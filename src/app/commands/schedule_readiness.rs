@@ -451,6 +451,37 @@ impl crate::app::App<'_> {
         self.schedule_report_cache.as_ref().map(|cache| cache.reports.clone()).unwrap_or_default()
     }
 
+    /// Mirror what the current run still mines into the editor state, while a
+    /// Solids Navigation tree that picks ground to dig is on screen: the
+    /// sequence editors, Animate and Haulage. Those trees leave out benches,
+    /// blasts and flitches with nothing left to dig.
+    pub(crate) fn mirror_mined_ground(&mut self) {
+        let wanted = (self.editor.is_schedule_gantt() && (self.editor.sequence_editor.is_some() || self.editor.blast_bar_dialog.is_some()))
+            || self.editor.is_schedule_animation()
+            || self.editor.is_haulage_page();
+        if !wanted {
+            if self.editor.mined_ground.take().is_some() {
+                self.editor.mined_ground_key = None;
+                self.redraw_requested = true;
+            }
+            return;
+        }
+        self.ensure_schedule_report_cache();
+        let Some(cache) = self.schedule_report_cache.as_ref() else { return };
+        if self.editor.mined_ground_key == Some(cache.key) {
+            return;
+        }
+        self.editor.mined_ground = cache.snapshot.as_ref().map(|snapshot| {
+            let mut mined = crate::ui::state::MinedGround::default();
+            for block in &snapshot.blocks {
+                mined.insert(block.solid, block.bench.base, block.blast, block.flitch.base);
+            }
+            Arc::new(mined)
+        });
+        self.editor.mined_ground_key = Some(cache.key);
+        self.redraw_requested = true;
+    }
+
     /// Mirror the bar readiness reports into the editor state the Gantt reads.
     ///
     /// Computed only while the Gantt is on screen, and cleared when it leaves,

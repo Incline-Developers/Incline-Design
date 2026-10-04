@@ -404,6 +404,7 @@ impl crate::app::App<'_> {
             self.sync_haulage_pipeline();
             self.sync_schedule_pipeline();
             self.mirror_schedule_reports();
+            self.mirror_mined_ground();
             self.mirror_routing_choices();
             return;
         };
@@ -509,6 +510,7 @@ impl crate::app::App<'_> {
         self.sync_haulage_pipeline();
         self.sync_schedule_pipeline();
         self.mirror_schedule_reports();
+        self.mirror_mined_ground();
         self.mirror_routing_choices();
     }
 

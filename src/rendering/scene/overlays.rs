@@ -173,11 +173,12 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
         for issue in editor.haul_issues.iter().filter(|issue| issue.blocks.is_empty()) {
             draw_screen_cross(&mut overlay, issue.pos, 9.0, 2.0, [1.0, 0.65, 0.15, 1.0]);
         }
-        // Joins are drawn one line per node, from the middle of the blocks
-        // using it, rather than one per block: the chosen ones always, solid,
-        // so a link is never invisible; the automatic ones only for the
-        // selection, dashed, so the two are never mistaken for each other.
-        let mut manual: Vec<(DVec3, f64, bool, Vec<DVec3>)> = Vec::new();
+        // Joins are drawn for the selection only, one line per node and
+        // flitch from the middle of the blocks using it rather than one per
+        // block: the chosen ones solid, the automatic ones dashed, so the two
+        // are never mistaken for each other. A chosen join still shows
+        // unselected, in its blocks' tint.
+        let mut manual: Vec<(DVec3, f64, Vec<DVec3>)> = Vec::new();
         let mut automatic: Vec<(DVec3, Vec<DVec3>)> = Vec::new();
         for block in editor.haul_blocks.iter().filter(|b| !editor.haul_hidden.hides(b.solid, b.bench, b.flitch, b.blast)) {
             let selected = editor.haul_selected_blocks.contains(&block.id);
@@ -193,10 +194,10 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
                 let verts: Vec<_> = ring.iter().copied().map(crate::model::PolyVertex::straight).collect();
                 tessellate_polyline_stroke(&mut overlay, &verts, true, width, color);
             }
-            for &(_, at) in &block.links {
-                match manual.iter_mut().find(|group| group.0 == at && group.1 == block.flitch.base && group.2 == selected) {
-                    Some(group) => group.3.push(block.point()),
-                    None => manual.push((at, block.flitch.base, selected, vec![block.point()])),
+            for &(_, at) in block.links.iter().filter(|_| selected) {
+                match manual.iter_mut().find(|group| group.0 == at && group.1 == block.flitch.base) {
+                    Some(group) => group.2.push(block.point()),
+                    None => manual.push((at, block.flitch.base, vec![block.point()])),
                 }
             }
             if selected && let Some(join) = block.join {
@@ -208,9 +209,9 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
         }
         let middle = |points: &[DVec3]| points.iter().copied().sum::<DVec3>() / points.len().max(1) as f64;
         let [r, g, b] = HAUL_MANUAL_BLOCK;
-        for (at, _, selected, points) in &manual {
+        for (at, _, points) in &manual {
             let from = middle(points);
-            draw_line(&mut overlay, from, *at, if *selected { 3.0 } else { 2.0 }, [r, g, b, 0.9]);
+            draw_line(&mut overlay, from, *at, 3.0, [r, g, b, 0.9]);
             draw_screen_cross(&mut overlay, from, 6.0, 2.0, [r, g, b, 1.0]);
             draw_screen_cross(&mut overlay, *at, 6.0, 2.0, [r, g, b, 1.0]);
         }

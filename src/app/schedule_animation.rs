@@ -610,11 +610,15 @@ impl crate::app::App<'_> {
             return;
         };
         for solid in document.solids() {
-            let Some(parts) = self.solid_view_cache.get(&solid.id).and_then(super::commands::solids_view::ViewSolid::finished_partition) else {
-                continue;
-            };
+            let Some(cache) = self.solid_view_cache.get(&solid.id) else { continue };
+            let Some(parts) = cache.finished_partition() else { continue };
             for part in parts {
                 let Some(block) = &part.block else { continue };
+                // Ground out of mining is never dug, and is not drawn as
+                // standing ground either: it is gone, as on the Solids pages.
+                if cache.excludes(solid, part) {
+                    continue;
+                }
                 let mut mesh = part.mesh.clone();
                 mesh.flitch_style = solid
                     .benching
@@ -648,6 +652,9 @@ impl crate::app::App<'_> {
                 };
                 for part in parts {
                     let Some(shape) = part.blast else { continue };
+                    if solid.exclusions.bench_excluded(shape.bench_base()) || solid.exclusions.blast_excluded(shape.bench_base(), shape.anchor()) {
+                        continue;
+                    }
                     let Some(published) = result.blasts.iter().position(|blast| {
                         blast.reference.solid == solid.id
                             && (blast.reference.bench - shape.bench_base()).abs() < 1e-6

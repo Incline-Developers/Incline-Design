@@ -1794,6 +1794,38 @@ impl BlastShapeRef {
     }
 }
 
+/// The ground the current Solids run still mines: every bench, blast and
+/// blast's flitch holding at least one dig block not excluded from mining.
+/// Navigation trees that pick ground to dig leave out the rest.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MinedGround {
+    benches: HashSet<(crate::model::SolidId, u64)>,
+    blasts: HashSet<BlastShapeRef>,
+    flitches: HashSet<(BlastShapeRef, u64)>,
+}
+
+impl MinedGround {
+    pub(crate) fn insert(&mut self, solid: crate::model::SolidId, bench: f64, blast: Option<BlastShapeRef>, flitch: f64) {
+        self.benches.insert((solid, bench.to_bits()));
+        if let Some(blast) = blast {
+            self.blasts.insert(blast);
+            self.flitches.insert((blast, flitch.to_bits()));
+        }
+    }
+
+    pub(crate) fn bench(&self, solid: crate::model::SolidId, base: f64) -> bool {
+        self.benches.contains(&(solid, base.to_bits()))
+    }
+
+    pub(crate) fn blast(&self, blast: BlastShapeRef) -> bool {
+        self.blasts.contains(&blast)
+    }
+
+    pub(crate) fn flitch(&self, blast: BlastShapeRef, base: f64) -> bool {
+        self.flitches.contains(&(blast, base.to_bits()))
+    }
+}
+
 impl RenameTarget {
     pub(crate) fn kind_label(self) -> String {
         match self {
@@ -2827,6 +2859,10 @@ pub(crate) struct EditorState {
     pub(crate) schedule_calculation_status: String,
     /// How many dig blocks Schedule Setup's Solids step last counted as 0 t.
     pub(crate) schedule_zero_blocks: usize,
+    /// What the current Solids run still mines, while a tree that picks
+    /// ground to dig is on screen; `None` elsewhere, and before a run.
+    pub(crate) mined_ground: Option<std::sync::Arc<MinedGround>>,
+    pub(crate) mined_ground_key: Option<u64>,
     /// Typed text for the Optimisation settings, so a partly typed number is
     /// not committed and not lost.
     pub(crate) schedule_experiment_draft: Option<ScheduleExperimentDraft>,
@@ -4214,6 +4250,8 @@ impl EditorState {
             haulage_auto_run: true,
             schedule_calculation_status: String::new(),
             schedule_zero_blocks: 0,
+            mined_ground: None,
+            mined_ground_key: None,
             schedule_experiment_draft: None,
             schedule_chunk_draft: None,
             schedule_selected_class: None,

@@ -14,6 +14,13 @@ use super::{
 };
 use crate::ui::state::SolidRegion;
 
+/// Every hash map here is seeded the same way in every run. Their iteration
+/// order decides which of a welded group's points stands for it and which way
+/// an outline is walked round a branch, so a per-process seed cuts the same
+/// ground a hair differently on each opening - enough to break the exact
+/// footprints a dig order holds its blocks by.
+type FixedState = foldhash::fast::FixedState;
+
 /// The two sheets a solid is bounded by, before they are welded into one mesh.
 ///
 /// A solid is the space between the design surface and the topography over the
@@ -210,7 +217,7 @@ pub(crate) fn open_edge_count(vertices: &[mesh_data::Vertex], faces: &[[u32; 3]]
     use std::collections::HashMap;
     let scale = weld_scale(vertices);
     let key = |index: u32| point_key_scaled(vertices[index as usize], scale);
-    let mut counts: HashMap<EdgeKey, usize> = HashMap::new();
+    let mut counts: HashMap<EdgeKey, usize, FixedState> = HashMap::default();
     for face in faces {
         for (a, b) in [(face[0], face[1]), (face[1], face[2]), (face[2], face[0])] {
             let (a, b) = (key(a), key(b));
@@ -418,7 +425,7 @@ fn cap_slab(slab: &mut (Vec<mesh_data::Vertex>, Vec<[u32; 3]>), base: f64, top: 
 /// so the rims there are closed loops.
 fn rims_close(rims: &[[mesh_data::Vertex; 2]], planes: &[f64], weld: Weld) -> bool {
     use std::collections::HashMap;
-    let mut degree: HashMap<PointKey, usize, foldhash::fast::RandomState> = HashMap::default();
+    let mut degree: HashMap<PointKey, usize, FixedState> = HashMap::default();
     for [a, b] in rims {
         if !planes.iter().any(|plane| (a.z - plane).abs() <= weld.tolerance && (b.z - plane).abs() <= weld.tolerance) {
             continue;
@@ -447,7 +454,7 @@ fn merge_coincident(vertices: &mut [mesh_data::Vertex], indices: &[usize], weld:
     // at most two cells along each axis rather than three.
     let cell = move |value: f64| (value * weld.scale / 2.0).floor() as i64;
     let span = move |value: f64| cell(value - weld.tolerance)..=cell(value + weld.tolerance);
-    let mut cells: HashMap<PointKey, Vec<mesh_data::Vertex>, foldhash::fast::RandomState> = HashMap::default();
+    let mut cells: HashMap<PointKey, Vec<mesh_data::Vertex>, FixedState> = HashMap::default();
     for &index in indices {
         let point = vertices[index];
         let found = span(point.x)
@@ -465,7 +472,7 @@ fn merge_coincident(vertices: &mut [mesh_data::Vertex], indices: &[usize], weld:
 
 /// Rim edges keyed by their welded ends, each with the direction that has the
 /// cap on its left: see [`cap_sides`].
-type CapSides = std::collections::HashMap<EdgeKey, (PointKey, PointKey), foldhash::fast::RandomState>;
+type CapSides = std::collections::HashMap<EdgeKey, (PointKey, PointKey), FixedState>;
 
 /// For each rim edge - an edge only one face uses - the direction along it
 /// that has the solid, and so the cap, on its left.
@@ -476,7 +483,7 @@ type CapSides = std::collections::HashMap<EdgeKey, (PointKey, PointKey), foldhas
 /// one cannot cover the other.
 fn cap_sides(vertices: &[mesh_data::Vertex], faces: &[[u32; 3]], weld: Weld) -> CapSides {
     use std::collections::HashMap;
-    let mut owners: HashMap<EdgeKey, (usize, PointKey, PointKey, bool), foldhash::fast::RandomState> = HashMap::default();
+    let mut owners: HashMap<EdgeKey, (usize, PointKey, PointKey, bool), FixedState> = HashMap::default();
     for face in faces {
         let [a, b, c] = face.map(|index| vertices[index as usize]);
         let normal = glam::DVec3::new(b.x - a.x, b.y - a.y, b.z - a.z).cross(glam::DVec3::new(c.x - a.x, c.y - a.y, c.z - a.z));
@@ -524,7 +531,7 @@ fn boundary_segments(vertices: &[mesh_data::Vertex], faces: &[[u32; 3]]) -> Vec<
     use std::collections::HashMap;
     let weld = Weld::of(vertices);
     let key = |vertex: mesh_data::Vertex| weld.key(vertex);
-    let mut counts: HashMap<EdgeKey, (usize, [mesh_data::Vertex; 2]), foldhash::fast::RandomState> = HashMap::default();
+    let mut counts: HashMap<EdgeKey, (usize, [mesh_data::Vertex; 2]), FixedState> = HashMap::default();
     for face in faces {
         let corners = face.map(|index| vertices[index as usize]);
         for (a, b) in [(corners[0], corners[1]), (corners[1], corners[2]), (corners[2], corners[0])] {
@@ -763,7 +770,7 @@ struct CapPolygon {
     holes: Vec<usize>,
     /// The points skipped between two consecutive corners, keyed by those
     /// corners in ring order.
-    skipped: HashMap<(usize, usize), Vec<usize>, foldhash::fast::RandomState>,
+    skipped: HashMap<(usize, usize), Vec<usize>, FixedState>,
 }
 
 impl CapPolygon {
@@ -990,8 +997,8 @@ fn boundary_rings(sheet: &(Vec<mesh_data::Vertex>, Vec<[u32; 3]>), weld: Weld) -
 fn planar_cap_rings(segments: &[[mesh_data::Vertex; 2]], weld: Weld) -> Vec<Vec<mesh_data::Vertex>> {
     use std::collections::{HashMap, HashSet};
 
-    let mut points: HashMap<PointKey, mesh_data::Vertex, foldhash::fast::RandomState> = HashMap::default();
-    let mut adjacency: HashMap<PointKey, Vec<PointKey>, foldhash::fast::RandomState> = HashMap::default();
+    let mut points: HashMap<PointKey, mesh_data::Vertex, FixedState> = HashMap::default();
+    let mut adjacency: HashMap<PointKey, Vec<PointKey>, FixedState> = HashMap::default();
     for [a, b] in segments {
         let (ka, kb) = (weld.key(*a), weld.key(*b));
         if ka == kb {
@@ -1019,7 +1026,7 @@ fn planar_cap_rings(segments: &[[mesh_data::Vertex; 2]], weld: Weld) -> Vec<Vec<
     let mut directed: Vec<(PointKey, PointKey)> = adjacency.iter().flat_map(|(from, tos)| tos.iter().map(|to| (*from, *to))).collect();
     directed.sort_unstable();
 
-    let mut visited: HashSet<(PointKey, PointKey), foldhash::fast::RandomState> = HashSet::default();
+    let mut visited: HashSet<(PointKey, PointKey), FixedState> = HashSet::default();
     let mut rings = Vec::new();
     for start in directed {
         if visited.contains(&start) {
@@ -1058,7 +1065,7 @@ fn ring_signed_area(ring: &[mesh_data::Vertex]) -> f64 {
 /// open contours with chords; manufacturing those edges is unsafe for solids.
 fn closed_boundary_rings(segments: &[[mesh_data::Vertex; 2]], weld: Weld) -> Vec<Vec<mesh_data::Vertex>> {
     use std::collections::{HashMap, HashSet};
-    let mut nodes: HashMap<PointKey, (mesh_data::Vertex, Vec<PointKey>)> = HashMap::new();
+    let mut nodes: HashMap<PointKey, (mesh_data::Vertex, Vec<PointKey>), FixedState> = HashMap::default();
     for [a, b] in segments {
         let (ka, kb) = (weld.key(*a), weld.key(*b));
         if ka == kb {
@@ -1069,7 +1076,7 @@ fn closed_boundary_rings(segments: &[[mesh_data::Vertex; 2]], weld: Weld) -> Vec
     }
     let mut starts: Vec<_> = nodes.keys().copied().collect();
     starts.sort_unstable();
-    let mut visited = HashSet::new();
+    let mut visited: HashSet<PointKey, FixedState> = HashSet::default();
     let mut rings = Vec::new();
     for start in starts {
         if visited.contains(&start) {
@@ -1104,10 +1111,10 @@ fn closed_boundary_rings(segments: &[[mesh_data::Vertex; 2]], weld: Weld) -> Vec
 /// The face that owns a rim edge has a third corner, and the sheet is on that
 /// corner's side. That is what tells the wall which way is out, without having
 /// to work out which rings are outer boundaries and which are holes.
-fn outward_lookup(sheet: &(Vec<mesh_data::Vertex>, Vec<[u32; 3]>), weld: Weld) -> std::collections::HashMap<EdgeKey, bool> {
+fn outward_lookup(sheet: &(Vec<mesh_data::Vertex>, Vec<[u32; 3]>), weld: Weld) -> std::collections::HashMap<EdgeKey, bool, FixedState> {
     use std::collections::HashMap;
     let point_key = |vertex| weld.key(vertex);
-    let mut counts: HashMap<EdgeKey, (usize, bool)> = HashMap::new();
+    let mut counts: HashMap<EdgeKey, (usize, bool), FixedState> = HashMap::default();
     for face in &sheet.1 {
         let corners = face.map(|index| sheet.0[index as usize]);
         for (a, b, c) in [
@@ -1296,7 +1303,7 @@ impl RingPath {
 fn append_wall(
     floor_ring: &[mesh_data::Vertex],
     roof_ring: &[mesh_data::Vertex],
-    outward: &std::collections::HashMap<EdgeKey, bool>,
+    outward: &std::collections::HashMap<EdgeKey, bool, FixedState>,
     weld: Weld,
     vertices: &mut Vec<mesh_data::Vertex>,
     faces: &mut Vec<[u32; 3]>,
@@ -1653,7 +1660,7 @@ pub(crate) fn split_solid_by_plan(mesh: &mesh_data::Triangulation, faces: &[&[Ve
         }
         index
     }
-    let mut first: HashMap<EdgeKey, u32, foldhash::fast::RandomState> = HashMap::default();
+    let mut first: HashMap<EdgeKey, u32, FixedState> = HashMap::default();
     for (index, triangle) in triangles.iter().enumerate() {
         for (a, b) in [(0, 1), (1, 2), (2, 0)] {
             let (ka, kb) = (weld.key(vertices[triangle[a] as usize]), weld.key(vertices[triangle[b] as usize]));
@@ -1669,7 +1676,7 @@ pub(crate) fn split_solid_by_plan(mesh: &mesh_data::Triangulation, faces: &[&[Ve
     }
 
     // Each piece's probe: the centroid of its largest triangle in plan.
-    let mut probe: HashMap<u32, (f64, glam::DVec2), foldhash::fast::RandomState> = HashMap::default();
+    let mut probe: HashMap<u32, (f64, glam::DVec2), FixedState> = HashMap::default();
     for (index, triangle) in triangles.iter().enumerate() {
         let [a, b, c] = triangle.map(|i| glam::DVec2::new(vertices[i as usize].x, vertices[i as usize].y));
         let area = (b - a).perp_dot(c - a).abs();
@@ -1678,7 +1685,7 @@ pub(crate) fn split_solid_by_plan(mesh: &mesh_data::Triangulation, faces: &[&[Ve
             *entry = (area, (a + b + c) / 3.0);
         }
     }
-    let mut owner: HashMap<u32, usize, foldhash::fast::RandomState> = HashMap::default();
+    let mut owner: HashMap<u32, usize, FixedState> = HashMap::default();
     for (piece, (area, point)) in probe {
         // A piece with no extent in plan is all wall, and says nothing.
         if area <= 0.0 {
@@ -1697,7 +1704,7 @@ pub(crate) fn split_solid_by_plan(mesh: &mesh_data::Triangulation, faces: &[&[Ve
             source_vertex: Vec::new(),
         })
         .collect();
-    let mut local: Vec<HashMap<u32, u32, foldhash::fast::RandomState>> = (0..faces.len()).map(|_| HashMap::default()).collect();
+    let mut local: Vec<HashMap<u32, u32, FixedState>> = (0..faces.len()).map(|_| HashMap::default()).collect();
     for (index, triangle) in triangles.iter().enumerate() {
         let face = owner[&root(&mut parent, index as u32)];
         let piece = &mut pieces[face];
@@ -1944,7 +1951,7 @@ fn convex_cells(points: &[glam::DVec2], triangles: &[usize]) -> Vec<Vec<usize>> 
         })
         .collect();
     let convex = |ring: &[usize]| {
-        let mut seen = std::collections::HashSet::with_capacity(ring.len());
+        let mut seen: std::collections::HashSet<_, FixedState> = std::collections::HashSet::with_capacity_and_hasher(ring.len(), FixedState::default());
         ring.iter().all(|corner| seen.insert(*corner))
             && (0..ring.len()).all(|index| {
                 let [a, b, c] = [0, 1, 2].map(|step| points[ring[(index + step) % ring.len()]]);
@@ -2084,7 +2091,7 @@ pub(crate) fn crease_outline(slab: &Slab, internal_wall: &[bool], min_angle: f64
         let vertex = vertices[index as usize];
         glam::DVec3::new(vertex.x, vertex.y, vertex.z)
     };
-    let mut edges: HashMap<EdgeKey, ([u32; 2], Vec<glam::DVec3>), foldhash::fast::RandomState> = HashMap::default();
+    let mut edges: HashMap<EdgeKey, ([u32; 2], Vec<glam::DVec3>), FixedState> = HashMap::default();
     // The walls between the clip's cells are inside the body: where one meets
     // the ground is a seam of the decomposition, not a corner of the blast.
     for (face, _) in faces.iter().zip(internal_wall).filter(|(_, internal)| !**internal) {
@@ -2134,7 +2141,7 @@ pub(crate) fn boundary_wall_outline(slab: &Slab, boundary_wall: &[bool]) -> Vec<
 
     let (vertices, faces) = slab;
     let weld = Weld::of(vertices);
-    let mut counts: HashMap<EdgeKey, (usize, [u32; 2]), foldhash::fast::RandomState> = HashMap::default();
+    let mut counts: HashMap<EdgeKey, (usize, [u32; 2]), FixedState> = HashMap::default();
     for (face, _) in faces.iter().zip(boundary_wall).filter(|(_, wall)| **wall) {
         for (a, b) in [(0, 1), (1, 2), (2, 0)] {
             let (ia, ib) = (face[a], face[b]);

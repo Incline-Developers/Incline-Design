@@ -133,6 +133,8 @@ fn draw_animation_solid(ui: &mut egui::Ui, editor: &mut EditorState, _document: 
     };
     let solid_rows = descendants(solid, occupied.as_ref(), true);
     let selected = group_selected(navigation_selection(editor, tree), &solid_rows);
+    // Ground no longer mined is not dug, so it is not listed.
+    let mined = editor.mined_ground.clone();
     let visible = !hidden(editor, tree).solids.contains(&solid.id);
     let benches: Vec<_> = solid
         .benching
@@ -140,6 +142,7 @@ fn draw_animation_solid(ui: &mut egui::Ui, editor: &mut EditorState, _document: 
         .into_iter()
         .rev()
         .filter(|bench| holds(occupied.as_ref(), bench.base, bench.top()))
+        .filter(|bench| mined.as_ref().is_none_or(|mined| mined.bench(solid.id, bench.base)))
         .collect();
     let bench_rows: Vec<_> = benches
         .iter()
@@ -185,6 +188,9 @@ fn draw_animation_solid(ui: &mut egui::Ui, editor: &mut EditorState, _document: 
                 bench_visible,
                 |ui| {
                     for (blast_index, (blast, &blast_ref)) in blasts.iter().zip(&blast_refs).enumerate() {
+                        if mined.as_ref().is_some_and(|mined| !mined.blast(blast_ref)) {
+                            continue;
+                        }
                         let blast_visible = bench_visible && !hidden(editor, tree).blasts.contains(&blast_ref);
                         let blast_title = reach_text(editor, tree, blast.name.clone(), |b| b.blast == Some(blast_ref));
                         let (_, blast_visibility_clicked) = animation_parent_row(
@@ -196,6 +202,9 @@ fn draw_animation_solid(ui: &mut egui::Ui, editor: &mut EditorState, _document: 
                             |ui| {
                                 for &flitch_row in &flitch_rows {
                                     let Some(flitch) = flitch_row.band else { continue };
+                                    if mined.as_ref().is_some_and(|mined| !mined.flitch(blast_ref, flitch.base)) {
+                                        continue;
+                                    }
                                     let flitch_visible = blast_visible && !hidden(editor, tree).rows.contains(&flitch_row);
                                     let flitch_title = reach_text(editor, tree, format_rl(flitch.base), |b| b.blast == Some(blast_ref) && b.flitch.base == flitch.base);
                                     let row = animation_leaf_row(
@@ -501,6 +510,9 @@ fn draw_tree_to_depth(ui: &mut egui::Ui, editor: &mut EditorState, document: &Do
         if document.solids().is_empty() {
             explorer_note(ui, tr!("solids-no-solids-yet-add"));
         }
+        // Where it picks ground to dig, the tree leaves out what is no
+        // longer mined; the Solids pages list it, to put it back.
+        let mined = editor.mined_ground.clone();
         let selection = &editor.solids_view_selection;
         let mut clicked: Option<Vec<SolidsViewRow>> = None;
         let mut clicked_blast = None;
@@ -539,7 +551,14 @@ fn draw_tree_to_depth(ui: &mut egui::Ui, editor: &mut EditorState, document: &Do
                                 if occupied.is_none() {
                                     explorer_note(ui, tr!("planning-solid-geometry-pending"));
                                 }
-                                for bench in solid.benching.benches().iter().rev().filter(|bench| holds(occupied, bench.base, bench.top())) {
+                                for bench in solid
+                                    .benching
+                                    .benches()
+                                    .iter()
+                                    .rev()
+                                    .filter(|bench| holds(occupied, bench.base, bench.top()))
+                                    .filter(|bench| mined.as_ref().is_none_or(|mined| mined.bench(solid.id, bench.base)))
+                                {
                                     let bench_band = BenchSelection {
                                         base: bench.base,
                                         top: bench.top(),
@@ -582,7 +601,11 @@ fn draw_tree_to_depth(ui: &mut egui::Ui, editor: &mut EditorState, document: &Do
                                             return;
                                         }
                                         for (blast_index, blast) in blasts.iter().enumerate() {
-                                            let blast_ref = Some(crate::ui::state::BlastShapeRef::new(solid.id, bench.base, blast.anchor));
+                                            let shape = crate::ui::state::BlastShapeRef::new(solid.id, bench.base, blast.anchor);
+                                            if mined.as_ref().is_some_and(|mined| !mined.blast(shape)) {
+                                                continue;
+                                            }
+                                            let blast_ref = Some(shape);
                                             let blast_selected = editor.selected_blast == blast_ref || (editor.selected_blast.is_none() && bench_selected);
                                             let blast_target = crate::model::ExclusionTarget::Blast {
                                                 bench: bench.base,
@@ -590,7 +613,7 @@ fn draw_tree_to_depth(ui: &mut egui::Ui, editor: &mut EditorState, document: &Do
                                             };
                                             let blast_label = exclusion_label(&blast.name, solid.exclusions.is_target_excluded(blast_target));
                                             let blast_response = collapsible_row(ui, bench_id.with(("blast", blast_index)), &blast_label, blast_selected, |ui| {
-                                                for flitch in &flitches {
+                                                for flitch in flitches.iter().filter(|flitch| mined.as_ref().is_none_or(|mined| mined.flitch(shape, flitch.base))) {
                                                     let flitch_row = SolidsViewRow {
                                                         solid: solid.id,
                                                         band: Some(BenchSelection {
