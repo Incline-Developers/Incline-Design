@@ -24,7 +24,7 @@ use crate::{
         state::{EditorState, OptimizationState, ScenarioDraft, ScenarioGridSelections, ScenarioStatus, ScenarioTab, UiCommand, UiProjectView},
         themed_icon, unthemed_icon,
         widgets::{
-            data_grid::{COLUMN_GAP, DataGrid, GridAction, GridButtons, GridColumn, GridRow, TRAILING_ALLOWANCE, apply_flat, column_widths, move_to_slot},
+            data_grid::{DataGrid, GridAction, GridButtons, GridColumn, GridRow, apply_flat, move_to_slot},
             menu::{self, DragableMenu, MenuButton, menu_note},
             rosette_diagram::{HEIGHT as ROSETTE_HEIGHT, draw_rosette},
             toolbar::ToolbarButton,
@@ -143,17 +143,16 @@ fn draw_scenarios_list(ui: &mut egui::Ui, state: &mut OptimizationState, command
 fn draw_name_field(ui: &mut egui::Ui, id: u64, name: &str, commands: &mut Vec<UiCommand>) {
     let field_id = egui::Id::new(("opt_scenario_name", id));
     let buffer_id = field_id.with("typed");
-    let focused = ui.memory(|memory| memory.has_focus(field_id));
-    let mut text = if focused {
-        ui.data_mut(|data| data.get_temp::<String>(buffer_id)).unwrap_or_else(|| name.to_owned())
-    } else {
-        name.to_owned()
-    };
+
+    // What was typed is kept until the field is left, whatever the focus
+    // state says on the frame it is lost.
+    let pending = ui.data_mut(|data| data.get_temp::<String>(buffer_id));
+    let mut text = pending.clone().unwrap_or_else(|| name.to_owned());
     let response = ui.add(egui::TextEdit::singleline(&mut text).id(field_id).desired_width(ui.available_width()));
     if response.changed() {
         ui.data_mut(|data| data.insert_temp(buffer_id, text.clone()));
     }
-    if response.lost_focus() {
+    if pending.is_some() && !response.has_focus() {
         let typed = text.trim();
         if !typed.is_empty() && typed != name {
             commands.push(UiCommand::RenameOptimizationScenario { id, name: typed.to_owned() });
@@ -864,13 +863,14 @@ fn draw_mining(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: &
             (0.0, f64::MAX),
         );
 
-        if form_checkbox(ui, tr!("opt-rocktype-costs"), &mut scenario.use_rocktype_costs).changed() && scenario.use_rocktype_costs && scenario.rocktype_costs.is_empty() {
-            // Switching the option on is a commitment, so it starts with a row.
-            scenario.rocktype_costs.push(RocktypeCost::default());
+        let mut field = scenario.cost_field.clone();
+        if form_combo(ui, "opt_cost_field", tr!("opt-cost-by-field"), &mut field, &fields.text).changed() {
+            let values = fields.rocktype_values(&field);
+            scenario.set_cost_field(field, &values);
         }
-        if scenario.use_rocktype_costs {
-            let values = fields.rocktype_values(&scenario.rocktype_field);
-            let columns = vec![GridColumn::new(tr!("opt-col-rocktype"), 50.0), GridColumn::new(tr!("opt-col-factor"), 50.0)];
+        if !scenario.cost_field.is_empty() {
+            let values = fields.rocktype_values(&scenario.cost_field);
+            let columns = vec![GridColumn::new(scenario.cost_field.clone(), 50.0), GridColumn::new(tr!("opt-col-cost"), 50.0)];
             let rows = plain_rows(scenario.rocktype_costs.len());
             let costs = &mut scenario.rocktype_costs;
             let mut actions = DataGrid::new("opt_rocktype_costs", columns).buttons(GridButtons::default().reorder().fill_all()).show(
@@ -888,7 +888,7 @@ fn draw_mining(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: &
                             cell_combo(ui, ("opt_cost_rocktype", row), &mut cost.rocktype, &values, tr!("opt-none-selected"), true);
                         }
                     } else {
-                        ValueField::new(("opt_rocktype_factor", row), &mut cost.factor).range(0.0, f64::MAX).show(ui);
+                        ValueField::new(("opt_rocktype_cost", row), &mut cost.cost).range(0.0, f64::MAX).show(ui);
                     }
                 },
             );
@@ -946,8 +946,6 @@ fn draw_haulage(ui: &mut egui::Ui, id: &str, title: String, haulage: &mut Haulag
 }
 
 // ── Processing costs ──
-
-const GA_LABEL_WIDTH: f32 = 80.0;
 
 /// The columns of the grid of a processing method's elements.
 fn element_columns() -> Vec<GridColumn> {
@@ -1057,26 +1055,49 @@ fn draw_processing(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, field
                     }
                 });
         apply_flat(&mut method.elements, &mut selections.elements, &mut actions, ElementCost::default);
-        ui.add_space(6.0);
-        // The G&A cost sits under the grid's last two columns, right edge to right
-        // edge, with its label hard against the field.
-        let widths = column_widths(ui.available_width(), &element_columns(), false);
-        let span = widths[1] + widths[2] + COLUMN_GAP;
-        let height = ui.spacing().interact_size.y;
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = COLUMN_GAP;
-            ui.add_space((ui.available_width() - TRAILING_ALLOWANCE - span).max(0.0));
-            ui.allocate_ui_with_layout(egui::vec2(GA_LABEL_WIDTH, height), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+    });
+
+    // The method's other costs, under its elements.
+    let OptimizationScenario {
+        methods,
+        ga_same_for_all: same_for_all,
+        ..
+    } = &mut *scenario;
+    option_group(ui, tr!("opt-group-other-costs"), |ui| {
+        form_value(
+            ui,
+            ("opt_haulage_factor", index),
+            tr!("opt-haulage-factor"),
+            None,
+            &mut methods[index].haulage_factor,
+            (0.0, f64::MAX),
+        );
+        let before = methods[index].ga_cost.clone();
+        form_row_wide_with(
+            ui,
+            &mut (&mut *methods, &mut *same_for_all),
+            |ui, _| {
                 ui.label(tr!("opt-ga-costs"));
-            });
-            ui.allocate_ui_with_layout(
-                egui::vec2((span - GA_LABEL_WIDTH - COLUMN_GAP).max(60.0), height),
-                egui::Layout::left_to_right(egui::Align::Center),
-                |ui| {
-                    ValueField::new(("opt_ga", index), &mut method.ga_cost).range(0.0, f64::MAX).show(ui);
-                },
-            );
-        });
+            },
+            |ui, (methods, same_for_all)| {
+                ui.allocate_ui(egui::vec2(CONTROL_WIDTH - 130.0, ui.spacing().interact_size.y), |ui| {
+                    ValueField::new(("opt_ga", index), &mut methods[index].ga_cost).range(0.0, f64::MAX).show(ui);
+                });
+                if ui.checkbox(same_for_all, tr!("opt-ga-same-for-all")).changed() && **same_for_all {
+                    // Turning it on makes every method follow this one.
+                    let value = methods[index].ga_cost.clone();
+                    for method in methods.iter_mut() {
+                        method.ga_cost = value.clone();
+                    }
+                }
+            },
+        );
+        if *same_for_all && methods[index].ga_cost != before {
+            let value = methods[index].ga_cost.clone();
+            for method in methods.iter_mut() {
+                method.ga_cost = value.clone();
+            }
+        }
     });
 }
 
@@ -1201,7 +1222,18 @@ fn draw_constraints(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, sele
                 }
             });
         });
-        apply_flat(&mut slope.rosette, &mut selections.rosette, &mut actions, RosetteRow::default);
+        // A new row starts one degree past the selected one (or the last), so
+        // the circle stays drawn; at 359 it repeats the bearing and the
+        // "same bearing" warning stands in for the circle.
+        let base = selections.rosette.filter(|row| *row < slope.rosette.len()).or(slope.rosette.len().checked_sub(1));
+        let next_bearing = base.map_or(0.0, |row| {
+            let bearing = slope.rosette[row].bearing;
+            if bearing.rem_euclid(360.0) >= 359.0 { bearing } else { bearing + 1.0 }
+        });
+        apply_flat(&mut slope.rosette, &mut selections.rosette, &mut actions, || RosetteRow {
+            bearing: next_bearing,
+            ..RosetteRow::default()
+        });
         if let Ok(sectors) = &sectors {
             ui.add_space(4.0);
             let caption = match sectors.as_slice() {

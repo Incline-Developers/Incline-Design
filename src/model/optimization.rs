@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use crate::{i18n::tr, model::formats::block_model_data::BlockModelData};
 
 /// Bumped whenever the file's shape changes in a way old builds cannot read.
-pub(crate) const SCENARIO_FILE_VERSION: u32 = 2;
+pub(crate) const SCENARIO_FILE_VERSION: u32 = 3;
 
 // ── Constants ──
 
@@ -307,19 +307,22 @@ impl Default for HaulageCost {
     }
 }
 
-/// A mining cost factor for one rock type.
+/// A mining cost for one rock type, in place of the default.
+///
+/// Scenarios saved when this was a `factor` load with a cost of 0: a factor
+/// is not a cost.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct RocktypeCost {
     pub(crate) rocktype: String,
-    pub(crate) factor: FieldValue<f32>,
+    pub(crate) cost: FieldValue<f32>,
 }
 
 impl Default for RocktypeCost {
     fn default() -> Self {
         Self {
             rocktype: String::new(),
-            factor: FieldValue::new(1.0),
+            cost: FieldValue::new(0.0),
         }
     }
 }
@@ -355,6 +358,8 @@ pub(crate) struct ProcessingMethod {
     pub(crate) max_grade: FieldValue<f64>,
     pub(crate) threshold: FieldValue<f64>,
     pub(crate) elements: Vec<ElementCost>,
+    /// Scales this method's haulage cost; 1 leaves it as it is.
+    pub(crate) haulage_factor: FieldValue<f64>,
     pub(crate) ga_cost: FieldValue<f64>,
 }
 
@@ -367,6 +372,7 @@ impl Default for ProcessingMethod {
             max_grade: FieldValue::new(0.0),
             threshold: FieldValue::new(0.0),
             elements: Vec::new(),
+            haulage_factor: FieldValue::new(1.0),
             ga_cost: FieldValue::new(0.0),
         }
     }
@@ -583,12 +589,20 @@ pub(crate) struct OptimizationScenario {
 
     // Mining costs
     pub(crate) mining_cost: FieldValue<f64>,
+    /// The text field the mining cost varies by; empty means one cost for all.
+    pub(crate) cost_field: String,
+    /// Read from files saved before `cost_field`, where it meant "vary by the
+    /// rock type field"; `migrate` turns it into `cost_field`. Never written.
+    #[serde(skip_serializing)]
     pub(crate) use_rocktype_costs: bool,
+    /// One row per value of `cost_field` (the row's `rocktype` is that value).
     pub(crate) rocktype_costs: Vec<RocktypeCost>,
     pub(crate) waste_haulage: HaulageCost,
     pub(crate) ore_haulage: HaulageCost,
 
     pub(crate) methods: Vec<ProcessingMethod>,
+    /// One G&A cost for every method: editing it in one changes all.
+    pub(crate) ga_same_for_all: bool,
     pub(crate) revenues: Vec<RevenueRow>,
     pub(crate) slope: SlopeSettings,
     pub(crate) output: OutputSettings,
@@ -616,6 +630,7 @@ impl OptimizationScenario {
             constants: Vec::new(),
             mining_cost: FieldValue::new(0.0),
             // One row, so switching the option on already asks for something.
+            cost_field: String::new(),
             use_rocktype_costs: false,
             rocktype_costs: vec![RocktypeCost::default()],
             waste_haulage: HaulageCost::default(),
@@ -627,6 +642,7 @@ impl OptimizationScenario {
                 elements: vec![ElementCost::default()],
                 ..ProcessingMethod::default()
             }],
+            ga_same_for_all: true,
             revenues: vec![RevenueRow::default()],
             slope: SlopeSettings::default(),
             output: OutputSettings::default(),
@@ -669,6 +685,12 @@ impl OptimizationScenario {
         };
         keep(&mut self.density_field, &fields.numeric);
         keep(&mut self.rocktype_field, &fields.text);
+        if !self.cost_field.is_empty() && !fields.text.contains(&self.cost_field) {
+            self.set_cost_field(String::new(), &[]);
+        } else if !self.cost_field.is_empty() {
+            let field = self.cost_field.clone();
+            self.set_cost_field(field.clone(), &fields.rocktype_values(&field));
+        }
         if self.density_field.is_empty() {
             self.density_field = first_named(&fields.numeric, &["density", "sg"]).unwrap_or_default();
         }
@@ -695,6 +717,32 @@ impl OptimizationScenario {
 
     /// Drop the rock type choices `values` no longer offers, and preselect the
     /// air value (a value named "air" or "-") when none has been chosen.
+    /// Bring a scenario saved by an earlier version up to date: mining costs
+    /// that varied by rock type now name the rock type field.
+    pub(crate) fn migrate(&mut self) {
+        if std::mem::take(&mut self.use_rocktype_costs) && self.cost_field.is_empty() {
+            self.cost_field = self.rocktype_field.clone();
+        }
+    }
+
+    /// Choose the field the mining cost varies by (empty for none). Rows whose
+    /// value the new field does not have are blanked, and a field with no rows
+    /// starts with one.
+    pub(crate) fn set_cost_field(&mut self, field: String, values: &[String]) {
+        self.cost_field = field;
+        if self.cost_field.is_empty() {
+            return;
+        }
+        for cost in &mut self.rocktype_costs {
+            if !cost.rocktype.is_empty() && !values.contains(&cost.rocktype) {
+                cost.rocktype.clear();
+            }
+        }
+        if self.rocktype_costs.is_empty() {
+            self.rocktype_costs.push(RocktypeCost::default());
+        }
+    }
+
     pub(crate) fn settle_rocktype_values(&mut self, values: &[String]) {
         let keep = |value: &mut String| {
             if !value.is_empty() && !values.contains(value) {
@@ -702,9 +750,6 @@ impl OptimizationScenario {
             }
         };
         keep(&mut self.air_rocktype);
-        for cost in &mut self.rocktype_costs {
-            keep(&mut cost.rocktype);
-        }
         for method in &mut self.methods {
             keep(&mut method.rocktype);
         }
@@ -716,7 +761,13 @@ impl OptimizationScenario {
     /// Every block model field the settings use, which the Outputs section's
     /// shell field must not overwrite.
     pub(crate) fn used_fields(&self) -> HashSet<&str> {
-        let mut used: HashSet<&str> = [self.density_field.as_str(), self.quality_field.as_str(), self.rocktype_field.as_str()].into();
+        let mut used: HashSet<&str> = [
+            self.density_field.as_str(),
+            self.quality_field.as_str(),
+            self.rocktype_field.as_str(),
+            self.cost_field.as_str(),
+        ]
+        .into();
         for haulage in [&self.waste_haulage, &self.ore_haulage] {
             if haulage.mode == HaulageMode::Field {
                 used.insert(haulage.field.as_str());

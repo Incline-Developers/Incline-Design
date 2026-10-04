@@ -397,10 +397,11 @@ pub(crate) fn load_optimization_scenarios() -> io::Result<crate::model::optimiza
 
 /// Refuse a file written by a newer build rather than misread it.
 pub(crate) fn parse_optimization_scenarios(json: &str) -> io::Result<crate::model::optimization::ScenarioFile> {
-    let file: crate::model::optimization::ScenarioFile = serde_json::from_str(json).map_err(io::Error::other)?;
+    let mut file: crate::model::optimization::ScenarioFile = serde_json::from_str(json).map_err(io::Error::other)?;
     if file.version > crate::model::optimization::SCENARIO_FILE_VERSION {
         return Err(io::Error::other(format!("scenarios file version {} is newer than this build reads", file.version)));
     }
+    file.scenarios.iter_mut().for_each(crate::model::optimization::OptimizationScenario::migrate);
     Ok(file)
 }
 

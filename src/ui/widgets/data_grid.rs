@@ -116,15 +116,8 @@ pub(crate) fn column_widths(available: f32, columns: &[GridColumn], with_groups:
     columns.iter().map(|column| total * column.weight / weight_sum).collect()
 }
 
-/// The room a row has to its right edge that the grid keeps for its scrollbar,
-/// which a row drawn beside the grid should also leave free.
-pub(crate) const TRAILING_ALLOWANCE: f32 = SCROLLBAR_ALLOWANCE;
-
-/// The gap between a grid's columns.
-pub(crate) const COLUMN_GAP: f32 = CELL_GAP;
-
 /// The colour that marks the rows of the group with this position among the grid's groups.
-fn group_colour(ordinal: usize, dark_mode: bool) -> egui::Color32 {
+pub(crate) fn group_colour(ordinal: usize, dark_mode: bool) -> egui::Color32 {
     let hue = (0.08 + ordinal as f32 * 0.17).fract();
     egui::ecolor::Hsva::new(hue, 0.55, if dark_mode { 0.85 } else { 0.8 }, 1.0).into()
 }

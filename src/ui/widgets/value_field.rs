@@ -22,6 +22,7 @@ use crate::{
     ui::{
         themed_icon, unthemed_icon,
         widgets::{
+            data_grid::group_colour,
             menu::{self, DragableMenu, MenuButton},
             toolbar::ToolbarButton,
         },
@@ -59,12 +60,15 @@ struct PickerChoice {
 
 /// Make the scenario's constants available to the fields drawn this frame.
 pub(crate) fn publish_constants(ctx: &egui::Context, rows: &[ConstantsRow]) {
-    let constants: Arc<Vec<Constant>> = Arc::new(rows.iter().filter_map(ConstantsRow::constant).cloned().collect());
-    ctx.data_mut(|data| data.insert_temp(constants_key(), constants));
+    ctx.data_mut(|data| data.insert_temp(constants_key(), Arc::new(rows.to_vec())));
 }
 
-fn published_constants(ctx: &egui::Context) -> Arc<Vec<Constant>> {
-    ctx.data(|data| data.get_temp::<Arc<Vec<Constant>>>(constants_key())).unwrap_or_default()
+fn published_rows(ctx: &egui::Context) -> Arc<Vec<ConstantsRow>> {
+    ctx.data(|data| data.get_temp::<Arc<Vec<ConstantsRow>>>(constants_key())).unwrap_or_default()
+}
+
+fn published_constants(ctx: &egui::Context) -> Vec<Constant> {
+    published_rows(ctx).iter().filter_map(ConstantsRow::constant).cloned().collect()
 }
 
 fn take_choice(ctx: &egui::Context, field: egui::Id) -> Option<String> {
@@ -317,8 +321,16 @@ pub(crate) fn draw_constant_picker(ctx: &egui::Context) {
     let Some(request) = ctx.data(|data| data.get_temp::<PickerRequest>(request_key())) else {
         return;
     };
-    let constants = published_constants(ctx);
-    let candidates: Vec<&Constant> = constants.iter().filter(|constant| constant.value.value_type() == request.value_type).collect();
+    let rows = published_rows(ctx);
+    let candidates: Vec<&Constant> = rows
+        .iter()
+        .filter_map(ConstantsRow::constant)
+        .filter(|constant| constant.value.value_type() == request.value_type)
+        .collect();
+    let collapsed_id = egui::Id::new("opt_constant_picker_collapsed");
+    // Every group starts open; the ones folded here are remembered by their
+    // place in the list until the picker closes.
+    let mut collapsed: Vec<usize> = ctx.data(|data| data.get_temp(collapsed_id)).unwrap_or_default();
 
     let sheet = egui::Area::new(egui::Id::new("opt_constant_picker_sheet"))
         .order(egui::Order::Foreground)
@@ -345,29 +357,61 @@ pub(crate) fn draw_constant_picker(ctx: &egui::Context) {
                 menu::menu_note(ui, tr!("opt-no-constants-of-type"));
             } else {
                 egui::ScrollArea::vertical().max_height(PICKER_LIST_HEIGHT).auto_shrink([false, true]).show(ui, |ui| {
-                    egui::Grid::new("opt_constant_picker_grid")
-                        .num_columns(3)
-                        .striped(true)
-                        .spacing([14.0, 4.0])
-                        .show(ui, |ui| {
-                            for header in [tr!("opt-col-name"), tr!("opt-col-value"), tr!("opt-col-description")] {
-                                ui.label(egui::RichText::new(header).weak());
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    let widths = picker_columns(ui.available_width());
+                    picker_row(ui, &widths, [tr!("opt-col-name"), tr!("opt-col-value"), tr!("opt-col-description")]);
+                    let mut group_ordinal = 0;
+                    let mut group: Option<(usize, egui::Color32)> = None;
+                    for (index, row) in rows.iter().enumerate() {
+                        match row {
+                            ConstantsRow::Group { name, .. } => {
+                                let colour = group_colour(group_ordinal, ui.visuals().dark_mode);
+                                group_ordinal += 1;
+                                group = Some((index, colour));
+                                // A group none of whose constants fit is left out.
+                                let has_candidates = rows[index + 1..]
+                                    .iter()
+                                    .take_while(|row| row.constant().is_some())
+                                    .filter_map(ConstantsRow::constant)
+                                    .any(|constant| constant.value.value_type() == request.value_type);
+                                if !has_candidates {
+                                    group = Some((usize::MAX, colour));
+                                    continue;
+                                }
+                                let folded = collapsed.contains(&index);
+                                let response = picker_group_row(ui, name, folded, colour);
+                                if response.clicked() {
+                                    if folded {
+                                        collapsed.retain(|other| *other != index);
+                                    } else {
+                                        collapsed.push(index);
+                                    }
+                                }
                             }
-                            ui.end_row();
-                            for constant in &candidates {
+                            ConstantsRow::Constant(constant) => {
+                                if constant.value.value_type() != request.value_type {
+                                    continue;
+                                }
+                                let tint = match group {
+                                    Some((owner, colour)) => {
+                                        if collapsed.contains(&owner) {
+                                            continue;
+                                        }
+                                        Some(colour)
+                                    }
+                                    None => None,
+                                };
                                 let is_selected = selected.as_deref() == Some(constant.name.as_str());
-                                let row = ui.selectable_label(is_selected, &constant.name);
-                                ui.label(constant.value.display());
-                                ui.label(&constant.description);
-                                ui.end_row();
-                                if row.clicked() {
+                                let response = picker_constant_row(ui, &widths, constant, is_selected, tint);
+                                if response.clicked() {
                                     selected = Some(constant.name.clone());
                                 }
-                                if row.double_clicked() {
+                                if response.double_clicked() {
                                     choose = Some(constant.name.clone());
                                 }
                             }
-                        });
+                        }
+                    }
                 });
             }
             let ready = selected.as_ref().is_some_and(|name| candidates.iter().any(|constant| constant.name == *name));
@@ -384,6 +428,7 @@ pub(crate) fn draw_constant_picker(ctx: &egui::Context) {
         ctx.move_to_top(dialog.response.layer_id);
     }
 
+    ctx.data_mut(|data| data.insert_temp(collapsed_id, collapsed));
     ctx.data_mut(|data| match &selected {
         Some(name) => {
             data.insert_temp(selected_id, name.clone());
@@ -402,6 +447,7 @@ fn close_picker(ctx: &egui::Context) {
     ctx.data_mut(|data| {
         data.remove::<PickerRequest>(request_key());
         data.remove::<String>(egui::Id::new("opt_constant_picker_selected"));
+        data.remove::<Vec<usize>>(egui::Id::new("opt_constant_picker_collapsed"));
     });
     ctx.request_repaint();
 }
@@ -409,4 +455,83 @@ fn close_picker(ctx: &egui::Context) {
 /// Whether the picker is up, which the editor uses to hold back its own Escape.
 pub(crate) fn picker_open(ctx: &egui::Context) -> bool {
     ctx.data(|data| data.get_temp::<PickerRequest>(request_key())).is_some()
+}
+
+// ── The picker's list ──
+
+const PICKER_ROW_HEIGHT: f32 = 24.0;
+const PICKER_GUTTER: f32 = 14.0;
+
+/// Widths of the name, value and description columns.
+fn picker_columns(available: f32) -> [f32; 3] {
+    let usable = (available - PICKER_GUTTER - 12.0).max(120.0);
+    [usable * 0.34, usable * 0.2, usable * 0.46]
+}
+
+/// The list's heading row.
+fn picker_row(ui: &mut egui::Ui, widths: &[f32; 3], cells: [String; 3]) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), PICKER_ROW_HEIGHT), egui::Sense::hover());
+    paint_cells(ui, rect, widths, cells, ui.visuals().weak_text_color());
+}
+
+fn paint_cells(ui: &egui::Ui, rect: egui::Rect, widths: &[f32; 3], cells: [String; 3], colour: egui::Color32) {
+    let mut x = rect.left() + PICKER_GUTTER;
+    for (cell, width) in cells.into_iter().zip(widths) {
+        let clip = egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(*width, rect.height()));
+        ui.painter().with_clip_rect(clip.intersect(ui.clip_rect())).text(
+            clip.left_center() + egui::vec2(4.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            cell,
+            egui::TextStyle::Body.resolve(ui.style()),
+            colour,
+        );
+        x += width;
+    }
+}
+
+/// A group's heading: a small triangle and the name, clickable anywhere along
+/// the row to fold or unfold the group.
+fn picker_group_row(ui: &mut egui::Ui, name: &str, folded: bool, colour: egui::Color32) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), PICKER_ROW_HEIGHT), egui::Sense::click());
+    let fill = colour.gamma_multiply(if response.hovered() { 0.6 } else { 0.5 });
+    ui.painter().rect_filled(rect, 2.0, fill);
+    let arrow = if folded { "▶" } else { "▼" };
+    ui.painter().text(
+        egui::pos2(rect.left() + 8.0, rect.center().y),
+        egui::Align2::CENTER_CENTER,
+        arrow,
+        egui::TextStyle::Small.resolve(ui.style()),
+        ui.visuals().text_color(),
+    );
+    ui.painter().text(
+        egui::pos2(rect.left() + PICKER_GUTTER + 6.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        name,
+        egui::TextStyle::Button.resolve(ui.style()),
+        ui.visuals().text_color(),
+    );
+    response
+}
+
+/// One constant: the whole row lights up under the pointer and takes the
+/// click, wherever in it that lands.
+fn picker_constant_row(ui: &mut egui::Ui, widths: &[f32; 3], constant: &Constant, selected: bool, group: Option<egui::Color32>) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), PICKER_ROW_HEIGHT), egui::Sense::click());
+    let fill = if selected {
+        Some(ui.visuals().selection.bg_fill)
+    } else if response.hovered() {
+        Some(ui.visuals().widgets.hovered.weak_bg_fill)
+    } else {
+        group.map(|colour| colour.gamma_multiply(0.14))
+    };
+    if let Some(fill) = fill {
+        ui.painter().rect_filled(rect, 2.0, fill);
+    }
+    if let Some(colour) = group {
+        let bar = egui::Rect::from_min_max(egui::pos2(rect.left() + 5.0, rect.top()), egui::pos2(rect.left() + 9.0, rect.bottom()));
+        ui.painter().rect_filled(bar, 1.0, colour);
+    }
+    let text = ui.visuals().text_color();
+    paint_cells(ui, rect, widths, [constant.name.clone(), constant.value.display(), constant.description.clone()], text);
+    response
 }

@@ -2397,7 +2397,7 @@ opt-col-type = Type
 opt-col-value = Value
 opt-col-description = Description
 opt-col-rocktype = Rock type
-opt-col-factor = Factor
+opt-col-cost = Cost
 opt-col-min-grade = Minimum grade
 opt-col-max-grade = Maximum grade
 opt-col-threshold = Threshold
@@ -2427,7 +2427,7 @@ opt-constant-wrong-type = The constant "{ $name }" is not of this field's type
 
 opt-mining-cost = Default mining cost
 opt-currency-agnostic = Any currency: costs are plain numbers
-opt-rocktype-costs = Use different costs for rock types
+opt-cost-by-field = Use different costs based on BM field
 opt-waste-haulage = Waste haulage costs
 opt-ore-haulage = Ore haulage costs
 opt-haulage-value = Value or constant
@@ -2437,6 +2437,9 @@ opt-default-method-name = Default
 opt-elements-of = Elements of { $name }
 opt-select-method = Select a processing method above to edit its elements.
 opt-ga-costs = G&A costs
+opt-group-other-costs = Other costs
+opt-haulage-factor = Haulage cost adjustment factor
+opt-ga-same-for-all = Same for all
 
 opt-select-mode = Select mode
 opt-mode-single = Single shell
