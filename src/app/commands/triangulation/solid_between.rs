@@ -351,7 +351,37 @@ pub(crate) fn slabs_between_elevations(mesh: &mesh_data::Triangulation, bands: &
 /// solid.
 fn cap_slab(slab: &mut (Vec<mesh_data::Vertex>, Vec<[u32; 3]>), base: f64, top: f64) {
     let weld = Weld::of(&slab.0);
-    let rims = boundary_segments(&slab.0, &slab.1);
+    // Only points on a cut plane can be a rim's, and only faces with two of
+    // their corners on one can own a rim edge - every face using an edge in
+    // the plane has both its ends there. Looking at those alone keeps a cut
+    // through a large body from hashing every face of it. Each point is
+    // classed once: 1 on the base, 2 on the top, 0 on neither.
+    let plane_of: Vec<u8> = slab
+        .0
+        .iter()
+        .map(|vertex| {
+            if (vertex.z - base).abs() <= weld.tolerance {
+                1
+            } else if (vertex.z - top).abs() <= weld.tolerance {
+                2
+            } else {
+                0
+            }
+        })
+        .collect();
+    let planar: Vec<usize> = (0..slab.0.len()).filter(|&index| plane_of[index] != 0).collect();
+    merge_coincident(&mut slab.0, &planar, weld);
+    let edge_faces: Vec<[u32; 3]> = slab
+        .1
+        .iter()
+        .copied()
+        .filter(|face| {
+            let [a, b, c] = face.map(|index| plane_of[index as usize]);
+            (a != 0 && (a == b || a == c)) || (b != 0 && b == c)
+        })
+        .collect();
+    let rims = boundary_segments(&slab.0, &edge_faces);
+    let sides = cap_sides(&slab.0, &edge_faces, weld);
     for (plane, upwards) in [(base, false), (top, true)] {
         let rim: Vec<[mesh_data::Vertex; 2]> = rims
             .iter()
@@ -362,8 +392,92 @@ fn cap_slab(slab: &mut (Vec<mesh_data::Vertex>, Vec<[u32; 3]>), base: f64, top: 
             continue;
         }
         let rings = planar_cap_rings(&rim, weld);
-        append_caps(&rings, plane, upwards, &mut slab.0, &mut slab.1);
+        let capped: Vec<bool> = rings.iter().map(|ring| ring_is_material(ring, &sides, weld)).collect();
+        append_caps(&rings, &capped, plane, upwards, &mut slab.0, &mut slab.1);
     }
+}
+
+/// Move each of `indices`' points onto the first one within the weld's
+/// tolerance of it.
+///
+/// Welding rounds points onto a grid, and two points a rounding error apart
+/// can land either side of a grid line: the same crossing reached along two
+/// collinear edges does, and the slab then has a crack there and its cap a
+/// rim that never closes. Merging by distance first means the grid only ever
+/// sees identical points.
+fn merge_coincident(vertices: &mut [mesh_data::Vertex], indices: &[usize], weld: Weld) {
+    use std::collections::HashMap;
+    let mut cells: HashMap<PointKey, Vec<mesh_data::Vertex>, foldhash::fast::RandomState> = HashMap::default();
+    for &index in indices {
+        let vertex = &mut vertices[index];
+        let (x, y, z) = weld.key(*vertex);
+        let found = (-1..=1)
+            .flat_map(|dx| (-1..=1).flat_map(move |dy| (-1..=1).map(move |dz| (x + dx, y + dy, z + dz))))
+            .filter_map(|cell| cells.get(&cell))
+            .flatten()
+            .find(|kept| weld.same(**kept, *vertex))
+            .copied();
+        match found {
+            Some(kept) => *vertex = kept,
+            None => cells.entry((x, y, z)).or_default().push(*vertex),
+        }
+    }
+}
+
+/// Rim edges keyed by their welded ends, each with the direction that has the
+/// cap on its left: see [`cap_sides`].
+type CapSides = std::collections::HashMap<EdgeKey, (PointKey, PointKey), foldhash::fast::RandomState>;
+
+/// For each rim edge - an edge only one face uses - the direction along it
+/// that has the solid, and so the cap, on its left.
+///
+/// The face that owns the edge says so without looking anywhere else: the
+/// solid is on the side its outward normal points away from, read in plan; a
+/// face lying flat in the plane has the cap on the other side of it, since
+/// one cannot cover the other.
+fn cap_sides(vertices: &[mesh_data::Vertex], faces: &[[u32; 3]], weld: Weld) -> CapSides {
+    use std::collections::HashMap;
+    let mut owners: HashMap<EdgeKey, (usize, PointKey, PointKey, bool), foldhash::fast::RandomState> = HashMap::default();
+    for face in faces {
+        let [a, b, c] = face.map(|index| vertices[index as usize]);
+        let normal = glam::DVec3::new(b.x - a.x, b.y - a.y, b.z - a.z).cross(glam::DVec3::new(c.x - a.x, c.y - a.y, c.z - a.z));
+        for (from, to, other) in [(a, b, c), (b, c, a), (c, a, b)] {
+            let (kf, kt) = (weld.key(from), weld.key(to));
+            let span = glam::DVec2::new(to.x - from.x, to.y - from.y);
+            // Left of from -> to is where the solid is when the normal leans
+            // the other way, or, lying flat, where this face is not.
+            let flat = normal.truncate().length_squared() <= 1e-12 * normal.length_squared();
+            let left = if flat {
+                span.perp_dot(glam::DVec2::new(other.x - from.x, other.y - from.y)) < 0.0
+            } else {
+                span.perp_dot(-normal.truncate()) > 0.0
+            };
+            let key = if kf <= kt { (kf, kt) } else { (kt, kf) };
+            owners.entry(key).and_modify(|entry| entry.0 += 1).or_insert((1, kf, kt, left));
+        }
+    }
+    owners
+        .into_iter()
+        .filter(|(_, (count, ..))| *count == 1)
+        .map(|(key, (_, from, to, left))| (key, if left { (from, to) } else { (to, from) }))
+        .collect()
+}
+
+/// Whether a traced cap ring encloses solid: its rim edges, walked with the
+/// ring's inside on their left, mostly agree with [`cap_sides`].
+fn ring_is_material(ring: &[mesh_data::Vertex], sides: &CapSides, weld: Weld) -> bool {
+    let mut agree = 0usize;
+    let mut disagree = 0usize;
+    for (index, point) in ring.iter().enumerate() {
+        let (from, to) = (weld.key(*point), weld.key(ring[(index + 1) % ring.len()]));
+        let key = if from <= to { (from, to) } else { (to, from) };
+        match sides.get(&key) {
+            Some(direction) if *direction == (from, to) => agree += 1,
+            Some(_) => disagree += 1,
+            None => {}
+        }
+    }
+    agree > disagree
 }
 
 /// The edges of a triangle soup that only one face uses, welded by position.
@@ -406,8 +520,14 @@ pub(crate) fn plan_footprint_rings(mesh: &mesh_data::Triangulation, plane: f64) 
     let mut faces = Vec::new();
     for face in mesh.face_vertex_indices_iter() {
         let [a, b, c] = face.map(|index| source[index]);
-        // Counter-clockwise in XY is an outward normal pointing up.
-        if (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x) <= sliver {
+        // Counter-clockwise in XY is an outward normal pointing up. A wall
+        // that only rounding keeps off vertical leans either way at random and
+        // projects to a line; counted, it laid stray edges along the outline.
+        let plan = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+        let full = glam::DVec3::new(b.x - a.x, b.y - a.y, b.z - a.z)
+            .cross(glam::DVec3::new(c.x - a.x, c.y - a.y, c.z - a.z))
+            .length();
+        if plan <= sliver.max(full * VERTICAL_WALL_RATIO) {
             continue;
         }
         let base = vertices.len() as u32;
@@ -418,25 +538,79 @@ pub(crate) fn plan_footprint_rings(mesh: &mesh_data::Triangulation, plane: f64) 
         return Vec::new();
     }
     // Flattening first makes the shared 3D weld an XY weld, so the roof's
-    // interior edges cancel and only its outline is left.
+    // interior edges cancel and only its outline is left. Points a rounding
+    // error apart are merged before that, or the outline cracks between them.
     let weld = Weld::of(&vertices);
-    closed_boundary_rings(&boundary_segments(&vertices, &faces), weld)
+    let all: Vec<usize> = (0..vertices.len()).collect();
+    merge_coincident(&mut vertices, &all, weld);
+    // Ground often pinches to a point - two pieces of a bench touching at a
+    // corner - so the outline is traced the way a cap is, past nodes where
+    // more than two of its edges meet, rather than abandoned there.
+    planar_cap_rings(&boundary_segments(&vertices, &faces), weld)
 }
 
-/// How many other rings each ring sits inside. Even depth is solid ground,
-/// odd is a hole through it - the same even-odd rule the caps are filled by.
+/// A face whose plan area is this small a fraction of its own is a vertical
+/// wall that rounding tilted: steeper than 89.9999°.
+const VERTICAL_WALL_RATIO: f64 = 1.0e-6;
+
+/// How many other rings each ring sits inside, which says which rings are
+/// nested directly in which.
+///
+/// Judged by a point strictly inside each ring, never by one of its corners:
+/// the rings of a cut plane often meet at a corner - a sliver of ground
+/// pinched off the main outline - and a corner on another ring's edge reads as
+/// inside it or not by rounding alone, which filled holes and left ground
+/// uncapped.
 pub(crate) fn ring_depths(rings: &[Vec<mesh_data::Vertex>]) -> Vec<usize> {
-    rings
+    let probes: Vec<_> = rings.iter().map(|ring| interior_point(ring)).collect();
+    // A ring's box rules most others out before the crossing test walks it.
+    let boxes: Vec<_> = rings.iter().map(|ring| ring_box(ring)).collect();
+    probes
         .iter()
         .enumerate()
-        .map(|(index, ring)| {
+        .map(|(index, probe)| {
+            let Some(probe) = probe else { return 0 };
             rings
                 .iter()
                 .enumerate()
-                .filter(|(other, candidate)| *other != index && !ring.is_empty() && ring_contains(candidate, ring[0]))
+                .filter(|(other, candidate)| *other != index && box_holds(boxes[*other], *probe) && ring_contains(candidate, *probe))
                 .count()
         })
         .collect()
+}
+
+/// A ring's plan bounds: min x, min y, max x, max y.
+fn ring_box(ring: &[mesh_data::Vertex]) -> [f64; 4] {
+    ring.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, p| {
+        [b[0].min(p.x), b[1].min(p.y), b[2].max(p.x), b[3].max(p.y)]
+    })
+}
+
+fn box_holds(bounds: [f64; 4], point: mesh_data::Vertex) -> bool {
+    point.x >= bounds[0] && point.y >= bounds[1] && point.x <= bounds[2] && point.y <= bounds[3]
+}
+
+/// A point strictly inside a ring: the centre of the largest triangle of its
+/// own triangulation. `None` for a ring with no area.
+fn interior_point(ring: &[mesh_data::Vertex]) -> Option<mesh_data::Vertex> {
+    if ring.len() < 3 {
+        return None;
+    }
+    let origin = ring[0];
+    let mut indices: Vec<usize> = Vec::new();
+    earcut::Earcut::new().earcut(ring.iter().map(|point| [point.x - origin.x, point.y - origin.y]), &[], &mut indices);
+    indices
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|triangle| triangle.map(|corner| ring[corner]))
+        .max_by(|a, b| triangle_plan_area(*a).total_cmp(&triangle_plan_area(*b)))
+        .filter(|triangle| triangle_plan_area(*triangle) > 0.0)
+        .map(|[a, b, c]| mesh_data::Vertex::new((a.x + b.x + c.x) / 3.0, (a.y + b.y + c.y) / 3.0, a.z))
+}
+
+fn triangle_plan_area([a, b, c]: [mesh_data::Vertex; 3]) -> f64 {
+    ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs()
 }
 
 /// Even-odd crossing test in XY, shared by the cap filler and the blast
@@ -451,21 +625,25 @@ pub(crate) fn ring_contains(ring: &[mesh_data::Vertex], point: mesh_data::Vertex
     inside
 }
 
-/// Fill even-depth rings with their immediate holes. Filling every ring
-/// independently would seal voids and overstate slab volumes.
-fn append_caps(rings: &[Vec<mesh_data::Vertex>], plane: f64, upwards: bool, vertices: &mut Vec<mesh_data::Vertex>, faces: &mut Vec<[u32; 3]>) {
+/// Fill the rings that enclose solid, each less the rings nested directly
+/// inside it - filled in turn if they are solid too, so an island in a hole
+/// is capped and the hole is not.
+fn append_caps(rings: &[Vec<mesh_data::Vertex>], capped: &[bool], plane: f64, upwards: bool, vertices: &mut Vec<mesh_data::Vertex>, faces: &mut Vec<[u32; 3]>) {
     let contains = ring_contains;
     let depths = ring_depths(rings);
+    // Which outer a hole belongs to is judged the same way as its depth.
+    let probes: Vec<_> = rings.iter().map(|ring| interior_point(ring)).collect();
     for (index, outer) in rings.iter().enumerate() {
-        if outer.len() < 3 || !depths[index].is_multiple_of(2) {
+        if outer.len() < 3 || !capped[index] {
             continue;
         }
+        let outer_box = ring_box(outer);
         let mut cap = CapPolygon::default();
         if !cap.add_ring(outer, false) {
             continue;
         }
         for (j, hole) in rings.iter().enumerate() {
-            if !hole.is_empty() && depths[j] == depths[index] + 1 && contains(outer, hole[0]) {
+            if depths[j] == depths[index] + 1 && probes[j].is_some_and(|probe| box_holds(outer_box, probe) && contains(outer, probe)) {
                 cap.add_ring(hole, true);
             }
         }
@@ -558,20 +736,39 @@ impl CapPolygon {
             .min_by(|&a, &b| ring[a].x.total_cmp(&ring[b].x).then(ring[a].y.total_cmp(&ring[b].y)))
             .unwrap_or(0);
         let at = |step: usize| ring[(start + step) % count];
-        let off_line = |point: mesh_data::Vertex, from: mesh_data::Vertex, to: mesh_data::Vertex| {
-            let span = glam::DVec2::new(to.x - from.x, to.y - from.y);
-            let offset = glam::DVec2::new(point.x - from.x, point.y - from.y);
-            let length = span.length();
-            if length > 0.0 { span.perp_dot(offset).abs() / length } else { offset.length() }
-        };
         // Steps round the ring, from `start`, of the points kept as corners.
         let mut kept = vec![0];
         let mut anchor = 0;
         while anchor < count {
             // Stretch the edge from `anchor` for as long as every point it
-            // skips stays on it; step `count` is the start again.
+            // skips stays on it; step `count` is the start again. Each
+            // skipped point allows the edge only the directions that pass
+            // within the tolerance of it, so the directions still allowed
+            // are kept as one range, narrowed point by point: one test per
+            // point rather than every skipped point again at each step.
+            let from = glam::DVec2::new(at(anchor).x, at(anchor).y);
+            let offset = |step: usize| glam::DVec2::new(at(step).x, at(step).y) - from;
+            let reference = offset(anchor + 1).try_normalize().unwrap_or(glam::DVec2::X);
+            let angle = |vector: glam::DVec2| reference.perp_dot(vector).atan2(reference.dot(vector));
+            let (mut low, mut high) = (f64::NEG_INFINITY, f64::INFINITY);
             let mut end = anchor + 1;
-            while end < count && (anchor + 1..=end).all(|skipped| off_line(at(skipped), at(anchor), at(end + 1)) <= COLLINEAR_TOLERANCE) {
+            while end < count {
+                let skipped = offset(end);
+                let reach = skipped.length();
+                // A point this close to the anchor lies on every line through it.
+                let (narrow_low, narrow_high) = if reach <= COLLINEAR_TOLERANCE {
+                    (low, high)
+                } else {
+                    let spread = (COLLINEAR_TOLERANCE / reach).asin();
+                    let direction = angle(skipped);
+                    (low.max(direction - spread), high.min(direction + spread))
+                };
+                let next = offset(end + 1);
+                let direction = angle(next);
+                if next.length() <= COLLINEAR_TOLERANCE || direction < narrow_low || direction > narrow_high {
+                    break;
+                }
+                (low, high) = (narrow_low, narrow_high);
                 end += 1;
             }
             if end < count {
@@ -673,8 +870,8 @@ fn boundary_rings(sheet: &(Vec<mesh_data::Vertex>, Vec<[u32; 3]>), weld: Weld) -
 fn planar_cap_rings(segments: &[[mesh_data::Vertex; 2]], weld: Weld) -> Vec<Vec<mesh_data::Vertex>> {
     use std::collections::{HashMap, HashSet};
 
-    let mut points: HashMap<PointKey, mesh_data::Vertex> = HashMap::new();
-    let mut adjacency: HashMap<PointKey, Vec<PointKey>> = HashMap::new();
+    let mut points: HashMap<PointKey, mesh_data::Vertex, foldhash::fast::RandomState> = HashMap::default();
+    let mut adjacency: HashMap<PointKey, Vec<PointKey>, foldhash::fast::RandomState> = HashMap::default();
     for [a, b] in segments {
         let (ka, kb) = (weld.key(*a), weld.key(*b));
         if ka == kb {
@@ -1070,11 +1267,41 @@ pub(crate) struct ClippedSolid {
     pub(crate) internal_wall: Vec<bool>,
 }
 
+/// A body being cut down to a cell, with which of its faces are walls a cut
+/// made along the polygon's own boundary, and which along an internal line.
+/// Both masks are parallel to the slab's faces.
+type CutPiece = (Slab, Vec<bool>, Vec<bool>);
+
+/// One finished cell: its piece and its volume.
+type Cell = (Slab, Vec<bool>, Vec<bool>, f64);
+
+/// A region is cut cell by cell once it has no more ring points than this and
+/// the body over it no more faces than [`CLIP_LEAF_FACES`]; until then it is
+/// halved. Cutting cell by cell costs about the region's points times the
+/// body's faces, so both have to be small.
+const CLIP_LEAF_POINTS: usize = 12;
+const CLIP_LEAF_FACES: usize = 2048;
+
+/// A halving is kept only while its two halves hold less than this many times
+/// the faces of the body they split. Each cut adds a cap, so halves never
+/// quite halve; kept regardless, a split whose caps outweigh what it removed
+/// would grow the work at every level instead of shrinking it.
+const CLIP_MAX_GROWTH: f64 = 1.6;
+
+/// Halvings stop here whatever the region: at most `2^12` pieces.
+const CLIP_MAX_DEPTH: usize = 12;
+
 /// Intersect a slab with a vertical polygon (including holes).
 ///
 /// Earcut partitions its plan into disjoint convex cells. Each cell is clipped
 /// and capped independently; shared vertical walls cancel in signed volume
 /// integration and have zero contribution to block-overlap columns.
+///
+/// A cell's cut walks every face of the body it starts from, so a polygon of
+/// a few thousand points - the outline of ground the topography crosses - is
+/// first halved, body and polygon together, until each half is small; its
+/// cells then start from that half alone. Cost goes from cells times body to
+/// roughly body times the depth of the halving.
 ///
 /// The result is a soup of those cells, and is deliberately *not* edge-manifold:
 /// cells meeting at an internal wall triangulate it independently, so
@@ -1089,9 +1316,289 @@ pub(crate) struct ClippedSolid {
 /// Failing here would take the whole View render down for a condition the page
 /// already knows how to show.
 pub(crate) fn clip_solid_to_plan(mesh: &mesh_data::Triangulation, face: &[Vec<glam::DVec2>], cancel: &crate::app::jobs::CancelFlag) -> Result<ClippedSolid> {
+    let original: Slab = (mesh.vertices().to_vec(), mesh.face_vertex_indices_iter().map(|f| f.map(|i| i as u32)).collect());
+    clip_piece_to_plan(original, face, cancel)
+}
+
+/// [`clip_solid_to_plan`] over a body already held as a slab - one piece of
+/// separate ground split off a flitch. Never an earlier clip's output: that
+/// is a soup of unwelded cells, and clipping it again grows without bound.
+pub(crate) fn clip_piece_to_plan(slab: Slab, face: &[Vec<glam::DVec2>], cancel: &crate::app::jobs::CancelFlag) -> Result<ClippedSolid> {
+    let floor = slab.0.iter().map(|vertex| vertex.z).fold(f64::INFINITY, f64::min);
+    let count = slab.1.len();
+    // The body's own surfaces are not walls the clip made.
+    let cells = clip_region((slab, vec![false; count], vec![false; count]), face.to_vec(), face, floor, 0, cancel)?;
+    let mut result: Slab = (Vec::new(), Vec::new());
+    let mut boundary_wall = Vec::new();
+    let mut internal_wall = Vec::new();
+    let mut volume = 0.0;
+    for (slab, wall, internal, cell_volume) in cells {
+        volume += cell_volume;
+        boundary_wall.extend(wall);
+        internal_wall.extend(internal);
+        let offset = result.0.len() as u32;
+        result.0.extend(slab.0);
+        result.1.extend(slab.1.into_iter().map(|face| face.map(|index| index + offset)));
+    }
+    debug_assert_eq!(boundary_wall.len(), result.1.len());
+    Ok(ClippedSolid {
+        slab: result,
+        volume,
+        boundary_wall,
+        internal_wall,
+    })
+}
+
+/// One plan face's share of a body split by [`split_solid_by_plan`]: its
+/// faces, the volume they enclose, and which source vertex each of its
+/// vertices was, so per-vertex data such as outline edges can follow it.
+pub(crate) struct SplitPiece {
+    pub(crate) slab: Slab,
+    pub(crate) volume: f64,
+    pub(crate) source_vertex: Vec<u32>,
+}
+
+/// Split a body among plan faces without cutting it, when every face is
+/// whole separate ground: the flitch footprint split only where the ground
+/// itself comes apart, with no line drawn across it.
+///
+/// The body's edge-connected pieces are each handed to the face holding a
+/// point of their largest plan triangle. `None` - and the caller clips
+/// instead - when a piece lands in no face or in two, or a face gets none.
+/// The caller must only ask when no line crosses the ground: a piece is
+/// never checked to lie wholly inside its face.
+pub(crate) fn split_solid_by_plan(mesh: &mesh_data::Triangulation, faces: &[&[Vec<glam::DVec2>]]) -> Option<Vec<SplitPiece>> {
+    use std::collections::HashMap;
+
+    let vertices = mesh.vertices();
+    let triangles: Vec<[u32; 3]> = mesh.face_vertex_indices_iter().map(|f| f.map(|i| i as u32)).collect();
+    let weld = Weld::of(vertices);
+
+    // Faces sharing an edge, by welded position, are one piece.
+    let mut parent: Vec<u32> = (0..triangles.len() as u32).collect();
+    fn root(parent: &mut [u32], mut index: u32) -> u32 {
+        while parent[index as usize] != index {
+            parent[index as usize] = parent[parent[index as usize] as usize];
+            index = parent[index as usize];
+        }
+        index
+    }
+    let mut first: HashMap<EdgeKey, u32, foldhash::fast::RandomState> = HashMap::default();
+    for (index, triangle) in triangles.iter().enumerate() {
+        for (a, b) in [(0, 1), (1, 2), (2, 0)] {
+            let (ka, kb) = (weld.key(vertices[triangle[a] as usize]), weld.key(vertices[triangle[b] as usize]));
+            if ka == kb {
+                continue;
+            }
+            let other = *first.entry(if ka <= kb { (ka, kb) } else { (kb, ka) }).or_insert(index as u32);
+            let (x, y) = (root(&mut parent, other), root(&mut parent, index as u32));
+            if x != y {
+                parent[x as usize] = y;
+            }
+        }
+    }
+
+    // Each piece's probe: the centroid of its largest triangle in plan.
+    let mut probe: HashMap<u32, (f64, glam::DVec2), foldhash::fast::RandomState> = HashMap::default();
+    for (index, triangle) in triangles.iter().enumerate() {
+        let [a, b, c] = triangle.map(|i| glam::DVec2::new(vertices[i as usize].x, vertices[i as usize].y));
+        let area = (b - a).perp_dot(c - a).abs();
+        let entry = probe.entry(root(&mut parent, index as u32)).or_insert((-1.0, glam::DVec2::ZERO));
+        if area > entry.0 {
+            *entry = (area, (a + b + c) / 3.0);
+        }
+    }
+    let mut owner: HashMap<u32, usize, foldhash::fast::RandomState> = HashMap::default();
+    for (piece, (area, point)) in probe {
+        // A piece with no extent in plan is all wall, and says nothing.
+        if area <= 0.0 {
+            return None;
+        }
+        let mut holders = faces.iter().enumerate().filter(|(_, face)| crate::model::arrangement::point_in_face(face, point));
+        let (face, None) = (holders.next()?.0, holders.next()) else { return None };
+        owner.insert(piece, face);
+    }
+
+    let origin = mesh.bounds().min;
+    let mut pieces: Vec<SplitPiece> = (0..faces.len())
+        .map(|_| SplitPiece {
+            slab: (Vec::new(), Vec::new()),
+            volume: 0.0,
+            source_vertex: Vec::new(),
+        })
+        .collect();
+    let mut local: Vec<HashMap<u32, u32, foldhash::fast::RandomState>> = (0..faces.len()).map(|_| HashMap::default()).collect();
+    for (index, triangle) in triangles.iter().enumerate() {
+        let face = owner[&root(&mut parent, index as u32)];
+        let piece = &mut pieces[face];
+        let corners = triangle.map(|source| {
+            *local[face].entry(source).or_insert_with(|| {
+                piece.slab.0.push(vertices[source as usize]);
+                piece.source_vertex.push(source);
+                piece.slab.0.len() as u32 - 1
+            })
+        });
+        piece.slab.1.push(corners);
+        let [a, b, c] = triangle.map(|i| {
+            let v = vertices[i as usize];
+            glam::DVec3::new(v.x - origin.x, v.y - origin.y, v.z - origin.z)
+        });
+        piece.volume += a.dot(b.cross(c)) / 6.0;
+    }
+    if pieces.iter().any(|piece| piece.slab.1.is_empty()) {
+        return None;
+    }
+    for piece in &mut pieces {
+        piece.volume = piece.volume.abs();
+    }
+    Some(pieces)
+}
+
+/// Cut `piece` to `region`, a part of `face` the piece already lies over.
+/// Halves both along a line across the region's longer side while either is
+/// big and halving pays, and cuts it cell by cell once not. Cells come back in a fixed
+/// order - the left half's before the right's - so the result does not depend
+/// on how the halves were scheduled.
+fn clip_region(piece: CutPiece, region: Vec<Vec<glam::DVec2>>, face: &[Vec<glam::DVec2>], floor: f64, depth: usize, cancel: &crate::app::jobs::CancelFlag) -> Result<Vec<Cell>> {
+    anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+    if piece.0.1.is_empty() {
+        return Ok(Vec::new());
+    }
+    let points: usize = region.iter().map(Vec::len).sum();
+    if (points > CLIP_LEAF_POINTS || piece.0.1.len() > CLIP_LEAF_FACES)
+        && depth < CLIP_MAX_DEPTH
+        && let Some(((a, b), left, right)) = halve_region(&region)
+    {
+        let (left_piece, right_piece) = rayon::join(|| clip_half(&piece, a, b, false, floor), || clip_half(&piece, b, a, false, floor));
+        if (left_piece.0.1.len() + right_piece.0.1.len()) as f64 > piece.0.1.len() as f64 * CLIP_MAX_GROWTH {
+            // The split cost more than it saved: cut this region whole.
+            drop((left_piece, right_piece));
+            return clip_cells(&piece, &region, face, floor, cancel);
+        }
+        drop(piece);
+        let (left_cells, right_cells) = rayon::join(
+            || -> Result<Vec<Cell>> {
+                let mut cells = Vec::new();
+                for part in left {
+                    cells.extend(clip_region(left_piece.clone(), part, face, floor, depth + 1, cancel)?);
+                }
+                Ok(cells)
+            },
+            || -> Result<Vec<Cell>> {
+                let mut cells = Vec::new();
+                for part in right {
+                    cells.extend(clip_region(right_piece.clone(), part, face, floor, depth + 1, cancel)?);
+                }
+                Ok(cells)
+            },
+        );
+        let mut cells = left_cells?;
+        cells.extend(right_cells?);
+        return Ok(cells);
+    }
+    clip_cells(&piece, &region, face, floor, cancel)
+}
+
+/// Split a region along a line through the middle of its longer side: the
+/// line, and the parts either side of it. `None` when the split leaves no part
+/// on one side, so the region is cut whole instead.
+#[allow(clippy::type_complexity, reason = "the split line and its two sides, used once by the caller")]
+fn halve_region(region: &[Vec<glam::DVec2>]) -> Option<((glam::DVec2, glam::DVec2), Vec<Vec<Vec<glam::DVec2>>>, Vec<Vec<Vec<glam::DVec2>>>)> {
+    let (min, max) = region
+        .iter()
+        .flatten()
+        .fold((glam::DVec2::splat(f64::INFINITY), glam::DVec2::splat(f64::NEG_INFINITY)), |(min, max), point| {
+            (min.min(*point), max.max(*point))
+        });
+    let size = max - min;
+    if !size.is_finite() || size.max_element() <= 0.0 {
+        return None;
+    }
+    let middle = (min + max) / 2.0;
+    let margin = size.max_element() + 1.0;
+    // Left of a -> b is the low side of the split axis.
+    let (a, b) = if size.x >= size.y {
+        (glam::DVec2::new(middle.x, max.y + margin), glam::DVec2::new(middle.x, min.y - margin))
+    } else {
+        (glam::DVec2::new(min.x - margin, middle.y), glam::DVec2::new(max.x + margin, middle.y))
+    };
+    let mut left = Vec::new();
+    let mut right = Vec::new();
+    for part in crate::model::arrangement::subdivide(region, &[vec![a, b]]) {
+        let point = crate::model::arrangement::representative_point(&part)?;
+        if (b - a).perp_dot(point - a) > 0.0 {
+            left.push(part);
+        } else {
+            right.push(part);
+        }
+    }
+    (!left.is_empty() && !right.is_empty()).then_some(((a, b), left, right))
+}
+
+/// Keep the part of `piece` left of the vertical plane through `a -> b`, and
+/// close it with a cap there - a wall along the polygon's boundary when
+/// `on_boundary`, an internal one otherwise.
+fn clip_half(piece: &CutPiece, a: glam::DVec2, b: glam::DVec2, on_boundary: bool, floor: f64) -> CutPiece {
+    let (slab, wall, internal) = piece;
+    let edge = (b - a).normalize();
+    let tangent = glam::DVec3::new(edge.x, edge.y, 0.0);
+    let normal = glam::DVec3::new(-edge.y, edge.x, 0.0);
+    let origin = glam::DVec3::new(a.x, a.y, floor);
+    let local: Vec<_> = slab
+        .0
+        .iter()
+        .map(|p| {
+            let delta = glam::DVec3::new(p.x, p.y, p.z) - origin;
+            let distance = delta.dot(normal);
+            mesh_data::Vertex::new(delta.z, delta.dot(tangent), if distance.abs() < 1e-8 { 0.0 } else { distance })
+        })
+        .collect();
+    let high = local.iter().map(|p| p.z).fold(0.0, f64::max) + 1.0;
+    let mut clipped: Slab = (Vec::new(), Vec::new());
+    let mut clipped_wall = Vec::new();
+    let mut clipped_internal = Vec::new();
+    for (index, indices) in slab.1.iter().enumerate() {
+        let triangle = indices.map(|index| local[index as usize]);
+        // A coplanar face with material on the discarded side is not
+        // a zero-thickness part of the retained volume.
+        if triangle.iter().all(|p| p.z == 0.0)
+            && (triangle[1].x - triangle[0].x) * (triangle[2].y - triangle[0].y) - (triangle[1].y - triangle[0].y) * (triangle[2].x - triangle[0].x) > 0.0
+        {
+            continue;
+        }
+        for tri in super::cuts::clip_triangle_z(triangle, 0.0, high) {
+            let v = tri.map(|p| glam::DVec3::new(p.x, p.y, p.z));
+            if (v[1] - v[0]).cross(v[2] - v[0]).length_squared() <= 1e-18 {
+                continue;
+            }
+            let start = clipped.0.len() as u32;
+            clipped.0.extend(tri);
+            clipped.1.push([start, start + 1, start + 2]);
+            clipped_wall.push(wall[index]);
+            clipped_internal.push(internal[index]);
+        }
+    }
+    if !clipped.1.is_empty() {
+        cap_slab(&mut clipped, 0.0, high);
+    }
+    // Everything `cap_slab` just appended closes this cut plane, so it
+    // is wall - and bounds the body only where this edge does.
+    clipped_wall.resize(clipped.1.len(), on_boundary);
+    clipped_internal.resize(clipped.1.len(), !on_boundary);
+    for p in &mut clipped.0 {
+        let world = origin + glam::DVec3::Z * p.x + tangent * p.y + normal * p.z;
+        *p = mesh_data::Vertex::new(world.x, world.y, world.z);
+    }
+    (clipped, clipped_wall, clipped_internal)
+}
+
+/// Cut `piece` to each earcut cell of `region`, in parallel and returned in
+/// earcut order. A cell edge cuts a boundary wall only where it runs along
+/// `face`, the whole polygon - not along a line a halving drew.
+fn clip_cells(piece: &CutPiece, region: &[Vec<glam::DVec2>], face: &[Vec<glam::DVec2>], floor: f64, cancel: &crate::app::jobs::CancelFlag) -> Result<Vec<Cell>> {
     let mut points = Vec::new();
     let mut holes = Vec::new();
-    for (i, ring) in face.iter().enumerate() {
+    for (i, ring) in region.iter().enumerate() {
         if i > 0 {
             holes.push(points.len());
         }
@@ -1099,88 +1606,25 @@ pub(crate) fn clip_solid_to_plan(mesh: &mesh_data::Triangulation, face: &[Vec<gl
     }
     let mut triangles = Vec::new();
     earcut::Earcut::new().earcut(points.iter().map(|p| [p.x, p.y]), &holes, &mut triangles);
-    let original: Slab = (mesh.vertices().to_vec(), mesh.face_vertex_indices_iter().map(|f| f.map(|i| i as u32)).collect());
-    // Each cell clips the whole body three times and shares nothing with the
-    // others, so the cells run in parallel. They are joined in earcut order,
-    // and the volume summed in that order, so the result is the same one a
-    // sequential walk produces.
-    /// One cell's body, its boundary-wall and internal-wall masks, and its volume.
-    type Cell = (Slab, Vec<bool>, Vec<bool>, f64);
     let clip_cell = |triangle: &[usize; 3]| -> Result<Option<Cell>> {
         anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
         let mut cell = [points[triangle[0]], points[triangle[1]], points[triangle[2]]];
         if (cell[1] - cell[0]).perp_dot(cell[2] - cell[0]) < 0.0 {
             cell.swap(1, 2);
         }
-        // Only the cell edges that run along the polygon's own boundary cut a
-        // wall that bounds the result. The rest are the decomposition's
-        // internal diagonals, whose walls are shared with the cell next door
-        // and are inside the body, not on it.
-        let cell_on_boundary: [bool; 3] = std::array::from_fn(|i| segment_follows(face, cell[i], cell[(i + 1) % 3]));
-        let mut slab = original.clone();
-        // The body's own surfaces are not walls the clip made.
-        let mut wall = vec![false; slab.1.len()];
-        let mut internal = vec![false; slab.1.len()];
+        let mut cut = piece.clone();
         for i in 0..3 {
-            if slab.1.is_empty() {
+            if cut.0.1.is_empty() {
                 break;
             }
-            let edge = (cell[(i + 1) % 3] - cell[i]).normalize();
-            let tangent = glam::DVec3::new(edge.x, edge.y, 0.0);
-            let normal = glam::DVec3::new(-edge.y, edge.x, 0.0);
-            let origin = glam::DVec3::new(cell[i].x, cell[i].y, mesh.bounds().min.z);
-            let local: Vec<_> = slab
-                .0
-                .iter()
-                .map(|p| {
-                    let delta = glam::DVec3::new(p.x, p.y, p.z) - origin;
-                    let distance = delta.dot(normal);
-                    mesh_data::Vertex::new(delta.z, delta.dot(tangent), if distance.abs() < 1e-8 { 0.0 } else { distance })
-                })
-                .collect();
-            let high = local.iter().map(|p| p.z).fold(0.0, f64::max) + 1.0;
-            let mut clipped: Slab = (Vec::new(), Vec::new());
-            let mut clipped_wall = Vec::new();
-            let mut clipped_internal = Vec::new();
-            for (index, indices) in slab.1.iter().enumerate() {
-                if index.is_multiple_of(1024) {
-                    anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
-                }
-                let triangle = indices.map(|index| local[index as usize]);
-                // A coplanar face with material on the discarded side is not
-                // a zero-thickness part of the retained volume.
-                if triangle.iter().all(|p| p.z == 0.0)
-                    && (triangle[1].x - triangle[0].x) * (triangle[2].y - triangle[0].y) - (triangle[1].y - triangle[0].y) * (triangle[2].x - triangle[0].x) > 0.0
-                {
-                    continue;
-                }
-                for tri in super::cuts::clip_triangle_z(triangle, 0.0, high) {
-                    let v = tri.map(|p| glam::DVec3::new(p.x, p.y, p.z));
-                    if (v[1] - v[0]).cross(v[2] - v[0]).length_squared() <= 1e-18 {
-                        continue;
-                    }
-                    let start = clipped.0.len() as u32;
-                    clipped.0.extend(tri);
-                    clipped.1.push([start, start + 1, start + 2]);
-                    clipped_wall.push(wall[index]);
-                    clipped_internal.push(internal[index]);
-                }
-            }
-            if !clipped.1.is_empty() {
-                cap_slab(&mut clipped, 0.0, high);
-            }
-            // Everything `cap_slab` just appended closes this cut plane, so it
-            // is wall - and bounds the body only where this edge does.
-            clipped_wall.resize(clipped.1.len(), cell_on_boundary[i]);
-            clipped_internal.resize(clipped.1.len(), !cell_on_boundary[i]);
-            for p in &mut clipped.0 {
-                let world = origin + glam::DVec3::Z * p.x + tangent * p.y + normal * p.z;
-                *p = mesh_data::Vertex::new(world.x, world.y, world.z);
-            }
-            slab = clipped;
-            wall = clipped_wall;
-            internal = clipped_internal;
+            // Only the cell edges that run along the polygon's own boundary
+            // cut a wall that bounds the result. The rest are the
+            // decomposition's internal diagonals, whose walls are shared with
+            // the cell next door and are inside the body, not on it.
+            let (a, b) = (cell[i], cell[(i + 1) % 3]);
+            cut = clip_half(&cut, a, b, segment_follows(face, a, b), floor);
         }
+        let (mut slab, wall, internal) = cut;
         if slab.1.is_empty() {
             return Ok(None);
         }
@@ -1210,26 +1654,15 @@ pub(crate) fn clip_solid_to_plan(mesh: &mesh_data::Triangulation, face: &[Vec<gl
         }
         Ok(Some((slab, wall, internal, signed.abs())))
     };
-    let cells = triangles.as_chunks::<3>().0.par_iter().map(clip_cell).collect::<Result<Vec<_>>>()?;
-    let mut result: Slab = (Vec::new(), Vec::new());
-    let mut boundary_wall = Vec::new();
-    let mut internal_wall = Vec::new();
-    let mut volume = 0.0;
-    for (slab, wall, internal, cell_volume) in cells.into_iter().flatten() {
-        volume += cell_volume;
-        boundary_wall.extend(wall);
-        internal_wall.extend(internal);
-        let offset = result.0.len() as u32;
-        result.0.extend(slab.0);
-        result.1.extend(slab.1.into_iter().map(|face| face.map(|index| index + offset)));
-    }
-    debug_assert_eq!(boundary_wall.len(), result.1.len());
-    Ok(ClippedSolid {
-        slab: result,
-        volume,
-        boundary_wall,
-        internal_wall,
-    })
+    Ok(triangles
+        .as_chunks::<3>()
+        .0
+        .par_iter()
+        .map(clip_cell)
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect())
 }
 
 /// The volume between a vertically-closed body's floor and its roof.

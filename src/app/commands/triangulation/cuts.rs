@@ -601,9 +601,19 @@ pub(super) fn clip_triangle_plane(v: [mesh_data::Vertex; 3], z_plane: f64, keep_
     }
 }
 
+/// Where the segment from `a` to `b` crosses height `z`.
+///
+/// The ends are taken in one fixed order whichever way round they are given,
+/// so the two triangles sharing an edge put its crossing at bit-for-bit the
+/// same point. Interpolated from opposite ends, the two could differ in the
+/// last place - enough, now and then, to land either side of a weld step and
+/// leave a crack in the slab the edge belongs to.
 pub(super) fn lerp_at_z(a: mesh_data::Vertex, b: mesh_data::Vertex, z: f64) -> mesh_data::Vertex {
+    let swapped = (b.x, b.y, b.z) < (a.x, a.y, a.z);
+    let (a, b) = if swapped { (b, a) } else { (a, b) };
     if (b.z - a.z).abs() < 1e-12 {
-        return a;
+        // Level: the end the caller gave first, as before.
+        return if swapped { b } else { a };
     }
     let t = (z - a.z) / (b.z - a.z);
     mesh_data::Vertex::new(a.x + t * (b.x - a.x), a.y + t * (b.y - a.y), z)
@@ -629,6 +639,7 @@ pub(super) fn clip_mesh_by_surface(
 
     let mut output_vertices = Vec::new();
     let mut output_faces = Vec::new();
+    let mut overlap = Vec::new();
 
     // One clip per target face, so faces walked is an exact measure.
     let face_count = target.face_count() as u64;
@@ -644,13 +655,21 @@ pub(super) fn clip_mesh_by_surface(
             .xy_bounds_candidate_indices(&reference_surface.mesh, target_bounds.0, target_bounds.1)
         {
             let reference_triangle = reference_surface.triangles[reference_index];
-            let overlap = clip_target_triangle_to_reference_xy(target_triangle, reference_triangle);
+            // Exact half-planes: the reference triangles tile the plane, so
+            // the pieces of one target face must tile it too. The tolerant
+            // clip keeps a point up to `XY_TOL` past an edge where it is,
+            // while the neighbour across that edge cuts at the edge itself,
+            // and the two pieces then fail to share their corners - a crack
+            // wherever a target edge passes within a tenth of a millimetre of
+            // a reference vertex, which a solid then reports as open.
+            clip_target_triangle_to_reference_xy_exact_into(target_triangle, reference_triangle, &mut overlap);
             if overlap.len() < 3 {
                 continue;
             }
 
             let polyline: Vec<SurfaceClipVertex> = overlap
-                .into_iter()
+                .iter()
+                .copied()
                 .map(|point| {
                     let reference_z = bary_z(point.x, point.y, reference_triangle);
                     SurfaceClipVertex {

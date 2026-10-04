@@ -260,16 +260,30 @@ fn canonical_rotation(points: &[DVec2], closed: bool) -> Vec<DVec2> {
 }
 
 /// Append a polyline's edges, closing it when it is a ring.
+///
+/// Points within [`XY_TOL`] of the last one kept are dropped first, so every
+/// edge starts where the one before it ended. Skipping a too-short edge
+/// instead let the next one start from its far end, which the weld could put
+/// on a different node from the one the chain had reached: the ring came
+/// apart there, and pruning the loose ends then took all of it.
 fn push_ring(segments: &mut Vec<[DVec2; 2]>, points: &[DVec2], closed: bool) {
-    if points.len() < 2 {
+    let mut kept: Vec<DVec2> = Vec::with_capacity(points.len());
+    for &point in points {
+        if kept.last().is_none_or(|last| last.distance_squared(point) > XY_TOL * XY_TOL) {
+            kept.push(point);
+        }
+    }
+    if closed {
+        while kept.len() > 1 && kept[0].distance_squared(kept[kept.len() - 1]) <= XY_TOL * XY_TOL {
+            kept.pop();
+        }
+    }
+    if kept.len() < 2 {
         return;
     }
-    let last = if closed { points.len() } else { points.len() - 1 };
+    let last = if closed { kept.len() } else { kept.len() - 1 };
     for index in 0..last {
-        let (a, b) = (points[index], points[(index + 1) % points.len()]);
-        if a.distance_squared(b) > XY_TOL * XY_TOL {
-            segments.push([a, b]);
-        }
+        segments.push([kept[index], kept[(index + 1) % kept.len()]]);
     }
 }
 
