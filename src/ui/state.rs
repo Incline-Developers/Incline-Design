@@ -1807,12 +1807,12 @@ impl RenameTarget {
 }
 
 /// Draft "type" choice in the Solids Setup's New Field dialog - the UI-only
-/// counterpart of [`crate::model::ReserveAggregation`], which additionally
-/// carries a `Sum` field's own id once "Weighted Average" is picked.
+/// counterpart of [`crate::model::ReserveAggregation`]. An average is weighted
+/// by block volume, or by the `Sum` field picked beside it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ReserveFieldKind {
     Sum,
-    WeightedAverage,
+    Average,
     /// A grouping label, e.g. "Rock Type" - see [`crate::model::ReserveAggregation::Category`].
     Category,
 }

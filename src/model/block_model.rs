@@ -926,6 +926,26 @@ impl ReserveMappingSource {
     }
 }
 
+/// Whether a column's name says it is per cubic metre: a density.
+pub(crate) fn looks_like_density(column: &str) -> bool {
+    let name = column.to_lowercase();
+    ["dens", "sg", "t_m3", "t/m3", "kg_m3"].iter().any(|hint| name.contains(hint))
+}
+
+/// Each block's volume in cubic metres, which a volume-averaged field is
+/// weighted by. `None` when the geometry does not match the model.
+pub(crate) fn block_volumes(model: &BlockModelData, blocks: &BlockBoundsSource) -> Option<Arc<Vec<f64>>> {
+    if blocks.len() != model.metadata.n_blocks {
+        return None;
+    }
+    // The same volume the reserve scan measures a block's overlaps against.
+    let stretch = model.rotation().determinant().abs();
+    let volumes = (0..blocks.len())
+        .map(|index| blocks.get(index).map_or(f64::NAN, |bounds| (bounds.upper - bounds.lower).element_product() * stretch))
+        .collect();
+    Some(Arc::new(volumes))
+}
+
 /// `column` times each block's world volume, for a
 /// [`ReserveMappingSource::PerVolume`] mapping. `None` when the column is not
 /// resident or does not match the block geometry; the mapping's resolver has
@@ -1053,6 +1073,7 @@ pub(crate) fn compute_reserve_totals(
                 }
                 resolve(weight_field)
             }
+            ReserveAggregation::VolumeAverage => block_volumes(model, geometry).map(ResolvedReserveValues::Column),
             _ => None,
         };
         let (mut sum, mut weight_sum) = (0.0, 0.0);

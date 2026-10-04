@@ -861,7 +861,7 @@ pub(crate) fn condition_note(document: &Document, condition: &FieldCondition) ->
     let aggregation = document.reserve_fields().iter().find(|field| field.id == condition.field).map(|field| field.aggregation);
     match aggregation {
         Some(ReserveAggregation::Sum) => tr!("destination-condition-note-sum"),
-        Some(ReserveAggregation::WeightedAverage { .. }) => tr!("destination-condition-note-average"),
+        Some(ReserveAggregation::WeightedAverage { .. } | ReserveAggregation::VolumeAverage) => tr!("destination-condition-note-average"),
         Some(ReserveAggregation::Category) => tr!("destination-condition-note-category"),
         None => tr!("destination-stage-field-missing"),
     }

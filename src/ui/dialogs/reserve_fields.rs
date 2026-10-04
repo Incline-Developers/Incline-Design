@@ -13,7 +13,7 @@ use crate::{
 fn kind_label(kind: ReserveFieldKind) -> String {
     match kind {
         ReserveFieldKind::Sum => tr!("planning-stat-sum"),
-        ReserveFieldKind::WeightedAverage => tr!("reserve-weighted-average"),
+        ReserveFieldKind::Average => tr!("reserve-average"),
         ReserveFieldKind::Category => tr!("csv-block-model-category"),
     }
 }
@@ -21,8 +21,8 @@ fn kind_label(kind: ReserveFieldKind) -> String {
 /// Draw the dialog that adds one field to the project's Reserves Field List.
 ///
 /// A field is a name plus how it aggregates: summed outright, averaged
-/// weighted by another (necessarily summed) field - e.g. a grade weighted by
-/// tonnes - or, for `Category`, not aggregated at all: a grouping label (e.g.
+/// weighted by block volume or by another (necessarily summed) field - e.g. a
+/// grade weighted by tonnes - or, for `Category`, not aggregated at all: a grouping label (e.g.
 /// "Rock Type") each block model maps onto one of its own categorical
 /// columns, for a future breakdown of the numeric fields by category.
 pub(crate) fn draw_new_reserve_field_dialog(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document, commands: &mut Vec<UiCommand>) {
@@ -38,7 +38,7 @@ pub(crate) fn draw_new_reserve_field_dialog(ui: &mut egui::Ui, editor: &mut Edit
             MenuFieldText::new(tr!("planning-name"), &mut editor.new_reserve_field_name)
                 .hint_text(tr!("reserve-field-name-hint"))
                 .show(ui);
-            const KINDS: [ReserveFieldKind; 3] = [ReserveFieldKind::Sum, ReserveFieldKind::WeightedAverage, ReserveFieldKind::Category];
+            const KINDS: [ReserveFieldKind; 3] = [ReserveFieldKind::Sum, ReserveFieldKind::Average, ReserveFieldKind::Category];
             let selected_kind_text = kind_label(editor.new_reserve_field_kind);
             MenuFieldCombo::new(
                 "new_reserve_field_kind",
@@ -55,38 +55,41 @@ pub(crate) fn draw_new_reserve_field_dialog(ui: &mut egui::Ui, editor: &mut Edit
                 .collect();
             let note = match editor.new_reserve_field_kind {
                 ReserveFieldKind::Sum => tr!("reserve-kind-sum-note"),
-                ReserveFieldKind::WeightedAverage if sum_fields.is_empty() => tr!("reserve-kind-average-needs-sum"),
-                ReserveFieldKind::WeightedAverage => tr!("reserve-kind-average-note"),
+                ReserveFieldKind::Average => tr!("reserve-kind-average-note"),
                 ReserveFieldKind::Category => tr!("reserve-kind-category-note"),
             };
             menu::menu_note(ui, note);
-            if editor.new_reserve_field_kind == ReserveFieldKind::WeightedAverage && !sum_fields.is_empty() {
-                if editor.new_reserve_field_weight_field.is_none_or(|id| !sum_fields.iter().any(|field| field.id == id)) {
-                    editor.new_reserve_field_weight_field = sum_fields.first().map(|field| field.id);
+            if editor.new_reserve_field_kind == ReserveFieldKind::Average {
+                // Weighted by block volume (`None`) or by a Sum field.
+                if editor.new_reserve_field_weight_field.is_some_and(|id| !sum_fields.iter().any(|field| field.id == id)) {
+                    editor.new_reserve_field_weight_field = None;
                 }
-                let selected_text = editor
-                    .new_reserve_field_weight_field
-                    .and_then(|id| sum_fields.iter().find(|field| field.id == id))
-                    .map(|field| field.name.clone())
-                    .unwrap_or_else(|| tr!("grade-calendar-none"));
+                let weight_name = |weight: Option<crate::model::ReserveFieldId>| {
+                    weight
+                        .and_then(|id| sum_fields.iter().find(|field| field.id == id))
+                        .map_or_else(|| tr!("reserve-block-volume"), |field| field.name.clone())
+                };
+                let selected_text = weight_name(editor.new_reserve_field_weight_field);
                 MenuFieldCombo::new(
                     "new_reserve_field_weight",
                     tr!("reserve-weighted"),
                     &mut editor.new_reserve_field_weight_field,
                     selected_text,
-                    sum_fields.iter().map(|field| (Some(field.id), field.name.clone().into())),
+                    std::iter::once(None)
+                        .chain(sum_fields.iter().map(|field| Some(field.id)))
+                        .map(|weight| (weight, weight_name(weight).into())),
                 )
                 .show(ui);
             }
             menu::menu_actions(ui, |ui| {
-                let can_add = !editor.new_reserve_field_name.trim().is_empty()
-                    && (editor.new_reserve_field_kind != ReserveFieldKind::WeightedAverage || editor.new_reserve_field_weight_field.is_some());
+                let can_add = !editor.new_reserve_field_name.trim().is_empty();
                 let submitted = menu::dialog_confirm_pressed(ui.ctx());
                 if (submitted || ui.add(MenuButton::new(tr!("reserve-add-field")).primary().enabled(can_add)).clicked()) && can_add {
                     let aggregation = match editor.new_reserve_field_kind {
                         ReserveFieldKind::Sum => ReserveAggregation::Sum,
-                        ReserveFieldKind::WeightedAverage => ReserveAggregation::WeightedAverage {
-                            weight_field: editor.new_reserve_field_weight_field.expect("checked by can_add"),
+                        ReserveFieldKind::Average => match editor.new_reserve_field_weight_field {
+                            Some(weight_field) => ReserveAggregation::WeightedAverage { weight_field },
+                            None => ReserveAggregation::VolumeAverage,
                         },
                         ReserveFieldKind::Category => ReserveAggregation::Category,
                     };

@@ -139,6 +139,9 @@ pub(crate) enum ReserveAggregation {
     /// resolved per-block values. That field is always a [`Self::Sum`] one,
     /// so this never needs to resolve a weighted average of its own.
     WeightedAverage { weight_field: ReserveFieldId },
+    /// The mapped column is averaged, weighted by each block's volume: for a
+    /// density, or a grade before there is a tonnage to weight it by.
+    VolumeAverage,
     /// Not aggregated to a number - a grouping label (e.g. "Rock Type") each
     /// block model maps onto one of its own categorical columns, so a future
     /// breakdown can report `Sum`/`WeightedAverage` totals per category.
@@ -1845,7 +1848,7 @@ impl Document {
             ReserveAggregation::WeightedAverage { weight_field } => {
                 !weights_others && weight_field != id && self.reserve_field(weight_field).is_some_and(|field| field.aggregation == ReserveAggregation::Sum)
             }
-            ReserveAggregation::Category => !weights_others,
+            ReserveAggregation::VolumeAverage | ReserveAggregation::Category => !weights_others,
         };
         let Some(field) = self.reserve_fields.iter_mut().find(|field| field.id == id) else {
             return false;

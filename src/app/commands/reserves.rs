@@ -61,8 +61,9 @@ impl crate::app::App<'_> {
     /// column of that name in every block model that has one.
     ///
     /// A category column becomes a Category field. A number is summed when its
-    /// name says it is a quantity - tonnes, volume, mass, metal - and is
-    /// otherwise a grade, averaged by the Sum field most likely to be tonnes.
+    /// name says it is a quantity - tonnes, volume, mass, metal - a density is
+    /// averaged by block volume, and anything else is a grade, averaged by the
+    /// Sum field most likely to be tonnes, or by volume while there is none.
     /// The Field List can change that afterwards.
     pub(crate) fn add_reserve_field_from_column(&mut self, column: String, categorical: bool) {
         use crate::model::block_model::{ReserveFieldMapping, ReserveMappingSource};
@@ -368,12 +369,15 @@ fn clear_reserve_totals(model: &mut crate::model::block_model::OpenBlockModel) {
 fn column_aggregation(column: &str, fields: &[crate::model::ReserveField]) -> ReserveAggregation {
     const QUANTITIES: [&str; 5] = ["ton", "volume", "vol_", "mass", "metal"];
     let lower = column.to_lowercase();
+    if crate::model::block_model::looks_like_density(column) {
+        return ReserveAggregation::VolumeAverage;
+    }
     if QUANTITIES.iter().any(|word| lower.contains(word)) || lower == "vol" || lower == "t" {
         return ReserveAggregation::Sum;
     }
     let sums = || fields.iter().filter(|field| field.aggregation == ReserveAggregation::Sum);
     match sums().find(|field| field.name.to_lowercase().contains("ton")).or_else(|| sums().next()) {
         Some(weight) => ReserveAggregation::WeightedAverage { weight_field: weight.id },
-        None => ReserveAggregation::Sum,
+        None => ReserveAggregation::VolumeAverage,
     }
 }

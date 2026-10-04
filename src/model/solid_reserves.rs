@@ -77,7 +77,9 @@ impl NumericTotal {
         }
         match aggregation {
             ReserveAggregation::Sum => self.sum.is_finite().then_some(self.sum),
-            ReserveAggregation::WeightedAverage { .. } => (self.weight > 0.0 && self.weight.is_finite() && self.sum.is_finite()).then(|| self.sum / self.weight),
+            ReserveAggregation::WeightedAverage { .. } | ReserveAggregation::VolumeAverage => {
+                (self.weight > 0.0 && self.weight.is_finite() && self.sum.is_finite()).then(|| self.sum / self.weight)
+            }
             ReserveAggregation::Category => None,
         }
     }
@@ -458,6 +460,14 @@ pub(crate) fn compute(
                     None => note(&mut resolution, field.id, ReserveFieldIssue::WeightUnresolved),
                 }
             }
+            ReserveAggregation::VolumeAverage => match crate::model::block_model::block_volumes(model, blocks) {
+                Some(volumes) => numeric.push(NumericField {
+                    id: field.id,
+                    values,
+                    weights: Some(Values::Column(volumes)),
+                }),
+                None => note(&mut resolution, field.id, ReserveFieldIssue::WeightUnresolved),
+            },
             ReserveAggregation::Category => {
                 let labels = mapping
                     .iter()

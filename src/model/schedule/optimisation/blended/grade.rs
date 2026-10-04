@@ -15,6 +15,8 @@
 //!   contained metal. Averaging one of these is meaningless.
 //! - [`ReserveAggregation::WeightedAverage`] - an *intensive* quantity,
 //!   averaged by another field's per-block values. This is a grade.
+//! - [`ReserveAggregation::VolumeAverage`] - intensive too, but averaged by
+//!   block volume: a density, or a grade with no tonnage to weight it.
 //! - [`ReserveAggregation::Category`] - a label. Not a number at all.
 //!
 //! A blended stockpile conserves *contained quantity*, and contained quantity
@@ -127,6 +129,15 @@ impl GradeField {
             ReserveAggregation::Category => Err(GradeRejection::Categorical { field: name }),
             ReserveAggregation::Sum => Err(GradeRejection::Summed { field: name }),
             ReserveAggregation::WeightedAverage { weight_field } if weight_field == tonnage => Ok(Self { field, name, basis }),
+            ReserveAggregation::VolumeAverage => Err(GradeRejection::ForeignWeight {
+                field: name,
+                weight: crate::i18n::tr!("reserve-block-volume"),
+                wanted: fields
+                    .iter()
+                    .find(|entry| entry.id == tonnage)
+                    .map(|entry| entry.name.clone())
+                    .unwrap_or_else(|| format!("field {}", tonnage.0)),
+            }),
             ReserveAggregation::WeightedAverage { weight_field } => {
                 let weight = fields
                     .iter()

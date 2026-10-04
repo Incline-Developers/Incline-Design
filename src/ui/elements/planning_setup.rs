@@ -502,6 +502,7 @@ pub(crate) fn aggregation_label(document: &Document, aggregation: &ReserveAggreg
             "planning-average-by",
             field = document.reserve_field(*weight_field).map_or_else(String::new, |field| field.name.clone())
         ),
+        ReserveAggregation::VolumeAverage => tr!("reserve-average-by-volume"),
         ReserveAggregation::Category => tr!("csv-block-model-category"),
     }
 }
@@ -525,16 +526,27 @@ fn draw_field_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState
             let combines = aggregation_label(document, &field.aggregation);
             // A weight others average by stays a Sum, and a category stays
             // one: neither has a choice to offer, so it is read rather than
-            // picked.
+            // picked. Anything else can be summed or averaged, by block volume
+            // or by any other Sum field.
             let weights_others = fields
                 .iter()
                 .any(|other| other.aggregation == ReserveAggregation::WeightedAverage { weight_field: field.id });
             let weights: Vec<_> = fields.iter().filter(|other| other.id != field.id && other.aggregation == ReserveAggregation::Sum).collect();
-            let fixed = field.aggregation == ReserveAggregation::Category || (weights_others || weights.is_empty()) && field.aggregation == ReserveAggregation::Sum;
+            let fixed = field.aggregation == ReserveAggregation::Category || weights_others;
             let (response, cells) = grid_columns_row(ui, &FRACTIONS, &[&field.name, if fixed { &combines } else { "" }], false);
+            let response = if weights_others {
+                response.on_hover_text(tr!("reserve-weights-others"))
+            } else {
+                response
+            };
             if !fixed {
                 let mut choice = field.aggregation;
-                let options = std::iter::once((ReserveAggregation::Sum, tr!("planning-stat-sum"))).chain(weights.iter().map(|weight| {
+                let options = [
+                    (ReserveAggregation::Sum, tr!("planning-stat-sum")),
+                    (ReserveAggregation::VolumeAverage, tr!("reserve-average-by-volume")),
+                ]
+                .into_iter()
+                .chain(weights.iter().map(|weight| {
                     (
                         ReserveAggregation::WeightedAverage { weight_field: weight.id },
                         tr!("planning-average-by", field = weight.name.clone()),
@@ -719,10 +731,17 @@ fn draw_block_model_mapping(ui: &mut egui::Ui, rect: egui::Rect, document: &Docu
                 options.push(CellOption::Heading(tr!("planning-columns-heading")));
                 options.extend(model_columns.iter().map(|name| CellOption::Choice(MappingChoice::Column(name.clone()), name.clone())));
                 // A summed quantity can also come from a per-volume column -
-                // tonnes from density - grouped after the plain columns.
+                // tonnes from density - grouped after the plain columns, the
+                // densities first, and each named for what it computes.
                 if field.aggregation == ReserveAggregation::Sum && !model_columns.is_empty() {
                     options.push(CellOption::Heading(tr!("planning-per-m3-heading")));
-                    options.extend(model_columns.iter().map(|name| CellOption::Choice(MappingChoice::PerVolume(name.clone()), name.clone())));
+                    let mut per_volume: Vec<_> = model_columns.iter().collect();
+                    per_volume.sort_by_key(|name| !crate::model::block_model::looks_like_density(name));
+                    options.extend(
+                        per_volume
+                            .into_iter()
+                            .map(|name| CellOption::Choice(MappingChoice::PerVolume(name.clone()), tr!("planning-mapping-per-volume", column = name.clone()))),
+                    );
                 }
                 // A constant's value shares the cell with the choice.
                 let source = cells[1];
