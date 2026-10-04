@@ -733,6 +733,12 @@ pub(crate) struct SchedulePlan {
     /// one, which is a readiness problem rather than a reason to assume.
     #[serde(default)]
     tonnage_field: Option<ReserveFieldId>,
+    /// Whether a dig block with no tonnage on [`Self::tonnage_field`] - one no
+    /// block model reaches - is read as 0 t: dug at once, moving nothing.
+    /// Off unless chosen, because an unmeasured block is usually a gap in
+    /// the block models rather than empty ground.
+    #[serde(default)]
+    unmeasured_as_zero: bool,
     /// Height of a dig-sequence bar in the Gantt, in logical UI points.
     #[serde(default = "default_bar_height")]
     bar_height: f32,
@@ -792,6 +798,7 @@ impl Default for SchedulePlan {
             bars: Vec::new(),
             next_bar_id: 0,
             tonnage_field: None,
+            unmeasured_as_zero: false,
             bar_height: DEFAULT_BAR_HEIGHT,
             routing: RoutingConfig::default(),
             trucks: TruckFleetConfig::default(),
@@ -841,6 +848,7 @@ impl SchedulePlan {
             && self.agents.is_empty()
             && self.bars.is_empty()
             && self.tonnage_field.is_none()
+            && !self.unmeasured_as_zero
             && self.bar_height == DEFAULT_BAR_HEIGHT
             && self.routing.is_pristine()
             && self.trucks.is_empty()
@@ -1275,6 +1283,15 @@ impl SchedulePlan {
     /// time a bar is measured rather than once when it is picked.
     pub(crate) fn set_tonnage_field(&mut self, field: Option<ReserveFieldId>) {
         self.tonnage_field = field;
+    }
+
+    /// Whether blocks with no tonnage on the chosen field count as 0 t.
+    pub(crate) fn unmeasured_as_zero(&self) -> bool {
+        self.unmeasured_as_zero
+    }
+
+    pub(crate) fn set_unmeasured_as_zero(&mut self, zero: bool) {
+        self.unmeasured_as_zero = zero;
     }
 
     pub(crate) fn bar_height(&self) -> f32 {
@@ -1951,6 +1968,7 @@ impl SchedulePlan {
             }
         }
         self.tonnage_field.hash(hasher);
+        self.unmeasured_as_zero.hash(hasher);
         self.bar_height.to_bits().hash(hasher);
         self.routing.hash_content(hasher);
         self.routing.hash_inventory_names(hasher);

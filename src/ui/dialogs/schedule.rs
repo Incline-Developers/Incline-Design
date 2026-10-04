@@ -716,6 +716,9 @@ fn draw_blast_sequence_preview(ui: &mut egui::Ui, editor: &mut EditorState, draf
         ui.ctx().request_repaint();
     }
     crate::ui::widgets::preview_navigation::navigate(ui, &response, rect, &mut draft.view, editor, true);
+    if ready {
+        crate::ui::widgets::preview_navigation::orientation_gizmo(ui, "blast_sequence_orientation_gizmo", rect, &mut draft.view, editor);
+    }
     if ready
         && response.clicked()
         && let Some(pointer) = response.interact_pointer_pos()

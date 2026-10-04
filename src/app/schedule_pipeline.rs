@@ -20,7 +20,8 @@
 //! | Dumps | The same, for dumps | Destinations that can receive |
 //! | Crushers | Each crusher's daily budget and its overrides | Budgets the evaluator can spend |
 //! | Destinations | The ordered routing rules | Rules whose destinations and fields resolve |
-//! | Scheduling Readiness | Everything above, and the Solids run | [`ScheduleRunInputs`] |
+//! | Solids | The Solids run, which it starts when it is not current, and the tonnage field | Dig blocks that are all measured, or counted as 0 t |
+//! | Scheduling Readiness | Everything above | [`ScheduleRunInputs`] |
 //!
 //! Three rules separate what is authored from what is derived, and they are
 //! the point of the whole module:
@@ -230,12 +231,12 @@ impl crate::app::App<'_> {
         let fingerprints = self.schedule_fingerprints();
         let pipeline = self.schedule_pipeline.as_mut().expect("just ensured");
         let earliest_change = pipeline.take_fingerprints(&fingerprints);
-        // A change that reaches only Readiness is the Solids run moving on.
-        // A running Readiness waits on that run and re-reads it every frame,
+        // A change that reaches only Solids is the Solids run moving on. A
+        // running Solids step waits on that run and re-reads it every frame,
         // and settles against the inputs current then, so it is not stopped:
         // stopping it reported an edit that nobody made each time a project
         // opened.
-        let earliest_change = earliest_change.filter(|&step| !(step == ScheduleStep::Readiness && pipeline.running() == Some(ScheduleStep::Readiness)));
+        let earliest_change = earliest_change.filter(|&step| !(step == ScheduleStep::Solids && pipeline.running() == Some(ScheduleStep::Solids)));
         if let Some(step) = earliest_change
             && pipeline.invalidate_from(step)
         {
@@ -371,11 +372,27 @@ impl crate::app::App<'_> {
                 .collect::<Vec<_>>()
         };
         let by_kind = |kind: crate::model::schedule::DestinationKind| solid_destinations.iter().filter(|(_, _, solid_kind, _)| *solid_kind == kind).cloned().collect::<Vec<_>>();
+        // Which piles are used, and how each is represented: a used pile has
+        // to have a representation. Only the reclaim bars' sources, so moving
+        // a bar does not send Setup back to be run.
+        let pile_use: Vec<_> = crate::model::schedule::destinations::available(document.solids(), routing)
+            .iter()
+            .filter(|entry| entry.kind == crate::model::schedule::DestinationKind::Stockpile)
+            .map(|entry| {
+                (
+                    format!("{:?}", entry.id),
+                    format!("{:?}", plan.experiment().representation(entry.id)),
+                    routing.rules.iter().any(|rule| rule.enabled && rule.destinations.contains(&entry.id))
+                        || plan.bars().iter().any(|bar| bar.reclaim().is_some_and(|reclaim| reclaim.sources.contains(&entry.id))),
+                )
+            })
+            .collect();
         let stockpiles_step = hash_of((
             agents_step,
             routing.enabled,
             by_kind(crate::model::schedule::DestinationKind::Stockpile),
             standalone(crate::model::schedule::DestinationKind::Stockpile),
+            pile_use,
         ));
         let dumps_step = hash_of((
             stockpiles_step,
@@ -474,7 +491,17 @@ impl crate::app::App<'_> {
             Ok(generation) => (0_u8, generation, String::new()),
             Err(reason) => (1, 0, reason.describe()),
         };
-        let readiness_step = hash_of((destinations_step, solids));
+        // Exclusions decide which blocks have to be measured at all.
+        let exclusions = {
+            let mut hasher = DefaultHasher::new();
+            for solid in document.solids() {
+                solid.id.0.hash(&mut hasher);
+                solid.exclusions.hash_content(&mut hasher);
+            }
+            hasher.finish()
+        };
+        let solids_step = hash_of((cashflow_step, solids, plan.unmeasured_as_zero(), exclusions));
+        let readiness_step = hash_of((destinations_step, solids_step));
         let drill_blast_step = {
             let mut hasher = DefaultHasher::new();
             delays_step.hash(&mut hasher);
@@ -495,6 +522,7 @@ impl crate::app::App<'_> {
             destinations_step,
             trucking_rules_step,
             cashflow_step,
+            solids_step,
             readiness_step,
         ]
     }
@@ -547,7 +575,7 @@ impl crate::app::App<'_> {
             ScheduleNotReady::NoProject => return None,
             ScheduleNotReady::NotRun(step) | ScheduleNotReady::Stale(step) | ScheduleNotReady::Running(step) | ScheduleNotReady::Failed { step, .. } => step,
         };
-        if schedule_step == ScheduleStep::Readiness
+        if matches!(schedule_step, ScheduleStep::Solids | ScheduleStep::Readiness)
             && let Some(project) = self.workspace.active_project()
             && let Some(pipeline) = self.planning_pipeline.as_ref().filter(|pipeline| pipeline.runtime == project.runtime_id)
             && let Err(reason) = pipeline.readiness(&self.planning_fingerprints())
@@ -565,7 +593,7 @@ impl crate::app::App<'_> {
     /// A Setup step that has not been run, or has gone stale, is no blocker:
     /// a run validates the Setup steps itself before it captures. What a run
     /// cannot fix is a Setup step that fails, and a Solids run that is
-    /// missing - which Readiness reports as its own, so that is looked for
+    /// missing - which the Solids step reports as its own, so that is looked for
     /// first and named as such.
     pub(crate) fn schedule_run_blocker(&self) -> Option<ScheduleNotReady> {
         let reason = self.schedule_run_inputs().err()?;
@@ -576,7 +604,7 @@ impl crate::app::App<'_> {
                 solids
                     .readiness(&self.planning_fingerprints())
                     .err()
-                    .map(|_| ScheduleNotReady::NotRun(ScheduleStep::Readiness))
+                    .map(|_| ScheduleNotReady::NotRun(ScheduleStep::Solids))
             }
             reason => Some(reason),
         }
@@ -741,6 +769,7 @@ impl crate::app::App<'_> {
             ScheduleStep::Haulage => self.evaluate_schedule_haulage(),
             ScheduleStep::TruckingRules => self.evaluate_trucking_rules(),
             ScheduleStep::Cashflow => self.evaluate_cashflow(),
+            ScheduleStep::Solids => self.evaluate_schedule_solids(),
             ScheduleStep::Readiness => self.evaluate_schedule_readiness(),
         }
     }
@@ -959,6 +988,18 @@ impl crate::app::App<'_> {
         // and not blocking, because nothing in a dig-only run reads either.
         if kind == crate::model::schedule::DestinationKind::Stockpile {
             for entry in available.iter().filter(|entry| entry.kind == kind) {
+                // A pile something delivers to or reclaims from has to be
+                // represented somehow, and nothing chooses that for the
+                // planner. One nothing uses can be left as it is.
+                let used = routing.rules.iter().any(|rule| rule.enabled && rule.destinations.contains(&entry.id))
+                    || plan.bars().iter().any(|bar| bar.reclaim().is_some_and(|reclaim| reclaim.sources.contains(&entry.id)));
+                if used && plan.experiment().representation(entry.id) == crate::model::schedule::experiment::StockpileRepresentation::NotConfigured {
+                    diagnostics.push(StageDiagnostic {
+                        entity: Some(entry.name.clone()),
+                        message: tr!("schedule-capture-representation"),
+                        blocking: true,
+                    });
+                }
                 if entry.capacity_t.is_some_and(|capacity| entry.opening_t > capacity) {
                     diagnostics.push(StageDiagnostic {
                         entity: Some(entry.name.clone()),
@@ -1268,7 +1309,7 @@ impl crate::app::App<'_> {
                 };
             }
         };
-        let Some(field) = self.workspace.active_document().and_then(|document| document.schedule().tonnage_field()) else {
+        if self.workspace.active_document().and_then(|document| document.schedule().tonnage_field()).is_none() {
             // Configuration blocks before this step is reached; a run that got
             // here without one has had the choice removed underneath it.
             return StageOutcome::Settled {
@@ -1279,26 +1320,9 @@ impl crate::app::App<'_> {
                 }],
                 entities: 0,
             };
-        };
+        }
 
         let mut diagnostics = Vec::new();
-        let mut unmeasured = 0;
-        for block in &snapshot.blocks {
-            match super::commands::schedule_readiness::block_tonnes_for_stage(block, field) {
-                Ok(_) => {}
-                // A figure that is there but cannot be tonnes is a broken
-                // project, and blocks. A figure that is absent stops only the
-                // bars that reach that ground, which each say so themselves -
-                // blocking the whole schedule over ground nothing is
-                // scheduled on would be a gate nobody could pass.
-                Err(reason) if reason.invalid => diagnostics.push(StageDiagnostic {
-                    entity: Some(block.name.clone()),
-                    message: reason.message,
-                    blocking: true,
-                }),
-                Err(_) => unmeasured += 1,
-            }
-        }
         // One line for every unconnected block, not one per block: Haulage →
         // Layout tints them red, which says which far better than a list.
         if let Some(document) = self.workspace.active_document() {
@@ -1333,12 +1357,93 @@ impl crate::app::App<'_> {
                 }
             }
         }
+        StageOutcome::Settled {
+            diagnostics,
+            entities: snapshot.blocks.len(),
+        }
+    }
+
+    /// The Solids run the schedule digs, run here when it is not current, and
+    /// the tonnes each block it makes reads on the chosen field.
+    ///
+    /// Every block that is still mined has to be measured, unless the planner
+    /// chose to count the unmeasured ones as 0 t. Excluded ground is not in
+    /// the run's blocks, so it is never read.
+    fn evaluate_schedule_solids(&mut self) -> StageOutcome {
+        use crate::app::commands::solids_view::PlanningNotReady;
+
+        let blocked = |message: String| StageOutcome::Settled {
+            diagnostics: vec![StageDiagnostic {
+                entity: None,
+                message,
+                blocking: true,
+            }],
+            entities: 0,
+        };
+        match self.planning_snapshot_status() {
+            Ok(_) => {}
+            // A Solids run in flight is not a failure: this step waits for it,
+            // the way the block-model step waits for its scans.
+            Err(reason @ PlanningNotReady::Running { .. }) => {
+                return StageOutcome::Working {
+                    message: Some(tr!("schedule-stage-waiting-solids", reason = reason.describe())),
+                };
+            }
+            // As Haulage does: the Schedule's setup runs what it depends on.
+            Err(reason @ (PlanningNotReady::NotRun { .. } | PlanningNotReady::Stale { .. })) => {
+                return if self.resume_planning_stages() {
+                    StageOutcome::Working {
+                        message: Some(tr!("schedule-stage-waiting-solids", reason = reason.describe())),
+                    }
+                } else {
+                    blocked(reason.describe())
+                };
+            }
+            Err(reason) => return blocked(reason.describe()),
+        }
+        let snapshot = match self.planning_snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(reason) => return blocked(reason.describe()),
+        };
+        let Some(document) = self.workspace.active_document() else {
+            return blocked(tr!("planning-snapshot-no-project"));
+        };
+        let Some(field) = document.schedule().tonnage_field() else {
+            // Configuration blocks before this step is reached; a run that got
+            // here without one has had the choice removed underneath it.
+            return blocked(tr!("schedule-stage-no-tonnage-field"));
+        };
+        let zero = document.schedule().unmeasured_as_zero();
+
+        let mut diagnostics = Vec::new();
+        let mut unmeasured = 0;
+        let mut counted_zero = 0;
+        for block in &snapshot.blocks {
+            match super::commands::schedule_readiness::block_tonnes_for_stage(block, field, false) {
+                Ok(_) => {}
+                // A figure that is there but cannot be tonnes is a broken
+                // project whatever the planner chose.
+                Err(reason) if reason.invalid => diagnostics.push(StageDiagnostic {
+                    entity: Some(block.name.clone()),
+                    message: reason.message,
+                    blocking: true,
+                }),
+                Err(_) if zero && super::commands::schedule_readiness::block_tonnes_for_stage(block, field, true).is_ok() => counted_zero += 1,
+                Err(_) => unmeasured += 1,
+            }
+        }
         if unmeasured > 0 {
             diagnostics.push(StageDiagnostic {
                 entity: None,
                 message: tr!("schedule-stage-blocks-unmeasured", count = unmeasured.to_string()),
-                blocking: false,
+                blocking: true,
             });
+        }
+        // Shown on the step's page rather than as a warning: the planner
+        // chose it.
+        if self.editor.schedule_zero_blocks != counted_zero {
+            self.editor.schedule_zero_blocks = counted_zero;
+            self.redraw_requested = true;
         }
         StageOutcome::Settled {
             diagnostics,

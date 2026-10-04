@@ -2728,10 +2728,9 @@ impl crate::app::App<'_> {
             StageNotReady::Running(stage) => PlanningNotReady::Running { stage: stage.label() },
             StageNotReady::Failed { stage, message } => PlanningNotReady::Failed { solid: stage.label(), message },
         })?;
-        let mut blocks = self.planning_dig_blocks()?;
         // Excluded ground is not dug, so nothing that reads the run - the
-        // schedule, haulage, the sequence editors - is handed it.
-        blocks.retain(|block| !block.excluded);
+        // schedule, haulage, the sequence editors - is handed it as ground.
+        let (blocks, excluded): (Vec<_>, Vec<_>) = self.planning_dig_blocks()?.into_iter().partition(|block| !block.excluded);
         // Unavailable material is not a schedulable quantity. Capacity-only
         // and no-schema are deliberate answers and pass.
         if let Some(block) = blocks.iter().find(|block| matches!(block.material, MaterialState::Unavailable)) {
@@ -2744,6 +2743,7 @@ impl crate::app::App<'_> {
             runtime: project.runtime_id,
             generation,
             blocks,
+            excluded,
             blasts: self.planning_blasts(),
         })
     }
@@ -2758,6 +2758,9 @@ pub(crate) struct PlanningSnapshot {
     /// The run that produced it, for provenance.
     pub(crate) generation: u64,
     pub(crate) blocks: Vec<DigBlockRecord>,
+    /// The blocks taken out of mining, kept apart so a dig order that still
+    /// names one can be told it is excluded rather than missing.
+    pub(crate) excluded: Vec<DigBlockRecord>,
     /// Every blast of every solid, for drill and blast.
     pub(crate) blasts: Vec<BlastRecord>,
 }

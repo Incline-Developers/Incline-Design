@@ -84,3 +84,19 @@ pub(crate) fn navigate(ui: &egui::Ui, response: &egui::Response, image: egui::Re
     }
     changed
 }
+
+/// The viewport's own orientation gizmo in the top right of a preview,
+/// turning `view` to the direction an axis click names. Returns whether it
+/// did. Hidden with the main viewport's gizmo.
+pub(crate) fn orientation_gizmo(ui: &mut egui::Ui, id: &str, image: egui::Rect, view: &mut SolidPreviewView, editor: &EditorState) -> bool {
+    if !editor.show_world_axis_gizmo {
+        return false;
+    }
+    let (_, up) = view.screen_basis();
+    let forward = view.forward();
+    let gizmo = crate::ui::elements::cursors::draw_orientation_gizmo(ui, egui::Id::new(id), image, forward.as_vec3().to_array(), up.as_vec3().to_array(), false);
+    let Some(direction) = gizmo.clicked else { return false };
+    view.face(direction);
+    ui.ctx().request_repaint();
+    true
+}

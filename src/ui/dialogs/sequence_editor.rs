@@ -53,14 +53,13 @@ const PLAYHEAD_MARK: f32 = 5.0;
 /// it so the list is never mutated while it is being drawn.
 #[derive(Clone, PartialEq)]
 enum ListEdit {
-    Remove(usize),
+    /// Take these rows out of the order: one row's cross, or every selected
+    /// row on Delete.
+    Remove(Vec<usize>),
     /// Take `rows` out of the order and put them back, in this order, at the
     /// gap `to` - which is counted in the list as it stands *before* anything
     /// is taken out, because that is the list the user was pointing at.
-    Move {
-        rows: Vec<usize>,
-        to: usize,
-    },
+    Move { rows: Vec<usize>, to: usize },
 }
 
 pub(crate) fn draw_sequence_editor(
@@ -365,6 +364,9 @@ fn draw_view(ui: &mut egui::Ui, editor: &mut EditorState, draft: &mut SequenceDr
     // and left click selects without ever moving the camera. While the
     // discard question is up the camera of the draft being asked about stays put.
     changed |= crate::ui::widgets::preview_navigation::navigate(ui, &response, image_rect, &mut draft.view, editor, !confirming);
+    if has_run && !confirming {
+        changed |= crate::ui::widgets::preview_navigation::orientation_gizmo(ui, "sequence_editor_orientation_gizmo", image_rect, &mut draft.view, editor);
+    }
     // A left press picks the block under it, and a left drag keeps picking as
     // it travels: one stroke takes every block it crosses. Which blocks those
     // may be is not decided here - the pane knows where the pointer is, and
@@ -557,7 +559,7 @@ fn draw_order_rows(ui: &mut egui::Ui, editor: &mut EditorState, draft: &Sequence
         // Registered after the row, so the cross is the topmost thing over its
         // own square and a click there removes rather than selects.
         if menu::close_cross(ui, cross, ui.id().with(("sequence_remove", index)), menu::menu_surface(ui.visuals())).clicked() {
-            edit = Some(ListEdit::Remove(index));
+            edit = Some(ListEdit::Remove(vec![index]));
         }
         if response.drag_started_by(egui::PointerButton::Primary) {
             started = Some(index);
@@ -567,9 +569,15 @@ fn draw_order_rows(ui: &mut egui::Ui, editor: &mut EditorState, draft: &Sequence
         }
         // A press that never became a drag is a plain click. The command
         // modifier adds and removes one row at a time, so a row swept up by
-        // mistake can be dropped without sweeping the run again.
+        // mistake can be dropped without sweeping the run again; shift
+        // extends the selection from its nearest row to this one.
         if response.clicked() {
-            if ui.input(|input| input.modifiers.command) {
+            let modifiers = ui.input(|input| input.modifiers);
+            if modifiers.shift
+                && let Some(nearest) = selected.iter().copied().min_by_key(|row| row.abs_diff(index))
+            {
+                selected.extend(nearest.min(index)..=nearest.max(index));
+            } else if modifiers.command {
                 if !selected.remove(&index) {
                     selected.insert(index);
                 }
@@ -642,6 +650,16 @@ fn draw_order_rows(ui: &mut egui::Ui, editor: &mut EditorState, draft: &Sequence
         }
         drag = None;
     }
+    // Delete takes every selected row out at once. The app's own Delete
+    // stands aside while this window is open, so it never reaches the bars.
+    if edit.is_none()
+        && drag.is_none()
+        && !selected.is_empty()
+        && !ui.ctx().egui_wants_keyboard_input()
+        && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Delete) || input.consume_key(egui::Modifiers::NONE, egui::Key::Backspace))
+    {
+        edit = Some(ListEdit::Remove(selected.iter().copied().collect()));
+    }
     editor.sequence_list_drag = drag;
     (edit, selected)
 }
@@ -707,15 +725,23 @@ fn draw_preview_slider(ui: &mut egui::Ui, draft: &mut SequenceDraft, confirming:
 /// alongside it, so the two never drift apart for a frame.
 fn apply_list_edit(editor: &mut EditorState, draft: &mut SequenceDraft, edit: ListEdit) {
     match edit {
-        ListEdit::Remove(index) if index < draft.members.len() => {
-            draft.members.remove(index);
-            if index < editor.sequence_members.len() {
-                editor.sequence_members.remove(index);
+        ListEdit::Remove(mut rows) => {
+            rows.retain(|index| *index < draft.members.len());
+            rows.sort_unstable();
+            rows.dedup();
+            let Some(&first) = rows.first() else { return };
+            // Last first, so each index still names the row it did.
+            for &index in rows.iter().rev() {
+                draft.members.remove(index);
+                if index < editor.sequence_members.len() {
+                    editor.sequence_members.remove(index);
+                }
             }
-            // The row that moved up into this place is the one now selected;
-            // past the end, nothing is, rather than the wrong thing.
-            draft.selected = (!draft.members.is_empty()).then(|| index.min(draft.members.len() - 1)).into_iter().collect();
-            draft.preview = draft.preview.min(draft.members.len());
+            // The row that moved up into the first place is the one now
+            // selected; past the end, nothing is, rather than the wrong thing.
+            draft.selected = (!draft.members.is_empty()).then(|| first.min(draft.members.len() - 1)).into_iter().collect();
+            // The playhead stays between the same two blocks.
+            draft.preview -= rows.iter().filter(|index| **index < draft.preview).count();
         }
         ListEdit::Move { rows, to } => {
             let mut rows: Vec<usize> = rows.into_iter().filter(|index| *index < draft.members.len()).collect();
@@ -735,7 +761,6 @@ fn apply_list_edit(editor: &mut EditorState, draft: &mut SequenceDraft, edit: Li
             }
             draft.selected = (landing..landing + rows.len()).collect();
         }
-        ListEdit::Remove(_) => {}
     }
 }
 

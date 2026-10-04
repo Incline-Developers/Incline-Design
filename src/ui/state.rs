@@ -819,6 +819,15 @@ impl SolidPreviewView {
     /// Widest elevation either side of the horizon. Stopping short of
     /// straight down keeps the camera's up vector well defined.
     const MAX_PITCH: f64 = std::f64::consts::FRAC_PI_2 * 0.98;
+
+    /// Looking straight down with north up, the whole mesh framed.
+    pub(crate) fn plan() -> Self {
+        Self {
+            yaw: std::f64::consts::FRAC_PI_2,
+            pitch: Self::MAX_PITCH,
+            ..Self::default()
+        }
+    }
     /// Room left round the mesh at a zoom of one: the image's half-height is
     /// this many framing radii.
     pub(crate) const FRAMING_MARGIN: f64 = 1.15;
@@ -2816,6 +2825,8 @@ pub(crate) struct EditorState {
     /// prerequisite, named. Inspection never consults it - only calculation is
     /// gated.
     pub(crate) schedule_calculation_status: String,
+    /// How many dig blocks Schedule Setup's Solids step last counted as 0 t.
+    pub(crate) schedule_zero_blocks: usize,
     /// Typed text for the Optimisation settings, so a partly typed number is
     /// not committed and not lost.
     pub(crate) schedule_experiment_draft: Option<ScheduleExperimentDraft>,
@@ -4202,6 +4213,7 @@ impl EditorState {
             haulage_run_active: false,
             haulage_auto_run: true,
             schedule_calculation_status: String::new(),
+            schedule_zero_blocks: 0,
             schedule_experiment_draft: None,
             schedule_chunk_draft: None,
             schedule_selected_class: None,
@@ -5808,6 +5820,7 @@ impl UiCommand {
                 | ScheduleEdit::SetAgentClass { .. }
                 | ScheduleEdit::RenameBar { .. }
                 | ScheduleEdit::SetTonnageField(_)
+                | ScheduleEdit::SetUnmeasuredAsZero(_)
                 | ScheduleEdit::SetBarHeight(_)
                 // Assignment, lane and earliest-start edits are cell edits of
                 // one bar, and dragging one produces a stream of them: the
@@ -6602,6 +6615,9 @@ pub(crate) enum ScheduleStep {
     Destinations,
     TruckingRules,
     Cashflow,
+    /// The Solids pipeline, run here when it is not current, and the
+    /// tonnage each of its dig blocks reads on the chosen field.
+    Solids,
     Readiness,
 }
 
@@ -6614,8 +6630,10 @@ impl ScheduleStep {
     /// name is only known once Readiness has the Solids run.
     /// Haulage sits with the loader fleet because its truck classes are
     /// fleet, and Trucking Rules after Destinations because a trucking rule
-    /// names them.
-    pub(crate) const ALL: [Self; 13] = [
+    /// names them. Solids sits last before Readiness because the Solids run
+    /// moves on far more often than the setup does, and a step's change
+    /// retires every step after it.
+    pub(crate) const ALL: [Self; 14] = [
         Self::Configuration,
         Self::LoaderClasses,
         Self::LoaderAgents,
@@ -6628,6 +6646,7 @@ impl ScheduleStep {
         Self::Destinations,
         Self::TruckingRules,
         Self::Cashflow,
+        Self::Solids,
         Self::Readiness,
     ];
 
@@ -6649,6 +6668,7 @@ impl ScheduleStep {
             Self::Destinations => tr!("destination-destinations"),
             Self::TruckingRules => tr!("truck-rules"),
             Self::Cashflow => tr!("cashflow"),
+            Self::Solids => tr!("planning-page-solids"),
             Self::Readiness => tr!("schedule-readiness-step"),
         }
     }
@@ -6667,6 +6687,7 @@ impl ScheduleStep {
             Self::Destinations => "schedule_destinations",
             Self::TruckingRules => "schedule_trucking_rules",
             Self::Cashflow => "schedule_cashflow",
+            Self::Solids => "schedule_solids",
             Self::Readiness => "schedule_readiness",
         }
     }
@@ -6913,6 +6934,8 @@ pub(crate) enum ScheduleEdit {
     /// Nominate the reserve field whose summed value is read as tonnes, or
     /// clear the choice. Never inferred from a field's name.
     SetTonnageField(Option<crate::model::ReserveFieldId>),
+    /// Read blocks with no tonnage on the chosen field as 0 t.
+    SetUnmeasuredAsZero(bool),
     /// Set the logical-point height of dig-sequence bars on the Gantt.
     SetBarHeight(f32),
     /// Add an empty Gantt bar to one machine's lane - the row it was asked
@@ -7809,7 +7832,7 @@ impl SequenceDraft {
             // Nothing dug: the editor opens on the whole authored order, and
             // the slider walks forward through it from there.
             preview: 0,
-            view: SolidPreviewView::default(),
+            view: SolidPreviewView::plan(),
             confirming_close: false,
         }
     }

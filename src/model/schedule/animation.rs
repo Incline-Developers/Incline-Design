@@ -67,6 +67,8 @@ impl std::fmt::Display for AnimationError {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct AnimationIndex {
     blocks: HashMap<DigBlockId, BlockCurve>,
+    /// Blocks of no tonnes, gone whole at the hour their bar reached them.
+    instant: HashMap<DigBlockId, f64>,
 }
 
 impl AnimationIndex {
@@ -81,13 +83,17 @@ impl AnimationIndex {
             }
         }
         let mut blocks = HashMap::new();
+        let mut instant = HashMap::new();
         for balance in &schedule.ground {
             if !balance.started_t.is_finite() || balance.started_t < 0.0 || !balance.remaining_t.is_finite() || balance.remaining_t < 0.0 {
                 return Err(AnimationError::InvalidBalance(balance.block));
             }
-            // A zero-tonne block deliberately has no curve.  Its geometry is
-            // retained because 0/0 has no useful visual interpretation.
+            // A zero-tonne block has no curve, 0/0 having no useful visual
+            // interpretation: it is whole until its bar reaches it, then gone.
             if balance.started_t == 0.0 {
+                if let Some(at) = balance.emptied_h.filter(|at| at.is_finite()) {
+                    instant.insert(balance.block, at);
+                }
                 continue;
             }
 
@@ -157,11 +163,14 @@ impl AnimationIndex {
                 },
             );
         }
-        Ok(Self { blocks })
+        Ok(Self { blocks, instant })
     }
 
     /// Fraction removed at elapsed project hours `time_h`.
     pub(crate) fn depleted_fraction(&self, block: DigBlockId, time_h: f64) -> f64 {
+        if let Some(at) = self.instant.get(&block) {
+            return if time_h >= *at { 1.0 } else { 0.0 };
+        }
         let Some(curve) = self.blocks.get(&block) else { return 0.0 };
         let at = time_h.max(0.0);
         let index = curve.intervals.partition_point(|interval| interval.end_h <= at);

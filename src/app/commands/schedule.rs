@@ -51,6 +51,10 @@ impl crate::app::App<'_> {
             ScheduleEdit::DeleteAgent(agent) => self.delete_loader_agent(agent),
             ScheduleEdit::SetCalendarCells { edits } => self.set_calendar_cells(edits),
             ScheduleEdit::SetTonnageField(field) => self.set_tonnage_field(field),
+            ScheduleEdit::SetUnmeasuredAsZero(zero) => self.edit_schedule(|plan| {
+                plan.set_unmeasured_as_zero(zero);
+                Ok(())
+            }),
             ScheduleEdit::SetBarHeight(height) => self.set_bar_height(height),
             ScheduleEdit::AddBar {
                 name,

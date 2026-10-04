@@ -827,7 +827,7 @@ impl crate::app::App<'_> {
             (None, _, Some(held)) => held,
             (None, _, None) => match self.schedule_run_blocker() {
                 None => tr!("schedule-run-never"),
-                Some(ScheduleNotReady::NotRun(ScheduleStep::Readiness)) => tr!("schedule-run-needs-solids"),
+                Some(ScheduleNotReady::NotRun(ScheduleStep::Solids)) => tr!("schedule-run-needs-solids"),
                 Some(reason) => tr!("schedule-run-blocked", reason = reason.describe()),
             },
         };
@@ -925,7 +925,8 @@ fn attempt_headline(attempt: &ScheduleAttempt) -> String {
         // One reason fits the status line; several are listed beneath it.
         AttemptOutcome::Refused => match attempt.messages.as_slice() {
             [reason] => tr!("schedule-run-refused-because", run = run, reason = reason.clone()),
-            _ => tr!("schedule-run-refused", run = run),
+            [] => tr!("schedule-run-refused-plain", run = run),
+            messages => tr!("schedule-run-refused", run = run, count = messages.len()),
         },
         AttemptOutcome::NoSolution => tr!("schedule-run-no-solution", run = run),
         AttemptOutcome::Infeasible => tr!("schedule-run-infeasible", run = run),

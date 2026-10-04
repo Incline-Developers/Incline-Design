@@ -290,7 +290,7 @@ impl PlanningPipeline {
                 status.message = None;
                 if blocking > 0 {
                     status.state = StageState::Failed;
-                    status.message = Some(tr!("stage-failed-count", count = blocking.to_string()));
+                    status.message = Some(tr!("stage-failed-count", count = blocking));
                     self.running = None;
                     // A failed stage stops everything after it.
                     for later in std::mem::take(&mut self.queue) {
@@ -763,11 +763,19 @@ impl crate::app::App<'_> {
         }
         self.planning_auto_settle = None;
         self.planning_auto_attempted = Some(key);
-        if self.planning_pipeline.as_mut().is_some_and(PlanningPipeline::resume_all) {
-            self.retry_failed_solid_requests();
-            self.advance_planning_run();
-            self.mirror_planning_stages();
+        self.resume_planning_stages();
+    }
+
+    /// Run the stages from the first one that is not current, as Auto does.
+    /// Whether anything was queued.
+    pub(crate) fn resume_planning_stages(&mut self) -> bool {
+        if !self.planning_pipeline.as_mut().is_some_and(PlanningPipeline::resume_all) {
+            return false;
         }
+        self.retry_failed_solid_requests();
+        self.advance_planning_run();
+        self.mirror_planning_stages();
+        true
     }
 
     /// Restart all six stages, including those already complete.

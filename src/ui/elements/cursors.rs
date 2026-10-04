@@ -60,9 +60,15 @@ pub(crate) fn draw_orientation_gizmo(
     const SIZE: f32 = GIZMO_SIZE;
 
     let mut clicked = None;
-    let rect = egui::Area::new(id)
-        .order(egui::Order::Middle)
-        .fixed_pos(gizmo_rect.min)
+    // Over a preview inside a dialog the gizmo has to ride above that
+    // dialog's layer, or the dialog covers it as soon as it is clicked.
+    let parent = ui.layer_id();
+    let order = parent.order.max(egui::Order::Middle);
+    let area = egui::Area::new(id).order(order).fixed_pos(gizmo_rect.min);
+    if parent.order == order {
+        ui.ctx().set_sublayer(parent, egui::LayerId::new(order, id));
+    }
+    let rect = area
         .show(ui.ctx(), |ui| {
             let (rect, response) = ui.allocate_exact_size(egui::vec2(SIZE, SIZE), egui::Sense::click());
             let forward = normalize3(camera_forward).unwrap_or([0.0, 0.0, -1.0]);

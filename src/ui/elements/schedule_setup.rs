@@ -175,6 +175,47 @@ pub(crate) fn draw_readiness(ui: &mut egui::Ui, rect: egui::Rect, editor: &Edito
     });
 }
 
+/// The Solids step's settings: how many dig blocks the run made, and whether
+/// those no block model reaches count as 0 t. What the step found is listed
+/// beneath.
+pub(crate) fn draw_solids_tonnage(ui: &mut egui::Ui, rect: egui::Rect, editor: &EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
+    let status = &editor.schedule_stages[ScheduleStep::Solids.index()];
+    let blocks = status.last_success.as_ref().map_or_else(|| String::from("—"), |summary| summary.entities.to_string());
+    let counted = plan.unmeasured_as_zero() && status.last_success.is_some();
+    let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, 3 + usize::from(counted)).min(rect.height())));
+    PropertyTable::new("schedule_solids", table_rect, &tr!("schedule-solids-tonnage")).show(ui, |rows| {
+        rows.readonly(&tr!("schedule-readiness-blocks"), &blocks, None, None);
+        let mut zero = plan.unmeasured_as_zero();
+        if rows.checkbox(&tr!("schedule-unmeasured-as-zero"), &mut zero).changed() {
+            commands.push(UiCommand::schedule(session, ScheduleEdit::SetUnmeasuredAsZero(zero)));
+        }
+        if counted {
+            rows.readonly(&tr!("schedule-blocks-zero"), &editor.schedule_zero_blocks.to_string(), None, None);
+        }
+        rows.note(&tr!("schedule-unmeasured-as-zero-help"));
+    });
+    let body = egui::Rect::from_min_max(egui::pos2(rect.left() + 8.0, table_rect.bottom() + 8.0), egui::pos2(rect.right() - 8.0, rect.bottom()));
+    if !body.is_positive() {
+        return;
+    }
+    ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
+        ui.set_clip_rect(ui.clip_rect().intersect(body));
+        egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
+            if let Some(message) = &status.message {
+                ui.add(egui::Label::new(egui::RichText::new(message).color(ui.visuals().weak_text_color())).wrap());
+            }
+            for entry in &status.diagnostics {
+                let text = match &entry.entity {
+                    Some(entity) => format!("{}: {}", entity, entry.message),
+                    None => entry.message.clone(),
+                };
+                let color = if entry.blocking { ui.visuals().error_fg_color } else { ui.visuals().weak_text_color() };
+                ui.add(egui::Label::new(egui::RichText::new(text).color(color)).wrap());
+            }
+        });
+    });
+}
+
 /// One field as the tonnage combo lists it: its name and how it aggregates,
 /// because only a summed field can be read as tonnes and the choice should
 /// not look like it can.

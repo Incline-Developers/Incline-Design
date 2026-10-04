@@ -169,6 +169,9 @@ pub(crate) struct CaptureIdentities {
     pub(crate) grades: Vec<(ReserveFieldId, String, GradeUnit)>,
     /// Each scoped dig bar's resolved blocks, in authored order.
     pub(crate) bar_blocks: Vec<(BarId, Vec<crate::model::DigBlockId>)>,
+    /// Each scoped dig bar's blocks of no tonnes: its earliest start, how
+    /// many of its `bar_blocks` come before the block, and the block.
+    pub(crate) empty_blocks: Vec<(BarId, f64, usize, crate::model::DigBlockId)>,
     /// Each scoped reclaim bar's cap.
     pub(crate) reclaim_caps: Vec<(BarId, Option<f64>)>,
     /// Calendar delays (delay lists and rosters) per captured loader, merged:
@@ -273,6 +276,9 @@ struct ScopedBar {
 enum ScopedWork {
     Dig {
         members: Vec<(usize, f64)>,
+        /// Blocks of no tonnes, each with how many of `members` come before
+        /// it: dug the moment the bar reaches them, outside the model.
+        empty: Vec<(usize, crate::model::DigBlockId)>,
     },
     Reclaim {
         sources: Vec<ProjectDestinationId>,
@@ -663,7 +669,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             .any(|report| report.generation.is_some_and(|generation| generation != source.generation))
     {
         return Err(vec![
-            CaptureDiagnostic::global(crate::i18n::tr!("schedule-dispatch-generation-changed")).at(ScheduleStep::Readiness),
+            CaptureDiagnostic::global(crate::i18n::tr!("schedule-dispatch-generation-changed")).at(ScheduleStep::Solids),
         ]);
     }
 
@@ -673,10 +679,16 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         if cancel.is_cancelled() {
             return Err(Vec::new());
         }
+        // An unnamed dig bar is spoken of as the Gantt labels it.
+        let label = if bar.has_custom_name() || report.members.is_empty() {
+            bar.name().to_owned()
+        } else {
+            super::schedule_readiness::default_bar_name(report.members.iter().filter_map(|member| member.area_name.as_deref()))
+        };
         let Some(agent) = bar.agent else {
             // An unassigned delay holds no machine, so it is not a fault.
             if bar.is_reclaim() || !bar.members().is_empty() {
-                problems.push(CaptureDiagnostic::new(bar.name().to_owned(), "this bar is not assigned to a loader"));
+                problems.push(CaptureDiagnostic::new(label.clone(), "this bar is not assigned to a loader"));
             }
             continue;
         };
@@ -706,20 +718,25 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             }
             if !report.is_ready() {
                 for problem in &report.problems {
-                    problems.push(CaptureDiagnostic::new(bar.name().to_owned(), problem.message()));
+                    problems.push(CaptureDiagnostic::new(label.clone(), problem.message()));
                 }
                 continue;
             }
             let mut members = Vec::new();
             let mut skipped = 0usize;
+            let mut empty = Vec::new();
             for member in &report.members {
+                if member.excluded {
+                    skipped += 1;
+                    continue;
+                }
                 let (Some(resolved), Some(tonnes)) = (member.resolved, member.tonnes) else {
-                    problems.push(CaptureDiagnostic::new(bar.name().to_owned(), "a dig block in this bar has no measured tonnage"));
+                    problems.push(CaptureDiagnostic::new(label.clone(), "a dig block in this bar has no measured tonnage"));
                     continue;
                 };
                 let Some(position) = source.snapshot.blocks.iter().position(|block| block.id == resolved) else {
                     problems.push(CaptureDiagnostic::new(
-                        bar.name().to_owned(),
+                        label.clone(),
                         "a dig block in this bar is not in the planning run this capture reads",
                     ));
                     continue;
@@ -730,12 +747,21 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                     skipped += 1;
                     continue;
                 }
+                // A block of no tonnes is dug the moment it is reached and
+                // sends nothing anywhere, so it takes no part in the model.
+                if tonnes <= 0.0 {
+                    empty.push((members.len(), resolved));
+                    continue;
+                }
                 members.push((position, tonnes));
             }
             if skipped > 0 {
-                notes.push(crate::i18n::tr!("schedule-capture-excluded", bar = bar.name().to_owned(), count = skipped.to_string()));
+                notes.push(crate::i18n::tr!("schedule-capture-excluded", bar = label.clone(), count = skipped.to_string()));
             }
-            ScopedWork::Dig { members }
+            if !empty.is_empty() {
+                notes.push(crate::i18n::tr!("schedule-capture-empty", bar = label.clone(), count = empty.len().to_string()));
+            }
+            ScopedWork::Dig { members, empty }
         };
         scoped.push(ScopedBar {
             bar: bar.id,
@@ -841,6 +867,14 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
 
     // ---- piles -------------------------------------------------------------
     let grades = grade_fields.len();
+    let dug_t: f64 = scoped
+        .iter()
+        .filter_map(|bar| match &bar.work {
+            ScopedWork::Dig { members, .. } => Some(members.iter().map(|(_, tonnes)| tonnes).sum::<f64>()),
+            _ => None,
+        })
+        .sum();
+    let unlimited_t = (dug_t + source.destinations.iter().map(|view| view.opening_t).sum::<f64>()).max(1.0);
     let mut piles: Vec<BlendPile> = Vec::new();
     for project_id in &used_piles {
         if cancel.is_cancelled() {
@@ -855,12 +889,10 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             problems.push(CaptureDiagnostic::new(view.name.clone(), crate::i18n::tr!("schedule-capture-representation")).at(ScheduleStep::Stockpiles));
             continue;
         }
-        let Some(capacity_t) = view.capacity_t else {
-            problems.push(
-                CaptureDiagnostic::new(view.name.clone(), "the blended model needs a finite pile capacity, because occupancy is a constraint in it").at(ScheduleStep::Stockpiles),
-            );
-            continue;
-        };
+        // A pile with no capacity is unlimited. The model still needs a bound
+        // to scale its switching rows by, so it is given one it can never
+        // reach: everything this run could ever put on any pile.
+        let capacity_t = view.capacity_t.unwrap_or(unlimited_t);
         // Opening lots, read exactly as authored. A missing grade is missing,
         // never zero.
         let inventory = routing.inventory(*project_id);
@@ -996,7 +1028,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
     let mut wanted_blocks: Vec<usize> = Vec::new();
     let mut measured: BTreeMap<usize, f64> = BTreeMap::new();
     for bar in &scoped {
-        if let ScopedWork::Dig { members } = &bar.work {
+        if let ScopedWork::Dig { members, .. } = &bar.work {
             for (position, tonnes) in members {
                 if !wanted_blocks.contains(position) {
                     wanted_blocks.push(*position);
@@ -1352,7 +1384,8 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         let Some(&loader) = loader_ids.get(&bar.agent) else { continue };
         let id = TaskId(tasks.len() as u32);
         let kind = match &bar.work {
-            ScopedWork::Dig { members } => {
+            ScopedWork::Dig { members, empty } => {
+                identities.empty_blocks.extend(empty.iter().map(|(before, block)| (bar.bar, bar.start_h, *before, *block)));
                 // The authored dig order, one entry per physical block.
                 let mut sequence = Vec::new();
                 for (position, _) in members {

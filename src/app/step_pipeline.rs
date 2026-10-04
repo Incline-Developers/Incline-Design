@@ -216,7 +216,7 @@ impl<S: PipelineStep> StepPipeline<S> {
                 status.message = None;
                 if blocking > 0 {
                     status.state = StageState::Failed;
-                    status.message = Some(tr!("stage-failed-count", count = blocking.to_string()));
+                    status.message = Some(tr!("stage-failed-count", count = blocking));
                     self.running = None;
                     for later in std::mem::take(&mut self.queue) {
                         let status = self.status_mut(later);

@@ -77,6 +77,24 @@ fn draw_haulage_summary(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut Editor
         });
 }
 
+/// The Schedule's Solids step: where each Solids step stands, each row
+/// opening that step.
+fn draw_solids_summary(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState) {
+    const FRACTIONS: [f32; 2] = [0.55, 0.45];
+    let columns = [(tr!("planning-step"), FRACTIONS[0]), (tr!("planning-status"), FRACTIONS[1])];
+    DataGrid::new("schedule_solids_steps", rect, &tr!("planning-page-solids")).columns(&columns).show(ui, |ui| {
+        for step in SolidsStep::ALL {
+            let state = editor.planning_stages[step.index()].state.label();
+            let (response, _) = grid_columns_row(ui, &FRACTIONS, &[&step.label(), &state], false);
+            if response.on_hover_text(tr!("schedule-solids-open")).clicked() {
+                editor.planning_page = PlanningPage::Solids;
+                editor.solids_subpage = crate::ui::state::PlanningSubpage::Setup;
+                editor.planning_solids_step = step;
+            }
+        }
+    });
+}
+
 /// Haulage Setup's steps, marked from the Haulage pipeline.
 fn draw_haulage_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
     use crate::ui::state::HaulageStep;
@@ -1069,21 +1087,10 @@ pub(crate) fn draw_solid_render(ui: &mut egui::Ui, rect: egui::Rect, editor: &mu
         }
         // The viewport's own orientation gizmo, over the preview image and
         // driving the preview's orbit: one gizmo in the app, not two.
-        if ready && editor.show_world_axis_gizmo {
-            let (_, up) = editor.solid_preview_view.screen_basis();
-            let forward = editor.solid_preview_view.forward();
-            let gizmo = crate::ui::elements::cursors::draw_orientation_gizmo(
-                ui,
-                egui::Id::new("solid_preview_orientation_gizmo"),
-                image_rect,
-                forward.as_vec3().to_array(),
-                up.as_vec3().to_array(),
-                false,
-            );
-            if let Some(view) = gizmo.clicked {
-                editor.solid_preview_view.face(view);
-                ui.ctx().request_repaint();
-            }
+        if ready {
+            let mut view = editor.solid_preview_view;
+            crate::ui::widgets::preview_navigation::orientation_gizmo(ui, "solid_preview_orientation_gizmo", image_rect, &mut view, editor);
+            editor.solid_preview_view = view;
         }
 
         // A built solid is only a preview until it is asked for by name; a
@@ -1851,6 +1858,12 @@ fn draw_schedule_details(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor:
             });
             central_island(ui, layout, |ui, rect| {
                 super::schedule_cashflow::draw_rule_editor(ui, rect, editor, &plan, document, session, commands)
+            });
+        }
+        ScheduleStep::Solids => {
+            island(ui, layout, "schedule_solids_steps_island", 320.0, |ui, rect| draw_solids_summary(ui, rect, editor));
+            central_island(ui, layout, |ui, rect| {
+                super::schedule_setup::draw_solids_tonnage(ui, rect, editor, &plan, session, commands)
             });
         }
         ScheduleStep::Readiness => {

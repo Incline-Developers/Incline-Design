@@ -94,7 +94,7 @@ pub(crate) fn block_path(document: &Document, block: &DigBlockRecord) -> String 
 /// listing them - a marker has room for a name, not an inventory. The order
 /// is the dig order, so the leading area is the one dug first, and repeats
 /// are counted once however many blocks of that area the bar holds.
-fn default_bar_name<'a>(areas: impl Iterator<Item = &'a str>) -> String {
+pub(crate) fn default_bar_name<'a>(areas: impl Iterator<Item = &'a str>) -> String {
     let mut distinct: Vec<&str> = Vec::new();
     for area in areas {
         if !distinct.contains(&area) {
@@ -194,6 +194,9 @@ pub(crate) struct MemberReport {
     /// that resolve to the same occupied ground across different bars.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
     pub(crate) resolved: Option<crate::model::DigBlockId>,
+    /// It lies in ground taken out of mining, so the bar passes over it.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
+    pub(crate) excluded: bool,
 }
 
 /// What a reclaim bar would take, as the current project sees it.
@@ -288,12 +291,16 @@ impl crate::app::App<'_> {
         let document = self.workspace.active_document()?;
         let bar = document.schedule().bar(id)?;
         let snapshot = self.planning_snapshot();
-        let ground = snapshot.as_ref().ok().map(ground_of);
+        let ground = snapshot.as_ref().ok().map(|snapshot| ground_of(&snapshot.blocks));
         let index = ground.as_deref().map(GroundIndex::build);
+        let excluded = snapshot.as_ref().ok().map(|snapshot| ground_of(&snapshot.excluded));
+        let excluded_index = excluded.as_deref().map(GroundIndex::build);
         let run = snapshot.as_ref().map(|snapshot| CurrentRun {
             snapshot,
             ground: ground.as_deref().expect("built for a finished snapshot"),
             index: index.as_ref().expect("built for a finished snapshot"),
+            excluded: excluded.as_deref().expect("built for a finished snapshot"),
+            excluded_index: excluded_index.as_ref().expect("built for a finished snapshot"),
         });
         Some(report_against(document, bar, run.as_ref().map_err(|reason| *reason)))
     }
@@ -390,12 +397,16 @@ impl crate::app::App<'_> {
         let (snapshot, ground, index, unavailable, reports) = match snapshot {
             Ok(snapshot) => {
                 let snapshot = Arc::new(snapshot);
-                let ground = Arc::new(ground_of(&snapshot));
+                let ground = Arc::new(ground_of(&snapshot.blocks));
                 let index = Arc::new(GroundIndex::build(&ground));
+                let excluded = ground_of(&snapshot.excluded);
+                let excluded_index = GroundIndex::build(&excluded);
                 let run = CurrentRun {
                     snapshot: &snapshot,
                     ground: &ground,
                     index: &index,
+                    excluded: &excluded,
+                    excluded_index: &excluded_index,
                 };
                 let reports: Vec<BarReport> = document.schedule().bars().iter().map(|bar| report_against(document, bar, Ok(&run))).collect();
                 (Some(snapshot), ground, index, None, Arc::new(reports))
@@ -669,6 +680,7 @@ impl crate::app::App<'_> {
                 // active document, so a label that cannot be built is left
                 // unstated here the same way a tonnage figure is.
                 let document = self.workspace.active_document();
+                let zero = document.is_some_and(|document| document.schedule().unmeasured_as_zero());
                 draft
                     .members
                     .iter()
@@ -697,7 +709,7 @@ impl crate::app::App<'_> {
                             blast: labels.as_ref().map(|labels| labels.2.clone()),
                             flitch: labels.as_ref().map(|labels| labels.3.clone()),
                             unresolved,
-                            tonnes: block.zip(field).and_then(|(block, field)| block_tonnes(block, field).ok()),
+                            tonnes: block.zip(field).and_then(|(block, field)| block_tonnes(block, field, zero).ok()),
                             stale_pick,
                             block: block.map(|block| block.id),
                         }
@@ -718,10 +730,10 @@ impl crate::app::App<'_> {
 
     /// Take one click in the sequence editor's 3D view into the draft.
     ///
-    /// Clicking a block the draft already holds selects it in the ordered
-    /// list rather than adding it a second time: a dig order refuses
-    /// duplicate ground, and a click that appeared to do nothing would read
-    /// as a dead block. A miss clears the list selection, the way clicking
+    /// Clicking a block the draft already holds never adds it a second time:
+    /// a dig order refuses duplicate ground. One not yet dug at the preview
+    /// slider moves up to it, so winding back and clicking reorders; one
+    /// already dug is selected in the ordered list. A miss clears the list selection, the way clicking
     /// empty space in the viewport clears a selection there.
     ///
     /// `generation` is the run the *click* was made against, carried from the
@@ -773,7 +785,7 @@ impl crate::app::App<'_> {
                 None => paint.flitch = Some(flitch),
             }
         }
-        let ground = ground_of(&snapshot);
+        let ground = ground_of(&snapshot.blocks);
         if let Some(draft) = self.editor.sequence_editor.as_mut() {
             insert_or_select(draft, block, index, generation, &ground);
         }
@@ -829,6 +841,10 @@ struct CurrentRun<'a> {
     snapshot: &'a PlanningSnapshot,
     ground: &'a [BlockGround],
     index: &'a GroundIndex,
+    /// The run's excluded ground, so a member lying in it is passed over
+    /// rather than reported as missing.
+    excluded: &'a [BlockGround],
+    excluded_index: &'a GroundIndex,
 }
 
 /// Measure one bar against the run the project currently holds, or against
@@ -927,6 +943,7 @@ fn report_against(document: &Document, bar: &crate::model::schedule::ScheduleBar
                     unresolved: None,
                     tonnes: None,
                     resolved: None,
+                    excluded: false,
                 })
                 .collect();
             return report;
@@ -943,6 +960,31 @@ fn report_against(document: &Document, bar: &crate::model::schedule::ScheduleBar
     let mut claimed: Vec<(usize, usize)> = Vec::new();
     for (index, member) in bar.members().iter().enumerate() {
         let status = member.resolve_indexed(run.ground, run.index);
+        // Ground taken out of mining after it was put in the bar: the bar
+        // passes over it, as it would dig nothing there.
+        if status.resolved().is_none()
+            && let Some(block) = member
+                .resolve_indexed(run.excluded, run.excluded_index)
+                .resolved()
+                .map(|found| &run.snapshot.excluded[found])
+        {
+            let labels = block_labels(document, block);
+            report.members.push(MemberReport {
+                position: index + 1,
+                name: Some(block.name.clone()),
+                solid_name: Some(block.solid_name.clone()),
+                solid_type: Some(labels.0),
+                bench: Some(labels.1),
+                blast: Some(labels.2),
+                flitch: Some(labels.3),
+                area_name: Some(labels.4),
+                unresolved: None,
+                tonnes: Some(0.0),
+                resolved: None,
+                excluded: true,
+            });
+            continue;
+        }
         let Some(found) = status.resolved() else {
             report.members.push(MemberReport {
                 position: index + 1,
@@ -956,6 +998,7 @@ fn report_against(document: &Document, bar: &crate::model::schedule::ScheduleBar
                 unresolved: status.message(),
                 tonnes: None,
                 resolved: None,
+                excluded: false,
             });
             total = None;
             continue;
@@ -971,7 +1014,7 @@ fn report_against(document: &Document, bar: &crate::model::schedule::ScheduleBar
         claimed.push((index, found));
         let block = &run.snapshot.blocks[found];
         let tonnes = match &field {
-            TonnageField::Chosen(field) => match block_tonnes(block, *field) {
+            TonnageField::Chosen(field) => match block_tonnes(block, *field, document.schedule().unmeasured_as_zero()) {
                 Ok(tonnes) => Some(tonnes),
                 Err(problem) => {
                     report.problems.push(problem);
@@ -999,6 +1042,7 @@ fn report_against(document: &Document, bar: &crate::model::schedule::ScheduleBar
             unresolved: None,
             tonnes,
             resolved: Some(block.id),
+            excluded: false,
         });
     }
     let unresolved = report.unresolved_count();
@@ -1018,9 +1062,8 @@ fn report_against(document: &Document, bar: &crate::model::schedule::ScheduleBar
 /// The current run's ground, in the order its blocks are held, so a resolved
 /// index addresses both lists. The footprint digest is computed once here,
 /// not per member, so a report over many members hashes each block once.
-fn ground_of(snapshot: &PlanningSnapshot) -> Vec<BlockGround> {
-    snapshot
-        .blocks
+fn ground_of(blocks: &[DigBlockRecord]) -> Vec<BlockGround> {
+    blocks
         .iter()
         .map(|block| BlockGround {
             solid: block.solid,
@@ -1036,7 +1079,8 @@ fn ground_of(snapshot: &PlanningSnapshot) -> Vec<BlockGround> {
 }
 
 /// Take one gated pick into the draft: insert it where the preview slider
-/// stands, or select the member that already holds this ground.
+/// stands, move the member that already holds this ground up to it while that
+/// ground is still on screen, or else select that member.
 ///
 /// The slider is the insertion point rather than the end of the list because
 /// it is where the user is *looking*: the 3D pane shows the ground as it
@@ -1048,8 +1092,8 @@ fn ground_of(snapshot: &PlanningSnapshot) -> Vec<BlockGround> {
 ///
 /// Kept pure so the pick's own rules can be checked without a running
 /// application: a completed pick adds exactly one member, carrying the run it
-/// was made against, and selects - never duplicates - ground the draft
-/// already holds, whatever anchor that ground was captured with.
+/// was made against, and moves or selects - never duplicates - ground the
+/// draft already holds, whatever anchor that ground was captured with.
 pub(crate) fn insert_or_select(draft: &mut crate::ui::state::SequenceDraft, block: crate::model::DigBlockId, index: usize, generation: u64, ground: &[BlockGround]) {
     use crate::ui::state::DraftMember;
 
@@ -1058,6 +1102,15 @@ pub(crate) fn insert_or_select(draft: &mut crate::ui::state::SequenceDraft, bloc
         DraftMember::Picked(pick) => pick.block == block && pick.generation == generation,
     });
     match existing {
+        // Still on screen at the playhead: dug next from here, so it moves up
+        // to the playhead and the slider steps over it, just as a new pick.
+        Some(position) if position >= draft.preview => {
+            let at = draft.preview;
+            let member = draft.members.remove(position);
+            draft.members.insert(at, member);
+            draft.selected = std::iter::once(at).collect();
+            draft.preview = at + 1;
+        }
         Some(position) => draft.selected = std::iter::once(position).collect(),
         None => {
             let at = draft.preview.min(draft.members.len());
@@ -1093,26 +1146,36 @@ pub(crate) struct StageTonnage {
 }
 
 /// One block's tonnage, for the Schedule Setup readiness step.
-pub(crate) fn block_tonnes_for_stage(block: &DigBlockRecord, field: ReserveFieldId) -> Result<f64, StageTonnage> {
-    block_tonnes(block, field).map_err(|problem| StageTonnage {
+pub(crate) fn block_tonnes_for_stage(block: &DigBlockRecord, field: ReserveFieldId, zero: bool) -> Result<f64, StageTonnage> {
+    block_tonnes(block, field, zero).map_err(|problem| StageTonnage {
         invalid: matches!(problem, ReadinessProblem::InvalidTonnes { .. }),
         message: problem.message(),
     })
 }
 
-fn block_tonnes(block: &DigBlockRecord, field: ReserveFieldId) -> Result<f64, ReadinessProblem> {
-    let unmeasured = |reason: String| ReadinessProblem::Unmeasured {
-        block: block.name.clone(),
-        reason,
+///
+/// `zero` reads a block no block model reaches as 0 t, as Schedule Setup's
+/// Solids step lets the planner choose. A partial or invalid figure is still
+/// refused: those are measurements, and wrong ones.
+fn block_tonnes(block: &DigBlockRecord, field: ReserveFieldId, zero: bool) -> Result<f64, ReadinessProblem> {
+    let unmeasured = |reason: String| {
+        if zero {
+            Ok(0.0)
+        } else {
+            Err(ReadinessProblem::Unmeasured {
+                block: block.name.clone(),
+                reason,
+            })
+        }
     };
     let totals: &ReserveTotals = match &block.material {
         MaterialState::Measured(totals) => totals,
-        MaterialState::CapacityOnly => return Err(unmeasured(tr!("sequence-material-capacity-only"))),
-        MaterialState::NoSchema => return Err(unmeasured(tr!("sequence-material-no-schema"))),
-        MaterialState::Unavailable => return Err(unmeasured(tr!("sequence-material-unavailable"))),
+        MaterialState::CapacityOnly => return unmeasured(tr!("sequence-material-capacity-only")),
+        MaterialState::NoSchema => return unmeasured(tr!("sequence-material-no-schema")),
+        MaterialState::Unavailable => return unmeasured(tr!("sequence-material-unavailable")),
     };
     let Some(total) = totals.all.numeric.get(&field) else {
-        return Err(unmeasured(tr!("sequence-material-unmapped")));
+        return unmeasured(tr!("sequence-material-unmapped"));
     };
     if total.is_partial() {
         return Err(ReadinessProblem::Partial { block: block.name.clone() });
@@ -1131,7 +1194,7 @@ fn block_tonnes(block: &DigBlockRecord, field: ReserveFieldId) -> Result<f64, Re
             block: block.name.clone(),
             value: f64::INFINITY,
         }),
-        None => Err(unmeasured(tr!("sequence-material-unmapped"))),
+        None => unmeasured(tr!("sequence-material-unmapped")),
     }
 }
 

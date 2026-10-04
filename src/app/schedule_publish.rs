@@ -386,6 +386,39 @@ pub(crate) fn publish(
             emptied_h: (remaining_t == 0.0).then_some(last),
         });
     }
+    // Blocks of no tonnes never entered the model. Each is dug the moment its
+    // bar reaches it: when the block before it ran out, or when the bar first
+    // dug, or - a bar with nothing else to dig - at its earliest start.
+    let mut instant: BTreeMap<crate::model::DigBlockId, f64> = BTreeMap::new();
+    for &(bar, start_h, before, block) in &identities.empty_blocks {
+        let blocks = identities.bar_blocks.iter().find(|(id, _)| *id == bar).map(|(_, blocks)| blocks.as_slice());
+        let at = match (before, blocks) {
+            (0, None) => Some(start_h),
+            (0, Some(_)) => merged
+                .iter()
+                .filter(|execution| execution.bar == bar && matches!(execution.source, WorkSource::Block(_)))
+                .map(|execution| execution.start_h)
+                .reduce(f64::min),
+            (before, Some(blocks)) => blocks
+                .get(before - 1)
+                .and_then(|previous| ground.iter().find(|balance| balance.block == *previous))
+                .and_then(|balance| balance.emptied_h),
+            (_, None) => None,
+        };
+        if let Some(at) = at.filter(|at| *at <= meta.requested_end_h) {
+            instant.entry(block).and_modify(|held| *held = held.min(at)).or_insert(at);
+        }
+    }
+    for (block, at) in instant {
+        if !ground.iter().any(|balance| balance.block == block) {
+            ground.push(GroundBalance {
+                block,
+                started_t: 0.0,
+                remaining_t: 0.0,
+                emptied_h: Some(at),
+            });
+        }
+    }
 
     // Stockpiles: the modelled ones off the replay's own balances, and every
     // other pile holding its authored opening stock throughout.
