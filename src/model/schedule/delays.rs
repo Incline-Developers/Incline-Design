@@ -553,6 +553,9 @@ impl DelayConfig {
 /// `Day` and with or without a time, and a plain number of hours. Day 1 is
 /// the first day, as the Gantt labels it.
 pub(crate) fn parse_instant(text: &str) -> Option<f64> {
+    // Text the app wrote itself carries the translator's invisible marks
+    // around each inserted value; they are not part of what was typed.
+    let text: String = text.chars().filter(|c| !matches!(c, '\u{2068}' | '\u{2069}')).collect();
     let text = text.trim();
     if text.is_empty() {
         return None;

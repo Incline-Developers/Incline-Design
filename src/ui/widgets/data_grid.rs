@@ -807,7 +807,13 @@ impl PropertyRows<'_> {
     /// An editable key/value pair. `error`, when set, shows a red badge in the
     /// value column with the message as its tooltip. Returns the field's response.
     pub(crate) fn field(&mut self, key: &str, value: &mut String, error: Option<&str>) -> egui::Response {
-        self.value_field(key, value, None, error.map(Badge::Error), false)
+        self.value_field(key, value, None, error.map(Badge::Error), false, " ")
+    }
+
+    /// [`Self::field`] with faint text shown while it is empty, for a value
+    /// whose blank means something: "the end of the schedule", say.
+    pub(crate) fn field_with_hint(&mut self, key: &str, value: &mut String, hint: &str, error: Option<&str>) -> egui::Response {
+        self.value_field(key, value, None, error.map(Badge::Error), false, hint)
     }
 
     /// An editable value, with its unit faint at the cell's right as a
@@ -817,7 +823,7 @@ impl PropertyRows<'_> {
     pub(crate) fn committed_entry(&mut self, id: impl std::hash::Hash + std::fmt::Debug, key: &str, current: &str, unit: Option<&str>) -> (egui::Response, Option<String>) {
         let id = egui::Id::new(id);
         let mut text = self.ui.data(|data| data.get_temp::<String>(id)).unwrap_or_else(|| current.to_owned());
-        let response = self.value_field(key, &mut text, unit, None, false);
+        let response = self.value_field(key, &mut text, unit, None, false, " ");
         if response.has_focus() {
             self.ui.data_mut(|data| data.insert_temp(id, text));
             return (response, None);
@@ -829,13 +835,13 @@ impl PropertyRows<'_> {
 
     /// A calculated value is rendered directly in the table cell with an optional unit.
     pub(crate) fn readonly(&mut self, key: &str, value: &str, unit: Option<&str>, error: Option<&str>) -> egui::Response {
-        self.value_field(key, &mut value.to_owned(), unit, error.map(Badge::Error), true)
+        self.value_field(key, &mut value.to_owned(), unit, error.map(Badge::Error), true, " ")
     }
 
     /// A calculated value with a yellow warning mark, for a figure that
     /// stands but rests on an assumption the message explains on hover.
     pub(crate) fn readonly_warning(&mut self, key: &str, value: &str, unit: Option<&str>, warning: Option<&str>) -> egui::Response {
-        self.value_field(key, &mut value.to_owned(), unit, warning.map(Badge::Warning), true)
+        self.value_field(key, &mut value.to_owned(), unit, warning.map(Badge::Warning), true, " ")
     }
 
     /// Weak text across both columns: a hint about the rows above it.
@@ -925,7 +931,7 @@ impl PropertyRows<'_> {
         self.place(self.value_rect(rect, split), egui::Checkbox::new(value, ""))
     }
 
-    fn value_field(&mut self, key: &str, value: &mut String, unit: Option<&str>, badge: Option<Badge<'_>>, readonly: bool) -> egui::Response {
+    fn value_field(&mut self, key: &str, value: &mut String, unit: Option<&str>, badge: Option<Badge<'_>>, readonly: bool, hint: &str) -> egui::Response {
         let (rect, split) = self.begin_row(false);
         self.paint_key(rect, split, key);
         if let Some(badge) = badge {
@@ -980,9 +986,9 @@ impl PropertyRows<'_> {
                 .vertical_align(egui::Align::Center)
                 .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 1)))
                 // egui 0.35 needs a nonzero text atom to anchor the caret
-                // in an empty field. A blank hint supplies it without
-                // inserting placeholder text into the stored value.
-                .hint_text(" ")
+                // in an empty field. A hint, blank unless the caller has
+                // one, supplies it without inserting text into the value.
+                .hint_text(hint)
                 .desired_width(value_rect.width()),
         )
     }

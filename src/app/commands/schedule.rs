@@ -730,12 +730,12 @@ impl crate::app::App<'_> {
         }
     }
 
-    /// Add a roster, untyped: a shift change is not maintenance, and the
-    /// first type is as likely to be one as the other.
+    /// Add a roster of the first delay type, as a new delay list is.
     fn add_roster(&mut self, name: String) {
         let mut added = None;
         self.edit_schedule(|plan| {
-            added = Some(plan.edit_delays(|delays, _| delays.add_roster(&name, None))?);
+            let kind = plan.delays().types.first().map(|entry| entry.id);
+            added = Some(plan.edit_delays(|delays, _| delays.add_roster(&name, kind))?);
             Ok(())
         });
         if let Some(id) = added {
