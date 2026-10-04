@@ -450,8 +450,19 @@ impl<'a> App<'a> {
         }
 
         let mut residency_settled = false;
-        let mut still_pending = Vec::with_capacity(self.pending_jobs.len());
-        for mut job in std::mem::take(&mut self.pending_jobs) {
+        // Only the job being polled leaves the list. An apply closure has to
+        // see every other job still in flight: one that asks whether a
+        // restore is pending, or cancels a job, would otherwise find nothing -
+        // which is how one surface landing used to fail a solid whose own
+        // surfaces were still on their way. Follow-ups an apply spawns are
+        // appended, and polled from the next frame.
+        let tickets: Vec<_> = self.pending_jobs.iter().map(|job| job.ticket).collect();
+        for ticket in tickets {
+            // Gone already if an earlier apply cancelled it.
+            let Some(index) = self.pending_jobs.iter().position(|job| job.ticket == ticket) else {
+                continue;
+            };
+            let mut job = self.pending_jobs.remove(index);
             self.applied_job_needs_gpu = false;
             if (job.poll)(self) {
                 residency_settled |= job
@@ -463,13 +474,10 @@ impl<'a> App<'a> {
                 self.finish_background_task(job.ticket, needs_gpu);
                 self.redraw_requested = true;
             } else {
-                still_pending.push(job);
+                let index = index.min(self.pending_jobs.len());
+                self.pending_jobs.insert(index, job);
             }
         }
-        // An apply closure may itself spawn a follow-up job; keep those
-        // (currently in self.pending_jobs) after the ones still running.
-        still_pending.append(&mut self.pending_jobs);
-        self.pending_jobs = still_pending;
         // A rename/edit can invalidate a pending eviction. Reconcile the
         // remaining payloads after stale workers settle as well as on edits.
         if residency_settled {
