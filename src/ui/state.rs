@@ -691,9 +691,15 @@ pub(crate) struct HaulBlock {
     pub(crate) face: std::sync::Arc<crate::model::arrangement::Face>,
     /// The footprint at the flitch base, for drawing.
     pub(crate) rings: Vec<Vec<glam::DVec3>>,
-    /// The node it is held to, when it is not left to the nearest road.
-    pub(crate) link: Option<crate::model::haulage::NodeId>,
-    /// Where it meets the network, and the grade-limited drive there.
+    /// Whether it is dug, rather than part of a dump or stockpile.
+    pub(crate) dug: bool,
+    /// Its blast's ground path, `Pit A/392/1`, which issues group it under.
+    pub(crate) area: String,
+    /// The nodes it is held to, when it is not left to the nearest road,
+    /// with where each is.
+    pub(crate) links: Vec<(crate::model::haulage::NodeId, glam::DVec3)>,
+    /// Where it meets the network when left to the nearest road, and the
+    /// grade-limited drive there.
     pub(crate) join: Option<glam::DVec3>,
     pub(crate) access_m: f64,
     pub(crate) connected: bool,
@@ -703,6 +709,14 @@ impl HaulBlock {
     /// Where trucks load: the anchor, at the flitch base.
     pub(crate) fn point(&self) -> glam::DVec3 {
         glam::DVec3::new(self.anchor[0], self.anchor[1], self.flitch.base)
+    }
+    pub(crate) fn reference(&self) -> HaulBlockRef {
+        HaulBlockRef {
+            solid: self.solid,
+            flitch_base: self.flitch.base,
+            face: self.face.clone(),
+            probe: self.anchor,
+        }
     }
 }
 
@@ -2033,19 +2047,23 @@ pub(crate) struct EditorState {
     pub(crate) cursor_world: Option<DVec3>,
     pub(crate) haul_draw: bool,
     pub(crate) haul_delete_node: Option<crate::model::haulage::NodeId>,
+    /// The Promote to Destination dialog, while it is open.
+    pub(crate) haul_promote: Option<HaulPromote>,
     pub(crate) import_as_haul_roads: bool,
     pub(crate) haul_points: Vec<DVec3>,
     pub(crate) haul_block_cache_key: Option<(u32, u64, Option<u64>, u64)>,
     pub(crate) haul_view_revision: u64,
     pub(crate) haul_issues: Vec<crate::model::haulage::network::NetworkIssue>,
     pub(crate) haul_blocks: Vec<HaulBlock>,
-    /// The dig block clicked on the Layout, which the route check starts from.
-    pub(crate) haul_selected_block: Option<crate::model::DigBlockId>,
-    /// While set, the next node clicked is the one the selected block is held to.
+    /// The dig blocks selected on the Layout, in the order they were picked.
+    pub(crate) haul_selected_blocks: Vec<crate::model::DigBlockId>,
+    /// While set, clicks on the roads pick the nodes the selected blocks are
+    /// held to, gathered in `haul_link_points` until they are joined.
     pub(crate) haul_link_pick: bool,
+    pub(crate) haul_link_points: Vec<DVec3>,
     /// What the block tint was last drawn for: the hidden ground and the
-    /// selected block. Compared each frame so a change redraws it.
-    pub(crate) haul_display_drawn: (SolidsVisibility, Option<crate::model::DigBlockId>),
+    /// selected blocks. Compared each frame so a change redraws it.
+    pub(crate) haul_display_drawn: (SolidsVisibility, Vec<crate::model::DigBlockId>),
     /// Whether the scene was last built showing the Layout's block tint, so
     /// leaving the page by any route clears it.
     pub(crate) haul_page_drawn: bool,
@@ -2059,6 +2077,9 @@ pub(crate) struct EditorState {
     /// The road point right-clicked to open the canvas menu, where Split
     /// cuts. The live cursor has moved onto the menu by then.
     pub(crate) haul_menu_point: Option<DVec3>,
+    /// The bend point of a road right-clicked near, which the menu offers
+    /// to promote to a node.
+    pub(crate) haul_menu_bend: Option<(crate::model::haulage::RoadId, DVec3)>,
     pub(crate) haul_pins: Vec<((f32, f32), crate::model::haulage::NodeRole)>,
     /// Animate's haul routes: the loaded path of each source, destination
     /// and truck class the schedule moves material by, worked out once per
@@ -2230,6 +2251,9 @@ pub(crate) struct EditorState {
     /// The bench selection the view was last framed on, so picking a bench
     /// zooms to it once rather than fighting the user's pan every frame.
     pub(crate) blasting_framed_key: Option<u64>,
+    /// The project the Haulage Layout was last framed on, so it fits the
+    /// network once when opened rather than fighting the user's pan.
+    pub(crate) haulage_framed_key: Option<u32>,
     /// What the Blasting step took over on entry and puts back on leaving, so
     /// popping in to check a bench costs the user neither the view nor the
     /// drawing settings they had set up.
@@ -3207,6 +3231,7 @@ impl EditorState {
         self.haul_cursor = None;
         self.haul_drag = None;
         self.haul_link_pick = false;
+        self.haul_link_points.clear();
         self.haul_route = None;
     }
 
@@ -3291,6 +3316,7 @@ impl EditorState {
             || self.new_delay_product_open
             || self.initiation_dialog.is_some()
             || self.renaming_item.is_some()
+            || self.haul_promote.is_some()
             || self.tri_create_open
             || self.tri_create_failure.is_some()
             || self.tri_cut_poly_open
@@ -3391,6 +3417,7 @@ impl EditorState {
         self.blasting_outlines_key = None;
         self.blasting_bench_key = None;
         self.blasting_framed_key = None;
+        self.haulage_framed_key = None;
         self.selected_handles.clear();
         self.selected_drill_holes.clear();
         self.selected_tie_ins.clear();
@@ -3434,9 +3461,12 @@ impl EditorState {
         self.haul_cursor = None;
         self.haul_drag = None;
         self.haul_menu_point = None;
+        self.haul_menu_bend = None;
         self.haul_delete_node = None;
-        self.haul_selected_block = None;
+        self.haul_promote = None;
+        self.haul_selected_blocks.clear();
         self.haul_link_pick = false;
+        self.haul_link_points.clear();
         self.haul_hidden = SolidsVisibility::default();
         self.haul_navigation_selection.clear();
         self.haul_pins.clear();
@@ -3754,14 +3784,16 @@ impl EditorState {
             cursor_world: None,
             haul_draw: false,
             haul_delete_node: None,
+            haul_promote: None,
             import_as_haul_roads: false,
             haul_points: Vec::new(),
             haul_block_cache_key: None,
             haul_view_revision: 0,
             haul_issues: Vec::new(),
             haul_blocks: Vec::new(),
-            haul_selected_block: None,
+            haul_selected_blocks: Vec::new(),
             haul_link_pick: false,
+            haul_link_points: Vec::new(),
             haul_display_drawn: Default::default(),
             haul_page_drawn: false,
             haul_hidden: SolidsVisibility::default(),
@@ -3769,6 +3801,7 @@ impl EditorState {
             haul_cursor: None,
             haul_drag: None,
             haul_menu_point: None,
+            haul_menu_bend: None,
             haul_pins: Vec::new(),
             animation_routes: HashMap::new(),
             animation_routes_key: None,
@@ -3845,6 +3878,7 @@ impl EditorState {
             scroll_to_blast: false,
             blast_labels: Vec::new(),
             blasting_outlines_key: None,
+            haulage_framed_key: None,
             blasting_framed_key: None,
             blasting_restore: None,
             blasting_bench_key: None,
@@ -4717,18 +4751,48 @@ pub(crate) enum HaulEdit {
     Role(crate::model::haulage::NodeId, Option<crate::model::haulage::NodeRole>),
     RoadProperties(Vec<crate::model::haulage::RoadId>, Option<String>, Option<f64>),
     Settings(crate::model::haulage::network::HaulSettings),
-    Fixed(crate::model::schedule::DestinationId, bool),
     /// Add a node where a destination meets the road, giving it that role.
     Pin(crate::model::haulage::NodeRole, DVec3),
-    /// Hold a dig block to a node, or (`None`) leave it to the nearest road.
-    /// `at` is a node's position or a point on a road, which becomes a node.
-    LinkBlock {
-        solid: crate::model::SolidId,
-        flitch_base: f64,
-        face: std::sync::Arc<crate::model::arrangement::Face>,
-        probe: [f64; 2],
-        at: Option<DVec3>,
+    /// Hold dig blocks to nodes, or with no `at` leave them to the nearest
+    /// road. Each of `at` is a node's position or a point on a road, which
+    /// becomes a node.
+    LinkBlocks {
+        blocks: Vec<HaulBlockRef>,
+        at: Vec<DVec3>,
     },
+}
+
+/// What the Promote to Destination dialog has chosen for a node: which
+/// destination, and for a stockpile which of its points the node becomes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct HaulPromote {
+    pub(crate) node: crate::model::haulage::NodeId,
+    pub(crate) target: HaulPromoteTarget,
+    pub(crate) point: HaulPromotePoint,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum HaulPromoteTarget {
+    Existing(crate::model::schedule::DestinationId),
+    New(crate::model::schedule::DestinationKind),
+}
+
+/// Which of a stockpile's points a node becomes; anything else is only
+/// tipped at.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum HaulPromotePoint {
+    DumpAndReclaim,
+    Dump,
+    Reclaim,
+}
+
+/// A dig block as a link names it: see [`crate::model::haulage::network::BlockLink`].
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct HaulBlockRef {
+    pub(crate) solid: crate::model::SolidId,
+    pub(crate) flitch_base: f64,
+    pub(crate) face: std::sync::Arc<crate::model::arrangement::Face>,
+    pub(crate) probe: [f64; 2],
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -4742,6 +4806,9 @@ pub(crate) enum UiCommand {
     OpenHaulImport,
     EditHaulProperties,
     FinishHaulRoad,
+    /// Hold the selected Layout blocks to nodes at these points, or with
+    /// none leave them to the nearest road.
+    LinkHaulBlocks(Vec<DVec3>),
     ConvertHaulSelection,
     /// Frame a haul feature: the box from `min` to `max`, padded.
     FrameHaul(DVec3, DVec3),
@@ -5545,6 +5612,7 @@ impl UiCommand {
             | Self::OpenHaulImport
             | Self::EditHaulProperties
             | Self::FinishHaulRoad
+            | Self::LinkHaulBlocks(_)
             | Self::ConvertHaulSelection
             | Self::FrameHaul(..)
             | Self::NewHaulDestination { .. }
@@ -5738,7 +5806,6 @@ impl UiCommand {
                 | ScheduleEdit::MoveRule { .. }
                 // Truck cell edits, for the same reason: the class editor and
                 // the rule editor show the result where it was typed.
-                | ScheduleEdit::SetDestinationDistance { .. }
                 | ScheduleEdit::RenameTruckClass { .. }
                 | ScheduleEdit::SetTruckClassPayload { .. }
                 | ScheduleEdit::SetTruckClassHaulage { .. }
@@ -6634,16 +6701,13 @@ pub(crate) struct ScheduleDestinationDraft {
     pub(crate) id: crate::model::schedule::DestinationId,
     /// What the project held when this draft was seeded, so an edit made
     /// elsewhere replaces the draft rather than being overwritten by it.
-    pub(crate) source: (String, Option<f64>, Option<f64>, u64, u64, Option<u64>),
+    pub(crate) source: (String, Option<f64>, Option<f64>, u64, Option<u64>),
     pub(crate) name: String,
     /// A stockpile's rest before reclaim, in hours.
     pub(crate) rest: String,
     pub(crate) capacity: String,
     /// A crusher's default daily budget, blank for unlimited.
     pub(crate) crusher_default: String,
-    /// One-way haul distance in kilometres. Always a figure - there is no
-    /// blank state, because every destination is somewhere.
-    pub(crate) distance: String,
     pub(crate) dump_time: String,
 }
 
@@ -6997,13 +7061,6 @@ pub(crate) enum ScheduleEdit {
     MoveRule {
         rule: crate::model::schedule::RuleId,
         later: bool,
-    },
-    /// One destination's one-way haul distance, in kilometres. A transport
-    /// input, edited on the destination pages because that is where the
-    /// destination is.
-    SetDestinationDistance {
-        destination: crate::model::schedule::DestinationId,
-        distance_km: f64,
     },
     /// Add a truck class - a shared pool of one type of truck, starting with
     /// no trucks in it.

@@ -1167,14 +1167,27 @@ const MIN_STACKED_PANE: f32 = 96.0;
 /// here is marked with. The upper half is [`central_pane`], which takes
 /// whatever this leaves.
 fn stacked_lower<R>(ui: &mut egui::Ui, id: &'static str, content: impl FnOnce(&mut egui::Ui, egui::Rect) -> R) -> (egui::Rect, chrome::Grip) {
+    stacked_lower_share(ui, id, 0.5, 0.0, content)
+}
+
+/// [`stacked_lower`], opening at `share` of the height on offer rather than
+/// half, and never taking the `reserve` a pane claimed after it needs: for a
+/// column of more than two panes, claimed from the bottom up.
+pub(crate) fn stacked_lower_share<R>(
+    ui: &mut egui::Ui,
+    id: &'static str,
+    share: f32,
+    reserve: f32,
+    content: impl FnOnce(&mut egui::Ui, egui::Rect) -> R,
+) -> (egui::Rect, chrome::Grip) {
     // Bounded against the height actually on offer rather than a fixed pair of
     // limits, so a short window narrows both panes instead of letting one of
     // them push the other off the bottom.
-    let available = ui.available_height();
+    let available = ui.available_height() - reserve;
     let max = (available - MIN_STACKED_PANE).max(MIN_STACKED_PANE);
     let rect = egui::Panel::bottom(id)
         .resizable(true)
-        .default_size(available * 0.5)
+        .default_size(available * share)
         .min_size(MIN_STACKED_PANE.min(max))
         .max_size(max)
         .show_separator_line(chrome::show_separator_line(ui))

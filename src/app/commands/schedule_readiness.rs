@@ -49,7 +49,7 @@ use crate::{
     ui::state::{ScheduleBarView, ScheduleMemberView, SequenceMemberView},
 };
 
-fn block_labels(document: &Document, block: &DigBlockRecord) -> (String, String, String, String, String) {
+pub(crate) fn block_labels(document: &Document, block: &DigBlockRecord) -> (String, String, String, String, String) {
     let solid_type = document
         .solid(block.solid)
         .map(|solid| crate::ui::dialogs::solids::kind_label(solid.kind))

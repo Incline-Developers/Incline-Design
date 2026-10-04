@@ -28,9 +28,11 @@ fn grid_row_height(ui: &egui::Ui) -> f32 {
 }
 
 /// Height a [`PropertyTable`] needs to show its title strip plus `rows` rows
-/// without clipping the last one.
+/// without clipping the last one. Its rows stand as tall as a
+/// [`grid_columns_row`]; a header row is shorter, so one counted here as a
+/// row leaves a little to spare rather than clipping.
 pub(crate) fn property_table_height(ui: &egui::Ui, rows: usize) -> f32 {
-    TITLE_STRIP + rows as f32 * grid_row_height(ui)
+    TITLE_STRIP + rows as f32 * (grid_row_height(ui) + COLUMN_ROW_EXTRA)
 }
 
 /// Paint the tree-stripe background, title strip and border shared by both surfaces,
@@ -774,6 +776,13 @@ impl<'a> PropertyTable<'a> {
     }
 }
 
+/// The mark at the end of a [`PropertyRows`] value, with its message.
+#[derive(Clone, Copy)]
+enum Badge<'a> {
+    Error(&'a str),
+    Warning(&'a str),
+}
+
 /// Row sink handed to a [`PropertyTable`] body closure.
 pub(crate) struct PropertyRows<'u> {
     ui: &'u mut egui::Ui,
@@ -797,12 +806,53 @@ impl PropertyRows<'_> {
     /// An editable key/value pair. `error`, when set, shows a red badge in the
     /// value column with the message as its tooltip. Returns the field's response.
     pub(crate) fn field(&mut self, key: &str, value: &mut String, error: Option<&str>) -> egui::Response {
-        self.value_field(key, value, None, error, false)
+        self.value_field(key, value, None, error.map(Badge::Error), false)
+    }
+
+    /// An editable value, with its unit faint at the cell's right as a
+    /// [`grid_cell_entry`] shows one. The text is held while it is being
+    /// typed, so the table can be drawn from the model every frame; it is
+    /// handed back once, when focus leaves it changed from `current`.
+    pub(crate) fn committed_entry(&mut self, id: impl std::hash::Hash + std::fmt::Debug, key: &str, current: &str, unit: Option<&str>) -> (egui::Response, Option<String>) {
+        let id = egui::Id::new(id);
+        let mut text = self.ui.data(|data| data.get_temp::<String>(id)).unwrap_or_else(|| current.to_owned());
+        let response = self.value_field(key, &mut text, unit, None, false);
+        if response.has_focus() {
+            self.ui.data_mut(|data| data.insert_temp(id, text));
+            return (response, None);
+        }
+        self.ui.data_mut(|data| data.remove::<String>(id));
+        let committed = (response.lost_focus() && text != current).then_some(text);
+        (response, committed)
     }
 
     /// A calculated value is rendered directly in the table cell with an optional unit.
     pub(crate) fn readonly(&mut self, key: &str, value: &str, unit: Option<&str>, error: Option<&str>) -> egui::Response {
-        self.value_field(key, &mut value.to_owned(), unit, error, true)
+        self.value_field(key, &mut value.to_owned(), unit, error.map(Badge::Error), true)
+    }
+
+    /// A calculated value with a yellow warning mark, for a figure that
+    /// stands but rests on an assumption the message explains on hover.
+    pub(crate) fn readonly_warning(&mut self, key: &str, value: &str, unit: Option<&str>, warning: Option<&str>) -> egui::Response {
+        self.value_field(key, &mut value.to_owned(), unit, warning.map(Badge::Warning), true)
+    }
+
+    /// Weak text across both columns: a hint about the rows above it.
+    pub(crate) fn note(&mut self, text: &str) {
+        let rect = self.begin_table_row(false);
+        let cell = egui::Rect::from_min_max(egui::pos2(rect.left() + GUTTER, rect.top()), rect.max);
+        paint_cell_text(self.ui, cell, egui::RichText::new(text), self.ui.visuals().weak_text_color());
+        self.ui.interact(cell, self.ui.id().with(("note", text)), egui::Sense::hover()).on_hover_text(text);
+    }
+
+    /// A row across both columns, `height` tall, drawn by `add` into the rect
+    /// it is handed: a chart, say.
+    pub(crate) fn wide(&mut self, height: f32, add: impl FnOnce(&mut egui::Ui, egui::Rect)) {
+        let (rect, _) = self.ui.allocate_exact_size(egui::vec2(self.ui.available_width(), height), egui::Sense::hover());
+        let inner = rect.shrink2(egui::vec2(8.0, 6.0));
+        let mut child = self.ui.new_child(egui::UiBuilder::new().max_rect(inner));
+        child.set_clip_rect(child.clip_rect().intersect(inner));
+        add(&mut child, inner);
     }
 
     /// A single-choice value, drawn as a combo box filling the value column.
@@ -855,21 +905,20 @@ impl PropertyRows<'_> {
         self.place(self.value_rect(rect, split), egui::Checkbox::new(value, ""))
     }
 
-    fn value_field(&mut self, key: &str, value: &mut String, unit: Option<&str>, error: Option<&str>, readonly: bool) -> egui::Response {
+    fn value_field(&mut self, key: &str, value: &mut String, unit: Option<&str>, badge: Option<Badge<'_>>, readonly: bool) -> egui::Response {
         let (rect, split) = self.begin_row(false);
         self.paint_key(rect, split, key);
-        if let Some(message) = error {
+        if let Some(badge) = badge {
             let icon_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - CELL_WARNING_WIDTH / 2.0, rect.center().y), egui::vec2(16.0, 16.0));
-            self.place(
-                icon_rect,
-                egui::Image::new(unthemed_icon!("step_error.svg"))
-                    .fit_to_exact_size(icon_rect.size())
-                    .sense(egui::Sense::hover()),
-            )
-            .on_hover_text(message);
+            let (icon, message) = match badge {
+                Badge::Error(message) => (unthemed_icon!("step_error.svg"), message),
+                Badge::Warning(message) => (unthemed_icon!("step_warning.svg"), message),
+            };
+            self.place(icon_rect, egui::Image::new(icon).fit_to_exact_size(icon_rect.size()).sense(egui::Sense::hover()))
+                .on_hover_text(message);
         }
         let mut value_rect = self.value_rect(rect, split);
-        if error.is_some() {
+        if badge.is_some() {
             value_rect.max.x -= CELL_WARNING_WIDTH;
         }
         if let Some(unit) = unit {

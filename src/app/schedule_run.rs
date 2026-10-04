@@ -303,7 +303,6 @@ impl crate::app::App<'_> {
                 id.hash(&mut hasher);
                 kind.hash(&mut hasher);
                 routing.capacity_t(id).map(f64::to_bits).hash(&mut hasher);
-                routing.distance_km(id).to_bits().hash(&mut hasher);
                 if let Some(inventory) = routing.inventory(id) {
                     inventory.hash_content(&mut hasher);
                 }
@@ -313,7 +312,6 @@ impl crate::app::App<'_> {
             entry.id.hash(&mut hasher);
             entry.kind.hash(&mut hasher);
             entry.capacity_t.map(f64::to_bits).hash(&mut hasher);
-            entry.distance_km.to_bits().hash(&mut hasher);
             entry.dump_time_s.map(f64::to_bits).hash(&mut hasher);
             entry.inventory.hash_content(&mut hasher);
             entry.crusher.default_tpd.map(f64::to_bits).hash(&mut hasher);

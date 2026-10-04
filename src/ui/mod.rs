@@ -710,14 +710,18 @@ fn draw_ui(
     // two strips below it, so it stops at the bottom toolbar's top and they
     // carry on underneath it, and after the viewport bar, so it starts
     // directly under it.
-    let planning_island = if editor.is_planning_cut_step() {
-        Some(if editor.is_dig_strips_step() {
+    // Its regions and seams: one of each for an island, more for a column
+    // of panes.
+    let planning_island: Option<(Vec<egui::Rect>, Vec<chrome::Grip>)> = if editor.is_planning_cut_step() {
+        let island = if editor.is_dig_strips_step() {
             elements::dig_strips::draw_panel(root_ui, editor, document, commands)
         } else {
             elements::blasting::draw_panel(root_ui, editor, document, commands)
-        })
+        };
+        Some((island.regions, vec![island.grip]))
     } else if editor.is_planning_viewport() && editor.planning_page == state::PlanningPage::Haulage {
-        Some(elements::haulage::draw_panel(root_ui, editor, document, project, commands))
+        let column = elements::haulage::draw_panel(root_ui, editor, document, project, commands);
+        Some((column.regions, column.grips))
     } else {
         None
     };
@@ -1342,7 +1346,7 @@ fn draw_ui(
     let ctx = root_ui.ctx().clone();
     chrome::paint_window_background(&ctx, window_background, scene_rect);
     let console_claimed = console_rect.unwrap_or(egui::Rect::NOTHING);
-    let planning_regions: Vec<egui::Rect> = planning_island.as_ref().map(|island| island.regions.clone()).unwrap_or_default();
+    let (planning_regions, planning_grips) = planning_island.unwrap_or_default();
     let borehole_inspector_claimed = borehole_inspector_rect.unwrap_or(egui::Rect::NOTHING);
     chrome::paint_regions(
         &ctx,
@@ -1370,7 +1374,7 @@ fn draw_ui(
             ])
             // The island names its own seam, so the grip lights up for whichever
             // of the right-edge panels the workspace drew.
-            .chain(planning_island.map(|island| island.grip)),
+            .chain(planning_grips),
     );
 
     geometry_dirty
@@ -1469,6 +1473,8 @@ fn draw_global_dialogs(
     if editor.lossy_save_confirm_open {
         dialogs::confirmations::draw_lossy_save_dialog(root_ui, commands, editor, project);
     }
+
+    elements::haulage::draw_promote_dialog(root_ui, editor, project, commands);
 
     // Delete selection confirmation
     if editor.delete_confirm_open {

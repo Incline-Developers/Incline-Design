@@ -44,7 +44,7 @@
 //! supported there.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     hash::{DefaultHasher, Hash, Hasher},
     sync::Arc,
     time::Duration,
@@ -298,8 +298,8 @@ struct GroundContext {
     /// Which of the block's captured portions this is, for diagnostics.
     portion: usize,
     position: glam::DVec3,
-    /// The road node the block is held to, when it is not left to the nearest road.
-    haul_link: Option<crate::model::haulage::NodeId>,
+    /// The road nodes the block is held to, when it is not left to the nearest road.
+    haul_link: Vec<crate::model::haulage::NodeId>,
 }
 
 impl GroundContext {
@@ -1094,7 +1094,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                     values: portion.values.clone(),
                     portion: index,
                     position: glam::DVec3::new(block.anchor[0], block.anchor[1], block.flitch.base),
-                    haul_link: source.haulage.block_link(block.solid, block.flitch.base, &block.ground),
+                    haul_link: source.haulage.block_link(block.solid, block.flitch.base, &block.ground).to_vec(),
                 },
             );
         }
@@ -1470,7 +1470,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                                 ExpandArgs {
                                     activity: Activity::Dig,
                                     position: Some(held.position),
-                                    haul_link: held.haul_link,
+                                    haul_link: &held.haul_link,
                                     loader: task.loader,
                                     agent,
                                     loader_name,
@@ -1483,7 +1483,6 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                                     routing_preference: preference,
                                     subject: portion_name(&identities, source, held.portion),
                                 },
-                                routing,
                                 fleet,
                                 &truck_ids,
                                 cashflow,
@@ -1580,7 +1579,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                             ExpandArgs {
                                 activity: Activity::Reclaim,
                                 position: None,
-                                haul_link: None,
+                                haul_link: &[],
                                 loader: task.loader,
                                 agent,
                                 loader_name,
@@ -1595,7 +1594,6 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                                 routing_preference: preference,
                                 subject: pile_name.clone(),
                             },
-                            routing,
                             fleet,
                             &truck_ids,
                             cashflow,
@@ -1694,6 +1692,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         notes.push(crate::i18n::tr!("drill-blast-unworked", blasts = blasts));
     }
 
+    haul.report(&identities, &mut notes, &mut problems);
     if movements.is_empty() && !has_blast_work && problems.is_empty() {
         problems.push(CaptureDiagnostic::global(crate::i18n::tr!("schedule-capture-no-movement")).at(ScheduleStep::Destinations));
     }
@@ -1744,6 +1743,12 @@ struct HaulCapture<'a> {
     plan: &'a SchedulePlan,
     /// Unconnected blocks are reported once by the Readiness step, not here.
     searches: BTreeMap<(ProjectDestinationId, trucking::TruckClassId), Option<crate::model::haulage::routing::DestinationSearch<'a>>>,
+    /// Sources each destination offered by routing could not be reached
+    /// from by road, so no candidate was made for them.
+    unroutable: BTreeMap<ProjectDestinationId, BTreeSet<SourceId>>,
+    /// Sources offered a destination, and those that reached one by road.
+    offered: BTreeSet<SourceId>,
+    routed: BTreeSet<SourceId>,
 }
 impl<'a> HaulCapture<'a> {
     fn new(network: &'a crate::model::haulage::HaulNetwork, points: &'a BTreeMap<ProjectDestinationId, glam::DVec3>, plan: &'a SchedulePlan) -> Self {
@@ -1753,12 +1758,18 @@ impl<'a> HaulCapture<'a> {
             index: crate::model::haulage::network::RoadIndex::new(network),
             plan,
             searches: BTreeMap::new(),
+            unroutable: BTreeMap::new(),
+            offered: BTreeSet::new(),
+            routed: BTreeSet::new(),
         }
     }
     fn point(&self, id: ProjectDestinationId, reclaim: bool) -> Option<glam::DVec3> {
         self.network.destination_point(id, reclaim, self.points.get(&id).copied())
     }
-    fn cycle(&mut self, args: &ExpandArgs<'_>, class: &'a trucking::TruckClass, distance: f64) -> trucking::CycleBreakdown {
+    /// The haul's cycle along the roads, or `None` when no road route
+    /// reaches the destination from this source: there is no other way to
+    /// say how long the haul takes, so it is not offered at all.
+    fn cycle(&mut self, args: &ExpandArgs<'_>, class: &'a trucking::TruckClass) -> Option<trucking::CycleBreakdown> {
         let loader = self.plan.agent(args.agent).and_then(|a| self.plan.class(a.class_id));
         let rate = loader.map_or(0.0, |c| {
             if args.activity == Activity::Dig {
@@ -1783,10 +1794,27 @@ impl<'a> HaulCapture<'a> {
                 .as_ref()
                 .and_then(|s| s.route(&self.index, source, args.haul_link, args.activity == Activity::Dig, rate, spot, dump))
             {
-                return route.cycle;
+                return Some(route.cycle);
             }
         }
-        trucking::CycleBreakdown::fixed(class, distance, rate, spot, dump, self.network.settings.acceleration_kph_s)
+        None
+    }
+
+    /// What the roads could not reach, for the Haulage step: one note per
+    /// destination, and a problem for each source with nowhere to go.
+    fn report(&self, identities: &CaptureIdentities, notes: &mut Vec<String>, problems: &mut Diagnostics) {
+        for (destination, sources) in &self.unroutable {
+            let name = identities
+                .destinations
+                .iter()
+                .find(|(_, id, _)| id == destination)
+                .map_or_else(String::new, |(_, _, name)| name.clone());
+            notes.push(crate::i18n::tr!("schedule-capture-unroutable", destination = name, count = sources.len().to_string()));
+        }
+        let stranded = self.offered.difference(&self.routed).count();
+        if stranded > 0 {
+            problems.push(CaptureDiagnostic::global(crate::i18n::tr!("schedule-capture-stranded", count = stranded.to_string())).at(ScheduleStep::Haulage));
+        }
     }
 }
 
@@ -1795,7 +1823,7 @@ impl<'a> HaulCapture<'a> {
 struct ExpandArgs<'a> {
     activity: Activity,
     position: Option<glam::DVec3>,
-    haul_link: Option<crate::model::haulage::NodeId>,
+    haul_link: &'a [crate::model::haulage::NodeId],
     loader: LoaderId,
     agent: LoaderAgentId,
     loader_name: &'a str,
@@ -1824,7 +1852,6 @@ fn expand_candidate<'a>(
     conditional_values: &mut Vec<ConditionalValue>,
     problems: &mut Diagnostics,
     args: ExpandArgs<'_>,
-    routing: &crate::model::schedule::destinations::RoutingConfig,
     fleet: &'a trucking::TruckFleetConfig,
     truck_ids: &BTreeMap<trucking::TruckClassId, TruckClassId>,
     cashflow: &crate::model::schedule::cashflow::CashflowConfig,
@@ -1849,7 +1876,6 @@ fn expand_candidate<'a>(
         );
         return;
     }
-    let distance_km = routing.distance_km(args.destination);
     let movement = MovementContext {
         activity: match args.activity {
             Activity::Dig => CashflowActivity::Dig,
@@ -1892,9 +1918,14 @@ fn expand_candidate<'a>(
             }
         }
     };
+    haul.offered.insert(args.source);
     for class in classes {
         let Some(definition) = fleet.class(class) else { continue };
-        let cycle = haul.cycle(&args, definition, distance_km);
+        let Some(cycle) = haul.cycle(&args, definition) else {
+            haul.unroutable.entry(args.destination).or_default().insert(args.source);
+            continue;
+        };
+        haul.routed.insert(args.source);
         let coefficients = match trucking::coefficients_from_cycle(definition, cycle) {
             Ok(coefficients) => coefficients,
             Err(error) => {

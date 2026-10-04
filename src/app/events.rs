@@ -58,10 +58,11 @@ impl<'a> App<'a> {
                     &self.schedule_animation,
                     self.solid_preview.as_ref(),
                 );
+                let overlay = if self.editor.is_haulage_page() { &self.haul_block_surface[..] } else { drawn.1 };
                 if let Some(graphics) = self.graphics.as_mut() {
                     graphics.begin_orbit_at_surface(
                         drawn.0,
-                        drawn.1,
+                        overlay,
                         &self.drill_holes,
                         &self.editor.hidden_handles,
                         &self.editor.frozen_handles,
@@ -265,6 +266,7 @@ impl<'a> App<'a> {
                     self.sync_blasting_outlines();
                     self.sync_dig_blocks();
                     self.sync_blasting_frame();
+                    self.sync_haulage_frame();
                     let showing_solid_preview = self.showing_solid_preview();
                     let completing_topology_load = self.topology_uploads_pending();
                     let applied_resize = self.take_resize_to_apply(now);
@@ -1072,17 +1074,54 @@ impl<'a> App<'a> {
         self.last_snap_poll_instant = Some(now);
         self.refresh_snap_index();
         let document = &self.scene_document;
-        self.graphics.as_ref().and_then(|graphics| {
-            graphics.snap_cursor(
-                document,
-                &self.snap_index,
-                &self.triangulations,
-                &self.editor.hidden_handles,
-                &self.editor.frozen_handles,
-                &self.editor.cursor_mode,
-                self.editor.xray_enabled,
-            )
-        })
+        let graphics = self.graphics.as_ref()?;
+        let found = graphics.snap_cursor(
+            document,
+            &self.snap_index,
+            &self.triangulations,
+            &self.editor.hidden_handles,
+            &self.editor.frozen_handles,
+            &self.editor.cursor_mode,
+            self.editor.xray_enabled,
+        );
+        // A road drawn on the Layout snaps to the dig blocks shown there too,
+        // which are drawn beside the document rather than in it: to their
+        // tops, which hide the ground under them, or their corners and edges.
+        if !(self.editor.is_haulage_page() && self.editor.haul_placing()) {
+            return found;
+        }
+        if self.editor.cursor_mode == crate::ui::state::CursorMode::SnapToSurface {
+            return graphics
+                .pick_triangulation_at_cursor(&self.haul_block_surface, &self.editor.hidden_handles, &self.editor.frozen_handles)
+                .map(|(_, point)| point)
+                .or(found);
+        }
+        // The roads snap the same way: their nodes and bend points, or
+        // anywhere along them in line mode.
+        let roads: Vec<Vec<glam::DVec3>> = self
+            .workspace
+            .active_document()
+            .map(|document| {
+                let network = document.haulage();
+                network
+                    .roads
+                    .iter()
+                    .filter(|road| !self.editor.hidden_handles.contains(&crate::model::SceneEntityId::HaulRoad(road.id)))
+                    .map(|road| network.points(road))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let hidden = &self.editor.haul_hidden;
+        let rings = self
+            .editor
+            .haul_blocks
+            .iter()
+            .filter(|b| !hidden.hides(b.solid, b.bench, b.flitch, b.blast))
+            .flat_map(|b| &b.rings)
+            .filter(|ring| ring.len() >= 2)
+            .map(|ring| (ring.as_slice(), true))
+            .chain(roads.iter().map(|road| (road.as_slice(), false)));
+        graphics.snap_cursor_to_rings(rings, &self.editor.cursor_mode, found)
     }
 
     /// Whether the cursor-poll rate the user set allows another scene query
@@ -1177,7 +1216,31 @@ impl<'a> App<'a> {
                         self.editor.xray_enabled,
                     )
                 });
-                if let Some(pick) = picked {
+                // On the Haulage Layout a dig block under the cursor takes the
+                // menu, unless a road or node is nearer the click: it joins the
+                // selection the way a right-clicked entity does.
+                let on_network = picked.as_ref().is_some_and(|pick| {
+                    self.workspace.active_document().is_some_and(|document| match pick.entity {
+                        crate::model::SceneEntityId::HaulRoad(id) => document.haulage().road(id).is_some(),
+                        crate::model::SceneEntityId::HaulNode(id) => document.haulage().node(id).is_some(),
+                        _ => false,
+                    })
+                });
+                let block = (self.editor.is_haulage_page() && !on_network).then(|| self.haul_block_at_cursor()).flatten();
+                if let Some(id) = block {
+                    if !self.editor.haul_selected_blocks.contains(&id) {
+                        self.editor.haul_selected_blocks = vec![id];
+                        self.editor
+                            .selected_handles
+                            .retain(|h| !matches!(h, crate::model::SceneEntityId::HaulRoad(_) | crate::model::SceneEntityId::HaulNode(_)));
+                    }
+                    self.editor.haul_menu_point = None;
+                    self.editor.haul_menu_bend = None;
+                    self.editor.canvas_context_menu_hole = None;
+                    self.editor.canvas_context_menu_open = true;
+                    self.editor.canvas_context_menu_px = self.editor.cursor_screen_px;
+                    self.invalidate_overlay();
+                } else if let Some(pick) = picked {
                     let handle = pick.entity;
                     // Same rule the left-click path follows: a click acts on
                     // the hole under the cursor, not its dataset.
@@ -1206,6 +1269,10 @@ impl<'a> App<'a> {
                         _ => None,
                     };
                     self.editor.haul_menu_point = matches!(handle, crate::model::SceneEntityId::HaulRoad(_)).then_some(pick.world);
+                    self.editor.haul_menu_bend = match handle {
+                        crate::model::SceneEntityId::HaulRoad(id) => self.haul_bend_at_cursor(id).map(|pos| (id, pos)),
+                        _ => None,
+                    };
                     self.editor.canvas_context_menu_open = true;
                     self.editor.canvas_context_menu_px = self.editor.cursor_screen_px;
                     self.redraw_requested = true;
@@ -1295,12 +1362,15 @@ impl<'a> App<'a> {
             &self.schedule_animation,
             self.solid_preview.as_ref(),
         );
+        // The Layout's blocks are flat fills in the scene, not surfaces; their
+        // pick surface stands in so an orbit pivots on the block it starts on.
+        let overlay = if self.editor.is_haulage_page() { &self.haul_block_surface[..] } else { drawn.1 };
         let Some(graphics) = self.graphics.as_mut() else {
             return;
         };
         graphics.begin_orbit_at_surface(
             drawn.0,
-            drawn.1,
+            overlay,
             &self.drill_holes,
             &self.editor.hidden_handles,
             &self.editor.frozen_handles,
@@ -1432,7 +1502,8 @@ impl<'a> App<'a> {
                     self.invalidate_overlay();
                 } else if self.editor.haul_link_pick {
                     self.editor.haul_link_pick = false;
-                    self.redraw_requested = true;
+                    self.editor.haul_link_points.clear();
+                    self.invalidate_overlay();
                 } else if self.editor.haul_draw {
                     self.finish_haul_road();
                 } else if self.editor.tie_anchor.is_some() {
@@ -1528,6 +1599,9 @@ impl<'a> App<'a> {
             KeyCode::Enter | KeyCode::NumpadEnter if !self.editor.text_editing_enabled => {
                 if self.editor.haul_draw {
                     self.finish_haul_road();
+                } else if self.editor.haul_link_pick && !self.editor.haul_link_points.is_empty() {
+                    let at = std::mem::take(&mut self.editor.haul_link_points);
+                    self.link_haul_blocks(at);
                 } else if self.editor.active_tool.translates() {
                     let d = self.editor.move_panel_delta;
                     self.apply_move_delta(glam::DVec3::new(d[0], d[1], d[2]));

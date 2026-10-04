@@ -840,6 +840,19 @@ impl crate::app::App<'_> {
         id.and_then(|id| self.triangulations.iter().find(|item| item.id == id).map(|item| (item.id, item.geometry)))
     }
 
+    /// A solid's design surface: the loaded mesh, else the one its envelope
+    /// was built from while that still stands for the same content - so a
+    /// surface hidden and unloaded still says where the solid is.
+    pub(crate) fn solid_design_surface(&self, runtime: u32, solid: &Solid) -> Option<Arc<Triangulation>> {
+        let id = solid.surface?;
+        if let Some(item) = self.triangulations.iter().find(|item| item.id == id && item.mesh.face_count() > 0) {
+            return Some(item.mesh.clone());
+        }
+        let versions = [solid.surface, solid.topography].map(|id| self.surface_content_version(id));
+        let key = envelope_key(runtime, solid, &versions);
+        self.solid_view_cache.get(&solid.id).and_then(|cache| cache.retained_source(key, 0))
+    }
+
     /// Solids: build the closed body between the solid's two surfaces.
     ///
     /// The single most expensive thing in the pipeline, and the one keyed
@@ -1458,7 +1471,7 @@ impl crate::app::App<'_> {
                         self.editor.solid_view_reserve_issues.entry(*field).or_insert_with(|| issue.describe());
                     }
                 }
-                if cache.reserves.product().is_some_and(|product| product.availability == ReserveAvailability::CapacityOnly) {
+                if solid.kind.requires_block_model() && cache.reserves.product().is_some_and(|product| product.availability == ReserveAvailability::CapacityOnly) {
                     self.editor.solid_view_reserve_status = Some(crate::i18n::tr!("planning-reserve-capacity-only"));
                 }
             }

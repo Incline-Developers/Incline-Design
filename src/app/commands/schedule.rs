@@ -99,7 +99,6 @@ impl crate::app::App<'_> {
             ScheduleEdit::SetRuleSources { rule, sources } => self.edit_routing(|routing| routing.set_rule_sources(rule, sources)),
             ScheduleEdit::SetRuleConditions { rule, conditions } => self.edit_routing(|routing| routing.set_rule_conditions(rule, conditions)),
             ScheduleEdit::MoveRule { rule, later } => self.edit_routing(|routing| routing.move_rule(rule, later)),
-            ScheduleEdit::SetDestinationDistance { destination, distance_km } => self.edit_routing(|routing| routing.set_distance_km(destination, distance_km)),
             ScheduleEdit::AddTruckClass { name } => self.add_truck_class(name),
             ScheduleEdit::DuplicateTruckClass(class) => self.duplicate_truck_class(class),
             ScheduleEdit::DeleteTruckClass(class) => self.delete_truck_class(class),

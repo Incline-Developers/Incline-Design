@@ -931,20 +931,6 @@ impl CycleBreakdown {
     pub(crate) fn total_h(self) -> f64 {
         self.spot_h + self.load_h + self.loaded_h + self.dump_h + self.empty_h
     }
-    pub(crate) fn fixed(class: &TruckClass, distance_km: f64, loader_rate: f64, spot_s: f64, dump_s: Option<f64>, _acceleration: f64) -> Self {
-        let loaded = class.speed(0.0, true, None);
-        let empty = class.speed(0.0, false, None);
-        Self {
-            spot_h: spot_s / 3600.0,
-            load_h: if loader_rate > 0.0 { class.payload_t / loader_rate } else { 0.0 },
-            loaded_h: distance_km / loaded,
-            empty_h: distance_km / empty,
-            dump_h: dump_s.unwrap_or(class.dump_time_s) / 3600.0,
-            loaded_km: distance_km,
-            empty_km: distance_km,
-            rise_m: 0.0,
-        }
-    }
 }
 
 /// Truck-hours one class can supply between two elapsed project hours.
@@ -1026,11 +1012,6 @@ fn checked_units(value: f64) -> ScheduleResult<u32> {
         return Err(ScheduleError::InvalidTruckUnits);
     }
     Ok(value as u32)
-}
-
-/// A one-way haul distance in kilometres.
-pub(crate) fn checked_distance(value: f64) -> ScheduleResult<f64> {
-    checked_positive(value, ScheduleError::InvalidDistance)
 }
 
 /// Default grade speed bands for a new class, from a large haul truck's

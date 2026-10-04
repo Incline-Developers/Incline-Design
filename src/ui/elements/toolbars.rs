@@ -39,6 +39,10 @@ enum LeftToolAction {
     Tool(ActiveTool),
     /// Open or close the Drill & Blast pattern builder.
     DrillPattern,
+    /// Start a haul road, or finish the one being drawn.
+    HaulDraw,
+    /// Send this command; the button holds no state of its own.
+    Command(Box<UiCommand>),
 }
 
 /// One button in the drawing toolbar's run.
@@ -130,6 +134,44 @@ fn blasting_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool) ->
     ]
 }
 
+/// The Haulage Layout tools: draw a road, turn design strings into roads,
+/// and bring roads in from or out to DXF.
+fn haulage_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, project_active: bool) -> Vec<LeftTool> {
+    let objects = editor.selected_handles.iter().any(|h| matches!(h, crate::model::SceneEntityId::Object(_)));
+    let tool = |icon: egui::ImageSource<'static>, tooltip: String, action: LeftToolAction, enabled: bool| LeftTool {
+        icon: egui::Image::new(icon),
+        tooltip,
+        action,
+        enabled: project_active && enabled,
+        hint: None,
+    };
+    let draw = if editor.haul_draw { tr!("haul-finish") } else { tr!("haul-draw") };
+    vec![
+        tool(themed_icon!(ui, "draw_haul_road.svg"), draw, LeftToolAction::HaulDraw, true),
+        LeftTool {
+            hint: (project_active && !objects).then(|| tr!("haul-convert-help")),
+            ..tool(
+                themed_icon!(ui, "convert_to_road.svg"),
+                tr!("haul-convert"),
+                LeftToolAction::Command(Box::new(UiCommand::ConvertHaulSelection)),
+                objects,
+            )
+        },
+        tool(
+            themed_icon!(ui, "import_data.svg"),
+            tr!("haul-import"),
+            LeftToolAction::Command(Box::new(UiCommand::OpenHaulImport)),
+            true,
+        ),
+        tool(
+            themed_icon!(ui, "export_data.svg"),
+            tr!("haul-export"),
+            LeftToolAction::Command(Box::new(UiCommand::ExportHaulRoads)),
+            !project.haulage.roads.is_empty(),
+        ),
+    ]
+}
+
 /// The Drill & Blast tools, in the order they are drawn: lay a pattern out,
 /// nudge its holes, re-aim them, tie them together, say where it starts,
 /// then load it.
@@ -204,6 +246,8 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
         LeftToolAction::NewLayer => editor.new_layer_dialog_open,
         LeftToolAction::Tool(active) => editor.active_tool == active,
         LeftToolAction::DrillPattern => editor.drill_pattern_open,
+        LeftToolAction::HaulDraw => editor.haul_draw,
+        LeftToolAction::Command(_) => false,
     };
     let button = ToolbarButton::new(tool.icon.clone(), tool.tooltip.as_str())
         .id_salt(("left_tool", tool.tooltip.as_str()))
@@ -225,6 +269,8 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
         }
         LeftToolAction::Tool(active) => commands.push(UiCommand::SetActiveTool(active)),
         LeftToolAction::DrillPattern => commands.push(UiCommand::ToggleCreateDrillPattern),
+        LeftToolAction::HaulDraw => commands.push(if editor.haul_draw { UiCommand::FinishHaulRoad } else { UiCommand::StartHaulRoad }),
+        LeftToolAction::Command(ref command) => commands.push(command.as_ref().clone()),
     }
 }
 
@@ -250,10 +296,11 @@ pub(crate) fn draw_left_toolbar(
     commands: &mut Vec<UiCommand>,
 ) -> egui::Rect {
     let tools = match editor.active_workspace {
-        // Planning's Blasting step is the one page outside production that
-        // draws design geometry, so its run is asked for before the workspace
-        // is: everywhere else in Planning the column stands empty.
+        // Planning's Blasting step draws design geometry and its Haulage
+        // Layout draws roads, so their runs are asked for before the
+        // workspace is: everywhere else in Planning the column stands empty.
         _ if editor.is_planning_cut_step() => blasting_tools(ui, editor, editing_enabled),
+        _ if editor.is_haulage_page() => haulage_tools(ui, project, editor, project_active),
         workspace if workspace.has_production_tools() => left_tools(ui, editor, editing_enabled, project_active),
         Workspace::DrillAndBlast => blast_tools(ui, project, editor, editing_enabled, project_active),
         _ => Vec::new(),

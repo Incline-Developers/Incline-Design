@@ -326,34 +326,32 @@ impl<'a> App<'a> {
         }
         if !dragged && self.editor.is_haulage_page() && self.editor.active_tool == ActiveTool::None && !self.editor.haul_draw {
             let on_network = pending_selection_click.is_some_and(|p| matches!(p.entity, SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_)));
-            // Only blocks left visible in Solids Navigation can be clicked,
-            // and of those under the cursor the highest - the one on top.
-            let hidden = &self.editor.haul_hidden;
-            let block = (!on_network)
-                .then(|| {
-                    self.editor
-                        .haul_blocks
-                        .iter()
-                        .filter(|b| !hidden.hides(b.solid, b.bench, b.flitch, b.blast))
-                        .filter(|b| {
-                            self.graphics
-                                .as_ref()
-                                .and_then(|g| g.cursor_world(b.flitch.base))
-                                .is_some_and(|world| crate::model::arrangement::point_in_face(&b.face, world.truncate()))
-                        })
-                        .max_by(|a, b| a.flitch.base.total_cmp(&b.flitch.base))
-                        .map(|b| b.id)
-                })
-                .flatten();
+            let toggle = self.modifiers.shift_key();
+            let add = self.modifiers.control_key();
+            let block = (!on_network).then(|| self.haul_block_at_cursor()).flatten();
             if let Some(id) = block {
-                self.editor.haul_selected_block = Some(id);
-                self.editor
-                    .selected_handles
-                    .retain(|h| !matches!(h, SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_)));
+                let selected = &mut self.editor.haul_selected_blocks;
+                if toggle && let Some(index) = selected.iter().position(|b| *b == id) {
+                    selected.remove(index);
+                } else if toggle || add {
+                    if !selected.contains(&id) {
+                        selected.push(id);
+                    }
+                } else {
+                    *selected = vec![id];
+                    self.editor
+                        .selected_handles
+                        .retain(|h| !matches!(h, SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_)));
+                }
                 self.invalidate_overlay();
                 return;
             }
-            self.editor.haul_selected_block = None;
+            // A road or node clicked with shift or ctrl joins the blocks
+            // already selected, so a block and a destination can be asked
+            // about together; anything else starts over.
+            if !(on_network && (toggle || add)) {
+                self.editor.haul_selected_blocks.clear();
+            }
             self.invalidate_overlay();
         }
         if !dragged
@@ -527,7 +525,22 @@ impl<'a> App<'a> {
             .filter(|_| !objects_only)
             .map(|graphics| graphics.drill_hole_collars_in_screen_rect(&self.drill_holes, start, end, &self.editor.hidden_handles, &self.editor.frozen_handles))
             .unwrap_or_default();
+        // The Layout's dig blocks ride the same box, by their outlines.
+        let blocks = if self.editor.is_haulage_page() && !objects_only {
+            self.haul_blocks_in_screen_rect(start, end, cross_select)
+        } else {
+            Vec::new()
+        };
         if self.modifiers.shift_key() {
+            for id in blocks {
+                let selected = &mut self.editor.haul_selected_blocks;
+                match selected.iter().position(|b| *b == id) {
+                    Some(index) => {
+                        selected.remove(index);
+                    }
+                    None => selected.push(id),
+                }
+            }
             for handle in enclosed {
                 if !self.editor.selected_handles.remove(&handle) {
                     self.editor.selected_handles.insert(handle);
@@ -544,6 +557,12 @@ impl<'a> App<'a> {
                 // Cleared with the handles, or a box over empty ground would
                 // leave the previous box's holes selected.
                 self.editor.selected_drill_holes.clear();
+                self.editor.haul_selected_blocks.clear();
+            }
+            for id in blocks {
+                if !self.editor.haul_selected_blocks.contains(&id) {
+                    self.editor.haul_selected_blocks.push(id);
+                }
             }
             self.editor.selected_handles.extend(enclosed);
             self.editor.selected_drill_holes.extend(holes);
@@ -552,6 +571,48 @@ impl<'a> App<'a> {
             self.editor.move_vertex_target = None;
         }
         self.invalidate_geometry();
+    }
+
+    /// The Layout's dig block under the cursor: of those left visible in
+    /// Solids Navigation, the highest - the one on top.
+    pub(crate) fn haul_block_at_cursor(&self) -> Option<crate::model::DigBlockId> {
+        let graphics = self.graphics.as_ref()?;
+        let hidden = &self.editor.haul_hidden;
+        self.editor
+            .haul_blocks
+            .iter()
+            .filter(|b| !hidden.hides(b.solid, b.bench, b.flitch, b.blast))
+            .filter(|b| {
+                graphics
+                    .cursor_world(b.flitch.base)
+                    .is_some_and(|world| crate::model::arrangement::point_in_face(&b.face, world.truncate()))
+            })
+            .max_by(|a, b| a.flitch.base.total_cmp(&b.flitch.base))
+            .map(|b| b.id)
+    }
+
+    /// The Layout's visible dig blocks a marquee takes: wholly inside it, or
+    /// for a crossing box any corner inside it.
+    fn haul_blocks_in_screen_rect(&self, start: (f32, f32), end: (f32, f32), cross_select: bool) -> Vec<crate::model::DigBlockId> {
+        let Some(graphics) = self.graphics.as_ref() else { return Vec::new() };
+        let view_proj = graphics.view_proj();
+        let (min, max) = ((start.0.min(end.0), start.1.min(end.1)), (start.0.max(end.0), start.1.max(end.1)));
+        let inside = |p: (f32, f32)| p.0 >= min.0 && p.0 <= max.0 && p.1 >= min.1 && p.1 <= max.1;
+        let hidden = &self.editor.haul_hidden;
+        self.editor
+            .haul_blocks
+            .iter()
+            .filter(|b| !hidden.hides(b.solid, b.bench, b.flitch, b.blast))
+            .filter(|b| {
+                let mut corners = b.rings.iter().flatten().map(|p| graphics.world_to_window_px(&view_proj, *p));
+                if cross_select {
+                    corners.any(|p| p.is_some_and(inside))
+                } else {
+                    corners.all(|p| p.is_some_and(inside))
+                }
+            })
+            .map(|b| b.id)
+            .collect()
     }
 
     /// The Drill & Blast marquee: select tie-ins exclusively when the box

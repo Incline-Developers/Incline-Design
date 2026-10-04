@@ -387,13 +387,12 @@ pub(crate) fn rebuild_document_scene(input: DocumentSceneBuildInput<'_>) {
                 draw_ctx.fill_vertex_buf,
                 draw_ctx.fill_index_buf,
                 &mesh,
-                if editor.haul_selected_block == Some(block.id) {
+                if editor.haul_selected_blocks.contains(&block.id) {
                     let [r, g, b, _] = super::overlays::HAUL_SELECTED_BLOCK;
-                    [r, g, b, 0.3]
-                } else if block.connected {
-                    [0.25, 0.85, 0.4, 0.04]
+                    [r, g, b, 0.12]
                 } else {
-                    [0.95, 0.25, 0.25, 0.08]
+                    let [r, g, b] = super::overlays::haul_block_tint(block);
+                    [r, g, b, if block.connected && block.links.is_empty() { 0.04 } else { 0.08 }]
                 },
                 scene_origin,
                 STYLE_SLOT_NONE,
@@ -409,6 +408,9 @@ pub(crate) fn rebuild_document_scene(input: DocumentSceneBuildInput<'_>) {
     if editor.shows_haul_network() {
         draw_ctx.style = STYLE_SLOT_NONE;
         let network = document.haulage();
+        // Only what Issues reports as too steep is marked: a grade every
+        // truck class can drive is not a problem, and a tint for it read as one.
+        let max_grade = crate::app::commands::haulage::max_grade(document.schedule().trucks());
         for road in &network.roads {
             let entity = SceneEntityId::HaulRoad(road.id);
             if editor.hidden_handles.contains(&entity) {
@@ -422,10 +424,8 @@ pub(crate) fn rebuild_document_scene(input: DocumentSceneBuildInput<'_>) {
                     crate::ui::SELECTION_COLOR_F32
                 } else if editor.tri_hover_handles.contains(&entity) {
                     [1.0, 0.8, 0.1, 1.0]
-                } else if slope > 0.1 {
+                } else if slope > max_grade {
                     [0.95, 0.25, 0.25, 1.0]
-                } else if slope > 0.02 {
-                    [0.9, 0.6, 0.3, 1.0]
                 } else {
                     [0.65, 0.75, 0.85, 1.0]
                 };

@@ -42,6 +42,7 @@ impl<'a> App<'a> {
                 &self.schedule_animation,
                 self.solid_preview.as_ref(),
             );
+            let overlay = if self.editor.is_haulage_page() { &self.haul_block_surface[..] } else { drawn.1 };
             let Some(graphics) = self.graphics.as_mut() else {
                 return;
             };
@@ -49,7 +50,7 @@ impl<'a> App<'a> {
             // it to the cursor.
             let Some(centre) = graphics.pick_rotation_centre(
                 drawn.0,
-                drawn.1,
+                overlay,
                 &self.drill_holes,
                 &self.editor.hidden_handles,
                 &self.editor.frozen_handles,
@@ -334,6 +335,15 @@ impl<'a> App<'a> {
 
     /// Fit all visible content while preserving the current orbit angle.
     pub(crate) fn zoom_to_extents(&mut self) {
+        // The Layout is about its roads and blocks, which the scene's own
+        // extents do not count.
+        if self.editor.is_haulage_page()
+            && let Some((min, max)) = self.haul_layout_bounds()
+        {
+            self.frame_haul(min, max);
+            userspace_log!("{}", tr!("cmd-view-zoom-extents-preserving-angle"));
+            return;
+        }
         let triangulations = self.framed_triangulations().to_vec();
         if let Some(graphics) = self.graphics.as_mut() {
             graphics.zoom_to_extents(

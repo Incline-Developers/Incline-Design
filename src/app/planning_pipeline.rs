@@ -486,12 +486,16 @@ impl crate::app::App<'_> {
             if self.editor.haul_block_cache_key != Some(key) {
                 self.editor.haul_block_cache_key = Some(key);
                 self.refresh_haulage_view();
+                self.rebuild_haul_block_surface();
                 self.invalidate_geometry();
             }
             // Hiding ground in Solids Navigation, or picking a block, changes
             // which blocks are tinted and how.
-            if self.editor.haul_display_drawn.0 != self.editor.haul_hidden || self.editor.haul_display_drawn.1 != self.editor.haul_selected_block {
-                self.editor.haul_display_drawn = (self.editor.haul_hidden.clone(), self.editor.haul_selected_block);
+            if self.editor.haul_display_drawn.0 != self.editor.haul_hidden || self.editor.haul_display_drawn.1 != self.editor.haul_selected_blocks {
+                self.editor.haul_display_drawn = (self.editor.haul_hidden.clone(), self.editor.haul_selected_blocks.clone());
+                // The tint is baked into the scene, which this revision keys.
+                self.editor.haul_view_revision = self.editor.haul_view_revision.wrapping_add(1);
+                self.rebuild_haul_block_surface();
                 self.invalidate_geometry();
                 self.invalidate_overlay();
             }
@@ -1335,11 +1339,14 @@ impl PlanningInputs<'_> {
             if stage == SolidsStep::DigStrips {
                 match self.reserve_state(solid, crate::app::commands::solids_view::ReserveScope::Dig) {
                     ReserveState::Waiting => waiting += 1,
-                    ReserveState::CapacityOnly => diagnostics.push(StageDiagnostic {
+                    // Worth saying only of a pit: a dump or stockpile is
+                    // placed material, so geometry alone is all it has.
+                    ReserveState::CapacityOnly if solid.kind.requires_block_model() => diagnostics.push(StageDiagnostic {
                         entity: Some(solid.name.clone()),
                         message: tr!("planning-reserve-capacity-only"),
                         blocking: false,
                     }),
+                    ReserveState::CapacityOnly => {}
                     ReserveState::Failed(message) => diagnostics.push(StageDiagnostic {
                         entity: Some(solid.name.clone()),
                         message,

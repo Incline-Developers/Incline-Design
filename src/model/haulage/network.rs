@@ -31,18 +31,34 @@ impl NodeRole {
     }
 }
 
-/// A dig block held to a chosen node instead of the nearest road.
+/// A dig block held to chosen nodes instead of the nearest road. Routing
+/// takes whichever of them gives the quickest cycle to each destination.
 ///
 /// Named by where the block is rather than by its session id: the solid, its
 /// flitch's base RL and a point inside it. A rerun that redraws the strips
 /// keeps the link with whichever block then covers that point.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct BlockLink {
     pub(crate) solid: SolidId,
     pub(crate) flitch_base: f64,
     pub(crate) probe: [f64; 2],
-    pub(crate) node: NodeId,
+    /// Read from `node` too, which held the one node a link once had.
+    #[serde(alias = "node", deserialize_with = "one_or_many")]
+    pub(crate) nodes: Vec<NodeId>,
+}
+
+fn one_or_many<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<NodeId>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(NodeId),
+        Many(Vec<NodeId>),
+    }
+    Ok(match OneOrMany::deserialize(deserializer)? {
+        OneOrMany::One(id) => vec![id],
+        OneOrMany::Many(ids) => ids,
+    })
 }
 impl BlockLink {
     pub(crate) fn covers(&self, solid: SolidId, flitch_base: f64, face: &[Vec<DVec2>]) -> bool {
@@ -95,7 +111,11 @@ pub(crate) struct HaulNetwork {
     pub(crate) nodes: Vec<HaulNode>,
     pub(crate) roads: Vec<HaulRoad>,
     pub(crate) settings: HaulSettings,
-    pub(crate) fixed_destinations: Vec<DestinationId>,
+    /// Destinations held to their fixed haul distance, from before every
+    /// haul was routed on the roads; read and dropped so such a project
+    /// still opens.
+    #[serde(rename = "fixed_destinations", skip_serializing)]
+    retired_fixed_destinations: serde::de::IgnoredAny,
     pub(crate) block_links: Vec<BlockLink>,
     next_node_id: u64,
     next_road_id: u64,
@@ -108,6 +128,9 @@ pub(crate) enum IssueKind {
     SeparatePiece,
     SteepRoad,
     MissingDestination,
+    /// Dig blocks further than the auto-join distance from every road, and
+    /// held to no node.
+    OutOfReach,
 }
 
 impl IssueKind {
@@ -118,6 +141,7 @@ impl IssueKind {
             Self::SeparatePiece => crate::i18n::tr!("haul-separate-piece"),
             Self::SteepRoad => crate::i18n::tr!("haul-steep"),
             Self::MissingDestination => crate::i18n::tr!("haul-missing-destination"),
+            Self::OutOfReach => crate::i18n::tr!("haul-out-of-reach"),
         }
     }
 }
@@ -127,6 +151,9 @@ pub(crate) struct NetworkIssue {
     pub(crate) pos: DVec3,
     pub(crate) road: Option<RoadId>,
     pub(crate) node: Option<NodeId>,
+    /// The blocks it is about, with the blast they are in.
+    pub(crate) blocks: Vec<crate::model::DigBlockId>,
+    pub(crate) area: String,
 }
 
 impl HaulNetwork {
@@ -140,8 +167,8 @@ impl HaulNetwork {
             road.from.0 = id(road.from.0);
             road.to.0 = id(road.to.0);
         }
-        for link in &mut self.block_links {
-            link.node.0 = id(link.node.0);
+        for node in self.block_links.iter_mut().flat_map(|l| &mut l.nodes) {
+            node.0 = id(node.0);
         }
         self.next_node_id = id(self.next_node_id);
         self.next_road_id = id(self.next_road_id);
@@ -222,17 +249,23 @@ impl HaulNetwork {
         let roads = &self.roads;
         self.nodes.retain(|n| n.role.is_some() || roads.iter().any(|r| r.from == n.id || r.to == n.id));
         let nodes = &self.nodes;
-        self.block_links.retain(|l| nodes.iter().any(|n| n.id == l.node));
+        for link in &mut self.block_links {
+            link.nodes.retain(|id| nodes.iter().any(|n| n.id == *id));
+        }
+        self.block_links.retain(|l| !l.nodes.is_empty());
     }
-    /// The node a block is held to, if it has been linked to one.
-    pub(crate) fn block_link(&self, solid: SolidId, flitch_base: f64, face: &[Vec<DVec2>]) -> Option<NodeId> {
-        self.block_links.iter().find(|l| l.covers(solid, flitch_base, face)).map(|l| l.node)
+    /// The nodes a block is held to; empty when it is left to the nearest road.
+    pub(crate) fn block_link(&self, solid: SolidId, flitch_base: f64, face: &[Vec<DVec2>]) -> &[NodeId] {
+        self.block_links.iter().find(|l| l.covers(solid, flitch_base, face)).map_or(&[], |l| &l.nodes)
     }
-    pub(crate) fn set_block_link(&mut self, solid: SolidId, flitch_base: f64, face: &[Vec<DVec2>], probe: [f64; 2], node: Option<NodeId>) -> anyhow::Result<()> {
-        anyhow::ensure!(node.is_none_or(|id| self.node(id).is_some()), "unknown road node");
+    /// Hold a block to `nodes`, or with none leave it to the nearest road.
+    pub(crate) fn set_block_link(&mut self, solid: SolidId, flitch_base: f64, face: &[Vec<DVec2>], probe: [f64; 2], mut nodes: Vec<NodeId>) -> anyhow::Result<()> {
+        anyhow::ensure!(nodes.iter().all(|id| self.node(*id).is_some()), "unknown road node");
+        nodes.sort();
+        nodes.dedup();
         self.block_links.retain(|l| !l.covers(solid, flitch_base, face));
-        if let Some(node) = node {
-            self.block_links.push(BlockLink { solid, flitch_base, probe, node });
+        if !nodes.is_empty() {
+            self.block_links.push(BlockLink { solid, flitch_base, probe, nodes });
         }
         Ok(())
     }
@@ -269,10 +302,32 @@ impl HaulNetwork {
     /// `None` when the destination is held to its fixed distance or has no
     /// point at all.
     pub(crate) fn destination_point(&self, destination: DestinationId, reclaim: bool, centroid: Option<DVec3>) -> Option<DVec3> {
-        if self.fixed_destinations.contains(&destination) {
-            return None;
-        }
-        self.role_point(destination, reclaim).or(centroid)
+        self.role_point(destination, reclaim).or_else(|| centroid.map(|c| self.at_road_level(c)))
+    }
+
+    /// `point` lowered or raised to the RL of the road nearest it in plan.
+    ///
+    /// A dump or stockpile with no node of its own is reached at the middle
+    /// of its surface, but trucks tip at the level they arrive on rather than
+    /// climbing to its top: until a fill direction says otherwise, that is
+    /// the safest level to assume. Nearest in plan, so the top of a tall dump
+    /// does not reach for a road on another level.
+    fn at_road_level(&self, point: DVec3) -> DVec3 {
+        let nearest = self
+            .roads
+            .iter()
+            .flat_map(|road| self.points(road).windows(2).map(|pair| (pair[0], pair[1])).collect::<Vec<_>>())
+            .map(|(a, b)| {
+                let span = (b - a).truncate();
+                let t = if span.length_squared() > 1e-12 {
+                    ((point - a).truncate().dot(span) / span.length_squared()).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                a + (b - a) * t
+            })
+            .min_by(|a, b| a.truncate().distance_squared(point.truncate()).total_cmp(&b.truncate().distance_squared(point.truncate())));
+        nearest.map_or(point, |road| DVec3::new(point.x, point.y, road.z))
     }
     /// Split on a specific segment. The original id remains on the first half.
     pub(crate) fn split(&mut self, id: RoadId, segment: usize, pos: DVec3) -> anyhow::Result<NodeId> {
@@ -311,8 +366,12 @@ impl HaulNetwork {
         if kept.role.is_none() {
             self.set_role(keep, removed.role)?;
         }
-        for link in self.block_links.iter_mut().filter(|l| l.node == remove) {
-            link.node = keep;
+        for link in &mut self.block_links {
+            for node in link.nodes.iter_mut().filter(|n| **n == remove) {
+                *node = keep;
+            }
+            link.nodes.sort();
+            link.nodes.dedup();
         }
         for road in &mut self.roads {
             if road.from == remove {
@@ -458,7 +517,7 @@ impl HaulNetwork {
         }
         for link in &self.block_links {
             anyhow::ensure!(
-                nodes.contains(&link.node) && link.flitch_base.is_finite() && link.probe.iter().all(|v| v.is_finite()),
+                !link.nodes.is_empty() && link.nodes.iter().all(|id| nodes.contains(id)) && link.flitch_base.is_finite() && link.probe.iter().all(|v| v.is_finite()),
                 "invalid block link"
             );
         }
@@ -484,6 +543,8 @@ impl HaulNetwork {
                     pos: self.node(road.from).expect("validated topology").pos,
                     road: Some(road.id),
                     node: None,
+                    blocks: Vec::new(),
+                    area: String::new(),
                 });
             }
         }
@@ -508,18 +569,22 @@ impl HaulNetwork {
                 pos: self.node(id).expect("node").pos,
                 road: None,
                 node: Some(id),
+                blocks: Vec::new(),
+                area: String::new(),
             });
         }
         for node in &self.nodes {
             if adjacency[&node.id].len() <= 1 && node.role.is_none() {
                 let reach = self.settings.auto_join_m;
-                let serves_blocks = self.block_links.iter().any(|l| l.node == node.id) || blocks.iter().any(|b| access_length(*b, node.pos, max_grade) <= reach);
+                let serves_blocks = self.block_links.iter().any(|l| l.nodes.contains(&node.id)) || blocks.iter().any(|b| access_length(*b, node.pos, max_grade) <= reach);
                 if !serves_blocks {
                     issues.push(NetworkIssue {
                         kind: IssueKind::DeadEnd,
                         pos: node.pos,
                         road: None,
                         node: Some(node.id),
+                        blocks: Vec::new(),
+                        area: String::new(),
                     });
                 }
                 if self.roads.iter().filter(|r| r.from != node.id && r.to != node.id).any(|r| {
@@ -532,6 +597,8 @@ impl HaulNetwork {
                         pos: node.pos,
                         road: None,
                         node: Some(node.id),
+                        blocks: Vec::new(),
+                        area: String::new(),
                     });
                 }
             }
@@ -543,6 +610,8 @@ impl HaulNetwork {
                     pos: node.pos,
                     road: None,
                     node: Some(node.id),
+                    blocks: Vec::new(),
+                    area: String::new(),
                 });
             }
         }
@@ -624,30 +693,31 @@ impl RoadIndex {
         }
         index
     }
-    /// The shortest grade-limited straight drive from `p` onto a road: the
-    /// larger of the distance and the height change at `max_grade`. Within
-    /// `reach` the point counts as connected. `None` with no roads at all.
-    pub(crate) fn access_m(&self, p: DVec3, reach: f64, max_grade: f64) -> Option<f64> {
-        self.joins(p, None, reach, max_grade).first().map(|j| access_length(p, j.2, max_grade))
+    /// The shortest grade-limited straight drive from `p` to a road node:
+    /// the larger of the distance and the height change at `max_grade`.
+    /// `None` with no roads at all.
+    pub(crate) fn access_m(&self, p: DVec3, max_grade: f64) -> Option<f64> {
+        self.joins(p, &[], max_grade).first().map(|j| access_length(p, j.2, max_grade))
     }
     /// Where a road leaves `node`, for a block held to it.
     pub(crate) fn node_join(&self, node: NodeId) -> Option<(RoadId, usize, DVec3)> {
         self.nodes.iter().find(|(id, _)| *id == node).map(|(_, join)| *join)
     }
-    /// Where a block at `p` meets the network: its linked node, else the
-    /// nearest road point by grade-limited drive. Points within a metre of
-    /// the nearest are all returned - the same junction reached along
-    /// different roads - so routing can take the quickest; anything further
-    /// would be a short cut through the pit walls.
-    pub(crate) fn joins(&self, p: DVec3, link: Option<NodeId>, reach: f64, max_grade: f64) -> Vec<(RoadId, usize, DVec3)> {
-        if let Some(join) = link.and_then(|id| self.node_join(id)) {
-            return vec![join];
+    /// Where a block at `p` meets the network: the nodes it is linked to,
+    /// else the node nearest it by grade-limited drive. Only nodes: a block
+    /// joined part way along a road would be reached at whatever RL the road
+    /// passes it, through the pit wall.
+    pub(crate) fn joins(&self, p: DVec3, links: &[NodeId], max_grade: f64) -> Vec<(RoadId, usize, DVec3)> {
+        let linked: Vec<_> = links.iter().filter_map(|id| self.node_join(*id)).collect();
+        if !linked.is_empty() {
+            return linked;
         }
-        let mut candidates = self.candidates(p, reach);
-        let nearest = candidates.iter().map(|c| access_length(p, c.2, max_grade)).fold(f64::INFINITY, f64::min);
-        candidates.retain(|c| access_length(p, c.2, max_grade) <= nearest + 1.0);
-        candidates.sort_by(|a, b| access_length(p, a.2, max_grade).total_cmp(&access_length(p, b.2, max_grade)));
-        candidates
+        self.nodes
+            .iter()
+            .map(|(_, join)| *join)
+            .min_by(|a, b| access_length(p, a.2, max_grade).total_cmp(&access_length(p, b.2, max_grade)))
+            .into_iter()
+            .collect()
     }
     pub(crate) fn candidates(&self, p: DVec3, distance: f64) -> Vec<(RoadId, usize, DVec3)> {
         let mut slots = BTreeSet::new();

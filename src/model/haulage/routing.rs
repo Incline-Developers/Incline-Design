@@ -255,21 +255,13 @@ impl<'a> DestinationSearch<'a> {
     }
     /// Both searches are reused for all blocks/materials for this class and
     /// destination. Only the short access candidates are evaluated per block.
-    /// `link` is the node a block has been held to, if any.
+    /// `link` is the nodes a block has been held to, if any; the quickest of
+    /// them is taken.
     #[allow(clippy::too_many_arguments, reason = "one block's whole question; a struct would only be unpacked again")]
-    pub(crate) fn route(
-        &self,
-        index: &RoadIndex,
-        source: DVec3,
-        link: Option<NodeId>,
-        bench_access: bool,
-        loader_rate: f64,
-        spot_s: f64,
-        dump_s: Option<f64>,
-    ) -> Option<RouteCheck> {
+    pub(crate) fn route(&self, index: &RoadIndex, source: DVec3, link: &[NodeId], bench_access: bool, loader_rate: f64, spot_s: f64, dump_s: Option<f64>) -> Option<RouteCheck> {
         let mut best: Option<RouteCheck> = None;
-        let linked = link.is_some_and(|id| index.node_join(id).is_some());
-        for join in index.joins(source, link, self.network.settings.auto_join_m, self.class.maximum_grade) {
+        let linked = link.iter().any(|id| index.node_join(*id).is_some());
+        for join in index.joins(source, link, self.class.maximum_grade) {
             let Some(mut loaded) = self.road_leg(join, false) else { continue };
             let Some(mut empty) = self.road_leg(join, true) else { continue };
             let direct = source.distance(join.2);

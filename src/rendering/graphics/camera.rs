@@ -1301,6 +1301,21 @@ impl<'a> Graphics<'a> {
         best
     }
 
+    /// The snap `found` among the document's targets, or a point or edge of
+    /// `rings` (each with whether it is closed) if one is nearer the cursor.
+    pub(crate) fn snap_cursor_to_rings<'r>(&self, rings: impl Iterator<Item = (&'r [DVec3], bool)>, mode: &CursorMode, found: Option<DVec3>) -> Option<DVec3> {
+        crate::rendering::snap::snap_to_rings(
+            rings,
+            mode,
+            &self.view_proj(),
+            self.screen_size(),
+            self.camera_controller.mouse_loc,
+            SNAP_THRESHOLD_PX,
+            self.section_slab(),
+            found,
+        )
+    }
+
     /// Find the nearest snap target for the current cursor position.
     /// Returns `None` in `CursorMode::Select` or when nothing is within the snap threshold.
     #[allow(clippy::too_many_arguments)]
@@ -1848,6 +1863,28 @@ impl<'a> Graphics<'a> {
             })
             .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), depth| (min.min(depth), max.max(depth)));
 
+        if min_depth.is_finite() {
+            let padding = (self.projection.zoom * 0.25).max(1.0);
+            self.projection.expand_view_depth_range(min_depth, max_depth, padding);
+        }
+    }
+
+    /// The Haulage Layout's dig blocks are fills drawn into the document
+    /// scene, outside the bounds the clip range is fitted to; without this a
+    /// camera brought close to them cuts the nearest ones off.
+    pub(super) fn include_haul_blocks_in_depth(&mut self, editor: &EditorState) {
+        if !editor.is_haulage_page() || editor.haul_blocks.is_empty() {
+            return;
+        }
+        let forward = self.camera.forward();
+        let (min_depth, max_depth) = editor
+            .haul_blocks
+            .iter()
+            .flat_map(|block| block.rings.iter().flatten())
+            .copied()
+            .filter(|point| point.is_finite())
+            .map(|point| (self.exaggerate_point(point) - self.camera.position).dot(forward))
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), depth| (min.min(depth), max.max(depth)));
         if min_depth.is_finite() {
             let padding = (self.projection.zoom * 0.25).max(1.0);
             self.projection.expand_view_depth_range(min_depth, max_depth, padding);

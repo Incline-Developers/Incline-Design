@@ -534,8 +534,6 @@ pub(crate) enum ScheduleError {
     InvalidPayload,
     /// A travel speed that is zero, negative, infinite or NaN.
     InvalidSpeed,
-    /// A haul distance that is zero, negative, infinite or NaN.
-    InvalidDistance,
     /// A truck count that is fractional, negative or not a number. Refused
     /// rather than rounded: half a truck is a typo.
     InvalidTruckUnits,
@@ -655,7 +653,6 @@ impl ScheduleError {
             Self::RuleAtEnd => tr!("destination-error-rule-at-end"),
             Self::InvalidPayload => tr!("truck-error-invalid-payload"),
             Self::InvalidSpeed => tr!("truck-error-invalid-speed"),
-            Self::InvalidDistance => tr!("truck-error-invalid-distance"),
             Self::InvalidTruckUnits => tr!("truck-error-invalid-units"),
             Self::UnknownTruckClass => tr!("truck-error-unknown-class"),
             Self::UnknownTruckingRule => tr!("truck-error-unknown-rule"),

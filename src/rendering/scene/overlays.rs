@@ -32,6 +32,29 @@ const BLAST_OUTLINE_WIDTH: f32 = 2.5;
 /// The Haulage Layout's selected dig block, and the line to where it joins
 /// the roads: the selection orange the rest of the scene uses.
 pub(crate) const HAUL_SELECTED_BLOCK: [f32; 4] = [1.0, 0.7, 0.1, 1.0];
+/// How a dig block meets the roads, as the Layout tints it: left to the
+/// nearest road within reach, held to nodes chosen for it, or out of reach.
+/// Blocks that are not dug are only context.
+pub(crate) const HAUL_AUTO_BLOCK: [f32; 3] = [0.25, 0.85, 0.4];
+pub(crate) const HAUL_MANUAL_BLOCK: [f32; 3] = [0.35, 0.65, 1.0];
+pub(crate) const HAUL_FAR_BLOCK: [f32; 3] = [0.95, 0.25, 0.25];
+pub(crate) const HAUL_PLACED_BLOCK: [f32; 3] = [0.6, 0.6, 0.6];
+
+/// The tint a Layout block is drawn in, before its alpha.
+pub(crate) fn haul_block_tint(block: &crate::ui::state::HaulBlock) -> [f32; 3] {
+    if !block.dug {
+        HAUL_PLACED_BLOCK
+    } else if !block.links.is_empty() {
+        HAUL_MANUAL_BLOCK
+    } else if block.connected {
+        HAUL_AUTO_BLOCK
+    } else {
+        HAUL_FAR_BLOCK
+    }
+}
+
+/// Dashes in an automatic join's line, which tell it from a chosen one.
+const HAUL_AUTO_DASHES: u32 = 7;
 
 /// How many pieces a leg replacing an existing connector is broken into. Odd,
 /// so a dashed run starts and ends on a mark rather than on a gap.
@@ -135,31 +158,75 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
     }
 
     if editor.is_haulage_page() {
-        for issue in &editor.haul_issues {
+        // Blocks out of reach are tinted already; a cross each would bury them.
+        for issue in editor.haul_issues.iter().filter(|issue| issue.blocks.is_empty()) {
             draw_screen_cross(&mut overlay, issue.pos, 9.0, 2.0, [1.0, 0.65, 0.15, 1.0]);
         }
+        // Joins are drawn one line per node, from the middle of the blocks
+        // using it, rather than one per block: the chosen ones always, solid,
+        // so a link is never invisible; the automatic ones only for the
+        // selection, dashed, so the two are never mistaken for each other.
+        let mut manual: Vec<(DVec3, f64, bool, Vec<DVec3>)> = Vec::new();
+        let mut automatic: Vec<(DVec3, Vec<DVec3>)> = Vec::new();
         for block in editor.haul_blocks.iter().filter(|b| !editor.haul_hidden.hides(b.solid, b.bench, b.flitch, b.blast)) {
-            let selected = editor.haul_selected_block == Some(block.id);
+            let selected = editor.haul_selected_blocks.contains(&block.id);
+            let [r, g, b] = haul_block_tint(block);
             let (color, width) = if selected {
-                (HAUL_SELECTED_BLOCK, 3.5)
-            } else if block.connected {
-                ([0.25, 0.85, 0.4, 0.45], 1.5)
+                (HAUL_SELECTED_BLOCK, 2.0)
+            } else if block.dug {
+                ([r, g, b, 0.45], 1.25)
             } else {
-                ([0.95, 0.25, 0.25, 0.55], 1.5)
+                ([r, g, b, 0.3], 1.0)
             };
             for ring in &block.rings {
                 let verts: Vec<_> = ring.iter().copied().map(crate::model::PolyVertex::straight).collect();
                 tessellate_polyline_stroke(&mut overlay, &verts, true, width, color);
             }
-            // Where it meets the roads: always for the selected block, and
-            // for any held to a chosen node, so a link is never invisible.
-            if let Some(join) = block.join
-                && (selected || block.link.is_some())
-            {
-                let color = if selected { HAUL_SELECTED_BLOCK } else { [0.35, 0.75, 0.95, 0.8] };
-                draw_line(&mut overlay, block.point(), join, if selected { 2.5 } else { 1.5 }, color);
-                draw_screen_cross(&mut overlay, block.point(), 6.0, 2.0, color);
+            for &(_, at) in &block.links {
+                match manual.iter_mut().find(|group| group.0 == at && group.1 == block.flitch.base && group.2 == selected) {
+                    Some(group) => group.3.push(block.point()),
+                    None => manual.push((at, block.flitch.base, selected, vec![block.point()])),
+                }
             }
+            if selected && let Some(join) = block.join {
+                match automatic.iter_mut().find(|group| group.0 == join) {
+                    Some(group) => group.1.push(block.point()),
+                    None => automatic.push((join, vec![block.point()])),
+                }
+            }
+        }
+        let middle = |points: &[DVec3]| points.iter().copied().sum::<DVec3>() / points.len().max(1) as f64;
+        let [r, g, b] = HAUL_MANUAL_BLOCK;
+        for (at, _, selected, points) in &manual {
+            let from = middle(points);
+            draw_line(&mut overlay, from, *at, if *selected { 3.0 } else { 2.0 }, [r, g, b, 0.9]);
+            draw_screen_cross(&mut overlay, from, 6.0, 2.0, [r, g, b, 1.0]);
+            draw_screen_cross(&mut overlay, *at, 6.0, 2.0, [r, g, b, 1.0]);
+        }
+        for (join, points) in &automatic {
+            let from = middle(points);
+            for step in 0..HAUL_AUTO_DASHES {
+                let (start, end) = (
+                    f64::from(2 * step) / f64::from(2 * HAUL_AUTO_DASHES - 1),
+                    f64::from(2 * step + 1) / f64::from(2 * HAUL_AUTO_DASHES - 1),
+                );
+                draw_line(&mut overlay, from.lerp(*join, start), from.lerp(*join, end), 2.5, HAUL_SELECTED_BLOCK);
+            }
+            draw_screen_cross(&mut overlay, from, 6.0, 2.0, HAUL_SELECTED_BLOCK);
+        }
+        // The nodes picked so far for the selected blocks, and where they
+        // would join them.
+        let picking: Vec<_> = editor
+            .haul_blocks
+            .iter()
+            .filter(|b| editor.haul_selected_blocks.contains(&b.id))
+            .map(crate::ui::state::HaulBlock::point)
+            .collect();
+        for &at in &editor.haul_link_points {
+            if !picking.is_empty() {
+                draw_line(&mut overlay, middle(&picking), at, 1.5, PREVIEW_COLOR);
+            }
+            draw_screen_cross(&mut overlay, at, 9.0, 2.5, PREVIEW_COLOR);
         }
     }
     for pair in editor.haul_points.windows(2) {

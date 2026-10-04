@@ -11,16 +11,25 @@ use crate::{
     ui::state::{HaulDrag, HaulDragTarget, HaulEdit},
 };
 
+/// The id of [`crate::app::App::haul_block_surface`]: generated geometry
+/// like the solid preview's, numbered below the ids those take.
+const HAUL_BLOCK_SURFACE_ID: crate::model::triangulation::TriangulationId = crate::model::triangulation::TriangulationId(u64::MAX - 1_000_000);
+
 impl crate::app::App<'_> {
     pub(crate) fn haul_destination_points(&self, document: &crate::model::Document) -> std::collections::BTreeMap<DestinationId, DVec3> {
         let mut points = std::collections::BTreeMap::new();
+        let Some(runtime) = self.workspace.active_project().map(|project| project.runtime_id) else {
+            return points;
+        };
         for solid in document.solids().iter().filter(|s| s.kind != crate::model::SolidKind::Pit) {
-            let Some(surface) = solid.surface.and_then(|id| self.triangulations.iter().find(|t| t.id == id)) else {
+            // Whether or not its surface is loaded: hiding a layer must not
+            // move a dump off the roads.
+            let Some(mesh) = self.solid_design_surface(runtime, solid) else {
                 continue;
             };
             let mut area = 0.0;
             let mut center = DVec3::ZERO;
-            for triangle in surface.mesh.triangles() {
+            for triangle in mesh.triangles() {
                 let p = triangle.vertices.map(|v| DVec3::new(v.x, v.y, v.z));
                 let weight = (p[1] - p[0]).truncate().perp_dot((p[2] - p[0]).truncate()).abs();
                 center += (p[0] + p[1] + p[2]) / 3.0 * weight;
@@ -30,9 +39,8 @@ impl crate::app::App<'_> {
                 continue;
             }
             center /= area;
-            let top = surface.mesh.vertices().iter().map(|v| v.z).fold(f64::NEG_INFINITY, f64::max);
-            center.z = surface
-                .mesh
+            let top = mesh.vertices().iter().map(|v| v.z).fold(f64::NEG_INFINITY, f64::max);
+            center.z = mesh
                 .triangles()
                 .filter_map(|triangle| {
                     let p = triangle.vertices.map(|v| DVec3::new(v.x, v.y, v.z));
@@ -82,7 +90,7 @@ impl crate::app::App<'_> {
                         .iter()
                         .map(|b| {
                             let point = DVec3::new(b.anchor[0], b.anchor[1], b.flitch.base);
-                            (b.id, (point, network.block_link(b.solid, b.flitch.base, &b.ground)))
+                            (b.id, (point, network.block_link(b.solid, b.flitch.base, &b.ground).to_vec()))
                         })
                         .collect()
                 })
@@ -97,11 +105,11 @@ impl crate::app::App<'_> {
                 };
                 let (from, link, bench) = match source {
                     crate::model::schedule::result::WorkSource::Block(id) => match blocks.get(&id) {
-                        Some((point, link)) => (*point, *link, true),
+                        Some((point, link)) => (*point, link.as_slice(), true),
                         None => continue,
                     },
                     crate::model::schedule::result::WorkSource::Stockpile(pile) => match network.destination_point(pile, true, centroids.get(&pile).copied()) {
-                        Some(point) => (point, None, false),
+                        Some(point) => (point, &[][..], false),
                         None => continue,
                     },
                 };
@@ -132,10 +140,24 @@ impl crate::app::App<'_> {
         let reach = network.settings.auto_join_m;
         for block in snapshot.iter().flat_map(|s| &s.blocks) {
             let point = DVec3::new(block.anchor[0], block.anchor[1], block.flitch.base);
-            let link = network.block_link(block.solid, block.flitch.base, &block.ground);
-            let join = index.joins(point, link, reach, max_grade).first().map(|j| j.2);
-            let access_m = join.map_or(f64::INFINITY, |j| crate::model::haulage::network::access_length(point, j, max_grade));
-            let linked = link.is_some() && join.is_some();
+            let links: Vec<_> = network
+                .block_link(block.solid, block.flitch.base, &block.ground)
+                .iter()
+                .filter_map(|id| index.node_join(*id).map(|join| (*id, join.2)))
+                .collect();
+            let join = if links.is_empty() {
+                index.joins(point, &[], max_grade).first().map(|j| j.2)
+            } else {
+                None
+            };
+            let access_m = links
+                .iter()
+                .map(|l| l.1)
+                .chain(join)
+                .map(|j| crate::model::haulage::network::access_length(point, j, max_grade))
+                .reduce(f64::min)
+                .unwrap_or(f64::INFINITY);
+            let (_, _, _, _, area) = crate::app::commands::schedule_readiness::block_labels(document, block);
             self.editor.haul_blocks.push(crate::ui::state::HaulBlock {
                 id: block.id,
                 solid: block.solid,
@@ -150,18 +172,36 @@ impl crate::app::App<'_> {
                     .iter()
                     .map(|ring| ring.iter().map(|p| DVec3::new(p.x, p.y, block.flitch.base)).collect())
                     .collect(),
-                link: link.filter(|_| linked),
+                dug: document.solid(block.solid).is_some_and(|s| s.kind == crate::model::SolidKind::Pit),
+                area,
+                connected: !links.is_empty() || access_m <= reach,
+                links,
                 join,
                 access_m,
-                connected: linked || access_m <= reach,
             });
         }
-        if self.editor.haul_selected_block.is_some_and(|id| !self.editor.haul_blocks.iter().any(|b| b.id == id)) {
-            self.editor.haul_selected_block = None;
-        }
+        let blocks = &self.editor.haul_blocks;
+        self.editor.haul_selected_blocks.retain(|id| blocks.iter().any(|b| b.id == *id));
         let destinations = haul_destinations(document);
         let anchors: Vec<_> = self.editor.haul_blocks.iter().map(crate::ui::state::HaulBlock::point).collect();
-        self.editor.haul_issues = network.issues(&destinations, max_grade, &anchors);
+        let mut issues = network.issues(&destinations, max_grade, &anchors);
+        // Dug blocks no road reaches, one issue per blast: a block each would
+        // bury the network's own issues.
+        if !network.roads.is_empty() {
+            let mut far: std::collections::BTreeMap<&str, Vec<&crate::ui::state::HaulBlock>> = std::collections::BTreeMap::new();
+            for block in self.editor.haul_blocks.iter().filter(|b| b.dug && !b.connected) {
+                far.entry(&block.area).or_default().push(block);
+            }
+            issues.extend(far.into_iter().map(|(area, blocks)| crate::model::haulage::network::NetworkIssue {
+                kind: crate::model::haulage::network::IssueKind::OutOfReach,
+                pos: blocks[0].point(),
+                road: None,
+                node: None,
+                blocks: blocks.iter().map(|b| b.id).collect(),
+                area: area.to_owned(),
+            }));
+        }
+        self.editor.haul_issues = issues;
         self.invalidate_overlay();
     }
     pub(crate) fn edit_haulage(&mut self, project: u32, edit: HaulEdit) -> anyhow::Result<()> {
@@ -259,26 +299,15 @@ impl crate::app::App<'_> {
                 }
             }
             HaulEdit::Settings(settings) => after.settings = settings,
-            HaulEdit::Fixed(destination, fixed) => {
-                after.fixed_destinations.retain(|id| *id != destination);
-                if fixed {
-                    after.fixed_destinations.push(destination);
-                }
-            }
             HaulEdit::Pin(role, pos) => {
                 let id = after.join_point(pos)?;
                 after.set_role(id, Some(role))?;
-                after.fixed_destinations.retain(|id| *id != role.destination());
             }
-            HaulEdit::LinkBlock {
-                solid,
-                flitch_base,
-                face,
-                probe,
-                at,
-            } => {
-                let node = at.map(|p| after.join_point(p)).transpose()?;
-                after.set_block_link(solid, flitch_base, &face, probe, node)?;
+            HaulEdit::LinkBlocks { blocks, at } => {
+                let nodes = at.into_iter().map(|p| after.join_point(p)).collect::<anyhow::Result<Vec<_>>>()?;
+                for block in blocks {
+                    after.set_block_link(block.solid, block.flitch_base, &block.face, block.probe, nodes.clone())?;
+                }
             }
         }
         Ok(())
@@ -312,12 +341,19 @@ impl crate::app::App<'_> {
         self.invalidate_overlay();
     }
     /// Where a road point under the cursor lands. A road or node within pick
-    /// reach wins when `join` is set, so drawn roads connect; then a snap the
-    /// user turned on; then the surface under the cursor, so roads drape on
-    /// the pit; and otherwise the level of `fallback_z`.
+    /// reach wins when `join` is set, so drawn roads connect - unless point
+    /// or line snap is on, which take roads as they take any geometry, so
+    /// point snap lands only on a node or bend point; then a snap the user
+    /// turned on; then the surface under the cursor, so roads drape on the
+    /// pit; and otherwise the level of `fallback_z`.
     fn haul_cursor_point(&self, fallback_z: f64, join: bool) -> Option<DVec3> {
         let graphics = self.graphics.as_ref()?;
+        let snaps_to_roads = matches!(
+            self.editor.cursor_mode,
+            crate::ui::state::CursorMode::SnapToPoint | crate::ui::state::CursorMode::SnapToLine
+        );
         if join
+            && !snaps_to_roads
             && let Some((_, point)) = graphics
                 .pick_at_cursor(PICK_THRESHOLD_PX, &[], &self.editor.hidden_handles, &self.editor.frozen_handles, self.editor.xray_enabled)
                 .filter(|(h, _)| matches!(h, SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_)))
@@ -332,10 +368,10 @@ impl crate::app::App<'_> {
             .map(|(_, point)| point)
             .or_else(|| graphics.cursor_world(fallback_z))
     }
-    /// The click that ends picking a node for the selected block: a node, or
-    /// a point on a road, which is split there to make one.
+    /// A click while picking nodes for the selected blocks: a node, or a
+    /// point on a road, which is split there to make one when they are
+    /// joined. Clicking a picked one again drops it.
     pub(crate) fn pick_haul_link(&mut self) {
-        self.editor.haul_link_pick = false;
         let Some(graphics) = self.graphics.as_ref() else { return };
         let Some(document) = self.workspace.active_document() else { return };
         let at = match graphics.pick_at_cursor(PICK_THRESHOLD_PX, &[], &self.editor.hidden_handles, &self.editor.frozen_handles, self.editor.xray_enabled) {
@@ -347,20 +383,36 @@ impl crate::app::App<'_> {
             crate::userspace_log!("{}", tr!("haul-link-missed"));
             return;
         };
-        let Some(block) = self.editor.haul_selected_block.and_then(|id| self.editor.haul_blocks.iter().find(|b| b.id == id)).cloned() else {
-            return;
-        };
+        let tolerance = document.haulage().settings.join_tolerance_m;
+        let points = &mut self.editor.haul_link_points;
+        match points.iter().position(|p| p.distance(at) <= tolerance) {
+            Some(index) => {
+                points.remove(index);
+            }
+            None => points.push(at),
+        }
+    }
+    /// Hold the selected blocks to the nodes picked for them, or with none
+    /// picked leave them to the nearest road. One undo step either way.
+    pub(crate) fn link_haul_blocks(&mut self, at: Vec<DVec3>) {
+        self.editor.haul_link_pick = false;
+        self.editor.haul_link_points.clear();
+        let blocks: Vec<_> = self
+            .editor
+            .haul_selected_blocks
+            .iter()
+            .filter_map(|id| self.editor.haul_blocks.iter().find(|b| b.id == *id))
+            .map(crate::ui::state::HaulBlock::reference)
+            .collect();
         let Some(runtime) = self.workspace.active_project().map(|p| p.runtime_id) else { return };
-        let edit = HaulEdit::LinkBlock {
-            solid: block.solid,
-            flitch_base: block.flitch.base,
-            face: block.face.clone(),
-            probe: block.anchor,
-            at: Some(at),
-        };
-        if let Err(error) = self.edit_haulage(runtime, edit) {
+        if blocks.is_empty() {
+            self.invalidate_overlay();
+            return;
+        }
+        if let Err(error) = self.edit_haulage(runtime, HaulEdit::LinkBlocks { blocks, at }) {
             crate::userspace_warn!("{error:#}");
         }
+        self.invalidate_overlay();
     }
     pub(crate) fn place_haul_point(&mut self) {
         let z = self.editor.haul_points.last().map_or(self.editor.z_level, |p| p.z);
@@ -373,6 +425,21 @@ impl crate::app::App<'_> {
     }
     /// A press on a node or shape point may become a drag. Selection still
     /// runs, so a press that never moves selects as before.
+    /// The bend point of `road` nearest the cursor, within the reach a drag
+    /// takes one from.
+    pub(crate) fn haul_bend_at_cursor(&self, road: crate::model::haulage::RoadId) -> Option<DVec3> {
+        let graphics = self.graphics.as_ref()?;
+        let cursor = self.editor.cursor_screen_px?;
+        let road = self.workspace.active_document()?.haulage().road(road)?;
+        let view_proj = graphics.view_proj();
+        let reach = self.points_to_px(8.0);
+        road.verts
+            .iter()
+            .filter_map(|p| graphics.world_to_window_px(&view_proj, *p).map(|s| (*p, (s.0 - cursor.0).hypot(s.1 - cursor.1))))
+            .filter(|(_, d)| *d <= reach)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(p, _)| p)
+    }
     pub(crate) fn begin_haul_drag(&mut self) {
         self.editor.haul_drag = None;
         let Some(graphics) = self.graphics.as_ref() else { return };
@@ -467,6 +534,89 @@ impl crate::app::App<'_> {
         }
         true
     }
+    /// What the Haulage Layout shows: its roads and the dig blocks not hidden
+    /// in Solids Navigation.
+    pub(crate) fn haul_layout_bounds(&self) -> Option<(DVec3, DVec3)> {
+        let network = self.workspace.active_document()?.haulage();
+        let roads = network.roads.iter().flat_map(|road| network.points(road));
+        let blocks = self
+            .editor
+            .haul_blocks
+            .iter()
+            .filter(|b| !self.editor.haul_hidden.hides(b.solid, b.bench, b.flitch, b.blast))
+            .flat_map(|b| b.rings.iter().flatten().copied());
+        roads
+            .chain(blocks)
+            .filter(|p| p.is_finite())
+            .fold(None, |bounds, p| Some(bounds.map_or((p, p), |(min, max): (DVec3, DVec3)| (min.min(p), max.max(p)))))
+    }
+
+    /// Fit the view to the Layout once when it opens on a project, as soon as
+    /// there is something to fit: the project's other geometry may be hidden
+    /// or far away, and the page is about its roads and blocks.
+    pub(crate) fn sync_haulage_frame(&mut self) {
+        if !self.editor.is_haulage_page() {
+            self.editor.haulage_framed_key = None;
+            return;
+        }
+        let Some(runtime) = self.workspace.active_project().map(|project| project.runtime_id) else {
+            return;
+        };
+        if self.editor.haulage_framed_key == Some(runtime) {
+            return;
+        }
+        // Nor while a swing into plan view is running: it holds the camera
+        // on the target it started from until it lands.
+        if self.graphics.as_ref().is_some_and(|graphics| graphics.view_transition_running()) {
+            return;
+        }
+        let Some((min, max)) = self.haul_layout_bounds() else { return };
+        self.editor.haulage_framed_key = Some(runtime);
+        self.frame_haul(min, max);
+    }
+
+    /// Rebuild [`crate::app::App::haul_block_surface`] from the blocks shown.
+    pub(crate) fn rebuild_haul_block_surface(&mut self) {
+        let mut vertices = Vec::new();
+        let mut faces = Vec::new();
+        for block in self
+            .editor
+            .haul_blocks
+            .iter()
+            .filter(|b| !self.editor.haul_hidden.hides(b.solid, b.bench, b.flitch, b.blast))
+        {
+            let start = vertices.len();
+            let mut points = Vec::new();
+            let mut holes = Vec::new();
+            for (i, ring) in block.rings.iter().enumerate() {
+                if i > 0 {
+                    holes.push(points.len());
+                }
+                points.extend(ring.iter().copied());
+            }
+            let Some(origin) = points.first().copied() else { continue };
+            let mut indices: Vec<usize> = Vec::new();
+            earcut::Earcut::new().earcut(points.iter().map(|p| [p.x - origin.x, p.y - origin.y]), &holes, &mut indices);
+            vertices.extend(points.iter().map(|p| crate::model::formats::mesh_data::Vertex { x: p.x, y: p.y, z: p.z }));
+            faces.extend(
+                indices
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .filter_map(|t| Some([u32::try_from(start + t[0]).ok()?, u32::try_from(start + t[1]).ok()?, u32::try_from(start + t[2]).ok()?])),
+            );
+        }
+        self.haul_block_surface.clear();
+        let Ok(mesh) = crate::model::formats::mesh_data::Triangulation::from_vertices_and_faces(vertices, faces) else {
+            return;
+        };
+        let mesh = std::sync::Arc::new(mesh);
+        let spatial = std::sync::Arc::new(crate::model::spatial::TriangleBvh::build(&mesh));
+        let mut surface = crate::app::commands::solids::preview_triangulation(String::new(), mesh, spatial, Vec::new(), std::sync::Arc::new(Vec::new()), [0.0; 4], [0.0; 4]);
+        surface.id = HAUL_BLOCK_SURFACE_ID;
+        self.haul_block_surface.push(surface);
+    }
+
     pub(crate) fn frame_haul(&mut self, min: DVec3, max: DVec3) {
         // Padded so a lone node or short road shows its surroundings.
         let pad = DVec3::splat(30.0).max((max - min) * 0.15);

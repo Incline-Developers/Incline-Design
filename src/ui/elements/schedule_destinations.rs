@@ -198,7 +198,6 @@ pub(crate) fn draw_destination_properties(
         entry.name.clone(),
         entry.capacity_t,
         crusher_default,
-        entry.distance_km.to_bits(),
         operation.rest_h.to_bits(),
         plan.routing().dump_time_s(entry.id).map(f64::to_bits),
     );
@@ -212,7 +211,6 @@ pub(crate) fn draw_destination_properties(
             name: entry.name.clone(),
             capacity: capacity_text(entry.capacity_t),
             crusher_default: capacity_text(crusher_default),
-            distance: super::schedule_trucking::number(entry.distance_km),
             dump_time: plan.routing().dump_time_s(entry.id).map(|v| v.to_string()).unwrap_or_default(),
             rest: super::schedule_trucking::number(operation.rest_h),
             source,
@@ -230,7 +228,6 @@ pub(crate) fn draw_destination_properties(
     let name_error = (!linked).then(|| name_problem(&draft.name, taken.iter().cloned())).flatten();
     let capacity_error = parse_capacity(&draft.capacity).err();
     let crusher_error = parse_capacity(&draft.crusher_default).err();
-    let distance_error = super::schedule_trucking::parse_positive(&draft.distance, crate::model::schedule::ScheduleError::InvalidDistance).err();
     // Two extra rows on a stockpile: which end reclaim takes from, and what it
     // opens holding. The opening total is calculated from the lots beside it and
     // is never typed here - one figure, one place it comes from.
@@ -243,7 +240,7 @@ pub(crate) fn draw_destination_properties(
         0
     };
     let rest_error = parse_rest(&draft.rest).err();
-    let rows_used = 8 + usize::from(kind == DestinationKind::Crusher) + usize::from(linked) + 4 * usize::from(stockpile) + optimisation_rows;
+    let rows_used = 7 + usize::from(kind == DestinationKind::Crusher) + usize::from(linked) + 4 * usize::from(stockpile) + optimisation_rows;
     let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, rows_used).min(rect.height())));
     let mut edits = Vec::new();
     let mut chunk_draft = editor.schedule_chunk_draft.take();
@@ -376,33 +373,16 @@ pub(crate) fn draw_destination_properties(
                 }
             }
         }
-        let method = if network.fixed_destinations.contains(&entry.id) {
-            tr!("haul-method-fixed", distance = format!("{:.1}", entry.distance_km))
-        } else if network.role_point(entry.id, false).is_some() {
-            tr!("haul-method-roads")
+        let (method, warning) = if network.role_point(entry.id, false).is_some() {
+            (tr!("haul-method-roads"), None)
         } else if entry.solid.is_some() && !network.roads.is_empty() {
-            tr!("haul-method-nearest")
+            (tr!("haul-method-nearest"), None)
         } else {
-            tr!("haul-method-fixed", distance = format!("{:.1}", entry.distance_km))
+            (tr!("haul-method-none"), Some(tr!("haul-method-none-help")))
         };
-        rows.readonly(&tr!("haul-dump-method"), &method, None, None).on_hover_text(tr!("haul-fixed-help"));
+        rows.readonly_warning(&tr!("haul-dump-method"), &method, None, warning.as_deref());
         if rows.action("", &tr!("haul-open-layout")).clicked() {
             edits.push(UiCommand::EditHaulProperties);
-        }
-        // A haul distance, not a measurement: it is one number for every source
-        // that delivers here, and nothing derives it from where the solid sits.
-        let response = rows.field(&tr!("haul-fixed-distance"), &mut draft.distance, distance_error.as_deref());
-        if response.lost_focus()
-            && let Ok(distance_km) = super::schedule_trucking::parse_positive(&draft.distance, crate::model::schedule::ScheduleError::InvalidDistance)
-            && distance_km != entry.distance_km
-        {
-            edits.push(UiCommand::schedule(
-                session,
-                ScheduleEdit::SetDestinationDistance {
-                    destination: entry.id,
-                    distance_km,
-                },
-            ));
         }
     });
     editor.schedule_chunk_draft = chunk_draft;

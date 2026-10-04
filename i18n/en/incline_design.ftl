@@ -637,12 +637,6 @@ haul-convert = Convert selection to roads
 haul-import = Import DXF as roads…
 haul-import-heading = Import DXF as Haul Roads
 haul-export = Export roads as DXF…
-haul-summary =
-    { $roads ->
-        [one] 1 road
-       *[other] { $roads } roads
-    } · { $length } km
-haul-issues = Issues ({ $count })
 haul-dead-end = Dead end
 haul-near-miss = Near miss
 haul-separate-piece = Separate piece
@@ -660,21 +654,13 @@ haul-near-miss-help = A road end close to another road but not joined to it. Tru
 haul-separate-piece-help = Roads not connected to the main network. Destinations on the main network cannot be reached from them.
 haul-steep-help = Part of this road is steeper than a truck class's maximum grade. It is still used; check the design or the class setting.
 haul-missing-destination-help = This node is a point for a destination that no longer exists.
-haul-roads-count = Roads ({ $count })
-haul-limit-hover = Speed limit { $speed } km/h
-haul-destination-frame = Show in the viewport
 haul-use-selected-node = The selected node
-haul-pin-help = Put a node on the road nearest this destination and make it the dump point, so you can move it.
-haul-method-help = How trucks reach this destination: a road node you chose, the road nearest its surface, or its fixed haul distance from its destination setup.
-haul-destinations-hint = Select a node to offer it here, or right-click a node in the viewport.
+haul-method-help = How trucks reach this destination: a road node you chose, or the road nearest its surface.
 haul-from = From
 haul-to = To
-haul-from-pick = Click a dig block
 haul-from-pile = Reclaim from { $pile }
-haul-from-hint = Click a dig block in the viewport, or choose a source above.
 haul-need-truck = Add a truck class in Haulage Setup to check routes.
 haul-need-loader = Add a loader in Schedule Setup to check routes.
-haul-per-truck = { $rate } t/h per truck
 haul-match-help = Theoretical matching: trucks are assumed never to queue at the loader or the destination.
 haul-profile-legend = elevation · speed
 haul-profile-hover = { $distance } m · { $elevation } m RL · { $speed } km/h
@@ -682,10 +668,9 @@ haul-unconnected-note =
     { $areas ->
         [one] 1 dig block has
        *[other] { $areas } dig blocks have
-    } no haul road within the auto-join distance. Their trucks are assumed to drive straight to the nearest road (up to { $longest } m), never steeper than the truck's maximum grade. Haulage → Layout shows these blocks in red.
+    } no road node within the auto-join distance. Their trucks are assumed to drive straight to the nearest node (up to { $longest } m), never steeper than the truck's maximum grade. Haulage → Layout shows these blocks in red.
 haul-lengthened = Reaching the road means a { $rise } m change in height, so the drive from the block is taken as { $length } m at the maximum grade.
 haul-drag-hint = drag to move
-haul-connected = { $connected } of { $total } blocks connected
 haul-spot-min = Spot (min)
 haul-load-min = Load (min)
 haul-loaded-min = Haul (min)
@@ -803,33 +788,36 @@ blast-sequence-changed = The bar or Solids run changed. Close and reopen this se
 blast-windows-label = Blasting windows
 blast-windows-summary = { $count } windows · edit on the Gantt
 haul-auto-join = Auto-join distance
-haul-auto-join-help = How far a dig block looks for a road.
+haul-auto-join-help = How far a dig block looks for a road node.
 haul-bench-speed = Bench speed
 haul-bench-speed-help = Top speed from a dig block to its road.
 haul-acceleration = Acceleration
 haul-acceleration-help = Sets the time lost starting and stopping.
 haul-clear-role = Clear role
-haul-dump-point = Dump point for
-haul-reclaim-point = Reclaim point for
 haul-delete-node = Delete node and its roads
 haul-delete-role-confirm = Delete this destination node and all its roads?
 haul-delete = Delete
 haul-cancel = Cancel
 haul-split = Split road here
+haul-promote-bend = Promote to road node
+haul-promote = Promote to destination…
+haul-promote-title = Promote to Destination
+haul-promote-apply = Promote
+haul-destination = Destination
+haul-point = Point
 haul-join-nodes = Join nodes
-haul-speed-limit = Speed limit (km/h)
-haul-no-limit = No speed limit
-haul-destinations = Destinations
 haul-method-roads = Its road node
 haul-method-nearest = Nearest road
-haul-method-fixed = Fixed { $distance } km
+haul-method-none = No road access
+haul-method-none-help = Nothing can be hauled here: give it a road node on the Haulage Layout.
+haul-no-route-short = No route
 haul-pin-nearest = Add a node at the nearest road
-haul-route-check = Route check
+haul-route-check = Route Check
 haul-reclaim = Reclaim
 haul-loader = Loader
 haul-truck = Truck class
-haul-no-route = No road route reaches this destination, so its fixed distance is used.
-haul-unconnected = No road within the auto-join distance: trucks are assumed to drive { $length } m straight to the nearest road ({ $rise } m).
+haul-no-route = No road route reaches this destination from here, so nothing can be hauled on it.
+haul-unconnected = No road node within the auto-join distance: trucks are assumed to drive { $length } m straight to the nearest node ({ $rise } m).
 haul-spot = Spot
 haul-load = Load
 haul-loaded = Loaded haul
@@ -841,7 +829,6 @@ haul-distance = Loaded haul (km)
 haul-rise = Rise (m)
 haul-tonne-km = Tonne-km
 haul-match = { $trucks } trucks to match the loader
-haul-profile = Loaded haul profile
 haul-table = Haulage
 haul-maximum-speed = Maximum speed (km/h)
 haul-maximum-grade = Maximum grade (%)
@@ -858,19 +845,12 @@ haul-error-grade = Enter a grade above 0 and up to 100 %.
 haul-error-seconds = Enter a number of seconds, 0 or more.
 haul-remove-band = Delete Grade Band
 haul-speeds-help = Speeds for a large haul truck on a road with 2% rolling resistance: rimpull uphill, retarder downhill. A band runs up to the next grade.
-haul-fixed-distance = Fixed haul distance
 haul-open-layout = Open Haulage layout
 haul-dump-override = Override dump time (s)
 haul-unlimited = Default
-haul-fixed-help = Used when no connected road route is available.
-haul-network = Haul network
-haul-convert-short = Convert selection
 haul-convert-help = Turn the selected design polylines into haul roads. Ends and crossings within the join tolerance become shared nodes; the polylines stay as they are.
-haul-dxf = DXF
-haul-drawing-hint = { $points } points · Backspace undoes · Enter or double-click finishes
 haul-empty = No roads yet. Draw one, or convert or import pit design strings.
-haul-connected-help = A block is connected when it can reach a road within the auto-join distance, climbing or descending no steeper than the truck's maximum grade. Unconnected blocks are red in the viewport; they are still scheduled, with a longer straight drive to the nearest road.
-haul-road-stats = { $length } m · steepest { $grade }%
+haul-connected-help = A block is connected when it can reach a road node within the auto-join distance, climbing or descending no steeper than the truck's maximum grade. Green blocks join the nearest node, blue ones the nodes chosen for them; red ones are out of reach and still scheduled, with a longer straight drive to the nearest node.
 haul-roads-selected =
     { $count ->
         [one] 1 road selected
@@ -881,30 +861,72 @@ haul-nodes-selected =
         [one] 1 node selected
        *[other] { $count } nodes selected
     }
-haul-shape-hint = Drag a node or bend point in the viewport to reshape the road.
 haul-role-none = Junction (no destination)
 haul-role-dump = Dump point · { $destination }
 haul-role-reclaim = Reclaim point · { $destination }
 haul-role-both = Dump & reclaim point · { $destination }
 haul-dump-and-reclaim = Dump & reclaim
-haul-both-point = Dump & reclaim point for
-haul-link-missed = Click a node or a road to hold the block to it.
-haul-block-deselect = Clear the selected block
-haul-block-linked = Held to { $node } · { $length } m drive
-haul-block-nearest = Joins the nearest road · { $length } m drive
-haul-block-far = Nearest road is { $length } m away, beyond the auto-join distance
+haul-link-missed = Click a node or a road to join the blocks to it.
+haul-block-joined = Chosen nodes · { $length } m
+haul-block-nearest = Nearest node · { $length } m
+haul-block-far = Nearest node is { $length } m away, beyond the auto-join distance
 haul-block-no-roads = No roads yet
-haul-link-pick = Choose node…
-haul-link-change = Change node…
-haul-link-help = Hold this block to a node of your choosing instead of the nearest road: click this, then a node or a point on a road in the viewport.
-haul-link-clear = Use nearest road
-haul-link-clear-help = Let this block join whichever road is nearest again.
-haul-link-picking = Click a node or a road in the viewport · Esc cancels
+haul-link-pick = Join to road nodes…
+haul-link-help = Join the selected blocks to nodes you choose instead of the nearest road. Pick one or more; each block uses whichever gives the quickest cycle.
+haul-link-clear = Use nearest node
+haul-link-clear-help = Let these blocks join whichever node is nearest again.
+haul-link-picking = Click nodes or road points, then Join.
 haul-step-network = Road Network
+haul-join-title = Join to Road
+haul-blocks = Blocks
+haul-nodes = Nodes
+haul-join-blocks = Join
+haul-join-blocks-help = Join the selected blocks to the picked nodes. A point on a road becomes a node.
+haul-joined-to = Joined to
+haul-joined-manually = Joined manually
+haul-joined-nearest = Nearest node
+haul-out-of-reach = Out of reach
+haul-out-of-reach-help = No road node within the auto-join distance. Trucks are assumed to drive straight to the nearest node; draw a road or join these blocks to a node.
+haul-blocks-in = { $area } · { $count ->
+        [one] 1 block
+       *[other] { $count } blocks
+    }
+haul-route-hint = Shift-click a destination to check a route.
+haul-route-hint-destination = Shift-click a block to check a route.
+haul-blocks-selected =
+    { $count ->
+        [one] 1 block selected
+       *[other] { $count } blocks selected
+    }
 haul-flow-hover = { $rate } t/h loaded
 haul-flow-legend = Loaded hauls now · stripes run faster and wider with tonnage · busiest { $rate } t/h
 haul-role-help = Trucks deliver to a dump point and load from a stockpile's reclaim point. A stockpile with no reclaim point is loaded at its dump point.
 haul-node-on = End of { $road }
+haul-selection = Selection
+haul-selection-empty = Click a road, node or block; shift-click for more.
+haul-new-road = New Road
+haul-points = Points
+haul-drawing-keys = Backspace undoes · Enter or double-click finishes
+haul-access = Access
+haul-access-far = { $length } m from a node
+haul-name = Name
+haul-length = Length
+haul-steepest = Steepest grade
+haul-speed-limit-short = Speed limit
+haul-speed-limit-help = Leave empty for no limit.
+haul-role = Role
+haul-issue = Issue
+haul-where = Where
+haul-issues-title = Issues
+haul-no-issues = No issues found.
+haul-cycle-time = Cycle
+haul-per-truck-short = Per truck
+haul-match-short = Trucks to match loader
+haul-loaded-distance = Loaded distance
+haul-return-distance = Return distance
+haul-rise-short = Rise
+schedule-capture-unroutable = { $destination }: no road route from { $count } sources it is offered
+schedule-capture-stranded = { $count } sources have no road route to any destination they are offered
 
 # Join Point Clouds dialog
 
@@ -1855,7 +1877,6 @@ stage-field-invented = The dig blocks report a reserve field the bench does not 
 
 truck-error-invalid-payload = Payload must be a positive number of tonnes.
 truck-error-invalid-speed = Speed must be a positive number of km/h.
-truck-error-invalid-distance = Distance must be a positive number of kilometres.
 truck-error-invalid-units = Units must be a whole number of trucks.
 truck-error-unknown-class = That truck class is no longer in this project.
 truck-error-unknown-rule = That trucking rule is no longer in this project.

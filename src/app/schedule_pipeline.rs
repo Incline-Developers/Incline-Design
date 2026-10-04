@@ -338,16 +338,9 @@ impl crate::app::App<'_> {
                 )
             })
             .collect();
-        // Haul distances are a transport input even though they are edited on
-        // the destination pages, so they belong to this chain rather than to
-        // the stockpile, dump and crusher steps.
-        let distances: Vec<_> = crate::model::schedule::destinations::available(document.solids(), plan.routing())
-            .into_iter()
-            .map(|entry| (format!("{:?}", entry.id), entry.distance_km.to_bits()))
-            .collect();
         let mut haul_hash = std::collections::hash_map::DefaultHasher::new();
         trucks.hash_content(&mut haul_hash);
-        let truck_classes_step = hash_of((agents_step, truck_classes, distances, std::hash::Hasher::finish(&haul_hash)));
+        let truck_classes_step = hash_of((agents_step, truck_classes, std::hash::Hasher::finish(&haul_hash)));
 
         // Destinations are fingerprinted in the three groups the pages edit,
         // each chained onto the last, so editing a crusher's budget does not
@@ -1318,8 +1311,8 @@ impl crate::app::App<'_> {
                     .blocks
                     .iter()
                     // A block held to a node is connected by choice.
-                    .filter(|block| network.block_link(block.solid, block.flitch.base, &block.ground).and_then(|id| index.node_join(id)).is_none())
-                    .filter_map(|block| index.access_m(glam::DVec3::new(block.anchor[0], block.anchor[1], block.flitch.base), reach, grade))
+                    .filter(|block| !network.block_link(block.solid, block.flitch.base, &block.ground).iter().any(|id| index.node_join(*id).is_some()))
+                    .filter_map(|block| index.access_m(glam::DVec3::new(block.anchor[0], block.anchor[1], block.flitch.base), grade))
                     .filter(|access| *access > reach)
                     .collect();
                 if !unconnected.is_empty() {

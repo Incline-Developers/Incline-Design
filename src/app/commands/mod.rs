@@ -158,6 +158,7 @@ impl<'a> App<'a> {
                 | UiCommand::Haulage { .. }
                 | UiCommand::StartHaulRoad
                 | UiCommand::FinishHaulRoad
+                | UiCommand::LinkHaulBlocks(_)
                 | UiCommand::ConvertHaulSelection
                 | UiCommand::NewHaulDestination { .. }
                 | UiCommand::ExportHaulRoads
@@ -457,6 +458,10 @@ impl<'a> App<'a> {
             }
             UiCommand::FinishHaulRoad => {
                 self.finish_haul_road();
+                Ok(())
+            }
+            UiCommand::LinkHaulBlocks(at) => {
+                self.link_haul_blocks(at);
                 Ok(())
             }
             UiCommand::ConvertHaulSelection => {

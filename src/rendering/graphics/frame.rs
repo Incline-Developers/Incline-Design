@@ -196,6 +196,7 @@ impl<'a> Graphics<'a> {
             self.include_tool_previews_in_depth(editor);
             self.include_batter_berm_preview_in_depth(editor);
             self.include_blast_outlines_in_depth(editor);
+            self.include_haul_blocks_in_depth(editor);
         }
         editor.debug_clip_plane_distances = Some(self.projection.clip_planes());
         // Uploaded every frame; outside a section this is `None`, which is what switches the shader clip off.

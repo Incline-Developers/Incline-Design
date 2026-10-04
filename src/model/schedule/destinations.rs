@@ -230,11 +230,10 @@ pub(crate) struct StandaloneDestination {
     /// for a crusher, which has no storage in this increment.
     #[serde(default)]
     pub(crate) capacity_t: Option<f64>,
-    /// One-way haul distance in kilometres. The return trip uses the same
-    /// figure, and a reclaim from here will too. Never derived from geometry:
-    /// a straight line between two solids is not a haul road.
-    #[serde(default = "default_distance")]
-    pub(crate) distance_km: f64,
+    /// The fixed one-way haul distance from before haul roads, read and
+    /// dropped so such a project still opens: hauls are routed on the roads.
+    #[serde(default, rename = "distance_km", skip_serializing)]
+    retired_distance_km: serde::de::IgnoredAny,
     /// Stockpile only: what it already holds, and which end reclaim takes
     /// from. Empty and FIFO for every project that has not authored any.
     #[serde(default)]
@@ -257,11 +256,9 @@ pub(crate) struct SolidDestination {
     pub(crate) solid: SolidId,
     #[serde(default)]
     pub(crate) capacity_t: Option<f64>,
-    /// One-way haul distance in kilometres; see
-    /// [`StandaloneDestination::distance_km`]. Projects saved before trucks
-    /// existed have no stored figure and resolve to the default.
-    #[serde(default = "default_distance")]
-    pub(crate) distance_km: f64,
+    /// See [`StandaloneDestination::retired_distance_km`].
+    #[serde(default, rename = "distance_km", skip_serializing)]
+    retired_distance_km: serde::de::IgnoredAny,
     /// Stockpile only; see [`StandaloneDestination::inventory`].
     #[serde(default)]
     pub(crate) inventory: StockpileInventory,
@@ -673,13 +670,6 @@ pub(crate) struct RoutingConfig {
     next_rule_id: u64,
 }
 
-/// What a destination's one-way haul distance is until somebody says otherwise.
-pub(crate) const DEFAULT_DISTANCE_KM: f64 = 2.0;
-
-fn default_distance() -> f64 {
-    DEFAULT_DISTANCE_KM
-}
-
 /// The destinations one rule may deliver to, in order, with repeats dropped.
 ///
 /// An empty list is refused rather than stored: a rule that matches material
@@ -839,16 +829,7 @@ impl RoutingConfig {
         }
     }
 
-    /// One destination's one-way haul distance, whichever kind it is. A
-    /// destination nothing has been stored against is at the default.
-    pub(crate) fn distance_km(&self, id: DestinationId) -> f64 {
-        match id {
-            DestinationId::Solid(solid) => self.solids.iter().find(|entry| entry.solid == solid).map_or(DEFAULT_DISTANCE_KM, |entry| entry.distance_km),
-            DestinationId::Standalone(standalone) => self.standalone(standalone).map_or(DEFAULT_DISTANCE_KM, |entry| entry.distance_km),
-        }
-    }
-
-    /// Store a one-way haul distance against any destination.
+    /// A standalone destination's own dump time, if it has one.
     pub(crate) fn dump_time_s(&self, id: DestinationId) -> Option<f64> {
         match id {
             DestinationId::Standalone(id) => self.standalone(id).and_then(|d| d.dump_time_s),
@@ -860,22 +841,6 @@ impl RoutingConfig {
             return Err(ScheduleError::InvalidSpeed);
         }
         self.standalone_mut(id)?.dump_time_s = seconds;
-        Ok(())
-    }
-    pub(crate) fn set_distance_km(&mut self, id: DestinationId, distance_km: f64) -> ScheduleResult {
-        let distance_km = super::trucking::checked_distance(distance_km)?;
-        match id {
-            DestinationId::Standalone(standalone) => self.standalone_mut(standalone)?.distance_km = distance_km,
-            DestinationId::Solid(solid) => match self.solids.iter_mut().find(|entry| entry.solid == solid) {
-                Some(entry) => entry.distance_km = distance_km,
-                None => self.solids.push(SolidDestination {
-                    solid,
-                    capacity_t: None,
-                    distance_km,
-                    inventory: StockpileInventory::default(),
-                }),
-            },
-        }
         Ok(())
     }
 
@@ -923,13 +888,12 @@ impl RoutingConfig {
                 None => self.solids.push(SolidDestination {
                     solid,
                     capacity_t: None,
-                    distance_km: DEFAULT_DISTANCE_KM,
+                    retired_distance_km: serde::de::IgnoredAny,
                     inventory: draft,
                 }),
             },
         }
-        self.solids
-            .retain(|entry| entry.capacity_t.is_some() || entry.distance_km != DEFAULT_DISTANCE_KM || !entry.inventory.is_pristine());
+        self.solids.retain(|entry| entry.capacity_t.is_some() || !entry.inventory.is_pristine());
         Ok(outcome)
     }
 
@@ -1007,7 +971,7 @@ impl RoutingConfig {
             name,
             kind,
             capacity_t: None,
-            distance_km: DEFAULT_DISTANCE_KM,
+            retired_distance_km: serde::de::IgnoredAny,
             inventory: StockpileInventory::default(),
             crusher: CrusherCalendar::default(),
             dump_time_s: None,
@@ -1093,15 +1057,14 @@ impl RoutingConfig {
             None if capacity_t.is_some() => self.solids.push(SolidDestination {
                 solid,
                 capacity_t,
-                distance_km: DEFAULT_DISTANCE_KM,
+                retired_distance_km: serde::de::IgnoredAny,
                 inventory: StockpileInventory::default(),
             }),
             None => {}
         }
         // An entry that says nothing the defaults do not is not kept: it would
         // be a stored setting for a solid nobody has configured.
-        self.solids
-            .retain(|entry| entry.capacity_t.is_some() || entry.distance_km != DEFAULT_DISTANCE_KM || !entry.inventory.is_pristine());
+        self.solids.retain(|entry| entry.capacity_t.is_some() || !entry.inventory.is_pristine());
         Ok(())
     }
 
@@ -1275,7 +1238,6 @@ impl RoutingConfig {
             if let Some(capacity) = entry.capacity_t {
                 checked_capacity(capacity)?;
             }
-            super::trucking::checked_distance(entry.distance_km)?;
 
             entry.crusher.validate()?;
             if entry.dump_time_s.is_some_and(|v| !v.is_finite() || v < 0.0) {
@@ -1289,7 +1251,6 @@ impl RoutingConfig {
             if let Some(capacity) = entry.capacity_t {
                 checked_capacity(capacity)?;
             }
-            super::trucking::checked_distance(entry.distance_km)?;
         }
         for entry in &mut self.standalone {
             entry.inventory.validate_loaded()?;
@@ -1378,7 +1339,6 @@ impl RoutingConfig {
             entry.name.hash(hasher);
             entry.kind.hash(hasher);
             entry.capacity_t.map(f64::to_bits).hash(hasher);
-            entry.distance_km.to_bits().hash(hasher);
 
             entry.inventory.hash_content(hasher);
             entry.crusher.default_tpd.map(f64::to_bits).hash(hasher);
@@ -1391,7 +1351,6 @@ impl RoutingConfig {
         for entry in &self.solids {
             entry.solid.hash(hasher);
             entry.capacity_t.map(f64::to_bits).hash(hasher);
-            entry.distance_km.to_bits().hash(hasher);
 
             entry.inventory.hash_content(hasher);
         }
@@ -1630,8 +1589,6 @@ pub(crate) struct DestinationView {
     pub(crate) name: String,
     pub(crate) kind: DestinationKind,
     pub(crate) capacity_t: Option<f64>,
-    /// One-way haul distance in kilometres.
-    pub(crate) distance_km: f64,
     /// Stockpile only: what it opens holding, and which end reclaim takes from.
     pub(crate) opening_t: f64,
     pub(crate) reclaim_order: ReclaimOrder,
@@ -1661,7 +1618,6 @@ pub(crate) fn available(solids: &[crate::model::Solid], routing: &RoutingConfig)
             name: solid.name.clone(),
             kind,
             capacity_t: routing.capacity_t(DestinationId::Solid(solid.id)),
-            distance_km: routing.distance_km(DestinationId::Solid(solid.id)),
             opening_t: routing.opening_tonnes(DestinationId::Solid(solid.id)),
             reclaim_order: routing.reclaim_order(DestinationId::Solid(solid.id)),
             solid: Some(solid.id),
@@ -1673,7 +1629,6 @@ pub(crate) fn available(solids: &[crate::model::Solid], routing: &RoutingConfig)
             name: entry.name.clone(),
             kind: entry.kind,
             capacity_t: entry.capacity_t,
-            distance_km: entry.distance_km,
             opening_t: entry.inventory.opening_tonnes(),
             reclaim_order: entry.inventory.order,
             solid: None,
@@ -1719,7 +1674,6 @@ pub(crate) fn resolve(id: DestinationId, solids: &[crate::model::Solid], routing
                 name: solid.name.clone(),
                 kind,
                 capacity_t: routing.capacity_t(id),
-                distance_km: routing.distance_km(id),
                 opening_t: routing.opening_tonnes(id),
                 reclaim_order: routing.reclaim_order(id),
                 solid: Some(solid_id),
@@ -1732,7 +1686,6 @@ pub(crate) fn resolve(id: DestinationId, solids: &[crate::model::Solid], routing
                 name: entry.name.clone(),
                 kind: entry.kind,
                 capacity_t: entry.capacity_t,
-                distance_km: entry.distance_km,
                 opening_t: entry.inventory.opening_tonnes(),
                 reclaim_order: entry.inventory.order,
                 solid: None,
