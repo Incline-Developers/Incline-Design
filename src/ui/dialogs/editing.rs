@@ -88,6 +88,32 @@ fn canvas_context_menu_title(editor: &EditorState, document: &Document) -> Strin
     )
 }
 
+/// The menu of a blast or dig block right-clicked on Blasting or Dig Strips:
+/// the same one its list row offers.
+fn draw_ground_context_menu(ui: &mut egui::Ui, editor: &EditorState, document: &Document, commands: &mut Vec<UiCommand>, shape: crate::ui::state::BlastShapeRef, pos: egui::Pos2) {
+    use crate::ui::elements::blasting::{OutlineKind, outline_menu};
+    let same = |outline: &&crate::ui::state::BlastOutline| crate::ui::state::BlastShapeRef::new(outline.solid, outline.bench_base, outline.anchor) == shape;
+    let found = if editor.is_blasting_step() {
+        editor.blasting_outlines.iter().find(same).map(|outline| (outline, OutlineKind::Blast))
+    } else {
+        editor.dig_outlines.iter().find(same).map(|outline| (outline, OutlineKind::DigBlock))
+    };
+    // Gone under the menu - a recut, or the step changed.
+    let Some((outline, kind)) = found else {
+        commands.push(UiCommand::CloseCanvasContextMenu);
+        return;
+    };
+    let title = match kind {
+        OutlineKind::Blast => tr!("planning-dig-blast-group", name = outline.name.clone()),
+        OutlineKind::DigBlock => tr!("planning-dig-block-title", name = outline.name.clone()),
+    };
+    ContextMenu::new("canvas_ground", title).position(pos).width(220.0).show(ui.ctx(), |ui| {
+        if outline_menu(ui, outline, kind, document, commands) {
+            commands.push(UiCommand::CloseCanvasContextMenu);
+        }
+    });
+}
+
 /// Draw the canvas right-click context menu for selected objects and triangulations.
 ///
 /// Groups design appearance and editing controls before shared selection actions.
@@ -105,6 +131,10 @@ pub(crate) fn draw_right_click_context(
 ) {
     let ppp = ui.ctx().pixels_per_point();
     let pos = egui::pos2(px / ppp + 4.0, py / ppp + 4.0);
+    if let Some(shape) = editor.canvas_context_menu_ground {
+        draw_ground_context_menu(ui, editor, document, commands, shape, pos);
+        return;
+    }
     let title = canvas_context_menu_title(editor, document);
     ContextMenu::new("canvas_properties", title).position(pos).width(220.0).show(ui.ctx(), |ui| {
         crate::ui::elements::haulage::canvas_menu(ui, editor, project, commands);

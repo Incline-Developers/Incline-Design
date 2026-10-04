@@ -1310,7 +1310,7 @@ fn draw_ui(
         }
     }
 
-    if editor.is_planning_cut_step() && editor.planning_cut_labels {
+    if editor.is_planning_cut_step() && editor.cut_labels() {
         let painter = root_ui.painter().with_clip_rect(canvas_rect);
         let scale = root_ui.ctx().pixels_per_point();
         for (name, (x, y), selected) in &editor.blast_labels {

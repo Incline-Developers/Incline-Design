@@ -28,6 +28,9 @@ pub(crate) struct OverlaySceneBuildInput<'a> {
 /// drawn a shade heavier than ordinary design geometry to read as a boundary
 /// rather than as one more line on the bench.
 const BLAST_OUTLINE_WIDTH: f32 = 2.5;
+/// Ground taken out of mining: still outlined, so it can be picked and put
+/// back, but grey against the live outlines around it.
+const EXCLUDED_OUTLINE_COLOR: [f32; 4] = [0.5, 0.5, 0.5, 0.9];
 
 /// The Haulage Layout's selected dig block, and the line to where it joins
 /// the roads: the selection orange the rest of the scene uses.
@@ -129,7 +132,11 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
                 &verts,
                 true,
                 if selected { BLAST_OUTLINE_WIDTH * 2.5 } else { BLAST_OUTLINE_WIDTH },
-                if selected { [1.0, 0.7, 0.1, 1.0] } else { PREVIEW_COLOR },
+                match (selected, outline.excluded) {
+                    (true, _) => [1.0, 0.7, 0.1, 1.0],
+                    (false, true) => EXCLUDED_OUTLINE_COLOR,
+                    (false, false) => PREVIEW_COLOR,
+                },
             );
         }
     }
@@ -146,7 +153,11 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
                     &verts,
                     true,
                     if selected { 4.0 } else { 1.5 },
-                    if selected { [1.0, 0.7, 0.1, 1.0] } else { [0.2, 0.9, 0.8, 1.0] },
+                    match (selected, outline.excluded) {
+                        (true, _) => [1.0, 0.7, 0.1, 1.0],
+                        (false, true) => EXCLUDED_OUTLINE_COLOR,
+                        (false, false) => [0.2, 0.9, 0.8, 1.0],
+                    },
                 );
             }
         }

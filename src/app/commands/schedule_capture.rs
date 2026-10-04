@@ -612,7 +612,7 @@ fn excluded(block: &crate::app::commands::solids_view::DigBlockRecord, exclusion
         *solid == block.solid
             && exclusions.excludes(
                 block.bench.base,
-                block.blast.map(|blast| (blast.bench_base(), blast.anchor())),
+                block.blast.map(|blast| (blast.bench_base(), blast.anchor(), block.blast_area.unwrap_or(f64::INFINITY))),
                 block.flitch.base,
                 &block.ground,
             )

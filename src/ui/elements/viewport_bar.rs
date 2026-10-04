@@ -363,7 +363,7 @@ fn draw_cut_step_settings(ui: &mut egui::Ui, editor: &mut EditorState) {
         }
     }
     centre_part(ui);
-    ui.add(crate::ui::widgets::toggle::Toggle::new(&mut editor.planning_cut_labels, tr!("viewport-labels")));
+    ui.add(crate::ui::widgets::toggle::Toggle::new(editor.cut_labels_mut(), tr!("viewport-labels")));
 }
 
 /// What the drawing tools will use next: layer, elevation, line colour, fill.

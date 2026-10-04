@@ -692,7 +692,11 @@ impl crate::app::App<'_> {
                     .iter()
                     .map(|bench| (bench.base.to_bits(), bench.cuts.iter().map(crate::model::Object::geometry_hash).collect::<Vec<_>>()))
                     .collect();
-                (solid.id.0, cuts)
+                // Excluded ground is left out of the dig blocks, so taking
+                // some out or putting it back is a Dig Strips input.
+                let mut exclusions = std::collections::hash_map::DefaultHasher::new();
+                solid.exclusions.hash_content(&mut exclusions);
+                (solid.id.0, cuts, std::hash::Hasher::finish(&exclusions))
             })
             .collect();
         let dig_stage = hash_of((blasting_stage, strips));

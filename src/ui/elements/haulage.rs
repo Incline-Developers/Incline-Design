@@ -660,6 +660,16 @@ fn node_menu(
         command(commands, session, HaulEdit::Role(id, None));
         ui.close();
     }
+    let blocker = network.merge_blocker(id);
+    let remove = ContextMenuAction::new(tr!("haul-remove-node")).enabled(blocker.is_none()).show(ui);
+    let remove = match blocker {
+        Some(reason) => remove.on_disabled_hover_text(reason),
+        None => remove.on_hover_text(tr!("haul-remove-node-help")),
+    };
+    if remove.clicked() {
+        command(commands, session, HaulEdit::RemoveNode(id));
+        ui.close();
+    }
     if ContextMenuAction::new(tr!("haul-delete-node")).show(ui).clicked() {
         if network.node(id).is_some_and(|n| n.role.is_some()) {
             editor.haul_delete_node = Some(id);

@@ -145,6 +145,20 @@ impl EditorState {
             && self.planning_solids_step == SolidsStep::Blasting
     }
 
+    /// Whether the open cut step labels its blasts or dig blocks.
+    pub(crate) fn cut_labels(&self) -> bool {
+        if self.is_dig_strips_step() { self.dig_strip_labels } else { self.planning_cut_labels }
+    }
+
+    /// The Labels switch of whichever cut step is open.
+    pub(crate) fn cut_labels_mut(&mut self) -> &mut bool {
+        if self.is_dig_strips_step() {
+            &mut self.dig_strip_labels
+        } else {
+            &mut self.planning_cut_labels
+        }
+    }
+
     pub(crate) fn is_dig_strips_step(&self) -> bool {
         self.active_workspace == Workspace::Planning
             && self.planning_page == PlanningPage::Solids
@@ -517,6 +531,8 @@ pub(crate) struct BlastOutline {
     pub(crate) area: f64,
     /// The blast a dig block lies in, by name; `None` for a blast itself.
     pub(crate) blast: Option<String>,
+    /// Out of mining, on its own or with the bench or blast it lies in.
+    pub(crate) excluded: bool,
 }
 
 /// What the Blasting step borrows from the rest of the editor while it is
@@ -2160,6 +2176,9 @@ pub(crate) struct EditorState {
     /// The drill hole under the cursor when the canvas context menu was
     /// opened; its hole-specific rows act on this hole, not the selection.
     pub(crate) canvas_context_menu_hole: Option<DrillHoleRef>,
+    /// The blast or dig block under the cursor when the canvas context menu
+    /// was opened on Blasting or Dig Strips; the menu is then that ground's.
+    pub(crate) canvas_context_menu_ground: Option<BlastShapeRef>,
     /// Selected polylines and the in-progress line-weight value for the
     /// selection appearance menu. The value must survive across frames while its
     /// `DragValue` is being dragged.
@@ -2218,6 +2237,9 @@ pub(crate) struct EditorState {
     pub(crate) blasting_outlines: Vec<BlastOutline>,
     pub(crate) dig_outlines: Vec<BlastOutline>,
     pub(crate) dig_outlines_key: Option<u64>,
+    /// Flitches whose ground Blasting took wholly out of mining, by solid and
+    /// base RL bits: Dig Strips leaves them out, as nothing on them is dug.
+    pub(crate) dig_excluded_flitches: std::collections::HashSet<(crate::model::SolidId, u64)>,
     pub(crate) selected_dig_block: Option<BlastShapeRef>,
     /// A click on the solid preview, waiting for the renderer to say what it
     /// landed on - addressed, so it can only ever be answered as the click it
@@ -2935,9 +2957,12 @@ pub(crate) struct EditorState {
     /// by default, like the schedule's: only the stale steps run, and an
     /// edit made meanwhile restarts them.
     pub(crate) planning_auto_run: bool,
-    /// Whether Blasting and Dig Strips name their blasts and dig blocks over
-    /// the viewport. On by default; one switch serves both steps.
+    /// Whether Blasting names its blasts over the viewport. On by default.
     pub(crate) planning_cut_labels: bool,
+    /// Whether Dig Strips numbers its dig blocks over the viewport. Off by
+    /// default: a flitch has hundreds of blocks, and their numbers bury the
+    /// strips being drawn.
+    pub(crate) dig_strip_labels: bool,
     /// Where the current Run prerequisite can be repaired, including the
     /// exact selected step on the Schedule or Solids setup page.
     pub(crate) schedule_run_repair: Option<ScheduleRepairTarget>,
@@ -3412,6 +3437,7 @@ impl EditorState {
         self.selected_dig_block = None;
         self.dig_outlines.clear();
         self.dig_outlines_key = None;
+        self.dig_excluded_flitches.clear();
         self.blasting_outlines.clear();
         self.blast_labels.clear();
         self.blasting_outlines_key = None;
@@ -3477,6 +3503,7 @@ impl EditorState {
         self.canvas_context_menu_open = false;
         self.canvas_context_menu_px = None;
         self.canvas_context_menu_hole = None;
+        self.canvas_context_menu_ground = None;
         self.design_line_weight_input = None;
         self.move_to_layer_dialog = None;
         self.move_to_axis_dialog = None;
@@ -3841,6 +3868,7 @@ impl EditorState {
             canvas_context_menu_open: false,
             canvas_context_menu_px: None,
             canvas_context_menu_hole: None,
+            canvas_context_menu_ground: None,
             design_line_weight_input: None,
             move_to_layer_dialog: None,
             move_to_axis_dialog: None,
@@ -3866,6 +3894,7 @@ impl EditorState {
             blasting_outlines: Vec::new(),
             dig_outlines: Vec::new(),
             dig_outlines_key: None,
+            dig_excluded_flitches: Default::default(),
             selected_dig_block: None,
             solid_preview_pick: None,
             solid_preview_pick_result: None,
@@ -4228,6 +4257,7 @@ impl EditorState {
             schedule_auto_recalculate: true,
             planning_auto_run: true,
             planning_cut_labels: true,
+            dig_strip_labels: false,
             schedule_run_repair: None,
             schedule_animation_selection: Vec::new(),
             schedule_animation_hidden: SolidsVisibility::default(),
@@ -4746,6 +4776,8 @@ pub(crate) enum HaulEdit {
     MoveShape(crate::model::haulage::RoadId, usize, DVec3),
     DeleteRoad(crate::model::haulage::RoadId),
     DeleteNode(crate::model::haulage::NodeId),
+    /// Remove a node where two roads meet, making them one road.
+    RemoveNode(crate::model::haulage::NodeId),
     Join(crate::model::haulage::NodeId, crate::model::haulage::NodeId),
     Split(crate::model::haulage::RoadId, DVec3),
     Role(crate::model::haulage::NodeId, Option<crate::model::haulage::NodeRole>),

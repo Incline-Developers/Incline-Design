@@ -231,8 +231,11 @@ impl crate::app::App<'_> {
                 }
             }
             HaulEdit::Draw(points) => {
+                // Every clicked point is a node, so blocks can join the road
+                // anywhere it was drawn without promoting points first.
                 let name = crate::model::schedule::suggested_name(&tr!("haul-road"), after.roads.iter().map(|r| r.name.clone()));
-                after.convert(&[(name, points)])?;
+                let segments: Vec<_> = points.windows(2).map(|pair| (name.clone(), pair.to_vec())).collect();
+                after.convert(&segments)?;
             }
             HaulEdit::ConvertSelection => {
                 let strings: Vec<_> = active
@@ -275,6 +278,7 @@ impl crate::app::App<'_> {
             }
             HaulEdit::DeleteRoad(id) => after.delete_road(id),
             HaulEdit::DeleteNode(id) => after.delete_node(id),
+            HaulEdit::RemoveNode(id) => after.merge_at(id)?,
             HaulEdit::Join(keep, remove) => after.join(keep, remove)?,
             HaulEdit::Split(id, pos) => {
                 let r = after.road(id).ok_or_else(|| anyhow::anyhow!(tr!("haul-missing-road")))?;
@@ -340,33 +344,24 @@ impl crate::app::App<'_> {
         }
         self.invalidate_overlay();
     }
-    /// Where a road point under the cursor lands. A road or node within pick
-    /// reach wins when `join` is set, so drawn roads connect - unless point
-    /// or line snap is on, which take roads as they take any geometry, so
-    /// point snap lands only on a node or bend point; then a snap the user
-    /// turned on; then the surface under the cursor, so roads drape on the
-    /// pit; and otherwise the level of `fallback_z`.
-    fn haul_cursor_point(&self, fallback_z: f64, join: bool) -> Option<DVec3> {
+    /// Where a road point under the cursor lands. With a snap mode on, only
+    /// what it snapped to, so a cursor over nothing it can take - a locked
+    /// surface, empty ground - lands nowhere. The plain cursor sits on the
+    /// level of `level_z`, or on a road or node within pick reach when
+    /// `join` is set, so drawn roads connect.
+    fn haul_cursor_point(&self, level_z: f64, join: bool) -> Option<DVec3> {
+        if self.editor.snapping_active() {
+            return self.editor.cursor_snapped.then_some(self.editor.cursor_world).flatten();
+        }
         let graphics = self.graphics.as_ref()?;
-        let snaps_to_roads = matches!(
-            self.editor.cursor_mode,
-            crate::ui::state::CursorMode::SnapToPoint | crate::ui::state::CursorMode::SnapToLine
-        );
         if join
-            && !snaps_to_roads
             && let Some((_, point)) = graphics
                 .pick_at_cursor(PICK_THRESHOLD_PX, &[], &self.editor.hidden_handles, &self.editor.frozen_handles, self.editor.xray_enabled)
                 .filter(|(h, _)| matches!(h, SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_)))
         {
             return Some(point);
         }
-        if self.editor.cursor_snapped {
-            return self.editor.cursor_world;
-        }
-        graphics
-            .pick_triangulation_at_cursor(&self.triangulations, &self.editor.hidden_handles, &self.editor.frozen_handles)
-            .map(|(_, point)| point)
-            .or_else(|| graphics.cursor_world(fallback_z))
+        graphics.cursor_world(level_z)
     }
     /// A click while picking nodes for the selected blocks: a node, or a
     /// point on a road, which is split there to make one when they are
@@ -415,8 +410,7 @@ impl crate::app::App<'_> {
         self.invalidate_overlay();
     }
     pub(crate) fn place_haul_point(&mut self) {
-        let z = self.editor.haul_points.last().map_or(self.editor.z_level, |p| p.z);
-        if let Some(point) = self.haul_cursor_point(z, true)
+        if let Some(point) = self.haul_cursor_point(self.editor.z_level, true)
             && self.editor.haul_points.last().is_none_or(|last| last.distance(point) > 1e-6)
         {
             self.editor.haul_points.push(point);
@@ -491,8 +485,7 @@ impl crate::app::App<'_> {
             }
             self.invalidate_overlay();
         } else if self.editor.haul_draw {
-            let z = self.editor.haul_points.last().map_or(self.editor.z_level, |p| p.z);
-            self.editor.haul_cursor = self.haul_cursor_point(z, true);
+            self.editor.haul_cursor = self.haul_cursor_point(self.editor.z_level, true);
             self.invalidate_overlay();
         }
     }

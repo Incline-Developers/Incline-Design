@@ -10,7 +10,7 @@ use crate::{
         EditorState,
         state::{BlastShapeRef, UiCommand},
         widgets::{
-            context_menu::{ContextMenuAction, context_menu_popup},
+            context_menu::context_menu_popup,
             data_grid::{DataGrid, grid_columns_row, grid_empty_state, grid_group_row},
             island::{Island, IslandResponse, Side},
         },
@@ -62,14 +62,7 @@ pub(crate) fn draw_panel(ui: &mut egui::Ui, editor: &mut EditorState, document: 
                             continue;
                         }
                         let id = BlastShapeRef::new(block.solid, block.bench_base, block.anchor);
-                        // A dig outline's base is its flitch's.
-                        let target = crate::model::ExclusionTarget::Block {
-                            flitch: block.bench_base,
-                            anchor: block.anchor,
-                        };
-                        let solid = document.solids().iter().find(|solid| solid.id == block.solid);
-                        let excluded = solid.is_some_and(|solid| solid.exclusions.is_target_excluded(target));
-                        let name = if excluded {
+                        let name = if block.excluded {
                             tr!("planning-excluded-label", name = block.name.clone())
                         } else {
                             block.name.clone()
@@ -79,17 +72,11 @@ pub(crate) fn draw_panel(ui: &mut egui::Ui, editor: &mut EditorState, document: 
                         if response.clicked() {
                             commands.push(UiCommand::SelectDigBlock(id));
                         }
-                        if let Some(solid) = solid {
-                            context_menu_popup(&response, &name, |ui| {
-                                if ContextMenuAction::new(tr!("planning-exclude-from-mining")).checked(excluded).show(ui).clicked() {
-                                    commands.push(UiCommand::UpdateSolid {
-                                        solid: solid.id,
-                                        edit: crate::model::SolidEdit::Exclusions(solid.exclusions.with(target, !excluded)),
-                                    });
-                                    ui.close();
-                                }
-                            });
-                        }
+                        context_menu_popup(&response, &name, |ui| {
+                            if super::blasting::outline_menu(ui, block, super::blasting::OutlineKind::DigBlock, document, commands) {
+                                ui.close();
+                            }
+                        });
                     }
                 });
         })

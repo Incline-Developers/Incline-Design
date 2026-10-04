@@ -385,6 +385,53 @@ impl HaulNetwork {
         self.nodes.retain(|n| n.id != remove);
         Ok(())
     }
+    /// Why `id` cannot be removed by [`Self::merge_at`], or `None` when it
+    /// can: it must be a plain node where exactly two roads meet, and those
+    /// roads must not already share their other ends.
+    pub(crate) fn merge_blocker(&self, id: NodeId) -> Option<String> {
+        let node = self.node(id)?;
+        if node.role.is_some() {
+            return Some(crate::i18n::tr!("haul-remove-node-role"));
+        }
+        let ends: Vec<_> = self.roads.iter().flat_map(|r| [(r, r.from), (r, r.to)]).filter(|(_, end)| *end == id).collect();
+        let [(a, _), (b, _)] = ends[..] else {
+            return Some(crate::i18n::tr!("haul-remove-node-two"));
+        };
+        let other = |r: &HaulRoad| if r.from == id { r.to } else { r.from };
+        (a.id == b.id || other(a) == other(b)).then(|| crate::i18n::tr!("haul-remove-node-loop"))
+    }
+    /// Remove a node where two roads meet, making them one road that bends
+    /// where the node was. The first road keeps its id, name and speed limit.
+    /// Blocks joined to the node let it go: those joined to no other node
+    /// return to the nearest one.
+    pub(crate) fn merge_at(&mut self, id: NodeId) -> anyhow::Result<()> {
+        if let Some(reason) = self.merge_blocker(id) {
+            anyhow::bail!(reason);
+        }
+        let pos = self.node(id).expect("checked node").pos;
+        let mut touching = self.roads.iter().filter(|r| r.from == id || r.to == id).cloned();
+        let (mut first, mut second) = (touching.next().expect("checked road"), touching.next().expect("checked road"));
+        // Run the first road into the node and the second out of it.
+        if first.from == id {
+            std::mem::swap(&mut first.from, &mut first.to);
+            first.verts.reverse();
+        }
+        if second.to == id {
+            std::mem::swap(&mut second.from, &mut second.to);
+            second.verts.reverse();
+        }
+        let road = self.roads.iter_mut().find(|r| r.id == first.id).expect("first road");
+        road.from = first.from;
+        road.to = second.to;
+        road.verts = first.verts.into_iter().chain(std::iter::once(pos)).chain(second.verts).collect();
+        self.roads.retain(|r| r.id != second.id);
+        self.nodes.retain(|n| n.id != id);
+        for link in &mut self.block_links {
+            link.nodes.retain(|node| *node != id);
+        }
+        self.block_links.retain(|l| !l.nodes.is_empty());
+        Ok(())
+    }
     /// Join a drawn point to a node, or split an existing road at its projection.
     pub(crate) fn join_point(&mut self, pos: DVec3) -> anyhow::Result<NodeId> {
         let tolerance = self.settings.join_tolerance_m;

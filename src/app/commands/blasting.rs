@@ -355,11 +355,15 @@ impl crate::app::App<'_> {
                     .map(|entry| entry.blasts.iter().filter_map(|blast| blast.name.parse().ok()).collect())
                     .unwrap_or_default();
                 for face in faces {
-                    let name = match stored.and_then(|entry| entry.blasts.iter().find(|blast| arrangement::point_in_face(&face.face, DVec2::from(blast.anchor)))) {
-                        Some(blast) => blast.name.clone(),
-                        None => {
-                            let number = lowest_unused(&mut used);
-                            number.to_string()
+                    let name = if solid.exclusions.blast_too_small(face.area) {
+                        String::new()
+                    } else {
+                        match stored.and_then(|entry| entry.blasts.iter().find(|blast| arrangement::point_in_face(&face.face, DVec2::from(blast.anchor)))) {
+                            Some(blast) => blast.name.clone(),
+                            None => {
+                                let number = lowest_unused(&mut used);
+                                number.to_string()
+                            }
                         }
                     };
                     if let Some(selected) = previous_selection
@@ -377,6 +381,7 @@ impl crate::app::App<'_> {
                         anchor: face.anchor,
                         area: face.area,
                         blast: None,
+                        excluded: solid.exclusions.blast_face_excluded(bench_base, &face.face),
                         rings: face
                             .face
                             .iter()
@@ -432,7 +437,15 @@ impl crate::app::App<'_> {
             };
             let mut plan = solid.blasting.clone();
             let mut plan_changed = false;
+            let mut exclusions = solid.exclusions.clone();
             for (bench_base, faces) in group_faces_by_bench(faces) {
+                // An excluded blast follows its face the way its name does,
+                // so the list and the menu can still address it exactly.
+                for entry in exclusions.blasts.iter_mut().filter(|entry| (entry.base - bench_base).abs() < 1e-6) {
+                    if let Some(face) = faces.iter().find(|face| arrangement::point_in_face(&face.face, DVec2::from(entry.anchor))) {
+                        entry.anchor = face.anchor;
+                    }
+                }
                 let entry = plan.bench_mut(bench_base);
                 let before = entry.blasts.len();
                 entry
@@ -440,7 +453,9 @@ impl crate::app::App<'_> {
                     .retain(|blast| faces.iter().any(|face| arrangement::point_in_face(&face.face, DVec2::from(blast.anchor))));
                 plan_changed |= entry.blasts.len() != before;
                 let mut surviving_anchors = Vec::new();
-                for face in faces {
+                // A blast under the minimum size is never mined, so it takes
+                // no name - and no number from the blasts that are.
+                for face in faces.iter().filter(|face| !exclusions.blast_too_small(face.area)) {
                     surviving_anchors.push(face.anchor);
                     match entry.blasts.iter().position(|blast| arrangement::point_in_face(&face.face, DVec2::from(blast.anchor))) {
                         // Re-anchor: the face may have moved under the name
@@ -462,12 +477,15 @@ impl crate::app::App<'_> {
                 plan_changed |= before != entry.blasts.len();
             }
             if plan_changed {
-                named.push((solid.id, plan));
+                named.push((solid.id, SolidEdit::Blasting(plan)));
+            }
+            if exclusions != solid.exclusions {
+                named.push((solid.id, SolidEdit::Exclusions(exclusions)));
             }
         }
         let count = named.len();
-        for (solid, plan) in named {
-            self.update_solid(solid, SolidEdit::Blasting(plan));
+        for (solid, edit) in named {
+            self.update_solid(solid, edit);
         }
         if count > 0 {
             self.editor.blasting_outlines_key = None;

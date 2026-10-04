@@ -541,6 +541,8 @@ impl<'a> Graphics<'a> {
         };
         editor.blast_labels = (if editor.is_dig_strips_step() { &editor.dig_outlines } else { &editor.blasting_outlines })
             .iter()
+            // A blast too small to mine has no name to show.
+            .filter(|outline| !outline.name.is_empty())
             .filter_map(|outline| {
                 let world = DVec3::new(outline.anchor[0], outline.anchor[1], outline.plane);
                 let selected = (if editor.is_dig_strips_step() {

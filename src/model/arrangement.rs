@@ -195,6 +195,14 @@ pub(crate) fn signed_area(ring: &[DVec2]) -> f64 {
     area / 2.0
 }
 
+/// Plan area of a face: its outer ring less its holes.
+pub(crate) fn face_area(face: &[Vec<DVec2>]) -> f64 {
+    face.iter()
+        .enumerate()
+        .map(|(index, ring)| signed_area(ring).abs() * if index == 0 { 1.0 } else { -1.0 })
+        .sum()
+}
+
 /// Even-odd containment over a set of rings.
 fn point_in_rings(rings: &[Vec<DVec2>], point: DVec2) -> bool {
     !rings.iter().filter(|ring| point_in_ring(ring, point)).count().is_multiple_of(2)

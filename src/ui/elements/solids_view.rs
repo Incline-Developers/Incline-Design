@@ -425,6 +425,19 @@ pub(crate) fn draw_flitch_tree(ui: &mut egui::Ui, editor: &mut EditorState, docu
                             explorer_note(ui, tr!("planning-solid-geometry-pending"));
                         }
                         for bench in solid.benching.benches().iter().rev().filter(|bench| holds(occupied, bench.base, bench.top())) {
+                            // Flitches Blasting took wholly out of mining have
+                            // nothing to draw strips on, and a bench left with
+                            // none goes too.
+                            let flitches: Vec<_> = bench
+                                .flitches
+                                .iter()
+                                .rev()
+                                .filter(|flitch| holds(occupied, flitch.base, flitch.top()))
+                                .filter(|flitch| !editor.dig_excluded_flitches.contains(&(solid.id, flitch.base.to_bits())))
+                                .collect();
+                            if flitches.is_empty() {
+                                continue;
+                            }
                             let bench_id = egui::Id::new(("strip_bench", solid.id.0, bench.base.to_bits()));
                             if reveal && picked.is_some_and(|band| bench.contains_rl(band.base)) {
                                 open_row(ui, bench_id);
@@ -432,7 +445,7 @@ pub(crate) fn draw_flitch_tree(ui: &mut egui::Ui, editor: &mut EditorState, docu
                             // Only a flitch is drawn on, so the bench row just
                             // opens and closes.
                             let response = collapsible_row(ui, bench_id, &format_rl(bench.base), false, |ui| {
-                                for flitch in bench.flitches.iter().rev().filter(|flitch| holds(occupied, flitch.base, flitch.top())) {
+                                for flitch in flitches.iter() {
                                     let row = SolidsViewRow {
                                         solid: solid.id,
                                         band: Some(BenchSelection {

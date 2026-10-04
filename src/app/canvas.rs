@@ -359,11 +359,7 @@ impl<'a> App<'a> {
             && self.editor.active_tool == ActiveTool::None
             && !pending_selection_click.is_some_and(|pick| matches!(pick.entity, SceneEntityId::Object(_)))
         {
-            self.editor.selected_dig_block = self.editor.dig_outlines.iter().find_map(|outline| {
-                let world = self.graphics.as_ref()?.cursor_world(outline.plane)?;
-                let face: Vec<Vec<glam::DVec2>> = outline.rings.iter().map(|ring| ring.iter().map(|p| p.truncate()).collect()).collect();
-                crate::model::arrangement::point_in_face(&face, world.truncate()).then(|| crate::ui::state::BlastShapeRef::new(outline.solid, outline.bench_base, outline.anchor))
-            });
+            self.editor.selected_dig_block = self.dig_block_at_cursor();
             self.invalidate_overlay();
             return;
         }
@@ -373,11 +369,7 @@ impl<'a> App<'a> {
             && !pending_selection_click.is_some_and(|pick| matches!(pick.entity, SceneEntityId::Object(_)))
         {
             self.editor.scroll_to_blast = true;
-            self.editor.selected_blast = self.editor.blasting_outlines.iter().rev().find_map(|outline| {
-                let world = self.graphics.as_ref()?.cursor_world(outline.plane)?;
-                let face: Vec<Vec<glam::DVec2>> = outline.rings.iter().map(|ring| ring.iter().map(|point| point.truncate()).collect()).collect();
-                crate::model::arrangement::point_in_face(&face, world.truncate()).then(|| crate::ui::state::BlastShapeRef::new(outline.solid, outline.bench_base, outline.anchor))
-            });
+            self.editor.selected_blast = self.blast_at_cursor();
             self.invalidate_overlay();
             return;
         }
@@ -790,6 +782,23 @@ impl<'a> App<'a> {
             ActiveTool::MoveCollar | ActiveTool::RotateCollar => pick.hole.is_some(),
             _ => true,
         }
+    }
+
+    /// The dig block under the cursor on Dig Strips.
+    pub(crate) fn dig_block_at_cursor(&self) -> Option<crate::ui::state::BlastShapeRef> {
+        self.editor.dig_outlines.iter().find_map(|outline| self.outline_at_cursor(outline))
+    }
+
+    /// The blast under the cursor on Blasting; the last drawn, so the
+    /// highest bench, wins where outlines overlap in plan.
+    pub(crate) fn blast_at_cursor(&self) -> Option<crate::ui::state::BlastShapeRef> {
+        self.editor.blasting_outlines.iter().rev().find_map(|outline| self.outline_at_cursor(outline))
+    }
+
+    fn outline_at_cursor(&self, outline: &crate::ui::state::BlastOutline) -> Option<crate::ui::state::BlastShapeRef> {
+        let world = self.graphics.as_ref()?.cursor_world(outline.plane)?;
+        let face: Vec<Vec<glam::DVec2>> = outline.rings.iter().map(|ring| ring.iter().map(|point| point.truncate()).collect()).collect();
+        crate::model::arrangement::point_in_face(&face, world.truncate()).then(|| crate::ui::state::BlastShapeRef::new(outline.solid, outline.bench_base, outline.anchor))
     }
 
     pub(crate) fn active_project_object_ids(&self) -> std::collections::HashSet<crate::model::ObjectId> {

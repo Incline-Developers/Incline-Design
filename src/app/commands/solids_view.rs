@@ -16,6 +16,7 @@ use std::{
 };
 
 use glam::DVec2;
+use rayon::prelude::*;
 
 use super::solids::{CutBand, bench_bands, build_bench_body, plan_bands, preview_triangulation};
 use crate::{
@@ -421,6 +422,23 @@ impl ViewSolid {
         self.blasting.product().map(|blasting| blasting.blast_faces.as_slice())
     }
 
+    /// Whether a part is ground the planner took out of mining: its bench,
+    /// the blast it lies in, or the dig block itself. Read off the parts
+    /// rather than cut out of them, so the dig blocks still add back up to
+    /// the benches they came from.
+    pub(crate) fn excludes(&self, solid: &Solid, part: &SolidPart) -> bool {
+        let exclusions = &solid.exclusions;
+        if exclusions.is_empty() {
+            return false;
+        }
+        exclusions.bench_excluded(part.bench.base)
+            || part
+                .blast
+                .and_then(|blast| self.blast_faces()?.iter().find(|face| face.shape_ref(solid.id) == blast))
+                .is_some_and(|face| exclusions.blast_face_excluded(face.bench.base, &face.face))
+            || part.block.as_ref().is_some_and(|block| exclusions.block_excluded(part.band.selection.base, &block.face))
+    }
+
     /// The first thing that went wrong, in stage order: a dig error on a solid
     /// whose envelope failed says nothing useful.
     pub(crate) fn error(&self) -> Option<&str> {
@@ -550,13 +568,6 @@ fn blended(color: [f32; 4], towards: [f32; 4], amount: f32) -> [f32; 4] {
 }
 
 /// A face's ground: its outer ring less its holes.
-pub(super) fn face_plan_area(face: &Face) -> f64 {
-    face.iter()
-        .enumerate()
-        .map(|(index, ring)| arrangement::signed_area(ring).abs() * if index == 0 { 1.0 } else { -1.0 })
-        .sum()
-}
-
 /// What the body depends on: the solid's definition, its surfaces and its
 /// benching plan. Deliberately free of the cut lines - those divide the body
 /// rather than shaping it - and of the open step, the selected blast, the
@@ -1506,6 +1517,11 @@ impl crate::app::App<'_> {
                 if !selected(&view_selection, solid.id, Some(part.band.selection)) {
                     continue;
                 }
+                // Ground out of mining is gone from every step after
+                // Blasting, which still draws it so it can be put back.
+                if (demand == GeometryDemand::Partition || blast_sequencing) && cache.excludes(solid, part) {
+                    continue;
+                }
                 // Selecting a blast narrows what is shown, not what is built.
                 if !benches_only
                     && let Some(blast) = selected_blast.filter(|blast| blast.solid == solid.id)
@@ -1802,7 +1818,7 @@ fn build_solid_blasting(solid: &Solid, body: &SolidBody, cancel: &crate::app::jo
             let Some(anchor) = arrangement::representative_point(&face) else { continue };
             blast_faces.push(BlastFace {
                 bench: part.band.selection,
-                area: face_plan_area(&face),
+                area: arrangement::face_area(&face),
                 face,
                 anchor: anchor.to_array(),
             });
@@ -1858,6 +1874,7 @@ fn build_solid_partition(
         let bench_cuts = solid.blasting.bench(bench.base).map_or(&[][..], |entry| &entry.cuts);
         let footprint = body.flitch_footprints.get(&band.selection.base.to_bits()).map_or(&[][..], Vec::as_slice);
         let faces = super::dig_strips::dig_block_faces(footprint, strips, bench_cuts);
+        let plans = super::dig_strips::dig_block_plans(&faces, &super::dig_strips::dig_block_cuts(strips, bench_cuts));
         anyhow::ensure!(!faces.is_empty(), "Occupied flitch at RL {} has no valid dig-block footprint", band.selection.base);
         let key = band.selection.base.to_bits();
         let level = Level {
@@ -1865,6 +1882,7 @@ fn build_solid_partition(
             volume: flitch.volume,
             footprint,
             faces: &faces,
+            plans: Some(&plans),
             earlier: earlier.as_ref().and_then(|earlier| earlier.flitches.get(&key)),
             outline: Outline::Rim,
         };
@@ -1880,7 +1898,7 @@ fn build_solid_partition(
                     id: DigBlockId(NEXT_DIG_BLOCK_ID.fetch_add(1, Ordering::Relaxed)),
                     key: BlastShapeRef::new(solid.id, band.selection.base, anchor.to_array()),
                     name: (number + 1).to_string(),
-                    area: face_plan_area(&face),
+                    area: arrangement::face_area(&face),
                     face: Arc::new(face),
                     replaces: Vec::new(),
                 }),
@@ -1926,6 +1944,7 @@ fn build_blast_parts(
             volume: bench.volume,
             footprint: body.bench_footprints.get(&key).map_or(&[][..], Vec::as_slice),
             faces: &faces,
+            plans: None,
             earlier: earlier.and_then(|earlier| earlier.benches.get(&key)),
             outline: Outline::Crease,
         };
@@ -1964,6 +1983,9 @@ struct Level<'a> {
     volume: Option<f64>,
     footprint: &'a [Vec<DVec2>],
     faces: &'a [(Face, DVec2)],
+    /// What each face is cut out with, when not its own outline: see
+    /// [`super::dig_strips::dig_block_plans`].
+    plans: Option<&'a [Face]>,
     /// How the last partition cut this same level.
     earlier: Option<&'a CarvedLevel>,
     outline: Outline,
@@ -1994,7 +2016,7 @@ struct Built {
 /// Never cut from an earlier cut piece, however much smaller: a clip returns
 /// unwelded cells, and clipping those again grows without bound.
 fn carve_level(level: &Level, old_parts: &mut [Option<SolidPart>], cancel: &crate::app::jobs::CancelFlag) -> anyhow::Result<Vec<Option<Carved>>> {
-    use super::triangulation::solid_between::{clip_piece_to_plan, clip_solid_to_plan, split_solid_by_plan};
+    use super::triangulation::solid_between::{clip_piece_to_plans, split_solid_by_plan};
 
     let source = level.source;
     let faces = level.faces;
@@ -2048,23 +2070,14 @@ fn carve_level(level: &Level, old_parts: &mut [Option<SolidPart>], cancel: &crat
             _ => split_solid_by_plan(&source.mesh, &plans).map_or_else(Vec::new, |split| split.into_iter().map(Some).collect()),
         };
         let ground_of = |point: DVec2| ground.iter().position(|face| arrangement::point_in_face(face, point));
+        // Faces cut from the same ground are cut together, sharing the cuts
+        // that narrow it down to each.
+        let mut groups: std::collections::BTreeMap<Option<usize>, Vec<usize>> = std::collections::BTreeMap::new();
         for index in pending {
-            anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
-            let (face, anchor) = &faces[index];
+            let (_, anchor) = &faces[index];
             let lot = if split.is_empty() { None } else { ground_of(*anchor) };
-            let Some(lot) = lot else {
-                let clipped = clip_solid_to_plan(&source.mesh, face, cancel)?;
-                built[index] = Some(Built {
-                    slab: clipped.slab,
-                    volume: clipped.volume,
-                    boundary_wall: clipped.boundary_wall,
-                    internal_wall: clipped.internal_wall,
-                    source_vertex: None,
-                });
-                continue;
-            };
-            let sharing = faces.iter().filter(|(_, anchor)| ground_of(*anchor) == Some(lot)).count();
-            if sharing == 1
+            if let Some(lot) = lot
+                && faces.iter().filter(|(_, anchor)| ground_of(*anchor) == Some(lot)).count() == 1
                 && let Some(piece) = split[lot].take()
             {
                 built[index] = Some(Built {
@@ -2076,44 +2089,72 @@ fn carve_level(level: &Level, old_parts: &mut [Option<SolidPart>], cancel: &crat
                 });
                 continue;
             }
-            let Some(piece) = split[lot].as_ref() else { continue };
-            let clipped = clip_piece_to_plan(piece.slab.clone(), face, cancel)?;
-            built[index] = Some(Built {
-                slab: clipped.slab,
-                volume: clipped.volume,
-                boundary_wall: clipped.boundary_wall,
-                internal_wall: clipped.internal_wall,
-                source_vertex: None,
-            });
+            groups.entry(lot).or_default().push(index);
+        }
+        for (lot, members) in groups {
+            anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+            let slab = match lot {
+                None => (
+                    source.mesh.vertices().to_vec(),
+                    source.mesh.face_vertex_indices_iter().map(|f| f.map(|i| i as u32)).collect(),
+                ),
+                Some(lot) => {
+                    let Some(piece) = split[lot].as_ref() else { continue };
+                    piece.slab.clone()
+                }
+            };
+            let grounds: Vec<&[Vec<DVec2>]> = members.iter().map(|&index| faces[index].0.as_slice()).collect();
+            let plans: Vec<&[Vec<DVec2>]> = members
+                .iter()
+                .map(|&index| level.plans.map_or(faces[index].0.as_slice(), |plans| plans[index].as_slice()))
+                .collect();
+            for (index, clipped) in members.into_iter().zip(clip_piece_to_plans(slab, &plans, &grounds, cancel)?) {
+                built[index] = Some(Built {
+                    slab: clipped.slab,
+                    volume: clipped.volume,
+                    boundary_wall: clipped.boundary_wall,
+                    internal_wall: clipped.internal_wall,
+                    source_vertex: None,
+                });
+            }
         }
     }
 
-    for (slot, built) in carved.iter_mut().zip(built) {
-        let Some(built) = built else { continue };
-        if built.slab.1.is_empty() {
-            continue;
-        }
-        let edges = match (level.outline, &built.source_vertex) {
-            (Outline::Rim, Some(source_vertex)) => split_edges(&source.edges, source_vertex),
-            (Outline::Rim, None) => super::triangulation::solid_between::boundary_wall_outline(&built.slab, &built.boundary_wall),
-            (Outline::Crease, _) => {
-                let internal = if built.internal_wall.is_empty() {
-                    vec![false; built.slab.1.len()]
-                } else {
-                    built.internal_wall.clone()
-                };
-                super::triangulation::solid_between::crease_outline(&built.slab, &internal, BLAST_CREASE_ANGLE)
+    // Each piece is dressed on its own, so they are dressed together.
+    let built: Vec<(usize, Built)> = built
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, built)| Some((index, built?)))
+        .filter(|(_, built)| !built.slab.1.is_empty())
+        .collect();
+    let dressed = built
+        .into_par_iter()
+        .map(|(index, built)| -> anyhow::Result<(usize, Carved)> {
+            let edges = match (level.outline, &built.source_vertex) {
+                (Outline::Rim, Some(source_vertex)) => split_edges(&source.edges, source_vertex),
+                (Outline::Rim, None) => super::triangulation::solid_between::boundary_wall_outline(&built.slab, &built.boundary_wall),
+                (Outline::Crease, _) => {
+                    let internal = if built.internal_wall.is_empty() {
+                        vec![false; built.slab.1.len()]
+                    } else {
+                        built.internal_wall.clone()
+                    };
+                    super::triangulation::solid_between::crease_outline(&built.slab, &internal, BLAST_CREASE_ANGLE)
+                }
+            };
+            let mut mesh = piece_preview(source, built.slab, edges)?;
+            if built.source_vertex.is_some() {
+                // Split off whole, its edges are the source's every triangle
+                // side: shown only as the whole flitch shows them, not as the
+                // always-on rim a cut piece draws.
+                mesh.always_show_edges = source.always_show_edges;
+                mesh.line_weight = source.line_weight;
             }
-        };
-        let mut mesh = piece_preview(source, built.slab, edges)?;
-        if built.source_vertex.is_some() {
-            // Split off whole, its edges are the source's every triangle
-            // side: shown only as the whole flitch shows them, not as the
-            // always-on rim a cut piece draws.
-            mesh.always_show_edges = source.always_show_edges;
-            mesh.line_weight = source.line_weight;
-        }
-        *slot = Some(Carved { mesh, volume: Some(built.volume) });
+            Ok((index, Carved { mesh, volume: Some(built.volume) }))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    for (index, piece) in dressed {
+        carved[index] = Some(piece);
     }
     Ok(carved)
 }
@@ -2436,6 +2477,9 @@ pub(crate) struct DigBlockRecord {
     /// RL range of the flitch it was cut from.
     pub(crate) flitch: BenchSelection,
     pub(crate) blast: Option<BlastShapeRef>,
+    /// The plan area of that blast, which a minimum blast size is read
+    /// against.
+    pub(crate) blast_area: Option<f64>,
     /// The block's number within its flitch, as the panels show it.
     pub(crate) name: String,
     pub(crate) plan_area: f64,
@@ -2453,6 +2497,9 @@ pub(crate) struct DigBlockRecord {
     /// `None` when the block did not come out closed, so it has no volume
     /// rather than a volume of zero.
     pub(crate) volume: Option<f64>,
+    /// Out of mining. Still a record, so the blocks reconcile against their
+    /// bench; the snapshot a schedule reads leaves it out.
+    pub(crate) excluded: bool,
     /// What is known about the material in this block. Deliberately not an
     /// `Option`: "no block model by design" and "the reserve run has not
     /// finished" are different answers, and a scheduler must not read either
@@ -2563,11 +2610,16 @@ impl crate::app::App<'_> {
                     bench: part.bench,
                     flitch: part.band.selection,
                     blast: part.blast,
+                    blast_area: part
+                        .blast
+                        .and_then(|blast| cache.blast_faces()?.iter().find(|face| face.shape_ref(solid.id) == blast))
+                        .map(|face| face.area),
                     name: block.name.clone(),
                     plan_area: block.area,
                     ground: block.face.clone(),
                     anchor: block.key.anchor(),
                     volume: part.volume,
+                    excluded: cache.excludes(solid, part),
                     portions: cache
                         .reserves
                         .product()
@@ -2600,7 +2652,7 @@ impl crate::app::App<'_> {
             let Some(faces) = self.solid_view_cache.get(&solid.id).and_then(ViewSolid::blast_faces) else {
                 continue;
             };
-            for face in faces {
+            for face in faces.iter().filter(|face| !solid.exclusions.blast_face_excluded(face.bench.base, &face.face)) {
                 let stored = solid.blasting.bench(face.bench.base);
                 let name = stored
                     .and_then(|entry| entry.blasts.iter().find(|blast| arrangement::point_in_face(&face.face, DVec2::from(blast.anchor))))
@@ -2676,7 +2728,10 @@ impl crate::app::App<'_> {
             StageNotReady::Running(stage) => PlanningNotReady::Running { stage: stage.label() },
             StageNotReady::Failed { stage, message } => PlanningNotReady::Failed { solid: stage.label(), message },
         })?;
-        let blocks = self.planning_dig_blocks()?;
+        let mut blocks = self.planning_dig_blocks()?;
+        // Excluded ground is not dug, so nothing that reads the run - the
+        // schedule, haulage, the sequence editors - is handed it.
+        blocks.retain(|block| !block.excluded);
         // Unavailable material is not a schedulable quantity. Capacity-only
         // and no-schema are deliberate answers and pass.
         if let Some(block) = blocks.iter().find(|block| matches!(block.material, MaterialState::Unavailable)) {

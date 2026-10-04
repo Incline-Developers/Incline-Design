@@ -306,13 +306,27 @@ pub(crate) struct Solid {
 /// and a dig block by its flitch and a point inside it - the block is
 /// excluded while it holds that point, however the strips around it are
 /// redrawn.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct MiningExclusions {
     /// Base RLs of whole benches.
     pub(crate) benches: Vec<f64>,
     pub(crate) blasts: Vec<ExcludedGround>,
     pub(crate) blocks: Vec<ExcludedGround>,
+    /// Blasts smaller than this in plan, m², are left out of mining and
+    /// unnamed: the slivers a cut line leaves against the bench edge.
+    pub(crate) min_blast_area: f64,
+}
+
+impl Default for MiningExclusions {
+    fn default() -> Self {
+        Self {
+            benches: Vec::new(),
+            blasts: Vec::new(),
+            blocks: Vec::new(),
+            min_blast_area: Self::DEFAULT_MIN_BLAST_AREA,
+        }
+    }
 }
 
 /// One excluded blast or dig block: the base RL of its bench (a blast) or
@@ -343,9 +357,15 @@ pub(crate) enum ExclusionTarget {
 impl MiningExclusions {
     /// Same tolerance a stored bench is matched to a generated one with.
     const RL_EPSILON: f64 = 1e-6;
+    pub(crate) const DEFAULT_MIN_BLAST_AREA: f64 = 100.0;
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.benches.is_empty() && self.blasts.is_empty() && self.blocks.is_empty()
+        self.benches.is_empty() && self.blasts.is_empty() && self.blocks.is_empty() && self.min_blast_area <= 0.0
+    }
+
+    /// Whether a blast of this plan area is too small to mine.
+    pub(crate) fn blast_too_small(&self, area: f64) -> bool {
+        area < self.min_blast_area
     }
 
     fn same_rl(left: f64, right: f64) -> bool {
@@ -362,18 +382,22 @@ impl MiningExclusions {
         self.blasts.iter().any(|entry| Self::same_rl(entry.base, bench) && entry.anchor == anchor)
     }
 
+    /// Whether this blast face is out of mining, with its bench or on its
+    /// own. Matched by point, as names are, so a blast stays out while its
+    /// stored anchor still lies inside it.
+    pub(crate) fn blast_face_excluded(&self, bench: f64, face: &[Vec<glam::DVec2>]) -> bool {
+        self.bench_excluded(bench) || self.blast_too_small(arrangement::face_area(face)) || Self::holds(&self.blasts, bench, face)
+    }
+
     /// Whether a dig block of this flitch with this footprint was picked out.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
     pub(crate) fn block_excluded(&self, flitch: f64, face: &[Vec<glam::DVec2>]) -> bool {
-        self.blocks
-            .iter()
-            .any(|entry| Self::same_rl(entry.base, flitch) && arrangement::point_in_face(face, glam::DVec2::from_array(entry.anchor)))
+        Self::holds(&self.blocks, flitch, face)
     }
 
     /// Whether a dig block is out of mining for any reason.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
-    pub(crate) fn excludes(&self, bench: f64, blast: Option<(f64, [f64; 2])>, flitch: f64, face: &[Vec<glam::DVec2>]) -> bool {
-        self.bench_excluded(bench) || blast.is_some_and(|(base, anchor)| self.blast_excluded(base, anchor)) || self.block_excluded(flitch, face)
+    pub(crate) fn excludes(&self, bench: f64, blast: Option<(f64, [f64; 2], f64)>, flitch: f64, face: &[Vec<glam::DVec2>]) -> bool {
+        self.bench_excluded(bench) || blast.is_some_and(|(base, anchor, area)| self.blast_too_small(area) || self.blast_excluded(base, anchor)) || self.block_excluded(flitch, face)
     }
 
     pub(crate) fn is_target_excluded(&self, target: ExclusionTarget) -> bool {
@@ -410,6 +434,44 @@ impl MiningExclusions {
         next
     }
 
+    /// Whether a blast or dig block is out of mining by an entry of its own,
+    /// rather than with the bench or blast it lies in. Matched by point, as
+    /// the cut reads it.
+    pub(crate) fn face_excluded(&self, target: ExclusionTarget, face: &[Vec<glam::DVec2>]) -> bool {
+        match target {
+            ExclusionTarget::Bench(base) => self.bench_excluded(base),
+            ExclusionTarget::Blast { bench, .. } => Self::holds(&self.blasts, bench, face),
+            ExclusionTarget::Block { flitch, .. } => Self::holds(&self.blocks, flitch, face),
+        }
+    }
+
+    /// These exclusions with one blast or dig block in or out. Putting it
+    /// back clears every entry inside it, not only one at its own anchor:
+    /// an entry is matched by point, and may predate a recut.
+    pub(crate) fn with_face(&self, target: ExclusionTarget, face: &[Vec<glam::DVec2>], excluded: bool) -> Self {
+        let (entries, base, anchor) = match target {
+            ExclusionTarget::Bench(_) => return self.with(target, excluded),
+            ExclusionTarget::Blast { bench, anchor } => (&self.blasts, bench, anchor),
+            ExclusionTarget::Block { flitch, anchor } => (&self.blocks, flitch, anchor),
+        };
+        let mut kept: Vec<ExcludedGround> = entries.iter().copied().filter(|entry| !Self::holds(std::slice::from_ref(entry), base, face)).collect();
+        if excluded {
+            kept.push(ExcludedGround { base, anchor });
+        }
+        let mut next = self.clone();
+        match target {
+            ExclusionTarget::Blast { .. } => next.blasts = kept,
+            _ => next.blocks = kept,
+        }
+        next
+    }
+
+    fn holds(entries: &[ExcludedGround], base: f64, face: &[Vec<glam::DVec2>]) -> bool {
+        entries
+            .iter()
+            .any(|entry| Self::same_rl(entry.base, base) && arrangement::point_in_face(face, glam::DVec2::from_array(entry.anchor)))
+    }
+
     pub(crate) fn hash_content<H: std::hash::Hasher>(&self, hasher: &mut H) {
         use std::hash::Hash;
         for bench in &self.benches {
@@ -421,6 +483,7 @@ impl MiningExclusions {
             entry.anchor[1].to_bits().hash(hasher);
         }
         (self.benches.len(), self.blasts.len(), self.blocks.len()).hash(hasher);
+        self.min_blast_area.to_bits().hash(hasher);
     }
 }
 

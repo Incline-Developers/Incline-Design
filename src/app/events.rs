@@ -1227,7 +1227,32 @@ impl<'a> App<'a> {
                     })
                 });
                 let block = (self.editor.is_haulage_page() && !on_network).then(|| self.haul_block_at_cursor()).flatten();
-                if let Some(id) = block {
+                // On Blasting and Dig Strips the blast or block under the
+                // cursor takes the menu, selected as a left click selects it,
+                // unless a cut line is picked over it.
+                let on_line = picked.as_ref().is_some_and(|pick| matches!(pick.entity, crate::model::SceneEntityId::Object(_)));
+                let ground = if on_line {
+                    None
+                } else if self.editor.is_blasting_step() {
+                    self.blast_at_cursor()
+                } else if self.editor.is_dig_strips_step() {
+                    self.dig_block_at_cursor()
+                } else {
+                    None
+                };
+                self.editor.canvas_context_menu_ground = ground;
+                if let Some(shape) = ground {
+                    if self.editor.is_blasting_step() {
+                        self.editor.selected_blast = Some(shape);
+                        self.editor.scroll_to_blast = true;
+                    } else {
+                        self.editor.selected_dig_block = Some(shape);
+                    }
+                    self.editor.canvas_context_menu_hole = None;
+                    self.editor.canvas_context_menu_open = true;
+                    self.editor.canvas_context_menu_px = self.editor.cursor_screen_px;
+                    self.invalidate_overlay();
+                } else if let Some(id) = block {
                     if !self.editor.haul_selected_blocks.contains(&id) {
                         self.editor.haul_selected_blocks = vec![id];
                         self.editor
