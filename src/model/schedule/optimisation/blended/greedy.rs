@@ -68,13 +68,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
     drill_blast::Chain,
-    input::{BlendInput, BlendPile, GRADE_CUSHION_T, GRADE_MARGIN, GradeQualification, REST_RECEIPT_T, authored_tasks, interval_rate, task_active, task_authorises},
+    input::{
+        BlendInput, BlendPile, GRADE_CUSHION_T, GRADE_MARGIN, GradeQualification, REST_RECEIPT_T, attribute_reclaim, authored_tasks, interval_rate, task_active, task_authorises,
+    },
     lp::{Col, LinearProgram},
     replay::{BlendSolution, ChunkRow, ExtractionAdjustments, MovementRow},
 };
-use crate::model::schedule::optimisation::{
-    Activity, DestinationId, DestinationKind, GroundId, Interval, MovementCandidate, ReclaimOrder, SourceId, StockpileId, TaskKind, TruckClassId,
-};
+use crate::model::schedule::optimisation::{Activity, DestinationId, DestinationKind, GroundId, Interval, ReclaimOrder, SourceId, StockpileId, TaskKind, TruckClassId};
 
 /// Remaining tonnes at or below which a block counts as finished.
 const FINISHED_T: f64 = 1e-9;
@@ -90,13 +90,18 @@ const SNAP_T: f64 = 1e-6;
 /// The tie-break weight per tonne, relative to the largest movement value.
 const TIE_WEIGHT: f64 = 1e-7;
 
-/// A dispatch schedule for `input`, or why there is none.
-pub(crate) fn dispatch(input: &BlendInput) -> Result<BlendSolution, String> {
+/// A dispatch schedule for `input`, or why there is none, polling `cancel`
+/// between intervals: `Ok(None)` once it is set, so a superseded run stops
+/// within one interval's work.
+pub(crate) fn dispatch_cancellable(input: &BlendInput, cancel: &std::sync::atomic::AtomicBool) -> Result<Option<BlendSolution>, String> {
     let mut state = State::new(input);
     for interval in &input.intervals {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            return Ok(None);
+        }
         state.work(*interval)?;
     }
-    Ok(state.finish())
+    Ok(Some(state.finish()))
 }
 
 /// The dispatcher's physical state, walked forward an interval at a time.
@@ -612,8 +617,8 @@ impl<'a> State<'a> {
             let blend = match candidate.source {
                 SourceId::Stockpile(pile) => {
                     *drawn.entry(pile).or_default() += tonnes;
-                    if let Some(task) = self.reclaim_task(candidate, interval) {
-                        *self.reclaimed.entry(task).or_default() += tonnes;
+                    for (task, share) in attribute_reclaim(input, candidate, interval, tonnes, &self.reclaimed) {
+                        *self.reclaimed.entry(task).or_default() += share;
                     }
                     released.get(&pile).map(|found| found.blend.clone()).unwrap_or_else(|| vec![0.0; grades])
                 }
@@ -747,15 +752,6 @@ impl<'a> State<'a> {
             tonnes: chunk.held_t,
             blend: blend(chunk.held_t, &chunk.held_q),
         })
-    }
-
-    /// The reclaim bar a reclaim row was worked under: its loader's first
-    /// active bar that authorises it.
-    fn reclaim_task(&self, candidate: &MovementCandidate, interval: Interval) -> Option<usize> {
-        let loader = self.input.loaders.iter().position(|loader| loader.id == candidate.loader)?;
-        authored_tasks(self.input, loader)
-            .into_iter()
-            .find(|&task| task_active(&self.input.tasks[task], interval) && task_authorises(&self.input.tasks[task], candidate))
     }
 
     /// The replay's readiness, from the state the interval opened with.

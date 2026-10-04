@@ -1388,6 +1388,22 @@ impl crate::app::App<'_> {
         let zero = document.schedule().unmeasured_as_zero();
 
         let mut diagnostics = Vec::new();
+        // Two pits cut from the same design, topography and model reserve the
+        // same ground, and each would schedule it. Refused rather than one
+        // quietly subtracted from the other.
+        let pits: Vec<_> = document.solids().iter().filter(|solid| solid.kind.is_blasted() && solid.surface.is_some()).collect();
+        for (index, solid) in pits.iter().enumerate() {
+            if let Some(first) = pits[..index]
+                .iter()
+                .find(|other| (other.surface, other.topography, other.block_model) == (solid.surface, solid.topography, solid.block_model))
+            {
+                diagnostics.push(StageDiagnostic {
+                    entity: Some(solid.name.clone()),
+                    message: tr!("schedule-stage-duplicate-solid", solid = solid.name.clone(), other = first.name.clone()),
+                    blocking: true,
+                });
+            }
+        }
         let mut unmeasured = 0;
         let mut counted_zero = 0;
         for block in &snapshot.blocks {

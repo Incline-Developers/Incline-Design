@@ -654,6 +654,7 @@ fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, p
             ui.add_space(4.0);
             if let Some(session) = settings {
                 draw_settings(ui, plan, session, commands);
+                ui.add_space(8.0);
             }
             if let Some(target) = editor.schedule_run_repair {
                 let label = match target {
@@ -2916,14 +2917,9 @@ fn draw_delay_drop_menu(ui: &mut egui::Ui, editor: &mut EditorState, plan: &Sche
 /// of its own type, so a follower adds to work it actually does. On an
 /// unassigned lane, any drill and blast machine.
 fn follow_leaders(plan: &SchedulePlan, agent: Option<crate::model::schedule::LoaderAgentId>) -> Vec<&crate::model::schedule::LoaderAgent> {
-    let kind = agent.and_then(|agent| plan.agent_kind(agent));
     plan.agents()
         .iter()
-        .filter(|leader| Some(leader.id) != agent)
-        .filter(|leader| {
-            plan.agent_kind(leader.id)
-                .is_some_and(|leader_kind| leader_kind.is_drill_blast() && kind.is_none_or(|kind| kind == leader_kind))
-        })
+        .filter(|leader| crate::model::schedule::follow_fits(agent, leader.id, |id| plan.agent_kind(id)))
         .collect()
 }
 

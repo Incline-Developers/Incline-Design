@@ -352,23 +352,33 @@ impl Carry {
     /// the window's own, in its local interval numbering.
     pub(crate) fn advance(&mut self, full: &BlendInput, window: Window, solution: &BlendSolution, replay: &ReplayReport) {
         let mut received: BTreeMap<(StockpileId, usize), f64> = BTreeMap::new();
-        for row in solution.movements.iter().filter(|row| row.interval < window.committed) {
+        // What each capped bar has reclaimed so far, for the shared
+        // attribution; windows renumber intervals, so in window order.
+        let mut reclaimed: BTreeMap<usize, f64> = full
+            .tasks
+            .iter()
+            .enumerate()
+            .filter_map(|(index, task)| match task.kind {
+                TaskKind::Reclaim { maximum_t: Some(maximum), .. } => Some((index, maximum - self.reclaim_left.get(&index).copied().unwrap_or(maximum))),
+                _ => None,
+            })
+            .collect();
+        let mut rows: Vec<_> = solution.movements.iter().filter(|row| row.interval < window.committed).collect();
+        rows.sort_by_key(|row| row.interval);
+        for row in rows {
             let Some(candidate) = full.movements.get(row.candidate) else { continue };
             if let (Activity::Dig, SourceId::Ground(ground)) = (candidate.activity, candidate.source)
                 && let Some(left) = self.ground.get_mut(&ground)
             {
                 *left -= row.tonnes_t;
             }
-            if let (Activity::Reclaim, SourceId::Stockpile(pile)) = (candidate.activity, candidate.source) {
-                // Mirrors the `reclmax` row: the bar's loader, from any pile
-                // the bar approves.
-                for (index, task) in full.tasks.iter().enumerate() {
-                    if let TaskKind::Reclaim { approved_sources, .. } = &task.kind
-                        && task.loader == candidate.loader
-                        && approved_sources.contains(&pile)
-                        && let Some(left) = self.reclaim_left.get_mut(&index)
-                    {
-                        *left -= row.tonnes_t;
+            if let (Activity::Reclaim, SourceId::Stockpile(_)) = (candidate.activity, candidate.source)
+                && let Some(interval) = full.intervals.get(window.first + row.interval)
+            {
+                for (index, share) in super::input::attribute_reclaim(full, candidate, *interval, row.tonnes_t, &reclaimed) {
+                    *reclaimed.entry(index).or_default() += share;
+                    if let Some(left) = self.reclaim_left.get_mut(&index) {
+                        *left -= share;
                     }
                 }
             }
@@ -403,13 +413,17 @@ impl Carry {
             &mut self.target_totals,
         );
         let last = window.committed - 1;
+        // Contained quantities are bounded by the stored grade scale, not by
+        // the tonnes: 100 t at grade 62 holds 6,200.
+        let ceilings = super::input::grade_ceilings(full);
+        let bound = |quantity: f64, tonnes: f64, grade: usize| quantity.clamp(0.0, tonnes * ceilings.get(grade).copied().unwrap_or(1.0).max(1.0));
         for pile in &full.piles {
             if let Some(state) = replay.pile_intervals.get(&(pile.id, last)) {
                 // Clamped as a chunk is below: an emptied pile can close
                 // with 3e-14 contained against 0 t, which the next window's
                 // input check refuses.
                 let tonnes = state.closing_t.clamp(0.0, pile.capacity_t);
-                let contained = state.closing_q.iter().map(|quantity| quantity.clamp(0.0, tonnes)).collect();
+                let contained = state.closing_q.iter().enumerate().map(|(grade, quantity)| bound(*quantity, tonnes, grade)).collect();
                 self.piles.insert(pile.id, (tonnes, contained));
             }
             let Some(chunks) = self.chunks.get_mut(&pile.id) else { continue };
@@ -434,7 +448,7 @@ impl Carry {
                     // tolerance's worth of overfill.
                     let tonnes = tonnes.clamp(0.0, pile.chunks[c]);
                     chunk.0 = tonnes;
-                    chunk.1 = contained.iter().map(|quantity| quantity.clamp(0.0, tonnes)).collect();
+                    chunk.1 = contained.iter().enumerate().map(|(grade, quantity)| bound(*quantity, tonnes, grade)).collect();
                 }
                 if let Some(row) = solution.chunks.iter().find(|row| row.pile == pile.id && row.chunk == c && row.interval == last) {
                     chunk.2 |= row.closed;

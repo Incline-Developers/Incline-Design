@@ -35,6 +35,12 @@ pub(crate) const DEFAULT_END_DAY: u32 = 1;
 pub(crate) const DEFAULT_INTERVAL_H: f64 = 1.0;
 /// Default solver wall-clock budget.
 pub(crate) const DEFAULT_SOLVE_SECONDS: f64 = 60.0;
+/// The finest calendar step offered: one minute. Anything finer is noise in
+/// a mine schedule and only multiplies the model.
+pub(crate) const MIN_INTERVAL_H: f64 = 1.0 / 60.0;
+/// The longest solver budget accepted: a week, well inside what a
+/// `Duration` holds.
+pub(crate) const MAX_SOLVE_SECONDS: f64 = 7.0 * 86_400.0;
 /// The relative MIP gap Stage 5A verified and this reuses rather than
 /// restating: one default, in one place.
 pub(crate) const DEFAULT_RELATIVE_GAP: f64 = 1e-4;
@@ -182,11 +188,17 @@ impl ExperimentConfig {
     }
 
     pub(crate) fn set_interval_h(&mut self, hours: f64) -> ScheduleResult {
+        if hours < MIN_INTERVAL_H {
+            return Err(ScheduleError::InvalidExperimentSetting);
+        }
         self.interval_h = checked_positive(hours)?;
         Ok(())
     }
 
     pub(crate) fn set_solve_seconds(&mut self, seconds: f64) -> ScheduleResult {
+        if seconds > MAX_SOLVE_SECONDS {
+            return Err(ScheduleError::InvalidExperimentSetting);
+        }
         self.solve_seconds = checked_positive(seconds)?;
         Ok(())
     }

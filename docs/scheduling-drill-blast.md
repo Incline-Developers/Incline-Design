@@ -14,7 +14,9 @@ For each blast of the Solids run (Planning → Blasts):
    dug. A buffer of 0 m means only ground over the blast itself; 100 m keeps
    a 100 m stand-off. Ground above that no dig bar digs never goes, so such a
    blast never clears, and the run's notes name it. Excluding standing ground
-   from mining does not count as removing it.
+   from mining does not count as removing it. A block of 0 t that a dig bar
+   reaches goes when the block before it in that bar does, or at once when
+   it leads the bar.
 2. **Prep.** A dozer works the blast's top area, in m².
 3. **Drill.** Drills drill its holes: the pattern (burden × spacing, square or
    staggered) laid over the blast shape gives the hole count, and each hole is

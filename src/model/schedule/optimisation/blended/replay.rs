@@ -22,7 +22,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use super::input::{BlendInput, BlendPile, GradeLimit, WINDOW_TOLERANCE_H, task_authorises};
+use super::input::{BlendInput, BlendPile, GradeLimit, WINDOW_TOLERANCE_H, attribute_reclaim, task_authorises};
 use crate::model::schedule::optimisation::{Activity, Destination, DestinationId, DestinationKind, GroundId, LoaderId, SourceId, StockpileId, TaskKind};
 
 /// One published movement: how much material a candidate moved in a cell.
@@ -574,30 +574,28 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
     }
 
     // ---- reclaim caps -------------------------------------------------------
-    for task in &input.tasks {
+    // Each movement counts against the bar it was worked under, in time
+    // order, exactly as dispatch charged it.
+    let mut reclaimed: BTreeMap<usize, f64> = BTreeMap::new();
+    let mut rows: Vec<_> = solution.movements.iter().collect();
+    rows.sort_by_key(|row| row.interval);
+    for row in rows {
+        let (Some(candidate), Some(interval)) = (input.movements.get(row.candidate), input.intervals.get(row.interval)) else {
+            continue;
+        };
+        if candidate.activity != Activity::Reclaim {
+            continue;
+        }
+        for (task, share) in attribute_reclaim(input, candidate, *interval, row.tonnes_t, &reclaimed) {
+            *reclaimed.entry(task).or_default() += share;
+        }
+    }
+    for (index, task) in input.tasks.iter().enumerate() {
         if checker.cancelled() {
             return None;
         }
-        let TaskKind::Reclaim {
-            approved_sources,
-            maximum_t: Some(maximum),
-        } = &task.kind
-        else {
-            continue;
-        };
-        let reclaimed: f64 = solution
-            .movements
-            .iter()
-            .filter(|row| {
-                input.movements.get(row.candidate).is_some_and(|candidate| {
-                    candidate.loader == task.loader
-                        && candidate.activity == Activity::Reclaim
-                        && matches!(candidate.source, SourceId::Stockpile(pile) if approved_sources.contains(&pile))
-                })
-            })
-            .map(|row| row.tonnes_t)
-            .sum();
-        checker.breach(&format!("reclaim cap on task {}", task.id.0), reclaimed, *maximum);
+        let TaskKind::Reclaim { maximum_t: Some(maximum), .. } = &task.kind else { continue };
+        checker.breach(&format!("reclaim cap on task {}", task.id.0), reclaimed.get(&index).copied().unwrap_or(0.0), *maximum);
     }
 
     // ---- exact authored bar windows -----------------------------------------
@@ -973,12 +971,8 @@ fn check_bar_priority(checker: &mut Checker<'_>, solution: &BlendSolution, openi
                         *slot -= row.tonnes_t;
                     }
                     if candidate.loader == loader && candidate.activity == Activity::Reclaim {
-                        for bar in &bars {
-                            if task_authorises(&input.tasks[*bar], candidate)
-                                && let Some(slot) = spent.get_mut(bar)
-                            {
-                                *slot += row.tonnes_t;
-                            }
+                        for (bar, share) in attribute_reclaim(input, candidate, *interval, row.tonnes_t, &spent) {
+                            *spent.entry(bar).or_default() += share;
                         }
                     }
                 }

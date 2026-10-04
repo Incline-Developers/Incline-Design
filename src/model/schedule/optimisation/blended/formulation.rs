@@ -958,8 +958,14 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
                     .filter_map(|at| building.get(&(pile.id, at)).cloned())
                     .collect();
                 let available = rows.binary(&format!("avail_{}_{k}", pile.id.0));
+                // Still resting from a receipt before this window: unavailable,
+                // and no lower bound - the receipt that rests it is not one of
+                // this window's building flags, so stock alone would demand 1.
                 if pile.last_receipt_h.is_some_and(|received_h| !pile.rested(received_h, *interval)) {
                     rows.eq(vec![(available.clone(), 1.0)], 0.0, &format!("availopen_{}_{k}", pile.id.0));
+                    rows.leq(vec![(available.clone(), 1.0), (flag, -1.0)], 0.0, &format!("availstock_{}_{k}", pile.id.0));
+                    stock.insert((pile.id, k), available);
+                    continue;
                 }
                 rows.leq(vec![(available.clone(), 1.0), (flag.clone(), -1.0)], 0.0, &format!("availstock_{}_{k}", pile.id.0));
                 let mut terms = vec![(available.clone(), 1.0), (flag, -1.0)];
@@ -1051,15 +1057,23 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
                                 rows.eq(vec![(ready, 1.0)], 0.0, &format!("rdyrecnone_{loader_index}_{task_index}_{position}"));
                                 continue;
                             }
-                            // ready >= stock[p] for each approved pile, and
-                            // ready <= sum of them, so "some approved pile has
-                            // released stock" is exactly readiness.
+                            // A bar that has consumed its authored reclaim cap
+                            // has no work left. Without this it would stay
+                            // "ready" for the rest of the horizon and block
+                            // every lower-priority bar on the same loader -
+                            // refusing valid schedules rather than admitting
+                            // invalid ones, but refusing them all the same.
+                            let spent = maximum_t.map(|_| rows.binary(&format!("capgone_{loader_index}_{task_index}_{position}")));
+                            // ready >= stock[p] - spent for each approved pile,
+                            // and ready <= sum of them, so "some approved pile
+                            // has released stock and the cap is not spent" is
+                            // exactly readiness.
                             for (rank, flag) in flags.iter().enumerate() {
-                                rows.geq(
-                                    vec![(ready.clone(), 1.0), (flag.clone(), -1.0)],
-                                    0.0,
-                                    &format!("rdyreclo_{loader_index}_{task_index}_{rank}_{position}"),
-                                );
+                                let mut terms = vec![(ready.clone(), 1.0), (flag.clone(), -1.0)];
+                                if let Some(spent) = &spent {
+                                    terms.push((spent.clone(), 1.0));
+                                }
+                                rows.geq(terms, 0.0, &format!("rdyreclo_{loader_index}_{task_index}_{rank}_{position}"));
                             }
                             let mut terms = vec![(ready.clone(), 1.0)];
                             for flag in &flags {
@@ -1067,20 +1081,13 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
                             }
                             rows.leq(terms, 0.0, &format!("rdyrechi_{loader_index}_{task_index}_{position}"));
 
-                            // A bar that has consumed its authored reclaim cap
-                            // has no work left. Without this it would stay
-                            // "ready" for the rest of the horizon and block
-                            // every lower-priority bar on the same loader -
-                            // refusing valid schedules rather than admitting
-                            // invalid ones, but refusing them all the same.
-                            let Some(maximum) = maximum_t else { continue };
-                            let spent = rows.binary(&format!("capgone_{loader_index}_{task_index}_{position}"));
+                            let (Some(maximum), Some(spent)) = (maximum_t, spent) else { continue };
                             let mut used: Vec<(R::Var, f64)> = Vec::new();
                             for (index, candidate) in input.movements.iter().enumerate() {
                                 if !task_authorises(task, candidate) {
                                     continue;
                                 }
-                                for earlier in &input.intervals {
+                                for earlier in input.intervals.iter().filter(|earlier| task_active(task, **earlier)) {
                                     for earlier_segment in 0..segments {
                                         if flat_cell(earlier.index, earlier_segment, segments) >= position {
                                             continue;
@@ -1217,7 +1224,11 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
             if !approved_sources.contains(&pile) {
                 continue;
             }
-            for interval in &input.intervals {
+            // Only what is worked inside the bar's own window counts against
+            // its cap. Exact while a loader's bars on the same pile do not
+            // overlap; where they do, this charges both and is stricter than
+            // the shared attribution dispatch and replay use.
+            for interval in input.intervals.iter().filter(|interval| task_active(task, **interval)) {
                 for segment in 0..segments {
                     if let Some(column) = rows.columns().movement.get(&(index, interval.index, segment)) {
                         terms.push((column.clone(), 1.0));

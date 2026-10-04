@@ -10,7 +10,7 @@ use crate::{
     i18n::tr,
     model::schedule::{
         DelayEntry, DelayTypeId, LoaderAgentId, LoaderSelection, Roster, SchedulePlan,
-        delays::{DelayRowProblem, hours_text, instant_parts, parse_delay_rows, parse_instant},
+        delays::{DelayRowProblem, MIN_ROSTER_DURATION_H, MIN_ROSTER_EVERY_H, hours_text, instant_parts, parse_delay_rows, parse_instant},
     },
     ui::{
         EditorState,
@@ -609,7 +609,13 @@ fn draw_roster(
             let text = &mut draft.roster[index];
             let parsed: Option<Option<f64>> = match index {
                 0 => parse_instant(text).map(Some),
-                1 | 2 => text.trim().parse::<f64>().ok().filter(|value| value.is_finite() && *value > 0.0).map(Some),
+                1 => text
+                    .trim()
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|value| value.is_finite() && *value >= MIN_ROSTER_DURATION_H)
+                    .map(Some),
+                2 => text.trim().parse::<f64>().ok().filter(|value| value.is_finite() && *value >= MIN_ROSTER_EVERY_H).map(Some),
                 _ if text.trim().is_empty() => Some(None),
                 _ => parse_instant(text).map(Some),
             };
@@ -619,9 +625,11 @@ fn draw_roster(
             }
             let response = ui.put(cell, field);
             if parsed.is_none() {
-                response
-                    .clone()
-                    .on_hover_text(if index == 1 || index == 2 { tr!("delay-hours-hint") } else { tr!("delay-instant-hint") });
+                response.clone().on_hover_text(match index {
+                    1 => tr!("delay-roster-duration-hint"),
+                    2 => tr!("delay-roster-every-hint"),
+                    _ => tr!("delay-instant-hint"),
+                });
             }
             if response.lost_focus()
                 && let Some(value) = parsed

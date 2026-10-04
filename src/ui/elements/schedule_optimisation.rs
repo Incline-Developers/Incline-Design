@@ -13,7 +13,7 @@ use crate::{
         Document, ReserveAggregation,
         schedule::{
             DestinationId, SchedulePlan,
-            experiment::{GradeUnit, StockpileRepresentation},
+            experiment::{GradeUnit, MAX_SOLVE_SECONDS, MIN_INTERVAL_H, StockpileRepresentation},
         },
     },
     ui::{
@@ -131,8 +131,8 @@ pub(crate) fn grades_row(rows: &mut PropertyRows<'_>, plan: &SchedulePlan, docum
 pub(crate) fn draw_advanced(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
     let experiment = plan.experiment();
     let draft = draft(editor, plan);
-    let interval_h = parse_positive(&draft.interval_h);
-    let solve_seconds = parse_positive(&draft.solve_seconds);
+    let interval_h = parse_positive(&draft.interval_h).filter(|hours| *hours >= MIN_INTERVAL_H);
+    let solve_seconds = parse_positive(&draft.solve_seconds).filter(|seconds| *seconds <= MAX_SOLVE_SECONDS);
     let relative_gap = draft.relative_gap.trim().parse::<f64>().ok().filter(|gap| gap.is_finite() && (0.0..=1.0).contains(gap));
     let invalid = crate::model::schedule::ScheduleError::InvalidExperimentSetting.message();
     let improve = cfg!(feature = "scip");

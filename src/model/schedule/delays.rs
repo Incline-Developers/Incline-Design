@@ -89,17 +89,26 @@ pub(crate) struct Roster {
     pub(crate) until_h: Option<f64>,
 }
 
+/// The shortest roster delay: one minute.
+pub(crate) const MIN_ROSTER_DURATION_H: f64 = 1.0 / 60.0;
+/// The most often a roster may repeat: hourly. Each occurrence is a span
+/// the Gantt draws and the calendar splits at, so a finer repeat only
+/// multiplies work.
+pub(crate) const MIN_ROSTER_EVERY_H: f64 = 1.0;
+
 impl Roster {
-    /// A finite start at or after the origin, a positive duration shorter
-    /// than the repeat, and an end - when there is one - after the start.
-    /// A delay as long as its repeat is the machine never working, which is
-    /// what availability says; it is refused here rather than read as that.
+    /// A finite start at or after the origin, a duration of at least a minute
+    /// shorter than a repeat of at least an hour, and an end - when there is
+    /// one - after the start. A delay as long as its repeat is the machine
+    /// never working, which is what availability says; it is refused here
+    /// rather than read as that.
     pub(crate) fn is_valid(&self) -> bool {
         self.first_start_h.is_finite()
             && self.first_start_h >= 0.0
             && self.duration_h.is_finite()
-            && self.duration_h > 0.0
+            && self.duration_h >= MIN_ROSTER_DURATION_H
             && self.every_h.is_finite()
+            && self.every_h >= MIN_ROSTER_EVERY_H
             && self.every_h > self.duration_h
             && self.until_h.is_none_or(|until| until.is_finite() && until > self.first_start_h)
             && match &self.loaders {
@@ -504,14 +513,24 @@ impl DelayConfig {
 
     /// Only what the calculation reads: which hours each machine is delayed.
     /// Names, colours and types are presentation.
-    pub(crate) fn hash_calendar<H: std::hash::Hasher>(&self, agents: &[LoaderAgentId], horizon_h: f64, hasher: &mut H) {
+    /// The hours delays take machines out, as authored: every entry and
+    /// roster, but not their names or types. Hashed without expanding a
+    /// roster into its occurrences, which currentness cannot afford.
+    pub(crate) fn hash_calendar<H: std::hash::Hasher>(&self, hasher: &mut H) {
         use std::hash::Hash;
-        for agent in agents {
-            for (start, end) in self.merged_for(*agent, horizon_h) {
-                agent.hash(hasher);
-                start.to_bits().hash(hasher);
-                end.to_bits().hash(hasher);
+        for list in &self.lists {
+            for entry in &list.entries {
+                entry.agent.hash(hasher);
+                entry.start_h.to_bits().hash(hasher);
+                entry.end_h.to_bits().hash(hasher);
             }
+        }
+        for roster in &self.rosters {
+            roster.loaders.hash(hasher);
+            roster.first_start_h.to_bits().hash(hasher);
+            roster.duration_h.to_bits().hash(hasher);
+            roster.every_h.to_bits().hash(hasher);
+            roster.until_h.map(f64::to_bits).hash(hasher);
         }
     }
 

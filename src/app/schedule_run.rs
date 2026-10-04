@@ -192,6 +192,9 @@ impl crate::app::App<'_> {
                     member.bench.to_bits().hash(&mut hasher);
                     member.anchor.map(f64::to_bits).hash(&mut hasher);
                 }
+            } else if let Some(work) = bar.follow() {
+                4u8.hash(&mut hasher);
+                work.leader.map(|leader| leader.0).hash(&mut hasher);
             } else {
                 0u8.hash(&mut hasher);
             }
@@ -332,7 +335,7 @@ impl crate::app::App<'_> {
             solid.exclusions.hash_content(&mut hasher);
         }
         // The hours delay lists and rosters take each machine out.
-        plan.delays().hash_calendar(&plan.agent_ids(), self.planning_end_h(), &mut hasher);
+        plan.delays().hash_calendar(&mut hasher);
         // Resolution, tracked grades (legacy tags retained) and pile representation.
         plan.experiment().hash_semantics(&mut hasher);
         let key = hasher.finish();
@@ -422,7 +425,8 @@ impl crate::app::App<'_> {
         let options = {
             let settings = project.project.document.schedule().experiment();
             ScheduleSolveOptions {
-                time_limit: Some(std::time::Duration::from_secs_f64(settings.solve_seconds)),
+                // Clamped, as a file may carry a limit no setter would accept.
+                time_limit: std::time::Duration::try_from_secs_f64(settings.solve_seconds.min(crate::model::schedule::experiment::MAX_SOLVE_SECONDS)).ok(),
                 relative_gap: Some(settings.relative_gap),
                 // Developer aid: SCIP's own progress log on stdout.
                 diagnostic_logging: std::env::var_os("INCLINE_SCIP_LOG").is_some(),

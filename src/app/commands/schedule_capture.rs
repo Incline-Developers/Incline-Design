@@ -55,6 +55,7 @@ use web_time::Instant;
 use super::{schedule_readiness::BarReport, solids_view::PlanningSnapshot};
 use crate::{
     app::jobs::CancelFlag,
+    i18n::tr,
     model::{
         Document, ReserveField, ReserveFieldId,
         schedule::{
@@ -66,9 +67,9 @@ use crate::{
             experiment::{GradeUnit, StockpileRepresentation},
             inventory::ReclaimOrder as ProjectReclaimOrder,
             optimisation::{
-                Activity, CashflowContribution, CashflowRuleId, Destination, DestinationId, DestinationKind, GroundId, GroundSource, HorizonSpec, Interval, IntervalRate, Loader,
-                LoaderId, MaterialId, MaterialShare, MovementCandidate, NumericalTolerances, ReclaimOrder, RoutingRuleId, SEGMENT_CEILING, SourceId, StockpileId, Task, TaskId,
-                TaskKind, TruckClass, TruckClassId,
+                Activity, CashflowContribution, CashflowRuleId, Destination, DestinationId, DestinationKind, GroundId, GroundSource, HorizonSpec, InputError, Interval,
+                IntervalRate, Loader, LoaderId, MAX_INTERVALS, MaterialId, MaterialShare, MovementCandidate, NumericalTolerances, ReclaimOrder, RoutingRuleId, SEGMENT_CEILING,
+                SourceId, StockpileId, Task, TaskId, TaskKind, TruckClass, TruckClassId,
                 blended::{
                     grade::{GradeBasis, GradeField, GradeTable},
                     input::{BlendInput, BlendPile, ConditionalValue, GradeBound, GradeEndpoint, GradePredicate, GradeQualification},
@@ -340,15 +341,15 @@ impl crate::app::App<'_> {
         let plan_revision = self.schedule_plan_revision();
         let reports = self.schedule_reports();
         let Some(snapshot) = self.schedule_snapshot() else {
-            return Err(vec![CaptureDiagnostic::global(crate::i18n::tr!("planning-snapshot-no-project"))]);
+            return Err(vec![CaptureDiagnostic::global(tr!("planning-snapshot-no-project"))]);
         };
         let Some(project) = self.workspace.active_project() else {
-            return Err(vec![CaptureDiagnostic::global(crate::i18n::tr!("planning-snapshot-no-project"))]);
+            return Err(vec![CaptureDiagnostic::global(tr!("planning-snapshot-no-project"))]);
         };
         let document: &Document = &project.project.document;
         let plan = document.schedule().clone();
         let Some(tonnage_field) = plan.tonnage_field() else {
-            return Err(vec![CaptureDiagnostic::global(crate::i18n::tr!("schedule-stage-no-tonnage-field"))]);
+            return Err(vec![CaptureDiagnostic::global(tr!("schedule-stage-no-tonnage-field"))]);
         };
         let destinations = crate::model::schedule::destinations::available(document.solids(), plan.routing());
         Ok(CaptureSnapshot {
@@ -378,14 +379,17 @@ impl crate::app::App<'_> {
 /// The drill and blast chain: every blast of the run, how much of each step
 /// it needs and what must be dug before it is clear, and the dozers, drills
 /// and MPUs working the blast bars.
+#[allow(clippy::too_many_arguments, reason = "one capture stage's inputs and outputs; a struct would only be unpacked again")]
 fn capture_drill_blast(
     source: &CaptureSnapshot,
     horizon_h: f64,
     intervals: &[Interval],
     block_ground: &BTreeMap<usize, GroundId>,
+    scoped: &[ScopedBar],
     identities: &mut CaptureIdentities,
     notes: &mut Vec<String>,
     problems: &mut Diagnostics,
+    cancel: &CancelFlag,
 ) -> Option<crate::model::schedule::optimisation::blended::drill_blast::DrillBlastInput> {
     use crate::model::{
         drill_hole::{DrillPatternLayout, generate_pattern_collars},
@@ -397,9 +401,47 @@ fn capture_drill_blast(
     let plan = &source.plan;
     let config = plan.drill_blast();
     let snapshot = &source.snapshot;
+    // A block of no tonnes a dig bar reaches is gone the moment the block
+    // before it in that bar is: it clears with that block's ground, or with
+    // nothing when it leads its bar.
+    let mut empty_cleared_by: BTreeMap<usize, Option<GroundId>> = BTreeMap::new();
+    for bar in scoped {
+        let ScopedWork::Dig { members, empty } = &bar.work else { continue };
+        for (before, id) in empty {
+            let Some(position) = snapshot.blocks.iter().position(|block| block.id == *id) else {
+                continue;
+            };
+            let previous = before
+                .checked_sub(1)
+                .and_then(|index| members.get(index))
+                .and_then(|(previous, _)| block_ground.get(previous))
+                .copied();
+            empty_cleared_by.entry(position).or_insert(previous);
+        }
+    }
+    // Plan bounds, once: a block whose box is further than the buffer from a
+    // blast's box is further from the blast itself, so the exact gap is only
+    // measured for the few near enough.
+    let bounds = |face: &crate::model::arrangement::Face| {
+        face.first().map_or((glam::DVec2::INFINITY, glam::DVec2::NEG_INFINITY), |ring| {
+            ring.iter()
+                .fold((glam::DVec2::INFINITY, glam::DVec2::NEG_INFINITY), |(lo, hi), point| (lo.min(*point), hi.max(*point)))
+        })
+    };
+    let block_bounds: Vec<_> = snapshot.blocks.iter().map(|block| bounds(&block.ground)).collect();
+    let excluded_bounds: Vec<_> = snapshot.excluded.iter().map(|block| bounds(&block.ground)).collect();
     let mut blasts = Vec::with_capacity(snapshot.blasts.len());
     let mut unclearable: Vec<String> = Vec::new();
     for record in &snapshot.blasts {
+        if cancel.is_cancelled() {
+            return None;
+        }
+        let (blast_lo, blast_hi) = bounds(&record.face);
+        let reach = config.buffer_m + 1e-9;
+        let near = |(lo, hi): (glam::DVec2, glam::DVec2)| {
+            let gap = (blast_lo - hi).max(lo - blast_hi).max(glam::DVec2::ZERO);
+            gap.x <= reach && gap.y <= reach
+        };
         let reference = record.reference();
         let pattern = config
             .patterns
@@ -450,15 +492,24 @@ fn capture_drill_blast(
             if block.flitch.base < record.bench.top - 1e-6 {
                 continue;
             }
-            if plan_gap(&block.ground, &record.face) > config.buffer_m + 1e-9 {
+            if !near(block_bounds[position]) || plan_gap(&block.ground, &record.face) > reach {
                 continue;
             }
-            match block_ground.get(&position) {
-                Some(ground) => above.push(*ground),
+            match (block_ground.get(&position), empty_cleared_by.get(&position)) {
+                (Some(ground), _) | (None, Some(Some(ground))) => above.push(*ground),
+                (None, Some(None)) => {}
                 // Standing ground no bar digs never goes.
-                None => blocked = true,
+                (None, None) => blocked = true,
             }
         }
+        // Ground excluded from mining is never dug, so it stands for good.
+        blocked |= snapshot.excluded.iter().zip(&excluded_bounds).any(|(block, bounds)| {
+            let in_blast = block.solid == record.solid
+                && block.blast.is_some_and(|blast| {
+                    (blast.bench_base() - record.bench.base).abs() < 1e-6 && crate::model::arrangement::point_in_face(&record.face, glam::DVec2::from(blast.anchor()))
+                });
+            !in_blast && block.flitch.base >= record.bench.top - 1e-6 && near(*bounds) && plan_gap(&block.ground, &record.face) <= reach
+        });
         if blocked && stage == crate::model::schedule::BlastStage::NotStarted {
             unclearable.push(crate::ui::elements::solids_view::blast_path(&record.solid_name, record.bench.base, &record.name));
         }
@@ -480,7 +531,7 @@ fn capture_drill_blast(
         });
     }
     if !unclearable.is_empty() {
-        notes.push(crate::i18n::tr!("drill-blast-unclearable", blasts = unclearable.join(", ")));
+        notes.push(tr!("drill-blast-unclearable", blasts = unclearable.join(", ")));
     }
 
     // Machines and their bars.
@@ -542,7 +593,7 @@ fn capture_drill_blast(
             }
         }
         if missing > 0 {
-            notes.push(crate::i18n::tr!("drill-blast-missing", bar = bar.name().to_owned(), count = missing.to_string()));
+            notes.push(tr!("drill-blast-missing", bar = bar.name().to_owned(), count = missing.to_string()));
         }
         if let Some(leader) = bar.follow().and_then(|work| work.leader) {
             leaders.push((tasks.len(), leader));
@@ -559,7 +610,13 @@ fn capture_drill_blast(
     }
     // A leader with no blast bars of its own has nothing to follow, and the
     // bar idles.
+    // So does one following a machine it may not: itself, or another type,
+    // which only an older file can still hold.
     for (task, leader) in leaders {
+        let follower = identities.blast_agents.get(tasks[task].agent).copied();
+        if !crate::model::schedule::follow_fits(follower, leader, |id| plan.agent_kind(id)) {
+            continue;
+        }
         tasks[task].follow = identities.blast_agents.iter().position(|id| *id == leader);
     }
     Some(DrillBlastInput {
@@ -642,14 +699,10 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
     // open-ended bar has no end, and the planning end day bounds it.
     let horizon_h = source.horizon_h;
     if !horizon_h.is_finite() || horizon_h <= 0.0 {
-        return Err(vec![
-            CaptureDiagnostic::global(crate::i18n::tr!("schedule-capture-horizon")).at(ScheduleStep::Configuration),
-        ]);
+        return Err(vec![CaptureDiagnostic::global(tr!("schedule-capture-horizon")).at(ScheduleStep::Configuration)]);
     }
     if !experiment.interval_h.is_finite() || experiment.interval_h <= 0.0 {
-        return Err(vec![
-            CaptureDiagnostic::global(crate::i18n::tr!("schedule-capture-interval")).at(ScheduleStep::Configuration),
-        ]);
+        return Err(vec![CaptureDiagnostic::global(tr!("schedule-capture-interval")).at(ScheduleStep::Configuration)]);
     }
     // Every report must come from the one Solids run the Setup gate named: a
     // model assembled from two runs would describe ground that was never all
@@ -660,9 +713,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             .iter()
             .any(|report| report.generation.is_some_and(|generation| generation != source.generation))
     {
-        return Err(vec![
-            CaptureDiagnostic::global(crate::i18n::tr!("schedule-dispatch-generation-changed")).at(ScheduleStep::Solids),
-        ]);
+        return Err(vec![CaptureDiagnostic::global(tr!("schedule-dispatch-generation-changed")).at(ScheduleStep::Solids)]);
     }
 
     // ---- bars in scope -----------------------------------------------------
@@ -727,10 +778,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                     continue;
                 };
                 let Some(position) = source.snapshot.blocks.iter().position(|block| block.id == resolved) else {
-                    problems.push(CaptureDiagnostic::new(
-                        label.clone(),
-                        "a dig block in this bar is not in the planning run this capture reads",
-                    ));
+                    problems.push(CaptureDiagnostic::new(label.clone(), tr!("schedule-capture-block-not-in-run")));
                     continue;
                 };
                 // Excluded ground is never dug: it leaves the sequence, and
@@ -748,10 +796,10 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 members.push((position, tonnes));
             }
             if skipped > 0 {
-                notes.push(crate::i18n::tr!("schedule-capture-excluded", bar = label.clone(), count = skipped.to_string()));
+                notes.push(tr!("schedule-capture-excluded", bar = label.clone(), count = skipped.to_string()));
             }
             if !empty.is_empty() {
-                notes.push(crate::i18n::tr!("schedule-capture-empty", bar = label.clone(), count = empty.len().to_string()));
+                notes.push(tr!("schedule-capture-empty", bar = label.clone(), count = empty.len().to_string()));
             }
             ScopedWork::Dig { members, empty }
         };
@@ -771,7 +819,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             .iter()
             .any(|bar| bar.agent.is_some() && bar.blast_order().is_some_and(|order| !order.members.is_empty()));
     if scoped.iter().all(|bar| matches!(bar.work, ScopedWork::Delay)) && !has_blast_work && problems.is_empty() {
-        problems.push(CaptureDiagnostic::global(crate::i18n::tr!("schedule-capture-no-work")));
+        problems.push(CaptureDiagnostic::global(tr!("schedule-capture-no-work")));
     }
 
     // ---- grades ------------------------------------------------------------
@@ -831,7 +879,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 .filter_map(|scope| scope.ground())
                 .any(|scope| !scope_is_placeable(scope, &source.snapshot.blocks))
         {
-            problems.push(CaptureDiagnostic::global(crate::i18n::tr!("routing-problem-scope-unplaced", rule = rule.name.clone())).at(ScheduleStep::Destinations));
+            problems.push(CaptureDiagnostic::global(tr!("routing-problem-scope-unplaced", rule = rule.name.clone())).at(ScheduleStep::Destinations));
         }
     }
 
@@ -878,7 +926,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         let Some(&pile) = pile_ids.get(project_id) else { continue };
         let representation = experiment.representation(*project_id);
         if representation == StockpileRepresentation::NotConfigured {
-            problems.push(CaptureDiagnostic::new(view.name.clone(), crate::i18n::tr!("schedule-capture-representation")).at(ScheduleStep::Stockpiles));
+            problems.push(CaptureDiagnostic::new(view.name.clone(), tr!("schedule-capture-representation")).at(ScheduleStep::Stockpiles));
             continue;
         }
         // A pile with no capacity is unlimited. The model still needs a bound
@@ -902,7 +950,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                             problems.push(
                                 CaptureDiagnostic::new(
                                     format!("{} · {}", view.name.clone(), lot.name.clone()),
-                                    format!("'{}' is missing on an opening portion; a missing grade cannot be read as zero", grade.name),
+                                    tr!("schedule-capture-opening-grade-missing", grade = grade.name.clone()),
                                 )
                                 .at(ScheduleStep::Stockpiles),
                             );
@@ -915,7 +963,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                         problems.push(
                             CaptureDiagnostic::new(
                                 format!("{} · {}", view.name.clone(), lot.name.clone()),
-                                format!("'{}' is {value}, which must be a finite, non-negative numeric grade", grade.name),
+                                tr!("schedule-capture-grade-negative", grade = grade.name.clone(), value = value.to_string()),
                             )
                             .at(ScheduleStep::Stockpiles),
                         );
@@ -936,7 +984,11 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             problems.push(
                 CaptureDiagnostic::new(
                     view.name.clone(),
-                    format!("opening stock of {total_opening:.2} t exceeds the pile capacity of {capacity_t:.2} t"),
+                    tr!(
+                        "schedule-capture-opening-over-capacity",
+                        opening = format!("{total_opening:.2}"),
+                        capacity = format!("{capacity_t:.2}")
+                    ),
                 )
                 .at(ScheduleStep::Stockpiles),
             );
@@ -973,7 +1025,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 // One blend: the authored lots are combined, explicitly, and
                 // FIFO/LIFO stops applying rather than being reinterpreted.
                 if lots.len() > 1 {
-                    notes.push(format!("{}: {} opening lots combined into one blend; reclaim order does not apply", view.name, lots.len()));
+                    notes.push(tr!("schedule-capture-lots-combined", stockpile = view.name.clone(), count = lots.len().to_string()));
                 }
             }
             StockpileRepresentation::Chunks => {
@@ -986,17 +1038,14 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 capacities.extend(receiving.iter().copied());
                 openings.extend(receiving.iter().map(|_| (0.0, vec![0.0; grades])));
                 if capacities.is_empty() {
-                    problems.push(CaptureDiagnostic::new(
-                        view.name.clone(),
-                        "ordered blended chunks need at least one opening lot or one receiving chunk",
-                    ));
+                    problems.push(CaptureDiagnostic::new(view.name.clone(), tr!("schedule-capture-chunks-empty")));
                     continue;
                 }
                 if receiving.is_empty() {
-                    notes.push(format!("{}: no receiving chunks are configured, so this pile can only be drawn down", view.name));
+                    notes.push(tr!("schedule-capture-no-receiving-chunks", stockpile = view.name.clone()));
                 }
-                let mut labels: Vec<String> = lot_names.iter().map(|name| crate::i18n::tr!("schedule-chunk-opening", lot = name.clone())).collect();
-                labels.extend((1..=receiving.len()).map(|number| crate::i18n::tr!("schedule-chunk-receiving", number = number.to_string())));
+                let mut labels: Vec<String> = lot_names.iter().map(|name| tr!("schedule-chunk-opening", lot = name.clone())).collect();
+                labels.extend((1..=receiving.len()).map(|number| tr!("schedule-chunk-receiving", number = number.to_string())));
                 identities.chunk_labels.insert(pile, labels);
                 identities.opening_chunks.insert(pile, lots.len());
                 blend.chunks = capacities;
@@ -1035,18 +1084,12 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         }
         let block = &source.snapshot.blocks[position];
         let Some(held) = block.portions.as_ref() else {
-            problems.push(CaptureDiagnostic::new(
-                block.name.clone(),
-                "nothing was captured about this block's material, so its blend cannot be computed",
-            ));
+            problems.push(CaptureDiagnostic::new(block.name.clone(), tr!("schedule-capture-block-uncaptured")));
             continue;
         };
         let capture = &held.capture;
         let Some(tonnage_position) = capture.position(source.tonnage_field) else {
-            problems.push(CaptureDiagnostic::new(
-                block.name.clone(),
-                "the nominated tonnes field is not among this block's captured values",
-            ));
+            problems.push(CaptureDiagnostic::new(block.name.clone(), tr!("schedule-capture-block-no-tonnes")));
             continue;
         };
         let id = GroundId(ground.len() as u32);
@@ -1067,7 +1110,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 let Some(slot) = capture.position(grade.field) else {
                     problems.push(CaptureDiagnostic::new(
                         block.name.clone(),
-                        format!("'{}' was not captured for this block, and a blend cannot be computed without it", grade.name),
+                        tr!("schedule-capture-grade-uncaptured", grade = grade.name.clone()),
                     ));
                     sound = false;
                     break;
@@ -1076,7 +1119,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 if capture.is_categorical(slot) || !raw.is_finite() {
                     problems.push(CaptureDiagnostic::new(
                         block.name.clone(),
-                        format!("'{}' is missing on some of this block's material; a missing grade cannot be read as zero", grade.name),
+                        tr!("schedule-capture-grade-missing", grade = grade.name.clone()),
                     ));
                     sound = false;
                     break;
@@ -1086,7 +1129,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 if raw < 0.0 {
                     problems.push(CaptureDiagnostic::new(
                         block.name.clone(),
-                        format!("'{}' is {raw}, which must be a finite, non-negative numeric grade", grade.name),
+                        tr!("schedule-capture-grade-negative", grade = grade.name.clone(), value = raw.to_string()),
                     ));
                     sound = false;
                     break;
@@ -1136,7 +1179,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             && (block_tonnes - total).abs() > 1e-6 + 1e-6 * total.abs()
         {
             problems.push(
-                CaptureDiagnostic::global(crate::i18n::tr!(
+                CaptureDiagnostic::global(tr!(
                     "routing-problem-unreconciled",
                     block = block.name.clone(),
                     portions = format!("{block_tonnes:.3}"),
@@ -1315,8 +1358,12 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
     };
     let intervals = match build_intervals(spec, &windows, &rate_changes) {
         Ok(intervals) => intervals,
+        Err(InputError::TooManyIntervals) => {
+            problems.push(CaptureDiagnostic::global(tr!("schedule-capture-too-many-intervals", limit = MAX_INTERVALS.to_string())).at(ScheduleStep::Configuration));
+            Vec::new()
+        }
         Err(error) => {
-            problems.push(CaptureDiagnostic::global(format!("the schedule calendar could not be built: {error:?}")).at(ScheduleStep::Configuration));
+            problems.push(CaptureDiagnostic::global(tr!("schedule-capture-calendar", reason = format!("{error:?}"))).at(ScheduleStep::Configuration));
             Vec::new()
         }
     };
@@ -1395,10 +1442,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 let mut approved_sources = Vec::with_capacity(sources.len());
                 for pile in sources {
                     let Some(&approved) = pile_ids.get(pile) else {
-                        problems.push(CaptureDiagnostic::new(
-                            bar.name.clone(),
-                            "a permitted reclaim source is no longer a stockpile in this project",
-                        ));
+                        problems.push(CaptureDiagnostic::new(bar.name.clone(), tr!("schedule-capture-reclaim-source-gone")));
                         continue;
                     };
                     if piles.iter().any(|entry| entry.id == approved) {
@@ -1481,7 +1525,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                             problems.push(
                                 CaptureDiagnostic::new(
                                     format!("{} · {}", loader_name.clone(), portion_name(&identities, source, held.portion)),
-                                    "no enabled destination rule accepts this part of the block, and the rest of the block cannot be dug without it",
+                                    tr!("schedule-capture-portion-unrouted"),
                                 )
                                 .at(ScheduleStep::Destinations),
                             );
@@ -1548,7 +1592,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                             if pile_ids.contains_key(destination) {
                                 if !rehandle_rules.contains(&rule.id) {
                                     rehandle_rules.push(rule.id);
-                                    notes.push(crate::i18n::tr!("schedule-capture-rehandle", rule = rule.name.clone()));
+                                    notes.push(tr!("schedule-capture-rehandle", rule = rule.name.clone()));
                                 }
                                 continue;
                             }
@@ -1587,11 +1631,8 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                     }
                     if offered.is_empty() {
                         problems.push(
-                            CaptureDiagnostic::new(
-                                format!("{} · {}", loader_name.clone(), pile_name.clone()),
-                                "no enabled destination rule accepts material reclaimed from this stockpile",
-                            )
-                            .at(ScheduleStep::Destinations),
+                            CaptureDiagnostic::new(format!("{} · {}", loader_name.clone(), pile_name.clone()), tr!("schedule-capture-reclaim-unrouted"))
+                                .at(ScheduleStep::Destinations),
                         );
                         continue;
                     }
@@ -1651,7 +1692,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
     }
     for (target, day) in &authored {
         let Some(&destination) = destination_ids.get(&target.destination) else {
-            problems.push(CaptureDiagnostic::global(crate::i18n::tr!("grade-target-missing-destination")).at(ScheduleStep::Configuration));
+            problems.push(CaptureDiagnostic::global(tr!("grade-target-missing-destination")).at(ScheduleStep::Configuration));
             continue;
         };
         // Tracked, by the filter above; grades are blended in their stored
@@ -1661,7 +1702,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         };
         let specification = target.clone();
         if specification.validate().is_err() {
-            problems.push(CaptureDiagnostic::new(field_name(fields, target.field), crate::i18n::tr!("grade-target-invalid")).at(ScheduleStep::Destinations));
+            problems.push(CaptureDiagnostic::new(field_name(fields, target.field), tr!("grade-target-invalid")).at(ScheduleStep::Destinations));
             continue;
         }
         grade_targets.push(crate::model::schedule::optimisation::blended::input::BlendGradeTarget {
@@ -1676,16 +1717,14 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
     let derived = derived_segments(&intervals, &loaders, &tasks, &movements);
     let event_capacity = experiment.event_capacity.unwrap_or(SEGMENT_CEILING);
     if !(1..=SEGMENT_CEILING).contains(&event_capacity) {
-        return Err(vec![
-            CaptureDiagnostic::global(crate::i18n::tr!("schedule-capture-event-capacity")).at(ScheduleStep::Configuration),
-        ]);
+        return Err(vec![CaptureDiagnostic::global(tr!("schedule-capture-event-capacity")).at(ScheduleStep::Configuration)]);
     }
     let event_budget_restricted = derived > event_capacity;
     let segments_per_interval = derived.clamp(1, event_capacity);
     let estimated_columns = movements.len().saturating_mul(intervals.len()).saturating_mul(segments_per_interval);
     if source.whole_horizon && estimated_columns > COLUMN_CEILING {
         problems.push(
-            CaptureDiagnostic::global(crate::i18n::tr!(
+            CaptureDiagnostic::global(tr!(
                 "schedule-capture-too-many-columns",
                 columns = format!("{:.1}", estimated_columns as f64 / 1e6),
                 ceiling = format!("{:.0}", COLUMN_CEILING as f64 / 1e6)
@@ -1695,10 +1734,13 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
     }
     // ---- drill and blast ----------------------------------------------------
     let drill_blast = if plan.drill_blast().enabled {
-        capture_drill_blast(source, horizon_h, &intervals, &block_ground, &mut identities, &mut notes, &mut problems)
+        capture_drill_blast(source, horizon_h, &intervals, &block_ground, &scoped, &mut identities, &mut notes, &mut problems, cancel)
     } else {
         None
     };
+    if cancel.is_cancelled() {
+        return Err(Vec::new());
+    }
     // A dig bar on ground whose blast no machine works waits for it all
     // horizon. The run is still a valid schedule, so it is a note and a
     // warning on the status rather than a refusal.
@@ -1709,17 +1751,17 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             .filter_map(|(index, activity)| {
                 identities.blasts.get(*index).map(|blast| {
                     let label = crate::ui::elements::solids_view::blast_path(&blast.solid_name, blast.bench.base, &blast.name);
-                    crate::i18n::tr!("drill-blast-unworked-entry", blast = label, step = activity.label())
+                    tr!("drill-blast-unworked-entry", blast = label, step = activity.label())
                 })
             })
             .collect::<Vec<_>>()
             .join(", ");
-        notes.push(crate::i18n::tr!("drill-blast-unworked", blasts = blasts));
+        notes.push(tr!("drill-blast-unworked", blasts = blasts));
     }
 
     haul.report(&identities, &mut notes, &mut problems);
     if movements.is_empty() && !has_blast_work && problems.is_empty() {
-        problems.push(CaptureDiagnostic::global(crate::i18n::tr!("schedule-capture-no-movement")).at(ScheduleStep::Destinations));
+        problems.push(CaptureDiagnostic::global(tr!("schedule-capture-no-movement")).at(ScheduleStep::Destinations));
     }
     if !problems.is_empty() {
         return Err(problems.entries);
@@ -1834,11 +1876,11 @@ impl<'a> HaulCapture<'a> {
                 .iter()
                 .find(|(_, id, _)| id == destination)
                 .map_or_else(String::new, |(_, _, name)| name.clone());
-            notes.push(crate::i18n::tr!("schedule-capture-unroutable", destination = name, count = sources.len().to_string()));
+            notes.push(tr!("schedule-capture-unroutable", destination = name, count = sources.len().to_string()));
         }
         let stranded = self.offered.difference(&self.routed).count();
         if stranded > 0 {
-            problems.push(CaptureDiagnostic::global(crate::i18n::tr!("schedule-capture-stranded", count = stranded.to_string())).at(ScheduleStep::Haulage));
+            problems.push(CaptureDiagnostic::global(tr!("schedule-capture-stranded", count = stranded.to_string())).at(ScheduleStep::Haulage));
         }
     }
 }
@@ -1892,13 +1934,7 @@ fn expand_candidate<'a>(
     };
     let classes = fleet.allowed_classes(context);
     if classes.is_empty() {
-        problems.push(
-            CaptureDiagnostic::new(
-                format!("{} · {}", args.loader_name, args.subject),
-                "no compatible truck class serves this route, so nothing can be hauled on it",
-            )
-            .at(ScheduleStep::TruckingRules),
-        );
+        problems.push(CaptureDiagnostic::new(format!("{} · {}", args.loader_name, args.subject), tr!("schedule-capture-no-truck")).at(ScheduleStep::TruckingRules));
         return;
     }
     let movement = MovementContext {
@@ -1993,21 +2029,21 @@ fn reclaim_conditions(conditions: &[FieldCondition], grades: &[GradeField], fiel
         // blend discards categories, which is a better answer than "that
         // field is not a grade".
         if matches!(condition.test, ConditionTest::Category { .. }) {
-            return Err(format!("category conditions on '{name}' are unsupported after blending"));
+            return Err(tr!("schedule-capture-condition-category", field = name.clone()));
         }
         let Some(position) = grades.iter().position(|grade| grade.field == condition.field) else {
-            return Err(format!("'{name}' is not one of this run's blended grades, so it cannot be tested on reclaimed material"));
+            return Err(tr!("schedule-capture-condition-untracked", field = name.clone()));
         };
         match &condition.test {
             ConditionTest::Category { .. } => unreachable!("refused above"),
             ConditionTest::Range { lower, upper } => {
                 if lower.is_none() && upper.is_none() {
-                    return Err(format!("a condition on '{name}' with neither bound is not a condition"));
+                    return Err(tr!("schedule-capture-condition-unbounded", field = name.clone()));
                 }
                 let endpoint = |bound: &crate::model::schedule::destinations::Bound| -> Result<GradeEndpoint, String> {
                     let value = grades[position].basis.to_fraction(bound.value);
                     if !value.is_finite() || value < 0.0 {
-                        return Err(format!("'{name}' bound {} must be finite and non-negative", bound.value));
+                        return Err(tr!("schedule-capture-condition-bound", field = name.clone(), value = bound.value.to_string()));
                     }
                     Ok(GradeEndpoint {
                         value,
@@ -2089,7 +2125,7 @@ fn block_name(identities: &CaptureIdentities, ground: GroundId) -> String {
         .iter()
         .find(|(id, _, _)| *id == ground)
         .map(|(_, name, _)| name.clone())
-        .unwrap_or_else(|| format!("block {}", ground.0))
+        .unwrap_or_else(|| tr!("schedule-capture-block-fallback", id = ground.0.to_string()))
 }
 
 /// One portion of a block, named so a diagnostic can be located. A block with
@@ -2097,7 +2133,11 @@ fn block_name(identities: &CaptureIdentities, ground: GroundId) -> String {
 fn portion_name(identities: &CaptureIdentities, ground: GroundId, portion: usize) -> String {
     let name = block_name(identities, ground);
     let portions = identities.ground.iter().find(|(id, _, _)| *id == ground).map(|(_, _, count)| *count).unwrap_or(1);
-    if portions > 1 { format!("{name} (material {})", portion + 1) } else { name }
+    if portions > 1 {
+        tr!("schedule-capture-portion", block = name, number = (portion + 1).to_string())
+    } else {
+        name
+    }
 }
 
 /// The complete experimental-run identity.
@@ -2280,5 +2320,5 @@ fn field_name(fields: &[ReserveField], id: ReserveFieldId) -> String {
         .iter()
         .find(|field| field.id == id)
         .map(|field| field.name.clone())
-        .unwrap_or_else(|| format!("field {}", id.0))
+        .unwrap_or_else(|| tr!("schedule-capture-field-fallback", id = id.0.to_string()))
 }

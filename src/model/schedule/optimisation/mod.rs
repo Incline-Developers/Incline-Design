@@ -99,7 +99,13 @@ pub(crate) enum InputError {
     NonPositive(&'static str),
     InvalidWindow,
     InvalidIntervals,
+    /// More calendar intervals than any model built from them could solve.
+    TooManyIntervals,
 }
+
+/// The most calendar intervals a horizon may split into: ten years at an
+/// hourly step, with room for window and calendar edges.
+pub(crate) const MAX_INTERVALS: usize = 200_000;
 
 /// Split a finite horizon at its regular grid, every midnight, every authored
 /// window edge and every supplied calendar change. Near-identical boundaries
@@ -113,6 +119,12 @@ pub(crate) fn build_intervals(spec: HorizonSpec, windows: &[(f64, f64)], calenda
     }
     if !spec.parcel_target_t.is_finite() || spec.parcel_target_t <= 0.0 {
         return Err(InputError::NonPositive("parcel target"));
+    }
+    // Counted before anything is allocated, so a fine step on a long horizon
+    // is refused at once rather than after building millions of boundaries.
+    let regular = spec.end_h / spec.regular_step_h + spec.end_h / 24.0;
+    if regular + (2 * windows.len() + calendar_changes_h.len()) as f64 > MAX_INTERVALS as f64 {
+        return Err(InputError::TooManyIntervals);
     }
     let mut points = vec![0.0, spec.end_h];
     let add_regular = |step: f64, points: &mut Vec<f64>| {

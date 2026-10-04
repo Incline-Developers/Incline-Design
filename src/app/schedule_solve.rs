@@ -242,8 +242,9 @@ pub(crate) enum DayByDay {
 /// whole horizon.
 pub(crate) fn hourly_dispatch(out: &mut ScheduleCompletion, cancel: &CancelFlag) -> DayByDay {
     let started = Instant::now();
-    let solution = match greedy::dispatch(&out.input) {
-        Ok(solution) => solution,
+    let solution = match greedy::dispatch_cancellable(&out.input, &cancel.signal()) {
+        Ok(Some(solution)) => solution,
+        Ok(None) => return DayByDay::Stop(SolveTermination::Cancelled, "cancelled during dispatch".into()),
         Err(reason) => return DayByDay::Failed(reason),
     };
     out.timings.solver += started.elapsed();

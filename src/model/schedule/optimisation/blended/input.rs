@@ -648,6 +648,44 @@ pub(crate) fn task_authorises(task: &Task, candidate: &MovementCandidate) -> boo
     }
 }
 
+/// The reclaim bars that `tonnes` of `candidate`, reclaimed in `interval`,
+/// count against, given what each bar has already reclaimed.
+///
+/// The one attribution dispatch, replay and rolling carry share: the
+/// loader's active bars that authorise the movement, in authored order, each
+/// taking up to what is left of its cap. Anything past every cap falls to the
+/// first, so an overdraw is still charged somewhere a check will see it.
+pub(crate) fn attribute_reclaim(input: &BlendInput, candidate: &MovementCandidate, interval: Interval, mut tonnes: f64, reclaimed: &BTreeMap<usize, f64>) -> Vec<(usize, f64)> {
+    let Some(loader) = input.loaders.iter().position(|loader| loader.id == candidate.loader) else {
+        return Vec::new();
+    };
+    let tasks: Vec<usize> = authored_tasks(input, loader)
+        .into_iter()
+        .filter(|&task| task_active(&input.tasks[task], interval) && task_authorises(&input.tasks[task], candidate))
+        .collect();
+    let mut shares = Vec::new();
+    for &task in &tasks {
+        if tonnes <= 0.0 {
+            break;
+        }
+        let room = match input.tasks[task].kind {
+            TaskKind::Reclaim { maximum_t: Some(maximum), .. } => (maximum - reclaimed.get(&task).copied().unwrap_or(0.0)).max(0.0),
+            _ => f64::INFINITY,
+        };
+        let share = tonnes.min(room);
+        if share > 0.0 {
+            shares.push((task, share));
+            tonnes -= share;
+        }
+    }
+    if tonnes > 0.0
+        && let Some(&first) = tasks.first()
+    {
+        shares.push((first, tonnes));
+    }
+    shares
+}
+
 #[cfg_attr(not(feature = "scip"), allow(dead_code, reason = "used by Improve"))]
 pub(crate) fn delivers_to_pile(candidate: &MovementCandidate, pile: StockpileId, destinations: &BTreeMap<DestinationId, &Destination>) -> bool {
     destinations

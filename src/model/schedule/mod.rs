@@ -1195,7 +1195,9 @@ impl SchedulePlan {
             return Err(ScheduleError::UnknownClass);
         }
         let kind = self.class(class_id).expect("checked above").kind;
-        if self.bars.iter().any(|bar| bar.agent == Some(id) && !work_fits(&bar.work, kind)) {
+        if self.bars.iter().any(|bar| bar.agent == Some(id) && !work_fits(&bar.work, kind))
+            || !self.broken_follows(|agent| if agent == id { Some(kind) } else { self.agent_kind(agent) }).is_empty()
+        {
             return Err(ScheduleError::WrongMachine);
         }
         let agent = self.agents.iter_mut().find(|agent| agent.id == id).ok_or(ScheduleError::UnknownAgent)?;
@@ -1588,14 +1590,32 @@ impl SchedulePlan {
         Ok(())
     }
 
-    /// Refuse to put a bar on a machine that cannot work it.
+    /// Refuse to put a bar on a machine that cannot work it, or a follow bar
+    /// on its own leader or on a machine of another type.
     fn check_fits(&self, id: BarId, agent: Option<LoaderAgentId>) -> ScheduleResult {
         let Some(agent) = agent else { return Ok(()) };
         let bar = self.bar(id).ok_or(ScheduleError::UnknownBar)?;
         match self.agent_kind(agent) {
             Some(kind) if !work_fits(&bar.work, kind) => Err(ScheduleError::WrongMachine),
+            _ if bar
+                .follow()
+                .and_then(|work| work.leader)
+                .is_some_and(|leader| !follow_fits(Some(agent), leader, |id| self.agent_kind(id))) =>
+            {
+                Err(ScheduleError::WrongMachine)
+            }
             _ => Ok(()),
         }
+    }
+
+    /// The follow bars that would no longer fit if machines' kinds were
+    /// those `kind_of` gives.
+    fn broken_follows(&self, kind_of: impl Fn(LoaderAgentId) -> Option<MachineKind>) -> Vec<String> {
+        self.bars
+            .iter()
+            .filter(|bar| bar.follow().and_then(|work| work.leader).is_some_and(|leader| !follow_fits(bar.agent, leader, &kind_of)))
+            .map(|bar| bar.name().to_owned())
+            .collect()
     }
 
     /// Make room for a new bar in a lane of its own at `priority`: that
@@ -1714,6 +1734,10 @@ impl SchedulePlan {
             .filter(|bar| bar.agent.is_some_and(|agent| self.agent(agent).is_some_and(|agent| agent.class_id == id)))
             .filter(|bar| !work_fits(&bar.work, kind))
             .map(|bar| bar.name().to_owned())
+            .chain(self.broken_follows(|agent| {
+                let class = self.agent(agent)?.class_id;
+                if class == id { Some(kind) } else { self.class(class).map(|class| class.kind) }
+            }))
             .collect();
         if !blocking.is_empty() {
             return Err(ScheduleError::KindInUse(blocking));
@@ -1750,12 +1774,9 @@ impl SchedulePlan {
     /// drill and blast machines, and a machine cannot follow itself.
     pub(crate) fn add_follow_bar(&mut self, agent: Option<LoaderAgentId>, priority: u32, window: WorkWindow, leader: LoaderAgentId) -> ScheduleResult<BarId> {
         for machine in agent.into_iter().chain([leader]) {
-            let kind = self.agent_kind(machine).ok_or(ScheduleError::UnknownAgent)?;
-            if !kind.is_drill_blast() {
-                return Err(ScheduleError::WrongMachine);
-            }
+            self.agent_kind(machine).ok_or(ScheduleError::UnknownAgent)?;
         }
-        if agent == Some(leader) {
+        if !follow_fits(agent, leader, |id| self.agent_kind(id)) {
             return Err(ScheduleError::WrongMachine);
         }
         if !window.is_valid() {
@@ -1775,14 +1796,12 @@ impl SchedulePlan {
 
     /// Change which machine a follow bar follows.
     pub(crate) fn set_follow_leader(&mut self, id: BarId, leader: LoaderAgentId) -> ScheduleResult {
-        if !self.agent_kind(leader).ok_or(ScheduleError::UnknownAgent)?.is_drill_blast() {
+        self.agent_kind(leader).ok_or(ScheduleError::UnknownAgent)?;
+        let agent = self.bar(id).ok_or(ScheduleError::UnknownBar)?.agent;
+        if !follow_fits(agent, leader, |id| self.agent_kind(id)) {
             return Err(ScheduleError::WrongMachine);
         }
-        let bar = self.bar_mut(id)?;
-        if bar.agent == Some(leader) {
-            return Err(ScheduleError::WrongMachine);
-        }
-        match &mut bar.work {
+        match &mut self.bar_mut(id)?.work {
             BarWork::Follow(work) => {
                 work.leader = Some(leader);
                 Ok(())
@@ -2051,6 +2070,15 @@ pub(crate) fn work_fits(work: &BarWork, kind: MachineKind) -> bool {
         BarWork::Blast(_) | BarWork::Follow(_) => kind.is_drill_blast(),
         BarWork::Dig(_) | BarWork::Reclaim(_) => !kind.is_drill_blast(),
     }
+}
+
+/// Whether `follower` may follow `leader`: another drill and blast machine
+/// of the same type. An unassigned follow bar may name any such leader.
+pub(crate) fn follow_fits(follower: Option<LoaderAgentId>, leader: LoaderAgentId, kind_of: impl Fn(LoaderAgentId) -> Option<MachineKind>) -> bool {
+    let Some(leader_kind) = kind_of(leader).filter(|kind| kind.is_drill_blast()) else {
+        return false;
+    };
+    follower.is_none_or(|follower| follower != leader && kind_of(follower) == Some(leader_kind))
 }
 
 /// A blast order with every reference well formed and no blast twice.

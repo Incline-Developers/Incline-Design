@@ -235,6 +235,11 @@ impl<'a> DestinationSearch<'a> {
             let Some(mut path) = search.path(node) else { continue };
             let points: Vec<_> = if outward { points.into_iter().rev().collect() } else { points };
             let connector = travel(&points, self.class, !outward, road.speed_limit_kph);
+            // A node at the destination itself carries no stop of its own;
+            // the connector meets the destination, so the stop is its.
+            if path.km <= 1e-9 {
+                path.hours += loss(if outward { connector.first_speed } else { connector.last_speed }, self.network);
+            }
             if outward {
                 path.append(&connector);
             } else {
@@ -264,6 +269,10 @@ impl<'a> DestinationSearch<'a> {
         for join in index.joins(source, link, self.class.maximum_grade) {
             let Some(mut loaded) = self.road_leg(join, false) else { continue };
             let Some(mut empty) = self.road_leg(join, true) else { continue };
+            // The road leg already carries a stop at the destination end at
+            // its own end speed, when it moves at all.
+            let road_end = |km: f64, speed: f64| if km > 1e-9 { speed } else { 0.0 };
+            let (loaded_road_end, empty_road_end) = (road_end(loaded.km, loaded.last_speed), road_end(empty.km, empty.first_speed));
             let direct = source.distance(join.2);
             let rise = join.2.z - source.z;
             let access_m = direct.max(rise.abs() / self.class.maximum_grade);
@@ -298,6 +307,28 @@ impl<'a> DestinationSearch<'a> {
                 loaded.points.push(self.destination);
                 empty.points.insert(0, self.destination);
             }
+            // One stop or start at the destination end of each leg, at the
+            // speed the truck actually meets it with: the off-road leg's
+            // when there is one, else the road's, else the access leg's.
+            let (off_in, off_out) = if off_m > 1e-9 {
+                let off_grade = off_rise / off_m;
+                (self.class.speed(off_grade, true, None), self.class.speed(-off_grade, false, None))
+            } else {
+                (0.0, 0.0)
+            };
+            let end_speed = |off: f64, road: f64, access: f64| {
+                if off > 0.0 {
+                    off
+                } else if road > 0.0 {
+                    road
+                } else if access_m > 1e-9 {
+                    access
+                } else {
+                    0.0
+                }
+            };
+            loaded.hours += loss(end_speed(off_in, loaded_road_end, loaded_speed), self.network) - loss(loaded_road_end, self.network);
+            empty.hours += loss(end_speed(off_out, empty_road_end, empty_speed), self.network) - loss(empty_road_end, self.network);
             let cycle = CycleBreakdown {
                 spot_h: spot_s / 3600.0,
                 load_h: if loader_rate > 0.0 { self.class.payload_t / loader_rate } else { 0.0 },

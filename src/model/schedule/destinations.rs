@@ -378,7 +378,7 @@ pub(crate) fn hash_scope<H: std::hash::Hasher>(scope: SourceScope, hasher: &mut 
 }
 
 /// Which loaders a rule applies to.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "snake_case")]
 pub(crate) enum LoaderSelection {
     #[default]
@@ -1331,7 +1331,7 @@ impl RoutingConfig {
             entry.name.hash(hasher);
             entry.kind.hash(hasher);
             entry.capacity_t.map(f64::to_bits).hash(hasher);
-
+            entry.dump_time_s.map(f64::to_bits).hash(hasher);
             entry.inventory.hash_content(hasher);
             entry.crusher.default_tpd.map(f64::to_bits).hash(hasher);
             for (period, value) in &entry.crusher.periods {
@@ -1343,7 +1343,6 @@ impl RoutingConfig {
         for entry in &self.solids {
             entry.solid.hash(hasher);
             entry.capacity_t.map(f64::to_bits).hash(hasher);
-
             entry.inventory.hash_content(hasher);
         }
         for rule in &self.rules {

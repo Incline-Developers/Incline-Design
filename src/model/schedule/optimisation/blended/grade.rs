@@ -29,7 +29,10 @@
 
 use std::collections::BTreeMap;
 
-use crate::model::{ReserveAggregation, ReserveField, ReserveFieldId, schedule::optimisation::MaterialId};
+use crate::{
+    i18n::tr,
+    model::{ReserveAggregation, ReserveField, ReserveFieldId, schedule::optimisation::MaterialId},
+};
 
 /// Stored numeric grades are used by project capture. Legacy fraction/percent
 /// cases remain available to the historical experiment fixtures.
@@ -82,22 +85,27 @@ impl GradeRejection {
     /// A diagnostic a planner can act on.
     pub(crate) fn message(&self) -> String {
         match self {
-            Self::UnknownField(id) => format!("reserve field {} is not defined on this project", id.0),
+            Self::UnknownField(id) => tr!("grade-rejection-unknown-field", id = id.0.to_string()),
             Self::Categorical { field } => {
-                format!("'{field}' is a category field, not a grade; a blended stockpile needs a numeric tonnes-weighted grade")
+                tr!("grade-rejection-categorical", field = field.clone())
             }
             Self::Summed { field } => {
-                format!("'{field}' is a summed quantity, not a grade; blending it would average a total. Use the weighted-average field it is a total of")
+                tr!("grade-rejection-summed", field = field.clone())
             }
             Self::ForeignWeight { field, weight, wanted } => {
-                format!("'{field}' is weighted by '{weight}', but the schedule's tonnage basis is '{wanted}', so grade x tonnes is not its contained quantity")
+                tr!("grade-rejection-foreign-weight", field = field.clone(), weight = weight.clone(), wanted = wanted.clone())
             }
-            Self::NoTonnageBasis => "the schedule plan has no tonnage field configured, so no grade's weighting can be verified".to_string(),
+            Self::NoTonnageBasis => tr!("grade-rejection-no-tonnage"),
             Self::MissingValue { field, material } => {
-                format!("material {} has no '{field}' value; a missing grade cannot be treated as zero in a blend", material.0)
+                tr!("grade-rejection-missing", material = material.0.to_string(), field = field.clone())
             }
             Self::OutOfRange { field, material, value } => {
-                format!("material {}'s '{field}' value {value} is outside the range its declared unit allows", material.0)
+                tr!(
+                    "grade-rejection-out-of-range",
+                    material = material.0.to_string(),
+                    field = field.clone(),
+                    value = value.to_string()
+                )
             }
         }
     }
@@ -131,7 +139,7 @@ impl GradeField {
             ReserveAggregation::WeightedAverage { weight_field } if weight_field == tonnage => Ok(Self { field, name, basis }),
             ReserveAggregation::VolumeAverage => Err(GradeRejection::ForeignWeight {
                 field: name,
-                weight: crate::i18n::tr!("reserve-block-volume"),
+                weight: tr!("reserve-block-volume"),
                 wanted: fields
                     .iter()
                     .find(|entry| entry.id == tonnage)

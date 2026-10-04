@@ -976,7 +976,7 @@ const SEED_BAND_RELATIVE: f64 = 1e-3;
 /// It is only ever a start: SCIP checks it against the model before storing
 /// it, and whatever SCIP returns is replayed again on its own.
 fn dispatch_start(input: &BlendInput, limit: Option<Duration>, cancel: &CancelFlag) -> Result<(HashMap<String, f64>, f64), String> {
-    let mut solution = greedy::dispatch(input)?;
+    let mut solution = greedy::dispatch_cancellable(input, &cancel.signal())?.ok_or("cancelled")?;
     // The rows are the dispatcher's own, so the objective they report is
     // what the replay values them at.
     solution.reported_objective = replay_cancellable(input, &solution, &cancel.signal()).ok_or("cancelled")?.replayed_objective;
