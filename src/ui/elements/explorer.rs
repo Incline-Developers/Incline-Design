@@ -592,6 +592,17 @@ pub(crate) fn draw_explorer(
         .min_width(220.0)
         .bare()
         .show(ui, |ui, _| {
+            // Which page this is, read once. A pane drawn early in the frame
+            // can change the step (a click in the cut steps' tree opens a
+            // Setup step), and a later pane that asked again would lay the
+            // new page out under the old one for that frame, drawing the step
+            // tree twice.
+            let solids_view = editor.is_solids_view();
+            let cut_step = editor.is_planning_cut_step();
+            let dig_strips = editor.is_dig_strips_step();
+            let setup_steps = (editor.is_planning_setup() && !editor.is_schedule_pane()).then_some(editor.planning_page);
+            let lower = LowerPane::of(editor);
+
             // Drill & Blast's products sit under the tree, a pane of the
             // column like the planning lists.
             let products = if editor.active_workspace == crate::ui::state::Workspace::DrillAndBlast {
@@ -607,7 +618,7 @@ pub(crate) fn draw_explorer(
             // ones - a Cancel that stopped whichever run the page had last
             // shown would be a button nobody could predict.
             let setup_page = editor.is_planning_setup().then_some(editor.planning_page);
-            let show_run_controls = editor.is_solids_view() || editor.is_planning_cut_step() || setup_page.is_some();
+            let show_run_controls = solids_view || cut_step || setup_page.is_some();
             let run_controls = if show_run_controls {
                 egui::Panel::top("planning_run_controls")
                     .resizable(false)
@@ -629,7 +640,7 @@ pub(crate) fn draw_explorer(
             // shares the column with the benches it divides. The two are
             // separate panes, halving between them whatever the run controls
             // left.
-            let steps = if editor.is_planning_cut_step() {
+            let steps = if cut_step {
                 egui::Panel::top(CUT_STEPS_PANEL_ID)
                     .resizable(true)
                     .default_size(ui.available_height() * 0.5)
@@ -682,7 +693,6 @@ pub(crate) fn draw_explorer(
             // they are navigation, the same as the tree above them, and a
             // column each left the workspace they drive with a third of the
             // window.
-            let lower = LowerPane::of(editor);
             let list = match lower {
                 Some(lower) => {
                     egui::Panel::bottom(STEP_LIST_PANEL_ID)
@@ -720,21 +730,20 @@ pub(crate) fn draw_explorer(
                 .show(ui, |ui| {
                     // The Solids View lists what the setup produced; every
                     // other full-window planning page lists its own steps.
-                    if editor.is_solids_view() {
+                    if solids_view {
                         super::solids_view::tree_heading(ui);
                         super::solids_view::draw_tree(ui, editor, document, commands);
                         return;
                     }
                     // The Gantt is not a setup step, so the column stays the
                     // project tree there: its own rows already name the fleet.
-                    if editor.is_planning_setup() && !editor.is_schedule_pane() {
-                        let page = editor.planning_page;
+                    if let Some(page) = setup_steps {
                         super::planning_setup::draw_steps(ui, editor, page, commands);
                         return;
                     }
-                    if editor.is_planning_cut_step() {
+                    if cut_step {
                         super::solids_view::bench_tree_heading(ui);
-                        if editor.is_dig_strips_step() {
+                        if dig_strips {
                             super::solids_view::draw_flitch_tree(ui, editor, document);
                         } else {
                             super::solids_view::draw_bench_tree(ui, editor, document, commands);

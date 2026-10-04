@@ -369,8 +369,9 @@ impl ViewSolid {
     pub(crate) fn display_parts(&self, demand: crate::app::planning_pipeline::GeometryDemand) -> Option<&[SolidPart]> {
         use crate::app::planning_pipeline::GeometryDemand;
         match demand {
-            GeometryDemand::Envelope | GeometryDemand::Body => self.body.product().map(|body| body.flitch_parts.as_slice()),
-            GeometryDemand::Blasting => self.body.product().map(|body| body.bench_parts.as_slice()),
+            // Blasting draws its benches flitch by flitch, so they keep the
+            // colours and patterns Benching gave them.
+            GeometryDemand::Envelope | GeometryDemand::Body | GeometryDemand::Blasting => self.body.product().map(|body| body.flitch_parts.as_slice()),
             GeometryDemand::Partition => self.partition.product().map(|partition| partition.parts.as_slice()),
         }
     }
@@ -1363,7 +1364,6 @@ impl crate::app::App<'_> {
             .collect();
         let dug_through = self.editor.sequence_editor.as_ref().filter(|_| sequencing).map_or(0, |draft| draft.preview);
         let benches_only = demand == GeometryDemand::Blasting;
-        let blasting = self.editor.is_planning_cut_step();
         let runtime = self.workspace.active_project().map(|project| project.runtime_id);
 
         let mut hasher = DefaultHasher::new();
@@ -1371,7 +1371,6 @@ impl crate::app::App<'_> {
         selected_block.hash(&mut hasher);
         selected_blast.hash(&mut hasher);
         benches_only.hash(&mut hasher);
-        blasting.hash(&mut hasher);
         demand.hash(&mut hasher);
         sequencing.hash(&mut hasher);
         blast_sequencing.hash(&mut hasher);
@@ -1413,7 +1412,7 @@ impl crate::app::App<'_> {
 
         // Ramp across what is actually on screen rather than the whole pit,
         // so one bench is not a single flat shade of its solid's colour.
-        let depth_shade = (blasting || blast_sequencing)
+        let depth_shade = blast_sequencing
             .then(|| {
                 let mut range: Option<[f64; 2]> = None;
                 for solid in solids {
@@ -1529,14 +1528,7 @@ impl crate::app::App<'_> {
                 }
                 let counted = selected_block.is_none() || is_selected_block;
                 let mut mesh = part.mesh.clone();
-                if blasting {
-                    // A plan view flattens everything a 3/4 view says with
-                    // shading, so height carries the shape instead. Flitch
-                    // hatching would only read as noise under the blast lines.
-                    mesh.flitch_style = None;
-                    mesh.color = solid.color;
-                    mesh.depth_shade = depth_shade;
-                } else if blast_sequencing {
+                if blast_sequencing {
                     // Whole blasts, bench high: a flitch's hatching would
                     // stripe across them and say nothing about the blast.
                     // Height carries the benches apart instead, as it does on
