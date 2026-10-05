@@ -547,24 +547,9 @@ pub(crate) fn draw_stockpile(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut E
                     },
                 ));
             }
-            // An unlimited pile takes as many as what its rules can send it
-            // needs; a limited one its maximum tonnes' worth.
-            let receiving = match (entry.capacity_t, chunk_t) {
-                (_, None) => "—".to_owned(),
-                (None, Some(chunk)) => tr!("experiment-receiving-unlimited", size = tonnes(chunk)),
-                (Some(capacity), Some(chunk)) => {
-                    let chunks = crate::model::schedule::experiment::receiving_chunks(capacity, chunk);
-                    match chunks.split_last() {
-                        Some((last, whole)) if (*last - chunk).abs() > 1e-6 => tr!(
-                            "experiment-receiving-remainder",
-                            count = whole.len().to_string(),
-                            size = tonnes(chunk),
-                            last = tonnes(*last)
-                        ),
-                        _ => tr!("experiment-receiving-whole", count = chunks.len().to_string(), size = tonnes(chunk)),
-                    }
-                }
-            };
+            // As many as the run needs: a chunk is filled once, and what is
+            // delivered after a reclaim frees room goes into the next.
+            let receiving = chunk_t.map_or_else(|| "—".to_owned(), |chunk| tr!("experiment-receiving-unlimited", size = tonnes(chunk)));
             rows.readonly(&tr!("experiment-receiving-chunks"), &receiving, None, None);
         }
 

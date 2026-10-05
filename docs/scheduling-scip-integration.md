@@ -91,12 +91,16 @@ an exact discontinuous authored-value problem.
   still limits cumulative receipts, and crusher budgets limit daily throughput.
 - Blended representation (every pile's default) combines opening chunks;
   FIFO/LIFO is not applied to a homogeneous blend. Ordered chunks preserve
-  order; their receiving chunks are the pile's maximum tonnes divided by one
-  chunk size, the last smaller when it does not divide evenly, and emptied
-  receiving chunks are not reused during a horizon. An unlimited chunked pile
-  gets enough chunks for the dug material its enabled rules can send it. Each
-  chunk adds rows to every interval, so a small chunk size makes a slower
-  solve.
+  order. Receiving chunks are all one chunk size and fill in order, each
+  filled once: material delivered after a reclaim frees room goes into the
+  next chunk, so chunk order stays age order and the pile refills all
+  horizon, its capacity bounding only what it holds at once. Capture gives
+  every chunked pile enough chunks for the dug material its enabled rules
+  can send it. Only live chunks cost anything: the hourly dispatch publishes
+  rows for the receiving chunk and those holding material, the replay walks
+  each chunk's state forward from its rows, and the formulation fixes empty
+  any chunk emptied before its input begins or not yet reachable by the
+  receipts so far, with no receipt columns or reclaim-order rows.
 - Stockpile-to-stockpile rehandle is excluded with a capture note rather than
   silently assigning zero grades.
 - Mixed dig blocks move in their measured proportions; opening stock is included
@@ -416,8 +420,9 @@ Chunked piles are solved this way too. Each chunk's tonnes and contained
 quantity cross the boundary from the window's replay, and whether it was
 closed in the last kept interval crosses from the window's schedule: a closed
 chunk opens the next window closed (`BlendPile::chunk_closed`), so an emptied
-slot is never reused, and an open one may still close at the boundary or keep
-filling. Authored piles are unaffected: without the flags, a chunk holding
+chunk is never refilled, and an open one may still close at the boundary or keep
+filling. A chunk that closed and emptied inside the window has no row at its
+end; it opens the next window closed and empty all the same. Authored piles are unaffected: without the flags, a chunk holding
 opening material starts closed as before. The replay now also reports each
 chunk's closing state and checks that a chunk required to start closed does.
 On the four chunk fixtures over 96 h (dynamic FIFO/LIFO, released FIFO/LIFO,

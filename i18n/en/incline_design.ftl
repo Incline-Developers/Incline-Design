@@ -1537,6 +1537,7 @@ pile-daily-mode-overrides = { $mode } · { $days ->
 }
 pile-open-calendar = Open in Calendar
 pile-chunk-size-missing = A chunked stockpile needs a chunk size.
+pile-chunk-over-capacity = The chunk size is larger than the stockpile's maximum tonnes, so no chunk could ever fill.
 pile-chunk-grade-missing = { $chunk } has no { $grade }, which the schedule tracks.
 pile-chunk-grade-negative = { $chunk } has a negative { $grade }.
 pile-grade-needed = The schedule tracks this grade, so it needs a value.
@@ -2327,12 +2328,10 @@ experiment-grades-none = None
 experiment-no-grade-fields = No tonnes-weighted average field is defined, so no blend grade can be tracked.
 experiment-representation = Representation
 experiment-blended-help = Reclaim uses the pile's tonnes-weighted average grades. Opening chunks are combined into one blend, so there is no reclaim order.
-experiment-chunks-help = Each opening chunk is closed and immediately reclaimable with its own composition. Deliveries fill receiving chunks in order: the maximum tonnes divided by the chunk size, the last one smaller if it does not divide evenly, or for an unlimited pile as many as the run needs. A chunk closes to be reclaimed and an emptied chunk is not reused within the horizon, which can limit total receipts.
+experiment-chunks-help = Each opening chunk is closed and immediately reclaimable with its own composition. Deliveries fill chunks of the chunk size in order, each closing when full to be reclaimed. Material delivered after a reclaim frees room goes into the next chunk, so the pile refills all run; its maximum tonnes limit what it holds at once.
 experiment-chunk-size = Chunk size
 experiment-receiving-chunks = Receiving chunks
-experiment-receiving-whole = { $count } × { $size }
 experiment-receiving-unlimited = { $size } each, as many as the run needs
-experiment-receiving-remainder = { $count } × { $size } + { $last }
 
 # Schedule calculation: capture refusals
 schedule-capture-horizon = The requested horizon is not a finite, positive number of hours.
@@ -2342,7 +2341,6 @@ schedule-capture-opening-grade-missing = '{ $grade }' is missing on an opening p
 schedule-capture-grade-negative = '{ $grade }' is { $value }, which must be a finite, non-negative numeric grade.
 schedule-capture-opening-over-capacity = Opening stock of { $opening } t exceeds the pile capacity of { $capacity } t.
 schedule-capture-lots-combined = { $stockpile }: { $count } opening chunks combined into one blend; reclaim order does not apply.
-schedule-capture-chunks-empty = Ordered blended chunks need at least one opening chunk or some maximum tonnes to receive into.
 schedule-capture-block-uncaptured = Nothing was captured about this block's material, so its blend cannot be computed.
 schedule-capture-block-no-tonnes = The tonnage field is not among this block's captured values.
 schedule-capture-grade-uncaptured = '{ $grade }' was not captured for this block, and a blend cannot be computed without it.

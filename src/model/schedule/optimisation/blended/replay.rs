@@ -35,6 +35,11 @@ pub(crate) struct MovementRow {
 }
 
 /// One chunk's published state in one interval.
+///
+/// Published for every live chunk: the one receiving, and any holding
+/// material or drawn from. A chunk with no row in an interval holds nothing -
+/// not yet reached, or emptied and closed - and keeps the state its last row
+/// gave it.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct ChunkRow {
     pub(crate) pile: StockpileId,
@@ -1399,6 +1404,11 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> BTreeMap
     for row in &solution.chunks {
         published.entry((row.pile, row.chunk, row.interval)).or_insert(row);
     }
+    // The chunks each pile publishes in each interval, in chunk order.
+    let mut live: BTreeMap<(StockpileId, usize), Vec<usize>> = BTreeMap::new();
+    for &(pile, chunk, interval) in published.keys() {
+        live.entry((pile, interval)).or_default().push(chunk);
+    }
     for pile in piles.iter().filter(|entry| !entry.chunks.is_empty()) {
         if checker.cancelled() {
             return drawn;
@@ -1436,7 +1446,14 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> BTreeMap
                     }
                 }
                 let Some(state) = published.get(&(pile.id, chunk, interval)) else {
-                    checker.report.chunk_intervals.insert((pile.id, chunk, interval), (held_t[chunk], held_q[chunk].clone()));
+                    // Only a chunk holding nothing may go unpublished.
+                    if held_t[chunk] > REPLAY_TOLERANCE_T {
+                        checker.report.issues.push(format!(
+                            "pile {} chunk {chunk} holds {:.6} t in interval {interval} but has no published row",
+                            pile.id.0, held_t[chunk]
+                        ));
+                        checker.report.chunk_intervals.insert((pile.id, chunk, interval), (held_t[chunk], held_q[chunk].clone()));
+                    }
                     continue;
                 };
                 checker.residual(
@@ -1479,47 +1496,49 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> BTreeMap
             }
         }
 
-        // When each chunk closed, from the published rows, so its rest can
-        // be judged: a chunk closed from the start closed when the pile says.
-        let closed_since: Vec<Option<f64>> = (0..count)
+        // Each chunk's state walked forward through its rows: closed or not,
+        // and since when, for its rest. A chunk with no row keeps its state.
+        let mut closed_state: Vec<bool> = (0..count).map(|chunk| pile.chunk_starts_closed(chunk)).collect();
+        let mut closed_since: Vec<Option<f64>> = (0..count)
             .map(|chunk| {
-                if pile.chunk_starts_closed(chunk) {
-                    return Some(pile.chunk_closed_h.get(chunk).copied().flatten().unwrap_or(f64::NEG_INFINITY));
-                }
-                solution
-                    .chunks
-                    .iter()
-                    .filter(|entry| entry.pile == pile.id && entry.chunk == chunk && entry.closed)
-                    .map(|entry| entry.interval)
-                    .min()
-                    .and_then(|first| checker.input.intervals.get(first))
-                    .map(|interval| interval.start_h)
+                pile.chunk_starts_closed(chunk)
+                    .then(|| pile.chunk_closed_h.get(chunk).copied().flatten().unwrap_or(f64::NEG_INFINITY))
             })
             .collect();
-        for interval in 0..checker.input.intervals.len() {
+        for interval in 0..horizon {
             if checker.cancelled() {
                 return drawn;
             }
             let at = checker.input.intervals[interval];
+            let here: &[usize] = live.get(&(pile.id, interval)).map(Vec::as_slice).unwrap_or_default();
+
+            // Transitions first, so the checks below read every chunk's
+            // state in this interval.
+            let mut closing: Vec<usize> = Vec::new();
+            for &chunk in here {
+                let state = published[&(pile.id, chunk, interval)];
+                if closed_state[chunk] && !state.closed {
+                    if interval == 0 && pile.chunk_starts_closed(chunk) {
+                        checker
+                            .report
+                            .issues
+                            .push(format!("pile {} chunk {chunk} opens the horizon open but must start closed", pile.id.0));
+                    } else {
+                        // A chunk is filled once: an emptied one is not refilled.
+                        checker.report.issues.push(format!("pile {} chunk {chunk} reopened in interval {interval}", pile.id.0));
+                    }
+                }
+                if !closed_state[chunk] && state.closed {
+                    closing.push(chunk);
+                    closed_since[chunk].get_or_insert(at.start_h);
+                }
+                closed_state[chunk] = state.closed;
+            }
             // Closed, and closed for the pile's rest.
             let released = |chunk: usize, entry: &ChunkRow| entry.closed && closed_since[chunk].is_some_and(|closed_h| pile.rested(closed_h, at));
-            let row = |chunk: usize| -> Option<ChunkRow> {
-                solution
-                    .chunks
-                    .iter()
-                    .find(|entry| entry.pile == pile.id && entry.chunk == chunk && entry.interval == interval)
-                    .cloned()
-            };
-            for chunk in 0..count {
-                let Some(state) = row(chunk) else { continue };
 
-                // A chunk the input closes from the start cannot begin open.
-                if interval == 0 && pile.chunk_starts_closed(chunk) && !state.closed {
-                    checker
-                        .report
-                        .issues
-                        .push(format!("pile {} chunk {chunk} opens the horizon open but must start closed", pile.id.0));
-                }
+            for &chunk in here {
+                let state = published[&(pile.id, chunk, interval)];
 
                 // Capacity is authored per chunk.
                 checker.breach(
@@ -1540,7 +1559,7 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> BTreeMap
                         ));
                     }
                 }
-                if state.closed && !released(chunk, &state) && state.reclaimed_t > dust {
+                if state.closed && !released(chunk, state) && state.reclaimed_t > dust {
                     checker
                         .report
                         .issues
@@ -1559,24 +1578,23 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> BTreeMap
                 }
 
                 // Sequential fill: receiving into a chunk requires every
-                // earlier chunk to be closed.
-                if state.received_t > dust {
-                    for earlier in 0..chunk {
-                        if row(earlier).is_some_and(|entry| !entry.closed) {
-                            checker.report.issues.push(format!(
-                                "pile {} chunk {chunk} received in interval {interval} while chunk {earlier} was still open",
-                                pile.id.0
-                            ));
-                        }
-                    }
+                // earlier chunk to be closed, published this interval or not.
+                if state.received_t > dust
+                    && let Some(earlier) = (0..chunk).find(|&earlier| !closed_state[earlier])
+                {
+                    checker.report.issues.push(format!(
+                        "pile {} chunk {chunk} received in interval {interval} while chunk {earlier} was still open",
+                        pile.id.0
+                    ));
                 }
 
-                // Authored order among released, non-empty chunks.
+                // Authored order among released, non-empty chunks. A chunk
+                // with no row holds nothing, so only published ones count.
                 if state.reclaimed_t > dust {
                     match pile.order {
                         crate::model::schedule::optimisation::ReclaimOrder::Fifo => {
-                            for earlier in 0..chunk {
-                                if row(earlier).is_some_and(|entry| entry.open_t > dust) {
+                            for &earlier in here.iter().filter(|&&other| other < chunk) {
+                                if published[&(pile.id, earlier, interval)].open_t > dust {
                                     checker.report.issues.push(format!(
                                         "FIFO violated: pile {} drew chunk {chunk} in interval {interval} while chunk {earlier} still held material",
                                         pile.id.0
@@ -1585,8 +1603,9 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> BTreeMap
                             }
                         }
                         crate::model::schedule::optimisation::ReclaimOrder::Lifo => {
-                            for later in (chunk + 1)..count {
-                                if row(later).is_some_and(|entry| released(later, &entry) && entry.open_t > dust) {
+                            for &later in here.iter().filter(|&&other| other > chunk) {
+                                let entry = published[&(pile.id, later, interval)];
+                                if released(later, entry) && entry.open_t > dust {
                                     checker.report.issues.push(format!(
                                         "LIFO violated: pile {} drew chunk {chunk} in interval {interval} while released chunk {later} still held material",
                                         pile.id.0
@@ -1599,32 +1618,11 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> BTreeMap
 
                 // A chunk closes only when full or where its pile is not
                 // building.
-                let closes = state.closed
-                    && if interval == 0 {
-                        !pile.chunk_starts_closed(chunk)
-                    } else {
-                        solution
-                            .chunks
-                            .iter()
-                            .find(|entry| entry.pile == pile.id && entry.chunk == chunk && entry.interval == interval - 1)
-                            .is_some_and(|entry| !entry.closed)
-                    };
-                if closes && pile.builds(at) && state.open_t < pile.chunks[chunk] - super::input::CHUNK_FULL_T - dust.max(REPLAY_TOLERANCE_T) {
+                if closing.contains(&chunk) && pile.builds(at) && state.open_t < pile.chunks[chunk] - super::input::CHUNK_FULL_T - dust.max(REPLAY_TOLERANCE_T) {
                     checker.report.issues.push(format!(
                         "pile {} chunk {chunk} closed in interval {interval} holding {:.6} t of {:.6} t while its pile was building",
                         pile.id.0, state.open_t, pile.chunks[chunk]
                     ));
-                }
-
-                // No slot reuse: a chunk closed in one interval stays closed.
-                if interval + 1 < checker.input.intervals.len() {
-                    let next = solution
-                        .chunks
-                        .iter()
-                        .find(|entry| entry.pile == pile.id && entry.chunk == chunk && entry.interval == interval + 1);
-                    if state.closed && next.is_some_and(|entry| !entry.closed) {
-                        checker.report.issues.push(format!("pile {} chunk {chunk} reopened after interval {interval}", pile.id.0));
-                    }
                 }
             }
         }

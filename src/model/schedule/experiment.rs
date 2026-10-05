@@ -83,9 +83,10 @@ impl StockpileRepresentation {
 #[serde(from = "StoredStockpileExperiment")]
 pub(crate) struct StockpileExperiment {
     pub(crate) representation: StockpileRepresentation,
-    /// The size of a chunked pile's *receiving* chunks. The pile's maximum
-    /// tonnes are divided into chunks of this size, the last smaller when it
-    /// does not divide evenly; the opening chunks are closed ahead of them.
+    /// The size of a chunked pile's *receiving* chunks, filled in order behind
+    /// the opening chunks. Each is filled once; what is delivered after a
+    /// reclaim frees room goes into the next, and the pile's maximum tonnes
+    /// bound what it holds at once.
     ///
     /// Never derived from a truck payload or a tonnage: how many chunks a
     /// pile is divided into is a modelling decision with a throughput
@@ -122,14 +123,14 @@ impl StockpileExperiment {
     }
 }
 
-/// The receiving chunks a pile of `capacity_t` holds at `chunk_t` each: as
-/// many whole chunks as fit, then the remainder as one smaller chunk.
-pub(crate) fn receiving_chunks(capacity_t: f64, chunk_t: f64) -> Vec<f64> {
-    if !(capacity_t > 0.0 && chunk_t > 0.0) {
+/// `total_t` in chunks of `chunk_t`: as many whole chunks as fit, then the
+/// remainder as one smaller chunk. How opening stock is split.
+pub(crate) fn chunk_sizes(total_t: f64, chunk_t: f64) -> Vec<f64> {
+    if !(total_t > 0.0 && chunk_t > 0.0) {
         return Vec::new();
     }
-    let whole = (capacity_t / chunk_t + 1e-9).floor();
-    let remainder = capacity_t - whole * chunk_t;
+    let whole = (total_t / chunk_t + 1e-9).floor();
+    let remainder = total_t - whole * chunk_t;
     let mut chunks = vec![chunk_t; whole as usize];
     if remainder > 1e-6 {
         chunks.push(remainder);

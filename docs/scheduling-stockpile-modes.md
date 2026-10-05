@@ -42,6 +42,13 @@ chunks offers to combine them. Changing the representation or the chunk size
 re-splits stock that is still one blend, and leaves chunks edited one by one
 as they are.
 
+Deliveries fill chunks of the chunk size in order, each closing when full to
+be reclaimed. A chunk is filled once: material delivered after a reclaim
+frees room goes into the next chunk, so a chunked pile refills all run, its
+maximum tonnes limiting what it holds at once, and FIFO and LIFO keep
+following age. A chunk size larger than the pile's maximum tonnes is an
+error, since no chunk could fill.
+
 What would stop a calculation is reported on the step, as an error when the
 pile is used and a warning otherwise: a chunked pile without a chunk size,
 and opening stock without a value for a grade the schedule tracks. A missing grade is also marked where it is typed and on its chunk.

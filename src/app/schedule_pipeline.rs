@@ -1487,8 +1487,12 @@ pub(crate) fn stockpile_problems(
 
     let mut problems = Vec::new();
     let experiment = plan.experiment();
-    if experiment.representation(entry.id) == StockpileRepresentation::Chunks && experiment.chunk_t(entry.id).is_none() {
-        problems.push(tr!("pile-chunk-size-missing"));
+    if experiment.representation(entry.id) == StockpileRepresentation::Chunks {
+        match experiment.chunk_t(entry.id) {
+            None => problems.push(tr!("pile-chunk-size-missing")),
+            Some(chunk_t) if entry.capacity_t.is_some_and(|capacity| chunk_t > capacity) => problems.push(tr!("pile-chunk-over-capacity")),
+            Some(_) => {}
+        }
     }
     for chunk in plan.routing().inventory(entry.id).map(|inventory| inventory.lots.as_slice()).unwrap_or_default() {
         for (field, _) in &experiment.grades {

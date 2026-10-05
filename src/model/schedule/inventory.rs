@@ -191,7 +191,7 @@ impl OpeningBlend {
             return Vec::new();
         }
         let sizes = chunk_t
-            .map(|chunk| super::experiment::receiving_chunks(self.tonnes_t, chunk))
+            .map(|chunk| super::experiment::chunk_sizes(self.tonnes_t, chunk))
             .filter(|sizes| !sizes.is_empty())
             .unwrap_or_else(|| vec![self.tonnes_t]);
         sizes

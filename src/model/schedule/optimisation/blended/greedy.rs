@@ -1255,16 +1255,22 @@ impl<'a> State<'a> {
                     } else {
                         (0.0, vec![0.0; grades])
                     };
-                    self.chunk_rows.push(ChunkRow {
-                        pile: *pile,
-                        chunk: index,
-                        interval: k,
-                        open_t: chunk.held_t,
-                        reclaimed_t: draw,
-                        closed: chunk.closed,
-                        received_t: taken_t,
-                        receipts: if Some(index) == receiving { pile_receipts.clone() } else { Vec::new() },
-                    });
+                    // Only a live chunk is published: the one receiving, and
+                    // any holding material. One not yet reached, or emptied
+                    // and closed, has nothing to say, and a pile may have
+                    // many of those.
+                    if Some(index) == receiving || chunk.held_t > FINISHED_T || draw > 0.0 {
+                        self.chunk_rows.push(ChunkRow {
+                            pile: *pile,
+                            chunk: index,
+                            interval: k,
+                            open_t: chunk.held_t,
+                            reclaimed_t: draw,
+                            closed: chunk.closed,
+                            received_t: taken_t,
+                            receipts: if Some(index) == receiving { pile_receipts.clone() } else { Vec::new() },
+                        });
+                    }
                     if draw > 0.0 && chunk.held_t > 0.0 {
                         let share = draw / chunk.held_t;
                         for contained in &mut chunk.held_q {

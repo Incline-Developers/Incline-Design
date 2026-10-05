@@ -28,9 +28,10 @@
 //!   interval join the released blend at that boundary, exactly as they
 //!   would inside one model.
 //! - **Chunks.** Each chunk's closing tonnes and contained quantity, again
-//!   from the replay, and whether it was closed in the last kept interval. A
-//!   closed chunk opens the next window closed, so an emptied slot is never
-//!   reused; an open one may be closed at the boundary or keep filling, as it
+//!   from the replay, and whether it closed in any kept interval. A closed
+//!   chunk opens the next window closed, so an emptied chunk is never
+//!   refilled - the next one takes what follows - and the formulation leaves
+//!   it out; an open one may be closed at the boundary or keep filling, as it
 //!   could inside one model.
 //! - **Horizon-wide allowances.** What is left of each reclaim bar's cap and
 //!   each dump's capacity, and what each crusher day has already taken.
@@ -428,31 +429,41 @@ impl Carry {
             }
             let Some(chunks) = self.chunks.get_mut(&pile.id) else { continue };
             let closed_h = self.chunk_closed_h.entry(pile.id).or_insert_with(|| vec![None; pile.chunks.len()]);
+            // The first kept interval each chunk is published closed in. Rows
+            // are published only for live chunks, so a chunk that closed and
+            // was emptied inside the window has none at its end; it is closed
+            // all the same, and stays so.
+            let mut first_closed: BTreeMap<usize, usize> = BTreeMap::new();
+            for row in solution.chunks.iter().filter(|row| row.pile == pile.id && row.closed && row.interval < window.committed) {
+                let first = first_closed.entry(row.chunk).or_insert(row.interval);
+                *first = (*first).min(row.interval);
+            }
             for (c, chunk) in chunks.iter_mut().enumerate() {
                 // Closed in this window: when, for its rest.
                 if !chunk.2
-                    && let Some(first) = solution
-                        .chunks
-                        .iter()
-                        .filter(|row| row.pile == pile.id && row.chunk == c && row.closed && row.interval < window.committed)
-                        .map(|row| row.interval)
-                        .min()
+                    && let Some(&first) = first_closed.get(&c)
                     && let Some(interval) = full.intervals.get(window.first + first)
                     && let Some(slot) = closed_h.get_mut(c)
                 {
                     *slot = Some(interval.start_h);
                 }
-                if let Some((tonnes, contained)) = replay.chunk_intervals.get(&(pile.id, c, last)) {
-                    // Never above the chunk's capacity: the model's own
-                    // opening row would otherwise have no solution for a
-                    // tolerance's worth of overfill.
-                    let tonnes = tonnes.clamp(0.0, pile.chunks[c]);
-                    chunk.0 = tonnes;
-                    chunk.1 = contained.iter().enumerate().map(|(grade, quantity)| bound(*quantity, tonnes, grade)).collect();
+                // A chunk the replay has no state for at the window's end
+                // holds nothing.
+                match replay.chunk_intervals.get(&(pile.id, c, last)) {
+                    Some((tonnes, contained)) => {
+                        // Never above the chunk's capacity: the model's own
+                        // opening row would otherwise have no solution for a
+                        // tolerance's worth of overfill.
+                        let tonnes = tonnes.clamp(0.0, pile.chunks[c]);
+                        chunk.0 = tonnes;
+                        chunk.1 = contained.iter().enumerate().map(|(grade, quantity)| bound(*quantity, tonnes, grade)).collect();
+                    }
+                    None => {
+                        chunk.0 = 0.0;
+                        chunk.1.iter_mut().for_each(|quantity| *quantity = 0.0);
+                    }
                 }
-                if let Some(row) = solution.chunks.iter().find(|row| row.pile == pile.id && row.chunk == c && row.interval == last) {
-                    chunk.2 |= row.closed;
-                }
+                chunk.2 |= first_closed.contains_key(&c);
             }
         }
     }

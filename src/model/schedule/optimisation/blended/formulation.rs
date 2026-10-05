@@ -1885,8 +1885,11 @@ fn predicate_owed<R: Rows>(rows: &mut R, pile: StockpileId, interval: usize, tes
 /// - A chunk **may not receive while being reclaimed**: receipts require
 ///   `not closed`, reclaim requires `closed`.
 /// - **FIFO/LIFO** applies among released, non-empty chunks.
-/// - An **emptied** chunk stays empty, and its **slot is not reused** within
-///   the horizon - there is no row that reopens a closed chunk.
+/// - A chunk is **filled once**: an emptied one stays empty, and there is
+///   no row that reopens a closed chunk. Material delivered after a reclaim
+///   frees room goes into the next chunk, so chunk order stays age order.
+///   Capture gives a pile chunks enough for all it can receive, and the
+///   pile's own capacity row bounds what it holds at once.
 ///
 /// **Opening stock** occupies chunk 0, which is closed from the start, so an
 /// authored opening is immediately reclaimable and receipts begin at chunk 1.
@@ -1894,10 +1897,11 @@ fn predicate_owed<R: Rows>(rows: &mut R, pile: StockpileId, interval: usize, tes
 /// day-by-day window opens in the state the day before left: any chunk may
 /// hold material, and whether it is closed is stated rather than inferred.
 ///
-/// The throughput consequence of "no slot reuse" is real and worth stating:
-/// total material the pile can pass over the whole horizon is bounded by
-/// `sum(chunk capacities)` plus opening stock, so a long horizon with few
-/// chunks is limited by the model rather than by the equipment.
+/// A pile may have many chunks, few of them in play at once. A chunk emptied
+/// and closed before the input begins, or one further along than the
+/// receipts so far could have filled, is fixed empty with no receipt columns
+/// and no reclaim order rows, so the model grows with the chunks that can be
+/// live rather than with all of them.
 #[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
 fn chunked_pile<R: Rows>(
     rows: &mut R,
@@ -1932,6 +1936,57 @@ fn chunked_pile<R: Rows>(
         .map(|(index, _)| index)
         .collect();
 
+    // Which chunks can be live in which interval. One closed from the start
+    // holding nothing - drawn empty before this input begins - never is: a
+    // chunk is filled once. One further along than the receipts so far could
+    // have filled is not yet: chunks fill in order, and the one receiving
+    // closes only when full or in an interval its pile is not building. So
+    // a chunk outside these intervals is held open (or closed) and empty,
+    // with no receipt columns and no reclaim order to keep, and a pile with
+    // many chunks costs the model only those that can be in play.
+    let dead: Vec<bool> = (0..count)
+        .map(|c| pile.chunk_starts_closed(c) && opening.get(c).is_none_or(|(tonnes, _)| *tonnes <= 0.0))
+        .collect();
+    let pile_receipt: Vec<f64> = input
+        .intervals
+        .iter()
+        .map(|interval| {
+            // The most each loader could bring the pile in this interval.
+            let mut by_loader: BTreeMap<LoaderId, f64> = BTreeMap::new();
+            for &m in &delivering {
+                if let Some(rate) = loader_rate(input, &input.movements[m], interval.index) {
+                    let entry = by_loader.entry(input.movements[m].loader).or_default();
+                    *entry = entry.max(rate * interval.duration_h());
+                }
+            }
+            by_loader.values().sum()
+        })
+        .collect();
+    let first_open = (0..count).find(|&c| !pile.chunk_starts_closed(c)).unwrap_or(count);
+    let mut earliest = vec![0_usize; count];
+    {
+        let mut needed = 0.0;
+        let mut k = 0;
+        let mut delivered = 0.0;
+        let mut unbounded = false;
+        for c in first_open..count {
+            if c > first_open {
+                let previous = c - 1;
+                needed += (pile.chunks[previous] - CHUNK_FULL_T - opening.get(previous).map(|(tonnes, _)| *tonnes).unwrap_or(0.0)).max(0.0);
+            }
+            // The first interval by whose start enough could have arrived to
+            // fill every chunk ahead of this one, or in which a pile not
+            // building could have closed them.
+            while k < horizon && !unbounded && delivered < needed - 1e-9 {
+                unbounded |= !pile.builds(input.intervals[k]);
+                delivered += pile_receipt[k];
+                k += 1;
+            }
+            earliest[c] = if unbounded || delivered >= needed - 1e-9 { k } else { horizon };
+        }
+    }
+    let active = |c: usize, k: usize| !dead[c] && k >= earliest[c];
+
     // Per chunk and interval state.
     let mut open_t = vec![vec![None; horizon]; count];
     let mut open_q = vec![vec![vec![None; horizon]; grades]; count];
@@ -1962,7 +2017,7 @@ fn chunked_pile<R: Rows>(
             rows.columns().chunk_open_t.insert((pile.id, c, k), open_t[c][k].clone().expect("just created"));
             rows.columns().chunk_recl_t.insert((pile.id, c, k), recl_t[c][k].clone().expect("just created"));
             rows.columns().chunk_closed.insert((pile.id, c, k), closed[c][k].clone().expect("just created"));
-            for &m in &delivering {
+            for &m in delivering.iter().filter(|_| active(c, k)) {
                 let column = rows.cont(cap, &format!("cRecv_{}_{c}_{k}_{m}", pile.id.0));
                 rows.columns().chunk_recv.insert((pile.id, c, k, m), column.clone());
                 recv.insert((m, c, k), column);
@@ -2020,6 +2075,19 @@ fn chunked_pile<R: Rows>(
             let void = take(&empty[c][k]);
             let draw = take(&recl_t[c][k]);
 
+            // Out of play: empty, and open until it is reached.
+            if !active(c, k) {
+                rows.eq(vec![(open.clone(), 1.0)], 0.0, &format!("cIdleT_{}_{c}_{k}", pile.id.0));
+                rows.eq(vec![(draw.clone(), 1.0)], 0.0, &format!("cIdleR_{}_{c}_{k}", pile.id.0));
+                for g in 0..grades {
+                    rows.eq(vec![(take(&open_q[c][g][k]), 1.0)], 0.0, &format!("cIdleQ_{}_{c}_{k}_{g}", pile.id.0));
+                    rows.eq(vec![(take(&recl_q[c][g][k]), 1.0)], 0.0, &format!("cIdleD_{}_{c}_{k}_{g}", pile.id.0));
+                }
+                if !dead[c] {
+                    rows.eq(vec![(close.clone(), 1.0)], 0.0, &format!("cIdleC_{}_{c}_{k}", pile.id.0));
+                }
+            }
+
             // A chunk holding authored opening material is closed from the
             // start, so it is immediately reclaimable and the authored order
             // has something to choose between. A chunk that opens empty is an
@@ -2073,7 +2141,9 @@ fn chunked_pile<R: Rows>(
                 let prior_draw = take(&recl_t[c][k - 1]);
                 let mut terms = vec![(open.clone(), 1.0), (prior, -1.0), (prior_draw, 1.0)];
                 for &m in &delivering {
-                    terms.push((recv[&(m, c, k - 1)].clone(), -1.0));
+                    if let Some(column) = recv.get(&(m, c, k - 1)) {
+                        terms.push((column.clone(), -1.0));
+                    }
                 }
                 rows.eq(terms, 0.0, &format!("cTbal_{}_{c}_{k}", pile.id.0));
 
@@ -2085,7 +2155,9 @@ fn chunked_pile<R: Rows>(
                         let Some(fraction) = input.grades.fraction(input.movements[m].material, g) else {
                             continue;
                         };
-                        terms.push((recv[&(m, c, k - 1)].clone(), -fraction));
+                        if let Some(column) = recv.get(&(m, c, k - 1)) {
+                            terms.push((column.clone(), -fraction));
+                        }
                     }
                     rows.eq(terms, 0.0, &format!("cQbal_{}_{c}_{k}_{g}", pile.id.0));
                 }
@@ -2096,7 +2168,7 @@ fn chunked_pile<R: Rows>(
             let receipt_m = cap.min(interval_receipt[k]).max(0.0);
             let draw_m = cap.min(interval_draw[k]).max(0.0);
             for &m in &delivering {
-                let column = recv[&(m, c, k)].clone();
+                let Some(column) = recv.get(&(m, c, k)).cloned() else { continue };
                 rows.leq(
                     vec![(column.clone(), 1.0), (close.clone(), receipt_m)],
                     receipt_m,
@@ -2122,6 +2194,12 @@ fn chunked_pile<R: Rows>(
 
             // Emptiness indicator: open tonnes > 0 forces `empty` to 0.
             rows.leq(vec![(open.clone(), 1.0), (void.clone(), cap)], cap, &format!("cEmptyLink_{}_{c}_{k}", pile.id.0));
+
+            // A chunk out of play is fixed empty: nothing to mix, and no
+            // order to keep.
+            if !active(c, k) {
+                continue;
+            }
 
             // Per-chunk perfect mixing, with the same grade-box rows that make
             // it sound at zero inventory.
@@ -2149,14 +2227,14 @@ fn chunked_pile<R: Rows>(
             match pile.order {
                 ReclaimOrder::Fifo => {
                     // Every older chunk must be empty first.
-                    for j in 0..c {
+                    for j in (0..c).filter(|&j| active(j, k)) {
                         let older = take(&empty[j][k]);
                         rows.leq(vec![(draw.clone(), 1.0), (older, -draw_m)], 0.0, &format!("cFifo_{}_{c}_{j}_{k}", pile.id.0));
                     }
                 }
                 ReclaimOrder::Lifo => {
                     // Every newer chunk must be empty OR not yet released.
-                    for j in (c + 1)..count {
+                    for j in ((c + 1)..count).filter(|&j| active(j, k)) {
                         let newer = take(&empty[j][k]);
                         match chunk_released(pile, j, k, input, &closed) {
                             // draw <= draw_m * (empty_j + 1 - released_j)
@@ -2180,7 +2258,9 @@ fn chunked_pile<R: Rows>(
                 return Err(FormulationCancelled);
             }
             for &m in &delivering {
-                fill.push((recv[&(m, c, k)].clone(), 1.0));
+                if let Some(column) = recv.get(&(m, c, k)) {
+                    fill.push((column.clone(), 1.0));
+                }
             }
         }
         if !fill.is_empty() {
@@ -2217,7 +2297,7 @@ fn chunked_pile<R: Rows>(
             if rows.cancelled() {
                 return Err(FormulationCancelled);
             }
-            let mut terms: Vec<(R::Var, f64)> = (0..count).map(|c| (recv[&(m, c, k)].clone(), 1.0)).collect();
+            let mut terms: Vec<(R::Var, f64)> = (0..count).filter_map(|c| recv.get(&(m, c, k)).map(|column| (column.clone(), 1.0))).collect();
             for segment in 0..segments {
                 if let Some(column) = rows.columns().movement.get(&(m, k, segment)).cloned() {
                     terms.push((column, -1.0));

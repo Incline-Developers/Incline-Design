@@ -945,9 +945,9 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         .sum();
     let unlimited_t = (dug_t + source.destinations.iter().map(|view| view.opening_t).sum::<f64>()).max(1.0);
     let mut piles: Vec<BlendPile> = Vec::new();
-    // Unlimited chunked piles, by position in `piles`, still to be given
-    // their receiving chunks.
-    let mut unlimited_chunked: Vec<(usize, ProjectDestinationId, f64)> = Vec::new();
+    // Chunked piles, by position in `piles`, still to be given their
+    // receiving chunks.
+    let mut chunked_piles: Vec<(usize, ProjectDestinationId, f64)> = Vec::new();
     for project_id in &used_piles {
         if cancel.is_cancelled() {
             return Err(Vec::new());
@@ -1056,20 +1056,21 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 }
             }
             StockpileRepresentation::Chunks => {
-                // The pile's maximum tonnes in chunks of its chunk size. An
-                // unlimited pile's are added once the dug material is known:
-                // enough for what its rules can send it.
+                // Receiving chunks of the chunk size are added once the dug
+                // material is known: enough for everything its rules can
+                // send it. A chunk is filled once, so material delivered
+                // after a reclaim frees room goes into the next chunk; the
+                // pile's maximum tonnes bound what it holds at once.
                 let Some(chunk_t) = experiment.chunk_t(*project_id) else {
                     problems.push(CaptureDiagnostic::new(view.name.clone(), tr!("pile-chunk-size-missing")).at(ScheduleStep::Stockpiles));
                     continue;
                 };
-                let receiving = match view.capacity_t {
-                    Some(capacity) => crate::model::schedule::experiment::receiving_chunks(capacity, chunk_t),
-                    None => {
-                        unlimited_chunked.push((piles.len(), *project_id, chunk_t));
-                        Vec::new()
-                    }
-                };
+                if view.capacity_t.is_some_and(|capacity| chunk_t > capacity) {
+                    problems.push(CaptureDiagnostic::new(view.name.clone(), tr!("pile-chunk-over-capacity")).at(ScheduleStep::Stockpiles));
+                    continue;
+                }
+                chunked_piles.push((piles.len(), *project_id, chunk_t));
+                let receiving: Vec<f64> = Vec::new();
                 // Each opening chunk is closed and immediately reclaimable,
                 // holding its own actual composition; the receiving chunks
                 // fill in order behind them.
@@ -1077,10 +1078,6 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 let mut openings: Vec<(f64, Vec<f64>)> = lots.clone();
                 capacities.extend(receiving.iter().copied());
                 openings.extend(receiving.iter().map(|_| (0.0, vec![0.0; grades])));
-                if capacities.is_empty() && view.capacity_t.is_some() {
-                    problems.push(CaptureDiagnostic::new(view.name.clone(), tr!("schedule-capture-chunks-empty")).at(ScheduleStep::Stockpiles));
-                    continue;
-                }
                 let mut labels: Vec<String> = lot_names.iter().map(|name| tr!("schedule-chunk-opening", lot = name.clone())).collect();
                 labels.extend((1..=receiving.len()).map(|number| tr!("schedule-chunk-receiving", number = number.to_string())));
                 identities.chunk_labels.insert(pile, labels);
@@ -1241,10 +1238,10 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         block_ground.insert(position, id);
         identities.ground_blocks.insert(id, block.id);
     }
-    // ---- receiving chunks of unlimited chunked piles -----------------------
+    // ---- receiving chunks of chunked piles -------------------------------
     // Every permitted destination is a candidate, so a pile can receive no
     // more than the dug material some enabled rule sends it.
-    for (index, project_id, chunk_t) in unlimited_chunked {
+    for (index, project_id, chunk_t) in chunked_piles {
         let mut counted: std::collections::BTreeSet<(GroundId, MaterialId)> = std::collections::BTreeSet::new();
         let mut routable = 0.0;
         for bar in &scoped {
@@ -1271,11 +1268,9 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 }
             }
         }
-        // A pile nothing is sent to still needs a chunk to be a pile.
-        let mut receiving = crate::model::schedule::experiment::receiving_chunks(routable, chunk_t);
-        if receiving.is_empty() {
-            receiving.push(chunk_t);
-        }
+        // Whole chunks: one left partly filled closes when the pile stops
+        // building. A pile nothing is sent to still needs a chunk to be one.
+        let receiving = vec![chunk_t; ((routable / chunk_t - 1e-9).ceil().max(1.0)) as usize];
         let pile = &mut piles[index];
         pile.chunks.extend(receiving.iter().copied());
         pile.chunk_opening.extend(receiving.iter().map(|_| (0.0, vec![0.0; grades])));
