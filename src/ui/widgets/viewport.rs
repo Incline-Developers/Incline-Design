@@ -1682,7 +1682,12 @@ impl ViewportLabel {
                     .fill(menu::menu_surface(&visuals))
                     .stroke(menu::menu_border(&visuals))
                     .corner_radius(egui::CornerRadius::same(crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS))
-                    .inner_margin(egui::Margin { left: 9, right: 11, top: 5, bottom: 5 })
+                    .inner_margin(egui::Margin {
+                        left: 9,
+                        right: 11,
+                        top: 5,
+                        bottom: 5,
+                    })
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 7.0;
