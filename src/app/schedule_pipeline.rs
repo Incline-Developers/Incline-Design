@@ -1010,16 +1010,16 @@ impl crate::app::App<'_> {
         // and not blocking, because nothing in a dig-only run reads either.
         if kind == crate::model::schedule::DestinationKind::Stockpile {
             for entry in available.iter().filter(|entry| entry.kind == kind) {
-                // A pile something delivers to or reclaims from has to be
-                // represented somehow, and nothing chooses that for the
-                // planner. One nothing uses can be left as it is.
+                // What a calculation would refuse, said here first. Blocking
+                // only on a pile something delivers to or reclaims from: one
+                // nothing uses stops no run.
                 let used = routing.rules.iter().any(|rule| rule.enabled && rule.destinations.contains(&entry.id))
                     || plan.bars().iter().any(|bar| bar.reclaim().is_some_and(|reclaim| reclaim.sources.contains(&entry.id)));
-                if used && plan.experiment().representation(entry.id) == crate::model::schedule::experiment::StockpileRepresentation::NotConfigured {
+                for message in stockpile_problems(plan, document, entry) {
                     diagnostics.push(StageDiagnostic {
                         entity: Some(entry.name.clone()),
-                        message: tr!("schedule-capture-representation"),
-                        blocking: true,
+                        message,
+                        blocking: used,
                     });
                 }
                 if entry.capacity_t.is_some_and(|capacity| entry.opening_t > capacity) {
@@ -1472,4 +1472,43 @@ impl crate::app::App<'_> {
             entities: snapshot.blocks.len(),
         }
     }
+}
+
+/// What would stop a calculation using this stockpile: a chunked pile
+/// without the chunk size it is divided by, and an opening
+/// chunk missing a grade the schedule tracks. The same checks capture makes,
+/// worded for the Stockpiles page.
+pub(crate) fn stockpile_problems(
+    plan: &crate::model::schedule::SchedulePlan,
+    document: &crate::model::Document,
+    entry: &crate::model::schedule::destinations::DestinationView,
+) -> Vec<String> {
+    use crate::model::schedule::experiment::StockpileRepresentation;
+
+    let mut problems = Vec::new();
+    let experiment = plan.experiment();
+    if experiment.representation(entry.id) == StockpileRepresentation::Chunks && experiment.chunk_t(entry.id).is_none() {
+        problems.push(tr!("pile-chunk-size-missing"));
+    }
+    for chunk in plan.routing().inventory(entry.id).map(|inventory| inventory.lots.as_slice()).unwrap_or_default() {
+        for (field, _) in &experiment.grades {
+            let Some(name) = document.reserve_fields().iter().find(|known| known.id == *field).map(|known| known.name.clone()) else {
+                continue;
+            };
+            let missing = chunk
+                .portions
+                .iter()
+                .any(|portion| !matches!(portion.value(*field), Some(crate::model::schedule::OpeningValue::Number(value)) if value.is_finite()));
+            let negative = chunk
+                .portions
+                .iter()
+                .any(|portion| matches!(portion.value(*field), Some(crate::model::schedule::OpeningValue::Number(value)) if *value < 0.0));
+            if missing {
+                problems.push(tr!("pile-chunk-grade-missing", chunk = chunk.name.clone(), grade = name));
+            } else if negative {
+                problems.push(tr!("pile-chunk-grade-negative", chunk = chunk.name.clone(), grade = name));
+            }
+        }
+    }
+    problems
 }

@@ -196,13 +196,11 @@ pub(crate) fn grid_named_row(ui: &mut egui::Ui, label: &str, depth: usize) -> (e
     ui.painter().line_segment([egui::pos2(split, rect.top()), egui::pos2(split, rect.bottom())], stroke);
     ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], stroke);
 
-    let left = rect.left() + 8.0 + SUB_INDENT * depth as f32;
+    // Painted rather than placed: a placed label is centred in its rect.
+    let left = rect.left() + SUB_INDENT * depth as f32;
     let name_rect = egui::Rect::from_min_max(egui::pos2(left, rect.top()), egui::pos2((split - 4.0).max(left), rect.bottom()));
     if name_rect.is_positive() {
-        ui.put(
-            name_rect,
-            egui::Label::new(egui::RichText::new(label).color(label_color)).truncate().halign(egui::Align::Min),
-        );
+        paint_cell_text(ui, name_rect, egui::RichText::new(label), label_color);
     }
     let cell = egui::Rect::from_min_max(egui::pos2(split + 4.0, rect.top() + 2.0), egui::pos2(rect.right() - 4.0, rect.bottom() - 2.0));
     (cell, response)
@@ -293,9 +291,9 @@ pub(crate) fn grid_separator_row(ui: &mut egui::Ui, label: &str, depth: usize) {
     };
     ui.painter().rect_filled(rect, 0.0, fill);
     ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], rule);
-    let text_rect = egui::Rect::from_min_max(egui::pos2(rect.left() + 8.0 + SUB_INDENT * depth as f32, rect.top()), rect.max);
+    let text_rect = egui::Rect::from_min_max(egui::pos2(rect.left() + SUB_INDENT * depth as f32, rect.top()), rect.max);
     if text_rect.is_positive() {
-        ui.put(text_rect, egui::Label::new(egui::RichText::new(label).color(color)).truncate().halign(egui::Align::Min));
+        paint_cell_text(ui, text_rect, egui::RichText::new(label), color);
     }
 }
 
@@ -823,6 +821,14 @@ impl PropertyRows<'_> {
         paint_cell_text(self.ui, Self::value_cell(rect, split), bold(value), color);
     }
 
+    /// A bold heading across both columns, starting a group of the rows
+    /// below it: one table for a whole page of settings, read in sections.
+    pub(crate) fn section(&mut self, label: &str) {
+        let rect = self.begin_table_row(true);
+        let cell = egui::Rect::from_min_max(egui::pos2(rect.left() + GUTTER, rect.top()), rect.max);
+        paint_cell_text(self.ui, cell, bold(label), self.ui.visuals().text_color());
+    }
+
     /// The key of an ordinary row, left-aligned in its cell.
     fn paint_key(&self, rect: egui::Rect, split: f32, key: &str) {
         paint_cell_text(self.ui, Self::key_cell(rect, split), egui::RichText::new(key), self.ui.visuals().text_color());
@@ -846,6 +852,11 @@ impl PropertyRows<'_> {
         self.value_field(key, value, None, error.map(Badge::Error), false, hint)
     }
 
+    /// [`Self::field_with_unit`] with faint text shown while it is empty.
+    pub(crate) fn field_with_unit_and_hint(&mut self, key: &str, value: &mut String, unit: &str, hint: &str, error: Option<&str>) -> egui::Response {
+        self.value_field(key, value, Some(unit), error.map(Badge::Error), false, hint)
+    }
+
     /// An editable value, with its unit faint at the cell's right as a
     /// [`grid_cell_entry`] shows one. The text is held while it is being
     /// typed, so the table can be drawn from the model every frame; it is
@@ -864,9 +875,23 @@ impl PropertyRows<'_> {
         unit: Option<&str>,
         hint: &str,
     ) -> (egui::Response, Option<String>) {
+        self.committed_entry_warned(id, key, current, unit, hint, None)
+    }
+
+    /// [`Self::committed_entry_with_hint`] with a yellow mark explaining on
+    /// hover why the value, blank or not, needs attention.
+    pub(crate) fn committed_entry_warned(
+        &mut self,
+        id: impl std::hash::Hash + std::fmt::Debug,
+        key: &str,
+        current: &str,
+        unit: Option<&str>,
+        hint: &str,
+        warning: Option<&str>,
+    ) -> (egui::Response, Option<String>) {
         let id = egui::Id::new(id);
         let mut text = self.ui.data(|data| data.get_temp::<String>(id)).unwrap_or_else(|| current.to_owned());
-        let response = self.value_field(key, &mut text, unit, None, false, hint);
+        let response = self.value_field(key, &mut text, unit, warning.map(Badge::Warning), false, hint);
         if response.has_focus() {
             self.ui.data_mut(|data| data.insert_temp(id, text));
             return (response, None);

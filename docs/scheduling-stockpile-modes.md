@@ -21,6 +21,31 @@ Days are aligned to project hour zero, like crusher limits and grade targets.
 Old projects open with every pile on Build & reclaim, which is how every pile
 behaved before modes.
 
+## The Stockpiles page
+
+Setup's Stockpiles step lists each pile with its maximum tonnes, and shows
+the selected one as one table in sections: **General** (name and maximum
+tonnes, blank for unlimited), **Operation** (build and reclaim at once, rest
+before reclaim, and the Default mode with how many days differ, with **Open
+in Calendar** to edit them), **Optimiser** (blended or ordered chunks; a
+chunked pile adds its reclaim order and chunk size), **Opening stock** and
+**Haulage** (whether its dump and reclaim points reach the roads, in the
+Haulage step's words).
+
+Opening stock is entered as one tonnage and one set of values. A blended pile
+holds it as one blend. A chunked pile splits it into opening chunks of its
+chunk size, the last smaller, and shows them beside the table, where one
+chunk can be given values of its own. Once the chunks differ, Opening stock
+shows their combined values (tonnes-weighted, or summed for a field that
+adds up) and offers to split them again; a blended pile holding several
+chunks offers to combine them. Changing the representation or the chunk size
+re-splits stock that is still one blend, and leaves chunks edited one by one
+as they are.
+
+What would stop a calculation is reported on the step, as an error when the
+pile is used and a warning otherwise: a chunked pile without a chunk size,
+and opening stock without a value for a grade the schedule tracks. A missing grade is also marked where it is typed and on its chunk.
+
 ## What the schedule does
 
 - **Not building.** Routing passes the pile over as if it were full: material

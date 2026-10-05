@@ -1924,21 +1924,11 @@ fn draw_schedule_details(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor:
             island(ui, layout, "schedule_destination_list_island", 320.0, |ui, rect| {
                 super::schedule_destinations::draw_destination_list(ui, rect, editor, &plan, document, kind, session, commands)
             });
-            // Stockpiles carry a third list: what the pile already holds, oldest
-            // first. It sits beside the pile rather than on a page of its own,
-            // because opening stock is a property of one stockpile.
-            if kind == crate::model::schedule::DestinationKind::Stockpile {
-                island(ui, layout, "schedule_opening_lots_island", 300.0, |ui, rect| {
-                    super::schedule_destinations::draw_opening_lots(ui, rect, editor, &plan, document, session, commands)
-                });
-            }
             central_island(ui, layout, |ui, rect| {
-                let table = super::schedule_destinations::draw_destination_properties(ui, rect, editor, &plan, document, kind, session, commands, &project.haulage);
                 if kind == crate::model::schedule::DestinationKind::Stockpile {
-                    let below = egui::Rect::from_min_max(egui::pos2(rect.left(), table.bottom() + ui.spacing().item_spacing.y), rect.max);
-                    if below.is_positive() {
-                        super::schedule_destinations::draw_lot_editor(ui, below, editor, &plan, document, session, commands);
-                    }
+                    super::schedule_destinations::draw_stockpile(ui, rect, editor, &plan, document, session, commands);
+                } else {
+                    super::schedule_destinations::draw_destination_properties(ui, rect, editor, &plan, document, kind, session, commands);
                 }
             });
             super::schedule_destinations::draw_new_destination_dialog(ui, editor, &plan, session, commands);

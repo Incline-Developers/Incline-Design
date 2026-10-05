@@ -26,7 +26,10 @@ use crate::{
         state::{ConditionOwner, ScheduleConditionDraft, ScheduleDestinationDraft, ScheduleEdit, ScheduleRuleDraft, SourceScopeView, UiCommand},
         widgets::{
             context_menu::{ChecklistRow, ContextMenuAction, Tick, checklist_popup, context_menu_popup, context_menu_separator},
-            data_grid::{DataGrid, GridRow, PropertyTable, grid_named_row, grid_row, grid_select_row, grid_separator_row, property_table_height},
+            data_grid::{
+                CELL_WARNING_WIDTH, DataGrid, GridRow, PropertyTable, grid_add_action_row, grid_cell_fixed, grid_cell_warning, grid_columns_row, grid_named_row, grid_row,
+                grid_select_row, grid_separator_row, property_table_height,
+            },
             explorer::explorer_note,
             menu::{self, DragableMenu, MenuButton, MenuFieldCombo, MenuFieldText},
         },
@@ -99,25 +102,25 @@ pub(crate) fn draw_destination_list(
     let mut selected = editor.schedule_selected_destination;
     let mut open_dialog = false;
     let title = kind_page_title(kind);
-    DataGrid::new(list_id(kind), rect, &title).column_header(&tr!("planning-name")).show(ui, |ui| {
-        if entries.is_empty() {
-            explorer_note(ui, empty_note(kind));
-        }
+    // A crusher's figure is a daily budget; a pile's or a dump's, what it holds.
+    let figure = if kind == DestinationKind::Crusher {
+        tr!("destination-limit-column")
+    } else {
+        tr!("destination-capacity-column")
+    };
+    let columns = [(tr!("planning-name"), LIST_FRACTIONS[0]), (figure, LIST_FRACTIONS[1])];
+    DataGrid::new(list_id(kind), rect, &title).columns(&columns).show(ui, |ui| {
         for entry in &entries {
-            // The capacity beside the name, because a destination that can
-            // receive nothing and one with room are different things to route
-            // to and the list is where that is compared.
-            let label = match entry.kind {
-                DestinationKind::Crusher => match plan.routing().crusher(standalone_of(entry.id)).and_then(|calendar| calendar.default_tpd) {
-                    Some(limit) => format!("{} · {}", entry.name, tonnes_per_day(limit)),
-                    None => format!("{} · {}", entry.name, tr!("destination-unlimited")),
-                },
-                _ => match entry.capacity_t {
-                    Some(capacity) => format!("{} · {}", entry.name, tonnes(capacity)),
-                    None => format!("{} · {}", entry.name, tr!("destination-unlimited")),
-                },
-            };
-            let response = grid_row(ui, GridRow::new(&label).selected(selected == Some(entry.id))).on_hover_text(&label);
+            let figure = match entry.kind {
+                DestinationKind::Crusher => plan
+                    .routing()
+                    .crusher(standalone_of(entry.id))
+                    .and_then(|calendar| calendar.default_tpd)
+                    .map(tonnes_per_day),
+                _ => entry.capacity_t.map(tonnes),
+            }
+            .unwrap_or_else(|| tr!("destination-unlimited"));
+            let (response, _) = grid_columns_row(ui, &LIST_FRACTIONS, &[&entry.name, &figure], selected == Some(entry.id));
             if response.clicked() {
                 selected = Some(entry.id);
             }
@@ -136,15 +139,8 @@ pub(crate) fn draw_destination_list(
                 }
             });
         }
-        let body = ui.available_rect_before_wrap();
-        if body.is_positive() {
-            let response = ui.interact(body, ui.id().with(("new_destination_space", list_id(kind))), egui::Sense::click());
-            context_menu_popup(&response, title.clone(), |ui| {
-                if ContextMenuAction::new(new_label(kind)).show(ui).clicked() {
-                    open_dialog = true;
-                    ui.close();
-                }
-            });
+        if grid_add_action_row(ui, &new_label(kind)) {
+            open_dialog = true;
         }
     });
     if editor.schedule_selected_destination != selected {
@@ -158,48 +154,22 @@ pub(crate) fn draw_destination_list(
     }
 }
 
-/// The selected destination's cells.
-///
-/// A linked destination's name and type are read-only and say where they are
-/// edited; its capacity is the schedule's own and is editable here. A crusher
-/// has no storage in this increment, so it carries a daily budget instead of a
-/// capacity.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn draw_destination_properties(
-    ui: &mut egui::Ui,
-    rect: egui::Rect,
-    editor: &mut EditorState,
-    plan: &SchedulePlan,
-    document: &Document,
-    kind: DestinationKind,
-    session: u32,
-    commands: &mut Vec<UiCommand>,
-    network: &crate::model::haulage::HaulNetwork,
-) -> egui::Rect {
-    let selected = editor
-        .schedule_selected_destination
-        .and_then(|id| destinations::resolve(id, document.solids(), plan.routing()).ok())
-        .filter(|entry| entry.kind == kind);
-    let Some(entry) = selected else {
-        let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, 2).min(rect.height())));
-        PropertyTable::new("schedule_destination_properties", table_rect, &kind_page_title(kind)).show(ui, |rows| {
-            rows.header(&tr!("planning-property"), &tr!("planning-value"));
-            rows.readonly(&tr!("planning-name"), &tr!("destination-select"), None, None);
-        });
-        return table_rect;
-    };
-    let crusher_default = plan
-        .routing()
-        .crusher(entry.solid.map_or_else(|| standalone_of(entry.id), |_| standalone_of(entry.id)))
-        .and_then(|calendar| calendar.default_tpd);
-    let crusher_default = if entry.kind == DestinationKind::Crusher { crusher_default } else { None };
-    let operation = plan.stockpile_operation(entry.id).into_owned();
+/// Seed the selected destination's draft from the plan, unless it already
+/// holds the same source and may hold half-typed text.
+fn destination_draft<'e>(editor: &'e mut EditorState, plan: &SchedulePlan, entry: &destinations::DestinationView) -> &'e mut ScheduleDestinationDraft {
+    let crusher_default = (entry.kind == DestinationKind::Crusher)
+        .then(|| plan.routing().crusher(standalone_of(entry.id)).and_then(|calendar| calendar.default_tpd))
+        .flatten();
+    let rest_h = plan.stockpile_operation(entry.id).rest_h;
+    let chunk_t = plan.experiment().chunk_t(entry.id);
+    let dump_time = plan.routing().dump_time_s(entry.id);
     let source = (
         entry.name.clone(),
         entry.capacity_t,
         crusher_default,
-        operation.rest_h.to_bits(),
-        plan.routing().dump_time_s(entry.id).map(f64::to_bits),
+        rest_h.to_bits(),
+        dump_time.map(f64::to_bits),
+        chunk_t.map(f64::to_bits),
     );
     if editor
         .schedule_destination_draft
@@ -211,66 +181,154 @@ pub(crate) fn draw_destination_properties(
             name: entry.name.clone(),
             capacity: capacity_text(entry.capacity_t),
             crusher_default: capacity_text(crusher_default),
-            dump_time: plan.routing().dump_time_s(entry.id).map(|v| v.to_string()).unwrap_or_default(),
-            rest: super::schedule_trucking::number(operation.rest_h),
+            dump_time: dump_time.map(|v| v.to_string()).unwrap_or_default(),
+            rest: super::schedule_trucking::number(rest_h),
+            chunk: capacity_text(chunk_t),
             source,
         });
     }
-    let draft = editor.schedule_destination_draft.as_mut().expect("just ensured");
-    let linked = entry.solid.is_some();
-    let taken: Vec<String> = plan
+    editor.schedule_destination_draft.as_mut().expect("just ensured")
+}
+
+/// The selected destination of `kind`, if it still resolves.
+fn selected_destination(editor: &EditorState, plan: &SchedulePlan, document: &Document, kind: DestinationKind) -> Option<destinations::DestinationView> {
+    editor
+        .schedule_selected_destination
+        .and_then(|id| destinations::resolve(id, document.solids(), plan.routing()).ok())
+        .filter(|entry| entry.kind == kind)
+}
+
+/// The Name rows: typed for a standalone destination, read-only with where
+/// it is edited for one that is a solid.
+fn name_rows(
+    rows: &mut crate::ui::widgets::data_grid::PropertyRows<'_>,
+    entry: &destinations::DestinationView,
+    draft: &mut ScheduleDestinationDraft,
+    plan: &SchedulePlan,
+    session: u32,
+    edits: &mut Vec<UiCommand>,
+) {
+    if entry.is_linked() {
+        rows.readonly(&tr!("planning-name"), &entry.name, None, None);
+        rows.readonly(&tr!("destination-linked-solid"), &tr!("destination-linked-note"), None, None);
+        return;
+    }
+    let taken = plan
         .routing()
         .standalone
         .iter()
         .filter(|other| DestinationId::Standalone(other.id) != entry.id)
-        .map(|other| other.name.clone())
-        .collect();
-    let name_error = (!linked).then(|| name_problem(&draft.name, taken.iter().cloned())).flatten();
-    let capacity_error = parse_capacity(&draft.capacity).err();
-    let crusher_error = parse_capacity(&draft.crusher_default).err();
-    // Two extra rows on a stockpile: which end reclaim takes from, and what it
-    // opens holding. The opening total is calculated from the lots beside it and
-    // is never typed here - one figure, one place it comes from.
-    let stockpile = entry.kind == DestinationKind::Stockpile;
-    // Optimisation rows on a stockpile: the representation, and the chunk
-    // capacities it needs.
-    let optimisation_rows = if stockpile {
-        1 + usize::from(plan.experiment().representation(entry.id) == crate::model::schedule::experiment::StockpileRepresentation::Chunks)
-    } else {
-        0
+        .map(|other| other.name.clone());
+    let name_error = name_problem(&draft.name, taken);
+    let response = rows.field(&tr!("planning-name"), &mut draft.name, name_error.as_deref());
+    if response.lost_focus()
+        && name_error.is_none()
+        && draft.name.trim() != entry.name
+        && let DestinationId::Standalone(id) = entry.id
+    {
+        edits.push(UiCommand::schedule(
+            session,
+            ScheduleEdit::RenameDestination {
+                destination: id,
+                name: draft.name.trim().to_owned(),
+            },
+        ));
+    }
+}
+
+/// The Maximum tonnes row, blank for unlimited. `problem` is a reason the
+/// typed figure, though a number, will not do.
+fn capacity_row(
+    rows: &mut crate::ui::widgets::data_grid::PropertyRows<'_>,
+    entry: &destinations::DestinationView,
+    draft: &mut ScheduleDestinationDraft,
+    problem: Option<String>,
+    session: u32,
+    edits: &mut Vec<UiCommand>,
+) {
+    let error = parse_capacity(&draft.capacity).err().or(problem);
+    let response = rows.field_with_unit_and_hint(&tr!("destination-capacity"), &mut draft.capacity, "t", &tr!("pile-capacity-unlimited"), error.as_deref());
+    if response.lost_focus()
+        && let Ok(capacity) = parse_capacity(&draft.capacity)
+        && capacity != entry.capacity_t
+    {
+        edits.push(UiCommand::schedule(
+            session,
+            ScheduleEdit::SetDestinationCapacity {
+                destination: entry.id,
+                capacity_t: capacity,
+            },
+        ));
+    }
+}
+
+/// How trucks meet one of a destination's points, in the Haulage step's words,
+/// with a warning when they cannot.
+fn haul_point_row(rows: &mut crate::ui::widgets::data_grid::PropertyRows<'_>, key: &str, link: Option<crate::app::commands::haulage::HaulLink>, problem: fn(String) -> String) {
+    let value = link.map_or_else(|| tr!("pile-not-checked"), |link| link.label());
+    let warning = link.filter(|link| link.is_problem()).map(|link| problem(link.label()));
+    rows.readonly_warning(key, &value, None, warning.as_deref());
+}
+
+fn dump_problem(status: String) -> String {
+    tr!("haul-link-dump-problem", status = status)
+}
+
+fn reclaim_problem(status: String) -> String {
+    tr!("haul-link-reclaim-problem", status = status)
+}
+
+/// The selected dump's or crusher's cells.
+///
+/// A linked destination's name and type are read-only and say where they are
+/// edited; its capacity is the schedule's own and is editable here. A crusher
+/// has no storage, so it carries a daily budget instead of a capacity.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn draw_destination_properties(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    editor: &mut EditorState,
+    plan: &SchedulePlan,
+    document: &Document,
+    kind: DestinationKind,
+    session: u32,
+    commands: &mut Vec<UiCommand>,
+) {
+    let Some(entry) = selected_destination(editor, plan, document, kind) else {
+        let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, 2).min(rect.height())));
+        PropertyTable::new("schedule_destination_properties", table_rect, &kind_page_title(kind)).show(ui, |rows| {
+            rows.header(&tr!("planning-property"), &tr!("planning-value"));
+            rows.readonly(&tr!("planning-name"), &tr!("destination-select"), None, None);
+        });
+        return;
     };
-    let rest_error = parse_rest(&draft.rest).err();
-    let rows_used = 7 + usize::from(kind == DestinationKind::Crusher) + usize::from(linked) + 4 * usize::from(stockpile) + optimisation_rows;
+    let link = editor
+        .schedule_haul_connections
+        .as_ref()
+        .and_then(|connections| connections.destinations.iter().find(|links| links.id == entry.id))
+        .map(|links| links.dump);
+    let crusher = kind == DestinationKind::Crusher;
+    let draft = destination_draft(editor, plan, &entry);
+    let rows_used = 6 + usize::from(entry.is_linked()) + usize::from(crusher && !entry.is_linked());
     let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, rows_used).min(rect.height())));
     let mut edits = Vec::new();
-    let mut chunk_draft = editor.schedule_chunk_draft.take();
     PropertyTable::new("schedule_destination_properties", table_rect, &entry.name).show(ui, |rows| {
         rows.header(&tr!("planning-property"), &tr!("planning-value"));
-        if linked {
-            rows.readonly(&tr!("planning-name"), &entry.name, None, None);
-            rows.readonly(&tr!("destination-linked-solid"), &tr!("destination-linked-note"), None, None);
-        } else {
-            let response = rows.field(&tr!("planning-name"), &mut draft.name, name_error.as_deref());
-            if response.lost_focus()
-                && name_error.is_none()
-                && draft.name.trim() != entry.name
-                && let DestinationId::Standalone(id) = entry.id
-            {
-                edits.push(UiCommand::schedule(
-                    session,
-                    ScheduleEdit::RenameDestination {
-                        destination: id,
-                        name: draft.name.trim().to_owned(),
-                    },
-                ));
-            }
-        }
+        name_rows(rows, &entry, draft, plan, session, &mut edits);
         rows.readonly(&tr!("destination-type"), &entry.kind.label(), None, None);
-        if entry.kind == DestinationKind::Crusher {
-            let response = rows.field(&tr!("destination-daily-limit"), &mut draft.crusher_default, crusher_error.as_deref());
+        if crusher {
+            let current = plan.routing().crusher(standalone_of(entry.id)).and_then(|calendar| calendar.default_tpd);
+            let error = parse_capacity(&draft.crusher_default).err();
+            let response = rows.field_with_unit_and_hint(
+                &tr!("destination-daily-limit"),
+                &mut draft.crusher_default,
+                "t",
+                &tr!("pile-capacity-unlimited"),
+                error.as_deref(),
+            );
             if response.lost_focus()
                 && let Ok(limit) = parse_capacity(&draft.crusher_default)
-                && limit != crusher_default
+                && limit != current
                 && let DestinationId::Standalone(id) = entry.id
             {
                 edits.push(UiCommand::schedule(
@@ -284,110 +342,368 @@ pub(crate) fn draw_destination_properties(
                     },
                 ));
             }
-        } else {
-            let response = rows.field(&tr!("destination-capacity"), &mut draft.capacity, capacity_error.as_deref());
-            if response.lost_focus()
-                && let Ok(capacity) = parse_capacity(&draft.capacity)
-                && capacity != entry.capacity_t
-            {
-                edits.push(UiCommand::schedule(
-                    session,
-                    ScheduleEdit::SetDestinationCapacity {
-                        destination: entry.id,
-                        capacity_t: capacity,
-                    },
-                ));
-            }
-        }
-        if stockpile {
-            let mut order = entry.reclaim_order;
-            let selected = order.label();
-            let response = rows.combo(
-                ("reclaim_order", format!("{:?}", entry.id)),
-                &tr!("inventory-reclaim-order"),
-                &mut order,
-                &selected,
-                [
-                    (crate::model::schedule::ReclaimOrder::Fifo, crate::model::schedule::ReclaimOrder::Fifo.label()),
-                    (crate::model::schedule::ReclaimOrder::Lifo, crate::model::schedule::ReclaimOrder::Lifo.label()),
-                ],
-            );
-            response.on_hover_text(tr!("inventory-help"));
-            if order != entry.reclaim_order {
-                edits.push(UiCommand::schedule(session, ScheduleEdit::SetReclaimOrder { destination: entry.id, order }));
-            }
-            let over = entry
-                .capacity_t
-                .is_some_and(|capacity| entry.opening_t > capacity)
-                .then(|| crate::model::schedule::ScheduleError::OpeningOverCapacity.message());
-            rows.readonly(&tr!("inventory-opening-tonnes"), &tonnes(entry.opening_t), None, over.as_deref());
-            // How the pile may be worked. Its day-by-day Mode is in the
-            // Calendar; these two hold for every day.
-            let mut simultaneous = operation.simultaneous;
-            rows.checkbox(&tr!("pile-simultaneous"), &mut simultaneous).on_hover_text(tr!("pile-simultaneous-help"));
-            if simultaneous != operation.simultaneous {
-                edits.push(UiCommand::schedule(
-                    session,
-                    ScheduleEdit::SetStockpileOperating {
-                        destination: entry.id,
-                        simultaneous,
-                        rest_h: operation.rest_h,
-                    },
-                ));
-            }
-            let response = rows.field(&tr!("pile-rest"), &mut draft.rest, rest_error.as_deref());
-            let committed = response.lost_focus();
-            response.on_hover_text(tr!("pile-rest-help"));
-            if committed
-                && let Ok(rest_h) = parse_rest(&draft.rest)
-                && rest_h != operation.rest_h
-            {
-                edits.push(UiCommand::schedule(
-                    session,
-                    ScheduleEdit::SetStockpileOperating {
-                        destination: entry.id,
-                        simultaneous: operation.simultaneous,
-                        rest_h,
-                    },
-                ));
-            }
-            // The representation. The authored lots above are untouched by
-            // it: choosing one changes what the optimiser is told, not what
-            // the project holds.
-            super::schedule_optimisation::stockpile_rows(rows, &mut chunk_draft, plan, entry.id, session, &mut edits);
-        }
-        if kind == DestinationKind::Crusher
-            && let DestinationId::Standalone(destination) = entry.id
-        {
-            let response = rows.field(&tr!("haul-dump-override"), &mut draft.dump_time, None);
-            if response.lost_focus() {
-                let seconds = if draft.dump_time.trim().is_empty() {
-                    Some(None)
-                } else {
-                    draft.dump_time.parse::<f64>().ok().map(Some)
-                };
-                if let Some(seconds) = seconds
-                    && seconds != plan.routing().dump_time_s(entry.id)
-                {
-                    edits.push(UiCommand::schedule(session, ScheduleEdit::SetDestinationDumpTime { destination, seconds }));
+            if let DestinationId::Standalone(destination) = entry.id {
+                let response = rows.field(&tr!("haul-dump-override"), &mut draft.dump_time, None);
+                if response.lost_focus() {
+                    let seconds = if draft.dump_time.trim().is_empty() {
+                        Some(None)
+                    } else {
+                        draft.dump_time.parse::<f64>().ok().map(Some)
+                    };
+                    if let Some(seconds) = seconds
+                        && seconds != plan.routing().dump_time_s(entry.id)
+                    {
+                        edits.push(UiCommand::schedule(session, ScheduleEdit::SetDestinationDumpTime { destination, seconds }));
+                    }
                 }
             }
-        }
-        let (method, warning) = if network.role_point(entry.id, false).is_some() {
-            (tr!("haul-method-roads"), None)
-        } else if entry.solid.is_some() && !network.roads.is_empty() {
-            (tr!("haul-method-nearest"), None)
         } else {
-            (tr!("haul-method-none"), Some(tr!("haul-method-none-help")))
-        };
-        rows.readonly_warning(&tr!("haul-dump-method"), &method, None, warning.as_deref());
+            capacity_row(rows, &entry, draft, None, session, &mut edits);
+        }
+        haul_point_row(rows, &tr!("haul-link-dump-column"), link, dump_problem);
         if rows.action_row(&tr!("haul-open-layout")).clicked() {
             edits.push(UiCommand::EditHaulProperties);
         }
     });
-    editor.schedule_chunk_draft = chunk_draft;
     commands.append(&mut edits);
-    table_rect
+}
+
+/// A chunk size in tonnes: blank for none, otherwise above zero.
+fn parse_chunk(text: &str) -> Result<Option<f64>, String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    trimmed
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .map(Some)
+        .ok_or_else(|| crate::model::schedule::ScheduleError::InvalidExperimentSetting.message())
+}
+
+/// The selected stockpile as one table read in sections - what it is, how it
+/// is worked, how the optimiser sees it, what it opens holding and how trucks
+/// reach it - and, for a chunked pile, its opening chunks and the one selected
+/// among them beside it.
+pub(crate) fn draw_stockpile(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, document: &Document, session: u32, commands: &mut Vec<UiCommand>) {
+    use crate::model::schedule::{
+        experiment::StockpileRepresentation,
+        inventory::{OpeningBlend, OpeningValue},
+    };
+
+    let Some(entry) = selected_destination(editor, plan, document, DestinationKind::Stockpile) else {
+        let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, 2).min(rect.height())));
+        PropertyTable::new("schedule_destination_properties", table_rect, &kind_page_title(DestinationKind::Stockpile)).show(ui, |rows| {
+            rows.header(&tr!("planning-property"), &tr!("planning-value"));
+            rows.readonly(&tr!("planning-name"), &tr!("destination-select"), None, None);
+        });
+        return;
+    };
+    let links = editor
+        .schedule_haul_connections
+        .as_ref()
+        .and_then(|connections| connections.destinations.iter().find(|links| links.id == entry.id))
+        .cloned();
+    let categories = editor.schedule_category_values.clone();
+    let operation = plan.stockpile_operation(entry.id).into_owned();
+    let experiment = plan.experiment();
+    let representation = experiment.representation(entry.id);
+    let chunked = representation == StockpileRepresentation::Chunks;
+    let chunk_t = experiment.chunk_t(entry.id);
+
+    // The opening stock as one blend, and whether the chunks still are
+    // exactly that blend split - so it can be edited as one.
+    let extensive: Vec<_> = document
+        .reserve_fields()
+        .iter()
+        .filter(|field| field.aggregation == ReserveAggregation::Sum)
+        .map(|field| field.id)
+        .collect();
+    let inventory = plan.routing().inventory(entry.id).cloned().unwrap_or_default();
+    let blend = inventory.combined(&extensive);
+    let arranged = inventory.lots.is_empty() || inventory.is_arranged(&extensive, crate::app::commands::schedule::opening_split(plan, entry.id));
+    let tonnage_field = plan.tonnage_field();
+    let fields: Vec<_> = document.reserve_fields().iter().filter(|field| Some(field.id) != tonnage_field).collect();
+    let tracked: Vec<_> = experiment.grades.iter().map(|(field, _)| *field).collect();
+
+    let draft = destination_draft(editor, plan, &entry);
+    let mut edits = Vec::new();
+    let mut open_calendar = false;
+
+    // What a typed figure, though a number, will not do for.
+    let capacity_problem = entry
+        .capacity_t
+        .is_some_and(|capacity| entry.opening_t > capacity)
+        .then(|| crate::model::schedule::ScheduleError::OpeningOverCapacity.message());
+    let chunk_error = parse_chunk(&draft.chunk)
+        .err()
+        .or_else(|| (chunked && chunk_t.is_none()).then(|| tr!("pile-chunk-size-missing")));
+
+    let gap = ui.spacing().item_spacing.y * 2.0;
+    // A chunked pile shares the page with its chunks, the settings keeping
+    // their full height; a blend has the page.
+    let table_rect = if chunked {
+        egui::Rect::from_min_size(rect.min, egui::vec2(((rect.width() - gap) * 0.5).max(0.0), rect.height()))
+    } else {
+        rect
+    };
+    let number = super::schedule_trucking::number;
+    let mut new_blend: Option<OpeningBlend> = None;
+    PropertyTable::new("schedule_pile_settings", table_rect, &entry.name).show(ui, |rows| {
+        rows.header(&tr!("planning-property"), &tr!("planning-value"));
+
+        rows.section(&tr!("pile-general"));
+        name_rows(rows, &entry, draft, plan, session, &mut edits);
+        rows.readonly(&tr!("destination-type"), &entry.kind.label(), None, None);
+        capacity_row(rows, &entry, draft, capacity_problem.clone(), session, &mut edits);
+
+        rows.section(&tr!("pile-operation"));
+        let mut simultaneous = operation.simultaneous;
+        rows.checkbox(&tr!("pile-simultaneous"), &mut simultaneous).on_hover_text(tr!("pile-simultaneous-help"));
+        if simultaneous != operation.simultaneous {
+            edits.push(UiCommand::schedule(
+                session,
+                ScheduleEdit::SetStockpileOperating {
+                    destination: entry.id,
+                    simultaneous,
+                    rest_h: operation.rest_h,
+                },
+            ));
+        }
+        let rest_error = parse_rest(&draft.rest).err();
+        let response = rows.field_with_unit(&tr!("pile-rest"), &mut draft.rest, "h", rest_error.as_deref());
+        let committed = response.lost_focus();
+        response.on_hover_text(tr!("pile-rest-help"));
+        if committed
+            && let Ok(rest_h) = parse_rest(&draft.rest)
+            && rest_h != operation.rest_h
+        {
+            edits.push(UiCommand::schedule(
+                session,
+                ScheduleEdit::SetStockpileOperating {
+                    destination: entry.id,
+                    simultaneous: operation.simultaneous,
+                    rest_h,
+                },
+            ));
+        }
+        // The day-by-day mode is the Calendar's; this says what it is and
+        // takes you there.
+        let differing = operation.periods.values().filter(|mode| **mode != operation.default_mode).count();
+        let mode = if differing == 0 {
+            operation.default_mode.label()
+        } else {
+            tr!("pile-daily-mode-overrides", mode = operation.default_mode.label(), days = differing.to_string())
+        };
+        rows.readonly(&tr!("pile-daily-mode"), &mode, None, None);
+        open_calendar = rows.action_row(&tr!("pile-open-calendar")).clicked();
+
+        rows.section(&tr!("pile-optimiser"));
+        let mut chosen = representation;
+        let response = rows.combo(
+            ("pile_representation", format!("{:?}", entry.id)),
+            &tr!("experiment-representation"),
+            &mut chosen,
+            &representation.label(),
+            [StockpileRepresentation::Blended, StockpileRepresentation::Chunks].map(|option| (option, option.label())),
+        );
+        response.on_hover_text(if chunked { tr!("experiment-chunks-help") } else { tr!("experiment-blended-help") });
+        if chosen != representation {
+            edits.push(UiCommand::schedule(
+                session,
+                ScheduleEdit::SetStockpileRepresentation {
+                    destination: entry.id,
+                    representation: chosen,
+                },
+            ));
+        }
+        // Order and chunks mean something only to a chunked pile: a blend
+        // has one composition and no oldest end.
+        if chunked {
+            let mut order = entry.reclaim_order;
+            rows.combo(
+                ("reclaim_order", format!("{:?}", entry.id)),
+                &tr!("inventory-reclaim-order"),
+                &mut order,
+                &entry.reclaim_order.label(),
+                [crate::model::schedule::ReclaimOrder::Fifo, crate::model::schedule::ReclaimOrder::Lifo].map(|option| (option, option.label())),
+            );
+            if order != entry.reclaim_order {
+                edits.push(UiCommand::schedule(session, ScheduleEdit::SetReclaimOrder { destination: entry.id, order }));
+            }
+            let response = rows.field_with_unit(&tr!("experiment-chunk-size"), &mut draft.chunk, "t", chunk_error.as_deref());
+            let committed = response.lost_focus();
+            response.on_hover_text(tr!("experiment-chunks-help"));
+            if committed
+                && let Ok(chunk) = parse_chunk(&draft.chunk)
+                && chunk != chunk_t
+            {
+                edits.push(UiCommand::schedule(
+                    session,
+                    ScheduleEdit::SetStockpileChunkSize {
+                        destination: entry.id,
+                        chunk_t: chunk,
+                    },
+                ));
+            }
+            // An unlimited pile takes as many as what its rules can send it
+            // needs; a limited one its maximum tonnes' worth.
+            let receiving = match (entry.capacity_t, chunk_t) {
+                (_, None) => "—".to_owned(),
+                (None, Some(chunk)) => tr!("experiment-receiving-unlimited", size = tonnes(chunk)),
+                (Some(capacity), Some(chunk)) => {
+                    let chunks = crate::model::schedule::experiment::receiving_chunks(capacity, chunk);
+                    match chunks.split_last() {
+                        Some((last, whole)) if (*last - chunk).abs() > 1e-6 => tr!(
+                            "experiment-receiving-remainder",
+                            count = whole.len().to_string(),
+                            size = tonnes(chunk),
+                            last = tonnes(*last)
+                        ),
+                        _ => tr!("experiment-receiving-whole", count = chunks.len().to_string(), size = tonnes(chunk)),
+                    }
+                }
+            };
+            rows.readonly(&tr!("experiment-receiving-chunks"), &receiving, None, None);
+        }
+
+        // One tonnage and one set of values. A chunked pile is split into
+        // chunks of its chunk size from these; once a chunk is edited on its
+        // own they are read back combined, and can be split again.
+        rows.section(&tr!("pile-opening-stock"));
+        let missing = |field: crate::model::ReserveFieldId| tracked.contains(&field) && blend.value(field).is_none() && blend.tonnes_t > 0.0;
+        if arranged {
+            let current = if blend.tonnes_t > 0.0 { number(blend.tonnes_t) } else { String::new() };
+            let (_, typed) = rows.committed_entry_with_hint(
+                ("pile_opening_tonnes", format!("{:?}", entry.id)),
+                &tr!("inventory-lot-tonnes"),
+                &current,
+                Some("t"),
+                &tr!("pile-opening-empty"),
+            );
+            if let Some(text) = typed {
+                let text = text.trim();
+                let tonnes_t = if text.is_empty() {
+                    Some(0.0)
+                } else {
+                    text.parse::<f64>().ok().filter(|t| t.is_finite() && *t >= 0.0)
+                };
+                if let Some(tonnes_t) = tonnes_t {
+                    new_blend = Some(OpeningBlend { tonnes_t, ..blend.clone() });
+                }
+            }
+            if blend.tonnes_t > 0.0 {
+                for field in &fields {
+                    let held = blend.value(field.id);
+                    if field.aggregation == ReserveAggregation::Category {
+                        let mut chosen = match held {
+                            Some(OpeningValue::Category(label)) => Some(label.clone()),
+                            _ => None,
+                        };
+                        let mut options: Vec<Option<String>> = vec![None];
+                        options.extend(categories.get(&field.id).into_iter().flatten().cloned().map(Some));
+                        if let Some(label) = &chosen
+                            && !options.contains(&Some(label.clone()))
+                        {
+                            options.push(Some(label.clone()));
+                        }
+                        let label = |value: &Option<String>| value.clone().unwrap_or_else(|| tr!("inventory-portion-missing"));
+                        let before = chosen.clone();
+                        rows.combo(
+                            ("pile_opening_category", format!("{:?}", entry.id), field.id.0),
+                            &field.name,
+                            &mut chosen,
+                            &label(&before),
+                            options.iter().map(|option| (option.clone(), label(option))).collect::<Vec<_>>(),
+                        );
+                        if chosen != before {
+                            let mut values = blend.values.clone();
+                            values.retain(|(id, _)| *id != field.id);
+                            if let Some(label) = chosen {
+                                values.push((field.id, OpeningValue::Category(label)));
+                            }
+                            new_blend = Some(OpeningBlend { values, ..blend.clone() });
+                        }
+                        continue;
+                    }
+                    let current = match held {
+                        Some(OpeningValue::Number(value)) => value.to_string(),
+                        _ => String::new(),
+                    };
+                    let warning = missing(field.id).then(|| tr!("pile-grade-needed"));
+                    let (_, typed) = rows.committed_entry_warned(
+                        ("pile_opening_value", format!("{:?}", entry.id), field.id.0),
+                        &field.name,
+                        &current,
+                        None,
+                        " ",
+                        warning.as_deref(),
+                    );
+                    if let Some(text) = typed {
+                        let text = text.trim();
+                        let value = if text.is_empty() {
+                            Some(None)
+                        } else {
+                            text.parse::<f64>().ok().filter(|v| v.is_finite()).map(Some)
+                        };
+                        if let Some(value) = value {
+                            let mut values = blend.values.clone();
+                            values.retain(|(id, _)| *id != field.id);
+                            if let Some(value) = value {
+                                values.push((field.id, OpeningValue::Number(value)));
+                            }
+                            new_blend = Some(OpeningBlend { values, ..blend.clone() });
+                        }
+                    }
+                }
+            }
+        } else {
+            rows.note(&tr!("pile-opening-differs"));
+            rows.readonly(&tr!("inventory-lot-tonnes"), &number(blend.tonnes_t), Some("t"), None);
+            for field in &fields {
+                let value = match blend.value(field.id) {
+                    Some(OpeningValue::Number(value)) => value.to_string(),
+                    Some(OpeningValue::Category(label)) => label.clone(),
+                    None => tr!("pile-opening-not-held"),
+                };
+                let warning = missing(field.id).then(|| tr!("pile-grade-needed"));
+                rows.readonly_warning(&field.name, &value, None, warning.as_deref());
+            }
+            let reset = if chunked { tr!("pile-opening-split-again") } else { tr!("pile-opening-combine") };
+            if rows.action_row(&reset).clicked() {
+                new_blend = Some(blend.clone());
+            }
+        }
+
+        rows.section(&tr!("pile-haulage"));
+        haul_point_row(rows, &tr!("haul-link-dump-column"), links.as_ref().map(|links| links.dump), dump_problem);
+        haul_point_row(rows, &tr!("haul-link-reclaim-column"), links.as_ref().and_then(|links| links.reclaim), reclaim_problem);
+        if rows.action_row(&tr!("haul-open-layout")).clicked() {
+            edits.push(UiCommand::EditHaulProperties);
+        }
+    });
+    if let Some(blend) = new_blend {
+        edits.push(UiCommand::schedule(session, ScheduleEdit::SetOpeningBlend { destination: entry.id, blend }));
+    }
+    commands.append(&mut edits);
+    if open_calendar {
+        editor.open_calendar_cell(crate::ui::state::CalendarCellAddress {
+            owner: crate::ui::state::CalendarOwner::Destination(entry.id),
+            row: crate::ui::state::CalendarRow::PileMode,
+            cell: crate::model::schedule::CalendarCell::Default,
+        });
+    }
+
+    // A chunked pile's opening chunks beside: the list, oldest first, over
+    // the one selected, for a chunk that differs from the rest.
+    let beside = egui::Rect::from_min_max(egui::pos2(table_rect.right() + gap, rect.top()), rect.max);
+    if chunked && beside.is_positive() {
+        let list = egui::Rect::from_min_size(beside.min, egui::vec2(beside.width(), ((beside.height() - gap) * 0.4).max(0.0)));
+        let chunk = egui::Rect::from_min_max(egui::pos2(beside.left(), list.bottom() + gap), beside.max);
+        draw_opening_lots(ui, list, editor, plan, document, &entry, session, commands);
+        draw_lot_editor(ui, chunk, editor, plan, document, &entry, session, commands);
+    }
 }
 
 /// The rule table: every rule in priority order, with what it matches.
@@ -1135,13 +1451,8 @@ fn new_label(kind: DestinationKind) -> String {
     }
 }
 
-fn empty_note(kind: DestinationKind) -> String {
-    match kind {
-        DestinationKind::Stockpile => tr!("destination-no-stockpiles"),
-        DestinationKind::Dump => tr!("destination-no-dumps"),
-        DestinationKind::Crusher => tr!("destination-no-crushers"),
-    }
-}
+/// The destination lists' Name and Capacity (or Daily limit) shares.
+const LIST_FRACTIONS: [f32; 2] = [0.6, 0.4];
 
 fn kind_page_title(kind: DestinationKind) -> String {
     match kind {
@@ -1363,43 +1674,57 @@ pub(crate) fn scope_key(scope: SourceScope) -> (u64, u64, u64) {
     }
 }
 
-/// The opening-inventory list for the selected stockpile: its lots, oldest
-/// first.
-///
-/// Ordered, and the order is labelled, because FIFO reads it from the top and
-/// LIFO from the bottom - so which end a lot sits at is the whole difference
-/// between the two settings.
-pub(crate) fn draw_opening_lots(
+/// The tracked grades an opening chunk has no value for, by name.
+fn missing_grades(plan: &SchedulePlan, document: &Document, lot: &crate::model::schedule::inventory::OpeningLot) -> Vec<String> {
+    plan.experiment()
+        .grades
+        .iter()
+        .filter_map(|(field, _)| document.reserve_fields().iter().find(|known| known.id == *field))
+        .filter(|field| {
+            lot.portions
+                .iter()
+                .any(|portion| !matches!(portion.value(field.id), Some(crate::model::schedule::OpeningValue::Number(value)) if value.is_finite()))
+        })
+        .map(|field| field.name.clone())
+        .collect()
+}
+
+/// What the stockpile opens holding: its chunks, oldest first, each with
+/// its tonnes and a mark where it lacks a grade the schedule tracks.
+#[allow(clippy::too_many_arguments)]
+fn draw_opening_lots(
     ui: &mut egui::Ui,
     rect: egui::Rect,
     editor: &mut EditorState,
     plan: &SchedulePlan,
     document: &Document,
+    destination: &destinations::DestinationView,
     session: u32,
     commands: &mut Vec<UiCommand>,
 ) {
-    let selected_destination = editor
-        .schedule_selected_destination
-        .and_then(|id| destinations::resolve(id, document.solids(), plan.routing()).ok())
-        .filter(|entry| entry.kind == DestinationKind::Stockpile);
-    let Some(destination) = selected_destination else {
-        DataGrid::new("schedule_opening_lots", rect, &tr!("inventory-opening")).show(ui, |ui| {
-            explorer_note(ui, tr!("destination-select"));
-        });
-        return;
-    };
     let inventory = plan.routing().inventory(destination.id).cloned().unwrap_or_default();
     let mut selected = editor.schedule_selected_lot;
+    let columns = [(tr!("inventory-chunk-column"), LIST_FRACTIONS[0]), (tr!("inventory-lot-tonnes"), LIST_FRACTIONS[1])];
+    let total = tonnes(destination.opening_t);
     DataGrid::new("schedule_opening_lots", rect, &tr!("inventory-opening"))
-        .column_header(&tr!("inventory-opening-order-note"))
+        .title_detail(&total)
+        .columns(&columns)
         .show(ui, |ui| {
             if inventory.lots.is_empty() {
                 explorer_note(ui, tr!("inventory-no-lots"));
             }
             let last = inventory.lots.len().saturating_sub(1);
             for (position, lot) in inventory.lots.iter().enumerate() {
-                let label = format!("{} · {}", lot.name, tonnes(lot.tonnes()));
-                let response = grid_row(ui, GridRow::new(&label).selected(selected == Some(lot.id))).on_hover_text(&label);
+                let (response, cells) = grid_columns_row(ui, &LIST_FRACTIONS, &[&lot.name, &tonnes(lot.tonnes())], selected == Some(lot.id));
+                let missing = missing_grades(plan, document, lot);
+                if let (false, Some(cell)) = (missing.is_empty(), cells.last()) {
+                    let message = missing
+                        .iter()
+                        .map(|grade| tr!("pile-chunk-grade-missing", chunk = lot.name.clone(), grade = grade.clone()))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    grid_cell_warning(ui, ("opening_chunk_warning", lot.id.0), *cell, &message);
+                }
                 if response.clicked() {
                     selected = Some(lot.id);
                 }
@@ -1449,23 +1774,16 @@ pub(crate) fn draw_opening_lots(
                     }
                 });
             }
-            let body = ui.available_rect_before_wrap();
-            if body.is_positive() {
-                let response = ui.interact(body, ui.id().with("new_opening_lot_space"), egui::Sense::click());
-                context_menu_popup(&response, tr!("inventory-opening"), |ui| {
-                    if ContextMenuAction::new(tr!("inventory-new-lot")).show(ui).clicked() {
-                        let name = crate::model::schedule::suggested_name(&tr!("inventory-default-lot-name"), inventory.lots.iter().map(|lot| lot.name.clone()));
-                        commands.push(UiCommand::schedule(
-                            session,
-                            ScheduleEdit::AddOpeningLot {
-                                destination: destination.id,
-                                name,
-                                tonnes_t: DEFAULT_LOT_TONNES,
-                            },
-                        ));
-                        ui.close();
-                    }
-                });
+            if grid_add_action_row(ui, &tr!("inventory-new-lot")) {
+                let name = crate::model::schedule::suggested_name(&tr!("inventory-default-lot-name"), inventory.lots.iter().map(|lot| lot.name.clone()));
+                commands.push(UiCommand::schedule(
+                    session,
+                    ScheduleEdit::AddOpeningLot {
+                        destination: destination.id,
+                        name,
+                        tonnes_t: DEFAULT_LOT_TONNES,
+                    },
+                ));
             }
         });
     if editor.schedule_selected_lot != selected {
@@ -1478,25 +1796,25 @@ pub(crate) fn draw_opening_lots(
 /// the user has to fill in before it means anything.
 const DEFAULT_LOT_TONNES: f64 = 1000.0;
 
-/// The selected lot: its name, and each portion's tonnes and property values.
+/// The selected opening chunk: its name, and each portion's tonnes and
+/// property values. A chunk of one portion shows that portion's rows
+/// directly; one of several shows its total, then each portion in turn.
 ///
 /// A portion's tonnes are asked once, here. The nominated tonnage field is not
 /// offered as a property - it would be the same number entered twice, free to
 /// disagree with itself.
-pub(crate) fn draw_lot_editor(
+#[allow(clippy::too_many_arguments)]
+fn draw_lot_editor(
     ui: &mut egui::Ui,
     rect: egui::Rect,
     editor: &mut EditorState,
     plan: &SchedulePlan,
     document: &Document,
+    destination: &destinations::DestinationView,
     session: u32,
     commands: &mut Vec<UiCommand>,
 ) {
-    let selected_destination = editor
-        .schedule_selected_destination
-        .and_then(|id| destinations::resolve(id, document.solids(), plan.routing()).ok())
-        .filter(|entry| entry.kind == DestinationKind::Stockpile);
-    let Some(destination) = selected_destination else { return };
+    let tracked: Vec<_> = plan.experiment().grades.iter().map(|(field, _)| *field).collect();
     let inventory = plan.routing().inventory(destination.id).cloned().unwrap_or_default();
     let Some(lot) = editor.schedule_selected_lot.and_then(|id| inventory.lot(id)).cloned() else {
         DataGrid::new("schedule_lot_editor", rect, &tr!("inventory-lot")).show(ui, |ui| {
@@ -1552,8 +1870,9 @@ pub(crate) fn draw_lot_editor(
     let name_error = name_problem(&draft.name, taken.iter().cloned());
     let mut edits = Vec::new();
     let mut portion_action = None;
-    DataGrid::new("schedule_lot_editor", rect, &lot.name).column_header(&tr!("inventory-lot")).show(ui, |ui| {
-        grid_separator_row(ui, &tr!("inventory-lot"), 0);
+    let several = lot.portions.len() > 1;
+    let depth = usize::from(several);
+    DataGrid::new("schedule_lot_editor", rect, &tr!("inventory-lot")).title_detail(&lot.name).show(ui, |ui| {
         {
             let (cell, _) = grid_named_row(ui, &tr!("inventory-lot-name"), 0);
             if cell.is_positive() {
@@ -1573,21 +1892,20 @@ pub(crate) fn draw_lot_editor(
                 }
             }
         }
-        let (cell, _) = grid_named_row(ui, &tr!("inventory-lot-tonnes"), 0);
-        if cell.is_positive() {
-            ui.put(
-                cell,
-                egui::Label::new(egui::RichText::new(tonnes(lot.tonnes())).color(ui.visuals().weak_text_color()))
-                    .truncate()
-                    .halign(egui::Align::Min),
-            );
+        if several {
+            let (cell, _) = grid_named_row(ui, &tr!("inventory-lot-tonnes"), 0);
+            if cell.is_positive() {
+                grid_cell_fixed(ui, cell, &tonnes(lot.tonnes()));
+            }
         }
 
         for (index, portion) in lot.portions.iter().enumerate() {
             let title = format!("{} {}", tr!("inventory-portion"), (index + 1));
-            grid_separator_row(ui, &title, 0);
+            if several {
+                grid_separator_row(ui, &title, 0);
+            }
             {
-                let (cell, response) = grid_named_row(ui, &tr!("inventory-lot-tonnes"), 1);
+                let (cell, response) = grid_named_row(ui, &tr!("inventory-lot-tonnes"), depth);
                 context_menu_popup(&response, &title, |ui| {
                     if ContextMenuAction::new(tr!("inventory-new-portion")).show(ui).clicked() {
                         portion_action = Some(PortionAction::Add);
@@ -1654,7 +1972,7 @@ pub(crate) fn draw_lot_editor(
                     };
                     let before = chosen.clone();
                     let label = |value: &Option<String>| value.clone().unwrap_or_else(|| tr!("inventory-portion-missing"));
-                    let (cell, response) = grid_named_row(ui, &display_name, 1);
+                    let (cell, response) = grid_named_row(ui, &display_name, depth);
                     if !compatible {
                         response.on_hover_text(tr!("inventory-field-incompatible-note"));
                     }
@@ -1689,7 +2007,7 @@ pub(crate) fn draw_lot_editor(
                     }
                     continue;
                 }
-                let (cell, response) = grid_named_row(ui, &display_name, 1);
+                let (cell, response) = grid_named_row(ui, &display_name, depth);
                 if !compatible {
                     response.on_hover_text(tr!("inventory-field-incompatible-note"));
                 }
@@ -1706,8 +2024,17 @@ pub(crate) fn draw_lot_editor(
                 };
                 let text = &mut draft.values[position].2;
                 let error = parse_lot_value(text).err();
+                // A grade the schedule tracks cannot be left blank: marked
+                // here, where it is typed, as well as on the step.
+                let mut cell = cell;
+                if tracked.contains(field) && held.is_none() {
+                    grid_cell_warning(ui, ("opening_grade_needed", portion.id.0, field.0), cell, &tr!("pile-grade-needed"));
+                    cell.max.x -= CELL_WARNING_WIDTH;
+                }
                 let response = ui.put(cell, egui::TextEdit::singleline(text).desired_width(cell.width()));
-                response.clone().on_hover_text(error.clone().unwrap_or_else(|| tr!("inventory-help")));
+                if let Some(message) = &error {
+                    response.clone().on_hover_text(message);
+                }
                 if response.lost_focus()
                     && let Ok(value) = parse_lot_value(text)
                 {

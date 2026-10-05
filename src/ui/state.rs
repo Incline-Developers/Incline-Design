@@ -2866,8 +2866,6 @@ pub(crate) struct EditorState {
     /// Typed text for the Optimisation settings, so a partly typed number is
     /// not committed and not lost.
     pub(crate) schedule_experiment_draft: Option<ScheduleExperimentDraft>,
-    /// Typed chunk capacities for one stockpile, as `(destination, source, text)`.
-    pub(crate) schedule_chunk_draft: Option<(crate::model::schedule::DestinationId, String, String)>,
     /// Selected rows in the two loader editors, and the drafts of the cells
     /// being typed into. Drafts are held rather than rebuilt each frame so an
     /// invalid entry stays on screen with its error instead of snapping back
@@ -4276,7 +4274,6 @@ impl EditorState {
             mined_ground: None,
             mined_ground_key: None,
             schedule_experiment_draft: None,
-            schedule_chunk_draft: None,
             schedule_selected_class: None,
             schedule_selected_agent: None,
             schedule_class_draft: None,
@@ -5952,7 +5949,8 @@ impl UiCommand {
                 | ScheduleEdit::SetExperimentSolveLimits { .. }
                 | ScheduleEdit::SetExperimentGradeUnit { .. }
                 | ScheduleEdit::SetStockpileRepresentation { .. }
-                | ScheduleEdit::SetStockpileChunks { .. } => None,
+                | ScheduleEdit::SetStockpileChunkSize { .. }
+                | ScheduleEdit::SetOpeningBlend { .. } => None,
             },
             Self::DeleteSolid(id) => report(tr!("planning-delete-solid"), format!("{id:?}")),
             Self::SelectBlast(_) | Self::SelectDigBlock(_) => None,
@@ -6821,10 +6819,12 @@ pub(crate) struct ScheduleDestinationDraft {
     pub(crate) id: crate::model::schedule::DestinationId,
     /// What the project held when this draft was seeded, so an edit made
     /// elsewhere replaces the draft rather than being overwritten by it.
-    pub(crate) source: (String, Option<f64>, Option<f64>, u64, Option<u64>),
+    pub(crate) source: (String, Option<f64>, Option<f64>, u64, Option<u64>, Option<u64>),
     pub(crate) name: String,
     /// A stockpile's rest before reclaim, in hours.
     pub(crate) rest: String,
+    /// A chunked stockpile's chunk size, blank for none.
+    pub(crate) chunk: String,
     pub(crate) capacity: String,
     /// A crusher's default daily budget, blank for unlimited.
     pub(crate) crusher_default: String,
@@ -7437,9 +7437,16 @@ pub(crate) enum ScheduleEdit {
         destination: crate::model::schedule::DestinationId,
         representation: crate::model::schedule::experiment::StockpileRepresentation,
     },
-    SetStockpileChunks {
+    /// Replace a stockpile's opening stock with one blend, held as one chunk
+    /// or split by the pile's chunk size.
+    SetOpeningBlend {
         destination: crate::model::schedule::DestinationId,
-        capacities: Vec<f64>,
+        blend: crate::model::schedule::inventory::OpeningBlend,
+    },
+    /// A chunked pile's receiving chunk size; `None` clears it.
+    SetStockpileChunkSize {
+        destination: crate::model::schedule::DestinationId,
+        chunk_t: Option<f64>,
     },
     /// Add a delay bar to one machine's lane: while it has priority the
     /// machine stands.

@@ -913,6 +913,16 @@ impl RoutingConfig {
         self.edit_inventory(id, |inventory| inventory.remove_lot(lot))
     }
 
+    pub(crate) fn set_opening_blend(
+        &mut self,
+        id: DestinationId,
+        blend: &super::inventory::OpeningBlend,
+        extensive: &[crate::model::ReserveFieldId],
+        chunk_t: Option<f64>,
+    ) -> ScheduleResult {
+        self.edit_inventory(id, |inventory| inventory.set_blend(blend, extensive, chunk_t))
+    }
+
     pub(crate) fn rename_opening_lot(&mut self, id: DestinationId, lot: OpeningLotId, name: &str) -> ScheduleResult {
         self.edit_inventory(id, |inventory| inventory.rename_lot(lot, name))
     }

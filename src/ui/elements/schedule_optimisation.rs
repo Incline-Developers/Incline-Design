@@ -12,8 +12,8 @@ use crate::{
     model::{
         Document, ReserveAggregation,
         schedule::{
-            DestinationId, SchedulePlan,
-            experiment::{GradeUnit, MAX_SOLVE_SECONDS, MIN_INTERVAL_H, StockpileRepresentation},
+            SchedulePlan,
+            experiment::{GradeUnit, MAX_SOLVE_SECONDS, MIN_INTERVAL_H},
         },
     },
     ui::{
@@ -173,66 +173,4 @@ pub(crate) fn draw_advanced(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut Ed
         }
     });
     commands.append(&mut edits);
-}
-
-/// The optimisation rows on one stockpile's Setup page.
-///
-/// Appended to the pile's own property table rather than given a page of
-/// their own: a representation is a property of one stockpile, exactly as its
-/// reclaim order and its capacity are.
-pub(crate) fn stockpile_rows(
-    rows: &mut crate::ui::widgets::data_grid::PropertyRows<'_>,
-    editor_chunks: &mut Option<(DestinationId, String, String)>,
-    plan: &SchedulePlan,
-    destination: DestinationId,
-    session: u32,
-    edits: &mut Vec<UiCommand>,
-) {
-    let experiment = plan.experiment();
-    let mut representation = experiment.representation(destination);
-    let selected = representation.label();
-    let response = rows.combo(
-        ("experiment_representation", format!("{destination:?}")),
-        &tr!("experiment-representation"),
-        &mut representation,
-        &selected,
-        [
-            (StockpileRepresentation::NotConfigured, StockpileRepresentation::NotConfigured.label()),
-            (StockpileRepresentation::Blended, StockpileRepresentation::Blended.label()),
-            (StockpileRepresentation::Chunks, StockpileRepresentation::Chunks.label()),
-        ],
-    );
-    response.on_hover_text(match experiment.representation(destination) {
-        StockpileRepresentation::NotConfigured => tr!("experiment-representation-help"),
-        StockpileRepresentation::Blended => tr!("experiment-blended-help"),
-        StockpileRepresentation::Chunks => tr!("experiment-chunks-help"),
-    });
-    if representation != experiment.representation(destination) {
-        edits.push(UiCommand::schedule(session, ScheduleEdit::SetStockpileRepresentation { destination, representation }));
-    }
-    if experiment.representation(destination) != StockpileRepresentation::Chunks {
-        return;
-    }
-    let authored = experiment.stockpile(destination).map(|entry| entry.receiving_chunks.clone()).unwrap_or_default();
-    let source = authored.iter().map(f64::to_string).collect::<Vec<_>>().join(", ");
-    if editor_chunks.as_ref().is_none_or(|(id, held, _)| *id != destination || *held != source) {
-        *editor_chunks = Some((destination, source.clone(), source.clone()));
-    }
-    let (_, _, text) = editor_chunks.as_mut().expect("just ensured");
-    let parsed: Option<Vec<f64>> = text
-        .split(',')
-        .map(str::trim)
-        .filter(|entry| !entry.is_empty())
-        .map(|entry| entry.parse::<f64>().ok().filter(|value| value.is_finite() && *value > 0.0))
-        .collect();
-    let error = parsed.is_none().then(|| crate::model::schedule::ScheduleError::InvalidExperimentSetting.message());
-    let response = rows.field(&tr!("experiment-receiving-chunks"), text, error.as_deref());
-    let committed = response.lost_focus();
-    response.on_hover_text(tr!("experiment-chunks-help"));
-    if committed
-        && let Some(capacities) = parsed
-        && capacities != authored
-    {
-        edits.push(UiCommand::schedule(session, ScheduleEdit::SetStockpileChunks { destination, capacities }));
-    }
 }

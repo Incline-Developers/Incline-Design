@@ -713,6 +713,7 @@ impl HaulLink {
 /// its reclaim point.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DestinationLinks {
+    pub(crate) id: crate::model::schedule::DestinationId,
     pub(crate) name: String,
     pub(crate) kind: DestinationKind,
     pub(crate) dump: HaulLink,
@@ -813,6 +814,7 @@ impl crate::app::App<'_> {
                     }
                 });
                 DestinationLinks {
+                    id: view.id,
                     name: view.name,
                     kind: view.kind,
                     dump,

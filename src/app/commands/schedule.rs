@@ -265,10 +265,23 @@ impl crate::app::App<'_> {
             ScheduleEdit::DeleteRoster(roster) => self.edit_schedule(|plan| plan.edit_delays(|delays, _| delays.remove_roster(roster))),
             ScheduleEdit::SetExperimentGradeUnit { field, unit } => self.edit_schedule(|plan| plan.experiment_mut().set_grade_unit(field, unit)),
             ScheduleEdit::SetStockpileRepresentation { destination, representation } => {
-                self.edit_stockpile_routing_plan(destination, move |plan| plan.experiment_mut().set_representation(destination, representation))
+                let extensive = self.extensive_fields();
+                self.edit_stockpile_routing_plan(destination, move |plan| {
+                    keep_opening_arranged(plan, destination, &extensive, |plan| plan.experiment_mut().set_representation(destination, representation))
+                })
             }
-            ScheduleEdit::SetStockpileChunks { destination, capacities } => {
-                self.edit_stockpile_routing_plan(destination, move |plan| plan.experiment_mut().set_receiving_chunks(destination, capacities))
+            ScheduleEdit::SetStockpileChunkSize { destination, chunk_t } => {
+                let extensive = self.extensive_fields();
+                self.edit_stockpile_routing_plan(destination, move |plan| {
+                    keep_opening_arranged(plan, destination, &extensive, |plan| plan.experiment_mut().set_chunk_size(destination, chunk_t))
+                })
+            }
+            ScheduleEdit::SetOpeningBlend { destination, blend } => {
+                let extensive = self.extensive_fields();
+                self.edit_stockpile_routing_plan(destination, move |plan| {
+                    let split = opening_split(plan, destination);
+                    plan.routing_mut().set_opening_blend(destination, &blend, &extensive, split)
+                })
             }
         }
     }
@@ -301,6 +314,22 @@ impl crate::app::App<'_> {
             return;
         }
         self.edit_schedule(edit);
+    }
+
+    /// The fields whose values add up rather than average, which a split
+    /// shares out by tonnes.
+    fn extensive_fields(&self) -> Vec<crate::model::ReserveFieldId> {
+        self.workspace
+            .active_document()
+            .map(|document| {
+                document
+                    .reserve_fields()
+                    .iter()
+                    .filter(|field| field.aggregation == crate::model::ReserveAggregation::Sum)
+                    .map(|field| field.id)
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     fn destination_is_stockpile(&self, destination: crate::model::schedule::DestinationId) -> bool {
@@ -1077,4 +1106,35 @@ fn resolve_drafted_order(
         }
     }
     Ok(resolved)
+}
+
+/// The chunk size a stockpile's opening stock is split by: its chunk size
+/// when it is chunked, and none - one chunk - when it is a blend.
+pub(crate) fn opening_split(plan: &SchedulePlan, destination: crate::model::schedule::DestinationId) -> Option<f64> {
+    let experiment = plan.experiment();
+    (experiment.representation(destination) == crate::model::schedule::experiment::StockpileRepresentation::Chunks)
+        .then(|| experiment.chunk_t(destination))
+        .flatten()
+}
+
+/// Apply `change`, then hold opening stock that was one blend as that blend
+/// under the new split. Stock whose chunks were edited one by one is left as
+/// it was: re-splitting it would throw that work away.
+fn keep_opening_arranged(
+    plan: &mut SchedulePlan,
+    destination: crate::model::schedule::DestinationId,
+    extensive: &[crate::model::ReserveFieldId],
+    change: impl FnOnce(&mut SchedulePlan) -> crate::model::schedule::ScheduleResult,
+) -> crate::model::schedule::ScheduleResult {
+    let before = plan
+        .routing()
+        .inventory(destination)
+        .filter(|inventory| !inventory.lots.is_empty() && inventory.is_arranged(extensive, opening_split(plan, destination)))
+        .map(|inventory| inventory.combined(extensive));
+    change(plan)?;
+    if let Some(blend) = before {
+        let split = opening_split(plan, destination);
+        plan.routing_mut().set_opening_blend(destination, &blend, extensive, split)?;
+    }
+    Ok(())
 }

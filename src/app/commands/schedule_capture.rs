@@ -945,6 +945,9 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         .sum();
     let unlimited_t = (dug_t + source.destinations.iter().map(|view| view.opening_t).sum::<f64>()).max(1.0);
     let mut piles: Vec<BlendPile> = Vec::new();
+    // Unlimited chunked piles, by position in `piles`, still to be given
+    // their receiving chunks.
+    let mut unlimited_chunked: Vec<(usize, ProjectDestinationId, f64)> = Vec::new();
     for project_id in &used_piles {
         if cancel.is_cancelled() {
             return Err(Vec::new());
@@ -954,16 +957,12 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         };
         let Some(&pile) = pile_ids.get(project_id) else { continue };
         let representation = experiment.representation(*project_id);
-        if representation == StockpileRepresentation::NotConfigured {
-            problems.push(CaptureDiagnostic::new(view.name.clone(), tr!("schedule-capture-representation")).at(ScheduleStep::Stockpiles));
-            continue;
-        }
         // A pile with no capacity is unlimited. The model still needs a bound
         // to scale its switching rows by, so it is given one it can never
         // reach: everything this run could ever put on any pile.
         let capacity_t = view.capacity_t.unwrap_or(unlimited_t);
-        // Opening lots, read exactly as authored. A missing grade is missing,
-        // never zero.
+        // Opening chunks, read exactly as authored. A missing grade is
+        // missing, never zero.
         let inventory = routing.inventory(*project_id);
         let mut lots: Vec<(f64, Vec<f64>)> = Vec::new();
         let mut lot_names: Vec<String> = Vec::new();
@@ -1049,29 +1048,38 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             chunk_closed_h: Vec::new(),
         };
         match representation {
-            StockpileRepresentation::NotConfigured => unreachable!("refused above"),
             StockpileRepresentation::Blended => {
-                // One blend: the authored lots are combined, explicitly, and
+                // One blend: the opening chunks are combined, explicitly, and
                 // FIFO/LIFO stops applying rather than being reinterpreted.
                 if lots.len() > 1 {
                     notes.push(tr!("schedule-capture-lots-combined", stockpile = view.name.clone(), count = lots.len().to_string()));
                 }
             }
             StockpileRepresentation::Chunks => {
-                let receiving = experiment.stockpile(*project_id).map(|entry| entry.receiving_chunks.clone()).unwrap_or_default();
-                // Each authored opening lot becomes a closed, immediately
-                // reclaimable chunk holding its own actual composition; the
-                // configured receiving chunks fill in order behind them.
+                // The pile's maximum tonnes in chunks of its chunk size. An
+                // unlimited pile's are added once the dug material is known:
+                // enough for what its rules can send it.
+                let Some(chunk_t) = experiment.chunk_t(*project_id) else {
+                    problems.push(CaptureDiagnostic::new(view.name.clone(), tr!("pile-chunk-size-missing")).at(ScheduleStep::Stockpiles));
+                    continue;
+                };
+                let receiving = match view.capacity_t {
+                    Some(capacity) => crate::model::schedule::experiment::receiving_chunks(capacity, chunk_t),
+                    None => {
+                        unlimited_chunked.push((piles.len(), *project_id, chunk_t));
+                        Vec::new()
+                    }
+                };
+                // Each opening chunk is closed and immediately reclaimable,
+                // holding its own actual composition; the receiving chunks
+                // fill in order behind them.
                 let mut capacities: Vec<f64> = lots.iter().map(|(tonnes, _)| tonnes.max(f64::MIN_POSITIVE)).collect();
                 let mut openings: Vec<(f64, Vec<f64>)> = lots.clone();
                 capacities.extend(receiving.iter().copied());
                 openings.extend(receiving.iter().map(|_| (0.0, vec![0.0; grades])));
-                if capacities.is_empty() {
-                    problems.push(CaptureDiagnostic::new(view.name.clone(), tr!("schedule-capture-chunks-empty")));
+                if capacities.is_empty() && view.capacity_t.is_some() {
+                    problems.push(CaptureDiagnostic::new(view.name.clone(), tr!("schedule-capture-chunks-empty")).at(ScheduleStep::Stockpiles));
                     continue;
-                }
-                if receiving.is_empty() {
-                    notes.push(tr!("schedule-capture-no-receiving-chunks", stockpile = view.name.clone()));
                 }
                 let mut labels: Vec<String> = lot_names.iter().map(|name| tr!("schedule-chunk-opening", lot = name.clone())).collect();
                 labels.extend((1..=receiving.len()).map(|number| tr!("schedule-chunk-receiving", number = number.to_string())));
@@ -1233,6 +1241,49 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         block_ground.insert(position, id);
         identities.ground_blocks.insert(id, block.id);
     }
+    // ---- receiving chunks of unlimited chunked piles -----------------------
+    // Every permitted destination is a candidate, so a pile can receive no
+    // more than the dug material some enabled rule sends it.
+    for (index, project_id, chunk_t) in unlimited_chunked {
+        let mut counted: std::collections::BTreeSet<(GroundId, MaterialId)> = std::collections::BTreeSet::new();
+        let mut routable = 0.0;
+        for bar in &scoped {
+            let ScopedWork::Dig { members, .. } = &bar.work else { continue };
+            for (position, _) in members {
+                let Some(&id) = block_ground.get(position) else { continue };
+                let Some(held_ground) = ground.iter().find(|entry| entry.id == id) else { continue };
+                for share in &held_ground.material {
+                    let Some(held) = context.get(&(id, share.material)) else { continue };
+                    let route = RouteSource::Ground {
+                        solid: held.solid,
+                        bench: held.bench,
+                        flitch: held.flitch,
+                    };
+                    if !counted.contains(&(id, share.material))
+                        && routing
+                            .rules
+                            .iter()
+                            .any(|rule| rule.destinations.contains(&project_id) && rule.accepts(bar.agent, route, |field| held.value(field)))
+                    {
+                        counted.insert((id, share.material));
+                        routable += held_ground.tonnes_t * share.fraction;
+                    }
+                }
+            }
+        }
+        // A pile nothing is sent to still needs a chunk to be a pile.
+        let mut receiving = crate::model::schedule::experiment::receiving_chunks(routable, chunk_t);
+        if receiving.is_empty() {
+            receiving.push(chunk_t);
+        }
+        let pile = &mut piles[index];
+        pile.chunks.extend(receiving.iter().copied());
+        pile.chunk_opening.extend(receiving.iter().map(|_| (0.0, vec![0.0; grades])));
+        if let Some(labels) = identities.chunk_labels.get_mut(&pile.id) {
+            labels.extend((1..=receiving.len()).map(|number| tr!("schedule-chunk-receiving", number = number.to_string())));
+        }
+    }
+
     if mixed_blocks > 0 {
         notes.push(format!(
             "{mixed_blocks} dig block(s) hold more than one captured material; each is one block dug in its measured proportions, so every segment removes every portion together"

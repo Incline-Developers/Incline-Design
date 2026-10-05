@@ -170,6 +170,62 @@ impl OpeningLot {
     }
 }
 
+/// Opening stock as one blend: its tonnes and what they are made of, as a
+/// stockpile without chunks holds it and as a chunked one is split from.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct OpeningBlend {
+    pub(crate) tonnes_t: f64,
+    pub(crate) values: Vec<(ReserveFieldId, OpeningValue)>,
+}
+
+impl OpeningBlend {
+    pub(crate) fn value(&self, field: ReserveFieldId) -> Option<&OpeningValue> {
+        self.values.iter().find(|(id, _)| *id == field).map(|(_, value)| value)
+    }
+
+    /// The chunks this blend is held as: one, or chunks of `chunk_t` with the
+    /// last smaller. `extensive` fields - ones that add up rather than
+    /// average - are shared out by tonnes; every other value is the blend's.
+    fn arrangement(&self, extensive: &[ReserveFieldId], chunk_t: Option<f64>) -> Vec<(f64, Vec<(ReserveFieldId, OpeningValue)>)> {
+        if self.tonnes_t.is_nan() || self.tonnes_t <= 0.0 {
+            return Vec::new();
+        }
+        let sizes = chunk_t
+            .map(|chunk| super::experiment::receiving_chunks(self.tonnes_t, chunk))
+            .filter(|sizes| !sizes.is_empty())
+            .unwrap_or_else(|| vec![self.tonnes_t]);
+        sizes
+            .into_iter()
+            .map(|size| {
+                let share = size / self.tonnes_t;
+                let values = self
+                    .values
+                    .iter()
+                    .map(|(field, value)| match value {
+                        OpeningValue::Number(number) if extensive.contains(field) => (*field, OpeningValue::Number(number * share)),
+                        _ => (*field, value.clone()),
+                    })
+                    .collect();
+                (size, values)
+            })
+            .collect()
+    }
+}
+
+fn close(a: f64, b: f64) -> bool {
+    (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0)
+}
+
+fn same_values(a: &[(ReserveFieldId, OpeningValue)], b: &[(ReserveFieldId, OpeningValue)]) -> bool {
+    a.len() == b.len()
+        && a.iter().all(|(field, value)| {
+            b.iter().find(|(other, _)| other == field).is_some_and(|(_, other)| match (value, other) {
+                (OpeningValue::Number(x), OpeningValue::Number(y)) => close(*x, *y),
+                _ => value == other,
+            })
+        })
+}
+
 /// One stockpile's reclaim settings and its opening stock.
 ///
 /// Held against the destination rather than in a table of its own, so a
@@ -219,6 +275,86 @@ impl StockpileInventory {
                 matches!(value, OpeningValue::Category(_)) != (field.aggregation == ReserveAggregation::Category)
             })
             .count()
+    }
+
+    /// The opening stock read as one blend. A number is the tonnes-weighted
+    /// average over every portion (the sum, for an `extensive` field), and
+    /// a label the one every portion shares; a field some portion lacks, or
+    /// whose labels differ, is left out.
+    pub(crate) fn combined(&self, extensive: &[ReserveFieldId]) -> OpeningBlend {
+        let portions: Vec<&OpeningPortion> = self.lots.iter().flat_map(|lot| &lot.portions).collect();
+        let tonnes_t: f64 = portions.iter().map(|portion| portion.tonnes_t).sum();
+        let mut fields: Vec<ReserveFieldId> = Vec::new();
+        for (field, _) in portions.iter().flat_map(|portion| &portion.values) {
+            if !fields.contains(field) {
+                fields.push(*field);
+            }
+        }
+        let values = fields
+            .into_iter()
+            .filter_map(|field| {
+                let held: Option<Vec<(f64, &OpeningValue)>> = portions.iter().map(|portion| portion.value(field).map(|value| (portion.tonnes_t, value))).collect();
+                let held = held?;
+                let value = match held.first()?.1 {
+                    OpeningValue::Category(label) => held
+                        .iter()
+                        .all(|(_, value)| matches!(value, OpeningValue::Category(other) if other == label))
+                        .then(|| OpeningValue::Category(label.clone()))?,
+                    OpeningValue::Number(_) => {
+                        let numbers: Option<Vec<(f64, f64)>> = held
+                            .iter()
+                            .map(|(tonnes, value)| match value {
+                                OpeningValue::Number(number) => Some((*tonnes, *number)),
+                                OpeningValue::Category(_) => None,
+                            })
+                            .collect();
+                        let numbers = numbers?;
+                        let sum: f64 = if extensive.contains(&field) {
+                            numbers.iter().map(|(_, number)| number).sum()
+                        } else {
+                            numbers.iter().map(|(tonnes, number)| tonnes * number).sum::<f64>() / tonnes_t
+                        };
+                        OpeningValue::Number(sum)
+                    }
+                };
+                Some((field, value))
+            })
+            .collect();
+        OpeningBlend { tonnes_t, values }
+    }
+
+    /// Whether the chunks are exactly their combined blend held as
+    /// [`Self::set_blend`] would hold it: so the blend can be edited and
+    /// split again without losing anything typed into one chunk alone.
+    pub(crate) fn is_arranged(&self, extensive: &[ReserveFieldId], chunk_t: Option<f64>) -> bool {
+        let arrangement = self.combined(extensive).arrangement(extensive, chunk_t);
+        self.lots.len() == arrangement.len()
+            && self
+                .lots
+                .iter()
+                .zip(&arrangement)
+                .all(|(lot, (tonnes, values))| matches!(lot.portions.as_slice(), [portion] if close(portion.tonnes_t, *tonnes) && same_values(&portion.values, values)))
+    }
+
+    /// Replace the opening stock with `blend`, as one chunk or as chunks of
+    /// `chunk_t`. A blend of no tonnes leaves the pile starting empty.
+    pub(crate) fn set_blend(&mut self, blend: &OpeningBlend, extensive: &[ReserveFieldId], chunk_t: Option<f64>) -> ScheduleResult {
+        if blend.values.iter().any(|(_, value)| !value.is_valid()) || !blend.tonnes_t.is_finite() || blend.tonnes_t < 0.0 {
+            return Err(ScheduleError::InvalidLotValue);
+        }
+        let parts = blend.arrangement(extensive, chunk_t);
+        let single = parts.len() == 1;
+        self.lots.clear();
+        for (index, (tonnes, values)) in parts.into_iter().enumerate() {
+            let name = if single {
+                tr!("inventory-blend-name")
+            } else {
+                tr!("inventory-chunk-name", number = (index + 1).to_string())
+            };
+            let id = self.add_lot(&name, tonnes)?;
+            self.lot_mut(id)?.portions[0].values = values;
+        }
+        Ok(())
     }
 
     /// Everything in the pile at hour zero.

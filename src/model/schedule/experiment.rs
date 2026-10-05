@@ -7,12 +7,9 @@
 //! - **How long to plan for, and at what resolution.** Run All Periods solves
 //!   a bounded horizon and has to be told where it ends, because a bar may be
 //!   open-ended and "the last bar's end" is then not a number.
-//! - **What a stockpile *is*.** Authored FIFO/LIFO lots are an ordered
-//!   inventory. The blended model is not, and the chunked variant is a third
-//!   thing again. Converting one into another silently would change what a
-//!   planner authored, so the representation is chosen per pile and defaults
-//!   to [`StockpileRepresentation::NotConfigured`] - which blocks a run that
-//!   uses that pile and blocks nothing else.
+//! - **What a stockpile *is*.** A blended pile is one composition; a chunked
+//!   pile is an ordered run of closed chunks reclaimed FIFO or LIFO. Each pile
+//!   is blended until chosen otherwise.
 //! - **Which grade columns to track.** Numeric tonnes-weighted fields can be
 //!   carried through blends, targets and actuals. Their stored numbers are
 //!   used directly, whether a value is written as `0.62` or `62`.
@@ -59,25 +56,22 @@ pub(crate) enum GradeUnit {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "snake_case")]
 pub(crate) enum StockpileRepresentation {
-    /// No choice has been made. Every existing project starts here, and a run
-    /// that needs this pile refuses with the pile named rather than picking
-    /// one of the two answers below on the planner's behalf.
+    /// One blend. Opening chunks are combined by tonnes and contained
+    /// quantity, and FIFO/LIFO stops meaning anything - a pile with one
+    /// composition has no oldest end to draw from. Older files saying no
+    /// choice had been made open as this.
     #[default]
-    NotConfigured,
-    /// One blend. Opening lots are combined by tonnes and contained quantity,
-    /// and FIFO/LIFO stops meaning anything - a pile with one composition has
-    /// no oldest end to draw from.
+    #[serde(alias = "not_configured")]
     Blended,
-    /// Ordered blended chunks. Each authored opening lot becomes a closed,
-    /// immediately reclaimable chunk of its own actual composition, and the
-    /// configured receiving chunks fill in order behind them.
+    /// Ordered blended chunks. Each opening chunk is closed and immediately
+    /// reclaimable with its own composition, and receiving chunks of the
+    /// pile's chunk size fill in order behind them.
     Chunks,
 }
 
 impl StockpileRepresentation {
     pub(crate) fn label(self) -> String {
         match self {
-            Self::NotConfigured => tr!("experiment-representation-none"),
             Self::Blended => tr!("experiment-representation-blended"),
             Self::Chunks => tr!("experiment-representation-chunks"),
         }
@@ -86,23 +80,61 @@ impl StockpileRepresentation {
 
 /// One stockpile's optimisation settings.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(from = "StoredStockpileExperiment")]
 pub(crate) struct StockpileExperiment {
     pub(crate) representation: StockpileRepresentation,
-    /// Capacities of the *receiving* chunks, in fill order. The opening lots
-    /// supply their own closed chunks ahead of these and are not listed here.
+    /// The size of a chunked pile's *receiving* chunks. The pile's maximum
+    /// tonnes are divided into chunks of this size, the last smaller when it
+    /// does not divide evenly; the opening chunks are closed ahead of them.
     ///
     /// Never derived from a truck payload or a tonnage: how many chunks a
     /// pile is divided into is a modelling decision with a throughput
     /// consequence - an emptied chunk slot is not reused within the horizon -
     /// and inventing them to make a solve succeed would hide that.
-    pub(crate) receiving_chunks: Vec<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) chunk_t: Option<f64>,
+}
+
+/// [`StockpileExperiment`] as files hold it, older ones listing each
+/// receiving chunk's capacity. The largest of those becomes the chunk size.
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct StoredStockpileExperiment {
+    representation: StockpileRepresentation,
+    chunk_t: Option<f64>,
+    receiving_chunks: Vec<f64>,
+}
+
+impl From<StoredStockpileExperiment> for StockpileExperiment {
+    fn from(stored: StoredStockpileExperiment) -> Self {
+        Self {
+            representation: stored.representation,
+            chunk_t: stored
+                .chunk_t
+                .or_else(|| stored.receiving_chunks.iter().copied().filter(|t| t.is_finite() && *t > 0.0).reduce(f64::max)),
+        }
+    }
 }
 
 impl StockpileExperiment {
     fn is_pristine(&self) -> bool {
-        self.representation == StockpileRepresentation::NotConfigured && self.receiving_chunks.is_empty()
+        self.representation == StockpileRepresentation::Blended && self.chunk_t.is_none()
     }
+}
+
+/// The receiving chunks a pile of `capacity_t` holds at `chunk_t` each: as
+/// many whole chunks as fit, then the remainder as one smaller chunk.
+pub(crate) fn receiving_chunks(capacity_t: f64, chunk_t: f64) -> Vec<f64> {
+    if !(capacity_t > 0.0 && chunk_t > 0.0) {
+        return Vec::new();
+    }
+    let whole = (capacity_t / chunk_t + 1e-9).floor();
+    let remainder = capacity_t - whole * chunk_t;
+    let mut chunks = vec![chunk_t; whole as usize];
+    if remainder > 1e-6 {
+        chunks.push(remainder);
+    }
+    chunks
 }
 
 /// Everything the schedule optimiser is told that the rest of the plan does
@@ -166,7 +198,7 @@ impl ExperimentConfig {
     }
 
     pub(crate) fn representation(&self, id: DestinationId) -> StockpileRepresentation {
-        self.stockpile(id).map_or(StockpileRepresentation::NotConfigured, |entry| entry.representation)
+        self.stockpile(id).map_or(StockpileRepresentation::Blended, |entry| entry.representation)
     }
 
     pub(crate) fn grade_unit(&self, field: ReserveFieldId) -> Option<GradeUnit> {
@@ -228,11 +260,15 @@ impl ExperimentConfig {
         Ok(())
     }
 
-    pub(crate) fn set_receiving_chunks(&mut self, id: DestinationId, capacities: Vec<f64>) -> ScheduleResult {
-        if capacities.iter().any(|capacity| !capacity.is_finite() || *capacity <= 0.0) {
+    pub(crate) fn chunk_t(&self, id: DestinationId) -> Option<f64> {
+        self.stockpile(id).and_then(|entry| entry.chunk_t)
+    }
+
+    pub(crate) fn set_chunk_size(&mut self, id: DestinationId, chunk_t: Option<f64>) -> ScheduleResult {
+        if chunk_t.is_some_and(|t| !t.is_finite() || t <= 0.0) {
             return Err(ScheduleError::InvalidExperimentSetting);
         }
-        self.entry(id).receiving_chunks = capacities;
+        self.entry(id).chunk_t = chunk_t;
         self.prune();
         Ok(())
     }
@@ -266,9 +302,7 @@ impl ExperimentConfig {
         for (id, entry) in &self.stockpiles {
             id.hash(hasher);
             entry.representation.hash(hasher);
-            for capacity in &entry.receiving_chunks {
-                capacity.to_bits().hash(hasher);
-            }
+            entry.chunk_t.map(f64::to_bits).hash(hasher);
         }
     }
 
@@ -289,19 +323,11 @@ impl ExperimentConfig {
         for (id, entry) in &self.stockpiles {
             id.hash(hasher);
             entry.representation.hash(hasher);
-            for capacity in &entry.receiving_chunks {
-                capacity.to_bits().hash(hasher);
-            }
+            entry.chunk_t.map(f64::to_bits).hash(hasher);
         }
     }
 
     pub(crate) fn estimated_bytes(&self) -> usize {
-        size_of::<Self>()
-            + size_of_val(self.grades.as_slice())
-            + self
-                .stockpiles
-                .iter()
-                .map(|(_, entry)| size_of::<(DestinationId, StockpileExperiment)>() + size_of_val(entry.receiving_chunks.as_slice()))
-                .sum::<usize>()
+        size_of::<Self>() + size_of_val(self.grades.as_slice()) + self.stockpiles.len() * size_of::<(DestinationId, StockpileExperiment)>()
     }
 }

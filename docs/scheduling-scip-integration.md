@@ -89,9 +89,14 @@ an exact discontinuous authored-value problem.
 - Stockpile capacity limits instantaneous occupancy, including opening stock;
   it does not limit lifetime receipts. Reclaim permits refill. Dump capacity
   still limits cumulative receipts, and crusher budgets limit daily throughput.
-- Blended representation combines opening lots; FIFO/LIFO intent is not applied
-  to a homogeneous blend. Ordered chunks preserve order, but emptied receiving
-  slots are not reused during a horizon.
+- Blended representation (every pile's default) combines opening chunks;
+  FIFO/LIFO is not applied to a homogeneous blend. Ordered chunks preserve
+  order; their receiving chunks are the pile's maximum tonnes divided by one
+  chunk size, the last smaller when it does not divide evenly, and emptied
+  receiving chunks are not reused during a horizon. An unlimited chunked pile
+  gets enough chunks for the dug material its enabled rules can send it. Each
+  chunk adds rows to every interval, so a small chunk size makes a slower
+  solve.
 - Stockpile-to-stockpile rehandle is excluded with a capture note rather than
   silently assigning zero grades.
 - Mixed dig blocks move in their measured proportions; opening stock is included
