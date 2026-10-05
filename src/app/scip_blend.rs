@@ -1037,11 +1037,16 @@ fn dispatch_start(input: &BlendInput, deadline: Option<Instant>, cancel: &Cancel
 /// solution is SCIP's own, so it satisfies the model as SCIP checks it.
 /// Should that hold leave no completion, the movements are tried alone.
 ///
-/// The copy is solved without presolve. Presolved, SCIP checked the
-/// completion in its reduced problem, and mapped back onto the original
-/// columns it overran a loader's rate row by up to 0.007 t on a real week:
-/// SCIP then refused it as a start. Nearly every column is already fixed,
-/// so presolve has little to do. SCIP's own completion
+/// Presolve only takes the fixed columns out: it neither aggregates columns
+/// nor makes dual reductions, and the first solution found ends the solve.
+/// With full presolve SCIP checked the completion in its reduced problem,
+/// and mapped back onto the original columns it overran a loader's rate row
+/// by up to 0.007 t on a real week, so SCIP refused it as a start. Without
+/// any presolve the fixed columns stayed in every LP: on the example
+/// project's 1,202 hours the completion took 30 s, twice its share of the
+/// budget, and SCIP was never offered the seed. Taking them out leaves a
+/// problem a tenth the size, completed in 8 s. Symmetry detection is off:
+/// with nearly every column fixed it finds nothing to use. SCIP's own completion
 /// heuristic was tried first and is not used: given the same values as a
 /// partial solution it searched a neighbourhood of them instead, and on a
 /// real week it spent the whole budget returning a schedule worth a
@@ -1106,9 +1111,16 @@ fn complete_seed_with(input: &BlendInput, seed: &BlendSolution, pin_piles: bool,
     }
     let mut model = configure(built.model.hide_output(), limit, None)?;
     model = without_mpec(model)?;
-    model = model
-        .set_int_param("presolving/maxrounds", 0)
-        .map_err(|error| format!("configuring the seed's completion: {error:?}"))?;
+    let configured = |model: Model<ProblemCreated>| -> Result<Model<ProblemCreated>, russcip::Retcode> {
+        model
+            .set_bool_param("presolving/donotaggr", true)?
+            .set_bool_param("presolving/donotmultaggr", true)?
+            .set_bool_param("misc/allowstrongdualreds", false)?
+            .set_bool_param("misc/allowweakdualreds", false)?
+            .set_int_param("misc/usesymmetry", 0)?
+            .set_int_param("limits/solutions", 1)
+    };
+    model = configured(model).map_err(|error| format!("configuring the seed's completion: {error:?}"))?;
     adapter::install_cancellation(&mut model, cancel.signal(), Arc::new(adapter::InterruptAudit::default()));
     let solved = model.solve();
     if cancel.is_cancelled() {
@@ -1242,8 +1254,7 @@ fn without_mpec(model: Model<ProblemCreated>) -> Result<Model<ProblemCreated>, S
 
 /// One line per finished solve, whatever became of it.
 /// Diagnostic-only: what the captured project looks like and which
-/// formulation families dominate the model. Built by a counting pass, so it
-/// costs a second formulation walk but no solver memory.
+/// formulation families dominate the model, as tallied while it was built.
 fn log_model_structure(run_id: u64, input: &BlendInput, families: &[(String, FamilySize)]) {
     let mut tonnes: Vec<f64> = input.ground.iter().map(|source| source.tonnes_t).collect();
     tonnes.sort_by(f64::total_cmp);

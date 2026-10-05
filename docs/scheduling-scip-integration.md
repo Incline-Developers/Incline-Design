@@ -385,10 +385,15 @@ dispatcher"):
    movements give them under perfect mixing. With only the movements held,
    every mixing equality was left a bilinear row to search, and a DreamLand
    week with a Reclaim bar on a full 200,000 t pile ran out of time without a
-   completion. The copy is solved without presolve: presolved, its answer
-   mapped back onto the original columns overran a loader's rate row by up to
-   0.007 t, and SCIP refused it as a start. That costs a few seconds (a
-   dig-only week completes in 5.6 s instead of 1.8 s).
+   completion. Presolve only takes the copy's fixed columns out, with no
+   aggregation or dual reductions, and the first solution found ends the
+   solve: with full presolve, its answer mapped back onto the original
+   columns overran a loader's rate row by up to 0.007 t, and SCIP refused it
+   as a start. With no presolve at all the fixed columns stayed in every LP,
+   and on the example project's 1,202 hours the completion took 30 s, twice
+   its share of the budget, so SCIP was never offered the seed; now it takes
+   8 s, and a chunked day window 0.65 s instead of 2.9 s. Symmetry detection
+   is off for the copy.
 
    The mixing rows themselves are divided by the pile's capacity. SCIP checks
    them to an absolute 1e-6, and unscaled their products reach about 3e10 on
