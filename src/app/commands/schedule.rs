@@ -214,7 +214,8 @@ impl crate::app::App<'_> {
                 window,
                 sources,
                 maximum_t,
-            } => self.add_reclaim_bar(name, agent, priority, window, sources, maximum_t),
+                insert_lane,
+            } => self.add_reclaim_bar(name, agent, priority, window, sources, maximum_t, insert_lane),
             ScheduleEdit::SetReclaimSources { bar, sources } => self.set_reclaim_sources(bar, sources),
             ScheduleEdit::SetReclaimMaximum { bar, maximum_t } => self.edit_schedule(|plan| plan.set_reclaim_maximum(bar, maximum_t)),
             ScheduleEdit::SetExperimentHorizon { end_day, interval_h } => self.edit_schedule(|plan| {
@@ -672,11 +673,11 @@ impl crate::app::App<'_> {
     fn add_bar(&mut self, name: String, agent: Option<LoaderAgentId>, priority: u32, window: crate::model::schedule::WorkWindow, insert_lane: bool) {
         let mut added = None;
         self.edit_schedule(|plan| {
-            let id = plan.add_bar(&name, agent, priority, window)?;
+            // A lane of its own is opened first, so the bar never shares one.
             if insert_lane {
                 plan.open_lane(agent, priority);
-                plan.set_bar_priority(id, priority)?;
             }
+            let id = plan.add_bar(&name, agent, priority, window)?;
             added = Some(id);
             Ok(())
         });
@@ -697,11 +698,11 @@ impl crate::app::App<'_> {
     ) {
         let mut added = None;
         self.edit_schedule(|plan| {
-            let id = plan.add_blast_bar(agent, priority, window, members)?;
+            // A lane of its own is opened first, so the bar never shares one.
             if insert_lane {
                 plan.open_lane(agent, priority);
-                plan.set_bar_priority(id, priority)?;
             }
+            let id = plan.add_blast_bar(agent, priority, window, members)?;
             added = Some(id);
             Ok(())
         });
@@ -722,11 +723,11 @@ impl crate::app::App<'_> {
     ) {
         let mut added = None;
         self.edit_schedule(|plan| {
-            let id = plan.add_delay_bar(agent, priority, window, kind)?;
+            // A lane of its own is opened first, so the bar never shares one.
             if insert_lane {
                 plan.open_lane(agent, priority);
-                plan.set_bar_priority(id, priority)?;
             }
+            let id = plan.add_delay_bar(agent, priority, window, kind)?;
             added = Some(id);
             Ok(())
         });
@@ -739,11 +740,11 @@ impl crate::app::App<'_> {
     fn add_follow_bar(&mut self, agent: Option<LoaderAgentId>, priority: u32, window: crate::model::schedule::WorkWindow, leader: LoaderAgentId, insert_lane: bool) {
         let mut added = None;
         self.edit_schedule(|plan| {
-            let id = plan.add_follow_bar(agent, priority, window, leader)?;
+            // A lane of its own is opened first, so the bar never shares one.
             if insert_lane {
                 plan.open_lane(agent, priority);
-                plan.set_bar_priority(id, priority)?;
             }
+            let id = plan.add_follow_bar(agent, priority, window, leader)?;
             added = Some(id);
             Ok(())
         });
@@ -784,6 +785,7 @@ impl crate::app::App<'_> {
     ///
     /// No dig-block picking: a reclaim bar names piles and a window, so
     /// creating it never puts the viewport into a picking mode.
+    #[allow(clippy::too_many_arguments)]
     fn add_reclaim_bar(
         &mut self,
         name: String,
@@ -792,12 +794,16 @@ impl crate::app::App<'_> {
         window: crate::model::schedule::WorkWindow,
         sources: Vec<crate::model::schedule::DestinationId>,
         maximum_t: Option<f64>,
+        insert_lane: bool,
     ) {
         if !self.reclaim_sources_are_stockpiles(&sources) {
             return;
         }
         let mut added = None;
         self.edit_schedule(|plan| {
+            if insert_lane {
+                plan.open_lane(agent, priority);
+            }
             added = Some(plan.add_reclaim_bar(&name, agent, priority, window, sources, maximum_t)?);
             Ok(())
         });

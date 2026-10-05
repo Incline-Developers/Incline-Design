@@ -433,6 +433,7 @@ schedule-error-unknown-bar = That bar is no longer in this project
 schedule-error-unknown-member = That position is no longer in this bar's dig order
 schedule-error-duplicate-member = That dig block is already in this bar's dig order
 schedule-error-invalid-window = A work window needs a start at or after the schedule origin and an end after it
+schedule-error-lane-overlap = That would overlap another bar in the same lane. Bars in one lane cannot overlap: drop it on the edge between lanes to give it a lane of its own.
 schedule-error-invalid-bar-height = Bar height must be a number from 20 to 160 pixels.
 
 # Destinations and routing: where calculated production goes.

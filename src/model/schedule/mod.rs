@@ -95,6 +95,13 @@ impl Default for WorkWindow {
 }
 
 impl WorkWindow {
+    /// Whether the two windows share any time. An open end runs forever;
+    /// one ending where the other starts does not overlap it.
+    pub(crate) fn overlaps(self, other: Self) -> bool {
+        let ends_after = |end: Option<f64>, start: f64| end.is_none_or(|end| end > start + 1e-9);
+        ends_after(self.end_h, other.start_h) && ends_after(other.end_h, self.start_h)
+    }
+
     /// Whether this is a window at all: a finite, non-negative start, and an
     /// end that is finite and strictly after it. Checked at the command
     /// boundary and again on load, never clamped into shape.
@@ -495,6 +502,8 @@ pub(crate) enum ScheduleError {
     /// A window that is not one: a start that is negative or not finite, or
     /// an end that is not finite or does not come after its start.
     InvalidWindow,
+    /// A bar would overlap another in its lane.
+    LaneOverlap,
     /// Gantt bars must remain large enough to interact with and small enough
     /// not to make a single loader consume the whole workspace.
     InvalidBarHeight,
@@ -636,6 +645,7 @@ impl ScheduleError {
             Self::DuplicateMember => tr!("schedule-error-duplicate-member"),
             Self::MalformedReference => tr!("schedule-error-malformed-reference"),
             Self::InvalidWindow => tr!("schedule-error-invalid-window"),
+            Self::LaneOverlap => tr!("schedule-error-lane-overlap"),
             Self::InvalidBarHeight => tr!("schedule-error-invalid-bar-height"),
             Self::InvalidCapacity => tr!("destination-error-invalid-capacity"),
             Self::UnknownDestination => tr!("destination-error-unknown"),
@@ -1269,6 +1279,8 @@ impl SchedulePlan {
                 work.leader = None;
             }
         }
+        // Its bars join Unassigned, where they may overlap bars already there.
+        self.separate_lanes();
         Ok(())
     }
 
@@ -1354,6 +1366,7 @@ impl SchedulePlan {
         if !window.is_valid() {
             return Err(ScheduleError::InvalidWindow);
         }
+        self.check_lane(None, agent, priority, window)?;
         let id = self.allocate_bar_id()?;
         self.bars.push(ScheduleBar {
             id,
@@ -1401,6 +1414,7 @@ impl SchedulePlan {
         if !work.is_valid() {
             return Err(ScheduleError::InvalidReclaimLimit);
         }
+        self.check_lane(None, agent, priority, window)?;
         let id = self.allocate_bar_id()?;
         self.bars.push(ScheduleBar {
             id,
@@ -1425,6 +1439,7 @@ impl SchedulePlan {
         if kind.is_some_and(|kind| self.delays.delay_type(kind).is_none()) {
             return Err(ScheduleError::UnknownDelay);
         }
+        self.check_lane(None, agent, priority, window)?;
         let id = self.allocate_bar_id()?;
         self.bars.push(ScheduleBar {
             id,
@@ -1545,10 +1560,10 @@ impl SchedulePlan {
     ///
     /// Independent from the moment it exists: a fresh id and a cloned
     /// membership list, so editing either one never reaches the other. The
-    /// copy keeps its original's machine, lane and earliest start - the point
-    /// of copying is to start from the same work - and the two then hold the
-    /// same ground, which the readiness report names as a conflict rather
-    /// than resolving on the user's behalf.
+    /// copy keeps its original's machine and earliest start - the point of
+    /// copying is to start from the same work - in a lane of its own directly
+    /// below, and the two then hold the same ground, which the readiness
+    /// report names as a conflict rather than resolving on the user's behalf.
     pub(crate) fn copy_bar(&mut self, id: BarId, name: &str) -> ScheduleResult<BarId> {
         let name = name.trim().to_owned();
         if self.bar_name_taken(&name, None) {
@@ -1561,6 +1576,11 @@ impl SchedulePlan {
         let mut copy = self.bars[index].clone();
         copy.id = new_id;
         copy.name = name;
+        // Two bars in one lane may not overlap, so the copy takes a lane of
+        // its own directly below the original.
+        let below = copy.priority.saturating_add(1);
+        self.open_lane(copy.agent, below);
+        copy.priority = below;
         self.bars.insert(index + 1, copy);
         Ok(new_id)
     }
@@ -1571,13 +1591,34 @@ impl SchedulePlan {
             return Err(ScheduleError::UnknownAgent);
         }
         self.check_fits(id, agent)?;
+        let (priority, window) = self.bar(id).map(|bar| (bar.priority, bar.window)).ok_or(ScheduleError::UnknownBar)?;
+        // On its new machine it keeps its lane where that lane is free over
+        // its window, and otherwise takes the next one down that is.
+        let priority = self.free_lane(Some(id), agent, priority, window);
         let bar = self.bars.iter_mut().find(|bar| bar.id == id).ok_or(ScheduleError::UnknownBar)?;
         bar.agent = agent;
+        bar.priority = priority;
         Ok(())
     }
 
     /// Put a bar in a priority lane. Lower is higher priority.
+    ///
+    /// Where the lane holds a bar it would overlap, it takes a lane of its own
+    /// on the far side of that one instead: raised, above it; lowered, below
+    /// it. Raising and lowering are about order, and two bars in one lane may
+    /// not overlap.
     pub(crate) fn set_bar_priority(&mut self, id: BarId, priority: u32) -> ScheduleResult {
+        let (agent, old, window) = self.bar(id).map(|bar| (bar.agent, bar.priority, bar.window)).ok_or(ScheduleError::UnknownBar)?;
+        let priority = if self.lane_clash(Some(id), agent, priority, window).is_none() {
+            priority
+        } else if priority < old {
+            self.open_lane(agent, priority);
+            priority
+        } else {
+            let below = priority.saturating_add(1);
+            self.open_lane(agent, below);
+            below
+        };
         let bar = self.bars.iter_mut().find(|bar| bar.id == id).ok_or(ScheduleError::UnknownBar)?;
         bar.priority = priority;
         Ok(())
@@ -1610,6 +1651,7 @@ impl SchedulePlan {
                 bar.priority = bar.priority.saturating_add(1);
             }
         }
+        self.check_lane(Some(id), agent, priority, window)?;
         let bar = self.bars.iter_mut().find(|bar| bar.id == id).expect("checked above");
         bar.agent = agent;
         bar.priority = priority;
@@ -1654,6 +1696,79 @@ impl SchedulePlan {
         }
     }
 
+    /// A bar other than `id` in `agent`'s lane `priority` whose window
+    /// overlaps `window`. Two bars in one lane never overlap: which of them
+    /// a machine works first would otherwise be decided by start time rather
+    /// than by the lane the planner put each in.
+    fn lane_clash(&self, id: Option<BarId>, agent: Option<LoaderAgentId>, priority: u32, window: WorkWindow) -> Option<&ScheduleBar> {
+        self.bars
+            .iter()
+            .find(|bar| Some(bar.id) != id && bar.agent == agent && bar.priority == priority && bar.window.overlaps(window))
+    }
+
+    fn check_lane(&self, id: Option<BarId>, agent: Option<LoaderAgentId>, priority: u32, window: WorkWindow) -> ScheduleResult {
+        match self.lane_clash(id, agent, priority, window) {
+            Some(_) => Err(ScheduleError::LaneOverlap),
+            None => Ok(()),
+        }
+    }
+
+    /// The first of `agent`'s lanes from `priority` down free over `window`.
+    fn free_lane(&self, id: Option<BarId>, agent: Option<LoaderAgentId>, priority: u32, window: WorkWindow) -> u32 {
+        let mut lane = priority;
+        while lane < u32::MAX && self.lane_clash(id, agent, lane, window).is_some() {
+            lane += 1;
+        }
+        lane
+    }
+
+    /// Give bars sharing a lane and overlapping in time lanes of their own,
+    /// one under another in order of earliest start - the order a machine
+    /// worked them in when they could share one - with the lanes below moved
+    /// further out to make room.
+    fn separate_lanes(&mut self) {
+        let mut machines: Vec<Option<LoaderAgentId>> = self.bars.iter().map(|bar| bar.agent).collect();
+        machines.sort();
+        machines.dedup();
+        for agent in machines {
+            let mut lanes: Vec<u32> = self.bars.iter().filter(|bar| bar.agent == agent).map(|bar| bar.priority).collect();
+            lanes.sort_unstable();
+            lanes.dedup();
+            // From the last lane up, so opening a lane never moves one still
+            // to be looked at.
+            for lane in lanes.into_iter().rev() {
+                let mut members: Vec<usize> = (0..self.bars.len())
+                    .filter(|&index| self.bars[index].agent == agent && self.bars[index].priority == lane)
+                    .collect();
+                members.sort_by(|&left, &right| {
+                    let (left, right) = (&self.bars[left], &self.bars[right]);
+                    left.window.start_h.total_cmp(&right.window.start_h).then(left.id.cmp(&right.id))
+                });
+                // Each bar into the first sub-lane it overlaps nothing in.
+                let mut sub_lanes: Vec<Vec<usize>> = Vec::new();
+                for index in members {
+                    let window = self.bars[index].window;
+                    match sub_lanes.iter_mut().find(|held| held.iter().all(|&other| !self.bars[other].window.overlaps(window))) {
+                        Some(held) => held.push(index),
+                        None => sub_lanes.push(vec![index]),
+                    }
+                }
+                let extra = sub_lanes.len().saturating_sub(1) as u32;
+                if extra == 0 {
+                    continue;
+                }
+                for bar in self.bars.iter_mut().filter(|bar| bar.agent == agent && bar.priority > lane) {
+                    bar.priority = bar.priority.saturating_add(extra);
+                }
+                for (offset, held) in sub_lanes.iter().enumerate() {
+                    for &index in held {
+                        self.bars[index].priority = lane.saturating_add(offset as u32);
+                    }
+                }
+            }
+        }
+    }
+
     /// Set the period a bar may be worked in, in hours from the schedule
     /// origin.
     ///
@@ -1665,6 +1780,8 @@ impl SchedulePlan {
         if !window.is_valid() {
             return Err(ScheduleError::InvalidWindow);
         }
+        let (agent, priority) = self.bar(id).map(|bar| (bar.agent, bar.priority)).ok_or(ScheduleError::UnknownBar)?;
+        self.check_lane(Some(id), agent, priority, window)?;
         let bar = self.bars.iter_mut().find(|bar| bar.id == id).ok_or(ScheduleError::UnknownBar)?;
         bar.window = window;
         Ok(())
@@ -1785,6 +1902,7 @@ impl SchedulePlan {
             return Err(ScheduleError::InvalidWindow);
         }
         let order = checked_blasts(members)?;
+        self.check_lane(None, agent, priority, window)?;
         let id = self.allocate_bar_id()?;
         self.bars.push(ScheduleBar {
             id,
@@ -1809,6 +1927,7 @@ impl SchedulePlan {
         if !window.is_valid() {
             return Err(ScheduleError::InvalidWindow);
         }
+        self.check_lane(None, agent, priority, window)?;
         let id = self.allocate_bar_id()?;
         self.bars.push(ScheduleBar {
             id,
@@ -1861,6 +1980,8 @@ impl SchedulePlan {
         if !self.bar_height.is_finite() || !(MIN_BAR_HEIGHT..=MAX_BAR_HEIGHT).contains(&self.bar_height) {
             return Err(ScheduleError::InvalidBarHeight);
         }
+        // Files from before bars in one lane were kept apart.
+        self.separate_lanes();
         for agent in &mut self.agents {
             agent.calendar.canonicalize_percentages();
         }

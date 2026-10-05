@@ -988,10 +988,20 @@ The Gantt does not mark it idle, because the delay is drawn itself:
 
 The chips in the Gantt's top-left corner (Dig, Reclaim, Delay) are dragged
 onto a row to make a bar there, at the hour under the pointer. Dropping a
-chip on the seam between lanes opens a new lane.
+chip on the seam between lanes opens a new lane, whichever chip it is.
 - A dropped delay asks for its type.
 - A dropped reclaim opens the reclaim dialog.
 - A delay bar's menu changes its type.
+
+Two bars in one lane never overlap in time, so a higher lane always means
+higher priority and no tie is settled by start time. An add, drag or window
+change that would overlap another bar in its lane is refused with a message;
+a copied bar goes in a lane of its own directly below its original; Raise and
+Lower Priority move a bar past one it would overlap; a bar moved to another
+machine, or to Unassigned when its machine is deleted, takes the first free
+lane from its own down. Older files with overlapping bars in one lane open
+with them split into lanes one under another, earliest start first - the
+order they were worked in before.
 
 Pasted rows are machine, start and end separated by tabs, commas or
 semicolons. A first line that is not a delay is taken as the header. A

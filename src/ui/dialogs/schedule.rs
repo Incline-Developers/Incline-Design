@@ -109,6 +109,7 @@ pub(crate) fn draw_reclaim_bar_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
                             window: window.expect("validated above"),
                             sources,
                             maximum_t,
+                            insert_lane: draft.insert_lane,
                         },
                     )),
                 }

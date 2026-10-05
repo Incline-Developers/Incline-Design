@@ -7366,6 +7366,8 @@ pub(crate) enum ScheduleEdit {
         window: crate::model::schedule::WorkWindow,
         sources: Vec<crate::model::schedule::DestinationId>,
         maximum_t: Option<f64>,
+        /// Open a lane of its own at `priority` first, as a drop on a lane edge asks.
+        insert_lane: bool,
     },
     /// Replace the set of stockpiles a reclaim bar may draw on, as one edit.
     /// Never empty, and never a silent repair of an entry that no longer
@@ -7630,6 +7632,8 @@ pub(crate) struct ReclaimBarDialog {
     pub(crate) sources: Vec<crate::model::schedule::DestinationId>,
     pub(crate) agent: Option<crate::model::schedule::LoaderAgentId>,
     pub(crate) priority: u32,
+    /// Whether `priority` is a lane to open rather than one to join.
+    pub(crate) insert_lane: bool,
     pub(crate) start: String,
     pub(crate) end: String,
     pub(crate) maximum: String,

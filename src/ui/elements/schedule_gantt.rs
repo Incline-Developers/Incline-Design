@@ -172,11 +172,12 @@ pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project:
 
 /// One priority lane of a row, and the sub-rows its markers are packed into.
 ///
-/// Two bars may legitimately sit at the same instant in the same lane - that is
-/// what copying a bar produces, deliberately - and one painted over the other
-/// cannot be selected, renamed or dragged. So a lane is as many sub-rows deep
-/// as it needs for no two markers in it to overlap. This is presentation only:
-/// no bar's machine, lane or earliest start is changed to make room.
+/// The plan never lets two bars in one lane overlap in time (see
+/// `SchedulePlan::lane_clash`), but their markers - a minimum width, a label -
+/// can still touch, and one painted over the other cannot be selected,
+/// renamed or dragged. So a lane is as many sub-rows deep as it needs for no
+/// two markers in it to overlap. This is presentation only: no bar's machine,
+/// lane or earliest start is changed to make room.
 struct Lane {
     priority: u32,
     /// Indices into `plan.bars()`, by sub-row. Always at least one sub-row,
@@ -2232,6 +2233,7 @@ fn draw_bars(
                                 sources: work.sources.clone(),
                                 agent: bar.agent,
                                 priority: bar.priority,
+                                insert_lane: false,
                                 start: bar.window.start_h.to_string(),
                                 end: bar.window.end_h.map(|value| value.to_string()).unwrap_or_default(),
                                 maximum: work.maximum_t.map(|value| value.to_string()).unwrap_or_default(),
@@ -2583,6 +2585,7 @@ fn draw_row_menus(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorState,
                         sources: Vec::new(),
                         agent: row.agent,
                         priority,
+                        insert_lane: false,
                         start: start_h.to_string(),
                         end: new_bar_end_h(plan, GanttPaletteItem::Reclaim, start_h).to_string(),
                         maximum: String::new(),
@@ -2830,6 +2833,7 @@ fn draw_palette_drop(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorSta
                 sources: Vec::new(),
                 agent: placement.agent,
                 priority: placement.priority,
+                insert_lane: placement.insert,
                 start: start_h.to_string(),
                 end: (new_bar_end_h(plan, item, start_h)).to_string(),
                 maximum: String::new(),
