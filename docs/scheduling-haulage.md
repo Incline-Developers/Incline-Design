@@ -10,9 +10,9 @@ class. A class's **Default fleet size** is its Calendar's default Units, and
 
 Schedule's pipeline has a Haulage step, after Solids, that runs this pipeline
 when it is not current and waits for it. Its page lists every stockpile, dump
-and crusher with whether trucks can tip there - and at a stockpile, load - by
-road, and how many of each pit's dig blocks reach the roads. "The roads" are
-the main network, the largest piece; a destination on another piece, with no
+and crusher with whether its dump point - and a stockpile's reclaim point -
+reaches the roads, and how many of each pit's dig blocks reach the roads.
+"The roads" are the main network, the largest piece; a destination on another piece, with no
 node, or with a node on no road is a warning on the step, as is a pit with
 blocks out of reach. A row opens the Layout to fix it. **Layout** holds the road network,
 destination dump and reclaim points, block connections and the Route check.
@@ -53,7 +53,7 @@ name, length, steepest grade and speed limit; selecting a node shows its role
 and coordinates, each edited in place. A road's speed limit is typed, and left
 empty for the truck class's own limit. On the map, each destination point is
 labelled with the destination's kind; a stockpile tipped and loaded at
-different nodes labels them its tip and load points. The role list also creates a new stockpile, dump or crusher at
+different nodes labels them its dump and reclaim points. The role list also creates a new stockpile, dump or crusher at
 the node and opens its setup. Right-clicking a node offers **Promote to
 destination…**, a dialog choosing the destination (or a new one made at the
 node) and, for a stockpile, whether the node is its dump point, reclaim point

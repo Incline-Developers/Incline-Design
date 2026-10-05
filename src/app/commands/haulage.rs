@@ -670,13 +670,13 @@ impl crate::app::App<'_> {
     }
 }
 
-/// How one side of a destination - where trucks tip, or where they load -
-/// meets the roads.
+/// How one of a destination's points - where trucks dump, or where they
+/// reclaim - meets the roads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HaulLink {
     /// Its node is on the main road network.
     Connected,
-    /// It has no node: trucks reach its surface from the nearest road.
+    /// It has no node: trucks dump on its surface from the nearest road.
     Surface,
     /// A stockpile with no reclaim node is loaded where it is tipped.
     AtDumpPoint,
@@ -709,8 +709,8 @@ impl HaulLink {
     }
 }
 
-/// How a destination meets the roads: where trucks tip, and for a
-/// stockpile where they load.
+/// How a destination meets the roads: its dump point, and for a stockpile
+/// its reclaim point.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DestinationLinks {
     pub(crate) name: String,

@@ -83,7 +83,7 @@ fn open_haul_layout(editor: &mut EditorState) {
     editor.haulage_subpage = crate::ui::state::PlanningSubpage::Layout;
 }
 
-/// Where trucks tip at each destination, and load at each stockpile, and
+/// Each destination's dump point, and each stockpile's reclaim point, and
 /// whether that reaches the roads. A row opens the Layout to fix it.
 fn draw_destination_connections(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState) {
     use crate::{

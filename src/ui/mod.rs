@@ -1262,8 +1262,8 @@ fn draw_ui(
             crate::model::schedule::DestinationId::Solid(id) => document.solid(id).map(|d| (d.name.clone(), DestinationKind::of_solid(d.kind))),
         }
         .unwrap_or_else(|| (tr!("destination-unresolved"), None));
-        // What the destination is; and for a stockpile tipped at one point
-        // and loaded at another, which point this is.
+        // What the destination is; and for a stockpile dumped at one point
+        // and reclaimed at another, which point this is.
         let what = match (kind, role) {
             (Some(DestinationKind::Stockpile), NodeRole::Dump(_)) => tr!("haul-pin-stockpile-dump"),
             (Some(DestinationKind::Stockpile), NodeRole::Reclaim(_)) => tr!("haul-pin-stockpile-reclaim"),
