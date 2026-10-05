@@ -792,7 +792,8 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
     }
 
     // ---- mandatory authored bar priority ------------------------------------
-    check_bar_priority(&mut checker, solution, &openings, segments);
+    let room = dig_room(checker.input, solution, &checker.report.pile_intervals);
+    check_bar_priority(&mut checker, solution, &openings, &room, segments);
     if checker.cancelled() {
         return None;
     }
@@ -871,6 +872,52 @@ fn covers(task: &crate::model::schedule::optimisation::Task, interval: crate::mo
     task.window_start_h <= interval.start_h + WINDOW_TOLERANCE_H && task.window_end_h >= interval.end_h - WINDOW_TOLERANCE_H
 }
 
+/// The destinations with room for a dig bar as each interval opened, from the
+/// replayed pile balances and the published receipts; see
+/// [`super::input::block_outlets`].
+fn dig_room(input: &BlendInput, solution: &BlendSolution, piles: &BTreeMap<(StockpileId, usize), PileInterval>) -> BTreeSet<(DestinationId, usize)> {
+    let horizon = input.intervals.len();
+    let mut received: BTreeMap<DestinationId, Vec<f64>> = input.destinations.iter().map(|entry| (entry.id, vec![0.0; horizon])).collect();
+    for row in &solution.movements {
+        if let Some(candidate) = input.movements.get(row.candidate)
+            && let Some(slot) = received.get_mut(&candidate.destination).and_then(|per| per.get_mut(row.interval))
+        {
+            *slot += row.tonnes_t;
+        }
+    }
+    let mut room = BTreeSet::new();
+    for entry in &input.destinations {
+        let (mut before, mut today, mut day) = (0.0, 0.0, None);
+        for interval in &input.intervals {
+            if day != Some(interval.day()) {
+                (today, day) = (0.0, Some(interval.day()));
+            }
+            let open = match entry.kind {
+                DestinationKind::Dump => entry.capacity_t.is_none_or(|capacity| capacity - before > super::input::DIG_ROOM_T),
+                DestinationKind::Crusher => entry
+                    .crusher_daily_t
+                    .get(interval.day() as usize)
+                    .copied()
+                    .flatten()
+                    .is_none_or(|budget| budget - today > super::input::DIG_ROOM_T),
+                DestinationKind::Stockpile(pile) => {
+                    input.piles.iter().any(|found| found.id == pile && found.builds(*interval))
+                        && entry
+                            .capacity_t
+                            .is_none_or(|capacity| capacity - piles.get(&(pile, interval.index)).map_or(0.0, |state| state.opening_t) > super::input::DIG_ROOM_T)
+                }
+            };
+            if open {
+                room.insert((entry.id, interval.index));
+            }
+            let moved = received[&entry.id][interval.index];
+            before += moved;
+            today += moved;
+        }
+    }
+    room
+}
+
 /// Recompute authored bar priority from the replayed physical state (§4).
 ///
 /// The model's `ready` columns are not consulted. Readiness is recomputed
@@ -886,7 +933,13 @@ fn covers(task: &crate::model::schedule::optimisation::Task, interval: crate::mo
 ///   ordinary idling - but when it does move material it must be under its
 ///   highest-priority ready bar, so standing down cannot be used to make a
 ///   lower-priority bar look like the only option.
-fn check_bar_priority(checker: &mut Checker<'_>, solution: &BlendSolution, openings: &BTreeMap<(StockpileId, usize), f64>, segments: usize) {
+fn check_bar_priority(
+    checker: &mut Checker<'_>,
+    solution: &BlendSolution,
+    openings: &BTreeMap<(StockpileId, usize), f64>,
+    room: &BTreeSet<(DestinationId, usize)>,
+    segments: usize,
+) {
     let input = checker.input;
     let loaders: Vec<_> = input.loaders.iter().map(|entry| entry.id).collect();
     checker.report.row_tasks = vec![None; solution.movements.len()];
@@ -940,7 +993,19 @@ fn check_bar_priority(checker: &mut Checker<'_>, solution: &BlendSolution, openi
                     }
                     let Some(rate) = rate else { return false };
                     match &task.kind {
-                        TaskKind::Dig { sequence } => rate.dig_tph > 0.0 && sequence.iter().any(|source| remaining.get(source).copied().unwrap_or(0.0) > REPLAY_TOLERANCE_T),
+                        // Its current block, and somewhere with room for all
+                        // of it as the interval opened.
+                        TaskKind::Dig { sequence } => {
+                            rate.dig_tph > 0.0
+                                && sequence
+                                    .iter()
+                                    .find(|source| remaining.get(*source).copied().unwrap_or(0.0) > REPLAY_TOLERANCE_T)
+                                    .is_some_and(|current| {
+                                        super::input::block_diggable(&super::input::block_outlets(input, task, *current), |destination| {
+                                            room.contains(&(destination, interval.index))
+                                        })
+                                    })
+                        }
                         TaskKind::Reclaim { approved_sources, maximum_t } => {
                             if rate.reclaim_tph <= 0.0 {
                                 return false;

@@ -14,7 +14,10 @@
 //!
 //! - Each loader works its highest-priority bar with work available, defined
 //!   exactly as the replay's priority check defines it, from the state at
-//!   the start of the interval.
+//!   the start of the interval. A dig bar whose current block has a material
+//!   with nowhere to go - every destination full, or a pile not building - has
+//!   no work, so the loader works its next bar and comes back the first
+//!   interval there is room; see `block_outlets`.
 //! - A dig bar works its current block, and the next ones in authored order
 //!   once each is finished, up to the loader's rate. A block's materials
 //!   leave in proportion. A block another loader may also dig must be gone a
@@ -89,7 +92,8 @@ use std::{
 use super::{
     drill_blast::Chain,
     input::{
-        BlendInput, BlendPile, GRADE_CUSHION_T, GRADE_MARGIN, GradeQualification, REST_RECEIPT_T, attribute_reclaim, authored_tasks, interval_rate, task_active, task_authorises,
+        BlendInput, BlendPile, DIG_ROOM_T, GRADE_CUSHION_T, GRADE_MARGIN, GradeQualification, REST_RECEIPT_T, attribute_reclaim, authored_tasks, block_diggable, block_outlets,
+        interval_rate, task_active, task_authorises,
     },
     lp::{Col, LinearProgram},
     replay::{BlendSolution, ChunkRow, ExtractionAdjustments, MovementRow, ReplayReport, replay_cancellable},
@@ -783,7 +787,7 @@ impl<'a> State<'a> {
                     .copied()
                     .filter(|block| !gone.contains(block) && self.ground.get(block).is_some_and(|left| *left > FINISHED_T))
                     .collect();
-                if left.is_empty() {
+                if left.is_empty() || !self.diggable(entry, left[0], interval) {
                     Some(false)
                 } else if left.iter().any(|block| !worked.contains(block) && self.ground[block] > SURELY_HELD_T) {
                     Some(true)
@@ -1351,7 +1355,14 @@ impl<'a> State<'a> {
             return false;
         }
         match &task.kind {
-            TaskKind::Dig { sequence } => dig_tph > 0.0 && sequence.iter().any(|block| opening_ground.get(block).is_some_and(|left| *left > FINISHED_T)),
+            // Its current block, and somewhere with room for all of it.
+            TaskKind::Dig { sequence } => {
+                dig_tph > 0.0
+                    && sequence
+                        .iter()
+                        .find(|block| opening_ground.get(block).is_some_and(|left| *left > FINISHED_T))
+                        .is_some_and(|current| self.diggable(task, *current, interval))
+            }
             TaskKind::Reclaim { approved_sources, maximum_t } => {
                 reclaim_tph > 0.0
                     && maximum_t.is_none_or(|maximum| self.reclaimed.get(&bar).copied().unwrap_or(0.0) < maximum - NEGLIGIBLE_T)
@@ -1367,6 +1378,37 @@ impl<'a> State<'a> {
                     })
             }
             TaskKind::Delay => true,
+        }
+    }
+
+    /// Whether `task` could dig `block` as `interval` opens: every material
+    /// of it has a destination with room; see [`block_outlets`].
+    fn diggable(&self, task: &super::super::Task, block: GroundId, interval: Interval) -> bool {
+        block_diggable(&block_outlets(self.input, task, block), |destination| self.room_at_opening(destination, interval))
+    }
+
+    /// Whether `destination` has room as `interval` opens, for a dig bar's
+    /// readiness: building, and more than [`DIG_ROOM_T`] short of what it can
+    /// take.
+    fn room_at_opening(&self, destination: DestinationId, interval: Interval) -> bool {
+        let input = self.input;
+        let Some(entry) = input.destinations.iter().find(|entry| entry.id == destination) else {
+            return false;
+        };
+        match entry.kind {
+            DestinationKind::Dump => entry
+                .capacity_t
+                .is_none_or(|capacity| capacity - self.dumped.get(&destination).copied().unwrap_or(0.0) > DIG_ROOM_T),
+            DestinationKind::Crusher => match entry.crusher_daily_t.get(interval.day() as usize).copied().flatten() {
+                Some(budget) => budget - self.crushed.get(&(destination, interval.day())).copied().unwrap_or(0.0) > DIG_ROOM_T,
+                None => true,
+            },
+            DestinationKind::Stockpile(pile) => {
+                input.piles.iter().any(|entry| entry.id == pile && entry.builds(interval))
+                    && entry
+                        .capacity_t
+                        .is_none_or(|capacity| capacity - self.piles.get(&pile).map_or(0.0, |(open_t, _)| *open_t) > DIG_ROOM_T)
+            }
         }
     }
 

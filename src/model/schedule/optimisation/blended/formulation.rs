@@ -10,8 +10,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::input::{
-    BlendInput, BlendPile, CHUNK_FULL_T, GRADE_CUSHION_T, GRADE_MARGIN, GradeBound, GradeEndpoint, GradeHalfSpace, GradePredicate, GradeQualification, REST_RECEIPT_T,
-    REST_TOLERANCE_H, authored_tasks, delivers_to_pile, dig_authority, flat_cell, interval_rate, loader_rate, task_active, task_authorises, task_operable,
+    BlendInput, BlendPile, CHUNK_FULL_T, DIG_ROOM_T, GRADE_CUSHION_T, GRADE_MARGIN, GradeBound, GradeEndpoint, GradeHalfSpace, GradePredicate, GradeQualification, REST_RECEIPT_T,
+    REST_TOLERANCE_H, authored_tasks, block_outlets, delivers_to_pile, dig_authority, flat_cell, interval_rate, loader_rate, task_active, task_authorises, task_operable,
 };
 use crate::model::schedule::optimisation::{
     Activity, Destination, DestinationId, DestinationKind, GroundId, Interval, LoaderId, MovementCandidate, ReclaimOrder, SourceId, StockpileId, TaskKind,
@@ -1019,6 +1019,31 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
         }
     }
 
+    // Room for a dig bar's material as each interval opens (see
+    // `block_outlets`): one flag per destination and interval, forced to 1
+    // by more than `DIG_ROOM_T` of room - so a bar cannot claim to be
+    // blocked while it is not. Unlimited destinations always have room; a
+    // stockpile not building has none.
+    let room = dig_room_flags(rows, input, segments)?;
+    let mut outlet_flags: BTreeMap<(Vec<DestinationId>, usize), Flag<R::Var>> = BTreeMap::new();
+    // Each dig bar's sequence, by ground index, with where each block's
+    // materials can go.
+    let task_blocks: BTreeMap<usize, Vec<BlockOutlets>> = input
+        .tasks
+        .iter()
+        .enumerate()
+        .filter_map(|(task_index, task)| match &task.kind {
+            TaskKind::Dig { sequence } => Some((
+                task_index,
+                sequence
+                    .iter()
+                    .filter_map(|ground| Some((input.ground.iter().position(|entry| entry.id == *ground)?, block_outlets(input, task, *ground))))
+                    .collect(),
+            )),
+            _ => None,
+        })
+        .collect();
+
     for (loader_index, _loader) in input.loaders.iter().enumerate() {
         if rows.cancelled() {
             return Err(FormulationCancelled);
@@ -1038,50 +1063,101 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
                         TaskKind::Delay => {
                             rows.eq(vec![(ready, 1.0)], 1.0, &format!("rdydelay_{loader_index}_{task_index}_{position}"));
                         }
-                        TaskKind::Dig { sequence } => {
-                            // Ready while any block in the authored sequence
-                            // still holds material at the start of this cell.
-                            let Some(previous) = position.checked_sub(1) else {
-                                // Before the first cell the input's own
-                                // tonnages are the state: ready exactly when
-                                // some block of the sequence holds material.
-                                let holds = sequence.iter().any(|source| input.ground.iter().any(|entry| entry.id == *source && entry.tonnes_t > 0.0));
-                                rows.eq(
-                                    vec![(ready, 1.0)],
-                                    if holds { 1.0 } else { 0.0 },
-                                    &format!("rdydig0_{loader_index}_{task_index}_{position}"),
-                                );
-                                continue;
-                            };
-                            let blocks: Vec<usize> = sequence.iter().filter_map(|source| input.ground.iter().position(|entry| entry.id == *source)).collect();
-                            let flags: Vec<R::Var> = blocks
+                        TaskKind::Dig { .. } => {
+                            // Ready while its current block - the first of
+                            // the sequence holding material as the cell
+                            // opens - has somewhere with room for each of its
+                            // materials; see `block_outlets`. Forced in the
+                            // one direction, as every readiness here, by a
+                            // chain over the sequence:
+                            //   ready >= P_i - E_i - Z_i
+                            // P_i "every block before the i-th is exhausted",
+                            // E_i "the i-th is", Z_i "one of its materials has
+                            // nowhere with room". P is built from the ground
+                            // left rather than from E, which is truthful only
+                            // the other way: an emptied block always counts as
+                            // exhausted there, so no earlier block can be
+                            // claimed current to excuse the bar.
+                            let k = interval.index;
+                            let state: Vec<Flag<R::Var>> = task_blocks[&task_index]
                                 .iter()
-                                .filter_map(|&source_index| rows.columns().exhausted.get(&(source_index, previous)).cloned())
+                                .map(|&(source_index, _)| match position.checked_sub(1) {
+                                    None if input.ground[source_index].tonnes_t > 0.0 => Flag::Zero,
+                                    None => Flag::One,
+                                    Some(previous) => rows.columns().exhausted.get(&(source_index, previous)).cloned().map_or(Flag::Zero, Flag::Var),
+                                })
                                 .collect();
-                            // A block without an exhaustion flag is untouched
-                            // and still holds material, so the bar has work.
-                            if flags.len() < blocks.len() {
-                                rows.eq(vec![(ready, 1.0)], 1.0, &format!("rdydigleft_{loader_index}_{task_index}_{position}"));
-                                continue;
-                            }
-                            if flags.is_empty() {
+                            let left: Vec<Option<R::Var>> = task_blocks[&task_index]
+                                .iter()
+                                .map(|&(source_index, _)| {
+                                    position
+                                        .checked_sub(1)
+                                        .and_then(|previous| rows.columns().ground_remaining.get(&(source_index, previous)).cloned())
+                                })
+                                .collect();
+                            // ready <= sum(1 - E): no block holding material, no work.
+                            if state.iter().all(|flag| matches!(flag, Flag::One)) {
                                 rows.eq(vec![(ready, 1.0)], 0.0, &format!("rdydignone_{loader_index}_{task_index}_{position}"));
                                 continue;
                             }
-                            // ready >= 1 - exhausted[g]  for each block
-                            for (rank, flag) in flags.iter().enumerate() {
-                                rows.geq(
-                                    vec![(ready.clone(), 1.0), (flag.clone(), 1.0)],
-                                    1.0,
-                                    &format!("rdydiglo_{loader_index}_{task_index}_{rank}_{position}"),
-                                );
+                            if !state.iter().any(|flag| matches!(flag, Flag::Zero)) {
+                                let mut terms = vec![(ready.clone(), 1.0)];
+                                let mut count = 0.0;
+                                for flag in &state {
+                                    if let Flag::Var(flag) = flag {
+                                        terms.push((flag.clone(), 1.0));
+                                        count += 1.0;
+                                    }
+                                }
+                                rows.leq(terms, count, &format!("rdydighi_{loader_index}_{task_index}_{position}"));
                             }
-                            // ready <= sum(1 - exhausted[g])
-                            let mut terms = vec![(ready.clone(), 1.0)];
-                            for flag in &flags {
-                                terms.push((flag.clone(), 1.0));
+                            let mut prefix: Flag<R::Var> = Flag::One;
+                            for (rank, (((_, outlets), exhausted), remaining)) in task_blocks[&task_index].iter().zip(&state).zip(&left).enumerate() {
+                                // ready - P + E + Z >= 0, constants moved right.
+                                let mut terms = vec![(ready.clone(), 1.0)];
+                                let mut rhs = 0.0;
+                                match &prefix {
+                                    Flag::One => rhs += 1.0,
+                                    Flag::Zero => {}
+                                    Flag::Var(column) => terms.push((column.clone(), -1.0)),
+                                }
+                                match exhausted {
+                                    Flag::One => rhs -= 1.0,
+                                    Flag::Zero => {}
+                                    Flag::Var(column) => terms.push((column.clone(), 1.0)),
+                                }
+                                for destinations in outlets {
+                                    match no_outlet(rows, &mut outlet_flags, &room, destinations, k) {
+                                        Flag::One => rhs -= 1.0,
+                                        Flag::Zero => {}
+                                        Flag::Var(column) => terms.push((column, 1.0)),
+                                    }
+                                }
+                                if rhs > 0.0 || terms.len() > 1 {
+                                    rows.geq(terms, rhs, &format!("rdydiglo_{loader_index}_{task_index}_{rank}_{position}"));
+                                }
+                                // P_{i+1} >= P_i - left_i / PREFIX_DUST_T. A
+                                // block surely holding material is the current
+                                // one at the latest: nothing after it can be.
+                                prefix = match (prefix, exhausted, remaining) {
+                                    (_, Flag::Zero, _) | (Flag::Zero, _, _) => break,
+                                    (prefix, Flag::One, _) => prefix,
+                                    (_, Flag::Var(_), None) => break,
+                                    (prefix, Flag::Var(_), Some(remaining)) => {
+                                        let next = rows.cont(1.0, &format!("rdydigpre_{loader_index}_{task_index}_{rank}_{position}"));
+                                        let mut terms = vec![(next.clone(), 1.0), (remaining.clone(), 1.0 / PREFIX_DUST_T)];
+                                        let rhs = match prefix {
+                                            Flag::Var(before) => {
+                                                terms.push((before, -1.0));
+                                                0.0
+                                            }
+                                            _ => 1.0,
+                                        };
+                                        rows.geq(terms, rhs, &format!("rdydigprel_{loader_index}_{task_index}_{rank}_{position}"));
+                                        Flag::Var(next)
+                                    }
+                                };
                             }
-                            rows.leq(terms, flags.len() as f64, &format!("rdydighi_{loader_index}_{task_index}_{position}"));
                         }
                         TaskKind::Reclaim { approved_sources, maximum_t } => {
                             // A pile its mode keeps from reclaiming today gives
@@ -1578,6 +1654,148 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
     // Movement value less period grade penalties, maximised; each valued
     // column carries its coefficient directly.
     Ok(())
+}
+
+/// A block of a dig bar's sequence, by ground index, with the destinations
+/// each of its materials can go to.
+type BlockOutlets = (usize, Vec<Vec<DestinationId>>);
+
+/// Ground left below which a block counts as gone when deciding which block
+/// is a dig bar's current one in the formulation's readiness rows.
+const PREFIX_DUST_T: f64 = 1e-3;
+
+/// A 0/1 quantity that is either known or a column.
+#[derive(Clone)]
+enum Flag<V> {
+    Zero,
+    One,
+    Var(V),
+}
+
+/// Each destination's room flag per interval.
+type RoomFlags<V> = BTreeMap<(DestinationId, usize), Flag<V>>;
+
+/// Whether each destination has room for a dig bar as each interval opens;
+/// see `block_outlets`.
+fn dig_room_flags<R: Rows>(rows: &mut R, input: &BlendInput, segments: usize) -> Result<RoomFlags<R::Var>, FormulationCancelled> {
+    let mut room = BTreeMap::new();
+    for destination in &input.destinations {
+        if rows.cancelled() {
+            return Err(FormulationCancelled);
+        }
+        let into: Vec<usize> = input
+            .movements
+            .iter()
+            .enumerate()
+            .filter(|(_, candidate)| candidate.destination == destination.id)
+            .map(|(index, _)| index)
+            .collect();
+        let received = |rows: &mut R, interval: usize| -> Vec<(R::Var, f64)> {
+            into.iter()
+                .flat_map(|&index| (0..segments).map(move |segment| (index, segment)))
+                .filter_map(|(index, segment)| rows.columns().movement.get(&(index, interval, segment)).cloned())
+                .map(|column| (column, 1.0))
+                .collect()
+        };
+        let mut before: Option<R::Var> = None;
+        for interval in &input.intervals {
+            let k = interval.index;
+            let (limit, mut held) = match destination.kind {
+                // Received before this interval, carried in one column.
+                DestinationKind::Dump => {
+                    let Some(capacity) = destination.capacity_t else {
+                        room.insert((destination.id, k), Flag::One);
+                        continue;
+                    };
+                    if k > 0 {
+                        let total = rows.cont(capacity + 1.0, &format!("dumped_{}_{k}", destination.id.0));
+                        let mut terms = vec![(total.clone(), 1.0)];
+                        if let Some(before) = &before {
+                            terms.push((before.clone(), -1.0));
+                        }
+                        terms.extend(received(rows, k - 1).into_iter().map(|(column, _)| (column, -1.0)));
+                        rows.eq(terms, 0.0, &format!("dumpedbal_{}_{k}", destination.id.0));
+                        before = Some(total);
+                    }
+                    (capacity, before.iter().map(|column| (column.clone(), 1.0)).collect::<Vec<_>>())
+                }
+                // Received earlier the same day.
+                DestinationKind::Crusher => {
+                    let Some(budget) = destination.crusher_daily_t.get(interval.day() as usize).copied().flatten() else {
+                        room.insert((destination.id, k), Flag::One);
+                        continue;
+                    };
+                    let mut terms = Vec::new();
+                    for earlier in input.intervals.iter().filter(|earlier| earlier.day() == interval.day() && earlier.index < k) {
+                        terms.extend(received(rows, earlier.index));
+                    }
+                    (budget, terms)
+                }
+                DestinationKind::Stockpile(pile) => {
+                    let Some(entry) = input.piles.iter().find(|entry| entry.id == pile) else { continue };
+                    if !entry.builds(*interval) {
+                        room.insert((destination.id, k), Flag::Zero);
+                        continue;
+                    }
+                    let Some(capacity) = destination.capacity_t else {
+                        room.insert((destination.id, k), Flag::One);
+                        continue;
+                    };
+                    (capacity, pile_opening_terms(rows, entry, k))
+                }
+            };
+            if limit <= DIG_ROOM_T {
+                room.insert((destination.id, k), Flag::Zero);
+                continue;
+            }
+            // limit * flag + taken >= limit - DIG_ROOM_T: room above the
+            // threshold forces the flag to 1.
+            let flag = rows.binary(&format!("digroom_{}_{k}", destination.id.0));
+            held.push((flag.clone(), limit));
+            rows.geq(held, limit - DIG_ROOM_T, &format!("digroomlink_{}_{k}", destination.id.0));
+            room.insert((destination.id, k), Flag::Var(flag));
+        }
+    }
+    Ok(room)
+}
+
+/// Whether none of `destinations` has room in interval `k`: 1 only when every
+/// one of their room flags is 0. Shared by every block whose material can go
+/// to the same destinations.
+fn no_outlet<R: Rows>(
+    rows: &mut R,
+    cache: &mut BTreeMap<(Vec<DestinationId>, usize), Flag<R::Var>>,
+    room: &BTreeMap<(DestinationId, usize), Flag<R::Var>>,
+    destinations: &[DestinationId],
+    k: usize,
+) -> Flag<R::Var> {
+    if let Some(flag) = cache.get(&(destinations.to_vec(), k)) {
+        return flag.clone();
+    }
+    let flags: Vec<Flag<R::Var>> = destinations.iter().map(|destination| room.get(&(*destination, k)).cloned().unwrap_or(Flag::Zero)).collect();
+    let flag = if flags.iter().any(|flag| matches!(flag, Flag::One)) {
+        Flag::Zero
+    } else {
+        let columns: Vec<R::Var> = flags
+            .into_iter()
+            .filter_map(|flag| match flag {
+                Flag::Var(column) => Some(column),
+                _ => None,
+            })
+            .collect();
+        if columns.is_empty() {
+            Flag::One
+        } else {
+            let names: Vec<String> = destinations.iter().map(|destination| destination.0.to_string()).collect();
+            let none = rows.cont(1.0, &format!("nooutlet_{}_{k}", names.join("-")));
+            for (rank, column) in columns.into_iter().enumerate() {
+                rows.leq(vec![(none.clone(), 1.0), (column, 1.0)], 1.0, &format!("nooutletl_{}_{k}_{rank}", names.join("-")));
+            }
+            Flag::Var(none)
+        }
+    };
+    cache.insert((destinations.to_vec(), k), flag.clone());
+    flag
 }
 
 /// Whether chunk `chunk` of `pile` is released to reclaim in interval `k`.

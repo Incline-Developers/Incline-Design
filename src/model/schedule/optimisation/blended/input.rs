@@ -653,6 +653,50 @@ pub(crate) fn task_operable(loader: &Loader, task: &Task, interval: usize) -> bo
     }
 }
 
+/// Room at or below which a destination counts as full when judging whether
+/// a dig bar has work. A machine is not held for an hour by a few tonnes.
+pub(crate) const DIG_ROOM_T: f64 = 1.0;
+
+/// Where `task` can send each material of `ground`, one list of destinations
+/// per material the block holds.
+///
+/// A dig bar's work is its current block - the first of its sequence with
+/// ground left - and a block is dug whole, its materials in proportion. So
+/// the bar has work only while every one of those materials has somewhere
+/// with room ([`block_diggable`]). Otherwise the machine works its next bar
+/// with work, and comes back as soon as there is room again. The hourly
+/// dispatch, the formulation and the replay all judge it so, on room as the
+/// interval opens: a stockpile building that day and more than
+/// [`DIG_ROOM_T`] below its capacity, a dump more than that below its
+/// capacity, a crusher more than that below its day's budget; unlimited ones
+/// always have room.
+pub(crate) fn block_outlets(input: &BlendInput, task: &Task, ground: GroundId) -> Vec<Vec<DestinationId>> {
+    let Some(source) = input.ground.iter().find(|source| source.id == ground) else {
+        return Vec::new();
+    };
+    source
+        .material
+        .iter()
+        .filter(|share| share.fraction > 0.0)
+        .map(|share| {
+            let mut outlets: Vec<DestinationId> = input
+                .movements
+                .iter()
+                .filter(|candidate| candidate.source == SourceId::Ground(ground) && candidate.material == share.material && task_authorises(task, candidate))
+                .map(|candidate| candidate.destination)
+                .collect();
+            outlets.sort_unstable();
+            outlets.dedup();
+            outlets
+        })
+        .collect()
+}
+
+/// Whether every material of a block has a destination with room.
+pub(crate) fn block_diggable(outlets: &[Vec<DestinationId>], has_room: impl Fn(DestinationId) -> bool) -> bool {
+    outlets.iter().all(|destinations| destinations.iter().any(|destination| has_room(*destination)))
+}
+
 /// Whether an authored bar permits this movement's source.
 pub(crate) fn task_authorises(task: &Task, candidate: &MovementCandidate) -> bool {
     if task.loader != candidate.loader {

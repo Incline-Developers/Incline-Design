@@ -100,6 +100,18 @@ machine lets the digging fill the next chunk, draws it once it closes, and
 the two alternate. Before, the Reclaim bar held the machine as soon as the
 filling chunk held anything, and neither bar could work again.
 
+A Dig bar has work only while its current block - the first of its
+sequence with ground left - can go somewhere: each material in it has a
+destination with room as the hour starts (a stockpile building that day and
+more than 1 t below its maximum tonnes, a dump more than 1 t below its
+capacity, a crusher more than 1 t below that day's limit; unlimited ones
+always have room). Otherwise the machine works its next bar with work, and
+returns to the Dig bar the first hour there is room, digging as fast as the
+room allows - with a Reclaim bar below it on the same machine, as fast as the
+pile is reclaimed. A bar still never starts before its place on the Gantt.
+The hourly dispatch, the whole-horizon model and the replay judge it the
+same way.
+
 An idle hour is explained by the bar holding the machine - the highest one
 with work - rather than by any bar open at the time: a Dig bar whose
 material has nowhere to go reads as its destinations being full, even with
