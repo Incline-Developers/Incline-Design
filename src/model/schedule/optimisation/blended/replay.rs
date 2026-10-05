@@ -769,7 +769,7 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
     // ---- chunk eligibility, recomputed --------------------------------------
     // This also returns what the chunks actually *delivered* per pile and
     // interval, which for a chunked pile is not the pile-wide average.
-    let drawn = check_chunks(&mut checker, solution);
+    let (drawn, released) = check_chunks(&mut checker, solution);
     if checker.cancelled() {
         return None;
     }
@@ -782,6 +782,13 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
         }
         let state = replay_pile(&mut checker, pile, &solution.movements, &destinations, grades, segments, &mut openings, &drawn);
         checker.report.closing.push(state);
+        // A chunked pile gives a reclaim bar work only in a chunk it
+        // releases: closed, rested and holding material.
+        if !pile.chunks.is_empty() {
+            for interval in &input.intervals {
+                openings.insert((pile.id, interval.index), released.get(&(pile.id, interval.index)).copied().unwrap_or(0.0));
+            }
+        }
     }
 
     // ---- mandatory authored bar priority ------------------------------------
@@ -1385,15 +1392,20 @@ fn check_grade_limits(
     }
 }
 
+/// What each pile's chunks delivered per interval, and the tonnes its
+/// released chunks held as each interval opened.
+type ChunkDraws = (BTreeMap<(StockpileId, usize), (f64, Vec<f64>)>, BTreeMap<(StockpileId, usize), f64>);
+
 /// Independently check the §8 chunk lifecycle against the published rows.
 ///
 /// Every rule here is checked from the published chunk state, not from the
 /// constraints that were supposed to enforce it.
 #[allow(clippy::needless_range_loop)]
-fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> BTreeMap<(StockpileId, usize), (f64, Vec<f64>)> {
+fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> ChunkDraws {
     let mut drawn: BTreeMap<(StockpileId, usize), (f64, Vec<f64>)> = BTreeMap::new();
+    let mut released_t: BTreeMap<(StockpileId, usize), f64> = BTreeMap::new();
     if solution.chunks.is_empty() {
-        return drawn;
+        return (drawn, released_t);
     }
     let piles: Vec<BlendPile> = checker.input.piles.clone();
     let grades = checker.input.grades.count();
@@ -1411,7 +1423,7 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> BTreeMap
     }
     for pile in piles.iter().filter(|entry| !entry.chunks.is_empty()) {
         if checker.cancelled() {
-            return drawn;
+            return (drawn, released_t);
         }
         let count = pile.chunks.len();
         // The scale below which a lifecycle indicator's own tolerance, not a
@@ -1436,7 +1448,7 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> BTreeMap
             .collect();
         for interval in 0..horizon {
             if checker.cancelled() {
-                return drawn;
+                return (drawn, released_t);
             }
             for chunk in 0..count {
                 let key = super::formulation::chunk_key(chunk, interval, horizon);
@@ -1507,7 +1519,7 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> BTreeMap
             .collect();
         for interval in 0..horizon {
             if checker.cancelled() {
-                return drawn;
+                return (drawn, released_t);
             }
             let at = checker.input.intervals[interval];
             let here: &[usize] = live.get(&(pile.id, interval)).map(Vec::as_slice).unwrap_or_default();
@@ -1536,6 +1548,13 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> BTreeMap
             }
             // Closed, and closed for the pile's rest.
             let released = |chunk: usize, entry: &ChunkRow| entry.closed && closed_since[chunk].is_some_and(|closed_h| pile.rested(closed_h, at));
+            let held: f64 = here
+                .iter()
+                .map(|&chunk| published[&(pile.id, chunk, interval)])
+                .filter(|state| released(state.chunk, state))
+                .map(|state| state.open_t)
+                .sum();
+            released_t.insert((pile.id, interval), held);
 
             for &chunk in here {
                 let state = published[&(pile.id, chunk, interval)];
@@ -1627,7 +1646,7 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> BTreeMap
             }
         }
     }
-    drawn
+    (drawn, released_t)
 }
 
 /// Aggregate actual contained quantities into absolute target periods.

@@ -92,6 +92,19 @@ could not. Now neither does: a chunk left partly filled when deliveries stop
 stays unreclaimable until its pile's Mode stops building. A Reclaim bar
 standing beside such a pile is explained as **stockpile settings**.
 
+A Reclaim bar on a chunked pile has work only while a chunk is released -
+closed, rested and holding material - not merely while the pile holds
+something. Material in the chunk still filling cannot be drawn, so it does
+not hold the loader: a Reclaim bar ranked above a Dig bar on the same
+machine lets the digging fill the next chunk, draws it once it closes, and
+the two alternate. Before, the Reclaim bar held the machine as soon as the
+filling chunk held anything, and neither bar could work again.
+
+An idle hour is explained by the bar holding the machine - the highest one
+with work - rather than by any bar open at the time: a Dig bar whose
+material has nowhere to go reads as its destinations being full, even with
+a Reclaim bar below it that could have worked.
+
 ## Per-pile settings
 
 Two settings sit with the pile in **Setup → Stockpiles** and hold every day:

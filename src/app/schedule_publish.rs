@@ -805,7 +805,15 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
         if open.iter().all(|task| rate_for(&task.kind) <= 0.0) {
             return (IdleReason::Unavailable, Vec::new());
         }
-        let sources: Vec<SourceId> = open.iter().filter(|task| rate_for(&task.kind) > 0.0).flat_map(|task| task_sources(task)).collect();
+        // The bar holding the machine is the highest one with work: the
+        // reason is that bar's, not one below it the machine may not work.
+        let holding = ordered
+            .iter()
+            .find(|task| task.window_start_h <= start_h + 1e-9 && task.window_end_h >= end_h - 1e-9 && rate_for(&task.kind) > 0.0 && !task_sources(task).is_empty());
+        let sources: Vec<SourceId> = match holding {
+            Some(task) => task_sources(task),
+            None => open.iter().filter(|task| rate_for(&task.kind) > 0.0).flat_map(|task| task_sources(task)).collect(),
+        };
         if sources.is_empty() {
             // Stock was there, but the pile's mode keeps it from reclaiming.
             let mut closed: Vec<_> = open

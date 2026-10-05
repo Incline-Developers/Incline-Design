@@ -52,6 +52,8 @@ pub(crate) struct BlendColumns<V> {
     pub(crate) chunk_open_t: BTreeMap<(StockpileId, usize, usize), V>,
     pub(crate) chunk_recl_t: BTreeMap<(StockpileId, usize, usize), V>,
     pub(crate) chunk_closed: BTreeMap<(StockpileId, usize, usize), V>,
+    /// Whether each chunk is empty, the same way: `open_t > 0` forces it to 0.
+    pub(crate) chunk_empty: BTreeMap<(StockpileId, usize, usize), V>,
     /// Keyed (pile, chunk, interval, movement).
     pub(crate) chunk_recv: BTreeMap<(StockpileId, usize, usize, usize), V>,
     /// Tonnes paid under a grade-conditional value, keyed (position in
@@ -76,6 +78,7 @@ impl<V> BlendColumns<V> {
             chunk_open_t: BTreeMap::new(),
             chunk_recl_t: BTreeMap::new(),
             chunk_closed: BTreeMap::new(),
+            chunk_empty: BTreeMap::new(),
             chunk_recv: BTreeMap::new(),
             paid: BTreeMap::new(),
         }
@@ -938,6 +941,10 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
         if rows.cancelled() {
             return Err(FormulationCancelled);
         }
+        // A chunked pile's closed columns, for which chunks it releases.
+        let closed: Vec<Vec<Option<R::Var>>> = (0..pile.chunks.len())
+            .map(|c| (0..input.intervals.len()).map(|at| rows.columns().chunk_closed.get(&(pile.id, c, at)).cloned()).collect())
+            .collect();
         for interval in &input.intervals {
             if rows.cancelled() {
                 return Err(FormulationCancelled);
@@ -956,6 +963,31 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
             let mut terms: Vec<_> = opening.into_iter().map(|(column, coefficient)| (column, coefficient / pile.capacity_t)).collect();
             terms.push((flag.clone(), -1.0));
             rows.leq(terms, 0.0, &format!("stocklink_{}_{k}", pile.id.0));
+            // A chunked pile has work for a reclaim bar only in a chunk it
+            // releases - closed, rested - and that is not empty: what sits in
+            // the chunk still filling cannot be drawn. The same one-way
+            // truth: a released chunk holding material forces it to 1.
+            if !pile.chunks.is_empty() {
+                let available = rows.binary(&format!("availchunk_{}_{k}", pile.id.0));
+                rows.leq(vec![(available.clone(), 1.0), (flag, -1.0)], 0.0, &format!("availchunkstock_{}_{k}", pile.id.0));
+                for c in 0..pile.chunks.len() {
+                    let Some(void) = rows.columns().chunk_empty.get(&(pile.id, c, k)).cloned() else {
+                        continue;
+                    };
+                    match chunk_released(pile, c, k, input, &closed) {
+                        // available >= released - empty
+                        Released::Column(released) => rows.geq(
+                            vec![(available.clone(), 1.0), (released, -1.0), (void, 1.0)],
+                            0.0,
+                            &format!("availchunk_{}_{c}_{k}", pile.id.0),
+                        ),
+                        Released::Always => rows.geq(vec![(available.clone(), 1.0), (void, 1.0)], 1.0, &format!("availchunk_{}_{c}_{k}", pile.id.0)),
+                        Released::Never => {}
+                    }
+                }
+                stock.insert((pile.id, k), available);
+                continue;
+            }
             // An unchunked pile still resting has no work for a reclaim bar,
             // however much it holds: `available` is stock and rested.
             if pile.rest_h > 0.0 && pile.chunks.is_empty() {
@@ -2017,6 +2049,7 @@ fn chunked_pile<R: Rows>(
             rows.columns().chunk_open_t.insert((pile.id, c, k), open_t[c][k].clone().expect("just created"));
             rows.columns().chunk_recl_t.insert((pile.id, c, k), recl_t[c][k].clone().expect("just created"));
             rows.columns().chunk_closed.insert((pile.id, c, k), closed[c][k].clone().expect("just created"));
+            rows.columns().chunk_empty.insert((pile.id, c, k), empty[c][k].clone().expect("just created"));
             for &m in delivering.iter().filter(|_| active(c, k)) {
                 let column = rows.cont(cap, &format!("cRecv_{}_{c}_{k}_{m}", pile.id.0));
                 rows.columns().chunk_recv.insert((pile.id, c, k, m), column.clone());

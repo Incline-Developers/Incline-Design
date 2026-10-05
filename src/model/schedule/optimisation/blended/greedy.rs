@@ -1355,9 +1355,16 @@ impl<'a> State<'a> {
             TaskKind::Reclaim { approved_sources, maximum_t } => {
                 reclaim_tph > 0.0
                     && maximum_t.is_none_or(|maximum| self.reclaimed.get(&bar).copied().unwrap_or(0.0) < maximum - NEGLIGIBLE_T)
-                    && approved_sources
-                        .iter()
-                        .any(|pile| self.reclaims(*pile, interval) && self.piles.get(pile).is_some_and(|(open_t, _)| *open_t > NEGLIGIBLE_T))
+                    && approved_sources.iter().any(|pile| {
+                        // A chunked pile has work only in a chunk it releases:
+                        // what sits in the chunk still filling cannot be drawn.
+                        self.reclaims(*pile, interval)
+                            && if self.chunks.contains_key(pile) {
+                                self.released(*pile, interval).is_some_and(|found| found.tonnes > NEGLIGIBLE_T)
+                            } else {
+                                self.piles.get(pile).is_some_and(|(open_t, _)| *open_t > NEGLIGIBLE_T)
+                            }
+                    })
             }
             TaskKind::Delay => true,
         }
