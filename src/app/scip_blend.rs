@@ -36,14 +36,14 @@ use super::{
 };
 use crate::model::schedule::{
     optimisation::{
-        Activity, DestinationKind, SourceId, TaskKind,
+        Activity, DestinationId, DestinationKind, SourceId, StockpileId, TaskKind,
         blended::{
-            formulation::{BlendColumns, BlendSizes},
+            formulation::{BlendColumns, BlendSizes, FamilySize},
             greedy,
             input::BlendInput,
             lp,
             relaxation::{RelaxationBound, relaxation_bound},
-            replay::{BlendSolution, ExtractionAdjustments, ReplayReport, replay_cancellable},
+            replay::{BlendSolution, ExtractionAdjustments, MovementRow, ReplayReport, replay_cancellable},
             rolling::{self, Carry, Stitched, Window},
         },
         scip::{
@@ -332,8 +332,8 @@ pub(crate) fn improve(
     if let Some(found) = seed.as_ref() {
         activity.set(3);
         let started = Instant::now();
-        let limit = remaining.map(|left| left.mul_f64(SEED_COMPLETION_SHARE));
-        match complete_seed(&out.input, &found.solution, limit, cancel) {
+        let deadline = remaining.map(|left| Instant::now() + left.mul_f64(SEED_COMPLETION_SHARE));
+        match complete_seed(&out.input, &found.solution, deadline, cancel) {
             Ok(values) => {
                 log::info!("schedule run {}: first schedule completed into a seed in {:.2?}", out.identity.run_id, started.elapsed());
                 completed = Some(values);
@@ -355,7 +355,7 @@ pub(crate) fn improve(
 
     activity.set(2);
     let started = Instant::now();
-    let built = formulate_scip_with_cancel(&out.input, Some(&cancel.signal()), Some(&activity.formulation_checks));
+    let built = formulate_scip_with_cancel(&out.input, Some(&cancel.signal()), Some(&activity.formulation_checks), options.diagnostic_logging);
     out.timings.formulation += started.elapsed();
     if cancel.is_cancelled() || built.is_err() {
         out.stop(SolveTermination::Cancelled, "cancelled during formulation");
@@ -376,7 +376,16 @@ pub(crate) fn improve(
     );
     let columns = built.columns;
     if options.diagnostic_logging {
-        log_model_structure(out.identity.run_id, &out.input);
+        log_model_structure(out.identity.run_id, &out.input, &built.families);
+    }
+    // The budget is the whole run's: what completing the seed and building
+    // the model took comes out of SCIP's share.
+    let remaining = options.time_limit.map(|limit| limit.saturating_sub(budget_started.elapsed()));
+    if let Some(found) = seed.take_if(|_| remaining.is_some_and(|left| left < WHOLE_HORIZON_MINIMUM)) {
+        log::info!("schedule run {}: no time left after building the model; keeping the first schedule", out.identity.run_id);
+        let proved = relaxation.as_mut().and_then(RelaxationJob::ready);
+        adopt_seed(&mut out, found, None, proved, DayByDayRole::Kept);
+        return out;
     }
 
     let model = if options.diagnostic_logging {
@@ -720,6 +729,8 @@ fn solve_day_by_day(
         if limit.is_some_and(|limit| limit.is_zero()) {
             return DayByDay::Failed(format!("{label}: no time left"));
         }
+        // Building the window's model and its start come out of its share.
+        let deadline = limit.map(|limit| Instant::now() + limit);
         let input = carry.window_input(&full, window);
         // A window's input is derived, not captured, so it is held to the
         // same checks before SCIP sees it.
@@ -731,7 +742,7 @@ fn solve_day_by_day(
 
         activity.set(2);
         let phase = Instant::now();
-        let built = formulate_scip_with_cancel(&input, Some(&cancel.signal()), Some(&activity.formulation_checks));
+        let built = formulate_scip_with_cancel(&input, Some(&cancel.signal()), Some(&activity.formulation_checks), false);
         out.timings.formulation += phase.elapsed();
         let Ok(built) = built else {
             return DayByDay::Stop(SolveTermination::Cancelled, "cancelled during formulation".into());
@@ -744,7 +755,7 @@ fn solve_day_by_day(
         // nothing worse even when its first LP takes longer than the window
         // has; see `greedy`.
         let phase = Instant::now();
-        let start = match dispatch_start(&input, limit.map(|limit| limit.mul_f64(SEED_COMPLETION_SHARE)), cancel) {
+        let start = match dispatch_start(&input, limit.map(|limit| Instant::now() + limit.mul_f64(SEED_COMPLETION_SHARE)), cancel) {
             Ok((values, value)) => {
                 log::info!(
                     "schedule run {}: {label} starts from a dispatch schedule worth {value:.2}, completed in {:.2?}",
@@ -760,7 +771,7 @@ fn solve_day_by_day(
             }
         };
         out.timings.solver += phase.elapsed();
-        let limit = limit.map(|limit| limit.saturating_sub(phase.elapsed()));
+        let limit = deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
 
         let model = if options.diagnostic_logging {
             built.model.show_output()
@@ -1002,7 +1013,7 @@ const SEED_BAND_RELATIVE: f64 = 1e-3;
 ///
 /// It is only ever a start: SCIP checks it against the model before storing
 /// it, and whatever SCIP returns is replayed again on its own.
-fn dispatch_start(input: &BlendInput, limit: Option<Duration>, cancel: &CancelFlag) -> Result<(HashMap<String, f64>, f64), String> {
+fn dispatch_start(input: &BlendInput, deadline: Option<Instant>, cancel: &CancelFlag) -> Result<(HashMap<String, f64>, f64), String> {
     let greedy::Dispatched { mut solution, replay: checked } = greedy::dispatch_cancellable(input, &cancel.signal())?.ok_or("cancelled")?;
     // The rows are the dispatcher's own, so the objective they report is
     // what the replay values them at.
@@ -1011,7 +1022,7 @@ fn dispatch_start(input: &BlendInput, limit: Option<Duration>, cancel: &CancelFl
         let issue = checked.issues.iter().chain(&checked.grade_issues).next().cloned().unwrap_or_default();
         return Err(format!("the replay rejected the dispatch schedule: {issue}"));
     }
-    Ok((complete_seed(input, &solution, limit, cancel)?, checked.replayed_objective))
+    Ok((complete_seed(input, &solution, deadline, cancel)?, checked.replayed_objective))
 }
 
 /// Complete a schedule - the stitched day-by-day one, or a dispatch
@@ -1035,24 +1046,23 @@ fn dispatch_start(input: &BlendInput, limit: Option<Duration>, cancel: &CancelFl
 /// partial solution it searched a neighbourhood of them instead, and on a
 /// real week it spent the whole budget returning a schedule worth a
 /// seventieth of the seed.
-fn complete_seed(input: &BlendInput, seed: &BlendSolution, limit: Option<Duration>, cancel: &CancelFlag) -> Result<HashMap<String, f64>, String> {
-    let started = Instant::now();
-    match complete_seed_with(input, seed, true, limit, cancel) {
+fn complete_seed(input: &BlendInput, seed: &BlendSolution, deadline: Option<Instant>, cancel: &CancelFlag) -> Result<HashMap<String, f64>, String> {
+    match complete_seed_with(input, seed, true, deadline, cancel) {
         // A stitched day-by-day seed may need its movements' band to meet
         // the model's rows, which exact pile state can rule out: try again
         // with the movements held alone, in what is left.
-        Err(problem) if !cancel.is_cancelled() && limit.is_none_or(|limit| started.elapsed() < limit) => {
-            let left = limit.map(|limit| limit.saturating_sub(started.elapsed()));
-            complete_seed_with(input, seed, false, left, cancel).map_err(|again| format!("{problem}; with the movements alone, {again}"))
+        Err(problem) if !cancel.is_cancelled() && deadline.is_none_or(|deadline| Instant::now() < deadline) => {
+            complete_seed_with(input, seed, false, deadline, cancel).map_err(|again| format!("{problem}; with the movements alone, {again}"))
         }
         done => done,
     }
 }
 
 /// [`complete_seed`], with unchunked piles' state held exactly when
-/// `pin_piles` is set.
-fn complete_seed_with(input: &BlendInput, seed: &BlendSolution, pin_piles: bool, limit: Option<Duration>, cancel: &CancelFlag) -> Result<HashMap<String, f64>, String> {
-    let built = formulate_scip_with_cancel(input, Some(&cancel.signal()), None).map_err(|_| "cancelled".to_owned())?;
+/// `pin_piles` is set, solving in what is left before `deadline` once the
+/// model is built.
+fn complete_seed_with(input: &BlendInput, seed: &BlendSolution, pin_piles: bool, deadline: Option<Instant>, cancel: &CancelFlag) -> Result<HashMap<String, f64>, String> {
+    let built = formulate_scip_with_cancel(input, Some(&cancel.signal()), None, false).map_err(|_| "cancelled".to_owned())?;
     let tonnes: BTreeMap<(usize, usize, usize), f64> = seed.movements.iter().map(|row| ((row.candidate, row.interval, row.segment), row.tonnes_t)).collect();
     let missing = tonnes.keys().filter(|key| !built.columns.movement.contains_key(key)).count();
     if missing > 0 {
@@ -1090,6 +1100,10 @@ fn complete_seed_with(input: &BlendInput, seed: &BlendSolution, pin_piles: bool,
             }
         });
     }
+    let limit = deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
+    if limit.is_some_and(|limit| limit.is_zero()) {
+        return Err("no time left to complete it".into());
+    }
     let mut model = configure(built.model.hide_output(), limit, None)?;
     model = without_mpec(model)?;
     model = model
@@ -1116,6 +1130,22 @@ fn complete_seed_with(input: &BlendInput, seed: &BlendSolution, pin_piles: bool,
 /// Chunked piles mix per chunk and are left to SCIP.
 fn pin_pile_state(input: &BlendInput, seed: &BlendSolution, columns: &BlendColumns<Variable>, mut pin: impl FnMut(&Variable, f64)) {
     let grades = input.grades.count();
+    // The pile each destination is, and the seed's rows by interval, so each
+    // pile and interval reads its own rather than every row.
+    let pile_of: BTreeMap<DestinationId, StockpileId> = input
+        .destinations
+        .iter()
+        .filter_map(|destination| match destination.kind {
+            DestinationKind::Stockpile(pile) => Some((destination.id, pile)),
+            _ => None,
+        })
+        .collect();
+    let mut by_interval: Vec<Vec<&MovementRow>> = vec![Vec::new(); input.intervals.len()];
+    for row in &seed.movements {
+        if let Some(rows) = by_interval.get_mut(row.interval) {
+            rows.push(row);
+        }
+    }
     for pile in input.piles.iter().filter(|pile| pile.chunks.is_empty()) {
         let mut open_t = pile.opening_t;
         let mut open_q: Vec<f64> = (0..grades).map(|g| pile.opening_q.get(g).copied().unwrap_or(0.0)).collect();
@@ -1124,13 +1154,9 @@ fn pin_pile_state(input: &BlendInput, seed: &BlendSolution, columns: &BlendColum
             let mut received_t = 0.0;
             let mut received_q = vec![0.0; grades];
             let mut reclaimed_t = 0.0;
-            for row in seed.movements.iter().filter(|row| row.interval == k) {
+            for row in by_interval.get(k).into_iter().flatten() {
                 let candidate = &input.movements[row.candidate];
-                let to_pile = input
-                    .destinations
-                    .iter()
-                    .any(|destination| destination.id == candidate.destination && destination.kind == DestinationKind::Stockpile(pile.id));
-                if to_pile {
+                if pile_of.get(&candidate.destination) == Some(&pile.id) {
                     received_t += row.tonnes_t;
                     for (g, quantity) in received_q.iter_mut().enumerate() {
                         *quantity += row.tonnes_t * input.grades.fraction(candidate.material, g).unwrap_or(0.0);
@@ -1218,7 +1244,7 @@ fn without_mpec(model: Model<ProblemCreated>) -> Result<Model<ProblemCreated>, S
 /// Diagnostic-only: what the captured project looks like and which
 /// formulation families dominate the model. Built by a counting pass, so it
 /// costs a second formulation walk but no solver memory.
-fn log_model_structure(run_id: u64, input: &BlendInput) {
+fn log_model_structure(run_id: u64, input: &BlendInput, families: &[(String, FamilySize)]) {
     let mut tonnes: Vec<f64> = input.ground.iter().map(|source| source.tonnes_t).collect();
     tonnes.sort_by(f64::total_cmp);
     let quantile = |q: f64| tonnes.get(((tonnes.len().saturating_sub(1)) as f64 * q).round() as usize).copied().unwrap_or(0.0);
@@ -1282,7 +1308,7 @@ fn log_model_structure(run_id: u64, input: &BlendInput) {
             ),
         }
     }
-    for (family, size) in crate::model::schedule::optimisation::blended::formulation::family_sizes(input) {
+    for (family, size) in families {
         log::info!(
             "schedule run {run_id}: family {family:<12} {:>9} columns ({:>8} binary) {:>9} rows {:>10} entries",
             size.columns,

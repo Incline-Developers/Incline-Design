@@ -14,7 +14,7 @@ use std::{
 use russcip::{Model, ProblemCreated, Variable, prelude::*};
 
 use super::super::blended::{
-    formulation::{BlendColumns, BlendSizes, FormulationCancelled, Rows, formulate},
+    formulation::{BlendColumns, BlendSizes, FamilySize, FamilyTally, FormulationCancelled, Rows, formulate},
     input::BlendInput,
 };
 use crate::model::schedule::optimisation::StockpileId;
@@ -23,6 +23,8 @@ pub(crate) struct BlendFormulation {
     pub(crate) model: Model<ProblemCreated>,
     pub(crate) columns: BlendColumns<Variable>,
     pub(crate) sizes: BlendSizes,
+    /// Sizes by family, largest first, when asked for; empty otherwise.
+    pub(crate) families: Vec<(String, FamilySize)>,
 }
 
 struct ScipRows<'a> {
@@ -33,6 +35,7 @@ struct ScipRows<'a> {
     checks: Option<&'a AtomicU64>,
     /// Each pile's capacity, which its mixing rows are divided by.
     capacities: BTreeMap<StockpileId, f64>,
+    families: Option<FamilyTally>,
 }
 
 impl Rows for ScipRows<'_> {
@@ -54,6 +57,9 @@ impl Rows for ScipRows<'_> {
     /// `set_obj_coeff`.
     fn valued(&mut self, upper: f64, value: f64, name: &str) -> Variable {
         self.sizes.variables += 1;
+        if let Some(families) = &mut self.families {
+            families.column(name, false);
+        }
         let upper = if upper.is_finite() { upper } else { 1e20 };
         self.model.add(var().cont(0.0..=upper).obj(value).name(name))
     }
@@ -61,6 +67,9 @@ impl Rows for ScipRows<'_> {
     fn binary(&mut self, name: &str) -> Variable {
         self.sizes.variables += 1;
         self.sizes.binaries += 1;
+        if let Some(families) = &mut self.families {
+            families.column(name, true);
+        }
         self.model.add(var().bin().name(name))
     }
 
@@ -68,8 +77,7 @@ impl Rows for ScipRows<'_> {
         if terms.is_empty() {
             return;
         }
-        self.sizes.linear_constraints += 1;
-        self.sizes.linear_coefficient_entries += terms.iter().filter(|(_, coefficient)| *coefficient != 0.0).count();
+        self.count_row(&terms, name);
         let vars: Vec<&Variable> = terms.iter().map(|(v, _)| v).collect();
         let coefs: Vec<f64> = terms.iter().map(|(_, c)| *c).collect();
         self.model.add_cons(vars, &coefs, lhs, rhs, name);
@@ -82,8 +90,7 @@ impl Rows for ScipRows<'_> {
         if terms.is_empty() {
             return;
         }
-        self.sizes.linear_constraints += 1;
-        self.sizes.linear_coefficient_entries += terms.iter().filter(|(_, coefficient)| *coefficient != 0.0).count();
+        self.count_row(&terms, name);
         let vars: Vec<&Variable> = terms.iter().map(|(v, _)| v).collect();
         let mut coefs: Vec<f64> = terms.iter().map(|(_, c)| *c).collect();
         self.model.add_cons_indicator(&flag, vars, &mut coefs, rhs, name);
@@ -104,6 +111,9 @@ impl Rows for ScipRows<'_> {
     /// grade units of the pile's: a millionth for a tonne from a full pile.
     fn mix(&mut self, pile: StockpileId, _interval: usize, _grade: usize, recl_q: Variable, open_t: Variable, recl_t: Variable, open_q: Variable, name: &str) {
         self.sizes.nonlinear_constraints += 1;
+        if let Some(families) = &mut self.families {
+            families.row(name, 4);
+        }
         let q1: Vec<&Variable> = vec![&recl_q, &recl_t];
         let q2: Vec<&Variable> = vec![&open_t, &open_q];
         let scale = self.capacities.get(&pile).copied().filter(|capacity| *capacity > 1.0).map_or(1.0, f64::recip);
@@ -112,7 +122,25 @@ impl Rows for ScipRows<'_> {
     }
 }
 
-pub(crate) fn formulate_scip_with_cancel(input: &BlendInput, cancel: Option<&AtomicBool>, checks: Option<&AtomicU64>) -> Result<BlendFormulation, FormulationCancelled> {
+impl ScipRows<'_> {
+    fn count_row(&mut self, terms: &[(Variable, f64)], name: &str) {
+        let entries = terms.iter().filter(|(_, coefficient)| *coefficient != 0.0).count();
+        self.sizes.linear_constraints += 1;
+        self.sizes.linear_coefficient_entries += entries;
+        if let Some(families) = &mut self.families {
+            families.row(name, entries);
+        }
+    }
+}
+
+/// Build the SCIP model of `input`, tallying its sizes by family as it goes
+/// when `count_families` is set.
+pub(crate) fn formulate_scip_with_cancel(
+    input: &BlendInput,
+    cancel: Option<&AtomicBool>,
+    checks: Option<&AtomicU64>,
+    count_families: bool,
+) -> Result<BlendFormulation, FormulationCancelled> {
     let model = Model::new()
         .hide_output()
         .include_default_plugins()
@@ -125,11 +153,13 @@ pub(crate) fn formulate_scip_with_cancel(input: &BlendInput, cancel: Option<&Ato
         cancel,
         checks,
         capacities: input.piles.iter().map(|pile| (pile.id, pile.capacity_t)).collect(),
+        families: count_families.then(FamilyTally::default),
     };
     formulate(&mut rows, input)?;
     Ok(BlendFormulation {
         model: rows.model,
         columns: rows.columns,
         sizes: rows.sizes,
+        families: rows.families.map(FamilyTally::sorted).unwrap_or_default(),
     })
 }

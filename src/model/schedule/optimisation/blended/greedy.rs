@@ -72,17 +72,16 @@
 //! and a pile not reclaiming gives a reclaim bar no work, so its loader moves
 //! on to its next bar as it would from an empty pile.
 //!
-//! A chunked pile follows the formulation's chunk lifecycle: a chunk closes
-//! when it is full, or at the start of an interval its pile's mode keeps from
-//! building, and at no other time. Receipts go to the
-//! first chunk still open, up to its room. A chunk is open or closed for a
-//! whole interval, so one that fills during an interval closes at the start of
-//! the next, and the next chunk starts receiving then. Reclaim draws one
-//! chunk, the one the authored order releases - FIFO the oldest holding
-//! material, if it is closed; LIFO the newest closed one holding material -
-//! at that chunk's own blend. Closing a partly filled chunk only on the
-//! planner's say-so is what keeps out of the dead end where every chunk
-//! closed early and the diggers had nowhere to deliver.
+//! A chunked pile follows the formulation's chunk lifecycle: chunks fill in
+//! their order, and a chunk closes when it is full and at no other time.
+//! Receipts go to the first chunk still open, up to its room, so one left
+//! partly filled when its pile stops building is topped up when building
+//! resumes. A chunk is open or closed for a whole interval, so one that fills
+//! during an interval closes at the start of the next, and the next chunk
+//! starts receiving then. A chunk holding material is reclaimable once its
+//! last delivery has rested, open or closed. Reclaim draws one chunk, the one
+//! the authored order releases - FIFO the first holding material, if rested;
+//! LIFO the last rested one holding material - at that chunk's own blend.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -247,8 +246,9 @@ struct Chunk {
     held_t: f64,
     held_q: Vec<f64>,
     closed: bool,
-    /// When it closed, for its rest; `None` for long enough ago.
-    closed_h: Option<f64>,
+    /// End of the last interval it received in, for its rest; `None` for
+    /// none in this run.
+    received_h: Option<f64>,
 }
 
 /// What a pile releases to reclaim in an interval.
@@ -429,17 +429,6 @@ impl<'a> State<'a> {
     fn work(&mut self, interval: Interval) -> Result<(), String> {
         let input = self.input;
         let k = interval.index;
-        // A chunk closes when it is full, or when its pile stops building:
-        // at the start of an interval the pile's mode keeps from taking
-        // deliveries, the chunk receiving closes if it holds anything.
-        for pile in input.piles.iter().filter(|pile| !pile.builds(interval)) {
-            if let Some(chunk) = self.chunks.get_mut(&pile.id).and_then(|chunks| chunks.iter_mut().find(|chunk| !chunk.closed))
-                && chunk.held_t > FINISHED_T
-            {
-                chunk.closed = true;
-                chunk.closed_h = Some(interval.start_h);
-            }
-        }
         // Readiness is judged on the state the interval opened with, as the
         // replay judges it.
         let opening_ground = self.ground.clone();
@@ -1290,10 +1279,12 @@ impl<'a> State<'a> {
                     for (contained, taken) in chunk.held_q.iter_mut().zip(&taken_q) {
                         *contained += taken;
                     }
+                    if taken_t > REST_RECEIPT_T {
+                        chunk.received_h = Some(interval.end_h);
+                    }
                     // Full, it closes for the next interval.
                     if !chunk.closed && chunk.capacity_t - chunk.held_t <= SNAP_T {
                         chunk.closed = true;
-                        chunk.closed_h = Some(interval.end_h);
                     }
                 }
                 *open_t = chunks.iter().map(|chunk| chunk.held_t).sum();
@@ -1334,11 +1325,11 @@ impl<'a> State<'a> {
                 blend: blend(*open_t, open_q),
             });
         };
-        // A closed chunk still resting is not yet released.
-        let released = |chunk: &Chunk| chunk.closed && chunk.closed_h.is_none_or(|closed_h| entry.rested(closed_h, interval));
+        // A chunk whose last delivery is still resting is not yet released.
+        let released = |index: usize| entry.chunk_rested(index, chunks[index].received_h, interval);
         let index = match entry.order {
-            ReclaimOrder::Fifo => chunks.iter().position(|chunk| chunk.held_t > FINISHED_T).filter(|&index| released(&chunks[index]))?,
-            ReclaimOrder::Lifo => chunks.iter().rposition(|chunk| released(chunk) && chunk.held_t > FINISHED_T)?,
+            ReclaimOrder::Fifo => chunks.iter().position(|chunk| chunk.held_t > FINISHED_T).filter(|&index| released(index))?,
+            ReclaimOrder::Lifo => (0..chunks.len()).rposition(|index| released(index) && chunks[index].held_t > FINISHED_T)?,
         };
         let chunk = &chunks[index];
         Some(Released {
@@ -1483,8 +1474,9 @@ impl<'a> State<'a> {
                 None => f64::INFINITY,
             },
             // The pile's own room is held segment by segment in `solve`; a
-            // chunked pile takes no more than its receiving chunk's room,
-            // which reclaim from closed chunks does not free.
+            // chunked pile takes no more than its receiving chunk's room as
+            // the interval opened, which reclaim from other chunks does not
+            // free.
             DestinationKind::Stockpile(pile) => {
                 if !input.piles.iter().any(|entry| entry.id == pile && entry.builds(interval)) || self.blocked.contains(&pile) {
                     return 0.0;
@@ -1579,7 +1571,7 @@ fn opening_chunks(pile: &BlendPile, grades: usize) -> Vec<Chunk> {
                 held_t,
                 held_q,
                 closed: pile.chunk_starts_closed(index),
-                closed_h: pile.chunk_closed_h.get(index).copied().flatten(),
+                received_h: None,
             }
         })
         .collect()

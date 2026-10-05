@@ -63,9 +63,9 @@ pub(crate) enum StockpileRepresentation {
     #[default]
     #[serde(alias = "not_configured")]
     Blended,
-    /// Ordered blended chunks. Each opening chunk is closed and immediately
-    /// reclaimable with its own composition, and receiving chunks of the
-    /// pile's chunk size fill in order behind them.
+    /// Ordered blended chunks of the pile's chunk size, each with its own
+    /// composition: the opening chunks first, then receiving chunks filling
+    /// in order behind them.
     Chunks,
 }
 
@@ -84,9 +84,9 @@ impl StockpileRepresentation {
 pub(crate) struct StockpileExperiment {
     pub(crate) representation: StockpileRepresentation,
     /// The size of a chunked pile's *receiving* chunks, filled in order behind
-    /// the opening chunks. Each is filled once; what is delivered after a
-    /// reclaim frees room goes into the next, and the pile's maximum tonnes
-    /// bound what it holds at once.
+    /// the opening chunks. Each closes when full and is not refilled once
+    /// emptied; what is delivered after that goes into the next, and the
+    /// pile's maximum tonnes bound what it holds at once.
     ///
     /// Never derived from a truck payload or a tonnage: how many chunks a
     /// pile is divided into is a modelling decision with a throughput

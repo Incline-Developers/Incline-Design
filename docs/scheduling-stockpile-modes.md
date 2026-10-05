@@ -42,12 +42,14 @@ chunks offers to combine them. Changing the representation or the chunk size
 re-splits stock that is still one blend, and leaves chunks edited one by one
 as they are.
 
-Deliveries fill chunks of the chunk size in order, each closing when full to
-be reclaimed. A chunk is filled once: material delivered after a reclaim
-frees room goes into the next chunk, so a chunked pile refills all run, its
-maximum tonnes limiting what it holds at once, and FIFO and LIFO keep
-following age. A chunk size larger than the pile's maximum tonnes is an
-error, since no chunk could fill.
+Chunks are numbered, and the number is the order: deliveries go to the
+lowest-numbered chunk that is not yet full, and FIFO draws the lowest chunk
+holding material, LIFO the highest. Opening stock sits in the first chunks,
+the last of them topped up first when it is not full. A chunk closes once it
+is full and never takes material again, so material delivered after it is
+emptied goes into the next chunk; a chunked pile refills all run, its
+maximum tonnes limiting what it holds at once. A chunk size larger than the
+pile's maximum tonnes is an error, since no chunk could fill.
 
 What would stop a calculation is reported on the step, as an error when the
 pile is used and a warning otherwise: a chunked pile without a chunk size,
@@ -73,32 +75,24 @@ it is not reclaiming, are never created, and a reclaim bar's readiness counts
 only piles reclaiming that interval. The replay rejects receipts or reclaim
 on a forbidden day.
 
-## Closing chunks
+## Filling and reclaiming chunks
 
-A chunk of an ordered chunked pile closes - stops receiving and becomes
-reclaimable - in two cases only, the same in the hourly dispatch, the model
-and the replay:
+A chunk of an ordered chunked pile closes - stops receiving - only when it
+is **full** (within 1e-3 t of its capacity); it closes at the start of the
+next hour and the next chunk starts receiving. One left partly filled when
+the pile's Mode stops building stays the receiving chunk and is topped up
+when building resumes, so a pile that alternates building and reclaiming
+never strands room. The hourly dispatch, the model and the replay all apply
+this. Before, a pile stopping building closed its partly filled chunk, and
+a pile that alternated could run out of chunks.
 
-- when it is **full** (within 1e-3 t of its capacity); it closes at the
-  start of the next hour and the next chunk starts receiving;
-- at the start of an hour its pile's **Mode** keeps from building (Reclaim
-  only or Off); the chunk receiving closes if it holds anything. This is how
-  a planner closes a chunk early on purpose: set the pile to Reclaim only for
-  the day it should start being reclaimed.
-
-Before this the model could close a partly filled chunk at any hour while the
-dispatch never did, so Improve could release material the first schedule
-could not. Now neither does: a chunk left partly filled when deliveries stop
-stays unreclaimable until its pile's Mode stops building. A Reclaim bar
-standing beside such a pile is explained as **stockpile settings**.
-
-A Reclaim bar on a chunked pile has work only while a chunk is released -
-closed, rested and holding material - not merely while the pile holds
-something. Material in the chunk still filling cannot be drawn, so it does
-not hold the loader: a Reclaim bar ranked above a Dig bar on the same
-machine lets the digging fill the next chunk, draws it once it closes, and
-the two alternate. Before, the Reclaim bar held the machine as soon as the
-filling chunk held anything, and neither bar could work again.
+Any chunk holding material can be reclaimed, open or closed, once its last
+delivery has rested, in the pile's FIFO or LIFO order. In an hour a chunk
+both receives and is drawn, it takes no more than the room it had as the
+hour started. A Reclaim bar on a chunked pile has work only while a chunk is
+released - rested and holding material - not merely while the pile holds
+something, so a Reclaim bar ranked above a Dig bar on the same machine,
+with a rest, lets the digging fill the pile and draws what has rested.
 
 A Dig bar has work only while its current block - the first of its
 sequence with ground left - can go somewhere: each material in it has a
@@ -132,14 +126,14 @@ Two settings sit with the pile in **Setup → Stockpiles** and hold every day:
   every hour it receives anything, and the pile cannot be reclaimed until
   it has received nothing for the whole rest; while it rests a Reclaim bar on
   it has no work, so its loader moves to its next bar. For a chunked pile
-  each chunk rests from the hour it closed, and a resting chunk counts as not
-  yet released for FIFO and LIFO; a Reclaim bar on a chunked pile still
-  counts as having work while the pile holds anything, as it does while
-  chunks are filling. Opening stock is already rested.
+  each chunk rests from the last hour it received anything, and a resting
+  chunk counts as not yet released for FIFO and LIFO; a Reclaim bar on a
+  chunked pile has work only while a released chunk holds material. Opening
+  stock is already rested.
 
 An hour's deliveries restart a rest only above 1e-4 t, in the dispatch, the
 model and the replay alike. Day-by-day windows carry when each pile last
-received and when each chunk closed, so a rest runs across window
+received and when each chunk last received, so a rest runs across window
 boundaries.
 
 In the model, one `build` binary per pile and interval links the hour's
@@ -147,8 +141,9 @@ deliveries to the pile. Not building and reclaiming at once bounds reclaim by
 its complement; a rest bounds reclaim by the complement of every `build`
 still inside the rest, and, because rest decides whether a Reclaim bar has
 work, the binary is held truthful in both directions (it is 1 only for a
-real delivery). A chunk's release under a rest reads its `closed` column at
-the last interval starting at least the rest earlier.
+real delivery). A chunk has its own such binary per interval it can
+receive in, and is released while none of those still inside the rest is
+set.
 
 Idle time either setting causes is explained with the Mode's as
 **stockpile settings**.

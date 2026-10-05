@@ -547,8 +547,8 @@ pub(crate) fn draw_stockpile(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut E
                     },
                 ));
             }
-            // As many as the run needs: a chunk is filled once, and what is
-            // delivered after a reclaim frees room goes into the next.
+            // As many as the run needs: a full chunk is not refilled once
+            // emptied, and what is delivered after that goes into the next.
             let receiving = chunk_t.map_or_else(|| "—".to_owned(), |chunk| tr!("experiment-receiving-unlimited", size = tonnes(chunk)));
             rows.readonly(&tr!("experiment-receiving-chunks"), &receiving, None, None);
         }

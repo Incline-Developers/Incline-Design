@@ -120,15 +120,16 @@ pub(crate) struct BlendPile {
     pub(crate) order: ReclaimOrder,
     /// Opening material already sitting in each chunk, as
     /// `(tonnes, contained per grade)`, aligned with [`Self::chunks`]. A
-    /// chunk holding opening material is closed from the start, so it is
-    /// immediately reclaimable. Empty means every chunk starts empty and
-    /// [`Self::opening_t`] goes into chunk 0.
+    /// chunk opening full is closed from the start; one opening partly filled
+    /// is the first to receive. Either is reclaimable once rested. Empty
+    /// means every chunk starts empty and [`Self::opening_t`] goes into
+    /// chunk 0.
     pub(crate) chunk_opening: Vec<(f64, Vec<f64>)>,
-    /// Which chunks start closed, aligned with [`Self::chunks`]. Empty means
-    /// the authored rule: a chunk holding opening material starts closed and
-    /// every other chunk starts open. A day-by-day window sets it from the
-    /// state the day before left, where a partly filled chunk may still be
-    /// open and an emptied one is closed for good.
+    /// Which chunks start closed - full, and taking no more - aligned with
+    /// [`Self::chunks`]. Empty means the authored rule: a chunk opening full
+    /// starts closed and every other chunk starts open. A day-by-day window
+    /// sets it from the state the day before left, where an emptied chunk
+    /// that once filled is closed for good.
     pub(crate) chunk_closed: Vec<bool>,
     /// The authored mode of each calendar day from hour 0. A day past the
     /// end builds and reclaims.
@@ -137,8 +138,8 @@ pub(crate) struct BlendPile {
     /// No deliveries in an interval the pile is reclaimed in.
     #[serde(default)]
     pub(crate) exclusive: bool,
-    /// Hours new material rests before reclaim: since the last delivery for
-    /// an unchunked pile, since the chunk closed for a chunked one.
+    /// Hours new material rests before reclaim: since the last delivery to
+    /// the pile, or for a chunked one to the chunk.
     #[serde(default)]
     pub(crate) rest_h: f64,
     /// End of the last interval before this input's first in which the pile
@@ -146,11 +147,12 @@ pub(crate) struct BlendPile {
     /// rested. Set by a day-by-day window.
     #[serde(default)]
     pub(crate) last_receipt_h: Option<f64>,
-    /// When each chunk that starts closed closed, aligned with
-    /// [`Self::chunks`]; `None` or missing means long enough ago to be
-    /// rested. Set by a day-by-day window.
+    /// End of the last interval before this input's first in which each
+    /// chunk received anything, aligned with [`Self::chunks`]; `None` or
+    /// missing means long enough ago to be rested. Set by a day-by-day
+    /// window.
     #[serde(default)]
-    pub(crate) chunk_closed_h: Vec<Option<f64>>,
+    pub(crate) chunk_received_h: Vec<Option<f64>>,
 }
 
 impl BlendPile {
@@ -174,10 +176,13 @@ impl BlendPile {
         received_end_h <= interval.start_h - self.rest_h + REST_TOLERANCE_H
     }
 
-    /// Whether chunk `chunk`, closed from the start of the input, has rested
-    /// by `interval`.
-    pub(crate) fn opening_chunk_rested(&self, chunk: usize, interval: Interval) -> bool {
-        self.chunk_closed_h.get(chunk).copied().flatten().is_none_or(|closed_h| self.rested(closed_h, interval))
+    /// Whether chunk `chunk` has rested by `interval`, given the end of the
+    /// last interval in this input it received in, if any; before that, the
+    /// last receipt the input opens with.
+    pub(crate) fn chunk_rested(&self, chunk: usize, received_h: Option<f64>, interval: Interval) -> bool {
+        received_h
+            .or_else(|| self.chunk_received_h.get(chunk).copied().flatten())
+            .is_none_or(|received_h| self.rested(received_h, interval))
     }
 
     /// The pile's total opening state, which is the per-chunk opening when
@@ -205,10 +210,16 @@ impl BlendPile {
         (tonnes, contained)
     }
 
-    /// Whether chunk `c` is closed from the start.
+    /// Whether chunk `c` is closed from the start: full, unless a window
+    /// says otherwise.
     pub(crate) fn chunk_starts_closed(&self, c: usize) -> bool {
         if self.chunk_closed.is_empty() {
-            self.chunk_opening.get(c).is_some_and(|(tonnes, _)| *tonnes > 0.0) || (self.chunk_opening.is_empty() && c == 0 && self.opening_t > 0.0)
+            let opening_t = match self.chunk_opening.get(c) {
+                Some((tonnes, _)) => *tonnes,
+                None if self.chunk_opening.is_empty() && c == 0 => self.opening_t,
+                None => 0.0,
+            };
+            self.chunks.get(c).is_some_and(|capacity| opening_t > 0.0 && opening_t >= capacity - CHUNK_FULL_T)
         } else {
             self.chunk_closed.get(c).copied().unwrap_or(false)
         }

@@ -1045,7 +1045,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             exclusive: !plan.stockpile_operation(*project_id).simultaneous,
             rest_h: plan.stockpile_operation(*project_id).rest_h,
             last_receipt_h: None,
-            chunk_closed_h: Vec::new(),
+            chunk_received_h: Vec::new(),
         };
         match representation {
             StockpileRepresentation::Blended => {
@@ -1058,9 +1058,10 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             StockpileRepresentation::Chunks => {
                 // Receiving chunks of the chunk size are added once the dug
                 // material is known: enough for everything its rules can
-                // send it. A chunk is filled once, so material delivered
-                // after a reclaim frees room goes into the next chunk; the
-                // pile's maximum tonnes bound what it holds at once.
+                // send it. A chunk closes only when full and is not refilled
+                // once emptied, so material delivered after that goes into
+                // the next chunk; the pile's maximum tonnes bound what it
+                // holds at once.
                 let Some(chunk_t) = experiment.chunk_t(*project_id) else {
                     problems.push(CaptureDiagnostic::new(view.name.clone(), tr!("pile-chunk-size-missing")).at(ScheduleStep::Stockpiles));
                     continue;
@@ -1071,10 +1072,10 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 }
                 chunked_piles.push((piles.len(), *project_id, chunk_t));
                 let receiving: Vec<f64> = Vec::new();
-                // Each opening chunk is closed and immediately reclaimable,
-                // holding its own actual composition; the receiving chunks
-                // fill in order behind them.
-                let mut capacities: Vec<f64> = lots.iter().map(|(tonnes, _)| tonnes.max(f64::MIN_POSITIVE)).collect();
+                // Each opening chunk holds its own actual composition and is
+                // the chunk size, so one opening partly filled is topped up
+                // first; the receiving chunks fill in order behind them.
+                let mut capacities: Vec<f64> = lots.iter().map(|(tonnes, _)| tonnes.max(chunk_t)).collect();
                 let mut openings: Vec<(f64, Vec<f64>)> = lots.clone();
                 capacities.extend(receiving.iter().copied());
                 openings.extend(receiving.iter().map(|_| (0.0, vec![0.0; grades])));
@@ -1268,8 +1269,9 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 }
             }
         }
-        // Whole chunks: one left partly filled closes when the pile stops
-        // building. A pile nothing is sent to still needs a chunk to be one.
+        // Every chunk but the last fills before the next receives, so whole
+        // chunks of everything the pile can receive are enough. A pile
+        // nothing is sent to still needs a chunk to be one.
         let receiving = vec![chunk_t; ((routable / chunk_t - 1e-9).ceil().max(1.0)) as usize];
         let pile = &mut piles[index];
         pile.chunks.extend(receiving.iter().copied());

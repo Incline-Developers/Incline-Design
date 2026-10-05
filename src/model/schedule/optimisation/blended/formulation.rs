@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::input::{
     BlendInput, BlendPile, CHUNK_FULL_T, DIG_ROOM_T, GRADE_CUSHION_T, GRADE_MARGIN, GradeBound, GradeEndpoint, GradeHalfSpace, GradePredicate, GradeQualification, REST_RECEIPT_T,
-    REST_TOLERANCE_H, authored_tasks, block_outlets, delivers_to_pile, dig_authority, flat_cell, interval_rate, loader_rate, task_active, task_authorises, task_operable,
+    authored_tasks, block_outlets, delivers_to_pile, dig_authority, flat_cell, interval_rate, loader_rate, task_active, task_authorises, task_operable,
 };
 use crate::model::schedule::optimisation::{
     Activity, Destination, DestinationId, DestinationKind, GroundId, Interval, LoaderId, MovementCandidate, ReclaimOrder, SourceId, StockpileId, TaskKind,
@@ -54,6 +54,9 @@ pub(crate) struct BlendColumns<V> {
     pub(crate) chunk_closed: BTreeMap<(StockpileId, usize, usize), V>,
     /// Whether each chunk is empty, the same way: `open_t > 0` forces it to 0.
     pub(crate) chunk_empty: BTreeMap<(StockpileId, usize, usize), V>,
+    /// Whether each chunk of a pile with a rest received in the interval,
+    /// truthful both ways: set by a delivery and only by one.
+    pub(crate) chunk_fresh: BTreeMap<(StockpileId, usize, usize), V>,
     /// Keyed (pile, chunk, interval, movement).
     pub(crate) chunk_recv: BTreeMap<(StockpileId, usize, usize, usize), V>,
     /// Tonnes paid under a grade-conditional value, keyed (position in
@@ -79,6 +82,7 @@ impl<V> BlendColumns<V> {
             chunk_recl_t: BTreeMap::new(),
             chunk_closed: BTreeMap::new(),
             chunk_empty: BTreeMap::new(),
+            chunk_fresh: BTreeMap::new(),
             chunk_recv: BTreeMap::new(),
             paid: BTreeMap::new(),
         }
@@ -449,13 +453,19 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
     // horizon has none at all. Consumers below read a missing state as
     // "untouched". An empty block is exhausted from the start, so it keeps
     // its state from the first cell.
+    // Dig candidates by ground source, in candidate order, so each source's
+    // rows read its own rather than scanning every candidate.
+    let mut ground_index: BTreeMap<GroundId, usize> = BTreeMap::new();
+    for (source_index, source) in input.ground.iter().enumerate() {
+        ground_index.entry(source.id).or_insert(source_index);
+    }
     let mut dig_candidates: Vec<Vec<usize>> = vec![Vec::new(); input.ground.len()];
     for (index, candidate) in input.movements.iter().enumerate() {
         if candidate.activity != Activity::Dig {
             continue;
         }
         let SourceId::Ground(ground) = candidate.source else { continue };
-        if let Some(source_index) = input.ground.iter().position(|source| source.id == ground) {
+        if let Some(&source_index) = ground_index.get(&ground) {
             dig_candidates[source_index].push(index);
         }
     }
@@ -489,10 +499,7 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
                     .ground_remaining
                     .insert((source_index, flat_cell(interval.index, segment, segments)), remaining.clone());
                 let mut terms = vec![(remaining.clone(), 1.0)];
-                for (index, candidate) in input.movements.iter().enumerate() {
-                    if candidate.activity != Activity::Dig || candidate.source != SourceId::Ground(source.id) {
-                        continue;
-                    }
+                for &index in &dig_candidates[source_index] {
                     if let Some(column) = rows.columns().movement.get(&(index, interval.index, segment)) {
                         terms.push((column.clone(), 1.0));
                     }
@@ -518,14 +525,12 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
         && let Some(timeline) = &chain.fixed
     {
         for (ground, deadline) in chain.clearance_deadlines(timeline) {
-            let Some(source) = input.ground.iter().find(|source| source.id == ground) else {
+            let Some(&source_index) = ground_index.get(&ground) else {
                 continue;
             };
+            let source = &input.ground[source_index];
             let mut terms = Vec::new();
-            for (candidate_index, candidate) in input.movements.iter().enumerate() {
-                if candidate.activity != Activity::Dig || candidate.source != SourceId::Ground(ground) {
-                    continue;
-                }
+            for &candidate_index in &dig_candidates[source_index] {
                 for interval in input.intervals.iter().filter(|interval| interval.end_h <= deadline + 1e-9) {
                     for segment in 0..segments {
                         if let Some(column) = rows.columns().movement.get(&(candidate_index, interval.index, segment)) {
@@ -582,8 +587,8 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
                 let extract = rows.cont(source.tonnes_t, &format!("ext_{source_index}_{}_{segment}", interval.index));
                 for share in &source.material {
                     let mut terms = vec![(extract.clone(), -share.fraction)];
-                    for (index, candidate) in input.movements.iter().enumerate() {
-                        if candidate.activity != Activity::Dig || candidate.source != SourceId::Ground(source.id) || candidate.material != share.material {
+                    for &index in &dig_candidates[source_index] {
+                        if input.movements[index].material != share.material {
                             continue;
                         }
                         if let Some(column) = rows.columns().movement.get(&(index, interval.index, segment)) {
@@ -941,10 +946,6 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
         if rows.cancelled() {
             return Err(FormulationCancelled);
         }
-        // A chunked pile's closed columns, for which chunks it releases.
-        let closed: Vec<Vec<Option<R::Var>>> = (0..pile.chunks.len())
-            .map(|c| (0..input.intervals.len()).map(|at| rows.columns().chunk_closed.get(&(pile.id, c, at)).cloned()).collect())
-            .collect();
         for interval in &input.intervals {
             if rows.cancelled() {
                 return Err(FormulationCancelled);
@@ -964,9 +965,9 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
             terms.push((flag.clone(), -1.0));
             rows.leq(terms, 0.0, &format!("stocklink_{}_{k}", pile.id.0));
             // A chunked pile has work for a reclaim bar only in a chunk it
-            // releases - closed, rested - and that is not empty: what sits in
-            // the chunk still filling cannot be drawn. The same one-way
-            // truth: a released chunk holding material forces it to 1.
+            // releases - rested since its last delivery - and that is not
+            // empty. The same one-way truth: a released chunk holding
+            // material forces it to 1.
             if !pile.chunks.is_empty() {
                 let available = rows.binary(&format!("availchunk_{}_{k}", pile.id.0));
                 rows.leq(vec![(available.clone(), 1.0), (flag, -1.0)], 0.0, &format!("availchunkstock_{}_{k}", pile.id.0));
@@ -974,16 +975,15 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
                     let Some(void) = rows.columns().chunk_empty.get(&(pile.id, c, k)).cloned() else {
                         continue;
                     };
-                    match chunk_released(pile, c, k, input, &closed) {
-                        // available >= released - empty
-                        Released::Column(released) => rows.geq(
-                            vec![(available.clone(), 1.0), (released, -1.0), (void, 1.0)],
-                            0.0,
-                            &format!("availchunk_{}_{c}_{k}", pile.id.0),
-                        ),
-                        Released::Always => rows.geq(vec![(available.clone(), 1.0), (void, 1.0)], 1.0, &format!("availchunk_{}_{c}_{k}", pile.id.0)),
-                        Released::Never => {}
-                    }
+                    // available >= 1 - empty - (deliveries still resting)
+                    let fresh = match chunk_released(pile, c, k, input, &rows.columns().chunk_fresh) {
+                        Released::Resting(fresh) => fresh,
+                        Released::Always => Vec::new(),
+                        Released::Never => continue,
+                    };
+                    let mut terms = vec![(available.clone(), 1.0), (void, 1.0)];
+                    terms.extend(fresh.into_iter().map(|flag| (flag, 1.0)));
+                    rows.geq(terms, 1.0, &format!("availchunk_{}_{c}_{k}", pile.id.0));
                 }
                 stock.insert((pile.id, k), available);
                 continue;
@@ -1800,38 +1800,25 @@ fn no_outlet<R: Rows>(
 
 /// Whether chunk `chunk` of `pile` is released to reclaim in interval `k`.
 enum Released<V> {
-    Column(V),
+    /// Released unless one of these delivery flags is set.
+    Resting(Vec<V>),
     Always,
     Never,
 }
 
-/// A chunk is released once it is closed, and, when the pile has a rest,
-/// once it closed at a boundary at least the rest before the interval. A
-/// chunk closed from the start of the input closed when the pile says.
-fn chunk_released<V: Clone>(pile: &BlendPile, chunk: usize, k: usize, input: &BlendInput, closed: &[Vec<Option<V>>]) -> Released<V> {
-    let column = |at: usize| closed[chunk][at].clone().expect("chunk column");
-    if pile.rest_h <= 0.0 {
-        return Released::Column(column(k));
+/// A chunk is released, open or closed, once its last delivery has rested:
+/// none still resting from before the input, and none in an interval of it
+/// whose receipts are still resting in `k`. `fresh` holds the chunk delivery
+/// flags, keyed (pile, chunk, interval).
+fn chunk_released<V: Clone>(pile: &BlendPile, chunk: usize, k: usize, input: &BlendInput, fresh: &BTreeMap<(StockpileId, usize, usize), V>) -> Released<V> {
+    if !pile.chunk_rested(chunk, None, input.intervals[k]) {
+        return Released::Never;
     }
-    let interval = input.intervals[k];
-    if pile.chunk_starts_closed(chunk) {
-        return if pile.opening_chunk_rested(chunk, interval) {
-            Released::Always
-        } else {
-            Released::Never
-        };
-    }
-    match rest_anchor(input, pile, k) {
-        Some(at) => Released::Column(column(at)),
-        None => Released::Never,
-    }
-}
-
-/// The last interval whose start is at least `pile`'s rest before interval
-/// `k`'s.
-fn rest_anchor(input: &BlendInput, pile: &BlendPile, k: usize) -> Option<usize> {
-    let start_h = input.intervals[k].start_h;
-    (0..=k).rev().find(|&at| input.intervals[at].start_h <= start_h - pile.rest_h + REST_TOLERANCE_H)
+    let flags: Vec<V> = resting_intervals(input, pile, k)
+        .into_iter()
+        .filter_map(|at| fresh.get(&(pile.id, chunk, at)).cloned())
+        .collect();
+    if flags.is_empty() { Released::Always } else { Released::Resting(flags) }
 }
 
 /// Intervals before `k` whose receipts are still resting in `k`.
@@ -2128,22 +2115,22 @@ fn predicate_owed<R: Rows>(rows: &mut R, pile: StockpileId, interval: usize, tes
 /// - **Capacity** is fixed and authored per chunk.
 /// - **Fill order** is sequential: chunk `c + 1` receives nothing until `c`
 ///   is closed.
-/// - A chunk **becomes reclaimable** when it is closed to further receipts.
-/// - A chunk **closes** when it is full, or at the start of an interval its
-///   pile's mode keeps from building - the planner closing it early on
-///   purpose. Never otherwise, as the hourly dispatch does.
-/// - A chunk **may not receive while being reclaimed**: receipts require
-///   `not closed`, reclaim requires `closed`.
+/// - A chunk **closes** when it is full, and at no other time, as the hourly
+///   dispatch does. One left partly filled when its pile stops building is
+///   topped up when building resumes.
+/// - A chunk receives no more in an interval than its room as the interval
+///   opens.
+/// - A chunk **becomes reclaimable**, open or closed, once its last delivery
+///   has rested.
 /// - **FIFO/LIFO** applies among released, non-empty chunks.
-/// - A chunk is **filled once**: an emptied one stays empty, and there is
-///   no row that reopens a closed chunk. Material delivered after a reclaim
-///   frees room goes into the next chunk, so chunk order stays age order.
-///   Capture gives a pile chunks enough for all it can receive, and the
-///   pile's own capacity row bounds what it holds at once.
+/// - A closed chunk **never reopens**: an emptied one stays empty, and
+///   material delivered after that goes into the next chunk, so chunk order
+///   stays age order. Capture gives a pile chunks enough for all it can
+///   receive, and the pile's own capacity row bounds what it holds at once.
 ///
-/// **Opening stock** occupies chunk 0, which is closed from the start, so an
-/// authored opening is immediately reclaimable and receipts begin at chunk 1.
-/// When a pile opens empty, chunk 0 is an ordinary fill target instead. A
+/// **Opening stock** occupies the first chunks; one opening full is closed
+/// from the start, and one opening partly filled is the first to receive.
+/// When a pile opens empty, chunk 0 is the first fill target instead. A
 /// day-by-day window opens in the state the day before left: any chunk may
 /// hold material, and whether it is closed is stated rather than inferred.
 ///
@@ -2188,12 +2175,12 @@ fn chunked_pile<R: Rows>(
 
     // Which chunks can be live in which interval. One closed from the start
     // holding nothing - drawn empty before this input begins - never is: a
-    // chunk is filled once. One further along than the receipts so far could
-    // have filled is not yet: chunks fill in order, and the one receiving
-    // closes only when full or in an interval its pile is not building. So
-    // a chunk outside these intervals is held open (or closed) and empty,
-    // with no receipt columns and no reclaim order to keep, and a pile with
-    // many chunks costs the model only those that can be in play.
+    // closed chunk never reopens. One further along than the receipts so far
+    // could have filled is not yet: chunks fill in order, and the one
+    // receiving closes only when full. So a chunk outside these intervals is
+    // held open (or closed) and empty, with no receipt columns and no
+    // reclaim order to keep, and a pile with many chunks costs the model only
+    // those that can be in play.
     let dead: Vec<bool> = (0..count)
         .map(|c| pile.chunk_starts_closed(c) && opening.get(c).is_none_or(|(tonnes, _)| *tonnes <= 0.0))
         .collect();
@@ -2218,21 +2205,25 @@ fn chunked_pile<R: Rows>(
         let mut needed = 0.0;
         let mut k = 0;
         let mut delivered = 0.0;
-        let mut unbounded = false;
         for c in first_open..count {
             if c > first_open {
                 let previous = c - 1;
                 needed += (pile.chunks[previous] - CHUNK_FULL_T - opening.get(previous).map(|(tonnes, _)| *tonnes).unwrap_or(0.0)).max(0.0);
             }
             // The first interval by whose start enough could have arrived to
-            // fill every chunk ahead of this one, or in which a pile not
-            // building could have closed them.
-            while k < horizon && !unbounded && delivered < needed - 1e-9 {
-                unbounded |= !pile.builds(input.intervals[k]);
+            // fill every chunk ahead of this one. One holding opening
+            // material is live from the start.
+            while k < horizon && delivered < needed - 1e-9 {
                 delivered += pile_receipt[k];
                 k += 1;
             }
-            earliest[c] = if unbounded || delivered >= needed - 1e-9 { k } else { horizon };
+            earliest[c] = if opening.get(c).is_some_and(|(tonnes, _)| *tonnes > 0.0) {
+                0
+            } else if delivered >= needed - 1e-9 {
+                k
+            } else {
+                horizon
+            };
         }
     }
     let active = |c: usize, k: usize| !dead[c] && k >= earliest[c];
@@ -2268,10 +2259,26 @@ fn chunked_pile<R: Rows>(
             rows.columns().chunk_recl_t.insert((pile.id, c, k), recl_t[c][k].clone().expect("just created"));
             rows.columns().chunk_closed.insert((pile.id, c, k), closed[c][k].clone().expect("just created"));
             rows.columns().chunk_empty.insert((pile.id, c, k), empty[c][k].clone().expect("just created"));
+            let mut received = Vec::new();
             for &m in delivering.iter().filter(|_| active(c, k)) {
                 let column = rows.cont(cap, &format!("cRecv_{}_{c}_{k}_{m}", pile.id.0));
                 rows.columns().chunk_recv.insert((pile.id, c, k, m), column.clone());
-                recv.insert((m, c, k), column);
+                recv.insert((m, c, k), column.clone());
+                received.push(column);
+            }
+            // With a rest, whether the chunk received in this interval, set
+            // by a delivery and only by one, so a reclaim bar can neither
+            // draw material still resting nor claim a rested chunk is not:
+            //   receipts / cap <= fresh <= receipts / REST_RECEIPT_T
+            if pile.rest_h > 0.0 && !received.is_empty() {
+                let fresh = rows.binary(&format!("cFresh_{}_{c}_{k}", pile.id.0));
+                let mut terms: Vec<_> = received.iter().map(|column| (column.clone(), 1.0 / cap)).collect();
+                terms.push((fresh.clone(), -1.0));
+                rows.leq(terms, 0.0, &format!("cFreshLink_{}_{c}_{k}", pile.id.0));
+                let mut terms: Vec<_> = received.into_iter().map(|column| (column, -1.0)).collect();
+                terms.push((fresh.clone(), REST_RECEIPT_T));
+                rows.leq(terms, 0.0, &format!("cFreshTrue_{}_{c}_{k}", pile.id.0));
+                rows.columns().chunk_fresh.insert((pile.id, c, k), fresh);
             }
         }
     }
@@ -2359,12 +2366,10 @@ fn chunked_pile<R: Rows>(
                 rows.leq(vec![(close.clone(), 1.0), (previous, -1.0)], 0.0, &format!("cCloseSeq_{}_{c}_{k}", pile.id.0));
             }
 
-            // A chunk closes only when full - its open tonnes, which for an
-            // open chunk are everything it has received, within
-            // `CHUNK_FULL_T` of its capacity - or where its pile is not
-            // building:
+            // A chunk closes only when full - its open tonnes within
+            // `CHUNK_FULL_T` of its capacity:
             //   closed[k] - closed[k-1] <= open_t[k] / (cap - CHUNK_FULL_T)
-            if !pile.chunk_starts_closed(c) && pile.builds(input.intervals[k]) && cap > CHUNK_FULL_T {
+            if !pile.chunk_starts_closed(c) && cap > CHUNK_FULL_T {
                 let mut terms = vec![(close.clone(), 1.0), (open.clone(), -1.0 / (cap - CHUNK_FULL_T))];
                 if k > 0 {
                     terms.push((take(&closed[c][k - 1]), -1.0));
@@ -2414,10 +2419,15 @@ fn chunked_pile<R: Rows>(
                 }
             }
 
-            // Receipts require an OPEN chunk, and sequential fill requires the
-            // previous one to be closed.
+            // Receipts require an OPEN chunk with room as the interval opens,
+            // and sequential fill requires the previous one to be closed.
             let receipt_m = cap.min(interval_receipt[k]).max(0.0);
             let draw_m = cap.min(interval_draw[k]).max(0.0);
+            let mut room = vec![(open.clone(), 1.0)];
+            room.extend(delivering.iter().filter_map(|&m| recv.get(&(m, c, k)).map(|column| (column.clone(), 1.0))));
+            if room.len() > 1 {
+                rows.leq(room, cap, &format!("cRoom_{}_{c}_{k}", pile.id.0));
+            }
             for &m in &delivering {
                 let Some(column) = recv.get(&(m, c, k)).cloned() else { continue };
                 rows.leq(
@@ -2431,12 +2441,14 @@ fn chunked_pile<R: Rows>(
                 }
             }
 
-            // Reclaim requires a CLOSED chunk - one closed for the pile's
-            // rest, when it has one - and cannot exceed its released opening
-            // tonnes.
-            match chunk_released(pile, c, k, input, &closed) {
-                Released::Column(released) => {
-                    rows.leq(vec![(draw.clone(), 1.0), (released, -draw_m)], 0.0, &format!("cDrawClosed_{}_{c}_{k}", pile.id.0));
+            // Reclaim requires a released chunk - its last delivery rested -
+            // and cannot exceed its opening tonnes.
+            match chunk_released(pile, c, k, input, &rows.columns().chunk_fresh) {
+                // draw <= draw_m * (1 - fresh) for each delivery still resting
+                Released::Resting(fresh) => {
+                    for (at, flag) in fresh.into_iter().enumerate() {
+                        rows.leq(vec![(draw.clone(), 1.0), (flag, draw_m)], draw_m, &format!("cDrawRest_{}_{c}_{k}_{at}", pile.id.0));
+                    }
                 }
                 Released::Always => {}
                 Released::Never => rows.leq(vec![(draw.clone(), 1.0)], 0.0, &format!("cDrawRest_{}_{c}_{k}", pile.id.0)),
@@ -2487,35 +2499,19 @@ fn chunked_pile<R: Rows>(
                     // Every newer chunk must be empty OR not yet released.
                     for j in ((c + 1)..count).filter(|&j| active(j, k)) {
                         let newer = take(&empty[j][k]);
-                        match chunk_released(pile, j, k, input, &closed) {
-                            // draw <= draw_m * (empty_j + 1 - released_j)
-                            Released::Column(released) => rows.leq(
-                                vec![(draw.clone(), 1.0), (newer, -draw_m), (released, draw_m)],
-                                draw_m,
-                                &format!("cLifo_{}_{c}_{j}_{k}", pile.id.0),
-                            ),
+                        match chunk_released(pile, j, k, input, &rows.columns().chunk_fresh) {
+                            // draw <= draw_m * (empty_j + deliveries to j still resting)
+                            Released::Resting(fresh) => {
+                                let mut terms = vec![(draw.clone(), 1.0), (newer, -draw_m)];
+                                terms.extend(fresh.into_iter().map(|flag| (flag, -draw_m)));
+                                rows.leq(terms, 0.0, &format!("cLifo_{}_{c}_{j}_{k}", pile.id.0));
+                            }
                             Released::Always => rows.leq(vec![(draw.clone(), 1.0), (newer, -draw_m)], 0.0, &format!("cLifo_{}_{c}_{j}_{k}", pile.id.0)),
                             Released::Never => {}
                         }
                     }
                 }
             }
-        }
-
-        // A chunk never receives more than its authored capacity.
-        let mut fill = Vec::new();
-        for k in 0..horizon {
-            if rows.cancelled() {
-                return Err(FormulationCancelled);
-            }
-            for &m in &delivering {
-                if let Some(column) = recv.get(&(m, c, k)) {
-                    fill.push((column.clone(), 1.0));
-                }
-            }
-        }
-        if !fill.is_empty() {
-            rows.leq(fill, cap, &format!("cFill_{}_{c}", pile.id.0));
         }
     }
 
@@ -2773,15 +2769,15 @@ pub(crate) struct FamilySize {
     pub(crate) entries: usize,
 }
 
-/// A sink that builds no solver model and only tallies what [`formulate`]
-/// posts, by family. It exists to answer "which part of the model is large"
-/// on a real project without paying for a solver build.
-struct FamilyRows {
-    columns: BlendColumns<()>,
+/// What a [`Rows`] sink posts, tallied by family as it posts it, to answer
+/// "which part of the model is large" on a real project from the model
+/// actually built.
+#[derive(Default)]
+pub(crate) struct FamilyTally {
     families: BTreeMap<String, FamilySize>,
 }
 
-impl FamilyRows {
+impl FamilyTally {
     fn family(&mut self, name: &str) -> &mut FamilySize {
         let prefix = name.split('_').next().unwrap_or(name);
         if !self.families.contains_key(prefix) {
@@ -2789,55 +2785,25 @@ impl FamilyRows {
         }
         self.families.get_mut(prefix).expect("just inserted")
     }
-}
 
-impl Rows for FamilyRows {
-    type Var = ();
-
-    fn columns(&mut self) -> &mut BlendColumns<()> {
-        &mut self.columns
-    }
-
-    fn valued(&mut self, _upper: f64, _value: f64, name: &str) {
-        self.family(name).columns += 1;
-    }
-
-    fn binary(&mut self, name: &str) {
+    pub(crate) fn column(&mut self, name: &str, binary: bool) {
         let family = self.family(name);
         family.columns += 1;
-        family.binaries += 1;
+        family.binaries += usize::from(binary);
     }
 
-    fn linear(&mut self, terms: Vec<((), f64)>, _lhs: f64, _rhs: f64, name: &str) {
-        if terms.is_empty() {
-            return;
-        }
+    pub(crate) fn row(&mut self, name: &str, entries: usize) {
         let family = self.family(name);
         family.rows += 1;
-        family.entries += terms.iter().filter(|(_, coefficient)| *coefficient != 0.0).count();
+        family.entries += entries;
     }
 
-    fn implies(&mut self, _flag: (), terms: Vec<((), f64)>, _rhs: f64, _big_m: f64, name: &str) {
-        self.linear(terms, 0.0, 0.0, name);
+    /// Per-family sizes, largest first by columns plus rows.
+    pub(crate) fn sorted(self) -> Vec<(String, FamilySize)> {
+        let mut families: Vec<(String, FamilySize)> = self.families.into_iter().collect();
+        families.sort_by_key(|(_, size)| std::cmp::Reverse(size.columns + size.rows));
+        families
     }
-
-    fn mix(&mut self, _pile: StockpileId, _interval: usize, _grade: usize, _recl_q: (), _open_t: (), _recl_t: (), _open_q: (), name: &str) {
-        let family = self.family(name);
-        family.rows += 1;
-        family.entries += 4;
-    }
-}
-
-/// Per-family model sizes, largest first by columns plus rows.
-pub(crate) fn family_sizes(input: &BlendInput) -> Vec<(String, FamilySize)> {
-    let mut rows = FamilyRows {
-        columns: BlendColumns::new(),
-        families: BTreeMap::new(),
-    };
-    formulate(&mut rows, input).expect("the counting sink never cancels");
-    let mut families: Vec<(String, FamilySize)> = rows.families.into_iter().collect();
-    families.sort_by_key(|(_, size)| std::cmp::Reverse(size.columns + size.rows));
-    families
 }
 
 /// A source as it appears in a row name.

@@ -50,7 +50,7 @@
 //! out of sequence - is checked again when the stitched schedule is replayed
 //! against the whole horizon.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
     input::{BlendInput, BlendPile},
@@ -126,8 +126,9 @@ pub(crate) struct Carry {
     chunks: BTreeMap<StockpileId, Vec<(f64, Vec<f64>, bool)>>,
     /// End of the last interval each pile received in, for its rest.
     last_receipt_h: BTreeMap<StockpileId, f64>,
-    /// When each chunk closed, for its rest; `None` for long enough ago.
-    chunk_closed_h: BTreeMap<StockpileId, Vec<Option<f64>>>,
+    /// End of the last interval each chunk received in, for its rest;
+    /// `None` for long enough ago.
+    chunk_received_h: BTreeMap<StockpileId, Vec<Option<f64>>>,
     /// Keyed by task index; only bars with an authored cap.
     reclaim_left: BTreeMap<usize, f64>,
     dump_left: BTreeMap<DestinationId, f64>,
@@ -162,11 +163,11 @@ impl Carry {
                 })
                 .collect(),
             last_receipt_h: input.piles.iter().filter_map(|pile| Some((pile.id, pile.last_receipt_h?))).collect(),
-            chunk_closed_h: input
+            chunk_received_h: input
                 .piles
                 .iter()
                 .filter(|pile| !pile.chunks.is_empty())
-                .map(|pile| (pile.id, (0..pile.chunks.len()).map(|c| pile.chunk_closed_h.get(c).copied().flatten()).collect()))
+                .map(|pile| (pile.id, (0..pile.chunks.len()).map(|c| pile.chunk_received_h.get(c).copied().flatten()).collect()))
                 .collect(),
             reclaim_left: input
                 .tasks
@@ -285,7 +286,7 @@ impl Carry {
                         exclusive: pile.exclusive,
                         rest_h: pile.rest_h,
                         last_receipt_h: self.last_receipt_h.get(&pile.id).copied().or(pile.last_receipt_h),
-                        chunk_closed_h: self.chunk_closed_h.get(&pile.id).cloned().unwrap_or_else(|| pile.chunk_closed_h.clone()),
+                        chunk_received_h: self.chunk_received_h.get(&pile.id).cloned().unwrap_or_else(|| pile.chunk_received_h.clone()),
                     };
                 }
                 let (tonnes, contained) = self.piles.get(&pile.id).cloned().unwrap_or_else(|| pile.total_opening(grades));
@@ -302,7 +303,7 @@ impl Carry {
                     exclusive: pile.exclusive,
                     rest_h: pile.rest_h,
                     last_receipt_h: self.last_receipt_h.get(&pile.id).copied().or(pile.last_receipt_h),
-                    chunk_closed_h: Vec::new(),
+                    chunk_received_h: Vec::new(),
                 }
             })
             .collect();
@@ -428,24 +429,30 @@ impl Carry {
                 self.piles.insert(pile.id, (tonnes, contained));
             }
             let Some(chunks) = self.chunks.get_mut(&pile.id) else { continue };
-            let closed_h = self.chunk_closed_h.entry(pile.id).or_insert_with(|| vec![None; pile.chunks.len()]);
-            // The first kept interval each chunk is published closed in. Rows
-            // are published only for live chunks, so a chunk that closed and
-            // was emptied inside the window has none at its end; it is closed
-            // all the same, and stays so.
-            let mut first_closed: BTreeMap<usize, usize> = BTreeMap::new();
-            for row in solution.chunks.iter().filter(|row| row.pile == pile.id && row.closed && row.interval < window.committed) {
-                let first = first_closed.entry(row.chunk).or_insert(row.interval);
-                *first = (*first).min(row.interval);
+            let received_h = self.chunk_received_h.entry(pile.id).or_insert_with(|| vec![None; pile.chunks.len()]);
+            // Which chunks are published closed in a kept interval, and the
+            // last kept interval each received in. Rows are published only
+            // for live chunks, so a chunk that closed and was emptied inside
+            // the window has none at its end; it is closed all the same, and
+            // stays so.
+            let mut closed: BTreeSet<usize> = BTreeSet::new();
+            let mut last_receipt: BTreeMap<usize, usize> = BTreeMap::new();
+            for row in solution.chunks.iter().filter(|row| row.pile == pile.id && row.interval < window.committed) {
+                if row.closed {
+                    closed.insert(row.chunk);
+                }
+                if row.received_t > super::input::REST_RECEIPT_T {
+                    let last = last_receipt.entry(row.chunk).or_insert(row.interval);
+                    *last = (*last).max(row.interval);
+                }
             }
             for (c, chunk) in chunks.iter_mut().enumerate() {
-                // Closed in this window: when, for its rest.
-                if !chunk.2
-                    && let Some(&first) = first_closed.get(&c)
-                    && let Some(interval) = full.intervals.get(window.first + first)
-                    && let Some(slot) = closed_h.get_mut(c)
+                // Received in this window: when last, for its rest.
+                if let Some(&last) = last_receipt.get(&c)
+                    && let Some(interval) = full.intervals.get(window.first + last)
+                    && let Some(slot) = received_h.get_mut(c)
                 {
-                    *slot = Some(interval.start_h);
+                    *slot = Some(interval.end_h);
                 }
                 // A chunk the replay has no state for at the window's end
                 // holds nothing.
@@ -463,7 +470,7 @@ impl Carry {
                         chunk.1.iter_mut().for_each(|quantity| *quantity = 0.0);
                     }
                 }
-                chunk.2 |= first_closed.contains_key(&c);
+                chunk.2 |= closed.contains(&c);
             }
         }
     }

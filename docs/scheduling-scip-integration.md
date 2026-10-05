@@ -91,9 +91,10 @@ an exact discontinuous authored-value problem.
   still limits cumulative receipts, and crusher budgets limit daily throughput.
 - Blended representation (every pile's default) combines opening chunks;
   FIFO/LIFO is not applied to a homogeneous blend. Ordered chunks preserve
-  order. Receiving chunks are all one chunk size and fill in order, each
-  filled once: material delivered after a reclaim frees room goes into the
-  next chunk, so chunk order stays age order and the pile refills all
+  order. Chunks are all one chunk size and fill in order, each closing only
+  when full - a partly filled one keeps receiving across days its pile is
+  not building - and never refilled once emptied: material delivered after
+  that goes into the next chunk, so chunk order stays age order and the pile refills all
   horizon, its capacity bounding only what it holds at once. Capture gives
   every chunked pile enough chunks for the dug material its enabled rules
   can send it. Only live chunks cost anything: the hourly dispatch publishes
@@ -420,8 +421,9 @@ Chunked piles are solved this way too. Each chunk's tonnes and contained
 quantity cross the boundary from the window's replay, and whether it was
 closed in the last kept interval crosses from the window's schedule: a closed
 chunk opens the next window closed (`BlendPile::chunk_closed`), so an emptied
-chunk is never refilled, and an open one may still close at the boundary or keep
-filling. A chunk that closed and emptied inside the window has no row at its
+chunk is never refilled, and an open one keeps filling until full. When each
+chunk last received crosses too (`BlendPile::chunk_received_h`), for its
+rest. A chunk that closed and emptied inside the window has no row at its
 end; it opens the next window closed and empty all the same. Authored piles are unaffected: without the flags, a chunk holding
 opening material starts closed as before. The replay now also reports each
 chunk's closing state and checks that a chunk required to start closed does.
@@ -838,21 +840,21 @@ dispatcher fails: HiGHS failing on an interval, or the replay refusing its
 schedule.
 
 The chunk rules are the formulation's:
-- **Closing:** a chunk closes when it is full, or at the start of an hour
-  its pile's Mode keeps from building, and at no other time - in the
+- **Closing:** a chunk closes when it is full and at no other time - in the
   dispatcher, the formulation and the replay alike (see
   `docs/scheduling-stockpile-modes.md`). The formulation used to be free to
   close a partly filled chunk at any hour; closing early is what led the
   days-alone LIFO run into its dead end, where every chunk was closed and the
-  diggers had nowhere to deliver.
-- **Filling:** receipts go to the first chunk still open, up to its room and
-  the pile's. A chunk is open or closed for a whole interval, so a chunk that
-  fills during an interval closes at the start of the next, and the next
-  chunk starts receiving then.
+  diggers had nowhere to deliver. Closing one when its pile stopped building
+  later ran a pile alternating building and reclaiming out of chunks.
+- **Filling:** receipts go to the first chunk still open, up to its room as
+  the interval opens and the pile's. A chunk is open or closed for a whole
+  interval, so a chunk that fills during an interval closes at the start of
+  the next, and the next chunk starts receiving then.
 - **Reclaiming:** reclaim draws only the chunk the authored order releases,
-  at that chunk's own blend. Under FIFO that is the oldest chunk holding
-  material, if it is closed; under LIFO, the newest closed chunk holding
-  material. A draw within 1e-6 t of emptying the chunk empties it, so the
+  at that chunk's own blend - open or closed, once its last delivery has
+  rested. Under FIFO that is the first chunk holding material, if rested;
+  under LIFO, the last rested chunk holding material. A draw within 1e-6 t of emptying the chunk empties it, so the
   order rules see it as empty.
 - **Admission:** reclaim admission by grade is judged on that chunk's blend,
   with the formulation's margin.

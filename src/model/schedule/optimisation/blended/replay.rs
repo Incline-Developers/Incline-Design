@@ -366,17 +366,26 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
     }
     checker.report.replayed_objective = replayed;
 
+    // The published dig rows of each ground source, in published order, so
+    // each source's checks read its own rows rather than every row.
+    let mut dug_rows: BTreeMap<GroundId, Vec<&MovementRow>> = BTreeMap::new();
+    for row in &solution.movements {
+        let Some(candidate) = input.movements.get(row.candidate) else { continue };
+        if candidate.activity == Activity::Dig
+            && let SourceId::Ground(ground) = candidate.source
+        {
+            dug_rows.entry(ground).or_default().push(row);
+        }
+    }
+
     // ---- ground depletion ---------------------------------------------------
     for source in &input.ground {
         if checker.cancelled() {
             return None;
         }
         let mut dug = 0.0;
-        for row in &solution.movements {
-            let Some(candidate) = input.movements.get(row.candidate) else { continue };
-            if candidate.activity == Activity::Dig && candidate.source == SourceId::Ground(source.id) {
-                dug += row.tonnes_t;
-            }
+        for row in dug_rows.get(&source.id).into_iter().flatten() {
+            dug += row.tonnes_t;
         }
         checker.breach(&format!("ground {} depleted twice", source.id.0), dug, source.tonnes_t);
     }
@@ -396,11 +405,8 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
             continue;
         }
         let mut per_cell: BTreeMap<(usize, usize), (f64, BTreeMap<u32, f64>)> = BTreeMap::new();
-        for row in &solution.movements {
-            let Some(candidate) = input.movements.get(row.candidate) else { continue };
-            if candidate.activity != Activity::Dig || candidate.source != SourceId::Ground(source.id) {
-                continue;
-            }
+        for row in dug_rows.get(&source.id).into_iter().flatten() {
+            let candidate = &input.movements[row.candidate];
             let entry = per_cell.entry((row.interval, row.segment)).or_default();
             entry.0 += row.tonnes_t;
             *entry.1.entry(candidate.material.0).or_default() += row.tonnes_t;
@@ -775,12 +781,20 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
     }
 
     // ---- blended inventory, recomputed --------------------------------------
+    // The published rows of each interval, in published order, so each
+    // pile's walk reads an interval's own rows rather than every row.
+    let mut by_interval: Vec<Vec<MovementRow>> = vec![Vec::new(); input.intervals.len()];
+    for row in &solution.movements {
+        if let Some(rows) = by_interval.get_mut(row.interval) {
+            rows.push(*row);
+        }
+    }
     let mut openings: BTreeMap<(StockpileId, usize), f64> = BTreeMap::new();
     for pile in &input.piles {
         if checker.cancelled() {
             return None;
         }
-        let state = replay_pile(&mut checker, pile, &solution.movements, &destinations, grades, segments, &mut openings, &drawn);
+        let state = replay_pile(&mut checker, pile, &by_interval, &destinations, grades, segments, &mut openings, &drawn);
         checker.report.closing.push(state);
         // A chunked pile gives a reclaim bar work only in a chunk it
         // releases: closed, rested and holding material.
@@ -1088,7 +1102,7 @@ fn check_bar_priority(
 fn replay_pile(
     checker: &mut Checker<'_>,
     pile: &BlendPile,
-    movements: &[MovementRow],
+    movements: &[Vec<MovementRow>],
     destinations: &BTreeMap<DestinationId, &Destination>,
     grades: usize,
     segments: usize,
@@ -1122,7 +1136,7 @@ fn replay_pile(
         let mut blocks_dug: BTreeMap<(usize, LoaderId), BTreeSet<GroundId>> = BTreeMap::new();
         let mut delivering: BTreeSet<(usize, LoaderId)> = BTreeSet::new();
 
-        for row in movements.iter().filter(|row| row.interval == k) {
+        for row in &movements[k] {
             let Some(candidate) = input.movements.get(row.candidate) else { continue };
             let to_pile = destinations
                 .get(&candidate.destination)
@@ -1267,7 +1281,7 @@ fn replay_pile(
         };
 
         // Grade eligibility on what was actually delivered (§6).
-        for row in movements.iter().filter(|row| row.interval == k) {
+        for row in &movements[k] {
             if !checker.input.grade_targets.is_empty()
                 && checker
                     .input
@@ -1281,8 +1295,8 @@ fn replay_pile(
                 }
             }
         }
-        check_grade_limits(checker, pile, k, reclaimed_t, &reclaimed_q, &delivered_blend, destinations, movements);
-        for row in movements.iter().filter(|row| row.interval == k && row.tonnes_t > REPLAY_TOLERANCE_T) {
+        check_grade_limits(checker, pile, k, reclaimed_t, &reclaimed_q, &delivered_blend, destinations, &movements[k]);
+        for row in movements[k].iter().filter(|row| row.tonnes_t > REPLAY_TOLERANCE_T) {
             let Some(candidate) = checker.input.movements.get(row.candidate) else { continue };
             if candidate.activity != Activity::Reclaim || candidate.source != SourceId::Stockpile(pile.id) {
                 continue;
@@ -1381,6 +1395,7 @@ fn check_grade_limits(
     _reclaimed_q: &[f64],
     blend: &[f64],
     destinations: &BTreeMap<DestinationId, &Destination>,
+    // The interval's published rows.
     movements: &[MovementRow],
 ) {
     if reclaimed_t <= REPLAY_TOLERANCE_T {
@@ -1395,7 +1410,6 @@ fn check_grade_limits(
         // limited destination?
         let delivered: f64 = movements
             .iter()
-            .filter(|row| row.interval == interval)
             .filter(|row| {
                 checker.input.movements.get(row.candidate).is_some_and(|candidate| {
                     candidate.activity == Activity::Reclaim && candidate.source == SourceId::Stockpile(pile.id) && candidate.destination == limit.destination
@@ -1574,14 +1588,10 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> ChunkDra
         }
 
         // Each chunk's state walked forward through its rows: closed or not,
-        // and since when, for its rest. A chunk with no row keeps its state.
+        // and when it last received, for its rest. A chunk with no row keeps
+        // its state.
         let mut closed_state: Vec<bool> = (0..count).map(|chunk| pile.chunk_starts_closed(chunk)).collect();
-        let mut closed_since: Vec<Option<f64>> = (0..count)
-            .map(|chunk| {
-                pile.chunk_starts_closed(chunk)
-                    .then(|| pile.chunk_closed_h.get(chunk).copied().flatten().unwrap_or(f64::NEG_INFINITY))
-            })
-            .collect();
+        let mut received_h: Vec<Option<f64>> = vec![None; count];
         for interval in 0..horizon {
             if checker.cancelled() {
                 return (drawn, released_t);
@@ -1607,16 +1617,16 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> ChunkDra
                 }
                 if !closed_state[chunk] && state.closed {
                     closing.push(chunk);
-                    closed_since[chunk].get_or_insert(at.start_h);
                 }
                 closed_state[chunk] = state.closed;
             }
-            // Closed, and closed for the pile's rest.
-            let released = |chunk: usize, entry: &ChunkRow| entry.closed && closed_since[chunk].is_some_and(|closed_h| pile.rested(closed_h, at));
+            // Open or closed, a chunk is released once its last delivery has
+            // rested.
+            let released = |chunk: usize| pile.chunk_rested(chunk, received_h[chunk], at);
             let held: f64 = here
                 .iter()
                 .map(|&chunk| published[&(pile.id, chunk, interval)])
-                .filter(|state| released(state.chunk, state))
+                .filter(|state| released(state.chunk))
                 .map(|state| state.open_t)
                 .sum();
             released_t.insert((pile.id, interval), held);
@@ -1630,8 +1640,16 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> ChunkDra
                     state.open_t,
                     pile.chunks[chunk],
                 );
+                // It receives no more than its room as the interval opens:
+                // what it draws in the interval does not make room in it.
+                checker.breach(
+                    &format!("pile {} chunk {chunk} room in interval {interval}", pile.id.0),
+                    state.open_t + state.received_t,
+                    pile.chunks[chunk],
+                );
 
-                // A chunk may not receive while closed, nor be reclaimed while open.
+                // A chunk may not receive while closed, nor be reclaimed
+                // before its last delivery has rested.
                 if state.closed && state.received_t > REPLAY_TOLERANCE_T {
                     if state.received_t <= dust {
                         checker.report.chunk_dust_events += 1;
@@ -1643,13 +1661,7 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> ChunkDra
                         ));
                     }
                 }
-                if state.closed && !released(chunk, state) && state.reclaimed_t > dust {
-                    checker
-                        .report
-                        .issues
-                        .push(format!("pile {} chunk {chunk} was reclaimed in interval {interval} before its rest", pile.id.0));
-                }
-                if !state.closed && state.reclaimed_t > REPLAY_TOLERANCE_T {
+                if !released(chunk) && state.reclaimed_t > REPLAY_TOLERANCE_T {
                     if state.reclaimed_t <= dust {
                         checker.report.chunk_dust_events += 1;
                         checker.report.chunk_dust_tonnes_t += state.reclaimed_t;
@@ -1657,7 +1669,7 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> ChunkDra
                         checker
                             .report
                             .issues
-                            .push(format!("pile {} chunk {chunk} was reclaimed in interval {interval} before being closed", pile.id.0));
+                            .push(format!("pile {} chunk {chunk} was reclaimed in interval {interval} before its rest", pile.id.0));
                     }
                 }
 
@@ -1689,7 +1701,7 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> ChunkDra
                         crate::model::schedule::optimisation::ReclaimOrder::Lifo => {
                             for &later in here.iter().filter(|&&other| other > chunk) {
                                 let entry = published[&(pile.id, later, interval)];
-                                if released(later, entry) && entry.open_t > dust {
+                                if released(later) && entry.open_t > dust {
                                     checker.report.issues.push(format!(
                                         "LIFO violated: pile {} drew chunk {chunk} in interval {interval} while released chunk {later} still held material",
                                         pile.id.0
@@ -1700,13 +1712,17 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> ChunkDra
                     }
                 }
 
-                // A chunk closes only when full or where its pile is not
-                // building.
-                if closing.contains(&chunk) && pile.builds(at) && state.open_t < pile.chunks[chunk] - super::input::CHUNK_FULL_T - dust.max(REPLAY_TOLERANCE_T) {
+                // A chunk closes only when full.
+                if closing.contains(&chunk) && state.open_t < pile.chunks[chunk] - super::input::CHUNK_FULL_T - dust.max(REPLAY_TOLERANCE_T) {
                     checker.report.issues.push(format!(
-                        "pile {} chunk {chunk} closed in interval {interval} holding {:.6} t of {:.6} t while its pile was building",
+                        "pile {} chunk {chunk} closed in interval {interval} holding {:.6} t of {:.6} t",
                         pile.id.0, state.open_t, pile.chunks[chunk]
                     ));
+                }
+            }
+            for &chunk in here {
+                if published[&(pile.id, chunk, interval)].received_t > super::input::REST_RECEIPT_T {
+                    received_h[chunk] = Some(at.end_h);
                 }
             }
         }

@@ -617,28 +617,21 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
         })
     };
 
-    // Which chunked piles release something in each interval: a chunk closed,
-    // rested and holding material.
-    let mut closed_from: BTreeMap<(StockpileId, usize), usize> = BTreeMap::new();
-    for row in solution.chunks.iter().filter(|row| row.closed) {
-        let first = closed_from.entry((row.pile, row.chunk)).or_insert(row.interval);
-        *first = (*first).min(row.interval);
-    }
+    // Which chunked piles release something in each interval: a chunk
+    // holding material whose last delivery has rested.
+    let mut chunk_rows: Vec<_> = solution.chunks.iter().collect();
+    chunk_rows.sort_by_key(|row| (row.pile, row.chunk, row.interval));
+    let mut received_h: BTreeMap<(StockpileId, usize), f64> = BTreeMap::new();
     let mut released: std::collections::BTreeSet<(StockpileId, usize)> = std::collections::BTreeSet::new();
-    for row in solution.chunks.iter().filter(|row| row.closed && row.open_t > IDLE_NEGLIGIBLE_T) {
+    for row in chunk_rows {
         let (Some(pile), Some(interval)) = (input.piles.iter().find(|pile| pile.id == row.pile), input.intervals.get(row.interval)) else {
             continue;
         };
-        let rested = if pile.chunk_starts_closed(row.chunk) {
-            pile.opening_chunk_rested(row.chunk, *interval)
-        } else {
-            closed_from
-                .get(&(row.pile, row.chunk))
-                .and_then(|first| input.intervals.get(*first))
-                .is_some_and(|first| pile.rested(first.start_h, *interval))
-        };
-        if rested {
+        if row.open_t > IDLE_NEGLIGIBLE_T && pile.chunk_rested(row.chunk, received_h.get(&(row.pile, row.chunk)).copied(), *interval) {
             released.insert((row.pile, row.interval));
+        }
+        if row.received_t > crate::model::schedule::optimisation::blended::input::REST_RECEIPT_T {
+            received_h.insert((row.pile, row.chunk), interval.end_h);
         }
     }
     // Drill and blast: when each block's ground was released, and by which
