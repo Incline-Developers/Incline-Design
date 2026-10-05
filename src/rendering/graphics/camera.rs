@@ -652,6 +652,7 @@ impl<'a> Graphics<'a> {
             screen,
             threshold_px,
             self.drill_hole_gpu.disc_spans(),
+            self.section_slab(),
         )
         .map(|(hole, world)| ScenePick {
             entity: SceneEntityId::DrillHole(hole.dataset),
@@ -1020,6 +1021,7 @@ impl<'a> Graphics<'a> {
                 screen,
                 0.0,
                 self.drill_hole_gpu.disc_spans(),
+                None,
             )
             .map(|(_, world)| world);
             let block_model_hit = self.block_model_gpu.nearest_visible_hit(ray_origin, direction, hidden, frozen);
