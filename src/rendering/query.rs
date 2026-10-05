@@ -16,6 +16,7 @@ use crate::{
     },
     rendering::{
         camera::SectionSlab,
+        pick::slab_clipped_segment,
         scene::{drill_hole_cache::DiscSpans, gpu_cache::ray_aabb_distance},
         snap,
     },
@@ -106,6 +107,10 @@ impl SceneQuery {
     /// `discs` is the cache's record of each hole's drawn discs
     /// ([`crate::rendering::scene::DrillHoleGpuCache::disc_spans`]);
     /// [`hole_discs`] stands in where it has none yet.
+    ///
+    /// Inside a section, `slab` cuts the trace and discs to what it draws and
+    /// skips a collar outside it, so a hidden hole cannot take the pick from a
+    /// shown one; the point reported is then on the hole's drawn front.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn nearest_drill_hole(
         drill_holes: &[OpenDrillHoleDataset],
@@ -118,9 +123,12 @@ impl SceneQuery {
         screen: Size,
         threshold_px: f32,
         discs: &DiscSpans,
+        slab: Option<SectionSlab>,
     ) -> Option<(DrillHoleRef, DVec3)> {
         let mut nearest = f64::INFINITY;
         let mut nearest_hole = None;
+        // The axis and drawn radius of the nearest hit; a collar is its marker.
+        let mut nearest_front = (DVec3::ZERO, DVec3::ZERO, 0.0);
         // The pixel floor depends on the view, not on the hole, so its basis
         // is worked out once here rather than inside the loop.
         let floor = PixelFloor::new(view_direction, view_projection, screen);
@@ -178,6 +186,7 @@ impl SceneQuery {
                 // Keep the same small lift toward the camera as the shader so
                 // depth ordering agrees with what is on screen.
                 let collar = hole.collar_position();
+                let collar_drawn = slab.is_none_or(|slab| slab.contains(collar));
                 let rendered_lift_radius = floor
                     .as_ref()
                     .and_then(|floor| floor.floored_radius(collar, lift_source_radius, f64::from(lift_floor_px), 0.0))
@@ -187,31 +196,30 @@ impl SceneQuery {
                     .and_then(|floor| floor.floored_radius(collar, collar_source_radius, f64::from(COLLAR_MARKER_MIN_PIXEL_DIAMETER), threshold_px))
                     .unwrap_or(collar_source_radius);
                 let lifted_collar = collar - view_direction * rendered_lift_radius * 1.5;
-                if let Some(distance) = ray_disc_distance(ray_origin, ray_direction, lifted_collar, view_direction, collar_radius)
+                if collar_drawn
+                    && let Some(distance) = ray_disc_distance(ray_origin, ray_direction, lifted_collar, view_direction, collar_radius)
                     && distance < nearest
                 {
                     nearest = distance;
                     nearest_hole = Some(DrillHoleRef { dataset: dataset.id, hole: index });
+                    nearest_front = (lifted_collar, lifted_collar, 0.0);
                 }
 
                 // The trace, string and true diameter alike: the exact pieces
                 // the cache draws, cut at render_ranges ends.
                 if let Some((first, last)) = hole.trace.first().zip(hole.trace.last()) {
                     for piece in hole.trace_pieces(first.depth, last.depth, &[]) {
-                        let radius = segment_pick_radius(
-                            floor.as_ref(),
-                            piece.start,
-                            piece.end,
-                            trace_source_radius,
-                            trace_fallback_radius,
-                            trace_floor_px,
-                            threshold_px,
-                        );
-                        if let Some(distance) = ray_capped_cylinder_distance(ray_origin, ray_direction, piece.start, piece.end, radius)
+                        let drawn = segment_pick_radius(floor.as_ref(), piece.start, piece.end, trace_source_radius, trace_fallback_radius, trace_floor_px, 0.0);
+                        let Some((start, end)) = slab_clipped_segment(widened(slab, drawn), piece.start, piece.end) else {
+                            continue;
+                        };
+                        let radius = segment_pick_radius(floor.as_ref(), start, end, trace_source_radius, trace_fallback_radius, trace_floor_px, threshold_px);
+                        if let Some(distance) = ray_capped_cylinder_distance(ray_origin, ray_direction, start, end, radius)
                             && distance < nearest
                         {
                             nearest = distance;
                             nearest_hole = Some(DrillHoleRef { dataset: dataset.id, hole: index });
+                            nearest_front = (start, end, drawn);
                         }
                     }
                 }
@@ -242,8 +250,19 @@ impl SceneQuery {
                     // symmetrically about its own middle rather than each
                     // piece growing about its own.
                     for piece in hole.trace_pieces(disc.from, disc.to, &[]) {
-                        let start = stretch.apply(piece.start);
-                        let end = stretch.apply(piece.end);
+                        let (piece_start, piece_end) = (stretch.apply(piece.start), stretch.apply(piece.end));
+                        let Some(piece_axis) = (piece_end - piece_start).try_normalize() else { continue };
+                        let drawn = ring_pixel_radius(floor.as_ref(), piece_start, piece_axis, disc_radius, disc_floor_px, 0.0).max(ring_pixel_radius(
+                            floor.as_ref(),
+                            piece_end,
+                            piece_axis,
+                            disc_radius,
+                            disc_floor_px,
+                            0.0,
+                        ));
+                        let Some((start, end)) = slab_clipped_segment(widened(slab, drawn), piece_start, piece_end) else {
+                            continue;
+                        };
                         let Some(axis) = (end - start).try_normalize() else { continue };
                         let radius = ring_pixel_radius(floor.as_ref(), start, axis, disc_radius, disc_floor_px, threshold_px).max(ring_pixel_radius(
                             floor.as_ref(),
@@ -258,12 +277,24 @@ impl SceneQuery {
                         {
                             nearest = distance;
                             nearest_hole = Some(DrillHoleRef { dataset: dataset.id, hole: index });
+                            nearest_front = (start, end, drawn);
                         }
                     }
                 }
             }
         }
-        nearest_hole.map(|hole| (hole, ray_origin + ray_direction * nearest))
+        let hole = nearest_hole?;
+        let Some(slab) = slab else {
+            return Some((hole, ray_origin + ray_direction * nearest));
+        };
+        // Zoomed out, the widened pick reach can meet a hole in front of the
+        // slab; report the hole's drawn front instead, inside the slab, so
+        // depth sorts against other picks as the screen does.
+        let (start, end, drawn) = nearest_front;
+        Some((
+            hole,
+            within_slab(slab, segment_point_nearest_ray(ray_origin, ray_direction, start, end) - view_direction * drawn),
+        ))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -617,6 +648,48 @@ fn ray_disc_distance(origin: DVec3, direction: DVec3, center: DVec3, normal: DVe
     }
     let hit = origin + direction * distance;
     (hit.distance_squared(center) <= radius * radius).then_some(distance)
+}
+
+/// The point of `start`-`end` nearest a normalized ray's line. A segment
+/// lying along the ray reports its end nearer the ray origin.
+fn segment_point_nearest_ray(origin: DVec3, direction: DVec3, start: DVec3, end: DVec3) -> DVec3 {
+    let axis = end - start;
+    let along = axis.dot(direction);
+    let length_squared = axis.length_squared();
+    let across = length_squared - along * along;
+    let fraction = if across > length_squared * 1.0e-12 {
+        let offset = start - origin;
+        ((along * offset.dot(direction) - offset.dot(axis)) / across).clamp(0.0, 1.0)
+    } else if along < 0.0 {
+        1.0
+    } else {
+        0.0
+    };
+    start.lerp(end, fraction)
+}
+
+/// `point` moved along the normal onto the slab, as one
+/// [`SectionSlab::contains`] accepts. A point on a wall can round to just
+/// outside it, so it lands inside by far less than a millimetre, a margin
+/// above the rounding of the coordinates involved.
+fn within_slab(slab: SectionSlab, point: DVec3) -> DVec3 {
+    if slab.contains(point) {
+        return point;
+    }
+    let magnitude = point.abs().max_element().max(slab.point.abs().max_element());
+    let margin = (16.0 * f64::EPSILON * magnitude).max(slab.half_width * 1.0e-9);
+    let inner = (slab.half_width - margin).max(0.0);
+    let offset = slab.signed_distance(point);
+    point + slab.normal * (offset.clamp(-inner, inner) - offset)
+}
+
+/// `slab` with each wall moved out by `by`, for geometry drawn that far either
+/// side of its axis.
+fn widened(slab: Option<SectionSlab>, by: f64) -> Option<SectionSlab> {
+    slab.map(|slab| SectionSlab {
+        half_width: slab.half_width + by,
+        ..slab
+    })
 }
 
 /// Nearest surface the view actually draws along a ray. Inside a section the
