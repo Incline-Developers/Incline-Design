@@ -20,7 +20,9 @@ For each blast of the Solids run (Planning → Blasts):
 2. **Prep.** A dozer works the blast's top area, in m².
 3. **Drill.** Drills drill its holes: the pattern (burden × spacing, square or
    staggered) laid over the blast shape gives the hole count, and each hole is
-   the bench height plus subdrill deep, in metres drilled.
+   the bench height plus subdrill deep, in metres drilled. A blast too large
+   to lay out (over 100,000 holes) is counted by area ÷ (burden × spacing)
+   instead, and Animate shows it without holes.
 4. **Charge.** An MPU loads the product: per hole, the hole's cross-section
    × (depth − stemming) × product density, in tonnes.
 5. **Fire.** A charged blast fires in the first available blast window that ends
@@ -64,28 +66,39 @@ a delay still leads. Change the leader from the bar's right-click menu.
 
 ## Blasting windows
 
+Blasts fire in the **default daily window**, set in Setup → Drill & Blast,
+and in any one-off windows added on the Gantt.
+
 The **Blasting** row on the Gantt shows windows and firing diamonds with each
 blast's name. Double-click empty space, or right-click → Add blasting window,
-to create a window. Windows can repeat daily or occur once. Daily window
-hours are hours of the day; one-off hours are elapsed from Day 1 00:00
-(for example, Day 3 12:00 is hour 60). Double-click a window to edit it;
-its context menu also offers Delete. Editing or deleting a daily window
-changes all its occurrences.
+to add a one-off window where you clicked. Times are written as delays' are:
+17/04/2026 06:00 once Day 1 has a date, Day 3 06:00, or hours from the start.
+Double-click a window to edit it; its context menu also offers Delete. The
+default window's occurrences open Setup instead.
 
-Existing projects retain their daily window until windows are edited on the
-Gantt. Removing every window leaves charged blasts waiting indefinitely.
-A blast already marked Fired at the start remains available immediately.
+Projects saved before the default window could be turned off keep their
+meaning: one with no Gantt windows keeps its daily window, and one whose
+windows were edited on the Gantt keeps the daily window it copied there as
+its default. With the default window off and no Gantt windows, the Drill &
+Blast step warns, and charged blasts wait indefinitely. A blast already
+marked Fired at the start remains available immediately.
 
 ## Setup → Drill & Blast
 
 - **Sequence drill & blast:** off by default, so a project's schedule is
   unchanged until it is switched on. When on, every blast starts Not started.
-- The default pattern (burden, spacing, subdrill, staggered rows), hole
-  diameter, stemming, product density and clearance buffer. The legacy daily
-  window is editable here until windows are managed on the Gantt.
-- The run's blasts by bench. Right-click a blast, or a whole bench's header,
-  to set the stage it starts the schedule at (Not started, Prepped, Drilled,
-  Charged, Fired). Select one to give it its own pattern. Ground is named by
+  The settings below show only while it is on.
+- **Pattern:** burden, spacing, subdrill, staggered rows.
+- **Holes & charge:** hole diameter, stemming, product density, and the charge
+  per hole they give on the selected blast's bench (or the commonest bench
+  height when none is selected).
+- **Timing:** clearance buffer; the default daily blast window, on or off, and
+  its opening and closing times of day (06:30); how many windows were added on
+  the Gantt.
+- The run's blasts, by solid and bench, each with the stage it starts the
+  schedule at (Not started, Prepped, Drilled, Charged, Fired). Right-click a
+  solid's or bench's heading to set every blast under it at once. Select a
+  blast to see its area or give it its own pattern. Ground is named by
   the app's one path, solid/bench RL/blast/flitch RL/dig block: blast 1 of
   Pit A's bench from 336 to 348 is "Pit A/336/1" everywhere it is shown, and a
   dig block in it "Pit A/336/1/344/3".

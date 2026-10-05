@@ -229,7 +229,7 @@ pub(crate) struct BlastPattern {
 
 /// The project's drill and blast settings.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, default)]
+#[serde(from = "StoredDrillBlastConfig")]
 pub(crate) struct DrillBlastConfig {
     /// Off by default: until a planner turns it on, every dig block is
     /// available from the start, as before drill and blast existed.
@@ -243,15 +243,89 @@ pub(crate) struct DrillBlastConfig {
     /// How far, in plan, standing ground in a higher bench keeps a blast from
     /// being clear. Zero: only ground over the blast itself.
     pub(crate) buffer_m: f64,
-    /// The daily blast window, in hours of the day. Ground is available from
-    /// the end of the window a blast fires in.
+    /// Whether blasts may fire in the default window every day. Ground is
+    /// available from the end of the window a blast fires in.
+    pub(crate) default_window: bool,
+    /// The default window, in hours of the day.
     pub(crate) window_start_h: f64,
     pub(crate) window_end_h: f64,
-    /// None preserves the legacy daily window; an empty list means no windows.
-    #[serde(default)]
-    pub(crate) windows: Option<Vec<BlastWindow>>,
+    /// Windows added on the Gantt, besides the default one.
+    pub(crate) windows: Vec<BlastWindow>,
     pub(crate) statuses: Vec<BlastStatus>,
     pub(crate) patterns: Vec<BlastPattern>,
+}
+
+/// [`DrillBlastConfig`] as files hold it, older ones included.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, default)]
+struct StoredDrillBlastConfig {
+    enabled: bool,
+    pattern: DrillPattern,
+    hole_diameter_mm: f64,
+    stemming_m: f64,
+    product_density_t_m3: f64,
+    buffer_m: f64,
+    default_window: Option<bool>,
+    window_start_h: f64,
+    window_end_h: f64,
+    /// Before the default window could be turned off, no list meant the
+    /// default window alone, and a list replaced it: the first Gantt edit
+    /// copied it in as daily window 0.
+    windows: Option<Vec<BlastWindow>>,
+    statuses: Vec<BlastStatus>,
+    patterns: Vec<BlastPattern>,
+}
+
+impl Default for StoredDrillBlastConfig {
+    fn default() -> Self {
+        let config = DrillBlastConfig::default();
+        Self {
+            enabled: config.enabled,
+            pattern: config.pattern,
+            hole_diameter_mm: config.hole_diameter_mm,
+            stemming_m: config.stemming_m,
+            product_density_t_m3: config.product_density_t_m3,
+            buffer_m: config.buffer_m,
+            default_window: None,
+            window_start_h: config.window_start_h,
+            window_end_h: config.window_end_h,
+            windows: None,
+            statuses: config.statuses,
+            patterns: config.patterns,
+        }
+    }
+}
+
+impl From<StoredDrillBlastConfig> for DrillBlastConfig {
+    fn from(stored: StoredDrillBlastConfig) -> Self {
+        let (mut default_window, mut window_start_h, mut window_end_h) = (true, stored.window_start_h, stored.window_end_h);
+        let mut windows = stored.windows.clone().unwrap_or_default();
+        match stored.default_window {
+            Some(on) => default_window = on,
+            None if stored.windows.is_some() => {
+                default_window = false;
+                if let Some(position) = windows.iter().position(|window| window.id == DEFAULT_WINDOW_ID && window.daily) {
+                    let window = windows.remove(position);
+                    (default_window, window_start_h, window_end_h) = (true, window.start_h, window.end_h);
+                }
+            }
+            None => {}
+        }
+        Self {
+            enabled: stored.enabled,
+            pattern: stored.pattern,
+            hole_diameter_mm: stored.hole_diameter_mm,
+            stemming_m: stored.stemming_m,
+            product_density_t_m3: stored.product_density_t_m3,
+            buffer_m: stored.buffer_m,
+            default_window,
+            window_start_h,
+            window_end_h,
+            windows,
+            statuses: stored.statuses,
+            patterns: stored.patterns,
+        }
+    }
 }
 
 impl Default for DrillBlastConfig {
@@ -263,9 +337,10 @@ impl Default for DrillBlastConfig {
             stemming_m: 3.5,
             product_density_t_m3: 1.2,
             buffer_m: 0.0,
+            default_window: true,
             window_start_h: 12.0,
             window_end_h: 15.0,
-            windows: None,
+            windows: Vec::new(),
             statuses: Vec::new(),
             patterns: Vec::new(),
         }
@@ -275,6 +350,10 @@ impl Default for DrillBlastConfig {
 fn positive(value: f64) -> bool {
     value.is_finite() && value > 0.0
 }
+
+/// The id the default window goes by; windows added on the Gantt never
+/// take it.
+pub(crate) const DEFAULT_WINDOW_ID: u64 = 0;
 
 /// One recurring daily window or one window at elapsed project hours.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -309,20 +388,22 @@ pub(crate) struct DrillBlastSettings {
     pub(crate) stemming_m: f64,
     pub(crate) product_density_t_m3: f64,
     pub(crate) buffer_m: f64,
+    pub(crate) default_window: bool,
     pub(crate) window_start_h: f64,
     pub(crate) window_end_h: f64,
 }
 
 impl DrillBlastConfig {
+    /// Every window a blast may fire in: the default one, when it is on,
+    /// then those added on the Gantt.
     pub(crate) fn effective_windows(&self) -> Vec<BlastWindow> {
-        self.windows.clone().unwrap_or_else(|| {
-            vec![BlastWindow {
-                id: 0,
-                start_h: self.window_start_h,
-                end_h: self.window_end_h,
-                daily: true,
-            }]
-        })
+        let default = self.default_window.then_some(BlastWindow {
+            id: DEFAULT_WINDOW_ID,
+            start_h: self.window_start_h,
+            end_h: self.window_end_h,
+            daily: true,
+        });
+        default.into_iter().chain(self.windows.iter().copied()).collect()
     }
 
     /// Expand recurring windows only across the requested timeline range.
@@ -346,7 +427,7 @@ impl DrillBlastConfig {
 
     pub(crate) fn set_windows(&mut self, windows: Vec<BlastWindow>) -> Result<(), DrillBlastError> {
         let mut candidate = self.clone();
-        candidate.windows = Some(windows);
+        candidate.windows = windows;
         candidate.validate()?;
         *self = candidate;
         Ok(())
@@ -364,6 +445,7 @@ impl DrillBlastConfig {
             stemming_m: self.stemming_m,
             product_density_t_m3: self.product_density_t_m3,
             buffer_m: self.buffer_m,
+            default_window: self.default_window,
             window_start_h: self.window_start_h,
             window_end_h: self.window_end_h,
         }
@@ -378,6 +460,7 @@ impl DrillBlastConfig {
             stemming_m: settings.stemming_m,
             product_density_t_m3: settings.product_density_t_m3,
             buffer_m: settings.buffer_m,
+            default_window: settings.default_window,
             window_start_h: settings.window_start_h,
             window_end_h: settings.window_end_h,
             windows: self.windows.clone(),
@@ -403,11 +486,13 @@ impl DrillBlastConfig {
         {
             return Err(DrillBlastError::Window);
         }
-        if let Some(windows) = &self.windows {
-            let mut ids = std::collections::BTreeSet::new();
-            if windows.iter().any(|window| !window.valid() || !ids.insert(window.id)) {
-                return Err(DrillBlastError::Window);
-            }
+        let mut ids = std::collections::BTreeSet::new();
+        if self
+            .windows
+            .iter()
+            .any(|window| !window.valid() || window.id == DEFAULT_WINDOW_ID || !ids.insert(window.id))
+        {
+            return Err(DrillBlastError::Window);
         }
         if self.statuses.iter().any(|entry| !entry.blast.is_valid()) || self.patterns.iter().any(|entry| !entry.blast.is_valid()) {
             return Err(DrillBlastError::Reference);
@@ -462,8 +547,8 @@ impl DrillBlastConfig {
         ] {
             value.to_bits().hash(hasher);
         }
-        self.windows.is_some().hash(hasher);
-        for window in self.windows.iter().flatten() {
+        self.default_window.hash(hasher);
+        for window in &self.windows {
             window.id.hash(hasher);
             window.start_h.to_bits().hash(hasher);
             window.end_h.to_bits().hash(hasher);

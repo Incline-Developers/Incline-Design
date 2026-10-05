@@ -671,60 +671,60 @@ pub(crate) fn draw_blast_window_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
     }
     let mut open = true;
     let mut close = false;
-    DragableMenu::new("blast_window_editor", tr!("blast-window-edit"))
-        .open(&mut open)
-        .min_width(360.0)
-        .show(ui.ctx(), |ui| {
-            if ui.checkbox(&mut draft.daily, tr!("blast-window-daily")).changed() && draft.daily {
-                for value in [&mut draft.start, &mut draft.end] {
-                    if let Ok(hour) = value.parse::<f64>() {
-                        *value = format!("{}", if hour > 0.0 && hour.rem_euclid(24.0) == 0.0 { 24.0 } else { hour.rem_euclid(24.0) });
-                    }
-                }
+    let title = if draft.id.is_some() { tr!("blast-window-edit") } else { tr!("blast-window-new") };
+    DragableMenu::new("blast_window_editor", title).open(&mut open).min_width(360.0).show(ui.ctx(), |ui| {
+        // Windows added here are one-off; the daily one is Setup's. A
+        // daily window from an older file is still edited as one.
+        if draft.daily {
+            ui.label(egui::RichText::new(tr!("blast-window-hour-note")).weak());
+        } else {
+            ui.label(egui::RichText::new(tr!("blast-window-instant-note")).weak());
+        }
+        MenuFieldText::new(tr!("blast-window-opens"), &mut draft.start).show(ui);
+        MenuFieldText::new(tr!("blast-window-closes"), &mut draft.end).show(ui);
+        let read = |text: &str| {
+            if draft.daily {
+                text.trim().parse::<f64>().ok()
+            } else {
+                crate::ui::elements::schedule_delays::read_time(text)
             }
-            ui.label(egui::RichText::new(if draft.daily { tr!("blast-window-hour-note") } else { tr!("blast-window-elapsed-note") }).weak());
-            MenuFieldText::new(tr!("schedule-window-start"), &mut draft.start).show(ui);
-            MenuFieldText::new(tr!("schedule-window-end"), &mut draft.end).show(ui);
-            let window = draft
-                .start
-                .trim()
-                .parse::<f64>()
-                .ok()
-                .zip(draft.end.trim().parse::<f64>().ok())
-                .map(|(start_h, end_h)| BlastWindow {
-                    id: draft.id.unwrap_or_else(|| draft.opened.iter().map(|window| window.id).max().unwrap_or(0).saturating_add(1)),
-                    start_h,
-                    end_h,
-                    daily: draft.daily,
-                })
-                .filter(BlastWindow::valid);
-            let current = plan.drill_blast().effective_windows() == draft.opened;
-            if !current {
-                ui.colored_label(ui.visuals().error_fg_color, tr!("blast-window-changed"));
-            }
-            if window.is_none() {
-                ui.colored_label(ui.visuals().error_fg_color, tr!("blast-window-invalid"));
-            }
-            menu::menu_actions(ui, |ui| {
-                let apply = ui.add(MenuButton::new(tr!("common-apply")).primary().enabled(window.is_some() && current)).clicked() || menu::dialog_confirm_pressed(ui.ctx());
-                if apply
-                    && current
-                    && let Some(window) = window
-                {
-                    let mut windows = draft.opened.clone();
-                    if let Some(existing) = windows.iter_mut().find(|entry| entry.id == window.id) {
-                        *existing = window;
-                    } else {
-                        windows.push(window);
-                    }
-                    commands.push(UiCommand::schedule(session, ScheduleEdit::SetBlastWindows(windows)));
-                    close = true;
+        };
+        let window = read(&draft.start)
+            .zip(read(&draft.end))
+            .map(|(start_h, end_h)| BlastWindow {
+                id: draft.id.unwrap_or_else(|| draft.opened.iter().map(|window| window.id).max().unwrap_or(0).saturating_add(1)),
+                start_h,
+                end_h,
+                daily: draft.daily,
+            })
+            .filter(BlastWindow::valid);
+        let current = plan.drill_blast().windows == draft.opened;
+        if !current {
+            ui.colored_label(ui.visuals().error_fg_color, tr!("blast-window-changed"));
+        }
+        if window.is_none() {
+            ui.colored_label(ui.visuals().error_fg_color, tr!("blast-window-invalid"));
+        }
+        menu::menu_actions(ui, |ui| {
+            let apply = ui.add(MenuButton::new(tr!("common-apply")).primary().enabled(window.is_some() && current)).clicked() || menu::dialog_confirm_pressed(ui.ctx());
+            if apply
+                && current
+                && let Some(window) = window
+            {
+                let mut windows = draft.opened.clone();
+                if let Some(existing) = windows.iter_mut().find(|entry| entry.id == window.id) {
+                    *existing = window;
+                } else {
+                    windows.push(window);
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
-                    close = true;
-                }
-            });
+                commands.push(UiCommand::schedule(session, ScheduleEdit::SetBlastWindows(windows)));
+                close = true;
+            }
+            if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                close = true;
+            }
         });
+    });
     if close || !open {
         editor.blast_window_dialog = None;
     }

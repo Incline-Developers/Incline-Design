@@ -31,7 +31,7 @@ pub(crate) fn instant_text(hours: f64) -> String {
 }
 
 /// What a typed instant reads as, dates included once Day 1 has one.
-fn read_time(text: &str) -> Option<f64> {
+pub(crate) fn read_time(text: &str) -> Option<f64> {
     parse_time(text, super::schedule_periods::clock_start())
 }
 

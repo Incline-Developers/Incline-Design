@@ -61,6 +61,7 @@ fn refresh_preview(editor: &mut EditorState, document: &Document) -> bool {
                     editor.drill_pattern_rotation_deg,
                     glam::DVec2::new(editor.drill_pattern_offset_x, editor.drill_pattern_offset_y),
                     editor.drill_pattern_layout,
+                    crate::model::drill_hole::MAX_PATTERN_HOLES,
                 )
             });
 

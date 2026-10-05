@@ -869,18 +869,24 @@ impl crate::app::App<'_> {
     /// A blast bar on a machine whose class is not a dozer, drill or MPU is
     /// refused when it is made, so nothing here can block a run.
     fn evaluate_drill_blast(&self) -> StageOutcome {
+        let mut diagnostics = Vec::new();
         let entities = self.workspace.active_document().map_or(0, |document| {
-            let plan = document.schedule();
-            if plan.drill_blast().enabled {
-                plan.bars().iter().filter(|bar| bar.blast_order().is_some()).count()
-            } else {
-                0
+            let config = document.schedule().drill_blast();
+            if !config.enabled {
+                return 0;
             }
+            // Blasts that start Fired need no window, so this holds nothing
+            // back; the rest wait all horizon.
+            if config.effective_windows().is_empty() {
+                diagnostics.push(StageDiagnostic {
+                    entity: None,
+                    message: tr!("drill-blast-no-windows"),
+                    blocking: false,
+                });
+            }
+            document.schedule().bars().iter().filter(|bar| bar.blast_order().is_some()).count()
         });
-        StageOutcome::Settled {
-            diagnostics: Vec::new(),
-            entities,
-        }
+        StageOutcome::Settled { diagnostics, entities }
     }
 
     fn evaluate_loader_agents(&self) -> StageOutcome {

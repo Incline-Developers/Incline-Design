@@ -3150,14 +3150,27 @@ fn firing_markers(ui: &egui::Ui, schedule: Option<&CalculatedSchedule>, view: Ga
     markers
 }
 
+/// Edit a window added on the Gantt, or add one at `at_h`. The default
+/// window is Setup's, so it opens there.
 fn open_blast_window(editor: &mut EditorState, plan: &SchedulePlan, session: u32, window: Option<crate::model::schedule::drill_blast::BlastWindow>, at_h: f64) {
+    use crate::model::schedule::drill_blast::DEFAULT_WINDOW_ID;
+    if window.is_some_and(|window| window.id == DEFAULT_WINDOW_ID) {
+        editor.open_schedule_step(ScheduleStep::DrillBlast);
+        return;
+    }
+    let daily = window.is_some_and(|window| window.daily);
+    // A daily window is hours of the day; any other is an instant, typed as
+    // a delay's start is.
+    let text = |hours: f64| if daily { format!("{hours}") } else { super::schedule_delays::instant_text(hours) };
+    let start = window.map_or(at_h.max(0.0).floor(), |window| window.start_h);
+    let end = window.map_or(start + 3.0, |window| window.end_h);
     editor.blast_window_dialog = Some(crate::ui::state::BlastWindowDialog {
         session,
-        opened: plan.drill_blast().effective_windows(),
+        opened: plan.drill_blast().windows.clone(),
         id: window.map(|window| window.id),
-        start: format!("{}", window.map_or(at_h.max(0.0).floor(), |window| window.start_h)),
-        end: format!("{}", window.map_or(at_h.max(0.0).floor() + 3.0, |window| window.end_h)),
-        daily: window.is_some_and(|window| window.daily),
+        start: text(start),
+        end: text(end),
+        daily,
     });
 }
 
@@ -3184,8 +3197,15 @@ fn draw_blasting_row(
         .interact_pointer_pos()
         .or_else(|| response.hover_pos())
         .map_or(0.0, |pos| view.seconds_at(pos.x, body.left(), body.width()) / GanttView::HOUR);
+    // Once the menu is open the pointer is over it, not the row: the time a
+    // window is added at is where the row was right-clicked.
+    let clicked_at = ui.id().with("blasting_row_menu_at");
+    if response.secondary_clicked() {
+        ui.data_mut(|data| data.insert_temp(clicked_at, at));
+    }
     response.context_menu(|ui| {
         if ContextMenuAction::new(tr!("blast-window-add")).show(ui).clicked() {
+            let at = ui.data(|data| data.get_temp::<f64>(clicked_at)).unwrap_or(at);
             open_blast_window(editor, plan, session, None, at);
             ui.close();
         }
@@ -3206,18 +3226,26 @@ fn draw_blasting_row(
             "{} — {}\n{}",
             instant_label(start * GanttView::HOUR),
             instant_label(end * GanttView::HOUR),
-            if window.daily { tr!("blast-window-daily") } else { tr!("blast-window-once") }
+            if window.id == crate::model::schedule::drill_blast::DEFAULT_WINDOW_ID {
+                tr!("blast-window-default")
+            } else if window.daily {
+                tr!("blast-window-daily")
+            } else {
+                tr!("blast-window-once")
+            }
         ));
         if hit.double_clicked() {
             open_blast_window(editor, plan, session, Some(window), start);
         }
+        let default = window.id == crate::model::schedule::drill_blast::DEFAULT_WINDOW_ID;
         hit.context_menu(|ui| {
-            if ContextMenuAction::new(tr!("blast-window-edit")).show(ui).clicked() {
+            let edit = if default { tr!("blast-window-edit-default") } else { tr!("blast-window-edit") };
+            if ContextMenuAction::new(edit).show(ui).clicked() {
                 open_blast_window(editor, plan, session, Some(window), start);
                 ui.close();
             }
-            if ContextMenuAction::new(tr!("haul-delete")).show(ui).clicked() {
-                let mut windows = plan.drill_blast().effective_windows();
+            if !default && ContextMenuAction::new(tr!("haul-delete")).show(ui).clicked() {
+                let mut windows = plan.drill_blast().windows.clone();
                 windows.retain(|entry| entry.id != window.id);
                 commands.push(UiCommand::schedule(session, ScheduleEdit::SetBlastWindows(windows)));
                 ui.close();

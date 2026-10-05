@@ -553,6 +553,12 @@ pub(crate) fn grid_cell_warning(ui: &mut egui::Ui, id: impl std::hash::Hash + st
 /// open, so the caller draws its rows only then. `depth` nests it under the
 /// group heading above it.
 pub(crate) fn grid_group_row(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, label: &str, detail: &str, depth: usize) -> bool {
+    grid_group_row_response(ui, id, label, detail, depth).0
+}
+
+/// [`grid_group_row`], with the heading's response for a menu or tooltip
+/// that acts on the whole group.
+pub(crate) fn grid_group_row_response(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, label: &str, detail: &str, depth: usize) -> (bool, egui::Response) {
     let id = ui.make_persistent_id(id);
     let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true);
     let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), grid_row_height(ui)), egui::Sense::click());
@@ -591,7 +597,7 @@ pub(crate) fn grid_group_row(ui: &mut egui::Ui, id: impl std::hash::Hash + std::
     let galley = ui.painter().layout_job(job);
     ui.painter()
         .galley(egui::pos2(text_rect.left() + 8.0, rect.center().y - galley.size().y * 0.5), galley, color);
-    open
+    (open, response)
 }
 
 /// One row offered for adding elsewhere: its name, a weak detail, and a +
@@ -934,21 +940,15 @@ impl PropertyRows<'_> {
     pub(crate) fn checkbox(&mut self, key: &str, value: &mut bool) -> egui::Response {
         let (rect, split) = self.begin_row(false);
         self.paint_key(rect, split, key);
-        self.place(self.value_rect(rect, split), egui::Checkbox::new(value, ""))
+        // At the left of the cell, where every other value starts.
+        let cell = self.value_rect(rect, split);
+        let left = egui::Rect::from_min_max(cell.min, egui::pos2((cell.left() + 24.0).min(cell.right()), cell.bottom()));
+        self.place(left, egui::Checkbox::without_text(value))
     }
 
     fn value_field(&mut self, key: &str, value: &mut String, unit: Option<&str>, badge: Option<Badge<'_>>, readonly: bool, hint: &str) -> egui::Response {
         let (rect, split) = self.begin_row(false);
         self.paint_key(rect, split, key);
-        if let Some(badge) = badge {
-            let icon_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - CELL_WARNING_WIDTH / 2.0, rect.center().y), egui::vec2(16.0, 16.0));
-            let (icon, message) = match badge {
-                Badge::Error(message) => (unthemed_icon!("step_error.svg"), message),
-                Badge::Warning(message) => (unthemed_icon!("step_warning.svg"), message),
-            };
-            self.place(icon_rect, egui::Image::new(icon).fit_to_exact_size(icon_rect.size()).sense(egui::Sense::hover()))
-                .on_hover_text(message);
-        }
         let mut value_rect = self.value_rect(rect, split);
         if badge.is_some() {
             value_rect.max.x -= CELL_WARNING_WIDTH;
@@ -981,12 +981,14 @@ impl PropertyRows<'_> {
                 galley,
                 self.ui.visuals().text_color(),
             );
-            return self
+            let response = self
                 .ui
                 .interact(value_rect, self.ui.id().with(("calculated", key)), egui::Sense::hover())
                 .on_hover_text(value.as_str());
+            self.badge(rect, badge);
+            return response;
         }
-        self.place(
+        let response = self.place(
             value_rect,
             egui::TextEdit::singleline(value)
                 .vertical_align(egui::Align::Center)
@@ -996,7 +998,23 @@ impl PropertyRows<'_> {
                 // one, supplies it without inserting text into the value.
                 .hint_text(hint)
                 .desired_width(value_rect.width()),
-        )
+        );
+        self.badge(rect, badge);
+        response
+    }
+
+    /// The mark at the right of a value. Placed after the value, so the
+    /// field keeps its id - and its focus - as the mark comes and goes
+    /// while it is typed in.
+    fn badge(&mut self, rect: egui::Rect, badge: Option<Badge<'_>>) {
+        let Some(badge) = badge else { return };
+        let icon_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - CELL_WARNING_WIDTH / 2.0, rect.center().y), egui::vec2(16.0, 16.0));
+        let (icon, message) = match badge {
+            Badge::Error(message) => (unthemed_icon!("step_error.svg"), message),
+            Badge::Warning(message) => (unthemed_icon!("step_warning.svg"), message),
+        };
+        self.place(icon_rect, egui::Image::new(icon).fit_to_exact_size(icon_rect.size()).sense(egui::Sense::hover()))
+            .on_hover_text(message);
     }
 
     /// Put `widget` in `rect` of a row already allocated. `Ui::put`, or a

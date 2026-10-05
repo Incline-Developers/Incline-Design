@@ -397,6 +397,10 @@ fn calendar_field(field: &str) -> String {
     }
 }
 
+/// The most collars laid out for one blast. A blast with more is counted by
+/// its area.
+const SCHEDULE_PATTERN_HOLES: usize = 4 * crate::model::drill_hole::MAX_PATTERN_HOLES;
+
 /// The drill and blast chain: every blast of the run, how much of each step
 /// it needs and what must be dug before it is clear, and the dozers, drills
 /// and MPUs working the blast bars.
@@ -475,7 +479,10 @@ fn capture_drill_blast(
             .first()
             .map_or_else(Vec::new, |ring| ring.iter().map(|point| point.extend(record.bench.top)).collect());
         let layout = if pattern.staggered { DrillPatternLayout::Staggered } else { DrillPatternLayout::Square };
-        let collars: Vec<glam::DVec2> = generate_pattern_collars(&outer, pattern.burden_m, pattern.spacing_m, 0.0, glam::DVec2::ZERO, layout)
+        // Collars are laid out for Animate to draw. A blast too big or too
+        // odd in shape for that is counted by its area instead: a schedule
+        // needs how much drilling there is, not where each hole goes.
+        let collars: Vec<glam::DVec2> = generate_pattern_collars(&outer, pattern.burden_m, pattern.spacing_m, 0.0, glam::DVec2::ZERO, layout, SCHEDULE_PATTERN_HOLES)
             .map(|collars| {
                 collars
                     .into_iter()
@@ -483,11 +490,12 @@ fn capture_drill_blast(
                     .filter(|collar| crate::model::arrangement::point_in_face(&record.face, *collar))
                     .collect()
             })
-            .unwrap_or_else(|error| {
-                problems.push(CaptureDiagnostic::new(record.name.clone(), error).at(ScheduleStep::DrillBlast));
-                Vec::new()
-            });
-        let holes = collars.len() as f64;
+            .unwrap_or_default();
+        let holes = if collars.is_empty() {
+            (record.area / (pattern.burden_m * pattern.spacing_m)).ceil().max(f64::from(record.area > 0.0))
+        } else {
+            collars.len() as f64
+        };
         let quantity = [record.area, holes * depth, holes * config.charge_per_hole_t(depth)];
         // Configured statuses name a blast by a point inside it.
         let stage = config
@@ -645,7 +653,7 @@ fn capture_drill_blast(
         agents,
         tasks,
         window_end_h: config.window_end_h,
-        windows: config.windows.clone(),
+        windows: Some(config.effective_windows()),
         fixed: None,
     })
 }
