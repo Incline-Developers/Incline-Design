@@ -300,17 +300,17 @@ fn selection(
         Picked::Drawing(points) => {
             rows.readonly(&tr!("haul-points"), &points.to_string(), None, None).on_hover_text(tr!("haul-draw-help"));
             rows.note(&tr!("haul-drawing-keys"));
-            if rows.action("", &tr!("haul-finish")).clicked() {
+            if rows.action_row(&tr!("haul-finish")).clicked() {
                 commands.push(UiCommand::FinishHaulRoad);
             }
         }
         Picked::ConfirmDelete(id) => {
             rows.note(&tr!("haul-delete-role-confirm"));
-            if rows.action("", &tr!("haul-delete")).clicked() {
+            if rows.action_row(&tr!("haul-delete")).clicked() {
                 command(commands, session, HaulEdit::DeleteNode(id));
                 editor.haul_delete_node = None;
             }
-            if rows.action("", &tr!("haul-cancel")).clicked() {
+            if rows.action_row(&tr!("haul-cancel")).clicked() {
                 editor.haul_delete_node = None;
             }
         }
@@ -318,10 +318,10 @@ fn selection(
             rows.readonly(&tr!("haul-blocks"), &blocks.to_string(), None, None);
             rows.readonly(&tr!("haul-nodes"), &points.to_string(), None, None);
             rows.note(&tr!("haul-link-picking"));
-            if points > 0 && rows.action("", &tr!("haul-join-blocks")).on_hover_text(tr!("haul-join-blocks-help")).clicked() {
+            if points > 0 && rows.action_row(&tr!("haul-join-blocks")).on_hover_text(tr!("haul-join-blocks-help")).clicked() {
                 commands.push(UiCommand::LinkHaulBlocks(std::mem::take(&mut editor.haul_link_points)));
             }
-            if rows.action("", &tr!("haul-cancel")).clicked() {
+            if rows.action_row(&tr!("haul-cancel")).clicked() {
                 editor.haul_link_pick = false;
                 editor.haul_link_points.clear();
                 commands.push(UiCommand::RefreshHaulOverlay);
@@ -353,11 +353,11 @@ fn selection(
                     (far > 0).then(|| tr!("haul-out-of-reach-help")).as_deref(),
                 );
             }
-            if !network.roads.is_empty() && rows.action("", &tr!("haul-link-pick")).on_hover_text(tr!("haul-link-help")).clicked() {
+            if !network.roads.is_empty() && rows.action_row(&tr!("haul-link-pick")).on_hover_text(tr!("haul-link-help")).clicked() {
                 editor.haul_link_pick = true;
                 editor.haul_link_points.clear();
             }
-            if blocks.iter().any(|b| !b.links.is_empty()) && rows.action("", &tr!("haul-link-clear")).on_hover_text(tr!("haul-link-clear-help")).clicked() {
+            if blocks.iter().any(|b| !b.links.is_empty()) && rows.action_row(&tr!("haul-link-clear")).on_hover_text(tr!("haul-link-clear-help")).clicked() {
                 commands.push(UiCommand::LinkHaulBlocks(Vec::new()));
             }
             if blocks.len() == 1 && route_question(editor, network, destinations).is_none() {
@@ -383,7 +383,13 @@ fn selection(
             }
             // Empty means no limit, so a limit is cleared the way it is typed.
             let shown = current.map(|v| format!("{v:.0}")).unwrap_or_default();
-            let (response, typed) = rows.committed_entry(("haul_speed_limit", roads[0]), &tr!("haul-speed-limit-short"), &shown, Some("km/h"));
+            let (response, typed) = rows.committed_entry_with_hint(
+                ("haul_speed_limit", roads[0]),
+                &tr!("haul-speed-limit-short"),
+                &shown,
+                Some("km/h"),
+                &tr!("haul-speed-limit-truck"),
+            );
             response.on_hover_text(tr!("haul-speed-limit-help"));
             if let Some(typed) = typed {
                 let limit = match typed.trim() {
@@ -394,7 +400,7 @@ fn selection(
                     command(commands, session, HaulEdit::RoadProperties(roads.clone(), None, limit));
                 }
             }
-            if rows.action("", &tr!("haul-delete")).on_hover_text(tr!("haul-delete-help")).clicked() {
+            if rows.action_row(&tr!("haul-delete")).on_hover_text(tr!("haul-delete-help")).clicked() {
                 command(commands, session, HaulEdit::Many(roads.iter().map(|id| HaulEdit::DeleteRoad(*id)).collect()));
             }
         }
@@ -433,16 +439,16 @@ fn selection(
                 }
             }
             if let [keep, remove] = nodes[..]
-                && rows.action("", &tr!("haul-join-nodes")).on_hover_text(tr!("haul-join-nodes-help")).clicked()
+                && rows.action_row(&tr!("haul-join-nodes")).on_hover_text(tr!("haul-join-nodes-help")).clicked()
             {
                 command(commands, session, HaulEdit::Join(keep, remove));
             }
-            if rows.action("", &tr!("haul-delete")).on_hover_text(tr!("haul-delete-help")).clicked() {
+            if rows.action_row(&tr!("haul-delete")).on_hover_text(tr!("haul-delete-help")).clicked() {
                 delete(editor, network, &[], &nodes, session, commands);
             }
         }
         Picked::Mixed(roads, nodes) => {
-            if rows.action("", &tr!("haul-delete")).on_hover_text(tr!("haul-delete-help")).clicked() {
+            if rows.action_row(&tr!("haul-delete")).on_hover_text(tr!("haul-delete-help")).clicked() {
                 delete(editor, network, &roads, &nodes, session, commands);
             }
         }

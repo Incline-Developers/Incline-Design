@@ -27,8 +27,8 @@ use crate::{
         widgets::{
             context_menu::{ChecklistRow, ContextMenuAction, Tick, checklist_popup, context_menu_popup, context_menu_separator},
             data_grid::{
-                DataGrid, GridRow, PropertyTable, grid_add_action_row, grid_cell_entry, grid_checkbox_row, grid_columns_row, grid_empty_state, grid_named_row, grid_row,
-                grid_select_row, grid_separator_row,
+                DataGrid, GridRow, PropertyTable, grid_add_action_row, grid_cell_entry, grid_cell_entry_flagged, grid_cell_fixed, grid_checkbox_row, grid_columns_row,
+                grid_empty_state, grid_named_row, grid_row, grid_select_row, grid_separator_row,
             },
             explorer::explorer_note,
             menu,
@@ -41,7 +41,7 @@ use crate::{
 const CLASS_FRACTIONS: [f32; 2] = [0.6, 0.4];
 /// Shares of the grade speed columns: where a band starts, then its loaded
 /// and empty speeds.
-const BAND_FRACTIONS: [f32; 3] = [0.34, 0.33, 0.33];
+const BAND_FRACTIONS: [f32; 4] = [0.22, 0.14, 0.32, 0.32];
 
 /// The truck classes, in fleet order.
 pub(crate) fn draw_class_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
@@ -138,6 +138,7 @@ pub(crate) fn draw_class_properties(ui: &mut egui::Ui, rect: egui::Rect, editor:
             maximum_speed: number(class.maximum_speed_kph),
             maximum_grade: number(class.maximum_grade * 100.0),
             dump_time: number(class.dump_time_s),
+            units: class.calendar.default_units.to_string(),
         });
     }
     let taken: Vec<String> = trucks.classes.iter().filter(|other| other.id != class.id).map(|other| other.name.clone()).collect();
@@ -146,6 +147,7 @@ pub(crate) fn draw_class_properties(ui: &mut egui::Ui, rect: egui::Rect, editor:
     let payload_error = parse_positive(&draft.payload, crate::model::schedule::ScheduleError::InvalidPayload).err();
 
     let mut edits = Vec::new();
+    let mut open_calendar = false;
     PropertyTable::new("schedule_truck_class_properties", rect, &class.name).show(ui, |rows| {
         rows.header(&tr!("planning-property"), &tr!("planning-value"));
         let response = rows.field(&tr!("planning-name"), &mut draft.name, name_error.as_deref());
@@ -158,7 +160,7 @@ pub(crate) fn draw_class_properties(ui: &mut egui::Ui, rect: egui::Rect, editor:
                 },
             ));
         }
-        let response = rows.field(&tr!("truck-payload"), &mut draft.payload, payload_error.as_deref());
+        let response = rows.field_with_unit(&tr!("truck-payload"), &mut draft.payload, "t", payload_error.as_deref());
         if response.lost_focus()
             && let Ok(payload) = parse_positive(&draft.payload, crate::model::schedule::ScheduleError::InvalidPayload)
             && payload != class.payload_t
@@ -183,12 +185,12 @@ pub(crate) fn draw_class_properties(ui: &mut egui::Ui, rect: egui::Rect, editor:
             .filter(|v| v.is_finite() && *v >= 0.0)
             .is_none()
             .then(|| tr!("haul-error-seconds"));
-        for (label, value, error) in [
-            (tr!("haul-maximum-speed"), &mut draft.maximum_speed, speed_error),
-            (tr!("haul-maximum-grade"), &mut draft.maximum_grade, grade_error),
-            (tr!("haul-dump-time"), &mut draft.dump_time, dump_error),
+        for (label, value, unit, error) in [
+            (tr!("haul-maximum-speed"), &mut draft.maximum_speed, "km/h", speed_error),
+            (tr!("haul-maximum-grade"), &mut draft.maximum_grade, "%", grade_error),
+            (tr!("haul-dump-time"), &mut draft.dump_time, "s", dump_error),
         ] {
-            commit |= rows.field(&label, value, error.as_deref()).lost_focus();
+            commit |= rows.field_with_unit(&label, value, unit, error.as_deref()).lost_focus();
         }
         if commit
             && let (Some(maximum_speed_kph), Some(maximum_grade), Ok(dump_time_s)) =
@@ -208,8 +210,39 @@ pub(crate) fn draw_class_properties(ui: &mut egui::Ui, rect: egui::Rect, editor:
                 },
             ));
         }
+        // How many trucks the class has is the Calendar's default for it;
+        // days that differ are set there.
+        let units_error = draft.units.trim().parse::<u32>().is_err().then(|| tr!("truck-error-invalid-units"));
+        let response = rows.field_with_unit(&tr!("truck-default-fleet"), &mut draft.units, &tr!("truck-units-suffix"), units_error.as_deref());
+        if response.lost_focus()
+            && let Ok(units) = draft.units.trim().parse::<u32>()
+            && units != class.calendar.default_units
+        {
+            edits.push(UiCommand::schedule(
+                session,
+                ScheduleEdit::SetTruckCells {
+                    edits: vec![trucking::TruckCellEdit {
+                        class: class.id,
+                        cell: crate::model::schedule::CalendarCell::Default,
+                        field: trucking::TruckField::Units,
+                        value: Some(f64::from(units)),
+                    }],
+                },
+            ));
+        }
+        response.on_hover_text(tr!("truck-default-fleet-help"));
+        if rows.action_row(&tr!("truck-open-calendar")).on_hover_text(tr!("truck-open-calendar-help")).clicked() {
+            open_calendar = true;
+        }
     });
     commands.append(&mut edits);
+    if open_calendar {
+        editor.open_calendar_cell(crate::ui::state::CalendarCellAddress {
+            owner: crate::ui::state::CalendarOwner::Truck(class.id),
+            row: crate::ui::state::CalendarRow::Truck(trucking::TruckField::Units),
+            cell: crate::model::schedule::CalendarCell::Default,
+        });
+    }
 }
 
 /// The selected class's speed in each grade band, loaded and empty.
@@ -219,8 +252,9 @@ pub(crate) fn draw_class_properties(ui: &mut egui::Ui, rect: egui::Rect, editor:
 pub(crate) fn draw_grade_speeds(ui: &mut egui::Ui, rect: egui::Rect, editor: &EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
     let columns = [
         (tr!("haul-grade-from"), BAND_FRACTIONS[0]),
-        (tr!("haul-loaded-speed"), BAND_FRACTIONS[1]),
-        (tr!("haul-empty-speed"), BAND_FRACTIONS[2]),
+        (tr!("haul-grade-to"), BAND_FRACTIONS[1]),
+        (tr!("haul-loaded-speed"), BAND_FRACTIONS[2]),
+        (tr!("haul-empty-speed"), BAND_FRACTIONS[3]),
     ];
     let title = tr!("haul-grade-speeds");
     let Some(class) = selected_class(editor, plan) else {
@@ -238,14 +272,23 @@ pub(crate) fn draw_grade_speeds(ui: &mut egui::Ui, rect: egui::Rect, editor: &Ed
         .title_action(&defaults, &defaults_help, &mut reset)
         .show(ui, |ui| {
             let removable = class.grade_speeds.len() > 1;
+            // A speed over the class's maximum is driven at the maximum.
+            let capped = tr!("haul-speed-capped", speed = number(class.maximum_speed_kph));
+            let note = |speed: f64| (speed > class.maximum_speed_kph).then_some(capped.as_str());
             for (index, band) in class.grade_speeds.iter().enumerate() {
-                let (response, cells) = grid_columns_row(ui, &BAND_FRACTIONS, &["", "", ""], false);
+                let (response, cells) = grid_columns_row(ui, &BAND_FRACTIONS, &["", "", "", ""], false);
                 let mut grade = band.from_grade * 100.0;
                 let mut loaded = band.loaded_kph;
                 let mut empty = band.empty_kph;
                 let mut changed = grid_cell_entry(ui, ("band_grade", index), cells[0], &mut grade, "%");
-                changed |= grid_cell_entry(ui, ("band_loaded", index), cells[1], &mut loaded, "km/h");
-                changed |= grid_cell_entry(ui, ("band_empty", index), cells[2], &mut empty, "km/h");
+                // A band runs up to the next one's grade; the last one has no end.
+                let to = class
+                    .grade_speeds
+                    .get(index + 1)
+                    .map_or_else(|| "∞".to_owned(), |next| format!("{} %", number(next.from_grade * 100.0)));
+                grid_cell_fixed(ui, cells[1], &to);
+                changed |= grid_cell_entry_flagged(ui, ("band_loaded", index), cells[2], &mut loaded, "km/h", note(band.loaded_kph));
+                changed |= grid_cell_entry_flagged(ui, ("band_empty", index), cells[3], &mut empty, "km/h", note(band.empty_kph));
                 if changed {
                     let mut speeds = class.grade_speeds.clone();
                     speeds[index] = trucking::GradeSpeed {

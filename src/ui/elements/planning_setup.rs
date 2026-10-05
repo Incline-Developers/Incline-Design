@@ -77,6 +77,99 @@ fn draw_haulage_summary(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut Editor
         });
 }
 
+/// Open the Haulage page's Layout, where a connection is fixed.
+fn open_haul_layout(editor: &mut EditorState) {
+    editor.planning_page = PlanningPage::Haulage;
+    editor.haulage_subpage = crate::ui::state::PlanningSubpage::Layout;
+}
+
+/// Where trucks tip at each destination, and load at each stockpile, and
+/// whether that reaches the roads. A row opens the Layout to fix it.
+fn draw_destination_connections(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState) {
+    use crate::{
+        model::schedule::DestinationKind,
+        ui::widgets::data_grid::{grid_cell_warning, grid_columns_row, grid_group_row},
+    };
+    const FRACTIONS: [f32; 3] = [0.3, 0.35, 0.35];
+    let columns = [
+        (tr!("planning-name"), FRACTIONS[0]),
+        (tr!("haul-link-dump-column"), FRACTIONS[1]),
+        (tr!("haul-link-reclaim-column"), FRACTIONS[2]),
+    ];
+    let connections = editor.schedule_haul_connections.clone();
+    let mut open = false;
+    DataGrid::new("schedule_haul_connections", rect, &tr!("haul-connections")).columns(&columns).show(ui, |ui| {
+        let Some(connections) = connections else {
+            grid_empty_state(ui, &tr!("haul-connections-not-run"), None);
+            return;
+        };
+        if connections.destinations.is_empty() {
+            grid_empty_state(ui, &tr!("haul-connections-no-destinations"), None);
+            return;
+        }
+        for kind in [DestinationKind::Stockpile, DestinationKind::Dump, DestinationKind::Crusher] {
+            let entries: Vec<_> = connections.destinations.iter().filter(|entry| entry.kind == kind).collect();
+            if entries.is_empty() {
+                continue;
+            }
+            let heading = match kind {
+                DestinationKind::Stockpile => tr!("planning-stockpiles"),
+                DestinationKind::Dump => tr!("planning-dumps"),
+                DestinationKind::Crusher => tr!("destination-crushers"),
+            };
+            if !grid_group_row(ui, ("schedule_haul_kind", kind as u8), &heading, &entries.len().to_string(), 0) {
+                continue;
+            }
+            for (index, entry) in entries.into_iter().enumerate() {
+                let dump = entry.dump.label();
+                let reclaim = entry.reclaim.map(|link| link.label()).unwrap_or_default();
+                let (response, cells) = grid_columns_row(ui, &FRACTIONS, &[&entry.name, &dump, &reclaim], false);
+                for (column, link) in [(1, Some(entry.dump)), (2, entry.reclaim)] {
+                    if let Some(link) = link.filter(|link| link.is_problem()) {
+                        grid_cell_warning(ui, ("schedule_haul_warning", kind as u8, index, column), cells[column], &link.label());
+                    }
+                }
+                open |= response.on_hover_text(tr!("haul-connections-open")).clicked();
+            }
+        }
+    });
+    if open {
+        open_haul_layout(editor);
+    }
+}
+
+/// How many of each pit's dig blocks reach the roads.
+fn draw_pit_connections(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState) {
+    use crate::ui::widgets::data_grid::{grid_cell_warning, grid_columns_row};
+    const FRACTIONS: [f32; 2] = [0.3, 0.7];
+    let columns = [(tr!("haul-link-pit-column"), FRACTIONS[0]), (tr!("haul-link-blocks-column"), FRACTIONS[1])];
+    let pits = editor.schedule_haul_connections.as_ref().map(|connections| connections.pits.clone());
+    let mut open = false;
+    DataGrid::new("schedule_haul_pits", rect, &tr!("haul-connections-pits")).columns(&columns).show(ui, |ui| {
+        let Some(pits) = pits else {
+            grid_empty_state(ui, &tr!("haul-connections-not-run"), None);
+            return;
+        };
+        if pits.is_empty() {
+            grid_empty_state(ui, &tr!("haul-connections-no-blocks"), None);
+            return;
+        }
+        for (index, pit) in pits.iter().enumerate() {
+            use thousands::Separable;
+            let reached = tr!("haul-link-blocks", reached = pit.reached.separate_with_commas(), total = pit.total.separate_with_commas());
+            let (response, cells) = grid_columns_row(ui, &FRACTIONS, &[&pit.name, &reached], false);
+            if pit.reached < pit.total {
+                let missed = tr!("haul-link-pit-problem", missed = (pit.total - pit.reached).to_string(), total = pit.total.to_string());
+                grid_cell_warning(ui, ("schedule_haul_pit_warning", index), cells[1], &missed);
+            }
+            open |= response.on_hover_text(tr!("haul-connections-open")).clicked();
+        }
+    });
+    if open {
+        open_haul_layout(editor);
+    }
+}
+
 /// The Schedule's Solids step: where each Solids step stands, each row
 /// opening that step.
 fn draw_solids_summary(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState) {
@@ -254,17 +347,16 @@ fn run_header(
     salt: &'static str,
     running: bool,
     run_step: bool,
-    auto: Option<&mut bool>,
+    auto: Option<(&mut bool, String)>,
     (done, total): (usize, usize),
     hover: impl FnOnce(&mut egui::Ui),
 ) -> Option<RunAction> {
     ui.horizontal_centered(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         let action = draw_run_buttons(ui, salt, running, run_step);
-        if let Some(auto) = auto {
+        if let Some((auto, note)) = auto {
             ui.add_space(10.0);
-            ui.add(crate::ui::widgets::toggle::Toggle::new(auto, tr!("planning-auto")))
-                .on_hover_text(tr!("planning-auto-note"));
+            ui.add(crate::ui::widgets::toggle::Toggle::new(auto, tr!("planning-auto"))).on_hover_text(note);
         }
         let label = tr!("stage-progress-short", done = done, total = total);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -292,7 +384,7 @@ pub(crate) fn draw_solids_run_controls(ui: &mut egui::Ui, editor: &mut EditorSta
         "planning_run",
         editor.planning_run_active,
         !editor.is_solids_view(),
-        Some(&mut editor.planning_auto_run),
+        Some((&mut editor.planning_auto_run, tr!("planning-auto-note"))),
         (completed, SolidsStep::ALL.len()),
         |ui| {
             ui.label(reported.label());
@@ -318,24 +410,36 @@ pub(crate) fn draw_solids_run_controls(ui: &mut egui::Ui, editor: &mut EditorSta
 /// pipelines run different things, and one control that switched which
 /// pipeline it drove on a page change would be one Cancel that could stop the
 /// wrong run.
-pub(crate) fn draw_schedule_run_controls(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
+///
+/// Its Auto is the Gantt's: one switch that reruns these steps and
+/// recalculates the schedule, shown on both pages.
+pub(crate) fn draw_schedule_run_controls(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
     use crate::{app::planning_pipeline::StageState, ui::state::ScheduleStep};
 
     let step = editor.schedule_setup_step;
     let completed = editor.schedule_stages.iter().filter(|stage| stage.state == StageState::Complete).count();
     let active = ScheduleStep::ALL.into_iter().find(|step| editor.schedule_stages[step.index()].state == StageState::Running);
     let reported = active.unwrap_or(step);
-    let status = &editor.schedule_stages[reported.index()];
-    let action = run_header(ui, "schedule_run", editor.schedule_run_active, true, None, (completed, ScheduleStep::ALL.len()), |ui| {
-        ui.label(reported.label());
-        stage_tooltip_parts(ui, status.state, status.blocked_by.map(ScheduleStep::label), status.message.as_deref(), &status.diagnostics);
-        // What the Gantt would be told if it asked to calculate now,
-        // where the buttons that change that answer are.
-        if !editor.schedule_calculation_status.is_empty() {
-            ui.separator();
-            ui.label(&editor.schedule_calculation_status);
-        }
-    });
+    let status = editor.schedule_stages[reported.index()].clone();
+    let calculation = editor.schedule_calculation_status.clone();
+    let action = run_header(
+        ui,
+        "schedule_run",
+        editor.schedule_run_active,
+        true,
+        Some((&mut editor.schedule_auto_recalculate, tr!("schedule-setup-auto-note"))),
+        (completed, ScheduleStep::ALL.len()),
+        |ui| {
+            ui.label(reported.label());
+            stage_tooltip_parts(ui, status.state, status.blocked_by.map(ScheduleStep::label), status.message.as_deref(), &status.diagnostics);
+            // What the Gantt would be told if it asked to calculate now,
+            // where the buttons that change that answer are.
+            if !calculation.is_empty() {
+                ui.separator();
+                ui.label(&calculation);
+            }
+        },
+    );
     match action {
         Some(RunAction::Step) => commands.push(UiCommand::RunScheduleStage(step)),
         Some(RunAction::All) => commands.push(UiCommand::RunAllScheduleStages),
@@ -358,7 +462,7 @@ pub(crate) fn draw_haulage_run_controls(ui: &mut egui::Ui, editor: &mut EditorSt
         "haulage_run",
         editor.haulage_run_active,
         true,
-        Some(&mut editor.haulage_auto_run),
+        Some((&mut editor.haulage_auto_run, tr!("planning-auto-note"))),
         (completed, HaulageStep::ALL.len()),
         |ui| {
             ui.label(reported.label());
@@ -1739,8 +1843,11 @@ fn draw_haulage_details(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: 
                 super::schedule_trucking::draw_class_list(ui, rect, editor, &plan, session, commands)
             });
             // The class's figures above, its grade speeds below, with the
-            // split between them the user's.
-            let (bands, seam) = stacked_lower(ui, "schedule_truck_grade_speeds_island", |ui, rect| {
+            // split between them the user's. It opens with the figures' rows
+            // fitted and the bands, which run longer, taking the rest.
+            let figures = crate::ui::widgets::data_grid::property_table_height(ui, 8) + 2.0;
+            let share = (1.0 - figures / ui.available_height().max(1.0)).clamp(0.3, 0.85);
+            let (bands, seam) = stacked_lower_share(ui, "schedule_truck_grade_speeds_pane", share, 0.0, |ui, rect| {
                 super::schedule_trucking::draw_grade_speeds(ui, rect, editor, &plan, session, commands)
             });
             layout.regions.push(bands);
@@ -1845,7 +1952,11 @@ fn draw_schedule_details(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor:
             });
         }
         ScheduleStep::Haulage => {
-            central_island(ui, layout, |ui, rect| draw_haulage_summary(ui, rect, editor));
+            island(ui, layout, "schedule_haulage_steps_island", 320.0, |ui, rect| draw_haulage_summary(ui, rect, editor));
+            let (pits, seam) = stacked_lower_share(ui, "schedule_haul_pits_island", 0.3, 0.0, |ui, rect| draw_pit_connections(ui, rect, editor));
+            layout.regions.push(pits);
+            layout.grips.push(seam);
+            central_island(ui, layout, |ui, rect| draw_destination_connections(ui, rect, editor));
         }
         ScheduleStep::TruckingRules => {
             island(ui, layout, "schedule_truck_rule_list_island", 380.0, |ui, rect| {

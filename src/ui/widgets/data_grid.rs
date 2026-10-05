@@ -473,19 +473,30 @@ fn trimmed_number(value: f64) -> String {
 /// is being edited and read when it is left; returns true then, with `value`
 /// updated, if what was typed is a number.
 pub(crate) fn grid_cell_entry(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, cell: egui::Rect, value: &mut f64, unit: &str) -> bool {
+    grid_cell_entry_flagged(ui, id, cell, value, unit, None)
+}
+
+/// [`grid_cell_entry`] for a value that stands but is not used as typed: in
+/// the warning colour, with `note` after its unit saying what is used.
+pub(crate) fn grid_cell_entry_flagged(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, cell: egui::Rect, value: &mut f64, unit: &str, note: Option<&str>) -> bool {
     let cell = cell.shrink2(egui::vec2(4.0, COLUMN_ROW_EXTRA / 2.0 + 1.0));
     if !cell.is_positive() {
         return false;
     }
+    let warn = ui.visuals().warn_fg_color;
     let mut text_rect = cell;
-    if !unit.is_empty() {
-        let galley = ui
-            .painter()
-            .layout_no_wrap(unit.to_owned(), egui::TextStyle::Body.resolve(ui.style()), ui.visuals().weak_text_color());
+    let suffix = match note {
+        Some(note) if unit.is_empty() => note.to_owned(),
+        Some(note) => format!("{unit} {note}"),
+        None => unit.to_owned(),
+    };
+    if !suffix.is_empty() {
+        let color = if note.is_some() { warn } else { ui.visuals().weak_text_color() };
+        let galley = ui.painter().layout_no_wrap(suffix, egui::TextStyle::Body.resolve(ui.style()), color);
         let left = (cell.right() - galley.size().x - 4.0).max(cell.left());
         ui.painter()
             .with_clip_rect(ui.clip_rect().intersect(cell))
-            .galley(egui::pos2(left, cell.center().y - galley.size().y * 0.5), galley, ui.visuals().weak_text_color());
+            .galley(egui::pos2(left, cell.center().y - galley.size().y * 0.5), galley, color);
         text_rect.max.x = left - 4.0;
     }
     if !text_rect.is_positive() {
@@ -500,6 +511,7 @@ pub(crate) fn grid_cell_entry(ui: &mut egui::Ui, id: impl std::hash::Hash + std:
         text_rect,
         egui::TextEdit::singleline(&mut text)
             .id(id.with("text"))
+            .text_color_opt(note.map(|_| warn))
             .vertical_align(egui::Align::Center)
             .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 1)))
             .desired_width(text_rect.width()),
@@ -822,6 +834,12 @@ impl PropertyRows<'_> {
         self.value_field(key, value, None, error.map(Badge::Error), false, " ")
     }
 
+    /// [`Self::field`] with its unit faint at the cell's right, as
+    /// [`Self::committed_entry`] and the grids show one.
+    pub(crate) fn field_with_unit(&mut self, key: &str, value: &mut String, unit: &str, error: Option<&str>) -> egui::Response {
+        self.value_field(key, value, Some(unit), error.map(Badge::Error), false, " ")
+    }
+
     /// [`Self::field`] with faint text shown while it is empty, for a value
     /// whose blank means something: "the end of the schedule", say.
     pub(crate) fn field_with_hint(&mut self, key: &str, value: &mut String, hint: &str, error: Option<&str>) -> egui::Response {
@@ -833,9 +851,22 @@ impl PropertyRows<'_> {
     /// typed, so the table can be drawn from the model every frame; it is
     /// handed back once, when focus leaves it changed from `current`.
     pub(crate) fn committed_entry(&mut self, id: impl std::hash::Hash + std::fmt::Debug, key: &str, current: &str, unit: Option<&str>) -> (egui::Response, Option<String>) {
+        self.committed_entry_with_hint(id, key, current, unit, " ")
+    }
+
+    /// [`Self::committed_entry`] with faint text shown while it is empty,
+    /// for a value whose blank means something.
+    pub(crate) fn committed_entry_with_hint(
+        &mut self,
+        id: impl std::hash::Hash + std::fmt::Debug,
+        key: &str,
+        current: &str,
+        unit: Option<&str>,
+        hint: &str,
+    ) -> (egui::Response, Option<String>) {
         let id = egui::Id::new(id);
         let mut text = self.ui.data(|data| data.get_temp::<String>(id)).unwrap_or_else(|| current.to_owned());
-        let response = self.value_field(key, &mut text, unit, None, false, " ");
+        let response = self.value_field(key, &mut text, unit, None, false, hint);
         if response.has_focus() {
             self.ui.data_mut(|data| data.insert_temp(id, text));
             return (response, None);
@@ -930,10 +961,20 @@ impl PropertyRows<'_> {
         )
     }
 
-    pub(crate) fn action(&mut self, key: &str, label: &str) -> egui::Response {
-        let (rect, split) = self.begin_row(false);
-        self.paint_key(rect, split, key);
-        self.place(self.value_rect(rect, split), super::menu::MenuButton::new(label))
+    /// A button on a row of its own, at the left where a key would start:
+    /// for an action on the whole table - Delete, Finish - that has no
+    /// property to sit beside.
+    pub(crate) fn action_row(&mut self, label: &str) -> egui::Response {
+        let rect = self.begin_table_row(false);
+        let inner = egui::Rect::from_min_max(
+            egui::pos2(rect.left() + GUTTER + 4.0, rect.top() + COLUMN_ROW_EXTRA / 2.0 + 1.0),
+            egui::pos2(rect.right() - 4.0, rect.bottom() - COLUMN_ROW_EXTRA / 2.0 - 1.0),
+        );
+        let mut child = self
+            .ui
+            .new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        child.set_clip_rect(child.clip_rect().intersect(inner));
+        child.add(super::menu::MenuButton::new(label))
     }
 
     /// An editable boolean, drawn as a checkbox in the value column.

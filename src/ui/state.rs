@@ -3085,6 +3085,9 @@ pub(crate) struct EditorState {
     /// How the Calendar's report export groups its rows.
     pub(crate) schedule_report_grouping: crate::ui::elements::schedule_report::ReportGrouping,
     pub(crate) schedule_calendar: ScheduleCalendarView,
+    /// Whether each destination and pit reaches the roads, as the Schedule's
+    /// Haulage step last found it.
+    pub(crate) schedule_haul_connections: Option<crate::app::commands::haulage::HaulConnections>,
     pub(crate) survey: crate::ui::dialogs::survey::SurveyState,
     pub(crate) workspace_order: [Workspace; 5],
     /// The Drill & Blast workspace's stored products, in the order the palette
@@ -3285,6 +3288,17 @@ impl EditorState {
     /// showing.
     pub(crate) fn is_haulage_page(&self) -> bool {
         self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Haulage && self.haulage_subpage == PlanningSubpage::Layout
+    }
+
+    /// Open the Calendar on `address`: its group unfolded, the cell selected
+    /// and scrolled into view.
+    pub(crate) fn open_calendar_cell(&mut self, address: CalendarCellAddress) {
+        self.planning_page = PlanningPage::Schedule;
+        self.schedule_subpage = PlanningSubpage::Calendar;
+        self.schedule_calendar.collapsed.remove(&address.owner);
+        self.schedule_calendar.selection = Some(CalendarSelection { anchor: address, focus: address });
+        self.schedule_calendar.draft = None;
+        self.schedule_calendar.reveal = Some(address);
     }
 
     /// Open the page that repairs a Schedule Setup step. What the Haulage step
@@ -4351,6 +4365,7 @@ impl EditorState {
             schedule_charts_scroll: 0.0,
             schedule_report_grouping: Default::default(),
             schedule_calendar: ScheduleCalendarView::default(),
+            schedule_haul_connections: None,
             workspace_order: Workspace::ALL,
             survey: Default::default(),
             delay_products: builtin_delay_products(),
@@ -6655,9 +6670,6 @@ pub(crate) enum ScheduleStep {
     Delays,
     /// Drill and blast settings and each blast's starting stage.
     DrillBlast,
-    /// The Haulage pipeline, run here when it is not current: truck classes
-    /// and the roads they drive.
-    Haulage,
     Stockpiles,
     Dumps,
     Crushers,
@@ -6667,6 +6679,9 @@ pub(crate) enum ScheduleStep {
     /// The Solids pipeline, run here when it is not current, and the
     /// tonnage each of its dig blocks reads on the chosen field.
     Solids,
+    /// The Haulage pipeline, run here when it is not current, and whether
+    /// each destination and pit reaches the roads.
+    Haulage,
     Readiness,
 }
 
@@ -6677,11 +6692,11 @@ impl ScheduleStep {
     /// and before Readiness: a rule names a destination, so the lists it
     /// chooses from have to be checked first, and the ground its source scopes
     /// name is only known once Readiness has the Solids run.
-    /// Haulage sits with the loader fleet because its truck classes are
-    /// fleet, and Trucking Rules after Destinations because a trucking rule
-    /// names them. Solids sits last before Readiness because the Solids run
-    /// moves on far more often than the setup does, and a step's change
-    /// retires every step after it.
+    /// Trucking Rules comes after Destinations because a trucking rule names
+    /// them. Solids sits late because the Solids run moves on far more often
+    /// than the setup does, and a step's change retires every step after it.
+    /// Haulage follows it: it checks that each destination and each pit's dig
+    /// blocks reach the roads, so it needs both.
     pub(crate) const ALL: [Self; 15] = [
         Self::Configuration,
         Self::Periods,
@@ -6689,7 +6704,6 @@ impl ScheduleStep {
         Self::LoaderAgents,
         Self::Delays,
         Self::DrillBlast,
-        Self::Haulage,
         Self::Stockpiles,
         Self::Dumps,
         Self::Crushers,
@@ -6697,6 +6711,7 @@ impl ScheduleStep {
         Self::TruckingRules,
         Self::Cashflow,
         Self::Solids,
+        Self::Haulage,
         Self::Readiness,
     ];
 
@@ -6832,6 +6847,8 @@ pub(crate) struct ScheduleTruckClassDraft {
     pub(crate) maximum_speed: String,
     pub(crate) maximum_grade: String,
     pub(crate) dump_time: String,
+    /// The class's default fleet size, as typed.
+    pub(crate) units: String,
 }
 
 /// Which rule a condition being written belongs to.
@@ -8092,6 +8109,9 @@ pub(crate) struct ScheduleCalendarView {
     /// The Mode cell whose choice list is open.
     pub(crate) mode_menu: Option<CalendarCellAddress>,
     pub(crate) error: Option<String>,
+    /// A cell to scroll into view on the next frame, once its row is laid
+    /// out.
+    pub(crate) reveal: Option<CalendarCellAddress>,
 }
 
 impl Default for ScheduleCalendarView {
@@ -8107,6 +8127,7 @@ impl Default for ScheduleCalendarView {
             draft: None,
             mode_menu: None,
             error: None,
+            reveal: None,
         }
     }
 }

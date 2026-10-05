@@ -243,8 +243,14 @@ fn destination_row_kinds(kind: DestinationKind) -> &'static [CalendarRow] {
 
 pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, document: &Document, commands: &mut Vec<UiCommand>) -> egui::Rect {
     if editor.schedule_calendar.runtime != project.active_session {
+        // A cell another page just sent the Calendar to outlives the reset
+        // its first visit makes.
+        let reveal = editor.schedule_calendar.reveal.take();
+        let selection = reveal.and(editor.schedule_calendar.selection);
         editor.schedule_calendar = Default::default();
         editor.schedule_calendar.runtime = project.active_session;
+        editor.schedule_calendar.reveal = reveal;
+        editor.schedule_calendar.selection = selection;
     }
     let plan = &project.schedule;
     // Held by value for the frame: the grid needs the mirrored result while it
@@ -538,6 +544,16 @@ fn draw_grid(
     let period_view = egui::Rect::from_min_max(egui::pos2(period_left, rect.top()), egui::pos2(rect.right(), scrollbar_top));
     let rows = rows(plan, destinations, editor);
     let max_y = (rows.len() as f32 * row_h - body.height()).max(0.0);
+    // A cell another page sent the Calendar to: its row a third of the way
+    // down, and the days back at the start, beside the Default column.
+    if let Some(target) = editor.schedule_calendar.reveal.take()
+        && let Some(index) = rows
+            .iter()
+            .position(|row| matches!(row, Row::Field(owner, field) if *owner == target.owner && *field == target.row))
+    {
+        editor.schedule_calendar.scroll_y = (index as f32 * row_h - body.height() / 3.0).clamp(0.0, max_y);
+        editor.schedule_calendar.scroll_x = 0.0;
+    }
     let max_x = (editor.schedule_calendar.visible_days as f32 * PERIOD_W - period_view.width()).max(0.0);
     if ui.rect_contains_pointer(rect) {
         let scroll = ui.input(|input| input.smooth_scroll_delta);

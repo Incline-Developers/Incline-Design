@@ -381,7 +381,7 @@ pub(crate) fn draw_destination_properties(
             (tr!("haul-method-none"), Some(tr!("haul-method-none-help")))
         };
         rows.readonly_warning(&tr!("haul-dump-method"), &method, None, warning.as_deref());
-        if rows.action("", &tr!("haul-open-layout")).clicked() {
+        if rows.action_row(&tr!("haul-open-layout")).clicked() {
             edits.push(UiCommand::EditHaulProperties);
         }
     });

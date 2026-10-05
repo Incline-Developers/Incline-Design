@@ -499,7 +499,15 @@ impl crate::app::App<'_> {
             hasher.finish()
         };
         let solids_step = hash_of((cashflow_step, solids, plan.unmeasured_as_zero(), exclusions));
-        let readiness_step = hash_of((destinations_step, solids_step));
+        // Haulage checks the destinations and the Solids run's dig blocks
+        // against the roads, so all three are its inputs.
+        let haulage_step = {
+            let mut hasher = DefaultHasher::new();
+            (truck_classes_step, crushers_step, solids_step).hash(&mut hasher);
+            document.haulage().hash_content(&mut hasher);
+            hasher.finish()
+        };
+        let readiness_step = hash_of((destinations_step, solids_step, haulage_step));
         let drill_blast_step = {
             let mut hasher = DefaultHasher::new();
             delays_step.hash(&mut hasher);
@@ -519,7 +527,6 @@ impl crate::app::App<'_> {
             agents_step,
             delays_step,
             drill_blast_step,
-            truck_classes_step,
             stockpiles_step,
             dumps_step,
             crushers_step,
@@ -527,6 +534,7 @@ impl crate::app::App<'_> {
             trucking_rules_step,
             cashflow_step,
             solids_step,
+            haulage_step,
             readiness_step,
         ]
     }

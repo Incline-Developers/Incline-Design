@@ -1256,15 +1256,19 @@ fn draw_ui(
     // land on one already drawn gives way rather than stacking illegibly.
     let mut placed: Vec<egui::Rect> = Vec::new();
     for ((x, y), role) in &editor.haul_pins {
-        let name = match role.destination() {
-            crate::model::schedule::DestinationId::Standalone(id) => project.schedule.routing().standalone(id).map(|d| d.name.clone()),
-            crate::model::schedule::DestinationId::Solid(id) => document.solid(id).map(|d| d.name.clone()),
+        use crate::model::{haulage::NodeRole, schedule::DestinationKind};
+        let (name, kind) = match role.destination() {
+            crate::model::schedule::DestinationId::Standalone(id) => project.schedule.routing().standalone(id).map(|d| (d.name.clone(), Some(d.kind))),
+            crate::model::schedule::DestinationId::Solid(id) => document.solid(id).map(|d| (d.name.clone(), DestinationKind::of_solid(d.kind))),
         }
-        .unwrap_or_else(|| tr!("destination-unresolved"));
-        let what = match role {
-            crate::model::haulage::NodeRole::Dump(_) => tr!("haul-dump"),
-            crate::model::haulage::NodeRole::Reclaim(_) => tr!("haul-reclaim"),
-            crate::model::haulage::NodeRole::DumpAndReclaim(_) => tr!("haul-dump-and-reclaim"),
+        .unwrap_or_else(|| (tr!("destination-unresolved"), None));
+        // What the destination is; and for a stockpile tipped at one point
+        // and loaded at another, which point this is.
+        let what = match (kind, role) {
+            (Some(DestinationKind::Stockpile), NodeRole::Dump(_)) => tr!("haul-pin-stockpile-dump"),
+            (Some(DestinationKind::Stockpile), NodeRole::Reclaim(_)) => tr!("haul-pin-stockpile-reclaim"),
+            (Some(kind), _) => kind.label(),
+            (None, _) => String::new(),
         };
         let painter = root_ui.painter().with_clip_rect(canvas_rect);
         let visuals = root_ui.visuals();

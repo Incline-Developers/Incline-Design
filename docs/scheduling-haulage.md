@@ -5,8 +5,16 @@ tolerance, auto-join distance, bench speed, acceleration) and the truck
 classes, each class's figures above its Grade Speeds. Setup has its own
 pipeline (`app/haulage_pipeline.rs`) with Run Step, Run All and Auto: Road
 Network reports the Layout's issues as warnings, Truck Classes checks each
-class. Schedule's pipeline has a Haulage step that runs this pipeline when it
-is not current and waits for it; its repair links open this page. **Layout** holds the road network,
+class. A class's **Default fleet size** is its Calendar's default Units, and
+**Open in Calendar** goes to that row, where days that differ are set.
+
+Schedule's pipeline has a Haulage step, after Solids, that runs this pipeline
+when it is not current and waits for it. Its page lists every stockpile, dump
+and crusher with whether trucks can tip there - and at a stockpile, load - by
+road, and how many of each pit's dig blocks reach the roads. "The roads" are
+the main network, the largest piece; a destination on another piece, with no
+node, or with a node on no road is a warning on the step, as is a pit with
+blocks out of reach. A row opens the Layout to fix it. **Layout** holds the road network,
 destination dump and reclaim points, block connections and the Route check.
 Loader classes stay in Schedule Setup. A road is a dedicated planning object: its ends are junction
 nodes and its intermediate vertices only shape the road. Moving a node moves
@@ -43,7 +51,9 @@ Drag a node or bend point in the viewport to move it, with its roads
 previewed until release; a still click only selects. Selecting a road shows its
 name, length, steepest grade and speed limit; selecting a node shows its role
 and coordinates, each edited in place. A road's speed limit is typed, and left
-empty for none. The role list also creates a new stockpile, dump or crusher at
+empty for the truck class's own limit. On the map, each destination point is
+labelled with the destination's kind; a stockpile tipped and loaded at
+different nodes labels them its tip and load points. The role list also creates a new stockpile, dump or crusher at
 the node and opens its setup. Right-clicking a node offers **Promote to
 destination…**, a dialog choosing the destination (or a new one made at the
 node) and, for a stockpile, whether the node is its dump point, reclaim point
@@ -104,7 +114,9 @@ Road travel uses 3D segment length and signed grade. Grade is elevation change
 divided by plan length. Each truck class supplies loaded and empty speed bands;
 a band's lower grade bound applies up to the next band. The lowest bound also
 covers grades below it. The selected speed is capped by the class maximum and
-any road speed limit. The return traverses the same topology in the opposite
+any road speed limit; Grade Speeds shows each band's upper bound beside it,
+and colours a speed over the class maximum with the cap it is driven at. The
+return traverses the same topology in the opposite
 direction, with its own least-time path and signed grades.
 
 New classes start with default grade speeds, from a large haul truck's

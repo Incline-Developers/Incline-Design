@@ -327,11 +327,55 @@ impl crate::app::App<'_> {
             }],
             None => HaulageStep::ALL.into_iter().flat_map(|step| pipeline.status(step).diagnostics.clone()).collect(),
         };
+        let mut diagnostics = diagnostics;
+        let connections = self.haul_connections();
+        diagnostics.extend(connection_diagnostics(&connections));
+        self.editor.schedule_haul_connections = Some(connections);
         StageOutcome::Settled {
             diagnostics,
             entities: HaulageStep::ALL.len(),
         }
     }
+}
+
+/// Each destination side and pit that trucks cannot reach, as a warning:
+/// the schedule still hauls from and to everything that can.
+fn connection_diagnostics(connections: &crate::app::commands::haulage::HaulConnections) -> Vec<StageDiagnostic> {
+    use crate::app::commands::haulage::HaulLink;
+
+    let mut diagnostics = Vec::new();
+    if connections.destinations.iter().any(|entry| entry.dump == HaulLink::NoRoads) {
+        diagnostics.push(StageDiagnostic {
+            entity: None,
+            message: tr!("haul-link-no-roads-note"),
+            blocking: false,
+        });
+        return diagnostics;
+    }
+    for entry in &connections.destinations {
+        if entry.dump.is_problem() {
+            diagnostics.push(StageDiagnostic {
+                entity: Some(entry.name.clone()),
+                message: tr!("haul-link-dump-problem", status = entry.dump.label()),
+                blocking: false,
+            });
+        }
+        if let Some(reclaim) = entry.reclaim.filter(|link| link.is_problem()) {
+            diagnostics.push(StageDiagnostic {
+                entity: Some(entry.name.clone()),
+                message: tr!("haul-link-reclaim-problem", status = reclaim.label()),
+                blocking: false,
+            });
+        }
+    }
+    for pit in connections.pits.iter().filter(|pit| pit.reached < pit.total) {
+        diagnostics.push(StageDiagnostic {
+            entity: Some(pit.name.clone()),
+            message: tr!("haul-link-pit-problem", missed = (pit.total - pit.reached).to_string(), total = pit.total.to_string()),
+            blocking: false,
+        });
+    }
+    diagnostics
 }
 
 fn node_name(network: &HaulNetwork, id: crate::model::haulage::network::NodeId) -> String {

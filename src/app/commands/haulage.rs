@@ -670,6 +670,193 @@ impl crate::app::App<'_> {
     }
 }
 
+/// How one side of a destination - where trucks tip, or where they load -
+/// meets the roads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HaulLink {
+    /// Its node is on the main road network.
+    Connected,
+    /// It has no node: trucks reach its surface from the nearest road.
+    Surface,
+    /// A stockpile with no reclaim node is loaded where it is tipped.
+    AtDumpPoint,
+    /// A crusher, or a destination with no surface, that has no node.
+    NoPoint,
+    /// Its node has no road.
+    OffRoad,
+    /// It meets a piece of road that does not join the main network.
+    SeparatePiece,
+    /// There are no roads at all.
+    NoRoads,
+}
+
+impl HaulLink {
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::Connected => tr!("haul-link-connected"),
+            Self::Surface => tr!("haul-link-surface"),
+            Self::AtDumpPoint => tr!("haul-link-at-dump"),
+            Self::NoPoint => tr!("haul-link-no-point"),
+            Self::OffRoad => tr!("haul-link-off-road"),
+            Self::SeparatePiece => tr!("haul-link-separate"),
+            Self::NoRoads => tr!("haul-link-no-roads"),
+        }
+    }
+
+    /// Whether trucks cannot get there this way.
+    pub(crate) fn is_problem(self) -> bool {
+        matches!(self, Self::NoPoint | Self::OffRoad | Self::SeparatePiece | Self::NoRoads)
+    }
+}
+
+/// How a destination meets the roads: where trucks tip, and for a
+/// stockpile where they load.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct DestinationLinks {
+    pub(crate) name: String,
+    pub(crate) kind: DestinationKind,
+    pub(crate) dump: HaulLink,
+    pub(crate) reclaim: Option<HaulLink>,
+}
+
+/// How many of a pit's dig blocks reach the main road network.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PitLinks {
+    pub(crate) name: String,
+    pub(crate) reached: usize,
+    pub(crate) total: usize,
+}
+
+/// What the Schedule's Haulage step shows: whether everything trucks haul
+/// between reaches the roads.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct HaulConnections {
+    pub(crate) destinations: Vec<DestinationLinks>,
+    pub(crate) pits: Vec<PitLinks>,
+}
+
+impl crate::app::App<'_> {
+    /// Whether each destination and each pit's dig blocks reach the roads.
+    ///
+    /// "The roads" are the main network: the largest piece, as the Layout's
+    /// issues judge it. A destination on another piece can only be reached
+    /// from blocks on that piece too, which is seldom what was meant.
+    pub(crate) fn haul_connections(&self) -> HaulConnections {
+        use std::collections::BTreeMap;
+
+        let Some(document) = self.workspace.active_document() else {
+            return HaulConnections::default();
+        };
+        let network = document.haulage();
+        let mut adjacency: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
+        for road in &network.roads {
+            adjacency.entry(road.from).or_default().push(road.to);
+            adjacency.entry(road.to).or_default().push(road.from);
+        }
+        let mut piece: BTreeMap<NodeId, usize> = BTreeMap::new();
+        let mut sizes = Vec::new();
+        for &seed in adjacency.keys() {
+            if piece.contains_key(&seed) {
+                continue;
+            }
+            let mut stack = vec![seed];
+            let mut size = 0;
+            while let Some(id) = stack.pop() {
+                if piece.contains_key(&id) {
+                    continue;
+                }
+                piece.insert(id, sizes.len());
+                size += 1;
+                stack.extend(&adjacency[&id]);
+            }
+            sizes.push(size);
+        }
+        let main = sizes.iter().enumerate().max_by_key(|(_, size)| **size).map(|(index, _)| index);
+        let on_main = |node: NodeId| main.is_some() && piece.get(&node).copied() == main;
+        let road_on_main = |road: crate::model::haulage::RoadId| network.road(road).is_some_and(|road| on_main(road.from));
+        let index = crate::model::haulage::network::RoadIndex::new(network);
+        let roads = !network.roads.is_empty();
+
+        // A side served by a node of its own: on the roads, off them, or on
+        // a separate piece.
+        let node_link = |served: &dyn Fn(NodeRole) -> bool| {
+            network
+                .nodes
+                .iter()
+                .find(|node| node.role.is_some_and(served))
+                .map(|node| match (adjacency.contains_key(&node.id), on_main(node.id)) {
+                    (false, _) => HaulLink::OffRoad,
+                    (true, false) => HaulLink::SeparatePiece,
+                    (true, true) => HaulLink::Connected,
+                })
+        };
+        let centroids = self.haul_destination_points(document);
+        let mut destinations: Vec<DestinationLinks> = crate::model::schedule::destinations::available(document.solids(), document.schedule().routing())
+            .into_iter()
+            .map(|view| {
+                let dump = if !roads {
+                    HaulLink::NoRoads
+                } else {
+                    node_link(&|role| role.destination() == view.id && role.dumps()).unwrap_or_else(|| match centroids.get(&view.id) {
+                        Some(point) => match index.candidates(*point, 0.0).first() {
+                            Some((road, _, _)) if road_on_main(*road) => HaulLink::Surface,
+                            _ => HaulLink::SeparatePiece,
+                        },
+                        None => HaulLink::NoPoint,
+                    })
+                };
+                let reclaim = (view.kind == DestinationKind::Stockpile).then(|| {
+                    if roads {
+                        node_link(&|role| role == NodeRole::Reclaim(view.id)).unwrap_or(HaulLink::AtDumpPoint)
+                    } else {
+                        HaulLink::NoRoads
+                    }
+                });
+                DestinationLinks {
+                    name: view.name,
+                    kind: view.kind,
+                    dump,
+                    reclaim,
+                }
+            })
+            .collect();
+        destinations.sort_by_key(|entry| entry.kind as u8);
+
+        // A dug block reaches the roads through the nodes it is held to, or
+        // else the nearest node within the auto-join distance.
+        let max_grade = max_grade(document.schedule().trucks());
+        let reach = network.settings.auto_join_m;
+        let mut pits: Vec<PitLinks> = Vec::new();
+        for block in self.planning_snapshot().ok().iter().flat_map(|snapshot| &snapshot.blocks) {
+            let Some(solid) = document.solid(block.solid).filter(|solid| solid.kind == crate::model::SolidKind::Pit) else {
+                continue;
+            };
+            let point = DVec3::new(block.anchor[0], block.anchor[1], block.flitch.base);
+            let links = network.block_link(block.solid, block.flitch.base, &block.ground);
+            let reached = if links.iter().any(|node| index.node_join(*node).is_some()) {
+                links.iter().any(|node| on_main(*node))
+            } else {
+                index
+                    .joins(point, &[], max_grade)
+                    .first()
+                    .is_some_and(|join| crate::model::haulage::network::access_length(point, join.2, max_grade) <= reach && road_on_main(join.0))
+            };
+            match pits.iter_mut().find(|pit| pit.name == solid.name) {
+                Some(pit) => {
+                    pit.total += 1;
+                    pit.reached += usize::from(reached);
+                }
+                None => pits.push(PitLinks {
+                    name: solid.name.clone(),
+                    reached: usize::from(reached),
+                    total: 1,
+                }),
+            }
+        }
+        HaulConnections { destinations, pits }
+    }
+}
+
 /// Every destination a road node can serve: the standalone ones and the
 /// solids that are not pits.
 pub(crate) fn haul_destinations(document: &crate::model::Document) -> Vec<DestinationId> {
