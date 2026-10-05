@@ -437,7 +437,7 @@ impl<'a> App<'a> {
     }
 
     /// Ring every position where a refused control goes wrong, each one,
-    /// past the report's line limit too, until the next build, Unhide All or
+    /// past the report's line limit too, until the next build, Clear rings or
     /// the project is left. Drawn on the canvas only: nothing enters the
     /// project or its undo history.
     fn ring_refused_controls(&mut self, ids: &[ObjectId], refused: &[usize], positions: &[DVec3]) {

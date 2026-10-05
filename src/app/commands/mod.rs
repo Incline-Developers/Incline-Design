@@ -65,7 +65,7 @@ impl<'a> App<'a> {
         self.editor.canvas_context_menu_open = false;
         // Rings describe the strings as a build or a clean left them, by
         // vertex number; a step back or forward leaves them describing
-        // strings that are no longer there, so they go, as with Unhide All.
+        // strings that are no longer there, so they go.
         self.editor.clear_string_rings();
         self.reset_fuse();
         self.cancel_chamfer();
@@ -1123,6 +1123,11 @@ impl<'a> App<'a> {
                 }
                 Ok(())
             }
+            UiCommand::ClearRings => {
+                self.editor.clear_string_rings();
+                self.redraw_requested = true;
+                Ok(())
+            }
             UiCommand::JoinAllAtHalfway => {
                 let rings: Vec<usize> = (0..self.editor.string_rings.len())
                     .filter(|&index| self.editor.string_rings[index].joinable() && self.ring_strings_editable(index))
@@ -1516,55 +1521,39 @@ impl<'a> App<'a> {
         self.invalidate_geometry();
     }
 
-    /// Show everything in the active project that Hide Selection hid, as
-    /// one undo step: its objects in any layer, and its triangulations,
-    /// block models, drill holes, point clouds and rasters. The explorer's
-    /// Reveal All brings back one section at a time; this brings back all.
+    /// Show the objects Hide Selection hid in loaded layers, as one undo
+    /// step, and any item the explorer shows as loaded that an older hide
+    /// left off the canvas. Nothing the explorer has switched off comes
+    /// back, so an item Hide Selection unloaded returns from the explorer;
+    /// the rings are left alone.
     fn unhide_all_objects(&mut self) {
-        // The rings a refused build left go with the strings it hid.
-        if !self.editor.string_rings.is_empty() {
-            self.editor.clear_string_rings();
-            self.redraw_requested = true;
-        }
         let Some(document) = self.workspace.active_document() else {
             userspace_log!("{}", tr!("cmd-unhide-all-nothing-hidden"));
             return;
         };
-        let mut commands: Vec<Command> = document.hidden_object_ids().map(|id| Command::SetObjectHidden { id, before: true, after: false }).collect();
-        let objects = commands.len();
-        // The items Hide Selection unloaded, and any an older hide left only
-        // on the canvas (not saved, so not part of the undo step).
-        let unloaded = self
-            .triangulations
-            .iter()
-            .filter(|item| !item.state.loaded)
-            .map(|item| SceneEntityId::Triangulation(item.id))
-            .chain(self.block_models.iter().filter(|item| !item.state.loaded).map(|item| SceneEntityId::BlockModel(item.id)))
-            .chain(self.drill_holes.iter().filter(|item| !item.state.loaded).map(|item| SceneEntityId::DrillHole(item.id)))
-            .chain(self.point_clouds.iter().filter(|item| !item.state.loaded).map(|item| SceneEntityId::PointCloud(item.id)))
-            .chain(self.raster_textures.iter().filter(|item| !item.state.loaded).map(|item| SceneEntityId::Raster(item.id)));
-        let mut items: Vec<SceneEntityId> = unloaded
-            .chain(
-                self.editor
-                    .hidden_handles
-                    .iter()
-                    .copied()
-                    .filter(|handle| crate::model::ItemRef::from_entity(*handle).is_some()),
-            )
+        let layer_loaded = |id: crate::model::ObjectId| document.get_object(id).and_then(|object| document.layer(object.layer())).is_some_and(|layer| layer.loaded);
+        let commands: Vec<Command> = document
+            .hidden_object_ids()
+            .filter(|&id| layer_loaded(id))
+            .map(|id| Command::SetObjectHidden { id, before: true, after: false })
             .collect();
-        let mut seen = std::collections::HashSet::new();
-        items.retain(|handle| seen.insert(*handle));
-        commands.extend(
-            items
-                .iter()
-                .filter_map(|&handle| crate::model::ItemRef::from_entity(handle))
-                .filter_map(|item| self.item_style_command(item, |style| style.with_loaded(true))),
-        );
-        self.editor.hidden_handles.retain(|handle| !items.contains(handle));
+        let objects = commands.len();
+        // Canvas-only hides are not saved, so they are not part of the undo
+        // step; an item the explorer has unloaded keeps its entry.
+        let loaded = |handle: &SceneEntityId| match handle {
+            SceneEntityId::Triangulation(id) => self.triangulations.iter().any(|item| item.id == *id && item.state.loaded),
+            SceneEntityId::BlockModel(id) => self.block_models.iter().any(|item| item.id == *id && item.state.loaded),
+            SceneEntityId::DrillHole(id) => self.drill_holes.iter().any(|item| item.id == *id && item.state.loaded),
+            SceneEntityId::PointCloud(id) => self.point_clouds.iter().any(|item| item.id == *id && item.state.loaded),
+            SceneEntityId::Raster(id) => self.raster_textures.iter().any(|item| item.id == *id && item.state.loaded),
+            SceneEntityId::Object(_) => false,
+        };
+        let items: Vec<SceneEntityId> = self.editor.hidden_handles.iter().copied().filter(|handle| loaded(handle)).collect();
         if objects == 0 && items.is_empty() {
             userspace_log!("{}", tr!("cmd-unhide-all-nothing-hidden"));
             return;
         }
+        self.editor.hidden_handles.retain(|handle| !items.contains(handle));
         if !commands.is_empty() {
             self.execute_edit(Command::Batch(commands));
         }

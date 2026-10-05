@@ -214,7 +214,12 @@ pub(crate) fn draw_right_click_context(
             commands.push(UiCommand::JoinAllAtHalfway);
             commands.push(UiCommand::CloseCanvasContextMenu);
         }
-        if open_string_selected || join_offered {
+        let rings_shown = !editor.string_rings.is_empty();
+        if rings_shown && ContextMenuAction::new(tr!("cmd-string-clean-clear-rings")).show(ui).clicked() {
+            commands.push(UiCommand::ClearRings);
+            commands.push(UiCommand::CloseCanvasContextMenu);
+        }
+        if open_string_selected || join_offered || rings_shown {
             context_menu_separator(ui);
         }
 

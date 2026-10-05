@@ -47,7 +47,7 @@ pub(crate) enum StringRingKind {
 }
 
 /// One ring on the canvas: a place where a string goes wrong, kept until the
-/// next build, a clean of its strings, an undo or redo, Unhide All or the
+/// next build, a clean of its strings, an undo or redo, Clear rings or the
 /// project is left; an edit of its string carries it across or drops it.
 /// Drawn only: never saved, and no part of the project or its undo history.
 #[derive(Clone, Debug, PartialEq)]
@@ -1864,7 +1864,7 @@ pub(crate) struct EditorState {
     pub(crate) tri_create_diagnostic_markers_screen_px: Vec<(f32, f32)>,
     pub(crate) tri_create_diagnostic_segments_screen_px: Vec<[OptionalScreenPointPx; 2]>,
     /// Where strings go wrong, ringed on the canvas until the next build, a
-    /// clean of their strings, an undo or redo, Unhide All, or the project
+    /// clean of their strings, an undo or redo, Clear rings, or the project
     /// is left: what the last Build Surface refused or left out, and what
     /// Clean Strings left. [`Self::settle_string_rings`] keeps them in step
     /// with edits of their strings.
@@ -4325,6 +4325,8 @@ pub(crate) enum UiCommand {
     JoinAllAtHalfway,
     /// Join at the halfway height the one ring at this index.
     JoinHereAtHalfway(usize),
+    /// Remove the rings; strings and what is hidden stay as they are.
+    ClearRings,
     /// Delete one vertex of a string as the canvas Delete Vertex does, from a
     /// ring's menu, and update the rings.
     DeleteRingVertex {
@@ -4659,6 +4661,7 @@ impl UiCommand {
             Self::CleanString(id) => report(tr!("cmd-string-clean-clean-this-string"), format!("{id:?}")),
             Self::JoinAllAtHalfway => report(tr!("cmd-string-clean-join-all-at-halfway"), tr!("cmd-string-clean-rings")),
             Self::JoinHereAtHalfway(_) => report(tr!("cmd-string-clean-join-here-at-halfway"), tr!("cmd-string-clean-rings")),
+            Self::ClearRings => report(tr!("cmd-string-clean-clear-rings"), tr!("cmd-string-clean-rings")),
             Self::DeleteRingVertex { id, .. } => report(tr!("cmd-selection-delete-vertex"), format!("{id:?}")),
             Self::InsertPointsAtElevation { object_ids, elevation } => report(
                 tr!("state-insert-points-elevation"),
