@@ -289,7 +289,9 @@ pub(crate) fn improve(
             shown.sizes = out.sizes;
             shown.timings = out.timings;
             adopt_seed(&mut shown, (*found).clone(), None, proved, DayByDayRole::Early);
-            if shown.primary_gap.is_some_and(|gap| options.relative_gap.is_some_and(|target| gap <= target)) {
+            if let Some(bound) = shown.primary_bound
+                && options.relative_gap.is_some_and(|target| gap_closed(found.solution.reported_objective, bound, target))
+            {
                 log::info!(
                     "schedule run {}: the first schedule is within the gap target of the relaxation bound; no whole-horizon solve",
                     out.identity.run_id
@@ -528,16 +530,29 @@ pub(crate) fn improve(
             out.primary_bound = Some(bound);
             out.primary_gap = out.raw_objective.and_then(|raw| relative_gap(raw, bound));
             out.bound_source = BoundSource::Relaxation;
-            if termination == SolveTermination::FeasibleLimit && out.primary_gap.is_some_and(|gap| options.relative_gap.is_some_and(|target| gap <= target)) {
+            if termination == SolveTermination::FeasibleLimit
+                && let Some(raw) = out.raw_objective
+                && options.relative_gap.is_some_and(|target| gap_closed(raw, bound, target))
+            {
                 termination = SolveTermination::Optimal;
             }
         }
     }
     if let Some(found) = seed {
+        // Kept on its published value, whatever SCIP proved: an optimum of
+        // the model's conservative valuation near a grade boundary can be
+        // worth less as published than the seed.
         let improved = out.published_objective.expect("replayed objective") >= found.replay.replayed_objective;
-        if !improved && termination != SolveTermination::Optimal {
+        if !improved {
             let bound = out.primary_bound.filter(|_| out.bound_source == BoundSource::Scip);
+            let proven = options
+                .relative_gap
+                .zip(out.primary_bound)
+                .is_some_and(|(target, bound)| gap_closed(found.solution.reported_objective, bound, target));
             adopt_seed(&mut out, found, bound, proved, DayByDayRole::Kept);
+            if proven && out.solution.is_some() {
+                out.termination = SolveTermination::Optimal;
+            }
             return out;
         }
         // Drill and blast happened as the dispatch simulated it.
@@ -573,7 +588,7 @@ fn watch_solve(cancel: &CancelFlag, interrupt: &AtomicBool, finished: &AtomicBoo
             && let Some(bound) = relaxation.as_mut().and_then(RelaxationJob::ready)
         {
             proving = None;
-            if relative_gap(raw, bound).is_some_and(|gap| gap <= target) {
+            if gap_closed(raw, bound, target) {
                 proof.store(true, Ordering::Release);
                 interrupt.store(true, Ordering::Release);
                 return;
@@ -582,6 +597,18 @@ fn watch_solve(cancel: &CancelFlag, interrupt: &AtomicBool, finished: &AtomicBoo
         std::thread::sleep(WATCH_INTERVAL);
     }
 }
+
+/// Whether `bound` proves `raw` within the gap `target`: relatively, or, for
+/// a schedule worth nothing or next to it, within the relaxation's own
+/// tolerance, which no relative gap can express.
+fn gap_closed(raw: f64, bound: f64, target: f64) -> bool {
+    relative_gap(raw, bound).is_some_and(|gap| gap <= target) || (raw.is_finite() && bound.is_finite() && (bound - raw).abs() <= ABSOLUTE_GAP)
+}
+
+/// The value gap below which a schedule counts as proven whatever its size:
+/// twice [`RELAXATION_MARGIN_ABSOLUTE`], so a schedule equal
+/// to the relaxation's optimum closes it.
+const ABSOLUTE_GAP: f64 = 2e-4;
 
 /// How often [`watch_solve`] looks at the cancellation flag and the
 /// relaxation bound.

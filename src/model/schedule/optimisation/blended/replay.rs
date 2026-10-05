@@ -22,7 +22,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use super::input::{BlendInput, BlendPile, GradeLimit, WINDOW_TOLERANCE_H, attribute_reclaim, task_authorises};
+use super::input::{BlendInput, BlendPile, GradeLimit, WINDOW_TOLERANCE_H, attribute_reclaim, authored_tasks, dig_authority, task_authorises};
 use crate::model::schedule::optimisation::{Activity, Destination, DestinationId, DestinationKind, GroundId, LoaderId, SourceId, StockpileId, TaskKind};
 
 /// One published movement: how much material a candidate moved in a cell.
@@ -423,6 +423,7 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
     // finished it first and the earlier block must be gone a cell before.
     {
         let mut remaining: BTreeMap<_, f64> = input.ground.iter().map(|source| (source.id, source.tonnes_t)).collect();
+        let ordered: BTreeMap<_, Vec<usize>> = input.loaders.iter().enumerate().map(|(index, loader)| (loader.id, authored_tasks(input, index))).collect();
         let tolerance = |ground| {
             input
                 .ground
@@ -449,17 +450,20 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
                         *slot -= row.tonnes_t;
                     }
                 }
-                for task in &input.tasks {
+                // Each dig is held only to the order of the bar it was
+                // worked under; see `dig_authority`.
+                for (&(loader, later), _) in dug.iter().filter(|(_, tonnes)| **tonnes > REPLAY_TOLERANCE_T) {
+                    let Some(ordered) = ordered.get(&loader) else { continue };
+                    let Some(task) = dig_authority(input, ordered, later, *interval).map(|index| &input.tasks[index]) else {
+                        continue;
+                    };
                     let TaskKind::Dig { sequence } = &task.kind else { continue };
-                    for pair in sequence.windows(2) {
+                    for pair in sequence.windows(2).filter(|pair| pair[1] == later) {
                         let [earlier, later] = pair else { continue };
-                        if dug.get(&(task.loader, *later)).copied().unwrap_or(0.0) <= REPLAY_TOLERANCE_T {
-                            continue;
-                        }
                         let Some(&left) = remaining.get(earlier) else { continue };
                         let shared = dug
                             .iter()
-                            .any(|(&(loader, ground), &tonnes)| loader != task.loader && ground == *earlier && tonnes > REPLAY_TOLERANCE_T);
+                            .any(|(&(other, ground), &tonnes)| other != task.loader && ground == *earlier && tonnes > REPLAY_TOLERANCE_T);
                         let left = if shared { before.get(earlier).copied().unwrap_or(0.0) } else { left };
                         if left > tolerance(*earlier) {
                             checker.report.issues.push(format!(
@@ -506,6 +510,27 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
                         moved,
                         tph * duration,
                     );
+                }
+                // One pile at a time: a loader switches piles only at a
+                // segment boundary, as the formulation's `onesrc` rows say.
+                let mut drawn: BTreeSet<StockpileId> = BTreeSet::new();
+                for row in rows.iter().filter(|row| row.tonnes_t > REPLAY_TOLERANCE_T) {
+                    if let Some(candidate) = input.movements.get(row.candidate)
+                        && candidate.loader == loader.id
+                        && candidate.activity == Activity::Reclaim
+                        && let SourceId::Stockpile(pile) = candidate.source
+                    {
+                        drawn.insert(pile);
+                    }
+                }
+                if drawn.len() > 1 {
+                    let piles: Vec<String> = drawn.iter().map(|pile| pile.0.to_string()).collect();
+                    checker.report.issues.push(format!(
+                        "loader {} reclaimed from piles {} at once in interval {} segment {segment}",
+                        loader.id.0,
+                        piles.join(", "),
+                        interval.index
+                    ));
                 }
             }
 
@@ -1368,6 +1393,12 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> BTreeMap
     let piles: Vec<BlendPile> = checker.input.piles.clone();
     let grades = checker.input.grades.count();
     let horizon = checker.input.intervals.len();
+    // Each published row by its key, indexed once; the first of any repeat,
+    // as a scan would find it.
+    let mut published: BTreeMap<(StockpileId, usize, usize), &ChunkRow> = BTreeMap::new();
+    for row in &solution.chunks {
+        published.entry((row.pile, row.chunk, row.interval)).or_insert(row);
+    }
     for pile in piles.iter().filter(|entry| !entry.chunks.is_empty()) {
         if checker.cancelled() {
             return drawn;
@@ -1404,11 +1435,7 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> BTreeMap
                         checker.report.blends.insert((pile.id, key, g), held_q[chunk][g] / held_t[chunk]);
                     }
                 }
-                let Some(state) = solution
-                    .chunks
-                    .iter()
-                    .find(|entry| entry.pile == pile.id && entry.chunk == chunk && entry.interval == interval)
-                else {
+                let Some(state) = published.get(&(pile.id, chunk, interval)) else {
                     checker.report.chunk_intervals.insert((pile.id, chunk, interval), (held_t[chunk], held_q[chunk].clone()));
                     continue;
                 };

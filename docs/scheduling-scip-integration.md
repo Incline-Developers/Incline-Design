@@ -539,7 +539,9 @@ The dispatcher's limits on reclaim:
 - It reclaims into a destination whose admission depends on the blend only
   when the pile's released blend clears the boundary by the formulation's
   margin.
-- It never reclaims where a grade-conditional value applies.
+- It prices a grade-conditional value on the released blend, as the
+  formulation does: a reward only when the blend clears the rule's bounds by
+  the margin, a cost unless it clears them on the outside.
 
 DreamLand, from the app's captured request, 60 s limit:
 

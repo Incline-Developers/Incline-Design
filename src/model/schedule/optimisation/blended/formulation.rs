@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::input::{
     BlendInput, BlendPile, CHUNK_FULL_T, GRADE_CUSHION_T, GRADE_MARGIN, GradeBound, GradeEndpoint, GradeHalfSpace, GradePredicate, GradeQualification, REST_RECEIPT_T,
-    REST_TOLERANCE_H, authored_tasks, delivers_to_pile, flat_cell, interval_rate, loader_rate, task_active, task_authorises, task_operable,
+    REST_TOLERANCE_H, authored_tasks, delivers_to_pile, dig_authority, flat_cell, interval_rate, loader_rate, task_active, task_authorises, task_operable,
 };
 use crate::model::schedule::optimisation::{
     Activity, Destination, DestinationId, DestinationKind, GroundId, Interval, LoaderId, MovementCandidate, ReclaimOrder, SourceId, StockpileId, TaskKind,
@@ -642,14 +642,17 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
         }
     }
 
-    for task in &input.tasks {
+    // Each bar's order binds only the digs it authorises; see `dig_authority`.
+    let ordered: Vec<Vec<usize>> = (0..input.loaders.len()).map(|loader| authored_tasks(input, loader)).collect();
+    for (task_index, task) in input.tasks.iter().enumerate() {
         if rows.cancelled() {
             return Err(FormulationCancelled);
         }
         let TaskKind::Dig { sequence } = &task.kind else { continue };
-        let Some(loader) = input.loaders.iter().find(|entry| entry.id == task.loader) else {
+        let Some(loader_index) = input.loaders.iter().position(|entry| entry.id == task.loader) else {
             continue;
         };
+        let loader = &input.loaders[loader_index];
         for window in sequence.windows(2) {
             if rows.cancelled() {
                 return Err(FormulationCancelled);
@@ -670,6 +673,9 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
                 continue;
             }
             for (position, &(interval, segment)) in cells.iter().enumerate() {
+                if dig_authority(input, &ordered[loader_index], *later, input.intervals[interval]) != Some(task_index) {
+                    continue;
+                }
                 let mut terms: Vec<(R::Var, f64)> = later_candidates
                     .iter()
                     .filter_map(|&index| rows.columns().movement.get(&(index, interval, segment)).cloned())
@@ -1658,15 +1664,25 @@ const REACH_TIME_SLACK_H: f64 = 1e-9;
 
 impl DigReach {
     fn new(input: &BlendInput) -> Self {
+        // A block may be dug under any bar listing it, and each bar orders
+        // only its own digs, so a block waits only for what every bar listing
+        // it puts ahead of it.
         let mut predecessors: BTreeMap<(LoaderId, GroundId), Vec<GroundId>> = BTreeMap::new();
         let mut authorised: BTreeSet<(LoaderId, GroundId)> = BTreeSet::new();
         for task in &input.tasks {
             let TaskKind::Dig { sequence } = &task.kind else { continue };
-            authorised.extend(sequence.iter().map(|ground| (task.loader, *ground)));
-            for pair in sequence.windows(2) {
+            for (position, &ground) in sequence.iter().enumerate() {
                 // A predecessor the capture did not include has no order row.
-                if input.ground.iter().any(|source| source.id == pair[0]) {
-                    predecessors.entry((task.loader, pair[1])).or_default().push(pair[0]);
+                let ahead: Vec<GroundId> = position
+                    .checked_sub(1)
+                    .map(|before| sequence[before])
+                    .filter(|before| input.ground.iter().any(|source| source.id == *before))
+                    .into_iter()
+                    .collect();
+                if authorised.insert((task.loader, ground)) {
+                    predecessors.insert((task.loader, ground), ahead);
+                } else if let Some(held) = predecessors.get_mut(&(task.loader, ground)) {
+                    held.retain(|block| ahead.contains(block));
                 }
             }
         }

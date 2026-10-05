@@ -569,6 +569,11 @@ impl crate::app::App<'_> {
                     return;
                 }
                 match result {
+                    Ok(RunOutcome::Published(schedule)) if app.better_held(serial, semantic, requested_end_h, &schedule).is_some() => {
+                        let held = app.better_held(serial, semantic, requested_end_h, &schedule).expect("checked above");
+                        crate::userspace_log!("{}", tr!("schedule-run-kept-better", run = serial.to_string(), held = held.to_string()));
+                        app.schedule_run_diagnostics = None;
+                    }
                     Ok(RunOutcome::Published(schedule)) => {
                         let finished = tr!("schedule-run-finished", run = serial.to_string(), day = day_of(schedule.requested_end_h).to_string());
                         if auto {
@@ -747,6 +752,16 @@ impl crate::app::App<'_> {
         self.schedule_calculation = Some(Arc::new(settled));
     }
 
+    /// The run whose held schedule is worth more than `schedule` from run
+    /// `serial`, when the two answer the same inputs over the same horizon.
+    /// Values from different inputs are not comparable, so only then.
+    fn better_held(&self, serial: u64, semantic: u64, requested_end_h: f64, schedule: &CalculatedSchedule) -> Option<u64> {
+        let held = self.schedule_calculation.as_ref()?;
+        let comparable = held.run != serial && held.semantic == semantic && (held.requested_end_h - requested_end_h).abs() <= 1e-9;
+        let margin = 1e-9 * held.report.objective.abs().max(1.0);
+        (comparable && schedule.report.objective < held.report.objective - margin).then_some(held.run)
+    }
+
     /// Retire a background run as soon as its inputs move, and show its
     /// day-by-day schedule once the worker has one.
     pub(crate) fn advance_schedule_calculation(&mut self) {
@@ -764,8 +779,11 @@ impl crate::app::App<'_> {
             return;
         }
         let early = pending.early.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
-        if let Some(schedule) = early {
-            let serial = pending.serial;
+        let serial = pending.serial;
+        // A first schedule worth less than the one on screen is not shown: the
+        // run would otherwise replace a better schedule with its starting
+        // point, and stopping it would keep that.
+        if let Some(schedule) = early.filter(|schedule| self.better_held(serial, semantic, requested_end_h, schedule).is_none()) {
             crate::userspace_log!(
                 "{}",
                 tr!("schedule-run-early", run = serial.to_string(), day = day_of(schedule.requested_end_h).to_string())
@@ -997,6 +1015,12 @@ fn result_details(calculation: &CalculatedSchedule) -> Vec<String> {
         (Some(bound), None) => tr!("schedule-detail-bound-no-gap", bound = crate::ui::elements::schedule_calendar::format_money(bound)),
         _ => tr!("schedule-detail-no-bound"),
     });
+    // Improve moves the mining, not the blasts: it works with the blast
+    // times the hourly schedule reached, and its bound holds only for those.
+    let improved = report.day_by_day.as_ref().is_some_and(|start| start.role != DayByDayRole::Only);
+    if improved && calculation.drill_blast.as_ref().is_some_and(|result| !result.blasts.is_empty()) {
+        lines.push(tr!("schedule-detail-fixed-blasts"));
+    }
     if let Some(start) = report.day_by_day.as_ref() {
         let seconds = format!("{:.2}", start.seconds);
         let method = match start.method {

@@ -49,13 +49,8 @@ pub(crate) fn extract_solution(solved: &Model<Solved>, columns: &BlendColumns<Va
         let reclaimed_t = columns.chunk_recl_t.get(&(pile, chunk, interval)).map(|variable| best.val(variable)).unwrap_or(0.0);
         let closed = columns.chunk_closed.get(&(pile, chunk, interval)).map(|variable| best.val(variable) > 0.5).unwrap_or(false);
         let mut receipts = Vec::new();
-        for (&(p, c, k, movement), variable) in &columns.chunk_recv {
-            if cancelled() {
-                return Err(());
-            }
-            if p != pile || c != chunk || k != interval {
-                continue;
-            }
+        // The map is ordered by chunk row first, so its receipts are one range.
+        for (&(_, _, _, movement), variable) in columns.chunk_recv.range((pile, chunk, interval, 0)..=(pile, chunk, interval, usize::MAX)) {
             let tonnes = best.val(variable);
             if tonnes.abs() <= 1e-9 {
                 if tonnes != 0.0 {

@@ -332,7 +332,12 @@ pub(crate) fn adopt_seed(out: &mut ScheduleCompletion, found: Seed, bound: Optio
 }
 
 /// SCIP's own definition, so the figure reads the same as a solver gap.
+/// A schedule equal to its bound has no gap, a zero-valued one included;
+/// any other gap over zero has no relative size.
 pub(crate) fn relative_gap(raw: f64, bound: f64) -> Option<f64> {
+    if raw == bound && raw.is_finite() {
+        return Some(0.0);
+    }
     let smaller = raw.abs().min(bound.abs());
     (smaller > 0.0 && raw.signum() == bound.signum()).then(|| (bound - raw).abs() / smaller)
 }

@@ -82,8 +82,8 @@ use std::collections::BTreeMap;
 
 use super::grade::GradeTable;
 use crate::model::schedule::optimisation::{
-    Activity, CashflowRuleId, Destination, DestinationId, DestinationKind, GroundSource, Interval, IntervalRate, Loader, LoaderId, MovementCandidate, ReclaimOrder, RoutingRuleId,
-    SourceId, StockpileId, Task, TaskKind, TruckClass,
+    Activity, CashflowRuleId, Destination, DestinationId, DestinationKind, GroundId, GroundSource, Interval, IntervalRate, Loader, LoaderId, MovementCandidate, ReclaimOrder,
+    RoutingRuleId, SourceId, StockpileId, Task, TaskKind, TruckClass,
 };
 pub(crate) use crate::model::schedule::stockpile_operation::PileMode;
 
@@ -605,6 +605,23 @@ pub(crate) fn authored_tasks(input: &BlendInput, loader_index: usize) -> Vec<usi
             .expect("authored windows are finite")
     });
     tasks
+}
+
+/// The bar a dig of `ground` in `interval` is worked under: the first of the
+/// loader's bars in authored order (`ordered`, from [`authored_tasks`]) whose
+/// window covers the interval and whose sequence holds the block.
+///
+/// Only that bar's sequence orders the dig. Ground is shared but membership
+/// is authored per bar, so a later bar listing the block behind another does
+/// not hold it back while an earlier bar digs it alone. Replay attributes
+/// rows to bars the same way: a covering bar holding the block is ready, so
+/// any higher-priority bar ahead of it that is ready but does not hold the
+/// block is a priority break in its own right.
+pub(crate) fn dig_authority(input: &BlendInput, ordered: &[usize], ground: GroundId, interval: Interval) -> Option<usize> {
+    ordered.iter().copied().find(|&index| {
+        let task = &input.tasks[index];
+        task_active(task, interval) && matches!(&task.kind, TaskKind::Dig { sequence } if sequence.contains(&ground))
+    })
 }
 
 /// Whether an authored bar covers a whole calendar interval.

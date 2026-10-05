@@ -44,8 +44,9 @@
 //! Each interval is worked as one execution segment holding the whole
 //! interval. A reclaim goes where a grade decides admission - a route
 //! qualification or a minimum grade - only when the pile's released blend
-//! clears the boundary by the formulation's own margin, and never where a
-//! grade-conditional value applies, which is the model's to price.
+//! clears the boundary by the formulation's own margin. A grade-conditional
+//! value is priced on that same released blend, as the formulation prices
+//! it: a reward only clear inside its bounds, a cost unless clear outside.
 //!
 //! A stockpile's authored mode is a fact of the interval: a pile not
 //! building has no room, so routing passes it over as it would a full one,
@@ -132,8 +133,11 @@ struct State<'a> {
     /// Blocks some other loader could dig, keyed (loader, block).
     shared: BTreeMap<(usize, GroundId), bool>,
     /// Objective per tonne of each candidate: its value, the production
-    /// credit and the tie-breaks.
+    /// credit and the tie-breaks. A reclaim's grade-conditional value is
+    /// added per interval, on the blend it draws.
     weight: Vec<f64>,
+    /// Grade-conditional value earned by the rows so far.
+    conditional: f64,
     rows: BTreeMap<(usize, usize), f64>,
     durations: BTreeMap<(usize, usize), f64>,
     /// The drill and blast chain, walked beside the loaders; see
@@ -170,6 +174,9 @@ struct Bar {
     /// Dig bars only: the blocks it works, in authored order. Every block
     /// before the last was finished by an earlier solve of the interval.
     blocks: Vec<GroundId>,
+    /// Reclaim bars only: the one pile it draws this interval, once the
+    /// program has picked it from those the bar approves.
+    pile: Option<StockpileId>,
 }
 
 /// An interval's answer.
@@ -202,7 +209,21 @@ impl<'a> State<'a> {
             shared.insert((loader, ground), other);
         }
         let values: Vec<f64> = input.movements.iter().map(|candidate| candidate.value_per_tonne().unwrap_or(0.0)).collect();
-        let tie = TIE_WEIGHT * values.iter().fold(1.0_f64, |largest, value| largest.max(value.abs()));
+        // The most a reclaim's conditional costs could take off its value,
+        // so the production credit covers them too.
+        let mut worst = values.clone();
+        for entry in input.conditional_values.iter().filter(|entry| entry.value_per_tonne < 0.0) {
+            if let Some(value) = worst.get_mut(entry.candidate) {
+                *value += entry.value_per_tonne;
+            }
+        }
+        let largest = input
+            .conditional_values
+            .iter()
+            .map(|entry| entry.value_per_tonne.abs())
+            .chain(values.iter().map(|value| value.abs()))
+            .fold(1.0_f64, f64::max);
+        let tie = TIE_WEIGHT * largest;
         // Bound marginal target cost over the grades carried by actual sources. This
         // keeps production preferable even when no movement values exist.
         let ceilings = super::input::grade_ceilings(input);
@@ -218,7 +239,7 @@ impl<'a> State<'a> {
             *entry = entry.max(cost);
         }
         let target_credit: f64 = target_costs.values().sum();
-        let credit = -values.iter().copied().fold(0.0_f64, f64::min) + target_credit + tie;
+        let credit = -worst.iter().copied().fold(0.0_f64, f64::min) + target_credit + tie;
         let latest = input.movements.iter().map(|candidate| candidate.routing_preference).max().unwrap_or(0);
         let weight = input
             .movements
@@ -247,6 +268,7 @@ impl<'a> State<'a> {
             reclaims,
             shared,
             weight,
+            conditional: 0.0,
             rows: BTreeMap::new(),
             durations: BTreeMap::new(),
             chain: input.drill_blast.as_ref().map(Chain::new),
@@ -293,6 +315,7 @@ impl<'a> State<'a> {
                         task,
                         capacity: rate.dig_tph * duration,
                         blocks: self.next_block(loader, sequence, None, &opening_ground).into_iter().collect(),
+                        pile: None,
                     }),
                     TaskKind::Reclaim { maximum_t, .. } => Some(Bar {
                         loader,
@@ -301,6 +324,7 @@ impl<'a> State<'a> {
                             (rate.reclaim_tph * duration).min(maximum - self.reclaimed.get(&task).copied().unwrap_or(0.0))
                         }),
                         blocks: Vec::new(),
+                        pile: None,
                     }),
                     // The loader's highest-priority bar is a delay: it stands.
                     TaskKind::Delay => None,
@@ -348,6 +372,30 @@ impl<'a> State<'a> {
                 self.blocked.retain(|pile| !idle.contains(pile));
                 plan = self.solve(interval, &bars)?;
             }
+        }
+        // A loader reclaims one pile at a time, and the interval is one
+        // segment, so a bar the program let draw on several keeps the one it
+        // drew most from.
+        let mut narrowed = false;
+        for bar in bars.iter_mut().filter(|bar| matches!(input.tasks[bar.task].kind, TaskKind::Reclaim { .. })) {
+            let mut drawn: BTreeMap<StockpileId, f64> = BTreeMap::new();
+            for &(index, tonnes) in &plan.rows {
+                let candidate = &input.movements[index];
+                if candidate.activity == Activity::Reclaim
+                    && input.loaders[bar.loader].id == candidate.loader
+                    && let SourceId::Stockpile(pile) = candidate.source
+                    && tonnes > NEGLIGIBLE_T
+                {
+                    *drawn.entry(pile).or_default() += tonnes;
+                }
+            }
+            if drawn.len() > 1 {
+                bar.pile = drawn.into_iter().max_by(|left, right| left.1.total_cmp(&right.1)).map(|(pile, _)| pile);
+                narrowed = true;
+            }
+        }
+        if narrowed {
+            plan = self.solve(interval, &bars)?;
         }
         loop {
             let mut grew = false;
@@ -449,12 +497,14 @@ impl<'a> State<'a> {
                     }
                 }
                 TaskKind::Reclaim { approved_sources, .. } => {
-                    for pile in approved_sources {
+                    for pile in approved_sources.iter().filter(|pile| bar.pile.is_none_or(|only| only == **pile)) {
                         if !self.reclaims(*pile, interval) || self.released(*pile, interval).is_none_or(|released| released.tonnes <= NEGLIGIBLE_T) {
                             continue;
                         }
+                        let released = self.released(*pile, interval).expect("checked above");
                         for index in self.reclaim_candidates(bar.loader, *pile, bar.task, interval) {
-                            let col = problem.add_column(self.weight[index], 0.0..);
+                            let value = conditional_value(input, index, &released.blend, released.tonnes);
+                            let col = problem.add_column(self.weight[index] + value, 0.0..);
                             columns.push((index, col));
                             loader_total.push((col, 1.0));
                             pile_draw.entry(*pile).or_default().push((col, 1.0));
@@ -611,6 +661,14 @@ impl<'a> State<'a> {
         let mut drawn: BTreeMap<StockpileId, f64> = BTreeMap::new();
         let mut received: BTreeMap<StockpileId, (f64, Vec<f64>)> = BTreeMap::new();
         let mut receipts: BTreeMap<StockpileId, Vec<(usize, f64)>> = BTreeMap::new();
+        // Conditional values are judged on what each pile gave up in all,
+        // as the replay judges them.
+        let mut pile_drawn: BTreeMap<StockpileId, f64> = BTreeMap::new();
+        for (index, tonnes) in &rows {
+            if let SourceId::Stockpile(pile) = input.movements[*index].source {
+                *pile_drawn.entry(pile).or_default() += tonnes;
+            }
+        }
         for (index, tonnes) in rows {
             let candidate = &input.movements[index];
             *self.rows.entry((index, k)).or_default() += tonnes;
@@ -620,7 +678,9 @@ impl<'a> State<'a> {
                     for (task, share) in attribute_reclaim(input, candidate, interval, tonnes, &self.reclaimed) {
                         *self.reclaimed.entry(task).or_default() += share;
                     }
-                    released.get(&pile).map(|found| found.blend.clone()).unwrap_or_else(|| vec![0.0; grades])
+                    let blend = released.get(&pile).map(|found| found.blend.clone()).unwrap_or_else(|| vec![0.0; grades]);
+                    self.conditional += tonnes * conditional_value(input, index, &blend, pile_drawn.get(&pile).copied().unwrap_or(tonnes));
+                    blend
                 }
                 _ => (0..grades).map(|grade| input.grades.fraction(candidate.material, grade).unwrap_or(0.0)).collect(),
             };
@@ -815,10 +875,6 @@ impl<'a> State<'a> {
                         if short {
                             return false;
                         }
-                        // A conditional value is the model's to price.
-                        if input.conditional_values.iter().any(|entry| entry.candidate == index) {
-                            return false;
-                        }
                         if input.qualifications.is_empty() {
                             return true;
                         }
@@ -890,7 +946,7 @@ impl<'a> State<'a> {
             movements,
             durations: self.durations,
             chunks: self.chunk_rows,
-            reported_objective: reported_objective - super::replay::target_penalty(input, &self.target_totals),
+            reported_objective: reported_objective + self.conditional - super::replay::target_penalty(input, &self.target_totals),
             adjustments: ExtractionAdjustments::default(),
             drill_blast: self.chain.map(Chain::finish),
         }
@@ -919,6 +975,24 @@ fn opening_chunks(pile: &BlendPile, grades: usize) -> Vec<Chunk> {
             }
         })
         .collect()
+}
+
+/// The grade-conditional value per tonne a reclaim on candidate `index`
+/// earns from `blend`, `tonnes` of it leaving the pile, priced as the
+/// formulation prices it: a reward only clear inside its bounds, a cost
+/// unless clear outside them. Never above the published value, so a
+/// schedule's reported objective stays one the model would grant it.
+fn conditional_value(input: &BlendInput, index: usize, blend: &[f64], tonnes: f64) -> f64 {
+    input
+        .conditional_values
+        .iter()
+        .filter(|entry| entry.candidate == index)
+        .filter(|entry| {
+            let (holds, near) = (entry.holds(blend), entry.near_boundary(blend, tonnes));
+            if entry.value_per_tonne >= 0.0 { holds && !near } else { holds || near }
+        })
+        .map(|entry| entry.value_per_tonne)
+        .sum()
 }
 
 /// Whether some alternative of `qualification` holds on `blend` with `band`
