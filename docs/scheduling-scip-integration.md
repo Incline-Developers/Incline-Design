@@ -99,9 +99,18 @@ an exact discontinuous authored-value problem.
   every chunked pile enough chunks for the dug material its enabled rules
   can send it. Only live chunks cost anything: the hourly dispatch publishes
   rows for the receiving chunk and those holding material, the replay walks
-  each chunk's state forward from its rows, and the formulation fixes empty
-  any chunk emptied before its input begins or not yet reachable by the
-  receipts so far, with no receipt columns or reclaim-order rows.
+  each chunk's state forward from its rows, and in the formulation a chunk
+  emptied before its input begins, or not yet reachable by the receipts so
+  far, is a constant with no columns or rows at all. A chunk's receipts are
+  one column per material rather than per delivering movement, split
+  between the movements when the solution is read back, and FIFO/LIFO is a
+  running bound along the chunks in each interval rather than a row per
+  pair. On a day of a 125-chunk pile that took the model from 48,894
+  columns and 92,439 rows to 5,070 and 7,945, with the same solutions. A
+  reached chunk stays in play to the end of the input, though, since when
+  it will be emptied is the model's to decide: over 1,202 hours from empty
+  that pile still reaches every chunk within a week, and its whole-horizon
+  model does not fit in 6 GB. Its day-by-day windows do.
 - Stockpile-to-stockpile rehandle is excluded with a capture note rather than
   silently assigning zero grades.
 - Mixed dig blocks move in their measured proportions; opening stock is included
@@ -858,8 +867,9 @@ The chunk rules are the formulation's:
   the next, and the next chunk starts receiving then.
 - **Reclaiming:** reclaim draws only the chunk the authored order releases,
   at that chunk's own blend - open or closed, once its last delivery has
-  rested. Under FIFO that is the first chunk holding material, if rested;
-  under LIFO, the last rested chunk holding material. A draw within 1e-6 t of emptying the chunk empties it, so the
+  rested. Under FIFO that is the first chunk holding material, under LIFO
+  the last; while it rests the pile releases nothing, rather than an older
+  or newer chunk behind it. A draw within 1e-6 t of emptying the chunk empties it, so the
   order rules see it as empty.
 - **Admission:** reclaim admission by grade is judged on that chunk's blend,
   with the formulation's margin.

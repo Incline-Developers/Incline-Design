@@ -14,7 +14,7 @@ use super::input::{
     authored_tasks, block_outlets, delivers_to_pile, dig_authority, flat_cell, interval_rate, loader_rate, task_active, task_authorises, task_operable,
 };
 use crate::model::schedule::optimisation::{
-    Activity, Destination, DestinationId, DestinationKind, GroundId, Interval, LoaderId, MovementCandidate, ReclaimOrder, SourceId, StockpileId, TaskKind,
+    Activity, Destination, DestinationId, DestinationKind, GroundId, Interval, LoaderId, MaterialId, MovementCandidate, ReclaimOrder, SourceId, StockpileId, TaskKind,
 };
 
 /// Column handles, kept so the solution can be read back by meaning rather
@@ -57,8 +57,13 @@ pub(crate) struct BlendColumns<V> {
     /// Whether each chunk of a pile with a rest received in the interval,
     /// truthful both ways: set by a delivery and only by one.
     pub(crate) chunk_fresh: BTreeMap<(StockpileId, usize, usize), V>,
-    /// Keyed (pile, chunk, interval, movement).
-    pub(crate) chunk_recv: BTreeMap<(StockpileId, usize, usize, usize), V>,
+    /// A chunk's receipts of a material, keyed (pile, chunk, interval,
+    /// material). The movements that bring it are
+    /// [`Self::chunk_recv_candidates`].
+    pub(crate) chunk_recv: BTreeMap<(StockpileId, usize, usize, MaterialId), V>,
+    /// The candidates delivering each material to each chunked pile, in
+    /// candidate order, for splitting a chunk's receipts between them.
+    pub(crate) chunk_recv_candidates: BTreeMap<(StockpileId, MaterialId), Vec<usize>>,
     /// Tonnes paid under a grade-conditional value, keyed (position in
     /// [`BlendInput::conditional_values`], interval, segment). Read back only
     /// to value part of a horizon on the model's own terms.
@@ -84,6 +89,7 @@ impl<V> BlendColumns<V> {
             chunk_empty: BTreeMap::new(),
             chunk_fresh: BTreeMap::new(),
             chunk_recv: BTreeMap::new(),
+            chunk_recv_candidates: BTreeMap::new(),
             paid: BTreeMap::new(),
         }
     }
@@ -894,9 +900,9 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
             terms.push((flag.clone(), -receipt_m));
             rows.leq(terms, 0.0, &format!("buildlink_{}_{k}", pile.id.0));
             if pile.rest_h > 0.0 {
-                // building <= receipts / REST_RECEIPT_T
+                // building <= receipts / REST_FLAG_T
                 let mut terms: Vec<_> = receipts.into_iter().map(|(column, _)| (column, -1.0)).collect();
-                terms.push((flag.clone(), REST_RECEIPT_T));
+                terms.push((flag.clone(), REST_FLAG_T));
                 rows.leq(terms, 0.0, &format!("buildtrue_{}_{k}", pile.id.0));
             }
             building.insert((pile.id, k), flag);
@@ -964,26 +970,35 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
             let mut terms: Vec<_> = opening.into_iter().map(|(column, coefficient)| (column, coefficient / pile.capacity_t)).collect();
             terms.push((flag.clone(), -1.0));
             rows.leq(terms, 0.0, &format!("stocklink_{}_{k}", pile.id.0));
-            // A chunked pile has work for a reclaim bar only in a chunk it
-            // releases - rested since its last delivery - and that is not
-            // empty. The same one-way truth: a released chunk holding
-            // material forces it to 1.
+            // A chunked pile has work for a reclaim bar only in the chunk
+            // next in its order - the first holding material under FIFO, the
+            // last under LIFO - once rested since its last delivery. While
+            // that chunk rests the pile has none. The same one-way truth: a
+            // released chunk holding material, with every chunk ahead of it
+            // in order empty, forces it to 1.
             if !pile.chunks.is_empty() {
                 let available = rows.binary(&format!("availchunk_{}_{k}", pile.id.0));
                 rows.leq(vec![(available.clone(), 1.0), (flag, -1.0)], 0.0, &format!("availchunkstock_{}_{k}", pile.id.0));
+                let voids: Vec<Option<R::Var>> = (0..pile.chunks.len()).map(|c| rows.columns().chunk_empty.get(&(pile.id, c, k)).cloned()).collect();
                 for c in 0..pile.chunks.len() {
-                    let Some(void) = rows.columns().chunk_empty.get(&(pile.id, c, k)).cloned() else {
+                    let Some(void) = voids[c].clone() else {
                         continue;
                     };
-                    // available >= 1 - empty - (deliveries still resting)
+                    // available >= 1 - empty - (deliveries still resting) - (chunks ahead holding)
                     let fresh = match chunk_released(pile, c, k, input, &rows.columns().chunk_fresh) {
                         Released::Resting(fresh) => fresh,
                         Released::Always => Vec::new(),
                         Released::Never => continue,
                     };
+                    let ahead: Vec<R::Var> = match pile.order {
+                        ReclaimOrder::Fifo => voids[..c].iter().flatten().cloned().collect(),
+                        ReclaimOrder::Lifo => voids[c + 1..].iter().flatten().cloned().collect(),
+                    };
                     let mut terms = vec![(available.clone(), 1.0), (void, 1.0)];
                     terms.extend(fresh.into_iter().map(|flag| (flag, 1.0)));
-                    rows.geq(terms, 1.0, &format!("availchunk_{}_{c}_{k}", pile.id.0));
+                    let rhs = 1.0 - ahead.len() as f64;
+                    terms.extend(ahead.into_iter().map(|void| (void, -1.0)));
+                    rows.geq(terms, rhs, &format!("availchunk_{}_{c}_{k}", pile.id.0));
                 }
                 stock.insert((pile.id, k), available);
                 continue;
@@ -1664,6 +1679,16 @@ type BlockOutlets = (usize, Vec<Vec<DestinationId>>);
 /// is a dig bar's current one in the formulation's readiness rows.
 const PREFIX_DUST_T: f64 = 1e-3;
 
+/// The least an interval's deliveries must total for the model to count
+/// them as restarting a rest: twice what the replay and the dispatcher
+/// count, so a delivery the model counts is one they count too, even with
+/// the solver's feasibility tolerance taken off it. Below it, and above the
+/// flag's own integrality leak, a delivery is impossible rather than
+/// ambiguous. At exactly the replay's figure the solver could otherwise set
+/// a flag the replay does not see, and did: it put 1e-4 t into a full LIFO
+/// chunk to call it resting and draw an older one.
+const REST_FLAG_T: f64 = 2.0 * REST_RECEIPT_T;
+
 /// A 0/1 quantity that is either known or a column.
 #[derive(Clone)]
 enum Flag<V> {
@@ -2228,55 +2253,84 @@ fn chunked_pile<R: Rows>(
     }
     let active = |c: usize, k: usize| !dead[c] && k >= earliest[c];
 
-    // Per chunk and interval state.
-    let mut open_t = vec![vec![None; horizon]; count];
-    let mut open_q = vec![vec![vec![None; horizon]; grades]; count];
-    let mut recl_t = vec![vec![None; horizon]; count];
-    let mut recl_q = vec![vec![vec![None; horizon]; grades]; count];
-    let mut closed = vec![vec![None; horizon]; count];
-    let mut empty = vec![vec![None; horizon]; count];
-    // Receipts of movement m into chunk c during interval k.
-    let mut recv: BTreeMap<(usize, usize, usize), R::Var> = BTreeMap::new();
+    // A chunk takes a material's tonnes the same whichever movement brings
+    // them, so its receipts are kept per material, and the per-movement split
+    // the replay reads is recovered when the solution is read back.
+    let mut by_material: BTreeMap<MaterialId, Vec<usize>> = BTreeMap::new();
+    for &m in &delivering {
+        by_material.entry(input.movements[m].material).or_default().push(m);
+    }
+    for (material, candidates) in &by_material {
+        rows.columns().chunk_recv_candidates.insert((pile.id, *material), candidates.clone());
+    }
+    // The materials some movement can bring in each interval.
+    let mut arriving: Vec<Vec<MaterialId>> = vec![Vec::new(); horizon];
+    for (k, materials) in arriving.iter_mut().enumerate() {
+        for (material, candidates) in &by_material {
+            if candidates
+                .iter()
+                .any(|&m| (0..segments).any(|segment| rows.columns().movement.contains_key(&(m, k, segment))))
+            {
+                materials.push(*material);
+            }
+        }
+    }
+
+    // Per chunk and interval state, as columns only where the chunk can be
+    // in play. Out of play it is a constant: holding nothing, drawing
+    // nothing, empty, and closed only if it closed before the input began.
+    let mut open_t: Vec<Vec<Option<R::Var>>> = vec![vec![None; horizon]; count];
+    let mut open_q: Vec<Vec<Vec<Option<R::Var>>>> = vec![vec![vec![None; horizon]; grades]; count];
+    let mut recl_t: Vec<Vec<Option<R::Var>>> = vec![vec![None; horizon]; count];
+    let mut recl_q: Vec<Vec<Vec<Option<R::Var>>>> = vec![vec![vec![None; horizon]; grades]; count];
+    let mut closed: Vec<Vec<Flag<R::Var>>> = (0..count).map(|c| vec![if dead[c] { Flag::One } else { Flag::Zero }; horizon]).collect();
+    let mut empty: Vec<Vec<Flag<R::Var>>> = vec![vec![Flag::One; horizon]; count];
+    // Receipts of a material into chunk c during interval k.
+    let mut recv: BTreeMap<(MaterialId, usize, usize), R::Var> = BTreeMap::new();
 
     for c in 0..count {
         if rows.cancelled() {
             return Err(FormulationCancelled);
         }
         let cap = pile.chunks[c];
-        for k in 0..horizon {
+        for k in (0..horizon).filter(|&k| active(c, k)) {
             if rows.cancelled() {
                 return Err(FormulationCancelled);
             }
-            open_t[c][k] = Some(rows.cont(cap, &format!("cOpenT_{}_{c}_{k}", pile.id.0)));
+            let open = rows.cont(cap, &format!("cOpenT_{}_{c}_{k}", pile.id.0));
             for g in 0..grades {
                 open_q[c][g][k] = Some(rows.cont(cap * ceilings[g], &format!("cOpenQ_{}_{c}_{k}_{g}", pile.id.0)));
                 recl_q[c][g][k] = Some(rows.cont(cap * ceilings[g], &format!("cReclQ_{}_{c}_{k}_{g}", pile.id.0)));
             }
-            recl_t[c][k] = Some(rows.cont(cap, &format!("cReclT_{}_{c}_{k}", pile.id.0)));
-            closed[c][k] = Some(rows.binary(&format!("cClosed_{}_{c}_{k}", pile.id.0)));
-            empty[c][k] = Some(rows.binary(&format!("cEmpty_{}_{c}_{k}", pile.id.0)));
-            rows.columns().chunk_open_t.insert((pile.id, c, k), open_t[c][k].clone().expect("just created"));
-            rows.columns().chunk_recl_t.insert((pile.id, c, k), recl_t[c][k].clone().expect("just created"));
-            rows.columns().chunk_closed.insert((pile.id, c, k), closed[c][k].clone().expect("just created"));
-            rows.columns().chunk_empty.insert((pile.id, c, k), empty[c][k].clone().expect("just created"));
+            let draw = rows.cont(cap, &format!("cReclT_{}_{c}_{k}", pile.id.0));
+            let close = rows.binary(&format!("cClosed_{}_{c}_{k}", pile.id.0));
+            let void = rows.binary(&format!("cEmpty_{}_{c}_{k}", pile.id.0));
+            rows.columns().chunk_open_t.insert((pile.id, c, k), open.clone());
+            rows.columns().chunk_recl_t.insert((pile.id, c, k), draw.clone());
+            rows.columns().chunk_closed.insert((pile.id, c, k), close.clone());
+            rows.columns().chunk_empty.insert((pile.id, c, k), void.clone());
+            open_t[c][k] = Some(open);
+            recl_t[c][k] = Some(draw);
+            closed[c][k] = Flag::Var(close);
+            empty[c][k] = Flag::Var(void);
             let mut received = Vec::new();
-            for &m in delivering.iter().filter(|_| active(c, k)) {
-                let column = rows.cont(cap, &format!("cRecv_{}_{c}_{k}_{m}", pile.id.0));
-                rows.columns().chunk_recv.insert((pile.id, c, k, m), column.clone());
-                recv.insert((m, c, k), column.clone());
+            for &material in &arriving[k] {
+                let column = rows.cont(cap, &format!("cRecv_{}_{c}_{k}_{}", pile.id.0, material.0));
+                rows.columns().chunk_recv.insert((pile.id, c, k, material), column.clone());
+                recv.insert((material, c, k), column.clone());
                 received.push(column);
             }
             // With a rest, whether the chunk received in this interval, set
             // by a delivery and only by one, so a reclaim bar can neither
             // draw material still resting nor claim a rested chunk is not:
-            //   receipts / cap <= fresh <= receipts / REST_RECEIPT_T
+            //   receipts / cap <= fresh <= receipts / REST_FLAG_T
             if pile.rest_h > 0.0 && !received.is_empty() {
                 let fresh = rows.binary(&format!("cFresh_{}_{c}_{k}", pile.id.0));
                 let mut terms: Vec<_> = received.iter().map(|column| (column.clone(), 1.0 / cap)).collect();
                 terms.push((fresh.clone(), -1.0));
                 rows.leq(terms, 0.0, &format!("cFreshLink_{}_{c}_{k}", pile.id.0));
                 let mut terms: Vec<_> = received.into_iter().map(|column| (column, -1.0)).collect();
-                terms.push((fresh.clone(), REST_RECEIPT_T));
+                terms.push((fresh.clone(), REST_FLAG_T));
                 rows.leq(terms, 0.0, &format!("cFreshTrue_{}_{c}_{k}", pile.id.0));
                 rows.columns().chunk_fresh.insert((pile.id, c, k), fresh);
             }
@@ -2284,6 +2338,18 @@ fn chunked_pile<R: Rows>(
     }
 
     let take = |slot: &Option<R::Var>| slot.clone().expect("chunk column");
+    let var = |flag: &Flag<R::Var>| match flag {
+        Flag::Var(column) => column.clone(),
+        _ => unreachable!("a chunk in play has state columns"),
+    };
+    // A chunk's receipts in an interval, across materials.
+    let received = |c: usize, k: usize, coefficient: f64| -> Vec<(R::Var, f64)> {
+        arriving[k]
+            .iter()
+            .filter_map(|material| recv.get(&(*material, c, k)))
+            .map(|column| (column.clone(), coefficient))
+            .collect()
+    };
 
     // Tightest physical bounds available for the lifecycle indicator rows.
     //
@@ -2294,17 +2360,6 @@ fn chunked_pile<R: Rows>(
     // interval makes it as small as the model can make it. The replay
     // publishes whatever still leaks rather than hiding it - see
     // `replay::ReplayReport::chunk_dust_tonnes_t`.
-    let interval_receipt: Vec<f64> = input
-        .intervals
-        .iter()
-        .map(|interval| {
-            delivering
-                .iter()
-                .filter_map(|&m| loader_rate(input, &input.movements[m], interval.index))
-                .map(|rate| rate * interval.duration_h())
-                .fold(0.0_f64, f64::max)
-        })
-        .collect();
     let interval_draw: Vec<f64> = input
         .intervals
         .iter()
@@ -2324,27 +2379,14 @@ fn chunked_pile<R: Rows>(
             return Err(FormulationCancelled);
         }
         let cap = pile.chunks[c];
-        for k in 0..horizon {
+        for k in (0..horizon).filter(|&k| active(c, k)) {
             if rows.cancelled() {
                 return Err(FormulationCancelled);
             }
             let open = take(&open_t[c][k]);
-            let close = take(&closed[c][k]);
-            let void = take(&empty[c][k]);
+            let close = var(&closed[c][k]);
+            let void = var(&empty[c][k]);
             let draw = take(&recl_t[c][k]);
-
-            // Out of play: empty, and open until it is reached.
-            if !active(c, k) {
-                rows.eq(vec![(open.clone(), 1.0)], 0.0, &format!("cIdleT_{}_{c}_{k}", pile.id.0));
-                rows.eq(vec![(draw.clone(), 1.0)], 0.0, &format!("cIdleR_{}_{c}_{k}", pile.id.0));
-                for g in 0..grades {
-                    rows.eq(vec![(take(&open_q[c][g][k]), 1.0)], 0.0, &format!("cIdleQ_{}_{c}_{k}_{g}", pile.id.0));
-                    rows.eq(vec![(take(&recl_q[c][g][k]), 1.0)], 0.0, &format!("cIdleD_{}_{c}_{k}_{g}", pile.id.0));
-                }
-                if !dead[c] {
-                    rows.eq(vec![(close.clone(), 1.0)], 0.0, &format!("cIdleC_{}_{c}_{k}", pile.id.0));
-                }
-            }
 
             // A chunk holding authored opening material is closed from the
             // start, so it is immediately reclaimable and the authored order
@@ -2362,56 +2404,65 @@ fn chunked_pile<R: Rows>(
             // rule below but breaks sequential fill outright. The replay
             // found exactly that on the dynamic LIFO fixture.
             if c > 0 {
-                let previous = take(&closed[c - 1][k]);
-                rows.leq(vec![(close.clone(), 1.0), (previous, -1.0)], 0.0, &format!("cCloseSeq_{}_{c}_{k}", pile.id.0));
+                match &closed[c - 1][k] {
+                    Flag::Var(previous) => {
+                        rows.leq(vec![(close.clone(), 1.0), (previous.clone(), -1.0)], 0.0, &format!("cCloseSeq_{}_{c}_{k}", pile.id.0));
+                    }
+                    Flag::Zero => rows.leq(vec![(close.clone(), 1.0)], 0.0, &format!("cCloseSeq_{}_{c}_{k}", pile.id.0)),
+                    Flag::One => {}
+                }
             }
 
             // A chunk closes only when full - its open tonnes within
             // `CHUNK_FULL_T` of its capacity:
             //   closed[k] - closed[k-1] <= open_t[k] / (cap - CHUNK_FULL_T)
+            // Before it was in play it was open.
             if !pile.chunk_starts_closed(c) && cap > CHUNK_FULL_T {
                 let mut terms = vec![(close.clone(), 1.0), (open.clone(), -1.0 / (cap - CHUNK_FULL_T))];
-                if k > 0 {
-                    terms.push((take(&closed[c][k - 1]), -1.0));
+                if k > 0
+                    && let Flag::Var(before) = &closed[c][k - 1]
+                {
+                    terms.push((before.clone(), -1.0));
                 }
                 rows.leq(terms, 0.0, &format!("cCloseFull_{}_{c}_{k}", pile.id.0));
             }
 
             // Closing is monotone: a closed chunk never reopens, so a slot is
-            // never reused.
+            // never reused. A chunk in play stays in play.
             if k + 1 < horizon {
-                let next = take(&closed[c][k + 1]);
+                let next = var(&closed[c][k + 1]);
                 rows.leq(vec![(close.clone(), 1.0), (next, -1.0)], 0.0, &format!("cMono_{}_{c}_{k}", pile.id.0));
             }
 
-            // Opening state.
-            if k == 0 {
-                let value = opening.get(c).map(|(tonnes, _)| *tonnes).unwrap_or(0.0);
-                rows.eq(vec![(open.clone(), 1.0)], value, &format!("cT0_{}_{c}", pile.id.0));
+            // Opening state: the authored opening, the interval before, or
+            // nothing when it was out of play.
+            if k == 0 || !active(c, k - 1) {
+                let value = if k == 0 { opening.get(c).map(|(tonnes, _)| *tonnes).unwrap_or(0.0) } else { 0.0 };
+                rows.eq(vec![(open.clone(), 1.0)], value, &format!("cT0_{}_{c}_{k}", pile.id.0));
                 for g in 0..grades {
-                    let value = opening.get(c).and_then(|(_, contained)| contained.get(g).copied()).unwrap_or(0.0);
-                    rows.eq(vec![(take(&open_q[c][g][0]), 1.0)], value, &format!("cQ0_{}_{c}_{g}", pile.id.0));
+                    let value = if k == 0 {
+                        opening.get(c).and_then(|(_, contained)| contained.get(g).copied()).unwrap_or(0.0)
+                    } else {
+                        0.0
+                    };
+                    rows.eq(vec![(take(&open_q[c][g][k]), 1.0)], value, &format!("cQ0_{}_{c}_{k}_{g}", pile.id.0));
                 }
             } else {
                 let prior = take(&open_t[c][k - 1]);
                 let prior_draw = take(&recl_t[c][k - 1]);
                 let mut terms = vec![(open.clone(), 1.0), (prior, -1.0), (prior_draw, 1.0)];
-                for &m in &delivering {
-                    if let Some(column) = recv.get(&(m, c, k - 1)) {
-                        terms.push((column.clone(), -1.0));
-                    }
-                }
+                terms.extend(received(c, k - 1, -1.0));
                 rows.eq(terms, 0.0, &format!("cTbal_{}_{c}_{k}", pile.id.0));
 
                 for g in 0..grades {
                     let prior = take(&open_q[c][g][k - 1]);
                     let prior_draw = take(&recl_q[c][g][k - 1]);
                     let mut terms = vec![(take(&open_q[c][g][k]), 1.0), (prior, -1.0), (prior_draw, 1.0)];
-                    for &m in &delivering {
-                        let Some(fraction) = input.grades.fraction(input.movements[m].material, g) else {
+                    for &material in &arriving[k - 1] {
+                        let Some(fraction) = input.grades.fraction(material, g) else {
                             continue;
                         };
-                        if let Some(column) = recv.get(&(m, c, k - 1)) {
+                        if let Some(column) = recv.get(&(material, c, k - 1)) {
                             terms.push((column.clone(), -fraction));
                         }
                     }
@@ -2421,23 +2472,26 @@ fn chunked_pile<R: Rows>(
 
             // Receipts require an OPEN chunk with room as the interval opens,
             // and sequential fill requires the previous one to be closed.
-            let receipt_m = cap.min(interval_receipt[k]).max(0.0);
+            let receipt_m = cap.min(pile_receipt[k]).max(0.0);
             let draw_m = cap.min(interval_draw[k]).max(0.0);
-            let mut room = vec![(open.clone(), 1.0)];
-            room.extend(delivering.iter().filter_map(|&m| recv.get(&(m, c, k)).map(|column| (column.clone(), 1.0))));
-            if room.len() > 1 {
+            let receipts = received(c, k, 1.0);
+            if !receipts.is_empty() {
+                let mut room = vec![(open.clone(), 1.0)];
+                room.extend(receipts.iter().cloned());
                 rows.leq(room, cap, &format!("cRoom_{}_{c}_{k}", pile.id.0));
-            }
-            for &m in &delivering {
-                let Some(column) = recv.get(&(m, c, k)).cloned() else { continue };
-                rows.leq(
-                    vec![(column.clone(), 1.0), (close.clone(), receipt_m)],
-                    receipt_m,
-                    &format!("cRecvOpen_{}_{c}_{k}_{m}", pile.id.0),
-                );
+                let mut terms = receipts.clone();
+                terms.push((close.clone(), receipt_m));
+                rows.leq(terms, receipt_m, &format!("cRecvOpen_{}_{c}_{k}", pile.id.0));
                 if c > 0 {
-                    let previous = take(&closed[c - 1][k]);
-                    rows.leq(vec![(column, 1.0), (previous, -receipt_m)], 0.0, &format!("cRecvSeq_{}_{c}_{k}_{m}", pile.id.0));
+                    match &closed[c - 1][k] {
+                        Flag::Var(previous) => {
+                            let mut terms = receipts;
+                            terms.push((previous.clone(), -receipt_m));
+                            rows.leq(terms, 0.0, &format!("cRecvSeq_{}_{c}_{k}", pile.id.0));
+                        }
+                        Flag::Zero => rows.leq(receipts, 0.0, &format!("cRecvSeq_{}_{c}_{k}", pile.id.0)),
+                        Flag::One => {}
+                    }
                 }
             }
 
@@ -2457,12 +2511,6 @@ fn chunked_pile<R: Rows>(
 
             // Emptiness indicator: open tonnes > 0 forces `empty` to 0.
             rows.leq(vec![(open.clone(), 1.0), (void.clone(), cap)], cap, &format!("cEmptyLink_{}_{c}_{k}", pile.id.0));
-
-            // A chunk out of play is fixed empty: nothing to mix, and no
-            // order to keep.
-            if !active(c, k) {
-                continue;
-            }
 
             // Per-chunk perfect mixing, with the same grade-box rows that make
             // it sound at zero inventory.
@@ -2485,33 +2533,57 @@ fn chunked_pile<R: Rows>(
                 rows.leq(vec![(q_draw, 1.0), (draw.clone(), -ceilings[g])], 0.0, &format!("cDrawBox_{}_{c}_{k}_{g}", pile.id.0));
                 rows.leq(vec![(q_open, 1.0), (open.clone(), -ceilings[g])], 0.0, &format!("cOpenBox_{}_{c}_{k}_{g}", pile.id.0));
             }
+        }
+    }
 
-            // Authored order among released, non-empty chunks.
-            match pile.order {
-                ReclaimOrder::Fifo => {
-                    // Every older chunk must be empty first.
-                    for j in (0..c).filter(|&j| active(j, k)) {
-                        let older = take(&empty[j][k]);
-                        rows.leq(vec![(draw.clone(), 1.0), (older, -draw_m)], 0.0, &format!("cFifo_{}_{c}_{j}_{k}", pile.id.0));
-                    }
-                }
-                ReclaimOrder::Lifo => {
-                    // Every newer chunk must be empty OR not yet released.
-                    for j in ((c + 1)..count).filter(|&j| active(j, k)) {
-                        let newer = take(&empty[j][k]);
-                        match chunk_released(pile, j, k, input, &rows.columns().chunk_fresh) {
-                            // draw <= draw_m * (empty_j + deliveries to j still resting)
-                            Released::Resting(fresh) => {
-                                let mut terms = vec![(draw.clone(), 1.0), (newer, -draw_m)];
-                                terms.extend(fresh.into_iter().map(|flag| (flag, -draw_m)));
-                                rows.leq(terms, 0.0, &format!("cLifo_{}_{c}_{j}_{k}", pile.id.0));
-                            }
-                            Released::Always => rows.leq(vec![(draw.clone(), 1.0), (newer, -draw_m)], 0.0, &format!("cLifo_{}_{c}_{j}_{k}", pile.id.0)),
-                            Released::Never => {}
-                        }
-                    }
-                }
+    // Authored order: under FIFO every older chunk must be empty first,
+    // under LIFO every newer one - resting or not, so a chunk still resting
+    // holds the pile rather than letting a loader dig in behind it. Rather
+    // than a row for every pair, a running bound carries the condition along
+    // the chunks in each interval, in order:
+    //
+    //   clear[c] <= clear[c-1],  clear[c] <= empty[c-1],  draw[c] <= draw_m * clear[c]
+    //
+    // where clear is a continuous column at most 1. clear[c] can reach the
+    // least of every earlier `empty` and no more, so a draw is allowed
+    // exactly when the pairwise rows allowed it, in the relaxation as in
+    // integers, with rows that grow with the chunks rather than with their
+    // pairs. A chunk out of play holds nothing, so lets the order past
+    // without a row.
+    for k in 0..horizon {
+        if rows.cancelled() {
+            return Err(FormulationCancelled);
+        }
+        let draw_m = pile.chunks.iter().copied().fold(0.0_f64, f64::max).min(interval_draw[k]).max(0.0);
+        let order: Vec<usize> = match pile.order {
+            ReclaimOrder::Fifo => (0..count).collect(),
+            ReclaimOrder::Lifo => (0..count).rev().collect(),
+        };
+        // The bound carried to the next chunk in order; `None` while every
+        // chunk passed lets the order past unconditionally.
+        let mut carried: Option<R::Var> = None;
+        let mut passed: Option<usize> = None;
+        for &c in &order {
+            let previous = passed;
+            if !active(c, k) {
+                continue;
             }
+            passed = Some(c);
+            let Some(previous) = previous else { continue };
+            // The chunk before in order lets the order past once empty.
+            let draw = take(&recl_t[c][k]);
+            let chunk_m = pile.chunks[c].min(draw_m);
+            let clear = rows.cont(1.0, &format!("cOrder_{}_{c}_{k}", pile.id.0));
+            rows.leq(
+                vec![(clear.clone(), 1.0), (var(&empty[previous][k]), -1.0)],
+                0.0,
+                &format!("cOrderNext_{}_{c}_{k}", pile.id.0),
+            );
+            if let Some(before) = carried.take() {
+                rows.leq(vec![(clear.clone(), 1.0), (before, -1.0)], 0.0, &format!("cOrderRun_{}_{c}_{k}", pile.id.0));
+            }
+            rows.leq(vec![(draw, 1.0), (clear.clone(), -chunk_m)], 0.0, &format!("cOrderDraw_{}_{c}_{k}", pile.id.0));
+            carried = Some(clear);
         }
     }
 
@@ -2529,39 +2601,36 @@ fn chunked_pile<R: Rows>(
         if rows.cancelled() {
             return Err(FormulationCancelled);
         }
-        let opening: Vec<(R::Var, f64)> = (0..count).map(|c| (take(&open_t[c][k]), 1.0)).collect();
+        let opening: Vec<(R::Var, f64)> = (0..count).filter_map(|c| open_t[c][k].clone()).map(|column| (column, 1.0)).collect();
         occupancy_rows(rows, input, pile, k, segments, destinations, opening, receipt_peak);
     }
 
-    // Tie each delivering movement's chunk split to its own tonnage, and
+    // Tie each material's chunk receipts to the movements that bring it, and
     // publish pile-level reclaim aggregates so the rest of the model - the
     // movement sum, reclaim caps and grade limits - is unchanged by chunking.
     for k in 0..horizon {
         if rows.cancelled() {
             return Err(FormulationCancelled);
         }
-        for &m in &delivering {
+        for &material in &arriving[k] {
             if rows.cancelled() {
                 return Err(FormulationCancelled);
             }
-            let mut terms: Vec<(R::Var, f64)> = (0..count).filter_map(|c| recv.get(&(m, c, k)).map(|column| (column.clone(), 1.0))).collect();
-            for segment in 0..segments {
-                if let Some(column) = rows.columns().movement.get(&(m, k, segment)).cloned() {
-                    terms.push((column, -1.0));
+            let mut terms: Vec<(R::Var, f64)> = (0..count).filter_map(|c| recv.get(&(material, c, k)).map(|column| (column.clone(), 1.0))).collect();
+            for &m in &by_material[&material] {
+                for segment in 0..segments {
+                    if let Some(column) = rows.columns().movement.get(&(m, k, segment)).cloned() {
+                        terms.push((column, -1.0));
+                    }
                 }
             }
-            rows.eq(terms, 0.0, &format!("cSplit_{}_{k}_{m}", pile.id.0));
+            rows.eq(terms, 0.0, &format!("cSplit_{}_{k}_{}", pile.id.0, material.0));
         }
 
         let pile_draw = rows.cont(pile.capacity_t, &format!("reclT_{}_{k}", pile.id.0));
         rows.columns().recl_t.insert((pile.id, k), pile_draw.clone());
         let mut terms = vec![(pile_draw, 1.0)];
-        for c in 0..count {
-            if rows.cancelled() {
-                return Err(FormulationCancelled);
-            }
-            terms.push((take(&recl_t[c][k]), -1.0));
-        }
+        terms.extend((0..count).filter_map(|c| recl_t[c][k].clone()).map(|column| (column, -1.0)));
         rows.eq(terms, 0.0, &format!("cDrawSum_{}_{k}", pile.id.0));
 
         for g in 0..grades {
@@ -2571,9 +2640,7 @@ fn chunked_pile<R: Rows>(
             let pile_q = rows.cont(pile.capacity_t * ceilings[g], &format!("reclQ_{}_{k}_{g}", pile.id.0));
             rows.columns().recl_q.insert((pile.id, k, g), pile_q.clone());
             let mut terms = vec![(pile_q, 1.0)];
-            for c in 0..count {
-                terms.push((take(&recl_q[c][g][k]), -1.0));
-            }
+            terms.extend((0..count).filter_map(|c| recl_q[c][g][k].clone()).map(|column| (column, -1.0)));
             rows.eq(terms, 0.0, &format!("cDrawQSum_{}_{k}_{g}", pile.id.0));
         }
 

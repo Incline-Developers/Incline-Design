@@ -1623,12 +1623,14 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> ChunkDra
             // Open or closed, a chunk is released once its last delivery has
             // rested.
             let released = |chunk: usize| pile.chunk_rested(chunk, received_h[chunk], at);
-            let held: f64 = here
-                .iter()
-                .map(|&chunk| published[&(pile.id, chunk, interval)])
-                .filter(|state| released(state.chunk))
-                .map(|state| state.open_t)
-                .sum();
+            // What the pile releases: the chunk next in order, once rested.
+            // While it rests the pile releases nothing.
+            let holding = |chunk: &&usize| published[&(pile.id, **chunk, interval)].open_t > dust;
+            let next = match pile.order {
+                crate::model::schedule::optimisation::ReclaimOrder::Fifo => here.iter().find(holding),
+                crate::model::schedule::optimisation::ReclaimOrder::Lifo => here.iter().rev().find(holding),
+            };
+            let held = next.filter(|&&chunk| released(chunk)).map_or(0.0, |&chunk| published[&(pile.id, chunk, interval)].open_t);
             released_t.insert((pile.id, interval), held);
 
             for &chunk in here {
@@ -1700,10 +1702,9 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> ChunkDra
                         }
                         crate::model::schedule::optimisation::ReclaimOrder::Lifo => {
                             for &later in here.iter().filter(|&&other| other > chunk) {
-                                let entry = published[&(pile.id, later, interval)];
-                                if released(later) && entry.open_t > dust {
+                                if published[&(pile.id, later, interval)].open_t > dust {
                                     checker.report.issues.push(format!(
-                                        "LIFO violated: pile {} drew chunk {chunk} in interval {interval} while released chunk {later} still held material",
+                                        "LIFO violated: pile {} drew chunk {chunk} in interval {interval} while chunk {later} still held material",
                                         pile.id.0
                                     ));
                                 }

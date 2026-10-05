@@ -86,8 +86,14 @@ never strands room. The hourly dispatch, the model and the replay all apply
 this. Before, a pile stopping building closed its partly filled chunk, and
 a pile that alternated could run out of chunks.
 
-Any chunk holding material can be reclaimed, open or closed, once its last
-delivery has rested, in the pile's FIFO or LIFO order. In an hour a chunk
+Reclaim draws the chunk next in the pile's order - under FIFO the oldest
+holding material, under LIFO the newest - open or closed, once its last
+delivery has rested. While that chunk rests the pile cannot be reclaimed at
+all: a loader waits at the face it is to load from rather than digging in
+behind it, so with a rest a LIFO pile still being tipped on is not reclaimed
+until tipping stops for the rest. With no rest, a chunk can be tipped on and
+drawn in the same hour, the pile's Build and reclaim at once setting
+allowing. In an hour a chunk
 both receives and is drawn, it takes no more than the room it had as the
 hour started. A Reclaim bar on a chunked pile has work only while a chunk is
 released - rested and holding material - not merely while the pile holds
@@ -126,10 +132,10 @@ Two settings sit with the pile in **Setup → Stockpiles** and hold every day:
   every hour it receives anything, and the pile cannot be reclaimed until
   it has received nothing for the whole rest; while it rests a Reclaim bar on
   it has no work, so its loader moves to its next bar. For a chunked pile
-  each chunk rests from the last hour it received anything, and a resting
-  chunk counts as not yet released for FIFO and LIFO; a Reclaim bar on a
-  chunked pile has work only while a released chunk holds material. Opening
-  stock is already rested.
+  each chunk rests from the last hour it received anything, and while the
+  chunk next in the pile's FIFO or LIFO order rests, the pile cannot be
+  reclaimed and a Reclaim bar on it has no work. Opening stock is already
+  rested.
 
 An hour's deliveries restart a rest only above 1e-4 t, in the dispatch, the
 model and the replay alike. Day-by-day windows carry when each pile last

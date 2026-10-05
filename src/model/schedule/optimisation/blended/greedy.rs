@@ -80,8 +80,10 @@
 //! during an interval closes at the start of the next, and the next chunk
 //! starts receiving then. A chunk holding material is reclaimable once its
 //! last delivery has rested, open or closed. Reclaim draws one chunk, the one
-//! the authored order releases - FIFO the first holding material, if rested;
-//! LIFO the last rested one holding material - at that chunk's own blend.
+//! next in the authored order - FIFO the first holding material, LIFO the
+//! last - and only once it has rested, at that chunk's own blend: a chunk
+//! still resting holds the whole pile, as a loader waits at the face rather
+//! than digging in behind it.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -1325,12 +1327,13 @@ impl<'a> State<'a> {
                 blend: blend(*open_t, open_q),
             });
         };
-        // A chunk whose last delivery is still resting is not yet released.
-        let released = |index: usize| entry.chunk_rested(index, chunks[index].received_h, interval);
-        let index = match entry.order {
-            ReclaimOrder::Fifo => chunks.iter().position(|chunk| chunk.held_t > FINISHED_T).filter(|&index| released(index))?,
-            ReclaimOrder::Lifo => (0..chunks.len()).rposition(|index| released(index) && chunks[index].held_t > FINISHED_T)?,
+        // The chunk next in order, once its last delivery has rested; while
+        // it rests the pile releases nothing.
+        let next = match entry.order {
+            ReclaimOrder::Fifo => chunks.iter().position(|chunk| chunk.held_t > FINISHED_T)?,
+            ReclaimOrder::Lifo => chunks.iter().rposition(|chunk| chunk.held_t > FINISHED_T)?,
         };
+        let index = Some(next).filter(|&index| entry.chunk_rested(index, chunks[index].received_h, interval))?;
         let chunk = &chunks[index];
         Some(Released {
             chunk: Some(index),

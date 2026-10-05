@@ -97,8 +97,8 @@ pub(crate) const REST_TOLERANCE_H: f64 = 1e-6;
 pub(crate) const CHUNK_FULL_T: f64 = 1e-3;
 
 /// The least an interval's deliveries to a pile may total and still restart
-/// its rest. The model counts no less as building, and the replay and the
-/// dispatcher count no less as a delivery that rests.
+/// its rest, as the replay and the dispatcher count it. The model needs twice
+/// it to count a delivery (see `formulation::REST_FLAG_T`).
 pub(crate) const REST_RECEIPT_T: f64 = 1e-4;
 
 /// A blended pile: opening lots already combined by tonnes and contained
