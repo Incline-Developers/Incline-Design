@@ -28,7 +28,7 @@ use crate::model::schedule::{
             greedy,
             input::BlendInput,
             lp,
-            replay::{BlendSolution, ExtractionAdjustments, ReplayReport, replay_cancellable},
+            replay::{BlendSolution, ExtractionAdjustments, ReplayReport},
         },
     },
     result::{BoundSource, DayByDayRole, DayByDaySummary, StartMethod},
@@ -242,18 +242,14 @@ pub(crate) enum DayByDay {
 /// whole horizon.
 pub(crate) fn hourly_dispatch(out: &mut ScheduleCompletion, cancel: &CancelFlag) -> DayByDay {
     let started = Instant::now();
-    let solution = match greedy::dispatch_cancellable(&out.input, &cancel.signal()) {
-        Ok(Some(solution)) => solution,
+    // The dispatcher replays what it returns, to choose between its
+    // schedules, so that time is counted as the solver's.
+    let (solution, checked) = match greedy::dispatch_cancellable(&out.input, &cancel.signal()) {
+        Ok(Some(found)) => (found.solution, found.replay),
         Ok(None) => return DayByDay::Stop(SolveTermination::Cancelled, "cancelled during dispatch".into()),
         Err(reason) => return DayByDay::Failed(reason),
     };
     out.timings.solver += started.elapsed();
-    let phase = Instant::now();
-    let checked = replay_cancellable(&out.input, &solution, &cancel.signal());
-    out.timings.replay += phase.elapsed();
-    let Some(checked) = checked else {
-        return DayByDay::Stop(SolveTermination::Cancelled, "cancelled during replay".into());
-    };
     if !checked.is_valid() {
         for issue in checked.issues.iter().chain(&checked.grade_issues).take(5) {
             log::warn!("schedule run {}: hourly dispatch schedule: {issue}", out.identity.run_id);

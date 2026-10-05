@@ -47,9 +47,16 @@
 //! block of its sequence dug, or its cap spent - moves to its next bar in a
 //! segment of its own, and a reclaim bar that emptied its pile to another
 //! pile it approves; the whole interval is solved again, and the new segment
-//! kept only when it is worth more. Inventory, blends, chunks, rests and the
-//! drill and blast chain still move once per interval: receipts take room at
-//! once but are reclaimable only from the next one.
+//! kept only when the program values it more and the interval's money is no
+//! less: the production credit alone does not buy a segment. Inventory,
+//! blends, chunks, rests and the drill and blast chain still move once per
+//! interval: receipts are reclaimable only from the next one, and take room
+//! on top of what earlier segments reclaimed.
+//!
+//! Moving to the next bar early can still take ground a later bar would
+//! have been worth more from, which no interval sees. So whenever segments
+//! were used, the schedule of one bar per loader per interval is worked too,
+//! both are replayed, and the one worth more is kept.
 //!
 //! A reclaim goes where a grade decides admission - a route
 //! qualification or a minimum grade - only when the pile's released blend
@@ -74,7 +81,10 @@
 //! planner's say-so is what keeps out of the dead end where every chunk
 //! closed early and the diggers had nowhere to deliver.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use super::{
     drill_blast::Chain,
@@ -82,7 +92,7 @@ use super::{
         BlendInput, BlendPile, GRADE_CUSHION_T, GRADE_MARGIN, GradeQualification, REST_RECEIPT_T, attribute_reclaim, authored_tasks, interval_rate, task_active, task_authorises,
     },
     lp::{Col, LinearProgram},
-    replay::{BlendSolution, ChunkRow, ExtractionAdjustments, MovementRow, replay_cancellable},
+    replay::{BlendSolution, ChunkRow, ExtractionAdjustments, MovementRow, ReplayReport, replay_cancellable},
 };
 use crate::model::schedule::optimisation::{Activity, DestinationId, DestinationKind, GroundId, Interval, LoaderId, ReclaimOrder, SourceId, StockpileId, TaskKind, TruckClassId};
 
@@ -109,38 +119,69 @@ const IMPROVEMENT: f64 = 1e-9;
 /// The tie-break weight per tonne, relative to the largest movement value.
 const TIE_WEIGHT: f64 = 1e-7;
 
-/// A dispatch schedule for `input`, or why there is none, polling `cancel`
-/// between intervals: `Ok(None)` once it is set, so a superseded run stops
-/// within one interval's work.
-pub(crate) fn dispatch_cancellable(input: &BlendInput, cancel: &std::sync::atomic::AtomicBool) -> Result<Option<BlendSolution>, String> {
-    let Some(solution) = dispatch(input, cancel, true)? else { return Ok(None) };
-    if !solution.durations.iter().any(|((_, segment), length)| *segment > 0 && *length > 0.0) {
-        return Ok(Some(solution));
+/// How much of the interval's money, relative, one more segment may give up
+/// to the program's own rounding and still be kept.
+const MONEY_SLACK: f64 = 1e-7;
+
+/// A dispatch schedule and the replay's report on it.
+pub(crate) struct Dispatched {
+    pub(crate) solution: BlendSolution,
+    pub(crate) replay: ReplayReport,
+}
+
+/// A dispatch schedule for `input`, replayed, or why there is none, polling
+/// `cancel` within each interval's work: `Ok(None)` once it is set.
+///
+/// With segments to use, the schedule of one bar per loader per interval is
+/// worked beside the one that moves loaders on within an interval, and of the
+/// two the replay accepts, the one it values more is kept. The replay is
+/// returned with it, so the caller need not run it again.
+pub(crate) fn dispatch_cancellable(input: &BlendInput, cancel: &AtomicBool) -> Result<Option<Dispatched>, String> {
+    let checked = |found: Result<Option<BlendSolution>, String>| -> Result<Option<Dispatched>, String> {
+        let Some(solution) = found? else { return Ok(None) };
+        let Some(replay) = replay_cancellable(input, &solution, cancel) else { return Ok(None) };
+        Ok(Some(Dispatched { solution, replay }))
+    };
+    if input.segments_per_interval <= 1 {
+        return checked(dispatch(input, cancel, false));
     }
-    // A loader moving to its next bar inside an interval rests on readiness
-    // read ahead of the program; should the replay read it otherwise, the
-    // interval-at-a-time schedule stands instead of no schedule at all.
-    match replay_cancellable(input, &solution, cancel) {
-        None => Ok(None),
-        Some(report) if report.is_valid() => Ok(Some(solution)),
-        Some(report) => {
-            let issue = report.issues.iter().chain(&report.grade_issues).next().cloned().unwrap_or_default();
-            log::warn!("hourly dispatch: bar changes within an interval were rejected by the replay ({issue}); one bar per interval instead");
-            dispatch(input, cancel, false)
-        }
+    let (segmented, single) = rayon::join(|| checked(dispatch(input, cancel, true)), || checked(dispatch(input, cancel, false)));
+    let (segmented, single) = match (segmented, single) {
+        (Ok(Some(segmented)), Ok(Some(single))) => (segmented, single),
+        (Ok(None), _) | (_, Ok(None)) => return Ok(None),
+        (Ok(Some(found)), Err(_)) | (Err(_), Ok(Some(found))) => return Ok(Some(found)),
+        (Err(reason), Err(_)) => return Err(reason),
+    };
+    if !segmented.replay.is_valid() {
+        let issue = segmented.replay.issues.iter().chain(&segmented.replay.grade_issues).next().cloned().unwrap_or_default();
+        log::warn!("hourly dispatch: bar changes within an interval were rejected by the replay ({issue}); one bar per interval instead");
+        return Ok(Some(single));
     }
+    let (worth, baseline) = (segmented.replay.replayed_objective, single.replay.replayed_objective);
+    if single.replay.is_valid() && baseline > worth + MONEY_SLACK * worth.abs().max(1.0) {
+        log::info!("hourly dispatch: one bar per interval is worth {baseline:.2} against {worth:.2} with bar changes within an interval; keeping it");
+        return Ok(Some(single));
+    }
+    Ok(Some(segmented))
 }
 
 /// The dispatch schedule, with loaders moving to their next bar inside an
 /// interval when `segmented`.
-fn dispatch(input: &BlendInput, cancel: &std::sync::atomic::AtomicBool, segmented: bool) -> Result<Option<BlendSolution>, String> {
-    let mut state = State::new(input);
+fn dispatch(input: &BlendInput, cancel: &AtomicBool, segmented: bool) -> Result<Option<BlendSolution>, String> {
+    let mut state = State::new(input, cancel);
     state.segmented = segmented;
     for interval in &input.intervals {
-        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        if state.cancelled() {
             return Ok(None);
         }
-        state.work(*interval)?;
+        match state.work(*interval) {
+            // An interval cut short reports why it stopped as a failure.
+            Err(_) if state.cancelled() => return Ok(None),
+            found => found?,
+        }
+    }
+    if state.cancelled() {
+        return Ok(None);
     }
     Ok(Some(state.finish()))
 }
@@ -164,6 +205,8 @@ struct State<'a> {
     /// Piles that may not build and reclaim at once, closed to deliveries
     /// this interval because a reclaim bar is drawing them.
     blocked: BTreeSet<StockpileId>,
+    /// Such piles left to building this interval: closed to reclaim.
+    building: BTreeSet<StockpileId>,
     /// Keyed by task index.
     reclaimed: BTreeMap<usize, f64>,
     /// Dig candidates by (loader, block, material) and reclaim candidates
@@ -176,6 +219,9 @@ struct State<'a> {
     /// credit and the tie-breaks. A reclaim's grade-conditional value is
     /// added per interval, on the blend it draws.
     weight: Vec<f64>,
+    /// What of each candidate's weight is not money: the production credit
+    /// and the tie-breaks.
+    credit: Vec<f64>,
     /// Grade-conditional value earned by the rows so far.
     conditional: f64,
     /// Keyed (candidate, interval, segment).
@@ -188,6 +234,7 @@ struct State<'a> {
     now_h: f64,
     /// Whether a loader may move to its next bar inside an interval.
     segmented: bool,
+    cancel: &'a AtomicBool,
 }
 
 /// One chunk of a chunked pile, as it opens an interval.
@@ -257,6 +304,9 @@ struct Plan {
     extracted: BTreeMap<(usize, GroundId, usize), f64>,
     durations: Vec<f64>,
     objective: f64,
+    /// The objective less the production credit and tie-breaks: what the
+    /// interval's movements are worth.
+    money: f64,
 }
 
 impl Plan {
@@ -276,7 +326,7 @@ impl Plan {
 }
 
 impl<'a> State<'a> {
-    fn new(input: &'a BlendInput) -> Self {
+    fn new(input: &'a BlendInput, cancel: &'a AtomicBool) -> Self {
         let loader_index = |id| input.loaders.iter().position(|loader| loader.id == id);
         let mut digs: BTreeMap<(usize, GroundId, u32), Vec<usize>> = BTreeMap::new();
         let mut reclaims: BTreeMap<(usize, StockpileId), Vec<usize>> = BTreeMap::new();
@@ -329,12 +379,12 @@ impl<'a> State<'a> {
         let target_credit: f64 = target_costs.values().sum();
         let credit = -worst.iter().copied().fold(0.0_f64, f64::min) + target_credit + tie;
         let latest = input.movements.iter().map(|candidate| candidate.routing_preference).max().unwrap_or(0);
-        let weight = input
+        let credit: Vec<f64> = input
             .movements
             .iter()
-            .zip(&values)
-            .map(|(candidate, value)| value + credit - tie * 0.5 * f64::from(candidate.routing_preference) / f64::from(latest + 1))
+            .map(|candidate| credit - tie * 0.5 * f64::from(candidate.routing_preference) / f64::from(latest + 1))
             .collect();
+        let weight = values.iter().zip(&credit).map(|(value, credit)| value + credit).collect();
         Self {
             input,
             target_totals: input.target_opening.iter().map(|&(i, p, t, q)| ((i, p), (t, q))).collect(),
@@ -351,18 +401,25 @@ impl<'a> State<'a> {
             crushed: BTreeMap::new(),
             last_receipt_h: input.piles.iter().filter_map(|pile| Some((pile.id, pile.last_receipt_h?))).collect(),
             blocked: BTreeSet::new(),
+            building: BTreeSet::new(),
             reclaimed: BTreeMap::new(),
             digs,
             reclaims,
             shared,
             weight,
+            credit,
             conditional: 0.0,
             rows: BTreeMap::new(),
             durations: BTreeMap::new(),
             chain: input.drill_blast.as_ref().map(Chain::new),
             now_h: 0.0,
             segmented: true,
+            cancel,
         }
+    }
+
+    fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
     }
 
     fn work(&mut self, interval: Interval) -> Result<(), String> {
@@ -405,54 +462,94 @@ impl<'a> State<'a> {
 
         // A pile that may not build and reclaim at once gives the hour to
         // the reclaim bar drawing it. One that the bar then leaves untouched
-        // is opened again, so the hour is not lost to nothing.
+        // is left to building instead, so the hour is not lost to nothing.
         self.blocked = self.exclusive_draws(&topology, interval);
-        let mut plan = self.solve(interval, &topology)?;
-        if !self.blocked.is_empty() {
-            let idle: Vec<StockpileId> = self
-                .blocked
-                .iter()
-                .copied()
-                .filter(|pile| {
-                    plan.rows
-                        .iter()
-                        .filter(|(index, _, _)| input.movements[*index].source == SourceId::Stockpile(*pile))
-                        .map(|(_, _, tonnes)| tonnes)
-                        .sum::<f64>()
-                        <= NEGLIGIBLE_T
-                })
-                .collect();
-            if !idle.is_empty() {
-                self.blocked.retain(|pile| !idle.contains(pile));
-                plan = self.solve(interval, &topology)?;
-            }
-        }
-        plan = self.settle(interval, &mut topology, plan, &opening_ground)?;
+        self.building.clear();
+        let plan = self.solve(interval, &topology)?;
+        let plan = self.reopen_idle(interval, &topology, plan)?;
+        let mut plan = self.settle(interval, &mut topology, plan, &opening_ground)?;
 
         // While a loader has finished its bar with time left in the
         // interval, give it its next bar in a segment of its own and solve
         // the whole interval again. The answer before stays feasible with
-        // the new segment empty, so one is only kept when it is worth more.
+        // the new segment empty, so one is only kept when it is worth more,
+        // to the program and in money.
         let budget = if self.segmented { input.segments_per_interval.max(1) } else { 1 };
         let mut tried: BTreeSet<(usize, usize, usize)> = BTreeSet::new();
-        while topology.segments.len() < budget {
-            let Some(trial) = self.transition(interval, &topology, &plan, &opening_ground, &mut tried) else {
+        while topology.segments.len() < budget && !self.cancelled() {
+            let Some(mut trial) = self.transition(interval, &topology, &plan, &opening_ground, &mut tried) else {
                 break;
             };
-            let blocked = self.blocked.clone();
-            self.blocked.extend(self.exclusive_draws(&trial, interval));
-            let mut trial = trial;
-            let found = self.solve(interval, &trial).and_then(|found| self.settle(interval, &mut trial, found, &opening_ground));
+            // What the interval already decided for an exclusive pile
+            // stands. One a new bar approves and nothing decided yet goes to
+            // building if the answer so far delivers there, else to the bar.
+            let (blocked, building) = (self.blocked.clone(), self.building.clone());
+            for pile in self.exclusive_draws(&trial, interval) {
+                if blocked.contains(&pile) || building.contains(&pile) {
+                    continue;
+                }
+                if self.delivered(&plan, pile) > NEGLIGIBLE_T {
+                    self.building.insert(pile);
+                } else {
+                    self.blocked.insert(pile);
+                }
+            }
+            let found = self
+                .solve(interval, &trial)
+                .and_then(|found| self.reopen_idle(interval, &trial, found))
+                .and_then(|found| self.settle(interval, &mut trial, found, &opening_ground));
             match found {
-                Ok(found) if found.objective > plan.objective + IMPROVEMENT * plan.objective.abs().max(1.0) => {
+                Ok(found)
+                    if found.objective > plan.objective + IMPROVEMENT * plan.objective.abs().max(1.0) && found.money >= plan.money - MONEY_SLACK * plan.money.abs().max(1.0) =>
+                {
                     topology = trial;
                     plan = found;
                 }
-                _ => self.blocked = blocked,
+                _ => (self.blocked, self.building) = (blocked, building),
             }
         }
         self.apply(interval, &topology, plan);
         Ok(())
+    }
+
+    /// Leave to building the blocked piles `plan` does not draw, and solve
+    /// again if there were any.
+    fn reopen_idle(&mut self, interval: Interval, topology: &Topology, plan: Plan) -> Result<Plan, String> {
+        let input = self.input;
+        let idle: Vec<StockpileId> = self
+            .blocked
+            .iter()
+            .copied()
+            .filter(|pile| {
+                plan.rows
+                    .iter()
+                    .filter(|(index, _, _)| input.movements[*index].source == SourceId::Stockpile(*pile))
+                    .map(|(_, _, tonnes)| tonnes)
+                    .sum::<f64>()
+                    <= NEGLIGIBLE_T
+            })
+            .collect();
+        if idle.is_empty() {
+            return Ok(plan);
+        }
+        self.blocked.retain(|pile| !idle.contains(pile));
+        self.building.extend(idle);
+        self.solve(interval, topology)
+    }
+
+    /// What `plan` delivers to `pile`.
+    fn delivered(&self, plan: &Plan, pile: StockpileId) -> f64 {
+        let input = self.input;
+        plan.rows
+            .iter()
+            .filter(|(index, _, _)| {
+                input
+                    .destinations
+                    .iter()
+                    .any(|entry| entry.id == input.movements[*index].destination && entry.kind == DestinationKind::Stockpile(pile))
+            })
+            .map(|(_, _, tonnes)| tonnes)
+            .sum()
     }
 
     /// A loader's bar as it opens in a segment, or `None` when it has no
@@ -512,6 +609,9 @@ impl<'a> State<'a> {
         let last = topology.segments.len() - 1;
         let done = topology.done();
         loop {
+            if self.cancelled() {
+                return Ok(plan);
+            }
             if narrow(input, topology, &plan) {
                 plan = self.solve(interval, topology)?;
                 continue;
@@ -618,7 +718,10 @@ impl<'a> State<'a> {
                         let mut emptied = bar.emptied.clone();
                         emptied.push(pile);
                         let others = approved_sources.iter().any(|other| {
-                            !emptied.contains(other) && self.reclaims(*other, interval) && self.released(*other, interval).is_some_and(|found| found.tonnes > NEGLIGIBLE_T)
+                            !emptied.contains(other)
+                                && !self.building.contains(other)
+                                && self.reclaims(*other, interval)
+                                && self.released(*other, interval).is_some_and(|found| found.tonnes > NEGLIGIBLE_T)
                         });
                         if pile_drawn < released - SNAP_T || !others {
                             continue;
@@ -755,8 +858,13 @@ impl<'a> State<'a> {
     /// Each segment has its own length, the lengths filling the interval.
     /// Within a segment a loader moves at most its rate for that length, and
     /// each truck class works its share of the interval's hours. Ground,
-    /// piles, destinations and soft targets are shared by the whole interval.
+    /// crushers, dumps and soft targets are shared by the whole interval; a
+    /// pile's room by the end of each segment, net of what segments before it
+    /// reclaimed.
     fn solve(&self, interval: Interval, topology: &Topology) -> Result<Plan, String> {
+        if self.cancelled() {
+            return Err(format!("interval {}: cancelled", interval.index));
+        }
         let input = self.input;
         let duration = interval.duration_h();
         let segments = topology.segments.len();
@@ -808,7 +916,7 @@ impl<'a> State<'a> {
                     TaskKind::Reclaim { approved_sources, .. } => {
                         for pile in approved_sources
                             .iter()
-                            .filter(|pile| bar.pile.is_none_or(|only| only == **pile) && !bar.emptied.contains(pile))
+                            .filter(|pile| bar.pile.is_none_or(|only| only == **pile) && !bar.emptied.contains(pile) && !self.building.contains(pile))
                         {
                             let Some(released) = self.released(*pile, interval).filter(|found| self.reclaims(*pile, interval) && found.tonnes > NEGLIGIBLE_T) else {
                                 continue;
@@ -865,12 +973,20 @@ impl<'a> State<'a> {
         // interval.
         let mut trucks: BTreeMap<(TruckClassId, usize), Vec<(Col, f64)>> = BTreeMap::new();
         let mut destinations: BTreeMap<DestinationId, Vec<(Col, f64)>> = BTreeMap::new();
+        // Per pile, (segment, column, +1 a receipt or -1 a reclaim).
+        let mut occupancy: BTreeMap<StockpileId, Vec<(usize, Col, f64)>> = BTreeMap::new();
         for &(index, segment, col) in &columns {
             let candidate = &input.movements[index];
             if candidate.truck_hours_per_tonne > 0.0 {
                 trucks.entry((candidate.truck, segment)).or_default().push((col, candidate.truck_hours_per_tonne));
             }
             destinations.entry(candidate.destination).or_default().push((col, 1.0));
+            if let Some(DestinationKind::Stockpile(pile)) = input.destinations.iter().find(|entry| entry.id == candidate.destination).map(|entry| entry.kind) {
+                occupancy.entry(pile).or_default().push((segment, col, 1.0));
+            }
+            if let (Activity::Reclaim, SourceId::Stockpile(pile)) = (candidate.activity, candidate.source) {
+                occupancy.entry(pile).or_default().push((segment, col, -1.0));
+            }
         }
         for ((truck, segment), mut terms) in trucks {
             if let Some(hours) = input.trucks.iter().find(|entry| entry.id == truck).and_then(|entry| entry.hours.get(interval.index)) {
@@ -886,6 +1002,22 @@ impl<'a> State<'a> {
             let room = self.destination_room(destination, interval);
             if room.is_finite() {
                 problem.add_row(..=room, terms);
+            }
+        }
+        // A pile's receipts up to the end of each segment fit on top of its
+        // opening stock less what the segments before reclaimed. A segment's
+        // own reclaim frees nothing for its receipts: a loader working blocks
+        // back to back delivers unevenly, so the pile can peak inside it.
+        for (pile, flows) in occupancy {
+            let Some(entry) = input.piles.iter().find(|entry| entry.id == pile) else { continue };
+            let room = entry.capacity_t - self.piles.get(&pile).map_or(0.0, |(tonnes, _)| *tonnes);
+            for segment in (0..segments).filter(|segment| flows.iter().any(|(at, _, sign)| at == segment && *sign > 0.0)) {
+                let terms: Vec<(Col, f64)> = flows
+                    .iter()
+                    .filter(|(at, _, sign)| *at < segment || (*at == segment && *sign > 0.0))
+                    .map(|(_, col, sign)| (*col, *sign))
+                    .collect();
+                problem.add_row(..=room.max(0.0), terms);
             }
         }
 
@@ -920,11 +1052,14 @@ impl<'a> State<'a> {
             }
         }
         let solution = problem.maximise().map_err(|reason| format!("interval {}: {reason}", interval.index))?;
+        let rows: Vec<(usize, usize, f64)> = columns.into_iter().map(|(index, segment, col)| (index, segment, solution[col.index()].max(0.0))).collect();
+        let objective = problem.value(&solution);
         Ok(Plan {
-            rows: columns.into_iter().map(|(index, segment, col)| (index, segment, solution[col.index()].max(0.0))).collect(),
+            money: objective - rows.iter().map(|(index, _, tonnes)| self.credit[*index] * tonnes).sum::<f64>(),
+            rows,
             extracted: extractions.into_iter().map(|(key, col)| (key, solution[col.index()].max(0.0))).collect(),
             durations: lengths.iter().map(|col| solution[col.index()].max(0.0)).collect(),
-            objective: problem.value(&solution),
+            objective,
         })
     }
 
@@ -1292,23 +1427,16 @@ impl<'a> State<'a> {
                 Some(budget) => budget - self.crushed.get(&(destination.id, interval.day())).copied().unwrap_or(0.0),
                 None => f64::INFINITY,
             },
-            // Receipts must fit on top of the opening stock, with no credit
-            // for what the interval reclaims: the replay's stricter check
-            // when a delivering loader works blocks back to back.
-            // A chunked pile also takes no more than its receiving chunk's room.
+            // The pile's own room is held segment by segment in `solve`; a
+            // chunked pile takes no more than its receiving chunk's room,
+            // which reclaim from closed chunks does not free.
             DestinationKind::Stockpile(pile) => {
-                let Some(target) = input
-                    .piles
-                    .iter()
-                    .find(|entry| entry.id == pile)
-                    .filter(|entry| entry.builds(interval) && !self.blocked.contains(&pile))
-                else {
+                if !input.piles.iter().any(|entry| entry.id == pile && entry.builds(interval)) || self.blocked.contains(&pile) {
                     return 0.0;
-                };
-                let room = target.capacity_t - self.piles.get(&pile).map_or(0.0, |(tonnes, _)| *tonnes);
+                }
                 match self.chunks.get(&pile) {
-                    Some(chunks) => chunks.iter().find(|chunk| !chunk.closed).map_or(0.0, |chunk| room.min(chunk.capacity_t - chunk.held_t)),
-                    None => room,
+                    Some(chunks) => chunks.iter().find(|chunk| !chunk.closed).map_or(0.0, |chunk| chunk.capacity_t - chunk.held_t),
+                    None => f64::INFINITY,
                 }
             }
         }

@@ -553,10 +553,26 @@ Bars that end inside an interval:
   finds the next bar the highest-priority ready one. A bar between the two is
   passed over only when it surely has no work; when that depends on the
   program, the loader stays on one bar for the interval.
+- A new segment is kept only when the interval's program values it more
+  and the interval's money is no less. The production credit alone does
+  not buy one.
+- What the interval decided for a pile that may not build and reclaim at
+  once stands as segments are added. A pile a new bar approves goes to
+  building if the interval already delivers there; otherwise it goes to the
+  bar, and back to building if the bar leaves it untouched.
 - Inventory, blends, chunks, rests and the drill and blast chain still move
-  once per interval, and the captured segment budget is never exceeded.
-- Should the replay reject the result, the dispatcher falls back to one bar
-  per loader per interval, as before.
+  once per interval. Receipts are reclaimable only from the next interval.
+  A pile's room is held by the end of each segment, net of what earlier
+  segments reclaimed. A segment's own reclaim frees nothing for that
+  segment's receipts.
+- The captured segment budget is never exceeded. Each reclaim bar counts
+  one segment per pile it can draw, so successive capped bars on one pile
+  each get their own.
+- Whenever segments are available, the schedule of one bar per loader per
+  interval is worked alongside, and both are replayed. The one worth more
+  is kept, as is the single-bar one when the replay rejects the other.
+  Moving on early can take ground a later bar would have been worth more
+  from, which no single interval sees.
 
 DreamLand, from the app's captured request, 60 s limit:
 

@@ -2091,7 +2091,8 @@ fn reclaim_conditions(conditions: &[FieldCondition], grades: &[GradeField], fiel
 /// segment, so a dig bar needs a segment of its own, not one per block. The
 /// exception is a block another loader can also dig: the next block waits
 /// for a segment boundary after it, so that transition still counts. A
-/// reclaim bar keeps one per approved pile.
+/// reclaim bar needs one per approved pile it can draw, and each bar its
+/// own: a capped bar hands over to the next on the same pile.
 ///
 /// Returns the derived figure *before* the shared [`SEGMENT_CEILING`] guard
 /// is applied, so the caller can report that the budget was restricted.
@@ -2105,7 +2106,6 @@ fn derived_segments(intervals: &[Interval], loaders: &[Loader], tasks: &[Task], 
             let can_dig = rate.is_some_and(|rate| rate.dig_tph > 0.0);
             let can_reclaim = rate.is_some_and(|rate| rate.reclaim_tph > 0.0);
             let mut phases = 0usize;
-            let mut piles: Vec<StockpileId> = Vec::new();
             for task in tasks.iter().filter(|task| task.loader == loader.id) {
                 if task.window_start_h > interval.start_h + 1e-9 || task.window_end_h < interval.end_h - 1e-9 {
                     continue;
@@ -2123,17 +2123,21 @@ fn derived_segments(intervals: &[Interval], loaders: &[Loader], tasks: &[Task], 
                         phases += 1 + shared;
                     }
                     TaskKind::Reclaim { approved_sources, .. } if can_reclaim => {
-                        for pile in approved_sources {
-                            let source = SourceId::Stockpile(*pile);
-                            if !piles.contains(pile) && movements.iter().any(|candidate| candidate.loader == loader.id && candidate.source == source) {
-                                piles.push(*pile);
-                            }
-                        }
+                        let piles: BTreeSet<StockpileId> = approved_sources
+                            .iter()
+                            .copied()
+                            .filter(|pile| {
+                                movements
+                                    .iter()
+                                    .any(|candidate| candidate.loader == loader.id && candidate.source == SourceId::Stockpile(*pile))
+                            })
+                            .collect();
+                        phases += piles.len();
                     }
                     _ => {}
                 }
             }
-            budget += (phases + piles.len()).saturating_sub(1);
+            budget += phases.saturating_sub(1);
         }
         highest = highest.max(budget);
     }
