@@ -55,6 +55,11 @@ impl LinearProgram {
         self.rows.push(Row { lower, upper, terms });
     }
 
+    /// The objective at `solution`'s column values.
+    pub(crate) fn value(&self, solution: &[f64]) -> f64 {
+        self.objective.iter().zip(solution).map(|(weight, value)| weight * value).sum()
+    }
+
     /// The column values at a maximum of the objective, or why there are none.
     pub(crate) fn maximise(&self) -> Result<Vec<f64>, String> {
         #[cfg(feature = "highs")]

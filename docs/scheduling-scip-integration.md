@@ -543,6 +543,21 @@ The dispatcher's limits on reclaim:
   formulation does: a reward only when the blend clears the rule's bounds by
   the margin, a cost unless it clears them on the outside.
 
+Bars that end inside an interval:
+- A loader whose bar has no work left before the interval ends (every block
+  of its sequence dug, or its cap spent) moves to its next bar in a new
+  execution segment. A reclaim bar that empties its pile moves to another
+  pile it approves. Segment lengths are the interval's program's to choose,
+  shared by all loaders, with each truck class's hours shared in proportion.
+- The finished bar is held finished by the end of its segment, so the replay
+  finds the next bar the highest-priority ready one. A bar between the two is
+  passed over only when it surely has no work; when that depends on the
+  program, the loader stays on one bar for the interval.
+- Inventory, blends, chunks, rests and the drill and blast chain still move
+  once per interval, and the captured segment budget is never exceeded.
+- Should the replay reject the result, the dispatcher falls back to one bar
+  per loader per interval, as before.
+
 DreamLand, from the app's captured request, 60 s limit:
 
 | horizon | before | with dispatch starts |
