@@ -4,7 +4,10 @@ use winit::keyboard::PhysicalKey;
 
 use super::{frustum::Frustum, *};
 use crate::{
-    rendering::pick::{clamped_range, local_vertex_world, slab_clipped_screen_segment, slab_clipped_segment, slab_screen_point},
+    rendering::{
+        camera::CameraPose,
+        pick::{clamped_range, local_vertex_world, slab_clipped_screen_segment, slab_clipped_segment, slab_screen_point},
+    },
     ui::state::ActiveTool,
 };
 
@@ -1371,6 +1374,46 @@ impl<'a> Graphics<'a> {
         self.rebase_scene_origin(center);
         // Update znear/zfar immediately so snap/pick work before the first render.
         self.fit_depth_to_scene(document, triangulations, block_models, drill_holes, point_clouds, hidden);
+    }
+
+    /// Square the view up to plan where it stands: looking straight down on
+    /// the fixed centre of rotation (world space) when one is set, else on the
+    /// camera's own target, from the same distance, so the zoom holds.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn plan_view_keeping_distance(
+        &mut self,
+        rotation_centre: Option<DVec3>,
+        document: &Document,
+        triangulations: &[OpenTriangulation],
+        block_models: &[OpenBlockModel],
+        drill_holes: &[OpenDrillHoleDataset],
+        point_clouds: &[OpenPointCloud],
+        hidden: &HashSet<SceneEntityId>,
+    ) {
+        self.camera_controller.cancel_view_transition();
+        self.camera_controller.cancel_orbit();
+        self.orbit_marker = None;
+        self.camera = self.plan_camera_keeping_distance(rotation_centre);
+        // Update znear/zfar immediately so snap/pick work before the first render.
+        self.fit_depth_to_scene(document, triangulations, block_models, drill_holes, point_clouds, hidden);
+    }
+
+    /// Where [`Self::plan_view_keeping_distance`] would put the camera,
+    /// without moving it.
+    pub(crate) fn plan_pose_keeping_distance(&self, rotation_centre: Option<DVec3>) -> CameraPose {
+        self.plan_camera_keeping_distance(rotation_centre).pose()
+    }
+
+    pub(crate) fn camera_pose(&self) -> CameraPose {
+        self.camera.pose()
+    }
+
+    fn plan_camera_keeping_distance(&self, rotation_centre: Option<DVec3>) -> Camera {
+        // The camera works in exaggerated space; the centre is a world point.
+        let centre = rotation_centre.map_or(self.camera.target(), |centre| self.exaggerate_point(centre));
+        let mut camera = self.camera.clone();
+        camera.reset_to_plan_view_keeping_distance(centre);
+        camera
     }
 
     /// Move the floating origin to the framed centre. Vertical exaggeration
