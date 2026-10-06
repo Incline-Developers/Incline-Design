@@ -740,6 +740,7 @@ cmd-view-fixed-centre-rotation-x-y = Kitovu cha mzunguko kimefungwa kwenye { $x 
 cmd-view-no-point-under-cursor-fix = Hakuna kidokezo chini ya kishale cha kufungia kitovu cha mzunguko
 cmd-view-released-centre-rotation = Kitovu cha mzunguko kimeachiliwa
 cmd-view-reset-view-fit-extents = Rejesha mwonekano (oanisha na wigo)
+cmd-view-reset-view-plan-same-distance = Rejesha mwonekano (mwonekano wa juu kwa umbali uleule; bofya tena kuoanisha na wigo)
 cmd-view-set-cinematic-view-enabled = Weka mwonekano wa sinema = { $enabled }
 cmd-view-set-topology-wireframes-enabled = Nyaya za tofolojia zimewekwa = { $enabled }
 cmd-view-set-view-points-enabled = Mwonekano wa vidokezo umewekwa = { $enabled }
@@ -1746,6 +1747,7 @@ state-export-viewport-image = Hamisha Picha ya Mwonekano
 state-finish-closed-polyline = Maliza mstari wa pointi nyingi uliofungwa
 state-finish-open-polyline = Maliza mstari wa pointi nyingi ulio wazi
 state-fit-extents = Oanisha na wigo
+state-plan-view-then-fit-extents = Mwonekano wa juu kwa umbali uleule, kisha oanisha na wigo
 state-fix-release-centre-both-views = Funga au achilia kitovu ambacho mionekano yote miwili inazunguka
 state-folder-section = { $folder } katika { $section }
 state-generate-contours = Zalisha Mistari ya Mwinuko
@@ -2084,6 +2086,8 @@ viewport-bar-hide-rl-grid = Ficha Gridi ya RL
 viewport-bar-hide-wireframes = Ficha Nyaya
 viewport-bar-hide-xy-grid = Ficha Gridi ya XY
 viewport-bar-release-centre-rotation = Achilia Kitovu cha Mzunguko
+viewport-bar-reset-view-plan-over-centre = Rejesha Mwonekano: mwonekano wa juu juu ya kitovu cha mzunguko, bofya tena kuoanisha vyote
+viewport-bar-reset-view-plan-same-distance = Rejesha Mwonekano: mwonekano wa juu kwa umbali uleule, bofya tena kuoanisha vyote
 viewport-bar-show-borehole-inspector = Onyesha Kikaguzi cha Shimo la Uchimbaji
 viewport-bar-show-classification = Onyesha Uainishaji
 viewport-bar-show-points = Onyesha Vidokezo

@@ -708,6 +708,7 @@ cmd-view-fixed-centre-rotation-x-y = घूर्णन केंद्र { $x 
 cmd-view-no-point-under-cursor-fix = घूर्णन केंद्र तय करने के लिए कर्सर के नीचे कोई बिंदु नहीं है
 cmd-view-released-centre-rotation = घूर्णन केंद्र मुक्त किया गया
 cmd-view-reset-view-fit-extents = दृश्य रीसेट करें (सीमाओं में फिट करें)
+cmd-view-reset-view-plan-same-distance = दृश्य रीसेट करें (उसी दूरी पर प्लान दृश्य; सीमाओं में फिट करने के लिए फिर से क्लिक करें)
 cmd-view-set-cinematic-view-enabled = सिनेमैटिक दृश्य सेट करें = { $enabled }
 cmd-view-set-topology-wireframes-enabled = स्थलाकृति वायरफ़्रेम सेट करें = { $enabled }
 cmd-view-set-view-points-enabled = दृश्य बिंदु सेट करें = { $enabled }
@@ -1714,6 +1715,7 @@ state-export-viewport-image = निर्यात व्यूपोर्ट 
 state-finish-closed-polyline = बंद पॉलीलाइन पूर्ण करें
 state-finish-open-polyline = खुली पॉलीलाइन पूर्ण करें
 state-fit-extents = सीमाओं में फिट करें
+state-plan-view-then-fit-extents = उसी दूरी पर प्लान दृश्य, फिर सीमाओं में फिट करें
 state-fix-release-centre-both-views = वह केंद्र तय करता या मुक्त करता है जिसके चारों ओर दोनों दृश्य घूमते हैं
 state-folder-section = { $section } में { $folder }
 state-generate-contours = समोच्च रेखाएँ उत्पन्न करें
@@ -2052,6 +2054,8 @@ viewport-bar-hide-rl-grid = ऊंचाई ग्रिड छिपाएँ
 viewport-bar-hide-wireframes = वायरफ़्रेम छिपाएँ
 viewport-bar-hide-xy-grid = XY ग्रिड छिपाएँ
 viewport-bar-release-centre-rotation = घूर्णन केंद्र मुक्त करें
+viewport-bar-reset-view-plan-over-centre = दृश्य रीसेट करें: घूर्णन केंद्र के ऊपर प्लान दृश्य, सब कुछ फिट करने के लिए फिर से क्लिक करें
+viewport-bar-reset-view-plan-same-distance = दृश्य रीसेट करें: उसी दूरी पर प्लान दृश्य, सब कुछ फिट करने के लिए फिर से क्लिक करें
 viewport-bar-show-borehole-inspector = बोरहोल इंस्पेक्टर दिखाएँ
 viewport-bar-show-classification = वर्गीकरण दिखाएँ
 viewport-bar-show-points = बिंदु दिखाएँ

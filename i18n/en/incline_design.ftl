@@ -1467,6 +1467,7 @@ cmd-view-fixed-centre-rotation-x-y = Fixed the centre of rotation at { $x }, { $
 cmd-view-no-point-under-cursor-fix = No point under the cursor to fix the centre of rotation on
 cmd-view-released-centre-rotation = Released the centre of rotation
 cmd-view-reset-view-fit-extents = Reset view (fit to extents)
+cmd-view-reset-view-plan-same-distance = Reset view (plan at the same distance; click again to fit to extents)
 cmd-view-set-cinematic-view-enabled = Set cinematic view = { $enabled }
 cmd-view-set-topology-wireframes-enabled = Set topology wireframes = { $enabled }
 cmd-view-set-view-points-enabled = Set view points = { $enabled }
@@ -3385,6 +3386,7 @@ state-export-viewport-image = Export Viewport Image
 state-finish-closed-polyline = Finish closed polyline
 state-finish-open-polyline = Finish open polyline
 state-fit-extents = Fit to extents
+state-plan-view-then-fit-extents = Plan view at the same distance, then fit to extents
 state-fix-release-centre-both-views = Fix or release the centre both views orbit about
 state-folder-section = { $folder } in { $section }
 state-generate-contours = Generate Contours
@@ -3736,6 +3738,8 @@ viewport-bar-hide-rl-grid = Hide RL Grid
 viewport-bar-hide-wireframes = Hide Wireframes
 viewport-bar-hide-xy-grid = Hide XY Grid
 viewport-bar-release-centre-rotation = Release Centre of Rotation
+viewport-bar-reset-view-plan-over-centre = Reset View: plan over the centre of rotation, click again to fit all
+viewport-bar-reset-view-plan-same-distance = Reset View: plan at the same distance, click again to fit all
 viewport-bar-show-borehole-inspector = Show Borehole Inspector
 viewport-bar-show-classification = Show Classification
 viewport-bar-show-points = Show Points

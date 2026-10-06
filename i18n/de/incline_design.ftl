@@ -749,6 +749,7 @@ cmd-view-fixed-centre-rotation-x-y = Rotationsmittelpunkt bei { $x }, { $y }, { 
 cmd-view-no-point-under-cursor-fix = Kein Punkt unter dem Cursor, um den Rotationsmittelpunkt darauf festzulegen
 cmd-view-released-centre-rotation = Rotationsmittelpunkt freigegeben
 cmd-view-reset-view-fit-extents = Ansicht zurückgesetzt (an Ausdehnung angepasst)
+cmd-view-reset-view-plan-same-distance = Ansicht zurückgesetzt (Draufsicht im selben Abstand; erneut klicken, um an die Ausdehnung anzupassen)
 cmd-view-set-cinematic-view-enabled = Kinoansicht = { $enabled } gesetzt
 cmd-view-set-topology-wireframes-enabled = Topologie-Drahtgitter = { $enabled } gesetzt
 cmd-view-set-view-points-enabled = Punkte anzeigen = { $enabled } gesetzt
@@ -1755,6 +1756,7 @@ state-export-viewport-image = Ansichtsbild exportieren
 state-finish-closed-polyline = Geschlossene Polylinie abschließen
 state-finish-open-polyline = Offene Polylinie abschließen
 state-fit-extents = An Ausdehnung anpassen
+state-plan-view-then-fit-extents = Draufsicht im selben Abstand, dann an Ausdehnung anpassen
 state-fix-release-centre-both-views = Legt den Mittelpunkt fest, um den beide Ansichten kreisen, oder gibt ihn frei
 state-folder-section = { $folder } in { $section }
 state-generate-contours = Höhenlinien erzeugen
@@ -2093,6 +2095,8 @@ viewport-bar-hide-rl-grid = Höhenraster ausblenden
 viewport-bar-hide-wireframes = Drahtgitter ausblenden
 viewport-bar-hide-xy-grid = XY-Raster ausblenden
 viewport-bar-release-centre-rotation = Rotationsmittelpunkt freigeben
+viewport-bar-reset-view-plan-over-centre = Ansicht zurücksetzen: Draufsicht über dem Rotationsmittelpunkt, erneut klicken, um alles einzupassen
+viewport-bar-reset-view-plan-same-distance = Ansicht zurücksetzen: Draufsicht im selben Abstand, erneut klicken, um alles einzupassen
 viewport-bar-show-borehole-inspector = Bohrloch-Inspektor einblenden
 viewport-bar-show-classification = Klassifizierung einblenden
 viewport-bar-show-points = Punkte anzeigen

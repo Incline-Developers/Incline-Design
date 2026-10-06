@@ -1,6 +1,7 @@
 use crate::{
     app::App,
     i18n::tr,
+    rendering::camera::CameraPose,
     ui::state::{ActiveTool, DelayProduct},
     userspace_log, userspace_warn,
 };
@@ -301,14 +302,17 @@ impl<'a> App<'a> {
         }
     }
 
-    /// The surfaces framing must measure: whatever the viewport is actually
+    /// The surfaces framing must measure whatever the viewport is actually
     /// drawing.
     ///
-    /// On the Animate page that is the project's own surfaces *and* the
+    /// On the Animate page, that is the project's own surfaces and the
     /// calculated solids for the instant on screen. Measuring only the
-    /// project's own there framed nothing at all when the solids were the
-    /// only thing visible, and the camera reset to the world origin.
-    fn framed_triangulations(&self) -> &[crate::model::triangulation::OpenTriangulation] {
+    /// project's own surfaces framed nothing when the calculated solids were
+    /// the only visible content, causing the camera to reset to the world
+    /// origin.
+    fn framed_triangulations(
+        &self,
+    ) -> &[crate::model::triangulation::OpenTriangulation] {
         if self.editor.is_schedule_animation() {
             self.schedule_animation.scene()
         } else {
@@ -316,21 +320,57 @@ impl<'a> App<'a> {
         }
     }
 
-    /// Reset the camera to a plan view that fits all visible content.
+    /// Reset in two stages: first switch to plan view while retaining the
+    /// camera distance, then, when clicked again without moving the camera,
+    /// fit the plan view to all visible content.
     pub(crate) fn reset_view(&mut self) {
+        // Clone this before mutably borrowing graphics. The triangulations may
+        // come from either the project or the current schedule animation.
         let triangulations = self.framed_triangulations().to_vec();
-        if let Some(graphics) = self.graphics.as_mut() {
-            graphics.fit_to_extents(
-                &self.scene_document,
-                &triangulations,
-                &self.block_models,
-                &self.drill_holes,
-                &self.point_clouds,
-                &self.editor.hidden_handles,
-            );
-            self.redraw_requested = true;
+
+        let Some(graphics) = self.graphics.as_mut() else {
+            return;
+        };
+
+        let rotation_centre = self.editor.rotation_centre;
+        let plan_pose = graphics.plan_pose_keeping_distance(rotation_centre);
+        let stage = next_reset_stage(graphics.camera_pose(), plan_pose);
+
+        match stage {
+            ResetStage::PlanKeepingDistance => {
+                graphics.plan_view_keeping_distance(
+                    rotation_centre,
+                    &self.scene_document,
+                    &triangulations,
+                    &self.block_models,
+                    &self.drill_holes,
+                    &self.point_clouds,
+                    &self.editor.hidden_handles,
+                );
+
+                userspace_log!(
+                    "{}",
+                    tr!("cmd-view-reset-view-plan-same-distance")
+                );
+            }
+            ResetStage::FitAll => {
+                graphics.fit_to_extents(
+                    &self.scene_document,
+                    &triangulations,
+                    &self.block_models,
+                    &self.drill_holes,
+                    &self.point_clouds,
+                    &self.editor.hidden_handles,
+                );
+
+                userspace_log!(
+                    "{}",
+                    tr!("cmd-view-reset-view-fit-extents")
+                );
+            }
         }
-        userspace_log!("{}", tr!("cmd-view-reset-view-fit-extents"));
+
+        self.redraw_requested = true;
     }
 
     /// Fit all visible content while preserving the current orbit angle.
@@ -415,5 +455,24 @@ pub(crate) fn config_from(
         coordinate_systems,
         mine_coordinate_system,
         workspace_order: workspace_order.to_vec(),
+    }
+}
+
+/// What a click on Reset does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ResetStage {
+    /// Look straight down from where the camera stands.
+    PlanKeepingDistance,
+    /// Plan view fitted to all visible content.
+    FitAll,
+}
+
+/// Square the view up to plan, unless the camera already stands in that plan,
+/// as the first click leaves it: then the click fits everything instead.
+pub(crate) fn next_reset_stage(current: CameraPose, plan_from_here: CameraPose) -> ResetStage {
+    if plan_from_here.matches(&current) {
+        ResetStage::FitAll
+    } else {
+        ResetStage::PlanKeepingDistance
     }
 }

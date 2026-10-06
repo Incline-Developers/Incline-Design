@@ -734,6 +734,7 @@ cmd-view-fixed-centre-rotation-x-y = Đã cố định tâm xoay tại { $x }, {
 cmd-view-no-point-under-cursor-fix = Không có điểm nào dưới con trỏ để cố định tâm xoay
 cmd-view-released-centre-rotation = Đã giải phóng tâm xoay
 cmd-view-reset-view-fit-extents = Đặt lại khung nhìn (vừa khung)
+cmd-view-reset-view-plan-same-distance = Đặt lại khung nhìn (nhìn từ trên xuống ở cùng khoảng cách; nhấp lần nữa để vừa khung)
 cmd-view-set-cinematic-view-enabled = Đặt chế độ xem điện ảnh = { $enabled }
 cmd-view-set-topology-wireframes-enabled = Đặt khung dây bề mặt địa hình = { $enabled }
 cmd-view-set-view-points-enabled = Đặt hiển thị điểm = { $enabled }
@@ -1740,6 +1741,7 @@ state-export-viewport-image = Xuất ảnh khung nhìn
 state-finish-closed-polyline = Hoàn tất đường đa tuyến khép kín
 state-finish-open-polyline = Hoàn tất đường đa tuyến hở
 state-fit-extents = Vừa khung
+state-plan-view-then-fit-extents = Nhìn từ trên xuống ở cùng khoảng cách, rồi vừa khung
 state-fix-release-centre-both-views = Cố định hoặc giải phóng tâm mà cả hai khung nhìn xoay quanh
 state-folder-section = { $folder } trong { $section }
 state-generate-contours = Tạo đường đồng mức
@@ -2078,6 +2080,8 @@ viewport-bar-hide-rl-grid = Ẩn lưới cao độ
 viewport-bar-hide-wireframes = Ẩn khung dây
 viewport-bar-hide-xy-grid = Ẩn lưới XY
 viewport-bar-release-centre-rotation = Giải phóng tâm xoay
+viewport-bar-reset-view-plan-over-centre = Đặt lại khung nhìn: nhìn từ trên xuống tâm xoay, nhấp lần nữa để vừa toàn bộ
+viewport-bar-reset-view-plan-same-distance = Đặt lại khung nhìn: nhìn từ trên xuống ở cùng khoảng cách, nhấp lần nữa để vừa toàn bộ
 viewport-bar-show-borehole-inspector = Hiện trình kiểm tra lỗ khoan
 viewport-bar-show-classification = Hiện phân loại
 viewport-bar-show-points = Hiện điểm

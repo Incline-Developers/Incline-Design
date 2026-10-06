@@ -5992,7 +5992,7 @@ impl UiCommand {
             Self::FinishPolyClose => report(tr!("common-create-polyline"), tr!("state-finish-closed-polyline")),
             Self::CommitStrokeOpen => report(tr!("common-create-line"), tr!("state-finish-open-polyline")),
             Self::CommitCircleTypedRadius => report(tr!("common-create-circle"), tr!("state-use-typed-radius")),
-            Self::ResetView => report(tr!("common-reset-view"), tr!("state-fit-extents")),
+            Self::ResetView => report(tr!("common-reset-view"), tr!("state-plan-view-then-fit-extents")),
             Self::ToggleRotationCentre => report(tr!("state-centre-rotation"), tr!("state-fix-release-centre-both-views")),
             Self::SetTopologyWireframes(enabled) => report(tr!("state-set-topology-wireframes"), if *enabled { tr!("state-shown") } else { tr!("state-hidden") }),
             Self::SetGridShown(shown) => report(tr!("state-set-grid"), if *shown { tr!("state-shown") } else { tr!("state-hidden") }),

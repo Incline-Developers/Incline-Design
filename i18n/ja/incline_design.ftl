@@ -736,6 +736,7 @@ cmd-view-fixed-centre-rotation-x-y = 回転中心を { $x }, { $y }, { $z } に�
 cmd-view-no-point-under-cursor-fix = カーソルの下に回転中心を固定できる点がありません
 cmd-view-released-centre-rotation = 回転中心を解放しました
 cmd-view-reset-view-fit-extents = ビューをリセット（全体表示）
+cmd-view-reset-view-plan-same-distance = ビューをリセット（同じ距離で平面表示。もう一度クリックで全体表示）
 cmd-view-set-cinematic-view-enabled = シネマティックビュー = { $enabled }
 cmd-view-set-topology-wireframes-enabled = トポロジーのワイヤーフレーム表示 = { $enabled }
 cmd-view-set-view-points-enabled = 頂点表示 = { $enabled }
@@ -1742,6 +1743,7 @@ state-export-viewport-image = ビューポート画像をエクスポート
 state-finish-closed-polyline = 閉じたポリラインを完了
 state-finish-open-polyline = 開いたポリラインを完了
 state-fit-extents = 全体表示に合わせる
+state-plan-view-then-fit-extents = 同じ距離で平面表示し、次に全体表示に合わせる
 state-fix-release-centre-both-views = 両方のビューが周回する中心を固定または解放します
 state-folder-section = { $section } の { $folder }
 state-generate-contours = コンターを生成
@@ -2080,6 +2082,8 @@ viewport-bar-hide-rl-grid = 標高グリッドを非表示
 viewport-bar-hide-wireframes = ワイヤーフレームを非表示
 viewport-bar-hide-xy-grid = XYグリッドを非表示
 viewport-bar-release-centre-rotation = 回転中心を解放
+viewport-bar-reset-view-plan-over-centre = ビューをリセット：回転中心の真上から平面表示、もう一度クリックですべて表示
+viewport-bar-reset-view-plan-same-distance = ビューをリセット：同じ距離で平面表示、もう一度クリックですべて表示
 viewport-bar-show-borehole-inspector = 削孔インスペクターを表示
 viewport-bar-show-classification = 分類を表示
 viewport-bar-show-points = 点を表示

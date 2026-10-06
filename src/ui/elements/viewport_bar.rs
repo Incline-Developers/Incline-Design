@@ -562,8 +562,17 @@ fn draw_camera_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
         commands.push(UiCommand::ZoomToExtents);
     }
 
+    // Outside a section Reset takes two clicks: plan where the camera stands,
+    // then everything fitted.
+    let reset_tooltip = if editor.slice_mode_enabled {
+        tr!("common-reset-view")
+    } else if editor.rotation_centre.is_some() {
+        tr!("viewport-bar-reset-view-plan-over-centre")
+    } else {
+        tr!("viewport-bar-reset-view-plan-same-distance")
+    };
     let reset = ui.add(
-        ToolbarButton::new(egui::Image::new(unthemed_icon!("reset_view.svg")), tr!("common-reset-view"))
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("reset_view.svg")), reset_tooltip)
             .id_salt("reset_view")
             .button_side(side),
     );

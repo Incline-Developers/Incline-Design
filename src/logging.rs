@@ -168,8 +168,26 @@ fn runtime_log() -> &'static Mutex<RuntimeLog> {
 }
 
 fn with_runtime_log<T>(f: impl FnOnce(&mut RuntimeLog) -> T) -> T {
+    #[cfg(target_arch = "wasm32")]
+    let mut log = lock_without_parking(runtime_log());
+    #[cfg(not(target_arch = "wasm32"))]
     let mut log = runtime_log().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     f(&mut log)
+}
+
+/// Take `mutex` by retrying instead of parking. In the browser a contended
+/// `lock` parks on `Atomics.wait`, which the main thread may not call, and
+/// the main thread takes the runtime log every frame while workers take it
+/// to report; each holds it only for a short copy in or out.
+#[cfg(target_arch = "wasm32")]
+fn lock_without_parking<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    loop {
+        match mutex.try_lock() {
+            Ok(guard) => return guard,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => return poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => std::hint::spin_loop(),
+        }
+    }
 }
 
 fn timestamp() -> String {
