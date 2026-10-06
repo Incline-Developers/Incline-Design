@@ -916,6 +916,7 @@ cmd-view-fixed-centre-rotation-x-y = Ustawiono środek obrotu w punkcie { $x }, 
 cmd-view-no-point-under-cursor-fix = Pod kursorem nie ma punktu, na którym można ustawić środek obrotu
 cmd-view-released-centre-rotation = Zwolniono środek obrotu
 cmd-view-reset-view-fit-extents = Zresetowano widok (dopasowano do zasięgu)
+cmd-view-reset-view-plan-same-distance = Zresetowano widok (rzut z góry z tej samej odległości; kliknij ponownie, aby dopasować do zasięgu)
 cmd-view-set-cinematic-view-enabled = Widok filmowy = { $enabled }
 cmd-view-set-topology-wireframes-enabled = Ustawiono siatki krawędziowe topologii = { $enabled }
 cmd-view-set-view-points-enabled = Ustawiono widoczność punktów = { $enabled }
@@ -1983,6 +1984,7 @@ state-export-viewport-image = Eksportuj obraz widoku
 state-finish-closed-polyline = Zakończ zamkniętą polilinię
 state-finish-open-polyline = Zakończ otwartą polilinię
 state-fit-extents = Dopasuj do zasięgu
+state-plan-view-then-fit-extents = Rzut z góry z tej samej odległości, potem dopasuj do zasięgu
 state-fix-release-centre-both-views = Ustawia lub zwalnia środek, wokół którego obracają się oba widoki
 state-folder-section = { $folder } w { $section }
 state-generate-contours = Generuj poziomice
@@ -2331,6 +2333,8 @@ viewport-bar-hide-rl-grid = Ukryj siatkę rzędnych
 viewport-bar-hide-wireframes = Ukryj siatki krawędziowe
 viewport-bar-hide-xy-grid = Ukryj siatkę XY
 viewport-bar-release-centre-rotation = Zwolnij środek obrotu
+viewport-bar-reset-view-plan-over-centre = Resetuj widok: rzut z góry nad środkiem obrotu, kliknij ponownie, aby dopasować wszystko
+viewport-bar-reset-view-plan-same-distance = Resetuj widok: rzut z góry z tej samej odległości, kliknij ponownie, aby dopasować wszystko
 viewport-bar-show-borehole-inspector = Pokaż inspektor otworów wiertniczych
 viewport-bar-show-classification = Pokaż klasyfikację
 viewport-bar-show-points = Pokaż punkty

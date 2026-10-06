@@ -893,6 +893,7 @@ cmd-view-fixed-centre-rotation-x-y = Центр обертання закріп�
 cmd-view-no-point-under-cursor-fix = Під курсором немає точки, щоб закріпити на ній центр обертання
 cmd-view-released-centre-rotation = Центр обертання звільнено
 cmd-view-reset-view-fit-extents = Скинути вигляд (вписати в межі)
+cmd-view-reset-view-plan-same-distance = Скинути вигляд (вигляд у плані з тієї ж відстані; клацніть ще раз, щоб вписати в межі)
 cmd-view-set-cinematic-view-enabled = Кінематографічний вигляд = { $enabled }
 cmd-view-set-topology-wireframes-enabled = Каркас топології = { $enabled }
 cmd-view-set-view-points-enabled = Відображення точок = { $enabled }
@@ -1960,6 +1961,7 @@ state-export-viewport-image = Експорт зображення області
 state-finish-closed-polyline = Завершити замкнену полілінію
 state-finish-open-polyline = Завершити розімкнену полілінію
 state-fit-extents = Вписати в межі
+state-plan-view-then-fit-extents = Вигляд у плані з тієї ж відстані, потім вписати в межі
 state-fix-release-centre-both-views = Закріплює або звільняє центр, навколо якого обертаються обидва види
 state-folder-section = { $folder } у { $section }
 state-generate-contours = Створити горизонталі
@@ -2308,6 +2310,8 @@ viewport-bar-hide-rl-grid = Сховати сітку позначок
 viewport-bar-hide-wireframes = Приховати каркаси
 viewport-bar-hide-xy-grid = Сховати сітку XY
 viewport-bar-release-centre-rotation = Звільнити центр обертання
+viewport-bar-reset-view-plan-over-centre = Скинути вигляд: план над центром обертання, клацніть ще раз, щоб вписати все
+viewport-bar-reset-view-plan-same-distance = Скинути вигляд: план з тієї ж відстані, клацніть ще раз, щоб вписати все
 viewport-bar-show-borehole-inspector = Показати інспектор свердловини
 viewport-bar-show-classification = Показати класифікацію
 viewport-bar-show-points = Показати точки

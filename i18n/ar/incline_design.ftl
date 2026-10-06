@@ -846,6 +846,7 @@ cmd-view-fixed-centre-rotation-x-y = تم تثبيت مركز الدوران ع�
 cmd-view-no-point-under-cursor-fix = لا توجد نقطة تحت المؤشر لتثبيت مركز الدوران عليها
 cmd-view-released-centre-rotation = تم تحرير مركز الدوران
 cmd-view-reset-view-fit-extents = إعادة تعيين العرض (ملاءمة للحدود)
+cmd-view-reset-view-plan-same-distance = إعادة تعيين العرض (منظر علوي على المسافة نفسها؛ انقر مرة أخرى للملاءمة للحدود)
 cmd-view-set-cinematic-view-enabled = تعيين العرض السينمائي = { $enabled }
 cmd-view-set-topology-wireframes-enabled = تعيين الإطارات السلكية للطبوغرافيا = { $enabled }
 cmd-view-set-view-points-enabled = تعيين نقاط العرض = { $enabled }
@@ -1913,6 +1914,7 @@ state-export-viewport-image = تصدير صورة منفذ العرض
 state-finish-closed-polyline = إنهاء الخط المتعدد المغلق
 state-finish-open-polyline = إنهاء الخط المتعدد المفتوح
 state-fit-extents = ملاءمة للحدود
+state-plan-view-then-fit-extents = منظر علوي على المسافة نفسها، ثم ملاءمة للحدود
 state-fix-release-centre-both-views = تثبيت أو تحرير المركز الذي يدور حوله كلا العرضين
 state-folder-section = { $folder } في { $section }
 state-generate-contours = توليد خطوط كنتور
@@ -2261,6 +2263,8 @@ viewport-bar-hide-rl-grid = إخفاء شبكة المناسيب
 viewport-bar-hide-wireframes = إخفاء الإطارات السلكية
 viewport-bar-hide-xy-grid = إخفاء شبكة XY
 viewport-bar-release-centre-rotation = تحرير مركز الدوران
+viewport-bar-reset-view-plan-over-centre = إعادة ضبط العرض: منظر علوي فوق مركز الدوران، انقر مرة أخرى لملاءمة الكل
+viewport-bar-reset-view-plan-same-distance = إعادة ضبط العرض: منظر علوي على المسافة نفسها، انقر مرة أخرى لملاءمة الكل
 viewport-bar-show-borehole-inspector = إظهار مفتش الثقوب
 viewport-bar-show-classification = إظهار التصنيف
 viewport-bar-show-points = إظهار النقاط

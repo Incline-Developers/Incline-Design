@@ -844,6 +844,7 @@ cmd-view-fixed-centre-rotation-x-y = Centro de rotação fixado em { $x }, { $y 
 cmd-view-no-point-under-cursor-fix = Nenhum ponto sob o cursor onde fixar o centro de rotação
 cmd-view-released-centre-rotation = Centro de rotação libertado
 cmd-view-reset-view-fit-extents = Repor vista (ajustar às extensões)
+cmd-view-reset-view-plan-same-distance = Repor vista (planta à mesma distância; clique novamente para ajustar às extensões)
 cmd-view-set-cinematic-view-enabled = Vista cinematográfica = { $enabled }
 cmd-view-set-topology-wireframes-enabled = Estruturas de arame da topografia = { $enabled }
 cmd-view-set-view-points-enabled = Pontos da vista = { $enabled }
@@ -1911,6 +1912,7 @@ state-export-viewport-image = Exportar Imagem da Janela de Visualização
 state-finish-closed-polyline = Terminar polilinha fechada
 state-finish-open-polyline = Terminar polilinha aberta
 state-fit-extents = Ajustar às extensões
+state-plan-view-then-fit-extents = Vista em planta à mesma distância e depois ajustar às extensões
 state-fix-release-centre-both-views = Fixa ou liberta o centro em torno do qual ambas as vistas orbitam
 state-folder-section = { $folder } em { $section }
 state-generate-contours = Gerar curvas de nível
@@ -2259,6 +2261,8 @@ viewport-bar-hide-rl-grid = Ocultar grelha de cotas
 viewport-bar-hide-wireframes = Ocultar estruturas de arame
 viewport-bar-hide-xy-grid = Ocultar grelha XY
 viewport-bar-release-centre-rotation = Libertar centro de rotação
+viewport-bar-reset-view-plan-over-centre = Redefinir vista: planta sobre o centro de rotação, clique novamente para ajustar tudo
+viewport-bar-reset-view-plan-same-distance = Redefinir vista: planta à mesma distância, clique novamente para ajustar tudo
 viewport-bar-show-borehole-inspector = Mostrar inspetor de furos de sondagem
 viewport-bar-show-classification = Mostrar classificação
 viewport-bar-show-points = Mostrar pontos

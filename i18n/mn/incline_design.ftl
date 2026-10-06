@@ -897,6 +897,7 @@ cmd-view-fixed-centre-rotation-x-y = Эргэлтийн төвийг { $x }, { $
 cmd-view-no-point-under-cursor-fix = Заагчийн доор эргэлтийн төвийг тогтоох цэг алга
 cmd-view-released-centre-rotation = Эргэлтийн төвийг суллалаа
 cmd-view-reset-view-fit-extents = Харагдацыг сэргээх (хэмжээнд тааруулах)
+cmd-view-reset-view-plan-same-distance = Харагдацыг сэргээх (ижил зайнаас дээрээс харах; хэмжээнд тааруулахын тулд дахин дарна уу)
 cmd-view-set-cinematic-view-enabled = Кино харагдацыг тохируулав = { $enabled }
 cmd-view-set-topology-wireframes-enabled = Топологийн торон дүрсийг тохируулав = { $enabled }
 cmd-view-set-view-points-enabled = Цэгийн харагдацыг тохируулав = { $enabled }
@@ -1964,6 +1965,7 @@ state-export-viewport-image = Харагдах цонхны зургийг эк�
 state-finish-closed-polyline = Хаалттай полилиниаг дуусгах
 state-finish-open-polyline = Задгай полилиниаг дуусгах
 state-fit-extents = Хэмжээнд тааруулах
+state-plan-view-then-fit-extents = Ижил зайнаас дээрээс харах, дараа нь хэмжээнд тааруулах
 state-fix-release-centre-both-views = Хоёр харагдац эргэдэг төвийг тогтоох эсвэл суллах
 state-folder-section = { $section } дахь { $folder }
 state-generate-contours = Изолиниа үүсгэх
@@ -2312,6 +2314,8 @@ viewport-bar-hide-rl-grid = RL торыг нуух
 viewport-bar-hide-wireframes = Торон дүрсийг нуух
 viewport-bar-hide-xy-grid = XY торыг нуух
 viewport-bar-release-centre-rotation = Эргэлтийн төвийг суллах
+viewport-bar-reset-view-plan-over-centre = Харагдацыг сэргээх: эргэлтийн төвийн дээрээс харах, бүгдийг тааруулахын тулд дахин дарна уу
+viewport-bar-reset-view-plan-same-distance = Харагдацыг сэргээх: ижил зайнаас дээрээс харах, бүгдийг тааруулахын тулд дахин дарна уу
 viewport-bar-show-borehole-inspector = Цооногийн шалгагчийг харуулах
 viewport-bar-show-classification = Ангиллыг харуулах
 viewport-bar-show-points = Цэгүүдийг харуулах

@@ -846,6 +846,7 @@ cmd-view-fixed-centre-rotation-x-y = مرکز چرخش در { $x }، { $y }، { 
 cmd-view-no-point-under-cursor-fix = هیچ نقطه‌ای زیر نشانگر برای ثابت کردن مرکز چرخش وجود ندارد
 cmd-view-released-centre-rotation = مرکز چرخش آزاد شد
 cmd-view-reset-view-fit-extents = بازنشانی نما (جا دادن در محدوده)
+cmd-view-reset-view-plan-same-distance = بازنشانی نما (نمای پلان در همان فاصله؛ برای جا دادن در محدوده دوباره کلیک کنید)
 cmd-view-set-cinematic-view-enabled = تنظیم نمای سینمایی = { $enabled }
 cmd-view-set-topology-wireframes-enabled = تنظیم قاب سیمی توپوگرافی = { $enabled }
 cmd-view-set-view-points-enabled = تنظیم نقاط نما = { $enabled }
@@ -1913,6 +1914,7 @@ state-export-viewport-image = صادرات تصویر نمای دید
 state-finish-closed-polyline = پایان چندخطی بسته
 state-finish-open-polyline = پایان چندخطی باز
 state-fit-extents = جا دادن در محدوده
+state-plan-view-then-fit-extents = نمای پلان در همان فاصله، سپس جا دادن در محدوده
 state-fix-release-centre-both-views = مرکزی را که هر دو نما حول آن می‌چرخند، ثابت یا آزاد می‌کند
 state-folder-section = { $folder } در { $section }
 state-generate-contours = تولید منحنی‌های میزان
@@ -2261,6 +2263,8 @@ viewport-bar-hide-rl-grid = پنهان کردن شبکه ترازها
 viewport-bar-hide-wireframes = پنهان کردن قاب‌های سیمی
 viewport-bar-hide-xy-grid = پنهان کردن شبکه XY
 viewport-bar-release-centre-rotation = آزاد کردن مرکز چرخش
+viewport-bar-reset-view-plan-over-centre = بازنشانی نما: نمای پلان روی مرکز چرخش، برای جا دادن همه دوباره کلیک کنید
+viewport-bar-reset-view-plan-same-distance = بازنشانی نما: نمای پلان در همان فاصله، برای جا دادن همه دوباره کلیک کنید
 viewport-bar-show-borehole-inspector = نمایش بازرس گمانه
 viewport-bar-show-classification = نمایش طبقه‌بندی
 viewport-bar-show-points = نمایش نقاط

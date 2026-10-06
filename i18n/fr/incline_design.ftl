@@ -846,6 +846,7 @@ cmd-view-fixed-centre-rotation-x-y = Centre de rotation fixé à { $x }, { $y },
 cmd-view-no-point-under-cursor-fix = Aucun point sous le curseur pour y fixer le centre de rotation
 cmd-view-released-centre-rotation = Centre de rotation libéré
 cmd-view-reset-view-fit-extents = Réinitialiser la vue (ajuster à l’étendue)
+cmd-view-reset-view-plan-same-distance = Réinitialiser la vue (vue en plan à la même distance ; cliquer à nouveau pour ajuster à l’étendue)
 cmd-view-set-cinematic-view-enabled = Vue cinématique = { $enabled }
 cmd-view-set-topology-wireframes-enabled = Filaires de topologie = { $enabled }
 cmd-view-set-view-points-enabled = Points de la vue = { $enabled }
@@ -1913,6 +1914,7 @@ state-export-viewport-image = Exporter l'image du point de vue
 state-finish-closed-polyline = Terminer la polyligne fermée
 state-finish-open-polyline = Terminer la polyligne ouverte
 state-fit-extents = Ajuster à l’étendue
+state-plan-view-then-fit-extents = Vue en plan à la même distance, puis ajuster à l’étendue
 state-fix-release-centre-both-views = Fixe ou libère le centre autour duquel les deux vues orbitent
 state-folder-section = { $folder } dans { $section }
 state-generate-contours = Générer courbes de niveau
@@ -2261,6 +2263,8 @@ viewport-bar-hide-rl-grid = Masquer la grille d'altitude
 viewport-bar-hide-wireframes = Masquer les filaires
 viewport-bar-hide-xy-grid = Masquer la grille XY
 viewport-bar-release-centre-rotation = Libérer le centre de rotation
+viewport-bar-reset-view-plan-over-centre = Réinitialiser la vue : plan au-dessus du centre de rotation, cliquer à nouveau pour tout ajuster
+viewport-bar-reset-view-plan-same-distance = Réinitialiser la vue : plan à la même distance, cliquer à nouveau pour tout ajuster
 viewport-bar-show-borehole-inspector = Afficher l’inspecteur de sondage
 viewport-bar-show-classification = Afficher la classification
 viewport-bar-show-points = Afficher les points

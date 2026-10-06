@@ -846,6 +846,7 @@ cmd-view-fixed-centre-rotation-x-y = Pusat rotasi ditetapkan di { $x }, { $y }, 
 cmd-view-no-point-under-cursor-fix = Tidak ada titik di bawah kursor untuk menetapkan pusat rotasi
 cmd-view-released-centre-rotation = Titik pusat rotasi dilepaskan
 cmd-view-reset-view-fit-extents = Atur ulang tampilan (sesuaikan dengan batas)
+cmd-view-reset-view-plan-same-distance = Atur ulang tampilan (tampak atas pada jarak yang sama; klik lagi untuk menyesuaikan dengan batas)
 cmd-view-set-cinematic-view-enabled = Tampilan sinematik = { $enabled }
 cmd-view-set-topology-wireframes-enabled = Atur kerangka kawat topologi = { $enabled }
 cmd-view-set-view-points-enabled = Atur titik tampilan = { $enabled }
@@ -1913,6 +1914,7 @@ state-export-viewport-image = Ekspor Gambar Viewport
 state-finish-closed-polyline = Selesaikan poligaris tertutup
 state-finish-open-polyline = Selesaikan poligaris terbuka
 state-fit-extents = Sesuaikan dengan batas
+state-plan-view-then-fit-extents = Tampak atas pada jarak yang sama, lalu sesuaikan dengan batas
 state-fix-release-centre-both-views = Menetapkan atau melepaskan pusat tempat kedua tampilan berputar
 state-folder-section = { $folder } di { $section }
 state-generate-contours = Buat Kontur
@@ -2261,6 +2263,8 @@ viewport-bar-hide-rl-grid = Sembunyikan Grid Elevasi
 viewport-bar-hide-wireframes = Sembunyikan Kerangka Kawat
 viewport-bar-hide-xy-grid = Sembunyikan Grid XY
 viewport-bar-release-centre-rotation = Lepaskan Pusat Rotasi
+viewport-bar-reset-view-plan-over-centre = Atur ulang tampilan: tampak atas di atas pusat rotasi, klik lagi untuk menyesuaikan semua
+viewport-bar-reset-view-plan-same-distance = Atur ulang tampilan: tampak atas pada jarak yang sama, klik lagi untuk menyesuaikan semua
 viewport-bar-show-borehole-inspector = Tampilkan Inspektur Lubang Bor
 viewport-bar-show-classification = Tampilkan Klasifikasi
 viewport-bar-show-points = Tampilkan Titik
