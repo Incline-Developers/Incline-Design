@@ -49,7 +49,11 @@ pub(crate) fn drill_hole_load_key(source: &DrillHoleSource, runtime_id: u32) -> 
 fn apply_loaded_bundle(app: &mut App, result: Result<LoadedBundle>) {
     match result {
         Ok(bundle) => {
+            let should_fit = !app.scene_has_renderables();
             app.add_loaded_bundle(bundle);
+            if should_fit {
+                app.fit_view_to_extents();
+            }
             app.job_needs_gpu_upload();
         }
         Err(error) => userspace_warn!("{}", tr!("cmd-drill-hole-failed-load-drillholes-error", error = format!("{error:#}"))),
@@ -227,7 +231,11 @@ impl<'a> App<'a> {
         };
         let apply = move |app: &mut App, result: Result<LoadedDrillHoleDataset>| match result {
             Ok(loaded) => {
+                let should_fit = !app.scene_has_renderables();
                 let id = app.add_loaded_drill_holes(loaded);
+                if should_fit {
+                    app.fit_view_to_extents();
+                }
                 app.job_needs_gpu_upload();
                 if !geophysics.is_empty() {
                     app.link_bundle_geophysics(id, geophysics);
