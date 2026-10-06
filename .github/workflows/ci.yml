@@ -1,4 +1,4 @@
-name: CI
+name: CI with executable build
 
 on:
   pull_request:
@@ -20,15 +20,21 @@ jobs:
   fmt:
     name: Formatting
     runs-on: ubuntu-24.04
+
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Install repository toolchain
         run: rustup show
-      - run: cargo fmt --all --check
+
+      - name: Check formatting
+        run: cargo fmt --all --check
 
   check:
     name: Check and Clippy (${{ matrix.target }}${{ matrix.features && ' with ' || '' }}${{ matrix.features }})
     runs-on: ${{ matrix.os }}
+
     strategy:
       fail-fast: false
       matrix:
@@ -36,40 +42,151 @@ jobs:
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             cargo-targets: --all-targets
+
           # The native solvers are off by default; keep their code building.
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             cargo-targets: --all-targets
             features: scip-source,highs
+
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             cargo-targets: --all-targets
+
           - os: ubuntu-24.04
             target: x86_64-pc-windows-gnu
             cargo-targets: --all-targets
+
           - os: macos-latest
             target: aarch64-apple-darwin
             cargo-targets: --all-targets
+
           - os: ubuntu-24.04
             target: wasm32-unknown-unknown
-            # Browser builds use panic=abort and do not support the native test harness.
+
+            # Browser builds use panic=abort and do not support the native
+            # test harness.
             cargo-targets: --lib --bins
+
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
+
           # libclang-dev: the scip-source row generates SCIP bindings with bindgen.
-          sudo apt-get install -y --no-install-recommends clang libclang-dev mold libgtk-3-dev libxkbcommon-dev
+          sudo apt-get install -y --no-install-recommends \
+            clang \
+            libclang-dev \
+            mold \
+            libgtk-3-dev \
+            libxkbcommon-dev
+
       - name: Install Windows GNU cross tools
         if: matrix.target == 'x86_64-pc-windows-gnu'
-        run: sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
+        run: |
+          sudo apt-get install -y --no-install-recommends \
+            gcc-mingw-w64-x86-64
+
       - name: Install repository toolchain
         run: rustup show
+
       - name: Install target
         run: rustup target add ${{ matrix.target }}
+
       - name: Check
-        run: cargo check --workspace ${{ matrix.cargo-targets }} --locked --target ${{ matrix.target }} ${{ matrix.features && '--features' || '' }} ${{ matrix.features }}
+        run: >
+          cargo check
+          --workspace
+          ${{ matrix.cargo-targets }}
+          --locked
+          --target ${{ matrix.target }}
+          ${{ matrix.features && '--features' || '' }}
+          ${{ matrix.features }}
+
       - name: Clippy
-        run: cargo clippy --workspace ${{ matrix.cargo-targets }} --locked --target ${{ matrix.target }} ${{ matrix.features && '--features' || '' }} ${{ matrix.features }} -- -D warnings
+        run: >
+          cargo clippy
+          --workspace
+          ${{ matrix.cargo-targets }}
+          --locked
+          --target ${{ matrix.target }}
+          ${{ matrix.features && '--features' || '' }}
+          ${{ matrix.features }}
+          --
+          -D warnings
+
+  build-linux:
+    name: Build Linux executable
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang \
+            libclang-dev \
+            mold \
+            libgtk-3-dev \
+            libxkbcommon-dev
+
+      - name: Install repository toolchain
+        run: rustup show
+
+      - name: Build release executable
+        run: cargo build --release --locked
+
+      - name: Stage Linux executable
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p out
+          cp target/release/incline-design \
+            out/Incline-Design-linux-x86_64
+
+      - name: Upload Linux executable
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Incline-Design-linux-x86_64
+          path: out/Incline-Design-linux-x86_64
+          if-no-files-found: error
+          retention-days: 7
+
+  build-windows:
+    name: Build Windows executable
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install repository toolchain
+        run: rustup show
+
+      - name: Build release executable
+        run: cargo build --release --locked
+
+      - name: Stage Windows executable
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p out
+          cp target/release/incline-design.exe \
+            out/Incline-Design-windows-x86_64.exe
+
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Incline-Design-windows-x86_64
+          path: out/Incline-Design-windows-x86_64.exe
+          if-no-files-found: error
+          retention-days: 7
