@@ -8,7 +8,7 @@ use anyhow::Result;
 use rayon::prelude::*;
 
 use super::{
-    cuts::clip_mesh_by_surface,
+    cuts::{FoldLayer, PreparedReferenceSurface, REPAIR_WELD, clip_mesh_by_prepared_surface, single_valued_surface, snap_surface_points},
     session::{self},
     *,
 };
@@ -73,14 +73,19 @@ fn append_oriented(source: (Vec<mesh_data::Vertex>, Vec<[u32; 3]>), facing: Faci
     output.0.extend(vertices);
 }
 
+/// How close in height, in model units, the design and the topography may run
+/// and still be taken to meet rather than enclose anything.
+///
+/// A design is often built from the topography - a pit stitched into the
+/// ground it was cut from - and agrees with it beyond the crest only to within
+/// rounding, or to where the two triangulate the same ground differently.
+/// Taken literally, that noise is thousands of slivers a hair thick, each its
+/// own scrap of solid with sides too thin to close.
+const SURFACE_CONTACT: f64 = 1.0e-2;
+
 /// Clip each surface to the wanted region and hand back the two sheets that
 /// bound it.
-fn build_envelopes(
-    design: &mesh_data::Triangulation,
-    topography: &mesh_data::Triangulation,
-    region: SolidRegion,
-    progress: &crate::model::progress::Phase,
-) -> Result<SolidEnvelopes> {
+fn build_envelopes(design: &PreparedReferenceSurface, topography: &PreparedReferenceSurface, region: SolidRegion, progress: &crate::model::progress::Phase) -> SolidEnvelopes {
     // `CutTop` keeps what lies below the reference, `CutBottom` what lies
     // above it. For a cut the floor is the design where it runs below the
     // ground and the roof is the ground above it; for a fill the roles - and
@@ -89,8 +94,8 @@ fn build_envelopes(
         SolidRegion::Cut => (TriSurfaceCutSide::CutTop, TriSurfaceCutSide::CutBottom),
         SolidRegion::Fill => (TriSurfaceCutSide::CutBottom, TriSurfaceCutSide::CutTop),
     };
-    let design_sheet = clip_mesh_by_surface(design, topography, design_side, &progress.phase(0.0, 0.5))?;
-    let topography_sheet = clip_mesh_by_surface(topography, design, topography_side, &progress.phase(0.5, 1.0))?;
+    let design_sheet = clip_mesh_by_prepared_surface(&design.mesh, topography, design_side, SURFACE_CONTACT, &progress.phase(0.0, 0.5));
+    let topography_sheet = clip_mesh_by_prepared_surface(&topography.mesh, design, topography_side, SURFACE_CONTACT, &progress.phase(0.5, 1.0));
 
     let (floor, roof) = match region {
         SolidRegion::Cut => (design_sheet, topography_sheet),
@@ -102,7 +107,7 @@ fn build_envelopes(
     let mut upper = (Vec::new(), Vec::new());
     append_oriented(roof, Facing::Up, &mut upper);
 
-    Ok(SolidEnvelopes { lower, upper })
+    SolidEnvelopes { lower, upper }
 }
 
 /// The volume enclosed between two surfaces on one side of their crossing, as
@@ -147,7 +152,33 @@ fn build_solid_local(
     region: SolidRegion,
     progress: &crate::model::progress::Phase,
 ) -> Result<(Vec<mesh_data::Vertex>, Vec<[u32; 3]>, f64)> {
-    let SolidEnvelopes { lower, upper } = build_envelopes(design, topography, region, progress)?;
+    // The two surfaces share the ground beyond the crest when one was built
+    // from the other, and points rounding moved a hair apart are made one.
+    let snapped = snap_surface_points(topography, design)?;
+    let topography = snapped.as_ref().unwrap_or(topography);
+    // A surface that folds over itself in plan cannot say which side of it a
+    // point is on, and one that is cracked leaves the solid open. Each is
+    // repaired first; where it folds, towards the outside of the solid - the
+    // floor keeps its lowest sheet and the roof its highest - so the solid
+    // takes in a fold rather than tearing round it.
+    let (design_keep, topography_keep) = match region {
+        SolidRegion::Cut => (FoldLayer::Lowest, FoldLayer::Highest),
+        SolidRegion::Fill => (FoldLayer::Highest, FoldLayer::Lowest),
+    };
+    let mut surfaces = Vec::with_capacity(2);
+    for (surface, keep, role) in [
+        (design, design_keep, tr!("tri-solid-role-design")),
+        (topography, topography_keep, tr!("tri-solid-role-topography")),
+    ] {
+        let (prepared, repaired) = single_valued_surface(surface, keep)?;
+        if repaired {
+            userspace_warn!("{}", tr!("tri-solid-repaired-surface", role = role));
+        } else if prepared.skipped_vertical_faces > 0 {
+            userspace_warn!("{}", tr!("cmd-cuts-ignored-vertical-faces", count = prepared.skipped_vertical_faces.to_string()));
+        }
+        surfaces.push(prepared);
+    }
+    let SolidEnvelopes { lower, upper } = build_envelopes(&surfaces[0], &surfaces[1], region, progress);
     if lower.1.is_empty() || upper.1.is_empty() {
         anyhow::bail!(
             "The two surfaces enclose no {} volume: the design surface is nowhere {} the topography within the area they share",
@@ -160,15 +191,29 @@ fn build_solid_local(
     }
 
     let volume = volume_between(&lower, &upper);
-    let walls = close_region_sides(&lower, &upper);
 
     let mut vertices = lower.0;
     let mut faces = lower.1;
-    for part in [upper, walls] {
-        let base = vertices.len() as u32;
-        vertices.extend(part.0);
-        faces.extend(part.1.into_iter().map(|face| [base + face[0], base + face[1], base + face[2]]));
-    }
+    let floor_faces = faces.len();
+    let base = vertices.len() as u32;
+    vertices.extend(upper.0);
+    faces.extend(upper.1.into_iter().map(|face| face.map(|index| base + index)));
+    let (vertices, mut faces, floor_faces) = merge_close_points(vertices, faces, floor_faces, SOLID_MERGE, None);
+    let walls = close_region_sides(&vertices, &faces, floor_faces);
+    faces.extend(walls);
+    let patches = fill_flat_holes(&vertices, &faces);
+    faces.extend(patches);
+    // A knot of points still open where the sheets part is closed by merging
+    // just those, within the weld the surfaces themselves were repaired to.
+    let loose = open_edge_points(&vertices, &faces);
+    let (vertices, faces) = if loose.is_empty() {
+        (vertices, faces)
+    } else {
+        let (vertices, mut faces, _) = merge_close_points(vertices, faces, 0, REPAIR_WELD, Some(&loose));
+        let patches = fill_flat_holes(&vertices, &faces);
+        faces.extend(patches);
+        (vertices, faces)
+    };
 
     // The sheets close against each other along the line where the surfaces
     // cross, and against the wall everywhere else. Anything still open is a
@@ -205,27 +250,50 @@ fn volume_between(lower: &(Vec<mesh_data::Vertex>, Vec<[u32; 3]>), upper: &(Vec<
     height_integral(upper, origin_z) - height_integral(lower, origin_z)
 }
 
-/// How many edges of the mesh are not shared by exactly two faces, once
-/// coincident vertices are welded.
+/// How many edges of the mesh do not close, once coincident vertices are
+/// welded: those used by an odd number of faces, and those used by more than
+/// two whose faces do not run them as often one way as the other.
 ///
 /// A closed solid has none. Ones that do appear are the sides: where the
 /// region ends because a surface simply runs out - a design that stops short
 /// of the ground rather than meeting it - the floor and the roof end at
 /// different heights with nothing between them. The volume is still exact
 /// there, but the mesh is a shell rather than a solid, which is worth saying.
+///
+/// An edge four faces share is where two parts of a solid touch along a line,
+/// as a wall standing on a crest that pinches against the ground does, and is
+/// as closed as any, so long as half its faces run it each way.
+///
+/// Edges that leak no more than [`LEAK_TOLERANCE`] between them, end to end,
+/// are not counted: a hole that small is a rounding error's worth of crack
+/// where two surfaces built one from the other were clipped against each
+/// other, and holds nothing a volume could measure. A real open side runs
+/// the length of a wall.
 pub(crate) fn open_edge_count(vertices: &[mesh_data::Vertex], faces: &[[u32; 3]]) -> usize {
     use std::collections::HashMap;
     let scale = weld_scale(vertices);
     let key = |index: u32| point_key_scaled(vertices[index as usize], scale);
-    let mut counts: HashMap<EdgeKey, usize, FixedState> = HashMap::default();
+    let mut counts: HashMap<EdgeKey, (usize, isize, f64), FixedState> = HashMap::default();
     for face in faces {
         for (a, b) in [(face[0], face[1]), (face[1], face[2]), (face[2], face[0])] {
+            let (pa, pb) = (vertices[a as usize], vertices[b as usize]);
             let (a, b) = (key(a), key(b));
-            *counts.entry(if a <= b { (a, b) } else { (b, a) }).or_default() += 1;
+            let entry = counts.entry(if a <= b { (a, b) } else { (b, a) }).or_default();
+            entry.0 += 1;
+            entry.1 += if a <= b { 1 } else { -1 };
+            entry.2 = ((pa.x - pb.x).powi(2) + (pa.y - pb.y).powi(2) + (pa.z - pb.z).powi(2)).sqrt();
         }
     }
-    counts.values().filter(|count| **count != 2).count()
+    let (open, leak) = counts
+        .values()
+        .filter(|(count, balance, _)| *count != 2 && (count % 2 == 1 || *balance != 0))
+        .fold((0, 0.0), |(open, leak), (.., length)| (open + 1, leak + length));
+    if leak <= LEAK_TOLERANCE { 0 } else { open }
 }
+
+/// The most open edge, end to end, a mesh may have and still be closed: see
+/// [`open_edge_count`].
+const LEAK_TOLERANCE: f64 = REPAIR_WELD;
 
 impl App<'_> {
     /// Create a new closed solid from a design surface and the topography it
@@ -308,7 +376,27 @@ pub(crate) fn slabs_between_elevations(mesh: &mesh_data::Triangulation, bands: &
         anyhow::bail!("Bench bands must be finite, ascending and non-overlapping");
     }
     let mut slabs: Vec<Slab> = vec![(Vec::new(), Vec::new()); bands.len()];
-    let source = mesh.vertices();
+    // A point a rounding error off a cut plane - a crest built at a bench's
+    // own elevation, say - is put on it. Left a hair to either side, the cut
+    // trims slivers off the faces meeting there, too thin to keep and too
+    // long to drop without cracking the rim.
+    let tolerance = Weld::of(mesh.vertices()).tolerance;
+    let mut planes: Vec<f64> = bands.iter().flat_map(|&(base, top)| [base, top]).collect();
+    planes.sort_by(f64::total_cmp);
+    let source: Vec<mesh_data::Vertex> = mesh
+        .vertices()
+        .iter()
+        .map(|vertex| {
+            let next = planes.partition_point(|plane| *plane < vertex.z);
+            let nearest = [next.checked_sub(1), Some(next)]
+                .into_iter()
+                .flatten()
+                .filter_map(|index| planes.get(index))
+                .copied()
+                .find(|plane| (plane - vertex.z).abs() <= tolerance);
+            nearest.map_or(*vertex, |plane| mesh_data::Vertex::new(vertex.x, vertex.y, plane))
+        })
+        .collect();
     for (face_index, face) in mesh.face_vertex_indices_iter().enumerate() {
         if face_index % 1024 == 0 && cancel.is_some_and(|cancel| cancel.is_cancelled()) {
             anyhow::bail!("Cancelled");
@@ -415,8 +503,21 @@ fn cap_slab(slab: &mut (Vec<mesh_data::Vertex>, Vec<[u32; 3]>), base: f64, top: 
         if rim.is_empty() {
             continue;
         }
-        let rings = planar_cap_rings(&rim, weld);
-        let capped: Vec<bool> = rings.iter().map(|ring| ring_is_material(ring, &sides, weld)).collect();
+        let (rings, capped) = match directed_cap_rings(&rim, &sides, weld) {
+            Some((directed, seams)) => {
+                for seam in seams {
+                    let base = slab.0.len() as u32;
+                    slab.0.extend_from_slice(&seam);
+                    slab.1.push([base, base + 1, base + 2]);
+                }
+                directed.into_iter().unzip()
+            }
+            None => {
+                let rings = planar_cap_rings(&rim, weld);
+                let capped: Vec<bool> = rings.iter().map(|ring| ring_is_material(ring, &sides, weld)).collect();
+                (rings, capped)
+            }
+        };
         append_caps(&rings, &capped, plane, upwards, &mut slab.0, &mut slab.1);
     }
 }
@@ -922,68 +1023,449 @@ impl CapPolygon {
     }
 }
 
-/// Close the sides of the region with a vertical wall between the two sheets.
-///
-/// The floor and roof meet on their own along the line where the surfaces
-/// cross - both clips stop there, at the same heights - but nowhere else. Where
-/// the region ends because a surface simply runs out inside the other's
-/// footprint, the two sheets end one above the other with a gap between them,
-/// and that gap is what this fills.
-///
-/// Both sheets cover the same XY region, so their rims trace the same closed
-/// path with different tessellations. The wall is built on the merge of the
-/// two: every rim vertex of either sheet becomes a wall vertex, so the wall's
-/// edges line up with the sheet edges on both sides and the result is closed
-/// rather than merely gapless.
-fn close_region_sides(floor: &(Vec<mesh_data::Vertex>, Vec<[u32; 3]>), roof: &(Vec<mesh_data::Vertex>, Vec<[u32; 3]>)) -> (Vec<mesh_data::Vertex>, Vec<[u32; 3]>) {
-    let mut vertices = Vec::new();
-    let mut faces = Vec::new();
-    // One weld for both sheets: they are welded against each other, so they
-    // cannot each pick their own grid from their own extent.
-    let weld = Weld::of(&floor.0);
-    let floor_rings = boundary_rings(floor, weld);
-    let mut roof_rings = boundary_rings(roof, weld);
-    if floor_rings.is_empty() || roof_rings.is_empty() {
-        return (vertices, faces);
-    }
-    let outward = outward_lookup(floor, weld);
+/// Points of an assembled solid closer than this, in model units, are one.
+/// Where the two surfaces were built one from the other, clipping each against
+/// the other leaves clusters of points microns apart at the corners where they
+/// part; no weld at rounding scale will join them.
+const SOLID_MERGE: f64 = 1.0e-4;
 
-    for floor_ring in &floor_rings {
-        // The rims trace the same path, so the roof ring that belongs with
-        // this one is the one that runs closest to it.
-        let Some(index) = nearest_ring(floor_ring, &roof_rings) else {
+/// Merge the points of `vertices` within `distance` of each other - of those
+/// in `only`, when given - and drop the faces that collapse. The floor's
+/// faces, the first `floor_faces`, stay first, and how many are left is said.
+/// Two faces that collapse onto each other facing opposite ways are a sliver
+/// closed flat, and both go.
+fn merge_close_points(
+    vertices: Vec<mesh_data::Vertex>,
+    faces: Vec<[u32; 3]>,
+    floor_faces: usize,
+    distance: f64,
+    only: Option<&std::collections::HashSet<u32>>,
+) -> (Vec<mesh_data::Vertex>, Vec<[u32; 3]>, usize) {
+    use std::collections::HashMap;
+    let cell = |value: f64| (value / distance).floor() as i64;
+    let mut cells: HashMap<PointKey, Vec<u32>, FixedState> = HashMap::default();
+    let mut kept: Vec<mesh_data::Vertex> = Vec::with_capacity(vertices.len());
+    let remap: Vec<u32> = vertices
+        .iter()
+        .enumerate()
+        .map(|(index, vertex)| {
+            if only.is_some_and(|only| !only.contains(&(index as u32))) {
+                kept.push(*vertex);
+                return (kept.len() - 1) as u32;
+            }
+            let (cx, cy, cz) = (cell(vertex.x), cell(vertex.y), cell(vertex.z));
+            let found = (cx - 1..=cx + 1)
+                .flat_map(|x| (cy - 1..=cy + 1).flat_map(move |y| (cz - 1..=cz + 1).map(move |z| (x, y, z))))
+                .filter_map(|key| cells.get(&key))
+                .flatten()
+                .copied()
+                .find(|&index| {
+                    let other = kept[index as usize];
+                    (other.x - vertex.x).powi(2) + (other.y - vertex.y).powi(2) + (other.z - vertex.z).powi(2) <= distance * distance
+                });
+            found.unwrap_or_else(|| {
+                kept.push(*vertex);
+                let index = (kept.len() - 1) as u32;
+                cells.entry((cx, cy, cz)).or_default().push(index);
+                index
+            })
+        })
+        .collect();
+
+    let mut merged: Vec<([u32; 3], bool)> = Vec::with_capacity(faces.len());
+    let mut seen: HashMap<[u32; 3], usize, FixedState> = HashMap::default();
+    for (index, face) in faces.iter().enumerate() {
+        let face = face.map(|corner| remap[corner as usize]);
+        if face[0] == face[1] || face[1] == face[2] || face[2] == face[0] {
             continue;
-        };
-        let roof_ring = roof_rings.remove(index);
-        append_wall(floor_ring, &roof_ring, &outward, weld, &mut vertices, &mut faces);
+        }
+        // The same three points either way round, read from the smallest.
+        let start = (0..3).min_by_key(|&slot| face[slot]).unwrap_or(0);
+        let canonical = [face[start], face[(start + 1) % 3], face[(start + 2) % 3]];
+        let opposite = [canonical[0], canonical[2], canonical[1]];
+        if let Some(twin) = seen.remove(&opposite) {
+            merged[twin].0 = [u32::MAX; 3];
+            continue;
+        }
+        seen.insert(canonical, merged.len());
+        merged.push((face, index < floor_faces));
     }
-    (vertices, faces)
+    merged.retain(|(face, _)| face[0] != u32::MAX);
+    let floor = merged.iter().filter(|(_, floor)| *floor).count();
+    // The floor's faces stay first, as they came.
+    merged.sort_by_key(|(_, floor)| !*floor);
+    (kept, merged.into_iter().map(|(face, _)| face).collect(), floor)
 }
 
-/// The rim of a sheet, as closed rings of points.
-fn boundary_rings(sheet: &(Vec<mesh_data::Vertex>, Vec<[u32; 3]>), weld: Weld) -> Vec<Vec<mesh_data::Vertex>> {
-    let segments = boundary_segments(&sheet.0, &sheet.1);
-    if segments.is_empty() {
-        return Vec::new();
-    }
-    let mut rings = closed_boundary_rings(&segments, weld);
-    for ring in &mut rings {
-        // A ring that repeats its first point closes itself; the wall walks
-        // the loop and would emit a zero-width quad on that repeat.
-        if ring.len() > 1 && weld.same_xy(ring[0], ring[ring.len() - 1]) {
-            ring.pop();
+/// The points at either end of an edge [`open_edge_count`] would count.
+fn open_edge_points(vertices: &[mesh_data::Vertex], faces: &[[u32; 3]]) -> std::collections::HashSet<u32> {
+    use std::collections::HashMap;
+    let scale = weld_scale(vertices);
+    let key = |index: u32| point_key_scaled(vertices[index as usize], scale);
+    let mut counts: HashMap<EdgeKey, (usize, isize, Vec<u32>), FixedState> = HashMap::default();
+    for face in faces {
+        for (a, b) in [(face[0], face[1]), (face[1], face[2]), (face[2], face[0])] {
+            let (ka, kb) = (key(a), key(b));
+            let entry = counts.entry(if ka <= kb { (ka, kb) } else { (kb, ka) }).or_default();
+            entry.0 += 1;
+            entry.1 += if ka <= kb { 1 } else { -1 };
+            entry.2.extend([a, b]);
         }
     }
-    rings.retain(|ring| ring.len() >= 3);
-    rings
+    counts
+        .into_values()
+        .filter(|(count, balance, _)| *count != 2 && (count % 2 == 1 || *balance != 0))
+        .flat_map(|(.., points)| points)
+        .collect()
+}
+
+/// Close the sides of the region with a vertical wall between the two sheets,
+/// an edge at a time, and any step a fold left within one. `faces` holds the
+/// floor's faces first, the first `floor_faces` of them, then the roof's.
+///
+/// The floor and roof meet on their own along the line where the surfaces
+/// cross - both clips stop there, at the same points - but nowhere else.
+/// Where the region ends because a surface simply runs out inside the other's
+/// footprint, or stands up in a wall of its own, the two sheets end one above
+/// the other with a gap between them, and that gap is what this fills.
+///
+/// Both rims are cut from the same overlaps of design and topography faces,
+/// so they share their points in plan, and each open floor edge has an open
+/// roof edge over exactly the same ground: the quad between the two closes
+/// that much of the side. Pairing edges rather than whole rims means a rim
+/// that touches itself - a crest pinching against the ground, where the
+/// floor's passes meet at one point and the roof's at two heights - needs no
+/// deciding which way round it goes.
+fn close_region_sides(vertices: &[mesh_data::Vertex], faces: &[[u32; 3]], floor_faces: usize) -> Vec<[u32; 3]> {
+    use std::collections::HashMap;
+    let weld = Weld::of(vertices);
+    let key = |index: u32| weld.key(vertices[index as usize]);
+    let mut owners: HashMap<EdgeKey, (usize, u32, u32, bool), FixedState> = HashMap::default();
+    for (face_index, face) in faces.iter().enumerate() {
+        for (a, b) in [(face[0], face[1]), (face[1], face[2]), (face[2], face[0])] {
+            let (ka, kb) = (key(a), key(b));
+            if ka == kb {
+                continue;
+            }
+            owners
+                .entry(if ka <= kb { (ka, kb) } else { (kb, ka) })
+                .and_modify(|entry| entry.0 += 1)
+                .or_insert((1, a, b, face_index < floor_faces));
+        }
+    }
+    let plan = |index: u32| {
+        let (x, y, _) = key(index);
+        (x, y)
+    };
+    // Open edges by their ends in plan. The floor is wound facing down and the
+    // roof facing up, so the two walk a shared rim opposite ways; so do the
+    // two sides of a step within one sheet, where a fold left a wall.
+    type PlanEdge = ((i64, i64), (i64, i64));
+    let mut open: Vec<(u32, u32, bool)> = owners.values().filter(|(count, ..)| *count == 1).map(|&(_, a, b, floor)| (a, b, floor)).collect();
+    // Floor edges first, so a floor rim pairs with the roof over it before
+    // anything else over the same ground.
+    open.sort_unstable_by_key(|&(a, b, floor)| (!floor, key(a), key(b)));
+    let mut waiting: HashMap<PlanEdge, Vec<(u32, u32)>, FixedState> = HashMap::default();
+    for &(a, b, _) in open.iter().rev() {
+        waiting.entry((plan(a), plan(b))).or_default().push((a, b));
+    }
+    let mut curtain = Vec::new();
+    for (a, b, _) in open {
+        // Taken already, as the other side of an earlier pair.
+        let Some(position) = waiting.get(&(plan(a), plan(b))).and_then(|edges| edges.iter().position(|&edge| edge == (a, b))) else {
+            continue;
+        };
+        // Edge a -> b facing edge c -> d over the same ground, c over b and
+        // d over a, at another height.
+        let Some(&(c, d)) = waiting
+            .get(&(plan(b), plan(a)))
+            .and_then(|edges| edges.iter().find(|&&(c, d)| key(c) != key(b) || key(d) != key(a)))
+        else {
+            continue;
+        };
+        if let Some(edges) = waiting.get_mut(&(plan(a), plan(b))) {
+            edges.remove(position);
+        }
+        if let Some(edges) = waiting.get_mut(&(plan(b), plan(a))) {
+            edges.retain(|&edge| edge != (c, d));
+        }
+        for face in [[b, a, d], [b, d, c]] {
+            let corners = face.map(|index| vertices[index as usize]);
+            // Where floor and roof meet at a corner the quad narrows to one
+            // triangle; the other has no area and is not emitted.
+            if weld.same(corners[0], corners[1]) || weld.same(corners[1], corners[2]) || weld.same(corners[2], corners[0]) {
+                continue;
+            }
+            curtain.push(face);
+        }
+    }
+    curtain
+}
+
+/// Close the holes left in a mesh that are flat: a loop of open edges lying
+/// in one plane to within a weld, of at most [`FLAT_HOLE_POINTS`] points.
+///
+/// What [`close_region_sides`] cannot pair is where the floor's rim and the
+/// roof's break at points a hair apart, which leaves a sliver of wall - flat,
+/// a hair wide, and as tall as the wall. Filling a hole that is not flat would
+/// be inventing a surface, so those are left for the open-edge warning.
+fn fill_flat_holes(vertices: &[mesh_data::Vertex], faces: &[[u32; 3]]) -> Vec<[u32; 3]> {
+    use std::collections::HashMap;
+    let weld = Weld::of(vertices);
+    let key = |index: u32| weld.key(vertices[index as usize]);
+    // Per edge: how many faces use it, how many more run it from its lower
+    // key than from its higher, and a point at each of those two ends.
+    let mut owners: HashMap<EdgeKey, (usize, isize, u32, u32), FixedState> = HashMap::default();
+    for face in faces {
+        for (a, b) in [(face[0], face[1]), (face[1], face[2]), (face[2], face[0])] {
+            let (ka, kb) = (key(a), key(b));
+            if ka == kb {
+                continue;
+            }
+            let (low, high, run) = if ka <= kb { (a, b, 1) } else { (b, a, -1) };
+            let entry = owners.entry(if ka <= kb { (ka, kb) } else { (kb, ka) }).or_insert((0, 0, low, high));
+            entry.0 += 1;
+            entry.1 += run;
+        }
+    }
+    // Each open edge, run the way the faces it is short of a partner wind it:
+    // an edge two faces run one way and one the other is open once.
+    let mut open: Vec<(u32, u32)> = owners
+        .into_values()
+        .filter(|&(count, balance, ..)| count != 2 && balance != 0)
+        .flat_map(|(_, balance, low, high)| std::iter::repeat_n(if balance > 0 { (low, high) } else { (high, low) }, balance.unsigned_abs()))
+        .collect();
+    open.sort_unstable_by_key(|&(a, b)| (key(a), key(b)));
+    let mut outgoing: HashMap<PointKey, Vec<usize>, FixedState> = HashMap::default();
+    for (index, &(a, _)) in open.iter().enumerate() {
+        outgoing.entry(key(a)).or_default().push(index);
+    }
+
+    let mut used = vec![false; open.len()];
+    let mut patches = Vec::new();
+    for start in 0..open.len() {
+        if used[start] {
+            continue;
+        }
+        used[start] = true;
+        let mut ring = vec![open[start].0];
+        let mut current = start;
+        let closed = loop {
+            let at = key(open[current].1);
+            if at == key(open[start].0) {
+                break true;
+            }
+            let Some(&next) = outgoing.get(&at).into_iter().flatten().find(|&&edge| !used[edge]) else {
+                break false;
+            };
+            used[next] = true;
+            ring.push(open[next].0);
+            current = next;
+            if ring.len() > FLAT_HOLE_POINTS {
+                break false;
+            }
+        };
+        if closed && ring.len() >= 3 {
+            // The patch runs each open edge the other way, as its neighbour
+            // across the hole would.
+            ring.reverse();
+            patches.extend(fill_flat_ring(vertices, &ring, SOLID_MERGE));
+        }
+    }
+    patches
+}
+
+/// The most points a hole [`fill_flat_holes`] fills may have.
+const FLAT_HOLE_POINTS: usize = 64;
+
+/// Ear-clip `ring` in its own plane, keeping its winding, or nothing when it
+/// is not flat to within `flatness`. A ring along one line is fanned flat.
+fn fill_flat_ring(vertices: &[mesh_data::Vertex], ring: &[u32], flatness: f64) -> Vec<[u32; 3]> {
+    let point = |index: u32| {
+        let vertex = vertices[index as usize];
+        glam::DVec3::new(vertex.x, vertex.y, vertex.z)
+    };
+    let centre = ring.iter().map(|&index| point(index)).sum::<glam::DVec3>() / ring.len() as f64;
+    // Newell's normal: sound for a loop that is thin or not quite flat.
+    let normal = (0..ring.len())
+        .map(|index| (point(ring[index]) - centre).cross(point(ring[(index + 1) % ring.len()]) - centre))
+        .sum::<glam::DVec3>();
+    let Some(normal) = normal.try_normalize() else {
+        // A loop with no area is points along one line - an edge two others
+        // were split from - and is closed by flat triangles along it.
+        return (1..ring.len() - 1).map(|index| [ring[0], ring[index], ring[index + 1]]).collect();
+    };
+    if ring.iter().any(|&index| (point(index) - centre).dot(normal).abs() > flatness) {
+        return Vec::new();
+    }
+    let u = normal.any_orthonormal_vector();
+    let v = normal.cross(u);
+    let flat: Vec<glam::DVec2> = ring
+        .iter()
+        .map(|&index| point(index) - centre)
+        .map(|offset| glam::DVec2::new(offset.dot(u), offset.dot(v)))
+        .collect();
+
+    // In this frame the ring winds anticlockwise, since `normal` is its own.
+    let mut remaining: Vec<usize> = (0..ring.len()).collect();
+    let mut triangles = Vec::with_capacity(ring.len() - 2);
+    while remaining.len() > 3 {
+        let count = remaining.len();
+        let ear = (0..count).find(|&slot| {
+            let (a, b, c) = (remaining[(slot + count - 1) % count], remaining[slot], remaining[(slot + 1) % count]);
+            let (pa, pb, pc) = (flat[a], flat[b], flat[c]);
+            (pb - pa).perp_dot(pc - pb) > 0.0
+                && remaining.iter().all(|&other| {
+                    other == a || other == b || other == c || {
+                        let p = flat[other];
+                        (pb - pa).perp_dot(p - pa) < 0.0 || (pc - pb).perp_dot(p - pb) < 0.0 || (pa - pc).perp_dot(p - pc) < 0.0
+                    }
+                })
+        });
+        let Some(slot) = ear else {
+            return Vec::new();
+        };
+        let (a, b, c) = (remaining[(slot + count - 1) % count], remaining[slot], remaining[(slot + 1) % count]);
+        triangles.push([ring[a], ring[b], ring[c]]);
+        remaining.remove(slot);
+    }
+    triangles.push([ring[remaining[0]], ring[remaining[1]], ring[remaining[2]]]);
+    triangles
+}
+
+/// The rings of a cut plane's rim, each anticlockwise and saying whether it
+/// encloses solid, traced from which side of each rim edge the solid lies on
+/// ([`cap_sides`]); `None` when some rim edge does not say, or a ring does not
+/// close, so the caller can trace it the older way.
+///
+/// With the solid kept on the left of every edge, an outline runs
+/// anticlockwise and a hole clockwise, so neither the walk nor the nesting
+/// needs to guess. A solid can carry a fin - two faces back to back along a
+/// line, where surfaces built one from the other part company - and a cut
+/// through it leaves a slit: rim run out along a line and straight back,
+/// with solid on both sides. Splitting each rim edge at the rim points lying
+/// along it lines the two passes up edge for edge, and run opposite ways
+/// they cancel, as the slit is not an edge of the cap at all.
+///
+/// A rim edge split that way still runs whole along its own face, while the
+/// cap runs its pieces. Each comes back with a seam: flat triangles fanned
+/// from the edge's start along its points, wound against its face, which use
+/// the whole edge once and each piece once, so the slab stays closed. They
+/// lie on the edge and enclose nothing.
+#[allow(clippy::type_complexity)]
+fn directed_cap_rings(rim: &[[mesh_data::Vertex; 2]], sides: &CapSides, weld: Weld) -> Option<(Vec<(Vec<mesh_data::Vertex>, bool)>, Vec<[mesh_data::Vertex; 3]>)> {
+    use std::collections::HashMap;
+    let mut points: HashMap<PointKey, mesh_data::Vertex, FixedState> = HashMap::default();
+    // Each rim edge with the solid on its left, and whether its face runs it
+    // that way too.
+    let mut directed: Vec<(PointKey, PointKey, bool)> = Vec::with_capacity(rim.len());
+    for [a, b] in rim {
+        let (ka, kb) = (weld.key(*a), weld.key(*b));
+        if ka == kb {
+            continue;
+        }
+        points.entry(ka).or_insert(*a);
+        points.entry(kb).or_insert(*b);
+        let (from, to) = *sides.get(&if ka <= kb { (ka, kb) } else { (kb, ka) })?;
+        directed.push((from, to, from == ka));
+    }
+
+    // Rim points by plan cell, to find those lying along each edge.
+    let size =
+        (directed.iter().map(|(a, b, _)| (points[a].x - points[b].x).hypot(points[a].y - points[b].y)).sum::<f64>() / directed.len().max(1) as f64).max(weld.tolerance * 16.0);
+    let cell = |point: mesh_data::Vertex| ((point.x / size).floor() as i64, (point.y / size).floor() as i64);
+    let mut cells: HashMap<(i64, i64), Vec<PointKey>, FixedState> = HashMap::default();
+    for (key, point) in &points {
+        cells.entry(cell(*point)).or_default().push(*key);
+    }
+    let reach = weld.tolerance * 16.0;
+    let mut balance: HashMap<(PointKey, PointKey), isize, FixedState> = HashMap::default();
+    let mut along: Vec<(f64, PointKey)> = Vec::new();
+    let mut seams = Vec::new();
+    for (from, to, face_runs_it) in directed {
+        let (a, b) = (points[&from], points[&to]);
+        let span = glam::DVec2::new(b.x - a.x, b.y - a.y);
+        let length = span.length();
+        let (lo, hi) = (
+            cell(mesh_data::Vertex::new(a.x.min(b.x) - reach, a.y.min(b.y) - reach, 0.0)),
+            cell(mesh_data::Vertex::new(a.x.max(b.x) + reach, a.y.max(b.y) + reach, 0.0)),
+        );
+        along.clear();
+        for x in lo.0..=hi.0 {
+            for y in lo.1..=hi.1 {
+                for key in cells.get(&(x, y)).into_iter().flatten() {
+                    if *key == from || *key == to {
+                        continue;
+                    }
+                    let point = points[key];
+                    let offset = glam::DVec2::new(point.x - a.x, point.y - a.y);
+                    let t = offset.dot(span) / (length * length);
+                    if t > 0.0 && t < 1.0 && span.perp_dot(offset).abs() / length <= reach {
+                        along.push((t, *key));
+                    }
+                }
+            }
+        }
+        along.sort_by(|left, right| left.0.total_cmp(&right.0));
+        let chain: Vec<PointKey> = std::iter::once(from).chain(along.iter().map(|&(_, key)| key)).chain(std::iter::once(to)).collect();
+        if chain.len() > 2 {
+            // Walked the way the face runs the edge, the fan uses the whole
+            // edge back from its end to its start, against the face, and each
+            // piece forwards, against the cap.
+            let mut walk: Vec<mesh_data::Vertex> = chain.iter().map(|key| points[key]).collect();
+            if !face_runs_it {
+                walk.reverse();
+            }
+            for pair in walk[1..].windows(2) {
+                seams.push([walk[0], pair[0], pair[1]]);
+            }
+        }
+        for pair in chain.windows(2) {
+            let (u, v) = (pair[0], pair[1]);
+            if u == v {
+                continue;
+            }
+            if u <= v {
+                *balance.entry((u, v)).or_default() += 1;
+            } else {
+                *balance.entry((v, u)).or_default() -= 1;
+            }
+        }
+    }
+    let mut segments = Vec::new();
+    let mut edges: Vec<_> = balance.into_iter().filter(|(_, net)| *net != 0).collect();
+    edges.sort_unstable();
+    for ((u, v), net) in edges {
+        let (from, to) = if net > 0 { (u, v) } else { (v, u) };
+        for _ in 0..net.unsigned_abs() {
+            segments.push([points[&from], points[&to]]);
+        }
+    }
+
+    let rings = closed_boundary_rings(&segments, weld);
+    // Every segment must have landed in a ring, or the rim did not close.
+    if rings.iter().map(|ring| ring.len()).sum::<usize>() != segments.len() {
+        return None;
+    }
+    let rings = rings
+        .into_iter()
+        .map(|mut ring| {
+            let solid = ring_signed_area(&ring) > 0.0;
+            if !solid {
+                ring.reverse();
+            }
+            (ring, solid)
+        })
+        .collect();
+    Some((rings, seams))
 }
 
 /// Trace the rings bounding a planar rim, getting past nodes where more than
 /// two rim edges meet.
 ///
-/// [`closed_boundary_rings`] abandons a ring at any such node, which is right
-/// when building a solid - bridging an ambiguous rim would invent geometry -
-/// but wrong for capping a cut. A vertical cut through a bench slab reaches
+/// The fallback for [`directed_cap_rings`], for a rim whose sides cannot all
+/// be told. Abandoning a ring at such a node, as a plain walk would, is wrong
+/// for capping a cut. A vertical cut through a bench slab reaches
 /// those nodes routinely: the cross-section pinches to a point, two pieces
 /// touch at a corner, or independently clipped triangles leave a T-junction.
 /// Giving up there left the cell uncapped, so it stayed open and its volume
@@ -1061,83 +1543,77 @@ fn ring_signed_area(ring: &[mesh_data::Vertex]) -> f64 {
         .sum()
 }
 
-/// Trace only closed, unambiguous loops. The general include tool bridges
-/// open contours with chords; manufacturing those edges is unsafe for solids.
+/// Trace the closed loops of a rim whose every segment has the solid on its
+/// left. A rim that does not close is left alone: bridging it would invent
+/// geometry.
+///
+/// A rim can touch itself at a point - two parts of a cut meeting at a
+/// corner, or a crest pinching against the ground - and there two ways in and
+/// two ways out meet. Leaving by the first way out that keeps the solid on the
+/// same side hugs it, so the rim splits there into loops that touch without
+/// crossing.
 fn closed_boundary_rings(segments: &[[mesh_data::Vertex; 2]], weld: Weld) -> Vec<Vec<mesh_data::Vertex>> {
-    use std::collections::{HashMap, HashSet};
-    let mut nodes: HashMap<PointKey, (mesh_data::Vertex, Vec<PointKey>), FixedState> = HashMap::default();
+    use std::collections::HashMap;
+    let mut points: HashMap<PointKey, mesh_data::Vertex, FixedState> = HashMap::default();
+    let mut outgoing: HashMap<PointKey, Vec<usize>, FixedState> = HashMap::default();
+    let mut edges: Vec<(PointKey, PointKey)> = Vec::with_capacity(segments.len());
     for [a, b] in segments {
         let (ka, kb) = (weld.key(*a), weld.key(*b));
         if ka == kb {
             continue;
         }
-        nodes.entry(ka).or_insert((*a, Vec::new())).1.push(kb);
-        nodes.entry(kb).or_insert((*b, Vec::new())).1.push(ka);
+        points.entry(ka).or_insert(*a);
+        points.entry(kb).or_insert(*b);
+        outgoing.entry(ka).or_default().push(edges.len());
+        edges.push((ka, kb));
     }
-    let mut starts: Vec<_> = nodes.keys().copied().collect();
-    starts.sort_unstable();
-    let mut visited: HashSet<PointKey, FixedState> = HashSet::default();
+    let direction = |from: PointKey, to: PointKey| {
+        let (a, b) = (points[&from], points[&to]);
+        glam::DVec2::new(b.x - a.x, b.y - a.y)
+    };
+
+    let mut used = vec![false; edges.len()];
+    let mut order: Vec<usize> = (0..edges.len()).collect();
+    order.sort_unstable_by_key(|&edge| edges[edge]);
     let mut rings = Vec::new();
-    for start in starts {
-        if visited.contains(&start) {
+    for start in order {
+        if used[start] {
             continue;
         }
-        let mut ring = Vec::new();
-        let mut previous = None;
+        used[start] = true;
+        let mut ring = vec![points[&edges[start].0]];
         let mut current = start;
-        loop {
-            if !visited.insert(current) {
-                if current == start && ring.len() >= 3 {
-                    rings.push(ring);
+        let closed = loop {
+            let (from, at) = edges[current];
+            // The way back, and each way on, as a turn away from it; the
+            // smallest turn clockwise is the way that hugs the solid.
+            let back = direction(at, from);
+            let turn = |edge: usize| {
+                let angle = -back.perp_dot(direction(at, edges[edge].1)).atan2(back.dot(direction(at, edges[edge].1)));
+                if angle <= 0.0 { angle + std::f64::consts::TAU } else { angle }
+            };
+            let next = outgoing
+                .get(&at)
+                .into_iter()
+                .flatten()
+                .copied()
+                .filter(|&edge| !used[edge] || edge == start)
+                .min_by(|&left, &right| turn(left).total_cmp(&turn(right)));
+            match next {
+                Some(edge) if edge == start => break true,
+                Some(edge) => {
+                    used[edge] = true;
+                    ring.push(points[&at]);
+                    current = edge;
                 }
-                break;
+                None => break false,
             }
-            let (point, neighbors) = &nodes[&current];
-            if neighbors.len() != 2 {
-                break;
-            }
-            ring.push(*point);
-            let next = if Some(neighbors[0]) == previous { neighbors[1] } else { neighbors[0] };
-            previous = Some(current);
-            current = next;
+        };
+        if closed && ring.len() >= 3 {
+            rings.push(ring);
         }
     }
     rings
-}
-
-/// For each rim edge of a sheet, which horizontal side of it the sheet lies
-/// on - keyed by the edge's welded endpoints.
-///
-/// The face that owns a rim edge has a third corner, and the sheet is on that
-/// corner's side. That is what tells the wall which way is out, without having
-/// to work out which rings are outer boundaries and which are holes.
-fn outward_lookup(sheet: &(Vec<mesh_data::Vertex>, Vec<[u32; 3]>), weld: Weld) -> std::collections::HashMap<EdgeKey, bool, FixedState> {
-    use std::collections::HashMap;
-    let point_key = |vertex| weld.key(vertex);
-    let mut counts: HashMap<EdgeKey, (usize, bool), FixedState> = HashMap::default();
-    for face in &sheet.1 {
-        let corners = face.map(|index| sheet.0[index as usize]);
-        for (a, b, c) in [
-            (corners[0], corners[1], corners[2]),
-            (corners[1], corners[2], corners[0]),
-            (corners[2], corners[0], corners[1]),
-        ] {
-            let (ka, kb) = (point_key(a), point_key(b));
-            // Keyed on the sorted pair, with the side recorded in the
-            // direction the key is stored, so a lookup can undo the sort.
-            let sorted = ka <= kb;
-            let (first, second) = if sorted { (a, b) } else { (b, a) };
-            let entry = counts.entry(if sorted { (ka, kb) } else { (kb, ka) }).or_insert((0, false));
-            entry.0 += 1;
-            entry.1 = left_of(first, second, c);
-        }
-    }
-    counts.into_iter().filter(|(_, (count, _))| *count == 1).map(|(key, (_, left))| (key, left)).collect()
-}
-
-/// Whether `point` lies to the left of the line `from` -> `to`, in XY.
-fn left_of(from: mesh_data::Vertex, to: mesh_data::Vertex, point: mesh_data::Vertex) -> bool {
-    (to.x - from.x) * (point.y - from.y) - (to.y - from.y) * (point.x - from.x) > 0.0
 }
 
 type PointKey = (i64, i64, i64);
@@ -1187,196 +1663,6 @@ impl Weld {
 
 fn point_key_scaled(vertex: mesh_data::Vertex, scale: f64) -> PointKey {
     ((vertex.x * scale).round() as i64, (vertex.y * scale).round() as i64, (vertex.z * scale).round() as i64)
-}
-
-/// Match XY footprints rather than centroids: concentric outer and hole
-/// rings have the same centroid, but must never be joined to one another.
-fn nearest_ring(ring: &[mesh_data::Vertex], candidates: &[Vec<mesh_data::Vertex>]) -> Option<usize> {
-    let bounds = |ring: &[mesh_data::Vertex]| {
-        ring.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, p| {
-            [b[0].min(p.x), b[1].min(p.y), b[2].max(p.x), b[3].max(p.y)]
-        })
-    };
-    let target = bounds(ring);
-    let tolerance = Weld::of(ring).tolerance * 4.0;
-    candidates
-        .iter()
-        .enumerate()
-        .filter_map(|(index, ring)| {
-            let candidate = bounds(ring);
-            let error = target.iter().zip(candidate).map(|(a, b)| (a - b).abs()).fold(0.0_f64, f64::max);
-            (error <= tolerance).then_some((index, error))
-        })
-        .min_by(|a, b| a.1.total_cmp(&b.1))
-        .map(|(index, _)| index)
-}
-
-/// A closed ring parameterised by its XY arc length, so two tessellations of
-/// the same path can be sampled against each other.
-struct RingPath {
-    points: Vec<mesh_data::Vertex>,
-    /// Cumulative XY length at each point, normalised to `0.0..1.0`.
-    params: Vec<f64>,
-}
-
-impl RingPath {
-    fn new(points: &[mesh_data::Vertex]) -> Option<Self> {
-        let mut lengths = Vec::with_capacity(points.len() + 1);
-        let mut total = 0.0;
-        lengths.push(0.0);
-        for index in 0..points.len() {
-            let a = points[index];
-            let b = points[(index + 1) % points.len()];
-            total += ((b.x - a.x).powi(2) + (b.y - a.y).powi(2)).sqrt();
-            lengths.push(total);
-        }
-        (total > 1e-9).then(|| Self {
-            points: points.to_vec(),
-            params: lengths.iter().map(|length| length / total).collect(),
-        })
-    }
-
-    /// Signed XY area, whose sign is the direction the ring is traced in.
-    fn signed_area(&self) -> f64 {
-        let mut sum = 0.0;
-        let origin = self.points[0];
-        for index in 0..self.points.len() {
-            let a = self.points[index];
-            let b = self.points[(index + 1) % self.points.len()];
-            sum += (a.x - origin.x) * (b.y - origin.y) - (b.x - origin.x) * (a.y - origin.y);
-        }
-        sum / 2.0
-    }
-
-    fn reverse(&mut self) {
-        self.points.reverse();
-        *self = Self::new(&self.points).unwrap_or_else(|| {
-            std::mem::replace(
-                self,
-                Self {
-                    points: Vec::new(),
-                    params: Vec::new(),
-                },
-            )
-        });
-    }
-
-    /// The parameter at which the ring passes closest to `target` in XY.
-    fn nearest_param(&self, target: mesh_data::Vertex) -> f64 {
-        let mut best = (f64::MAX, 0.0);
-        for index in 0..self.points.len() {
-            let a = self.points[index];
-            let b = self.points[(index + 1) % self.points.len()];
-            let (ax, ay) = (b.x - a.x, b.y - a.y);
-            let length_sq = ax * ax + ay * ay;
-            let t = if length_sq > 0.0 {
-                (((target.x - a.x) * ax + (target.y - a.y) * ay) / length_sq).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            let distance = (target.x - (a.x + ax * t)).powi(2) + (target.y - (a.y + ay * t)).powi(2);
-            if distance < best.0 {
-                let span = self.params[index + 1] - self.params[index];
-                best = (distance, self.params[index] + span * t);
-            }
-        }
-        best.1
-    }
-
-    /// The point at a parameter, interpolating along the ring.
-    fn sample(&self, param: f64) -> mesh_data::Vertex {
-        let param = param.rem_euclid(1.0);
-        let index = self.params.partition_point(|value| *value <= param).saturating_sub(1).min(self.points.len() - 1);
-        let a = self.points[index];
-        let b = self.points[(index + 1) % self.points.len()];
-        let span = self.params[index + 1] - self.params[index];
-        let t = if span > 0.0 { ((param - self.params[index]) / span).clamp(0.0, 1.0) } else { 0.0 };
-        mesh_data::Vertex {
-            x: a.x + (b.x - a.x) * t,
-            y: a.y + (b.y - a.y) * t,
-            z: a.z + (b.z - a.z) * t,
-        }
-    }
-}
-
-/// Build the wall between one floor rim and the roof rim that matches it.
-fn append_wall(
-    floor_ring: &[mesh_data::Vertex],
-    roof_ring: &[mesh_data::Vertex],
-    outward: &std::collections::HashMap<EdgeKey, bool, FixedState>,
-    weld: Weld,
-    vertices: &mut Vec<mesh_data::Vertex>,
-    faces: &mut Vec<[u32; 3]>,
-) {
-    let (Some(floor), Some(mut roof)) = (RingPath::new(floor_ring), RingPath::new(roof_ring)) else {
-        return;
-    };
-    // Walk both rims the same way round, from the same place, so the two
-    // parameterisations describe the same journey.
-    if floor.signed_area().is_sign_negative() != roof.signed_area().is_sign_negative() {
-        roof.reverse();
-    }
-    let roof_offset = roof.nearest_param(floor.points[0]);
-
-    // Which side of the rim the sheet lies on decides which way the wall
-    // faces. It is the same all the way round a ring, so one edge answers it.
-    let sheet_on_left = floor
-        .points
-        .iter()
-        .enumerate()
-        .find_map(|(index, point)| {
-            let next = floor.points[(index + 1) % floor.points.len()];
-            let (ka, kb) = (weld.key(*point), weld.key(next));
-            let sorted = ka <= kb;
-            let left = *outward.get(&if sorted { (ka, kb) } else { (kb, ka) })?;
-            // The lookup recorded the side relative to the sorted direction,
-            // so an edge walked the other way has the sheet on the other side.
-            Some(if sorted { left } else { !left })
-        })
-        .unwrap_or(true);
-
-    // Every rim vertex of either sheet becomes a wall vertex, so the wall's
-    // edges match the sheet edges on both sides.
-    let mut params: Vec<f64> = floor.params[..floor.points.len()].to_vec();
-    // A roof vertex sits at its own parameter less the offset, since the roof
-    // is walked from wherever it passes closest to the floor's own start.
-    params.extend(roof.params[..roof.points.len()].iter().map(|param| (param - roof_offset).rem_euclid(1.0)));
-    params.sort_by(f64::total_cmp);
-    params.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
-    if params.len() < 2 {
-        return;
-    }
-
-    let base = vertices.len() as u32;
-    for param in &params {
-        vertices.push(floor.sample(*param));
-        vertices.push(roof.sample(param + roof_offset));
-    }
-    for index in 0..params.len() {
-        let next = (index + 1) % params.len();
-        let (floor_a, roof_a) = (base + index as u32 * 2, base + index as u32 * 2 + 1);
-        let (floor_b, roof_b) = (base + next as u32 * 2, base + next as u32 * 2 + 1);
-        // Where the two sheets already meet - along the line the surfaces
-        // cross - there is no wall to build.
-        let closed = weld.same(vertices[floor_a as usize], vertices[roof_a as usize]) && weld.same(vertices[floor_b as usize], vertices[roof_b as usize]);
-        if closed {
-            continue;
-        }
-        // Wound floor-then-roof along the direction of travel, a quad's
-        // normal points to the right of it. That is out of the solid when the
-        // sheet is on the left, and into it when the sheet is on the right.
-        for face in [[floor_a, floor_b, roof_b], [floor_a, roof_b, roof_a]] {
-            // Where the wall runs out to nothing - a corner at which the two
-            // sheets meet - the quad degenerates into a sliver with two
-            // corners in the same place. It has no area to contribute and its
-            // repeated edge would read as a hole, so it is not emitted.
-            let corners = face.map(|index| vertices[index as usize]);
-            if weld.same(corners[0], corners[1]) || weld.same(corners[1], corners[2]) || weld.same(corners[2], corners[0]) {
-                continue;
-            }
-            faces.push(if sheet_on_left { face } else { [face[0], face[2], face[1]] });
-        }
-    }
 }
 
 /// What clipping a solid to a plan polygon produced.
