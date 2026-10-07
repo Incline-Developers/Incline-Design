@@ -874,6 +874,8 @@ struct Fold {
     second: usize,
     area: f64,
     z_delta: f64,
+    /// Whether the two faces give the same height where they overlap.
+    coincident: bool,
 }
 
 /// The first place `prepared` covers the same ground twice, if it does.
@@ -904,14 +906,18 @@ fn folds(prepared: &PreparedReferenceSurface, overlap_area_tolerance: f64, all: 
             let z_delta = overlap_z_delta(triangle, prepared.triangles[other_index], &overlap);
             // Coincident triangles - a sliver duplicated where two surfaces
             // were merged - still give one height wherever they overlap, so
-            // the surface is single-valued there. Only a fold, where the
-            // heights differ, is refused.
-            if z_delta > REFERENCE_COINCIDENT_Z_TOLERANCE {
+            // the surface is single-valued there, and only a fold, where the
+            // heights differ, is refused. They are still two layers, though,
+            // and taken whole each counts the ground under it again, so they
+            // are noted for the repair to make one.
+            let coincident = z_delta <= REFERENCE_COINCIDENT_Z_TOLERANCE;
+            if !coincident || all {
                 found.push(Fold {
                     first: index,
                     second: other_index,
                     area: overlap_area,
                     z_delta,
+                    coincident,
                 });
             }
         });
@@ -949,7 +955,7 @@ fn folds(prepared: &PreparedReferenceSurface, overlap_area_tolerance: f64, all: 
             folded[fold.second] = true;
         }
     }
-    (found.into_iter().next(), folded)
+    (found.into_iter().find(|fold| !fold.coincident), folded)
 }
 
 /// Which sheet of a folded surface [`single_valued_surface`] keeps where the
@@ -967,7 +973,8 @@ pub(super) enum FoldLayer {
 pub(super) const REPAIR_WELD: f64 = 1.0e-3;
 
 /// `surface` prepared as a clip reference, repaired first if it folds over
-/// itself in plan or is cracked; the flag says whether it had to be.
+/// itself in plan, repeats faces over the same ground, or is cracked; the
+/// flag says whether it had to be.
 ///
 /// A design or topography that folds - an overhang, or more often a sliver
 /// flipped where two surfaces were stitched together - gives two heights for
@@ -998,7 +1005,10 @@ pub(super) fn single_valued_surface(surface: &mesh_data::Triangulation, keep: Fo
         .map(|(a, b)| (a.min(b), a.max(b)))
         .collect();
     graph.split_t_junctions();
-    if fold.is_none() && !graph.cracked {
+    // Faces that overlap at one height are no fold, but are still two
+    // layers where the surface should have one.
+    let layered = folded.iter().any(|&folded| folded);
+    if fold.is_none() && !layered && !graph.cracked {
         return Ok((prepared, false));
     }
     graph.split_crossings(&folding);
