@@ -188,6 +188,12 @@ fn clip(faces: &mut Polyhedron, normal: DVec3, distance: f64, cap: &mut Vec<DVec
                 cap.push(a);
             }
         }
+        // A face left lying in the plane - a block face the cut runs a
+        // rounding error off - is the cap's own ground, and the cap is built
+        // from its points; kept as well, it would count that slice twice.
+        if output.iter().all(|&point| signed(point) == 0.0) {
+            output.clear();
+        }
         // Swapped rather than assigned: the face takes the list just built and
         // the scratch buffer inherits the face's allocation for the next one.
         std::mem::swap(face, output);
