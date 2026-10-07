@@ -741,6 +741,7 @@ cmd-view-fixed-centre-rotation-x-y = 회전 중심을 { $x }, { $y }, { $z }에 
 cmd-view-no-point-under-cursor-fix = 커서 아래에 회전 중심을 고정할 점이 없습니다
 cmd-view-released-centre-rotation = 회전 중심을 해제했습니다
 cmd-view-reset-view-fit-extents = 뷰 재설정(범위에 맞춤)
+cmd-view-reset-view-plan-same-distance = 뷰 재설정(같은 거리에서 평면 보기, 다시 클릭하면 범위에 맞춤)
 cmd-view-set-cinematic-view-enabled = 시네마틱 뷰 설정 = { $enabled }
 cmd-view-set-topology-wireframes-enabled = 지형면 와이어프레임 설정 = { $enabled }
 cmd-view-set-view-points-enabled = 뷰 포인트 설정 = { $enabled }
@@ -1747,6 +1748,7 @@ state-export-viewport-image = 뷰포트 이미지 내보내기
 state-finish-closed-polyline = 닫힌 폴리라인 완료
 state-finish-open-polyline = 열린 폴리라인 완료
 state-fit-extents = 범위에 맞춤
+state-plan-view-then-fit-extents = 같은 거리에서 평면 보기 후 범위에 맞춤
 state-fix-release-centre-both-views = 두 뷰가 궤도 회전하는 중심을 고정하거나 해제합니다
 state-folder-section = { $section }의 { $folder }
 state-generate-contours = 등고선 생성
@@ -2085,6 +2087,8 @@ viewport-bar-hide-rl-grid = RL 그리드 숨기기
 viewport-bar-hide-wireframes = 와이어프레임 숨기기
 viewport-bar-hide-xy-grid = XY 그리드 숨기기
 viewport-bar-release-centre-rotation = 회전 중심 해제
+viewport-bar-reset-view-plan-over-centre = 뷰 재설정: 회전 중심 위에서 평면 보기, 다시 클릭하면 전체 맞춤
+viewport-bar-reset-view-plan-same-distance = 뷰 재설정: 같은 거리에서 평면 보기, 다시 클릭하면 전체 맞춤
 viewport-bar-show-borehole-inspector = 시추공 검사기 표시
 viewport-bar-show-classification = 분류 표시
 viewport-bar-show-points = 점 표시

@@ -614,7 +614,11 @@ fn parse_tables<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFileMapping, &
                     // Rows the import will drop must not vote, or one junk
                     // cell would demote a numeric column to text.
                     .filter(|(row_index, _)| {
-                        gates.as_ref().is_none_or(|gates| gates[row_index - 1].as_ref().is_ok_and(|keys| hole_known(segment_scoped, &collars, &segment_stations, &keys.dhid)))
+                        gates.as_ref().is_none_or(|gates| {
+                            gates[row_index - 1]
+                                .as_ref()
+                                .is_ok_and(|keys| hole_known(segment_scoped, &collars, &segment_stations, &keys.dhid))
+                        })
                     })
                     .filter_map(|(_, (_, row))| row.get(index).map(|value| value.trim()))
                     .filter(|value| !value.is_empty() && !file.damaged(value))

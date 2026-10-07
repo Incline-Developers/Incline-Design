@@ -750,6 +750,7 @@ cmd-view-fixed-centre-rotation-x-y = Dönüş merkezi { $x }, { $y }, { $z } nok
 cmd-view-no-point-under-cursor-fix = İmlecin altında dönüş merkezinin sabitleneceği bir nokta yok
 cmd-view-released-centre-rotation = Dönüş merkezi serbest bırakıldı
 cmd-view-reset-view-fit-extents = Görünümü sıfırla (kapsama sığdır)
+cmd-view-reset-view-plan-same-distance = Görünümü sıfırla (aynı mesafeden plan görünümü; kapsama sığdırmak için yeniden tıklayın)
 cmd-view-set-cinematic-view-enabled = Sinematik görünüm = { $enabled } olarak ayarlandı
 cmd-view-set-topology-wireframes-enabled = Topoloji tel kafesleri = { $enabled } olarak ayarlandı
 cmd-view-set-view-points-enabled = Görünüm noktaları = { $enabled } olarak ayarlandı
@@ -1756,6 +1757,7 @@ state-export-viewport-image = Görüntü Alanı Resmini Dışa Aktar
 state-finish-closed-polyline = Kapalı çoklu çizgiyi bitir
 state-finish-open-polyline = Açık çoklu çizgiyi bitir
 state-fit-extents = Kapsama sığdır
+state-plan-view-then-fit-extents = Aynı mesafeden plan görünümü, ardından kapsama sığdır
 state-fix-release-centre-both-views = Her iki görünümün de etrafında döndüğü merkezi sabitler veya serbest bırakır
 state-folder-section = { $section } içinde { $folder }
 state-generate-contours = Konturları Oluştur
@@ -2094,6 +2096,8 @@ viewport-bar-hide-rl-grid = Kot Izgarasını Gizle
 viewport-bar-hide-wireframes = Tel Kafesleri Gizle
 viewport-bar-hide-xy-grid = XY Izgarasını Gizle
 viewport-bar-release-centre-rotation = Dönüş Merkezini Serbest Bırak
+viewport-bar-reset-view-plan-over-centre = Görünümü Sıfırla: dönüş merkezinin üzerinden plan görünümü, tümünü sığdırmak için yeniden tıklayın
+viewport-bar-reset-view-plan-same-distance = Görünümü Sıfırla: aynı mesafeden plan görünümü, tümünü sığdırmak için yeniden tıklayın
 viewport-bar-show-borehole-inspector = Sondaj Deliği Denetçisini Göster
 viewport-bar-show-classification = Sınıflandırmayı Göster
 viewport-bar-show-points = Noktaları Göster

@@ -708,6 +708,7 @@ cmd-view-fixed-centre-rotation-x-y = 已将旋转中心固定在 { $x }、{ $y }
 cmd-view-no-point-under-cursor-fix = 光标下没有可用于固定旋转中心的点
 cmd-view-released-centre-rotation = 已释放旋转中心
 cmd-view-reset-view-fit-extents = 重置视图（适合范围）
+cmd-view-reset-view-plan-same-distance = 重置视图（同距离平面视图；再次点击以适合范围）
 cmd-view-set-cinematic-view-enabled = 设置电影视图 = { $enabled }
 cmd-view-set-topology-wireframes-enabled = 设置地形线框 = { $enabled }
 cmd-view-set-view-points-enabled = 设置视图点 = { $enabled }
@@ -1714,6 +1715,7 @@ state-export-viewport-image = 导出视口图像
 state-finish-closed-polyline = 完成闭合多段线
 state-finish-open-polyline = 完成开放多段线
 state-fit-extents = 适合范围
+state-plan-view-then-fit-extents = 同距离平面视图，然后适合范围
 state-fix-release-centre-both-views = 固定或释放两个视图共同环绕的中心
 state-folder-section = { $section }中的{ $folder }
 state-generate-contours = 生成等高线
@@ -2052,6 +2054,8 @@ viewport-bar-hide-rl-grid = 隐藏 RL 网格
 viewport-bar-hide-wireframes = 隐藏线框
 viewport-bar-hide-xy-grid = 隐藏 XY 网格
 viewport-bar-release-centre-rotation = 释放旋转中心
+viewport-bar-reset-view-plan-over-centre = 重置视图：在旋转中心上方平面视图，再次点击以适合全部
+viewport-bar-reset-view-plan-same-distance = 重置视图：同距离平面视图，再次点击以适合全部
 viewport-bar-show-borehole-inspector = 显示钻孔检查器
 viewport-bar-show-classification = 显示分类
 viewport-bar-show-points = 显示点
