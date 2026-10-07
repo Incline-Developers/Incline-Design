@@ -1742,11 +1742,17 @@ fn planar_cap_rings(segments: &[[mesh_data::Vertex; 2]], weld: Weld) -> Vec<Vec<
 }
 
 /// Twice the signed area of a ring in the plane it was traced in.
+///
+/// Taken about the ring's first point: products of mine coordinates run to
+/// trillions, and their rounding alone outweighs the area of a sliver a
+/// millimetre wide, which then read as no area at all - neither solid nor
+/// hole - and was left uncapped.
 fn ring_signed_area(ring: &[mesh_data::Vertex]) -> f64 {
+    let Some(&origin) = ring.first() else { return 0.0 };
     (0..ring.len())
         .map(|index| {
             let (a, b) = (ring[index], ring[(index + 1) % ring.len()]);
-            a.x * b.y - b.x * a.y
+            (a.x - origin.x) * (b.y - origin.y) - (b.x - origin.x) * (a.y - origin.y)
         })
         .sum()
 }

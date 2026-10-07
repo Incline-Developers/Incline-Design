@@ -186,10 +186,13 @@ pub(crate) fn representative_point(face: &[Vec<DVec2>]) -> Option<DVec2> {
 
 /// Signed area of a ring in XY. Positive is counter-clockwise.
 pub(crate) fn signed_area(ring: &[DVec2]) -> f64 {
+    let Some(&origin) = ring.first() else { return 0.0 };
+    // About the first point: products of mine coordinates run to trillions,
+    // and their rounding alone outweighs the area of a thin sliver.
     let mut area = 0.0;
     for index in 0..ring.len() {
-        let a = ring[index];
-        let b = ring[(index + 1) % ring.len()];
+        let a = ring[index] - origin;
+        let b = ring[(index + 1) % ring.len()] - origin;
         area += a.perp_dot(b);
     }
     area / 2.0
