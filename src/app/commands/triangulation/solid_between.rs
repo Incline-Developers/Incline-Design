@@ -862,7 +862,8 @@ const VERTICAL_WALL_RATIO: f64 = 1.0e-6;
 /// How many other rings each ring sits inside, which says which rings are
 /// nested directly in which.
 ///
-/// Judged by a point strictly inside each ring, never by one of its corners:
+/// Judged by a point strictly inside each ring and next to its own edge
+/// ([`boundary_probe`]), never by one of its corners:
 /// the rings of a cut plane often meet at a corner - a sliver of ground
 /// pinched off the main outline - and a corner on another ring's edge reads as
 /// inside it or not by rounding alone, which filled holes and left ground
@@ -895,27 +896,68 @@ fn box_holds(bounds: [f64; 4], point: mesh_data::Vertex) -> bool {
     point.x >= bounds[0] && point.y >= bounds[1] && point.x <= bounds[2] && point.y <= bounds[3]
 }
 
-/// A point strictly inside a ring: the centre of the largest triangle of its
-/// own triangulation. `None` for a ring with no area.
-fn interior_point(ring: &[mesh_data::Vertex]) -> Option<mesh_data::Vertex> {
+/// A point strictly inside `rings[index]`, next to its own boundary: in from
+/// the middle of one of its edges, half way to the nearest boundary of any
+/// ring. `None` for a ring with no area.
+///
+/// Inside a ring is not enough. Nesting is read by which rings hold the
+/// point, and a point well inside a large outline - the centre of its largest
+/// triangle, say - can as well be inside one of its holes, which made the
+/// outline read as nested, left its holes unattached, and laid the cap over
+/// them. A point this close to the ring's own edge is held by exactly the
+/// rings that hold that stretch of edge.
+fn boundary_probe(index: usize, rings: &[Vec<mesh_data::Vertex>]) -> Option<mesh_data::Vertex> {
+    let ring = &rings[index];
     if ring.len() < 3 {
         return None;
     }
-    let origin = ring[0];
-    let mut indices: Vec<usize> = Vec::new();
-    earcut::Earcut::new().earcut(ring.iter().map(|point| [point.x - origin.x, point.y - origin.y]), &[], &mut indices);
-    indices
-        .as_chunks::<3>()
-        .0
-        .iter()
-        .map(|triangle| triangle.map(|corner| ring[corner]))
-        .max_by(|a, b| triangle_plan_area(*a).total_cmp(&triangle_plan_area(*b)))
-        .filter(|triangle| triangle_plan_area(*triangle) > 0.0)
-        .map(|[a, b, c]| mesh_data::Vertex::new((a.x + b.x + c.x) / 3.0, (a.y + b.y + c.y) / 3.0, a.z))
-}
-
-fn triangle_plan_area([a, b, c]: [mesh_data::Vertex; 3]) -> f64 {
-    ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs()
+    let area = ring_signed_area(ring);
+    if area == 0.0 {
+        return None;
+    }
+    let point = |vertex: mesh_data::Vertex| glam::DVec2::new(vertex.x, vertex.y);
+    let segment_distance = |p: glam::DVec2, a: glam::DVec2, b: glam::DVec2| {
+        let span = b - a;
+        let t = ((p - a).dot(span) / span.length_squared().max(f64::MIN_POSITIVE)).clamp(0.0, 1.0);
+        p.distance(a + span * t)
+    };
+    let boxes: Vec<[f64; 4]> = rings.iter().map(|ring| ring_box(ring)).collect();
+    // The longest edges first: the most room beside them.
+    let mut edges: Vec<usize> = (0..ring.len()).collect();
+    edges.sort_by(|&x, &y| {
+        let length = |at: usize| point(ring[at]).distance(point(ring[(at + 1) % ring.len()]));
+        length(y).total_cmp(&length(x))
+    });
+    for &edge in edges.iter().take(8) {
+        let (a, b) = (point(ring[edge]), point(ring[(edge + 1) % ring.len()]));
+        let length = a.distance(b);
+        if length == 0.0 {
+            continue;
+        }
+        let middle = (a + b) / 2.0;
+        // Inward is to the left of an anticlockwise ring, right of a
+        // clockwise one.
+        let inward = (b - a).perp() / length * area.signum();
+        let mut clearance = length / 2.0;
+        for (other, candidate) in rings.iter().enumerate() {
+            let bounds = boxes[other];
+            let outside = (bounds[0] - middle.x).max(middle.x - bounds[2]).max(bounds[1] - middle.y).max(middle.y - bounds[3]);
+            if outside > clearance {
+                continue;
+            }
+            for at in 0..candidate.len() {
+                if other == index && at == edge {
+                    continue;
+                }
+                clearance = clearance.min(segment_distance(middle, point(candidate[at]), point(candidate[(at + 1) % candidate.len()])));
+            }
+        }
+        if clearance > 0.0 {
+            let probe = middle + inward * (clearance / 2.0);
+            return Some(mesh_data::Vertex::new(probe.x, probe.y, ring[0].z));
+        }
+    }
+    None
 }
 
 /// Even-odd crossing test in XY, shared by the cap filler and the blast
@@ -937,9 +979,9 @@ fn append_caps(rings: &[Vec<mesh_data::Vertex>], capped: &[bool], plane: f64, up
     let contains = ring_contains;
     // Which outer a hole belongs to is judged the same way as its depth. A
     // lone ring - most caps - neither sits in another nor holds one, and
-    // finding a point inside it means triangulating it a second time.
+    // needs no point found inside it.
     let probes: Vec<_> = if rings.len() > 1 {
-        rings.iter().map(|ring| interior_point(ring)).collect()
+        (0..rings.len()).map(|index| boundary_probe(index, rings)).collect()
     } else {
         vec![None; rings.len()]
     };
