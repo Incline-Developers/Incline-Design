@@ -9,6 +9,7 @@
 
 pub(crate) mod blast;
 pub(crate) mod block_model;
+pub(crate) mod borehole_inspector;
 pub(crate) mod console;
 pub(crate) mod cursors;
 pub(crate) mod explorer;

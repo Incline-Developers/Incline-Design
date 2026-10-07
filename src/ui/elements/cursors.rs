@@ -164,7 +164,9 @@ fn marker_painter(ui: &egui::Ui, x: f32, y: f32, clip_rect: egui::Rect, id: &str
     if !clip_rect.contains(pos) {
         return None;
     }
-    let mut painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new(id)));
+    // A loose layer paints after the areas of its order, so a Foreground
+    // marker would cover the dialogs, which are Foreground areas themselves.
+    let mut painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Background, egui::Id::new(id)));
     painter.set_clip_rect(clip_rect);
     Some((painter, pos))
 }

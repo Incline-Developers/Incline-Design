@@ -2,7 +2,7 @@ pub(crate) mod block_model;
 pub(crate) mod drawing; // Handles finishing polylines, creating points, etc commands
 pub(crate) mod drill_hole;
 pub(crate) mod file; // Handles importing, exportings, etc. commands
-pub(crate) mod folder; // Handles explorer folder create/delete/rename/move commands, for all six sections
+pub(crate) mod folder; // Handles explorer folder create/delete/rename/move commands, for every section
 pub(crate) mod layer; // Handles creating layers, deleting layers, etc. commands
 pub(crate) mod object_edit; // Handles the "Edit Object" dialog's working-copy writeback.
 pub(crate) mod omf; // Whole-project Open Mining Format interchange.
@@ -25,7 +25,7 @@ use anyhow::Result;
 
 use crate::{
     app::App,
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{Command, SceneEntityId},
     ui::state::{ActiveTool, TriCreatePhase, UiCommand},
     userspace_error, userspace_warn,
@@ -86,7 +86,7 @@ impl<'a> App<'a> {
                 }
                 None => {
                     if let Err(err) = self.handle_ui_command(command) {
-                        userspace_error!("{}", tr_format!(literal = "Command failed: %error%", error = format!("{err:#}")));
+                        userspace_error!("{}", tr!("cmd-commands-command-failed-error", error = format!("{err:#}")));
                     }
                 }
             }
@@ -119,6 +119,10 @@ impl<'a> App<'a> {
                 | UiCommand::MoveToFolder { .. }
                 | UiCommand::OpenCreateTriangulation
                 | UiCommand::OpenCreateBlockModel
+                | UiCommand::OpenReferencePoints
+                | UiCommand::OpenReferenceSurface
+                | UiCommand::BuildReferenceSurface { .. }
+                | UiCommand::BuildReferencePoints { .. }
                 | UiCommand::OpenCreateOreTriangulation
         );
         if requires_project && !self.workspace.has_active_project() {
@@ -317,6 +321,10 @@ impl<'a> App<'a> {
                 self.choose_export_block_model_csv(id);
                 Ok(())
             }
+            UiCommand::ExportDrillHoleCsv(id) => {
+                self.choose_export_drill_hole_csv(id);
+                Ok(())
+            }
             UiCommand::HideSelection => {
                 self.hide_selected_elements();
                 Ok(())
@@ -335,8 +343,8 @@ impl<'a> App<'a> {
             UiCommand::CreateLayer { name } => self.create_layer(name),
             UiCommand::CreateFolder(section) => self.create_folder(section),
             UiCommand::DeleteFolder { section, folder } => self.delete_folder(section, folder),
-            UiCommand::MoveToFolder { member, folder } => {
-                self.move_to_folder(member, folder);
+            UiCommand::MoveToFolder { member, section, folder } => {
+                self.move_to_folder(member, section, folder);
                 Ok(())
             }
             UiCommand::AddDelayProduct { delay_ms, name, color } => {
@@ -544,12 +552,128 @@ impl<'a> App<'a> {
                 self.editor.drill_hole_color_dialog = Some(id);
                 Ok(())
             }
+            UiCommand::LinkGeophysics(id) => {
+                self.choose_geophysics_file(id);
+                Ok(())
+            }
+            UiCommand::ReadHoleGeophysics { dataset, dhid } => {
+                self.read_hole_geophysics(dataset, dhid);
+                Ok(())
+            }
+            UiCommand::OpenReferencePoints => {
+                // Select first, then act: the points are placed on the holes
+                // selected when it opens, not on a dataset picked inside the
+                // dialog. Both ways of naming holes feed it.
+                let mut holes = Vec::new();
+                self.for_each_reference_hole(|hole| holes.push(hole));
+                if holes.is_empty() {
+                    userspace_warn!("{}", tr!("cmd-commands-select-holes-place-reference-points"));
+                    return Ok(());
+                }
+                // The selection is two unordered sets; sorting here keeps the
+                // layer's points and the flagged list in a settled order.
+                holes.sort_unstable_by_key(|hole| (hole.dataset.0, hole.hole));
+                self.editor.reference_points_dialog = Some(crate::ui::state::ReferencePointsDraft { holes, ..Default::default() });
+                Ok(())
+            }
+            UiCommand::OpenReferenceSurface => {
+                // Two inputs of different kinds, so the selection names both
+                // without anything having to say which is which.
+                let input = match crate::app::commands::triangulation::reference_surface::surface_input(&self.scene_document, &self.editor.selected_handles) {
+                    Ok(input) => input,
+                    Err(error) => {
+                        userspace_warn!("{}", format!("{error:#}"));
+                        return Ok(());
+                    }
+                };
+                // The labels are rendered once here, not each frame: the
+                // dialog reports the input it was opened on, which cannot
+                // change under it.
+                let layer_name = |id| self.scene_document.layer(id).map(|layer| layer.name.clone()).unwrap_or_default();
+                let points_label = match input.layers.as_slice() {
+                    [layer] => tr!(
+                        "cmd-commands-count-point-s-layer",
+                        count = input.points.len().to_string(),
+                        layer = layer_name(*layer).to_string()
+                    ),
+                    layers => tr!(
+                        "cmd-commands-count-point-s-across-layers",
+                        count = input.points.len().to_string(),
+                        layers = layers.len().to_string()
+                    ),
+                };
+                let extent_label = match input.extent {
+                    None => tr!("cmd-commands-no-extent"),
+                    Some(id) => self
+                        .scene_document
+                        .get_object(id)
+                        .map(|object| {
+                            tr!(
+                                "cmd-commands-kind-layer",
+                                kind = object.kind_name().to_string(),
+                                layer = layer_name(object.layer()).to_string()
+                            )
+                        })
+                        .unwrap_or_else(|| tr!("cmd-commands-no-extent")),
+                };
+                let controls_label = match input.controls.len() {
+                    0 => tr!("cmd-commands-no-control-strings"),
+                    count => {
+                        let mut control_layers = input.controls.iter().map(|id| self.scene_document.get_object(*id).map(|object| object.layer()));
+                        match control_layers.next().flatten() {
+                            Some(layer) if control_layers.all(|other| other == Some(layer)) => {
+                                tr!(
+                                    "cmd-commands-count-control-string-s-layer",
+                                    count = count.to_string(),
+                                    layer = layer_name(layer).to_string()
+                                )
+                            }
+                            _ => tr!("cmd-commands-count-control-string-s", count = count.to_string()),
+                        }
+                    }
+                };
+                self.editor.reference_surface_dialog = Some(crate::ui::state::ReferenceSurfaceDraft {
+                    points: input.points,
+                    controls: input.controls,
+                    extent: input.extent,
+                    points_label,
+                    controls_label,
+                    extent_label,
+                });
+                Ok(())
+            }
+            UiCommand::BuildReferenceSurface { points, controls, extent } => self.build_reference_surface(points, controls, extent),
+            UiCommand::BuildReferencePoints { holes, field, target, side } => {
+                self.build_reference_points(holes, field, target, side);
+                Ok(())
+            }
+            UiCommand::InspectDrillHole(hole) => self.inspect_drill_hole(hole),
             UiCommand::SetDrillHoleColorField { id, field } => {
                 self.set_drill_hole_color_field(id, field);
                 Ok(())
             }
             UiCommand::SetDrillHoleColorPreset { id, preset } => {
                 self.set_drill_hole_color_preset(id, preset);
+                Ok(())
+            }
+            UiCommand::SetDrillHoleWidth {
+                id,
+                radius_scale,
+                min_pixel_diameter,
+            } => {
+                self.set_drill_hole_width(id, radius_scale, min_pixel_diameter);
+                Ok(())
+            }
+            UiCommand::SetDrillHoleStyle { id, style } => {
+                self.set_drill_hole_style(id, style);
+                Ok(())
+            }
+            UiCommand::SetDrillHoleDiscs {
+                id,
+                disc_diameter,
+                string_pixel_width,
+            } => {
+                self.set_drill_hole_discs(id, disc_diameter, string_pixel_width);
                 Ok(())
             }
             UiCommand::SetDrillHoleColorStops { id, stops } => {
@@ -560,12 +684,20 @@ impl<'a> App<'a> {
                 self.set_drill_hole_category_colors(id, categories);
                 Ok(())
             }
+            UiCommand::SetDrillHoleWorkingSections { id, sections } => {
+                self.set_drill_hole_working_sections(id, sections);
+                Ok(())
+            }
+            UiCommand::SetDrillHoleColorByWorkingSection { id, field } => {
+                self.set_drill_hole_color_by_working_section(id, field);
+                Ok(())
+            }
             UiCommand::OpenCreateBlockModel => {
                 // One dataset is estimated at a time, so the selection has to
                 // name exactly which one before the dialog opens on it.
                 let selected = self.selected_drill_hole_datasets();
                 let [drill_hole_id] = selected[..] else {
-                    userspace_warn!("{}", tr!(literal = "Select one loaded drill hole collection before creating a block model from it"));
+                    userspace_warn!("{}", tr!("cmd-commands-select-one-loaded-drill-hole"));
                     return Ok(());
                 };
                 self.open_create_block_model_dialog(drill_hole_id);
@@ -595,7 +727,7 @@ impl<'a> App<'a> {
                 // name exactly which one before the dialog opens on it.
                 let selected = self.selected_block_models();
                 let [block_model_id] = selected[..] else {
-                    userspace_warn!("{}", tr!(literal = "Select one loaded block model before creating an ore triangulation from it"));
+                    userspace_warn!("{}", tr!("cmd-commands-select-one-loaded-block-model"));
                     return Ok(());
                 };
                 self.editor.ore_triangulation_open = true;
@@ -767,6 +899,7 @@ impl<'a> App<'a> {
             }
             UiCommand::ApplyPreferences(preferences) => self.apply_preferences(preferences),
             UiCommand::SetLanguage(choice) => self.set_language(choice),
+            UiCommand::SetWellLogStyle(style) => self.set_well_log_style(style),
             UiCommand::ToggleViewOption(option) => self.toggle_view_option(option),
             UiCommand::RemoveTriangulation(id) => {
                 self.remove_triangulation(id);
@@ -859,7 +992,7 @@ impl<'a> App<'a> {
                     .collect();
 
                 if selected_objects.is_empty() {
-                    userspace_warn!("{}", tr_format!(literal = "Select one or more objects before setting %axis%", axis = axis.label()));
+                    userspace_warn!("{}", tr!("cmd-commands-select-one-more-objects-before", axis = axis.label().to_string()));
                     return Ok(());
                 }
 
@@ -916,7 +1049,7 @@ impl<'a> App<'a> {
                 // in agreement.
                 let object_ids = self.selected_triangulation_sources();
                 if object_ids.is_empty() {
-                    userspace_warn!("{}", tr!(literal = "Select the objects to triangulate before running Create Triangulation"));
+                    userspace_warn!("{}", tr!("cmd-triangulate-needs-selection"));
                     return Ok(());
                 }
                 self.editor.tri_create_open = true;
@@ -924,7 +1057,7 @@ impl<'a> App<'a> {
                 self.editor.selected_handles = object_ids.iter().map(|&object_id| SceneEntityId::Object(object_id)).collect();
                 self.editor.tri_selected_object_ids = object_ids;
                 self.editor.tri_selected_layer_ids.clear();
-                self.editor.tri_name_input = tr!(literal = "Surface");
+                self.editor.tri_name_input = tr!("tri-type-open-surface");
                 self.editor.tri_hover_handles.clear();
                 Ok(())
             }
@@ -941,7 +1074,7 @@ impl<'a> App<'a> {
                 // name exactly which one before the dialog opens on it.
                 let selected = self.selected_point_clouds();
                 let [cloud_id] = selected[..] else {
-                    userspace_warn!("{}", tr!(literal = "Select one loaded point cloud before creating a triangulation from it"));
+                    userspace_warn!("{}", tr!("cmd-commands-select-one-loaded-point-cloud"));
                     return Ok(());
                 };
                 self.editor.point_cloud_tin_open = true;
@@ -959,7 +1092,7 @@ impl<'a> App<'a> {
                 // Keep any name the user already typed; otherwise restore the
                 // default rather than opening with an empty, un-runnable field.
                 if self.editor.point_cloud_tin_name_input.trim().is_empty() {
-                    self.editor.point_cloud_tin_name_input = tr!(literal = "Surface");
+                    self.editor.point_cloud_tin_name_input = tr!("tri-type-open-surface");
                 }
                 Ok(())
             }
@@ -979,20 +1112,20 @@ impl<'a> App<'a> {
                 // both without anything having to say which is which.
                 let selected = self.selected_triangulations();
                 let ([tri_id], Some(polyline_id)) = (&selected[..], self.selected_clip_boundary()) else {
-                    userspace_warn!("{}", tr!(literal = "Select one loaded triangulation and one closed polyline before clipping"));
+                    userspace_warn!("{}", tr!("cmd-commands-select-one-loaded-triangulation-one"));
                     return Ok(());
                 };
                 let (tri_id, polyline_id) = (*tri_id, polyline_id);
                 let Some(surface) = self.triangulations.iter().find(|t| t.id == tri_id) else {
                     return Ok(());
                 };
-                let name = crate::app::canvas::derived_triangulation_name(&surface.name, &tr!(literal = "Clipped"));
+                let name = crate::app::canvas::derived_triangulation_name(&surface.name, &tr!("cmd-commands-clipped"));
                 let boundary_name = self
                     .scene_document
                     .get_object(polyline_id)
                     .and_then(|object| self.scene_document.layer(object.layer()))
-                    .map(|layer| tr_format!(literal = "Polyline on '%layer%'", layer = &layer.name))
-                    .unwrap_or_else(|| tr!(literal = "Polyline"));
+                    .map(|layer| tr!("common-polyline-layer", layer = layer.name.to_string()))
+                    .unwrap_or_else(|| tr!("common-polyline"));
                 self.editor.tri_cut_poly_open = true;
                 self.editor.tri_hover_handles.clear();
                 self.editor.tri_cut_poly_tri_id = Some(tri_id);
@@ -1020,14 +1153,14 @@ impl<'a> App<'a> {
             UiCommand::OpenCutTriangulationByZ => {
                 let selected = self.selected_triangulations();
                 let [tri_id] = selected[..] else {
-                    userspace_warn!("{}", tr!(literal = "Select one loaded triangulation before slicing it by Z range"));
+                    userspace_warn!("{}", tr!("cmd-slice-needs-triangulation"));
                     return Ok(());
                 };
                 let Some(surface) = self.triangulations.iter().find(|t| t.id == tri_id) else {
                     return Ok(());
                 };
                 let bounds = surface.mesh.bounds();
-                let name = crate::app::canvas::derived_triangulation_name(&surface.name, &tr!(literal = "Sliced"));
+                let name = crate::app::canvas::derived_triangulation_name(&surface.name, &tr!("cmd-commands-sliced"));
                 self.editor.tri_cut_z_open = true;
                 self.editor.tri_cut_z_tri_id = Some(tri_id);
                 self.editor.tri_cut_z_min_input = bounds.min.z;
@@ -1084,7 +1217,7 @@ impl<'a> App<'a> {
                 self.editor.tri_cut_pitshell_name_input = self
                     .active_triangulation
                     .and_then(|id| self.triangulations.iter().find(|t| t.id == id))
-                    .map(|t| crate::app::canvas::derived_triangulation_name(&t.name, &tr!(literal = "Cut")))
+                    .map(|t| crate::app::canvas::derived_triangulation_name(&t.name, &tr!("common-cut")))
                     .unwrap_or_default();
                 Ok(())
             }
@@ -1110,7 +1243,7 @@ impl<'a> App<'a> {
                 self.editor.tri_include_solid_name_input = self
                     .active_triangulation
                     .and_then(|id| self.triangulations.iter().find(|triangulation| triangulation.id == id))
-                    .map(|triangulation| crate::app::canvas::derived_triangulation_name(&triangulation.name, &tr!(literal = "With Shell")))
+                    .map(|triangulation| crate::app::canvas::derived_triangulation_name(&triangulation.name, &tr!("common-shell")))
                     .unwrap_or_default();
                 Ok(())
             }
@@ -1130,7 +1263,7 @@ impl<'a> App<'a> {
             UiCommand::OpenContourTriangulation => {
                 let selected = self.selected_triangulations();
                 let [tri_id] = selected[..] else {
-                    userspace_warn!("{}", tr!(literal = "Select one loaded triangulation before generating contours from it"));
+                    userspace_warn!("{}", tr!("cmd-contours-needs-triangulation"));
                     return Ok(());
                 };
                 let surface_name = self
@@ -1145,7 +1278,7 @@ impl<'a> App<'a> {
                 if let Some(surface_name) = surface_name {
                     self.editor.update_contour_layer_name_from_surface(&surface_name);
                 } else {
-                    self.editor.tri_contour_layer_name_input = tr!(literal = "Surface Contours");
+                    self.editor.tri_contour_layer_name_input = tr!("common-surface-contours");
                 }
                 Ok(())
             }

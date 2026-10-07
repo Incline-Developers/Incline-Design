@@ -18,7 +18,7 @@
 //! stands on a delay, and the products those rules stack into a column.
 
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::blast::{BlastLibrary, ChargeProduct, ChargeRule, DeckLength},
     ui::{
         EditorState,
@@ -90,7 +90,7 @@ pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState, c
                     // Reserved before any row is laid out and filled once the
                     // list's height is known: see `paint_fixed_stripes`.
                     let (stripes_slot, stripes_top) = reserve_fixed_stripes(ui);
-                    let (toggle, header, _) = ExplorerHeader::new(egui::Id::new("delay_palette_collapse"), tr!(literal = "Delay Palette"))
+                    let (toggle, header, _) = ExplorerHeader::new(egui::Id::new("delay_palette_collapse"), tr!("products-delay-palette"))
                         .icon(unthemed_icon!("tie_holes.svg"))
                         .color(HEADER_DELAY_PALETTE)
                         .show(ui, |ui| draw_delay_palette(ui, editor));
@@ -98,31 +98,31 @@ pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState, c
                     // one product in it, so it hangs off the section heading -
                     // the way the explorer's own section menus do - instead of
                     // taking a permanent row at the foot of the list.
-                    context_menu_popup(&toggle.union(header.inner), tr!(literal = "Delay Palette"), |ui| {
-                        if ContextMenuAction::new(tr!(literal = "New Product")).show(ui).clicked() {
+                    context_menu_popup(&toggle.union(header.inner), tr!("products-delay-palette"), |ui| {
+                        if ContextMenuAction::new(tr!("common-new-product")).show(ui).clicked() {
                             editor.begin_new_delay_product();
                             ui.close();
                         }
                     });
 
-                    let (toggle, header, _) = ExplorerHeader::new(egui::Id::new("charge_rules_collapse"), tr!(literal = "Charge Rules"))
+                    let (toggle, header, _) = ExplorerHeader::new(egui::Id::new("charge_rules_collapse"), tr!("products-charge-rules"))
                         .icon(unthemed_icon!("charge_holes.svg"))
                         .color(HEADER_CHARGE)
                         .show(ui, |ui| draw_charge_rules(ui, editor, commands));
-                    context_menu_popup(&toggle.union(header.inner), tr!(literal = "Charge Rules"), |ui| {
-                        if ContextMenuAction::new(tr!(literal = "New Rule")).show(ui).clicked() {
+                    context_menu_popup(&toggle.union(header.inner), tr!("products-charge-rules"), |ui| {
+                        if ContextMenuAction::new(tr!("products-new-rule")).show(ui).clicked() {
                             editor.charge_rule_dialog = Some(ChargeRuleDialog::new(None, new_rule(&editor.blast_library)));
                             ui.close();
                         }
                     });
 
-                    let (toggle, header, _) = ExplorerHeader::new(egui::Id::new("charge_products_collapse"), tr!(literal = "Charge Products"))
+                    let (toggle, header, _) = ExplorerHeader::new(egui::Id::new("charge_products_collapse"), tr!("products-charge-products"))
                         .icon(unthemed_icon!("charge_products.svg"))
                         .color(HEADER_CHARGE)
                         .default_open(false)
                         .show(ui, |ui| draw_charge_products(ui, editor));
-                    context_menu_popup(&toggle.union(header.inner), tr!(literal = "Charge Products"), |ui| {
-                        if ContextMenuAction::new(tr!(literal = "New Product")).show(ui).clicked() {
+                    context_menu_popup(&toggle.union(header.inner), tr!("products-charge-products"), |ui| {
+                        if ContextMenuAction::new(tr!("common-new-product")).show(ui).clicked() {
                             editor.charge_product_dialog = Some(ChargeProductDialog {
                                 original: None,
                                 product: ChargeProduct {
@@ -155,7 +155,7 @@ fn draw_delay_palette(ui: &mut egui::Ui, editor: &mut EditorState) {
     let mut delete = None;
 
     if editor.delay_products.is_empty() {
-        explorer_note(ui, tr!(literal = "No products"));
+        explorer_note(ui, tr!("products-no-products"));
     }
     // The palette stands on its first product whenever the selection has
     // nothing to point at - a config that never named one, say - so the row
@@ -182,7 +182,7 @@ fn draw_delay_palette(ui: &mut egui::Ui, editor: &mut EditorState) {
         }
         let label = format!("{} {}", product.delay_ms, product.name);
         context_menu_popup(&response, label.clone(), |ui| {
-            if ContextMenuAction::new(tr!(literal = "Delete Product")).show(ui).clicked() {
+            if ContextMenuAction::new(tr!("common-delete-product")).show(ui).clicked() {
                 delete = Some((product.id, label.clone()));
                 ui.close();
             }
@@ -248,7 +248,7 @@ fn new_rule(library: &BlastLibrary) -> ChargeRule {
             length: DeckLength::Fill,
         });
     }
-    let base = tr!(literal = "New rule");
+    let base = tr!("products-new-rule-default-name");
     let mut name = base.clone();
     let mut counter = 2;
     while library.rules.iter().any(|rule| rule.name == name) {
@@ -268,7 +268,7 @@ fn new_rule(library: &BlastLibrary) -> ChargeRule {
 /// lit. A row's menu loads or unloads the selected holes with it directly.
 fn draw_charge_rules(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
     if editor.blast_library.rules.is_empty() {
-        explorer_note(ui, tr!(literal = "No rules"));
+        explorer_note(ui, tr!("products-no-rules"));
     }
     let active = editor.active_rule().map(|rule| rule.name.clone());
     let selected_holes = editor
@@ -311,7 +311,7 @@ fn draw_charge_rules(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
         }
         context_menu_popup(&response, rule.name.clone(), |ui| {
             let can_load = selected_holes > 0 && problem.is_none();
-            if ContextMenuAction::new(tr_format!(literal = "Load Selected Holes (%count%)", count = selected_holes))
+            if ContextMenuAction::new(tr!("products-load-selected-holes-count", count = selected_holes.to_string()))
                 .enabled(can_load)
                 .show(ui)
                 .clicked()
@@ -319,7 +319,7 @@ fn draw_charge_rules(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
                 commands.push(UiCommand::ChargeSelectedHoles { rule: Some(rule.name.clone()) });
                 ui.close();
             }
-            if ContextMenuAction::new(tr_format!(literal = "Unload Selected Holes (%count%)", count = selected_holes))
+            if ContextMenuAction::new(tr!("products-unload-selected-holes-count", count = selected_holes.to_string()))
                 .enabled(selected_holes > 0)
                 .show(ui)
                 .clicked()
@@ -327,17 +327,17 @@ fn draw_charge_rules(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
                 commands.push(UiCommand::ChargeSelectedHoles { rule: None });
                 ui.close();
             }
-            if ContextMenuAction::new(tr!(literal = "Edit Rule")).show(ui).clicked() {
+            if ContextMenuAction::new(tr!("products-edit-rule")).show(ui).clicked() {
                 editor.charge_rule_dialog = Some(ChargeRuleDialog::new(Some(rule.name.clone()), rule.clone()));
                 ui.close();
             }
-            if ContextMenuAction::new(tr!(literal = "Duplicate Rule")).show(ui).clicked() {
+            if ContextMenuAction::new(tr!("products-duplicate-rule")).show(ui).clicked() {
                 let mut copy = rule.clone();
-                copy.name = tr_format!(literal = "%name% copy", name = &rule.name);
+                copy.name = tr!("cmd-layer-name-copy", name = rule.name.to_string());
                 editor.charge_rule_dialog = Some(ChargeRuleDialog::new(None, copy));
                 ui.close();
             }
-            if ContextMenuAction::new(tr!(literal = "Delete Rule")).show(ui).clicked() {
+            if ContextMenuAction::new(tr!("products-delete-rule")).show(ui).clicked() {
                 editor.pending_delete_blast_item = Some(BlastLibraryItem::Rule(rule.name.clone()));
                 ui.close();
             }
@@ -392,16 +392,16 @@ fn rule_description(rule: &ChargeRule) -> String {
         .iter()
         .map(|deck| match deck.length {
             DeckLength::Fixed(length) => format!("{length:.2} m  {}", deck.product),
-            DeckLength::Fill => tr_format!(literal = "fill  %product%", product = &deck.product),
+            DeckLength::Fill => tr!("products-fill-product", product = deck.product.to_string()),
         })
         .collect();
-    lines.push(tr_format!(
-        literal = "Primer %offset% m off each explosive deck's base, %booster% kg booster, %delay% ms downhole",
+    lines.push(tr!(
+        "products-primer-offset-m-off-each-explosive",
         offset = format!("{:.2}", rule.primer_offset),
         booster = format!("{:.2}", rule.booster_kg),
-        delay = rule.downhole_delay_ms
+        delay = rule.downhole_delay_ms.to_string()
     ));
-    lines.push(tr!(literal = "Double-click to edit"));
+    lines.push(tr!("products-double-click-edit"));
     lines.join("\n")
 }
 
@@ -409,7 +409,7 @@ fn rule_description(rule: &ChargeRule) -> String {
 /// are drawn in.
 fn draw_charge_products(ui: &mut egui::Ui, editor: &mut EditorState) {
     if editor.blast_library.products.is_empty() {
-        explorer_note(ui, tr!(literal = "No products"));
+        explorer_note(ui, tr!("products-no-products"));
     }
     for product in &editor.blast_library.products {
         let color = egui::Color32::from_rgb(product.color[0], product.color[1], product.color[2]);
@@ -448,14 +448,14 @@ fn draw_charge_products(ui: &mut egui::Ui, editor: &mut EditorState) {
             });
         }
         context_menu_popup(&response, product.name.clone(), |ui| {
-            if ContextMenuAction::new(tr!(literal = "Edit Product")).show(ui).clicked() {
+            if ContextMenuAction::new(tr!("products-edit-product")).show(ui).clicked() {
                 editor.charge_product_dialog = Some(ChargeProductDialog {
                     original: Some(product.name.clone()),
                     product: product.clone(),
                 });
                 ui.close();
             }
-            if ContextMenuAction::new(tr!(literal = "Delete Product")).show(ui).clicked() {
+            if ContextMenuAction::new(tr!("common-delete-product")).show(ui).clicked() {
                 editor.pending_delete_blast_item = Some(BlastLibraryItem::Product(product.name.clone()));
                 ui.close();
             }

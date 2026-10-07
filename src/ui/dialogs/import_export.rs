@@ -1,14 +1,15 @@
 //! Import & Export menus.
 
 use crate::{
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{
         LayerId,
         block_model::BlockModelId,
+        drill_hole::DrillHoleId,
         formats::{
             MeshFormat,
             csv_block_model::{CsvColumnRole, validate_mapping},
-            csv_drill_hole::{CsvDrillColumnRole, CsvDrillFileRole},
+            csv_drill_hole::{CsvDrillColumnRole, CsvDrillFileMapping, CsvDrillFileRole, CsvDrillPreview, bundle_anchor},
         },
         triangulation::TriangulationId,
     },
@@ -115,7 +116,7 @@ pub(crate) fn draw_import_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
     let mut show_import = editor.show_import;
     let mut close_after_action = false;
     let mut cancelled = false;
-    DragableMenu::new("import_dialog", tr!(literal = "Import")).open(&mut show_import).show(ui.ctx(), |ui| {
+    DragableMenu::new("import_dialog", tr!("io-import")).open(&mut show_import).show(ui.ctx(), |ui| {
         ui.set_height(MENU_HEIGHT);
         ui.set_width(MENU_WIDTH);
 
@@ -135,13 +136,13 @@ pub(crate) fn draw_import_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
                         let command = import_command(editor);
                         let confirm = menu::dialog_confirm_pressed(ui.ctx());
                         cancelled = menu::dialog_cancel_pressed(ui.ctx());
-                        if (ui.add(MenuButton::new(tr!(literal = "Import")).primary().enabled(command.is_some())).clicked() || confirm)
+                        if (ui.add(MenuButton::new(tr!("io-import")).primary().enabled(command.is_some())).clicked() || confirm)
                             && let Some(command) = command
                         {
                             commands.push(command);
                             close_after_action = true;
                         }
-                        if ui.add(MenuButton::new(tr!(literal = "Default"))).clicked() {
+                        if ui.add(MenuButton::new(tr!("io-default"))).clicked() {
                             #[cfg(target_arch = "wasm32")]
                             let import_kind = editor.data_menu;
                             reset_import_defaults(editor, project);
@@ -170,7 +171,7 @@ pub(crate) fn draw_export_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
     let mut show_export = editor.show_export;
     let mut close_after_action = false;
     let mut cancelled = false;
-    DragableMenu::new("export_dialog", tr!(literal = "Export")).open(&mut show_export).show(ui.ctx(), |ui| {
+    DragableMenu::new("export_dialog", tr!("io-export")).open(&mut show_export).show(ui.ctx(), |ui| {
         ui.set_height(MENU_HEIGHT);
         ui.set_width(MENU_WIDTH);
 
@@ -190,13 +191,13 @@ pub(crate) fn draw_export_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
                         let command = export_command(editor);
                         let confirm = menu::dialog_confirm_pressed(ui.ctx());
                         cancelled = menu::dialog_cancel_pressed(ui.ctx());
-                        if (ui.add(MenuButton::new(tr!(literal = "Export")).primary().enabled(command.is_some())).clicked() || confirm)
+                        if (ui.add(MenuButton::new(tr!("io-export")).primary().enabled(command.is_some())).clicked() || confirm)
                             && let Some(command) = command
                         {
                             commands.push(command);
                             close_after_action = true;
                         }
-                        if ui.add(MenuButton::new(tr!(literal = "Default"))).clicked() {
+                        if ui.add(MenuButton::new(tr!("io-default"))).clicked() {
                             reset_export_defaults(editor, project);
                         }
                     },
@@ -215,67 +216,70 @@ fn draw_import_explorer(ui: &mut egui::Ui, editor: &mut EditorState) {
         // OMF carries a whole project rather than one kind of data, so it gets
         // a section of its own above the rest - open, because it is also the
         // dialog's default selection.
-        ExplorerHeader::new(egui::Id::new("import_projects_section"), tr!(literal = "Projects"))
+        ExplorerHeader::new(egui::Id::new("import_projects_section"), tr!("io-projects"))
             .default_open(true)
             .show(ui, |ui| {
-                draw_entry(ui, editor, &tr!(literal = "Open Mining Format 2 (.omf)"), DataMenu::Omf);
+                draw_entry(ui, editor, &tr!("io-open-mining-format-2-omf"), DataMenu::Omf);
             });
         // The sections below are the data explorer's, in its order: whatever
         // comes in here lands in the section of the same name over there. They
         // carry neither the explorer's icons nor its tints - here the heading
         // names a group of file formats, not the data itself.
-        ExplorerHeader::new(egui::Id::new("import_designs_section"), tr!(literal = "Designs"))
+        ExplorerHeader::new(egui::Id::new("import_designs_section"), tr!("common-designs"))
             .default_open(false)
             .show(ui, |ui| {
-                draw_entry(ui, editor, &tr!(literal = "Drawing Exchange Format (.dxf)"), DataMenu::Dxf);
+                draw_entry(ui, editor, &tr!("io-drawing-exchange-format-dxf"), DataMenu::Dxf);
             });
-        ExplorerHeader::new(egui::Id::new("import_triangulations_section"), tr!(literal = "Triangulations"))
+        ExplorerHeader::new(egui::Id::new("import_triangulations_section"), tr!("common-triangulations"))
             .default_open(false)
             .show(ui, |ui| {
-                draw_entry(ui, editor, &tr!(literal = "Wavefront OBJ (.obj)"), DataMenu::Obj);
-                draw_entry(ui, editor, &tr!(literal = "STL (.stl)"), DataMenu::Stl);
-                draw_entry(ui, editor, &tr!(literal = "PLY (.ply)"), DataMenu::Ply);
+                draw_entry(ui, editor, &tr!("io-wavefront-obj"), DataMenu::Obj);
+                draw_entry(ui, editor, &tr!("io-stl"), DataMenu::Stl);
+                draw_entry(ui, editor, &tr!("io-ply"), DataMenu::Ply);
             });
-        ExplorerHeader::new(egui::Id::new("import_rasters_section"), tr!(literal = "Rasters"))
+        ExplorerHeader::new(egui::Id::new("import_rasters_section"), tr!("common-rasters"))
             .default_open(false)
             .show(ui, |ui| {
-                draw_entry(ui, editor, &tr!(literal = "GeoTIFF (.tif, .tiff)"), DataMenu::Geotiff);
+                draw_entry(ui, editor, &tr!("io-geotiff-tif-tiff"), DataMenu::Geotiff);
             });
-        ExplorerHeader::new(egui::Id::new("import_point_clouds_section"), tr!(literal = "Point Clouds"))
+        ExplorerHeader::new(egui::Id::new("import_point_clouds_section"), tr!("common-point-clouds"))
             .default_open(false)
             .show(ui, |ui| {
-                draw_entry(ui, editor, &tr!(literal = "LAS / LAZ (.las, .laz)"), DataMenu::Las);
-                draw_entry(ui, editor, &tr!(literal = "ASCII Points (.xyz, .pts)"), DataMenu::Xyz);
-                draw_entry(ui, editor, &tr!(literal = "Point Cloud Data (.pcd)"), DataMenu::Pcd);
+                draw_entry(ui, editor, &tr!("io-las-laz-las-laz"), DataMenu::Las);
+                draw_entry(ui, editor, &tr!("io-ascii-points-xyz-pts"), DataMenu::Xyz);
+                draw_entry(ui, editor, &tr!("io-point-cloud-data-pcd"), DataMenu::Pcd);
             });
-        ExplorerHeader::new(egui::Id::new("import_block_models_section"), tr!(literal = "Block Models"))
+        ExplorerHeader::new(egui::Id::new("import_block_models_section"), tr!("common-block-models"))
             .default_open(false)
             .show(ui, |ui| {
-                draw_entry(ui, editor, &tr!(literal = "Comma-Separated Values (.csv)"), DataMenu::CsvBlockModel);
+                draw_entry(ui, editor, &tr!("io-comma-separated-values-csv"), DataMenu::CsvBlockModel);
             });
-        ExplorerHeader::new(egui::Id::new("import_drill_holes_section"), tr!(literal = "Drill Holes"))
+        ExplorerHeader::new(egui::Id::new("import_drill_holes_section"), tr!("ws-menubar-drillholes"))
             .default_open(false)
             .show(ui, |ui| {
-                draw_entry(ui, editor, &tr!(literal = "Mapped CSV bundle (.csv)"), DataMenu::CsvDrillHole);
+                draw_entry(ui, editor, &tr!("io-mapped-csv-bundle-csv"), DataMenu::CsvDrillHole);
             });
     });
 }
 
 fn draw_export_explorer(ui: &mut egui::Ui, editor: &mut EditorState) {
     draw_type_explorer(ui, "export_type_tree", |ui| {
-        ExplorerHeader::new(egui::Id::new("export_projects_section"), tr!(literal = "Projects")).show(ui, |ui| {
-            draw_entry(ui, editor, &tr!(literal = "Open Mining Format 2 (.omf)"), DataMenu::Omf);
+        ExplorerHeader::new(egui::Id::new("export_projects_section"), tr!("io-projects")).show(ui, |ui| {
+            draw_entry(ui, editor, &tr!("io-open-mining-format-2-omf"), DataMenu::Omf);
         });
-        ExplorerHeader::new(egui::Id::new("export_designs_section"), tr!(literal = "Designs")).show(ui, |ui| {
-            draw_entry(ui, editor, &tr!(literal = "Drawing Exchange Format (.dxf)"), DataMenu::Dxf);
+        ExplorerHeader::new(egui::Id::new("export_designs_section"), tr!("common-designs")).show(ui, |ui| {
+            draw_entry(ui, editor, &tr!("io-drawing-exchange-format-dxf"), DataMenu::Dxf);
         });
-        ExplorerHeader::new(egui::Id::new("export_triangulations_section"), tr!(literal = "Triangulations")).show(ui, |ui| {
-            draw_entry(ui, editor, &tr!(literal = "Wavefront OBJ (.obj)"), DataMenu::Obj);
-            draw_entry(ui, editor, &tr!(literal = "STL (.stl)"), DataMenu::Stl);
-            draw_entry(ui, editor, &tr!(literal = "PLY (.ply)"), DataMenu::Ply);
+        ExplorerHeader::new(egui::Id::new("export_triangulations_section"), tr!("common-triangulations")).show(ui, |ui| {
+            draw_entry(ui, editor, &tr!("io-wavefront-obj"), DataMenu::Obj);
+            draw_entry(ui, editor, &tr!("io-stl"), DataMenu::Stl);
+            draw_entry(ui, editor, &tr!("io-ply"), DataMenu::Ply);
         });
-        ExplorerHeader::new(egui::Id::new("export_block_models_section"), tr!(literal = "Block Models")).show(ui, |ui| {
-            draw_entry(ui, editor, &tr!(literal = "Comma-Separated Values (.csv)"), DataMenu::CsvBlockModel);
+        ExplorerHeader::new(egui::Id::new("export_block_models_section"), tr!("common-block-models")).show(ui, |ui| {
+            draw_entry(ui, editor, &tr!("io-comma-separated-values-csv"), DataMenu::CsvBlockModel);
+        });
+        ExplorerHeader::new(egui::Id::new("export_drill_holes_section"), tr!("ws-menubar-drillholes")).show(ui, |ui| {
+            draw_entry(ui, editor, &tr!("io-mapped-csv-bundle-csv"), DataMenu::CsvDrillHole);
         });
     });
 }
@@ -285,18 +289,18 @@ fn draw_import_details(ui: &mut egui::Ui, editor: &mut EditorState, commands: &m
     // rect don't trip egui's id-stability check when switching pages.
     ui.push_id(editor.data_menu, |ui| match editor.data_menu {
         DataMenu::Omf => {
-            ui.heading(tr!(literal = "Import Open Mining Format 2"));
-            draw_import_source_picker(ui, editor, commands, tr!(literal = "Project"), tr!(literal = "No .omf chosen"));
+            ui.heading(tr!("io-import-open-mining-format-2"));
+            draw_import_source_picker(ui, editor, commands, tr!("common-project"), tr!("io-no-omf-chosen"));
         }
         DataMenu::Dxf => draw_import_dxf(ui, editor, commands),
-        DataMenu::Obj => draw_import_mesh(ui, editor, commands, &tr!(literal = "Import Wavefront OBJ")),
-        DataMenu::Stl => draw_import_mesh(ui, editor, commands, &tr!(literal = "Import STL")),
-        DataMenu::Ply => draw_import_mesh(ui, editor, commands, &tr!(literal = "Import PLY")),
-        DataMenu::Las => draw_import_mesh(ui, editor, commands, &tr!(literal = "Import LAS/LAZ Point Cloud")),
-        DataMenu::Xyz => draw_import_mesh(ui, editor, commands, &tr!(literal = "Import ASCII Point Cloud")),
-        DataMenu::Pcd => draw_import_mesh(ui, editor, commands, &tr!(literal = "Import PCD Point Cloud")),
+        DataMenu::Obj => draw_import_mesh(ui, editor, commands, &tr!("io-import-wavefront-obj")),
+        DataMenu::Stl => draw_import_mesh(ui, editor, commands, &tr!("io-import-stl")),
+        DataMenu::Ply => draw_import_mesh(ui, editor, commands, &tr!("io-import-ply")),
+        DataMenu::Las => draw_import_mesh(ui, editor, commands, &tr!("io-import-las-laz-point-cloud")),
+        DataMenu::Xyz => draw_import_mesh(ui, editor, commands, &tr!("io-import-ascii-point-cloud")),
+        DataMenu::Pcd => draw_import_mesh(ui, editor, commands, &tr!("io-import-pcd-point-cloud")),
         DataMenu::CsvBlockModel => draw_import_csv_block_model(ui, editor, commands),
-        DataMenu::Geotiff => draw_import_mesh(ui, editor, commands, &tr!(literal = "Import GeoTIFF")),
+        DataMenu::Geotiff => draw_import_mesh(ui, editor, commands, &tr!("io-import-geotiff")),
         DataMenu::CsvDrillHole => draw_import_csv_drill_holes(ui, editor, commands),
         DataMenu::None => {}
     });
@@ -306,10 +310,11 @@ fn draw_export_details(ui: &mut egui::Ui, editor: &mut EditorState, project: &Ui
     ui.push_id(editor.data_menu, |ui| match editor.data_menu {
         DataMenu::Omf => draw_export_omf(ui, editor, project),
         DataMenu::Dxf => draw_export_dxf(ui, editor, project),
-        DataMenu::Obj => draw_export_mesh(ui, editor, project, &tr!(literal = "Export Wavefront OBJ")),
-        DataMenu::Stl => draw_export_mesh(ui, editor, project, &tr!(literal = "Export STL")),
-        DataMenu::Ply => draw_export_mesh(ui, editor, project, &tr!(literal = "Export PLY")),
+        DataMenu::Obj => draw_export_mesh(ui, editor, project, &tr!("io-export-wavefront-obj")),
+        DataMenu::Stl => draw_export_mesh(ui, editor, project, &tr!("io-export-stl")),
+        DataMenu::Ply => draw_export_mesh(ui, editor, project, &tr!("io-export-ply")),
         DataMenu::CsvBlockModel => draw_export_csv_block_model(ui, editor, project),
+        DataMenu::CsvDrillHole => draw_export_csv_drill_holes(ui, editor, project),
         _ => {}
     });
 }
@@ -323,7 +328,7 @@ fn draw_export_details(ui: &mut egui::Ui, editor: &mut EditorState, project: &Ui
 fn draw_export_omf(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView) {
     const CHECKLIST_SIZE: egui::Vec2 = egui::vec2(320.0, 340.0);
 
-    ui.heading(tr!(literal = "Export Open Mining Format 2"));
+    ui.heading(tr!("io-export-open-mining-format-2"));
     ui.add_space(6.0);
     let active = project.projects.iter().find(|entry| entry.is_active);
     striped_box(ui, "omf_export_checklist", CHECKLIST_SIZE, |ui| {
@@ -331,52 +336,52 @@ fn draw_export_omf(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProj
         checklist_section(
             ui,
             "omf_export_designs",
-            &tr!(literal = "Designs"),
+            &tr!("common-designs"),
             &mut selection.designs,
             active
                 .map(|entry| entry.layers.iter().map(|layer| (layer.id, layer.name.clone())).collect())
                 .unwrap_or_default(),
-            &tr!(literal = "No design layers"),
+            &tr!("common-no-design-layers"),
         );
         checklist_section(
             ui,
             "omf_export_triangulations",
-            &tr!(literal = "Triangulations"),
+            &tr!("common-triangulations"),
             &mut selection.triangulations,
             project.triangulations.iter().map(|entry| (entry.id, entry.name.clone())).collect(),
-            &tr!(literal = "No triangulations"),
+            &tr!("common-no-triangulations"),
         );
         checklist_section(
             ui,
             "omf_export_rasters",
-            &tr!(literal = "Rasters"),
+            &tr!("common-rasters"),
             &mut selection.rasters,
             project.raster_textures.iter().map(|entry| (entry.id, entry.name.clone())).collect(),
-            &tr!(literal = "No rasters"),
+            &tr!("explorer-no-rasters"),
         );
         checklist_section(
             ui,
             "omf_export_point_clouds",
-            &tr!(literal = "Point Clouds"),
+            &tr!("common-point-clouds"),
             &mut selection.point_clouds,
             project.point_clouds.iter().map(|entry| (entry.id, entry.name.clone())).collect(),
-            &tr!(literal = "No point clouds"),
+            &tr!("common-no-point-clouds"),
         );
         checklist_section(
             ui,
             "omf_export_block_models",
-            &tr!(literal = "Block Models"),
+            &tr!("common-block-models"),
             &mut selection.block_models,
             project.block_models.iter().map(|entry| (entry.id, entry.name.clone())).collect(),
-            &tr!(literal = "No block models"),
+            &tr!("common-no-block-models"),
         );
         checklist_section(
             ui,
             "omf_export_drill_holes",
-            &tr!(literal = "Drill Holes"),
+            &tr!("ws-menubar-drillholes"),
             &mut selection.drill_holes,
             project.drill_holes.iter().map(|entry| (entry.id, entry.name.clone())).collect(),
-            &tr!(literal = "No drill holes"),
+            &tr!("common-no-drill-holes"),
         );
     });
 }
@@ -430,13 +435,13 @@ fn checklist_section<Id: Copy + Eq + std::hash::Hash>(
 }
 
 fn draw_import_dxf(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
-    ui.heading(tr!(literal = "Import DXF"));
-    draw_import_source_picker(ui, editor, commands, tr!(literal = "Source file"), tr!(literal = "No .dxf chosen"));
+    ui.heading(tr!("common-import-dxf"));
+    draw_import_source_picker(ui, editor, commands, tr!("io-source-file"), tr!("io-no-dxf-chosen"));
 }
 
 fn draw_import_mesh(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, heading: &str) {
     ui.heading(heading);
-    draw_import_source_picker(ui, editor, commands, tr!(literal = "Source file"), tr!(literal = "No file chosen"));
+    draw_import_source_picker(ui, editor, commands, tr!("io-source-file"), tr!("common-no-file-chosen"));
 }
 
 fn draw_import_source_picker(
@@ -447,9 +452,9 @@ fn draw_import_source_picker(
     empty_text: impl Into<egui::WidgetText>,
 ) {
     if MenuFieldFilePicker::new(label, selected_import_source_paths(editor))
-        .help_text(tr!(literal = "Choose the source file or files to import."))
+        .help_text(tr!("io-choose-source-file-files-import"))
         .empty_text(empty_text)
-        .button_text(tr!(literal = "Choose..."))
+        .button_text(tr!("common-choose"))
         .width(FIELD_WIDTH)
         .show(ui)
         .changed()
@@ -459,8 +464,8 @@ fn draw_import_source_picker(
 }
 
 fn draw_import_csv_block_model(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
-    ui.heading(tr!(literal = "Import CSV Block Model"));
-    draw_import_source_picker(ui, editor, commands, tr!(literal = "Model file"), tr!(literal = "No .csv chosen"));
+    ui.heading(tr!("common-import-csv-block-model"));
+    draw_import_source_picker(ui, editor, commands, tr!("io-model-file"), tr!("io-no-csv-chosen"));
     if selected_import_source_paths(editor).is_empty() {
         return;
     }
@@ -471,12 +476,12 @@ fn draw_import_csv_block_model(ui: &mut egui::Ui, editor: &mut EditorState, comm
         return;
     };
 
-    menu::menu_section(ui, tr!(literal = "Column mapping"));
+    menu::menu_section(ui, tr!("io-column-mapping"));
     egui::ScrollArea::both().auto_shrink([false, false]).max_height(ui.available_height()).show(ui, |ui| {
         egui::Grid::new("csv_block_model_preview").striped(true).min_col_width(110.0).show(ui, |ui| {
             for (column, header) in preview.headers.iter().enumerate() {
                 ui.vertical(|ui| {
-                    ui.strong(if header.is_empty() { tr!(literal = "(blank header)") } else { header.to_string() });
+                    ui.strong(if header.is_empty() { tr!("io-blank-header") } else { header.to_string() });
                     let selected = &mut preview.mapping.roles[column];
                     egui::ComboBox::from_id_salt(("csv_column_role", column))
                         .selected_text(selected.label())
@@ -504,8 +509,8 @@ fn draw_import_csv_block_model(ui: &mut egui::Ui, editor: &mut EditorState, comm
 }
 
 fn draw_import_csv_drill_holes(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
-    ui.heading(tr!(literal = "Import Drillhole CSV Bundle"));
-    draw_import_source_picker(ui, editor, commands, tr!(literal = "CSV files"), tr!(literal = "No CSV files chosen"));
+    ui.heading(tr!("io-import-drillhole-csv-bundle"));
+    draw_import_source_picker(ui, editor, commands, tr!("io-csv-files"), tr!("io-no-csv-files-chosen"));
     if let Some(error) = &editor.import_csv_error {
         ui.colored_label(ui.visuals().error_fg_color, error);
     }
@@ -526,6 +531,7 @@ fn draw_import_csv_drill_holes(ui: &mut egui::Ui, editor: &mut EditorState, comm
                             CsvDrillFileRole::Survey,
                             CsvDrillFileRole::Interval,
                             CsvDrillFileRole::ExplicitSegments,
+                            CsvDrillFileRole::Geophysics,
                         ] {
                             ui.selectable_value(&mut mapping.role, role, file_role_label(role));
                         }
@@ -535,17 +541,17 @@ fn draw_import_csv_drill_holes(ui: &mut egui::Ui, editor: &mut EditorState, comm
                     }
                 });
                 if mapping.role == CsvDrillFileRole::Unassigned {
-                    ui.weak(tr!(literal = "Choose a file purpose to map its columns."));
+                    ui.weak(tr!("io-choose-file-purpose-map-its"));
                 }
                 egui::Grid::new("mapping").striped(true).min_col_width(100.0).show(ui, |ui| {
                     for (column, header) in preview.headers.iter().enumerate() {
                         ui.vertical(|ui| {
                             ui.strong(header);
                             if mapping.role == CsvDrillFileRole::Unassigned {
-                                ui.weak(tr!(literal = "Unmapped"));
+                                ui.weak(tr!("io-unmapped"));
                             } else {
                                 let selected = &mut mapping.columns[column];
-                                egui::ComboBox::from_id_salt(("column", column))
+                                let combo = egui::ComboBox::from_id_salt(("column", column))
                                     .selected_text(column_role_label(selected))
                                     .width(115.0)
                                     .show_ui(ui, |ui| {
@@ -554,6 +560,9 @@ fn draw_import_csv_drill_holes(ui: &mut egui::Ui, editor: &mut EditorState, comm
                                             ui.selectable_value(selected, column_role, label);
                                         }
                                     });
+                                if let Some(help) = column_role_help(mapping.role, selected) {
+                                    combo.response.on_hover_text(help);
+                                }
                             }
                         });
                     }
@@ -568,38 +577,59 @@ fn draw_import_csv_drill_holes(ui: &mut egui::Ui, editor: &mut EditorState, comm
             });
         }
     });
+    if geophysics_without_holes(&editor.import_drill_csv) {
+        ui.weak(tr!("io-add-collar-file-explicit-segments"));
+    }
 }
 
 fn file_role_label(role: CsvDrillFileRole) -> String {
     match role {
-        CsvDrillFileRole::Unassigned => tr!(literal = "Choose purpose…"),
-        CsvDrillFileRole::Collar => tr!(literal = "Collar"),
-        CsvDrillFileRole::Survey => tr!(literal = "Survey"),
-        CsvDrillFileRole::Interval => tr!(literal = "Interval"),
-        CsvDrillFileRole::ExplicitSegments => tr!(literal = "Explicit segments"),
+        CsvDrillFileRole::Unassigned => tr!("io-choose-purpose"),
+        CsvDrillFileRole::Collar => tr!("io-collar"),
+        CsvDrillFileRole::Survey => tr!("ws-survey"),
+        CsvDrillFileRole::Interval => tr!("io-interval"),
+        CsvDrillFileRole::ExplicitSegments => tr!("io-explicit-segments"),
+        CsvDrillFileRole::Geophysics => tr!("io-downhole-geophysics"),
     }
 }
 
 fn column_role_label(role: &CsvDrillColumnRole) -> String {
     match role {
-        CsvDrillColumnRole::Ignore => tr!(literal = "Ignore"),
+        CsvDrillColumnRole::Ignore => tr!("common-ignore"),
         CsvDrillColumnRole::Dhid => "DHID".to_owned(),
-        CsvDrillColumnRole::East => tr!(literal = "East / X"),
-        CsvDrillColumnRole::North => tr!(literal = "North / Y"),
-        CsvDrillColumnRole::Elevation => tr!(literal = "Elevation / Z"),
-        CsvDrillColumnRole::Depth => tr!(literal = "Depth"),
-        CsvDrillColumnRole::Azimuth => tr!(literal = "Azimuth"),
-        CsvDrillColumnRole::Dip => tr!(literal = "Dip"),
+        CsvDrillColumnRole::East => tr!("io-east-x"),
+        CsvDrillColumnRole::North => tr!("io-north-y"),
+        CsvDrillColumnRole::Elevation => tr!("io-elevation-z"),
+        CsvDrillColumnRole::Depth => tr!("io-depth"),
+        CsvDrillColumnRole::Azimuth => tr!("edit-azimuth"),
+        CsvDrillColumnRole::Dip => tr!("edit-dip"),
+        CsvDrillColumnRole::Inclination => tr!("io-inclination"),
         CsvDrillColumnRole::From => "FROM".to_owned(),
         CsvDrillColumnRole::To => "TO".to_owned(),
-        CsvDrillColumnRole::StartEast => tr!(literal = "Start X"),
-        CsvDrillColumnRole::StartNorth => tr!(literal = "Start Y"),
-        CsvDrillColumnRole::StartElevation => tr!(literal = "Start Z"),
-        CsvDrillColumnRole::EndEast => tr!(literal = "End X"),
-        CsvDrillColumnRole::EndNorth => tr!(literal = "End Y"),
-        CsvDrillColumnRole::EndElevation => tr!(literal = "End Z"),
-        CsvDrillColumnRole::Diameter => tr!(literal = "Diameter"),
-        CsvDrillColumnRole::Attribute(_) => tr!(literal = "Attribute"),
+        CsvDrillColumnRole::StartEast => tr!("io-start-x"),
+        CsvDrillColumnRole::StartNorth => tr!("io-start-y"),
+        CsvDrillColumnRole::StartElevation => tr!("io-start-z"),
+        CsvDrillColumnRole::EndEast => tr!("io-end-x"),
+        CsvDrillColumnRole::EndNorth => tr!("io-end-y"),
+        CsvDrillColumnRole::EndElevation => tr!("io-end-z"),
+        CsvDrillColumnRole::Diameter => tr!("io-diameter"),
+        CsvDrillColumnRole::Gamma => tr!("io-gamma-api"),
+        CsvDrillColumnRole::LongDensity => tr!("io-long-spaced-density-g-cc"),
+        CsvDrillColumnRole::ShortDensity => tr!("io-short-spaced-density-g-cc"),
+        CsvDrillColumnRole::Attribute(_) => tr!("io-attribute"),
+    }
+}
+
+/// Hover help for a geophysics column's unit convention, `None` elsewhere.
+fn column_role_help(file: CsvDrillFileRole, column: &CsvDrillColumnRole) -> Option<String> {
+    if file != CsvDrillFileRole::Geophysics {
+        return None;
+    }
+    match column {
+        CsvDrillColumnRole::Depth => Some(tr!("io-measured-depth-down-hole-read")),
+        CsvDrillColumnRole::Gamma => Some(tr!("io-natural-gamma-read-api-units")),
+        CsvDrillColumnRole::LongDensity | CsvDrillColumnRole::ShortDensity => Some(tr!("io-density-read-g-cc-exported")),
+        _ => None,
     }
 }
 
@@ -620,6 +650,7 @@ fn available_column_roles(role: CsvDrillFileRole, header: &str) -> Vec<CsvDrillC
             CsvDrillColumnRole::Elevation,
             CsvDrillColumnRole::Azimuth,
             CsvDrillColumnRole::Dip,
+            CsvDrillColumnRole::Inclination,
         ]),
         CsvDrillFileRole::Interval => roles.extend([CsvDrillColumnRole::From, CsvDrillColumnRole::To, CsvDrillColumnRole::Attribute(header.to_owned())]),
         CsvDrillFileRole::ExplicitSegments => roles.extend([
@@ -634,16 +665,22 @@ fn available_column_roles(role: CsvDrillFileRole, header: &str) -> Vec<CsvDrillC
             CsvDrillColumnRole::Diameter,
             CsvDrillColumnRole::Attribute(header.to_owned()),
         ]),
+        CsvDrillFileRole::Geophysics => roles.extend([
+            CsvDrillColumnRole::Depth,
+            CsvDrillColumnRole::Gamma,
+            CsvDrillColumnRole::LongDensity,
+            CsvDrillColumnRole::ShortDensity,
+        ]),
     }
     roles
 }
 
 fn draw_export_dxf(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView) {
-    ui.heading(tr!(literal = "Export DXF"));
-    MenuFieldBool::new(tr!(literal = "Export one layer"), &mut editor.export_dxf_layer).show(ui);
+    ui.heading(tr!("io-export-dxf"));
+    MenuFieldBool::new(tr!("io-export-one-layer"), &mut editor.export_dxf_layer).show(ui);
     if editor.export_dxf_layer {
         ensure_export_layer(editor, project);
-        layer_combo(ui, "dxf_export_layer", &tr!(literal = "Layer:"), project, &mut editor.export_layer);
+        layer_combo(ui, "dxf_export_layer", &tr!("ws-menubar-active-layer"), project, &mut editor.export_layer);
     } else {
         // A workspace holds one project, so a whole-project export just takes
         // the active one rather than offering a choice of exactly one.
@@ -654,13 +691,20 @@ fn draw_export_dxf(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProj
 fn draw_export_mesh(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, heading: &str) {
     ui.heading(heading);
     ensure_export_triangulation(editor, project);
-    triangulation_combo(ui, "mesh_export_triangulation", &tr!(literal = "Triangulation:"), project, &mut editor.export_triangulation);
+    triangulation_combo(ui, "mesh_export_triangulation", &tr!("io-triangulation"), project, &mut editor.export_triangulation);
 }
 
 fn draw_export_csv_block_model(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView) {
-    ui.heading(tr!(literal = "Export CSV Block Model"));
+    ui.heading(tr!("io-export-csv-block-model"));
     ensure_export_block_model(editor, project);
-    block_model_combo(ui, "csv_export_block_model", &tr!(literal = "Block model:"), project, &mut editor.export_block_model);
+    block_model_combo(ui, "csv_export_block_model", &tr!("io-block-model"), project, &mut editor.export_block_model);
+}
+
+fn draw_export_csv_drill_holes(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView) {
+    ui.heading(tr!("io-export-csv-drillholes"));
+    ensure_export_drill_hole(editor, project);
+    drill_hole_combo(ui, "csv_export_drill_hole", &tr!("io-dataset"), project, &mut editor.export_drill_hole);
+    ui.small(tr!("io-writes-three-files-beside-name"));
 }
 
 fn layer_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, field_label: &str, project: &UiProjectView, selected: &mut Option<LayerId>) {
@@ -670,7 +714,7 @@ fn layer_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, fi
     let options = active_entry
         .into_iter()
         .flat_map(|entry| entry.layers.iter().filter(|layer| layer.is_loaded).map(|layer| (Some(layer.id), layer.name.clone().into())));
-    MenuFieldCombo::new(id, field_label, selected, selected_label.unwrap_or_else(|| tr!(literal = "Choose a loaded layer")), options)
+    MenuFieldCombo::new(id, field_label, selected, selected_label.unwrap_or_else(|| tr!("io-choose-loaded-layer")), options)
         .width(FIELD_WIDTH)
         .show(ui);
 }
@@ -679,7 +723,7 @@ fn triangulation_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::D
     let label = selected
         .and_then(|id| project.triangulations.iter().find(|entry| entry.id == id && entry.is_loaded))
         .map(|entry| entry.name.clone())
-        .unwrap_or_else(|| tr!(literal = "Choose a loaded triangulation"));
+        .unwrap_or_else(|| tr!("io-choose-loaded-triangulation"));
     MenuFieldCombo::new(
         id,
         field_label,
@@ -699,7 +743,7 @@ fn block_model_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Deb
     let label = selected
         .and_then(|id| project.block_models.iter().find(|entry| entry.id == id && entry.is_loaded))
         .map(|entry| entry.name.clone())
-        .unwrap_or_else(|| tr!(literal = "Choose a loaded block model"));
+        .unwrap_or_else(|| tr!("io-choose-loaded-block-model"));
     MenuFieldCombo::new(
         id,
         field_label,
@@ -757,6 +801,9 @@ fn reset_export_defaults(editor: &mut EditorState, project: &UiProjectView) {
         DataMenu::CsvBlockModel => {
             editor.export_block_model = first_loaded_block_model(project);
         }
+        DataMenu::CsvDrillHole => {
+            editor.export_drill_hole = first_loaded_drill_hole(project);
+        }
         _ => {}
     }
 }
@@ -779,10 +826,43 @@ fn ensure_export_triangulation(editor: &mut EditorState, project: &UiProjectView
     }
 }
 
+fn ensure_export_drill_hole(editor: &mut EditorState, project: &UiProjectView) {
+    if !has_loaded_drill_hole(project, editor.export_drill_hole) {
+        editor.export_drill_hole = first_loaded_drill_hole(project);
+    }
+}
+
+fn drill_hole_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, field_label: &str, project: &UiProjectView, selected: &mut Option<DrillHoleId>) {
+    let label = selected
+        .and_then(|id| project.drill_holes.iter().find(|entry| entry.id == id && entry.is_loaded))
+        .map(|entry| entry.name.clone())
+        .unwrap_or_else(|| tr!("io-choose-loaded-dataset"));
+    MenuFieldCombo::new(
+        id,
+        field_label,
+        selected,
+        label,
+        project
+            .drill_holes
+            .iter()
+            .filter(|entry| entry.is_loaded)
+            .map(|entry| (Some(entry.id), entry.name.clone().into())),
+    )
+    .width(FIELD_WIDTH)
+    .show(ui);
+}
+
 fn ensure_export_block_model(editor: &mut EditorState, project: &UiProjectView) {
     if !has_loaded_block_model(project, editor.export_block_model) {
         editor.export_block_model = first_loaded_block_model(project);
     }
+}
+
+/// True when the bundle carries a downhole-geophysics file but no file the
+/// holes it should attach to could be named after (no collar, no
+/// explicit-segments file).
+fn geophysics_without_holes(files: &[(CsvDrillFileMapping, CsvDrillPreview)]) -> bool {
+    files.iter().any(|(mapping, _)| mapping.role == CsvDrillFileRole::Geophysics) && bundle_anchor(files.iter().map(|(mapping, _)| mapping)).is_none()
 }
 
 fn import_command(editor: &EditorState) -> Option<UiCommand> {
@@ -805,20 +885,20 @@ fn import_command(editor: &EditorState) -> Option<UiCommand> {
         DataMenu::CsvDrillHole
             if editor.import_csv_error.is_none()
                 && !editor.import_drill_csv.is_empty()
-                && editor.import_drill_csv.iter().all(|(mapping, _)| mapping.role != CsvDrillFileRole::Unassigned) =>
+                && editor.import_drill_csv.iter().all(|(mapping, _)| mapping.role != CsvDrillFileRole::Unassigned)
+                && !geophysics_without_holes(&editor.import_drill_csv) =>
         {
-            let name = editor
-                .import_drill_csv
-                .first()?
-                .0
+            let anchor = bundle_anchor(editor.import_drill_csv.iter().map(|(mapping, _)| mapping));
+            let name = anchor
+                .or_else(|| editor.import_drill_csv.first().map(|(mapping, _)| mapping))?
                 .path
                 .file_stem()
                 .and_then(|stem| stem.to_str())
                 .map(str::to_owned)
-                .unwrap_or_else(|| tr!(literal = "Drill holes"));
+                .unwrap_or_else(|| tr!("io-drill-holes"));
             Some(UiCommand::ImportDrillHole(crate::model::drill_hole::DrillHoleSource::Csv {
                 name: if editor.import_drill_csv.len() > 1 {
-                    tr_format!(literal = "%name% + %count% files", name = name, count = editor.import_drill_csv.len() - 1)
+                    tr!("io-name-count-files", name = name.to_string(), count = (editor.import_drill_csv.len() - 1).to_string())
                 } else {
                     name
                 },
@@ -841,6 +921,7 @@ fn export_command(editor: &EditorState) -> Option<UiCommand> {
             editor.export_triangulation.map(|id| UiCommand::ExportTriangulationAs(id, format))
         }
         DataMenu::CsvBlockModel => editor.export_block_model.map(UiCommand::ExportBlockModelCsv),
+        DataMenu::CsvDrillHole => editor.export_drill_hole.map(UiCommand::ExportDrillHoleCsv),
         _ => None,
     }
 }
@@ -874,7 +955,7 @@ fn is_import_menu(data_menu: DataMenu) -> bool {
 fn is_export_menu(data_menu: DataMenu) -> bool {
     matches!(
         data_menu,
-        DataMenu::Omf | DataMenu::Dxf | DataMenu::Obj | DataMenu::Stl | DataMenu::Ply | DataMenu::CsvBlockModel
+        DataMenu::Omf | DataMenu::Dxf | DataMenu::Obj | DataMenu::Stl | DataMenu::Ply | DataMenu::CsvBlockModel | DataMenu::CsvDrillHole
     )
 }
 
@@ -892,6 +973,10 @@ fn active_project(project: &UiProjectView) -> Option<u32> {
 
 fn first_loaded_triangulation(project: &UiProjectView) -> Option<TriangulationId> {
     project.triangulations.iter().find(|entry| entry.is_loaded).map(|entry| entry.id)
+}
+
+fn first_loaded_drill_hole(project: &UiProjectView) -> Option<DrillHoleId> {
+    project.drill_holes.iter().find(|entry| entry.is_loaded).map(|entry| entry.id)
 }
 
 fn first_loaded_block_model(project: &UiProjectView) -> Option<BlockModelId> {
@@ -913,6 +998,10 @@ fn has_project(project: &UiProjectView, selected: Option<u32>) -> bool {
 
 fn has_loaded_triangulation(project: &UiProjectView, selected: Option<TriangulationId>) -> bool {
     selected.is_some_and(|id| project.triangulations.iter().any(|entry| entry.is_loaded && entry.id == id))
+}
+
+fn has_loaded_drill_hole(project: &UiProjectView, selected: Option<DrillHoleId>) -> bool {
+    selected.is_some_and(|id| project.drill_holes.iter().any(|entry| entry.is_loaded && entry.id == id))
 }
 
 fn has_loaded_block_model(project: &UiProjectView, selected: Option<BlockModelId>) -> bool {

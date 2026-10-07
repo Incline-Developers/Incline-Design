@@ -8,7 +8,7 @@
 
 use crate::{
     app::App,
-    i18n::{tr, tr_format},
+    i18n::tr,
     logging::CommandReportSpec,
     model::{
         Command,
@@ -38,11 +38,11 @@ impl App<'_> {
                         }
                     }
                 }
-                userspace_log!("{}", tr_format!(literal = "Updated charge product %name%", name = &name));
+                userspace_log!("{}", tr!("blast-log-updated-charge-product-name", name = name.to_string()));
             }
             None => {
                 library.products.push(product);
-                userspace_log!("{}", tr_format!(literal = "Added charge product %name%", name = &name));
+                userspace_log!("{}", tr!("blast-log-added-charge-product-name", name = name.to_string()));
             }
         }
         self.persist_blast_library();
@@ -71,12 +71,12 @@ impl App<'_> {
                 if self.editor.active_charge_rule.as_ref() == original.as_ref() {
                     self.editor.active_charge_rule = Some(name.clone());
                 }
-                userspace_log!("{}", tr_format!(literal = "Updated charge rule %name%", name = &name));
+                userspace_log!("{}", tr!("blast-log-updated-charge-rule-name", name = name.to_string()));
             }
             None => {
                 library.rules.push(rule);
                 self.editor.active_charge_rule = Some(name.clone());
-                userspace_log!("{}", tr_format!(literal = "Added charge rule %name%", name = &name));
+                userspace_log!("{}", tr!("blast-log-added-charge-rule-name", name = name.to_string()));
             }
         }
         self.persist_blast_library();
@@ -100,10 +100,10 @@ impl App<'_> {
             }
         };
         if !removed {
-            userspace_warn!("{}", tr!(literal = "That entry is no longer in the charge library"));
+            userspace_warn!("{}", tr!("blast-log-entry-no-longer-charge-library"));
             return;
         }
-        userspace_log!("{}", tr_format!(literal = "Deleted %name% from the charge library", name = item.name()));
+        userspace_log!("{}", tr!("blast-log-deleted-name-from-charge-library", name = item.name().to_string()));
         self.persist_blast_library();
     }
 
@@ -119,7 +119,7 @@ impl App<'_> {
             self.editor.survey.definitions.clone(),
             self.editor.survey.local_system.clone(),
         )) {
-            userspace_warn!("{}", tr_format!(literal = "Failed to save the charge library: %error%", error = error));
+            userspace_warn!("{}", tr!("blast-log-failed-save-charge-library-error", error = error.to_string()));
         }
     }
 
@@ -134,7 +134,7 @@ impl App<'_> {
         let data = &dataset.dataset;
         let products = &self.editor.blast_library.products;
         if let Some(problem) = rule.and_then(|rule| rule.problem(products)) {
-            userspace_warn!("{}", tr_format!(literal = "Cannot load with this rule: %problem%", problem = problem));
+            userspace_warn!("{}", tr!("blast-log-cannot-load-rule-problem", problem = problem.to_string()));
             return;
         }
         let mut before = Vec::new();
@@ -168,22 +168,13 @@ impl App<'_> {
             }
         }
         if too_short > 0 {
-            userspace_warn!(
-                "{}",
-                tr_format!(
-                    literal = "%count% hole(s) are too short for the fixed decks of this rule and were left as they were",
-                    count = too_short
-                )
-            );
+            userspace_warn!("{}", tr!("blast-log-count-hole-too-short-fixed-decks", count = too_short.to_string()));
         }
         if no_depth > 0 {
-            userspace_warn!("{}", tr_format!(literal = "%count% hole(s) have no depth to load", count = no_depth));
+            userspace_warn!("{}", tr!("blast-log-count-hole-have-no-depth-load", count = no_depth.to_string()));
         }
         if no_diameter > 0 {
-            userspace_warn!(
-                "{}",
-                tr_format!(literal = "%count% loaded hole(s) have no diameter, so their explosive mass is unknown", count = no_diameter)
-            );
+            userspace_warn!("{}", tr!("blast-log-count-loaded-hole-have-no-diameter", count = no_diameter.to_string()));
         }
         if after.is_empty() {
             return;
@@ -192,10 +183,10 @@ impl App<'_> {
         self.execute_edit(Command::SetCharges { dataset: id, before, after });
         let (title, detail) = match rule {
             Some(rule) => (
-                tr!(literal = "Charge Holes"),
-                tr_format!(literal = "Loaded %count% hole(s) with %rule%", count = count, rule = &rule.name),
+                tr!("common-charge-holes"),
+                tr!("blast-log-loaded-count-hole-rule", count = count.to_string(), rule = rule.name.to_string()),
             ),
-            None => (tr!(literal = "Unload Holes"), tr_format!(literal = "Unloaded %count% hole(s)", count = count)),
+            None => (tr!("blast-log-unload-holes"), tr!("blast-log-unloaded-count-hole", count = count.to_string())),
         };
         crate::logging::report_completed_action(CommandReportSpec::new(title, rule.map_or_else(String::new, |rule| rule.name.clone())), detail);
     }
@@ -209,14 +200,14 @@ impl App<'_> {
         let mut holes: Vec<usize> = self.editor.selected_drill_holes.iter().filter(|hole| hole.dataset == id).map(|hole| hole.hole).collect();
         holes.sort_unstable();
         if holes.is_empty() {
-            userspace_warn!("{}", tr!(literal = "Select holes of the active pattern first"));
+            userspace_warn!("{}", tr!("blast-log-select-holes-active-pattern-first"));
             return;
         }
         let rule = match rule {
             Some(name) => match self.editor.blast_library.rules.iter().find(|rule| rule.name == name).cloned() {
                 Some(rule) => Some(rule),
                 None => {
-                    userspace_warn!("{}", tr!(literal = "That rule is no longer in the charge library"));
+                    userspace_warn!("{}", tr!("blast-log-rule-no-longer-charge-library"));
                     return;
                 }
             },
@@ -272,7 +263,7 @@ impl App<'_> {
             return;
         }
         let Some(rule) = self.editor.active_rule().cloned() else {
-            userspace_warn!("{}", tr!(literal = "There is no charge rule to load with: add one in the products panel"));
+            userspace_warn!("{}", tr!("blast-log-there-no-charge-rule-load-add"));
             return;
         };
         self.charge_holes(holes, Some(&rule));

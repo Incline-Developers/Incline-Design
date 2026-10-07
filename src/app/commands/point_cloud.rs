@@ -14,7 +14,7 @@ use crate::app::file_name;
 use crate::model::formats::point_cloud::{PointCloudFormat, read_point_cloud};
 use crate::{
     app::App,
-    i18n::{tr, tr_format},
+    i18n::tr,
     model::{
         Command, ItemRef, MemberKind, OpenItem, SceneEntityId,
         formats::point_cloud::try_vec_with_capacity,
@@ -40,7 +40,11 @@ impl<'a> App<'a> {
         let name = crate::model::project::unique_item_name(loaded.name, self.point_clouds.iter().map(|item| item.name.as_str()));
         userspace_log!(
             "{}",
-            tr_format!(literal = "Loaded point cloud %name% (%count% points)", name = name.clone(), count = loaded.points.len())
+            tr!(
+                "cmd-point-cloud-loaded-point-cloud-name-count",
+                name = name.clone().to_string(),
+                count = loaded.points.len().to_string()
+            )
         );
         self.point_clouds.push(OpenPointCloud {
             id,
@@ -65,9 +69,9 @@ impl<'a> App<'a> {
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn open_point_cloud_input(&mut self, input: crate::model::input::InputFile, display_path: std::path::PathBuf) {
         let source_name = input.source.name.clone();
-        let name = crate::model::project::imported_item_name(std::path::Path::new(&source_name), &crate::i18n::tr!(literal = "Point cloud"));
+        let name = crate::model::project::imported_item_name(std::path::Path::new(&source_name), &crate::i18n::tr!("common-point-cloud"));
         self.spawn_job_reporting_progress(
-            crate::i18n::tr_format!(literal = "Loading %name%", name = &source_name),
+            crate::i18n::tr!("cmd-block-model-loading-name", name = source_name.to_string()),
             vec![crate::app::jobs::JobKey::Anonymous],
             move |cancel, progress| {
                 if cancel.is_cancelled() {
@@ -104,7 +108,7 @@ impl<'a> App<'a> {
                     }
                     app.invalidate_topology_bounds_and_redraw();
                 }
-                Err(error) => userspace_warn!("{}", tr_format!(literal = "Failed to load point cloud: %error%", error = format!("{error:#}"))),
+                Err(error) => userspace_warn!("{}", tr!("cmd-point-cloud-failed-load-point-cloud-error", error = format!("{error:#}"))),
             },
         );
     }
@@ -131,8 +135,8 @@ impl<'a> App<'a> {
         }
 
         let source_name = file_name(&path);
-        let name = crate::model::project::imported_item_name(&path, &crate::i18n::tr!(literal = "Point cloud"));
-        let (ticket, progress) = self.begin_reported_task(crate::i18n::tr_format!(literal = "Loading %name%", name = &source_name));
+        let name = crate::model::project::imported_item_name(&path, &crate::i18n::tr!("common-point-cloud"));
+        let (ticket, progress) = self.begin_reported_task(crate::i18n::tr!("cmd-block-model-loading-name", name = source_name.to_string()));
 
         let (tx, rx) = std::sync::mpsc::channel();
         let console_report = crate::logging::retain_current_report();
@@ -199,12 +203,12 @@ impl<'a> App<'a> {
                     self.invalidate_topology_bounds_and_redraw();
                 }
                 Ok(Err(error)) => {
-                    userspace_warn!("{}", tr_format!(literal = "Failed to load point cloud: %error%", error = format!("{error:#}")));
+                    userspace_warn!("{}", tr!("cmd-point-cloud-failed-load-point-cloud-error", error = format!("{error:#}")));
                     self.finish_background_task(ticket, false);
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => unreachable!(),
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    userspace_warn!("{}", tr_format!(literal = "Point-cloud loader disconnected for %path%", path = path.display()));
+                    userspace_warn!("{}", tr!("cmd-point-cloud-point-cloud-loader-disconnected-path", path = path.display().to_string()));
                     self.finish_background_task(ticket, false);
                 }
             };
@@ -249,13 +253,13 @@ impl<'a> App<'a> {
         // the dialog opens, so it reports the set rather than offering one.
         let sources = self.selected_point_clouds();
         if sources.len() < 2 {
-            userspace_warn!("{}", tr!(literal = "Select two or more loaded point clouds before joining them"));
+            userspace_warn!("{}", tr!("cmd-point-cloud-select-two-more-loaded-point"));
             return;
         }
         self.editor.point_cloud_join_open = true;
         self.editor.point_cloud_join_sources = sources;
         if self.editor.point_cloud_join_name_input.trim().is_empty() {
-            self.editor.point_cloud_join_name_input = tr!(literal = "Joined Cloud");
+            self.editor.point_cloud_join_name_input = tr!("common-joined-cloud");
         }
     }
 
@@ -302,9 +306,9 @@ impl<'a> App<'a> {
                     }
                 }
             }
-            Err(error) => userspace_warn!("{}", tr_format!(literal = "Failed to join point clouds: %error%", error = format!("{error:#}"))),
+            Err(error) => userspace_warn!("{}", tr!("cmd-point-cloud-failed-join-point-clouds-error", error = format!("{error:#}"))),
         };
-        self.spawn_job_reporting_progress(tr_format!(literal = "Joining %name%", name = &name), keys, compute, apply);
+        self.spawn_job_reporting_progress(tr!("cmd-point-cloud-joining-name", name = name.to_string()), keys, compute, apply);
         Ok(())
     }
 
@@ -312,7 +316,7 @@ impl<'a> App<'a> {
     pub(crate) fn open_point_cloud_classify(&mut self) {
         let sources = self.selected_point_clouds();
         if sources.is_empty() {
-            userspace_warn!("{}", tr!(literal = "Select one or more loaded point clouds before classifying them"));
+            userspace_warn!("{}", tr!("cmd-point-cloud-select-one-more-loaded-point"));
             return;
         }
         // The sparsest cloud sets the recommendation: a cloth fine enough for
@@ -391,7 +395,7 @@ impl<'a> App<'a> {
             let classified = match result {
                 Ok(classified) => classified,
                 Err(error) => {
-                    userspace_warn!("{}", tr_format!(literal = "Failed to classify point clouds: %error%", error = format!("{error:#}")));
+                    userspace_warn!("{}", tr!("cmd-point-cloud-failed-classify-point-clouds-error", error = format!("{error:#}")));
                     return;
                 }
             };
@@ -403,20 +407,20 @@ impl<'a> App<'a> {
                         .is_some_and(|state| state.revision() == *revision && state.loaded && state.deferred.is_none())
                 });
             if stale {
-                userspace_warn!("{}", tr!(literal = "Point cloud classification discarded: a cloud changed while it ran. Run it again."));
+                userspace_warn!("{}", tr!("cmd-point-cloud-point-cloud-classification-discarded"));
                 return;
             }
             let mut commands = Vec::with_capacity(classified.len());
             for (cloud, output) in classified {
                 userspace_log!(
                     "{}",
-                    tr_format!(
-                        literal = "Classified %name%: %ground% ground, %vegetation% vegetation and %noise% noise of %count% points",
-                        name = cloud.name.clone(),
-                        ground = output.ground,
-                        vegetation = output.vegetation,
-                        noise = output.noise,
-                        count = cloud.points.len()
+                    tr!(
+                        "cmd-point-cloud-classified",
+                        name = cloud.name.clone().to_string(),
+                        ground = output.ground.to_string(),
+                        vegetation = output.vegetation.to_string(),
+                        noise = output.noise.to_string(),
+                        count = cloud.points.len().to_string()
                     )
                 );
                 commands.push(Command::ReplaceItem {
@@ -426,7 +430,7 @@ impl<'a> App<'a> {
             }
             app.execute_edit_for(runtime_id, Command::Batch(commands));
         };
-        self.spawn_job_reporting_progress(tr!(literal = "Classifying point clouds"), keys, compute, apply);
+        self.spawn_job_reporting_progress(tr!("cmd-point-cloud-classifying-point-clouds"), keys, compute, apply);
         Ok(())
     }
 }
@@ -467,10 +471,7 @@ fn join_point_clouds(sources: &[JoinSource], name: String, cancel: &crate::app::
     // says so.
     let classified = sources.iter().all(|source| source.classifications.is_some());
     if !classified && sources.iter().any(|source| source.classifications.is_some()) {
-        userspace_warn!(
-            "{}",
-            tr!(literal = "Dropped point classifications: some of the joined clouds are unclassified, and a partly classified cloud cannot be filtered to ground.")
-        );
+        userspace_warn!("{}", tr!("cmd-point-cloud-join-dropped-classifications"));
     }
     let mut points = try_vec_with_capacity::<DVec3>(total, "joined point cloud")?;
     let mut colors = if colored {
@@ -522,11 +523,11 @@ fn join_point_clouds(sources: &[JoinSource], name: String, cancel: &crate::app::
     progress.set_fraction(1.0);
     userspace_log!(
         "{}",
-        tr_format!(
-            literal = "Joined %count% clouds into %name% (%points% points)",
-            count = sources.len(),
-            name = name.clone(),
-            points = total
+        tr!(
+            "cmd-point-cloud-joined-count-clouds-into-name",
+            count = sources.len().to_string(),
+            name = name.clone().to_string(),
+            points = total.to_string()
         )
     );
     Ok(LoadedPointCloud {

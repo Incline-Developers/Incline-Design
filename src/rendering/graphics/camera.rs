@@ -4,7 +4,10 @@ use winit::keyboard::PhysicalKey;
 
 use super::{frustum::Frustum, *};
 use crate::{
-    rendering::pick::{clamped_range, local_vertex_world, slab_clipped_screen_segment, slab_clipped_segment, slab_screen_point},
+    rendering::{
+        camera::CameraPose,
+        pick::{clamped_range, local_vertex_world, slab_clipped_screen_segment, slab_clipped_segment, slab_screen_point},
+    },
     ui::state::ActiveTool,
 };
 
@@ -651,6 +654,8 @@ impl<'a> Graphics<'a> {
             &view_proj,
             screen,
             threshold_px,
+            self.drill_hole_gpu.disc_spans(),
+            self.section_slab(),
         )
         .map(|(hole, world)| ScenePick {
             entity: SceneEntityId::DrillHole(hole.dataset),
@@ -881,6 +886,47 @@ impl<'a> Graphics<'a> {
         hits
     }
 
+    /// The holes a selection rectangle takes outside Drill & Blast, judged by
+    /// the collar alone: crossing and window selection agree, a point being
+    /// inside or out, and a hole whose trace crosses the box while its collar
+    /// sits outside is not taken.
+    pub(crate) fn drill_hole_collars_in_screen_rect(
+        &self,
+        drill_holes: &[OpenDrillHoleDataset],
+        start_px: (f32, f32),
+        end_px: (f32, f32),
+        hidden: &HashSet<SceneEntityId>,
+        frozen: &HashSet<SceneEntityId>,
+    ) -> Vec<DrillHoleRef> {
+        let rect = ScreenRect::new(self.window_to_viewport_px(start_px), self.window_to_viewport_px(end_px));
+        let view_proj = self.view_proj();
+        let screen = self.screen_size();
+        let mut hits = Vec::new();
+
+        for dataset in drill_holes.iter().filter(|dataset| dataset.state.loaded) {
+            let entity = dataset.entity_id();
+            if hidden.contains(&entity) || frozen.contains(&entity) {
+                continue;
+            }
+            for (index, hole) in dataset.dataset.holes.iter().enumerate() {
+                let collar = hole.collar_position();
+                // A collar the section cut away is not on screen to drag over.
+                if !self.slab_contains(collar) {
+                    continue;
+                }
+                // Behind the camera there is no screen point to test.
+                let Some(point) = crate::rendering::pick::world_to_screen(&view_proj, collar, screen) else {
+                    continue;
+                };
+                if rect.contains(point) {
+                    hits.push(DrillHoleRef { dataset: dataset.id, hole: index });
+                }
+            }
+        }
+
+        hits
+    }
+
     /// The tie-in connectors a Drill & Blast selection rectangle takes.
     ///
     /// Crossing selection accepts a connector that touches the box; window
@@ -967,8 +1013,20 @@ impl<'a> Graphics<'a> {
         {
             let (ray_origin, direction) = self.cursor_model_ray();
             let triangulation_hit = SceneQuery::nearest_surface(triangulations, hidden, Some(frozen), ray_origin, direction).map(|(_, world)| world);
-            let drill_hole_hit =
-                SceneQuery::nearest_drill_hole(drill_holes, hidden, frozen, ray_origin, direction, self.camera.forward(), &view_proj, screen, 0.0).map(|(_, world)| world);
+            let drill_hole_hit = SceneQuery::nearest_drill_hole(
+                drill_holes,
+                hidden,
+                frozen,
+                ray_origin,
+                direction,
+                self.camera.forward(),
+                &view_proj,
+                screen,
+                0.0,
+                self.drill_hole_gpu.disc_spans(),
+                None,
+            )
+            .map(|(_, world)| world);
             let block_model_hit = self.block_model_gpu.nearest_visible_hit(ray_origin, direction, hidden, frozen);
             // A point cloud has no ray-castable surface, so pivot on the nearest
             // splat under the cursor instead - otherwise orbiting over a selected
@@ -1316,6 +1374,46 @@ impl<'a> Graphics<'a> {
         self.rebase_scene_origin(center);
         // Update znear/zfar immediately so snap/pick work before the first render.
         self.fit_depth_to_scene(document, triangulations, block_models, drill_holes, point_clouds, hidden);
+    }
+
+    /// Square the view up to plan where it stands: looking straight down on
+    /// the fixed centre of rotation (world space) when one is set, else on the
+    /// camera's own target, from the same distance, so the zoom holds.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn plan_view_keeping_distance(
+        &mut self,
+        rotation_centre: Option<DVec3>,
+        document: &Document,
+        triangulations: &[OpenTriangulation],
+        block_models: &[OpenBlockModel],
+        drill_holes: &[OpenDrillHoleDataset],
+        point_clouds: &[OpenPointCloud],
+        hidden: &HashSet<SceneEntityId>,
+    ) {
+        self.camera_controller.cancel_view_transition();
+        self.camera_controller.cancel_orbit();
+        self.orbit_marker = None;
+        self.camera = self.plan_camera_keeping_distance(rotation_centre);
+        // Update znear/zfar immediately so snap/pick work before the first render.
+        self.fit_depth_to_scene(document, triangulations, block_models, drill_holes, point_clouds, hidden);
+    }
+
+    /// Where [`Self::plan_view_keeping_distance`] would put the camera,
+    /// without moving it.
+    pub(crate) fn plan_pose_keeping_distance(&self, rotation_centre: Option<DVec3>) -> CameraPose {
+        self.plan_camera_keeping_distance(rotation_centre).pose()
+    }
+
+    pub(crate) fn camera_pose(&self) -> CameraPose {
+        self.camera.pose()
+    }
+
+    fn plan_camera_keeping_distance(&self, rotation_centre: Option<DVec3>) -> Camera {
+        // The camera works in exaggerated space; the centre is a world point.
+        let centre = rotation_centre.map_or(self.camera.target(), |centre| self.exaggerate_point(centre));
+        let mut camera = self.camera.clone();
+        camera.reset_to_plan_view_keeping_distance(centre);
+        camera
     }
 
     /// Move the floating origin to the framed centre. Vertical exaggeration
