@@ -566,7 +566,15 @@ pub(crate) fn compute(
                         break;
                     }
                     for piece in &band.pieces {
-                        let fraction = block.fraction(piece, scratch, cancel)?;
+                        // Said with where, so a bad piece can be found: the
+                        // fraction alone names neither the piece nor the block.
+                        let fraction = block.fraction(piece, scratch, cancel).map_err(|error| {
+                            let (centre, size) = ((block.min + block.max) / 2.0, block.max - block.min);
+                            error.context(format!(
+                                "in the piece from RL {:.2} to {:.2}, against the block centred at ({:.2}, {:.2}, RL {:.2}) of {:.2} x {:.2} x {:.2}",
+                                band.base, band.top, centre.x, centre.y, centre.z, size.x, size.y, size.z
+                            ))
+                        })?;
                         if fraction > 0.0 {
                             hits.push((piece.slot, fraction));
                         }
