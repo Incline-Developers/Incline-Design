@@ -654,62 +654,78 @@ pub(super) fn clip_mesh_by_prepared_surface(
         TriSurfaceCutSide::CutTop => clearance,
         TriSurfaceCutSide::CutBottom => -clearance,
     };
+    use rayon::prelude::*;
+
     let target_vertices = target.vertices();
-    let mut output_vertices = Vec::new();
-    let mut output_faces = Vec::new();
-    let mut overlap = Vec::new();
+    let target_faces: Vec<[usize; 3]> = target.face_vertex_indices_iter().collect();
+    // Each face is clipped on its own, so the faces are shared out in
+    // chunks and the pieces joined back in face order: the sheet comes out
+    // the same whichever thread clipped what.
+    let task_count = rayon::current_num_threads().saturating_mul(8).max(1);
+    let chunk_size = target_faces.len().div_ceil(task_count).max(1);
+    let clipped_faces = progress.counter(target_faces.len());
+    let partials: Vec<(Vec<mesh_data::Vertex>, Vec<[u32; 3]>)> = target_faces
+        .par_chunks(chunk_size)
+        .map(|chunk| {
+            let mut output_vertices = Vec::new();
+            let mut output_faces = Vec::new();
+            let mut overlap = Vec::new();
+            let mut candidates = Vec::new();
+            for face in chunk {
+                let target_triangle = [target_vertices[face[0]], target_vertices[face[1]], target_vertices[face[2]]];
+                let target_bounds = triangle_xy_bounds(target_triangle);
+                reference_surface
+                    .spatial
+                    .for_each_xy_bounds_candidate_index_with_stack(target_bounds.0, target_bounds.1, &mut candidates, |reference_index| {
+                        let reference_triangle = reference_surface.triangles[reference_index];
+                        // Exact half-planes: the reference triangles tile the plane, so
+                        // the pieces of one target face must tile it too. The tolerant
+                        // clip keeps a point up to `XY_TOL` past an edge where it is,
+                        // while the neighbour across that edge cuts at the edge itself,
+                        // and the two pieces then fail to share their corners - a crack
+                        // wherever a target edge passes within a tenth of a millimetre of
+                        // a reference vertex, which a solid then reports as open.
+                        clip_target_triangle_to_reference_xy_exact_into(target_triangle, reference_triangle, &mut overlap);
+                        if overlap.len() < 3 {
+                            return;
+                        }
 
-    // One clip per target face, so faces walked is an exact measure.
-    let face_count = target.face_count() as u64;
-    for (index, face) in target.face_vertex_indices_iter().enumerate() {
-        if index.is_multiple_of(4096) {
-            progress.set_items(index as u64, face_count);
-        }
-        let target_triangle = [target_vertices[face[0]], target_vertices[face[1]], target_vertices[face[2]]];
-        let target_bounds = triangle_xy_bounds(target_triangle);
-
-        for reference_index in reference_surface
-            .spatial
-            .xy_bounds_candidate_indices(&reference_surface.mesh, target_bounds.0, target_bounds.1)
-        {
-            let reference_triangle = reference_surface.triangles[reference_index];
-            // Exact half-planes: the reference triangles tile the plane, so
-            // the pieces of one target face must tile it too. The tolerant
-            // clip keeps a point up to `XY_TOL` past an edge where it is,
-            // while the neighbour across that edge cuts at the edge itself,
-            // and the two pieces then fail to share their corners - a crack
-            // wherever a target edge passes within a tenth of a millimetre of
-            // a reference vertex, which a solid then reports as open.
-            clip_target_triangle_to_reference_xy_exact_into(target_triangle, reference_triangle, &mut overlap);
-            if overlap.len() < 3 {
-                continue;
+                        let polyline: Vec<SurfaceClipVertex> = overlap
+                            .iter()
+                            .copied()
+                            .map(|point| {
+                                let reference_z = bary_z(point.x, point.y, reference_triangle);
+                                SurfaceClipVertex {
+                                    point,
+                                    height_delta: point.z - reference_z + offset,
+                                }
+                            })
+                            .collect();
+                        let mut clipped = clip_surface_polyline(polyline, side);
+                        if offset != 0.0 {
+                            // Where this sheet stops it lies `clearance` from the
+                            // reference, and the reference's own sheet stops at the same
+                            // line in plan, `clearance` the other way. Both put their
+                            // edge half way between, so the two meet there.
+                            for vertex in clipped.iter_mut().filter(|vertex| vertex.height_delta.abs() <= 1e-6) {
+                                vertex.point.z += offset / 2.0;
+                            }
+                        }
+                        append_surface_clip_polyline(&clipped, &mut output_vertices, &mut output_faces);
+                    });
             }
+            clipped_faces.advance_by(chunk.len());
+            (output_vertices, output_faces)
+        })
+        .collect();
 
-            let polyline: Vec<SurfaceClipVertex> = overlap
-                .iter()
-                .copied()
-                .map(|point| {
-                    let reference_z = bary_z(point.x, point.y, reference_triangle);
-                    SurfaceClipVertex {
-                        point,
-                        height_delta: point.z - reference_z + offset,
-                    }
-                })
-                .collect();
-            let mut clipped = clip_surface_polyline(polyline, side);
-            if offset != 0.0 {
-                // Where this sheet stops it lies `clearance` from the
-                // reference, and the reference's own sheet stops at the same
-                // line in plan, `clearance` the other way. Both put their
-                // edge half way between, so the two meet there.
-                for vertex in clipped.iter_mut().filter(|vertex| vertex.height_delta.abs() <= 1e-6) {
-                    vertex.point.z += offset / 2.0;
-                }
-            }
-            append_surface_clip_polyline(&clipped, &mut output_vertices, &mut output_faces);
-        }
+    let mut output_vertices = Vec::with_capacity(partials.iter().map(|(vertices, _)| vertices.len()).sum());
+    let mut output_faces = Vec::with_capacity(partials.iter().map(|(_, faces)| faces.len()).sum());
+    for (vertices, faces) in partials {
+        let base = output_vertices.len() as u32;
+        output_vertices.extend(vertices);
+        output_faces.extend(faces.into_iter().map(|face| face.map(|index| base + index)));
     }
-
     (output_vertices, output_faces)
 }
 
@@ -868,40 +884,72 @@ fn first_fold(prepared: &PreparedReferenceSurface, overlap_area_tolerance: f64) 
 /// The first place `prepared` covers the same ground twice, and with `all`,
 /// which of its faces take part in any fold.
 fn folds(prepared: &PreparedReferenceSurface, overlap_area_tolerance: f64, all: bool) -> (Option<Fold>, Vec<bool>) {
-    let mut first = None;
-    let mut folded = vec![false; if all { prepared.triangles.len() } else { 0 }];
-    for (index, triangle) in prepared.triangles.iter().copied().enumerate() {
+    use rayon::prelude::*;
+
+    // Each face is checked against the faces after it, a face at a time and
+    // independently, so the faces are shared out across threads. The first
+    // fold reported is still the one a walk in face order meets first.
+    let fold_of = |index: usize, stack: &mut Vec<usize>, found: &mut Vec<Fold>| {
+        let triangle = prepared.triangles[index];
         let bounds = triangle_xy_bounds(triangle);
-        for other_index in prepared.spatial.xy_bounds_candidate_indices(&prepared.mesh, bounds.0, bounds.1) {
-            if other_index <= index {
-                continue;
+        prepared.spatial.for_each_xy_bounds_candidate_index_with_stack(bounds.0, bounds.1, stack, |other_index| {
+            if other_index <= index || (!all && !found.is_empty()) {
+                return;
             }
             let overlap = triangle_intersection_xy(triangle, prepared.triangles[other_index]);
             let overlap_area = signed_area_xy(&overlap).abs();
-            if overlap_area > overlap_area_tolerance {
-                let z_delta = overlap_z_delta(triangle, prepared.triangles[other_index], &overlap);
-                // Coincident triangles - a sliver duplicated where two
-                // surfaces were merged - still give one height wherever they
-                // overlap, so the surface is single-valued there. Only a fold,
-                // where the heights differ, is refused.
-                if z_delta <= REFERENCE_COINCIDENT_Z_TOLERANCE {
-                    continue;
-                }
-                first.get_or_insert(Fold {
+            if overlap_area <= overlap_area_tolerance {
+                return;
+            }
+            let z_delta = overlap_z_delta(triangle, prepared.triangles[other_index], &overlap);
+            // Coincident triangles - a sliver duplicated where two surfaces
+            // were merged - still give one height wherever they overlap, so
+            // the surface is single-valued there. Only a fold, where the
+            // heights differ, is refused.
+            if z_delta > REFERENCE_COINCIDENT_Z_TOLERANCE {
+                found.push(Fold {
                     first: index,
                     second: other_index,
                     area: overlap_area,
                     z_delta,
                 });
-                if !all {
-                    return (first, folded);
-                }
-                folded[index] = true;
-                folded[other_index] = true;
             }
+        });
+    };
+    let mut found: Vec<Fold> = if all {
+        (0..prepared.triangles.len())
+            .into_par_iter()
+            .fold(
+                || (Vec::new(), Vec::new()),
+                |(mut stack, mut found), index| {
+                    fold_of(index, &mut stack, &mut found);
+                    (stack, found)
+                },
+            )
+            .flat_map_iter(|(_, found)| found)
+            .collect()
+    } else {
+        (0..prepared.triangles.len())
+            .into_par_iter()
+            .map_init(Vec::new, |stack, index| {
+                let mut found = Vec::new();
+                fold_of(index, stack, &mut found);
+                found.into_iter().min_by_key(|fold| fold.second)
+            })
+            .find_first(Option::is_some)
+            .flatten()
+            .into_iter()
+            .collect()
+    };
+    found.sort_by_key(|fold| (fold.first, fold.second));
+    let mut folded = vec![false; if all { prepared.triangles.len() } else { 0 }];
+    if all {
+        for fold in &found {
+            folded[fold.first] = true;
+            folded[fold.second] = true;
         }
     }
-    (first, folded)
+    (found.into_iter().next(), folded)
 }
 
 /// Which sheet of a folded surface [`single_valued_surface`] keeps where the
@@ -1044,6 +1092,7 @@ impl SurfaceGraph {
         // hair apart can never land either side of a grid line and stay apart.
         let cell = |value: f64| (value / REPAIR_WELD).floor() as i64;
         let mut cells: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+        let mut exact: HashMap<(u64, u64, u64), usize> = HashMap::with_capacity(prepared.triangles.len());
         let mut graph = Self {
             world: Vec::new(),
             points: Vec::new(),
@@ -1056,6 +1105,12 @@ impl SurfaceGraph {
         for triangle in &prepared.triangles {
             let mut indices = [0usize; 3];
             for (slot, corner) in triangle.iter().enumerate() {
+                // Most corners repeat a point exactly - each is shared by
+                // several faces - and one lookup finds those.
+                if let Some(&index) = exact.get(&(corner.x.to_bits(), corner.y.to_bits(), corner.z.to_bits())) {
+                    indices[slot] = index;
+                    continue;
+                }
                 let local = glam::DVec2::new(corner.x - origin.x, corner.y - origin.y);
                 let (cx, cy) = (cell(local.x), cell(local.y));
                 let found = (cx - 1..=cx + 1)
@@ -1065,6 +1120,7 @@ impl SurfaceGraph {
                     .copied()
                     .find(|&index| graph.points[index].distance(local) <= REPAIR_WELD);
                 indices[slot] = match found {
+                    Some(index) if graph.points[index] == local && graph.heights[index] == corner.z => index,
                     Some(index) => {
                         graph.cracked |= graph.points[index] != local && (graph.heights[index] - corner.z).abs() <= REFERENCE_COINCIDENT_Z_TOLERANCE;
                         if graph.better(corner.z, graph.heights[index]) {
@@ -1080,6 +1136,7 @@ impl SurfaceGraph {
                         graph.points.len() - 1
                     }
                 };
+                exact.insert((corner.x.to_bits(), corner.y.to_bits(), corner.z.to_bits()), indices[slot]);
             }
             for i in 0..3 {
                 let (a, b) = (indices[i], indices[(i + 1) % 3]);
@@ -1105,6 +1162,8 @@ impl SurfaceGraph {
     /// A point on an edge at another height is the foot or head of a wall
     /// standing on it, which splits it just the same.
     fn split_t_junctions(&mut self) {
+        use rayon::prelude::*;
+
         if self.edges.is_empty() {
             return;
         }
@@ -1116,46 +1175,52 @@ impl SurfaceGraph {
             cells.entry((cell(point.x), cell(point.y))).or_default().push(index);
         }
 
-        let mut split = Vec::new();
-        let mut on_edge: Vec<(f64, usize)> = Vec::new();
-        for &(a, b) in &self.edges {
-            let (from, to) = (self.points[a], self.points[b]);
-            let span = to - from;
-            let length = span.length();
-            if length <= 2.0 * REPAIR_WELD {
-                continue;
-            }
-            let (min, max) = (from.min(to) - REPAIR_WELD, from.max(to) + REPAIR_WELD);
-            on_edge.clear();
-            for x in cell(min.x)..=cell(max.x) {
-                for y in cell(min.y)..=cell(max.y) {
-                    for &index in cells.get(&(x, y)).into_iter().flatten() {
-                        if index == a || index == b {
-                            continue;
+        // Each edge looks for the points along it on its own; the edges are
+        // shared out across threads and the splits applied afterwards.
+        let edges: Vec<(usize, usize)> = self.edges.iter().copied().collect();
+        let found: Vec<((usize, usize), Vec<usize>, bool)> = edges
+            .par_iter()
+            .map_init(Vec::new, |on_edge: &mut Vec<(f64, usize)>, &(a, b)| {
+                let (from, to) = (self.points[a], self.points[b]);
+                let span = to - from;
+                let length = span.length();
+                if length <= 2.0 * REPAIR_WELD {
+                    return None;
+                }
+                let (min, max) = (from.min(to) - REPAIR_WELD, from.max(to) + REPAIR_WELD);
+                on_edge.clear();
+                for x in cell(min.x)..=cell(max.x) {
+                    for y in cell(min.y)..=cell(max.y) {
+                        for &index in cells.get(&(x, y)).into_iter().flatten() {
+                            if index == a || index == b {
+                                continue;
+                            }
+                            let offset = self.points[index] - from;
+                            let along = offset.dot(span) / length;
+                            if along <= REPAIR_WELD || along >= length - REPAIR_WELD || span.perp_dot(offset).abs() / length > REPAIR_WELD {
+                                continue;
+                            }
+                            on_edge.push((along / length, index));
                         }
-                        let offset = self.points[index] - from;
-                        let along = offset.dot(span) / length;
-                        if along <= REPAIR_WELD || along >= length - REPAIR_WELD || span.perp_dot(offset).abs() / length > REPAIR_WELD {
-                            continue;
-                        }
-                        on_edge.push((along / length, index));
                     }
                 }
-            }
-            if !on_edge.is_empty() {
+                if on_edge.is_empty() {
+                    return None;
+                }
                 on_edge.sort_by(|left, right| left.0.total_cmp(&right.0));
-                self.cracked |= on_edge.iter().any(|&(t, index)| {
+                let cracked = on_edge.iter().any(|&(t, index)| {
                     let height = self.heights[a] + t * (self.heights[b] - self.heights[a]);
                     (self.heights[index] - height).abs() <= REFERENCE_COINCIDENT_Z_TOLERANCE
                 });
-                split.push((
-                    (a, b),
-                    std::iter::once(a)
-                        .chain(on_edge.iter().map(|&(_, index)| index))
-                        .chain(std::iter::once(b))
-                        .collect::<Vec<_>>(),
-                ));
-            }
+                let chain = std::iter::once(a).chain(on_edge.iter().map(|&(_, index)| index)).chain(std::iter::once(b)).collect();
+                Some(((a, b), chain, cracked))
+            })
+            .flatten()
+            .collect();
+        let mut split = Vec::with_capacity(found.len());
+        for (edge, chain, cracked) in found {
+            self.cracked |= cracked;
+            split.push((edge, chain));
         }
         for (edge, chain) in split {
             self.edges.remove(&edge);

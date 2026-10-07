@@ -94,8 +94,10 @@ fn build_envelopes(design: &PreparedReferenceSurface, topography: &PreparedRefer
         SolidRegion::Cut => (TriSurfaceCutSide::CutTop, TriSurfaceCutSide::CutBottom),
         SolidRegion::Fill => (TriSurfaceCutSide::CutBottom, TriSurfaceCutSide::CutTop),
     };
-    let design_sheet = clip_mesh_by_prepared_surface(&design.mesh, topography, design_side, SURFACE_CONTACT, &progress.phase(0.0, 0.5));
-    let topography_sheet = clip_mesh_by_prepared_surface(&topography.mesh, design, topography_side, SURFACE_CONTACT, &progress.phase(0.5, 1.0));
+    let (design_sheet, topography_sheet) = rayon::join(
+        || clip_mesh_by_prepared_surface(&design.mesh, topography, design_side, SURFACE_CONTACT, &progress.phase(0.0, 0.5)),
+        || clip_mesh_by_prepared_surface(&topography.mesh, design, topography_side, SURFACE_CONTACT, &progress.phase(0.5, 1.0)),
+    );
 
     let (floor, roof) = match region {
         SolidRegion::Cut => (design_sheet, topography_sheet),
@@ -123,6 +125,90 @@ pub(crate) fn build_solid_between_surfaces(
     region: SolidRegion,
     progress: &crate::model::progress::Phase,
 ) -> Result<(Vec<mesh_data::Vertex>, Vec<[u32; 3]>, f64)> {
+    // The same pair is built more than once - the Setup page's inspection
+    // preview and the Solids stage each build it, and the preview again on
+    // every return to the solid - so a recent build of exactly these surfaces
+    // is handed back rather than built again.
+    let key = (mesh_fingerprint(design), mesh_fingerprint(topography), region == SolidRegion::Cut);
+    if let Some(built) = recent_builds().iter().find(|(recent, _)| *recent == key).map(|(_, built)| built.clone()) {
+        progress.set_fraction(1.0);
+        return Ok((built.0.clone(), built.1.clone(), built.2));
+    }
+    let built = build_solid_between_surfaces_uncached(design, topography, region, progress)?;
+    let mut recent = recent_builds();
+    recent.retain(|(recent, _)| *recent != key);
+    if recent.len() >= RECENT_BUILDS {
+        recent.remove(0);
+    }
+    recent.push((key, std::sync::Arc::new(built.clone())));
+    Ok(built)
+}
+
+/// How many recent builds [`build_solid_between_surfaces`] keeps: enough for
+/// the solid on screen and the few the Solids stage is working through.
+const RECENT_BUILDS: usize = 4;
+
+type BuiltSolid = (Vec<mesh_data::Vertex>, Vec<[u32; 3]>, f64);
+type RecentBuilds = Vec<((u64, u64, bool), std::sync::Arc<BuiltSolid>)>;
+
+fn recent_builds() -> std::sync::MutexGuard<'static, RecentBuilds> {
+    static RECENT: std::sync::Mutex<RecentBuilds> = std::sync::Mutex::new(Vec::new());
+    // A build that panicked mid-update leaves nothing worse than a stale
+    // list, which is still a list of finished builds.
+    RECENT.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// A hash of a mesh's every point and face, so two meshes with the same
+/// geometry - however they were loaded - are known for the same one.
+fn mesh_fingerprint(mesh: &mesh_data::Triangulation) -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+
+    use rayon::prelude::*;
+    const CHUNK: usize = 16 * 1024;
+    let hash_with = |write: &dyn Fn(&mut foldhash::fast::FoldHasher)| {
+        let mut hasher = FixedState::default().build_hasher();
+        write(&mut hasher);
+        hasher.finish()
+    };
+    let vertices = mesh.vertices();
+    let vertex_hashes: Vec<u64> = vertices
+        .par_chunks(CHUNK)
+        .map(|chunk| {
+            hash_with(&|hasher| {
+                for vertex in chunk {
+                    hasher.write_u64(vertex.x.to_bits());
+                    hasher.write_u64(vertex.y.to_bits());
+                    hasher.write_u64(vertex.z.to_bits());
+                }
+            })
+        })
+        .collect();
+    let face_hashes: Vec<u64> = (0..mesh.face_count())
+        .into_par_iter()
+        .step_by(CHUNK)
+        .map(|start| {
+            hash_with(&|hasher| {
+                for face in start..(start + CHUNK).min(mesh.face_count()) {
+                    for index in mesh.face_vertex_indices(face).unwrap_or_default() {
+                        hasher.write_usize(index);
+                    }
+                }
+            })
+        })
+        .collect();
+    hash_with(&|hasher| {
+        hasher.write_usize(vertices.len());
+        hasher.write_usize(mesh.face_count());
+        vertex_hashes.iter().chain(&face_hashes).for_each(|hash| hasher.write_u64(*hash));
+    })
+}
+
+fn build_solid_between_surfaces_uncached(
+    design: &mesh_data::Triangulation,
+    topography: &mesh_data::Triangulation,
+    region: SolidRegion,
+    progress: &crate::model::progress::Phase,
+) -> Result<BuiltSolid> {
     // Surface intersections must be computed near the origin: line and
     // barycentric arithmetic on mine eastings/northings loses enough precision
     // to tear matching rims apart. Restore domain coordinates only afterwards.
@@ -165,12 +251,10 @@ fn build_solid_local(
         SolidRegion::Cut => (FoldLayer::Lowest, FoldLayer::Highest),
         SolidRegion::Fill => (FoldLayer::Highest, FoldLayer::Lowest),
     };
+    let (design_prepared, topography_prepared) = rayon::join(|| single_valued_surface(design, design_keep), || single_valued_surface(topography, topography_keep));
     let mut surfaces = Vec::with_capacity(2);
-    for (surface, keep, role) in [
-        (design, design_keep, tr!("tri-solid-role-design")),
-        (topography, topography_keep, tr!("tri-solid-role-topography")),
-    ] {
-        let (prepared, repaired) = single_valued_surface(surface, keep)?;
+    for (result, role) in [(design_prepared, tr!("tri-solid-role-design")), (topography_prepared, tr!("tri-solid-role-topography"))] {
+        let (prepared, repaired) = result?;
         if repaired {
             userspace_warn!("{}", tr!("tri-solid-repaired-surface", role = role));
         } else if prepared.skipped_vertical_faces > 0 {
@@ -198,20 +282,25 @@ fn build_solid_local(
     let base = vertices.len() as u32;
     vertices.extend(upper.0);
     faces.extend(upper.1.into_iter().map(|face| face.map(|index| base + index)));
+    // From here on every point is one index, so the edges are told apart by
+    // their indices: one sorted tally answers every later question about them.
     let (vertices, mut faces, floor_faces) = merge_close_points(vertices, faces, floor_faces, SOLID_MERGE, None);
-    let walls = close_region_sides(&vertices, &faces, floor_faces);
+    let weld = Weld::of(&vertices);
+    let walls = close_region_sides(&vertices, &edge_uses(&faces, floor_faces), weld);
     faces.extend(walls);
-    let patches = fill_flat_holes(&vertices, &faces);
+    let patches = fill_flat_holes(&vertices, &edge_uses(&faces, floor_faces));
     faces.extend(patches);
     // A knot of points still open where the sheets part is closed by merging
     // just those, within the weld the surfaces themselves were repaired to.
-    let loose = open_edge_points(&vertices, &faces);
+    let mut uses = edge_uses(&faces, floor_faces);
+    let loose: std::collections::HashSet<u32> = uses.iter().filter(|edge| !edge.closes()).flat_map(|edge| [edge.low, edge.high]).collect();
     let (vertices, faces) = if loose.is_empty() {
         (vertices, faces)
     } else {
         let (vertices, mut faces, _) = merge_close_points(vertices, faces, 0, REPAIR_WELD, Some(&loose));
-        let patches = fill_flat_holes(&vertices, &faces);
+        let patches = fill_flat_holes(&vertices, &edge_uses(&faces, 0));
         faces.extend(patches);
+        uses = edge_uses(&faces, 0);
         (vertices, faces)
     };
 
@@ -219,7 +308,7 @@ fn build_solid_local(
     // cross, and against the wall everywhere else. Anything still open is a
     // rim the wall could not trace - a sheet torn into pieces too small to
     // ring, say - and is worth saying rather than passing off as a solid.
-    let open_edges = open_edge_count(&vertices, &faces);
+    let open_edges = leaking_edges(&vertices, &uses);
     if open_edges > 0 {
         userspace_warn!("{}", tr!("tri-solid-open-along-edge", count = open_edges.to_string()));
     }
@@ -270,25 +359,92 @@ fn volume_between(lower: &(Vec<mesh_data::Vertex>, Vec<[u32; 3]>), upper: &(Vec<
 /// other, and holds nothing a volume could measure. A real open side runs
 /// the length of a wall.
 pub(crate) fn open_edge_count(vertices: &[mesh_data::Vertex], faces: &[[u32; 3]]) -> usize {
-    use std::collections::HashMap;
+    use rayon::prelude::*;
+    // Welded first: a mesh handed in here may repeat its points, a copy per
+    // face, so its indices alone do not say which edges are one.
     let scale = weld_scale(vertices);
-    let key = |index: u32| point_key_scaled(vertices[index as usize], scale);
-    let mut counts: HashMap<EdgeKey, (usize, isize, f64), FixedState> = HashMap::default();
-    for face in faces {
-        for (a, b) in [(face[0], face[1]), (face[1], face[2]), (face[2], face[0])] {
-            let (pa, pb) = (vertices[a as usize], vertices[b as usize]);
-            let (a, b) = (key(a), key(b));
-            let entry = counts.entry(if a <= b { (a, b) } else { (b, a) }).or_default();
-            entry.0 += 1;
-            entry.1 += if a <= b { 1 } else { -1 };
-            entry.2 = ((pa.x - pb.x).powi(2) + (pa.y - pb.y).powi(2) + (pa.z - pb.z).powi(2)).sqrt();
+    let keys: Vec<PointKey> = vertices.par_iter().map(|vertex| point_key_scaled(*vertex, scale)).collect();
+    let mut order: Vec<u32> = (0..vertices.len() as u32).collect();
+    order.par_sort_unstable_by_key(|&index| keys[index as usize]);
+    let mut welded = vec![0u32; vertices.len()];
+    let mut representative = 0;
+    for (position, &index) in order.iter().enumerate() {
+        if position == 0 || keys[index as usize] != keys[order[position - 1] as usize] {
+            representative = index;
         }
+        welded[index as usize] = representative;
     }
-    let (open, leak) = counts
-        .values()
-        .filter(|(count, balance, _)| *count != 2 && (count % 2 == 1 || *balance != 0))
-        .fold((0, 0.0), |(open, leak), (.., length)| (open + 1, leak + length));
+    let faces: Vec<[u32; 3]> = faces.par_iter().map(|face| face.map(|index| welded[index as usize])).collect();
+    leaking_edges(vertices, &edge_uses(&faces, 0))
+}
+
+/// How many of `uses` do not close, or none when, end to end, they leak no
+/// more than [`LEAK_TOLERANCE`]: see [`open_edge_count`].
+fn leaking_edges(vertices: &[mesh_data::Vertex], uses: &[EdgeUse]) -> usize {
+    let (open, leak) = uses.iter().filter(|edge| !edge.closes()).fold((0, 0.0), |(open, leak), edge| {
+        let (a, b) = (vertices[edge.low as usize], vertices[edge.high as usize]);
+        (open + 1, leak + ((a.x - b.x).powi(2) + (a.y - b.y).powi(2) + (a.z - b.z).powi(2)).sqrt())
+    });
     if leak <= LEAK_TOLERANCE { 0 } else { open }
+}
+
+/// One edge of an indexed mesh and how its faces use it.
+#[derive(Clone, Copy)]
+struct EdgeUse {
+    /// Its ends, the lower index first.
+    low: u32,
+    high: u32,
+    /// How many faces use it.
+    count: u32,
+    /// How many more of them run it from `low` to `high` than back.
+    balance: i32,
+    /// The way the first face to use it runs it, and whether that face is
+    /// one of the floor's.
+    from: u32,
+    to: u32,
+    floor: bool,
+}
+
+impl EdgeUse {
+    /// Whether the faces close over it: two of them, or more in balance, as
+    /// where two parts of a solid touch along a line.
+    fn closes(&self) -> bool {
+        self.count == 2 || (self.count.is_multiple_of(2) && self.balance == 0)
+    }
+}
+
+/// Every edge of `faces` once, with how its faces use it; the first
+/// `floor_faces` faces are the floor's. Sorted, so the tally of a few million
+/// edges is one parallel sort rather than as many hash lookups.
+fn edge_uses(faces: &[[u32; 3]], floor_faces: usize) -> Vec<EdgeUse> {
+    use rayon::prelude::*;
+    let mut runs: Vec<(u32, u32, u32, bool)> = faces
+        .par_iter()
+        .enumerate()
+        .flat_map_iter(|(face, corners)| {
+            [(corners[0], corners[1]), (corners[1], corners[2]), (corners[2], corners[0])]
+                .into_iter()
+                .filter(|(a, b)| a != b)
+                .map(move |(a, b)| (a.min(b), a.max(b), face as u32, a < b))
+        })
+        .collect();
+    runs.par_sort_unstable();
+    runs.chunk_by(|left, right| (left.0, left.1) == (right.0, right.1))
+        .map(|group| {
+            let (low, high, face, forward) = group[0];
+            let balance = group.iter().map(|run| if run.3 { 1 } else { -1 }).sum();
+            let (from, to) = if forward { (low, high) } else { (high, low) };
+            EdgeUse {
+                low,
+                high,
+                count: group.len() as u32,
+                balance,
+                from,
+                to,
+                floor: (face as usize) < floor_faces,
+            }
+        })
+        .collect()
 }
 
 /// The most open edge, end to end, a mesh may have and still be closed: see
@@ -429,15 +585,18 @@ pub(crate) fn slabs_between_elevations(mesh: &mesh_data::Triangulation, bands: &
             }
         }
     }
-    for (slab, (base, top)) in slabs.iter_mut().zip(bands) {
+    // Each slab is capped on its own, so the slabs are capped side by side.
+    use rayon::prelude::*;
+    slabs.par_iter_mut().zip(bands).try_for_each(|(slab, (base, top))| {
         if slab.1.is_empty() {
-            continue;
+            return Ok(());
         }
         if cancel.is_some_and(|cancel| cancel.is_cancelled()) {
             anyhow::bail!("Cancelled");
         }
         cap_slab(slab, *base, *top);
-    }
+        Ok(())
+    })?;
     Ok(slabs)
 }
 
@@ -1042,20 +1201,39 @@ fn merge_close_points(
     only: Option<&std::collections::HashSet<u32>>,
 ) -> (Vec<mesh_data::Vertex>, Vec<[u32; 3]>, usize) {
     use std::collections::HashMap;
-    let cell = |value: f64| (value / distance).floor() as i64;
+
+    use rayon::prelude::*;
+    // Cells four distances wide: the points within reach of one lie in its
+    // own cell, and only near a cell's side in the next one too, so most
+    // points look in one cell rather than twenty-seven.
+    let size = distance * 4.0;
+    let cell = move |value: f64| (value / size).floor() as i64;
+    let span = move |value: f64| cell(value - distance)..=cell(value + distance);
+    // Most points repeat one exactly - a copy for each face meeting there.
+    // A parallel sort finds every repeat at once, and each takes whatever
+    // its first copy becomes, so the search below sees each place once.
+    let bits: Vec<(u64, u64, u64)> = vertices.par_iter().map(|vertex| (vertex.x.to_bits(), vertex.y.to_bits(), vertex.z.to_bits())).collect();
+    let mut order: Vec<u32> = (0..vertices.len() as u32).collect();
+    order.par_sort_unstable_by_key(|&index| (bits[index as usize], index));
+    let mut first_copy: Vec<u32> = (0..vertices.len() as u32).collect();
+    for group in order.chunk_by(|&left, &right| bits[left as usize] == bits[right as usize]) {
+        for &index in &group[1..] {
+            first_copy[index as usize] = group[0];
+        }
+    }
+
     let mut cells: HashMap<PointKey, Vec<u32>, FixedState> = HashMap::default();
-    let mut kept: Vec<mesh_data::Vertex> = Vec::with_capacity(vertices.len());
-    let remap: Vec<u32> = vertices
-        .iter()
-        .enumerate()
-        .map(|(index, vertex)| {
-            if only.is_some_and(|only| !only.contains(&(index as u32))) {
-                kept.push(*vertex);
-                return (kept.len() - 1) as u32;
-            }
-            let (cx, cy, cz) = (cell(vertex.x), cell(vertex.y), cell(vertex.z));
-            let found = (cx - 1..=cx + 1)
-                .flat_map(|x| (cy - 1..=cy + 1).flat_map(move |y| (cz - 1..=cz + 1).map(move |z| (x, y, z))))
+    let mut kept: Vec<mesh_data::Vertex> = Vec::with_capacity(vertices.len() / 2);
+    let mut remap: Vec<u32> = vec![0; vertices.len()];
+    for (index, vertex) in vertices.iter().enumerate() {
+        remap[index] = if only.is_some_and(|only| !only.contains(&(index as u32))) {
+            kept.push(*vertex);
+            (kept.len() - 1) as u32
+        } else if first_copy[index] as usize != index && only.is_none_or(|only| only.contains(&first_copy[index])) {
+            remap[first_copy[index] as usize]
+        } else {
+            let found = span(vertex.x)
+                .flat_map(|x| span(vertex.y).flat_map(move |y| span(vertex.z).map(move |z| (x, y, z))))
                 .filter_map(|key| cells.get(&key))
                 .flatten()
                 .copied()
@@ -1066,57 +1244,56 @@ fn merge_close_points(
             found.unwrap_or_else(|| {
                 kept.push(*vertex);
                 let index = (kept.len() - 1) as u32;
-                cells.entry((cx, cy, cz)).or_default().push(index);
+                cells.entry((cell(vertex.x), cell(vertex.y), cell(vertex.z))).or_default().push(index);
                 index
             })
+        };
+    }
+
+    // Faces that collapse go. Of faces left on the same three points, those
+    // facing opposite ways pair off and go too, earliest kept: a sliver
+    // closed flat.
+    let mut merged: Vec<(u32, [u32; 3], [u32; 3], bool)> = faces
+        .par_iter()
+        .enumerate()
+        .filter_map(|(index, face)| {
+            let face = face.map(|corner| remap[corner as usize]);
+            if face[0] == face[1] || face[1] == face[2] || face[2] == face[0] {
+                return None;
+            }
+            let mut sorted = face;
+            sorted.sort_unstable();
+            Some((index as u32, sorted, face, index < floor_faces))
         })
         .collect();
-
-    let mut merged: Vec<([u32; 3], bool)> = Vec::with_capacity(faces.len());
-    let mut seen: HashMap<[u32; 3], usize, FixedState> = HashMap::default();
-    for (index, face) in faces.iter().enumerate() {
-        let face = face.map(|corner| remap[corner as usize]);
-        if face[0] == face[1] || face[1] == face[2] || face[2] == face[0] {
+    let mut by_points: Vec<u32> = (0..merged.len() as u32).collect();
+    by_points.par_sort_unstable_by_key(|&position| (merged[position as usize].1, merged[position as usize].0));
+    let mut dropped = vec![false; merged.len()];
+    for group in by_points.chunk_by(|&left, &right| merged[left as usize].1 == merged[right as usize].1) {
+        if group.len() < 2 {
             continue;
         }
-        // The same three points either way round, read from the smallest.
-        let start = (0..3).min_by_key(|&slot| face[slot]).unwrap_or(0);
-        let canonical = [face[start], face[(start + 1) % 3], face[(start + 2) % 3]];
-        let opposite = [canonical[0], canonical[2], canonical[1]];
-        if let Some(twin) = seen.remove(&opposite) {
-            merged[twin].0 = [u32::MAX; 3];
-            continue;
+        // Even: the same way round as the sorted points.
+        let even = |position: u32| {
+            let (sorted, face) = (merged[position as usize].1, merged[position as usize].2);
+            let start = face.iter().position(|&corner| corner == sorted[0]).unwrap_or(0);
+            face[(start + 1) % 3] == sorted[1]
+        };
+        let (forward, backward): (Vec<u32>, Vec<u32>) = group.iter().partition(|&&position| even(position));
+        for (&a, &b) in forward.iter().zip(&backward) {
+            dropped[a as usize] = true;
+            dropped[b as usize] = true;
         }
-        seen.insert(canonical, merged.len());
-        merged.push((face, index < floor_faces));
     }
-    merged.retain(|(face, _)| face[0] != u32::MAX);
-    let floor = merged.iter().filter(|(_, floor)| *floor).count();
+    let mut index = 0;
+    merged.retain(|_| {
+        index += 1;
+        !dropped[index - 1]
+    });
+    let floor = merged.iter().filter(|(.., floor)| *floor).count();
     // The floor's faces stay first, as they came.
-    merged.sort_by_key(|(_, floor)| !*floor);
-    (kept, merged.into_iter().map(|(face, _)| face).collect(), floor)
-}
-
-/// The points at either end of an edge [`open_edge_count`] would count.
-fn open_edge_points(vertices: &[mesh_data::Vertex], faces: &[[u32; 3]]) -> std::collections::HashSet<u32> {
-    use std::collections::HashMap;
-    let scale = weld_scale(vertices);
-    let key = |index: u32| point_key_scaled(vertices[index as usize], scale);
-    let mut counts: HashMap<EdgeKey, (usize, isize, Vec<u32>), FixedState> = HashMap::default();
-    for face in faces {
-        for (a, b) in [(face[0], face[1]), (face[1], face[2]), (face[2], face[0])] {
-            let (ka, kb) = (key(a), key(b));
-            let entry = counts.entry(if ka <= kb { (ka, kb) } else { (kb, ka) }).or_default();
-            entry.0 += 1;
-            entry.1 += if ka <= kb { 1 } else { -1 };
-            entry.2.extend([a, b]);
-        }
-    }
-    counts
-        .into_values()
-        .filter(|(count, balance, _)| *count != 2 && (count % 2 == 1 || *balance != 0))
-        .flat_map(|(.., points)| points)
-        .collect()
+    merged.sort_by_key(|&(index, .., floor)| (!floor, index));
+    (kept, merged.into_iter().map(|(_, _, face, _)| face).collect(), floor)
 }
 
 /// Close the sides of the region with a vertical wall between the two sheets,
@@ -1136,23 +1313,9 @@ fn open_edge_points(vertices: &[mesh_data::Vertex], faces: &[[u32; 3]]) -> std::
 /// that touches itself - a crest pinching against the ground, where the
 /// floor's passes meet at one point and the roof's at two heights - needs no
 /// deciding which way round it goes.
-fn close_region_sides(vertices: &[mesh_data::Vertex], faces: &[[u32; 3]], floor_faces: usize) -> Vec<[u32; 3]> {
+fn close_region_sides(vertices: &[mesh_data::Vertex], uses: &[EdgeUse], weld: Weld) -> Vec<[u32; 3]> {
     use std::collections::HashMap;
-    let weld = Weld::of(vertices);
     let key = |index: u32| weld.key(vertices[index as usize]);
-    let mut owners: HashMap<EdgeKey, (usize, u32, u32, bool), FixedState> = HashMap::default();
-    for (face_index, face) in faces.iter().enumerate() {
-        for (a, b) in [(face[0], face[1]), (face[1], face[2]), (face[2], face[0])] {
-            let (ka, kb) = (key(a), key(b));
-            if ka == kb {
-                continue;
-            }
-            owners
-                .entry(if ka <= kb { (ka, kb) } else { (kb, ka) })
-                .and_modify(|entry| entry.0 += 1)
-                .or_insert((1, a, b, face_index < floor_faces));
-        }
-    }
     let plan = |index: u32| {
         let (x, y, _) = key(index);
         (x, y)
@@ -1161,7 +1324,7 @@ fn close_region_sides(vertices: &[mesh_data::Vertex], faces: &[[u32; 3]], floor_
     // roof facing up, so the two walk a shared rim opposite ways; so do the
     // two sides of a step within one sheet, where a fold left a wall.
     type PlanEdge = ((i64, i64), (i64, i64));
-    let mut open: Vec<(u32, u32, bool)> = owners.values().filter(|(count, ..)| *count == 1).map(|&(_, a, b, floor)| (a, b, floor)).collect();
+    let mut open: Vec<(u32, u32, bool)> = uses.iter().filter(|edge| edge.count == 1).map(|edge| (edge.from, edge.to, edge.floor)).collect();
     // Floor edges first, so a floor rim pairs with the roof over it before
     // anything else over the same ground.
     open.sort_unstable_by_key(|&(a, b, floor)| (!floor, key(a), key(b)));
@@ -1209,36 +1372,23 @@ fn close_region_sides(vertices: &[mesh_data::Vertex], faces: &[[u32; 3]], floor_
 /// roof's break at points a hair apart, which leaves a sliver of wall - flat,
 /// a hair wide, and as tall as the wall. Filling a hole that is not flat would
 /// be inventing a surface, so those are left for the open-edge warning.
-fn fill_flat_holes(vertices: &[mesh_data::Vertex], faces: &[[u32; 3]]) -> Vec<[u32; 3]> {
+fn fill_flat_holes(vertices: &[mesh_data::Vertex], uses: &[EdgeUse]) -> Vec<[u32; 3]> {
     use std::collections::HashMap;
-    let weld = Weld::of(vertices);
-    let key = |index: u32| weld.key(vertices[index as usize]);
-    // Per edge: how many faces use it, how many more run it from its lower
-    // key than from its higher, and a point at each of those two ends.
-    let mut owners: HashMap<EdgeKey, (usize, isize, u32, u32), FixedState> = HashMap::default();
-    for face in faces {
-        for (a, b) in [(face[0], face[1]), (face[1], face[2]), (face[2], face[0])] {
-            let (ka, kb) = (key(a), key(b));
-            if ka == kb {
-                continue;
-            }
-            let (low, high, run) = if ka <= kb { (a, b, 1) } else { (b, a, -1) };
-            let entry = owners.entry(if ka <= kb { (ka, kb) } else { (kb, ka) }).or_insert((0, 0, low, high));
-            entry.0 += 1;
-            entry.1 += run;
-        }
-    }
     // Each open edge, run the way the faces it is short of a partner wind it:
     // an edge two faces run one way and one the other is open once.
-    let mut open: Vec<(u32, u32)> = owners
-        .into_values()
-        .filter(|&(count, balance, ..)| count != 2 && balance != 0)
-        .flat_map(|(_, balance, low, high)| std::iter::repeat_n(if balance > 0 { (low, high) } else { (high, low) }, balance.unsigned_abs()))
+    let open: Vec<(u32, u32)> = uses
+        .iter()
+        .filter(|edge| edge.count != 2 && edge.balance != 0)
+        .flat_map(|edge| {
+            std::iter::repeat_n(
+                if edge.balance > 0 { (edge.low, edge.high) } else { (edge.high, edge.low) },
+                edge.balance.unsigned_abs() as usize,
+            )
+        })
         .collect();
-    open.sort_unstable_by_key(|&(a, b)| (key(a), key(b)));
-    let mut outgoing: HashMap<PointKey, Vec<usize>, FixedState> = HashMap::default();
+    let mut outgoing: HashMap<u32, Vec<usize>, FixedState> = HashMap::default();
     for (index, &(a, _)) in open.iter().enumerate() {
-        outgoing.entry(key(a)).or_default().push(index);
+        outgoing.entry(a).or_default().push(index);
     }
 
     let mut used = vec![false; open.len()];
@@ -1251,8 +1401,8 @@ fn fill_flat_holes(vertices: &[mesh_data::Vertex], faces: &[[u32; 3]]) -> Vec<[u
         let mut ring = vec![open[start].0];
         let mut current = start;
         let closed = loop {
-            let at = key(open[current].1);
-            if at == key(open[start].0) {
+            let at = open[current].1;
+            if at == open[start].0 {
                 break true;
             }
             let Some(&next) = outgoing.get(&at).into_iter().flatten().find(|&&edge| !used[edge]) else {
