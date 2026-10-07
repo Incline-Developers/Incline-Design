@@ -310,9 +310,7 @@ impl<'a> App<'a> {
     /// project's own surfaces framed nothing when the calculated solids were
     /// the only visible content, causing the camera to reset to the world
     /// origin.
-    fn framed_triangulations(
-        &self,
-    ) -> &[crate::model::triangulation::OpenTriangulation] {
+    fn framed_triangulations(&self) -> &[crate::model::triangulation::OpenTriangulation] {
         if self.editor.is_schedule_animation() {
             self.schedule_animation.scene()
         } else {
@@ -348,10 +346,7 @@ impl<'a> App<'a> {
                     &self.editor.hidden_handles,
                 );
 
-                userspace_log!(
-                    "{}",
-                    tr!("cmd-view-reset-view-plan-same-distance")
-                );
+                userspace_log!("{}", tr!("cmd-view-reset-view-plan-same-distance"));
             }
             ResetStage::FitAll => {
                 graphics.fit_to_extents(
@@ -363,10 +358,7 @@ impl<'a> App<'a> {
                     &self.editor.hidden_handles,
                 );
 
-                userspace_log!(
-                    "{}",
-                    tr!("cmd-view-reset-view-fit-extents")
-                );
+                userspace_log!("{}", tr!("cmd-view-reset-view-fit-extents"));
             }
         }
 
