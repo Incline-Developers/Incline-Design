@@ -1765,7 +1765,7 @@ fn build_solid_body(solid: &Solid, source: &OpenTriangulation, cancel: &crate::a
     let mut bench_parts = Vec::with_capacity(bench_body.len());
     for (mut mesh, band) in bench_body.into_iter().zip(bench_bands_out) {
         mesh.id = next_view_id();
-        let volume = closed_volume(&mesh);
+        let volume = closed_volume(&mesh, &solid.name, &band);
         bench_parts.push(SolidPart {
             bench: band.selection,
             band,
@@ -1777,7 +1777,7 @@ fn build_solid_body(solid: &Solid, source: &OpenTriangulation, cancel: &crate::a
     }
     let mut flitch_parts = Vec::with_capacity(flitch_body.len());
     for (mesh, band) in flitch_body.into_iter().zip(flitch_bands) {
-        let volume = closed_volume(&mesh);
+        let volume = closed_volume(&mesh, &solid.name, &band);
         flitch_parts.push(SolidPart {
             bench: bench_of(band.selection),
             band,
@@ -2181,10 +2181,31 @@ fn split_edges(edges: &[[u32; 2]], source_vertex: &[u32]) -> Vec<[u32; 2]> {
     edges.iter().filter_map(|edge| Some([*local.get(&edge[0])?, *local.get(&edge[1])?])).collect()
 }
 
-/// A measured volume, or `None` when the piece did not come out closed.
-fn closed_volume(mesh: &OpenTriangulation) -> Option<f64> {
+/// A measured volume, or `None` when the piece did not come out closed - said
+/// in the activity console with where, since the reserve diagnostic that
+/// follows can only say that some piece of the solid is open.
+fn closed_volume(mesh: &OpenTriangulation, solid: &str, band: &CutBand) -> Option<f64> {
     let faces: Vec<_> = mesh.mesh.face_vertex_indices_iter().map(|face| face.map(|i| i as u32)).collect();
-    (super::triangulation::solid_between::open_edge_count(mesh.mesh.vertices(), &faces) == 0).then(|| mesh_volume(&mesh.mesh))
+    match super::triangulation::solid_between::open_edge_report(mesh.mesh.vertices(), &faces) {
+        None => Some(mesh_volume(&mesh.mesh)),
+        Some((count, length, at)) => {
+            crate::userspace_warn!(
+                "{}",
+                crate::i18n::tr!(
+                    "planning-reserve-open-piece",
+                    solid = solid.to_string(),
+                    base = format!("{:.2}", band.selection.base),
+                    top = format!("{:.2}", band.selection.top),
+                    count = count.to_string(),
+                    length = format!("{length:.3}"),
+                    x = format!("{:.2}", at.x),
+                    y = format!("{:.2}", at.y),
+                    z = format!("{:.2}", at.z)
+                )
+            );
+            None
+        }
+    }
 }
 
 fn plan_footprints(body: &[OpenTriangulation], bands: &[CutBand], cancel: &crate::app::jobs::CancelFlag) -> anyhow::Result<HashMap<u64, Vec<Vec<DVec2>>>> {

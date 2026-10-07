@@ -237,6 +237,7 @@ planning-combines-as = Combines As
 planning-no-solids = No solids yet
 triangulation-picker-loaded-only = Only loaded surfaces are listed. Load one in the explorer to offer it here.
 planning-reserve-needs-model = Assign a block model to compute reserve fields
+planning-reserve-open-piece = { $solid }: the piece from RL { $base } to { $top } is open along { $count } edge(s), { $length } long in all; the longest is near { $x }, { $y }, RL { $z }. Its volume cannot be measured, so reserves cannot be taken from it.
 planning-reserve-open-solid = Reserve fields need a closed solid, and this one is open: its surfaces do not meet all the way round. Rebuild it from a design that meets the topography everywhere; Build Solid from Surfaces reports how many edges are open.
 planning-reserve-method = Geometric overlap fractions · uniform values within blocks · totals added per solid
 planning-reserve-blocks = Equivalent blocks

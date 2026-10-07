@@ -323,7 +323,7 @@ fn build_solid_local(
 /// clipped by the same predicate - so the volume is the roof's integral of z
 /// minus the floor's, face by face. Unlike a divergence-theorem sum over the
 /// whole mesh this needs no closed surface, so it stays exact for a solid
-/// whose sides are open (see [`open_edge_count`]).
+/// whose sides are open (see [`open_edge_report`]).
 fn volume_between(lower: &(Vec<mesh_data::Vertex>, Vec<[u32; 3]>), upper: &(Vec<mesh_data::Vertex>, Vec<[u32; 3]>)) -> f64 {
     let origin_z = lower.0.first().map_or(0.0, |vertex| vertex.z);
     fn height_integral((vertices, faces): &(Vec<mesh_data::Vertex>, Vec<[u32; 3]>), origin_z: f64) -> f64 {
@@ -339,26 +339,8 @@ fn volume_between(lower: &(Vec<mesh_data::Vertex>, Vec<[u32; 3]>), upper: &(Vec<
     height_integral(upper, origin_z) - height_integral(lower, origin_z)
 }
 
-/// How many edges of the mesh do not close, once coincident vertices are
-/// welded: those used by an odd number of faces, and those used by more than
-/// two whose faces do not run them as often one way as the other.
-///
-/// A closed solid has none. Ones that do appear are the sides: where the
-/// region ends because a surface simply runs out - a design that stops short
-/// of the ground rather than meeting it - the floor and the roof end at
-/// different heights with nothing between them. The volume is still exact
-/// there, but the mesh is a shell rather than a solid, which is worth saying.
-///
-/// An edge four faces share is where two parts of a solid touch along a line,
-/// as a wall standing on a crest that pinches against the ground does, and is
-/// as closed as any, so long as half its faces run it each way.
-///
-/// Edges that leak no more than [`LEAK_TOLERANCE`] between them, end to end,
-/// are not counted: a hole that small is a rounding error's worth of crack
-/// where two surfaces built one from the other were clipped against each
-/// other, and holds nothing a volume could measure. A real open side runs
-/// the length of a wall.
-pub(crate) fn open_edge_count(vertices: &[mesh_data::Vertex], faces: &[[u32; 3]]) -> usize {
+/// [`edge_uses`] once coincident points are welded.
+fn welded_edge_uses(vertices: &[mesh_data::Vertex], faces: &[[u32; 3]]) -> Vec<EdgeUse> {
     use rayon::prelude::*;
     // Welded first: a mesh handed in here may repeat its points, a copy per
     // face, so its indices alone do not say which edges are one.
@@ -375,11 +357,45 @@ pub(crate) fn open_edge_count(vertices: &[mesh_data::Vertex], faces: &[[u32; 3]]
         welded[index as usize] = representative;
     }
     let faces: Vec<[u32; 3]> = faces.par_iter().map(|face| face.map(|index| welded[index as usize])).collect();
-    leaking_edges(vertices, &edge_uses(&faces, 0))
+    edge_uses(&faces, 0)
+}
+
+/// Where a mesh fails to close, once coincident vertices are welded: how many
+/// of its edges do not close, how long they are end to end, and the middle of
+/// the longest; `None` when it closes. Edges that do not close are those used
+/// by an odd number of faces, and those used by more than two whose faces do
+/// not run them as often one way as the other.
+///
+/// A closed solid has none. Ones that do appear are the sides: where the
+/// region ends because a surface simply runs out - a design that stops short
+/// of the ground rather than meeting it - the floor and the roof end at
+/// different heights with nothing between them. The volume is still exact
+/// there, but the mesh is a shell rather than a solid, which is worth saying.
+///
+/// An edge four faces share is where two parts of a solid touch along a line,
+/// as a wall standing on a crest that pinches against the ground does, and is
+/// as closed as any, so long as half its faces run it each way.
+///
+/// Edges that leak no more than [`LEAK_TOLERANCE`] between them, end to end,
+/// are not counted: a hole that small is a rounding error's worth of crack
+/// where two surfaces built one from the other were clipped against each
+/// other, and holds nothing a volume could measure. A real open side runs
+/// the length of a wall.
+pub(crate) fn open_edge_report(vertices: &[mesh_data::Vertex], faces: &[[u32; 3]]) -> Option<(usize, f64, mesh_data::Vertex)> {
+    let uses = welded_edge_uses(vertices, faces);
+    if leaking_edges(vertices, &uses) == 0 {
+        return None;
+    }
+    let ends = |edge: &EdgeUse| (vertices[edge.low as usize], vertices[edge.high as usize]);
+    let length = |(a, b): (mesh_data::Vertex, mesh_data::Vertex)| ((a.x - b.x).powi(2) + (a.y - b.y).powi(2) + (a.z - b.z).powi(2)).sqrt();
+    let open: Vec<&EdgeUse> = uses.iter().filter(|edge| !edge.closes()).collect();
+    let total = open.iter().map(|edge| length(ends(edge))).sum();
+    let (a, b) = ends(open.iter().max_by(|x, y| length(ends(x)).total_cmp(&length(ends(y))))?);
+    Some((open.len(), total, mesh_data::Vertex::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0, (a.z + b.z) / 2.0)))
 }
 
 /// How many of `uses` do not close, or none when, end to end, they leak no
-/// more than [`LEAK_TOLERANCE`]: see [`open_edge_count`].
+/// more than [`LEAK_TOLERANCE`]: see [`open_edge_report`].
 fn leaking_edges(vertices: &[mesh_data::Vertex], uses: &[EdgeUse]) -> usize {
     let (open, leak) = uses.iter().filter(|edge| !edge.closes()).fold((0, 0.0), |(open, leak), edge| {
         let (a, b) = (vertices[edge.low as usize], vertices[edge.high as usize]);
@@ -448,7 +464,7 @@ fn edge_uses(faces: &[[u32; 3]], floor_faces: usize) -> Vec<EdgeUse> {
 }
 
 /// The most open edge, end to end, a mesh may have and still be closed: see
-/// [`open_edge_count`].
+/// [`open_edge_report`].
 const LEAK_TOLERANCE: f64 = REPAIR_WELD;
 
 impl App<'_> {
@@ -1910,7 +1926,7 @@ const CLIP_MAX_DEPTH: usize = 12;
 ///
 /// The result is a soup of those cells, and is deliberately *not* edge-manifold:
 /// cells meeting at an internal wall triangulate it independently, so
-/// [`open_edge_count`] over the result always reports it open even when every
+/// [`open_edge_report`] over the result always reports it open even when every
 /// cell is sound. It is no use as a trust signal here - the caller should judge
 /// the volume on whether the body going *in* was closed, which is the only
 /// thing that decides it, since a closed body clips to an exact one.
