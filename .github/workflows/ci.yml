@@ -130,8 +130,12 @@ jobs:
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
+
+          # cmake and libclang-dev: SCIP and SoPlex are built from source and
+          # their bindings generated with bindgen.
           sudo apt-get install -y --no-install-recommends \
             clang \
+            cmake \
             libclang-dev \
             mold \
             libgtk-3-dev \
@@ -140,8 +144,10 @@ jobs:
       - name: Install repository toolchain
         run: rustup show
 
+      # SCIP bundled: built from source and linked statically, so the
+      # executable carries Improve with no SCIP library beside it.
       - name: Build release executable
-        run: cargo build --release --locked
+        run: cargo build --release --locked --features scip-source
 
       - name: Stage Linux executable
         shell: bash
@@ -171,8 +177,12 @@ jobs:
       - name: Install repository toolchain
         run: rustup show
 
+      # SCIP bundled, as on Linux. The runner's LLVM provides the libclang
+      # bindgen needs; cmake and MSVC are preinstalled.
       - name: Build release executable
-        run: cargo build --release --locked
+        env:
+          LIBCLANG_PATH: C:\Program Files\LLVM\bin
+        run: cargo build --release --locked --features scip-source
 
       - name: Stage Windows executable
         shell: bash
