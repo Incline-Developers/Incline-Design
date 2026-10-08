@@ -1441,11 +1441,19 @@ impl crate::app::App<'_> {
         let mut unmeasured = 0;
         let mut counted_zero = 0;
         let mut negative = 0;
+        let grades: Vec<ReserveFieldId> = document.schedule().experiment().grades.iter().map(|(grade, _)| *grade).collect();
+        let mut negative_grades = vec![0usize; grades.len()];
         for block in &snapshot.blocks {
-            if let super::commands::solids_view::MaterialState::Measured(totals) = &block.material
-                && totals.all.numeric.get(&field).is_some_and(|total| total.negatives > 0)
-            {
-                negative += 1;
+            if let super::commands::solids_view::MaterialState::Measured(totals) = &block.material {
+                let has_negatives = |id: &ReserveFieldId| totals.all.numeric.get(id).is_some_and(|total| total.negatives > 0);
+                if has_negatives(&field) {
+                    negative += 1;
+                }
+                for (count, grade) in negative_grades.iter_mut().zip(&grades) {
+                    if has_negatives(grade) {
+                        *count += 1;
+                    }
+                }
             }
             match super::commands::schedule_readiness::block_tonnes_for_stage(block, field, false) {
                 Ok(_) => {}
@@ -1475,6 +1483,20 @@ impl crate::app::App<'_> {
                 message: tr!("schedule-stage-blocks-negative-tonnes", count = negative.to_string()),
                 blocking: false,
             });
+        }
+        for (count, grade) in negative_grades.iter().zip(&grades) {
+            if *count > 0 {
+                let name = document
+                    .reserve_fields()
+                    .iter()
+                    .find(|known| known.id == *grade)
+                    .map_or_else(String::new, |known| known.name.clone());
+                diagnostics.push(StageDiagnostic {
+                    entity: Some(name.clone()),
+                    message: tr!("schedule-stage-blocks-negative-grade", count = count.to_string(), grade = name),
+                    blocking: false,
+                });
+            }
         }
         // Shown on the step's page rather than as a warning: the planner
         // chose it.

@@ -1161,15 +1161,9 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 }
                 // The *captured* value, in the field's own unit. The grade
                 // table retains the stored scale; no unit conversion is needed.
-                if raw < 0.0 {
-                    problems.push(CaptureDiagnostic::new(
-                        block.name.clone(),
-                        tr!("schedule-capture-grade-negative", grade = grade.name.clone(), value = raw.to_string()),
-                    ));
-                    sound = false;
-                    break;
-                }
-                row.push(raw);
+                // A negative one is a model's blank (-99, typically, on waste)
+                // and reads as a zero grade; the Solids step warns of it.
+                row.push(raw.max(0.0));
             }
             if !sound {
                 break;
