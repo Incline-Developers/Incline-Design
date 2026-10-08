@@ -127,8 +127,8 @@ fn charts(plan: &SchedulePlan, destinations: &[DestinationView], schedule: &Calc
 
 fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, destinations: &[DestinationView], fields: &[(ReserveFieldId, String)]) {
     // The zoom first, then the frame, as on the Gantt.
-    let (over_canvas, rows_scroll, _) = navigate(ui, rect, TimelineFrame::new(editor.gantt, rect).body, editor, "charts_canvas");
-    let frame = TimelineFrame::new(editor.gantt, rect);
+    let (over_canvas, rows_scroll, _) = navigate(ui, rect, TimelineFrame::new(rect).body, editor, "charts_canvas");
+    let frame = TimelineFrame::new(rect);
     editor.schedule_charts_scroll += rows_scroll;
 
     let visuals = ui.visuals().clone();
@@ -137,19 +137,19 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
     ui.painter().rect_filled(rect, 0.0, surface);
     ui.painter().rect_filled(frame.ruler, 0.0, visuals.widgets.noninteractive.bg_fill);
     ui.painter().rect_filled(frame.corner, 0.0, visuals.widgets.noninteractive.bg_fill);
-    let interval = frame.interval(editor.gantt);
-    draw_ruler(ui, frame.ruler, editor.gantt, interval, frame.day_band);
+    let interval = frame.interval(ui, editor.gantt);
+    draw_ruler(ui, frame.ruler, editor.gantt);
 
     let schedule = editor.schedule_result.clone();
     match &schedule {
         None => {
-            draw_grid(ui, frame.body, editor.gantt, interval);
+            draw_grid(ui, frame.body, editor.gantt);
             centred_note(ui, frame.body, tr!("charts-no-schedule"));
         }
         Some(schedule) => {
             let charts = charts(plan, destinations, schedule, fields);
             if charts.is_empty() {
-                draw_grid(ui, frame.body, editor.gantt, interval);
+                draw_grid(ui, frame.body, editor.gantt);
                 centred_note(ui, frame.body, tr!("charts-no-destinations"));
             } else {
                 let total: f32 = charts.iter().map(|chart| chart.height).sum();
@@ -176,7 +176,6 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
                         &child,
                         egui::Rect::from_min_max(egui::pos2(frame.body.left(), row.top()), egui::pos2(frame.body.right(), row.bottom())),
                         editor.gantt,
-                        interval,
                     );
                     draw_chart(&mut child, chart, plot, header, editor, plan, schedule, fields);
                     child.painter().line_segment([row.left_bottom(), row.right_bottom()], rule);
