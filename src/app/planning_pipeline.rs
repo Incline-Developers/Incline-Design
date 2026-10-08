@@ -20,9 +20,12 @@
 //! | Dig Strips | Completed blast and flitch partitions, strip drawings | Each flitch's dig blocks in plan |
 //! | Reserving | Those plans and the bodies they divide | Dig blocks with volumes and reserves |
 //!
-//! Auto stops after Dig Strips: Reserving cuts every block out of its solid
-//! and measures it against the block model, so it runs only from Run Step or
-//! Run All, and editing a strip never starts it.
+//! Dig Strips works in plan, so a strip edit settles at once; Reserving, which
+//! cuts every block out of its solid and measures it against the block model,
+//! is the expensive step. Auto runs it like any other once edits settle; with
+//! Auto off it runs from Run Step or Run All. Run Step runs the step it is
+//! pressed on - again, if it was current - after only those before it that
+//! are out of date; Run All starts over from the first.
 //!
 //! Each stage's input fingerprint includes the fingerprint of the stage before
 //! it, so one edit marks exactly the suffix of stages it can reach. Camera,
@@ -207,6 +210,38 @@ impl PlanningPipeline {
         for stage in self.queue.clone() {
             self.status_mut(stage).state = StageState::Queued;
         }
+        true
+    }
+
+    /// Run `stage` again, and first whichever stages before it are not
+    /// current - Run Step. A step already complete before it is left as it
+    /// stands rather than worked out again from the start.
+    fn rerun_step(&mut self, stage: SolidsStep) -> bool {
+        if self.is_running() {
+            return false;
+        }
+        self.demand = None;
+        self.auto_run = false;
+        self.generation += 1;
+        let mut queue = Vec::new();
+        for earlier in SolidsStep::ALL.into_iter().take(stage.index()) {
+            let matches = self.stage_inputs_match(earlier);
+            let status = self.status_mut(earlier);
+            // An edit undone since: its inputs are what it ran on again.
+            if status.state == StageState::Stale && matches {
+                status.state = StageState::Complete;
+            }
+            if !(status.state.is_current() && matches) {
+                queue.push(earlier);
+            }
+        }
+        queue.push(stage);
+        for queued in &queue {
+            let status = self.status_mut(*queued);
+            status.state = StageState::Queued;
+            status.message = None;
+        }
+        self.queue = queue;
         true
     }
 
@@ -716,9 +751,15 @@ impl crate::app::App<'_> {
         [field_list, block_models, solids_stage, benching_stage, blasting_stage, dig_stage, reserving_stage]
     }
 
-    /// Reset the pipeline and run from the first step through the selected step.
-    /// Whether the run started.
+    /// Run Step: the selected step again, after whichever steps before it
+    /// are out of date. Whether the run started.
     pub(crate) fn run_planning_stage(&mut self, stage: SolidsStep) -> bool {
+        self.start_planning_run(stage, false)
+    }
+
+    /// Start a run through `stage`: every step from the first again when
+    /// `restart` (Run All), otherwise only what [`PlanningPipeline::rerun_step`] queues.
+    fn start_planning_run(&mut self, stage: SolidsStep, restart: bool) -> bool {
         self.sync_planning_pipeline();
         let Some(pipeline) = self.planning_pipeline.as_mut() else {
             return false;
@@ -726,7 +767,8 @@ impl crate::app::App<'_> {
         if pipeline.is_running() {
             return false;
         }
-        if !pipeline.restart_through(stage) {
+        let started = if restart { pipeline.restart_through(stage) } else { pipeline.rerun_step(stage) };
+        if !started {
             return false;
         }
         self.retry_failed_solid_requests();
@@ -775,8 +817,7 @@ impl crate::app::App<'_> {
         }
         self.planning_auto_settle = None;
         self.planning_auto_attempted = Some(key);
-        // Reserving is the expensive step, and the one Auto leaves alone.
-        self.resume_planning_stages(SolidsStep::DigStrips);
+        self.resume_planning_stages(SolidsStep::LAST);
     }
 
     /// Run the stages from the first one that is not current through
@@ -793,7 +834,7 @@ impl crate::app::App<'_> {
 
     /// Restart every stage, including those already complete.
     pub(crate) fn run_all_planning_stages(&mut self) {
-        self.run_planning_stage(SolidsStep::LAST);
+        self.start_planning_run(SolidsStep::LAST, true);
     }
 
     pub(crate) fn cancel_planning_run(&mut self) {
