@@ -23,7 +23,10 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::{i18n::tr, model::formats::block_model_data::BlockModelData};
+use crate::{
+    i18n::tr,
+    model::{block_model::OpenBlockModel, formats::block_model_data::BlockModelData},
+};
 
 /// Bumped whenever the file's shape changes in a way old builds cannot read.
 pub(crate) const SCENARIO_FILE_VERSION: u32 = 3;
@@ -357,6 +360,8 @@ pub(crate) struct ProcessingMethod {
     pub(crate) min_grade: FieldValue<f64>,
     pub(crate) max_grade: FieldValue<f64>,
     pub(crate) threshold: FieldValue<f64>,
+    /// Cost per tonne of feed.
+    pub(crate) processing_cost: FieldValue<f64>,
     pub(crate) elements: Vec<ElementCost>,
     /// Scales this method's haulage cost; 1 leaves it as it is.
     pub(crate) haulage_factor: FieldValue<f64>,
@@ -371,6 +376,7 @@ impl Default for ProcessingMethod {
             min_grade: FieldValue::new(0.0),
             max_grade: FieldValue::new(0.0),
             threshold: FieldValue::new(0.0),
+            processing_cost: FieldValue::new(0.0),
             elements: Vec::new(),
             haulage_factor: FieldValue::new(1.0),
             ga_cost: FieldValue::new(0.0),
@@ -382,6 +388,11 @@ impl Default for ProcessingMethod {
 #[serde(default)]
 pub(crate) struct RevenueRow {
     pub(crate) element: String,
+    /// The unit the element's block model field is stored in.
+    pub(crate) grade_unit: GradeUnit,
+    /// The unit the element is sold in: price and selling cost are per one of
+    /// these, and so is the element cost of every method.
+    pub(crate) sales_unit: SalesUnit,
     pub(crate) price: FieldValue<f64>,
     pub(crate) selling_cost: FieldValue<f64>,
 }
@@ -390,9 +401,100 @@ impl Default for RevenueRow {
     fn default() -> Self {
         Self {
             element: String::new(),
+            grade_unit: GradeUnit::default(),
+            sales_unit: SalesUnit::default(),
             price: FieldValue::new(0.0),
             selling_cost: FieldValue::new(0.0),
         }
+    }
+}
+
+/// The unit an element's grade field is stored in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum GradeUnit {
+    #[default]
+    Percent,
+    GramsPerTonne,
+    Ppm,
+    Ppb,
+    /// Already sales units per tonne (carats per tonne, say): no conversion.
+    Unit,
+}
+
+impl GradeUnit {
+    pub(crate) const ALL: [Self; 5] = [Self::Percent, Self::GramsPerTonne, Self::Ppm, Self::Ppb, Self::Unit];
+
+    /// Kilograms of the element in a tonne of rock per one grade unit; `None`
+    /// for [`Self::Unit`].
+    fn kg_per_tonne(self) -> Option<f64> {
+        match self {
+            Self::Percent => Some(10.0),
+            Self::GramsPerTonne | Self::Ppm => Some(0.001),
+            Self::Ppb => Some(1.0e-6),
+            Self::Unit => None,
+        }
+    }
+
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::Percent => tr!("opt-unit-percent"),
+            Self::GramsPerTonne => tr!("opt-unit-grams-per-tonne"),
+            Self::Ppm => tr!("opt-unit-ppm"),
+            Self::Ppb => tr!("opt-unit-ppb"),
+            Self::Unit => tr!("opt-unit-unit"),
+        }
+    }
+}
+
+/// The unit an element is sold in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum SalesUnit {
+    #[default]
+    Tonne,
+    Kilogram,
+    Gram,
+    /// Troy ounce.
+    Ounce,
+    Pound,
+    /// Whatever grade x tonnes gives: no conversion.
+    Unit,
+}
+
+impl SalesUnit {
+    pub(crate) const ALL: [Self; 6] = [Self::Tonne, Self::Kilogram, Self::Gram, Self::Ounce, Self::Pound, Self::Unit];
+
+    /// Kilograms in one unit; `None` for [`Self::Unit`].
+    fn kg(self) -> Option<f64> {
+        match self {
+            Self::Tonne => Some(1000.0),
+            Self::Kilogram => Some(1.0),
+            Self::Gram => Some(0.001),
+            Self::Ounce => Some(0.031_103_476_8),
+            Self::Pound => Some(0.453_592_37),
+            Self::Unit => None,
+        }
+    }
+
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::Tonne => tr!("opt-unit-tonne"),
+            Self::Kilogram => tr!("opt-unit-kilogram"),
+            Self::Gram => tr!("opt-unit-gram"),
+            Self::Ounce => tr!("opt-unit-ounce"),
+            Self::Pound => tr!("opt-unit-pound"),
+            Self::Unit => tr!("opt-unit-unit"),
+        }
+    }
+}
+
+/// Sales units of an element in one tonne of rock per one grade unit: the one
+/// place grades are converted. 1 % sold by the pound is 22.046; 1 g/t sold by
+/// the ounce is 0.03215. Either unit being [`GradeUnit::Unit`] or
+/// [`SalesUnit::Unit`] means no conversion.
+pub(crate) fn metal_factor(grade: GradeUnit, sales: SalesUnit) -> f64 {
+    match (grade.kg_per_tonne(), sales.kg()) {
+        (Some(kg_per_tonne), Some(kg)) => kg_per_tonne / kg,
+        _ => 1.0,
     }
 }
 
@@ -404,6 +506,9 @@ pub(crate) enum SlopeMode {
     Single,
     /// An angle per sector of bearings.
     Rosette,
+    /// Each block's own angle, from a numeric block model field, the same in
+    /// every direction. Blocks without a valid angle take the default angle.
+    Field,
 }
 
 /// One rosette row: from this bearing (degrees clockwise from north) the pit
@@ -428,6 +533,9 @@ impl Default for RosetteRow {
 
 pub(crate) const DEFAULT_SLOPE_ANGLE: f64 = 45.0;
 
+/// A typical rock density, t/m3, for a scenario that has not set its own.
+pub(crate) const DEFAULT_DENSITY: f64 = 2.7;
+
 /// The overall slope: one default angle, or a rosette. The rows are kept while
 /// the single angle is in use, and the other way round.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -436,6 +544,49 @@ pub(crate) struct SlopeSettings {
     pub(crate) mode: SlopeMode,
     pub(crate) angle: FieldValue<f64>,
     pub(crate) rosette: Vec<RosetteRow>,
+    /// How the angle goes from one rosette row to the next.
+    pub(crate) interpolation: RosetteInterpolation,
+    /// The numeric field holding each block's angle, for [`SlopeMode::Field`].
+    pub(crate) field: String,
+}
+
+/// How a rosette's angle changes between its rows' bearings.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum RosetteInterpolation {
+    /// Each row's angle holds up to the next row's bearing (the sectors).
+    #[default]
+    Step,
+    Linear,
+    Cosine,
+    /// Needs at least four rows.
+    Cubic,
+}
+
+impl RosetteInterpolation {
+    pub(crate) const ALL: [Self; 4] = [Self::Step, Self::Linear, Self::Cosine, Self::Cubic];
+
+    /// The fewest rosette rows the interpolation can work from.
+    pub(crate) fn min_rows(self) -> usize {
+        match self {
+            Self::Step => 1,
+            Self::Linear | Self::Cosine => 2,
+            Self::Cubic => 4,
+        }
+    }
+
+    /// The interpolations a rosette of `rows` rows can use.
+    pub(crate) fn available(rows: usize) -> impl Iterator<Item = Self> {
+        Self::ALL.into_iter().filter(move |option| rows >= option.min_rows())
+    }
+
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::Step => tr!("opt-interpolation-step"),
+            Self::Linear => tr!("opt-interpolation-linear"),
+            Self::Cosine => tr!("opt-interpolation-cosine"),
+            Self::Cubic => tr!("opt-interpolation-cubic"),
+        }
+    }
 }
 
 impl Default for SlopeSettings {
@@ -444,6 +595,8 @@ impl Default for SlopeSettings {
             mode: SlopeMode::Single,
             angle: FieldValue::new(DEFAULT_SLOPE_ANGLE),
             rosette: Vec::new(),
+            interpolation: RosetteInterpolation::Step,
+            field: String::new(),
         }
     }
 }
@@ -511,10 +664,15 @@ pub(crate) enum ShellDirection {
     SouthWest,
     West,
     NorthWest,
+    /// Out from the starting point in every direction, as rings. Last, so the
+    /// compass variants keep their saved names and order.
+    Radial,
 }
 
 impl ShellDirection {
-    pub(crate) const ALL: [Self; 8] = [
+    /// In the order the drop-down offers them: radial first, then the compass.
+    pub(crate) const ALL: [Self; 9] = [
+        Self::Radial,
         Self::North,
         Self::NorthEast,
         Self::East,
@@ -525,10 +683,21 @@ impl ShellDirection {
         Self::NorthWest,
     ];
 
-    /// Bearing in degrees clockwise from north. Read by the run (stage 2).
-    #[allow(dead_code)]
-    pub(crate) fn bearing(self) -> f64 {
-        Self::ALL.iter().position(|d| *d == self).unwrap_or(0) as f64 * 45.0
+    /// Bearing in degrees clockwise from north; `None` for [`Self::Radial`],
+    /// which has none.
+    pub(crate) fn bearing(self) -> Option<f64> {
+        let bearing = match self {
+            Self::North => 0.0,
+            Self::NorthEast => 45.0,
+            Self::East => 90.0,
+            Self::SouthEast => 135.0,
+            Self::South => 180.0,
+            Self::SouthWest => 225.0,
+            Self::West => 270.0,
+            Self::NorthWest => 315.0,
+            Self::Radial => return None,
+        };
+        Some(bearing)
     }
 
     pub(crate) fn label(self) -> String {
@@ -541,6 +710,7 @@ impl ShellDirection {
             Self::SouthWest => tr!("opt-direction-sw"),
             Self::West => tr!("opt-direction-w"),
             Self::NorthWest => tr!("opt-direction-nw"),
+            Self::Radial => tr!("opt-direction-radial"),
         }
     }
 }
@@ -565,6 +735,10 @@ pub(crate) struct OutputSettings {
     pub(crate) factor_to: f64,
     pub(crate) factor_step: f64,
     pub(crate) shell_count: u32,
+    /// Range (from, to, step) or a typed list.
+    pub(crate) factor_input: FactorInput,
+    /// The typed list, as typed (see [`parse_factor_list`]); a plain string.
+    pub(crate) factor_list: String,
     /// Shells that advance in one direction from a starting point picked in the model.
     pub(crate) use_directional_shells: bool,
     pub(crate) shell_direction: ShellDirection,
@@ -592,6 +766,8 @@ impl Default for OutputSettings {
             factor_to: 1.0,
             factor_step: 0.05,
             shell_count: 11,
+            factor_input: FactorInput::Range,
+            factor_list: String::from("0.5, 0.75, 1, 1.25"),
             use_directional_shells: false,
             shell_direction: ShellDirection::North,
             shell_start: None,
@@ -608,14 +784,77 @@ impl Default for OutputSettings {
     }
 }
 
+/// How a multiple-shell run's revenue factors are given.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum FactorInput {
+    /// From, to and a step (or a number of shells).
+    #[default]
+    Range,
+    /// A list the user types.
+    List,
+}
+
+/// Why a typed list of revenue factors cannot be used.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum FactorListIssue {
+    Empty,
+    /// This piece is not a number above 0.
+    Invalid(String),
+}
+
+/// Read a typed list of revenue factors: numbers above 0 separated by commas,
+/// semicolons or spaces, each rounded with [`round_factor`], sorted, repeats
+/// dropped.
+pub(crate) fn parse_factor_list(text: &str) -> Result<Vec<f64>, FactorListIssue> {
+    let mut factors = Vec::new();
+    for piece in text.split(|character: char| character == ',' || character == ';' || character.is_whitespace()) {
+        if piece.is_empty() {
+            continue;
+        }
+        match piece.parse::<f64>() {
+            Ok(value) if value.is_finite() && round_factor(value) > 0.0 => factors.push(round_factor(value)),
+            _ => return Err(FactorListIssue::Invalid(piece.to_owned())),
+        }
+    }
+    factors.sort_by(f64::total_cmp);
+    factors.dedup();
+    if factors.is_empty() { Err(FactorListIssue::Empty) } else { Ok(factors) }
+}
+
+impl FactorListIssue {
+    pub(crate) fn message(&self) -> String {
+        match self {
+            Self::Empty => tr!("opt-factor-list-empty"),
+            Self::Invalid(piece) => tr!("opt-factor-list-invalid", piece = piece.clone()),
+        }
+    }
+}
+
 /// How many shells a step makes between two ends, ends included.
 pub(crate) fn shell_count_for_step(from: f64, to: f64, step: f64) -> Option<u32> {
     (step > 0.0 && to > from).then(|| ((to - from) / step).round() as u32 + 1)
 }
 
-/// The step that spreads `count` shells between two ends, ends included.
+/// The step that spreads `count` shells between two ends, ends included,
+/// rounded to [`round_factor`] so 0.8 to 1 in 5 shells reads 0.05.
 pub(crate) fn shell_step_for_count(from: f64, to: f64, count: u32) -> Option<f64> {
-    (count >= 2 && to > from).then(|| (to - from) / f64::from(count - 1))
+    (count >= 2 && to > from).then(|| round_factor((to - from) / f64::from(count - 1)))
+}
+
+/// A revenue factor or step to three decimals, clearing float tails such as
+/// 0.04999999999999999 or 0.3333333333.
+pub(crate) fn round_factor(value: f64) -> f64 {
+    (value * 1000.0).round() / 1000.0
+}
+
+/// A factor as shell names show it: at least two decimals, at most three
+/// (0.85, 0.333).
+pub(crate) fn format_factor(value: f64) -> String {
+    let text = format!("{:.3}", round_factor(value));
+    match text.strip_suffix('0') {
+        Some(short) => short.to_owned(),
+        None => text,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -629,6 +868,9 @@ pub(crate) struct OptimizationScenario {
     // Inputs
     /// Name of the block model the scenario runs on.
     pub(crate) block_model: String,
+    /// Density for every block when no density field is chosen, and for blank,
+    /// zero or negative values in the field. Above 0.
+    pub(crate) default_density: FieldValue<f64>,
     pub(crate) density_field: String,
     pub(crate) quality_field: String,
     pub(crate) rocktype_field: String,
@@ -677,6 +919,7 @@ impl OptimizationScenario {
             id,
             name,
             block_model: String::new(),
+            default_density: FieldValue::new(DEFAULT_DENSITY),
             density_field: String::new(),
             quality_field: String::new(),
             rocktype_field: String::new(),
@@ -762,6 +1005,7 @@ impl OptimizationScenario {
         keep(&mut self.rehab_cost.field, &fields.numeric);
         keep(&mut self.waste_haulage.field, &fields.numeric);
         keep(&mut self.ore_haulage.field, &fields.numeric);
+        keep(&mut self.slope.field, &fields.numeric);
         keep(&mut self.output.shell_field, &fields.all);
         for method in &mut self.methods {
             for element in &mut method.elements {
@@ -827,6 +1071,9 @@ impl OptimizationScenario {
             self.cost_field.as_str(),
         ]
         .into();
+        if self.slope.mode == SlopeMode::Field {
+            used.insert(self.slope.field.as_str());
+        }
         for haulage in [&self.rehab_cost, &self.waste_haulage, &self.ore_haulage] {
             if haulage.mode == HaulageMode::Field {
                 used.insert(haulage.field.as_str());
@@ -870,9 +1117,49 @@ pub(crate) struct BlockModelFields {
     pub(crate) all: Vec<String>,
     /// Each text field's values, in the order its categories were defined.
     text_values: Vec<(String, Vec<String>)>,
+    /// Why the block model cannot be optimised, if it cannot.
+    pub(crate) grid_issue: Option<GridIssue>,
+}
+
+/// Why a block model cannot be optimised yet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GridIssue {
+    /// Sub-blocked, or blocks not on one regular grid.
+    Irregular,
+    Rotated,
+}
+
+impl GridIssue {
+    /// The issue `model` has, if any: the optimizer needs one regular,
+    /// unrotated grid of equal blocks.
+    pub(crate) fn of(model: &OpenBlockModel) -> Option<Self> {
+        Self::of_parts(model.uniform_grid.is_some(), model.model.rotation())
+    }
+
+    pub(crate) fn of_parts(uniform: bool, rotation: glam::DMat3) -> Option<Self> {
+        if !uniform {
+            return Some(Self::Irregular);
+        }
+        (!rotation.abs_diff_eq(glam::DMat3::IDENTITY, 1.0e-9)).then_some(Self::Rotated)
+    }
+
+    pub(crate) fn message(self) -> String {
+        match self {
+            Self::Irregular => tr!("opt-bm-irregular"),
+            Self::Rotated => tr!("opt-bm-rotated"),
+        }
+    }
 }
 
 impl BlockModelFields {
+    /// The fields of an open block model, with whether it can be optimised.
+    pub(crate) fn of_open(model: &OpenBlockModel) -> Self {
+        Self {
+            grid_issue: GridIssue::of(model),
+            ..Self::of(&model.model)
+        }
+    }
+
     pub(crate) fn of(model: &BlockModelData) -> Self {
         let mut fields = Self::default();
         for variable in model.metadata.variables.iter().filter(|variable| !variable.special) {

@@ -125,6 +125,7 @@ impl<'a> App<'a> {
                 | UiCommand::BuildReferenceSurface { .. }
                 | UiCommand::BuildReferencePoints { .. }
                 | UiCommand::OpenCreateOreTriangulation
+                | UiCommand::RunOptimizationScenario(_)
         );
         if requires_project && !self.workspace.has_active_project() {
             anyhow::bail!("Create or open a project before importing, drawing, or generating data");
@@ -725,6 +726,14 @@ impl<'a> App<'a> {
             UiCommand::DuplicateOptimizationScenario(id) => self.duplicate_optimization_scenario(id),
             UiCommand::RenameOptimizationScenario { id, name } => self.rename_optimization_scenario(id, name),
             UiCommand::DeleteOptimizationScenario(id) => self.delete_optimization_scenario(id),
+            UiCommand::RunOptimizationScenario(id) => {
+                self.run_optimization_scenario(id);
+                Ok(())
+            }
+            UiCommand::CancelOptimizationScenario(id) => {
+                self.cancel_optimization_scenario(id);
+                Ok(())
+            }
             UiCommand::OpenCreateBlockModel => {
                 // One dataset is estimated at a time, so the selection has to
                 // name exactly which one before the dialog opens on it.

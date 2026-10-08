@@ -15,9 +15,9 @@ use crate::{
     model::{
         block_model::OpenBlockModel,
         optimization::{
-            AirMode, BlockModelFields, Constant, ConstantValue, ConstantsRow, ElementCost, FieldValue, HaulageCost, HaulageMode, OptimizationScenario, ProcessingMethod,
-            RevenueRow, RocktypeCost, RosetteIssue, RosetteRow, ShellDirection, ShellFieldMode, ShellMode, SlopeMode, ValueType, group_names, move_constants_row,
-            shell_count_for_step, shell_step_for_count, unique_name,
+            AirMode, BlockModelFields, Constant, ConstantValue, ConstantsRow, ElementCost, FactorInput, FieldValue, GradeUnit, HaulageCost, HaulageMode, OptimizationScenario,
+            ProcessingMethod, RevenueRow, RocktypeCost, RosetteInterpolation, RosetteIssue, RosetteRow, SalesUnit, ShellDirection, ShellFieldMode, ShellMode, SlopeMode, ValueType,
+            format_factor, group_names, move_constants_row, parse_factor_list, shell_count_for_step, shell_step_for_count, unique_name,
         },
     },
     ui::{
@@ -46,9 +46,9 @@ const STACK_WIDTH: f32 = (CONTROL_WIDTH - 8.0) / 2.0;
 const CONTROL_WIDTH: f32 = 300.0;
 
 pub(crate) fn draw_optimization_dialogs(ui: &mut egui::Ui, editor: &mut EditorState, block_models: &[OpenBlockModel], project: &UiProjectView, commands: &mut Vec<UiCommand>) {
-    // Runs finish by the clock, whichever window is up.
-    if editor.optimization.tick_runs() {
-        ui.ctx().request_repaint_after(Duration::from_millis(50));
+    // The progress rings move while a run goes, whichever window is up.
+    if editor.optimization.any_running() {
+        ui.ctx().request_repaint_after(Duration::from_millis(100));
     }
     // While a starting point is picked in the viewport the editor steps aside;
     // the prompt is the viewport banner (`ui::viewport_message`).
@@ -73,6 +73,8 @@ fn draw_scenarios_list(ui: &mut egui::Ui, state: &mut OptimizationState, command
     let mut open = true;
     let mut close = false;
     let mut run = None;
+    // What the buttons ask for, sent after any name still being typed is committed.
+    let mut actions: Vec<UiCommand> = Vec::new();
     DragableMenu::new("optimization_scenarios_dialog", tr!("opt-scenarios-title"))
         .open(&mut open)
         .min_width(LIST_WIDTH)
@@ -97,19 +99,19 @@ fn draw_scenarios_list(ui: &mut egui::Ui, state: &mut OptimizationState, command
                             .id_salt(("opt_delete", scenario.id))
                             .button_side(ICON_SIDE);
                         if ui.add(delete).clicked() {
-                            commands.push(UiCommand::DeleteOptimizationScenario(scenario.id));
+                            actions.push(UiCommand::DeleteOptimizationScenario(scenario.id));
                         }
                         let duplicate = ToolbarButton::new(egui::Image::new(themed_icon!(ui, "duplicate.svg")), tr!("opt-duplicate"))
                             .id_salt(("opt_duplicate", scenario.id))
                             .button_side(ICON_SIDE);
                         if ui.add(duplicate).clicked() {
-                            commands.push(UiCommand::DuplicateOptimizationScenario(scenario.id));
+                            actions.push(UiCommand::DuplicateOptimizationScenario(scenario.id));
                         }
                         let edit = ToolbarButton::new(egui::Image::new(themed_icon!(ui, "edit.svg")), tr!("opt-edit"))
                             .id_salt(("opt_edit", scenario.id))
                             .button_side(ICON_SIDE);
                         if ui.add(edit).clicked() {
-                            commands.push(UiCommand::EditOptimizationScenario(scenario.id));
+                            actions.push(UiCommand::EditOptimizationScenario(scenario.id));
                         }
                         draw_name_field(ui, scenario.id, &scenario.name, commands);
                     });
@@ -118,7 +120,7 @@ fn draw_scenarios_list(ui: &mut egui::Ui, state: &mut OptimizationState, command
             }
             menu::menu_actions(ui, |ui| {
                 if ui.add(MenuButton::new(tr!("opt-add-scenario")).primary()).clicked() {
-                    commands.push(UiCommand::AddOptimizationScenario);
+                    actions.push(UiCommand::AddOptimizationScenario);
                 }
                 if ui.add(MenuButton::new(tr!("common-close"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                     close = true;
@@ -131,29 +133,68 @@ fn draw_scenarios_list(ui: &mut egui::Ui, state: &mut OptimizationState, command
                         .id_salt("opt_import")
                         .button_side(ICON_SIDE);
                     if ui.add(import).clicked() {
-                        commands.push(UiCommand::ImportOptimizationScenarios);
+                        actions.push(UiCommand::ImportOptimizationScenarios);
                     }
                     let export = ToolbarButton::new(egui::Image::new(unthemed_icon!("export_scenarios.svg")).tint(accent), tr!("opt-export-json"))
                         .id_salt("opt_export")
                         .button_side(ICON_SIDE);
                     if ui.add_enabled_ui(!state.scenarios.is_empty(), |ui| ui.add(export)).inner.clicked() {
-                        commands.push(UiCommand::ExportOptimizationScenarios);
+                        actions.push(UiCommand::ExportOptimizationScenarios);
                     }
                 });
             });
         });
+    // A button clicked while a name is still being typed commits the name
+    // first: its field may not have lost focus yet this frame.
+    if !actions.is_empty() || run.is_some() || close || !open {
+        commit_typed_names(ui.ctx(), state, commands);
+    }
+    commands.extend(actions);
     if let Some(id) = run {
-        state.start_run(id);
+        let busy = state
+            .scenarios
+            .iter()
+            .find(|scenario| scenario.id == id)
+            .is_some_and(|scenario| matches!(state.status(scenario), ScenarioStatus::Running(_) | ScenarioStatus::Queued));
+        commands.push(if busy {
+            UiCommand::CancelOptimizationScenario(id)
+        } else {
+            UiCommand::RunOptimizationScenario(id)
+        });
     }
     if close || !open {
         state.list_open = false;
     }
 }
 
-/// The scenario's name, typed in place; the rename is sent when focus leaves.
-fn draw_name_field(ui: &mut egui::Ui, id: u64, name: &str, commands: &mut Vec<UiCommand>) {
+fn name_field_ids(id: u64) -> (egui::Id, egui::Id) {
     let field_id = egui::Id::new(("opt_scenario_name", id));
-    let buffer_id = field_id.with("typed");
+    (field_id, field_id.with("typed"))
+}
+
+/// Send the rename of every name still being typed, and take the focus from
+/// its field, so the next command sees the new name.
+fn commit_typed_names(ctx: &egui::Context, state: &OptimizationState, commands: &mut Vec<UiCommand>) {
+    for scenario in &state.scenarios {
+        let (field_id, buffer_id) = name_field_ids(scenario.id);
+        let Some(typed) = ctx.data_mut(|data| data.remove_temp::<String>(buffer_id)) else {
+            continue;
+        };
+        ctx.memory_mut(|memory| memory.surrender_focus(field_id));
+        let typed = typed.trim();
+        if !typed.is_empty() && typed != scenario.name {
+            commands.push(UiCommand::RenameOptimizationScenario {
+                id: scenario.id,
+                name: typed.to_owned(),
+            });
+        }
+    }
+}
+
+/// The scenario's name, typed in place; the rename is sent when focus leaves,
+/// or when any button of the list is clicked ([`commit_typed_names`]).
+fn draw_name_field(ui: &mut egui::Ui, id: u64, name: &str, commands: &mut Vec<UiCommand>) {
+    let (field_id, buffer_id) = name_field_ids(id);
 
     // What was typed is kept until the field is left, whatever the focus
     // state says on the frame it is lost.
@@ -176,6 +217,7 @@ fn status_icon(ui: &mut egui::Ui, status: ScenarioStatus) {
     let (source, tooltip) = match status {
         ScenarioStatus::NeverRun => (unthemed_icon!("status_not_run.svg"), tr!("opt-status-never-run")),
         ScenarioStatus::Running(_) => (unthemed_icon!("status_not_run.svg"), tr!("opt-status-running")),
+        ScenarioStatus::Queued => (unthemed_icon!("status_not_run.svg"), tr!("opt-status-queued")),
         ScenarioStatus::UpToDate => (unthemed_icon!("status_up_to_date.svg"), tr!("opt-status-up-to-date")),
         ScenarioStatus::Stale => (unthemed_icon!("status_stale.svg"), tr!("opt-status-stale")),
     };
@@ -189,6 +231,7 @@ fn play_button(ui: &mut egui::Ui, status: ScenarioStatus) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(ICON_SIDE), egui::Sense::click());
     let running = match status {
         ScenarioStatus::Running(progress) => Some(progress),
+        ScenarioStatus::Queued => Some(0.0),
         _ => None,
     };
     if response.hovered() && running.is_none() {
@@ -211,7 +254,12 @@ fn play_button(ui: &mut egui::Ui, status: ScenarioStatus) -> egui::Response {
             .add(egui::Shape::line(points, egui::Stroke::new(2.5, egui::Color32::from_rgb(0x2f, 0xb3, 0x44))));
     }
     let tooltip = match running {
-        Some(progress) => tr!("opt-status-running-percent", percent = ((progress * 100.0) as u32).to_string()),
+        Some(_) if status == ScenarioStatus::Queued => format!("{}\n{}", tr!("opt-status-queued"), tr!("opt-cancel-run")),
+        Some(progress) => format!(
+            "{}\n{}",
+            tr!("opt-status-running-percent", percent = ((progress * 100.0) as u32).to_string()),
+            tr!("opt-cancel-run")
+        ),
         None => tr!("opt-run"),
     };
     response.on_hover_text(tooltip)
@@ -220,11 +268,7 @@ fn play_button(ui: &mut egui::Ui, status: ScenarioStatus) -> egui::Response {
 // ── Scenario editor ──
 
 fn model_fields(block_models: &[OpenBlockModel], name: &str) -> BlockModelFields {
-    block_models
-        .iter()
-        .find(|model| model.state.loaded && model.name == name)
-        .map(|model| BlockModelFields::of(&model.model))
-        .unwrap_or_default()
+    block_models.iter().find(|model| model.name == name).map(BlockModelFields::of_open).unwrap_or_default()
 }
 
 fn draw_scenario_editor(ui: &mut egui::Ui, state: &mut OptimizationState, block_models: &[OpenBlockModel], project: &UiProjectView, commands: &mut Vec<UiCommand>) {
@@ -275,7 +319,7 @@ fn draw_scenario_editor(ui: &mut egui::Ui, state: &mut OptimizationState, block_
                                 ScenarioTab::MiningCosts => draw_mining(ui, scenario, &fields, selections),
                                 ScenarioTab::ProcessingCosts => draw_processing(ui, scenario, &fields, selections),
                                 ScenarioTab::Revenues => draw_revenues(ui, scenario, &fields, selections),
-                                ScenarioTab::Constraints => draw_constraints(ui, scenario, selections),
+                                ScenarioTab::Constraints => draw_constraints(ui, scenario, &fields, selections),
                                 ScenarioTab::Outputs => draw_outputs(ui, scenario, &fields, commands),
                             }
                         });
@@ -648,6 +692,16 @@ fn cell_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, val
     }
 }
 
+/// A drop-down over a fixed list of choices that fills the grid cell it is drawn in.
+fn cell_choice<T: Copy + PartialEq>(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, value: &mut T, all: &[T], label: impl Fn(T) -> String) {
+    let width = (ui.available_width() - 8.0).max(40.0);
+    egui::ComboBox::from_id_salt(id).selected_text(label(*value)).width(width).truncate().show_ui(ui, |ui| {
+        for option in all {
+            ui.selectable_value(value, *option, label(*option));
+        }
+    });
+}
+
 /// A text box that fills its grid cell, outlined in red when `required` and empty.
 fn cell_text(ui: &mut egui::Ui, value: &mut String, required: bool) {
     let response = ui.add(egui::TextEdit::singleline(value).desired_width(ui.available_width()));
@@ -672,7 +726,8 @@ fn option_group(ui: &mut egui::Ui, title: String, rows: impl FnOnce(&mut egui::U
 // ── Inputs ──
 
 fn draw_inputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: &mut BlockModelFields, block_models: &[OpenBlockModel], project: &UiProjectView) {
-    let models: Vec<String> = block_models.iter().filter(|model| model.state.loaded).map(|model| model.name.clone()).collect();
+    // Hidden models too: an unloaded model keeps its fields, and a run reads its values back.
+    let models: Vec<String> = block_models.iter().map(|model| model.name.clone()).collect();
     option_group(ui, tr!("opt-group-block-model"), |ui| {
         if form_combo(ui, "opt_block_model", tr!("common-block-model"), &mut scenario.block_model, &models).changed() {
             *fields = model_fields(block_models, &scenario.block_model);
@@ -680,6 +735,20 @@ fn draw_inputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: &
         }
         if fields.all.is_empty() && !scenario.block_model.is_empty() {
             menu_note(ui, tr!("opt-block-model-not-loaded"));
+        }
+        if let Some(issue) = fields.grid_issue {
+            ui.add(egui::Label::new(egui::RichText::new(issue.message()).color(ui.visuals().warn_fg_color)).wrap());
+        }
+        let response = form_value(
+            ui,
+            "opt_default_density",
+            tr!("opt-default-density"),
+            Some(tr!("opt-default-density-help")),
+            &mut scenario.default_density,
+            (0.001, f64::MAX),
+        );
+        if scenario.default_density.resolve(&scenario.constants).is_none_or(|density| density <= 0.0) {
+            mark_invalid(ui, &response);
         }
         form_combo(ui, "opt_density", tr!("opt-density-field"), &mut scenario.density_field, &fields.numeric);
         let mut quality = scenario.quality_field.clone();
@@ -709,9 +778,8 @@ fn draw_inputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: &
                     let layers: Vec<String> = project
                         .triangulations
                         .iter()
-                        .filter(|entry| entry.is_loaded)
                         .map(|entry| entry.name.clone())
-                        .chain(project.point_clouds.iter().filter(|entry| entry.is_loaded).map(|entry| entry.name.clone()))
+                        .chain(project.point_clouds.iter().map(|entry| entry.name.clone()))
                         .collect();
                     inline_combo(
                         ui,
@@ -972,11 +1040,12 @@ fn draw_processing(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, field
     let values = fields.rocktype_values(&scenario.rocktype_field);
     let quality = scenario.quality_field.clone();
     let columns = vec![
-        GridColumn::new(tr!("opt-col-name"), 20.0),
-        GridColumn::new(tr!("opt-col-rocktype"), 20.0),
-        GridColumn::new(tr!("opt-col-min-grade"), 20.0),
-        GridColumn::new(tr!("opt-col-max-grade"), 20.0),
-        GridColumn::new(tr!("opt-col-threshold"), 20.0),
+        GridColumn::new(tr!("opt-col-name"), 18.0),
+        GridColumn::new(tr!("opt-col-rocktype"), 18.0),
+        GridColumn::new(tr!("opt-col-min-grade"), 16.0),
+        GridColumn::new(tr!("opt-col-max-grade"), 16.0),
+        GridColumn::new(tr!("opt-col-threshold"), 16.0),
+        GridColumn::new(tr!("opt-col-processing-cost"), 16.0),
     ];
     option_group(ui, tr!("opt-group-methods"), |ui| {
         let rows = plain_rows(scenario.methods.len());
@@ -1002,8 +1071,11 @@ fn draw_processing(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, field
                     3 => {
                         ValueField::new(("opt_method_max", row), &mut method.max_grade).range(0.0, f64::MAX).show(ui);
                     }
-                    _ => {
+                    4 => {
                         ValueField::new(("opt_method_threshold", row), &mut method.threshold).range(0.0, f64::MAX).show(ui);
+                    }
+                    _ => {
+                        ValueField::new(("opt_method_cost", row), &mut method.processing_cost).range(0.0, f64::MAX).show(ui);
                     }
                 }
             });
@@ -1045,6 +1117,7 @@ fn draw_processing(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, field
         }
         return;
     };
+    let revenues = scenario.revenues.clone();
     option_group(ui, tr!("opt-elements-of", name = scenario.methods[index].name.clone()), |ui| {
         let method = &mut scenario.methods[index];
         let rows = plain_rows(method.elements.len());
@@ -1067,6 +1140,24 @@ fn draw_processing(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, field
                     }
                 });
         apply_flat(&mut method.elements, &mut selections.elements, &mut actions, ElementCost::default);
+        // Each element's units come from its Revenues row.
+        let units: Vec<String> = method
+            .elements
+            .iter()
+            .filter(|element| !element.element.is_empty())
+            .filter_map(|element| {
+                let row = revenues.iter().find(|revenue| revenue.element == element.element)?;
+                Some(format!(
+                    "{}: {}",
+                    element.element,
+                    tr!("opt-element-units", grade = row.grade_unit.label(), sales = row.sales_unit.label())
+                ))
+            })
+            .collect();
+        ui.label(egui::RichText::new(tr!("opt-element-cost-hint")).weak());
+        for line in units {
+            ui.label(egui::RichText::new(line).weak());
+        }
     });
 
     // The method's other costs, under its elements.
@@ -1118,9 +1209,11 @@ fn draw_processing(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, field
 fn draw_revenues(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: &BlockModelFields, selections: &mut ScenarioGridSelections) {
     option_group(ui, tr!("opt-group-prices"), |ui| {
         let columns = vec![
-            GridColumn::new(tr!("opt-col-element"), 40.0),
-            GridColumn::new(tr!("opt-col-price"), 30.0),
-            GridColumn::new(tr!("opt-col-selling-costs"), 30.0),
+            GridColumn::new(tr!("opt-col-element"), 26.0),
+            GridColumn::new(tr!("opt-col-grade-unit"), 16.0),
+            GridColumn::new(tr!("opt-col-sales-unit"), 16.0),
+            GridColumn::new(tr!("opt-col-price"), 21.0),
+            GridColumn::new(tr!("opt-col-selling-costs"), 21.0),
         ];
         let rows = plain_rows(scenario.revenues.len());
         let revenues = &mut scenario.revenues;
@@ -1133,7 +1226,9 @@ fn draw_revenues(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields:
                     };
                     match column {
                         0 => cell_combo(ui, ("opt_revenue_element", row), &mut revenue.element, &fields.numeric, tr!("opt-none-selected"), true),
-                        1 => {
+                        1 => cell_choice(ui, ("opt_grade_unit", row), &mut revenue.grade_unit, &GradeUnit::ALL, GradeUnit::label),
+                        2 => cell_choice(ui, ("opt_sales_unit", row), &mut revenue.sales_unit, &SalesUnit::ALL, SalesUnit::label),
+                        3 => {
                             ValueField::new(("opt_price", row), &mut revenue.price).range(0.0, f64::MAX).show(ui);
                         }
                         _ => {
@@ -1150,12 +1245,13 @@ fn draw_revenues(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields:
             }
         }
         apply_flat(&mut scenario.revenues, &mut selections.revenues, &mut actions, RevenueRow::default);
+        ui.label(egui::RichText::new(tr!("opt-units-hint")).weak());
     });
 }
 
 // ── Constraints ──
 
-fn draw_constraints(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, selections: &mut ScenarioGridSelections) {
+fn draw_constraints(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: &BlockModelFields, selections: &mut ScenarioGridSelections) {
     let OptimizationScenario { slope, constants, .. } = scenario;
     let previous = slope.mode;
     option_group(ui, tr!("opt-overall-slope"), |ui| {
@@ -1166,7 +1262,8 @@ fn draw_constraints(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, sele
                 ui.radio_value(&mut slope.mode, SlopeMode::Single, tr!("opt-slope-default-angle"));
             },
             |ui, slope| {
-                ui.add_enabled_ui(slope.mode == SlopeMode::Single, |ui| {
+                // The default angle is also the field's fallback.
+                ui.add_enabled_ui(slope.mode != SlopeMode::Rosette, |ui| {
                     ValueField::new("opt_slope_angle", &mut slope.angle).range(1.0, 89.0).show(ui);
                 });
             },
@@ -1180,6 +1277,24 @@ fn draw_constraints(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, sele
                 ui.label(egui::RichText::new(tr!("opt-slope-rosettes-hint")).weak());
             },
         );
+        form_row_with(
+            ui,
+            &mut *slope,
+            |ui, slope| {
+                ui.radio_value(&mut slope.mode, SlopeMode::Field, tr!("opt-slope-field"));
+            },
+            |ui, slope| {
+                ui.add_enabled_ui(slope.mode == SlopeMode::Field, |ui| {
+                    let response = inline_combo(ui, "opt_slope_field", &mut slope.field, &fields.numeric, tr!("opt-none-selected"), CONTROL_WIDTH - 8.0);
+                    if slope.mode == SlopeMode::Field && slope.field.is_empty() {
+                        mark_invalid(ui, &response);
+                    }
+                });
+            },
+        );
+        if slope.mode == SlopeMode::Field {
+            ui.label(egui::RichText::new(tr!("opt-slope-field-hint")).weak());
+        }
     });
     if slope.mode != SlopeMode::Rosette {
         return;
@@ -1246,14 +1361,31 @@ fn draw_constraints(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, sele
             bearing: next_bearing,
             ..RosetteRow::default()
         });
-        if let Ok(sectors) = &sectors {
-            ui.add_space(4.0);
-            let caption = match sectors.as_slice() {
-                [only] => tr!("opt-rosette-full-oval", angle = only.angle.to_string()),
-                _ => tr!("opt-rosette-sectors"),
-            };
-            ui.label(egui::RichText::new(caption).weak());
+        // Only the interpolations the rows allow are offered; one that no
+        // longer fits (after deleting rows) falls back to the sectors.
+        let rows = sectors.as_ref().map_or(0, Vec::len);
+        if rows < slope.interpolation.min_rows() {
+            slope.interpolation = RosetteInterpolation::Step;
         }
+        ui.add_space(4.0);
+        form_row(
+            ui,
+            |ui| {
+                ui.label(tr!("opt-interpolation")).on_hover_text(tr!("opt-interpolation-hint"));
+            },
+            |ui| {
+                egui::ComboBox::from_id_salt("opt_rosette_interpolation")
+                    .selected_text(slope.interpolation.label())
+                    .width(CONTROL_WIDTH - 8.0)
+                    .show_ui(ui, |ui| {
+                        for option in RosetteInterpolation::available(rows) {
+                            ui.selectable_value(&mut slope.interpolation, option, option.label());
+                        }
+                    })
+                    .response
+                    .on_hover_text(tr!("opt-interpolation-hint"));
+            },
+        );
     });
 }
 
@@ -1291,6 +1423,34 @@ fn draw_outputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: 
         );
         if output.mode == ShellMode::Multiple {
             option_group(ui, tr!("opt-factors-title"), |ui| {
+                // Two ways to give the factors: a range, or a list typed out.
+                form_row_with(
+                    ui,
+                    &mut output.factor_input,
+                    |ui, input| {
+                        ui.radio_value(input, FactorInput::Range, tr!("opt-factor-input-range"));
+                    },
+                    |ui, input| {
+                        ui.radio_value(input, FactorInput::List, tr!("opt-factor-input-list"));
+                    },
+                );
+                if output.factor_input == FactorInput::List {
+                    // A plain string, read when run: the list is not worth constants.
+                    let response = labeled_row(ui, tr!("opt-factor-list"), Some(tr!("opt-factor-list-hint")), |ui| {
+                        ui.add(egui::TextEdit::singleline(&mut output.factor_list).desired_width(ui.available_width()))
+                    });
+                    match parse_factor_list(&output.factor_list) {
+                        Ok(factors) => {
+                            let listed: Vec<String> = factors.iter().map(|factor| format_factor(*factor)).collect();
+                            ui.label(egui::RichText::new(tr!("opt-factor-list-summary", count = factors.len().to_string(), factors = listed.join(", "))).weak());
+                        }
+                        Err(issue) => {
+                            mark_invalid(ui, &response);
+                            menu_note(ui, issue.message());
+                        }
+                    }
+                    return;
+                }
                 // Plain numbers: a revenue factor range is not worth a constant.
                 let from_changed = labeled_row(ui, tr!("opt-factor-from"), None, |ui| {
                     output.factor_from.edit(ui, egui::Id::new("opt_factor_from"), ui.available_width(), (0.0, f64::MAX))
@@ -1340,7 +1500,8 @@ fn draw_outputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: 
                 ui,
                 &mut *output,
                 |ui, output| {
-                    ui.checkbox(&mut output.use_directional_shells, tr!("opt-directional-shells"));
+                    ui.checkbox(&mut output.use_directional_shells, tr!("opt-directional-shells"))
+                        .on_hover_text(tr!("opt-directional-shells-hint"));
                 },
                 |ui, output| {
                     ui.add_enabled_ui(output.use_directional_shells, |ui| {

@@ -23,6 +23,7 @@ pub(crate) mod kernel;
 pub(crate) mod kriging;
 pub(crate) mod object_edit;
 pub(crate) mod optimization;
+pub(crate) mod optimization_run;
 pub(crate) mod plot;
 pub(crate) mod point_cloud;
 pub(crate) mod point_features;

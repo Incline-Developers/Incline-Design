@@ -3642,6 +3642,10 @@ pub(crate) enum UiCommand {
     BeginShellStartPick,
     /// Copy a scenario into a new one beside it, with an amended name.
     DuplicateOptimizationScenario(u64),
+    /// Run the saved scenario with this id (queued if enough are running).
+    RunOptimizationScenario(u64),
+    /// Stop the scenario's run, or take it out of the queue.
+    CancelOptimizationScenario(u64),
     RenameOptimizationScenario {
         id: u64,
         name: String,
@@ -3905,6 +3909,8 @@ impl UiCommand {
             | Self::RenameOptimizationScenario { .. }
             | Self::ChooseOptimizationReportsFolder
             | Self::BeginShellStartPick
+            | Self::RunOptimizationScenario(_)
+            | Self::CancelOptimizationScenario(_)
             | Self::OpenCreateBlockModel
             | Self::OpenCreateOreTriangulation
             | Self::OpenOffsetDialog
@@ -4571,15 +4577,18 @@ impl ScenarioDraft {
     }
 }
 
-/// How long the stand-in run takes, until the optimizer is wired in.
-pub(crate) const STUB_RUN_SECONDS: f32 = 10.0;
-
-/// Where a scenario's run stands. The fingerprint is that of the settings the
-/// run started with, so a later edit shows as stale.
+/// Where a scenario's run stands. A finished run keeps the fingerprint of the
+/// settings it ran with, so a later edit shows as stale.
 #[derive(Clone, Debug)]
 pub(crate) enum RunState {
-    Running { started: web_time::Instant, fingerprint: u64 },
-    Finished { fingerprint: u64 },
+    /// Waiting for a running scenario to finish.
+    Queued,
+    Running {
+        progress: crate::model::progress::Progress,
+    },
+    Finished {
+        fingerprint: u64,
+    },
 }
 
 /// What the scenarios list shows beside a scenario.
@@ -4590,9 +4599,17 @@ pub(crate) enum ScenarioStatus {
     UpToDate,
     /// Run, but changed since: it has to be run again.
     Stale,
+    Queued,
     /// Running, with the fraction done.
     Running(f32),
 }
+
+/// How many scenarios run at once; the rest queue. Memory, not cores, is the
+/// limit: each run holds several values per grid cell and the solver's graph.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) const MAX_CONCURRENT_RUNS: usize = 2;
+#[cfg(target_arch = "wasm32")]
+pub(crate) const MAX_CONCURRENT_RUNS: usize = 1;
 
 /// What the Optimization workspace holds while the app runs.
 ///
@@ -4607,6 +4624,11 @@ pub(crate) struct OptimizationState {
     pub(crate) draft: Option<ScenarioDraft>,
     pub(crate) next_scenario_id: u64,
     pub(crate) runs: HashMap<u64, RunState>,
+    /// Runs waiting for their block model or topography to be read back in
+    /// before they start.
+    pub(crate) awaiting_restore: HashSet<u64>,
+    /// What each scenario's last run produced, for stage 3 to read back.
+    pub(crate) results: HashMap<u64, std::sync::Arc<crate::model::optimization_run::RunResult>>,
     /// The saved scenarios file has been read this session. It is read the
     /// first time the list opens.
     pub(crate) loaded_from_file: bool,
@@ -4628,6 +4650,12 @@ pub(crate) struct ShellStartPick {
     /// Height the old point's marker is drawn at: the top of the model, so it
     /// stays inside the depth range the camera fits to the model. Never saved.
     pub(crate) marker_z: f64,
+    /// The block model was hidden (unloaded) and is being shown for the pick;
+    /// it is hidden again when the pick ends.
+    pub(crate) hide_after: bool,
+    /// Its values are still being read back in, so the view is fitted again
+    /// once they are there.
+    pub(crate) loading: bool,
 }
 
 impl OptimizationState {
@@ -4645,43 +4673,20 @@ impl OptimizationState {
     pub(crate) fn status(&self, scenario: &OptimizationScenario) -> ScenarioStatus {
         match self.runs.get(&scenario.id) {
             None => ScenarioStatus::NeverRun,
-            Some(RunState::Running { started, .. }) => ScenarioStatus::Running((started.elapsed().as_secs_f32() / STUB_RUN_SECONDS).min(1.0)),
+            Some(RunState::Queued) => ScenarioStatus::Queued,
+            Some(RunState::Running { progress, .. }) => ScenarioStatus::Running(progress.snapshot().map_or(0.0, |snapshot| snapshot.fraction)),
             Some(RunState::Finished { fingerprint }) if *fingerprint == scenario.fingerprint() => ScenarioStatus::UpToDate,
             Some(RunState::Finished { .. }) => ScenarioStatus::Stale,
         }
     }
 
-    /// Start a run of the saved scenario. A scenario already running is left alone.
-    pub(crate) fn start_run(&mut self, id: u64) {
-        let Some(scenario) = self.scenarios.iter().find(|scenario| scenario.id == id) else {
-            return;
-        };
-        if matches!(self.runs.get(&id), Some(RunState::Running { .. })) {
-            return;
-        }
-        let fingerprint = scenario.fingerprint();
-        self.runs.insert(
-            id,
-            RunState::Running {
-                started: web_time::Instant::now(),
-                fingerprint,
-            },
-        );
+    /// Whether a run is going or waiting, so the list keeps repainting.
+    pub(crate) fn any_running(&self) -> bool {
+        self.runs.values().any(|run| matches!(run, RunState::Queued | RunState::Running { .. }))
     }
 
-    /// Finish the runs whose time is up; returns whether any are still going.
-    pub(crate) fn tick_runs(&mut self) -> bool {
-        let mut running = false;
-        for run in self.runs.values_mut() {
-            if let RunState::Running { started, fingerprint } = run {
-                if started.elapsed().as_secs_f32() >= STUB_RUN_SECONDS {
-                    *run = RunState::Finished { fingerprint: *fingerprint };
-                } else {
-                    running = true;
-                }
-            }
-        }
-        running
+    pub(crate) fn running_count(&self) -> usize {
+        self.runs.values().filter(|run| matches!(run, RunState::Running { .. })).count()
     }
 }
 

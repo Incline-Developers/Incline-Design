@@ -204,6 +204,8 @@ impl<'a> App<'a> {
                     self.poll_raster_loads();
                     self.poll_saves();
                     self.poll_jobs();
+                    self.reconcile_optimization_runs();
+                    self.watch_shell_start_pick_load();
                     self.refresh_status_message();
                     let now = Instant::now();
                     let frame_interval = self.frame_interval();

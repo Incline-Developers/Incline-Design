@@ -339,6 +339,20 @@ impl<'a> App<'a> {
     /// section can show one - see [`crate::model::SectionKind::derived_for`] -
     /// and always at the section root, never in one of its collections.
     pub(crate) fn insert_generated_triangulation_in(&mut self, built: crate::model::triangulation::GeneratedTriangulation, section: crate::model::SectionKind) {
+        let state = crate::model::project::ProjectItemState::dirty(MemberKind::Triangulation, None).with_section(section);
+        self.insert_generated_triangulation_with(built, state, DEFAULT_TRIANGULATION_COLOR, true);
+    }
+
+    /// The same, with the item's placement and colour chosen by the caller.
+    /// Without `select` the selection is left alone, for tools that add many
+    /// surfaces at once; the caller then invalidates the scene once.
+    pub(crate) fn insert_generated_triangulation_with(
+        &mut self,
+        built: crate::model::triangulation::GeneratedTriangulation,
+        state: crate::model::project::ProjectItemState,
+        color: [f32; 4],
+        select: bool,
+    ) -> TriangulationId {
         let crate::model::triangulation::GeneratedTriangulation {
             name,
             mesh,
@@ -354,25 +368,22 @@ impl<'a> App<'a> {
         self.next_triangulation_id += 1;
         let name = crate::model::project::unique_item_name(name, self.triangulations.iter().map(|item| item.name.as_str()));
 
-        let cleared_object_selection = self.editor.selected_handles.iter().any(|handle| matches!(handle, crate::model::SceneEntityId::Object(_)));
+        let cleared_object_selection = select && self.editor.selected_handles.iter().any(|handle| matches!(handle, crate::model::SceneEntityId::Object(_)));
         self.triangulations.push(OpenTriangulation {
             id,
-            state: crate::model::project::ProjectItemState::dirty(MemberKind::Triangulation, None).with_section(section),
+            state,
             name: name.clone(),
             mesh,
             spatial,
             edges,
             surface_face_order,
-            color: DEFAULT_TRIANGULATION_COLOR,
+            color,
             line_color: [0.05, 0.08, 0.10, 1.0],
             line_weight: Some(1.0),
             raster_texture: None,
             raster_opacity: 1.0,
         });
         self.touch_active_project_content();
-        self.active_triangulation = Some(id);
-        self.editor.selected_handles.clear();
-        self.editor.selected_handles.insert(crate::model::SceneEntityId::Triangulation(id));
         userspace_log!(
             "{}",
             tr!(
@@ -383,11 +394,18 @@ impl<'a> App<'a> {
                 surface_type = format!("{surface_type:?}")
             )
         );
+        if !select {
+            return id;
+        }
+        self.active_triangulation = Some(id);
+        self.editor.selected_handles.clear();
+        self.editor.selected_handles.insert(crate::model::SceneEntityId::Triangulation(id));
         if cleared_object_selection {
             self.invalidate_geometry();
         } else {
             self.invalidate_topology_bounds_and_redraw();
         }
+        id
     }
 }
 
