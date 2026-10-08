@@ -1829,7 +1829,7 @@ fn draw_haul_flows(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect)
         painter.rect_filled(rect, widgets::toolbar::GROUP_CORNER_RADIUS, ui.visuals().window_fill());
         painter.galley(rect.min + egui::vec2(6.0, 4.0), galley, ui.visuals().text_color());
     }
-    // A key in the corner: what the stripes mean, and what the busiest road carries.
+    // A key in the corner: what the flows are, and what the busiest route carries.
     let legend = tr!("haul-flow-legend", rate = format!("{busiest:.0}"));
     let galley = painter.layout_no_wrap(legend, egui::FontId::proportional(11.0), ui.visuals().weak_text_color());
     let rect = egui::Rect::from_min_size(canvas_rect.left_bottom() + egui::vec2(12.0, -galley.size().y - 20.0), galley.size() + egui::vec2(12.0, 8.0));
