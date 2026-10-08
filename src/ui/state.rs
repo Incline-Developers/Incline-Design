@@ -432,6 +432,8 @@ impl EditorState {
             || self.ore_triangulation_open
             || self.reference_points_dialog.is_some()
             || self.reference_surface_dialog.is_some()
+            || self.thickness_points_dialog.is_some()
+            || self.seam_surface_dialog.is_some()
     }
 
     /// Lock or unlock one scene entity by name. Layer locks go through
@@ -2014,6 +2016,23 @@ pub(crate) struct EditorState {
     pub(crate) reference_points_dialog: Option<ReferencePointsDraft>,
     /// The build surface dialog's snapshot of its input while it is open.
     pub(crate) reference_surface_dialog: Option<ReferenceSurfaceDraft>,
+    /// The thickness points dialog's surface and pairs file while it is open.
+    pub(crate) thickness_points_dialog: Option<ThicknessPointsDraft>,
+    /// The seam last chosen in Reference Points or Thickness Points, which
+    /// the next of either dialog starts from.
+    pub(crate) last_seam: Option<SeamChoice>,
+    /// The thickness table shown, until closed.
+    pub(crate) thickness_table: Option<std::sync::Arc<ThicknessTable>>,
+    /// Every thickness points layer's table made this session, by project
+    /// runtime id and layer, to show again from the explorer.
+    pub(crate) thickness_tables: std::collections::HashMap<(u32, crate::model::LayerId), std::sync::Arc<ThicknessTable>>,
+    /// The thickness surfaces dialog's surface while it is open.
+    pub(crate) seam_surface_dialog: Option<SeamSurfaceDraft>,
+    /// The thickness grid table shown, until closed.
+    pub(crate) seam_table: Option<std::sync::Arc<SeamTable>>,
+    /// Every surface made by Thickness Surfaces this session, with its
+    /// grid's table, to show again from the explorer.
+    pub(crate) seam_tables: std::collections::HashMap<TriangulationId, std::sync::Arc<SeamTable>>,
     /// The rename seam dialog's seam and entries while it is open.
     pub(crate) seam_rename_dialog: Option<SeamRenameDraft>,
     /// The shift names dialog's hole, direction and reason while it is open.
@@ -2366,6 +2385,8 @@ impl EditorState {
             || self.drill_hole_color_dialog.is_some()
             || self.reference_points_dialog.is_some()
             || self.reference_surface_dialog.is_some()
+            || self.thickness_points_dialog.is_some()
+            || self.seam_surface_dialog.is_some()
             || self.show_modelling_settings
             || self.drill_pattern_open
             || self.plot_dialog.is_some()
@@ -2798,6 +2819,10 @@ impl EditorState {
         // Snapshotted object ids, and a hold on the selection while it is up:
         // neither can outlive the project they were taken from.
         self.reference_surface_dialog = None;
+        self.thickness_points_dialog = None;
+        self.thickness_table = None;
+        self.seam_surface_dialog = None;
+        self.seam_table = None;
         self.seam_rename_dialog = None;
         self.name_shift_dialog = None;
     }
@@ -3182,6 +3207,13 @@ impl EditorState {
             drill_hole_color_dialog: None,
             reference_points_dialog: None,
             reference_surface_dialog: None,
+            thickness_points_dialog: None,
+            last_seam: None,
+            thickness_table: None,
+            thickness_tables: std::collections::HashMap::new(),
+            seam_surface_dialog: None,
+            seam_table: None,
+            seam_tables: std::collections::HashMap::new(),
             seam_rename_dialog: None,
             name_shift_dialog: None,
             show_modelling_settings: false,
@@ -4013,6 +4045,36 @@ pub(crate) enum UiCommand {
         controls: Vec<ObjectId>,
         extent: Option<ObjectId>,
     },
+    OpenThicknessPoints,
+    /// Ask for a measured pairs file for the open thickness points dialog.
+    ChooseThicknessPairs,
+    /// A new set of thickness points for the seam chosen, measured against
+    /// `surface`, on `holes` (none: every loaded hole holding the section),
+    /// with the measured pairs given, if any.
+    MakeThicknessPoints {
+        surface: TriangulationId,
+        holes: Vec<DrillHoleRef>,
+        field: String,
+        target: crate::model::drill_hole::ReferenceTarget,
+        side: crate::model::drill_hole::ReferenceSide,
+        pairs: Option<PairsFile>,
+        /// Then make the seam's other surface from the run.
+        then_surface: bool,
+    },
+    OpenSeamSurface,
+    /// The seam's other surface, hung from `surface` by its latest
+    /// thickness points.
+    MakeSeamSurface {
+        surface: TriangulationId,
+    },
+    /// Show again the table of a thickness points layer made this session.
+    ShowThicknessTable {
+        runtime_id: u32,
+        layer: crate::model::LayerId,
+    },
+    /// Show again the thickness grid behind a surface Thickness Surfaces
+    /// made this session.
+    ShowSeamTable(TriangulationId),
     OpenModellingSettings,
     /// The project's modelling settings, whole; the dialog sends them only
     /// when valid.
@@ -4423,6 +4485,11 @@ impl UiCommand {
             | Self::ReadHoleGeophysics { .. }
             | Self::OpenReferencePoints
             | Self::OpenReferenceSurface
+            | Self::OpenThicknessPoints
+            | Self::ChooseThicknessPairs
+            | Self::OpenSeamSurface
+            | Self::ShowThicknessTable { .. }
+            | Self::ShowSeamTable(_)
             | Self::OpenModellingSettings
             | Self::InspectDrillHole(_)
             | Self::SetBlockModelSlice { .. }
@@ -4642,6 +4709,14 @@ impl UiCommand {
                 match extent {
                     Some(_) => tr!("state-points-controls-clipped", count = points.len().to_string(), controls = controls.len().to_string()),
                     None => tr!("state-points-controls-outline", count = points.len().to_string(), controls = controls.len().to_string()),
+                },
+            ),
+            Self::MakeSeamSurface { .. } => report(tr!("common-thickness-surfaces"), tr!("state-seam-surface-from-thickness")),
+            Self::MakeThicknessPoints { pairs, .. } => report(
+                tr!("common-thickness-points"),
+                match pairs {
+                    Some(file) => tr!("state-thickness-points-with-pairs", name = file.name.clone()),
+                    None => tr!("state-thickness-points-holes-only"),
                 },
             ),
             Self::SetModellingSettings(settings) => report(tr!("state-set-modelling-settings"), settings.summary()),
@@ -5301,6 +5376,71 @@ pub(crate) struct ReferenceSurfaceDraft {
     pub(crate) extent_label: String,
 }
 
+/// What the thickness points dialog was opened on and has chosen: the
+/// selected surface, the holes, the seam, and the measured pairs file.
+#[derive(Clone, Debug)]
+pub(crate) struct ThicknessPointsDraft {
+    pub(crate) surface: TriangulationId,
+    pub(crate) surface_label: String,
+    /// The holes selected alongside the surface; none means every loaded
+    /// hole holding the section.
+    pub(crate) holes: Vec<DrillHoleRef>,
+    pub(crate) seam: SeamChoice,
+    /// The codes the holes log in a field, read once each time the field
+    /// changes rather than every frame.
+    pub(crate) codes: Option<(String, Vec<String>)>,
+    pub(crate) pairs: Option<PairsFile>,
+    /// Make the seam's other surface as soon as the points are made.
+    pub(crate) then_surface: bool,
+    pub(crate) grid: GridCheck,
+}
+
+/// Whether a selected surface can be measured against: still being read,
+/// one regular grid, or not, with the reason.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum GridCheck {
+    Checking,
+    Grid,
+    Refused(String),
+}
+
+/// What the thickness surfaces dialog was opened on: the selected surface,
+/// the thickness run it will grid, and the surface it makes.
+#[derive(Clone, Debug)]
+pub(crate) struct SeamSurfaceDraft {
+    pub(crate) surface: TriangulationId,
+    pub(crate) surface_label: String,
+    pub(crate) run_label: String,
+    pub(crate) output_label: String,
+    pub(crate) grid: GridCheck,
+}
+
+/// One thickness grid as its node table shows it.
+#[derive(Debug)]
+pub(crate) struct SeamTable {
+    pub(crate) name: String,
+    pub(crate) surface: String,
+    pub(crate) nodes: Vec<crate::app::commands::triangulation::reference_surface::seam::SeamNode>,
+}
+
+/// A measured pairs file: read by path on the desktop, whole in the browser.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PairsFile {
+    pub(crate) name: String,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) path: std::path::PathBuf,
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) bytes: std::sync::Arc<[u8]>,
+}
+
+/// One thickness point set as its table shows it.
+#[derive(Debug)]
+pub(crate) struct ThicknessTable {
+    pub(crate) name: String,
+    pub(crate) surface: String,
+    pub(crate) points: Vec<crate::model::thickness_points::ThicknessPoint>,
+}
+
 /// What the rename seam dialog holds while open: the seam, where it was
 /// picked, how widely it is renamed, and what has been typed. The counts are
 /// taken when it opens; the rename recounts when it runs.
@@ -5397,6 +5537,13 @@ impl EditorState {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ReferencePointsDraft {
     pub(crate) holes: Vec<DrillHoleRef>,
+    pub(crate) seam: SeamChoice,
+}
+
+/// The seam a tool works on, as its dialog chooses it: the categorical
+/// field carrying the working section, the section or code, and the side.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SeamChoice {
     pub(crate) field: Option<String>,
     pub(crate) value: Option<crate::model::drill_hole::ReferenceTarget>,
     pub(crate) side: crate::model::drill_hole::ReferenceSide,

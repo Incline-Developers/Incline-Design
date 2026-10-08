@@ -36,9 +36,11 @@ impl Command {
             Self::AddObject(object) | Self::DeleteObject { object, .. } => (vec![object.layer()], Vec::new()),
             Self::Replace { before, after } => (vec![before.layer(), after.layer()], Vec::new()),
             Self::AddLayerSnapshot { layer, .. } | Self::DeleteLayerSnapshot { layer, .. } => (vec![layer.id], Vec::new()),
-            Self::MoveCollars { dataset, .. } | Self::RotateCollars { dataset, .. } | Self::SetTieIns { dataset, .. } | Self::CorrectIntervals { dataset, .. } => {
-                (Vec::new(), vec![ItemRef::DrillHole(*dataset)])
-            }
+            Self::MoveCollars { dataset, .. }
+            | Self::RotateCollars { dataset, .. }
+            | Self::SetTieIns { dataset, .. }
+            | Self::CorrectIntervals { dataset, .. }
+            | Self::WriteIntervalColumn { dataset, .. } => (Vec::new(), vec![ItemRef::DrillHole(*dataset)]),
             _ => (Vec::new(), Vec::new()),
         }
     }

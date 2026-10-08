@@ -101,6 +101,18 @@ impl App<'_> {
             .collect()
     }
 
+    /// Make `handles` the whole selection, as a tool does with what it made,
+    /// so the next tool in a flow is ready for it.
+    pub(crate) fn select_only(&mut self, handles: impl IntoIterator<Item = SceneEntityId>) {
+        if self.has_pending_move_delta() {
+            self.cancel_move_delta();
+        }
+        self.editor.selected_handles = handles.into_iter().collect();
+        self.editor.selected_drill_holes.clear();
+        self.editor.selected_tie_ins.clear();
+        self.invalidate_overlay();
+    }
+
     /// Refresh the per-kind selection counts the menus read.
     ///
     /// Walks the selection rather than the project, so the cost is the size of

@@ -117,6 +117,9 @@ fn mesh_format_mime_type(format: MeshFormat) -> &'static str {
 // On wasm the native variants are compiled out, leaving only the `Web`-prefixed ones.
 #[cfg_attr(target_arch = "wasm32", allow(clippy::enum_variant_names))]
 pub(crate) enum FileDialogAction {
+    /// A measured pairs file for the open thickness points dialog, or why it
+    /// could not be read.
+    ThicknessPairs(std::result::Result<crate::ui::state::PairsFile, String>),
     /// Start a new, never-saved project. It carries no path until the first
     /// Save asks for one.
     #[cfg(not(target_arch = "wasm32"))]
@@ -467,6 +470,10 @@ impl<'a> App<'a> {
         }
         self.project_replacement_bypass = false;
         match action {
+            FileDialogAction::ThicknessPairs(file) => {
+                self.set_thickness_pairs(file);
+                Ok(())
+            }
             #[cfg(not(target_arch = "wasm32"))]
             FileDialogAction::NewProject => {
                 self.start_untitled_project()?;

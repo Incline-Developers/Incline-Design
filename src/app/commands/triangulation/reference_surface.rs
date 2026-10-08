@@ -27,6 +27,8 @@ use crate::{
     ui::state::{StringRing, StringRingKind},
 };
 
+pub(crate) mod seam;
+
 /// The fewest points a surface can be built from.
 pub(crate) const MINIMUM_POINTS: usize = 3;
 
@@ -290,8 +292,10 @@ impl<'a> App<'a> {
         // every source, not a case carved out for any one section.
         let sections = layers.iter().filter_map(|id| self.scene_document.layer(*id)).map(|layer| layer.section);
         let section = SectionKind::derived_for(MemberKind::Triangulation, sections);
-        let name = match layers.len() {
-            1 => self
+        let source = self.reference_source_of(runtime_id, &layers);
+        let name = match (&source, layers.len()) {
+            (Some(source), _) => crate::app::commands::thickness_points::seam_names::surface(source.target.name(), source.side),
+            (None, 1) => self
                 .scene_document
                 .layer(layers[0])
                 .map(|layer| layer.name.clone())
@@ -340,6 +344,7 @@ impl<'a> App<'a> {
         let apply = move |app: &mut App, result: Result<(crate::model::triangulation::GeneratedTriangulation, Vec<LeftOut>)>| match result {
             Ok((generated, left_out)) => {
                 app.insert_generated_triangulation_in(generated, section);
+                app.keep_surface_source(source);
                 // The strings left out stay selected and ringed, nothing
                 // hidden: the surface is there to look at beside them.
                 if !left_out.is_empty() {

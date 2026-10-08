@@ -21,6 +21,7 @@ pub(crate) mod products;
 pub(crate) mod reference_points;
 pub(crate) mod reference_surface;
 pub(crate) mod survey;
+pub(crate) mod thickness_points;
 pub(crate) mod triangulation;
 
 #[derive(Clone, Debug, PartialEq)]

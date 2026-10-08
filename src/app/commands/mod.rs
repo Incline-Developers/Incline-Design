@@ -20,6 +20,7 @@ pub(crate) mod strat_check; // Orders a strat column by majority and flags the h
 pub(crate) mod string_clean; // Clean Strings: the app side of the open-string clean-up and the rings it leaves.
 mod survey; // Handles saved mine grids and transformations of project data.
 pub(crate) mod text; // Handles text editing commands
+pub(crate) mod thickness_points; // True thickness at each hole and measured pair, against a reference surface.
 pub(crate) mod triangulation; // Handles loading meshes, deleting meshes, etc. commands
 pub(crate) mod view; /* Handles resetting camera view, , etc. commands */
 
@@ -137,6 +138,11 @@ impl<'a> App<'a> {
                 | UiCommand::OpenReferencePoints
                 | UiCommand::OpenReferenceSurface
                 | UiCommand::BuildReferenceSurface { .. }
+                | UiCommand::OpenThicknessPoints
+                | UiCommand::ChooseThicknessPairs
+                | UiCommand::MakeThicknessPoints { .. }
+                | UiCommand::OpenSeamSurface
+                | UiCommand::MakeSeamSurface { .. }
                 | UiCommand::OpenModellingSettings
                 | UiCommand::SetModellingSettings(_)
                 | UiCommand::BuildReferencePoints { .. }
@@ -602,7 +608,9 @@ impl<'a> App<'a> {
                 // The selection is two unordered sets; sorting here keeps the
                 // layer's points and the flagged list in a settled order.
                 holes.sort_unstable_by_key(|hole| (hole.dataset.0, hole.hole));
-                self.editor.reference_points_dialog = Some(crate::ui::state::ReferencePointsDraft { holes, ..Default::default() });
+                // The seam last chosen comes back, so it is chosen once.
+                let seam = self.editor.last_seam.clone().unwrap_or_default();
+                self.editor.reference_points_dialog = Some(crate::ui::state::ReferencePointsDraft { holes, seam });
                 Ok(())
             }
             UiCommand::OpenReferenceSurface => {
@@ -672,6 +680,42 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::BuildReferenceSurface { points, controls, extent } => self.build_reference_surface(points, controls, extent),
+            UiCommand::OpenThicknessPoints => {
+                self.open_thickness_points();
+                Ok(())
+            }
+            UiCommand::ChooseThicknessPairs => {
+                self.choose_thickness_pairs();
+                Ok(())
+            }
+            UiCommand::MakeThicknessPoints {
+                surface,
+                holes,
+                field,
+                target,
+                side,
+                pairs,
+                then_surface,
+            } => self.make_thickness_points(
+                surface,
+                holes,
+                crate::app::commands::thickness_points::ReferenceSeam { field, target, side },
+                pairs,
+                then_surface,
+            ),
+            UiCommand::OpenSeamSurface => {
+                self.open_seam_surface();
+                Ok(())
+            }
+            UiCommand::ShowThicknessTable { runtime_id, layer } => {
+                self.editor.thickness_table = self.editor.thickness_tables.get(&(runtime_id, layer)).cloned();
+                Ok(())
+            }
+            UiCommand::ShowSeamTable(surface) => {
+                self.editor.seam_table = self.editor.seam_tables.get(&surface).cloned();
+                Ok(())
+            }
+            UiCommand::MakeSeamSurface { surface } => self.make_seam_surface(surface),
             UiCommand::OpenModellingSettings => {
                 self.editor.show_modelling_settings = true;
                 Ok(())

@@ -865,6 +865,9 @@ pub(crate) struct DrillHoleDataset {
     /// What each loaded hole is charged with, by hole index. Content, like
     /// the ties: undone with everything else and written with the dataset.
     pub(crate) charges: BTreeMap<usize, crate::model::blast::HoleCharge>,
+    /// Interval columns an Incline tool wrote and may write again. A column
+    /// of the same name that came in with the data is never written over.
+    pub(crate) derived_columns: BTreeSet<String>,
 }
 
 impl DrillHoleDataset {
@@ -884,6 +887,7 @@ impl DrillHoleDataset {
             initiations: Vec::new(),
             corrections: Vec::new(),
             charges: BTreeMap::new(),
+            derived_columns: BTreeSet::new(),
         };
         // The one gate every importer and project load passes through, so the
         // boxes cannot fall out of step with the traces.
@@ -1225,6 +1229,28 @@ impl DrillHoleDataset {
             }
             set_value(&mut interval.values, &record.field, record.after.as_ref());
             self.corrections.push(record.clone());
+        }
+        self.fields = collect_fields(&self.holes);
+    }
+
+    /// Write cells of a derived `column`, each `(hole, interval, value)`, and
+    /// mark the column derived or not. A derived value is no correction: it is
+    /// written beside an interval's logged values too, so it never makes the
+    /// interval read as corrected.
+    pub(crate) fn write_column(&mut self, column: &str, cells: &[(usize, usize, Option<DrillValue>)], derived: bool) {
+        for (hole, interval, value) in cells {
+            let Some(interval) = self.holes.get_mut(*hole).and_then(|hole| hole.intervals.get_mut(*interval)) else {
+                continue;
+            };
+            set_value(&mut interval.values, column, value.as_ref());
+            if let Some(logged) = &mut interval.logged {
+                set_value(&mut logged.values, column, value.as_ref());
+            }
+        }
+        if derived {
+            self.derived_columns.insert(column.to_owned());
+        } else {
+            self.derived_columns.remove(column);
         }
         self.fields = collect_fields(&self.holes);
     }
@@ -2769,6 +2795,46 @@ pub(crate) struct ReferencePick {
 /// `codes` is one code, or every code of a working section: consecutive
 /// intervals holding any of them form a single run.
 pub(crate) fn reference_pick(hole: &DrillHole, field: &str, codes: &[String], side: ReferenceSide) -> ReferencePick {
+    let (runs, _) = value_runs(hole, field, codes);
+    let depth = runs.first().map(|&(top, base)| match side {
+        ReferenceSide::Roof => top,
+        ReferenceSide::Floor => base,
+    });
+    ReferencePick { depth, runs: runs.len() }
+}
+
+/// The uppermost run of a working section in one hole, whole.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SectionRun {
+    /// Down-hole depth of the roof: the top of the run's first interval.
+    pub(crate) top: f64,
+    /// Down-hole depth of the floor: the deepest base in the run.
+    pub(crate) base: f64,
+    /// How many separate runs the hole holds, as for [`ReferencePick`].
+    pub(crate) runs: usize,
+    /// The hole was logged past the run: a different value follows it. False
+    /// where the intervals ran out with the run open, so the base is only
+    /// where logging stopped.
+    pub(crate) closed: bool,
+}
+
+/// The uppermost run of intervals carrying any of `codes` in `field`, read by
+/// the same rules as [`reference_pick`], or `None` where the hole never holds
+/// them.
+pub(crate) fn section_run(hole: &DrillHole, field: &str, codes: &[String]) -> Option<SectionRun> {
+    let (runs, last_open) = value_runs(hole, field, codes);
+    let &(top, base) = runs.first()?;
+    Some(SectionRun {
+        top,
+        base,
+        runs: runs.len(),
+        closed: runs.len() > 1 || !last_open,
+    })
+}
+
+/// The `(top, base)` of every run of `codes` in `field`, uppermost first, and
+/// whether the last run was still open when the intervals ran out.
+fn value_runs(hole: &DrillHole, field: &str, codes: &[String]) -> (Vec<(f64, f64)>, bool) {
     let mut intervals: Vec<&DrillInterval> = hole.intervals.iter().collect();
     intervals.sort_by(|a, b| a.from.total_cmp(&b.from));
     let mut runs: Vec<(f64, f64)> = Vec::new();
@@ -2792,14 +2858,11 @@ pub(crate) fn reference_pick(hole: &DrillHole, field: &str, codes: &[String], si
             }
         }
     }
+    let last_open = open.is_some();
     if let Some(run) = open {
         runs.push(run);
     }
-    let depth = runs.first().map(|&(top, base)| match side {
-        ReferenceSide::Roof => top,
-        ReferenceSide::Floor => base,
-    });
-    ReferencePick { depth, runs: runs.len() }
+    (runs, last_open)
 }
 
 /// One disc of a hole drawn as string and discs: a stretch of the trace and

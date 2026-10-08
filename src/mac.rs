@@ -48,6 +48,9 @@ struct MenuState {
     /// Whether enough design points are selected to triangulate a surface
     /// from, which is what Build Surface runs on.
     can_build_reference_surface: bool,
+    /// Whether exactly one loaded surface is selected, which is what
+    /// thickness points are measured against.
+    can_make_thickness_points: bool,
     /// Whether exactly one loaded block model is selected, which is what ore
     /// thresholding runs on.
     can_create_ore_triangulation: bool,
@@ -108,6 +111,10 @@ pub(crate) enum MacMenuAction {
     OpenReferencePoints,
     /// The Drillholes menu's row that opens the build surface dialog.
     OpenReferenceSurface,
+    /// The Modelling menu's row that opens the thickness points dialog.
+    OpenThicknessPoints,
+    /// The Modelling menu's row that opens the thickness surfaces dialog.
+    OpenSeamSurface,
     /// One row of File > Open Recent, by its index in the recent list the menu
     /// was last built from.
     OpenRecent(usize),
@@ -179,6 +186,8 @@ impl MacMenuAction {
         Self::ShowProjectInFileManager,
         Self::OpenReferencePoints,
         Self::OpenReferenceSurface,
+        Self::OpenThicknessPoints,
+        Self::OpenSeamSurface,
     ];
 
     /// The `NSMenuItem` tag this action is carried by.
@@ -515,6 +524,23 @@ pub(crate) fn install_menu_bar() {
         &target,
         mtm,
     );
+    add_separator(&modelling_menu, mtm);
+    add_action(
+        &modelling_menu,
+        &tr!("common-thickness-points-ellipsis"),
+        "",
+        MacMenuAction::OpenThicknessPoints,
+        &target,
+        mtm,
+    );
+    add_action(
+        &modelling_menu,
+        &tr!("common-thickness-surfaces-ellipsis"),
+        "",
+        MacMenuAction::OpenSeamSurface,
+        &target,
+        mtm,
+    );
     let modelling_item = add_submenu(&root, &tr!("ws-menubar-modelling"), &modelling_menu, mtm);
     modelling_item.setTag(MODELLING_MENU_TAG);
 
@@ -650,6 +676,7 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         can_create_block_model: editor.selection_counts.drill_holes == 1,
         can_build_reference_points: editor.selection_counts.reference_holes > 0,
         can_build_reference_surface: editor.selection_counts.surface_points >= crate::app::commands::triangulation::reference_surface::MINIMUM_POINTS,
+        can_make_thickness_points: editor.selection_counts.triangulations == 1,
         can_create_ore_triangulation: editor.selection_counts.block_models == 1,
         can_undrape_rasters: project.raster_textures.iter().any(|raster| raster.is_draped),
         has_design_selection: editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_))),
@@ -691,6 +718,8 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     set_enabled(&root, MacMenuAction::OpenCreateBlockModel, state.can_create_block_model);
     set_enabled(&root, MacMenuAction::OpenReferencePoints, state.can_build_reference_points);
     set_enabled(&root, MacMenuAction::OpenReferenceSurface, state.can_build_reference_surface);
+    set_enabled(&root, MacMenuAction::OpenThicknessPoints, state.can_make_thickness_points);
+    set_enabled(&root, MacMenuAction::OpenSeamSurface, state.can_make_thickness_points);
     set_enabled(&root, MacMenuAction::OpenCreateOreTriangulation, state.can_create_ore_triangulation);
     for action in [MacMenuAction::OpenCutTriangulationByZ, MacMenuAction::OpenContourTriangulation] {
         set_enabled(&root, action, state.one_surface_selected);

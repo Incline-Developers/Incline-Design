@@ -265,6 +265,8 @@ struct LayerRowContext<'a> {
     /// the Move to Collection submenu offers every section that admits this
     /// layer's kind, not only the one it is drawn under.
     folders: &'a crate::model::FolderRegistry,
+    /// Thickness points layers whose table is still in memory.
+    thickness_tables: &'a std::collections::HashMap<(u32, crate::model::LayerId), std::sync::Arc<crate::ui::state::ThicknessTable>>,
 }
 
 /// One layer row: eye, padlock, drag payload and right-click menu. The same
@@ -333,6 +335,11 @@ fn layer_row(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, layer: &UiLayerEn
             }
             if ContextMenuAction::new(tr!("explorer-select-all-objects")).show(ui).clicked() {
                 commands.push(UiCommand::SelectAllObjectsInLayer(layer_id));
+                ui.close();
+            }
+            let runtime_id = cx.entry.runtime_id;
+            if cx.thickness_tables.contains_key(&(runtime_id, layer_id)) && ContextMenuAction::new(tr!("explorer-show-thickness-table")).show(ui).clicked() {
+                commands.push(UiCommand::ShowThicknessTable { runtime_id, layer: layer_id });
                 ui.close();
             }
         } else if ContextMenuAction::new(tr!("explorer-load")).show(ui).clicked() {
@@ -569,6 +576,8 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                         locked_layers,
                         locked_rasters,
                         frozen_handles,
+                        thickness_tables,
+                        seam_tables,
                         ..
                     } = &*editor;
 
@@ -617,6 +626,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                     locked_layers,
                                     draggable: rows_draggable,
                                     folders: &project.folders,
+                                    thickness_tables,
                                 };
                                 let mut design_layers = Rows {
                                     items: &entry.layers,
@@ -717,6 +727,10 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                 if tri_loaded {
                                     if ContextMenuAction::new(tr!("explorer-unload")).show(ui).clicked() {
                                         commands.push(UiCommand::CloseTriangulation(tri_id));
+                                        ui.close();
+                                    }
+                                    if seam_tables.contains_key(&tri_id) && ContextMenuAction::new(tr!("explorer-show-thickness-table")).show(ui).clicked() {
+                                        commands.push(UiCommand::ShowSeamTable(tri_id));
                                         ui.close();
                                     }
                                 } else if ContextMenuAction::new(tr!("explorer-load")).show(ui).clicked() {
@@ -1284,6 +1298,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                             locked_layers,
                                             draggable: rows_draggable,
                                             folders: &project.folders,
+                                            thickness_tables,
                                         };
                                         let mut layers_source = Rows {
                                             items: &entry.layers,

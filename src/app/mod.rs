@@ -354,6 +354,15 @@ pub(crate) struct App<'a> {
     triangulations: Vec<OpenTriangulation>,
     active_triangulation: Option<TriangulationId>,
     next_triangulation_id: u64,
+    /// What each reference points layer was made from, by project and
+    /// layer. Held for the session only.
+    reference_sources: std::collections::HashMap<(u32, LayerId), commands::thickness_points::ReferenceSource>,
+    /// The seam each surface Build Surface made this session was picked on,
+    /// to prefill its thickness points dialog.
+    surface_seams: std::collections::HashMap<TriangulationId, commands::thickness_points::ReferenceSource>,
+    /// The latest thickness points measured against each surface, held for
+    /// its thickness grid.
+    thickness_runs: std::collections::HashMap<TriangulationId, commands::triangulation::reference_surface::seam::ThicknessRunRecord>,
     block_models: Vec<OpenBlockModel>,
     next_block_model_id: u64,
     drill_holes: Vec<OpenDrillHoleDataset>,
@@ -505,6 +514,9 @@ impl<'a> Default for App<'a> {
             triangulations: Vec::new(),
             active_triangulation: None,
             next_triangulation_id: 0,
+            reference_sources: std::collections::HashMap::new(),
+            surface_seams: std::collections::HashMap::new(),
+            thickness_runs: std::collections::HashMap::new(),
             block_models: Vec::new(),
             next_block_model_id: 0,
             drill_holes: Vec::new(),
@@ -612,6 +624,8 @@ impl<'a> App<'a> {
             MacMenuAction::OpenCreateBlockModel => Some(UiCommand::OpenCreateBlockModel),
             MacMenuAction::OpenReferencePoints => Some(UiCommand::OpenReferencePoints),
             MacMenuAction::OpenReferenceSurface => Some(UiCommand::OpenReferenceSurface),
+            MacMenuAction::OpenThicknessPoints => Some(UiCommand::OpenThicknessPoints),
+            MacMenuAction::OpenSeamSurface => Some(UiCommand::OpenSeamSurface),
             MacMenuAction::OpenSurveyDefinitions => Some(UiCommand::OpenSurveyDefinitions),
             MacMenuAction::OpenSurveyTransform => Some(UiCommand::OpenSurveyTransform),
             MacMenuAction::OpenCreateOreTriangulation => Some(UiCommand::OpenCreateOreTriangulation),
@@ -1258,6 +1272,12 @@ impl<'a> App<'a> {
         self.triangulations.clear();
         self.next_triangulation_id = 0;
         self.active_triangulation = None;
+        // Keyed by ids that restart here, so they cannot outlive the project.
+        self.reference_sources.clear();
+        self.surface_seams.clear();
+        self.thickness_runs.clear();
+        self.editor.thickness_tables.clear();
+        self.editor.seam_tables.clear();
         self.block_models.clear();
         self.next_block_model_id = 0;
         self.drill_holes.clear();

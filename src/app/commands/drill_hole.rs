@@ -827,11 +827,15 @@ impl<'a> App<'a> {
         let Some(project) = self.workspace.active_project_mut() else {
             return;
         };
+        let runtime_id = project.runtime_id;
         let document = &mut project.project.document;
         let layer_id = document.allocate_layer_id();
         let layer = crate::model::Layer {
             id: layer_id,
-            name: reference_layer_name(&target, side),
+            name: crate::model::project::unique_item_name(
+                crate::app::commands::thickness_points::seam_names::points_layer(target.name(), side),
+                document.layers().iter().map(|layer| layer.name.as_str()),
+            ),
             color_index: None,
             color: [1.0, 1.0, 1.0, 1.0],
             loaded: true,
@@ -851,14 +855,19 @@ impl<'a> App<'a> {
             })
             .collect();
         let used = objects.len();
+        let made: Vec<crate::model::ObjectId> = objects.iter().map(|object| object.id()).collect();
         self.execute_edit(Command::AddLayerSnapshot { layer, objects });
+        // The points become the selection, so Build Surface is ready for them.
+        self.select_only(made.into_iter().map(SceneEntityId::Object));
+        let label = target.label();
+        self.remember_reference_source(runtime_id, layer_id, crate::app::commands::thickness_points::ReferenceSource { field, target, side });
         userspace_log!(
             "{}",
             tr!(
                 "cmd-drill-hole-reference-points-used-holes-placed",
                 used = used.to_string(),
                 absent = absent.to_string(),
-                value = target.label().to_string(),
+                value = label.to_string(),
                 flagged = flagged.len().to_string()
             )
         );
@@ -869,18 +878,6 @@ impl<'a> App<'a> {
     }
 }
 
-/// The new layer's name for a reference pick. A working section says so, so
-/// a section and a code of the same name (e.g. a section "COO" holding a
-/// code also called "COO") never collide on the layer they build.
-fn reference_layer_name(target: &crate::model::drill_hole::ReferenceTarget, side: crate::model::drill_hole::ReferenceSide) -> String {
-    match target {
-        crate::model::drill_hole::ReferenceTarget::Section(name) => {
-            tr!("cmd-drill-hole-name-working-section-side", name = name.clone().to_string(), side = side.label().to_string())
-        }
-        crate::model::drill_hole::ReferenceTarget::Code(name) => tr!("cmd-drill-hole-name-side", name = name.clone().to_string(), side = side.label().to_string()),
-    }
-}
-
 /// The codes a reference pick on `target` looks for in each dataset, found
 /// once per dataset rather than per hole, and whether the datasets define
 /// the section differently. A code stands for itself. A working section
@@ -888,7 +885,7 @@ fn reference_layer_name(target: &crate::model::drill_hole::ReferenceTarget, side
 /// that name on `field` borrows the first definition among the others. A
 /// section none of them defines picks nothing: its name is never looked
 /// for as a code.
-fn reference_codes(datasets: &[&OpenDrillHoleDataset], field: &str, target: &crate::model::drill_hole::ReferenceTarget) -> (Vec<(DrillHoleId, Vec<String>)>, bool) {
+pub(super) fn reference_codes(datasets: &[&OpenDrillHoleDataset], field: &str, target: &crate::model::drill_hole::ReferenceTarget) -> (Vec<(DrillHoleId, Vec<String>)>, bool) {
     let name = match target {
         crate::model::drill_hole::ReferenceTarget::Code(code) => return (datasets.iter().map(|dataset| (dataset.id, vec![code.clone()])).collect(), false),
         crate::model::drill_hole::ReferenceTarget::Section(name) => name,

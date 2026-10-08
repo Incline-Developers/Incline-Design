@@ -93,6 +93,9 @@ const DRILL_HOLE_ATTRIBUTE: &str = "Hole";
 /// they are what joins its holes rather than anything one hole holds.
 const META_TIE_INS: &str = "incline:tie_ins";
 const META_CHARGES: &str = "incline:charges";
+/// Interval columns an Incline tool wrote, by name, so a later run may write
+/// them again while a column that came in with the data is left alone.
+const META_DERIVED_COLUMNS: &str = "incline:derived_columns";
 const MAX_ARRAY_ITEMS: u64 = 200_000_000;
 
 /// Owned, cheaply-cloned state captured before OMF encoding moves to a worker.
@@ -1326,6 +1329,9 @@ fn write_drill_holes<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
     if !open.dataset.corrections.is_empty() {
         put(&mut element, META_CORRECTIONS, serde_json::to_value(&open.dataset.corrections)?);
     }
+    if !open.dataset.derived_columns.is_empty() {
+        put(&mut element, META_DERIVED_COLUMNS, serde_json::to_value(&open.dataset.derived_columns)?);
+    }
     Ok(Some(element))
 }
 
@@ -2287,6 +2293,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             META_CORRECTIONS,
             META_TIE_INS,
             META_CHARGES,
+            META_DERIVED_COLUMNS,
         ];
         let unknown_metadata = element.metadata.keys().filter(|key| !KNOWN_METADATA.contains(&key.as_str())).cloned().collect::<Vec<_>>();
         if !unknown_metadata.is_empty() {
@@ -3238,6 +3245,15 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             .and_then(|value| Vec::<crate::model::drill_hole::Correction>::deserialize(value).ok())
         {
             dataset.corrections = corrections;
+        }
+        // Only columns the file still holds: a name with no column behind it
+        // would let a later import of that name be written over.
+        if let Some(columns) = element
+            .metadata
+            .get(META_DERIVED_COLUMNS)
+            .and_then(|value| std::collections::BTreeSet::<String>::deserialize(value).ok())
+        {
+            dataset.derived_columns = columns.into_iter().filter(|column| dataset.fields.iter().any(|field| &field.key == column)).collect();
         }
         // Resolved after construction: it is `new` that fixes the hole order
         // the stored names are looked up against.
