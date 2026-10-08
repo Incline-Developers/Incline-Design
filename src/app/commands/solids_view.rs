@@ -826,16 +826,22 @@ impl crate::app::App<'_> {
                 draft.generation = self.editor.blast_sequence_generation;
             }
         }
-        let solids = self.workspace.active_document().map(|doc| doc.solids().to_vec()).unwrap_or_default();
-        self.solid_view_cache
-            .retain(|id, cache| cache.runtime == runtime && solids.iter().any(|solid| solid.id == *id));
-        self.editor.solid_view_bands.retain(|id, _| solids.iter().any(|solid| solid.id == *id));
-        self.dig_block_identities.retain(|id, _| solids.iter().any(|solid| solid.id == *id));
+        // Ids alone, every frame; the solids themselves - every cut drawing
+        // with them - are copied only when a stage needs them built.
+        let ids: Vec<SolidId> = self
+            .workspace
+            .active_document()
+            .map(|doc| doc.solids().iter().map(|solid| solid.id).collect())
+            .unwrap_or_default();
+        self.solid_view_cache.retain(|id, cache| cache.runtime == runtime && ids.contains(id));
+        self.editor.solid_view_bands.retain(|id, _| ids.contains(id));
+        self.dig_block_identities.retain(|id, _| ids.contains(id));
         // Only a running stage may start authoritative work. Display reads
         // what the last run committed and nothing else, so opening View on a
         // project that has never been run finishes no calculation.
         let demand = self.planning_pipeline.as_ref().and_then(crate::app::planning_pipeline::PlanningPipeline::demand);
         if let Some(demand) = demand {
+            let solids = self.workspace.active_document().map(|doc| doc.solids().to_vec()).unwrap_or_default();
             use crate::app::planning_pipeline::GeometryDemand;
             for solid in &solids {
                 // Each stage asks only for its own artifact, and only once the
@@ -863,9 +869,9 @@ impl crate::app::App<'_> {
         if !displaying {
             return;
         }
-        self.prune_solids_view_selection(&solids);
+        self.prune_solids_view_selection();
         self.resolve_solid_preview_pick();
-        self.rebuild_solid_view_body(&solids, display_demand(&self.editor));
+        self.rebuild_solid_view_body(display_demand(&self.editor));
     }
 
     /// The stamp entry for one named source surface, as this job's inputs
@@ -1227,7 +1233,8 @@ impl crate::app::App<'_> {
     }
 
     /// Drop selection rows whose band no longer exists in the built geometry.
-    fn prune_solids_view_selection(&mut self, solids: &[Solid]) {
+    fn prune_solids_view_selection(&mut self) {
+        let solids = self.workspace.active_document().map_or(&[][..], |document| document.solids());
         self.editor.solids_view_selection.retain(|row| {
             let Some(solid) = solids.iter().find(|solid| solid.id == row.solid) else {
                 return false;
@@ -1351,7 +1358,7 @@ impl crate::app::App<'_> {
     /// Rebuild the display list from the artifacts. Pure presentation: which
     /// step is open, what is selected and how things are coloured all live
     /// here, and none of them reach the geometry.
-    fn rebuild_solid_view_body(&mut self, solids: &[Solid], demand: crate::app::planning_pipeline::GeometryDemand) {
+    fn rebuild_solid_view_body(&mut self, demand: crate::app::planning_pipeline::GeometryDemand) {
         use crate::app::planning_pipeline::GeometryDemand;
         // While the sequence editor owns the preview it shows the whole run:
         // narrowing the image to the Solids View page's tree selection would
@@ -1399,13 +1406,22 @@ impl crate::app::App<'_> {
         let mut order_key: Vec<(DigBlockId, usize)> = order.iter().map(|(block, position)| (*block, *position)).collect();
         order_key.sort_unstable();
         order_key.hash(&mut hasher);
-        serde_json::to_vec(&solids).unwrap_or_default().hash(&mut hasher);
+        // The stage fingerprints cover everything about the solids this draws -
+        // colours, benching styles, cuts, exclusions - and are cached against
+        // the document revision, where serialising every solid was not.
+        self.planning_fingerprints().hash(&mut hasher);
+        let solid_ids: Vec<SolidId> = self
+            .workspace
+            .active_document()
+            .map(|doc| doc.solids().iter().map(|solid| solid.id).collect())
+            .unwrap_or_default();
+        solid_ids.hash(&mut hasher);
         for row in &view_selection {
             row.solid.hash(&mut hasher);
             row.band.map(|band| (band.base.to_bits(), band.top.to_bits(), band.is_flitch)).hash(&mut hasher);
         }
-        for solid in solids {
-            if let Some(cache) = self.solid_view_cache.get(&solid.id) {
+        for id in &solid_ids {
+            if let Some(cache) = self.solid_view_cache.get(id) {
                 cache.key.hash(&mut hasher);
                 cache.built_through(demand).hash(&mut hasher);
                 cache.fingerprint().hash(&mut hasher);
@@ -1415,6 +1431,8 @@ impl crate::app::App<'_> {
         if self.solid_view_body_key == Some(key) {
             return;
         }
+        let solids = self.workspace.active_document().map(|doc| doc.solids().to_vec()).unwrap_or_default();
+        let solids = solids.as_slice();
         self.solid_view_body_key = Some(key);
         self.solid_view_body.clear();
         self.editor.solid_view_reserves = None;
@@ -2731,7 +2749,13 @@ impl crate::app::App<'_> {
     /// against it *before* it can be Complete - gating it on completion would
     /// deadlock the stage that produces it. This one gates: a caller gets one
     /// coherent generation of a run that finished, or an explicit reason.
-    pub(crate) fn planning_snapshot(&self) -> Result<PlanningSnapshot, PlanningNotReady> {
+    ///
+    /// Shared rather than rebuilt: it is asked for every frame (the run
+    /// controls' block count, the schedule's fingerprints) and on every bar
+    /// edit, and a large pit's blocks carry megabytes of ground and reserves.
+    /// Everything it reads is covered by the key - the stage fingerprints, the
+    /// run that completed, and each solid's committed artifacts.
+    pub(crate) fn planning_snapshot(&self) -> Result<Arc<PlanningSnapshot>, PlanningNotReady> {
         use crate::app::planning_pipeline::StageNotReady;
 
         let Some(project) = self.workspace.active_project() else {
@@ -2751,6 +2775,22 @@ impl crate::app::App<'_> {
             StageNotReady::Running(stage) => PlanningNotReady::Running { stage: stage.label() },
             StageNotReady::Failed { stage, message } => PlanningNotReady::Failed { solid: stage.label(), message },
         })?;
+        let key = {
+            let mut hasher = DefaultHasher::new();
+            (project.runtime_id, generation, fingerprints).hash(&mut hasher);
+            if let Some(document) = self.workspace.active_document() {
+                for solid in document.solids() {
+                    solid.id.hash(&mut hasher);
+                    self.solid_view_cache.get(&solid.id).map(|cache| (cache.key, cache.fingerprint())).hash(&mut hasher);
+                }
+            }
+            hasher.finish()
+        };
+        if let Some((cached, snapshot)) = self.planning_snapshot_cache.borrow().as_ref()
+            && *cached == key
+        {
+            return Ok(Arc::clone(snapshot));
+        }
         // Excluded ground is not dug, so nothing that reads the run - the
         // schedule, haulage, the sequence editors - is handed it as ground.
         let (blocks, excluded): (Vec<_>, Vec<_>) = self.planning_dig_blocks()?.into_iter().partition(|block| !block.excluded);
@@ -2762,13 +2802,15 @@ impl crate::app::App<'_> {
                 message: crate::i18n::tr!("planning-snapshot-unmeasured", block = block.name.clone()),
             });
         }
-        Ok(PlanningSnapshot {
+        let snapshot = Arc::new(PlanningSnapshot {
             runtime: project.runtime_id,
             generation,
             blocks,
             excluded,
             blasts: self.planning_blasts(),
-        })
+        });
+        *self.planning_snapshot_cache.borrow_mut() = Some((key, Arc::clone(&snapshot)));
+        Ok(snapshot)
     }
 }
 

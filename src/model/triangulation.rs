@@ -108,7 +108,9 @@ pub(crate) struct OpenTriangulation {
     pub(crate) geometry: GeometryVersion,
     pub(crate) mesh: Arc<mesh_data::Triangulation>,
     pub(crate) spatial: Arc<crate::model::spatial::TriangleBvh>,
-    pub(crate) edges: Vec<[u32; 2]>,
+    /// Shared like the mesh: the Solids pages restyle every dig block on each
+    /// pick, and a copy of each block's outline per restyle added up.
+    pub(crate) edges: Arc<Vec<[u32; 2]>>,
     /// Face indices in GPU-chunk order (see `spatial_surface_face_order`),
     /// precomputed off-thread so GPU surface chunking never sorts on the render
     /// thread. `Arc` so cloning an `OpenTriangulation` stays cheap.
