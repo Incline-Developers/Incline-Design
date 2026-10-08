@@ -1459,10 +1459,16 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                         // happen, because every one is an interval boundary
                         // above.
                         let stood = delayed.iter().any(|(start, end)| *start <= interval.start_h + 1e-9 && interval.start_h < *end - 1e-9);
+                        // Intervals break at every day boundary, so the day an
+                        // interval starts in is the day it lies in.
+                        let day = CalendarPeriod((interval.start_h / SCHEDULE_PERIOD_H).floor().max(0.0) as u32);
+                        let (utilisation_target, utilisation_incentive) = plan.agent(*agent).map_or((1.0, 0.0), |loader| loader.calendar.incentive_at(day));
                         IntervalRate {
                             interval: interval.index,
                             dig_tph: if stood { 0.0 } else { dig.rate_at(interval.start_h) },
                             reclaim_tph: if stood { 0.0 } else { reclaim.rate_at(interval.start_h) },
+                            utilisation_target,
+                            utilisation_incentive,
                         }
                     })
                     .collect(),

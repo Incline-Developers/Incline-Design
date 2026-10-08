@@ -24,16 +24,36 @@ pub(crate) struct LoaderPeriodOverride {
     /// the same machine, and a project saved before reclaim existed has
     /// neither.
     pub(crate) reclaim_rate_tph: Option<f64>,
+    /// The scheduled utilisation the dig incentive pays up to; see
+    /// [`LoaderCalendar::default_utilisation_target`]. Left out of a saved
+    /// project when unset, so projects from before it read and hash as they did.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) utilisation_target: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) utilisation_incentive: Option<f64>,
 }
 
 impl LoaderPeriodOverride {
     fn is_empty(&self) -> bool {
-        self.availability.is_none() && self.utilisation.is_none() && self.rate_tph.is_none() && self.reclaim_rate_tph.is_none()
+        self.availability.is_none()
+            && self.utilisation.is_none()
+            && self.rate_tph.is_none()
+            && self.reclaim_rate_tph.is_none()
+            && self.utilisation_target.is_none()
+            && self.utilisation_incentive.is_none()
     }
 }
 
 fn one() -> f64 {
     1.0
+}
+
+fn is_one(value: &f64) -> bool {
+    *value == 1.0
+}
+
+fn is_zero(value: &f64) -> bool {
+    *value == 0.0
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -43,6 +63,17 @@ pub(crate) struct LoaderCalendar {
     pub(crate) default_availability: f64,
     #[serde(default = "one")]
     pub(crate) default_utilisation: f64,
+    /// The scheduled utilisation, as a fraction, the dig incentive pays up
+    /// to: the share of the day so far's productive hours the loader has
+    /// worked. 100% unless set.
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub(crate) default_utilisation_target: f64,
+    /// Currency per dug tonne per percentage point the loader's scheduled
+    /// utilisation so far today stands below its target. It steers the
+    /// hourly schedule towards keeping loaders busy and is never counted as
+    /// money. Zero unless set.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub(crate) default_utilisation_incentive: f64,
     pub(crate) periods: BTreeMap<CalendarPeriod, LoaderPeriodOverride>,
 }
 
@@ -51,6 +82,8 @@ impl Default for LoaderCalendar {
         Self {
             default_availability: 1.0,
             default_utilisation: 1.0,
+            default_utilisation_target: 1.0,
+            default_utilisation_incentive: 0.0,
             periods: BTreeMap::new(),
         }
     }
@@ -65,6 +98,10 @@ pub(crate) enum CalendarField {
     /// Tonnes per productive hour reclaiming from a stockpile. Availability and
     /// utilisation are shared: they are the machine's, not the activity's.
     ReclaimRate,
+    /// The scheduled utilisation the dig incentive pays up to, a fraction.
+    UtilisationTarget,
+    /// Currency per dug tonne per point below the target.
+    UtilisationIncentive,
 }
 
 impl CalendarField {
@@ -73,7 +110,7 @@ impl CalendarField {
         match self {
             Self::Rate => Some(RateKind::Dig),
             Self::ReclaimRate => Some(RateKind::Reclaim),
-            Self::Availability | Self::Utilisation => None,
+            Self::Availability | Self::Utilisation | Self::UtilisationTarget | Self::UtilisationIncentive => None,
         }
     }
 }
@@ -142,8 +179,27 @@ impl LoaderCalendar {
             if let Some(rate) = value.reclaim_rate_tph {
                 checked_override_rate(rate)?;
             }
+            if let Some(target) = value.utilisation_target {
+                checked_percentage(target)?;
+            }
+            if let Some(incentive) = value.utilisation_incentive {
+                checked_incentive(incentive)?;
+            }
         }
+        checked_percentage(self.default_utilisation_target)?;
+        checked_incentive(self.default_utilisation_incentive)?;
         Ok(())
+    }
+
+    /// The utilisation target and the incentive per dug tonne per point
+    /// below it, for one period.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
+    pub(crate) fn incentive_at(&self, period: CalendarPeriod) -> (f64, f64) {
+        let held = self.periods.get(&period);
+        (
+            held.and_then(|value| value.utilisation_target).unwrap_or(self.default_utilisation_target),
+            held.and_then(|value| value.utilisation_incentive).unwrap_or(self.default_utilisation_incentive),
+        )
     }
 
     #[allow(
@@ -227,13 +283,16 @@ impl LoaderCalendar {
             (CalendarCell::Default, CalendarField::Rate | CalendarField::ReclaimRate) => return Err(ScheduleError::ReadOnlyCalendarCell),
             (CalendarCell::Default, CalendarField::Availability) => self.default_availability = value.map(checked_percentage).transpose()?.unwrap_or(1.0),
             (CalendarCell::Default, CalendarField::Utilisation) => self.default_utilisation = value.map(checked_percentage).transpose()?.unwrap_or(1.0),
+            (CalendarCell::Default, CalendarField::UtilisationTarget) => self.default_utilisation_target = value.map(checked_percentage).transpose()?.unwrap_or(1.0),
+            (CalendarCell::Default, CalendarField::UtilisationIncentive) => self.default_utilisation_incentive = value.map(checked_incentive).transpose()?.unwrap_or(0.0),
             (CalendarCell::Period(period), field) => {
                 if value.is_some() {
                     period.0.checked_add(1).ok_or(ScheduleError::CalendarPeriodOverflow)?;
                 }
-                let value = match field.rate_kind() {
-                    None => value.map(checked_percentage).transpose()?,
-                    Some(_) => value.map(checked_override_rate).transpose()?,
+                let value = match (field.rate_kind(), field) {
+                    (_, CalendarField::UtilisationIncentive) => value.map(checked_incentive).transpose()?,
+                    (None, _) => value.map(checked_percentage).transpose()?,
+                    (Some(_), _) => value.map(checked_override_rate).transpose()?,
                 };
                 let override_ = self.periods.entry(period).or_default();
                 match field {
@@ -241,6 +300,8 @@ impl LoaderCalendar {
                     CalendarField::Utilisation => override_.utilisation = value,
                     CalendarField::Rate => override_.rate_tph = value,
                     CalendarField::ReclaimRate => override_.reclaim_rate_tph = value,
+                    CalendarField::UtilisationTarget => override_.utilisation_target = value,
+                    CalendarField::UtilisationIncentive => override_.utilisation_incentive = value,
                 }
                 if override_.is_empty() {
                     self.periods.remove(&period);
@@ -256,6 +317,7 @@ impl LoaderCalendar {
         for value in self.periods.values_mut() {
             value.availability = value.availability.map(canonical_percentage_zero);
             value.utilisation = value.utilisation.map(canonical_percentage_zero);
+            value.utilisation_target = value.utilisation_target.map(canonical_percentage_zero);
         }
     }
 }
@@ -282,6 +344,13 @@ fn checked_percentage(value: f64) -> ScheduleResult<f64> {
 
 fn canonical_percentage_zero(value: f64) -> f64 {
     if value == 0.0 { 0.0 } else { value }
+}
+
+fn checked_incentive(value: f64) -> ScheduleResult<f64> {
+    if !value.is_finite() || value < 0.0 {
+        return Err(ScheduleError::InvalidUtilisationIncentive);
+    }
+    Ok(canonical_percentage_zero(value))
 }
 
 fn checked_override_rate(value: f64) -> ScheduleResult<f64> {
