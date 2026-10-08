@@ -870,7 +870,29 @@ impl<'a> State<'a> {
     /// crushers, dumps and soft targets are shared by the whole interval; a
     /// pile's room by the end of each segment, net of what segments before it
     /// reclaimed.
+    /// Solve one interval, its utilisation incentive priced. Should the
+    /// incentive's band columns leave the program unsolvable, the interval is
+    /// solved without them rather than failing the run: the incentive steers
+    /// the schedule, and is never a reason not to have one.
     fn solve(&self, interval: Interval, topology: &Topology) -> Result<Plan, String> {
+        match self.solve_priced(interval, topology, true) {
+            Err(error) if !self.cancelled() && self.has_incentive(interval) => {
+                let plan = self.solve_priced(interval, topology, false).map_err(|_| error.clone())?;
+                log::warn!("interval {}: solved without the utilisation incentive, which left it unsolvable: {error}", interval.index);
+                Ok(plan)
+            }
+            result => result,
+        }
+    }
+
+    fn has_incentive(&self, interval: Interval) -> bool {
+        self.input
+            .loaders
+            .iter()
+            .any(|loader| interval_rate(loader, interval.index).is_some_and(|rate| rate.utilisation_incentive > 0.0 && rate.dig_tph > 0.0))
+    }
+
+    fn solve_priced(&self, interval: Interval, topology: &Topology, priced: bool) -> Result<Plan, String> {
         if self.cancelled() {
             return Err(format!("interval {}: cancelled", interval.index));
         }
@@ -1037,7 +1059,7 @@ impl<'a> State<'a> {
         // program fills the lower, better-paid bands first by itself - a
         // concave reward, exact as a linear program. Never money.
         let mut incentive: Vec<(Col, f64)> = Vec::new();
-        for (loader, entry) in input.loaders.iter().enumerate() {
+        for (loader, entry) in input.loaders.iter().enumerate().filter(|_| priced) {
             let Some(rate) = interval_rate(entry, interval.index).filter(|rate| rate.utilisation_incentive > 0.0 && rate.dig_tph > 0.0) else {
                 continue;
             };

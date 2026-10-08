@@ -18,13 +18,14 @@ impl Col {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct LinearProgram {
     objective: Vec<f64>,
     column_bounds: Vec<(f64, f64)>,
     rows: Vec<Row>,
 }
 
+#[derive(Clone)]
 struct Row {
     lower: f64,
     upper: f64,
@@ -212,10 +213,30 @@ impl LinearProgram {
     #[cfg_attr(feature = "highs", allow(dead_code, reason = "HiGHS solves the dispatch in this build"))]
     fn maximise_microlp(&self) -> Result<Vec<f64>, String> {
         let (scaled, column_scale) = self.equilibrated();
-        match scaled.maximise_microlp_as_given() {
-            Ok(solution) => Ok(solution.iter().zip(&column_scale).map(|(value, scale)| value * scale).collect()),
-            Err(scaled_error) => self.maximise_microlp_as_given().map_err(|error| format!("{error} (scaled: {scaled_error})")),
+        let unscale = |solution: Vec<f64>| solution.iter().zip(&column_scale).map(|(value, scale)| value * scale).collect();
+        let scaled_error = match scaled.maximise_microlp_as_given() {
+            Ok(solution) => return Ok(unscale(solution)),
+            Err(error) => error,
+        };
+        if let Ok(solution) = self.maximise_microlp_as_given() {
+            return Ok(solution);
         }
+        // A degenerate program can lead the simplex into a basis that is
+        // singular apart from rounding. Nudging each objective weight by a
+        // millionth or less sends it down another path without moving what
+        // is feasible: the answer is still a vertex of the same region, worth
+        // what the replay says it is.
+        for round in 1..=3_u64 {
+            let mut nudged = scaled.clone();
+            for (index, weight) in nudged.objective.iter_mut().enumerate() {
+                let jitter = ((index as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_mul(round) >> 11) as f64 / (1u64 << 53) as f64;
+                *weight *= 1.0 + 1e-6 * (jitter - 0.5);
+            }
+            if let Ok(solution) = nudged.maximise_microlp_as_given() {
+                return Ok(unscale(solution));
+            }
+        }
+        Err(scaled_error)
     }
 
     #[cfg_attr(feature = "highs", allow(dead_code, reason = "HiGHS solves the dispatch in this build"))]
