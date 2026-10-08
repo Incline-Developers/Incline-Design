@@ -62,10 +62,125 @@ impl LinearProgram {
 
     /// The column values at a maximum of the objective, or why there are none.
     pub(crate) fn maximise(&self) -> Result<Vec<f64>, String> {
+        let tidy = self.tidied()?;
         #[cfg(feature = "highs")]
-        return self.maximise_highs();
+        return tidy.maximise_highs();
         #[cfg(not(feature = "highs"))]
-        return self.maximise_microlp();
+        return tidy.maximise_microlp();
+    }
+
+    /// The same program with what a simplex basis chokes on taken out: a
+    /// column repeated within a row is one term, zero terms are dropped, a
+    /// row with no terms left is checked and dropped, and rows over exactly
+    /// the same terms - a reclaim cap and the equality that spends it, a dig
+    /// pin and its block's total - are one row with the tighter bounds.
+    ///
+    /// Two parallel rows are the classic way to a basis that is singular
+    /// apart from rounding, which is what microlp reports as a singular matrix.
+    fn tidied(&self) -> Result<Self, String> {
+        let mut rows: Vec<Row> = Vec::with_capacity(self.rows.len());
+        let mut seen: std::collections::HashMap<Vec<(usize, u64)>, usize> = std::collections::HashMap::new();
+        for row in &self.rows {
+            let mut terms: Vec<(Col, f64)> = Vec::with_capacity(row.terms.len());
+            let mut sorted = row.terms.clone();
+            sorted.sort_by_key(|(col, _)| col.0);
+            for (col, coefficient) in sorted {
+                match terms.last_mut() {
+                    Some((last, total)) if *last == col => *total += coefficient,
+                    _ => terms.push((col, coefficient)),
+                }
+            }
+            terms.retain(|(_, coefficient)| *coefficient != 0.0 && coefficient.is_finite());
+            if terms.is_empty() {
+                // 0 has to lie within the row's bounds, or nothing can.
+                let slack = 1e-9 * row.lower.abs().max(row.upper.abs()).max(1.0);
+                if row.lower > slack || row.upper < -slack {
+                    return Err(format!("a constraint with no terms needs {}..{}", row.lower, row.upper));
+                }
+                continue;
+            }
+            let key: Vec<(usize, u64)> = terms.iter().map(|(col, coefficient)| (col.0, coefficient.to_bits())).collect();
+            match seen.get(&key) {
+                Some(&index) => {
+                    let held = &mut rows[index];
+                    held.lower = held.lower.max(row.lower);
+                    held.upper = held.upper.min(row.upper);
+                    // Equal in all but rounding: one equality, not an
+                    // infeasible pair.
+                    if held.lower > held.upper {
+                        let slack = 1e-9 * held.lower.abs().max(held.upper.abs()).max(1.0);
+                        if held.lower - held.upper > slack {
+                            return Err(format!("two constraints over the same terms need {} and {}", held.lower, held.upper));
+                        }
+                        held.upper = held.lower;
+                    }
+                }
+                None => {
+                    seen.insert(key, rows.len());
+                    rows.push(Row {
+                        lower: row.lower,
+                        upper: row.upper,
+                        terms,
+                    });
+                }
+            }
+        }
+        Ok(Self {
+            objective: self.objective.clone(),
+            column_bounds: self.column_bounds.clone(),
+            rows,
+        })
+    }
+
+    /// This program scaled so every row's and then every column's largest
+    /// coefficient is near one, with the factor each column was scaled by.
+    ///
+    /// microlp takes a pivot under an absolute 1e-10 for zero. Tonnes in the
+    /// thousands beside truck hours per tonne and grade differences of a
+    /// ten-thousandth make that a different test in every row; scaled, it is
+    /// the same test everywhere. Powers of two, so scaling rounds nothing.
+    #[cfg_attr(feature = "highs", allow(dead_code, reason = "HiGHS scales its own problems"))]
+    fn equilibrated(&self) -> (Self, Vec<f64>) {
+        let power_of_two = |magnitude: f64| {
+            if magnitude > 0.0 && magnitude.is_finite() {
+                2f64.powi(-magnitude.log2().round() as i32)
+            } else {
+                1.0
+            }
+        };
+        let row_scale: Vec<f64> = self
+            .rows
+            .iter()
+            .map(|row| power_of_two(row.terms.iter().map(|(_, c)| c.abs()).fold(0.0, f64::max)))
+            .collect();
+        let mut column_max = vec![0.0f64; self.objective.len()];
+        for (row, scale) in self.rows.iter().zip(&row_scale) {
+            for (col, coefficient) in &row.terms {
+                column_max[col.0] = column_max[col.0].max((coefficient * scale).abs());
+            }
+        }
+        let column_scale: Vec<f64> = column_max.iter().map(|max| power_of_two(*max)).collect();
+        let rows = self
+            .rows
+            .iter()
+            .zip(&row_scale)
+            .map(|(row, scale)| Row {
+                lower: row.lower * scale,
+                upper: row.upper * scale,
+                terms: row.terms.iter().map(|(col, coefficient)| (*col, coefficient * scale * column_scale[col.0])).collect(),
+            })
+            .collect();
+        let scaled = Self {
+            objective: self.objective.iter().zip(&column_scale).map(|(weight, scale)| weight * scale).collect(),
+            column_bounds: self
+                .column_bounds
+                .iter()
+                .zip(&column_scale)
+                .map(|((lower, upper), scale)| (lower / scale, upper / scale))
+                .collect(),
+            rows,
+        };
+        (scaled, column_scale)
     }
 
     #[cfg(feature = "highs")]
@@ -92,8 +207,19 @@ impl LinearProgram {
         Ok(solved.get_solution().columns().to_vec())
     }
 
+    /// Solve with microlp, scaled; and should the scaled basis still come
+    /// out singular, once more as given before saying so.
     #[cfg_attr(feature = "highs", allow(dead_code, reason = "HiGHS solves the dispatch in this build"))]
     fn maximise_microlp(&self) -> Result<Vec<f64>, String> {
+        let (scaled, column_scale) = self.equilibrated();
+        match scaled.maximise_microlp_as_given() {
+            Ok(solution) => Ok(solution.iter().zip(&column_scale).map(|(value, scale)| value * scale).collect()),
+            Err(scaled_error) => self.maximise_microlp_as_given().map_err(|error| format!("{error} (scaled: {scaled_error})")),
+        }
+    }
+
+    #[cfg_attr(feature = "highs", allow(dead_code, reason = "HiGHS solves the dispatch in this build"))]
+    fn maximise_microlp_as_given(&self) -> Result<Vec<f64>, String> {
         use microlp::{ComparisonOp, OptimizationDirection, Problem};
         let mut problem = Problem::new(OptimizationDirection::Maximize);
         let vars: Vec<_> = self
@@ -124,4 +250,73 @@ impl LinearProgram {
 /// The solver the hourly dispatch uses in this build, for the run's report.
 pub(crate) fn backend_name() -> &'static str {
     if cfg!(feature = "highs") { "HiGHS" } else { "microlp 0.6.0" }
+}
+
+#[cfg(test)]
+mod tidy_probe {
+    use super::*;
+    #[test]
+    fn tidied_and_scaled_solves_match_the_program_as_given() {
+        let (mut compared, mut rescued) = (0, 0);
+        for seed in 0..600u64 {
+            let mut state = seed.wrapping_mul(0x9E3779B97F4A7C15) | 1;
+            let mut rand = move || {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                (state % 1_000_000) as f64 / 1_000_000.0
+            };
+            let mut lp = LinearProgram::default();
+            let n = 3 + (rand() * 8.0) as usize;
+            let cols: Vec<Col> = (0..n).map(|_| lp.add_column(rand() * 10.0 - 2.0, 0.0..=1e5 * rand() + 1.0)).collect();
+            for _ in 0..(2 + (rand() * 10.0) as usize) {
+                let scale = [1e-4, 1e-3, 1.0, 3500.0][(rand() * 4.0) as usize];
+                let mut terms: Vec<(Col, f64)> = Vec::new();
+                #[allow(clippy::needless_range_loop)]
+                for c in &cols {
+                    if rand() < 0.5 {
+                        terms.push((*c, (rand() + 0.05) * scale));
+                    }
+                }
+                let bound = rand() * 1e4 * scale;
+                lp.add_row(..=bound, terms.clone());
+                if rand() < 0.3 {
+                    lp.add_row(bound * 0.5..=bound * 0.5, terms);
+                }
+            }
+            let given = lp.maximise_microlp_as_given();
+            let now = lp.maximise();
+            match (&given, &now) {
+                (Ok(a), Ok(b)) => {
+                    compared += 1;
+                    let (va, vb) = (lp.value(a), lp.value(b));
+                    assert!((va - vb).abs() <= 1e-6 * va.abs().max(1.0), "seed {seed}: {va} vs {vb}");
+                }
+                (Err(_), Ok(_)) => rescued += 1,
+                (Ok(_), Err(error)) => panic!("seed {seed}: newly failing: {error}"),
+                (Err(_), Err(_)) => {}
+            }
+            if let Ok(solution) = &now {
+                for row in &lp.rows {
+                    let total: f64 = row.terms.iter().map(|(c, k)| k * solution[c.0]).sum();
+                    let tolerance = 1e-6
+                        * row
+                            .terms
+                            .iter()
+                            .map(|(c, k)| (k * solution[c.0]).abs())
+                            .sum::<f64>()
+                            .max(row.upper.abs().min(1e12))
+                            .max(1e-6);
+                    assert!(
+                        total <= row.upper + tolerance && total >= row.lower - tolerance,
+                        "seed {seed}: row broken {} not in {}..{}",
+                        total,
+                        row.lower,
+                        row.upper
+                    );
+                }
+            }
+        }
+        println!("compared {compared}, rescued {rescued}");
+    }
 }
