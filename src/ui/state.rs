@@ -8203,7 +8203,11 @@ impl GanttView {
     /// The minor tick intervals the ruler steps through as it is zoomed,
     /// coarsest last. Hours, then days, then weeks - the scales a mine plan
     /// is actually read at.
-    pub(crate) const TICK_LADDER: [f64; 8] = [
+    ///
+    /// Whole weeks beyond a fortnight, counted from Day 1 like every tick, so
+    /// a timeline zoomed out over a year keeps its columns rather than
+    /// dropping to a single tick.
+    pub(crate) const TICK_LADDER: [f64; 12] = [
         Self::HOUR,
         3.0 * Self::HOUR,
         6.0 * Self::HOUR,
@@ -8212,6 +8216,10 @@ impl GanttView {
         2.0 * Self::DAY,
         7.0 * Self::DAY,
         14.0 * Self::DAY,
+        28.0 * Self::DAY,
+        56.0 * Self::DAY,
+        91.0 * Self::DAY,
+        182.0 * Self::DAY,
     ];
 
     /// Frame the timeline on the work it holds: from the start of the project
