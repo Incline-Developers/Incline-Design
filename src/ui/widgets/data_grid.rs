@@ -28,6 +28,8 @@ use crate::{
 
 const HANDLE_WIDTH: f32 = 18.0;
 const CELL_GAP: f32 = 4.0;
+/// Space between rows, as in the constant picker's list.
+const ROW_GAP: f32 = 4.0;
 const SCROLLBAR_ALLOWANCE: f32 = 14.0;
 const MAX_BODY_HEIGHT: f32 = 280.0;
 /// The least a grid asked to fill a height leaves for its rows.
@@ -176,7 +178,7 @@ impl DataGrid {
         let widths = column_widths(ui.available_width(), &self.columns, self.buttons.groups);
         let row_height = ui.spacing().interact_size.y + 4.0;
 
-        ui.spacing_mut().item_spacing = egui::vec2(CELL_GAP, 2.0);
+        ui.spacing_mut().item_spacing = egui::vec2(CELL_GAP, ROW_GAP);
         self.draw_header(ui, &widths, row_height);
 
         let dragging = egui::DragAndDrop::payload::<usize>(ui.ctx()).map(|payload| *payload);
@@ -305,10 +307,7 @@ impl DataGrid {
                     // The bar down the left edge ties a row to its group.
                     let (gutter, _) = ui.allocate_exact_size(egui::vec2(GROUP_GUTTER, row_height), egui::Sense::hover());
                     if let Some(colour) = group {
-                        let bar = egui::Rect::from_min_max(
-                            egui::pos2(gutter.center().x - 2.0, gutter.top() - 1.0),
-                            egui::pos2(gutter.center().x + 2.0, gutter.bottom() + 1.0),
-                        );
+                        let bar = egui::Rect::from_min_max(egui::pos2(gutter.center().x - 2.0, gutter.top()), egui::pos2(gutter.center().x + 2.0, gutter.bottom()));
                         ui.painter().rect_filled(bar, 1.0, colour);
                     }
                 }
@@ -350,7 +349,7 @@ impl DataGrid {
             None
         };
         if let Some(fill) = fill {
-            ui.painter().set(background, egui::Shape::rect_filled(rect.expand2(egui::vec2(2.0, 1.0)), 2.0, fill));
+            ui.painter().set(background, egui::Shape::rect_filled(rect.expand2(egui::vec2(2.0, 0.0)), 2.0, fill));
         }
         rect
     }
@@ -373,10 +372,7 @@ impl DataGrid {
         let response = ui
             .horizontal(|ui| {
                 let (gutter, _) = ui.allocate_exact_size(egui::vec2(GROUP_GUTTER, row_height), egui::Sense::hover());
-                let bar = egui::Rect::from_min_max(
-                    egui::pos2(gutter.center().x - 3.0, gutter.top() - 1.0),
-                    egui::pos2(gutter.center().x + 3.0, gutter.bottom() + 1.0),
-                );
+                let bar = egui::Rect::from_min_max(egui::pos2(gutter.center().x - 3.0, gutter.top()), egui::pos2(gutter.center().x + 3.0, gutter.bottom()));
                 ui.painter().rect_filled(bar, 1.0, colour);
                 let arrow = if collapsed { "▶" } else { "▼" };
                 if ui.add_sized([HANDLE_WIDTH, row_height], egui::Button::new(arrow).frame(false)).clicked() {
@@ -384,7 +380,10 @@ impl DataGrid {
                 }
                 let mut edited = name.to_owned();
                 let width = (row_width - GROUP_GUTTER - HANDLE_WIDTH - 2.0 * CELL_GAP).max(60.0);
-                let response = ui.add_sized([width, row_height - 2.0], egui::TextEdit::singleline(&mut edited).font(egui::TextStyle::Button));
+                let response = ui.add_sized(
+                    [width, row_height - 2.0],
+                    egui::TextEdit::singleline(&mut edited).font(egui::TextStyle::Button).frame(egui::Frame::NONE),
+                );
                 if name.trim().is_empty() {
                     crate::ui::widgets::value_field::mark_invalid(ui, &response);
                 }
@@ -402,7 +401,7 @@ impl DataGrid {
         } else {
             colour.gamma_multiply(0.5)
         };
-        ui.painter().set(background, egui::Shape::rect_filled(rect.expand2(egui::vec2(2.0, 1.0)), 2.0, fill));
+        ui.painter().set(background, egui::Shape::rect_filled(rect.expand2(egui::vec2(2.0, 0.0)), 2.0, fill));
         if let Some(released) = drag_released {
             let dragging = egui::DragAndDrop::payload::<usize>(ui.ctx()).map(|payload| *payload);
             self.handle_drop(ui, index, rect, true, dragging, released, actions);

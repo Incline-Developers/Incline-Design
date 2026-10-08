@@ -718,6 +718,10 @@ impl<'a> App<'a> {
                 self.choose_optimization_reports_folder();
                 Ok(())
             }
+            UiCommand::BeginShellStartPick => {
+                self.begin_shell_start_pick();
+                Ok(())
+            }
             UiCommand::DuplicateOptimizationScenario(id) => self.duplicate_optimization_scenario(id),
             UiCommand::RenameOptimizationScenario { id, name } => self.rename_optimization_scenario(id, name),
             UiCommand::DeleteOptimizationScenario(id) => self.delete_optimization_scenario(id),

@@ -2070,7 +2070,11 @@ impl EditorState {
     /// A dialog is parked waiting on a click in the 3D viewport. Escape belongs
     /// to the pick (it returns to the dialog), and Enter means nothing.
     fn viewport_pick_in_progress(&self) -> bool {
-        self.triangulation_pick_target.is_some() || self.drill_pattern_awaiting_shape_pick || self.canvas_context_menu_open || self.text_editing_enabled
+        self.triangulation_pick_target.is_some()
+            || self.optimization.start_pick.is_some()
+            || self.drill_pattern_awaiting_shape_pick
+            || self.canvas_context_menu_open
+            || self.text_editing_enabled
     }
 
     /// The common case: a dialog that confirms on Enter and cancels on Escape.
@@ -3633,6 +3637,9 @@ pub(crate) enum UiCommand {
     ImportOptimizationScenarios,
     /// Choose the folder the reports are written to.
     ChooseOptimizationReportsFolder,
+    /// Hide everything but the scenario's block model, show it in plan view
+    /// and wait for a click that sets the directional shells' starting point.
+    BeginShellStartPick,
     /// Copy a scenario into a new one beside it, with an amended name.
     DuplicateOptimizationScenario(u64),
     RenameOptimizationScenario {
@@ -3897,6 +3904,7 @@ impl UiCommand {
             | Self::EditOptimizationScenario(_)
             | Self::RenameOptimizationScenario { .. }
             | Self::ChooseOptimizationReportsFolder
+            | Self::BeginShellStartPick
             | Self::OpenCreateBlockModel
             | Self::OpenCreateOreTriangulation
             | Self::OpenOffsetDialog
@@ -4602,6 +4610,24 @@ pub(crate) struct OptimizationState {
     /// The saved scenarios file has been read this session. It is read the
     /// first time the list opens.
     pub(crate) loaded_from_file: bool,
+    /// Set while the user is clicking the starting point of a directional
+    /// shell in the viewport. The editor steps aside meanwhile.
+    pub(crate) start_pick: Option<ShellStartPick>,
+    /// A pick was up on the last frame drawn, so an Escape still pending on the
+    /// first frame without it belongs to the pick, not to the editor.
+    pub(crate) pick_was_active: bool,
+}
+
+/// A directional-shell starting point being picked from the viewport.
+#[derive(Clone, Debug)]
+pub(crate) struct ShellStartPick {
+    /// The block model the click must land on.
+    pub(crate) block_model: crate::model::block_model::BlockModelId,
+    /// What was hidden before the pick hid everything else.
+    pub(crate) previously_hidden: HashSet<SceneEntityId>,
+    /// Height the old point's marker is drawn at: the top of the model, so it
+    /// stays inside the depth range the camera fits to the model. Never saved.
+    pub(crate) marker_z: f64,
 }
 
 impl OptimizationState {

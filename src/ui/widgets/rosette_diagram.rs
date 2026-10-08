@@ -11,9 +11,14 @@ use crate::{i18n::tr, model::optimization::SlopeSector};
 pub(crate) const HEIGHT: f32 = 300.0;
 /// Room kept outside the circle for the compass letters and bearings.
 const LABEL_MARGIN: f32 = 36.0;
-/// Crest and toe lines of the pit's benches as fractions of the circle's
-/// radius, from the top crest in to the floor; even entries are crests.
-const PIT_LINES: [f32; 8] = [0.94, 0.80, 0.72, 0.58, 0.50, 0.36, 0.28, 0.14];
+/// Toe lines of the pit's benches as fractions of the circle's radius, from
+/// the highest bench in to the floor. Each is free-form; the crest above it is
+/// worked out from it.
+const PIT_TOES: [f32; 3] = [0.72, 0.50, 0.28];
+/// Horizontal run of every bench face as a fraction of the circle's radius:
+/// the face angle and bench height are constant, so each crest lies this far
+/// outside its toe, all the way round.
+const PIT_FACE_RUN: f32 = 0.06;
 const PIT_STEPS: u32 = 72;
 /// The pit is narrower than it is long (east-west against north-south).
 const PIT_WIDTH: f32 = 0.78;
@@ -88,20 +93,29 @@ pub(crate) fn draw_rosette(ui: &mut egui::Ui, sectors: &[SlopeSector]) {
         }
     }
 
-    // A small pit inside, so it reads as a pit's walls: crest and toe lines of
-    // a few benches, stretched north-south and a little uneven.
+    // A small pit inside, so it reads as a pit's walls: a toe line for each
+    // bench, stretched north-south and a little uneven, and above it the crest,
+    // the toe pushed out by the same distance everywhere.
     let ink = egui::Color32::from_rgba_unmultiplied(40, 46, 58, 215);
-    for (index, scale) in PIT_LINES.iter().enumerate() {
-        let is_crest = index % 2 == 0;
-        let points: Vec<egui::Pos2> = (0..=PIT_STEPS)
+    let toe_point = |scale: f32, angle: f64| {
+        let wobble = 1.0 + 0.12 * (2.0 * angle + 0.6).sin() + 0.07 * (3.0 * angle + 1.9).sin() + 0.03 * (5.0 * angle).sin();
+        let reach = radius * scale * PIT_FIT * wobble as f32;
+        centre + egui::vec2(reach * PIT_WIDTH * angle.sin() as f32, -reach * angle.cos() as f32)
+    };
+    let step_angle = |step: u32| f64::from(step) / f64::from(PIT_STEPS) * std::f64::consts::TAU;
+    for scale in PIT_TOES {
+        let toe: Vec<egui::Pos2> = (0..=PIT_STEPS).map(|step| toe_point(scale, step_angle(step))).collect();
+        let crest: Vec<egui::Pos2> = (0..=PIT_STEPS)
             .map(|step| {
-                let angle = f64::from(step) / f64::from(PIT_STEPS) * std::f64::consts::TAU;
-                let wobble = 1.0 + 0.12 * (2.0 * angle + 0.6).sin() + 0.07 * (3.0 * angle + 1.9).sin() + 0.03 * (5.0 * angle).sin();
-                let reach = radius * scale * PIT_FIT * wobble as f32;
-                centre + egui::vec2(reach * PIT_WIDTH * angle.sin() as f32, -reach * angle.cos() as f32)
+                // Outward normal from the toe's own direction of travel.
+                let angle = step_angle(step);
+                let tangent = toe_point(scale, angle + 1e-3) - toe_point(scale, angle - 1e-3);
+                let outward = egui::vec2(tangent.y, -tangent.x).normalized();
+                toe[step as usize] + outward * (radius * PIT_FACE_RUN)
             })
             .collect();
-        painter.add(egui::Shape::line(points, egui::Stroke::new(if is_crest { 2.6 } else { 1.8 }, ink)));
+        painter.add(egui::Shape::line(crest, egui::Stroke::new(2.6, ink)));
+        painter.add(egui::Shape::line(toe, egui::Stroke::new(1.2, ink)));
     }
 
     for (zone, sector) in sectors.iter().enumerate() {
@@ -114,7 +128,7 @@ pub(crate) fn draw_rosette(ui: &mut egui::Ui, sectors: &[SlopeSector]) {
         );
         let middle = (sector.from + sector.to) / 2.0;
         painter.text(
-            on_circle(middle, 0.9),
+            on_circle(middle, 0.78),
             egui::Align2::CENTER_CENTER,
             format!("{}°", trim_number(sector.angle)),
             egui::FontId::proportional(15.0),

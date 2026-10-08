@@ -360,6 +360,9 @@ struct UiFrameContext<'a> {
 /// to, the way out, why it is being asked - goes in `minor` rather than being
 /// punctuated onto the end, so the banner can dim it. See [`ViewportMessage`].
 fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
+    if editor.optimization.start_pick.is_some() {
+        return Some(ViewportMessage::text(tr!("opt-pick-prompt")).minor(tr!("ui-esc-cancels")));
+    }
     if editor.drill_pattern_awaiting_shape_pick {
         return Some(ViewportMessage::text(tr!("ui-click-closed-polyline-use-blast")).minor(tr!("ui-esc-cancels")));
     }

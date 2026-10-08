@@ -5,8 +5,11 @@ use anyhow::Result;
 use crate::{
     app::{App, commands::file::FileDialogAction},
     i18n::tr,
-    model::optimization::{OptimizationScenario, ScenarioFile, unique_name},
-    ui::state::ScenarioDraft,
+    model::{
+        SceneEntityId,
+        optimization::{OptimizationScenario, ScenarioFile, unique_name},
+    },
+    ui::state::{ScenarioDraft, ShellStartPick},
     userspace_log, userspace_warn,
 };
 
@@ -211,6 +214,100 @@ impl<'a> App<'a> {
     pub(crate) fn set_optimization_reports_folder(&mut self, path: std::path::PathBuf) {
         if let Some(draft) = self.editor.optimization.draft.as_mut() {
             draft.scenario.output.reports_folder = path.display().to_string();
+        }
+    }
+
+    /// Start picking the directional shells' starting point: everything but the
+    /// scenario's block model is hidden, the view goes to plan fitted to the
+    /// model, and the editor steps aside until a block is clicked.
+    pub(crate) fn begin_shell_start_pick(&mut self) {
+        let Some(name) = self.editor.optimization.draft.as_ref().map(|draft| draft.scenario.block_model.clone()) else {
+            return;
+        };
+        let Some((block_model, marker_z)) = self
+            .block_models
+            .iter()
+            .find(|model| model.name == name && model.state.loaded)
+            .map(|model| (model.id, model.world_bounds().map_or(0.0, |(_, max)| max.z)))
+        else {
+            userspace_warn!("{}", tr!("opt-pick-needs-block-model"));
+            return;
+        };
+        let keep = SceneEntityId::BlockModel(block_model);
+        let previously_hidden = self.editor.hidden_handles.clone();
+        let everything = self
+            .scene_document
+            .objects()
+            .iter()
+            .map(|object| SceneEntityId::Object(object.id()))
+            .chain(self.triangulations.iter().map(|item| SceneEntityId::Triangulation(item.id)))
+            .chain(self.point_clouds.iter().map(|item| SceneEntityId::PointCloud(item.id)))
+            .chain(self.drill_holes.iter().map(|item| SceneEntityId::DrillHole(item.id)))
+            .chain(self.block_models.iter().map(|item| SceneEntityId::BlockModel(item.id)))
+            .filter(|entity| *entity != keep);
+        self.editor.hidden_handles.extend(everything);
+        self.editor.hidden_handles.remove(&keep);
+        self.editor.optimization.start_pick = Some(ShellStartPick {
+            block_model,
+            previously_hidden,
+            marker_z,
+        });
+        self.invalidate_geometry();
+        self.invalidate_overlay();
+        // Plan view and zoom to all, on what is left showing.
+        if let Some(graphics) = self.graphics.as_mut() {
+            graphics.fit_to_extents(
+                &self.scene_document,
+                &self.triangulations,
+                &self.block_models,
+                &self.drill_holes,
+                &self.point_clouds,
+                &self.editor.hidden_handles,
+            );
+        }
+        self.redraw_requested = true;
+    }
+
+    /// Put visibility back and bring the editor back, without a point.
+    pub(crate) fn cancel_shell_start_pick(&mut self) {
+        self.end_shell_start_pick();
+    }
+
+    fn end_shell_start_pick(&mut self) -> bool {
+        let Some(pick) = self.editor.optimization.start_pick.take() else {
+            return false;
+        };
+        self.editor.hidden_handles = pick.previously_hidden;
+        self.editor.viewport_pick_hover_label = None;
+        self.invalidate_geometry();
+        self.invalidate_overlay();
+        true
+    }
+
+    /// A click while picking: a block of the scenario's model sets the point.
+    pub(crate) fn pick_shell_start_at_cursor(&mut self) {
+        let Some(block_model) = self.editor.optimization.start_pick.as_ref().map(|pick| pick.block_model) else {
+            return;
+        };
+        let picked = self.graphics.as_ref().and_then(|graphics| {
+            graphics.pick_scene_entity_at_cursor(
+                crate::app::PICK_THRESHOLD_PX,
+                &self.triangulations,
+                &self.drill_holes,
+                &self.editor.hidden_handles,
+                &self.editor.frozen_handles,
+                false,
+            )
+        });
+        if let Some(pick) = picked
+            && pick.entity == SceneEntityId::BlockModel(block_model)
+        {
+            let world = pick.world;
+            if let Some(draft) = self.editor.optimization.draft.as_mut() {
+                draft.scenario.output.shell_start = Some((world.x, world.y));
+            }
+            self.end_shell_start_pick();
+            userspace_log!("{}", tr!("opt-pick-done", x = format!("{:.2}", world.x), y = format!("{:.2}", world.y)));
         }
     }
 }

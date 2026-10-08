@@ -499,6 +499,52 @@ pub(crate) enum ShellMode {
     Multiple,
 }
 
+/// The compass direction a directional shell advances in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum ShellDirection {
+    #[default]
+    North,
+    NorthEast,
+    East,
+    SouthEast,
+    South,
+    SouthWest,
+    West,
+    NorthWest,
+}
+
+impl ShellDirection {
+    pub(crate) const ALL: [Self; 8] = [
+        Self::North,
+        Self::NorthEast,
+        Self::East,
+        Self::SouthEast,
+        Self::South,
+        Self::SouthWest,
+        Self::West,
+        Self::NorthWest,
+    ];
+
+    /// Bearing in degrees clockwise from north. Read by the run (stage 2).
+    #[allow(dead_code)]
+    pub(crate) fn bearing(self) -> f64 {
+        Self::ALL.iter().position(|d| *d == self).unwrap_or(0) as f64 * 45.0
+    }
+
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::North => tr!("opt-direction-n"),
+            Self::NorthEast => tr!("opt-direction-ne"),
+            Self::East => tr!("opt-direction-e"),
+            Self::SouthEast => tr!("opt-direction-se"),
+            Self::South => tr!("opt-direction-s"),
+            Self::SouthWest => tr!("opt-direction-sw"),
+            Self::West => tr!("opt-direction-w"),
+            Self::NorthWest => tr!("opt-direction-nw"),
+        }
+    }
+}
+
 /// Where the shell number is written in the block model.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum ShellFieldMode {
@@ -519,6 +565,11 @@ pub(crate) struct OutputSettings {
     pub(crate) factor_to: f64,
     pub(crate) factor_step: f64,
     pub(crate) shell_count: u32,
+    /// Shells that advance in one direction from a starting point picked in the model.
+    pub(crate) use_directional_shells: bool,
+    pub(crate) shell_direction: ShellDirection,
+    /// Easting and northing of the picked starting point.
+    pub(crate) shell_start: Option<(f64, f64)>,
     pub(crate) create_reports: bool,
     /// Folder the reports are written to; empty until one is chosen.
     pub(crate) reports_folder: String,
@@ -541,6 +592,9 @@ impl Default for OutputSettings {
             factor_to: 1.0,
             factor_step: 0.05,
             shell_count: 11,
+            use_directional_shells: false,
+            shell_direction: ShellDirection::North,
+            shell_start: None,
             create_reports: true,
             reports_folder: String::new(),
             shell_as_solid: true,
@@ -597,6 +651,9 @@ pub(crate) struct OptimizationScenario {
     pub(crate) use_rocktype_costs: bool,
     /// One row per value of `cost_field` (the row's `rocktype` is that value).
     pub(crate) rocktype_costs: Vec<RocktypeCost>,
+    /// Rehabilitation cost per tonne, applied only to blocks the run finds
+    /// economically waste.
+    pub(crate) rehab_cost: HaulageCost,
     pub(crate) waste_haulage: HaulageCost,
     pub(crate) ore_haulage: HaulageCost,
 
@@ -633,6 +690,7 @@ impl OptimizationScenario {
             cost_field: String::new(),
             use_rocktype_costs: false,
             rocktype_costs: vec![RocktypeCost::default()],
+            rehab_cost: HaulageCost::default(),
             waste_haulage: HaulageCost::default(),
             ore_haulage: HaulageCost::default(),
             // One method, so a user with a single way of processing has
@@ -701,6 +759,7 @@ impl OptimizationScenario {
         if !quality.is_empty() && !fields.numeric.contains(&quality) {
             self.set_quality_field(String::new());
         }
+        keep(&mut self.rehab_cost.field, &fields.numeric);
         keep(&mut self.waste_haulage.field, &fields.numeric);
         keep(&mut self.ore_haulage.field, &fields.numeric);
         keep(&mut self.output.shell_field, &fields.all);
@@ -768,7 +827,7 @@ impl OptimizationScenario {
             self.cost_field.as_str(),
         ]
         .into();
-        for haulage in [&self.waste_haulage, &self.ore_haulage] {
+        for haulage in [&self.rehab_cost, &self.waste_haulage, &self.ore_haulage] {
             if haulage.mode == HaulageMode::Field {
                 used.insert(haulage.field.as_str());
             }

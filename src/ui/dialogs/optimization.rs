@@ -16,8 +16,8 @@ use crate::{
         block_model::OpenBlockModel,
         optimization::{
             AirMode, BlockModelFields, Constant, ConstantValue, ConstantsRow, ElementCost, FieldValue, HaulageCost, HaulageMode, OptimizationScenario, ProcessingMethod,
-            RevenueRow, RocktypeCost, RosetteIssue, RosetteRow, ShellFieldMode, ShellMode, SlopeMode, ValueType, group_names, move_constants_row, shell_count_for_step,
-            shell_step_for_count, unique_name,
+            RevenueRow, RocktypeCost, RosetteIssue, RosetteRow, ShellDirection, ShellFieldMode, ShellMode, SlopeMode, ValueType, group_names, move_constants_row,
+            shell_count_for_step, shell_step_for_count, unique_name,
         },
     },
     ui::{
@@ -41,6 +41,8 @@ const MENU_ICON: f32 = 22.0;
 const LIST_WIDTH: f32 = 560.0;
 const ICON_SIDE: f32 = 26.0;
 const LABEL_WIDTH: f32 = 270.0;
+/// Width of the starting point and mining direction stacks, label over control.
+const STACK_WIDTH: f32 = (CONTROL_WIDTH - 8.0) / 2.0;
 const CONTROL_WIDTH: f32 = 300.0;
 
 pub(crate) fn draw_optimization_dialogs(ui: &mut egui::Ui, editor: &mut EditorState, block_models: &[OpenBlockModel], project: &UiProjectView, commands: &mut Vec<UiCommand>) {
@@ -48,7 +50,16 @@ pub(crate) fn draw_optimization_dialogs(ui: &mut egui::Ui, editor: &mut EditorSt
     if editor.optimization.tick_runs() {
         ui.ctx().request_repaint_after(Duration::from_millis(50));
     }
-    if editor.optimization.draft.is_some() {
+    // While a starting point is picked in the viewport the editor steps aside;
+    // the prompt is the viewport banner (`ui::viewport_message`).
+    if editor.optimization.start_pick.is_some() {
+        editor.optimization.pick_was_active = true;
+    } else if editor.optimization.draft.is_some() {
+        // The Escape that cancelled the pick is still in this frame's input; it
+        // must not also close the editor it returns to.
+        if std::mem::take(&mut editor.optimization.pick_was_active) {
+            menu::dialog_cancel_pressed(ui.ctx());
+        }
         draw_scenario_editor(ui, &mut editor.optimization, block_models, project, commands);
     } else if editor.optimization.list_open {
         draw_scenarios_list(ui, &mut editor.optimization, commands);
@@ -908,6 +919,7 @@ fn draw_mining(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: &
         }
     });
 
+    draw_haulage(ui, "opt_rehab_cost", tr!("opt-rehab-cost"), &mut scenario.rehab_cost, &fields.numeric);
     draw_haulage(ui, "opt_waste_haulage", tr!("opt-waste-haulage"), &mut scenario.waste_haulage, &fields.numeric);
     draw_haulage(ui, "opt_ore_haulage", tr!("opt-ore-haulage"), &mut scenario.ore_haulage, &fields.numeric);
 }
@@ -1254,6 +1266,7 @@ fn draw_outputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: 
         let used = scenario.used_fields();
         fields.all.iter().filter(|name| !used.contains(name.as_str())).cloned().collect()
     };
+    let scenario_block_model = scenario.block_model.clone();
     let output = &mut scenario.output;
     if !output.shell_field.is_empty() && !free.contains(&output.shell_field) && fields.all.contains(&output.shell_field) {
         output.shell_field.clear();
@@ -1322,6 +1335,55 @@ fn draw_outputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: 
                     menu_note(ui, tr!("opt-factor-range-invalid"));
                 }
             });
+            let can_pick = !scenario_block_model.is_empty() && !fields.all.is_empty();
+            form_row_wide_with(
+                ui,
+                &mut *output,
+                |ui, output| {
+                    ui.checkbox(&mut output.use_directional_shells, tr!("opt-directional-shells"));
+                },
+                |ui, output| {
+                    ui.add_enabled_ui(output.use_directional_shells, |ui| {
+                        // Two stacks side by side, each a label over its control.
+                        ui.horizontal_top(|ui| {
+                            ui.spacing_mut().item_spacing = egui::vec2(8.0, 4.0);
+                            ui.allocate_ui_with_layout(egui::vec2(STACK_WIDTH, 0.0), egui::Layout::top_down(egui::Align::Center), |ui| {
+                                ui.set_width(STACK_WIDTH);
+                                ui.spacing_mut().item_spacing.y = 4.0;
+                                ui.label(tr!("opt-start-point-label"));
+                                // Picked shows the point's whole metres on hover; a click
+                                // picks again, with the old point marked in the model.
+                                let (label, hint) = match output.shell_start {
+                                    Some((x, y)) => (tr!("opt-picked"), tr!("opt-start-point", x = format!("{x:.0}"), y = format!("{y:.0}"))),
+                                    None => (tr!("opt-pick-start"), tr!("opt-pick-start-hint")),
+                                };
+                                let response = ui
+                                    .add_enabled(can_pick, MenuButton::new(label).selected(output.shell_start.is_some()).min_width(STACK_WIDTH))
+                                    .on_hover_text(hint);
+                                if output.shell_start.is_none() {
+                                    mark_invalid(ui, &response);
+                                }
+                                if response.clicked() {
+                                    commands.push(UiCommand::BeginShellStartPick);
+                                }
+                            });
+                            ui.allocate_ui_with_layout(egui::vec2(STACK_WIDTH, 0.0), egui::Layout::top_down(egui::Align::Center), |ui| {
+                                ui.set_width(STACK_WIDTH);
+                                ui.spacing_mut().item_spacing.y = 4.0;
+                                ui.label(tr!("opt-mining-direction"));
+                                egui::ComboBox::from_id_salt("opt_shell_direction")
+                                    .selected_text(output.shell_direction.label())
+                                    .width(STACK_WIDTH)
+                                    .show_ui(ui, |ui| {
+                                        for direction in ShellDirection::ALL {
+                                            ui.selectable_value(&mut output.shell_direction, direction, direction.label());
+                                        }
+                                    });
+                            });
+                        });
+                    });
+                },
+            );
         }
     });
 
