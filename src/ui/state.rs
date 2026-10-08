@@ -7995,6 +7995,10 @@ pub(crate) enum CalendarRow {
     /// Tonnes a loader reclaimed from stockpiles in the period. Kept apart
     /// from [`Self::DigTonnes`]: the two are not one "mined" figure.
     ReclaimTonnes,
+    /// How much of the loader's productive time the schedule used: hours
+    /// digging and reclaiming at its rates, over the hours its availability
+    /// and utilisation leave it.
+    ScheduledUtilisation,
     /// A crusher's maximum tonnes for the period, the one destination input the
     /// Calendar carries. Stockpile and dump capacities stay in Setup: they are a
     /// figure for the whole calculation, not for a day of it.
@@ -8043,6 +8047,7 @@ impl CalendarRow {
             self,
             Self::DigTonnes
                 | Self::ReclaimTonnes
+                | Self::ScheduledUtilisation
                 | Self::TruckHours
                 | Self::TruckCycle
                 | Self::TruckTonneKm

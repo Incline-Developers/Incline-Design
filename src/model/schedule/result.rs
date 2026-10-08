@@ -745,6 +745,13 @@ impl PeriodTotals {
     }
 
     /// Whether coverage stops part-way through this period.
+    /// Hours of `period` the calculation covers: the whole day, or the part
+    /// of it before the horizon ends.
+    pub(crate) fn covered_hours(&self, period: u32) -> Option<f64> {
+        let start = f64::from(period) * SCHEDULE_PERIOD_H;
+        self.covers(period).then(|| (self.coverage_end_h.min(start + SCHEDULE_PERIOD_H) - start).max(0.0))
+    }
+
     pub(crate) fn is_partial(&self, period: u32) -> bool {
         self.covers(period) && self.coverage_end_h < f64::from(period.saturating_add(1)) * SCHEDULE_PERIOD_H
     }
