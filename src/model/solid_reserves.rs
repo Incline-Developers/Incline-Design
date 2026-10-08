@@ -64,10 +64,12 @@ pub(crate) struct NumericTotal {
     pub(crate) missing: u64,
     /// Blocks in range whose weight was absent, zero or negative.
     pub(crate) unusable_weights: u64,
-    /// Blocks whose summed value was negative - a model's -99 for a blank,
-    /// typically - and so were read as nothing. A quantity of ground cannot be
-    /// less than none, and one such block must not take tonnes away from the
-    /// rest. Counted among `contributions`, as the zero it was read as.
+    /// Blocks whose value was negative - a model's -99 for a blank, typically -
+    /// and so were read as zero. A quantity of ground cannot be less than
+    /// none, and one such block must not take tonnes away from the rest; an
+    /// averaged grade reads it as a zero grade over its weight, the same way
+    /// the schedule does. Counted among `contributions`, as the zero it was
+    /// read as.
     pub(crate) negatives: u64,
 }
 impl NumericTotal {
@@ -777,7 +779,11 @@ fn add(group: &mut ReserveGroup, numeric: &[NumericField], index: usize, fractio
             Some(weights) => {
                 let weight = weights.at(index) * fraction;
                 if weight.is_finite() && weight > 0.0 {
-                    total.sum += value * weight;
+                    if value < 0.0 {
+                        total.negatives += 1;
+                    } else {
+                        total.sum += value * weight;
+                    }
                     total.weight += weight;
                     total.contributions += 1;
                 } else {
