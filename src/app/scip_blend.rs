@@ -551,7 +551,9 @@ pub(crate) fn improve(
         // Kept on its published value, whatever SCIP proved: an optimum of
         // the model's conservative valuation near a grade boundary can be
         // worth less as published than the seed.
-        let improved = out.published_objective.expect("replayed objective") >= found.replay.replayed_objective;
+        // Ranked as the model ranks them: the utilisation incentive beside the
+        // money, so a seed kept busier by it is not lost to one that is not.
+        let improved = out.replay.as_ref().expect("replayed incumbent").ranked_objective() >= found.replay.ranked_objective();
         if !improved {
             let bound = out.primary_bound.filter(|_| out.bound_source == BoundSource::Scip);
             let proven = options
@@ -859,7 +861,7 @@ fn solve_day_by_day(
         stitched.keep(&full, window, &solution, paid);
     }
 
-    let mut solution = stitched.finish();
+    let mut solution = stitched.finish(&full);
     if !full.grade_targets.is_empty() {
         let Some(checked) = replay_cancellable(&full, &solution, &cancel.signal()) else {
             return DayByDay::Stop(SolveTermination::Cancelled, "cancelled during target scoring".into());
@@ -1016,8 +1018,9 @@ const SEED_BAND_RELATIVE: f64 = 1e-3;
 fn dispatch_start(input: &BlendInput, deadline: Option<Instant>, cancel: &CancelFlag) -> Result<(HashMap<String, f64>, f64), String> {
     let greedy::Dispatched { mut solution, replay: checked } = greedy::dispatch_cancellable(input, &cancel.signal())?.ok_or("cancelled")?;
     // The rows are the dispatcher's own, so the objective they report is
-    // what the replay values them at.
-    solution.reported_objective = checked.replayed_objective;
+    // what the replay values them at, the utilisation incentive included as
+    // the model's objective includes it.
+    solution.reported_objective = checked.ranked_objective();
     if !checked.is_valid() {
         let issue = checked.issues.iter().chain(&checked.grade_issues).next().cloned().unwrap_or_default();
         return Err(format!("the replay rejected the dispatch schedule: {issue}"));

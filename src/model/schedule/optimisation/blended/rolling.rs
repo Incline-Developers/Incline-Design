@@ -529,7 +529,10 @@ impl Stitched {
         adjustments.movement_max_t = adjustments.movement_max_t.max(solution.adjustments.movement_max_t);
     }
 
-    pub(crate) fn finish(self) -> BlendSolution {
+    /// The stitched schedule, reporting the utilisation incentive over the
+    /// whole horizon as each window's model priced its own days.
+    pub(crate) fn finish(mut self, input: &BlendInput) -> BlendSolution {
+        self.solution.reported_objective += super::utilisation::value(input, &self.solution.movements);
         self.solution
     }
 }

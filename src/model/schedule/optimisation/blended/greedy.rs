@@ -43,7 +43,7 @@
 //! each dug tonne by how far its scheduled utilisation so far today - hours
 //! worked at its effective rates over the day's productive hours to the end
 //! of the interval - stands below its target, in bands of
-//! [`INCENTIVE_BAND`]. The lower bands pay more, so the program fills them
+//! [`super::utilisation::BAND`]. The lower bands pay more, so the program fills them
 //! first: the loader furthest behind is trucked up first. It is never money:
 //! segments are still kept only when the money is no less, and the reported
 //! value is the movements' own.
@@ -137,11 +137,6 @@ const TIE_WEIGHT: f64 = 1e-7;
 /// to the program's own rounding and still be kept.
 const MONEY_SLACK: f64 = 1e-7;
 
-/// Width of one band of the utilisation incentive, as a share of the day so
-/// far's productive hours. Each band pays one rate, so the rate falls in
-/// these steps as a loader's utilisation rises.
-const INCENTIVE_BAND: f64 = 0.05;
-
 /// A dispatch schedule and the replay's report on it.
 pub(crate) struct Dispatched {
     pub(crate) solution: BlendSolution,
@@ -176,7 +171,7 @@ pub(crate) fn dispatch_cancellable(input: &BlendInput, cancel: &AtomicBool) -> R
         log::warn!("hourly dispatch: bar changes within an interval were rejected by the replay ({issue}); one bar per interval instead");
         return Ok(Some(single));
     }
-    let (worth, baseline) = (segmented.replay.replayed_objective, single.replay.replayed_objective);
+    let (worth, baseline) = (segmented.replay.ranked_objective(), single.replay.ranked_objective());
     if single.replay.is_valid() && baseline > worth + MONEY_SLACK * worth.abs().max(1.0) {
         log::info!("hourly dispatch: one bar per interval is worth {baseline:.2} against {worth:.2} with bar changes within an interval; keeping it");
         return Ok(Some(single));
@@ -1056,17 +1051,14 @@ impl<'a> State<'a> {
             }
             let (worked, had) = self.utilisation.get(&(loader, interval.day())).copied().unwrap_or_default();
             let available = had + duration;
-            let mut lower = worked / available;
-            let mut band_hours = Vec::new();
+            let lower = worked / available;
             // Bands this interval can reach: it adds at most its own length.
-            let reach = lower + duration / available;
-            while lower < rate.utilisation_target.min(reach) - 1e-12 {
-                let upper = (lower + INCENTIVE_BAND).min(rate.utilisation_target);
-                let per_hour = rate.utilisation_incentive * 100.0 * (rate.utilisation_target - (lower + upper) / 2.0) * rate.dig_tph;
-                let col = problem.add_column(per_hour, 0.0..=(upper - lower) * available);
+            let reach = lower + duration / available + super::utilisation::BAND;
+            let mut band_hours = Vec::new();
+            for (hours, per_hour) in super::utilisation::bands(lower, reach, rate.utilisation_target, available, rate.utilisation_incentive, rate.dig_tph) {
+                let col = problem.add_column(per_hour, 0.0..=hours);
                 incentive.push((col, per_hour));
                 band_hours.push((col, 1.0));
-                lower = upper;
             }
             if band_hours.is_empty() {
                 continue;
@@ -1591,11 +1583,15 @@ impl<'a> State<'a> {
             .iter()
             .map(|row| row.tonnes_t * input.movements[row.candidate].value_per_tonne().unwrap_or(0.0))
             .sum();
+        // The incentive measured as the replay measures it - over whole days -
+        // so the report reconciles; the dispatch's own day-so-far pricing only
+        // steered which rows these are.
+        let incentive = super::utilisation::value(input, &movements);
         BlendSolution {
             movements,
             durations: self.durations,
             chunks: self.chunk_rows,
-            reported_objective: reported_objective + self.conditional - super::replay::target_penalty(input, &self.target_totals),
+            reported_objective: reported_objective + self.conditional - super::replay::target_penalty(input, &self.target_totals) + incentive,
             adjustments: ExtractionAdjustments::default(),
             drill_blast: self.chain.map(Chain::finish),
         }

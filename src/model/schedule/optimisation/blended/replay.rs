@@ -130,6 +130,11 @@ pub(crate) struct ReplayReport {
     pub(crate) movement_contained: BTreeMap<(usize, usize), Vec<f64>>,
     pub(crate) target_totals: BTreeMap<(usize, u32), (f64, f64)>,
     pub(crate) grade_target_penalty: f64,
+    /// What the schedule earns under the utilisation incentive, measured by
+    /// [`super::utilisation::value`]. Not money, so never part of
+    /// [`Self::replayed_objective`]; a solver's objective carries it, and
+    /// schedules are ranked by the two together ([`Self::ranked_objective`]).
+    pub(crate) utilisation_incentive: f64,
     /// Money corresponding to the contained-tonne feasibility tolerance in
     /// target allocation and deviation rows. Never replaces the replayed cost.
     pub(crate) target_value_tolerance: f64,
@@ -232,6 +237,12 @@ pub(crate) struct PileInterval {
 }
 
 impl ReplayReport {
+    /// What schedules are compared by: the replayed money plus what the
+    /// utilisation incentive earns. The money alone is what is published.
+    pub(crate) fn ranked_objective(&self) -> f64 {
+        self.replayed_objective + self.utilisation_incentive
+    }
+
     /// Publishable: every physical *and* grade check passed.
     pub(crate) fn is_valid(&self) -> bool {
         self.issues.is_empty() && self.grade_issues.is_empty()
@@ -815,6 +826,7 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
     checker.report.target_totals = target_totals(input, solution, &checker.report.movement_contained);
     checker.report.grade_target_penalty = target_penalty(input, &checker.report.target_totals);
     checker.report.replayed_objective -= checker.report.grade_target_penalty;
+    checker.report.utilisation_incentive = super::utilisation::value(input, &solution.movements);
     // Each reclaim cell allocates contained metal independently; each hinge
     // introduces a linear feasibility residual. Price those physical residuals
     // at their authored slopes instead of relaxing reconciliation by a dollar
@@ -840,7 +852,8 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
         checker.report.target_value_tolerance += REPLAY_TOLERANCE_T * slopes * (1.0 + cells.len() as f64);
     }
     checker.report.boundary_value_slack += checker.report.target_value_tolerance;
-    checker.report.objective_difference = checker.report.replayed_objective - solution.reported_objective;
+    // A solver's objective carries the incentive beside the money.
+    checker.report.objective_difference = checker.report.ranked_objective() - solution.reported_objective;
     let ceilings = super::input::grade_ceilings(input);
     let largest_unit_value = input
         .movements

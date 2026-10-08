@@ -1665,9 +1665,11 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
     }
 
     formulate_targets(rows, input)?;
+    formulate_utilisation(rows, input)?;
 
-    // Movement value less period grade penalties, maximised; each valued
-    // column carries its coefficient directly.
+    // Movement value less period grade penalties, plus the utilisation
+    // incentive, maximised; each valued column carries its coefficient
+    // directly.
     Ok(())
 }
 
@@ -2891,6 +2893,40 @@ pub(crate) fn chunk_key(chunk: usize, interval: usize, horizon: usize) -> usize 
 
 /// Allocate reclaim content to its routed movements using the same delivered
 /// blend, then price positive deviations on each destination's period total.
+/// The utilisation incentive over whole days: each loader-day's bands, filled
+/// by the hours it digs at its effective rates. See [`super::utilisation`];
+/// the bands pay less the higher they lie, so they fill from the bottom with
+/// nothing to enforce it.
+fn formulate_utilisation<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(), FormulationCancelled> {
+    let days = super::utilisation::loader_days(input);
+    if days.is_empty() {
+        return Ok(());
+    }
+    let movement = rows.columns().movement.clone();
+    for (index, day) in days.iter().enumerate() {
+        if rows.cancelled() {
+            return Err(FormulationCancelled);
+        }
+        let loader = input.loaders[day.loader].id;
+        let mut terms: Vec<(R::Var, f64)> = movement
+            .iter()
+            .filter(|((candidate, _, _), _)| {
+                let candidate = &input.movements[*candidate];
+                candidate.loader == loader && candidate.activity == Activity::Dig
+            })
+            .filter_map(|((_, k, _), tonnes)| day.intervals.iter().find(|(at, _)| at == k).map(|&(_, rate)| (tonnes.clone(), -1.0 / rate)))
+            .collect();
+        if terms.is_empty() {
+            continue;
+        }
+        for (band, &(hours, per_hour)) in day.bands.iter().enumerate() {
+            terms.push((rows.valued(hours, per_hour, &format!("utilband_{}_{index}_{band}", loader.0)), 1.0));
+        }
+        rows.leq(terms, 0.0, &format!("utilhours_{}_{index}", loader.0));
+    }
+    Ok(())
+}
+
 fn formulate_targets<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(), FormulationCancelled> {
     if input.grade_targets.is_empty() {
         return Ok(());

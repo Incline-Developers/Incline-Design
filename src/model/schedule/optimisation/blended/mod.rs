@@ -52,3 +52,4 @@ pub(crate) mod relaxation;
 pub(crate) mod replay;
 #[cfg(feature = "scip")]
 pub(crate) mod rolling;
+pub(crate) mod utilisation;
