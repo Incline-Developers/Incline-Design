@@ -221,6 +221,19 @@ pub(crate) struct IntervalRate {
     pub(crate) interval: usize,
     pub(crate) dig_tph: f64,
     pub(crate) reclaim_tph: f64,
+    /// The scheduled utilisation, a fraction, the dig incentive pays up to
+    /// on this interval's day.
+    #[serde(default = "full_utilisation")]
+    pub(crate) utilisation_target: f64,
+    /// Objective weight per dug tonne per percentage point the loader's
+    /// scheduled utilisation so far today stands below the target. Steers
+    /// the hourly dispatch only; never money.
+    #[serde(default)]
+    pub(crate) utilisation_incentive: f64,
+}
+
+fn full_utilisation() -> f64 {
+    1.0
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]

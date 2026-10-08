@@ -39,6 +39,15 @@
 //! value per tonne, and so are authored routing preferences. Soft targets
 //! subtract the running destination-period penalty from that objective.
 //!
+//! A loader with a utilisation incentive is paid, in the objective only, for
+//! each dug tonne by how far its scheduled utilisation so far today - hours
+//! worked at its effective rates over the day's productive hours to the end
+//! of the interval - stands below its target, in bands of
+//! [`INCENTIVE_BAND`]. The lower bands pay more, so the program fills them
+//! first: the loader furthest behind is trucked up first. It is never money:
+//! segments are still kept only when the money is no less, and the reported
+//! value is the movements' own.
+//!
 //! Nothing here looks past the interval, so it claims nothing about the
 //! horizon's optimum: stockpiling for later, saving a crusher day for better
 //! feed and the like are the whole-horizon solve's to find. Its answer is
@@ -128,6 +137,11 @@ const TIE_WEIGHT: f64 = 1e-7;
 /// to the program's own rounding and still be kept.
 const MONEY_SLACK: f64 = 1e-7;
 
+/// Width of one band of the utilisation incentive, as a share of the day so
+/// far's productive hours. Each band pays one rate, so the rate falls in
+/// these steps as a loader's utilisation rises.
+const INCENTIVE_BAND: f64 = 0.05;
+
 /// A dispatch schedule and the replay's report on it.
 pub(crate) struct Dispatched {
     pub(crate) solution: BlendSolution,
@@ -195,6 +209,10 @@ fn dispatch(input: &BlendInput, cancel: &AtomicBool, segmented: bool) -> Result<
 struct State<'a> {
     input: &'a BlendInput,
     target_totals: BTreeMap<(usize, u32), (f64, f64)>,
+    /// Per (loader, day): hours worked at the loader's effective rates and
+    /// productive hours it had, over the intervals of the day so far. Their
+    /// ratio is the scheduled utilisation the incentive is priced against.
+    utilisation: BTreeMap<(usize, u32), (f64, f64)>,
     ground: BTreeMap<GroundId, f64>,
     /// Released opening tonnes and contained quantity per grade; a chunked
     /// pile's is the sum of its chunks.
@@ -394,6 +412,7 @@ impl<'a> State<'a> {
         Self {
             input,
             target_totals: input.target_opening.iter().map(|&(i, p, t, q)| ((i, p), (t, q))).collect(),
+            utilisation: BTreeMap::new(),
             ground: input.ground.iter().map(|source| (source.id, source.tonnes_t)).collect(),
             piles: input.piles.iter().map(|pile| (pile.id, pile.total_opening(input.grades.count()))).collect(),
             chunks: input
@@ -1016,6 +1035,46 @@ impl<'a> State<'a> {
             }
         }
 
+        // The utilisation incentive: each loader's dug hours climb through
+        // bands of its scheduled utilisation so far today, from where it
+        // stands up to its target, each band paying the incentive for every
+        // point it lies below the target. The rate falls band by band, so the
+        // program fills the lower, better-paid bands first by itself - a
+        // concave reward, exact as a linear program. Never money.
+        let mut incentive: Vec<(Col, f64)> = Vec::new();
+        for (loader, entry) in input.loaders.iter().enumerate() {
+            let Some(rate) = interval_rate(entry, interval.index).filter(|rate| rate.utilisation_incentive > 0.0 && rate.dig_tph > 0.0) else {
+                continue;
+            };
+            let dug: Vec<(Col, f64)> = extractions
+                .iter()
+                .filter(|((by, _, _), _)| *by == loader)
+                .map(|(_, col)| (*col, -1.0 / rate.dig_tph))
+                .collect();
+            if dug.is_empty() || duration <= 0.0 {
+                continue;
+            }
+            let (worked, had) = self.utilisation.get(&(loader, interval.day())).copied().unwrap_or_default();
+            let available = had + duration;
+            let mut lower = worked / available;
+            let mut band_hours = Vec::new();
+            // Bands this interval can reach: it adds at most its own length.
+            let reach = lower + duration / available;
+            while lower < rate.utilisation_target.min(reach) - 1e-12 {
+                let upper = (lower + INCENTIVE_BAND).min(rate.utilisation_target);
+                let per_hour = rate.utilisation_incentive * 100.0 * (rate.utilisation_target - (lower + upper) / 2.0) * rate.dig_tph;
+                let col = problem.add_column(per_hour, 0.0..=(upper - lower) * available);
+                incentive.push((col, per_hour));
+                band_hours.push((col, 1.0));
+                lower = upper;
+            }
+            if band_hours.is_empty() {
+                continue;
+            }
+            band_hours.extend(dug);
+            problem.add_row(..=0.0, band_hours);
+        }
+
         if columns.is_empty() && extractions.is_empty() {
             return Ok(Plan {
                 durations: (0..segments).map(|segment| if segment == 0 { duration } else { 0.0 }).collect(),
@@ -1049,8 +1108,9 @@ impl<'a> State<'a> {
         let solution = problem.maximise().map_err(|reason| format!("interval {}: {reason}", interval.index))?;
         let rows: Vec<(usize, usize, f64)> = columns.into_iter().map(|(index, segment, col)| (index, segment, solution[col.index()].max(0.0))).collect();
         let objective = problem.value(&solution);
+        let steered: f64 = incentive.iter().map(|(col, per_hour)| per_hour * solution[col.index()].max(0.0)).sum();
         Ok(Plan {
-            money: objective - rows.iter().map(|(index, _, tonnes)| self.credit[*index] * tonnes).sum::<f64>(),
+            money: objective - steered - rows.iter().map(|(index, _, tonnes)| self.credit[*index] * tonnes).sum::<f64>(),
             rows,
             extracted: extractions.into_iter().map(|(key, col)| (key, solution[col.index()].max(0.0))).collect(),
             durations: lengths.iter().map(|col| solution[col.index()].max(0.0)).collect(),
@@ -1187,6 +1247,28 @@ impl<'a> State<'a> {
             if let SourceId::Stockpile(pile) = input.movements[*index].source {
                 *pile_drawn.entry(pile).or_default() += tonnes;
             }
+        }
+        // The day so far's utilisation, for the incentive: every loader with
+        // productive time this interval had it, and worked the hours its
+        // tonnes took at its effective rates - reclaiming included, as busy.
+        for (loader, entry) in input.loaders.iter().enumerate() {
+            let Some(rate) = interval_rate(entry, k).filter(|rate| rate.dig_tph > 0.0 || rate.reclaim_tph > 0.0) else {
+                continue;
+            };
+            let worked: f64 = rows
+                .iter()
+                .filter(|(index, _, _)| input.movements[*index].loader == entry.id)
+                .map(|(index, _, tonnes)| {
+                    let per_hour = match input.movements[*index].activity {
+                        Activity::Dig => rate.dig_tph,
+                        Activity::Reclaim => rate.reclaim_tph,
+                    };
+                    if per_hour > 0.0 { tonnes / per_hour } else { 0.0 }
+                })
+                .sum();
+            let day = self.utilisation.entry((loader, interval.day())).or_default();
+            day.0 += worked;
+            day.1 += duration;
         }
         for (index, segment, tonnes) in rows {
             let candidate = &input.movements[index];

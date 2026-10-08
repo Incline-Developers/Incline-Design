@@ -538,7 +538,10 @@ const TRUCK_ROWS: [CalendarRow; 6] = [
 ///
 /// Dig and reclaim tonnes are two rows, never summed: reclaim moves material
 /// that was already mined.
-const LOADER_ROWS: [CalendarRow; 7] = [
+///
+/// The utilisation target and incentive sit beside the scheduled utilisation
+/// they steer, under the tonnes it is worked out from.
+const LOADER_ROWS: [CalendarRow; 9] = [
     CalendarRow::Input(CalendarField::Availability),
     CalendarRow::Input(CalendarField::Utilisation),
     CalendarRow::Input(CalendarField::Rate),
@@ -546,6 +549,8 @@ const LOADER_ROWS: [CalendarRow; 7] = [
     CalendarRow::DigTonnes,
     CalendarRow::ReclaimTonnes,
     CalendarRow::ScheduledUtilisation,
+    CalendarRow::Input(CalendarField::UtilisationTarget),
+    CalendarRow::Input(CalendarField::UtilisationIncentive),
 ];
 
 /// A dozer's, drill's or MPU's rows: its time and its rate, and what it got
@@ -947,6 +952,8 @@ fn row_label(row: CalendarRow, destination: Option<DestinationKind>, currency: &
         CalendarRow::Input(CalendarField::Utilisation) => tr!("schedule-calendar-utilisation"),
         CalendarRow::Input(CalendarField::Rate) => tr!("schedule-calendar-dig-rate"),
         CalendarRow::Input(CalendarField::ReclaimRate) => tr!("schedule-calendar-reclaim-rate"),
+        CalendarRow::Input(CalendarField::UtilisationTarget) => tr!("schedule-calendar-utilisation-target"),
+        CalendarRow::Input(CalendarField::UtilisationIncentive) => tr!("schedule-calendar-utilisation-incentive", currency = currency.to_owned()),
         CalendarRow::Truck(TruckField::Units) => tr!("truck-calendar-units"),
         CalendarRow::Truck(TruckField::Availability) => tr!("truck-calendar-availability"),
         CalendarRow::Truck(TruckField::Utilisation) => tr!("truck-calendar-utilisation"),
@@ -1517,6 +1524,8 @@ fn explicit_value(agent: &LoaderAgent, address: CalendarCellAddress) -> Option<f
         CalendarCell::Default => match field {
             CalendarField::Availability => Some(agent.calendar.default_availability),
             CalendarField::Utilisation => Some(agent.calendar.default_utilisation),
+            CalendarField::UtilisationTarget => Some(agent.calendar.default_utilisation_target),
+            CalendarField::UtilisationIncentive => Some(agent.calendar.default_utilisation_incentive),
             CalendarField::Rate | CalendarField::ReclaimRate => None,
         },
         CalendarCell::Period(period) => agent.calendar.periods.get(&period).and_then(|value| match field {
@@ -1524,6 +1533,8 @@ fn explicit_value(agent: &LoaderAgent, address: CalendarCellAddress) -> Option<f
             CalendarField::Utilisation => value.utilisation,
             CalendarField::Rate => value.rate_tph,
             CalendarField::ReclaimRate => value.reclaim_rate_tph,
+            CalendarField::UtilisationTarget => value.utilisation_target,
+            CalendarField::UtilisationIncentive => value.utilisation_incentive,
         }),
     }
 }
@@ -1654,6 +1665,26 @@ fn resolved_hover(plan: &SchedulePlan, agent: &LoaderAgent, address: CalendarCel
     let Some(class) = plan.class(agent.class_id) else {
         return tr!("schedule-error-unknown-class");
     };
+    // The incentive pair resolves on its own: neither is a rate or a share of
+    // the machine's time.
+    if matches!(field, CalendarField::UtilisationTarget | CalendarField::UtilisationIncentive) {
+        let period = match address.cell {
+            CalendarCell::Default => CalendarPeriod(0),
+            CalendarCell::Period(period) => period,
+        };
+        let (target, incentive) = agent.calendar.incentive_at(period);
+        let value = if field == CalendarField::UtilisationTarget { target } else { incentive };
+        let source = if explicit_value(agent, address).is_none() {
+            tr!("schedule-calendar-loader-default")
+        } else {
+            tr!("schedule-calendar-explicit")
+        };
+        return format!(
+            "{}\n{}",
+            tr!("schedule-calendar-resolved", value = format_value(field, value, ""), source = source),
+            tr!("schedule-calendar-utilisation-incentive-help")
+        );
+    }
     if address.cell == CalendarCell::Default && matches!(field, CalendarField::Rate | CalendarField::ReclaimRate) {
         return tr!(
             "schedule-calendar-class-default",
@@ -1690,6 +1721,8 @@ fn resolved_hover(plan: &SchedulePlan, agent: &LoaderAgent, address: CalendarCel
                 tr!("schedule-calendar-explicit")
             },
         ),
+        // Answered above.
+        CalendarField::UtilisationTarget | CalendarField::UtilisationIncentive => return String::new(),
         CalendarField::Rate | CalendarField::ReclaimRate => (
             values.rate_tph,
             if explicit_value(agent, address).is_none() {
@@ -1705,8 +1738,8 @@ fn resolved_hover(plan: &SchedulePlan, agent: &LoaderAgent, address: CalendarCel
 /// Percentages are stored as fractions and shown out of a hundred.
 fn scaled(field: CalendarField, value: f64) -> f64 {
     match field {
-        CalendarField::Rate | CalendarField::ReclaimRate => value,
-        CalendarField::Availability | CalendarField::Utilisation => value * 100.0,
+        CalendarField::Rate | CalendarField::ReclaimRate | CalendarField::UtilisationIncentive => value,
+        CalendarField::Availability | CalendarField::Utilisation | CalendarField::UtilisationTarget => value * 100.0,
     }
 }
 
@@ -1754,7 +1787,8 @@ fn format_value(field: CalendarField, value: f64, unit: &str) -> String {
     let text = trimmed_number(scaled(field, value)).separate_with_commas();
     match field {
         CalendarField::Rate | CalendarField::ReclaimRate => format!("{text} {unit}"),
-        CalendarField::Availability | CalendarField::Utilisation => format!("{text}%"),
+        CalendarField::Availability | CalendarField::Utilisation | CalendarField::UtilisationTarget => format!("{text}%"),
+        CalendarField::UtilisationIncentive => text,
     }
 }
 
@@ -1764,15 +1798,19 @@ fn parse_value(field: CalendarField, text: &str) -> Result<Option<f64>, String> 
         return Ok(None);
     }
     let number = match field {
-        CalendarField::Availability | CalendarField::Utilisation => trimmed.strip_suffix('%').unwrap_or(trimmed).trim(),
-        CalendarField::Rate | CalendarField::ReclaimRate => trimmed,
+        CalendarField::Availability | CalendarField::Utilisation | CalendarField::UtilisationTarget => trimmed.strip_suffix('%').unwrap_or(trimmed).trim(),
+        CalendarField::Rate | CalendarField::ReclaimRate | CalendarField::UtilisationIncentive => trimmed,
     };
     let parsed = number.parse::<f64>().map_err(|_| tr!("schedule-calendar-invalid-number"))?;
     match field {
-        CalendarField::Availability | CalendarField::Utilisation if parsed.is_finite() && (0.0..=100.0).contains(&parsed) => Ok(Some(parsed / 100.0)),
+        CalendarField::Availability | CalendarField::Utilisation | CalendarField::UtilisationTarget if parsed.is_finite() && (0.0..=100.0).contains(&parsed) => {
+            Ok(Some(parsed / 100.0))
+        }
         CalendarField::Rate | CalendarField::ReclaimRate if parsed.is_finite() && parsed > 0.0 => Ok(Some(parsed)),
-        CalendarField::Availability | CalendarField::Utilisation => Err(tr!("schedule-calendar-invalid-percentage")),
+        CalendarField::UtilisationIncentive if parsed.is_finite() && parsed >= 0.0 => Ok(Some(parsed)),
+        CalendarField::Availability | CalendarField::Utilisation | CalendarField::UtilisationTarget => Err(tr!("schedule-calendar-invalid-percentage")),
         CalendarField::Rate | CalendarField::ReclaimRate => Err(tr!("schedule-error-invalid-rate")),
+        CalendarField::UtilisationIncentive => Err(tr!("schedule-calendar-invalid-incentive")),
     }
 }
 

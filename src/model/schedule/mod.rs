@@ -472,6 +472,7 @@ pub(crate) enum ScheduleError {
     /// A dig rate that is zero, negative, infinite or NaN.
     InvalidRate,
     InvalidCalendarPercentage,
+    InvalidUtilisationIncentive,
     EmptyCalendarOverride,
     ReadOnlyCalendarCell,
     DuplicateCalendarCell,
@@ -630,6 +631,7 @@ impl ScheduleError {
             Self::DuplicateName(name) => tr!("schedule-error-duplicate-name", name = name.clone()),
             Self::InvalidRate => tr!("schedule-error-invalid-rate"),
             Self::InvalidCalendarPercentage => tr!("schedule-calendar-invalid-percentage"),
+            Self::InvalidUtilisationIncentive => tr!("schedule-calendar-invalid-incentive"),
             Self::EmptyCalendarOverride => tr!("schedule-calendar-empty-override"),
             Self::ReadOnlyCalendarCell => tr!("schedule-calendar-read-only"),
             Self::DuplicateCalendarCell => tr!("schedule-calendar-duplicate-cell"),
