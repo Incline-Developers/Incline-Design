@@ -8,12 +8,12 @@
 //! Ctrl-Z. And it refuses rather than guesses: the draft carries the session
 //! it was opened under, the bar it edits, the order it was opened from and,
 //! inside each new member, the run generation it was picked against, so a
-//! project switch, a deleted bar, an undo underneath it or a Dig Strips rerun
+//! project switch, a deleted bar, an undo underneath it or a Reserving rerun
 //! each end in a stated refusal instead of in an overwrite.
 //!
 //! **Opening it starts nothing.** The window reads the artifacts a completed
 //! run committed, exactly as the Solids pages do; it sets no pipeline demand,
-//! and a project whose Dig Strips stage has not been run opens onto a stated
+//! and a project whose Reserving stage has not been run opens onto a stated
 //! reason rather than onto an empty pit.
 
 use std::collections::BTreeSet;

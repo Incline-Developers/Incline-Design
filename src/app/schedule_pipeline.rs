@@ -1397,7 +1397,7 @@ impl crate::app::App<'_> {
             }
             // As Haulage does: the Schedule's setup runs what it depends on.
             Err(reason @ (PlanningNotReady::NotRun { .. } | PlanningNotReady::Stale { .. })) => {
-                return if self.resume_planning_stages() {
+                return if self.resume_planning_stages(crate::ui::state::SolidsStep::LAST) {
                     StageOutcome::Working {
                         message: Some(tr!("schedule-stage-waiting-solids", reason = reason.describe())),
                     }

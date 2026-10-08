@@ -933,7 +933,7 @@ haul-blocks-selected =
        *[other] { $count } blocks selected
     }
 haul-flow-hover = { $rate } t/h loaded
-haul-flow-legend = Loaded hauls now · stripes run faster and wider with tonnage · busiest { $rate } t/h
+haul-flow-legend = Loaded hauls · stripe speed and width show tonnes per hour · busiest { $rate } t/h
 haul-role-help = Trucks deliver to a dump point and load from a stockpile's reclaim point. A stockpile with no reclaim point is loaded at its dump point.
 haul-node-on = End of { $road }
 haul-selection = Selection
@@ -1771,7 +1771,7 @@ sequence-material-unmapped = no block model maps a value onto the chosen field
 ## Schedule → the floating sequence editor
 
 sequence-editor-title = Edit Sequence — ⁨{ $bar }⁩
-sequence-editor-no-run = ⁨{ $reason }⁩ Run Solids → Dig Strips to pick dig blocks for this bar.
+sequence-editor-no-run = ⁨{ $reason }⁩ Run Solids → Reserving to pick dig blocks for this bar.
 sequence-editor-order = Dig order
 sequence-editor-empty-order = No dig blocks yet
 sequence-editor-unresolved-kept = ⁨{ $count }⁩ of these references could not be found in the current run. They stay in the order, and stay removable, until you decide what to do with them.
@@ -1875,6 +1875,12 @@ planning-blast-count =
        *[other] { $count } blasts
     }
 planning-dig-strips = Dig Strips
+planning-reserving = Reserving
+planning-reserving-item = Item
+planning-reserving-finding = Finding
+planning-reserving-not-run = Run this step to cut the dig blocks out of the solids and measure their reserves. Auto leaves it for you to run.
+planning-reserving-stale = The strips or the ground have changed since the blocks were cut. Run this step again to cut and measure them.
+planning-reserving-complete = { $blocks } dig blocks cut and measured. Inspect them in Solids View.
 planning-dig-blocks = Dig Blocks
 planning-dig-blocks-empty = Select a flitch to see its dig blocks
 planning-dig-block = Block
@@ -1918,7 +1924,7 @@ planning-reserve-capacity-only = Geometry only · no block model assigned, so th
 stage-state-not-run = Not run
 stage-stale-hint = Edited since its last run. Run Step or Run All brings it up to date, or tick Auto to have it rerun on its own; the steps after it keep their earlier results until then.
 planning-auto = Auto
-planning-auto-note = Rerun out-of-date steps half a second after your last edit.
+planning-auto-note = Rerun out-of-date steps half a second after your last edit. Reserving is left for you to run.
 schedule-setup-auto-note = Rerun out-of-date steps and recalculate the schedule after your last edit. The same switch as the Gantt's Auto.
 stage-state-stale = Stale
 stage-state-blocked = Blocked
@@ -3981,7 +3987,7 @@ solids-flitch-rl = Flitch RL
 solids-contents = Contents
 
 ## Animate strings
-animate-calculated-solids-unavailable-run = Calculated solids are unavailable. Run Solids through Dig Strips.
+animate-calculated-solids-unavailable-run = Calculated solids are unavailable. Run Solids through Reserving.
 animate-updating-schedule-animation = Updating schedule animation
 animate-block-volume-could-not = A block's volume could not be measured.
 animate-block-retains-more-material = A block retains more material the further it is cut back.
