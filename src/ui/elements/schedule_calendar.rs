@@ -78,6 +78,9 @@ struct DestinationRow {
 /// anything.
 struct Figures<'a> {
     result: Option<&'a CalculatedSchedule>,
+    /// The plan the result was calculated from, for the loader rates its
+    /// utilisation is measured against.
+    plan: &'a SchedulePlan,
     /// Grade names, aligned with the result's grades.
     grades: Vec<String>,
     currency: String,
@@ -90,6 +93,23 @@ impl Figures<'_> {
             .iter()
             .find(|(id, _)| *id == field)
             .map_or_else(|| field.0.to_string(), |(_, name)| name.clone())
+    }
+
+    /// A loader's hours working and hours it had in one period: tonnes over
+    /// the rate it moves them at, and the covered hours its availability and
+    /// utilisation leave. `None` outside the calculated horizon.
+    fn utilisation_hours(&self, agent: crate::model::schedule::LoaderAgentId, period: u32) -> Option<(f64, f64)> {
+        use crate::model::schedule::RateKind;
+        let periods = &self.result?.periods;
+        let hours = periods.covered_hours(period)?;
+        let loader = self.plan.agent(agent)?;
+        let class = self.plan.class(loader.class_id)?;
+        let at = CalendarPeriod(period);
+        let dig = loader.calendar.rate_values_at(at, RateKind::Dig, class.default_dig_rate_tph).ok()?;
+        let reclaim = loader.calendar.rate_values_at(at, RateKind::Reclaim, class.default_reclaim_rate_tph).ok()?;
+        let working = |tonnes: f64, rate: f64| if rate > 0.0 { tonnes / rate } else { 0.0 };
+        let worked = working(periods.dig(agent, period).unwrap_or(0.0), dig.rate_tph) + working(periods.reclaim(agent, period).unwrap_or(0.0), reclaim.rate_tph);
+        Some((worked, hours * dig.availability * dig.utilisation))
     }
 
     /// The day's priced target behind a grade Actual cell, when it received tonnes.
@@ -113,6 +133,12 @@ impl Figures<'_> {
         let value = match address.row {
             CalendarRow::DigTonnes => periods.dig(address.agent()?, period)?,
             CalendarRow::ReclaimTonnes => periods.reclaim(address.agent()?, period)?,
+            // A machine with no productive hours that day has nothing to be a
+            // share of: blank, not 0% or a division by zero.
+            CalendarRow::ScheduledUtilisation => match self.utilisation_hours(address.agent()?, period)? {
+                (worked, available) if available > 0.0 => worked / available * 100.0,
+                _ => return None,
+            },
             CalendarRow::TruckHours => periods.truck_hours(address.truck()?, period)?,
             CalendarRow::TruckCycle => periods.truck_haul(address.truck()?, period)?.cycle_minutes(),
             CalendarRow::TruckTonneKm => periods.truck_haul(address.truck()?, period)?.loaded_t_km,
@@ -159,6 +185,18 @@ impl Figures<'_> {
         Some(match row {
             CalendarRow::DigTonnes => sum(&|period| periods.dig(owner.agent()?, period)),
             CalendarRow::ReclaimTonnes => sum(&|period| periods.reclaim(owner.agent()?, period)),
+            // Hours worked over hours had, across the schedule - not an
+            // average of the days, which would weigh a part day as a whole one.
+            CalendarRow::ScheduledUtilisation => {
+                let agent = owner.agent()?;
+                let (worked, available) = (0..covered)
+                    .filter_map(|period| self.utilisation_hours(agent, period))
+                    .fold((0.0, 0.0), |(worked, available), (w, a)| (worked + w, available + a));
+                if available <= 0.0 {
+                    return None;
+                }
+                worked / available * 100.0
+            }
             CalendarRow::BlastWork => result.drill_blast.as_ref()?.worked(owner.agent()?, 0.0, f64::INFINITY)?,
             CalendarRow::TruckHours => sum(&|period| periods.truck_hours(owner.truck()?, period)),
             CalendarRow::TruckCycle => {
@@ -258,6 +296,7 @@ pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project:
     let result = editor.schedule_result.clone();
     let figures = Figures {
         result: result.as_deref(),
+        plan,
         grades: result
             .as_deref()
             .map(|result| {
@@ -499,13 +538,14 @@ const TRUCK_ROWS: [CalendarRow; 6] = [
 ///
 /// Dig and reclaim tonnes are two rows, never summed: reclaim moves material
 /// that was already mined.
-const LOADER_ROWS: [CalendarRow; 6] = [
+const LOADER_ROWS: [CalendarRow; 7] = [
     CalendarRow::Input(CalendarField::Availability),
     CalendarRow::Input(CalendarField::Utilisation),
     CalendarRow::Input(CalendarField::Rate),
     CalendarRow::Input(CalendarField::ReclaimRate),
     CalendarRow::DigTonnes,
     CalendarRow::ReclaimTonnes,
+    CalendarRow::ScheduledUtilisation,
 ];
 
 /// A dozer's, drill's or MPU's rows: its time and its rate, and what it got
@@ -915,6 +955,7 @@ fn row_label(row: CalendarRow, destination: Option<DestinationKind>, currency: &
         CalendarRow::TruckTonneKm => tr!("haul-tonne-km"),
         CalendarRow::DigTonnes => tr!("schedule-calendar-dig-tonnes"),
         CalendarRow::ReclaimTonnes => tr!("schedule-calendar-reclaim-tonnes"),
+        CalendarRow::ScheduledUtilisation => tr!("schedule-calendar-scheduled-utilisation"),
         CalendarRow::BlastWork => tr!("schedule-calendar-blast-work", unit = ""),
         CalendarRow::CrusherLimit => tr!("destination-calendar-limit"),
         CalendarRow::PileMode => tr!("pile-mode-row"),
@@ -1178,6 +1219,7 @@ fn format_figure(row: CalendarRow, value: f64) -> String {
         CalendarRow::TruckTonneKm => format_tonnes(value),
         CalendarRow::GradeActual(_) => trimmed_number(value),
         CalendarRow::Value => format_money(value),
+        CalendarRow::ScheduledUtilisation => format!("{value:.0}%"),
         _ => format_tonnes(value),
     }
 }
@@ -1187,6 +1229,7 @@ fn raw_figure(row: CalendarRow, value: f64) -> String {
     match row {
         CalendarRow::GradeActual(_) => trimmed_number(value),
         CalendarRow::Value => format!("{:.2}", if value == 0.0 { 0.0 } else { value }),
+        CalendarRow::ScheduledUtilisation => format!("{value:.1}"),
         _ => tonnes_number(value),
     }
 }
@@ -1260,6 +1303,16 @@ fn hover_text(plan: &SchedulePlan, destinations: &[DestinationRow], agent: Optio
                 lines.push(tr!("schedule-calendar-tonnes-partial", hours = trimmed_number(figures.result?.periods.coverage_end_h())));
             }
             (!lines.is_empty()).then(|| lines.join("\n"))
+        }
+        // The hours behind the share, and what the share is of.
+        CalendarRow::ScheduledUtilisation => {
+            let CalendarCell::Period(CalendarPeriod(period)) = address.cell else { return None };
+            let (worked, available) = figures.utilisation_hours(address.agent()?, period)?;
+            Some(format!(
+                "{}\n{}",
+                tr!("schedule-calendar-utilisation-hours", worked = format_hours(worked), available = format_hours(available)),
+                tr!("schedule-calendar-scheduled-utilisation-help")
+            ))
         }
         row => {
             let kind = destination_kind(destinations, address);
@@ -1443,6 +1496,7 @@ fn editable(address: CalendarCellAddress) -> bool {
         CalendarRow::DigTonnes
         | CalendarRow::BlastWork
         | CalendarRow::ReclaimTonnes
+        | CalendarRow::ScheduledUtilisation
         | CalendarRow::TruckHours
         | CalendarRow::TruckCycle
         | CalendarRow::TruckTonneKm
