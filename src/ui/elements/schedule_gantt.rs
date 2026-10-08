@@ -577,16 +577,6 @@ pub(crate) fn draw_run_status(ui: &mut egui::Ui, editor: &EditorState) {
     ui.add(egui::Label::new(text).truncate()).on_hover_ui(|ui| {
         ui.set_max_width(520.0);
         ui.label(&editor.schedule_run_status);
-        if let Some(schedule) = &editor.schedule_result {
-            let started: f64 = schedule.ground.iter().map(|balance| balance.started_t).sum();
-            let remaining: f64 = schedule.ground.iter().map(|balance| balance.remaining_t).sum();
-            ui.label(tr!(
-                "schedule-result-summary",
-                started = format_tonnes(started),
-                extracted = format_tonnes(started - remaining),
-                remaining = format_tonnes(remaining)
-            ));
-        }
         for line in &editor.schedule_run_details {
             ui.add(egui::Label::new(egui::RichText::new(line).weak()).wrap());
         }

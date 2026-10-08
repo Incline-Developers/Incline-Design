@@ -1671,6 +1671,7 @@ schedule-run-no-bars = Drag Dig from the palette onto a loader to start the sche
 schedule-run-empty-bars = Add dig blocks to a bar to start the schedule: right-click it, then Edit Sequence.
 schedule-run-stale = Run { $run } is out of date. The calculated work is hidden until the schedule is run again.
 schedule-result-summary = Unique ground: { $started } t · extracted: { $extracted } t · remaining: { $remaining } t
+schedule-run-still-showing = Still showing run { $run }: { $status }
 schedule-bar-reclaimed = Reclaimed: { $tonnes } t
 schedule-bar-reclaimed-of = Reclaimed: { $tonnes } t of the { $cap } t cap
 schedule-dispatch-reclaim = Reclaiming

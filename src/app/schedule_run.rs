@@ -861,12 +861,18 @@ impl crate::app::App<'_> {
                 Some(reason) => tr!("schedule-run-blocked", reason = reason.describe()),
             },
         };
-        let mut details: Vec<String> = held_detail.into_iter().collect();
+        // The failed attempt's own reasons first, then - named as the earlier
+        // run it is - whatever is still shown, so nothing about the run on
+        // screen reads as if it described the attempt that failed.
+        let mut details: Vec<String> = Vec::new();
         if let Some(attempt) = attempt.filter(|attempt| self.schedule_calculation.as_ref().is_none_or(|calculation| calculation.run <= attempt.serial)) {
             // A refusal's only reason is already in the status line.
             if !(attempt.outcome == AttemptOutcome::Refused && attempt.messages.len() == 1) {
                 details.extend(attempt.messages.iter().cloned());
             }
+        }
+        if let (Some(held), Some(calculation)) = (held_detail, self.schedule_calculation.as_ref()) {
+            details.push(tr!("schedule-run-still-showing", run = calculation.run.to_string(), status = held));
         }
         if let Some(calculation) = self.schedule_calculation.as_ref().filter(|_| current) {
             details.extend(result_details(calculation));
@@ -998,12 +1004,21 @@ fn result_status(calculation: &CalculatedSchedule) -> String {
 
 /// Everything the status tooltip says about a held result.
 fn result_details(calculation: &CalculatedSchedule) -> Vec<String> {
+    use crate::ui::elements::schedule_calendar::format_tonnes;
     let report = &calculation.report;
+    let started: f64 = calculation.ground.iter().map(|balance| balance.started_t).sum();
+    let remaining: f64 = calculation.ground.iter().map(|balance| balance.remaining_t).sum();
     let mut lines = vec![tr!(
+        "schedule-result-summary",
+        started = format_tonnes(started),
+        extracted = format_tonnes(started - remaining),
+        remaining = format_tonnes(remaining)
+    )];
+    lines.push(tr!(
         "schedule-detail-value",
         value = crate::ui::elements::schedule_calendar::format_money(report.objective),
         currency = crate::model::schedule::cashflow::currency_symbol()
-    )];
+    ));
     lines.push(match (report.bound, report.gap) {
         // A bound more than twice the schedule says nothing useful about it.
         (Some(_), Some(gap)) if gap > 1.0 => tr!("schedule-detail-bound-weak"),
