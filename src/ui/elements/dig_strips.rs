@@ -11,7 +11,7 @@ use crate::{
         state::{BlastShapeRef, UiCommand},
         widgets::{
             context_menu::context_menu_popup,
-            data_grid::{DataGrid, grid_columns_row, grid_empty_state, grid_group_row},
+            data_grid::{DataGrid, grid_cell_entry, grid_columns_row, grid_empty_state, grid_group_row},
             island::{Island, IslandResponse, Side},
         },
     },
@@ -32,6 +32,22 @@ pub(crate) fn draw_panel(ui: &mut egui::Ui, editor: &mut EditorState, document: 
             DataGrid::new("planning_dig_blocks_grid", rect, &tr!("planning-dig-blocks"))
                 .columns(&columns)
                 .show(ui, |ui| {
+                    // The minimum strip of the solid the step is on, above its
+                    // blocks, as the Blasts panel carries the minimum blast.
+                    if let Some(solid) = editor.solids_view_selection.first().and_then(|row| document.solid(row.solid)) {
+                        let (response, cells) = grid_columns_row(ui, &FRACTIONS, &[&tr!("planning-min-strip-area"), ""], false);
+                        response.on_hover_text(tr!("planning-min-strip-area-help"));
+                        let mut area = solid.exclusions.min_strip_area;
+                        if grid_cell_entry(ui, ("planning_min_strip_area", solid.id), cells[1], &mut area, "m²") {
+                            commands.push(UiCommand::UpdateSolid {
+                                solid: solid.id,
+                                edit: crate::model::SolidEdit::Exclusions(crate::model::MiningExclusions {
+                                    min_strip_area: area.max(0.0),
+                                    ..solid.exclusions.clone()
+                                }),
+                            });
+                        }
+                    }
                     if editor.dig_outlines.is_empty() {
                         grid_empty_state(ui, &tr!("planning-dig-blocks-empty"), None);
                         return;

@@ -502,6 +502,10 @@ pub(crate) struct App<'a> {
     /// When the settled inputs are due a recalculation, so the event loop
     /// wakes for it with no further input.
     pub(crate) schedule_auto_deadline: Option<Instant>,
+    /// Whether the Schedule Setup run in progress was asked for, and so may
+    /// bring the Solids run up to date - Reserving included. A recalculation
+    /// Auto started may not: it only reports that Solids needs running.
+    pub(crate) schedule_setup_runs_solids: bool,
     /// The planning inputs Auto last started a run for (or found nothing
     /// to run), so a failed or cancelled run is not retried until they
     /// change. See [`Self::auto_run_planning`].
@@ -671,6 +675,7 @@ impl<'a> Default for App<'a> {
             schedule_auto_attempted: None,
             schedule_auto_settle: None,
             schedule_auto_deadline: None,
+            schedule_setup_runs_solids: false,
             planning_auto_attempted: None,
             planning_auto_settle: None,
             planning_auto_deadline: None,
