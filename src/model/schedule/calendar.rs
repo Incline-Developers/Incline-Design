@@ -69,9 +69,11 @@ pub(crate) struct LoaderCalendar {
     #[serde(default = "one", skip_serializing_if = "is_one")]
     pub(crate) default_utilisation_target: f64,
     /// Currency per dug tonne per percentage point the loader's scheduled
-    /// utilisation so far today stands below its target. It steers the
-    /// hourly schedule towards keeping loaders busy and is never counted as
-    /// money. Zero unless set.
+    /// utilisation stands below its target - the day so far in the hourly
+    /// schedule, the whole day in Improve; see
+    /// [`crate::model::schedule::optimisation::blended::utilisation`]. It
+    /// steers the schedule towards keeping loaders busy and is never counted
+    /// as money. Zero unless set.
     #[serde(skip_serializing_if = "is_zero")]
     pub(crate) default_utilisation_incentive: f64,
     pub(crate) periods: BTreeMap<CalendarPeriod, LoaderPeriodOverride>,
