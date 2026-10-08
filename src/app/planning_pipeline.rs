@@ -1,4 +1,4 @@
-//! The Solids workspace's six-stage pipeline: what each stage needs, what it
+//! The Solids workspace's seven-stage pipeline: what each stage needs, what it
 //! produces, and whether what it produced is still current.
 //!
 //! The pipeline is *explicitly executed*. Opening a page, selecting a blast or
@@ -17,7 +17,12 @@
 //! | Solids | Those bindings, the solid definitions and their surfaces | Closed bodies, volumes and bounds |
 //! | Benching | Completed bodies and the benching plan | Bench and flitch slabs, footprints, occupied bands |
 //! | Blasting | Completed benches and their cut drawings | Blast partitions and committed names |
-//! | Dig Strips | Completed blast and flitch partitions, strip drawings | Dig blocks with volumes and reserves |
+//! | Dig Strips | Completed blast and flitch partitions, strip drawings | Each flitch's dig blocks in plan |
+//! | Reserving | Those plans and the bodies they divide | Dig blocks with volumes and reserves |
+//!
+//! Auto stops after Dig Strips: Reserving cuts every block out of its solid
+//! and measures it against the block model, so it runs only from Run Step or
+//! Run All, and editing a strip never starts it.
 //!
 //! Each stage's input fingerprint includes the fingerprint of the stage before
 //! it, so one edit marks exactly the suffix of stages it can reach. Camera,
@@ -140,8 +145,9 @@ pub(crate) struct PlanningPipeline {
 
 /// How far down the geometry a running stage needs built.
 ///
-/// Solids and Benching own the body; Blasting and Dig Strips own the
-/// partition cut out of it. A stage never asks for work belonging to a stage
+/// Solids and Benching own the body; Blasting owns the blast partition, and
+/// Reserving the dig blocks cut out of it. Dig Strips works in plan on what
+/// Blasting left, so it asks for no more than Blasting does. A stage never asks for work belonging to a stage
 /// after it, which is what stops Run Solids waiting on a bad cut line.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum GeometryDemand {
@@ -204,9 +210,10 @@ impl PlanningPipeline {
         true
     }
 
-    /// Bring every stage up to date without retiring the ones that already
-    /// are: the run Auto starts. Returns whether there was anything to run.
-    fn resume_all(&mut self) -> bool {
+    /// Bring every stage through `through` up to date without retiring the
+    /// ones that already are: the run Auto starts, and the one Schedule
+    /// Setup asks for. Returns whether there was anything to run.
+    fn resume_through(&mut self, through: SolidsStep) -> bool {
         if self.is_running() {
             return false;
         }
@@ -214,7 +221,7 @@ impl PlanningPipeline {
         // on - an undo, say - is current again, as long as everything before
         // it is.
         let mut first = None;
-        for stage in SolidsStep::ALL {
+        for stage in SolidsStep::ALL.into_iter().take(through.index() + 1) {
             let matches = self.stage_inputs_match(stage);
             let status = self.status_mut(stage);
             if status.state == StageState::Stale && matches {
@@ -228,7 +235,7 @@ impl PlanningPipeline {
         let Some(first) = first else { return false };
         self.generation += 1;
         self.auto_run = true;
-        self.queue = SolidsStep::ALL.into_iter().skip(first.index()).collect();
+        self.queue = SolidsStep::ALL.into_iter().take(through.index() + 1).skip(first.index()).collect();
         for stage in self.queue.clone() {
             let status = self.status_mut(stage);
             status.state = StageState::Queued;
@@ -342,7 +349,7 @@ impl PlanningPipeline {
                 });
             }
         }
-        Ok(self.status(SolidsStep::DigStrips).run_generation)
+        Ok(self.status(SolidsStep::LAST).run_generation)
     }
 
     /// Mark this stage and every stage after it as no longer current.
@@ -461,9 +468,9 @@ impl crate::app::App<'_> {
         if self.editor.planning_page == crate::ui::state::PlanningPage::Schedule {
             // The blasts drill and blast lists, refreshed as the run or the
             // project (blast names included) moves.
-            let completed = self.planning_pipeline.as_ref().and_then(|p| p.status(SolidsStep::DigStrips).completed_inputs);
+            let completed = self.planning_pipeline.as_ref().and_then(|p| p.status(SolidsStep::LAST).completed_inputs);
             let revision = self.workspace.active_document().map_or(0, |d| d.revision());
-            let key = (runtime, fingerprints[SolidsStep::DigStrips.index()], completed, revision);
+            let key = (runtime, fingerprints[SolidsStep::LAST.index()], completed, revision);
             if self.editor.schedule_blasts_key != Some(key) {
                 self.editor.schedule_blasts_key = Some(key);
                 self.refresh_schedule_blasts();
@@ -478,12 +485,12 @@ impl crate::app::App<'_> {
             self.invalidate_overlay();
         }
         if self.editor.planning_page == crate::ui::state::PlanningPage::Haulage {
-            let completed = self.planning_pipeline.as_ref().and_then(|p| p.status(SolidsStep::DigStrips).completed_inputs);
+            let completed = self.planning_pipeline.as_ref().and_then(|p| p.status(SolidsStep::LAST).completed_inputs);
             // The document revision covers road, truck-class and destination
             // edits, undo included, so the connection tint and issue list
             // never lag the network they describe.
             let revision = self.workspace.active_document().map_or(0, |d| d.revision());
-            let key = (runtime, fingerprints[SolidsStep::DigStrips.index()], completed, revision);
+            let key = (runtime, fingerprints[SolidsStep::LAST.index()], completed, revision);
             if self.editor.haul_block_cache_key != Some(key) {
                 self.editor.haul_block_cache_key = Some(key);
                 self.refresh_haulage_view();
@@ -578,7 +585,7 @@ impl crate::app::App<'_> {
         }
     }
 
-    /// Input fingerprints for all six stages, each chained onto the one before
+    /// Input fingerprints for all seven stages, each chained onto the one before
     /// it so an edit invalidates exactly the suffix it can reach.
     pub(crate) fn planning_fingerprints(&self) -> [u64; SolidsStep::ALL.len()] {
         // Read every frame from every workspace, and the full computation
@@ -702,8 +709,11 @@ impl crate::app::App<'_> {
             })
             .collect();
         let dig_stage = hash_of((blasting_stage, strips));
+        // Reserving reads nothing of its own: it cuts and measures exactly
+        // what the stages before it settled.
+        let reserving_stage = hash_of(dig_stage);
 
-        [field_list, block_models, solids_stage, benching_stage, blasting_stage, dig_stage]
+        [field_list, block_models, solids_stage, benching_stage, blasting_stage, dig_stage, reserving_stage]
     }
 
     /// Reset the pipeline and run from the first step through the selected step.
@@ -765,13 +775,14 @@ impl crate::app::App<'_> {
         }
         self.planning_auto_settle = None;
         self.planning_auto_attempted = Some(key);
-        self.resume_planning_stages();
+        // Reserving is the expensive step, and the one Auto leaves alone.
+        self.resume_planning_stages(SolidsStep::DigStrips);
     }
 
-    /// Run the stages from the first one that is not current, as Auto does.
-    /// Whether anything was queued.
-    pub(crate) fn resume_planning_stages(&mut self) -> bool {
-        if !self.planning_pipeline.as_mut().is_some_and(PlanningPipeline::resume_all) {
+    /// Run the stages from the first one that is not current through
+    /// `through`, as Auto does. Whether anything was queued.
+    pub(crate) fn resume_planning_stages(&mut self, through: SolidsStep) -> bool {
+        if !self.planning_pipeline.as_mut().is_some_and(|pipeline| pipeline.resume_through(through)) {
             return false;
         }
         self.retry_failed_solid_requests();
@@ -780,9 +791,9 @@ impl crate::app::App<'_> {
         true
     }
 
-    /// Restart all six stages, including those already complete.
+    /// Restart every stage, including those already complete.
     pub(crate) fn run_all_planning_stages(&mut self) {
-        self.run_planning_stage(SolidsStep::DigStrips);
+        self.run_planning_stage(SolidsStep::LAST);
     }
 
     pub(crate) fn cancel_planning_run(&mut self) {
@@ -841,7 +852,7 @@ impl crate::app::App<'_> {
             // The geometry artifacts are built by one job per solid, which
             // every geometric stage reads a different facet of. Asking for it
             // here is what makes a run independent of any page being open.
-            SolidsStep::Solids | SolidsStep::Benching | SolidsStep::Blasting | SolidsStep::DigStrips => {
+            SolidsStep::Solids | SolidsStep::Benching | SolidsStep::Blasting | SolidsStep::DigStrips | SolidsStep::Reserving => {
                 self.sync_solid_preview();
             }
         }
@@ -852,7 +863,7 @@ impl crate::app::App<'_> {
         match stage {
             SolidsStep::FieldList => self.evaluate_field_list_stage(),
             SolidsStep::BlockModels => self.evaluate_block_models_stage(),
-            SolidsStep::Solids | SolidsStep::Benching | SolidsStep::DigStrips => self.evaluate_geometry_stage(stage),
+            SolidsStep::Solids | SolidsStep::Benching | SolidsStep::DigStrips | SolidsStep::Reserving => self.evaluate_geometry_stage(stage),
             SolidsStep::Blasting => {
                 let outcome = self.evaluate_geometry_stage(stage);
                 // Names are the one thing about a blast that cannot be
@@ -979,10 +990,15 @@ impl crate::app::App<'_> {
             has_schema: self.workspace.active_document().is_some_and(|document| !document.reserve_fields().is_empty()),
         }
         .evaluate_geometry_stage(stage);
-        // Only Dig Strips needs the app: it reads the blocks through the
-        // record API and reconciles them against the bench measurements.
+        // Dig Strips and Reserving need the app: one divides the flitches in
+        // plan, the other reads the blocks through the record API and
+        // reconciles them against the bench measurements.
         match outcome {
-            StageOutcome::Settled { mut diagnostics, entities } if stage == SolidsStep::DigStrips && !diagnostics.iter().any(|entry| entry.blocking) => {
+            StageOutcome::Settled { diagnostics, .. } if stage == SolidsStep::DigStrips && !diagnostics.iter().any(|entry| entry.blocking) => StageOutcome::Settled {
+                entities: crate::app::commands::dig_strips::count_dig_block_faces(&solids, &self.solid_view_cache),
+                diagnostics,
+            },
+            StageOutcome::Settled { mut diagnostics, entities } if stage == SolidsStep::Reserving && !diagnostics.iter().any(|entry| entry.blocking) => {
                 let records = match self.planning_dig_blocks() {
                     Ok(records) => records,
                     // Reached only with no blocking diagnostic recorded above,
@@ -1347,10 +1363,10 @@ impl PlanningInputs<'_> {
                 diagnostics.push(StageDiagnostic {
                     entity: Some(solid.name.clone()),
                     message: tr!("planning-reserve-open-solid"),
-                    blocking: stage == SolidsStep::DigStrips,
+                    blocking: stage == SolidsStep::Reserving,
                 });
             }
-            if stage == SolidsStep::DigStrips {
+            if stage == SolidsStep::Reserving {
                 match self.reserve_state(solid, crate::app::commands::solids_view::ReserveScope::Dig) {
                     ReserveState::Waiting => waiting += 1,
                     // Worth saying only of a pit: a dump or stockpile is
@@ -1425,7 +1441,9 @@ impl SolidsStep {
             Self::Solids => Some(GeometryDemand::Envelope),
             Self::Benching => Some(GeometryDemand::Body),
             Self::Blasting => Some(GeometryDemand::Blasting),
-            Self::DigStrips => Some(GeometryDemand::Partition),
+            // Plan work over what Blasting committed; the cutting is Reserving's.
+            Self::DigStrips => Some(GeometryDemand::Blasting),
+            Self::Reserving => Some(GeometryDemand::Partition),
         }
     }
 
@@ -1438,6 +1456,7 @@ impl SolidsStep {
             Self::Benching => "solids_benching_step",
             Self::Blasting => "solids_blasting_step",
             Self::DigStrips => "solids_dig_strips_step",
+            Self::Reserving => "solids_reserving_step",
         }
     }
 
@@ -1449,6 +1468,7 @@ impl SolidsStep {
             Self::Benching => tr!("planning-benching"),
             Self::Blasting => tr!("planning-blasting"),
             Self::DigStrips => tr!("planning-dig-strips"),
+            Self::Reserving => tr!("planning-reserving"),
         }
     }
 }

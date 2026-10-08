@@ -90,7 +90,7 @@ pub(crate) struct SolidBlasting {
     pub(crate) blast_faces: Vec<BlastFace>,
 }
 
-/// What the Dig Strips stage commits: the terminal blocks.
+/// What the Reserving stage commits: the terminal blocks.
 pub(crate) struct SolidPartition {
     /// Flitch-level parts, cut into dig blocks. What View draws.
     pub(crate) parts: Vec<SolidPart>,
@@ -306,7 +306,7 @@ pub(crate) struct ViewSolid {
     body: Stage<Arc<SolidBody>>,
     /// The Blasting stage: the benches plus the cuts across them.
     blasting: Stage<Arc<SolidBlasting>>,
-    /// The Dig Strips stage: the blasts plus each flitch's own strips.
+    /// The Reserving stage: the blasts plus each flitch's own strips, cut.
     partition: Stage<SolidPartition>,
     /// The last partition, kept from when a blast cut retired it until the
     /// next one is built, so that one can reuse its pieces.
@@ -713,8 +713,10 @@ fn display_demand(editor: &crate::ui::state::EditorState) -> crate::app::plannin
     }
     match editor.planning_solids_step {
         SolidsStep::Blasting => GeometryDemand::Blasting,
-        SolidsStep::DigStrips => GeometryDemand::Partition,
-        SolidsStep::FieldList | SolidsStep::BlockModels | SolidsStep::Solids | SolidsStep::Benching => GeometryDemand::Body,
+        // The strips are drawn over the flitches; the blocks cut from an
+        // earlier set of strips are Reserving's, and would be out of date.
+        SolidsStep::Reserving => GeometryDemand::Partition,
+        SolidsStep::FieldList | SolidsStep::BlockModels | SolidsStep::Solids | SolidsStep::Benching | SolidsStep::DigStrips => GeometryDemand::Body,
     }
 }
 
@@ -1827,7 +1829,7 @@ fn build_solid_blasting(solid: &Solid, body: &SolidBody, cancel: &crate::app::jo
     Ok(SolidBlasting { blast_faces })
 }
 
-/// The Dig Strips stage: each flitch cut by its own strips and by the blast
+/// The Reserving stage: each flitch cut by its own strips and by the blast
 /// boundaries of the bench above it.
 ///
 /// Reuses the committed flitch meshes and the committed blast faces; nothing
@@ -2225,7 +2227,7 @@ impl crate::app::App<'_> {
     /// Measure reserves over one scope's partition of every solid.
     ///
     /// Run twice over a completed solid: once at Benching over whole benches,
-    /// and once at Dig Strips over the blocks those benches are cut into. The
+    /// and once at Reserving over the blocks those benches are cut into. The
     /// bench figures are an *independent* measurement, not the blocks added
     /// up, which is the only thing a subdivision can honestly be reconciled
     /// against - summing the children and comparing them to themselves would
@@ -2358,7 +2360,7 @@ impl crate::app::App<'_> {
 pub(crate) enum ReserveScope {
     /// Whole benches, measured at the Benching stage.
     Bench,
-    /// Dig blocks, measured at the Dig Strips stage.
+    /// Dig blocks, measured at the Reserving stage.
     Dig,
 }
 
@@ -2725,7 +2727,7 @@ impl crate::app::App<'_> {
     /// The completed, validated scheduling snapshot, or why there is not one.
     ///
     /// The public contract, and deliberately not the collector above. That one
-    /// gathers whatever the artifacts hold, because Dig Strips reconciles
+    /// gathers whatever the artifacts hold, because Reserving reconciles
     /// against it *before* it can be Complete - gating it on completion would
     /// deadlock the stage that produces it. This one gates: a caller gets one
     /// coherent generation of a run that finished, or an explicit reason.

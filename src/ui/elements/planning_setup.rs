@@ -376,7 +376,7 @@ pub(crate) fn draw_solids_run_controls(ui: &mut egui::Ui, editor: &mut EditorSta
     let step = editor.planning_solids_step;
     let completed = editor.planning_stages.iter().filter(|stage| stage.state == StageState::Complete).count();
     let active = SolidsStep::ALL.into_iter().find(|step| editor.planning_stages[step.index()].state == StageState::Running);
-    let reported = active.unwrap_or(if editor.is_solids_view() { SolidsStep::DigStrips } else { step });
+    let reported = active.unwrap_or(if editor.is_solids_view() { SolidsStep::LAST } else { step });
     let status = editor.planning_stages[reported.index()].clone();
     let snapshot = editor.planning_snapshot_status.clone();
     let action = run_header(
@@ -512,6 +512,40 @@ impl StepBadge {
             Self::Error => unthemed_icon!("step_error.svg"),
         }
     }
+}
+
+/// The Reserving step's page: what its last run found, one row each.
+///
+/// The blocks themselves are inspected in Solids View; this says whether the
+/// cut and the measurement went through, and where they did not.
+fn draw_reserving(ui: &mut egui::Ui, rect: egui::Rect, editor: &EditorState) {
+    use crate::app::planning_pipeline::StageState;
+
+    const FRACTIONS: [f32; 2] = [0.35, 0.65];
+    let status = &editor.planning_stages[SolidsStep::Reserving.index()];
+    let columns = [(tr!("planning-reserving-item"), FRACTIONS[0]), (tr!("planning-reserving-finding"), FRACTIONS[1])];
+    DataGrid::new("planning_reserving", rect, &SolidsStep::Reserving.label()).columns(&columns).show(ui, |ui| {
+        if status.diagnostics.is_empty() {
+            let message = match status.state {
+                StageState::Complete => tr!(
+                    "planning-reserving-complete",
+                    blocks = status.last_success.as_ref().map_or(0, |run| run.entities).to_string()
+                ),
+                StageState::Queued | StageState::Running => status.message.clone().unwrap_or_else(|| status.state.label()),
+                StageState::Stale => tr!("planning-reserving-stale"),
+                _ => tr!("planning-reserving-not-run"),
+            };
+            grid_empty_state(ui, &message, None);
+            return;
+        }
+        for entry in &status.diagnostics {
+            let entity = entry.entity.clone().unwrap_or_default();
+            let (_, cells) = grid_columns_row(ui, &FRACTIONS, &[&entity, &entry.message], false);
+            if entry.blocking {
+                grid_cell_warning(ui, ("planning_reserving_issue", &entity, &entry.message), cells[1], &entry.message);
+            }
+        }
+    });
 }
 
 fn stage_tooltip(ui: &mut egui::Ui, status: &crate::ui::state::PlanningStageView) {
@@ -943,7 +977,7 @@ pub(crate) fn step_list(editor: &EditorState) -> Option<StepList> {
     match editor.planning_solids_step {
         SolidsStep::Solids | SolidsStep::Benching => Some(StepList::Solids),
         SolidsStep::BlockModels => Some(StepList::BlockModels),
-        SolidsStep::FieldList | SolidsStep::Blasting | SolidsStep::DigStrips => None,
+        SolidsStep::FieldList | SolidsStep::Blasting | SolidsStep::DigStrips | SolidsStep::Reserving => None,
     }
 }
 
@@ -1788,6 +1822,7 @@ fn draw_solids_details(
 ) {
     match editor.planning_solids_step {
         SolidsStep::Blasting | SolidsStep::DigStrips => {}
+        SolidsStep::Reserving => central_island(ui, layout, |ui, rect| draw_reserving(ui, rect, editor)),
         // The list is the workspace; the columns it is added from are a
         // helper beside it.
         SolidsStep::FieldList => {

@@ -181,7 +181,7 @@ struct Slot {
 /// the same colours - so a cut solved for one is a cut of the other, and a
 /// rebuild of the source can keep it rather than starting the block whole
 /// again. The mesh and the plan face are compared by address: both are
-/// rebuilt wholesale by the Dig Strips stage and never edited in place, so a
+/// rebuilt wholesale by the Reserving stage and never edited in place, so a
 /// shared pointer is a shared geometry.
 #[derive(Clone, Copy, PartialEq)]
 struct CutInputs {
@@ -560,7 +560,7 @@ impl crate::app::App<'_> {
     /// authored order that gives each block its successor.
     ///
     /// Pointer-and-count rather than content, because the partitions behind it
-    /// are rebuilt wholesale by the Dig Strips stage and never edited in place.
+    /// are rebuilt wholesale by the Reserving stage and never edited in place.
     fn animation_source_key(&self) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         let Some(document) = self.workspace.active_document() else {

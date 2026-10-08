@@ -501,12 +501,28 @@ pub(crate) enum SolidsStep {
     /// steps this one frames the 3D viewport rather than owning the window,
     /// because the blast outlines are drawn with the ordinary design tools.
     Blasting,
+    /// Dividing each flitch into dig blocks along its strips. Checked in plan
+    /// alone, so editing a strip costs nothing until the blocks are cut.
     DigStrips,
+    /// Cutting the dig blocks out of the solids and measuring their reserves:
+    /// the expensive half of the subdivision, run only when asked for.
+    Reserving,
 }
 
 impl SolidsStep {
     /// Every step, in the order the step tree lists them.
-    pub(crate) const ALL: [Self; 6] = [Self::FieldList, Self::BlockModels, Self::Solids, Self::Benching, Self::Blasting, Self::DigStrips];
+    pub(crate) const ALL: [Self; 7] = [
+        Self::FieldList,
+        Self::BlockModels,
+        Self::Solids,
+        Self::Benching,
+        Self::Blasting,
+        Self::DigStrips,
+        Self::Reserving,
+    ];
+
+    /// The step whose completion makes a run schedulable.
+    pub(crate) const LAST: Self = Self::Reserving;
 }
 
 /// One derived blast shape, ready to draw and to list.

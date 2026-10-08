@@ -72,6 +72,32 @@ pub(crate) fn dig_block_plans(faces: &[(arrangement::Face, DVec2)], cuts: &[Vec<
         .collect()
 }
 
+/// How many dig blocks the strips divide every flitch into, worked out in
+/// plan from the flitch ground Benching committed.
+///
+/// The whole of the Dig Strips step's own work: the same faces the step draws
+/// and Reserving later cuts, counted without cutting anything, so a strip
+/// edit settles at once.
+pub(crate) fn count_dig_block_faces(solids: &[crate::model::Solid], caches: &std::collections::HashMap<crate::model::SolidId, super::solids_view::ViewSolid>) -> usize {
+    let mut count = 0;
+    for solid in solids {
+        let Some(footprints) = caches.get(&solid.id).and_then(super::solids_view::ViewSolid::flitch_footprints) else {
+            continue;
+        };
+        for bench in solid.benching.benches() {
+            let bench_cuts = solid.blasting.bench(bench.base).map(|entry| entry.cuts.as_slice()).unwrap_or_default();
+            for flitch in &bench.flitches {
+                let Some(footprint) = footprints.get(&flitch.base.to_bits()) else {
+                    continue;
+                };
+                let strips = solid.blasting.drawing(flitch.base, true).map_or(&[][..], |drawing| &drawing.cuts);
+                count += dig_block_faces(footprint, strips, bench_cuts).len();
+            }
+        }
+    }
+    count
+}
+
 impl crate::app::App<'_> {
     pub(crate) fn copy_dig_strips(&mut self) {
         if !self.editor.is_dig_strips_step() {

@@ -1,6 +1,6 @@
 pub(crate) mod blasting;
 pub(crate) mod block_model;
-mod dig_strips;
+pub(crate) mod dig_strips;
 pub(crate) mod drawing; // Handles finishing polylines, creating points, etc commands
 pub(crate) mod drill_hole;
 pub(crate) mod file; // Handles importing, exportings, etc. commands
