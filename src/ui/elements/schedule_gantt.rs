@@ -832,6 +832,10 @@ pub(super) fn navigate(ui: &mut egui::Ui, rect: egui::Rect, body: egui::Rect, ed
 /// The header column, the ruler, the rows and the bars, plus the navigation
 /// over them.
 fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, destinations: &[DestinationView], session: u32, commands: &mut Vec<UiCommand>) {
+    // The zoom first, then the frame: whether the ruler carries a band of
+    // days depends on the zoom, and a frame laid out from last frame's zoom
+    // stays on screen when nothing repaints after the wheel stops.
+    let (over_canvas, rows_scroll, canvas) = navigate(ui, rect, TimelineFrame::new(editor.gantt, rect).body, editor, "gantt_canvas");
     let TimelineFrame {
         header,
         ruler,
@@ -839,7 +843,6 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
         corner,
         day_band,
     } = TimelineFrame::new(editor.gantt, rect);
-    let (over_canvas, rows_scroll, canvas) = navigate(ui, rect, body, editor, "gantt_canvas");
     editor.gantt.row_scroll += rows_scroll;
     // Laid out after the navigation, so the arrangement drawn this frame is
     // the one this frame's zoom and pan produced. How deep a lane stacks

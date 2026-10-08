@@ -126,8 +126,9 @@ fn charts(plan: &SchedulePlan, destinations: &[DestinationView], schedule: &Calc
 }
 
 fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, destinations: &[DestinationView], fields: &[(ReserveFieldId, String)]) {
+    // The zoom first, then the frame, as on the Gantt.
+    let (over_canvas, rows_scroll, _) = navigate(ui, rect, TimelineFrame::new(editor.gantt, rect).body, editor, "charts_canvas");
     let frame = TimelineFrame::new(editor.gantt, rect);
-    let (over_canvas, rows_scroll, _) = navigate(ui, rect, frame.body, editor, "charts_canvas");
     editor.schedule_charts_scroll += rows_scroll;
 
     let visuals = ui.visuals().clone();
