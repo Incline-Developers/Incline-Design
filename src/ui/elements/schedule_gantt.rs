@@ -128,14 +128,6 @@ const MIN_TICK_SPACING: f32 = 72.0;
 /// How much one zoom-button press changes the visible span.
 const ZOOM_STEP: f64 = 1.5;
 
-/// Write one elapsed-seconds instant as a day-and-time label.
-///
-/// Day 1 starts at zero, so the first day of a schedule reads `Day 1` rather
-/// than `Day 0` - which is how a mine plan is written and read.
-fn day_of(seconds: f64) -> i64 {
-    (seconds / GanttView::DAY).floor() as i64 + 1
-}
-
 fn time_of(seconds: f64) -> String {
     let into_day = seconds - (seconds / GanttView::DAY).floor() * GanttView::DAY;
     let minutes = (into_day / 60.0).round() as i64;
@@ -768,31 +760,24 @@ pub(super) struct TimelineFrame {
     pub(super) ruler: egui::Rect,
     pub(super) body: egui::Rect,
     pub(super) corner: egui::Rect,
-    /// Whether the ruler carries a band of days above finer ticks.
-    pub(super) day_band: bool,
 }
 
 impl TimelineFrame {
-    pub(super) fn new(view: GanttView, rect: egui::Rect) -> Self {
+    pub(super) fn new(rect: egui::Rect) -> Self {
         let header_width = HEADER_WIDTH.min(rect.width() * 0.5);
-        let day_band = view.minor_interval(rect.width() - header_width, MIN_TICK_SPACING) < GanttView::DAY;
-        let ruler_height = (RULER_BAND * if day_band { 2.0 } else { 1.0 }).min(rect.height());
+        // Two bands at every zoom - the columns and the unit grouping them - so
+        // the rows never jump as the ruler changes unit.
+        let ruler_height = (RULER_BAND * 2.0).min(rect.height());
         let header = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() + ruler_height), egui::pos2(rect.left() + header_width, rect.bottom()));
         let ruler = egui::Rect::from_min_max(egui::pos2(rect.left() + header_width, rect.top()), egui::pos2(rect.right(), rect.top() + ruler_height));
         let body = egui::Rect::from_min_max(ruler.left_bottom(), rect.max);
         let corner = egui::Rect::from_min_max(rect.min, header.right_top());
-        Self {
-            header,
-            ruler,
-            body,
-            corner,
-            day_band,
-        }
+        Self { header, ruler, body, corner }
     }
 
-    /// The minor tick interval the ruler and grid use at this zoom.
-    pub(super) fn interval(&self, view: GanttView) -> f64 {
-        view.minor_interval(self.body.width(), MIN_TICK_SPACING)
+    /// The step the time slider snaps to at this zoom.
+    pub(super) fn interval(&self, ui: &egui::Ui, view: GanttView) -> f64 {
+        RulerScale::new(ui, view, self.body.width()).interval()
     }
 }
 
@@ -835,14 +820,8 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
     // The zoom first, then the frame: whether the ruler carries a band of
     // days depends on the zoom, and a frame laid out from last frame's zoom
     // stays on screen when nothing repaints after the wheel stops.
-    let (over_canvas, rows_scroll, canvas) = navigate(ui, rect, TimelineFrame::new(editor.gantt, rect).body, editor, "gantt_canvas");
-    let TimelineFrame {
-        header,
-        ruler,
-        body,
-        corner,
-        day_band,
-    } = TimelineFrame::new(editor.gantt, rect);
+    let (over_canvas, rows_scroll, canvas) = navigate(ui, rect, TimelineFrame::new(rect).body, editor, "gantt_canvas");
+    let TimelineFrame { header, ruler, body, corner } = TimelineFrame::new(rect);
     editor.gantt.row_scroll += rows_scroll;
     // Laid out after the navigation, so the arrangement drawn this frame is
     // the one this frame's zoom and pan produced. How deep a lane stacks
@@ -861,13 +840,13 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
     ui.painter().rect_filled(ruler, 0.0, visuals.widgets.noninteractive.bg_fill);
     ui.painter().rect_filled(corner, 0.0, visuals.widgets.noninteractive.bg_fill);
 
-    let interval = editor.gantt.minor_interval(body.width(), MIN_TICK_SPACING);
+    let interval = RulerScale::new(ui, editor.gantt, body.width()).interval();
     // Marked days as a solid strip along the ruler's top edge, where it
     // reads at any zoom without fighting the text or the bars.
     draw_period_colors(ui, egui::Rect::from_min_size(ruler.min, egui::vec2(ruler.width(), 3.0)), editor.gantt, plan);
-    draw_ruler(ui, ruler, editor.gantt, interval, day_band);
+    draw_ruler(ui, ruler, editor.gantt);
     draw_rows(ui, header, body, stripe, editor, &layout.rows);
-    draw_grid(ui, body, editor.gantt, interval);
+    draw_grid(ui, body, editor.gantt);
     draw_calendar_delays(ui, body, editor.gantt, editor.gantt.row_scroll, plan, &layout.rows);
     draw_palette(ui, corner, editor);
     // Taken out for the duration of the frame rather than cloned: the bars
@@ -1070,65 +1049,261 @@ pub(super) fn draw_time_slider(ui: &mut egui::Ui, ruler: egui::Rect, body: egui:
     painter.galley(pill.center() - galley.size() / 2.0, galley, text_color);
 }
 
-/// The time ruler: minor ticks with their labels, and - while the minor ticks
-/// are finer than a day - a band of days above grouping them.
-pub(super) fn draw_ruler(ui: &egui::Ui, rect: egui::Rect, view: GanttView, interval: f64, day_band: bool) {
+/// What one column of the ruler is.
+///
+/// The ruler is a ladder of these: hours while they have room, then days,
+/// weeks, months and years. Every column is labelled with exactly the range
+/// it covers - never a column of several days named after its first - and
+/// when no way of writing that label fits, the ruler steps up to the next
+/// unit rather than squeezing several units into one column.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum RulerUnit {
+    /// Ticks this many hours apart, labelled by the instant at each tick.
+    Hours(f64),
+    Day,
+    /// Seven days from Day 1: Week 1 is Days 1 to 7.
+    Week,
+    /// A calendar month once the schedule has a start date; four weeks
+    /// before, so months still nest the weeks.
+    Month,
+    /// A calendar year once there is a start date; thirteen four-week months
+    /// before.
+    Year,
+}
+
+/// Hour steps the ruler can tick at, finest first.
+const HOUR_STEPS: [f64; 4] = [1.0, 3.0, 6.0, 12.0];
+/// Space either side of a column's label.
+const LABEL_PAD: f32 = 6.0;
+
+impl RulerUnit {
+    /// The unit one band up, which names the columns this one groups into.
+    fn parent(self) -> Option<Self> {
+        match self {
+            Self::Hours(_) => Some(Self::Day),
+            Self::Day => Some(Self::Week),
+            Self::Week => Some(Self::Month),
+            Self::Month => Some(Self::Year),
+            Self::Year => None,
+        }
+    }
+
+    /// The columns of this unit the window reaches, as their start and end in
+    /// elapsed seconds and their index from Day 1.
+    fn cells(self, view: GanttView) -> Vec<(f64, f64, u32)> {
+        let (from, to) = (view.start_seconds.max(0.0), view.end_seconds());
+        let fixed = |length: f64| -> Vec<(f64, f64, u32)> {
+            let first = (from / length).floor() as u32;
+            (first..)
+                .map(|index| (f64::from(index) * length, f64::from(index + 1) * length, index))
+                .take_while(|cell| cell.0 < to)
+                .collect()
+        };
+        match self {
+            Self::Hours(hours) => fixed(hours * GanttView::HOUR),
+            Self::Day => fixed(GanttView::DAY),
+            Self::Week => fixed(7.0 * GanttView::DAY),
+            Self::Month | Self::Year => match super::schedule_periods::clock_start() {
+                Some(start) => calendar_cells(start, self == Self::Year, from, to),
+                None => fixed(if self == Self::Month { 28.0 } else { 364.0 } * GanttView::DAY),
+            },
+        }
+    }
+
+    /// Ways of writing one column's label, longest first.
+    fn labels(self, start_seconds: f64, index: u32) -> Vec<String> {
+        use chrono::Datelike;
+        let number = (index + 1).to_string();
+        let date = super::schedule_periods::clock_start().and_then(|start| start.checked_add_signed(chrono::Duration::days((start_seconds / GanttView::DAY).round() as i64)));
+        match self {
+            Self::Hours(_) => vec![time_of(start_seconds)],
+            Self::Day => {
+                let mut labels = Vec::new();
+                if date.is_some() {
+                    labels.push(super::schedule_periods::day_label(index));
+                }
+                labels.push(tr!("gantt-day", day = number));
+                labels
+            }
+            Self::Week => {
+                let mut labels = Vec::new();
+                if let Some(date) = date {
+                    labels.push(tr!("gantt-week-date", week = number.clone(), date = crate::model::schedule::periods::date_text(date)));
+                }
+                labels.push(tr!("gantt-week", week = number.clone()));
+                labels.push(tr!("gantt-week-short", week = number));
+                labels
+            }
+            Self::Month => match date {
+                Some(date) => vec![date.format("%B %Y").to_string(), date.format("%b %Y").to_string(), date.format("%b").to_string()],
+                None => vec![tr!("gantt-month", month = number.clone()), tr!("gantt-month-short", month = number)],
+            },
+            Self::Year => match date {
+                Some(date) => vec![date.year().to_string()],
+                None => vec![tr!("gantt-year", year = number)],
+            },
+        }
+    }
+}
+
+/// Calendar months or years from `start`, the first running from the start
+/// date itself to the first boundary after it.
+fn calendar_cells(start: chrono::NaiveDate, years: bool, from: f64, to: f64) -> Vec<(f64, f64, u32)> {
+    use chrono::Datelike;
+    let boundary = |index: u32| -> Option<chrono::NaiveDate> {
+        if index == 0 {
+            return Some(start);
+        }
+        if years {
+            chrono::NaiveDate::from_ymd_opt(start.year() + index as i32, 1, 1)
+        } else {
+            let months = start.month0() + index;
+            chrono::NaiveDate::from_ymd_opt(start.year() + (months / 12) as i32, months % 12 + 1, 1)
+        }
+    };
+    let seconds = |date: chrono::NaiveDate| (date - start).num_days() as f64 * GanttView::DAY;
+    let mut cells = Vec::new();
+    for index in 0..10_000 {
+        let (Some(begin), Some(end)) = (boundary(index), boundary(index + 1)) else { break };
+        let (begin, end) = (seconds(begin), seconds(end));
+        if begin >= to {
+            break;
+        }
+        if end > from {
+            cells.push((begin, end, index));
+        }
+    }
+    cells
+}
+
+/// Which units the ruler shows at this zoom: the finest whose labels fit,
+/// and the one above it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct RulerScale {
+    pub(super) minor: RulerUnit,
+}
+
+impl RulerScale {
+    pub(super) fn new(ui: &egui::Ui, view: GanttView, width: f32) -> Self {
+        let per_second = f64::from(width.max(1.0)) / view.span_seconds;
+        if let Some(hours) = HOUR_STEPS.into_iter().find(|hours| hours * GanttView::HOUR * per_second >= f64::from(MIN_TICK_SPACING)) {
+            return Self { minor: RulerUnit::Hours(hours) };
+        }
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        for unit in [RulerUnit::Day, RulerUnit::Week, RulerUnit::Month] {
+            let cells = unit.cells(view);
+            // The narrowest column against the widest number it has to carry:
+            // a label that fits there fits everywhere along the window.
+            let narrowest = cells.iter().map(|cell| cell.1 - cell.0).fold(f64::INFINITY, f64::min);
+            let Some(&(start, _, index)) = cells.last() else { continue };
+            let shortest = unit.labels(start, index).last().map_or(0.0, |label| text_width(ui, label, &font));
+            if f64::from(shortest + 2.0 * LABEL_PAD) <= narrowest * per_second {
+                return Self { minor: unit };
+            }
+        }
+        Self { minor: RulerUnit::Year }
+    }
+
+    /// The step the time slider snaps to: its own hours, or whole hours once
+    /// the columns are days or longer.
+    pub(super) fn interval(self) -> f64 {
+        match self.minor {
+            RulerUnit::Hours(hours) => hours * GanttView::HOUR,
+            _ => GanttView::DAY,
+        }
+    }
+
+    /// Where the minor columns start, for the grid under the rows.
+    fn boundaries(self, view: GanttView) -> Vec<f64> {
+        match self.minor {
+            RulerUnit::Hours(hours) => view.visible_ticks(hours * GanttView::HOUR).collect(),
+            unit => unit.cells(view).into_iter().map(|cell| cell.0).filter(|start| *start >= view.start_seconds).collect(),
+        }
+    }
+}
+
+fn text_width(ui: &egui::Ui, text: &str, font: &egui::FontId) -> f32 {
+    ui.painter().layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::WHITE).size().x
+}
+
+/// One band of labelled columns: a rule at each column's start and, inside
+/// what shows of the column, the longest way of writing its label that fits.
+fn draw_ruler_cells(ui: &egui::Ui, painter: &egui::Painter, band: egui::Rect, rule_height: egui::Rangef, view: GanttView, unit: RulerUnit) {
+    let rule = ui.visuals().widgets.noninteractive.bg_stroke;
+    let text_color = ui.visuals().weak_text_color();
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let cells = unit.cells(view);
+    let width = |start: f64, end: f64| view.x_of(end, band.left(), band.width()) - view.x_of(start, band.left(), band.width());
+    // One way of writing every label along the band - the longest each whole
+    // column has room for - so "Sep 2026" never sits beside "October 2026".
+    let style = cells
+        .iter()
+        .map(|&(start, end, index)| {
+            let room = width(start, end) - 2.0 * LABEL_PAD;
+            let labels = unit.labels(start, index);
+            labels.iter().position(|label| text_width(ui, label, &font) <= room).unwrap_or(labels.len())
+        })
+        .max()
+        .unwrap_or(0);
+    for (start, end, index) in cells {
+        let left = view.x_of(start, band.left(), band.width());
+        let right = view.x_of(end, band.left(), band.width());
+        if left > band.left() {
+            painter.line_segment([egui::pos2(left, rule_height.min), egui::pos2(left, rule_height.max)], rule);
+        }
+        // A column cut off at either end shortens its own label further, or
+        // drops it, rather than spilling into its neighbour.
+        let (shown_left, shown_right) = (left.max(band.left()), right.min(band.right()));
+        let room = shown_right - shown_left - 2.0 * LABEL_PAD;
+        if let Some(label) = unit.labels(start, index).into_iter().skip(style).find(|label| text_width(ui, label, &font) <= room) {
+            painter.text(
+                egui::pos2(shown_left + LABEL_PAD, band.center().y),
+                egui::Align2::LEFT_CENTER,
+                label,
+                font.clone(),
+                text_color,
+            );
+        }
+    }
+}
+
+/// The time ruler: two bands of labelled columns, the finer below and the one
+/// grouping it above. Hours are the exception - an hour tick marks an instant,
+/// so it is labelled at the tick.
+pub(super) fn draw_ruler(ui: &egui::Ui, rect: egui::Rect, view: GanttView) {
     if !rect.is_positive() {
         return;
     }
+    let scale = RulerScale::new(ui, view, rect.width());
     let painter = ui.painter_at(rect);
     let rule = ui.visuals().widgets.noninteractive.bg_stroke;
     let text_color = ui.visuals().weak_text_color();
-    let minor_band = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - RULER_BAND.min(rect.height())), rect.max);
+    let band = RULER_BAND.min(rect.height() / 2.0);
+    let parent_band = egui::Rect::from_min_max(rect.min, egui::pos2(rect.right(), rect.top() + band));
+    let minor_band = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - band), rect.max);
 
-    if day_band {
-        // Whole days across the top. Drawn from the first day boundary at or
-        // before the left edge so a part-visible day still carries its label.
-        let first = (view.start_seconds / GanttView::DAY).floor();
-        let mut day = first;
-        while day * GanttView::DAY <= view.end_seconds() {
-            let start = day * GanttView::DAY;
-            let left = view.x_of(start, rect.left(), rect.width()).max(rect.left());
-            let right = view.x_of(start + GanttView::DAY, rect.left(), rect.width()).min(rect.right());
-            if right - left > 28.0 {
-                // The date too, where the day is wide enough to say it.
-                let period = (day_of(start + 1.0) - 1).max(0) as u32;
-                let label = if right - left > 150.0 {
-                    super::schedule_periods::day_label(period)
-                } else {
-                    tr!("gantt-day", day = day_of(start + 1.0).to_string())
-                };
+    if let Some(parent) = scale.minor.parent() {
+        // The group's rule runs down through both bands, so a day reads as
+        // the hours under it.
+        draw_ruler_cells(ui, &painter, parent_band, rect.y_range(), view, parent);
+    }
+    painter.line_segment([minor_band.left_top(), minor_band.right_top()], rule);
+
+    match scale.minor {
+        RulerUnit::Hours(hours) => {
+            for tick in view.visible_ticks(hours * GanttView::HOUR) {
+                let x = view.x_of(tick, rect.left(), rect.width());
+                painter.line_segment([egui::pos2(x, minor_band.bottom() - 5.0), egui::pos2(x, minor_band.bottom())], rule);
                 painter.text(
-                    egui::pos2(left + 6.0, rect.top() + RULER_BAND * 0.5),
+                    egui::pos2(x + 4.0, minor_band.center().y),
                     egui::Align2::LEFT_CENTER,
-                    label,
+                    time_of(tick),
                     egui::TextStyle::Body.resolve(ui.style()),
                     text_color,
                 );
             }
-            if left > rect.left() {
-                painter.line_segment([egui::pos2(left, rect.top()), egui::pos2(left, rect.bottom())], rule);
-            }
-            day += 1.0;
         }
-        painter.line_segment([minor_band.left_top(), minor_band.right_top()], rule);
-    }
-
-    for tick in view.visible_ticks(interval) {
-        let x = view.x_of(tick, rect.left(), rect.width());
-        painter.line_segment([egui::pos2(x, minor_band.bottom() - 5.0), egui::pos2(x, minor_band.bottom())], rule);
-        let label = if interval < GanttView::DAY {
-            time_of(tick)
-        } else {
-            tr!("gantt-day", day = day_of(tick).to_string())
-        };
-        painter.text(
-            egui::pos2(x + 4.0, minor_band.center().y),
-            egui::Align2::LEFT_CENTER,
-            label,
-            egui::TextStyle::Body.resolve(ui.style()),
-            text_color,
-        );
+        unit => draw_ruler_cells(ui, &painter, minor_band, minor_band.y_range(), view, unit),
     }
 }
 
@@ -2619,15 +2794,16 @@ fn draw_period_colors(ui: &egui::Ui, rect: egui::Rect, view: GanttView, plan: &c
     }
 }
 
-/// Vertical grid lines under the rows, on the same ticks the ruler labels.
-pub(super) fn draw_grid(ui: &egui::Ui, rect: egui::Rect, view: GanttView, interval: f64) {
+/// Vertical grid lines under the rows, at the starts of the columns the
+/// ruler labels.
+pub(super) fn draw_grid(ui: &egui::Ui, rect: egui::Rect, view: GanttView) {
     if !rect.is_positive() {
         return;
     }
     let painter = ui.painter_at(rect);
     let stroke = egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color.gamma_multiply(0.6));
-    for tick in view.visible_ticks(interval) {
-        let x = view.x_of(tick, rect.left(), rect.width());
+    for start in RulerScale::new(ui, view, rect.width()).boundaries(view) {
+        let x = view.x_of(start, rect.left(), rect.width());
         painter.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], stroke);
     }
 }
