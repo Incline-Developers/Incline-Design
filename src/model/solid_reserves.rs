@@ -64,6 +64,11 @@ pub(crate) struct NumericTotal {
     pub(crate) missing: u64,
     /// Blocks in range whose weight was absent, zero or negative.
     pub(crate) unusable_weights: u64,
+    /// Blocks whose summed value was negative - a model's -99 for a blank,
+    /// typically - and so were read as nothing. A quantity of ground cannot be
+    /// less than none, and one such block must not take tonnes away from the
+    /// rest. Counted among `contributions`, as the zero it was read as.
+    pub(crate) negatives: u64,
 }
 impl NumericTotal {
     /// The figure, or `None` when nothing measured contributed to it.
@@ -112,6 +117,7 @@ impl ReserveGroup {
                 total.contributions += value.contributions;
                 total.missing += value.missing;
                 total.unusable_weights += value.unusable_weights;
+                total.negatives += value.negatives;
                 true
             } else {
                 false
@@ -760,6 +766,10 @@ fn add(group: &mut ReserveGroup, numeric: &[NumericField], index: usize, fractio
             continue;
         }
         match &field.weights {
+            None if value < 0.0 => {
+                total.negatives += 1;
+                total.contributions += 1;
+            }
             None => {
                 total.sum += value * fraction;
                 total.contributions += 1;

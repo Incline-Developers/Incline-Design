@@ -1440,7 +1440,13 @@ impl crate::app::App<'_> {
         }
         let mut unmeasured = 0;
         let mut counted_zero = 0;
+        let mut negative = 0;
         for block in &snapshot.blocks {
+            if let super::commands::solids_view::MaterialState::Measured(totals) = &block.material
+                && totals.all.numeric.get(&field).is_some_and(|total| total.negatives > 0)
+            {
+                negative += 1;
+            }
             match super::commands::schedule_readiness::block_tonnes_for_stage(block, field, false) {
                 Ok(_) => {}
                 // A figure that is there but cannot be tonnes is a broken
@@ -1459,6 +1465,15 @@ impl crate::app::App<'_> {
                 entity: None,
                 message: tr!("schedule-stage-blocks-unmeasured", count = unmeasured.to_string()),
                 blocking: true,
+            });
+        }
+        // Read as 0 t rather than refused: models write -99 and the like for
+        // a blank, and filtering those out is the model's business.
+        if negative > 0 {
+            diagnostics.push(StageDiagnostic {
+                entity: None,
+                message: tr!("schedule-stage-blocks-negative-tonnes", count = negative.to_string()),
+                blocking: false,
             });
         }
         // Shown on the step's page rather than as a warning: the planner

@@ -417,6 +417,7 @@ schedule-stage-agent-no-class = This machine's loader class is no longer in this
 schedule-stage-waiting-solids = Waiting on the Solids pipeline: { $reason }
 schedule-stage-duplicate-solid = { $solid } is cut from the same design, topography and block model as { $other }, so both would mine the same ground. Delete one, or change its inputs.
 schedule-stage-blocks-unmeasured = { $count } dig blocks have no tonnage on the chosen field. Fix the block models, exclude the ground, or count these blocks as 0 t.
+schedule-stage-blocks-negative-tonnes = { $count } dig blocks hold negative values on the tonnage field, such as -99 for a blank. Those values are counted as 0 t.
 schedule-not-ready-not-run = { $step } has not been run
 schedule-not-ready-stale = { $step } is out of date; run Schedule Setup again
 schedule-not-ready-running = { $step } is still running
