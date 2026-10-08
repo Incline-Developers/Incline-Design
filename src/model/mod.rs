@@ -316,6 +316,10 @@ pub(crate) struct MiningExclusions {
     /// Blasts smaller than this in plan, m², are left out of mining and
     /// unnamed: the slivers a cut line leaves against the bench edge.
     pub(crate) min_blast_area: f64,
+    /// Dig blocks smaller than this in plan, m², are left out of mining: the
+    /// slivers a strip leaves against a blast boundary or the flitch edge.
+    /// They are still cut, so the blocks keep adding up to their benches.
+    pub(crate) min_strip_area: f64,
 }
 
 impl Default for MiningExclusions {
@@ -325,6 +329,7 @@ impl Default for MiningExclusions {
             blasts: Vec::new(),
             blocks: Vec::new(),
             min_blast_area: Self::DEFAULT_MIN_BLAST_AREA,
+            min_strip_area: Self::DEFAULT_MIN_STRIP_AREA,
         }
     }
 }
@@ -358,9 +363,15 @@ impl MiningExclusions {
     /// Same tolerance a stored bench is matched to a generated one with.
     const RL_EPSILON: f64 = 1e-6;
     pub(crate) const DEFAULT_MIN_BLAST_AREA: f64 = 100.0;
+    pub(crate) const DEFAULT_MIN_STRIP_AREA: f64 = 10.0;
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.benches.is_empty() && self.blasts.is_empty() && self.blocks.is_empty() && self.min_blast_area <= 0.0
+        self.benches.is_empty() && self.blasts.is_empty() && self.blocks.is_empty() && self.min_blast_area <= 0.0 && self.min_strip_area <= 0.0
+    }
+
+    /// Whether a dig block of this plan area is too small to mine.
+    pub(crate) fn block_too_small(&self, area: f64) -> bool {
+        area < self.min_strip_area
     }
 
     /// Whether a blast of this plan area is too small to mine.
@@ -389,9 +400,10 @@ impl MiningExclusions {
         self.bench_excluded(bench) || self.blast_too_small(arrangement::face_area(face)) || Self::holds(&self.blasts, bench, face)
     }
 
-    /// Whether a dig block of this flitch with this footprint was picked out.
+    /// Whether a dig block of this flitch with this footprint is out of
+    /// mining on its own: picked out, or under the minimum strip area.
     pub(crate) fn block_excluded(&self, flitch: f64, face: &[Vec<glam::DVec2>]) -> bool {
-        Self::holds(&self.blocks, flitch, face)
+        self.block_too_small(arrangement::face_area(face)) || Self::holds(&self.blocks, flitch, face)
     }
 
     /// Whether a dig block is out of mining for any reason.
@@ -484,6 +496,7 @@ impl MiningExclusions {
         }
         (self.benches.len(), self.blasts.len(), self.blocks.len()).hash(hasher);
         self.min_blast_area.to_bits().hash(hasher);
+        self.min_strip_area.to_bits().hash(hasher);
     }
 }
 

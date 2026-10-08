@@ -674,7 +674,14 @@ impl crate::app::App<'_> {
     /// the selected one.
     /// Whether the run started.
     pub(crate) fn run_schedule_step(&mut self, step: ScheduleStep) -> bool {
+        self.run_schedule_step_as(step, true)
+    }
+
+    /// As [`Self::run_schedule_step`], saying whether someone asked for the
+    /// run: only then may its Solids step start the Solids run.
+    fn run_schedule_step_as(&mut self, step: ScheduleStep, requested: bool) -> bool {
         self.sync_schedule_pipeline();
+        self.schedule_setup_runs_solids = requested;
         let Some(pipeline) = self.schedule_pipeline.as_mut() else {
             return false;
         };
@@ -688,6 +695,12 @@ impl crate::app::App<'_> {
 
     pub(crate) fn run_all_schedule_steps(&mut self) {
         self.run_schedule_step(ScheduleStep::Readiness);
+    }
+
+    /// Validate every Setup step for a recalculation nobody pressed a button
+    /// for, leaving the Solids run as it stands.
+    pub(crate) fn check_all_schedule_steps(&mut self) {
+        self.run_schedule_step_as(ScheduleStep::Readiness, false);
     }
 
     pub(crate) fn cancel_schedule_run(&mut self) {
@@ -1396,8 +1409,10 @@ impl crate::app::App<'_> {
                 };
             }
             // As Haulage does: the Schedule's setup runs what it depends on.
+            // Only a run someone asked for: an automatic recalculation never
+            // starts Reserving behind the user's back.
             Err(reason @ (PlanningNotReady::NotRun { .. } | PlanningNotReady::Stale { .. })) => {
-                return if self.resume_planning_stages(crate::ui::state::SolidsStep::LAST) {
+                return if self.schedule_setup_runs_solids && self.resume_planning_stages(crate::ui::state::SolidsStep::LAST) {
                     StageOutcome::Working {
                         message: Some(tr!("schedule-stage-waiting-solids", reason = reason.describe())),
                     }

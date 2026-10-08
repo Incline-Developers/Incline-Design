@@ -373,8 +373,13 @@ impl crate::app::App<'_> {
 
         let auto = mode == ScheduleRunMode::Auto;
         // Validate the lightweight Schedule Setup stages as part of the run.
-        // Solids remains an explicit prerequisite.
-        self.run_all_schedule_steps();
+        // Solids remains an explicit prerequisite: a recalculation Auto
+        // started reports a stale Solids run rather than starting it.
+        if auto {
+            self.check_all_schedule_steps();
+        } else {
+            self.run_all_schedule_steps();
+        }
         let inputs = match self.schedule_run_inputs() {
             Ok(inputs) => inputs,
             Err(reason) => {
