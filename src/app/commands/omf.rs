@@ -571,7 +571,7 @@ impl<'a> App<'a> {
                 geometry: imported.geometry,
                 mesh,
                 spatial,
-                edges,
+                edges: edges.into(),
                 surface_face_order,
                 color: imported.color,
                 line_color: imported.line_color,

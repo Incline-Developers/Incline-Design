@@ -263,6 +263,9 @@ pub(crate) struct ScheduleReportCache {
     snapshot: Option<Arc<PlanningSnapshot>>,
     ground: Arc<Vec<BlockGround>>,
     index: Arc<GroundIndex>,
+    /// The run's excluded ground and its index, kept with the rest so a bar
+    /// edit against the same run builds neither again.
+    excluded: Arc<(Vec<BlockGround>, GroundIndex)>,
     unavailable: Option<String>,
     reports: Arc<Vec<BarReport>>,
     bar_views_key: Option<u64>,
@@ -386,6 +389,7 @@ impl crate::app::App<'_> {
                 snapshot: None,
                 ground: Arc::default(),
                 index: Arc::new(GroundIndex::build(&[])),
+                excluded: Arc::new((Vec::new(), GroundIndex::build(&[]))),
                 unavailable: snapshot.err().map(|reason| reason.describe()),
                 reports: Arc::default(),
                 bar_views_key: None,
@@ -394,27 +398,43 @@ impl crate::app::App<'_> {
             log::debug!("schedule report cache rebuilt without a project in {:?}", rebuild_started.elapsed());
             return;
         };
-        let (snapshot, ground, index, unavailable, reports) = match snapshot {
+        // The same run as last time - a bar edit, typically - keeps its ground
+        // and indexes: only the bars are measured again.
+        let held = self
+            .schedule_report_cache
+            .as_ref()
+            .filter(|cache| cache.snapshot.as_ref().zip(snapshot.as_ref().ok()).is_some_and(|(held, now)| Arc::ptr_eq(held, now)))
+            .map(|cache| (Arc::clone(&cache.ground), Arc::clone(&cache.index), Arc::clone(&cache.excluded)));
+        let (snapshot, ground, index, excluded, unavailable, reports) = match snapshot {
             Ok(snapshot) => {
-                let snapshot = Arc::new(snapshot);
-                let ground = Arc::new(ground_of(&snapshot.blocks));
-                let index = Arc::new(GroundIndex::build(&ground));
-                let excluded = ground_of(&snapshot.excluded);
-                let excluded_index = GroundIndex::build(&excluded);
+                let (ground, index, excluded) = held.unwrap_or_else(|| {
+                    let ground = Arc::new(ground_of(&snapshot.blocks));
+                    let index = Arc::new(GroundIndex::build(&ground));
+                    let excluded = ground_of(&snapshot.excluded);
+                    let excluded_index = GroundIndex::build(&excluded);
+                    (ground, index, Arc::new((excluded, excluded_index)))
+                });
                 let run = CurrentRun {
                     snapshot: &snapshot,
                     ground: &ground,
                     index: &index,
-                    excluded: &excluded,
-                    excluded_index: &excluded_index,
+                    excluded: &excluded.0,
+                    excluded_index: &excluded.1,
                 };
                 let reports: Vec<BarReport> = document.schedule().bars().iter().map(|bar| report_against(document, bar, Ok(&run))).collect();
-                (Some(snapshot), ground, index, None, Arc::new(reports))
+                (Some(snapshot), ground, index, excluded, None, Arc::new(reports))
             }
             Err(reason) => {
                 let unavailable = reason.describe();
                 let reports: Vec<BarReport> = document.schedule().bars().iter().map(|bar| report_against(document, bar, Err(&reason))).collect();
-                (None, Arc::default(), Arc::new(GroundIndex::build(&[])), Some(unavailable), Arc::new(reports))
+                (
+                    None,
+                    Arc::default(),
+                    Arc::new(GroundIndex::build(&[])),
+                    Arc::new((Vec::new(), GroundIndex::build(&[]))),
+                    Some(unavailable),
+                    Arc::new(reports),
+                )
             }
         };
         let block_count = snapshot.as_ref().map_or(0, |snapshot| snapshot.blocks.len());
@@ -425,6 +445,7 @@ impl crate::app::App<'_> {
             snapshot,
             ground,
             index,
+            excluded,
             unavailable,
             reports,
             bar_views_key: None,
@@ -468,7 +489,18 @@ impl crate::app::App<'_> {
         }
         self.ensure_schedule_report_cache();
         let Some(cache) = self.schedule_report_cache.as_ref() else { return };
-        if self.editor.mined_ground_key == Some(cache.key) {
+        // The run alone decides what ground there is, so a bar edit - which
+        // retires the reports but not the snapshot - leaves this as it was.
+        let key = {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            cache
+                .snapshot
+                .as_ref()
+                .map(|snapshot| (Arc::as_ptr(snapshot) as usize, snapshot.generation, snapshot.blocks.len()))
+                .hash(&mut hasher);
+            hasher.finish()
+        };
+        if self.editor.mined_ground_key == Some(key) {
             return;
         }
         self.editor.mined_ground = cache.snapshot.as_ref().map(|snapshot| {
@@ -478,7 +510,7 @@ impl crate::app::App<'_> {
             }
             Arc::new(mined)
         });
-        self.editor.mined_ground_key = Some(cache.key);
+        self.editor.mined_ground_key = Some(key);
         self.redraw_requested = true;
     }
 
@@ -712,6 +744,13 @@ impl crate::app::App<'_> {
                 // unstated here the same way a tonnage figure is.
                 let document = self.workspace.active_document();
                 let zero = document.is_some_and(|document| document.schedule().unmeasured_as_zero());
+                // Picks name blocks by id; a run holds tens of thousands, so
+                // they are looked up through a map rather than a scan each.
+                let by_id: std::collections::HashMap<_, usize> = if draft.members.iter().any(|member| matches!(member, DraftMember::Picked(_))) {
+                    snapshot.blocks.iter().enumerate().map(|(index, block)| (block.id, index)).collect()
+                } else {
+                    std::collections::HashMap::new()
+                };
                 draft
                     .members
                     .iter()
@@ -726,7 +765,7 @@ impl crate::app::App<'_> {
                             }
                             DraftMember::Picked(pick) => {
                                 let stale = pick.generation != snapshot.generation;
-                                let found = snapshot.blocks.iter().position(|block| block.id == pick.block).filter(|_| !stale);
+                                let found = by_id.get(&pick.block).copied().filter(|_| !stale);
                                 (found, stale.then(|| tr!("sequence-pick-superseded")), stale)
                             }
                         };
