@@ -78,6 +78,8 @@ pub(crate) fn explorer_note(ui: &mut egui::Ui, text: impl Into<String>) {
 /// Width reserved for one trailing toggle in an explorer row.
 const TOGGLE_WIDTH: f32 = 20.0;
 
+/// Name colour of an entry that is not loaded - see [`ExplorerEntry::dimmed`].
+const DIMMED_TEXT_COLOR: egui::Color32 = egui::Color32::from_gray(140);
 /// Drawn size of a toggle's glyph inside [`TOGGLE_WIDTH`].
 const TOGGLE_ICON: f32 = 14.0;
 
@@ -146,6 +148,7 @@ pub(crate) struct ExplorerEntry {
     toggles: Option<EntryToggles>,
     leading_icon: Option<(egui::ImageSource<'static>, egui::Color32)>,
     draggable: bool,
+    dimmed: bool,
     trailing: f32,
 }
 
@@ -159,6 +162,7 @@ impl ExplorerEntry {
             toggles: None,
             leading_icon: None,
             draggable: false,
+            dimmed: false,
             trailing: 0.0,
         }
     }
@@ -168,6 +172,14 @@ impl ExplorerEntry {
     /// label truncates against it, the way it does against the toggles.
     pub(crate) fn trailing(mut self, width: f32) -> Self {
         self.trailing = width;
+        self
+    }
+
+    /// Grey the name, for an entry that is not loaded. A selected row keeps
+    /// the selection's colour instead: a frameless row shows that it is
+    /// selected only through its text, which an explicit grey would hide.
+    pub(crate) fn dimmed(mut self, dimmed: bool) -> Self {
+        self.dimmed = dimmed;
         self
     }
 
@@ -214,8 +226,10 @@ impl ExplorerEntry {
             toggles,
             leading_icon,
             draggable,
+            dimmed,
             trailing,
         } = self;
+        let title = if dimmed && !selected { title.color(DIMMED_TEXT_COLOR) } else { title };
         let height = row_height(ui);
         ui.scope_builder(egui::UiBuilder::new().id(id.with("explorer_entry_scope")), |ui| {
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);

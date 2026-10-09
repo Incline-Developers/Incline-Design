@@ -15,12 +15,10 @@ use crate::{
     },
 };
 
-/// Grey colour used for inactive (not loaded) layers and triangulations.
-const INACTIVE_TEXT_COLOR: egui::Color32 = egui::Color32::from_gray(140);
-
-/// An entry's name: bold while loaded, plain and greyed while not.
+/// An entry's name: bold while loaded, plain while not. The row greys an
+/// unloaded name itself - see `ExplorerEntry::dimmed`.
 fn entry_label(name: &str, loaded: bool) -> egui::RichText {
-    if loaded { bold(name) } else { egui::RichText::new(name).color(INACTIVE_TEXT_COLOR) }
+    if loaded { bold(name) } else { egui::RichText::new(name) }
 }
 
 /// Section heading tints, keyed to the icons each section's entries use.
@@ -506,6 +504,7 @@ fn layer_row(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, layer: &UiLayerEn
     // Named `row` rather than `entry`: `entry` is the enclosing project this
     // layer belongs to.
     let row = ExplorerEntry::new(egui::Id::new(("explorer_layer", layer_id)), layer_label)
+        .dimmed(!layer.is_loaded)
         .selected(is_active || cx.selected_layers.contains(&layer_id))
         .draggable(cx.draggable)
         .toggles(EntryToggles {
@@ -876,6 +875,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                             let tri_handle = SceneEntityId::Triangulation(tri_id);
                             let tri_locked = frozen_handles.contains(&tri_handle);
                             let row = ExplorerEntry::new(egui::Id::new(("explorer_triangulation", tri.id)), label)
+                                .dimmed(!tri.is_loaded)
                                 .selected(tri.is_active || selected_handles.contains(&SceneEntityId::Triangulation(tri_id)))
                                 .draggable(rows_draggable)
                                 .toggles(EntryToggles {
@@ -1018,6 +1018,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                     rows.push(ExplorerRow::Entity(raster_handle));
                                     let raster_locked = locked_rasters.contains(&raster.id);
                                     let row = ExplorerEntry::new(egui::Id::new(("explorer_raster", raster.id)), label)
+                                        .dimmed(!raster.is_loaded)
                                         .selected(selected_handles.contains(&raster_handle))
                                         .draggable(rows_draggable)
                                         .toggles(EntryToggles {
@@ -1130,6 +1131,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                     rows.push(ExplorerRow::Entity(cloud_handle));
                                     let row = ExplorerEntry::new(egui::Id::new(("explorer_point_cloud", point_cloud.id)), label)
                                         .draggable(rows_draggable)
+                                        .dimmed(!point_cloud.is_loaded)
                                         .selected(selected_handles.contains(&cloud_handle))
                                         .toggles(EntryToggles {
                                             visible: point_cloud.is_loaded && !point_cloud.is_hidden,
@@ -1222,6 +1224,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                     let label = entry_label(&label_text, block_model.is_loaded);
                                     let model_locked = frozen_handles.contains(&SceneEntityId::BlockModel(block_model.id));
                                     let row = ExplorerEntry::new(egui::Id::new(("explorer_block_model", block_model.id)), label)
+                                        .dimmed(!block_model.is_loaded)
                                         .selected(is_selected)
                                         .draggable(rows_draggable)
                                         .toggles(EntryToggles {
@@ -1335,6 +1338,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                     let dataset_locked = frozen_handles.contains(&dataset_handle);
                                     let row = ExplorerEntry::new(egui::Id::new(("explorer_drill_hole", dataset.id)), label)
                                         .draggable(rows_draggable)
+                                        .dimmed(!dataset.is_loaded)
                                         .selected(selected_handles.contains(&dataset_handle))
                                         .toggles(EntryToggles {
                                             visible: dataset.is_loaded && !dataset.is_hidden,
