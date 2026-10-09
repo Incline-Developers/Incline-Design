@@ -1654,6 +1654,8 @@ products-update = Update
 ## Progress strings
 
 progress-percent-done-total = { $percent } ({ $done } of { $total })
+progress-memory-usage = System memory: { $used } of { $total } in use ({ $percent }%)
+progress-memory-usage-web = App memory: { $used } of { $total } ({ $percent }%)
 progress-task-finished = { $task }: Finished
 
 ## Project strings

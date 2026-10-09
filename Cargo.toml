@@ -73,6 +73,7 @@ i18n-embed = { version = "0.16.0", features = ["desktop-requester"] }
 memmap2 = "0.9.11"
 pollster = "1.0.1"
 sys-locale = "0.3.2"
+sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 tempfile = "3.27.0"
 toml = "1.1.6"
 tracing = "0.1.44"

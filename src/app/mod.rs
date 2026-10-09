@@ -8,6 +8,7 @@ pub(crate) mod geophysics_web;
 pub(crate) mod io; /* Handles session serialisation */
 pub(crate) mod jobs; // Reusable background-compute job queue
 pub(crate) mod memory; // Browser address-space budgeting for large allocations
+pub(crate) mod memory_usage; // The bottom toolbar's memory readout
 pub(crate) mod tie_in; // Drill & Blast's tie-in and initiation point
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web_download;
@@ -341,6 +342,8 @@ pub(crate) struct App<'a> {
     /// wanted after it: the frame counter's clock. See `record_frame_time`.
     last_frame_end: Option<Instant>,
     frame_demanded_at: Option<Instant>,
+    /// Feeds `EditorState::memory_usage` on its own timer.
+    memory_sampler: memory_usage::MemorySampler,
     surface_retry_pending: bool,
     slice_surface_retry_deadline: Option<Instant>,
     last_scroll_instant: Option<Instant>,
@@ -494,6 +497,7 @@ impl<'a> Default for App<'a> {
             last_render_time: None,
             last_frame_end: None,
             frame_demanded_at: None,
+            memory_sampler: memory_usage::MemorySampler::new(),
             surface_retry_pending: false,
             slice_surface_retry_deadline: None,
             last_scroll_instant: None,

@@ -1191,6 +1191,10 @@ pub(crate) struct EditorState {
     pub(crate) downscale_raster_previews: bool,
     pub(crate) frame_counter_enabled: bool,
     pub(crate) measured_fps: Option<f32>,
+    /// What the app holds against the machine's memory, refreshed by
+    /// `App` every `memory_usage::SAMPLE_PERIOD`. `None` until the first
+    /// reading, or where the platform cannot say.
+    pub(crate) memory_usage: Option<crate::app::memory_usage::MemoryUsage>,
     /// Frames and busy seconds counted towards the next `measured_fps`, which
     /// is published once per window rather than every frame. See
     /// `App::record_frame_time`.
@@ -2435,6 +2439,7 @@ impl EditorState {
             downscale_raster_previews: crate::app::io::default_downscale_raster_previews(),
             frame_counter_enabled: false,
             measured_fps: None,
+            memory_usage: None,
             frame_rate_window: (0, 0.0),
             debug_surface_chunks: false,
             debug_surface_stats: None,
