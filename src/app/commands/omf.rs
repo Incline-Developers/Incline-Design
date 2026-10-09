@@ -246,6 +246,12 @@ impl<'a> App<'a> {
         // Merged once, for every section, before anything is installed:
         // every item below looks its own membership up in this same map.
         let folder_map = project::merge_folders(&mut design.folders, &folders, project::FolderMergeMode::Reuse);
+        for imported in &designs {
+            design.document.merge_reserve_fields_from(&imported.document);
+            design.document.merge_solids_from(&imported.document);
+            design.document.merge_schedule_from(&imported.document);
+            design.document.merge_haulage_from(&imported.document);
+        }
         for imported in designs {
             project::merge_document_preserve_ids(&mut design.document, &imported.document, &folder_map);
         }
@@ -562,15 +568,21 @@ impl<'a> App<'a> {
                     .with_section(imported.section)
                     .with_folder(folder),
                 name,
+                geometry: imported.geometry,
                 mesh,
                 spatial,
-                edges,
+                edges: edges.into(),
                 surface_face_order,
                 color: imported.color,
                 line_color: imported.line_color,
                 line_weight: imported.line_weight,
                 raster_texture,
                 raster_opacity: imported.raster_opacity,
+                flitch_style: None,
+                cull_back_faces: false,
+                always_show_edges: false,
+                depth_shade: None,
+                pattern_from: None,
             });
             if let Some(open) = self.triangulations.last_mut() {
                 open.state.payload_source = PayloadSource::for_triangulation(imported.payload_source, open);
@@ -608,6 +620,12 @@ impl<'a> App<'a> {
                 }
                 open.color_transfers.extend(imported.color_transfers);
                 open.hide_empty_color_values = imported.hide_empty_color_values;
+                // The mapping names the file's reserve fields, which only a
+                // whole-project open brings along.
+                if !fresh {
+                    open.reserve_mapping = imported.reserve_mapping;
+                    open.included_in_reserves = imported.reserve_included;
+                }
             }
         }
 

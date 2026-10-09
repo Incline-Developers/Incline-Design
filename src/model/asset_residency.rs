@@ -87,7 +87,7 @@ impl OpenItem {
                 };
                 item.mesh = Arc::new(super::formats::mesh_data::Triangulation::empty());
                 item.spatial = Arc::new(super::spatial::TriangleBvh::build(&item.mesh));
-                item.edges = Vec::new();
+                item.edges = Arc::default();
                 item.surface_face_order = Arc::new(Vec::new());
                 summary
             }
@@ -142,13 +142,13 @@ impl OpenItem {
                 let data = bundle.triangulations.pop().context("backing contains no triangulation")?.loaded;
                 item.mesh = data.mesh;
                 item.spatial = data.spatial;
-                item.edges = data.edges;
+                item.edges = data.edges.into();
                 item.surface_face_order = data.surface_face_order;
             }
             Self::BlockModel(item) => {
                 let imported = bundle.block_models.pop().context("backing contains no block model")?;
                 let data = imported.loaded;
-                item.model = data.model;
+                item.model.restore_payload(data.model);
                 item.blocks = data.blocks;
                 item.renderable_block_indices = data.renderable_block_indices;
                 item.uniform_grid = data.uniform_grid;

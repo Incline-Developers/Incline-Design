@@ -2230,3 +2230,4 @@ ui-hold-shift-unload = अनलोड करने के लिए Shift द�
 ui-no-charge-rule-load = लोड करने के लिए कोई चार्ज नियम नहीं
 ui-right-click-charge-rules-heading-add = एक जोड़ने के लिए चार्ज नियम शीर्षक पर राइट-क्लिक करें
 omf-element-name-has-count-charge-naming = तत्व '{ $name }' में { $count } चार्ज ऐसे छेदों का नाम देते हैं जिन्हें वह अब नहीं रखता
+common-currency-symbol = ₹

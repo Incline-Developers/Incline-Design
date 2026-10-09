@@ -232,9 +232,19 @@ impl<'a> App<'a> {
             hide_empty_color_values: true,
             active_values_cache: loaded.active_values_cache,
             world_bounds: loaded.world_bounds,
+            reserve_mapping: Vec::new(),
+            included_in_reserves: false,
+            reserve_totals: std::collections::HashMap::new(),
+            reserve_totals_key: None,
+            reserve_totals_data_key: 0,
+            reserve_totals_awaiting_restore: false,
+            reserve_totals_error: None,
+            reserve_totals_error_key: None,
         };
         open_model.ensure_color_transfer_for_active_variable();
         self.block_models.push(open_model);
+        // A project open replaces this with the file's own mapping.
+        self.auto_map_reserve_columns(Some(id));
         self.touch_active_project_content();
         if should_fit {
             self.fit_view_to_extents();
@@ -552,6 +562,11 @@ impl<'a> App<'a> {
     pub(crate) fn remove_block_model(&mut self, id: BlockModelId) {
         self.cancel_jobs(|key| *key == crate::app::jobs::JobKey::BlockModel(id));
         self.clear_block_model_entity_state(SceneEntityId::BlockModel(id));
+        // Solids reference their block model by id, and an import can reuse a
+        // freed id - see `App::remove_triangulation`.
+        if let Some(document) = self.workspace.active_document_mut() {
+            document.forget_solid_block_model(id);
+        }
         self.delete_project_item(ItemRef::BlockModel(id));
         self.request_topology_redraw();
     }

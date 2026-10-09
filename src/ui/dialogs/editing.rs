@@ -70,6 +70,8 @@ fn canvas_context_menu_title(editor: &EditorState, document: &Document) -> Strin
             SceneEntityId::DrillHole(_) => (tr!("edit-drill-hole"), false),
             SceneEntityId::PointCloud(_) => (tr!("ws-menubar-point-cloud"), false),
             SceneEntityId::Raster(_) => (tr!("ws-menubar-raster"), false),
+            SceneEntityId::HaulRoad(_) => (tr!("haul-road"), false),
+            SceneEntityId::HaulNode(_) => (tr!("haul-node"), false),
         };
         match kind.as_ref() {
             None => kind = Some((label, is_object)),
@@ -84,6 +86,32 @@ fn canvas_context_menu_title(editor: &EditorState, document: &Document) -> Strin
         || tr!("edit-properties"),
         |(label, _)| tr!("edit-kind-properties", kind = label.to_string(), properties = (tr!("edit-properties")).to_string()),
     )
+}
+
+/// The menu of a blast or dig block right-clicked on Blasting or Dig Strips:
+/// the same one its list row offers.
+fn draw_ground_context_menu(ui: &mut egui::Ui, editor: &EditorState, document: &Document, commands: &mut Vec<UiCommand>, shape: crate::ui::state::BlastShapeRef, pos: egui::Pos2) {
+    use crate::ui::elements::blasting::{OutlineKind, outline_menu};
+    let same = |outline: &&crate::ui::state::BlastOutline| crate::ui::state::BlastShapeRef::new(outline.solid, outline.bench_base, outline.anchor) == shape;
+    let found = if editor.is_blasting_step() {
+        editor.blasting_outlines.iter().find(same).map(|outline| (outline, OutlineKind::Blast))
+    } else {
+        editor.dig_outlines.iter().find(same).map(|outline| (outline, OutlineKind::DigBlock))
+    };
+    // Gone under the menu - a recut, or the step changed.
+    let Some((outline, kind)) = found else {
+        commands.push(UiCommand::CloseCanvasContextMenu);
+        return;
+    };
+    let title = match kind {
+        OutlineKind::Blast => tr!("planning-dig-blast-group", name = outline.name.clone()),
+        OutlineKind::DigBlock => tr!("planning-dig-block-title", name = outline.name.clone()),
+    };
+    ContextMenu::new("canvas_ground", title).position(pos).width(220.0).show(ui.ctx(), |ui| {
+        if outline_menu(ui, outline, kind, document, commands) {
+            commands.push(UiCommand::CloseCanvasContextMenu);
+        }
+    });
 }
 
 /// Draw the canvas right-click context menu for selected objects and triangulations.
@@ -103,8 +131,13 @@ pub(crate) fn draw_right_click_context(
 ) {
     let ppp = ui.ctx().pixels_per_point();
     let pos = egui::pos2(px / ppp + 4.0, py / ppp + 4.0);
+    if let Some(shape) = editor.canvas_context_menu_ground {
+        draw_ground_context_menu(ui, editor, document, commands, shape, pos);
+        return;
+    }
     let title = canvas_context_menu_title(editor, document);
     ContextMenu::new("canvas_properties", title).position(pos).width(220.0).show(ui.ctx(), |ui| {
+        crate::ui::elements::haulage::canvas_menu(ui, editor, project, commands);
         crate::ui::elements::properties::draw_selection_appearance(ui, editor, project, document, commands, geometry_dirty);
         let selected_drill_hole = editor
             .selected_handles
@@ -870,6 +903,11 @@ pub(crate) fn draw_offset_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand
         return;
     }
 
+    if editor.is_planning_cut_step() {
+        draw_planning_offset_dialog(ui, commands, editor, viewport_rect);
+        return;
+    }
+
     ViewportDockPanel::new("offset_element_panel", tr!("edit-offset-element"), viewport_rect)
         .min_width(350.0)
         .show(ui.ctx(), |ui| {
@@ -937,6 +975,46 @@ pub(crate) fn draw_offset_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand
                 let pick_side_clicked = ui.add(MenuButton::new(tr!("edit-pick-side")).enabled(can_pick_side)).clicked();
                 if can_pick_side && (pick_side_clicked || enter_pressed) {
                     queue_begin_offset_pick(commands, editor);
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() {
+                    commands.push(UiCommand::CancelOffset);
+                }
+            });
+        });
+}
+
+/// The Blasting and Dig Strips version of the offset tool.
+///
+/// Cuts are drawn flat on one bench or flitch, so slope, height and the
+/// triangulation clamp have nothing to act on and are left out: all that is
+/// left is a spacing, repeated out to wherever the side is picked, which is
+/// how a run of strips or blast blocks gets drawn in one gesture.
+fn draw_planning_offset_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState, viewport_rect: egui::Rect) {
+    ViewportDockPanel::new("planning_offset_panel", tr!("edit-offset-cut"), viewport_rect)
+        .min_width(300.0)
+        .show(ui.ctx(), |ui| {
+            MenuFieldF64::new(tr!("drill-pattern-spacing"), &mut editor.offset_value_input, 0.0..=f64::MAX)
+                .help_text(tr!("edit-distance-between-cuts-picking"))
+                .speed(0.1)
+                .suffix(String::from("m"))
+                .show(ui);
+
+            ui.add_space(8.0);
+            let can_pick_side = editor.offset_value_input.abs() > 1e-9;
+            let enter_pressed = ui.input(|input| input.key_pressed(egui::Key::Enter));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let pick_side_clicked = ui.add(MenuButton::new(tr!("edit-pick-side")).enabled(can_pick_side)).clicked();
+                if can_pick_side && (pick_side_clicked || enter_pressed) {
+                    // Built here rather than through `queue_begin_offset_pick` so
+                    // the full tool's remembered angle, measure and clamp survive
+                    // a trip through this one.
+                    commands.push(UiCommand::BeginOffsetPick {
+                        object_ids: editor.offset_target_ids.clone(),
+                        horiz_dist: editor.offset_value_input,
+                        z_delta: 0.0,
+                        project_to_rl: None,
+                        collide_with_triangulation: editor.offset_collide_with_triangulation,
+                    });
                 }
                 if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() {
                     commands.push(UiCommand::CancelOffset);

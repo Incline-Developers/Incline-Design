@@ -42,9 +42,17 @@ fn positioned_objects_on_layer(document: &Document, layer_id: LayerId) -> Vec<(u
 
 impl<'a> App<'a> {
     pub(crate) fn create_layer(&mut self, name: String) -> Result<()> {
-        let Some(project) = self.workspace.active_project_mut() else {
-            return Ok(());
-        };
+        self.create_named_layer(name);
+        Ok(())
+    }
+
+    /// Add a layer and make it the drawing target, handing back its id.
+    ///
+    /// The same thing [`Self::create_layer`] does, for the callers that then
+    /// have to record which layer they got - the Blasting step's per-bench cut
+    /// layer is one.
+    pub(crate) fn create_named_layer(&mut self, name: String) -> Option<LayerId> {
+        let project = self.workspace.active_project_mut()?;
         let layer_id = project.project.document.allocate_layer_id();
         let layer = Layer {
             id: layer_id,
@@ -62,7 +70,7 @@ impl<'a> App<'a> {
         self.editor.active_layer = Some(layer_id);
         userspace_log!("{}", tr!("cmd-layer-created-layer-name", name = name.to_string()));
         self.invalidate_geometry();
-        Ok(())
+        Some(layer_id)
     }
 
     pub(crate) fn delete_layer(&mut self, layer_id: LayerId) -> Result<()> {

@@ -39,6 +39,16 @@ use crate::{
     model::{progress::Progress, triangulation::TriangulationId},
 };
 
+/// Whether a job announces itself to the user while it runs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Announce {
+    /// Report in the bottom-right readout, turn the pointer to the busy
+    /// cursor, and keep the frame redrawing so a percentage advances.
+    StatusBar,
+    /// Say nothing anywhere.
+    Quietly,
+}
+
 /// Identifies the sources a job derives from, so stale in-flight jobs can be
 /// cancelled when their source changes or is removed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,6 +74,37 @@ pub(crate) enum JobKey {
     PointCloud(crate::model::point_cloud::PointCloudId),
     BlockModel(crate::model::block_model::BlockModelId),
     DrillHole(crate::model::drill_hole::DrillHoleId),
+    /// The Solids Setup page's inspection mesh. Keyed by the solid, so
+    /// selecting another one - or changing this one's surfaces - cancels the
+    /// build already in flight for it.
+    SolidPreview(crate::model::SolidId),
+    /// One attempt at building one of a solid's artifacts.
+    ///
+    /// The token identifies the *attempt*, not the inputs. Keying on an input
+    /// fingerprint cannot tell a retry from the cancelled attempt it replaces,
+    /// because identical inputs hash identically - so a result the cancelled
+    /// attempt had already computed would satisfy the new request and publish.
+    SolidArtifact {
+        solid: crate::model::SolidId,
+        kind: crate::app::commands::solids_view::SolidArtifact,
+        token: u64,
+    },
+    /// One coalesced Schedule Animate geometry request.
+    ScheduleAnimation {
+        runtime: u32,
+        run: u64,
+        request: u64,
+    },
+    /// One explicit schedule calculation, owned by its project and serial.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        allow(dead_code, reason = "started only by the native schedule run; the browser build does not calculate")
+    )]
+    ScheduleRun {
+        runtime: u32,
+        serial: u64,
+    },
+    ReserveStats(crate::model::block_model::BlockModelId, u64),
     /// Work on a dataset's linked geophysics files: an index pass, a check
     /// or a hole read. Stale once the dataset's link is taken up again
     /// under another generation, by a relink or a reopen.
@@ -107,11 +148,15 @@ pub(crate) struct CancelFlag(Arc<AtomicBool>);
 
 impl CancelFlag {
     pub(crate) fn cancel(&self) {
-        self.0.store(true, Ordering::Relaxed);
+        self.0.store(true, Ordering::Release);
     }
 
     pub(crate) fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Relaxed)
+        self.0.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn signal(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.0)
     }
 }
 
@@ -221,6 +266,17 @@ impl<'a> App<'a> {
             JobKey::PointCloud(id) => self.point_clouds.iter().any(|item| item.id == id),
             JobKey::BlockModel(id) => self.block_models.iter().any(|item| item.id == id),
             JobKey::DrillHole(id) => self.drill_holes.iter().any(|item| item.id == id),
+            // The page may have moved to another solid, or off the step, while
+            // the build ran; its result is only wanted for the solid still
+            // being previewed.
+            JobKey::ReserveStats(id, key) => self.block_models.iter().any(|model| model.id == id && model.reserve_totals_key == Some(key)),
+            JobKey::SolidArtifact { solid, kind, token } => self.solid_view_cache.get(&solid).is_some_and(|cache| cache.accepts(kind, token)),
+            JobKey::SolidPreview(solid) => self.solid_preview.as_ref().is_some_and(|preview| preview.solid() == solid),
+            JobKey::ScheduleAnimation { runtime, run, request } => self.schedule_animation.accepts(runtime, run, request),
+            JobKey::ScheduleRun { runtime, serial } => self
+                .pending_schedule_run
+                .as_ref()
+                .is_some_and(|pending| pending.runtime == runtime && pending.serial == serial),
             JobKey::Geophysics { dataset, generation } => self.well_logs.generation(dataset) == Some(generation),
             JobKey::DrillHoleLoad { runtime_id, .. } => self.workspace.active_project().is_some_and(|project| project.runtime_id == runtime_id),
             JobKey::Raster(id) => self.raster_textures.iter().any(|item| item.id == id),
@@ -261,7 +317,25 @@ impl<'a> App<'a> {
         C: FnOnce(&CancelFlag) -> anyhow::Result<T> + Send + 'static,
         A: FnOnce(&mut App<'a>, anyhow::Result<T>) + 'a,
     {
-        self.spawn_job_reporting_progress(label, keys, move |cancel, _progress| compute(cancel), apply);
+        self.spawn_announced_job(Announce::StatusBar, label, keys, move |cancel, _progress| compute(cancel), apply);
+    }
+
+    /// As [`App::spawn_job`], but the task never reaches the status bar or the
+    /// busy pointer, and the frame is not held open while it runs.
+    ///
+    /// For work that reports itself where the user is already looking. The
+    /// status bar keeps redrawing for as long as it has something to show, so
+    /// a job that fires on every drag of a slider would otherwise keep the
+    /// whole scene redrawing between the drags as well as during them. `label`
+    /// is still carried, because a stale or lost result has to be able to name
+    /// itself in the activity console.
+    pub(crate) fn spawn_job_quietly<T, C, A>(&mut self, label: impl Into<String>, keys: Vec<JobKey>, compute: C, apply: A)
+    where
+        T: Send + 'static,
+        C: FnOnce(&CancelFlag) -> anyhow::Result<T> + Send + 'static,
+        A: FnOnce(&mut App<'a>, anyhow::Result<T>) + 'a,
+    {
+        self.spawn_announced_job(Announce::Quietly, label, keys, move |cancel, _progress| compute(cancel), apply);
     }
 
     /// As [`App::spawn_job`], but the compute closure also gets a
@@ -274,8 +348,20 @@ impl<'a> App<'a> {
         C: FnOnce(&CancelFlag, &Progress) -> anyhow::Result<T> + Send + 'static,
         A: FnOnce(&mut App<'a>, anyhow::Result<T>) + 'a,
     {
+        self.spawn_announced_job(Announce::StatusBar, label, keys, compute, apply);
+    }
+
+    fn spawn_announced_job<T, C, A>(&mut self, announce: Announce, label: impl Into<String>, keys: Vec<JobKey>, compute: C, apply: A)
+    where
+        T: Send + 'static,
+        C: FnOnce(&CancelFlag, &Progress) -> anyhow::Result<T> + Send + 'static,
+        A: FnOnce(&mut App<'a>, anyhow::Result<T>) + 'a,
+    {
         let label = label.into();
-        let (ticket, progress) = self.begin_reported_task(label.clone());
+        let (ticket, progress) = match announce {
+            Announce::StatusBar => self.begin_reported_task(label.clone()),
+            Announce::Quietly => self.begin_quiet_task(),
+        };
         let mut console_report = crate::logging::retain_current_report();
 
         let (tx, rx) = mpsc::channel();
@@ -364,8 +450,19 @@ impl<'a> App<'a> {
         }
 
         let mut residency_settled = false;
-        let mut still_pending = Vec::with_capacity(self.pending_jobs.len());
-        for mut job in std::mem::take(&mut self.pending_jobs) {
+        // Only the job being polled leaves the list. An apply closure has to
+        // see every other job still in flight: one that asks whether a
+        // restore is pending, or cancels a job, would otherwise find nothing -
+        // which is how one surface landing used to fail a solid whose own
+        // surfaces were still on their way. Follow-ups an apply spawns are
+        // appended, and polled from the next frame.
+        let tickets: Vec<_> = self.pending_jobs.iter().map(|job| job.ticket).collect();
+        for ticket in tickets {
+            // Gone already if an earlier apply cancelled it.
+            let Some(index) = self.pending_jobs.iter().position(|job| job.ticket == ticket) else {
+                continue;
+            };
+            let mut job = self.pending_jobs.remove(index);
             self.applied_job_needs_gpu = false;
             if (job.poll)(self) {
                 residency_settled |= job
@@ -377,13 +474,10 @@ impl<'a> App<'a> {
                 self.finish_background_task(job.ticket, needs_gpu);
                 self.redraw_requested = true;
             } else {
-                still_pending.push(job);
+                let index = index.min(self.pending_jobs.len());
+                self.pending_jobs.insert(index, job);
             }
         }
-        // An apply closure may itself spawn a follow-up job; keep those
-        // (currently in self.pending_jobs) after the ones still running.
-        still_pending.append(&mut self.pending_jobs);
-        self.pending_jobs = still_pending;
         // A rename/edit can invalidate a pending eviction. Reconcile the
         // remaining payloads after stale workers settle as well as on edits.
         if residency_settled {

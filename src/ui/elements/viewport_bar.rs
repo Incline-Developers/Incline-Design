@@ -97,10 +97,17 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
 
                     let left = super::cluster(ui, strip, egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         draw_project_actions(ui, editor, project, commands, side);
-                        main_menu::draw_workspace_menus(ui, editor, project, commands, (side - MENU_ROW_INSET).max(1.0));
+                        if editor.active_workspace == Workspace::Planning {
+                            divider(ui, side);
+                            draw_planning_subpages(ui, editor, commands);
+                        } else {
+                            main_menu::draw_workspace_menus(ui, editor, project, commands, (side - MENU_ROW_INSET).max(1.0));
+                        }
                     });
                     let right = super::cluster(ui, strip, egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        draw_view_tools(ui, editor, project, commands, side);
+                        if !editor.is_planning_setup() {
+                            draw_view_tools(ui, editor, project, commands, side);
+                        }
                     });
 
                     // egui centres a block it is told the size of, and the run
@@ -189,6 +196,7 @@ fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
     if import.clicked() {
         editor.show_import = true;
         editor.show_export = false;
+        editor.import_as_haul_roads = false;
     }
     let export = ui.add_enabled(
         has_project,
@@ -227,6 +235,13 @@ fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
 /// The centre run: every workspace gets the working elevation, alongside any
 /// settings belonging specifically to that workspace.
 fn draw_centre_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView) {
+    if editor.is_planning_setup() {
+        return;
+    }
+    if editor.is_planning_cut_step() {
+        draw_cut_step_settings(ui, editor);
+        return;
+    }
     match editor.active_workspace {
         Workspace::Production => draw_drawing_settings(ui, editor, project),
         Workspace::DrillAndBlast => {
@@ -323,6 +338,32 @@ fn draw_blast_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &Ui
         editor.end_tie_chain();
         editor.initiation_dialog = None;
     }
+}
+
+/// The cut steps name what is being cut, with a switch for the blast and
+/// block labels over the viewport. Cuts are drawn at the bench's own crest and
+/// over the solid, so a working elevation or a line colour would only be a way
+/// to draw one wrong.
+fn draw_cut_step_settings(ui: &mut egui::Ui, editor: &mut EditorState) {
+    ui.spacing_mut().item_spacing.x = CENTRE_LABEL_GAP;
+    match &editor.planning_cut_name {
+        Some(name) => {
+            ui.label(if editor.is_dig_strips_step() { tr!("viewport-flitch") } else { tr!("viewport-bench") });
+            ui.label(name);
+        }
+        // The tools grey out without one bench to draw on - see
+        // `EditorState::planning_cut_target` - so say so where it would be named.
+        None => {
+            let hint = if editor.is_dig_strips_step() {
+                tr!("planning-dig-one-flitch")
+            } else {
+                tr!("planning-blasts-one-bench")
+            };
+            ui.label(egui::RichText::new(hint).color(ui.visuals().weak_text_color()));
+        }
+    }
+    centre_part(ui);
+    ui.add(crate::ui::widgets::toggle::Toggle::new(editor.cut_labels_mut(), tr!("viewport-labels")));
 }
 
 /// What the drawing tools will use next: layer, elevation, line colour, fill.
@@ -762,5 +803,36 @@ fn draw_blast_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, project: &
     );
     if relief.clicked() {
         review.relief = !review.relief;
+    }
+}
+
+/// Planning's pages, then the chosen page's own tabs, in place of the
+/// discipline menus the other workspaces carry here.
+fn draw_planning_subpages(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
+    use crate::ui::state::PlanningPage;
+    let labels = PlanningPage::ALL.map(PlanningPage::label);
+    let selected = PlanningPage::ALL.iter().position(|page| *page == editor.planning_page).unwrap_or(0);
+    if let Some(index) = crate::ui::widgets::toolbar::segmented(ui, "planning_pages", &labels, selected) {
+        commands.push(UiCommand::SetPlanningPage(PlanningPage::ALL[index]));
+    }
+    ui.add_space(12.0);
+    for subpage in editor.planning_page.subpages().iter().copied() {
+        let label = subpage.label();
+        let selected = editor.planning_subpage() == subpage;
+        let font = egui::TextStyle::Button.resolve(ui.style());
+        let color = ui.visuals().text_color();
+        let galley = ui.painter().layout_no_wrap(label.clone(), font, color);
+        let padding = 8.0;
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(galley.size().x + padding * 2.0, ui.spacing().interact_size.y), egui::Sense::click());
+        response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, label.as_str()));
+        ui.painter().galley(rect.center() - galley.size() * 0.5, galley, color);
+        if selected {
+            let y = rect.bottom() - 1.0;
+            ui.painter()
+                .line_segment([egui::pos2(rect.left() + padding, y), egui::pos2(rect.right() - padding, y)], egui::Stroke::new(1.5, color));
+        }
+        if response.clicked() {
+            commands.push(UiCommand::SetPlanningSubpage(subpage));
+        }
     }
 }

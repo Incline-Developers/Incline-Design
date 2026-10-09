@@ -287,3 +287,48 @@ impl<'a> ColorSquarePicker<'a> {
         .inner
     }
 }
+
+/// A row of joined text buttons, one of which is always chosen: a switch
+/// between a handful of sibling views. Returns the index clicked this frame.
+///
+/// Reads as one control rather than a run of tabs, so it can sit beside the
+/// tabs of whichever view it chose without the two levels running together.
+pub(crate) fn segmented(ui: &mut Ui, id_salt: impl Hash + std::fmt::Debug, labels: &[String], selected: usize) -> Option<usize> {
+    const PADDING: f32 = 12.0;
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let galleys: Vec<_> = labels
+        .iter()
+        .map(|label| ui.painter().layout_no_wrap(label.clone(), font.clone(), Color32::PLACEHOLDER))
+        .collect();
+    let height = ui.spacing().interact_size.y;
+    let width: f32 = galleys.iter().map(|galley| galley.size().x + PADDING * 2.0).sum();
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
+    let visuals = ui.visuals().clone();
+    let stroke = visuals.widgets.inactive.bg_stroke;
+    ui.painter().rect(rect, GROUP_CORNER_RADIUS, visuals.extreme_bg_color, stroke, egui::StrokeKind::Inside);
+    let mut clicked = None;
+    let mut x = rect.left();
+    for (index, galley) in galleys.into_iter().enumerate() {
+        let segment = egui::Rect::from_min_size(egui::pos2(x, rect.top()), Vec2::new(galley.size().x + PADDING * 2.0, height));
+        let response = ui.interact(segment, ui.id().with((&id_salt, index)), Sense::click());
+        let chosen = index == selected;
+        response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, chosen, galley.text()));
+        if chosen {
+            ui.painter().rect_filled(segment.shrink(2.0), GROUP_CORNER_RADIUS, visuals.selection.bg_fill);
+        } else if response.hovered() {
+            ui.painter().rect_filled(segment.shrink(2.0), GROUP_CORNER_RADIUS, visuals.widgets.hovered.bg_fill);
+        }
+        if index > 0 && !chosen && index != selected + 1 {
+            let rule = segment.left();
+            ui.painter()
+                .line_segment([egui::pos2(rule, segment.top() + 5.0), egui::pos2(rule, segment.bottom() - 5.0)], stroke);
+        }
+        let color = if chosen { visuals.selection.stroke.color } else { visuals.text_color() };
+        ui.painter().galley(segment.center() - galley.size() * 0.5, galley, color);
+        if response.clicked() {
+            clicked = Some(index);
+        }
+        x = segment.right();
+    }
+    clicked
+}

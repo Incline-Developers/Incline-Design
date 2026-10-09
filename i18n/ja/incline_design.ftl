@@ -2258,3 +2258,4 @@ ui-hold-shift-unload = Shift を押しながらで装薬解除
 ui-no-charge-rule-load = 装薬に使用できる装薬ルールがありません
 ui-right-click-charge-rules-heading-add = 追加するには装薬ルールの見出しを右クリックしてください
 omf-element-name-has-count-charge-naming = 要素 '{ $name }' には、既に含まれていない孔を参照する装薬が { $count } 件あります
+common-currency-symbol = ¥

@@ -2230,3 +2230,4 @@ ui-hold-shift-unload = maintenez Maj pour décharger
 ui-no-charge-rule-load = Aucune règle de chargement à utiliser
 ui-right-click-charge-rules-heading-add = faites un clic droit sur l’en-tête Règles de chargement pour en ajouter une
 omf-element-name-has-count-charge-naming = L’élément « { $name } » a { $count } chargement(s) désignant des trous qu’il ne contient plus
+common-currency-symbol = €

@@ -35,13 +35,23 @@ impl<'a> App<'a> {
             centre
         } else {
             self.refresh_snap_index();
+            let drawn = crate::app::events::drawn_surfaces(
+                &self.editor,
+                self.showing_solid_preview(),
+                &self.triangulations,
+                &self.solid_view_body,
+                &self.schedule_animation,
+                self.solid_preview.as_ref(),
+            );
+            let overlay = if self.editor.is_haulage_page() { &self.haul_block_surface[..] } else { drawn.1 };
             let Some(graphics) = self.graphics.as_mut() else {
                 return;
             };
             // No snap caught: one rule for every object, the closest point on
             // it to the cursor.
             let Some(centre) = graphics.pick_rotation_centre(
-                &self.triangulations,
+                drawn.0,
+                overlay,
                 &self.drill_holes,
                 &self.editor.hidden_handles,
                 &self.editor.frozen_handles,
@@ -292,48 +302,85 @@ impl<'a> App<'a> {
         }
     }
 
-    /// Reset in two stages: plan view where the camera stands, then, clicked
-    /// again with the camera unmoved, plan view fitted to all visible content.
+    /// The surfaces framing must measure whatever the viewport is actually
+    /// drawing.
+    ///
+    /// On the Animate page, that is the project's own surfaces and the
+    /// calculated solids for the instant on screen. Measuring only the
+    /// project's own surfaces framed nothing when the calculated solids were
+    /// the only visible content, causing the camera to reset to the world
+    /// origin.
+    fn framed_triangulations(&self) -> &[crate::model::triangulation::OpenTriangulation] {
+        if self.editor.is_schedule_animation() {
+            self.schedule_animation.scene()
+        } else {
+            &self.triangulations
+        }
+    }
+
+    /// Reset in two stages: first switch to plan view while retaining the
+    /// camera distance, then, when clicked again without moving the camera,
+    /// fit the plan view to all visible content.
     pub(crate) fn reset_view(&mut self) {
+        // Clone this before mutably borrowing graphics. The triangulations may
+        // come from either the project or the current schedule animation.
+        let triangulations = self.framed_triangulations().to_vec();
+
         let Some(graphics) = self.graphics.as_mut() else {
             return;
         };
+
         let rotation_centre = self.editor.rotation_centre;
-        let stage = next_reset_stage(graphics.camera_pose(), graphics.plan_pose_keeping_distance(rotation_centre));
+        let plan_pose = graphics.plan_pose_keeping_distance(rotation_centre);
+        let stage = next_reset_stage(graphics.camera_pose(), plan_pose);
+
         match stage {
             ResetStage::PlanKeepingDistance => {
                 graphics.plan_view_keeping_distance(
                     rotation_centre,
                     &self.scene_document,
-                    &self.triangulations,
+                    &triangulations,
                     &self.block_models,
                     &self.drill_holes,
                     &self.point_clouds,
                     &self.editor.hidden_handles,
                 );
+
                 userspace_log!("{}", tr!("cmd-view-reset-view-plan-same-distance"));
             }
             ResetStage::FitAll => {
                 graphics.fit_to_extents(
                     &self.scene_document,
-                    &self.triangulations,
+                    &triangulations,
                     &self.block_models,
                     &self.drill_holes,
                     &self.point_clouds,
                     &self.editor.hidden_handles,
                 );
+
                 userspace_log!("{}", tr!("cmd-view-reset-view-fit-extents"));
             }
         }
+
         self.redraw_requested = true;
     }
 
     /// Fit all visible content while preserving the current orbit angle.
     pub(crate) fn zoom_to_extents(&mut self) {
+        // The Layout is about its roads and blocks, which the scene's own
+        // extents do not count.
+        if self.editor.is_haulage_page()
+            && let Some((min, max)) = self.haul_layout_bounds()
+        {
+            self.frame_haul(min, max);
+            userspace_log!("{}", tr!("cmd-view-zoom-extents-preserving-angle"));
+            return;
+        }
+        let triangulations = self.framed_triangulations().to_vec();
         if let Some(graphics) = self.graphics.as_mut() {
             graphics.zoom_to_extents(
                 &self.scene_document,
-                &self.triangulations,
+                &triangulations,
                 &self.block_models,
                 &self.drill_holes,
                 &self.point_clouds,

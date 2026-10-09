@@ -66,13 +66,18 @@ pub(crate) fn stripe_bands(x_range: egui::Rangef, top: f32, bottom: f32, height:
 }
 
 /// A section's empty-state line ("No design layers"), as a tree row.
-pub(crate) fn explorer_note(ui: &mut egui::Ui, text: impl Into<String>) {
+///
+/// Wraps rather than truncating: a note is usually the only thing in an empty
+/// list, and the part cut off is the part that says what to do. Returns the
+/// note's response, so a list can offer its own menu on it too.
+pub(crate) fn explorer_note(ui: &mut egui::Ui, text: impl Into<String>) -> egui::Response {
     let height = row_height(ui);
-    ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+    ui.horizontal(|ui| {
+        ui.set_min_height(height);
         ui.add_space(ENTRY_LABEL_GUTTER);
-        ui.label(egui::RichText::new(text).weak().italics());
-    });
+        ui.add(egui::Label::new(egui::RichText::new(text).weak().italics()).wrap())
+    })
+    .inner
 }
 
 /// Width reserved for one trailing toggle in an explorer row.
@@ -94,6 +99,8 @@ pub(crate) struct EntryToggles {
 pub(crate) struct ExplorerEntryResponse {
     /// The row's label, carrying selection clicks and the context menu.
     pub(crate) response: egui::Response,
+    /// Actual leading-icon bounds, for decorations connecting adjacent rows.
+    pub(crate) icon_rect: Option<egui::Rect>,
     pub(crate) visibility_clicked: bool,
     pub(crate) lock_clicked: bool,
     /// The space [`ExplorerEntry::trailing`] reserved, for the caller to paint.
@@ -144,7 +151,10 @@ pub(crate) struct ExplorerEntry {
     selected: bool,
     reserve_toggle_gutter: bool,
     toggles: Option<EntryToggles>,
+    visibility_only: Option<bool>,
     leading_icon: Option<(egui::ImageSource<'static>, egui::Color32)>,
+    header_aligned_icon: bool,
+    error: Option<String>,
     draggable: bool,
     trailing: f32,
 }
@@ -157,7 +167,10 @@ impl ExplorerEntry {
             selected: false,
             reserve_toggle_gutter: false,
             toggles: None,
+            visibility_only: None,
             leading_icon: None,
+            header_aligned_icon: false,
+            error: None,
             draggable: false,
             trailing: 0.0,
         }
@@ -176,12 +189,35 @@ impl ExplorerEntry {
         self
     }
 
+    /// Leave room for a collapsing arrow this row does not have, so a leaf
+    /// lines up with the rows beside it that do open.
+    pub(crate) fn reserve_toggle_gutter(mut self, reserve: bool) -> Self {
+        self.reserve_toggle_gutter = reserve;
+        self
+    }
+
     /// Draw `icon`, tinted `color`, in the gutter the label is indented past.
     ///
     /// The gutter is the same width whether or not a row fills it, so marking
     /// one row of a list this way does not shift the others' labels.
     pub(crate) fn leading_icon(mut self, icon: egui::ImageSource<'static>, color: egui::Color32) -> Self {
         self.leading_icon = Some((icon, color));
+        self
+    }
+
+    /// Match the section header's 16-point icon and left alignment.
+    pub(crate) fn header_aligned_icon(mut self) -> Self {
+        self.header_aligned_icon = true;
+        self
+    }
+
+    /// Mark the row invalid: `hint` replaces the leading icon with the red
+    /// error badge and shows as its hover text. Mirrors
+    /// [`GridRow::error`](super::data_grid::GridRow::error) and the `error`
+    /// argument of [`PropertyRows::field`](super::data_grid::PropertyRows::field).
+    #[allow(dead_code)] // Feature-facing: step rows gain validation with the feature.
+    pub(crate) fn error(mut self, hint: Option<&str>) -> Self {
+        self.error = hint.map(str::to_owned);
         self
     }
 
@@ -201,6 +237,13 @@ impl ExplorerEntry {
         self
     }
 
+    /// Draw only the trailing eye. Used by derived navigation rows that have
+    /// visibility but are not editable project entities with a lock state.
+    pub(crate) fn visibility_toggle(mut self, visible: bool) -> Self {
+        self.visibility_only = Some(visible);
+        self
+    }
+
     /// Lay the row out, returning its label response alongside the toggles.
     ///
     /// [`egui::Widget`] can only hand back the label response, so rows that
@@ -212,7 +255,10 @@ impl ExplorerEntry {
             selected,
             reserve_toggle_gutter,
             toggles,
+            visibility_only,
             leading_icon,
+            header_aligned_icon,
+            error,
             draggable,
             trailing,
         } = self;
@@ -226,13 +272,29 @@ impl ExplorerEntry {
                     // Match its gutter so this leaf starts at the same x.
                     ui.add_space(ui.spacing().indent);
                 }
+                // An error overrides whatever leading icon was set with the red
+                // badge and carries the message as hover text.
+                let leading_icon = match &error {
+                    Some(_) => Some((crate::ui::unthemed_icon!("step_error.svg"), egui::Color32::WHITE)),
+                    None => leading_icon,
+                };
+                let mut leading_icon_rect = None;
                 match leading_icon {
                     Some((icon, color)) => {
-                        let (rect, _) = ui.allocate_exact_size(egui::vec2(ENTRY_LABEL_GUTTER, height), egui::Sense::hover());
-                        if ui.is_rect_visible(rect) {
-                            egui::Image::new(icon)
-                                .tint(color)
-                                .paint_at(ui, egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(TOGGLE_ICON)));
+                        let (rect, response) = ui.allocate_exact_size(egui::vec2(ENTRY_LABEL_GUTTER, height), egui::Sense::hover());
+                        if let Some(hint) = &error {
+                            response.on_hover_text(hint.clone());
+                        }
+                        {
+                            let icon_rect = if header_aligned_icon {
+                                egui::Rect::from_min_size(egui::pos2(rect.left(), rect.center().y - 8.0), egui::vec2(16.0, 16.0))
+                            } else {
+                                egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(TOGGLE_ICON))
+                            };
+                            leading_icon_rect = Some(icon_rect);
+                            if ui.is_rect_visible(rect) {
+                                egui::Image::new(icon).tint(color).paint_at(ui, icon_rect);
+                            }
                         }
                     }
                     None => ui.add_space(ENTRY_LABEL_GUTTER),
@@ -246,7 +308,14 @@ impl ExplorerEntry {
                 // as a floor, so the name would truncate at the row's edge and
                 // shove the toggles past it - which is what stopped the panel
                 // from being dragged narrower than its longest entry.
-                let label_width = (ui.available_width() - if toggles.is_some() { 2.0 * TOGGLE_WIDTH } else { 0.0 } - trailing).max(0.0);
+                let toggle_width = if toggles.is_some() {
+                    2.0 * TOGGLE_WIDTH
+                } else if visibility_only.is_some() {
+                    TOGGLE_WIDTH
+                } else {
+                    0.0
+                };
+                let label_width = (ui.available_width() - toggle_width - trailing).max(0.0);
                 let response = ui
                     .allocate_ui_with_layout(egui::vec2(label_width, height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         ui.add(
@@ -260,8 +329,8 @@ impl ExplorerEntry {
                     })
                     .inner;
                 let trailing = (trailing > 0.0).then(|| ui.allocate_exact_size(egui::vec2(trailing, height), egui::Sense::hover()).0);
-                let (visibility_clicked, lock_clicked) = match toggles {
-                    Some(EntryToggles { visible, locked }) => {
+                let (visibility_clicked, lock_clicked) = match (toggles, visibility_only) {
+                    (Some(EntryToggles { visible, locked }), _) => {
                         let visibility_clicked = entry_toggle(
                             ui,
                             if visible {
@@ -286,10 +355,25 @@ impl ExplorerEntry {
                         );
                         (visibility_clicked, lock_clicked)
                     }
-                    None => (false, false),
+                    (None, Some(visible)) => (
+                        entry_toggle(
+                            ui,
+                            if visible {
+                                crate::ui::unthemed_icon!("entry_visible.svg")
+                            } else {
+                                crate::ui::unthemed_icon!("entry_hidden.svg")
+                            },
+                            visible,
+                            true,
+                            height,
+                        ),
+                        false,
+                    ),
+                    (None, None) => (false, false),
                 };
                 ExplorerEntryResponse {
                     response,
+                    icon_rect: leading_icon_rect,
                     visibility_clicked,
                     lock_clicked,
                     trailing,
@@ -319,6 +403,12 @@ pub(crate) struct ExplorerHeader {
     color: Option<egui::Color32>,
     /// Whether the section starts open the first time it is drawn.
     default_open: bool,
+    /// Whether clicking the heading itself collapses the section. The arrow
+    /// always does; turning this off frees the heading to carry a click of
+    /// its own, such as selecting everything the section holds.
+    collapse_on_click: bool,
+    /// Draw the heading with the selected highlight its entries use.
+    selected: bool,
 }
 
 impl ExplorerHeader {
@@ -330,7 +420,22 @@ impl ExplorerHeader {
             dirty: false,
             color: None,
             default_open: true,
+            collapse_on_click: true,
+            selected: false,
         }
+    }
+
+    /// Let the heading act on its own click instead of collapsing the
+    /// section. The arrow beside it still collapses.
+    pub(crate) fn collapse_on_click(mut self, collapse_on_click: bool) -> Self {
+        self.collapse_on_click = collapse_on_click;
+        self
+    }
+
+    /// Highlight the heading the way a selected entry is highlighted.
+    pub(crate) fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
+        self
     }
 
     /// Show `icon` ahead of the heading text. The section's entries are plain
@@ -374,6 +479,8 @@ impl ExplorerHeader {
             dirty,
             color,
             default_open,
+            collapse_on_click,
+            selected,
         } = self;
         let state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, default_open);
         if dirty && !state.is_open() {
@@ -401,6 +508,7 @@ impl ExplorerHeader {
                             egui::Button::new("")
                                 .left_text(text)
                                 .frame(false)
+                                .selected(selected)
                                 .sense(egui::Sense::click())
                                 .min_size(egui::vec2(ui.available_width(), height)),
                         );
@@ -413,7 +521,7 @@ impl ExplorerHeader {
                 })
                 .body(add_contents);
 
-            if header_response.inner.clicked() {
+            if collapse_on_click && header_response.inner.clicked() {
                 let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, default_open);
                 state.toggle(ui);
                 state.store(ui.ctx());

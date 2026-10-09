@@ -24,7 +24,7 @@ use serde_json::{Value, json};
 use crate::{
     i18n::tr,
     model::{
-        Document, FillStyle, FolderId, FolderRegistry, Layer, MemberKind, Object, ObjectColor, PolyVertex, SectionKind,
+        Document, FillStyle, FolderId, FolderRegistry, Layer, MemberKind, Object, ObjectColor, PolyVertex, ReserveField, SectionKind, Solid,
         block_model::{
             BlockBounds, BlockBoundsSource, Boundary, ColorTransferFunction, LoadedBlockModel, OpenBlockModel, RenderableBlockIndices, StoredColorTransferFunction,
             compute_world_bounds, opaque_irregular_surface_block_count, opaque_surface_block_count,
@@ -38,11 +38,12 @@ use crate::{
         progress::Phase,
         project::{self, ProjectFile, ProjectMetadata},
         raster::{LoadedRasterTexture, OpenRasterTexture},
-        triangulation::{LoadedTriangulation, OpenTriangulation, spatial_surface_face_order, unique_edges},
+        triangulation::{GeometryVersion, LoadedTriangulation, OpenTriangulation, spatial_surface_face_order, unique_edges},
     },
     rendering::color::{linear_to_srgb_byte, rgb_bytes_to_linear_rgba},
 };
 
+const META_GEOMETRY: &str = "incline:geometry";
 const META_KIND: &str = "incline:kind";
 const META_NAME: &str = "incline:name";
 /// A design layer's [`DesignRecord`]s.
@@ -79,11 +80,56 @@ const META_RENDER_RANGES: &str = "incline:render_ranges";
 const META_ORIENTATION_SOURCES: &str = "incline:orientation_sources";
 /// The category on every drillhole row naming the hole it belongs to.
 const DRILL_HOLE_ATTRIBUTE: &str = "Hole";
+const META_RESERVE_FIELDS: &str = "incline:reserve_fields";
+const META_SOLIDS: &str = "incline:solids";
+/// The Schedule workspace's loader fleet, versioned independently of the
+/// planning metadata beside it so a future shape change can be read back
+/// deliberately rather than guessed at.
+const META_HAULAGE: &str = "incline:haulage";
+const META_SCHEDULE: &str = "incline:schedule";
+/// Payload version written into [`META_SCHEDULE`], and the only one this
+/// build reads.
+///
+/// Scheduling is in development and keeps **no** backwards compatibility: a
+/// payload naming any other version is reported and left out rather than
+/// half-read or migrated. Bumping this retires every file written before it,
+/// deliberately, so that nothing in the app has to carry a shape it no longer
+/// has. That ends when scheduling ships.
+const SCHEDULE_METADATA_VERSION: u64 = 7;
 /// A dataset's tie-in: its surface connectors and where the round starts,
 /// both keyed by hole name. Carried on the dataset's own element, because
 /// they are what joins its holes rather than anything one hole holds.
 const META_TIE_INS: &str = "incline:tie_ins";
 const META_CHARGES: &str = "incline:charges";
+
+/// Every `incline:` key the writer puts on an element.
+///
+/// A key absent from here is read back as somebody else's metadata, and the
+/// save dialog offers to drop it - so a file Incline wrote would announce
+/// itself as foreign, and go on doing so after every save and reopen, the
+/// save having faithfully written the key again. Anything added to the
+/// constants above belongs in this list.
+const KNOWN_ELEMENT_METADATA: &[&str] = &[
+    META_GEOMETRY,
+    META_KIND,
+    META_NAME,
+    META_OBJECTS,
+    META_LAYER,
+    META_FOLDERS,
+    META_FOLDER,
+    META_SECTION,
+    META_SOURCE,
+    META_STYLE,
+    META_ID,
+    META_RENDER_RANGES,
+    META_ORIENTATION_SOURCES,
+    META_TIE_INS,
+    META_CHARGES,
+    META_RESERVE_FIELDS,
+    META_SOLIDS,
+    META_SCHEDULE,
+    META_HAULAGE,
+];
 const MAX_ARRAY_ITEMS: u64 = 200_000_000;
 
 /// Owned, cheaply-cloned state captured before OMF encoding moves to a worker.
@@ -142,6 +188,9 @@ pub(crate) struct ImportedTriangulation {
     pub(crate) preferred_id: Option<u64>,
     pub(crate) source_name: Option<String>,
     pub(crate) source_format: Option<String>,
+    /// Which geometry version this surface's mesh is, read from the file or
+    /// minted at load for an older file that never recorded one.
+    pub(crate) geometry: GeometryVersion,
     pub(crate) loaded: LoadedTriangulation,
     pub(crate) is_loaded: bool,
     pub(crate) deferred: Option<(DeferredAsset, crate::model::asset_residency::AssetSummary)>,
@@ -172,6 +221,8 @@ pub(crate) struct ImportedBlockModel {
     /// ramp invented at load from the data.
     pub(crate) color_transfers: BTreeMap<String, ColorTransferFunction>,
     pub(crate) hide_empty_color_values: bool,
+    pub(crate) reserve_mapping: Vec<crate::model::block_model::ReserveFieldMapping>,
+    pub(crate) reserve_included: bool,
     pub(crate) folder: Option<FolderId>,
     /// The section this item is shown under, as its element recorded it.
     pub(crate) section: SectionKind,
@@ -514,6 +565,28 @@ fn element_id(element: &omf_crate::Element) -> Option<u64> {
         .and_then(|value| value.as_str().and_then(|value| value.parse().ok()).or_else(|| value.as_u64()))
 }
 
+/// The geometry version a surface element carries, as a UUID string. An
+/// element written before versions existed has none, so it is minted one at
+/// load: the mesh it holds is the first version this project has ever seen
+/// of it. That mint cannot retroactively verify anything - sequence
+/// references from those files carry no version to compare against, and stay
+/// unverified - it only gives the item a baseline that future edits can be
+/// measured from.
+///
+/// A value that is present but unparseable is treated the same way: the
+/// safest thing a file can be told about its own token is that this build
+/// cannot read it, and a fresh one cannot lie about the old geometry.
+fn element_geometry(element: &omf_crate::Element) -> GeometryVersion {
+    element
+        .metadata
+        .get(META_GEOMETRY)
+        .and_then(|value| value.get("version"))
+        .and_then(|value| value.as_str())
+        .and_then(|value| value.parse::<uuid::Uuid>().ok())
+        .map(GeometryVersion)
+        .unwrap_or_else(GeometryVersion::mint)
+}
+
 fn element_source_name(element: &omf_crate::Element) -> Option<String> {
     element
         .metadata
@@ -622,7 +695,67 @@ fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
     // of section - that is the file's container, not the tag.
     let mut element = omf_crate::Element::new("Designs", omf_crate::Composite::new(layers));
     put(&mut element, META_KIND, "designs");
+    put(&mut element, META_RESERVE_FIELDS, serde_json::to_value(document.reserve_fields())?);
+    let mut solids = document.solids().to_vec();
+    for bench in solids.iter_mut().flat_map(|solid| solid.blasting.benches.iter_mut().chain(&mut solid.blasting.dig_strips)) {
+        bench.cut_layer = bench.cut_layer.map(|id| crate::model::LayerId(id.0 & LOCAL_MASK));
+        if let Some(layer) = &mut bench.planning_layer {
+            layer.id.0 &= LOCAL_MASK;
+        }
+        bench.cuts = bench
+            .cuts
+            .iter()
+            .map(|object| object.with_id_and_layer(crate::model::ObjectId(object.id().0 & LOCAL_MASK), crate::model::LayerId(object.layer().0 & LOCAL_MASK)))
+            .collect();
+    }
+    put(&mut element, META_SOLIDS, serde_json::to_value(solids)?);
+    if !document.haulage().is_pristine() {
+        put(&mut element, META_HAULAGE, serde_json::to_value(document.haulage().local_copy())?);
+    }
+    let schedule = document.schedule();
+    if !schedule.is_pristine() {
+        put(
+            &mut element,
+            META_SCHEDULE,
+            serde_json::json!({ "version": SCHEDULE_METADATA_VERSION, "plan": serde_json::to_value(schedule)? }),
+        );
+    }
     Ok(element)
+}
+
+/// Decode one [`META_SCHEDULE`] payload, or say why it could not be.
+///
+/// Every failure here is reported to the caller: the version, the shape and
+/// the plan's own invariants (unique ids, unique names, positive rates,
+/// resolvable class and agent references) are all things a silent default
+/// would turn into wrong numbers further down the schedule.
+fn read_schedule(value: serde_json::Value) -> std::result::Result<crate::model::schedule::SchedulePlan, String> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Payload {
+        /// Read above, before the plan, so that a payload of another shape is
+        /// refused with the version as the reason. Declared here only because
+        /// `deny_unknown_fields` would otherwise reject the key it was read
+        /// from.
+        #[allow(dead_code, reason = "checked before deserializing; the field exists so deny_unknown_fields accepts the key")]
+        version: u64,
+        plan: crate::model::schedule::SchedulePlan,
+    }
+
+    // The version is read before the plan: another version is another shape,
+    // and `deny_unknown_fields` would refuse it with a serde complaint about
+    // some field rather than with the reason.
+    let version = value.get("version").and_then(serde_json::Value::as_u64);
+    if version != Some(SCHEDULE_METADATA_VERSION) {
+        return Err(format!(
+            "schedule format {} is not read by this build, which reads {SCHEDULE_METADATA_VERSION}: scheduling is in development and keeps no backwards compatibility",
+            version.map_or_else(|| "(unstated)".to_owned(), |version| version.to_string())
+        ));
+    }
+    let payload: Payload = serde_json::from_value(value).map_err(|error| error.to_string())?;
+    let mut plan = payload.plan;
+    plan.validate_loaded().map_err(|error| error.message())?;
+    Ok(plan)
 }
 
 /// A design object's settings, in document order on its layer's element.
@@ -808,6 +941,10 @@ fn triangulation_element(triangulation: &OpenTriangulation, geometry: omf_crate:
         triangulation.state.source_format.as_deref(),
         "surface",
     );
+    // The geometry version travels with the element as a UUID string, so a
+    // reopen - and an eviction, whose backing is these same bytes - hands
+    // back the version that left.
+    put(&mut element, META_GEOMETRY, json!({ "version": triangulation.geometry.0.to_string() }));
     put(
         &mut element,
         META_STYLE,
@@ -1126,6 +1263,8 @@ fn write_block_model<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
             "slice": open.slice,
             "active_color_variable": open.active_color_variable,
             "hide_empty_color_values": open.hide_empty_color_values,
+            "reserve_mapping": open.reserve_mapping,
+            "reserve_included": open.included_in_reserves,
         }),
     );
     Ok(element)
@@ -2091,6 +2230,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     preferred_id,
                     source_name,
                     source_format,
+                    geometry: element_geometry(element),
                     is_loaded: false,
                     payload_source: Some(locator.clone()),
                     deferred: Some((
@@ -2164,8 +2304,17 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     .attributes
                     .iter()
                     .filter(|attribute| matches!(attribute.data, omf_crate::AttributeData::Number { .. } | omf_crate::AttributeData::Category { .. }))
+                    // Typed now, before the values load, so lists of a deferred
+                    // model's columns can tell numbers from categories. Loading
+                    // replaces these with the full variables.
                     .map(|attribute| BlockVariable {
                         name: attribute.name.clone(),
+                        physical_type: if matches!(attribute.data, omf_crate::AttributeData::Category { .. }) {
+                            "namedshort"
+                        } else {
+                            "double"
+                        }
+                        .to_owned(),
                         ..Default::default()
                     })
                     .collect();
@@ -2208,6 +2357,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     slice: style_value(style, "slice"),
                     color_transfers: BTreeMap::new(),
                     hide_empty_color_values: style_bool(style, "hide_empty_color_values").unwrap_or(true),
+                    reserve_mapping: style_value(style, "reserve_mapping").unwrap_or_default(),
+                    reserve_included: style_bool(style, "reserve_included").unwrap_or(false),
                     folder,
                     section,
                 });
@@ -2218,23 +2369,12 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
     }
 
     fn record_unsupported_content(&mut self, element: &omf_crate::Element) {
-        const KNOWN_METADATA: &[&str] = &[
-            META_KIND,
-            META_NAME,
-            META_OBJECTS,
-            META_LAYER,
-            META_FOLDERS,
-            META_FOLDER,
-            META_SECTION,
-            META_SOURCE,
-            META_STYLE,
-            META_ID,
-            META_RENDER_RANGES,
-            META_ORIENTATION_SOURCES,
-            META_TIE_INS,
-            META_CHARGES,
-        ];
-        let unknown_metadata = element.metadata.keys().filter(|key| !KNOWN_METADATA.contains(&key.as_str())).cloned().collect::<Vec<_>>();
+        let unknown_metadata = element
+            .metadata
+            .keys()
+            .filter(|key| !KNOWN_ELEMENT_METADATA.contains(&key.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
         if !unknown_metadata.is_empty() {
             self.bundle
                 .warnings
@@ -2370,6 +2510,46 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             let records = Vec::<DesignRecord>::deserialize(records).with_context(|| format!("read the objects of design layer '{}'", layer_element.name))?;
             self.read_design_layer(&mut document, layer_id, records, lines, points)
                 .with_context(|| format!("read design layer '{}'", layer_element.name))?;
+        }
+        // Planning data that cannot be read is reported and left out rather
+        // than failing the whole project or vanishing silently. The warning
+        // also stands in front of the next save, which would otherwise
+        // replace what is in the file with nothing.
+        let mut unreadable = |what: &str, reason: String| {
+            self.bundle
+                .warnings
+                .push(format!("Element '{}' has {what} that could not be read and was left out: {reason}", element.name));
+        };
+        if let Some(value) = element.metadata.get(META_RESERVE_FIELDS).cloned() {
+            match serde_json::from_value::<Vec<ReserveField>>(value) {
+                Ok(fields) => document.restore_reserve_fields(fields),
+                Err(error) => unreadable("a reserves field list", error.to_string()),
+            }
+        }
+        if let Some(value) = element.metadata.get(META_SOLIDS).cloned() {
+            match serde_json::from_value::<Vec<Solid>>(value) {
+                Ok(solids) => document.restore_solids(solids),
+                Err(error) => unreadable("planning solids", error.to_string()),
+            }
+        }
+        if let Some(value) = element.metadata.get(META_HAULAGE).cloned() {
+            let network = serde_json::from_value::<crate::model::haulage::HaulNetwork>(value)
+                .map_err(anyhow::Error::from)
+                .and_then(|mut network| network.validate().map(|()| network));
+            match network {
+                Ok(network) => document.restore_haulage(network),
+                Err(error) => unreadable("a haul road network", format!("{error:#}")),
+            }
+        }
+        if let Some(value) = element.metadata.get(META_SCHEDULE).cloned() {
+            // A schedule is refused whole rather than defaulted: a dig rate
+            // that failed to parse must not come back as a plausible-looking
+            // default, and a class an agent can no longer reach is a
+            // reconciliation the user has to see.
+            match read_schedule(value) {
+                Ok(schedule) => document.restore_schedule(schedule),
+                Err(reason) => unreadable("a schedule", reason),
+            }
         }
         // Files written before circles were their own variant store them as
         // closed two-vertex bulged polylines. Upgrade on load so no tool
@@ -2673,6 +2853,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
     }
 
     fn push_triangulation(&mut self, element: &omf_crate::Element, vertices: Vec<Vertex>, faces: Vec<[u32; 3]>) -> Result<()> {
+        let geometry = element_geometry(element);
         let mesh = Triangulation::from_vertices_and_faces(vertices, faces).with_context(|| format!("build OMF surface '{}'", element.name))?;
         let spatial = Arc::new(crate::model::spatial::TriangleBvh::build(&mesh));
         let edges = unique_edges(&mesh);
@@ -2686,6 +2867,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             preferred_id: element_id(element),
             source_name: element_source_name(element),
             source_format: element_source_format(element),
+            geometry,
             loaded: LoadedTriangulation {
                 name: element_name(element).to_owned(),
                 path: virtual_path(self.source_name, element_name(element), "obj"),
@@ -2959,6 +3141,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             slice: style_value(style, "slice"),
             color_transfers,
             hide_empty_color_values: style_bool(style, "hide_empty_color_values").unwrap_or(true),
+            reserve_mapping: style_value(style, "reserve_mapping").unwrap_or_default(),
+            reserve_included: style_bool(style, "reserve_included").unwrap_or(false),
             folder,
             section,
         });

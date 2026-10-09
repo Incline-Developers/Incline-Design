@@ -108,68 +108,10 @@ pub(crate) fn draw_status_bar(ui: &mut egui::Ui, editor: &EditorState, commands:
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(format!("{} {}", crate::APP_NAME, crate::APP_RELEASE));
-                ui.separator();
-                ui.label(tr!("status-selected", count = editor.selected_handles.len()));
-                ui.separator();
-                if editor.frame_counter_enabled {
-                    match editor.measured_fps {
-                        Some(fps) => ui.label(format!("{}: {fps:.0}", tr!("status-frame-rate"))),
-                        None => ui.label(format!("{}: --", tr!("status-frame-rate"))),
-                    };
-                    ui.separator();
-                }
-                if editor.debug_surface_chunks {
-                    match editor.debug_surface_stats {
-                        Some(stats) => ui.label(tr!(
-                            "status-faces",
-                            drawn = stats.drawn_faces.separate_with_commas(),
-                            total = stats.total_faces.separate_with_commas(),
-                            drawn_chunks = stats.drawn_chunks,
-                            total_chunks = stats.total_chunks
-                        )),
-                        None => ui.label(tr!("status-faces-chunks")),
-                    };
-                    ui.separator();
-                }
-                if editor.debug_clip_planes {
-                    match editor.debug_clip_plane_distances {
-                        Some((near, far)) => ui.label(tr!(
-                            "status-clip",
-                            near = format!("{near:.3}"),
-                            far = format!("{far:.3}"),
-                            delta = format!("{:.3}", far - near)
-                        )),
-                        None => ui.label(tr!("status-clip-near-far")),
-                    };
-                    ui.separator();
-                }
-                if editor.debug_point_cloud_chunks {
-                    match editor.debug_point_stats {
-                        Some(stats) => ui.label(tr!(
-                            "status-points",
-                            drawn = stats.drawn.separate_with_commas(),
-                            target = stats.target.separate_with_commas(),
-                            total = stats.total.separate_with_commas(),
-                            drawn_chunks = stats.drawn_chunks,
-                            total_chunks = stats.total_chunks
-                        )),
-                        None => ui.label(tr!("status-points-chunks")),
-                    };
-                    ui.separator();
-                }
-                let coord_width = coord_field_width(ui);
-                let cursor_in_viewport = ui.input(|input| input.pointer.hover_pos().is_some()) && !ui.ctx().is_pointer_over_egui();
-                match editor.cursor_world.filter(|_| cursor_in_viewport) {
-                    Some(p) => {
-                        for (axis, value) in crate::model::survey::axis_names().into_iter().zip([p.x, p.y, p.z]) {
-                            coord_field(ui, coord_width, format!("{axis}: {}", format!("{value:.2}").separate_with_commas()));
-                        }
-                    }
-                    None => {
-                        for axis in crate::model::survey::axis_names() {
-                            coord_field(ui, coord_width, format!("{axis}: --"));
-                        }
-                    }
+                // Planning → Set Up has no viewport, so the cursor, selection and
+                // render readouts have nothing to report.
+                if !editor.is_planning_setup() {
+                    draw_viewport_readouts(ui, editor);
                 }
                 // The picker is pinned to the far end of the bar, so it does not
                 // move as the readouts before it come and go.
@@ -178,4 +120,72 @@ pub(crate) fn draw_status_bar(ui: &mut egui::Ui, editor: &EditorState, commands:
         })
         .response
         .rect
+}
+
+/// The cursor, selection and debug render readouts, drawn only when a viewport
+/// is on screen to report them.
+fn draw_viewport_readouts(ui: &mut egui::Ui, editor: &EditorState) {
+    ui.separator();
+    ui.label(tr!("status-selected", count = editor.selected_handles.len()));
+    ui.separator();
+    if editor.frame_counter_enabled {
+        match editor.measured_fps {
+            Some(fps) => ui.label(format!("{}: {fps:.0}", tr!("status-frame-rate"))),
+            None => ui.label(format!("{}: --", tr!("status-frame-rate"))),
+        };
+        ui.separator();
+    }
+    if editor.debug_surface_chunks {
+        match editor.debug_surface_stats {
+            Some(stats) => ui.label(tr!(
+                "status-faces",
+                drawn = stats.drawn_faces.separate_with_commas(),
+                total = stats.total_faces.separate_with_commas(),
+                drawn_chunks = stats.drawn_chunks,
+                total_chunks = stats.total_chunks
+            )),
+            None => ui.label(tr!("status-faces-chunks")),
+        };
+        ui.separator();
+    }
+    if editor.debug_clip_planes {
+        match editor.debug_clip_plane_distances {
+            Some((near, far)) => ui.label(tr!(
+                "status-clip",
+                near = format!("{near:.3}"),
+                far = format!("{far:.3}"),
+                delta = format!("{:.3}", far - near)
+            )),
+            None => ui.label(tr!("status-clip-near-far")),
+        };
+        ui.separator();
+    }
+    if editor.debug_point_cloud_chunks {
+        match editor.debug_point_stats {
+            Some(stats) => ui.label(tr!(
+                "status-points",
+                drawn = stats.drawn.separate_with_commas(),
+                target = stats.target.separate_with_commas(),
+                total = stats.total.separate_with_commas(),
+                drawn_chunks = stats.drawn_chunks,
+                total_chunks = stats.total_chunks
+            )),
+            None => ui.label(tr!("status-points-chunks")),
+        };
+        ui.separator();
+    }
+    let coord_width = coord_field_width(ui);
+    let cursor_in_viewport = ui.input(|input| input.pointer.hover_pos().is_some()) && !ui.ctx().is_pointer_over_egui();
+    match editor.cursor_world.filter(|_| cursor_in_viewport) {
+        Some(p) => {
+            for (axis, value) in crate::model::survey::axis_names().into_iter().zip([p.x, p.y, p.z]) {
+                coord_field(ui, coord_width, format!("{axis}: {}", format!("{value:.2}").separate_with_commas()));
+            }
+        }
+        None => {
+            for axis in crate::model::survey::axis_names() {
+                coord_field(ui, coord_width, format!("{axis}: --"));
+            }
+        }
+    }
 }

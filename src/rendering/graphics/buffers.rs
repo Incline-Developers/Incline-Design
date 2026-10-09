@@ -38,6 +38,10 @@ impl<'a> Graphics<'a> {
         self.dynamic_strokes = Vec::new();
         self.dynamic_stroke_gpu = Self::create_stream_buffer(&self.device, "Released Design Stream", 4, wgpu::BufferUsages::VERTEX);
         self.dynamic_stroke_capacity = 0;
+        self.flow_strokes = Vec::new();
+        self.flow_stroke_gpu = Self::create_stream_buffer(&self.device, "Released Design Stream", 4, wgpu::BufferUsages::VERTEX);
+        self.flow_stroke_capacity = 0;
+        self.flow_underlay = 0;
         self.invalidate_geometry();
     }
 

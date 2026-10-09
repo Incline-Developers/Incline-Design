@@ -40,8 +40,12 @@ const SEPARATOR_HEIGHT: f32 = 16.0;
 const SEPARATOR_MARGIN: f32 = 8.0;
 /// Space either side of a workspace tab's label.
 const TAB_PADDING: f32 = 10.0;
-/// Height of a workspace tab's fill.
+/// Vertical space a workspace tab claims in the bar.
 const TAB_HEIGHT: f32 = 20.0;
+/// Height of a workspace tab's fill, sat against the top of that space. Shorter
+/// than [`TAB_HEIGHT`] so the group box behind Planning keeps air below it
+/// instead of bleeding into the region under the bar.
+const TAB_FILL_HEIGHT: f32 = 17.0;
 /// Space either side of a dropdown's label in the viewport bar.
 ///
 /// `egui`'s `menu_style` packs bar labels to 2 points, which is right for a
@@ -164,7 +168,7 @@ fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, commands: &m
     let mut drag = ui.ctx().data_mut(|data| data.get_temp::<WorkspaceTabDrag>(drag_id));
     let font = egui::TextStyle::Button.resolve(ui.style());
     let widths = Workspace::ALL.map(|workspace| ui.painter().layout_no_wrap(workspace.label(), font.clone(), egui::Color32::PLACEHOLDER).size().x + TAB_PADDING * 2.0);
-    let width = |workspace| widths[Workspace::ALL.iter().position(|item| *item == workspace).unwrap()];
+    let tab_width = |workspace| widths[Workspace::ALL.iter().position(|item| *item == workspace).unwrap()];
     let spacing = ui.spacing().item_spacing.x;
     let total_width = widths.iter().sum::<f32>() + spacing * (Workspace::ALL.len() - 1) as f32;
     let (strip, _) = ui.allocate_exact_size(egui::vec2(total_width, TAB_HEIGHT), egui::Sense::hover());
@@ -176,12 +180,12 @@ fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, commands: &m
     if let Some(drag) = &mut drag
         && let Some(pointer) = pointer
     {
-        let center = pointer.x - drag.grab_offset + width(drag.workspace) / 2.0;
+        let center = pointer.x - drag.grab_offset + tab_width(drag.workspace) / 2.0;
         let mut index = drag.order.iter().position(|item| *item == drag.workspace).unwrap();
         let mut x = strip.left();
         let centers = drag.order.map(|workspace| {
-            let center = x + width(workspace) / 2.0;
-            x += width(workspace) + spacing;
+            let center = x + tab_width(workspace) / 2.0;
+            x += tab_width(workspace) + spacing;
             center
         });
         while index > 0 && center < centers[index - 1] {
@@ -203,13 +207,13 @@ fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, commands: &m
             && drag.workspace == workspace
             && let Some(pointer) = pointer
         {
-            (pointer.x - drag.grab_offset).clamp(strip.left(), strip.right() - width(workspace))
+            (pointer.x - drag.grab_offset).clamp(strip.left(), strip.right() - tab_width(workspace))
         } else {
             animated_x
         };
-        let rect = egui::Rect::from_min_size(egui::pos2(left, strip.top()), egui::vec2(width(workspace), TAB_HEIGHT));
+        let rect = egui::Rect::from_min_size(egui::pos2(left, strip.top()), egui::vec2(tab_width(workspace), TAB_FILL_HEIGHT));
         tabs.push((workspace, id, rect));
-        x += width(workspace) + spacing;
+        x += tab_width(workspace) + spacing;
     }
     // Paint the held tab last so it travels above its sliding neighbours.
     tabs.sort_by_key(|(workspace, _, _)| drag.as_ref().is_some_and(|drag| drag.workspace == *workspace));
@@ -273,6 +277,7 @@ fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, wor
     // of a trip through production.
     editor.end_tie_chain();
     editor.initiation_dialog = None;
+    editor.cancel_haul_edit();
     // Survey consumes the same entity selection as the design workspaces.
     // Keep it when entering/leaving Survey so users can select data first.
     // Drill & Blast's individual-hole selection still has different semantics.
@@ -288,7 +293,10 @@ fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, wor
         ActiveTool::MoveCollar | ActiveTool::RotateCollar | ActiveTool::TieHoles | ActiveTool::SetInitiationPoint | ActiveTool::ChargeHoles => {
             workspace == Workspace::DrillAndBlast
         }
-        _ => workspace.has_production_tools(),
+        // Planning's Blasting step carries a run of the drawing tools of its
+        // own, so one armed there is still armed when the user comes back to
+        // it - the same rule, read against the page rather than the tab.
+        _ => workspace.has_production_tools() || editor.is_planning_cut_step(),
     };
     if !survives {
         commands.push(UiCommand::SetActiveTool(ActiveTool::None));
@@ -420,6 +428,7 @@ fn draw_file_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProje
         if ContextMenuAction::new(tr!("menu-file-import")).enabled(active_project.is_some()).show(ui).clicked() {
             editor.show_import = true;
             editor.show_export = false;
+            editor.import_as_haul_roads = false;
             ui.close();
         }
         if ContextMenuAction::new(tr!("menu-file-export")).enabled(active_project.is_some()).show(ui).clicked() {
@@ -532,6 +541,22 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
         spacing.button_padding = egui::vec2(MENU_LABEL_PADDING, 0.0);
         spacing.item_spacing.x = MENU_LABEL_GAP;
 
+        if editor.active_workspace == Workspace::Planning {
+            MenuBarMenu::new(&tr!("haul-roads")).enabled(project.has_active_project).show(ui, |ui| {
+                for (label, command) in [
+                    (tr!("haul-draw"), UiCommand::StartHaulRoad),
+                    (tr!("haul-convert"), UiCommand::ConvertHaulSelection),
+                    (tr!("haul-import"), UiCommand::OpenHaulImport),
+                    (tr!("haul-export"), UiCommand::ExportHaulRoads),
+                    (tr!("haul-open-layout"), UiCommand::EditHaulProperties),
+                ] {
+                    if ContextMenuAction::new(label).show(ui).clicked() {
+                        commands.push(command);
+                        ui.close();
+                    }
+                }
+            });
+        }
         // Drill & Blast and Planning carry no discipline menus of their own
         // yet, and the run is what the workspace has rather than a fixed set of
         // titles: a menu that opens on nothing is left off it.
@@ -693,6 +718,10 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
             }
             if ContextMenuAction::new(tr!("common-merge-shell-into-topology-ellipsis")).show(ui).clicked() {
                 commands.push(UiCommand::OpenIncludeSolidInTopology);
+                ui.close();
+            }
+            if ContextMenuAction::new(tr!("menu-build-solid-surfaces")).show(ui).clicked() {
+                commands.push(UiCommand::OpenBuildSolidFromSurfaces);
                 ui.close();
             }
             context_menu_separator(ui);

@@ -12,7 +12,7 @@ use crate::{
     },
     rendering::{
         StrokeInstance, Vertex,
-        geometry::{DrawContext, draw_line, draw_screen_cross, tessellate_polyline_stroke},
+        geometry::{DrawContext, draw_line, draw_round_join, draw_screen_cross, draw_screen_point_marker_sized, tessellate_polyline_stroke},
         graphics::{DOC_LINE_WIDTH, DOC_TEXT_FONT_SIZE, TEXT_EDIT_INDICATOR_COLOR, text_bounds_corners_with_layout_width},
         pick::{PickRecord, TextPickRecord, world_bounds_from_local_positions},
         scene::{
@@ -58,6 +58,20 @@ pub(crate) fn document_scene_key(document: &Document, editor: &EditorState, stat
     document.objects().len().hash(&mut hasher);
     document.revision().hash(&mut hasher);
     static_key.hash(&mut hasher);
+    // The haul network is the only part of this scene that depends on the
+    // page, so it is all that is keyed: switching between workspaces that do
+    // not show it must not re-tessellate the design.
+    editor.shows_haul_network().hash(&mut hasher);
+    editor.is_haulage_page().hash(&mut hasher);
+    editor.haul_view_revision.hash(&mut hasher);
+    for id in editor
+        .selected_handles
+        .iter()
+        .chain(editor.tri_hover_handles.iter())
+        .filter(|id| matches!(id, crate::model::SceneEntityId::HaulRoad(_) | crate::model::SceneEntityId::HaulNode(_)))
+    {
+        id.hash(&mut hasher);
+    }
     scene_origin.to_array().map(f64::to_bits).hash(&mut hasher);
     scale_factor.to_bits().hash(&mut hasher);
     let hidden = editor.hidden_handles.iter().fold(editor.hidden_handles.len() as u64, |acc, handle| {
@@ -351,6 +365,127 @@ pub(crate) fn rebuild_document_scene(input: DocumentSceneBuildInput<'_>) {
             });
         }
     }
+    if editor.is_haulage_page() {
+        for block in editor.haul_blocks.iter().filter(|b| !editor.haul_hidden.hides(b.solid, b.bench, b.flitch, b.blast)) {
+            let mut points = Vec::new();
+            let mut holes = Vec::new();
+            for (i, ring) in block.rings.iter().enumerate() {
+                if i > 0 {
+                    holes.push(points.len());
+                }
+                points.extend(ring.iter().copied());
+            }
+            let mut indices = Vec::new();
+            let origin = points.first().copied().unwrap_or_default();
+            earcut::Earcut::new().earcut(points.iter().map(|p| [p.x - origin.x, p.y - origin.y]), &holes, &mut indices);
+            let mesh = PolylineFillMesh {
+                vertices: points,
+                indices: indices.into_iter().filter_map(|i| u32::try_from(i).ok()).collect(),
+            };
+            let start = draw_ctx.fill_index_buf.len() as u32;
+            fill_polyline_solid(
+                draw_ctx.fill_vertex_buf,
+                draw_ctx.fill_index_buf,
+                &mesh,
+                if editor.haul_selected_blocks.contains(&block.id) {
+                    let [r, g, b, _] = super::overlays::HAUL_SELECTED_BLOCK;
+                    [r, g, b, 0.12]
+                } else {
+                    let [r, g, b] = super::overlays::haul_block_tint(block);
+                    [r, g, b, if block.connected && block.links.is_empty() { 0.04 } else { 0.08 }]
+                },
+                scene_origin,
+                STYLE_SLOT_NONE,
+            );
+            object_ranges.push(DocumentObjectRanges {
+                entity: SceneEntityId::HaulNode(crate::model::haulage::NodeId(u64::MAX)),
+                stroke_range: (0, 0),
+                fill_index_range: (start, draw_ctx.fill_index_buf.len() as u32),
+                center: origin,
+            });
+        }
+    }
+    if editor.shows_haul_network() {
+        draw_ctx.style = STYLE_SLOT_NONE;
+        let network = document.haulage();
+        // Only what Issues reports as too steep is marked: a grade every
+        // truck class can drive is not a problem, and a tint for it read as one.
+        let max_grade = crate::app::commands::haulage::max_grade(document.schedule().trucks());
+        for road in &network.roads {
+            let entity = SceneEntityId::HaulRoad(road.id);
+            if editor.hidden_handles.contains(&entity) {
+                continue;
+            }
+            let points = network.points(road);
+            let start = draw_ctx.strokes.len() as u32;
+            for pair in points.windows(2) {
+                let slope = crate::model::haulage::network::grade(pair[0], pair[1]).abs();
+                let color = if editor.selected_handles.contains(&entity) {
+                    crate::ui::SELECTION_COLOR_F32
+                } else if editor.tri_hover_handles.contains(&entity) {
+                    [1.0, 0.8, 0.1, 1.0]
+                } else if slope > max_grade {
+                    [0.95, 0.25, 0.25, 1.0]
+                } else {
+                    [0.65, 0.75, 0.85, 1.0]
+                };
+                draw_line(&mut draw_ctx, pair[0], pair[1], 3.0, color);
+            }
+            let end = draw_ctx.strokes.len() as u32;
+            if let Some(bounds) = world_bounds_from_local_positions(
+                draw_ctx.strokes[start as usize..end as usize].iter().flat_map(|s| {
+                    let (a, b) = s.world_ends();
+                    [a, b]
+                }),
+                scene_origin,
+            ) {
+                pick_records.push(PickRecord {
+                    entity,
+                    world_bounds: bounds,
+                    stroke_range: (start, end),
+                    fill_range: (0, 0),
+                    fill_index_range: (0, 0),
+                    fill_opaque: false,
+                });
+                object_ranges.push(DocumentObjectRanges {
+                    entity,
+                    stroke_range: (start, end),
+                    fill_index_range: (0, 0),
+                    center: average_positions(points.into_iter()),
+                });
+            }
+        }
+        for node in &network.nodes {
+            let entity = SceneEntityId::HaulNode(node.id);
+            if editor.hidden_handles.contains(&entity) {
+                continue;
+            }
+            let start = draw_ctx.strokes.len() as u32;
+            let color = if editor.selected_handles.contains(&entity) {
+                crate::ui::SELECTION_COLOR_F32
+            } else if node.role.is_some() {
+                [0.3, 0.9, 0.5, 1.0]
+            } else {
+                [0.85, 0.9, 1.0, 1.0]
+            };
+            draw_screen_point_marker_sized(&mut draw_ctx, node.pos, if node.role.is_some() { 12.0 } else { 8.0 }, color);
+            let end = draw_ctx.strokes.len() as u32;
+            pick_records.push(PickRecord {
+                entity,
+                world_bounds: (node.pos, node.pos),
+                stroke_range: (start, end),
+                fill_range: (0, 0),
+                fill_index_range: (0, 0),
+                fill_opaque: false,
+            });
+            object_ranges.push(DocumentObjectRanges {
+                entity,
+                stroke_range: (start, end),
+                fill_index_range: (0, 0),
+                center: node.pos,
+            });
+        }
+    }
 }
 
 /// Re-stage the document batches for the current selection, hover and
@@ -528,6 +663,198 @@ pub(crate) fn rebuild_dynamic_scene(input: DynamicSceneBuildInput<'_>) {
             {
                 draw_line(&mut draw_ctx, last, first, 2.0, BATTER_BERM_PREVIEW_COLOR);
             }
+        }
+    }
+}
+
+pub(crate) struct FlowSceneBuildInput<'a> {
+    pub(crate) flows: &'a [crate::ui::state::HaulFlowSegment],
+    /// Drill and blast at the hour Animate shows, with the ground each blast
+    /// stands on.
+    pub(crate) blasts: Option<(
+        &'a crate::model::schedule::result::DrillBlastResult,
+        f64,
+        &'a [crate::model::schedule::animation::AnimatedBlast],
+    )>,
+    pub(crate) flow_strokes: &'a mut Vec<StrokeInstance>,
+    pub(crate) view_proj: glam::DMat4,
+    pub(crate) scene_origin: DVec3,
+    pub(crate) scale_factor: f32,
+    /// Seconds on a steady clock; only its rate matters.
+    pub(crate) time_s: f64,
+}
+
+/// Animate's haul flows: each loaded route as a band coloured and sized by
+/// its share of the busiest road's tonnes per hour, with stripes moving
+/// along it faster the more it carries.
+///
+/// Returns how many leading strokes are the faint underlay, drawn without a
+/// depth test so a haul behind a solid still shows where it runs; the band
+/// and stripes after it are depth-tested like any other line in the scene.
+/// Rebuilt every frame while flows are shown, since the stripes move; a few
+/// hundred strokes at most.
+pub(crate) fn rebuild_flow_scene(input: FlowSceneBuildInput<'_>) -> u32 {
+    /// Stripe period and length along the route, in logical pixels.
+    const PERIOD: f32 = 18.0;
+    const DASH: f32 = 8.0;
+    const COOL: [f32; 3] = [70.0 / 255.0, 175.0 / 255.0, 215.0 / 255.0];
+    const WARM: [f32; 3] = [250.0 / 255.0, 165.0 / 255.0, 45.0 / 255.0];
+    let FlowSceneBuildInput {
+        flows,
+        blasts,
+        flow_strokes,
+        view_proj,
+        scene_origin,
+        scale_factor,
+        time_s,
+    } = input;
+    flow_strokes.clear();
+    let mut unused_fill_vertices: Vec<Vertex> = Vec::new();
+    let mut unused_fill_indices: Vec<u32> = Vec::new();
+    let mut ctx = DrawContext::unstyled(flow_strokes, &mut unused_fill_vertices, &mut unused_fill_indices, scene_origin, scale_factor);
+    if flows.is_empty() {
+        if let Some((result, at_h, animated)) = blasts {
+            draw_blasts(&mut ctx, result, at_h, animated);
+        }
+        return 0;
+    }
+    let busiest = flows.iter().map(|flow| flow.tph).fold(0.0, f64::max).max(1e-9);
+    let mix = |a: [f32; 3], b: [f32; 3], t: f32, alpha: f32| [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, alpha];
+    let pieces: Vec<_> = flows
+        .iter()
+        .filter_map(|flow| {
+            let length = (flow.b.0 - flow.a.0).hypot(flow.b.1 - flow.a.1);
+            let share = (flow.tph / busiest) as f32;
+            (length >= 0.5).then(|| (flow, share, length, 3.0 + 4.0 * share, mix(COOL, WARM, share, 1.0)))
+        })
+        .collect();
+    for &(flow, share, _, _, color) in &pieces {
+        draw_line(&mut ctx, flow.from, flow.to, 1.5 + 1.5 * share, [color[0], color[1], color[2], 0.35]);
+    }
+    let underlay = ctx.strokes.len() as u32;
+    // Outline, then band, then stripes, each over every piece before the
+    // next: a piece's dark edge never cuts across its neighbour, and round
+    // joins close the corners between them.
+    let outline = [0.0, 0.0, 0.0, 0.43];
+    for &(flow, _, _, width, _) in &pieces {
+        draw_line(&mut ctx, flow.from, flow.to, width + 2.0, outline);
+        draw_round_join(&mut ctx, flow.from, width + 2.0, outline);
+        draw_round_join(&mut ctx, flow.to, width + 2.0, outline);
+    }
+    for &(flow, _, _, width, color) in &pieces {
+        let band = [color[0] * 0.85, color[1] * 0.85, color[2] * 0.85, 1.0];
+        draw_line(&mut ctx, flow.from, flow.to, width, band);
+        draw_round_join(&mut ctx, flow.from, width, band);
+        draw_round_join(&mut ctx, flow.to, width, band);
+    }
+    let period = PERIOD * scale_factor;
+    let dash = DASH * scale_factor;
+    for &(flow, share, length, width, color) in &pieces {
+        let stripe = mix([color[0], color[1], color[2]], [1.0; 3], 0.65, 1.0);
+        // A fraction of the way along the piece on screen, as a fraction of
+        // the way along it in the world: perspective foreshortens the far end.
+        let w = |point: DVec3| (view_proj * point.extend(1.0)).w.abs().max(1e-9);
+        let (wa, wb) = (w(flow.from), w(flow.to));
+        let world = |along: f32| {
+            let s = f64::from((along / length).clamp(0.0, 1.0));
+            flow.from.lerp(flow.to, s * wa / ((1.0 - s) * wb + s * wa))
+        };
+        // Dashes sit at fixed places along the whole route, shifted by time,
+        // so they flow on unbroken from one piece into the next.
+        let speed = (10.0 + 60.0 * share) * scale_factor;
+        let shift = ((time_s * f64::from(speed)) % f64::from(period)) as f32;
+        let mut k = ((flow.offset - shift) / period).floor();
+        loop {
+            let from = k * period + shift - flow.offset;
+            if from > length {
+                break;
+            }
+            let to = (from + dash).min(length);
+            if to > from.max(0.0) {
+                draw_line(&mut ctx, world(from.max(0.0)), world(to), width * 0.55, stripe);
+            }
+            k += 1.0;
+        }
+    }
+    if let Some((result, at_h, animated)) = blasts {
+        draw_blasts(&mut ctx, result, at_h, animated);
+    }
+    underlay
+}
+
+/// The ground a blast's marks are drawn on: its sampled top where there is
+/// one, else a plane at its bench top.
+struct BlastGround<'a> {
+    top: Option<&'a crate::model::schedule::animation::BlastTop>,
+    bench_top: f64,
+}
+
+impl BlastGround<'_> {
+    /// Held just above the ground, so the solid's own face does not fight the
+    /// marks for depth.
+    const LIFT: f64 = 0.4;
+
+    fn at(&self, point: glam::DVec2) -> DVec3 {
+        point.extend(self.top.and_then(|top| top.height(point)).unwrap_or(self.bench_top) + Self::LIFT)
+    }
+
+    /// A line from `a` to `b` laid along the ground, in steps no longer than
+    /// its samples are apart.
+    fn line(&self, ctx: &mut DrawContext<'_>, a: glam::DVec2, b: glam::DVec2, width: f32, color: [f32; 4]) {
+        let steps = self.top.map_or(1, |top| ((a.distance(b) / top.cell()).ceil() as usize).clamp(1, 256));
+        let mut from = self.at(a);
+        for step in 1..=steps {
+            let to = self.at(a.lerp(b, step as f64 / steps as f64));
+            draw_line(ctx, from, to, width, color);
+            from = to;
+        }
+    }
+}
+
+/// Each blast under way at `at_h`, laid on its ground: its outline in the
+/// colour of its stage, and its holes - those drilled so far, in light
+/// grey, and those charged, in red. Its hatching until prepped is on its own
+/// mesh (see `ScheduleAnimation::set_blast_prep`). A blast not yet clear, or
+/// fired, draws nothing.
+fn draw_blasts(ctx: &mut DrawContext<'_>, result: &crate::model::schedule::result::DrillBlastResult, at_h: f64, animated: &[crate::model::schedule::animation::AnimatedBlast]) {
+    use crate::model::schedule::{BlastActivity, BlastStage};
+    const CLEAR: [f32; 4] = [0.80, 0.74, 0.60, 0.9];
+    const PREPPED: [f32; 4] = [0.85, 0.66, 0.40, 1.0];
+    const DRILLED: [f32; 4] = [0.95, 0.55, 0.20, 1.0];
+    const CHARGED: [f32; 4] = [0.85, 0.25, 0.25, 1.0];
+    const HOLE: [f32; 4] = [0.92, 0.92, 0.88, 1.0];
+    for (index, blast) in result.blasts.iter().enumerate() {
+        let stage = result.stage_at(index, at_h);
+        let cleared = blast.cleared_h.is_some_and(|cleared| cleared <= at_h);
+        if (stage == BlastStage::NotStarted && !cleared) || stage == BlastStage::Fired {
+            continue;
+        }
+        let ground = BlastGround {
+            top: animated.get(index).and_then(|animation| animation.top.as_deref()),
+            bench_top: blast.bench_top,
+        };
+        let prep = result.done_share(index, BlastActivity::Prep, at_h);
+        let prepping = stage == BlastStage::NotStarted && prep > 0.0;
+        let (color, width) = match stage {
+            BlastStage::NotStarted if prepping => (PREPPED, 2.5),
+            BlastStage::NotStarted => (CLEAR, 1.5),
+            BlastStage::Prepped => (PREPPED, 2.5),
+            BlastStage::Drilled => (DRILLED, 2.5),
+            BlastStage::Charged => (CHARGED, 3.0),
+            BlastStage::Fired => continue,
+        };
+        for ring in blast.face.iter() {
+            for (i, point) in ring.iter().enumerate() {
+                let next = ring[(i + 1) % ring.len()];
+                ground.line(ctx, *point, next, width, color);
+            }
+        }
+        let holes = blast.collars.len();
+        let drilled = (result.done_share(index, BlastActivity::Drill, at_h) * holes as f64).round() as usize;
+        let charged = (result.done_share(index, BlastActivity::Charge, at_h) * holes as f64).round() as usize;
+        for (position, collar) in blast.collars.iter().enumerate().take(drilled) {
+            let color = if position < charged { CHARGED } else { HOLE };
+            draw_round_join(ctx, ground.at(*collar), 5.0, color);
         }
     }
 }

@@ -29,6 +29,22 @@ fn merge_aabbs(aabbs: &[(DVec3, DVec3)]) -> Option<(DVec3, DVec3)> {
     aabbs.iter().copied().reduce(|(acc_min, acc_max), (min, max)| (acc_min.min(min), acc_max.max(max)))
 }
 
+/// Generated planning and Animate meshes can change without a document edit.
+/// Track their identities and visibility before reusing camera depth bounds.
+fn bounds_surface_key(triangulations: &[OpenTriangulation], hidden: &HashSet<SceneEntityId>, haul_roads: bool) -> u64 {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    haul_roads.hash(&mut hasher);
+    triangulations.len().hash(&mut hasher);
+    for surface in triangulations {
+        surface.id.hash(&mut hasher);
+        (std::sync::Arc::as_ptr(&surface.mesh) as usize).hash(&mut hasher);
+        surface.state.loaded.hash(&mut hasher);
+        hidden.contains(&surface.entity_id()).hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 /// What a scene pick landed on.
 ///
 /// `entity` is the scene entity the selection sets are keyed by; `hole` is
@@ -981,6 +997,7 @@ impl<'a> Graphics<'a> {
     pub(crate) fn begin_orbit_at_surface(
         &mut self,
         triangulations: &[OpenTriangulation],
+        overlay: &[OpenTriangulation],
         drill_holes: &[OpenDrillHoleDataset],
         hidden: &HashSet<SceneEntityId>,
         frozen: &HashSet<SceneEntityId>,
@@ -991,7 +1008,7 @@ impl<'a> Graphics<'a> {
         xray_enabled: bool,
     ) {
         let pt = rotation_centre.unwrap_or_else(|| {
-            self.pick_rotation_centre(triangulations, drill_holes, hidden, frozen, document, snap_index, working_plane_z, xray_enabled)
+            self.pick_rotation_centre(triangulations, overlay, drill_holes, hidden, frozen, document, snap_index, working_plane_z, xray_enabled)
                 .unwrap_or_else(|| self.unexaggerate_point(self.cursor_world_at_target_depth()))
         });
         self.camera.sync_angles_from_forward();
@@ -1000,9 +1017,12 @@ impl<'a> Graphics<'a> {
     }
 
     /// Asset under the cursor, else object, working plane, or eye depth.
+    /// `overlay` holds surfaces drawn in place of or over the project's own
+    /// - planning solids, Animate's ground - so the pivot lands on them too.
     fn orbit_point_under_cursor(
         &self,
         triangulations: &[OpenTriangulation],
+        overlay: &[OpenTriangulation],
         drill_holes: &[OpenDrillHoleDataset],
         hidden: &HashSet<SceneEntityId>,
         frozen: &HashSet<SceneEntityId>,
@@ -1013,6 +1033,7 @@ impl<'a> Graphics<'a> {
         {
             let (ray_origin, direction) = self.cursor_model_ray();
             let triangulation_hit = SceneQuery::nearest_surface(triangulations, hidden, Some(frozen), ray_origin, direction).map(|(_, world)| world);
+            let overlay_hit = SceneQuery::nearest_surface(overlay, hidden, Some(frozen), ray_origin, direction).map(|(_, world)| world);
             let drill_hole_hit = SceneQuery::nearest_drill_hole(
                 drill_holes,
                 hidden,
@@ -1045,6 +1066,7 @@ impl<'a> Graphics<'a> {
                 .map(|(_, world)| world);
             triangulation_hit
                 .into_iter()
+                .chain(overlay_hit)
                 .chain(drill_hole_hit)
                 .chain(block_model_hit)
                 .chain(point_cloud_hit)
@@ -1069,6 +1091,7 @@ impl<'a> Graphics<'a> {
     pub(crate) fn pick_rotation_centre(
         &self,
         triangulations: &[OpenTriangulation],
+        overlay: &[OpenTriangulation],
         drill_holes: &[OpenDrillHoleDataset],
         hidden: &HashSet<SceneEntityId>,
         frozen: &HashSet<SceneEntityId>,
@@ -1079,10 +1102,10 @@ impl<'a> Graphics<'a> {
     ) -> Option<DVec3> {
         if self.slice_view.is_some() {
             return self
-                .string_or_trace_near_cursor(triangulations, drill_holes, hidden, frozen, document, snap_index, xray_enabled)
+                .string_or_trace_near_cursor(triangulations, overlay, drill_holes, hidden, frozen, document, snap_index, xray_enabled)
                 .or_else(|| self.section_point_at_px(self.camera_controller.mouse_loc));
         }
-        Some(self.plan_pivot_near_cursor(triangulations, drill_holes, hidden, frozen, document, snap_index, working_plane_z, xray_enabled))
+        Some(self.plan_pivot_near_cursor(triangulations, overlay, drill_holes, hidden, frozen, document, snap_index, working_plane_z, xray_enabled))
     }
 
     /// Nearest string or trace point the eye can see within reach, since it
@@ -1092,6 +1115,7 @@ impl<'a> Graphics<'a> {
     fn plan_pivot_near_cursor(
         &self,
         triangulations: &[OpenTriangulation],
+        overlay: &[OpenTriangulation],
         drill_holes: &[OpenDrillHoleDataset],
         hidden: &HashSet<SceneEntityId>,
         frozen: &HashSet<SceneEntityId>,
@@ -1100,8 +1124,8 @@ impl<'a> Graphics<'a> {
         working_plane_z: f64,
         xray_enabled: bool,
     ) -> DVec3 {
-        self.string_or_trace_near_cursor(triangulations, drill_holes, hidden, frozen, document, snap_index, xray_enabled)
-            .unwrap_or_else(|| self.orbit_point_under_cursor(triangulations, drill_holes, hidden, frozen, working_plane_z))
+        self.string_or_trace_near_cursor(triangulations, overlay, drill_holes, hidden, frozen, document, snap_index, xray_enabled)
+            .unwrap_or_else(|| self.orbit_point_under_cursor(triangulations, overlay, drill_holes, hidden, frozen, working_plane_z))
     }
 
     /// The nearer of the closest string and trace points within reach, kept
@@ -1113,6 +1137,7 @@ impl<'a> Graphics<'a> {
     fn string_or_trace_near_cursor(
         &self,
         triangulations: &[OpenTriangulation],
+        overlay: &[OpenTriangulation],
         drill_holes: &[OpenDrillHoleDataset],
         hidden: &HashSet<SceneEntityId>,
         frozen: &HashSet<SceneEntityId>,
@@ -1127,7 +1152,11 @@ impl<'a> Graphics<'a> {
             .flatten()
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(point, _)| point)
-            .filter(|point| xray_enabled || self.centre_candidate_drawn(*point, triangulations, document, snap_index, hidden))
+            .filter(|point| {
+                xray_enabled
+                    || (self.centre_candidate_drawn(*point, triangulations, document, snap_index, hidden)
+                        && !SceneQuery::surface_occludes_pick(overlay, hidden, &self.view_proj(), self.scene_origin, *point, self.section_slab()))
+            })
     }
 
     /// Whether a centre candidate is drawn where it sits, against everything
@@ -1275,6 +1304,21 @@ impl<'a> Graphics<'a> {
             }
         }
         best
+    }
+
+    /// The snap `found` among the document's targets, or a point or edge of
+    /// `rings` (each with whether it is closed) if one is nearer the cursor.
+    pub(crate) fn snap_cursor_to_rings<'r>(&self, rings: impl Iterator<Item = (&'r [DVec3], bool)>, mode: &CursorMode, found: Option<DVec3>) -> Option<DVec3> {
+        crate::rendering::snap::snap_to_rings(
+            rings,
+            mode,
+            &self.view_proj(),
+            self.screen_size(),
+            self.camera_controller.mouse_loc,
+            SNAP_THRESHOLD_PX,
+            self.section_slab(),
+            found,
+        )
     }
 
     /// Find the nearest snap target for the current cursor position.
@@ -1441,7 +1485,7 @@ impl<'a> Graphics<'a> {
         point_clouds: &[OpenPointCloud],
         hidden: &HashSet<SceneEntityId>,
     ) -> Option<(DVec3, DVec3)> {
-        scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, hidden)
+        scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, hidden, self.haul_roads_in_bounds)
     }
 
     /// The point the viewport is currently looking at, in world (not
@@ -1467,6 +1511,26 @@ impl<'a> Graphics<'a> {
         let Some((min, max)) = self.cached_scene_bounds else {
             return;
         };
+        self.frame_bounds(min, max, document, triangulations, block_models, drill_holes, point_clouds, hidden);
+    }
+
+    /// Fit one explicit box, keeping the current orbit angle.
+    ///
+    /// Separate from [`Self::zoom_to_extents`] so a page can frame the thing
+    /// it is about - the Blasting step frames the selected bench - rather
+    /// than everything the scene happens to hold.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn frame_bounds(
+        &mut self,
+        min: DVec3,
+        max: DVec3,
+        document: &Document,
+        triangulations: &[OpenTriangulation],
+        block_models: &[OpenBlockModel],
+        drill_holes: &[OpenDrillHoleDataset],
+        point_clouds: &[OpenPointCloud],
+        hidden: &HashSet<SceneEntityId>,
+    ) {
         if self.slice_view.is_some() {
             self.zoom_slice_to_extents(min, max);
             return;
@@ -1560,9 +1624,25 @@ impl<'a> Graphics<'a> {
 
     pub(crate) fn set_standard_view(&mut self, view: crate::ui::state::StandardView) {
         let (forward, up) = standard_view_basis(view);
+        self.set_view_direction(forward, up);
+    }
+
+    /// Swing the camera to look along `forward`, as the standard views do.
+    /// Separate from them so a page that owns the camera - the Blasting
+    /// step's plan view - can put back whatever the user had before.
+    pub(crate) fn set_view_direction(&mut self, forward: DVec3, up: DVec3) {
         self.camera_controller.begin_view_transition(&self.camera, forward, up, self.projection.zoom);
         self.camera_controller.cancel_orbit();
         self.orbit_marker = None;
+    }
+
+    /// Whether a [`Self::set_view_direction`] swing is still under way.
+    pub(crate) fn view_transition_running(&self) -> bool {
+        self.camera_controller.has_view_transition()
+    }
+
+    pub(crate) fn camera_orientation(&self) -> (DVec3, DVec3) {
+        (self.camera.forward(), self.camera.up())
     }
 
     /// Keep the depth range tight around the current scene. An oversized range
@@ -1578,8 +1658,10 @@ impl<'a> Graphics<'a> {
         point_clouds: &[OpenPointCloud],
         hidden: &HashSet<SceneEntityId>,
     ) {
-        if self.geometry_dirty || self.cached_bounds_document_revision != document.revision() {
-            self.cached_object_aabbs = visible_object_aabbs(document, triangulations, block_models, drill_holes, point_clouds, hidden);
+        let surface_key = bounds_surface_key(triangulations, hidden, self.haul_roads_in_bounds);
+        if self.geometry_dirty || self.cached_bounds_document_revision != document.revision() || self.cached_bounds_surface_key != Some(surface_key) {
+            self.cached_bounds_surface_key = Some(surface_key);
+            self.cached_object_aabbs = visible_object_aabbs(document, triangulations, block_models, drill_holes, point_clouds, hidden, self.haul_roads_in_bounds);
             self.cached_scene_bounds = merge_aabbs(&self.cached_object_aabbs);
             self.cached_bounds_document_revision = document.revision();
         }
@@ -1797,6 +1879,57 @@ impl<'a> Graphics<'a> {
             })
             .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), depth| (min.min(depth), max.max(depth)));
 
+        if min_depth.is_finite() {
+            let padding = (self.projection.zoom * 0.25).max(1.0);
+            self.projection.expand_view_depth_range(min_depth, max_depth, padding);
+        }
+    }
+
+    /// Keep the blast outlines inside the clip volume. They are drawn on their
+    /// bench's nominal crest plane, which on the topmost bench sits above the
+    /// mesh roof - that roof is topography, not a cut cap - so the scene bounds
+    /// stop short of them and the near plane clips them away as the shrinking
+    /// zoom padding stops covering the gap.
+    pub(super) fn include_blast_outlines_in_depth(&mut self, editor: &EditorState) {
+        if editor.blasting_outlines.is_empty() {
+            return;
+        }
+
+        let forward = self.camera.forward();
+        let (min_depth, max_depth) = editor
+            .blasting_outlines
+            .iter()
+            .flat_map(|outline| outline.rings.iter().flatten())
+            .copied()
+            .filter(|point| point.x.is_finite() && point.y.is_finite() && point.z.is_finite())
+            .map(|point| {
+                let point = self.exaggerate_point(point);
+                (point - self.camera.position).dot(forward)
+            })
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), depth| (min.min(depth), max.max(depth)));
+
+        if min_depth.is_finite() {
+            let padding = (self.projection.zoom * 0.25).max(1.0);
+            self.projection.expand_view_depth_range(min_depth, max_depth, padding);
+        }
+    }
+
+    /// The Haulage Layout's dig blocks are fills drawn into the document
+    /// scene, outside the bounds the clip range is fitted to; without this a
+    /// camera brought close to them cuts the nearest ones off.
+    pub(super) fn include_haul_blocks_in_depth(&mut self, editor: &EditorState) {
+        if !editor.is_haulage_page() || editor.haul_blocks.is_empty() {
+            return;
+        }
+        let forward = self.camera.forward();
+        let (min_depth, max_depth) = editor
+            .haul_blocks
+            .iter()
+            .flat_map(|block| block.rings.iter().flatten())
+            .copied()
+            .filter(|point| point.is_finite())
+            .map(|point| (self.exaggerate_point(point) - self.camera.position).dot(forward))
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), depth| (min.min(depth), max.max(depth)));
         if min_depth.is_finite() {
             let padding = (self.projection.zoom * 0.25).max(1.0);
             self.projection.expand_view_depth_range(min_depth, max_depth, padding);

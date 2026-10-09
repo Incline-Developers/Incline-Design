@@ -9,6 +9,7 @@ use glam::DVec3;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
+    ReserveAggregation, ReserveField, ReserveFieldId,
     formats::{block_model_data::BlockModelData, csv_block_model::CsvColumnMapping},
     project::ProjectItemState,
 };
@@ -20,7 +21,7 @@ use crate::model::{
 pub(crate) const MAX_GRADIENT_ENTRIES: usize = 32;
 pub(crate) const FIRST_CUSTOM_COLOR_STOP_ID: u64 = 1_000;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(crate) struct BlockModelId(pub(crate) u64);
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -901,6 +902,219 @@ impl BlockModelSlice {
     }
 }
 
+/// Where one [`ReserveFieldMapping`] gets its per-block values from.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) enum ReserveMappingSource {
+    /// Name of one of this model's own numeric variables.
+    Column(String),
+    /// Fixed value applied to every block, for a model that has no matching
+    /// column - e.g. `0` for a waste model with no grade data.
+    Constant(f64),
+    /// A numeric variable given per cubic metre, times each block's own
+    /// volume: tonnes from a density column, for a model that carries no
+    /// tonnage of its own. Summed and prorated like any other block value.
+    PerVolume(String),
+}
+
+impl ReserveMappingSource {
+    /// The model column this source reads, if it reads one.
+    pub(crate) fn column(&self) -> Option<&str> {
+        match self {
+            Self::Column(name) | Self::PerVolume(name) => Some(name),
+            Self::Constant(_) => None,
+        }
+    }
+}
+
+/// Whether a column's name says it is per cubic metre: a density.
+pub(crate) fn looks_like_density(column: &str) -> bool {
+    let name = column.to_lowercase();
+    ["dens", "sg", "t_m3", "t/m3", "kg_m3"].iter().any(|hint| name.contains(hint))
+}
+
+/// Each block's volume in cubic metres, which a volume-averaged field is
+/// weighted by. `None` when the geometry does not match the model.
+pub(crate) fn block_volumes(model: &BlockModelData, blocks: &BlockBoundsSource) -> Option<Arc<Vec<f64>>> {
+    if blocks.len() != model.metadata.n_blocks {
+        return None;
+    }
+    // The same volume the reserve scan measures a block's overlaps against.
+    let stretch = model.rotation().determinant().abs();
+    let volumes = (0..blocks.len())
+        .map(|index| blocks.get(index).map_or(f64::NAN, |bounds| (bounds.upper - bounds.lower).element_product() * stretch))
+        .collect();
+    Some(Arc::new(volumes))
+}
+
+/// `column` times each block's world volume, for a
+/// [`ReserveMappingSource::PerVolume`] mapping. `None` when the column is not
+/// resident or does not match the block geometry; the mapping's resolver has
+/// already said which.
+pub(crate) fn per_volume_values(model: &BlockModelData, blocks: &BlockBoundsSource, column: &str) -> Option<Arc<Vec<f64>>> {
+    let values = model.shared_numeric_values(column)?;
+    if values.len() != blocks.len() {
+        return None;
+    }
+    // The same volume the reserve scan measures a block's overlaps against.
+    let stretch = model.rotation().determinant().abs();
+    let scaled = values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            blocks
+                .get(index)
+                .map_or(f64::NAN, |bounds| value * (bounds.upper - bounds.lower).element_product() * stretch)
+        })
+        .collect();
+    Some(Arc::new(scaled))
+}
+
+/// This block model's mapping of one project [`crate::model::ReserveField`]
+/// onto its own data.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct ReserveFieldMapping {
+    pub(crate) field: ReserveFieldId,
+    pub(crate) source: ReserveMappingSource,
+}
+
+/// One field's per-block values, resolved from its [`ReserveFieldMapping`].
+/// A constant never materializes a `n_blocks`-long array.
+enum ResolvedReserveValues {
+    Column(Arc<Vec<f64>>),
+    Constant(f64, usize),
+}
+
+impl ResolvedReserveValues {
+    fn len(&self) -> usize {
+        match self {
+            Self::Column(values) => values.len(),
+            Self::Constant(_, count) => *count,
+        }
+    }
+
+    fn get(&self, index: usize) -> f64 {
+        match self {
+            Self::Column(values) => values[index],
+            Self::Constant(value, _) => *value,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ReserveFieldStats {
+    pub(crate) total: Option<f64>,
+    pub(crate) min: Option<f64>,
+    pub(crate) max: Option<f64>,
+    /// Why this field has no total, when it has none. A field that resolved
+    /// cleanly carries `None` here, so a dash always has a stated reason.
+    pub(crate) issue: Option<crate::model::ReserveFieldIssue>,
+    /// Blocks whose mapped value was not a finite number.
+    pub(crate) missing_values: u64,
+    /// Blocks whose weight was absent, zero or negative.
+    pub(crate) unusable_weights: u64,
+}
+
+/// Statistics over all blocks, independent of rendering and reserve inclusion.
+///
+/// Min/max describe finite mapped values, even when average weights are
+/// missing. Every field in the list gets an entry: one that could not be
+/// resolved carries the reason rather than being dropped, so the page can say
+/// why a figure is absent instead of drawing an unexplained dash.
+pub(crate) fn compute_reserve_totals(
+    model: &BlockModelData,
+    blocks: &BlockBoundsSource,
+    fields: &[ReserveField],
+    mapping: &[ReserveFieldMapping],
+    cancel: &crate::app::jobs::CancelFlag,
+) -> anyhow::Result<HashMap<ReserveFieldId, ReserveFieldStats>> {
+    let geometry = blocks;
+    let blocks = model.metadata.n_blocks;
+    let resolve = |id| -> Option<ResolvedReserveValues> {
+        match &mapping.iter().find(|entry| entry.field == id)?.source {
+            ReserveMappingSource::Column(name) => model.shared_numeric_values(name).map(ResolvedReserveValues::Column),
+            ReserveMappingSource::PerVolume(name) => per_volume_values(model, geometry, name).map(ResolvedReserveValues::Column),
+            ReserveMappingSource::Constant(value) => Some(ResolvedReserveValues::Constant(*value, blocks)),
+        }
+    };
+    let mut totals = HashMap::new();
+    for field in fields {
+        anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+        let mut stats = ReserveFieldStats::default();
+        // The same resolver the solid reserves use, so a field that fails
+        // here fails there for the stated reason rather than two different
+        // ones - or, worse, for no stated reason at all.
+        if let Err(issue) = crate::model::solid_reserves::resolve_mapping(model, fields, mapping, field.id, blocks) {
+            stats.issue = Some(issue);
+            totals.insert(field.id, stats);
+            continue;
+        }
+        if field.aggregation == ReserveAggregation::Category {
+            totals.insert(field.id, stats);
+            continue;
+        }
+        let Some(values) = resolve(field.id) else {
+            stats.issue = Some(crate::model::ReserveFieldIssue::Unmapped);
+            totals.insert(field.id, stats);
+            continue;
+        };
+        let weights = match field.aggregation {
+            ReserveAggregation::WeightedAverage { weight_field } => {
+                let issue = match fields.iter().find(|entry| entry.id == weight_field) {
+                    None => Some(crate::model::ReserveFieldIssue::WeightFieldMissing),
+                    Some(entry) if entry.aggregation != ReserveAggregation::Sum => Some(crate::model::ReserveFieldIssue::WeightNotSummed(entry.name.clone())),
+                    Some(_) => crate::model::solid_reserves::resolve_mapping(model, fields, mapping, weight_field, blocks)
+                        .err()
+                        .map(|_| crate::model::ReserveFieldIssue::WeightUnresolved),
+                };
+                if let Some(issue) = issue {
+                    stats.issue = Some(issue);
+                    totals.insert(field.id, stats);
+                    continue;
+                }
+                resolve(weight_field)
+            }
+            ReserveAggregation::VolumeAverage => block_volumes(model, geometry).map(ResolvedReserveValues::Column),
+            _ => None,
+        };
+        let (mut sum, mut weight_sum) = (0.0, 0.0);
+        for index in 0..values.len() {
+            if index.is_multiple_of(4096) {
+                anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+            }
+            let value = values.get(index);
+            if !value.is_finite() {
+                stats.missing_values += 1;
+                continue;
+            }
+            stats.min = Some(stats.min.map_or(value, |min| min.min(value)));
+            stats.max = Some(stats.max.map_or(value, |max| max.max(value)));
+            if field.aggregation == ReserveAggregation::Sum {
+                sum += value;
+            } else if let Some(weights) = &weights {
+                let weight = weights.get(index);
+                if weight.is_finite() && weight > 0.0 {
+                    sum += value * weight;
+                    weight_sum += weight;
+                } else {
+                    stats.unusable_weights += 1;
+                }
+            }
+        }
+        if blocks > 0 && stats.missing_values as usize == blocks {
+            // Every value absent is not a measured zero.
+            stats.issue = Some(crate::model::ReserveFieldIssue::AllValuesMissing);
+        } else if field.aggregation == ReserveAggregation::Sum {
+            stats.total = sum.is_finite().then_some(sum);
+        } else if weight_sum > 0.0 && weight_sum.is_finite() && sum.is_finite() {
+            stats.total = Some(sum / weight_sum);
+        } else {
+            stats.issue = Some(crate::model::ReserveFieldIssue::WeightUnresolved);
+        }
+        totals.insert(field.id, stats);
+    }
+    Ok(totals)
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct OpenBlockModel {
     pub(crate) id: BlockModelId,
@@ -934,6 +1148,30 @@ pub(crate) struct OpenBlockModel {
     /// scene-bounds queries read this instead of re-walking every block's
     /// eight rotated corners.
     pub(crate) world_bounds: Option<(DVec3, DVec3)>,
+    /// This model's mapping of the project's Reserves field list onto its
+    /// own columns/constants; see [`ReserveFieldMapping`].
+    pub(crate) reserve_mapping: Vec<ReserveFieldMapping>,
+    /// Whether this model is opted into the project's Reserves. Defaults to
+    /// `false` - a newly loaded or imported model is excluded until checked
+    /// in, matching the checkbox in the Block Models step.
+    pub(crate) included_in_reserves: bool,
+    /// Computed reserve totals, keyed by field id. Session-only: derived from
+    /// `reserve_mapping` and recomputed whenever it or the field list changes.
+    pub(crate) reserve_totals: HashMap<ReserveFieldId, ReserveFieldStats>,
+    pub(crate) reserve_totals_key: Option<u64>,
+    pub(crate) reserve_totals_data_key: u64,
+    /// A restore was started to bring this model's mapped columns back. Kept
+    /// so a restore that ends without them can be turned into a stated
+    /// failure rather than an indefinite wait behind a matching key.
+    pub(crate) reserve_totals_awaiting_restore: bool,
+    /// Why the last scan produced nothing. Terminal: cleared only by an
+    /// explicit recompute, so a failure is reported once rather than retried
+    /// in a loop.
+    pub(crate) reserve_totals_error: Option<String>,
+    /// The input fingerprint that failure belongs to. While the inputs still
+    /// hash to this, no automatic attempt is made; changed inputs, or an
+    /// explicit Recompute, retire it.
+    pub(crate) reserve_totals_error_key: Option<u64>,
 }
 
 pub(crate) type ActiveValuesCache = RefCell<Option<ActiveValuesCacheEntry>>;
