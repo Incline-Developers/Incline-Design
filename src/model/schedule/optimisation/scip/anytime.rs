@@ -65,6 +65,7 @@ use super::{
         replay::{BlendSolution, ChunkRow, MovementRow, ReplayReport, replay_cancellable},
         rolling::{self, Carry, Stitched},
     },
+    lagrange,
     plan::{self, PlanSolve, Settings, Window},
 };
 use crate::model::schedule::optimisation::{DestinationKind, SourceId, StockpileId, TaskKind};
@@ -86,6 +87,8 @@ pub(crate) struct AnytimeSettings {
     pub(crate) polish_columns: usize,
     /// Solve the whole horizon's plan in the background for a bound.
     pub(crate) background_bound: bool,
+    /// The most the Lagrangian bound may take.
+    pub(crate) lagrange_limit: Duration,
     /// A gap to the bound at or below which there is nothing left worth
     /// searching for.
     pub(crate) closed_gap: f64,
@@ -122,6 +125,7 @@ impl AnytimeSettings {
             polish_limit: Duration::from_secs(60),
             polish_columns: 400_000,
             background_bound: true,
+            lagrange_limit: Duration::from_secs(60),
             closed_gap: gap_target.unwrap_or(DEFAULT_CLOSED_GAP),
         }
     }
@@ -349,6 +353,9 @@ impl Progress {
 /// per tonne: (follow, overrun).
 const WEIGHTS: [(f64, f64); 3] = [(1.0, 0.0), (1.0, 1.0), (2.0, 2.0)];
 
+/// The share of the budget the Lagrangian bound may take.
+const LAGRANGE_SHARE: f64 = 0.2;
+
 /// How long the search waits for its background plan to stop.
 const BACKGROUND_GRACE: Duration = Duration::from_secs(2);
 
@@ -405,7 +412,7 @@ pub(crate) fn run(
     // only a plan of the whole horizon from scratch bounds a schedule that
     // reclaims; see `plan`.
     let reclaims = input.tasks.iter().any(|task| matches!(task.kind, TaskKind::Reclaim { .. }));
-    let bound = plan::solve(
+    let relaxed = plan::solve(
         input,
         None,
         None,
@@ -416,9 +423,21 @@ pub(crate) fn run(
         },
         cancel,
     )
-    .ok()
-    .and_then(|relaxed| relaxed.bound);
+    .ok();
+    let mut bound = relaxed.as_ref().and_then(|relaxed| relaxed.bound);
     record(value, bound, "relaxation bound".into());
+    // Loader by loader, from the relaxation's prices: on long sequences far
+    // tighter than the relaxation, whose fractional finished flags let a
+    // sliver of every block be dug at once.
+    if let Some(relaxed) = relaxed.as_ref() {
+        let prepared = plan::Prepared::new(input, None);
+        let limit = settings.lagrange_limit.min(settings.budget.saturating_sub(started.elapsed()).mul_f64(LAGRANGE_SHARE));
+        if let Some(proved) = lagrange::bound(&prepared, &relaxed.duals, value, limit, cancel) {
+            let held = bound;
+            bound = Some(bound.map_or(proved, |held: f64| held.min(proved)));
+            record(value, bound, format!("Lagrangian bound {proved:.0} (relaxation {:?})", held.map(f64::round)));
+        }
+    }
     // Raised when the search ends, so the background plan stops with it.
     let ending = Arc::new(AtomicBool::new(false));
     let mut background = (settings.background_bound && !cancel.load(Ordering::Relaxed)).then(|| {
@@ -445,7 +464,6 @@ pub(crate) fn run(
     let spread = PlanTargets::value_spread(input);
     let mut targets = PlanTargets::new(input, BTreeMap::new(), spread, spread);
     let horizon = days.len() as u32;
-    let mut bound = bound;
     let mut length = settings.window_days.clamp(1, horizon);
     let mut step = (settings.step_days.max(1) as usize).min(length as usize);
     let mut limit = settings.window_limit;
