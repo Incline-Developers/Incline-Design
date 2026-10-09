@@ -3,7 +3,9 @@
 //!
 //! Has a Data tab (summary and interval table), a Log tab (strip log) and a
 //! Column tab (the set's strat column beside its working sections); the Log
-//! tab's widget lives in [`crate::ui::widgets::viewport::BoreholeLog`].
+//! tab's widget lives in [`crate::ui::widgets::borehole_log::BoreholeLog`].
+
+use std::{fmt::Debug, hash::Hash};
 
 use crate::{
     i18n::tr,
@@ -15,13 +17,16 @@ use crate::{
     },
     ui::{
         EditorState,
+        elements::properties::read_only_row,
         state::{BoreholeInspectorTab, NameShiftDraft, SeamRenameDraft, StratCheckReport, UiCommand},
         themed_icon, unthemed_icon,
         widgets::{
+            borehole_log::{NameShift, SeamRename},
             collapsible_section::CollapsibleSection,
+            data_table::DataTable,
             menu::{self, MenuButton, MenuField, MenuFieldCombo},
             toolbar::GROUP_CORNER_RADIUS,
-            viewport::{DrillHoleProperties, NameShift, SeamRename},
+            viewport::format_grade,
         },
     },
 };
@@ -163,7 +168,7 @@ fn draw_body(
             draw_geophysics_note(ui, &view, dataset.id, commands);
             // The log's wheel zooms rather than scrolling an enclosing area,
             // so it takes the rest of the panel instead of sitting in one.
-            let output = crate::ui::widgets::viewport::BoreholeLog::new(("borehole_log", dataset.id), hole, dataset)
+            let output = crate::ui::widgets::borehole_log::BoreholeLog::new(("borehole_log", dataset.id), hole, dataset)
                 .strat_field(strat_choice_for(editor, dataset))
                 .well_logs(logs, linked)
                 .reading(reading)
@@ -186,7 +191,7 @@ fn draw_body(
                 .show(ui, |ui| draw_strat_field_picker(ui, editor, dataset));
             ui.add_space(4.0);
             let chosen = strat_choice_for(editor, dataset);
-            match crate::ui::widgets::viewport::strat_field_of(dataset, chosen.as_deref()) {
+            match crate::ui::widgets::borehole_log::strat_field_of(dataset, chosen.as_deref()) {
                 // Scrolls in what the panel has left, so a long column never
                 // runs off the bottom of the window.
                 Some(field) => {
@@ -464,7 +469,7 @@ fn draw_strat_column(ui: &mut egui::Ui, dataset: &OpenDrillHoleDataset, field: &
                     }
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         // The colour the log and the scene give this code.
-                        let [red, green, blue] = crate::ui::widgets::viewport::strat_run_color(&dataset.color, field, code);
+                        let [red, green, blue] = crate::ui::widgets::borehole_log::strat_run_color(&dataset.color, field, code);
                         let (swatch, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
                         ui.painter()
                             .rect_filled(swatch, GROUP_CORNER_RADIUS, crate::rendering::color::rgba_to_color32([red, green, blue, 1.0]));
@@ -803,4 +808,131 @@ fn inspected_hole<'a>(editor: &EditorState, datasets: &'a [OpenDrillHoleDataset]
     }
     let hole = dataset.dataset.holes.get(inspected.hole)?;
     Some((dataset, hole, inspected.hole))
+}
+
+/// Read-only summary of one drill hole: collar, trace extent, orientation,
+/// provenance, and the interval table as a grid. The two halves draw
+/// separately, so the caller can fold each into a section of its own.
+pub(crate) struct DrillHoleProperties<'a> {
+    id: egui::Id,
+    hole: &'a crate::model::drill_hole::DrillHole,
+    /// The dataset's fields, in order, become the columns after From and
+    /// To, so every hole gets the same columns even if it never recorded one.
+    fields: &'a [crate::model::drill_hole::DrillField],
+}
+
+impl<'a> DrillHoleProperties<'a> {
+    pub(crate) fn new(id_source: impl Hash + Debug, hole: &'a crate::model::drill_hole::DrillHole, fields: &'a [crate::model::drill_hole::DrillField]) -> Self {
+        Self {
+            id: egui::Id::new(id_source),
+            hole,
+            fields,
+        }
+    }
+
+    /// The hole's collar, trace, orientation and interval count, as rows
+    /// lined up with the fields of the panel around them.
+    pub(crate) fn show_summary(&self, ui: &mut egui::Ui) {
+        let hole = self.hole;
+        let collar = hole.collar_position();
+        read_only_row(ui, &tr!("common-easting"), &format!("{:.2}", collar.x));
+        read_only_row(ui, &tr!("common-northing"), &format!("{:.2}", collar.y));
+        read_only_row(ui, &tr!("common-elevation"), &format!("{:.2}", collar.z));
+        let extent = match (hole.trace.first(), hole.trace.last()) {
+            (Some(first), Some(last)) => tr!("viewport-from", from = format!("{:.2}", first.depth), to = format!("{:.2}", last.depth)),
+            _ => tr!("viewport-no-trace"),
+        };
+        read_only_row(ui, &tr!("viewport-trace-extent"), &extent);
+        let orientation = match hole.orientation() {
+            Some(orientation) => tr!(
+                "viewport-azimuth-dip",
+                azimuth = format!("{:.1}", orientation.azimuth),
+                dip = format!("{:.1}", orientation.dip)
+            ),
+            // Not "none": nobody recorded one, the same as its source.
+            None => tr!("common-unknown"),
+        };
+        read_only_row(ui, &tr!("common-orientation"), &orientation);
+        read_only_row(ui, &tr!("viewport-orientation-source"), &hole.orientation_source.label());
+        read_only_row(ui, &tr!("viewport-intervals"), &hole.intervals.len().to_string());
+    }
+
+    /// The interval spreadsheet, scrolling within `max_height`.
+    pub(crate) fn show_intervals(&self, ui: &mut egui::Ui, max_height: f32) {
+        let hole = self.hole;
+        let header = drill_table_header(self.fields);
+        let aligns = drill_table_aligns(self.fields);
+        let shown = |index: usize| hole.intervals.get(index).map(|interval| drill_table_row(interval, self.fields, false)).unwrap_or_default();
+        let copied = |index: usize| hole.intervals.get(index).map(|interval| drill_table_row(interval, self.fields, true)).unwrap_or_default();
+        DataTable::new(self.id.with("intervals"), &header, hole.intervals.len(), &shown)
+            .aligns(&aligns)
+            .copy_cells(&copied)
+            .fingerprint(self.fingerprint())
+            .max_height(max_height)
+            .show(ui);
+    }
+
+    /// What the table's columns were measured from; a change re-measures.
+    fn fingerprint(&self) -> u64 {
+        use std::hash::Hasher;
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.hole
+            .intervals
+            .last()
+            .map(|interval| (interval.from.to_bits(), interval.to.to_bits()))
+            .hash(&mut hasher);
+        hasher.finish()
+    }
+}
+
+/// The table's header row: From, To, then one column per dataset field.
+fn drill_table_header(fields: &[crate::model::drill_hole::DrillField]) -> Vec<String> {
+    let mut header = Vec::with_capacity(fields.len() + 2);
+    header.push(tr!("survey-from"));
+    header.push(tr!("survey-to"));
+    header.extend(fields.iter().map(|field| field.label.clone()));
+    header
+}
+
+/// One interval as text, one cell per header column, `raw` for full
+/// precision instead of display rounding. An unrecorded field is an empty cell.
+///
+/// A corrected cell shows the interpreted value with the logged one in
+/// brackets; raw text, which a copy carries, is the interpreted value alone.
+fn drill_table_row(interval: &crate::model::drill_hole::DrillInterval, fields: &[crate::model::drill_hole::DrillField], raw: bool) -> Vec<String> {
+    let (logged_from, logged_to, logged_values) = interval.logged();
+    let corrected = !raw && interval.is_corrected();
+    let beside = |shown: String, logged: String| if corrected && shown != logged { format!("{shown} ({logged})") } else { shown };
+    let depth = |depth: f64| if raw { depth.to_string() } else { format!("{depth:.2}") };
+    let value = |value: Option<&crate::model::drill_hole::DrillValue>| match value {
+        Some(crate::model::drill_hole::DrillValue::Numeric(number)) => {
+            if raw {
+                number.to_string()
+            } else {
+                format_grade(*number)
+            }
+        }
+        Some(crate::model::drill_hole::DrillValue::Category(category)) => category.clone(),
+        None => String::new(),
+    };
+    let mut row = Vec::with_capacity(fields.len() + 2);
+    row.push(beside(depth(interval.from), depth(logged_from)));
+    row.push(beside(depth(interval.to), depth(logged_to)));
+    row.extend(
+        fields
+            .iter()
+            .map(|field| beside(value(interval.values.get(&field.key)), value(logged_values.get(&field.key)))),
+    );
+    row
+}
+
+/// Which edge a column's cells sit against: numbers right, categories left.
+fn drill_table_aligns(fields: &[crate::model::drill_hole::DrillField]) -> Vec<egui::Align> {
+    let mut aligns = vec![egui::Align::Max, egui::Align::Max];
+    aligns.extend(fields.iter().map(|field| match field.kind {
+        crate::model::drill_hole::DrillFieldKind::Numeric { .. } => egui::Align::Max,
+        crate::model::drill_hole::DrillFieldKind::Categorical { .. } => egui::Align::Min,
+    }));
+    aligns
 }
