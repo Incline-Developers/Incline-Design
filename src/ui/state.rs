@@ -4406,7 +4406,6 @@ pub(crate) struct UiTriangulationEntry {
     pub(crate) id: TriangulationId,
     pub(crate) name: String,
     pub(crate) source_name: Option<String>,
-    pub(crate) is_active: bool,
     pub(crate) is_loaded: bool,
     /// Loaded but kept out of the viewport by the explorer's eye.
     pub(crate) is_hidden: bool,

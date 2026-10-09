@@ -150,8 +150,8 @@ impl App<'_> {
 
     /// Drop explorer-selected layers the selection has moved away from: a
     /// visible layer stays selected only while some of its objects do. One
-    /// that is unloaded or hidden has no objects to say so, and stays until
-    /// the next explorer click.
+    /// that is unloaded, hidden or empty has no objects to say so, and stays
+    /// until the next explorer click.
     fn prune_selected_layers(&mut self) {
         if self.editor.selected_layers.is_empty() {
             return;
@@ -166,6 +166,7 @@ impl App<'_> {
             })
             .collect();
         let workspace = &self.workspace;
+        let populated = &self.populated_layers;
         self.editor.selected_layers.retain(|layer_id| {
             let Some(layer) = workspace
                 .project_index_for_layer(*layer_id)
@@ -173,7 +174,7 @@ impl App<'_> {
             else {
                 return false;
             };
-            !layer.is_visible() || with_selected.contains(layer_id)
+            !layer.is_visible() || !populated.contains(layer_id) || with_selected.contains(layer_id)
         });
     }
 

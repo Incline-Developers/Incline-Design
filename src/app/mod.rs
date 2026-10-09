@@ -367,6 +367,10 @@ pub(crate) struct App<'a> {
     next_raster_texture_id: u64,
     empty_document: Document,
     scene_document: Document,
+    /// Layers of `scene_document` with at least one object on them, rebuilt
+    /// with it. An explorer-selected layer with nothing on it has no objects
+    /// to stay selected through - see `prune_selected_layers`.
+    populated_layers: std::collections::HashSet<crate::model::LayerId>,
     snap_index: ObjectSnapIndex,
     /// Set by `invalidate_geometry`; the index rebuilds lazily on the next
     /// snap/orbit query via `refresh_snap_index`.
@@ -519,6 +523,7 @@ impl<'a> Default for App<'a> {
             next_raster_texture_id: 0,
             empty_document: Document::new(),
             scene_document: Document::new(),
+            populated_layers: std::collections::HashSet::new(),
             snap_index: ObjectSnapIndex::default(),
             snap_index_dirty: false,
             scene_document_key: None,
@@ -1458,6 +1463,7 @@ impl<'a> App<'a> {
         if Some(composite_key) != self.scene_document_key {
             self.scene_document = self.workspace.scene_document();
             self.scene_document_key = Some(composite_key);
+            self.populated_layers = self.scene_document.objects().iter().map(crate::model::Object::layer).collect();
             // The snap index rebuild is deferred to the next snap/orbit
             // query: many edits never snap before the next edit, and the
             // BVH build is the expensive part.
@@ -1854,7 +1860,6 @@ impl<'a> App<'a> {
                 id: tri.id,
                 name: tri.name.clone(),
                 source_name: tri.state.source_name.clone(),
-                is_active: self.active_triangulation == Some(tri.id),
                 is_loaded: tri.state.loaded,
                 is_hidden: tri.state.hidden,
                 dirty: tri.state.is_dirty(),

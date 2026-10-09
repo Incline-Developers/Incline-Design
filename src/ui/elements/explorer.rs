@@ -473,7 +473,6 @@ fn row_menu_delete(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, row: RowSta
 struct LayerRowContext<'a> {
     /// The project the layer belongs to; the discard row reads its path.
     entry: &'a UiProjectEntry,
-    active_layer: Option<crate::model::LayerId>,
     locked_layers: &'a std::collections::HashSet<crate::model::LayerId>,
     /// A row drag and a list drag are one gesture under a finger, so rows
     /// offer a drag to a pointer only.
@@ -497,7 +496,6 @@ fn layer_row(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, layer: &UiLayerEn
     let _ = cx.entry;
     let layer_id = layer.id;
     rows.push(ExplorerRow::Layer(layer_id));
-    let is_active = cx.active_layer == Some(layer_id);
     let layer_locked = cx.locked_layers.contains(&layer_id);
     let layer_name = if layer.dirty { format!("{} *", layer.name) } else { layer.name.clone() };
     let layer_label = entry_label(&layer_name, layer.is_loaded);
@@ -505,7 +503,7 @@ fn layer_row(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, layer: &UiLayerEn
     // layer belongs to.
     let row = ExplorerEntry::new(egui::Id::new(("explorer_layer", layer_id)), layer_label)
         .dimmed(!layer.is_loaded)
-        .selected(is_active || cx.selected_layers.contains(&layer_id))
+        .selected(cx.selected_layers.contains(&layer_id))
         .draggable(cx.draggable)
         .toggles(EntryToggles {
             visible: layer.is_loaded && !layer.is_hidden,
@@ -777,7 +775,6 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                     // row closures below from capturing `editor` mutably, which the
                     // borrow checker would otherwise reject against these shared reads.
                     let EditorState {
-                        active_layer,
                         selected_handles,
                         locked_layers,
                         locked_rasters,
@@ -827,7 +824,6 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                 }
                                 let design_row_context = LayerRowContext {
                                     entry,
-                                    active_layer: *active_layer,
                                     locked_layers,
                                     draggable: rows_draggable,
                                     folders: &project.folders,
@@ -876,7 +872,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                             let tri_locked = frozen_handles.contains(&tri_handle);
                             let row = ExplorerEntry::new(egui::Id::new(("explorer_triangulation", tri.id)), label)
                                 .dimmed(!tri.is_loaded)
-                                .selected(tri.is_active || selected_handles.contains(&SceneEntityId::Triangulation(tri_id)))
+                                .selected(selected_handles.contains(&SceneEntityId::Triangulation(tri_id)))
                                 .draggable(rows_draggable)
                                 .toggles(EntryToggles {
                                     visible: tri.is_loaded && !tri.is_hidden,
@@ -1441,7 +1437,6 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                         // not anything about the layer itself.
                                         let modelling_row_context = LayerRowContext {
                                             entry,
-                                            active_layer: *active_layer,
                                             locked_layers,
                                             draggable: rows_draggable,
                                             folders: &project.folders,
