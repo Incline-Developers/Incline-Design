@@ -11,12 +11,15 @@
 //! whole-horizon plan keeps nothing more, the gap is closed or the budget is
 //! spent. Every kept schedule is a replayed one, so the value only rises.
 //!
-//! When a cycle of plan windows keeps nothing, the days are polished, those
-//! where the schedule earns least against what their plan promised first,
-//! before the windows grow: the exact hourly model of a day, opening in the
-//! state the best schedule leaves, is solved from that schedule's own hours,
-//! and the dispatch works the days after it again from where it ends. That
-//! goes after what following a plan loses - the plan sees days, not hours.
+//! When a cycle of plan windows keeps nothing, the days are polished, in
+//! order, before the windows grow: the exact hourly model of a day and a
+//! look-ahead past it, opening in the state the best schedule leaves, is
+//! solved from that schedule's own hours; only the day is kept, and the
+//! dispatch works the days after it again from where it ends. That goes
+//! after what following a plan loses - the plan sees days, not hours. The
+//! look-ahead is what makes it pay on long horizons: a day solved as though
+//! the horizon ended with it takes value now that the days after it lose
+//! more than, and the dispatch after it has to live with that.
 //!
 //! Every candidate keeps the best schedule's hours before its window and is
 //! dispatched from the state they leave, so a polished day is not undone by
@@ -62,6 +65,8 @@ pub(crate) struct AnytimeSettings {
     pub(crate) backend: Backend,
     /// Days per polished window, and the time each gets.
     pub(crate) polish_days: u32,
+    /// Days solved past each polished window and then discarded.
+    pub(crate) polish_lookahead_days: u32,
     pub(crate) polish_limit: Duration,
     /// Windows whose exact model would have more movement columns than this
     /// are not polished.
@@ -177,14 +182,16 @@ fn slice(best: &Best, first: usize, end: usize) -> BlendSolution {
     }
 }
 
-/// Polish `days` days from `first_day`: their exact hourly model from
-/// `best`'s hours, then the dispatch again from where they end.
+/// Polish `days` days from `first_day`: their exact hourly model, with
+/// `lookahead` days more solved and discarded, from `best`'s hours, then the
+/// dispatch again from where the kept days end.
 #[allow(clippy::too_many_arguments)]
 fn polish(
     input: &BlendInput,
     best: &Best,
     first_day: u32,
     days: u32,
+    lookahead: u32,
     targets: &PlanTargets,
     polisher: Polisher,
     limit: Duration,
@@ -197,14 +204,23 @@ fn polish(
         .iter()
         .position(|interval| interval.day() >= first_day + days)
         .unwrap_or(input.intervals.len());
-    let size = input.movements.len() * (end - first) * input.segments_per_interval.max(1);
+    let solved_to = input
+        .intervals
+        .iter()
+        .position(|interval| interval.day() >= first_day + days + lookahead)
+        .unwrap_or(input.intervals.len());
+    let size = input.movements.len() * (solved_to - first) * input.segments_per_interval.max(1);
     if size > columns {
         return Err(format!("{size} movement columns"));
     }
     let mut carry = carried(input, best, first);
-    let window = whole(first, end);
+    let window = rolling::Window {
+        first,
+        committed: end - first,
+        end: solved_to,
+    };
     let local = carry.window_input(input, window);
-    let Some(polished) = polisher(&local, &slice(best, first, end), limit) else {
+    let Some(polished) = polisher(&local, &slice(best, first, solved_to), limit) else {
         return Ok(None);
     };
     let Some(checked) = replay_cancellable(&local, &polished, cancel) else {
@@ -215,7 +231,7 @@ fn polish(
     }
     let count = input.intervals.len();
     if end == count {
-        return Ok(stitch(input, best, first, &[(window, &polished)], cancel));
+        return Ok(stitch(input, best, first, &[(whole(first, end), &polished)], cancel));
     }
     carry.advance(input, window, &polished, &checked);
     let tail = carry.window_input(input, whole(end, count));
@@ -395,10 +411,11 @@ pub(crate) fn run(input: &BlendInput, settings: AnytimeSettings, polisher: Optio
             // before the windows grow.
             polished_since = true;
             let mut kept_any = false;
-            // The days furthest short of their plan first; days no plan has
-            // covered last, in order.
+            // In order: a day polished first can shut off what the day before
+            // it would have found. How far each falls short of its plan is
+            // logged.
             let earning = earned(input, &best.solution);
-            let mut order: Vec<(f64, u32)> = days
+            let order: Vec<(f64, u32)> = days
                 .iter()
                 .step_by(settings.polish_days.max(1) as usize)
                 .map(|day| {
@@ -408,7 +425,6 @@ pub(crate) fn run(input: &BlendInput, settings: AnytimeSettings, polisher: Optio
                     )
                 })
                 .collect();
-            order.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
             for (short, day) in order {
                 let left = settings.budget.saturating_sub(started.elapsed());
                 if left.is_zero() {
@@ -420,6 +436,7 @@ pub(crate) fn run(input: &BlendInput, settings: AnytimeSettings, polisher: Optio
                     &best,
                     day,
                     settings.polish_days.max(1),
+                    settings.polish_lookahead_days,
                     &targets,
                     polisher,
                     settings.polish_limit.min(left),
