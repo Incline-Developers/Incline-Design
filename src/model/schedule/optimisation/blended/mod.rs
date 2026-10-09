@@ -47,6 +47,7 @@ pub(crate) mod grade;
 pub(crate) mod greedy;
 pub(crate) mod input;
 pub(crate) mod lp;
+pub(crate) mod plan;
 #[cfg(feature = "scip")]
 pub(crate) mod relaxation;
 pub(crate) mod replay;
