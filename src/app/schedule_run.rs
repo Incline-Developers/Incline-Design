@@ -1069,14 +1069,19 @@ fn result_details(calculation: &CalculatedSchedule) -> Vec<String> {
         formulate = format!("{:.2}", report.formulation_s),
         replay = format!("{:.2}", report.replay_s + report.extraction_s + report.publication_s)
     ));
-    lines.push(tr!(
-        "schedule-detail-model",
-        variables = report.variables.to_string(),
-        binaries = report.binaries.to_string(),
-        constraints = report.constraints.to_string(),
-        intervals = report.intervals.to_string(),
-        positions = report.segments_per_interval.to_string()
-    ));
+    // The hourly dispatch builds no whole-horizon model, so there is no
+    // model, search or optimality to describe until Improve has run.
+    let modelled = report.variables > 0;
+    if modelled {
+        lines.push(tr!(
+            "schedule-detail-model",
+            variables = report.variables.to_string(),
+            binaries = report.binaries.to_string(),
+            constraints = report.constraints.to_string(),
+            intervals = report.intervals.to_string(),
+            positions = report.segments_per_interval.to_string()
+        ));
+    }
     lines.push(tr!(
         "schedule-detail-capture",
         candidates = report.candidates.to_string(),
@@ -1084,13 +1089,15 @@ fn result_details(calculation: &CalculatedSchedule) -> Vec<String> {
         identity = format!("{:016x}", report.model_identity)
     ));
     lines.push(tr!("schedule-detail-backend", backend = report.backend.clone()));
-    lines.push(tr!(
-        "schedule-detail-proof-progress",
-        presolve = format!("{:.2}", report.diagnostics.presolve_s),
-        nodes = report.diagnostics.nodes.to_string(),
-        iterations = report.diagnostics.lp_iterations.to_string(),
-        entries = report.linear_coefficient_entries.to_string()
-    ));
+    if modelled {
+        lines.push(tr!(
+            "schedule-detail-proof-progress",
+            presolve = format!("{:.2}", report.diagnostics.presolve_s),
+            nodes = report.diagnostics.nodes.to_string(),
+            iterations = report.diagnostics.lp_iterations.to_string(),
+            entries = report.linear_coefficient_entries.to_string()
+        ));
+    }
     if let Some(first) = report.diagnostics.first_incumbent_s {
         lines.push(tr!("schedule-detail-first-incumbent", seconds = format!("{first:.2}")));
     }
@@ -1101,8 +1108,10 @@ fn result_details(calculation: &CalculatedSchedule) -> Vec<String> {
             tr!("schedule-detail-root-lp-unobserved")
         });
     }
-    // What optimality does not remove, stated every time.
-    lines.push(tr!("schedule-detail-optimal-scope"));
+    // What optimality does not remove, stated whenever there is a model.
+    if modelled {
+        lines.push(tr!("schedule-detail-optimal-scope"));
+    }
     lines.push(tr!("schedule-detail-release"));
     if report.chunk_slots > 0 {
         lines.push(tr!("schedule-detail-chunks", slots = report.chunk_slots.to_string()));
@@ -1110,7 +1119,9 @@ fn result_details(calculation: &CalculatedSchedule) -> Vec<String> {
     lines.push(tr!(
         "schedule-detail-grade-margin",
         fraction = format!("{:e}", report.grade_margin),
-        percent = format!("{}", report.grade_margin * 100.0)
+        // Through `{:e}`, which prints the shortest digits that round-trip:
+        // 1e-6 times a hundred is not exactly 1e-4 in binary.
+        percent = format!("{:e}", (report.grade_margin * 100.0 * 1e12).round() / 1e12)
     ));
     if report.boundary_rows > 0 {
         lines.push(tr!(
