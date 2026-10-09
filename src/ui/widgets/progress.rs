@@ -1,7 +1,7 @@
 //! The readouts that sit at the right end of the bottom toolbar: rings that
-//! fill green around their circumference. The background-task ring has the
-//! task text and the counts to its left; the memory ring at the very end
-//! carries its percentage inside.
+//! fill green around their circumference, each with its text to its left:
+//! the background task and its counts, and at the very end the machine's
+//! memory in use.
 //!
 //! Painted rather than assembled from `egui::ProgressBar`, for two reasons: a
 //! ring is not a shape egui offers at all, and an indeterminate task has to
@@ -37,14 +37,10 @@ const TEXT_GAP: f32 = 8.0;
 /// against it comes back cut down one side.
 pub(crate) const END_INSET: f32 = 6.0;
 /// Gap between the task readout and the memory ring to its right.
-pub(crate) const READOUT_GAP: f32 = 10.0;
+pub(crate) const READOUT_GAP: f32 = 16.0;
 /// Least room the task text is given before it is dropped in favour of the
 /// counts: below this an elided label is all ellipsis and says nothing.
 const TASK_MIN_WIDTH: f32 = 48.0;
-/// Starting size of the memory ring's figure, as a share of the hole it sits
-/// in, and the size it is never shrunk below to fit.
-const MEMORY_TEXT_FRACTION: f32 = 0.62;
-const MEMORY_TEXT_MIN: f32 = 6.0;
 /// One full turn of the indeterminate chunk, in seconds.
 const SPIN_PERIOD: f64 = 1.4;
 /// Share of the circumference the indeterminate chunk covers.
@@ -225,7 +221,9 @@ fn paint_ring(ui: &egui::Ui, painter: &egui::Painter, center: egui::Pos2, diamet
 }
 
 /// Draw the memory readout: a ring filled to the share of the machine's
-/// memory in use, with that share written inside it and nothing beside it.
+/// memory in use, with "Memory Utilisation" and the used and total amounts to
+/// its left - the same pairing as the task readout, the amounts in the strong
+/// shade nearest the ring.
 ///
 /// Sits at the very end of the strip, `END_INSET` from its edge, so the task
 /// readout to its left keeps one place whatever it says.
@@ -236,40 +234,18 @@ pub(crate) fn draw_memory_usage(ui: &mut egui::Ui, editor: &EditorState) {
     // Rendering is on demand, so an idle window would otherwise hold the
     // first reading forever.
     ui.ctx().request_repaint_after(crate::app::memory_usage::SAMPLE_PERIOD);
-    let diameter = ring_diameter(ui);
-    if ui.available_width() < diameter + END_INSET {
-        return;
-    }
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(diameter + END_INSET, ui.available_height()), egui::Sense::hover());
-    let fraction = usage.fraction();
-    let percent = format!("{:.0}", fraction * 100.0);
-    if ui.is_rect_visible(rect) {
-        let painter = ui.painter().clone();
-        let center = egui::pos2(rect.right() - END_INSET - diameter / 2.0, rect.center().y);
-        paint_ring(ui, &painter, center, diameter, RingFill::Fraction(fraction));
-        // The figure fills the hole: the largest size whose width still
-        // clears the ring's inner edge.
-        let hole = diameter - 2.0 * ring_stroke_width(diameter);
-        let mut size = hole * MEMORY_TEXT_FRACTION;
-        let color = ui.visuals().strong_text_color();
-        let galley = loop {
-            let galley = painter.layout_no_wrap(percent.clone(), egui::FontId::proportional(size), color);
-            if galley.size().x <= hole - 1.0 || size <= MEMORY_TEXT_MIN {
-                break galley;
-            }
-            size -= 0.5;
-        };
-        painter.galley(center - galley.size() / 2.0, galley, color);
-    }
-    let used = crate::ui::dialogs::triangulation::format_bytes(usage.used);
-    let total = crate::ui::dialogs::triangulation::format_bytes(usage.total);
+    let amounts = tr!(
+        "progress-memory-used-total",
+        used = crate::ui::dialogs::triangulation::format_bytes(usage.used),
+        total = crate::ui::dialogs::triangulation::format_bytes(usage.total)
+    );
     // A browser does not say what the machine is doing, so the web build
     // reports its own heap instead - see `MemoryUsage`.
     #[cfg(not(target_arch = "wasm32"))]
-    let hover = tr!("progress-memory-usage", used = used, total = total, percent = percent);
+    let label = tr!("progress-memory-utilisation");
     #[cfg(target_arch = "wasm32")]
-    let hover = tr!("progress-memory-usage-web", used = used, total = total, percent = percent);
-    response.on_hover_text(hover);
+    let label = tr!("progress-memory-utilisation-web");
+    draw_ring(ui, &amounts, &label, RingFill::Fraction(usage.fraction()), END_INSET);
 }
 
 /// Stroke `sweep` radians of arc, clockwise from `start` radians past twelve
