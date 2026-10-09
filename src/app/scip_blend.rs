@@ -908,10 +908,19 @@ fn solve_day_by_day(
 /// `optimisation::scip::anytime`). Anything short of an extracted schedule
 /// is `None`, and the caller keeps what it had.
 #[allow(dead_code, reason = "prototype, not yet called by Improve")]
-pub(crate) fn polish_window(input: &BlendInput, seed: &BlendSolution, limit: Duration) -> Option<BlendSolution> {
+pub(crate) fn polish_window(input: &BlendInput, seed: &BlendSolution, progress: &[(usize, f64)], kept: usize, limit: Duration) -> Option<BlendSolution> {
     let cancel = CancelFlag::default();
     let deadline = Instant::now() + limit;
-    let built = formulate_scip_with_cancel(input, Some(&cancel.signal()), None, false).ok()?;
+    let mut built = formulate_scip_with_cancel(input, Some(&cancel.signal()), None, false).ok()?;
+    // Each block holds no more at the end of the kept intervals than
+    // `progress` allows: the seed meets this by construction.
+    let segments = input.segments_per_interval.max(1);
+    let last = crate::model::schedule::optimisation::blended::input::flat_cell(kept, segments - 1, segments);
+    for &(source, most) in progress {
+        if let Some(remaining) = built.columns.ground_remaining.get(&(source, last)) {
+            built.model.add_cons(vec![remaining], &[1.0], f64::NEG_INFINITY, most + 1e-6, &format!("progress_{source}"));
+        }
+    }
     let values = complete_seed(input, seed, Some(Instant::now() + limit.mul_f64(SEED_COMPLETION_SHARE)), &cancel).ok();
     let mut model = configure(built.model.hide_output(), Some(deadline.saturating_duration_since(Instant::now())), Some(1e-4)).ok()?;
     if let Some(values) = values.as_ref() {
