@@ -33,6 +33,56 @@ use super::super::blended::{
 };
 use crate::model::schedule::optimisation::{Activity, DestinationId, DestinationKind, GroundId, Interval, MaterialId, SourceId, TaskKind};
 
+/// Where a plan starts: the first day it plans, how many days, and the
+/// state the schedule it improves left as that day opens.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Window {
+    pub(crate) first_day: u32,
+    pub(crate) days: u32,
+    /// Tonnes left in each block; a block not here is gone.
+    pub(crate) remaining: BTreeMap<GroundId, f64>,
+    /// What each destination had received before the first day.
+    pub(crate) received: BTreeMap<DestinationId, f64>,
+}
+
+impl Window {
+    /// The state `solution` leaves as `first_day` opens.
+    pub(crate) fn opening(input: &BlendInput, solution: &BlendSolution, first_day: u32, days: u32) -> Self {
+        let mut remaining: BTreeMap<GroundId, f64> = input.ground.iter().map(|source| (source.id, source.tonnes_t)).collect();
+        let mut received: BTreeMap<DestinationId, f64> = BTreeMap::new();
+        for row in &solution.movements {
+            if input.intervals.get(row.interval).is_none_or(|interval| interval.day() >= first_day) {
+                continue;
+            }
+            let candidate = &input.movements[row.candidate];
+            if let (Activity::Dig, SourceId::Ground(ground)) = (candidate.activity, candidate.source)
+                && let Some(left) = remaining.get_mut(&ground)
+            {
+                *left -= row.tonnes_t;
+            }
+            *received.entry(candidate.destination).or_default() += row.tonnes_t;
+        }
+        remaining.retain(|_, left| *left > 1e-6);
+        Self {
+            first_day,
+            days,
+            remaining,
+            received,
+        }
+    }
+}
+
+/// How to solve a plan.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Settings {
+    pub(crate) backend: Backend,
+    pub(crate) time_limit: Duration,
+    pub(crate) relative_gap: f64,
+    /// Solve the linear relaxation only, by HiGHS's interior point method:
+    /// with no window, an upper bound on any schedule's value.
+    pub(crate) relax: bool,
+}
+
 /// The solved plan.
 pub(crate) struct PlanSolve {
     /// Planned dug tonnes per (loader index, destination, day).
@@ -121,12 +171,12 @@ struct Answer {
     status: String,
 }
 
-fn solve_highs(builder: &Builder, seed: Option<&[f64]>, time_limit: Duration, relative_gap: f64) -> Result<Answer, String> {
+fn solve_highs(builder: &Builder, seed: Option<&[f64]>, time_limit: Duration, relative_gap: f64, relax: bool) -> Result<Answer, String> {
     let fits = |count: usize| HighsInt::try_from(count).map_err(|_| format!("the plan has {count} entries, more than HiGHS can index"));
     let columns = builder.cost.len();
     let starts = builder.starts.iter().map(|&start| fits(start)).collect::<Result<Vec<_>, _>>()?;
     let index = builder.index.iter().map(|&column| fits(column)).collect::<Result<Vec<_>, _>>()?;
-    let integrality: Vec<HighsInt> = builder.integer.iter().map(|&integer| HighsInt::from(integer)).collect();
+    let integrality: Vec<HighsInt> = builder.integer.iter().map(|&integer| HighsInt::from(integer && !relax)).collect();
     let lower = vec![0.0; columns];
     let upper: Vec<f64> = builder.upper.iter().map(|&upper| if upper.is_finite() { upper } else { f64::INFINITY }).collect();
     struct Instance(*mut c_void);
@@ -153,6 +203,9 @@ fn solve_highs(builder: &Builder, seed: Option<&[f64]>, time_limit: Duration, re
             "the time limit",
         )?;
         ok(highs_sys::Highs_setDoubleOptionValue(highs.0, c"mip_rel_gap".as_ptr(), relative_gap), "the gap")?;
+        if relax {
+            ok(highs_sys::Highs_setStringOptionValue(highs.0, c"solver".as_ptr(), c"ipm".as_ptr()), "the ipm solver")?;
+        }
         ok(
             highs_sys::Highs_passMip(
                 highs.0,
@@ -198,10 +251,16 @@ fn solve_highs(builder: &Builder, seed: Option<&[f64]>, time_limit: Duration, re
         if !objective.is_finite() {
             return Err(format!("no plan found: HiGHS model status {status}"));
         }
+        // A relaxation interrupted before its optimum bounds nothing.
+        let bound = if relax {
+            (status == highs_sys::MODEL_STATUS_OPTIMAL).then_some(objective)
+        } else {
+            (found != highs_sys::STATUS_ERROR && bound.is_finite()).then_some(bound)
+        };
         Ok(Answer {
             values,
             objective,
-            bound: (found != highs_sys::STATUS_ERROR && bound.is_finite()).then_some(bound),
+            bound,
             status: format!("HiGHS status {status}, {nodes} nodes"),
         })
     }
@@ -278,12 +337,14 @@ type Routed = ((GroundId, MaterialId, DestinationId, usize), usize, f64, Option<
 
 /// The plan for `input`, started from `seed` (the hourly dispatch's schedule)
 /// when there is one, so it is never worse than the schedule it improves.
-pub(crate) fn solve(input: &BlendInput, seed: Option<&BlendSolution>, backend: Backend, time_limit: Duration, relative_gap: f64) -> Result<PlanSolve, String> {
+pub(crate) fn solve(input: &BlendInput, seed: Option<&BlendSolution>, window: Option<&Window>, settings: Settings) -> Result<PlanSolve, String> {
     let started = Instant::now();
     // ---- days ---------------------------------------------------------------
     let mut day_intervals: BTreeMap<u32, Vec<Interval>> = BTreeMap::new();
     for interval in &input.intervals {
-        day_intervals.entry(interval.day()).or_default().push(*interval);
+        if window.is_none_or(|window| (window.first_day..window.first_day + window.days).contains(&interval.day())) {
+            day_intervals.entry(interval.day()).or_default().push(*interval);
+        }
     }
     let days: Vec<u32> = day_intervals.keys().copied().collect();
     let day_end: Vec<f64> = days
@@ -292,7 +353,11 @@ pub(crate) fn solve(input: &BlendInput, seed: Option<&BlendSolution>, backend: B
         .collect();
     let periods = days.len();
 
-    let tonnes: BTreeMap<GroundId, f64> = input.ground.iter().map(|source| (source.id, source.tonnes_t / UNIT)).collect();
+    let tonnes: BTreeMap<GroundId, f64> = match window {
+        Some(window) => window.remaining.iter().map(|(ground, left)| (*ground, left / UNIT)).collect(),
+        None => input.ground.iter().map(|source| (source.id, source.tonnes_t / UNIT)).collect(),
+    };
+    let before = |id: DestinationId| window.and_then(|window| window.received.get(&id)).copied().unwrap_or(0.0);
     let releases = input.drill_blast.as_ref().map(|chain| chain.releases()).unwrap_or_default();
 
     // ---- outlets: each block material's destinations, on its best candidate
@@ -627,8 +692,12 @@ pub(crate) fn solve(input: &BlendInput, seed: Option<&BlendSolution>, backend: B
         let Some(entry) = destination(*id) else { continue };
         let room = match entry.kind {
             DestinationKind::Crusher => None,
-            DestinationKind::Dump => entry.capacity_t,
-            DestinationKind::Stockpile(pile) => input.piles.iter().find(|found| found.id == pile).map(|found| found.capacity_t - found.opening_t),
+            DestinationKind::Dump => entry.capacity_t.map(|capacity| capacity - before(*id)),
+            DestinationKind::Stockpile(pile) => input
+                .piles
+                .iter()
+                .find(|found| found.id == pile)
+                .map(|found| found.capacity_t - found.opening_t - before(*id)),
         };
         if let Some(room) = room {
             builder.row(terms, f64::NEG_INFINITY, room.max(0.0) / UNIT, &format!("room_{}", id.0));
@@ -745,9 +814,9 @@ pub(crate) fn solve(input: &BlendInput, seed: Option<&BlendSolution>, backend: B
     let build_s = started.elapsed().as_secs_f64();
     let (variables, binaries, rows) = (builder.cost.len(), builder.binaries, builder.row_lower.len());
     let solving = Instant::now();
-    let answer = match backend {
-        Backend::Highs => solve_highs(&builder, seed_values.as_deref(), time_limit, relative_gap)?,
-        Backend::Scip => solve_scip(&builder, seed_values.as_deref(), time_limit, relative_gap)?,
+    let answer = match settings.backend {
+        Backend::Scip if !settings.relax => solve_scip(&builder, seed_values.as_deref(), settings.time_limit, settings.relative_gap)?,
+        _ => solve_highs(&builder, seed_values.as_deref(), settings.time_limit, settings.relative_gap, settings.relax)?,
     };
     let solve_s = solving.elapsed().as_secs_f64();
 
