@@ -2,7 +2,7 @@
 
 use crate::{
     i18n::tr,
-    model::{Folder, FolderId, FolderMember, ItemRef, MemberKind, SceneEntityId, SectionKind},
+    model::{Folder, FolderId, FolderMember, ItemRef, LayerId, MemberKind, SceneEntityId, SectionKind},
     ui::{
         EditorState, UiCommand, UiProjectView,
         fonts::bold,
@@ -261,6 +261,215 @@ fn folder_group<Z: DropZone>(ui: &mut egui::Ui, section: SectionKind, folder: &F
     });
 }
 
+/// What an explorer row stands for, so the actions a right-click on a
+/// multi-row selection offers can reach every row in it, whatever its kind.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RowTarget {
+    Layer(LayerId),
+    Item(ItemRef),
+}
+
+impl RowTarget {
+    fn load_command(self, load: bool) -> UiCommand {
+        match (self, load) {
+            (Self::Layer(id), true) => UiCommand::LoadLayer(id),
+            (Self::Layer(id), false) => UiCommand::UnloadLayer(id),
+            (Self::Item(ItemRef::Triangulation(id)), true) => UiCommand::LoadTriangulation(id),
+            (Self::Item(ItemRef::Triangulation(id)), false) => UiCommand::CloseTriangulation(id),
+            (Self::Item(ItemRef::Raster(id)), true) => UiCommand::LoadRaster(id),
+            (Self::Item(ItemRef::Raster(id)), false) => UiCommand::UnloadRaster(id),
+            (Self::Item(ItemRef::PointCloud(id)), true) => UiCommand::LoadPointCloud(id),
+            (Self::Item(ItemRef::PointCloud(id)), false) => UiCommand::ClosePointCloud(id),
+            (Self::Item(ItemRef::BlockModel(id)), true) => UiCommand::LoadBlockModel(id),
+            (Self::Item(ItemRef::BlockModel(id)), false) => UiCommand::CloseBlockModel(id),
+            (Self::Item(ItemRef::DrillHole(id)), true) => UiCommand::LoadDrillHole(id),
+            (Self::Item(ItemRef::DrillHole(id)), false) => UiCommand::CloseDrillHole(id),
+        }
+    }
+
+    fn visible_command(self, visible: bool) -> UiCommand {
+        match self {
+            Self::Layer(id) => UiCommand::SetLayerVisible(id, visible),
+            Self::Item(item) => UiCommand::SetItemVisible(item, visible),
+        }
+    }
+
+    fn toggle_lock_command(self) -> UiCommand {
+        match self {
+            Self::Layer(id) => UiCommand::ToggleLayerLocked(id),
+            Self::Item(ItemRef::Raster(id)) => UiCommand::ToggleRasterLocked(id),
+            Self::Item(ItemRef::Triangulation(id)) => UiCommand::ToggleEntityLocked(SceneEntityId::Triangulation(id)),
+            Self::Item(ItemRef::PointCloud(id)) => UiCommand::ToggleEntityLocked(SceneEntityId::PointCloud(id)),
+            Self::Item(ItemRef::BlockModel(id)) => UiCommand::ToggleEntityLocked(SceneEntityId::BlockModel(id)),
+            Self::Item(ItemRef::DrillHole(id)) => UiCommand::ToggleEntityLocked(SceneEntityId::DrillHole(id)),
+        }
+    }
+
+    /// The command that deletes this row outright, once confirmed.
+    fn delete_command(self) -> UiCommand {
+        match self {
+            Self::Layer(id) => UiCommand::DeleteLayer(id),
+            Self::Item(ItemRef::Triangulation(id)) => RenameTarget::Triangulation(id).remove_command(),
+            Self::Item(ItemRef::Raster(id)) => RenameTarget::Raster(id).remove_command(),
+            Self::Item(ItemRef::PointCloud(id)) => RenameTarget::PointCloud(id).remove_command(),
+            Self::Item(ItemRef::BlockModel(id)) => RenameTarget::BlockModel(id).remove_command(),
+            Self::Item(ItemRef::DrillHole(id)) => RenameTarget::DrillHole(id).remove_command(),
+        }
+    }
+}
+
+/// One row's state, as its right-click menu reads it.
+#[derive(Clone, Copy)]
+struct RowState {
+    target: RowTarget,
+    loaded: bool,
+    hidden: bool,
+    locked: bool,
+}
+
+impl RowState {
+    fn visible(&self) -> bool {
+        self.loaded && !self.hidden
+    }
+}
+
+/// Every explorer row the selection holds, in no particular order.
+///
+/// Items are in it when their scene entity is selected; layers, which are
+/// containers rather than entities, through `EditorState::selected_layers`.
+fn explorer_selection(editor: &EditorState, project: &UiProjectView) -> Vec<RowState> {
+    let selected = |entity: SceneEntityId| editor.selected_handles.contains(&entity);
+    let frozen = |entity: SceneEntityId| editor.frozen_handles.contains(&entity);
+    let mut rows = Vec::new();
+    if let Some(entry) = project.projects.first() {
+        rows.extend(entry.layers.iter().filter(|layer| editor.selected_layers.contains(&layer.id)).map(|layer| RowState {
+            target: RowTarget::Layer(layer.id),
+            loaded: layer.is_loaded,
+            hidden: layer.is_hidden,
+            locked: editor.locked_layers.contains(&layer.id),
+        }));
+    }
+    for item in &project.triangulations {
+        let entity = SceneEntityId::Triangulation(item.id);
+        if selected(entity) {
+            rows.push(RowState {
+                target: RowTarget::Item(ItemRef::Triangulation(item.id)),
+                loaded: item.is_loaded,
+                hidden: item.is_hidden,
+                locked: frozen(entity),
+            });
+        }
+    }
+    for item in &project.raster_textures {
+        if selected(SceneEntityId::Raster(item.id)) {
+            rows.push(RowState {
+                target: RowTarget::Item(ItemRef::Raster(item.id)),
+                loaded: item.is_loaded,
+                hidden: item.is_hidden,
+                locked: editor.locked_rasters.contains(&item.id),
+            });
+        }
+    }
+    for item in &project.point_clouds {
+        let entity = SceneEntityId::PointCloud(item.id);
+        if selected(entity) {
+            rows.push(RowState {
+                target: RowTarget::Item(ItemRef::PointCloud(item.id)),
+                loaded: item.is_loaded,
+                hidden: item.is_hidden,
+                locked: frozen(entity),
+            });
+        }
+    }
+    for item in &project.block_models {
+        let entity = SceneEntityId::BlockModel(item.id);
+        if selected(entity) {
+            rows.push(RowState {
+                target: RowTarget::Item(ItemRef::BlockModel(item.id)),
+                loaded: item.is_loaded,
+                hidden: item.is_hidden,
+                locked: frozen(entity),
+            });
+        }
+    }
+    for item in &project.drill_holes {
+        let entity = SceneEntityId::DrillHole(item.id);
+        if selected(entity) {
+            rows.push(RowState {
+                target: RowTarget::Item(ItemRef::DrillHole(item.id)),
+                loaded: item.is_loaded,
+                hidden: item.is_hidden,
+                locked: frozen(entity),
+            });
+        }
+    }
+    rows
+}
+
+/// The rows a right-click on `row` acts on: the whole selection when `row`
+/// is one of several selected, otherwise `row` alone.
+fn menu_rows(row: RowState, selection: &[RowState]) -> Option<&[RowState]> {
+    (selection.len() > 1 && selection.iter().any(|selected| selected.target == row.target)).then_some(selection)
+}
+
+/// A row menu's title: the row's name, or how many rows it acts on.
+fn row_menu_title(name: &str, row: RowState, selection: &[RowState]) -> String {
+    match menu_rows(row, selection) {
+        Some(rows) => tr!("explorer-selected-count", count = rows.len().to_string()),
+        None => name.to_owned(),
+    }
+}
+
+/// The actions every data row's menu opens with - show and hide, load and
+/// unload, lock and unlock - applied to every selected row when `row` is one
+/// of several selected. A separator follows, before the row's own actions.
+fn row_menu_head(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, row: RowState, selection: &[RowState]) {
+    let rows = menu_rows(row, selection).unwrap_or(std::slice::from_ref(&row));
+    let bulk = rows.len() > 1;
+    // A single row offers whichever way its state can go; a selection offers
+    // both ways, each enabled while some row can still go that way.
+    let mut action = |ui: &mut egui::Ui, label: String, offered: bool, applies: &dyn Fn(&RowState) -> bool, command: &dyn Fn(RowTarget) -> UiCommand| {
+        let any = rows.iter().any(applies);
+        if !(offered && (bulk || any)) {
+            return;
+        }
+        if ContextMenuAction::new(label).enabled(any).show(ui).clicked() {
+            commands.extend(rows.iter().filter(|row| applies(row)).map(|row| command(row.target)));
+            ui.close();
+        }
+    };
+    action(ui, tr!("explorer-show"), true, &|row| !row.visible(), &|target| target.visible_command(true));
+    action(ui, tr!("explorer-hide"), true, &|row| row.visible(), &|target| target.visible_command(false));
+    action(ui, tr!("explorer-load"), true, &|row| !row.loaded, &|target| target.load_command(true));
+    action(ui, tr!("explorer-unload"), true, &|row| row.loaded, &|target| target.load_command(false));
+    action(ui, tr!("explorer-lock"), true, &|row| !row.locked, &|target| target.toggle_lock_command());
+    action(ui, tr!("explorer-unlock"), true, &|row| row.locked, &|target| target.toggle_lock_command());
+    context_menu_separator(ui);
+}
+
+/// The destructive end of a data row's menu: Delete, for the row alone
+/// through `single` (which asks first), or for every selected row.
+fn row_menu_delete(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, row: RowState, selection: &[RowState], single: UiCommand) {
+    context_menu_separator(ui);
+    match menu_rows(row, selection) {
+        Some(rows) => {
+            // Locked rows are left out, as they are of every edit.
+            let deletable: Vec<_> = rows.iter().filter(|row| !row.locked).map(|row| row.target.delete_command()).collect();
+            let label = tr!("explorer-delete-selected", count = deletable.len().to_string());
+            if ContextMenuAction::new(label).enabled(!deletable.is_empty()).show(ui).clicked() {
+                commands.push(UiCommand::RequestDeleteRows(deletable));
+                ui.close();
+            }
+        }
+        None => {
+            if ContextMenuAction::new(tr!("explorer-delete-from-project")).enabled(!row.locked).show(ui).clicked() {
+                commands.push(single);
+                ui.close();
+            }
+        }
+    }
+}
+
 /// Everything a layer row reads besides the layer itself, bundled so the
 /// row builder Designs and Modelling share takes it as one argument.
 struct LayerRowContext<'a> {
@@ -275,6 +484,10 @@ struct LayerRowContext<'a> {
     /// the Move to Collection submenu offers every section that admits this
     /// layer's kind, not only the one it is drawn under.
     folders: &'a crate::model::FolderRegistry,
+    /// Every selected row, for the menu's actions on all of them.
+    selection: &'a [RowState],
+    /// Layers taken into the selection from the tree.
+    selected_layers: &'a std::collections::HashSet<LayerId>,
 }
 
 /// One layer row: eye, padlock, drag payload and right-click menu. The same
@@ -293,7 +506,7 @@ fn layer_row(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, layer: &UiLayerEn
     // Named `row` rather than `entry`: `entry` is the enclosing project this
     // layer belongs to.
     let row = ExplorerEntry::new(egui::Id::new(("explorer_layer", layer_id)), layer_label)
-        .selected(is_active)
+        .selected(is_active || cx.selected_layers.contains(&layer_id))
         .draggable(cx.draggable)
         .toggles(EntryToggles {
             visible: layer.is_loaded && !layer.is_hidden,
@@ -328,25 +541,17 @@ fn layer_row(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, layer: &UiLayerEn
         commands.push(UiCommand::SelectExplorerRow(ExplorerRow::Layer(layer_id)));
     }
 
-    context_menu_popup(&layer_resp, layer.name.as_str(), |ui| {
-        if ContextMenuAction::new(if layer_locked { tr!("explorer-unlock") } else { tr!("explorer-lock") })
-            .show(ui)
-            .clicked()
-        {
-            commands.push(UiCommand::ToggleLayerLocked(layer_id));
-            ui.close();
-        }
-        if layer.is_loaded {
-            if ContextMenuAction::new(tr!("explorer-unload")).show(ui).clicked() {
-                commands.push(UiCommand::UnloadLayer(layer_id));
-                ui.close();
-            }
-            if ContextMenuAction::new(tr!("explorer-select-all-objects")).show(ui).clicked() {
-                commands.push(UiCommand::SelectAllObjectsInLayer(layer_id));
-                ui.close();
-            }
-        } else if ContextMenuAction::new(tr!("explorer-load")).show(ui).clicked() {
-            commands.push(UiCommand::LoadLayer(layer_id));
+    let row_state = RowState {
+        target: RowTarget::Layer(layer_id),
+        loaded: layer.is_loaded,
+        hidden: layer.is_hidden,
+        locked: layer_locked,
+    };
+    context_menu_popup(&layer_resp, row_menu_title(layer.name.as_str(), row_state, cx.selection), |ui| {
+        row_menu_head(ui, commands, row_state, cx.selection);
+        // Hidden objects cannot be selected, so neither can a hidden layer's.
+        if row_state.visible() && ContextMenuAction::new(tr!("explorer-select-all-objects")).show(ui).clicked() {
+            commands.push(UiCommand::SelectAllObjectsInLayer(layer_id));
             ui.close();
         }
         if ContextMenuAction::new(tr!("dialog-rename-submit")).enabled(!layer_locked).show(ui).clicked() {
@@ -363,11 +568,7 @@ fn layer_row(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, layer: &UiLayerEn
             commands.push(UiCommand::RequestDiscardLayerChanges(layer_id));
             ui.close();
         }
-        context_menu_separator(ui);
-        if ContextMenuAction::new(tr!("explorer-delete-from-project")).enabled(!layer_locked).show(ui).clicked() {
-            commands.push(UiCommand::RequestDeleteLayer(layer_id));
-            ui.close();
-        }
+        row_menu_delete(ui, commands, row_state, cx.selection, UiCommand::RequestDeleteLayer(layer_id));
     });
 }
 
@@ -566,6 +767,9 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
             // can be resolved against the rows the user is looking at: see
             // `EditorState::explorer_rows`.
             let mut rows: Vec<ExplorerRow> = Vec::new();
+            // What a right-click on any selected row acts on, gathered once
+            // rather than per row.
+            let selection = explorer_selection(editor, project);
             let tree = crate::ui::chrome::region_frame(ui)
                 .fill(surface)
                 .inner_margin(egui::Margin::ZERO)
@@ -579,6 +783,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                         locked_layers,
                         locked_rasters,
                         frozen_handles,
+                        selected_layers,
                         ..
                     } = &*editor;
 
@@ -627,6 +832,8 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                     locked_layers,
                                     draggable: rows_draggable,
                                     folders: &project.folders,
+                                    selection: &selection,
+                                    selected_layers,
                                 };
                                 let mut design_layers = Rows {
                                     items: &entry.layers,
@@ -701,7 +908,14 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                             }
 
                             let tri_loaded = tri.is_loaded;
-                            context_menu_popup(&response, tri.name.as_str(), |ui| {
+                            let row_state = RowState {
+                                target: RowTarget::Item(ItemRef::Triangulation(tri_id)),
+                                loaded: tri.is_loaded,
+                                hidden: tri.is_hidden,
+                                locked: tri_locked,
+                            };
+                            context_menu_popup(&response, row_menu_title(tri.name.as_str(), row_state, &selection), |ui| {
+                                row_menu_head(ui, commands, row_state, &selection);
                                 if tri_loaded {
                                     let mut color = crate::rendering::color::rgba_to_color32(tri.color);
                                     if crate::ui::widgets::menu::MenuFieldColor32::new(tr!("explorer-face-colour"), &mut color).show(ui).changed() {
@@ -721,22 +935,6 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                     }
                                     context_menu_separator(ui);
                                 }
-                                if ContextMenuAction::new(if tri_locked { tr!("explorer-unlock") } else { tr!("explorer-lock") })
-                                    .show(ui)
-                                    .clicked()
-                                {
-                                    commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::Triangulation(tri_id)));
-                                    ui.close();
-                                }
-                                if tri_loaded {
-                                    if ContextMenuAction::new(tr!("explorer-unload")).show(ui).clicked() {
-                                        commands.push(UiCommand::CloseTriangulation(tri_id));
-                                        ui.close();
-                                    }
-                                } else if ContextMenuAction::new(tr!("explorer-load")).show(ui).clicked() {
-                                    commands.push(UiCommand::LoadTriangulation(tri_id));
-                                    ui.close();
-                                }
                                 #[cfg(target_arch = "wasm32")]
                                 if ContextMenuAction::new(tr!("explorer-download")).show(ui).clicked() {
                                     commands.push(UiCommand::ExportTriangulationAs(tri_id, crate::model::formats::MeshFormat::Obj));
@@ -747,11 +945,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                     ui.close();
                                 }
                                 move_to_folder_submenu(ui, &project.folders, tri.folder, FolderMember::item(tri.section, ItemRef::Triangulation(tri_id)), commands);
-                                context_menu_separator(ui);
-                                if ContextMenuAction::new(tr!("explorer-delete-from-project")).enabled(!tri_locked).show(ui).clicked() {
-                                    commands.push(UiCommand::RequestDeleteItem(RenameTarget::Triangulation(tri_id)));
-                                    ui.close();
-                                }
+                                row_menu_delete(ui, commands, row_state, &selection, UiCommand::RequestDeleteItem(RenameTarget::Triangulation(tri_id)));
                             });
                         };
 
@@ -854,25 +1048,16 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                         commands.push(UiCommand::SelectExplorerRow(ExplorerRow::Entity(raster_handle)));
                                     }
 
-                                    context_menu_popup(&response, raster.name.as_str(), |ui| {
-                                        if ContextMenuAction::new(if raster_locked { tr!("explorer-unlock") } else { tr!("explorer-lock") })
-                                            .show(ui)
-                                            .clicked()
-                                        {
-                                            commands.push(UiCommand::ToggleRasterLocked(raster.id));
-                                            ui.close();
-                                        }
-                                        if raster.is_loaded {
-                                            if ContextMenuAction::new(tr!("explorer-unload")).show(ui).clicked() {
-                                                commands.push(UiCommand::UnloadRaster(raster.id));
-                                                ui.close();
-                                            }
-                                            if ContextMenuAction::new(tr!("explorer-drape-over-surface")).enabled(!raster_locked).show(ui).clicked() {
-                                                commands.push(UiCommand::DrapeRaster(raster.id));
-                                                ui.close();
-                                            }
-                                        } else if ContextMenuAction::new(tr!("explorer-load")).show(ui).clicked() {
-                                            commands.push(UiCommand::LoadRaster(raster.id));
+                                    let row_state = RowState {
+                                        target: RowTarget::Item(ItemRef::Raster(raster.id)),
+                                        loaded: raster.is_loaded,
+                                        hidden: raster.is_hidden,
+                                        locked: raster_locked,
+                                    };
+                                    context_menu_popup(&response, row_menu_title(raster.name.as_str(), row_state, &selection), |ui| {
+                                        row_menu_head(ui, commands, row_state, &selection);
+                                        if raster.is_loaded && ContextMenuAction::new(tr!("explorer-drape-over-surface")).enabled(!raster_locked).show(ui).clicked() {
+                                            commands.push(UiCommand::DrapeRaster(raster.id));
                                             ui.close();
                                         }
                                         // Unloading a raster keeps its drape, so offer the undrape in both states.
@@ -897,11 +1082,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                             FolderMember::item(raster.section, ItemRef::Raster(raster.id)),
                                             commands,
                                         );
-                                        context_menu_separator(ui);
-                                        if ContextMenuAction::new(tr!("explorer-delete-from-project")).enabled(!raster_locked).show(ui).clicked() {
-                                            commands.push(UiCommand::RequestDeleteItem(RenameTarget::Raster(raster.id)));
-                                            ui.close();
-                                        }
+                                        row_menu_delete(ui, commands, row_state, &selection, UiCommand::RequestDeleteItem(RenameTarget::Raster(raster.id)));
                                     });
                                 };
                                 let mut rasters_source = Rows {
@@ -985,23 +1166,14 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                         commands.push(UiCommand::SelectExplorerRow(ExplorerRow::Entity(cloud_handle)));
                                     }
 
-                                    context_menu_popup(&response, point_cloud.name.as_str(), |ui| {
-                                        if ContextMenuAction::new(if cloud_locked { tr!("explorer-unlock") } else { tr!("explorer-lock") })
-                                            .show(ui)
-                                            .clicked()
-                                        {
-                                            commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::PointCloud(point_cloud.id)));
-                                            ui.close();
-                                        }
-                                        if point_cloud.is_loaded {
-                                            if ContextMenuAction::new(tr!("explorer-unload")).show(ui).clicked() {
-                                                commands.push(UiCommand::ClosePointCloud(point_cloud.id));
-                                                ui.close();
-                                            }
-                                        } else if ContextMenuAction::new(tr!("explorer-load")).show(ui).clicked() {
-                                            commands.push(UiCommand::LoadPointCloud(point_cloud.id));
-                                            ui.close();
-                                        }
+                                    let row_state = RowState {
+                                        target: RowTarget::Item(ItemRef::PointCloud(point_cloud.id)),
+                                        loaded: point_cloud.is_loaded,
+                                        hidden: point_cloud.is_hidden,
+                                        locked: cloud_locked,
+                                    };
+                                    context_menu_popup(&response, row_menu_title(point_cloud.name.as_str(), row_state, &selection), |ui| {
+                                        row_menu_head(ui, commands, row_state, &selection);
                                         if ContextMenuAction::new(tr!("dialog-rename-submit")).enabled(!cloud_locked).show(ui).clicked() {
                                             commands.push(UiCommand::BeginRenameItem(RenameTarget::PointCloud(point_cloud.id)));
                                             ui.close();
@@ -1013,11 +1185,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                             FolderMember::item(point_cloud.section, ItemRef::PointCloud(point_cloud.id)),
                                             commands,
                                         );
-                                        context_menu_separator(ui);
-                                        if ContextMenuAction::new(tr!("explorer-delete-from-project")).enabled(!cloud_locked).show(ui).clicked() {
-                                            commands.push(UiCommand::RequestDeleteItem(RenameTarget::PointCloud(point_cloud.id)));
-                                            ui.close();
-                                        }
+                                        row_menu_delete(ui, commands, row_state, &selection, UiCommand::RequestDeleteItem(RenameTarget::PointCloud(point_cloud.id)));
                                     });
                                 };
                                 let mut point_clouds_source = Rows {
@@ -1100,23 +1268,14 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                         commands.push(UiCommand::SelectExplorerRow(ExplorerRow::Entity(block_model_handle)));
                                     }
 
-                                    context_menu_popup(&response, block_model.name.as_str(), |ui| {
-                                        if ContextMenuAction::new(if model_locked { tr!("explorer-unlock") } else { tr!("explorer-lock") })
-                                            .show(ui)
-                                            .clicked()
-                                        {
-                                            commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::BlockModel(block_model.id)));
-                                            ui.close();
-                                        }
-                                        if block_model.is_loaded {
-                                            if ContextMenuAction::new(tr!("explorer-unload")).show(ui).clicked() {
-                                                commands.push(UiCommand::CloseBlockModel(block_model.id));
-                                                ui.close();
-                                            }
-                                        } else if ContextMenuAction::new(tr!("explorer-load")).show(ui).clicked() {
-                                            commands.push(UiCommand::LoadBlockModel(block_model.id));
-                                            ui.close();
-                                        }
+                                    let row_state = RowState {
+                                        target: RowTarget::Item(ItemRef::BlockModel(block_model.id)),
+                                        loaded: block_model.is_loaded,
+                                        hidden: block_model.is_hidden,
+                                        locked: model_locked,
+                                    };
+                                    context_menu_popup(&response, row_menu_title(block_model.name.as_str(), row_state, &selection), |ui| {
+                                        row_menu_head(ui, commands, row_state, &selection);
                                         if ContextMenuAction::new(tr!("dialog-rename-submit")).enabled(!model_locked).show(ui).clicked() {
                                             commands.push(UiCommand::BeginRenameItem(RenameTarget::BlockModel(block_model.id)));
                                             ui.close();
@@ -1128,11 +1287,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                             FolderMember::item(block_model.section, ItemRef::BlockModel(block_model.id)),
                                             commands,
                                         );
-                                        context_menu_separator(ui);
-                                        if ContextMenuAction::new(tr!("explorer-delete-from-project")).enabled(!model_locked).show(ui).clicked() {
-                                            commands.push(UiCommand::RequestDeleteItem(RenameTarget::BlockModel(block_model.id)));
-                                            ui.close();
-                                        }
+                                        row_menu_delete(ui, commands, row_state, &selection, UiCommand::RequestDeleteItem(RenameTarget::BlockModel(block_model.id)));
                                     });
                                 };
                                 let mut block_models_source = Rows {
@@ -1209,19 +1364,15 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                         commands.push(UiCommand::SelectExplorerRow(ExplorerRow::Entity(dataset_handle)));
                                     }
 
-                                    context_menu_popup(&response, dataset.name.as_str(), |ui| {
-                                        if ContextMenuAction::new(if dataset_locked { tr!("explorer-unlock") } else { tr!("explorer-lock") })
-                                            .show(ui)
-                                            .clicked()
-                                        {
-                                            commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::DrillHole(dataset.id)));
-                                            ui.close();
-                                        }
+                                    let row_state = RowState {
+                                        target: RowTarget::Item(ItemRef::DrillHole(dataset.id)),
+                                        loaded: dataset.is_loaded,
+                                        hidden: dataset.is_hidden,
+                                        locked: dataset_locked,
+                                    };
+                                    context_menu_popup(&response, row_menu_title(dataset.name.as_str(), row_state, &selection), |ui| {
+                                        row_menu_head(ui, commands, row_state, &selection);
                                         if dataset.is_loaded {
-                                            if ContextMenuAction::new(tr!("explorer-unload")).show(ui).clicked() {
-                                                commands.push(UiCommand::CloseDrillHole(dataset.id));
-                                                ui.close();
-                                            }
                                             if ContextMenuAction::new(tr!("common-appearance")).show(ui).clicked() {
                                                 commands.push(UiCommand::OpenDrillHoleColorDialog(dataset.id));
                                                 ui.close();
@@ -1230,9 +1381,6 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                                 commands.push(UiCommand::LinkGeophysics(dataset.id));
                                                 ui.close();
                                             }
-                                        } else if ContextMenuAction::new(tr!("explorer-load")).show(ui).clicked() {
-                                            commands.push(UiCommand::LoadDrillHole(dataset.id));
-                                            ui.close();
                                         }
                                         if ContextMenuAction::new(tr!("dialog-rename-submit")).enabled(!dataset_locked).show(ui).clicked() {
                                             commands.push(UiCommand::BeginRenameItem(RenameTarget::DrillHole(dataset.id)));
@@ -1245,11 +1393,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                             FolderMember::item(dataset.section, ItemRef::DrillHole(dataset.id)),
                                             commands,
                                         );
-                                        context_menu_separator(ui);
-                                        if ContextMenuAction::new(tr!("explorer-delete-from-project")).enabled(!dataset_locked).show(ui).clicked() {
-                                            commands.push(UiCommand::RequestDeleteItem(RenameTarget::DrillHole(dataset.id)));
-                                            ui.close();
-                                        }
+                                        row_menu_delete(ui, commands, row_state, &selection, UiCommand::RequestDeleteItem(RenameTarget::DrillHole(dataset.id)));
                                     });
                                 };
                                 let mut drill_holes_source = Rows {
@@ -1297,6 +1441,8 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                             locked_layers,
                                             draggable: rows_draggable,
                                             folders: &project.folders,
+                                            selection: &selection,
+                                            selected_layers,
                                         };
                                         let mut layers_source = Rows {
                                             items: &entry.layers,

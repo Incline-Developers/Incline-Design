@@ -78,6 +78,8 @@ dialog-delete-title = Delete { $kind }
 dialog-delete-confirm =
     Delete '{ $name }' from the project?
     This cannot be undone.
+dialog-delete-rows-confirm =
+    Delete { $count } items from the project?
 dialog-delete-collection-confirm =
     Delete collection '{ $name }' and everything in it from the project?
 confirm-delete-product =
@@ -1275,12 +1277,16 @@ explorer-raster-id =
     { $driver } · { $width } × { $height }
     { $projection }
 explorer-id-triangulation-id-source = ID: triangulation:{ $id }{ $source }
+explorer-hide = Hide
 explorer-load = Load
 explorer-lock = Lock
 explorer-new-collection = New Collection
 explorer-no-collection = No Collection
+explorer-delete-selected = Delete { $count } Items
 explorer-remove-collection = Remove Collection
 explorer-select-all-objects = Select All Objects
+explorer-selected-count = { $count } Selected
+explorer-show = Show
 explorer-source-name = Source: { $name }
 explorer-unload = Unload
 explorer-unlock = Unlock

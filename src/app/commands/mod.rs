@@ -391,6 +391,10 @@ impl<'a> App<'a> {
                 self.activate_project_for_layer(layer_id);
                 self.delete_layer(layer_id)
             }
+            UiCommand::RequestDeleteRows(rows) => {
+                self.editor.pending_delete_rows = (!rows.is_empty()).then_some(rows);
+                Ok(())
+            }
             UiCommand::RequestDeleteItem(target) => {
                 let name = self.rename_target_name(target);
                 self.editor.pending_delete_item = name.map(|name| (target, name));

@@ -1082,6 +1082,12 @@ pub(crate) struct EditorState {
     /// The row a Shift-click measures its run from: the last row clicked
     /// without Shift.
     pub(crate) explorer_anchor: Option<ExplorerRow>,
+    /// Layer rows taken into the selection from the explorer. A layer is a
+    /// container rather than a scene entity, so its row's membership is held
+    /// here; an unloaded or hidden layer has nothing in the scene to stand
+    /// for it. A visible layer drops out once none of its objects are
+    /// selected - see `App::refresh_selection_counts`.
+    pub(crate) selected_layers: HashSet<LayerId>,
     /// Individually selected drill holes - see [`DrillHoleRef`]. A canvas
     /// click lands here in every workspace; the explorer selects a dataset
     /// whole into [`Self::selected_handles`] instead, which draws every hole
@@ -1296,6 +1302,9 @@ pub(crate) struct EditorState {
     /// Non-layer explorer item (triangulation, raster, point cloud, block
     /// model, drill hole dataset) awaiting destructive deletion confirmation.
     pub(crate) pending_delete_item: Option<(RenameTarget, String)>,
+    /// Several explorer rows awaiting deletion together: the commands that
+    /// delete each, issued once confirmed.
+    pub(crate) pending_delete_rows: Option<Vec<UiCommand>>,
     /// Vertices accumulated for an in-progress MakeLine / MakePoly stroke.
     pub(crate) pending_stroke: Vec<DVec3>,
     pub(crate) circle_draft: Option<CircleDraft>,
@@ -2084,6 +2093,7 @@ impl EditorState {
             || self.delete_confirm_open
             || self.pending_delete_layer.is_some()
             || self.pending_delete_item.is_some()
+            || self.pending_delete_rows.is_some()
             || self.pending_delete_delay_product.is_some()
             || self.pending_close_project.is_some()
             || self.pending_discard_project.is_some()
@@ -2401,6 +2411,7 @@ impl EditorState {
             selected_handles: HashSet::new(),
             explorer_rows: Vec::new(),
             explorer_anchor: None,
+            selected_layers: HashSet::new(),
             selected_drill_holes: HashSet::new(),
             selected_tie_ins: HashSet::new(),
             inspected_hole: None,
@@ -2495,6 +2506,7 @@ impl EditorState {
             new_layer_name: tr!("ws-menubar-design"),
             renaming_item: None,
             pending_delete_layer: None,
+            pending_delete_rows: None,
             pending_delete_item: None,
             pending_stroke: Vec::new(),
             circle_draft: None,
@@ -3493,6 +3505,9 @@ pub(crate) enum UiCommand {
     SetLayerVisible(LayerId, bool),
     /// The same for a project item.
     SetItemVisible(crate::model::ItemRef, bool),
+    /// Ask before deleting several explorer rows at once; carries the
+    /// commands that delete each.
+    RequestDeleteRows(Vec<UiCommand>),
     /// Lock/unlock every object on a design layer against selection and editing.
     ToggleLayerLocked(LayerId),
     /// Lock/unlock one scene entity against selection and editing.
@@ -4059,6 +4074,7 @@ impl UiCommand {
                 tr!("state-set-visibility"),
                 format!("{id:?}: {}", if *visible { tr!("state-shown") } else { tr!("state-hidden") }),
             ),
+            Self::RequestDeleteRows(rows) => report(tr!("explorer-delete-selected", count = rows.len().to_string()), String::new()),
             Self::SetItemVisible(item, visible) => report(
                 tr!("state-set-visibility"),
                 format!("{item:?}: {}", if *visible { tr!("state-shown") } else { tr!("state-hidden") }),

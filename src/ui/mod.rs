@@ -1269,6 +1269,11 @@ fn draw_global_dialogs(
         dialogs::confirmations::draw_delete_item_confirm_dialog(root_ui, commands, editor);
     }
 
+    // Delete several explorer rows at once
+    if editor.pending_delete_rows.is_some() {
+        dialogs::confirmations::draw_delete_rows_confirm_dialog(root_ui, commands, editor);
+    }
+
     // Delete delay product confirmation
     if editor.pending_delete_delay_product.is_some() {
         dialogs::confirmations::draw_delete_delay_product_dialog(root_ui, commands, editor);
