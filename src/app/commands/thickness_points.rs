@@ -391,6 +391,7 @@ impl<'a> App<'a> {
                 color_index: None,
                 color: [1.0, 1.0, 1.0, 1.0],
                 loaded: true,
+                hidden: false,
                 elevation: 0.0,
                 folder: None,
                 section: crate::model::SectionKind::Modelling,

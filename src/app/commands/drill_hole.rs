@@ -381,6 +381,7 @@ impl<'a> App<'a> {
             ItemRef::DrillHole(id),
             ItemStyle::DrillHole {
                 loaded: dataset.state.loaded,
+                hidden: dataset.state.hidden,
                 color,
             },
         );
@@ -509,10 +510,10 @@ impl<'a> App<'a> {
         let sections = crate::model::drill_hole::sections_after_rename(&dataset.color.working_sections, &field, &from, &to, held > count);
         let mut commands = vec![Command::CorrectIntervals { dataset: id, targets, records }];
         commands.extend(self.item_style_command(ItemRef::DrillHole(id), |style| match style {
-            ItemStyle::DrillHole { loaded, mut color } => {
+            ItemStyle::DrillHole { loaded, hidden, mut color } => {
                 color.carry_category_color(&field, &from, &to);
                 color.working_sections = sections;
-                ItemStyle::DrillHole { loaded, color }
+                ItemStyle::DrillHole { loaded, hidden, color }
             }
             other => other,
         }));
@@ -598,10 +599,10 @@ impl<'a> App<'a> {
         let (targets, records): (Vec<_>, Vec<_>) = shift.corrections.into_iter().unzip();
         let mut commands = vec![Command::CorrectIntervals { dataset: id, targets, records }];
         commands.extend(self.item_style_command(ItemRef::DrillHole(id), |style| match style {
-            ItemStyle::DrillHole { loaded, mut color } => {
+            ItemStyle::DrillHole { loaded, hidden, mut color } => {
                 color.carry_category_colors(&field, &renames);
                 color.working_sections = sections;
-                ItemStyle::DrillHole { loaded, color }
+                ItemStyle::DrillHole { loaded, hidden, color }
             }
             other => other,
         }));
@@ -839,6 +840,7 @@ impl<'a> App<'a> {
             color_index: None,
             color: [1.0, 1.0, 1.0, 1.0],
             loaded: true,
+            hidden: false,
             elevation: 0.0,
             folder: None,
             // Derived from the holes, so it is tagged for Modelling rather
@@ -909,6 +911,7 @@ impl<'a> App<'a> {
             color_index: None,
             color: [1.0, 1.0, 1.0, 1.0],
             loaded: true,
+            hidden: false,
             elevation: 0.0,
             folder: None,
             section: crate::model::SectionKind::Modelling,

@@ -83,6 +83,10 @@ dialog-delete-title = Delete { $kind }
 dialog-delete-confirm =
     Delete '{ $name }' from the project?
     This cannot be undone.
+dialog-delete-rows-confirm =
+    Delete { $count } items from the project?
+dialog-delete-collection-confirm =
+    Delete collection '{ $name }' and everything in it from the project?
 confirm-delete-product =
     Delete product '{ $name }' from the palette?
     This cannot be undone.
@@ -621,6 +625,7 @@ cmd-folder-collection-named-name-already-exists = A collection named '{ $name }'
 cmd-folder-collection-no-longer-exists = That collection no longer exists
 cmd-folder-created-collection-name = Created collection '{ $name }'
 cmd-folder-deleted-collection-name = Deleted collection '{ $name }'
+cmd-folder-deleted-collection-contents = Deleted collection '{ $name }' and its contents
 cmd-folder-moved-item-into-collection-name = Moved item into collection '{ $name }'
 cmd-folder-moved-item-root-section = Moved item to the root of { $section }
 cmd-folder-renamed-collection-before-after = Renamed collection '{ $before }' to '{ $after }'
@@ -1519,13 +1524,18 @@ explorer-raster-id =
     { $driver } · { $width } × { $height }
     { $projection }
 explorer-id-triangulation-id-source = ID: triangulation:{ $id }{ $source }
+explorer-hide = Hide
 explorer-load = Load
 explorer-lock = Lock
 explorer-new-collection = New Collection
 explorer-no-collection = No Collection
+explorer-delete-selected = Delete { $count } Items
+explorer-remove-collection = Remove Collection
 explorer-select-all-objects = Select All Objects
-explorer-show-thickness-table = Show thickness table
+explorer-selected-count = { $count } Selected
 explorer-settings = Settings...
+explorer-show = Show
+explorer-show-thickness-table = Show thickness table
 explorer-source-name = Source: { $name }
 explorer-unload = Unload
 explorer-unlock = Unlock
@@ -1900,6 +1910,9 @@ products-update = Update
 ## Progress strings
 
 progress-percent-done-total = { $percent } ({ $done } of { $total })
+progress-memory-used-total = { $used } / { $total }
+progress-memory-utilisation = Memory Utilisation
+progress-memory-utilisation-web = App Memory
 progress-task-finished = { $task }: Finished
 
 ## Project strings
@@ -2138,6 +2151,7 @@ state-set-drillhole-style = Set Drillhole Style
 state-set-drillhole-width = Set Drillhole Width
 state-set-entity-lock = Set Entity Lock
 state-set-grid = Set Grid
+state-set-visibility = Set Visibility
 state-set-layer-lock = Set Layer Lock
 state-set-line-weight = Set Line Weight
 state-set-modelling-settings = Set Modelling Settings

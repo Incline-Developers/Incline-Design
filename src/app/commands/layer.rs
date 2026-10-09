@@ -7,25 +7,6 @@ use crate::{
     userspace_log,
 };
 
-/// `preferred`, or `preferred` with the lowest ` N` (N >= 2) suffix not
-/// already taken. Shared by layer duplication (here) and folder creation
-/// (`app::commands::folder`), which sit side by side in the same menu and
-/// must agree on the scheme.
-pub(super) fn unique_name(preferred: &str, taken: impl Fn(&str) -> bool) -> String {
-    if !taken(preferred) {
-        return preferred.to_string();
-    }
-
-    for index in 2.. {
-        let candidate = format!("{preferred} {index}");
-        if !taken(&candidate) {
-            return candidate;
-        }
-    }
-
-    unreachable!("unbounded iterator should always find a unique name")
-}
-
 fn objects_on_layer(document: &Document, layer_id: LayerId) -> Vec<Object> {
     document.objects().iter().filter(|object| object.layer() == layer_id).cloned().collect()
 }
@@ -52,6 +33,7 @@ impl<'a> App<'a> {
             color_index: None,
             color: [1.0, 1.0, 1.0, 1.0],
             loaded: true,
+            hidden: false,
             elevation: 0.0,
             folder: None,
             section: SectionKind::natural_layer(),
@@ -114,9 +96,10 @@ impl<'a> App<'a> {
             return;
         };
         let source_objects = objects_on_layer(&project.project.document, layer_id);
-        let duplicate_name = unique_name(&tr!("cmd-layer-name-copy", name = source_layer.name.to_string()), |candidate| {
-            project.project.document.layer_id_by_name(candidate).is_some()
-        });
+        let duplicate_name = crate::model::project::unique_item_name(
+            tr!("cmd-layer-name-copy", name = source_layer.name.to_string()),
+            project.project.document.layers().iter().map(|layer| layer.name.as_str()),
+        );
 
         let doc = &mut project.project.document;
         let new_layer_id = doc.allocate_layer_id();
@@ -126,6 +109,7 @@ impl<'a> App<'a> {
             color_index: source_layer.color_index,
             color: source_layer.color,
             loaded: source_layer.loaded,
+            hidden: source_layer.hidden,
             elevation: source_layer.elevation,
             folder: source_layer.folder,
             section: source_layer.section,
@@ -165,18 +149,55 @@ impl<'a> App<'a> {
         if layer.loaded == loaded {
             return;
         }
-        self.execute_edit(Command::SetLayerLoaded {
+        let set_loaded = Command::SetLayerLoaded {
             id: layer_id,
             before: layer.loaded,
             after: loaded,
+        };
+        // Loading always brings a layer in visible, whatever its eye said
+        // before it was unloaded.
+        if loaded && layer.hidden {
+            self.execute_edit(Command::Batch(vec![
+                set_loaded,
+                Command::SetLayerHidden {
+                    id: layer_id,
+                    before: true,
+                    after: false,
+                },
+            ]));
+        } else {
+            self.execute_edit(set_loaded);
+        }
+    }
+
+    /// The explorer's eye on a layer: hiding leaves it loaded, and showing
+    /// one that is unloaded loads it.
+    pub(crate) fn set_layer_visible(&mut self, layer_id: LayerId, visible: bool) {
+        self.activate_project_for_layer(layer_id);
+        let Some(layer) = self.workspace.active_document().and_then(|document| document.layer(layer_id)) else {
+            return;
+        };
+        if visible && !layer.loaded {
+            self.set_layer_loaded(layer_id, true);
+            return;
+        }
+        if !layer.loaded || layer.hidden == !visible {
+            return;
+        }
+        let before = layer.hidden;
+        self.execute_edit(Command::SetLayerHidden {
+            id: layer_id,
+            before,
+            after: !visible,
         });
+        self.invalidate_geometry();
     }
 
     pub(crate) fn select_all_objects_in_layer(&mut self, layer_id: LayerId) {
         let Some(project) = self.workspace.active_project() else {
             return;
         };
-        if !project.project.document.layer(layer_id).is_some_and(|layer| layer.loaded) {
+        if !project.project.document.layer(layer_id).is_some_and(Layer::is_visible) {
             return;
         }
         let handles: Vec<SceneEntityId> = project
@@ -188,7 +209,6 @@ impl<'a> App<'a> {
             .map(|object| SceneEntityId::Object(object.id()))
             .collect();
 
-        self.editor.active_layer = Some(layer_id);
         self.editor.selected_handles = handles.into_iter().collect();
         self.editor.tri_selected_object_ids.clear();
         self.editor.tri_selected_layer_ids.clear();

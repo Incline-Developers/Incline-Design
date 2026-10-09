@@ -8,6 +8,7 @@ pub(crate) mod geophysics_web;
 pub(crate) mod io; /* Handles session serialisation */
 pub(crate) mod jobs; // Reusable background-compute job queue
 pub(crate) mod memory; // Browser address-space budgeting for large allocations
+pub(crate) mod memory_usage; // The bottom toolbar's memory readout
 pub(crate) mod tie_in; // Drill & Blast's tie-in and initiation point
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web_download;
@@ -341,6 +342,8 @@ pub(crate) struct App<'a> {
     /// wanted after it: the frame counter's clock. See `record_frame_time`.
     last_frame_end: Option<Instant>,
     frame_demanded_at: Option<Instant>,
+    /// Feeds `EditorState::memory_usage` on its own timer.
+    memory_sampler: memory_usage::MemorySampler,
     surface_retry_pending: bool,
     slice_surface_retry_deadline: Option<Instant>,
     last_scroll_instant: Option<Instant>,
@@ -366,6 +369,10 @@ pub(crate) struct App<'a> {
     next_raster_texture_id: u64,
     empty_document: Document,
     scene_document: Document,
+    /// Layers of `scene_document` with at least one object on them, rebuilt
+    /// with it. An explorer-selected layer with nothing on it has no objects
+    /// to stay selected through - see `prune_selected_layers`.
+    populated_layers: std::collections::HashSet<crate::model::LayerId>,
     snap_index: ObjectSnapIndex,
     /// Set by `invalidate_geometry`; the index rebuilds lazily on the next
     /// snap/orbit query via `refresh_snap_index`.
@@ -496,6 +503,7 @@ impl<'a> Default for App<'a> {
             last_render_time: None,
             last_frame_end: None,
             frame_demanded_at: None,
+            memory_sampler: memory_usage::MemorySampler::new(),
             surface_retry_pending: false,
             slice_surface_retry_deadline: None,
             last_scroll_instant: None,
@@ -518,6 +526,7 @@ impl<'a> Default for App<'a> {
             next_raster_texture_id: 0,
             empty_document: Document::new(),
             scene_document: Document::new(),
+            populated_layers: std::collections::HashSet::new(),
             snap_index: ObjectSnapIndex::default(),
             snap_index_dirty: false,
             scene_document_key: None,
@@ -816,9 +825,9 @@ impl<'a> App<'a> {
 
     fn active_layer(&self) -> Option<LayerId> {
         self.editor.active_layer.and_then(|layer| {
-            self.workspace
-                .active_project()
-                .and_then(|project| (project.project.document.layer(layer).is_some_and(|layer| layer.loaded) && project.project.document.layer(layer).is_some()).then_some(layer))
+            self.workspace.active_project().and_then(|project| {
+                (project.project.document.layer(layer).is_some_and(crate::model::Layer::is_visible) && project.project.document.layer(layer).is_some()).then_some(layer)
+            })
         })
     }
 
@@ -1117,6 +1126,9 @@ impl<'a> App<'a> {
         self.evict_unloaded_items();
         self.evict_unloaded_layers();
         self.drop_editor_references_to_missing_items();
+        if effects.items_changed {
+            self.sync_hidden_handles();
+        }
         if effects.document_changed {
             self.invalidate_geometry();
         }
@@ -1436,14 +1448,31 @@ impl<'a> App<'a> {
         }
     }
 
+    /// Mirror everything persisted as hidden - design objects, and project
+    /// items hidden from the explorer's eye - into the editor's unified scene
+    /// filter, which the renderer, picking and selection all read.
+    fn sync_hidden_handles(&mut self) {
+        self.editor.hidden_handles.clear();
+        if let Some(project) = self.workspace.active_project() {
+            self.editor.hidden_handles.extend(project.project.document.hidden_object_ids().map(SceneEntityId::Object));
+        }
+        let hidden = self
+            .triangulations
+            .iter()
+            .filter(|item| item.state.hidden)
+            .map(|item| item.entity_id())
+            .chain(self.block_models.iter().filter(|item| item.state.hidden).map(|item| item.entity_id()))
+            .chain(self.drill_holes.iter().filter(|item| item.state.hidden).map(|item| item.entity_id()))
+            .chain(self.point_clouds.iter().filter(|item| item.state.hidden).map(|item| item.entity_id()))
+            .chain(self.raster_textures.iter().filter(|item| item.state.hidden).map(|item| SceneEntityId::Raster(item.id)));
+        self.editor.hidden_handles.extend(hidden);
+    }
+
     fn invalidate_geometry(&mut self) {
         // Project-persistent design visibility is mirrored into the editor's
         // unified scene filter so selection tools that query the retained
         // document directly exclude the same objects as the rendered scene.
-        self.editor.hidden_handles.retain(|handle| !matches!(handle, SceneEntityId::Object(_)));
-        if let Some(project) = self.workspace.active_project() {
-            self.editor.hidden_handles.extend(project.project.document.hidden_object_ids().map(SceneEntityId::Object));
-        }
+        self.sync_hidden_handles();
         // Many of the ~90 invalidation sites fire for editor-state reasons
         // (selection, tool changes) with the documents untouched; the
         // composite clone and snap index only need refreshing when the
@@ -1452,6 +1481,7 @@ impl<'a> App<'a> {
         if Some(composite_key) != self.scene_document_key {
             self.scene_document = self.workspace.scene_document();
             self.scene_document_key = Some(composite_key);
+            self.populated_layers = self.scene_document.objects().iter().map(crate::model::Object::layer).collect();
             // The snap index rebuild is deferred to the next snap/orbit
             // query: many edits never snap before the next edit, and the
             // BVH build is the expensive part.
@@ -1624,7 +1654,7 @@ impl<'a> App<'a> {
                 .document
                 .objects()
                 .iter()
-                .any(|object| project.project.document.layer(object.layer()).is_some_and(|layer| layer.loaded))
+                .any(|object| project.project.document.layer(object.layer()).is_some_and(crate::model::Layer::is_visible))
         }) || self.triangulations.iter().any(|item| item.state.loaded)
             || self.block_models.iter().any(|item| item.state.loaded)
             || self.drill_holes.iter().any(|item| item.state.loaded)
@@ -1785,6 +1815,7 @@ impl<'a> App<'a> {
                             id: layer.id,
                             name: layer.name.clone(),
                             is_loaded: layer.loaded,
+                            is_hidden: layer.hidden,
                             dirty: dirty_layers.contains(&layer.id),
                             folder: layer.folder,
                             section: layer.section,
@@ -1849,8 +1880,8 @@ impl<'a> App<'a> {
                 id: tri.id,
                 name: tri.name.clone(),
                 source_name: tri.state.source_name.clone(),
-                is_active: self.active_triangulation == Some(tri.id),
                 is_loaded: tri.state.loaded,
+                is_hidden: tri.state.hidden,
                 dirty: tri.state.is_dirty(),
                 color: tri.color,
                 folder: tri.state.folder,
@@ -1865,6 +1896,7 @@ impl<'a> App<'a> {
                 name: model.name.clone(),
                 source_name: model.state.source_name.clone(),
                 is_loaded: model.state.loaded,
+                is_hidden: model.state.hidden,
                 dirty: model.state.is_dirty(),
                 _block_count: model
                     .state
@@ -1884,6 +1916,7 @@ impl<'a> App<'a> {
                 name: dataset.name.clone(),
                 source_name: dataset.state.source_name.clone(),
                 is_loaded: dataset.state.loaded,
+                is_hidden: dataset.state.hidden,
                 dirty: dataset.state.is_dirty(),
                 hole_count: dataset.state.summary.as_ref().map_or_else(|| dataset.dataset.holes.len(), |summary| summary.primary_count),
                 field_count: dataset
@@ -1903,6 +1936,7 @@ impl<'a> App<'a> {
                 name: cloud.name.clone(),
                 source_name: cloud.state.source_name.clone(),
                 is_loaded: cloud.state.loaded,
+                is_hidden: cloud.state.hidden,
                 dirty: cloud.state.is_dirty(),
                 point_count: cloud.state.summary.as_ref().map_or_else(|| cloud.points.len(), |summary| summary.primary_count),
                 folder: cloud.state.folder,
@@ -1919,6 +1953,7 @@ impl<'a> App<'a> {
                 name: raster.name.clone(),
                 source_name: raster.state.source_name.clone(),
                 is_loaded: raster.state.loaded,
+                is_hidden: raster.state.hidden,
                 dirty: raster.state.is_dirty(),
                 is_draped: draped_raster_ids.contains(&raster.id),
                 source_size: raster.source_size,
