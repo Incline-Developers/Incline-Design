@@ -409,6 +409,32 @@ impl<'a> App<'a> {
     }
 }
 
+impl<'a> App<'a> {
+    /// Put freshly generated geometry into triangulation `id` in place of
+    /// what it held, keeping its id, name, colour, style and visibility - for
+    /// a tool that regenerates the same item (an optimization rerun's shells).
+    /// Not an undo step, like the insert it stands in for.
+    pub(crate) fn replace_generated_triangulation(&mut self, id: TriangulationId, built: crate::model::triangulation::GeneratedTriangulation) {
+        let Some(item) = self.triangulations.iter_mut().find(|item| item.id == id) else {
+            return;
+        };
+        let face_count = built.mesh.face_count();
+        item.mesh = built.mesh;
+        item.spatial = built.spatial;
+        item.edges = built.edges;
+        item.surface_face_order = built.surface_face_order;
+        item.raster_texture = None;
+        // Whatever backed the old geometry (the archive, or a temporary file
+        // after eviction) no longer matches it.
+        item.state.deferred = None;
+        item.state.payload_source = None;
+        item.state.touch();
+        let name = item.name.clone();
+        self.touch_active_project_content();
+        userspace_log!("{}", tr!("cmd-session-updated-triangulation", name = name, face_count = face_count.to_string()));
+    }
+}
+
 /// Worker-thread half of a generated-triangulation apply: assemble the mesh,
 /// build its BVH and edge list. Pure (no `App`), so it can run off the UI
 /// thread; the result is handed to `insert_generated_triangulation`.

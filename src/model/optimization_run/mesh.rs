@@ -1,5 +1,5 @@
 //! Shells as triangulations: a blocky solid of the cells a shell holds, or a
-//! blocky surface of its floor and the ground round it.
+//! blocky surface of its floor and walls (the solid without its cap).
 //!
 //! Both follow block faces exactly. Smoothing (Whittle joins the centres of the
 //! column bottoms) is left for later.
@@ -64,13 +64,33 @@ fn in_shell(label: &[u16], air: &[bool], shell: u16, cell: usize) -> bool {
     label[cell] != OUTSIDE && label[cell] <= shell && !air[cell]
 }
 
-/// The closed solid of shell `shell`'s rock cells: one quad for every face
-/// between a cell in the shell and one outside it (or off the grid).
-pub(crate) fn solid(grid: &Grid, label: &[u16], air: &[bool], shell: u16) -> ShellMesh {
+/// What lies across a face of a shell cell.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Beyond {
+    /// Rock the shell leaves in place.
+    Rock,
+    Air,
+    /// Off the grid at its sides or bottom.
+    Edge,
+    /// Off the top of the grid.
+    Top,
+}
+
+/// One quad for every face between a cell in shell `shell` and one outside
+/// it (or off the grid) for which `keep` says yes.
+fn faces(grid: &Grid, label: &[u16], air: &[bool], shell: u16, keep: impl Fn(Beyond) -> bool) -> ShellMesh {
     let [nx, ny, nz] = grid.dims;
     let mut builder = Builder::default();
     let height = |z: usize| grid.corner(0, 0, z).z;
     let inside = |x: usize, y: usize, z: usize| in_shell(label, air, shell, grid.index(x, y, z));
+    // `None` when the neighbour is in the shell, so no face is there.
+    let beyond = |neighbour: Option<[usize; 3]>, off_grid: Beyond| match neighbour {
+        None => Some(off_grid),
+        Some([x, y, z]) if inside(x, y, z) => None,
+        Some([x, y, z]) if air[grid.index(x, y, z)] => Some(Beyond::Air),
+        Some(_) => Some(Beyond::Rock),
+    };
+    let wanted = |neighbour: Option<[usize; 3]>, off_grid: Beyond| beyond(neighbour, off_grid).is_some_and(&keep);
     for z in 0..nz {
         for y in 0..ny {
             for x in 0..nx {
@@ -78,27 +98,27 @@ pub(crate) fn solid(grid: &Grid, label: &[u16], air: &[bool], shell: u16) -> She
                     continue;
                 }
                 let (z0, z1) = (height(z), height(z + 1));
-                if x == 0 || !inside(x - 1, y, z) {
+                if wanted((x > 0).then(|| [x - 1, y, z]), Beyond::Edge) {
                     let corners = [(x, y, z0), (x, y, z1), (x, y + 1, z1), (x, y + 1, z0)];
                     builder.quad_at(grid, corners);
                 }
-                if x + 1 == nx || !inside(x + 1, y, z) {
+                if wanted((x + 1 < nx).then(|| [x + 1, y, z]), Beyond::Edge) {
                     let corners = [(x + 1, y, z0), (x + 1, y + 1, z0), (x + 1, y + 1, z1), (x + 1, y, z1)];
                     builder.quad_at(grid, corners);
                 }
-                if y == 0 || !inside(x, y - 1, z) {
+                if wanted((y > 0).then(|| [x, y - 1, z]), Beyond::Edge) {
                     let corners = [(x, y, z0), (x + 1, y, z0), (x + 1, y, z1), (x, y, z1)];
                     builder.quad_at(grid, corners);
                 }
-                if y + 1 == ny || !inside(x, y + 1, z) {
+                if wanted((y + 1 < ny).then(|| [x, y + 1, z]), Beyond::Edge) {
                     let corners = [(x, y + 1, z0), (x, y + 1, z1), (x + 1, y + 1, z1), (x + 1, y + 1, z0)];
                     builder.quad_at(grid, corners);
                 }
-                if z == 0 || !inside(x, y, z - 1) {
+                if wanted((z > 0).then(|| [x, y, z - 1]), Beyond::Edge) {
                     let corners = [(x, y, z0), (x, y + 1, z0), (x + 1, y + 1, z0), (x + 1, y, z0)];
                     builder.quad_at(grid, corners);
                 }
-                if z + 1 == nz || !inside(x, y, z + 1) {
+                if wanted((z + 1 < nz).then(|| [x, y, z + 1]), Beyond::Top) {
                     let corners = [(x, y, z1), (x + 1, y, z1), (x + 1, y + 1, z1), (x, y + 1, z1)];
                     builder.quad_at(grid, corners);
                 }
@@ -108,56 +128,15 @@ pub(crate) fn solid(grid: &Grid, label: &[u16], air: &[bool], shell: u16) -> She
     builder.finish()
 }
 
-/// The ground once shell `shell` is mined: each column's pit floor where the
-/// shell reaches it, otherwise the top of its highest rock cell; columns of
-/// air alone are left open. Risers join neighbouring columns of different height.
+/// The closed solid of shell `shell`'s rock cells: one quad for every face
+/// between a cell in the shell and one outside it (or off the grid).
+pub(crate) fn solid(grid: &Grid, label: &[u16], air: &[bool], shell: u16) -> ShellMesh {
+    faces(grid, label, air, shell, |_| true)
+}
+
+/// The pit outline of shell `shell`: the solid without its cap - only the
+/// faces against rock the shell leaves (and the grid's sides and bottom), so
+/// the floor and walls, open where the pit meets air or the top of the grid.
 pub(crate) fn surface(grid: &Grid, label: &[u16], air: &[bool], shell: u16) -> ShellMesh {
-    let [nx, ny, nz] = grid.dims;
-    let heights: Vec<Option<f64>> = (0..nx * ny)
-        .map(|column| {
-            let (x, y) = (column % nx, column / nx);
-            let floor = (0..nz).find(|&z| in_shell(label, air, shell, grid.index(x, y, z)));
-            match floor {
-                Some(z) => Some(grid.corner(0, 0, z).z),
-                None => (0..nz).rev().find(|&z| !air[grid.index(x, y, z)]).map(|z| grid.corner(0, 0, z + 1).z),
-            }
-        })
-        .collect();
-    let height = |x: usize, y: usize| heights[x + nx * y];
-    let mut builder = Builder::default();
-    for y in 0..ny {
-        for x in 0..nx {
-            let Some(z) = height(x, y) else {
-                continue;
-            };
-            let corners = [(x, y), (x + 1, y), (x + 1, y + 1), (x, y + 1)];
-            builder.quad_at(grid, corners.map(|(x, y)| (x, y, z)));
-            // Risers to the east and north neighbours, facing the lower side.
-            if x + 1 < nx
-                && let Some(east) = height(x + 1, y)
-                && east != z
-            {
-                let (low, high) = (z.min(east), z.max(east));
-                let corners = if east < z {
-                    [(x + 1, y, low), (x + 1, y + 1, low), (x + 1, y + 1, high), (x + 1, y, high)]
-                } else {
-                    [(x + 1, y, low), (x + 1, y, high), (x + 1, y + 1, high), (x + 1, y + 1, low)]
-                };
-                builder.quad_at(grid, corners);
-            }
-            if y + 1 < ny
-                && let Some(north) = height(x, y + 1)
-                && north != z
-            {
-                let (low, high) = (z.min(north), z.max(north));
-                let corners = if north < z {
-                    [(x, y + 1, low), (x, y + 1, high), (x + 1, y + 1, high), (x + 1, y + 1, low)]
-                } else {
-                    [(x, y + 1, low), (x + 1, y + 1, low), (x + 1, y + 1, high), (x, y + 1, high)]
-                };
-                builder.quad_at(grid, corners);
-            }
-        }
-    }
-    builder.finish()
+    faces(grid, label, air, shell, |beyond| matches!(beyond, Beyond::Rock | Beyond::Edge))
 }

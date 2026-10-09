@@ -16,8 +16,8 @@ use crate::{
         block_model::OpenBlockModel,
         optimization::{
             AirMode, BlockModelFields, Constant, ConstantValue, ConstantsRow, ElementCost, FactorInput, FieldValue, GradeUnit, HaulageCost, HaulageMode, OptimizationScenario,
-            ProcessingMethod, RevenueRow, RocktypeCost, RosetteInterpolation, RosetteIssue, RosetteRow, SalesUnit, ShellDirection, ShellFieldMode, ShellMode, SlopeMode, ValueType,
-            format_factor, group_names, move_constants_row, parse_factor_list, shell_count_for_step, shell_step_for_count, unique_name,
+            ProcessingMethod, RevenueRow, RocktypeCost, RosetteInterpolation, RosetteIssue, RosetteRow, SalesUnit, ShellDirection, ShellFieldMode, ShellFieldValue, ShellMode,
+            SlopeMode, ValueType, group_names, move_constants_row, parse_factor_list, shell_count_for_step, shell_step_for_count, unique_name,
         },
     },
     ui::{
@@ -1392,12 +1392,13 @@ fn draw_constraints(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fiel
 // ── Outputs ──
 
 fn draw_outputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: &BlockModelFields, commands: &mut Vec<UiCommand>) {
-    // Every field the settings use is held back from the shell number, so a run
-    // cannot overwrite one.
+    // The shell value is a category (each shell its own colour), so only text
+    // fields are offered, less any the settings use, so a run cannot overwrite one.
     let free: Vec<String> = {
         let used = scenario.used_fields();
-        fields.all.iter().filter(|name| !used.contains(name.as_str())).cloned().collect()
+        fields.text.iter().filter(|name| !used.contains(name.as_str())).cloned().collect()
     };
+    let shell_field_issue = scenario.shell_field_target(fields).err();
     let scenario_block_model = scenario.block_model.clone();
     let output = &mut scenario.output;
     if !output.shell_field.is_empty() && !free.contains(&output.shell_field) && fields.all.contains(&output.shell_field) {
@@ -1439,15 +1440,9 @@ fn draw_outputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: 
                     let response = labeled_row(ui, tr!("opt-factor-list"), Some(tr!("opt-factor-list-hint")), |ui| {
                         ui.add(egui::TextEdit::singleline(&mut output.factor_list).desired_width(ui.available_width()))
                     });
-                    match parse_factor_list(&output.factor_list) {
-                        Ok(factors) => {
-                            let listed: Vec<String> = factors.iter().map(|factor| format_factor(*factor)).collect();
-                            ui.label(egui::RichText::new(tr!("opt-factor-list-summary", count = factors.len().to_string(), factors = listed.join(", "))).weak());
-                        }
-                        Err(issue) => {
-                            mark_invalid(ui, &response);
-                            menu_note(ui, issue.message());
-                        }
+                    if let Err(issue) = parse_factor_list(&output.factor_list) {
+                        mark_invalid(ui, &response);
+                        menu_note(ui, issue.message());
                     }
                     return;
                 }
@@ -1602,15 +1597,27 @@ fn draw_outputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: 
     });
 
     option_group(ui, tr!("opt-group-write-back"), |ui| {
-        // The shell number in the block model: an existing field, or a new one.
+        // The shell value in the block model - its number or its revenue
+        // factor - in an existing field or a new one.
         form_row_wide_with(
             ui,
             &mut *output,
             |ui, output| {
-                ui.checkbox(&mut output.write_shell_field, tr!("opt-write-shell-field"));
+                ui.checkbox(&mut output.write_shell_field, tr!("opt-write-shell-field"))
+                    .on_hover_text(tr!("opt-shell-field-value-hint"));
             },
             |ui, output| {
                 ui.add_enabled_ui(output.write_shell_field, |ui| {
+                    egui::ComboBox::from_id_salt("opt_shell_field_value")
+                        .selected_text(output.shell_field_value.label())
+                        .width(130.0)
+                        .show_ui(ui, |ui| {
+                            for value in ShellFieldValue::ALL {
+                                ui.selectable_value(&mut output.shell_field_value, value, value.label());
+                            }
+                        })
+                        .response
+                        .on_hover_text(tr!("opt-shell-field-value-hint"));
                     let label = |mode: ShellFieldMode| match mode {
                         ShellFieldMode::Existing => tr!("opt-shell-field-existing"),
                         ShellFieldMode::New => tr!("opt-shell-field-new"),
@@ -1623,21 +1630,19 @@ fn draw_outputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: 
                                 ui.selectable_value(&mut output.shell_field_mode, mode, label(mode));
                             }
                         });
-                    match output.shell_field_mode {
-                        ShellFieldMode::Existing => {
-                            inline_combo(ui, "opt_shell_field", &mut output.shell_field, &free, tr!("opt-none-selected"), 150.0);
-                        }
-                        ShellFieldMode::New => {
-                            let response = ui.add(
-                                egui::TextEdit::singleline(&mut output.shell_new_field)
-                                    .hint_text(tr!("opt-shell-new-field-hint"))
-                                    .desired_width(150.0),
-                            );
-                            let name = output.shell_new_field.trim();
-                            if output.write_shell_field && (name.is_empty() || fields.all.iter().any(|field| field == name)) {
-                                mark_invalid(ui, &response);
-                            }
-                        }
+                    // A field that exists already is overwritten, so a rerun
+                    // updates the field its first run made.
+                    let response = match output.shell_field_mode {
+                        ShellFieldMode::Existing => inline_combo(ui, "opt_shell_field", &mut output.shell_field, &free, tr!("opt-none-selected"), 150.0),
+                        ShellFieldMode::New => ui.add(
+                            egui::TextEdit::singleline(&mut output.shell_new_field)
+                                .hint_text(tr!("opt-shell-new-field-hint"))
+                                .desired_width(150.0),
+                        ),
+                    };
+                    if let Some(issue) = &shell_field_issue {
+                        mark_invalid(ui, &response);
+                        response.on_hover_text(issue);
                     }
                 });
             },

@@ -25,7 +25,7 @@ Paths relative to `src/`, except `crates/` paths, which are relative to the repo
 | Translations | `src/i18n.rs` (`tr!` macro, loader), `i18n/en/incline_design.ftl` |
 | Web shell | `web/` (`index.html`, `web-initializer.js`, `_headers`), built by Trunk via `Trunk.toml` |
 
-`res/` holds embedded assets, `docs/` documentation assets, `vendor/` patched dependencies. `examples/` holds an import-ready project with real data for manual validation; format fixtures live in `src/model/formats/fixtures/`.
+`res/` holds embedded assets, `docs/` documentation assets, `vendor/` patched dependencies. `examples/` holds an import-ready project with real data for manual validation; format fixtures live in `src/model/formats/fixtures/`. Larger real data (block models for pit optimization) lives outside the repository in `../incline-test-data/`; see the optimization skill.
 
 ## Commands
 

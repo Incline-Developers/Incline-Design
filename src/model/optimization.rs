@@ -725,6 +725,28 @@ pub(crate) enum ShellFieldMode {
     New,
 }
 
+/// What each block's shell is written into the block model as: blocks keep
+/// the innermost shell holding them, so values ring outwards from the smallest.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum ShellFieldValue {
+    /// 1 for the smallest shell, counting outwards.
+    #[default]
+    Sequence,
+    /// The shell's revenue factor.
+    Factor,
+}
+
+impl ShellFieldValue {
+    pub(crate) const ALL: [Self; 2] = [Self::Sequence, Self::Factor];
+
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::Sequence => tr!("opt-shell-field-value-sequence"),
+            Self::Factor => tr!("opt-shell-field-value-factor"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct OutputSettings {
@@ -756,6 +778,7 @@ pub(crate) struct OutputSettings {
     pub(crate) shell_field_mode: ShellFieldMode,
     pub(crate) shell_field: String,
     pub(crate) shell_new_field: String,
+    pub(crate) shell_field_value: ShellFieldValue,
 }
 
 impl Default for OutputSettings {
@@ -780,6 +803,7 @@ impl Default for OutputSettings {
             shell_field_mode: ShellFieldMode::Existing,
             shell_field: String::new(),
             shell_new_field: String::new(),
+            shell_field_value: ShellFieldValue::Sequence,
         }
     }
 }
@@ -1006,7 +1030,7 @@ impl OptimizationScenario {
         keep(&mut self.waste_haulage.field, &fields.numeric);
         keep(&mut self.ore_haulage.field, &fields.numeric);
         keep(&mut self.slope.field, &fields.numeric);
-        keep(&mut self.output.shell_field, &fields.all);
+        keep(&mut self.output.shell_field, &fields.text);
         for method in &mut self.methods {
             for element in &mut method.elements {
                 keep(&mut element.element, &fields.numeric);
@@ -1083,6 +1107,31 @@ impl OptimizationScenario {
         used.extend(self.revenues.iter().map(|revenue| revenue.element.as_str()));
         used.remove("");
         used
+    }
+
+    /// The block model field a run writes each block's shell into: `Ok(None)`
+    /// when none is wanted, otherwise the name, or why it cannot be written.
+    /// The field is categorical (text), so each shell takes its own colour. A
+    /// field that exists is overwritten - in either mode, so the reruns of a
+    /// sensitivity study keep updating one field - unless the settings read it
+    /// or it holds numbers.
+    pub(crate) fn shell_field_target(&self, fields: &BlockModelFields) -> Result<Option<String>, String> {
+        let output = &self.output;
+        if !output.write_shell_field {
+            return Ok(None);
+        }
+        let name = match output.shell_field_mode {
+            ShellFieldMode::Existing => output.shell_field.trim(),
+            ShellFieldMode::New => output.shell_new_field.trim(),
+        };
+        if name.is_empty() || (output.shell_field_mode == ShellFieldMode::Existing && !fields.text.iter().any(|field| field == name)) {
+            return Err(tr!("opt-shell-field-missing"));
+        }
+        let numeric = fields.all.iter().any(|field| field == name) && !fields.text.iter().any(|field| field == name);
+        if self.used_fields().contains(name) || numeric {
+            return Err(tr!("opt-shell-field-taken", field = name.to_owned()));
+        }
+        Ok(Some(name.to_owned()))
     }
 
     /// Every element a processing method recovers, once each.
