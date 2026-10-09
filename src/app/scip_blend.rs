@@ -333,7 +333,7 @@ pub(crate) fn improve(
         activity.set(3);
         let started = Instant::now();
         let deadline = remaining.map(|left| Instant::now() + left.mul_f64(SEED_COMPLETION_SHARE));
-        match complete_seed(&out.input, &found.solution, deadline, cancel) {
+        match complete_seed(&out.input, &found.solution, None, deadline, cancel) {
             Ok(values) => {
                 log::info!("schedule run {}: first schedule completed into a seed in {:.2?}", out.identity.run_id, started.elapsed());
                 completed = Some(values);
@@ -912,22 +912,32 @@ pub(crate) fn polish_window(input: &BlendInput, seed: &BlendSolution, progress: 
     let cancel = CancelFlag::default();
     let deadline = Instant::now() + limit;
     let mut built = formulate_scip_with_cancel(input, Some(&cancel.signal()), None, false).ok()?;
-    // Each block holds what `progress` says at the end of the kept
-    // intervals: the seed meets this by construction.
-    let segments = input.segments_per_interval.max(1);
-    let last = crate::model::schedule::optimisation::blended::input::flat_cell(kept, segments - 1, segments);
-    for &(source, held) in progress {
-        if let Some(remaining) = built.columns.ground_remaining.get(&(source, last)) {
-            built.model.add_cons(vec![remaining], &[1.0], held - 1e-6, held + 1e-6, &format!("progress_{source}"));
-        }
-    }
-    let values = complete_seed(input, seed, Some(Instant::now() + limit.mul_f64(SEED_COMPLETION_SHARE)), &cancel).ok();
+    let held = Some((progress, kept));
+    hold_progress(&mut built.model, &built.columns, input, held);
+    let values = complete_seed(input, seed, held, Some(Instant::now() + limit.mul_f64(SEED_COMPLETION_SHARE)), &cancel).ok();
     let mut model = configure(built.model.hide_output(), Some(deadline.saturating_duration_since(Instant::now())), Some(1e-4)).ok()?;
     if let Some(values) = values.as_ref() {
         model = offer_seed(model, values).ok()?.0;
     }
     let solved = model.solve();
     extract_solution(&solved, &built.columns, || false).ok().flatten()
+}
+
+/// What each block (by position in the input) must hold at the end of an
+/// interval, and that interval.
+type Progress<'a> = Option<(&'a [(usize, f64)], usize)>;
+
+/// Hold each block of `progress` at what it says at the end of its interval:
+/// a polished window ends where the schedule it polishes leaves the ground.
+fn hold_progress(model: &mut Model<ProblemCreated>, columns: &BlendColumns<Variable>, input: &BlendInput, progress: Progress) {
+    let Some((progress, kept)) = progress else { return };
+    let segments = input.segments_per_interval.max(1);
+    let last = crate::model::schedule::optimisation::blended::input::flat_cell(kept, segments - 1, segments);
+    for &(source, held) in progress {
+        if let Some(remaining) = columns.ground_remaining.get(&(source, last)) {
+            model.add_cons(vec![remaining], &[1.0], held - 1e-6, held + 1e-6, &format!("progress_{source}"));
+        }
+    }
 }
 
 /// The run's limits and LP settings; everything else is SCIP's default.
@@ -1052,7 +1062,7 @@ fn dispatch_start(input: &BlendInput, deadline: Option<Instant>, cancel: &Cancel
         let issue = checked.issues.iter().chain(&checked.grade_issues).next().cloned().unwrap_or_default();
         return Err(format!("the replay rejected the dispatch schedule: {issue}"));
     }
-    Ok((complete_seed(input, &solution, deadline, cancel)?, checked.replayed_objective))
+    Ok((complete_seed(input, &solution, None, deadline, cancel)?, checked.replayed_objective))
 }
 
 /// Complete a schedule - the stitched day-by-day one, or a dispatch
@@ -1081,13 +1091,13 @@ fn dispatch_start(input: &BlendInput, deadline: Option<Instant>, cancel: &Cancel
 /// partial solution it searched a neighbourhood of them instead, and on a
 /// real week it spent the whole budget returning a schedule worth a
 /// seventieth of the seed.
-fn complete_seed(input: &BlendInput, seed: &BlendSolution, deadline: Option<Instant>, cancel: &CancelFlag) -> Result<HashMap<String, f64>, String> {
-    match complete_seed_with(input, seed, true, deadline, cancel) {
+fn complete_seed(input: &BlendInput, seed: &BlendSolution, progress: Progress, deadline: Option<Instant>, cancel: &CancelFlag) -> Result<HashMap<String, f64>, String> {
+    match complete_seed_with(input, seed, true, progress, deadline, cancel) {
         // A stitched day-by-day seed may need its movements' band to meet
         // the model's rows, which exact pile state can rule out: try again
         // with the movements held alone, in what is left.
         Err(problem) if !cancel.is_cancelled() && deadline.is_none_or(|deadline| Instant::now() < deadline) => {
-            complete_seed_with(input, seed, false, deadline, cancel).map_err(|again| format!("{problem}; with the movements alone, {again}"))
+            complete_seed_with(input, seed, false, progress, deadline, cancel).map_err(|again| format!("{problem}; with the movements alone, {again}"))
         }
         done => done,
     }
@@ -1096,8 +1106,17 @@ fn complete_seed(input: &BlendInput, seed: &BlendSolution, deadline: Option<Inst
 /// [`complete_seed`], with unchunked piles' state held exactly when
 /// `pin_piles` is set, solving in what is left before `deadline` once the
 /// model is built.
-fn complete_seed_with(input: &BlendInput, seed: &BlendSolution, pin_piles: bool, deadline: Option<Instant>, cancel: &CancelFlag) -> Result<HashMap<String, f64>, String> {
-    let built = formulate_scip_with_cancel(input, Some(&cancel.signal()), None, false).map_err(|_| "cancelled".to_owned())?;
+fn complete_seed_with(
+    input: &BlendInput,
+    seed: &BlendSolution,
+    pin_piles: bool,
+    progress: Progress,
+    deadline: Option<Instant>,
+    cancel: &CancelFlag,
+) -> Result<HashMap<String, f64>, String> {
+    let mut built = formulate_scip_with_cancel(input, Some(&cancel.signal()), None, false).map_err(|_| "cancelled".to_owned())?;
+    // The seed's movements move within their band to meet these.
+    hold_progress(&mut built.model, &built.columns, input, progress);
     let tonnes: BTreeMap<(usize, usize, usize), f64> = seed.movements.iter().map(|row| ((row.candidate, row.interval, row.segment), row.tonnes_t)).collect();
     let missing = tonnes.keys().filter(|key| !built.columns.movement.contains_key(key)).count();
     if missing > 0 {
