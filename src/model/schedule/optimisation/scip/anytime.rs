@@ -19,7 +19,11 @@
 //! after what following a plan loses - the plan sees days, not hours. The
 //! look-ahead is what makes it pay on long horizons: a day solved as though
 //! the horizon ended with it takes value now that the days after it lose
-//! more than, and the dispatch after it has to live with that.
+//! more than, and the dispatch after it has to live with that. Even a day
+//! ahead is too short to see why the plan strips waste now, so a polished
+//! day must also leave every block dug at least as far as the best schedule
+//! leaves it: polishing rearranges the hours, the plan windows decide the
+//! strategy.
 //!
 //! Every candidate keeps the best schedule's hours before its window and is
 //! dispatched from the state they leave, so a polished day is not undone by
@@ -77,8 +81,10 @@ pub(crate) struct AnytimeSettings {
 
 /// Solves one window's exact hourly model from a schedule of it, within a
 /// time limit: the window's own input and schedule, in its own interval
-/// numbering. The SCIP side lives with the app's other solves.
-pub(crate) type Polisher<'a> = &'a (dyn Fn(&BlendInput, &BlendSolution, Duration) -> Option<BlendSolution> + Sync);
+/// numbering, and the most each block of its input (by position) may hold
+/// at the end of interval `kept`. The SCIP side lives with the app's other
+/// solves.
+pub(crate) type Polisher<'a> = &'a (dyn Fn(&BlendInput, &BlendSolution, &[(usize, f64)], usize, Duration) -> Option<BlendSolution> + Sync);
 
 /// The best schedule so far and the replay's report on it.
 struct Best {
@@ -220,7 +226,16 @@ fn polish(
         end: solved_to,
     };
     let local = carry.window_input(input, window);
-    let Some(polished) = polisher(&local, &slice(best, first, solved_to), limit) else {
+    // At least as far along every block as the best schedule by the end of
+    // the kept days.
+    let left_by_then = Window::opening(input, &best.solution, first_day + days, 0).remaining;
+    let progress: Vec<(usize, f64)> = local
+        .ground
+        .iter()
+        .enumerate()
+        .map(|(index, source)| (index, left_by_then.get(&source.id).copied().unwrap_or(0.0)))
+        .collect();
+    let Some(polished) = polisher(&local, &slice(best, first, solved_to), &progress, end - first - 1, limit) else {
         return Ok(None);
     };
     let Some(checked) = replay_cancellable(&local, &polished, cancel) else {
