@@ -227,7 +227,6 @@ impl<'a> App<'a> {
             .map(|object| SceneEntityId::Object(object.id()))
             .collect();
 
-        self.editor.active_layer = Some(layer_id);
         self.editor.selected_handles = handles.into_iter().collect();
         self.editor.tri_selected_object_ids.clear();
         self.editor.tri_selected_layer_ids.clear();

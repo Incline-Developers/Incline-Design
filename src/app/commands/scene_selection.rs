@@ -196,10 +196,11 @@ impl App<'_> {
         }
         // A layer belongs to one project, and its objects can only be read out
         // of that project's document - so clicking it makes that project the
-        // active one, exactly as the row's own Select All Objects does.
+        // active one, exactly as the row's own Select All Objects does. It
+        // does not make the layer the one drawn onto: that is the viewport
+        // bar's layer picker's to say.
         if let ExplorerRow::Layer(layer_id) = row {
             self.activate_project_for_layer(layer_id);
-            self.editor.active_layer = Some(layer_id);
         }
         let toggle = self.modifiers.control_key() || (cfg!(target_os = "macos") && self.modifiers.super_key());
         if self.modifiers.shift_key() {
