@@ -48,7 +48,7 @@ use crate::model::schedule::{
         },
         scip::{
             adapter::{self, SolveReport},
-            anytime::{self, AnytimeSettings},
+            anytime::{self, AnytimeSettings, Hold},
             blend::formulate_scip_with_cancel,
             experiments::extract_solution,
         },
@@ -337,7 +337,7 @@ pub(crate) fn improve(
         let budget = if fits { left.mul_f64(SEARCH_SHARE) } else { left };
         activity.set(3);
         let started = Instant::now();
-        let polish = |input: &BlendInput, seed: &BlendSolution, progress: &[(usize, f64)], kept: usize, limit: Duration| polish_window(input, seed, progress, kept, limit, cancel);
+        let polish = |input: &BlendInput, seed: &BlendSolution, hold: &Hold, limit: Duration| polish_window(input, seed, hold, limit, cancel);
         let drill_blast = found.solution.drill_blast.clone();
         let run_id = out.identity.run_id;
         let searched = anytime::run(
@@ -998,16 +998,14 @@ fn solve_day_by_day(
 }
 
 /// One window's exact hourly model solved from `seed`, a schedule of it,
-/// within `limit`, with each block held where `progress` says at the end of
-/// interval `kept`: the search's polishing step (`scip::anytime`). Anything
-/// short of an extracted schedule is `None`, and the search keeps what it
-/// had.
-fn polish_window(input: &BlendInput, seed: &BlendSolution, progress: &[(usize, f64)], kept: usize, limit: Duration, cancel: &CancelFlag) -> Option<BlendSolution> {
+/// within `limit`, holding what `hold` says at the end of its kept intervals:
+/// the search's polishing step (`scip::anytime`). Anything short of an
+/// extracted schedule is `None`, and the search keeps what it had.
+fn polish_window(input: &BlendInput, seed: &BlendSolution, hold: &Hold, limit: Duration, cancel: &CancelFlag) -> Option<BlendSolution> {
     let deadline = Instant::now() + limit;
     let mut built = formulate_scip_with_cancel(input, Some(&cancel.signal()), None, false).ok()?;
-    let held = Some((progress, kept));
-    hold_progress(&mut built.model, &built.columns, input, held);
-    let values = complete_seed(input, seed, held, Some(Instant::now() + limit.mul_f64(SEED_COMPLETION_SHARE)), cancel).ok();
+    hold_progress(&mut built.model, &built.columns, input, Some(hold));
+    let values = complete_seed(input, seed, Some(hold), Some(Instant::now() + limit.mul_f64(SEED_COMPLETION_SHARE)), cancel).ok();
     let mut model = configure(built.model.hide_output(), Some(deadline.saturating_duration_since(Instant::now())), Some(1e-4)).ok()?;
     if let Some(values) = values.as_ref() {
         model = offer_seed(model, values).ok()?.0;
@@ -1017,19 +1015,43 @@ fn polish_window(input: &BlendInput, seed: &BlendSolution, progress: &[(usize, f
     extract_solution(&solved, &built.columns, || false).ok().flatten()
 }
 
-/// What each block (by position in the input) must hold at the end of an
-/// interval, and that interval.
-type Progress<'a> = Option<(&'a [(usize, f64)], usize)>;
-
-/// Hold each block of `progress` at what it says at the end of its interval:
-/// a polished window ends where the schedule it polishes leaves the ground.
-fn hold_progress(model: &mut Model<ProblemCreated>, columns: &BlendColumns<Variable>, input: &BlendInput, progress: Progress) {
-    let Some((progress, kept)) = progress else { return };
+/// Hold each block and pile of `hold` at what it says at the end of its
+/// kept intervals: a polished window ends where the schedule it polishes
+/// leaves the ground, and its piles having received and given up the same
+/// tonnes.
+fn hold_progress(model: &mut Model<ProblemCreated>, columns: &BlendColumns<Variable>, input: &BlendInput, hold: Option<&Hold>) {
+    let Some(hold) = hold else { return };
     let segments = input.segments_per_interval.max(1);
-    let last = crate::model::schedule::optimisation::blended::input::flat_cell(kept, segments - 1, segments);
-    for &(source, held) in progress {
+    let last = crate::model::schedule::optimisation::blended::input::flat_cell(hold.kept, segments - 1, segments);
+    for &(source, held) in &hold.blocks {
         if let Some(remaining) = columns.ground_remaining.get(&(source, last)) {
             model.add_cons(vec![remaining], &[1.0], held - 1e-6, held + 1e-6, &format!("progress_{source}"));
+        }
+    }
+    let pile_of = |destination: DestinationId| match input.destinations.iter().find(|entry| entry.id == destination).map(|entry| entry.kind) {
+        Some(DestinationKind::Stockpile(pile)) => Some(pile),
+        _ => None,
+    };
+    for &(pile, received, reclaimed) in &hold.piles {
+        let (mut into, mut out_of) = (Vec::new(), Vec::new());
+        for (&(candidate, interval, _), column) in &columns.movement {
+            if interval > hold.kept {
+                continue;
+            }
+            let movement = &input.movements[candidate];
+            if pile_of(movement.destination) == Some(pile) {
+                into.push(column);
+            }
+            if movement.source == SourceId::Stockpile(pile) {
+                out_of.push(column);
+            }
+        }
+        for (terms, held, name) in [(into, received, "received"), (out_of, reclaimed, "reclaimed")] {
+            if !terms.is_empty() {
+                let ones = vec![1.0; terms.len()];
+                let slack = 1e-6 * held.abs().max(1.0);
+                model.add_cons(terms, &ones, held - slack, held + slack, &format!("{name}_{}", pile.0));
+            }
         }
     }
 }
@@ -1203,7 +1225,7 @@ fn dispatch_start(input: &BlendInput, deadline: Option<Instant>, cancel: &Cancel
 /// partial solution it searched a neighbourhood of them instead, and on a
 /// real week it spent the whole budget returning a schedule worth a
 /// seventieth of the seed.
-fn complete_seed(input: &BlendInput, seed: &BlendSolution, progress: Progress, deadline: Option<Instant>, cancel: &CancelFlag) -> Result<HashMap<String, f64>, String> {
+fn complete_seed(input: &BlendInput, seed: &BlendSolution, progress: Option<&Hold>, deadline: Option<Instant>, cancel: &CancelFlag) -> Result<HashMap<String, f64>, String> {
     match complete_seed_with(input, seed, true, progress, deadline, cancel) {
         // A stitched day-by-day seed may need its movements' band to meet
         // the model's rows, which exact pile state can rule out: try again
@@ -1222,7 +1244,7 @@ fn complete_seed_with(
     input: &BlendInput,
     seed: &BlendSolution,
     pin_piles: bool,
-    progress: Progress,
+    progress: Option<&Hold>,
     deadline: Option<Instant>,
     cancel: &CancelFlag,
 ) -> Result<HashMap<String, f64>, String> {

@@ -1,7 +1,7 @@
 //! Targets from a coarse whole-horizon plan for the hourly dispatch to follow.
 //!
 //! The plan (`scip::plan` with the `scip` feature) decides, per loader and
-//! day, how many tonnes go to each destination. The dispatch still chooses
+//! day, how many tonnes go to each destination, dug or reclaimed. The dispatch still chooses
 //! every hour's blocks, destinations and trucks itself, under authored bar
 //! priority, and the replay still checks the result; the targets only steer
 //! its objective. Each loader's route is paced through the day: tonnes up to
