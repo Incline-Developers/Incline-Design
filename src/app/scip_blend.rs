@@ -903,6 +903,24 @@ fn solve_day_by_day(
     }))
 }
 
+/// One window's exact hourly model solved from `seed`, a schedule of it,
+/// within `limit`: the polishing step of the anytime search (prototype; see
+/// `optimisation::scip::anytime`). Anything short of an extracted schedule
+/// is `None`, and the caller keeps what it had.
+#[allow(dead_code, reason = "prototype, not yet called by Improve")]
+pub(crate) fn polish_window(input: &BlendInput, seed: &BlendSolution, limit: Duration) -> Option<BlendSolution> {
+    let cancel = CancelFlag::default();
+    let deadline = Instant::now() + limit;
+    let built = formulate_scip_with_cancel(input, Some(&cancel.signal()), None, false).ok()?;
+    let values = complete_seed(input, seed, Some(Instant::now() + limit.mul_f64(SEED_COMPLETION_SHARE)), &cancel).ok();
+    let mut model = configure(built.model.hide_output(), Some(deadline.saturating_duration_since(Instant::now())), Some(1e-4)).ok()?;
+    if let Some(values) = values.as_ref() {
+        model = offer_seed(model, values).ok()?.0;
+    }
+    let solved = model.solve();
+    extract_solution(&solved, &built.columns, || false).ok().flatten()
+}
+
 /// The run's limits and LP settings; everything else is SCIP's default.
 ///
 /// # Primal simplex with devex pricing
