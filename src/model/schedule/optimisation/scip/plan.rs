@@ -139,9 +139,6 @@ pub(crate) struct PlanSolve {
     /// What the plan's movements earn on each day it plans.
     pub(crate) day_values: BTreeMap<u32, f64>,
     pub(crate) status: String,
-    /// A relaxation's prices on the rows its Lagrangian bound moves into
-    /// the objective (`super::lagrange`), by row name; empty otherwise.
-    pub(crate) duals: BTreeMap<String, f64>,
 }
 
 /// The plan's columns and rows, kept row-wise for HiGHS.
@@ -156,7 +153,6 @@ struct Builder {
     starts: Vec<usize>,
     index: Vec<usize>,
     value: Vec<f64>,
-    row_names: Vec<String>,
     binaries: usize,
 }
 
@@ -177,7 +173,7 @@ impl Builder {
     }
 
     /// One row, its repeated columns merged.
-    fn row(&mut self, terms: &[(usize, f64)], lhs: f64, rhs: f64, name: &str) {
+    fn row(&mut self, terms: &[(usize, f64)], lhs: f64, rhs: f64, _name: &str) {
         if terms.is_empty() {
             return;
         }
@@ -195,14 +191,12 @@ impl Builder {
         }
         self.row_lower.push(lhs);
         self.row_upper.push(rhs);
-        self.row_names.push(name.to_owned());
     }
 }
 
 /// A solve's column values, objective, bound and status.
 struct Answer {
     values: Vec<f64>,
-    row_duals: Vec<f64>,
     objective: f64,
     bound: Option<f64>,
     status: String,
@@ -305,7 +299,6 @@ fn solve_highs(builder: &Builder, seed: Option<&[f64]>, time_limit: Duration, re
         };
         Ok(Answer {
             values,
-            row_duals,
             objective,
             bound,
             status: format!("HiGHS status {status}, {nodes} nodes"),
@@ -349,7 +342,7 @@ type Flow = (usize, f64, Carried);
 
 /// Tonnes per unit of a plan column: kilotonnes keep its coefficients within
 /// a few orders of magnitude of each other, which both solvers need.
-pub(super) const UNIT: f64 = 1000.0;
+const UNIT: f64 = 1000.0;
 
 /// A column carrying a block material's tonnes to a destination on a day:
 /// (block, material, destination, period), the column, tonnes per unit, and
@@ -359,9 +352,8 @@ type Routed = ((GroundId, MaterialId, DestinationId, usize), usize, f64, Option<
 /// Everything a plan of `input` is built from, worked out once: the days it
 /// covers, what each block holds and where its materials can go, each
 /// loader's sequence and dig capacity, each reclaim bar's piles, routes and
-/// capacity, and the piles as the plan opens. The plan and its Lagrangian
-/// bound (`super::lagrange`) both read it.
-pub(crate) struct Prepared<'a> {
+/// capacity, and the piles as the plan opens.
+pub(super) struct Prepared<'a> {
     pub(super) input: &'a BlendInput,
     pub(super) window: Option<&'a Window>,
     pub(super) days: Vec<u32>,
@@ -411,7 +403,7 @@ fn ground_materials(input: &BlendInput, ground: GroundId) -> Vec<(MaterialId, f6
 }
 
 impl<'a> Prepared<'a> {
-    pub(crate) fn new(input: &'a BlendInput, window: Option<&'a Window>) -> Self {
+    pub(super) fn new(input: &'a BlendInput, window: Option<&'a Window>) -> Self {
         // ---- days ---------------------------------------------------------------
         let mut day_intervals: BTreeMap<u32, Vec<Interval>> = BTreeMap::new();
         for interval in &input.intervals {
@@ -1233,19 +1225,7 @@ pub(crate) fn solve(input: &BlendInput, seed: Option<&BlendSolution>, window: Op
             *day_values.entry(days[p]).or_default() += builder.cost[column] * answer.values[column];
         }
     }
-    let duals = if settings.relax {
-        builder
-            .row_names
-            .iter()
-            .zip(&answer.row_duals)
-            .filter(|(name, _)| super::lagrange::PRICED.iter().any(|prefix| name.starts_with(prefix)))
-            .map(|(name, dual)| (name.clone(), *dual))
-            .collect()
-    } else {
-        BTreeMap::new()
-    };
     Ok(PlanSolve {
-        duals,
         day_values,
         routes,
         objective,
