@@ -1,7 +1,8 @@
 //! Bulk show/hide/lock actions for one explorer section, as offered by the
 //! right-click menu on each section heading.
 //!
-//! Eye and lock actions apply to every row, including unloaded entries.
+//! Eye and lock actions apply to every row. Hiding leaves rows loaded;
+//! revealing loads any that are not.
 
 use crate::{
     app::App,
@@ -70,8 +71,8 @@ impl<'a> App<'a> {
         triangulations.chain(rasters).chain(point_clouds).chain(block_models).chain(drill_holes).collect()
     }
 
-    /// Load or unload every item in one explorer section, as a single
-    /// undo step.
+    /// Show or hide every item in one explorer section, as a single undo
+    /// step. Showing loads whatever is unloaded; hiding unloads nothing.
     pub(crate) fn set_section_visible(&mut self, section: ExplorerSection, visible: bool) {
         let layer_tag = section_layer_tag(section);
         if let (Some(tag), true) = (layer_tag, visible) {
@@ -95,13 +96,24 @@ impl<'a> App<'a> {
         if let Some(tag) = layer_tag
             && let Some(document) = self.workspace.active_document()
         {
-            commands.extend(document.layers().iter().filter(|layer| layer.section == tag).map(|layer| layer.id).filter_map(|id| {
-                document.layer(id).filter(|layer| layer.loaded != visible).map(|_| Command::SetLayerLoaded {
-                    id,
-                    before: !visible,
-                    after: visible,
-                })
-            }));
+            for layer in document.layers().iter().filter(|layer| layer.section == tag) {
+                // Revealing loads what is unloaded and shows what is hidden;
+                // hiding leaves everything loaded.
+                if visible && !layer.loaded {
+                    commands.push(Command::SetLayerLoaded {
+                        id: layer.id,
+                        before: false,
+                        after: true,
+                    });
+                }
+                if layer.hidden == visible && (layer.loaded || visible) {
+                    commands.push(Command::SetLayerHidden {
+                        id: layer.id,
+                        before: layer.hidden,
+                        after: !visible,
+                    });
+                }
+            }
             // Individual objects hidden from the canvas menu own no
             // explorer row, so this is where they come back.
             if visible && tag == SectionKind::Designs {
@@ -110,11 +122,17 @@ impl<'a> App<'a> {
         }
         // A section can hold both layers and items (Modelling), so this half
         // always runs; it is empty for the layer-only sections.
-        commands.extend(
-            self.section_items(section)
-                .into_iter()
-                .filter_map(|item| self.item_style_command(item, |style| style.with_loaded(visible))),
-        );
+        commands.extend(self.section_items(section).into_iter().filter_map(|item| {
+            self.item_style_command(item, |style| {
+                if visible {
+                    style.with_loaded(true).with_hidden(false)
+                } else if style.loaded() {
+                    style.with_hidden(true)
+                } else {
+                    style
+                }
+            })
+        }));
 
         let changed = commands.len();
         if visible {

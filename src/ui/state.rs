@@ -3488,6 +3488,11 @@ pub(crate) enum UiCommand {
     CancelCollarRotation,
     LoadLayer(LayerId),
     UnloadLayer(LayerId),
+    /// The explorer's eye on a layer: hide it while leaving it loaded, or
+    /// show it, loading it first when it is unloaded.
+    SetLayerVisible(LayerId, bool),
+    /// The same for a project item.
+    SetItemVisible(crate::model::ItemRef, bool),
     /// Lock/unlock every object on a design layer against selection and editing.
     ToggleLayerLocked(LayerId),
     /// Lock/unlock one scene entity against selection and editing.
@@ -4050,6 +4055,14 @@ impl UiCommand {
             Self::ApplyCollarRotation => report(tr!("common-rotate-collar"), tr!("state-apply-selection")),
             Self::LoadLayer(id) => report(tr!("state-load-layer"), format!("{id:?}")),
             Self::UnloadLayer(id) => report(tr!("state-unload-layer"), format!("{id:?}")),
+            Self::SetLayerVisible(id, visible) => report(
+                tr!("state-set-visibility"),
+                format!("{id:?}: {}", if *visible { tr!("state-shown") } else { tr!("state-hidden") }),
+            ),
+            Self::SetItemVisible(item, visible) => report(
+                tr!("state-set-visibility"),
+                format!("{item:?}: {}", if *visible { tr!("state-shown") } else { tr!("state-hidden") }),
+            ),
             Self::ToggleLayerLocked(id) => report(tr!("state-set-layer-lock"), format!("{id:?}")),
             Self::ToggleEntityLocked(handle) => report(tr!("state-set-entity-lock"), format!("{handle:?}")),
             Self::SetSectionVisible(section, visible) => report(
@@ -4218,6 +4231,8 @@ pub(crate) struct UiLayerEntry {
     pub(crate) name: String,
     /// Whether the layer is loaded and drawn in the viewport.
     pub(crate) is_loaded: bool,
+    /// Loaded but kept out of the viewport by the explorer's eye.
+    pub(crate) is_hidden: bool,
     pub(crate) dirty: bool,
     /// Folder the layer sits in, or `None` for the section root.
     pub(crate) folder: Option<FolderId>,
@@ -4339,6 +4354,8 @@ pub(crate) struct UiPointCloudEntry {
     pub(crate) name: String,
     pub(crate) source_name: Option<String>,
     pub(crate) is_loaded: bool,
+    /// Loaded but kept out of the viewport by the explorer's eye.
+    pub(crate) is_hidden: bool,
     pub(crate) dirty: bool,
     pub(crate) point_count: usize,
     /// Folder the point cloud sits in, or `None` for the section root.
@@ -4355,6 +4372,8 @@ pub(crate) struct UiRasterTextureEntry {
     pub(crate) name: String,
     pub(crate) source_name: Option<String>,
     pub(crate) is_loaded: bool,
+    /// Loaded but kept out of the viewport by the explorer's eye.
+    pub(crate) is_hidden: bool,
     pub(crate) dirty: bool,
     /// Currently draped over at least one triangulation.
     pub(crate) is_draped: bool,
@@ -4373,6 +4392,8 @@ pub(crate) struct UiTriangulationEntry {
     pub(crate) source_name: Option<String>,
     pub(crate) is_active: bool,
     pub(crate) is_loaded: bool,
+    /// Loaded but kept out of the viewport by the explorer's eye.
+    pub(crate) is_hidden: bool,
     pub(crate) dirty: bool,
     /// Face colour edited in the context menu.
     pub(crate) color: [f32; 4],
@@ -4387,6 +4408,8 @@ pub(crate) struct UiBlockModelEntry {
     pub(crate) name: String,
     pub(crate) source_name: Option<String>,
     pub(crate) is_loaded: bool,
+    /// Loaded but kept out of the viewport by the explorer's eye.
+    pub(crate) is_hidden: bool,
     pub(crate) dirty: bool,
     pub(crate) _block_count: usize,
     pub(crate) variable_count: usize,
@@ -4401,6 +4424,8 @@ pub(crate) struct UiDrillHoleEntry {
     pub(crate) name: String,
     pub(crate) source_name: Option<String>,
     pub(crate) is_loaded: bool,
+    /// Loaded but kept out of the viewport by the explorer's eye.
+    pub(crate) is_hidden: bool,
     pub(crate) dirty: bool,
     pub(crate) hole_count: usize,
     pub(crate) field_count: usize,

@@ -429,6 +429,14 @@ impl<'a> App<'a> {
                 self.unload_layer(layer);
                 Ok(())
             }
+            UiCommand::SetLayerVisible(layer, visible) => {
+                self.set_layer_visible(layer, visible);
+                Ok(())
+            }
+            UiCommand::SetItemVisible(item, visible) => {
+                self.set_item_visible(item, visible);
+                Ok(())
+            }
             UiCommand::ToggleLayerLocked(layer) => {
                 self.toggle_layer_locked(layer);
                 Ok(())
@@ -1386,7 +1394,7 @@ impl<'a> App<'a> {
             selected
                 .iter()
                 .filter_map(|handle| crate::model::ItemRef::from_entity(*handle))
-                .filter_map(|item| self.item_style_command(item, |style| style.with_loaded(false))),
+                .filter_map(|item| self.item_style_command(item, |style| if style.loaded() { style.with_hidden(true) } else { style })),
         );
 
         // Persisted visibility now owns ordinary Hide Selection. Remove any

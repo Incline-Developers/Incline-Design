@@ -96,8 +96,16 @@ pub(crate) struct Layer {
     pub(crate) color_index: Option<u8>,
     /// Resolved RGBA used for rendering objects with `ObjectColor::ByLayer`.
     pub(crate) color: [f32; 4],
+    /// Whether the layer's objects are held in memory. A file records
+    /// whether the layer was visible - loaded and not hidden - so a project
+    /// opens with only what was being looked at loaded.
     #[serde(alias = "visible")]
     pub(crate) loaded: bool,
+    /// Kept out of the viewport while loaded: the explorer's eye, separate
+    /// from loading. Meaningless while unloaded, and never written - see
+    /// `loaded`.
+    #[serde(skip)]
+    pub(crate) hidden: bool,
     pub(crate) elevation: f32,
     /// Folder this layer sits in, or `None` for the section root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -108,12 +116,18 @@ pub(crate) struct Layer {
 }
 
 impl Layer {
+    /// Whether the layer draws: loaded, and not hidden.
+    pub(crate) fn is_visible(&self) -> bool {
+        self.loaded && !self.hidden
+    }
+
     /// Fold what the explorer tree draws of this layer into a view key.
     pub(crate) fn hash_row(&self, hasher: &mut impl std::hash::Hasher) {
         use std::hash::Hash;
         self.id.hash(hasher);
         self.name.hash(hasher);
         self.loaded.hash(hasher);
+        self.hidden.hash(hasher);
         self.folder.hash(hasher);
         self.section.hash(hasher);
     }
@@ -772,6 +786,7 @@ impl Document {
             color_index,
             color,
             loaded,
+            hidden: false,
             elevation,
             folder: None,
             section: SectionKind::natural_layer(),
@@ -1001,8 +1016,19 @@ impl Document {
         }
     }
 
-    /// Set a layer's viewport visibility. Returns the new state, or `None`
-    /// when the layer no longer exists.
+    /// Hide or show a loaded layer without unloading it. Returns the new
+    /// state, or `None` when the layer no longer exists.
+    pub(crate) fn set_layer_hidden(&mut self, id: LayerId, hidden: bool) -> Option<bool> {
+        let layer = self.layers.iter_mut().find(|layer| layer.id == id)?;
+        if layer.hidden != hidden {
+            layer.hidden = hidden;
+            self.touch();
+        }
+        Some(hidden)
+    }
+
+    /// Load or unload a layer. Returns the new state, or `None` when the
+    /// layer no longer exists.
     pub(crate) fn set_layer_loaded(&mut self, id: LayerId, loaded: bool) -> Option<bool> {
         let layer = self.layers.iter_mut().find(|layer| layer.id == id)?;
         if layer.loaded != loaded {
@@ -1301,6 +1327,7 @@ impl ItemRef {
 pub(crate) enum ItemStyle {
     Triangulation {
         loaded: bool,
+        hidden: bool,
         color: [f32; 4],
         line_color: [f32; 4],
         line_weight: Option<f32>,
@@ -1309,6 +1336,7 @@ pub(crate) enum ItemStyle {
     },
     BlockModel {
         loaded: bool,
+        hidden: bool,
         color: [f32; 4],
         slice: Option<block_model::BlockModelSlice>,
         active_color_variable: Option<String>,
@@ -1317,15 +1345,18 @@ pub(crate) enum ItemStyle {
     },
     DrillHole {
         loaded: bool,
+        hidden: bool,
         color: drill_hole::DrillColorState,
     },
     PointCloud {
         loaded: bool,
+        hidden: bool,
         color: [f32; 4],
         point_size: f32,
     },
     Raster {
         loaded: bool,
+        hidden: bool,
     },
 }
 
@@ -1333,6 +1364,7 @@ impl ItemStyle {
     pub(crate) fn of_triangulation(item: &triangulation::OpenTriangulation) -> Self {
         Self::Triangulation {
             loaded: item.state.loaded,
+            hidden: item.state.hidden,
             color: item.color,
             line_color: item.line_color,
             line_weight: item.line_weight,
@@ -1344,6 +1376,7 @@ impl ItemStyle {
     pub(crate) fn of_block_model(item: &block_model::OpenBlockModel) -> Self {
         Self::BlockModel {
             loaded: item.state.loaded,
+            hidden: item.state.hidden,
             color: item.color,
             slice: item.slice,
             active_color_variable: item.active_color_variable.clone(),
@@ -1355,6 +1388,7 @@ impl ItemStyle {
     pub(crate) fn of_drill_hole(item: &drill_hole::OpenDrillHoleDataset) -> Self {
         Self::DrillHole {
             loaded: item.state.loaded,
+            hidden: item.state.hidden,
             color: item.color.clone(),
         }
     }
@@ -1362,20 +1396,26 @@ impl ItemStyle {
     pub(crate) fn of_point_cloud(item: &point_cloud::OpenPointCloud) -> Self {
         Self::PointCloud {
             loaded: item.state.loaded,
+            hidden: item.state.hidden,
             color: item.color,
             point_size: item.point_size,
         }
     }
 
     pub(crate) fn of_raster(item: &raster::OpenRasterTexture) -> Self {
-        Self::Raster { loaded: item.state.loaded }
+        Self::Raster {
+            loaded: item.state.loaded,
+            hidden: item.state.hidden,
+        }
     }
 
     pub(crate) fn loaded(&self) -> bool {
         match self {
-            Self::Triangulation { loaded, .. } | Self::BlockModel { loaded, .. } | Self::DrillHole { loaded, .. } | Self::PointCloud { loaded, .. } | Self::Raster { loaded } => {
-                *loaded
-            }
+            Self::Triangulation { loaded, .. }
+            | Self::BlockModel { loaded, .. }
+            | Self::DrillHole { loaded, .. }
+            | Self::PointCloud { loaded, .. }
+            | Self::Raster { loaded, .. } => *loaded,
         }
     }
 
@@ -1383,9 +1423,34 @@ impl ItemStyle {
     /// action builds the `after` half of its command.
     pub(crate) fn with_loaded(mut self, value: bool) -> Self {
         match &mut self {
-            Self::Triangulation { loaded, .. } | Self::BlockModel { loaded, .. } | Self::DrillHole { loaded, .. } | Self::PointCloud { loaded, .. } | Self::Raster { loaded } => {
-                *loaded = value
-            }
+            Self::Triangulation { loaded, .. }
+            | Self::BlockModel { loaded, .. }
+            | Self::DrillHole { loaded, .. }
+            | Self::PointCloud { loaded, .. }
+            | Self::Raster { loaded, .. } => *loaded = value,
+        }
+        self
+    }
+
+    pub(crate) fn hidden(&self) -> bool {
+        match self {
+            Self::Triangulation { hidden, .. }
+            | Self::BlockModel { hidden, .. }
+            | Self::DrillHole { hidden, .. }
+            | Self::PointCloud { hidden, .. }
+            | Self::Raster { hidden, .. } => *hidden,
+        }
+    }
+
+    /// The same style with only its hidden flag changed: the explorer's eye,
+    /// which leaves the item loaded.
+    pub(crate) fn with_hidden(mut self, value: bool) -> Self {
+        match &mut self {
+            Self::Triangulation { hidden, .. }
+            | Self::BlockModel { hidden, .. }
+            | Self::DrillHole { hidden, .. }
+            | Self::PointCloud { hidden, .. }
+            | Self::Raster { hidden, .. } => *hidden = value,
         }
         self
     }
@@ -1732,6 +1797,7 @@ impl EditTarget<'_> {
                     line_weight,
                     raster_texture,
                     raster_opacity,
+                    ..
                 },
             ) => {
                 if let Some(entry) = self.triangulations.iter_mut().find(|entry| entry.id == id) {
@@ -1753,6 +1819,7 @@ impl EditTarget<'_> {
                     active_color_variable,
                     color_transfers,
                     hide_empty_color_values,
+                    ..
                 },
             ) => {
                 if let Some(entry) = self.block_models.iter_mut().find(|entry| entry.id == id) {
@@ -1776,14 +1843,14 @@ impl EditTarget<'_> {
                     changed = true;
                 }
             }
-            (ItemRef::DrillHole(id), ItemStyle::DrillHole { loaded, color }) => {
+            (ItemRef::DrillHole(id), ItemStyle::DrillHole { loaded, color, .. }) => {
                 if let Some(entry) = self.drill_holes.iter_mut().find(|entry| entry.id == id) {
                     entry.state.loaded = *loaded;
                     entry.color = color.clone();
                     changed = true;
                 }
             }
-            (ItemRef::PointCloud(id), ItemStyle::PointCloud { loaded, color, point_size }) => {
+            (ItemRef::PointCloud(id), ItemStyle::PointCloud { loaded, color, point_size, .. }) => {
                 if let Some(entry) = self.point_clouds.iter_mut().find(|entry| entry.id == id) {
                     entry.state.loaded = *loaded;
                     entry.color = *color;
@@ -1791,7 +1858,7 @@ impl EditTarget<'_> {
                     changed = true;
                 }
             }
-            (ItemRef::Raster(id), ItemStyle::Raster { loaded }) => {
+            (ItemRef::Raster(id), ItemStyle::Raster { loaded, .. }) => {
                 if let Some(entry) = self.rasters.iter_mut().find(|entry| entry.id == id) {
                     entry.state.loaded = *loaded;
                     changed = true;
@@ -1800,6 +1867,9 @@ impl EditTarget<'_> {
             _ => {}
         }
         if changed {
+            if let Some(state) = self.item_state_mut(item) {
+                state.hidden = style.hidden();
+            }
             if was_loaded && !style.loaded() {
                 self.effects.unloaded_items.push(item);
             }
@@ -2071,8 +2141,14 @@ pub(crate) enum Command {
         before: Placement,
         after: Placement,
     },
-    /// Show or hide a design layer.
+    /// Load or unload a design layer.
     SetLayerLoaded {
+        id: LayerId,
+        before: bool,
+        after: bool,
+    },
+    /// Hide or show a loaded design layer, leaving it loaded.
+    SetLayerHidden {
         id: LayerId,
         before: bool,
         after: bool,
@@ -2219,7 +2295,11 @@ impl Command {
                 Command::DeleteLayerSnapshot { layer, objects, .. } => {
                     layer_bytes(layer).saturating_add(objects.iter().map(|(_, object)| object_bytes(object)).fold(0usize, usize::saturating_add))
                 }
-                Command::SetLayerLoaded { .. } | Command::SetObjectHidden { .. } | Command::Archived { .. } | Command::SetLayerElevation { .. } => 0,
+                Command::SetLayerLoaded { .. }
+                | Command::SetLayerHidden { .. }
+                | Command::SetObjectHidden { .. }
+                | Command::Archived { .. }
+                | Command::SetLayerElevation { .. } => 0,
                 Command::AddFolder { folder, .. } => folder.name.len(),
                 Command::DeleteFolder { folder, layers, items, .. } => folder
                     .name
@@ -2403,6 +2483,7 @@ impl Command {
             | Command::AddLayerSnapshot { .. }
             | Command::DeleteLayerSnapshot { .. }
             | Command::SetLayerLoaded { .. }
+            | Command::SetLayerHidden { .. }
             | Command::SetLayerElevation { .. }
             | Command::SetObjectHidden { .. }
             | Command::AddFolder { .. }
@@ -2526,6 +2607,10 @@ impl Command {
             }
             Command::SetLayerLoaded { id, after, .. } => {
                 target.document.set_layer_loaded(*id, *after);
+                target.effects.document_changed = true;
+            }
+            Command::SetLayerHidden { id, after, .. } => {
+                target.document.set_layer_hidden(*id, *after);
                 target.effects.document_changed = true;
             }
             Command::SetObjectHidden { id, after, .. } => {
@@ -2671,6 +2756,10 @@ impl Command {
             }
             Command::SetLayerLoaded { id, before, .. } => {
                 target.document.set_layer_loaded(*id, *before);
+                target.effects.document_changed = true;
+            }
+            Command::SetLayerHidden { id, before, .. } => {
+                target.document.set_layer_hidden(*id, *before);
                 target.effects.document_changed = true;
             }
             Command::SetObjectHidden { id, before, .. } => {

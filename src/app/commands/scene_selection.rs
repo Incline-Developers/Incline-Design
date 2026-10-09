@@ -226,7 +226,7 @@ impl App<'_> {
                     let Some(project) = self.workspace.project_index_for_layer(*layer_id).map(|index| &self.workspace.projects[index]) else {
                         continue;
                     };
-                    if !project.project.document.layer(*layer_id).is_some_and(|layer| layer.loaded) {
+                    if !project.project.document.layer(*layer_id).is_some_and(crate::model::Layer::is_visible) {
                         continue;
                     }
                     handles.extend(

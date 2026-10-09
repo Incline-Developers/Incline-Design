@@ -18,6 +18,11 @@ use crate::{
 /// Grey colour used for inactive (not loaded) layers and triangulations.
 const INACTIVE_TEXT_COLOR: egui::Color32 = egui::Color32::from_gray(140);
 
+/// An entry's name: bold while loaded, plain and greyed while not.
+fn entry_label(name: &str, loaded: bool) -> egui::RichText {
+    if loaded { bold(name) } else { egui::RichText::new(name).color(INACTIVE_TEXT_COLOR) }
+}
+
 /// Section heading tints, keyed to the icons each section's entries use.
 ///
 /// One colour serves both themes: each holds at least a 3:1 contrast ratio
@@ -284,24 +289,24 @@ fn layer_row(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, layer: &UiLayerEn
     let is_active = cx.active_layer == Some(layer_id);
     let layer_locked = cx.locked_layers.contains(&layer_id);
     let layer_name = if layer.dirty { format!("{} *", layer.name) } else { layer.name.clone() };
-    let layer_label = if layer.is_loaded {
-        bold(&layer_name)
-    } else {
-        bold(&layer_name).color(INACTIVE_TEXT_COLOR)
-    };
+    let layer_label = entry_label(&layer_name, layer.is_loaded);
     // Named `row` rather than `entry`: `entry` is the enclosing project this
     // layer belongs to.
     let row = ExplorerEntry::new(egui::Id::new(("explorer_layer", layer_id)), layer_label)
         .selected(is_active)
         .draggable(cx.draggable)
         .toggles(EntryToggles {
-            visible: layer.is_loaded,
+            visible: layer.is_loaded && !layer.is_hidden,
             locked: layer_locked,
         });
     // The row's own tag is the section drawing it: `shown_in` only gives a
     // section the rows tagged for it.
     let row = with_kind_badge(row, layer.section, MemberKind::Layer).show(ui);
     if row.visibility_clicked {
+        commands.push(UiCommand::SetLayerVisible(layer_id, !(layer.is_loaded && !layer.is_hidden)));
+    }
+    // Double-clicking loads and unloads; the eye only hides and shows.
+    if row.response.double_clicked() {
         commands.push(if layer.is_loaded {
             UiCommand::UnloadLayer(layer_id)
         } else {
@@ -659,7 +664,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
 
                             let dirty_marker = if tri.dirty { " *" } else { "" };
                             let stats = format!("{}{}", tri.name, dirty_marker);
-                            let label = if tri.is_loaded { bold(&stats) } else { bold(&stats).color(INACTIVE_TEXT_COLOR) };
+                            let label = entry_label(&stats, tri.is_loaded);
 
                             let tri_handle = SceneEntityId::Triangulation(tri_id);
                             let tri_locked = frozen_handles.contains(&tri_handle);
@@ -667,11 +672,15 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                 .selected(tri.is_active || selected_handles.contains(&SceneEntityId::Triangulation(tri_id)))
                                 .draggable(rows_draggable)
                                 .toggles(EntryToggles {
-                                    visible: tri.is_loaded,
+                                    visible: tri.is_loaded && !tri.is_hidden,
                                     locked: tri_locked,
                                 });
                             let row = with_kind_badge(row, tri.section, MemberKind::Triangulation).show(ui);
                             if row.visibility_clicked {
+                                commands.push(UiCommand::SetItemVisible(ItemRef::Triangulation(tri_id), !(tri.is_loaded && !tri.is_hidden)));
+                            }
+                            // Double-clicking loads and unloads; the eye only hides and shows.
+                            if row.response.double_clicked() {
                                 commands.push(if tri.is_loaded {
                                     UiCommand::CloseTriangulation(tri_id)
                                 } else {
@@ -791,11 +800,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                 }
                                 let render_raster_entry = |ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, rows: &mut Vec<ExplorerRow>, raster: &UiRasterTextureEntry| {
                                     let raster_label = if raster.dirty { format!("{} *", raster.name) } else { raster.name.clone() };
-                                    let label = if raster.is_loaded {
-                                        bold(&raster_label)
-                                    } else {
-                                        bold(&raster_label).color(INACTIVE_TEXT_COLOR)
-                                    };
+                                    let label = entry_label(&raster_label, raster.is_loaded);
                                     let source_suffix = raster
                                         .source_name
                                         .as_deref()
@@ -822,11 +827,15 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                         .selected(selected_handles.contains(&raster_handle))
                                         .draggable(rows_draggable)
                                         .toggles(EntryToggles {
-                                            visible: raster.is_loaded,
+                                            visible: raster.is_loaded && !raster.is_hidden,
                                             locked: raster_locked,
                                         });
                                     let row = with_kind_badge(row, raster.section, MemberKind::Raster).show(ui);
                                     if row.visibility_clicked {
+                                        commands.push(UiCommand::SetItemVisible(ItemRef::Raster(raster.id), !(raster.is_loaded && !raster.is_hidden)));
+                                    }
+                                    // Double-clicking loads and unloads; the eye only hides and shows.
+                                    if row.response.double_clicked() {
                                         commands.push(if raster.is_loaded {
                                             UiCommand::UnloadRaster(raster.id)
                                         } else {
@@ -923,11 +932,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                 let render_point_cloud_entry = |ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, rows: &mut Vec<ExplorerRow>, point_cloud: &UiPointCloudEntry| {
                                     let dirty_marker = if point_cloud.dirty { " *" } else { "" };
                                     let label_text = format!("{}{dirty_marker}", point_cloud.name);
-                                    let label = if point_cloud.is_loaded {
-                                        bold(&label_text)
-                                    } else {
-                                        bold(&label_text).color(INACTIVE_TEXT_COLOR)
-                                    };
+                                    let label = entry_label(&label_text, point_cloud.is_loaded);
                                     let source_suffix = point_cloud
                                         .source_name
                                         .as_deref()
@@ -946,11 +951,18 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                         .draggable(rows_draggable)
                                         .selected(selected_handles.contains(&cloud_handle))
                                         .toggles(EntryToggles {
-                                            visible: point_cloud.is_loaded,
+                                            visible: point_cloud.is_loaded && !point_cloud.is_hidden,
                                             locked: cloud_locked,
                                         });
                                     let row = with_kind_badge(row, point_cloud.section, MemberKind::PointCloud).show(ui);
                                     if row.visibility_clicked {
+                                        commands.push(UiCommand::SetItemVisible(
+                                            ItemRef::PointCloud(point_cloud.id),
+                                            !(point_cloud.is_loaded && !point_cloud.is_hidden),
+                                        ));
+                                    }
+                                    // Double-clicking loads and unloads; the eye only hides and shows.
+                                    if row.response.double_clicked() {
                                         commands.push(if point_cloud.is_loaded {
                                             UiCommand::ClosePointCloud(point_cloud.id)
                                         } else {
@@ -1039,21 +1051,24 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                     let is_selected = selected_handles.contains(&block_model_handle);
                                     let dirty_marker = if block_model.dirty { " *" } else { "" };
                                     let label_text = format!("{}{dirty_marker}", block_model.name);
-                                    let label = if block_model.is_loaded {
-                                        bold(&label_text)
-                                    } else {
-                                        bold(&label_text).color(INACTIVE_TEXT_COLOR)
-                                    };
+                                    let label = entry_label(&label_text, block_model.is_loaded);
                                     let model_locked = frozen_handles.contains(&SceneEntityId::BlockModel(block_model.id));
                                     let row = ExplorerEntry::new(egui::Id::new(("explorer_block_model", block_model.id)), label)
                                         .selected(is_selected)
                                         .draggable(rows_draggable)
                                         .toggles(EntryToggles {
-                                            visible: block_model.is_loaded,
+                                            visible: block_model.is_loaded && !block_model.is_hidden,
                                             locked: model_locked,
                                         });
                                     let row = with_kind_badge(row, block_model.section, MemberKind::BlockModel).show(ui);
                                     if row.visibility_clicked {
+                                        commands.push(UiCommand::SetItemVisible(
+                                            ItemRef::BlockModel(block_model.id),
+                                            !(block_model.is_loaded && !block_model.is_hidden),
+                                        ));
+                                    }
+                                    // Double-clicking loads and unloads; the eye only hides and shows.
+                                    if row.response.double_clicked() {
                                         commands.push(if block_model.is_loaded {
                                             UiCommand::CloseBlockModel(block_model.id)
                                         } else {
@@ -1147,11 +1162,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                 }
                                 let render_drill_hole_entry = |ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, rows: &mut Vec<ExplorerRow>, dataset: &UiDrillHoleEntry| {
                                     let dataset_label = if dataset.dirty { format!("{} *", dataset.name) } else { dataset.name.clone() };
-                                    let label = if dataset.is_loaded {
-                                        bold(&dataset_label)
-                                    } else {
-                                        bold(&dataset_label).color(INACTIVE_TEXT_COLOR)
-                                    };
+                                    let label = entry_label(&dataset_label, dataset.is_loaded);
                                     let source_suffix = dataset
                                         .source_name
                                         .as_deref()
@@ -1171,11 +1182,15 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                         .draggable(rows_draggable)
                                         .selected(selected_handles.contains(&dataset_handle))
                                         .toggles(EntryToggles {
-                                            visible: dataset.is_loaded,
+                                            visible: dataset.is_loaded && !dataset.is_hidden,
                                             locked: dataset_locked,
                                         });
                                     let row = with_kind_badge(row, dataset.section, MemberKind::DrillHole).show(ui);
                                     if row.visibility_clicked {
+                                        commands.push(UiCommand::SetItemVisible(ItemRef::DrillHole(dataset.id), !(dataset.is_loaded && !dataset.is_hidden)));
+                                    }
+                                    // Double-clicking loads and unloads; the eye only hides and shows.
+                                    if row.response.double_clicked() {
                                         commands.push(if dataset.is_loaded {
                                             UiCommand::CloseDrillHole(dataset.id)
                                         } else {

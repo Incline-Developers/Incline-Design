@@ -366,6 +366,7 @@ impl<'a> App<'a> {
             ItemRef::DrillHole(id),
             ItemStyle::DrillHole {
                 loaded: dataset.state.loaded,
+                hidden: dataset.state.hidden,
                 color,
             },
         );
@@ -676,6 +677,7 @@ impl<'a> App<'a> {
             color_index: None,
             color: [1.0, 1.0, 1.0, 1.0],
             loaded: true,
+            hidden: false,
             elevation: 0.0,
             folder: None,
             // Derived from the holes, so it is tagged for Modelling rather

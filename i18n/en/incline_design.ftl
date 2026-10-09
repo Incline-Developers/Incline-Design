@@ -1876,6 +1876,7 @@ state-set-drillhole-style = Set Drillhole Style
 state-set-drillhole-width = Set Drillhole Width
 state-set-entity-lock = Set Entity Lock
 state-set-grid = Set Grid
+state-set-visibility = Set Visibility
 state-set-layer-lock = Set Layer Lock
 state-set-line-weight = Set Line Weight
 state-set-object-colour = Set Object Colour
