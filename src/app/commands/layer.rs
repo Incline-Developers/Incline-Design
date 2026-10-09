@@ -7,23 +7,19 @@ use crate::{
     userspace_log,
 };
 
-/// `preferred`, or `preferred` with the lowest ` N` (N >= 2) suffix not
-/// already taken. Shared by layer duplication (here) and folder creation
-/// (`app::commands::folder`), which sit side by side in the same menu and
-/// must agree on the scheme.
-pub(super) fn unique_name(preferred: &str, taken: impl Fn(&str) -> bool) -> String {
-    if !taken(preferred) {
+fn unique_layer_name(document: &Document, preferred: &str) -> String {
+    if document.layer_id_by_name(preferred).is_none() {
         return preferred.to_string();
     }
 
     for index in 2.. {
         let candidate = format!("{preferred} {index}");
-        if !taken(&candidate) {
+        if document.layer_id_by_name(&candidate).is_none() {
             return candidate;
         }
     }
 
-    unreachable!("unbounded iterator should always find a unique name")
+    unreachable!("unbounded iterator should always find a unique layer name")
 }
 
 fn objects_on_layer(document: &Document, layer_id: LayerId) -> Vec<Object> {
@@ -114,9 +110,7 @@ impl<'a> App<'a> {
             return;
         };
         let source_objects = objects_on_layer(&project.project.document, layer_id);
-        let duplicate_name = unique_name(&tr!("cmd-layer-name-copy", name = source_layer.name.to_string()), |candidate| {
-            project.project.document.layer_id_by_name(candidate).is_some()
-        });
+        let duplicate_name = unique_layer_name(&project.project.document, &tr!("cmd-layer-name-copy", name = source_layer.name.to_string()));
 
         let doc = &mut project.project.document;
         let new_layer_id = doc.allocate_layer_id();
