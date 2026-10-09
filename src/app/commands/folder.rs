@@ -117,7 +117,7 @@ impl<'a> App<'a> {
             .iter()
             .filter_map(|id| document.layers().iter().position(|layer| layer.id == *id).map(|position| (position, *id)))
             .collect();
-        ordered.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+        ordered.sort_unstable_by_key(|&(position, _)| std::cmp::Reverse(position));
         let mut removed = std::collections::HashSet::new();
         for (layer_index, layer_id) in ordered {
             let Some(layer) = document.layer(layer_id).cloned() else {
