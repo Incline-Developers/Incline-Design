@@ -7,9 +7,9 @@
 //! target kept so far, and the replay's value decides whether it is kept.
 //! The window slides through the horizon, pass after pass. When a whole
 //! cycle of passes keeps nothing, the windows double in length, and their
-//! time with them, up to the whole horizon, which is then solved again with
-//! ever more time until the budget is spent. Every kept schedule is a
-//! replayed one, so the value only rises.
+//! time with them, up to the whole horizon, which is solved again until a
+//! whole-horizon plan keeps nothing more, the gap is closed or the budget is
+//! spent. Every kept schedule is a replayed one, so the value only rises.
 //!
 //! The gap is measured against the plan's linear relaxation over the whole
 //! horizon, which is an upper bound on any schedule's value while every
@@ -59,6 +59,9 @@ impl Progress {
 /// Target weights tried for each window, relative to the spread of values
 /// per tonne: (follow, overrun).
 const WEIGHTS: [(f64, f64); 3] = [(1.0, 0.0), (1.0, 1.0), (2.0, 2.0)];
+
+/// A gap at or below which there is nothing left worth searching for.
+const CLOSED_GAP: f64 = 1e-4;
 
 pub(crate) fn run(input: &BlendInput, settings: AnytimeSettings, mut report: impl FnMut(&Progress)) -> Result<(BlendSolution, Vec<Progress>), String> {
     let started = Instant::now();
@@ -112,6 +115,18 @@ pub(crate) fn run(input: &BlendInput, settings: AnytimeSettings, mut report: imp
     let mut offset = 0;
     let mut quiet_passes = 0;
     'passes: loop {
+        let closed = Progress {
+            elapsed_s: 0.0,
+            value,
+            bound,
+            note: String::new(),
+        }
+        .gap()
+        .is_some_and(|gap| gap <= CLOSED_GAP);
+        if closed {
+            record(&mut log, value, bound, "gap closed".into());
+            break;
+        }
         if quiet_passes >= step {
             // A whole cycle of offsets kept nothing: longer windows.
             length = (length * 2).min(horizon);
@@ -192,10 +207,12 @@ pub(crate) fn run(input: &BlendInput, settings: AnytimeSettings, mut report: imp
         quiet_passes = if improved { 0 } else { quiet_passes + 1 };
         offset = (offset + 1) % step;
         if length == horizon {
-            // The whole horizon again, with more time, until the budget.
+            if !improved {
+                // Planned again from the same schedule, it would plan the
+                // same.
+                break;
+            }
             quiet_passes = 0;
-            limit *= 2;
-            record(&mut log, value, bound, format!("whole horizon, {:.0}s", limit.as_secs_f64()));
         }
     }
     record(&mut log, value, bound, "done".into());
