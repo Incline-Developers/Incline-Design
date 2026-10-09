@@ -1620,10 +1620,8 @@ impl<'a> App<'a> {
         self.invalidate_geometry();
     }
 
-    /// Show the objects Hide Selection hid in loaded layers, as one undo
-    /// step, and any item the explorer shows as loaded that an older hide
-    /// left off the canvas. Nothing the explorer has switched off comes
-    /// back, so an item Hide Selection unloaded returns from the explorer;
+    /// Show the objects Hide Selection hid in loaded layers and every loaded
+    /// item that is hidden, as one undo step. Nothing unloaded is loaded;
     /// the rings are left alone.
     fn unhide_all_objects(&mut self) {
         let Some(document) = self.workspace.active_document() else {
@@ -1631,39 +1629,27 @@ impl<'a> App<'a> {
             return;
         };
         let layer_loaded = |id: crate::model::ObjectId| document.get_object(id).and_then(|object| document.layer(object.layer())).is_some_and(|layer| layer.loaded);
-        let commands: Vec<Command> = document
+        let mut commands: Vec<Command> = document
             .hidden_object_ids()
             .filter(|&id| layer_loaded(id))
             .map(|id| Command::SetObjectHidden { id, before: true, after: false })
             .collect();
         let objects = commands.len();
-        // Canvas-only hides are not saved, so they are not part of the undo
-        // step; an item the explorer has unloaded keeps its entry.
-        let loaded = |handle: &SceneEntityId| match handle {
-            SceneEntityId::Triangulation(id) => self.triangulations.iter().any(|item| item.id == *id && item.state.loaded),
-            SceneEntityId::BlockModel(id) => self.block_models.iter().any(|item| item.id == *id && item.state.loaded),
-            SceneEntityId::DrillHole(id) => self.drill_holes.iter().any(|item| item.id == *id && item.state.loaded),
-            SceneEntityId::PointCloud(id) => self.point_clouds.iter().any(|item| item.id == *id && item.state.loaded),
-            SceneEntityId::Raster(id) => self.raster_textures.iter().any(|item| item.id == *id && item.state.loaded),
-            SceneEntityId::Object(_) => false,
-        };
-        let items: Vec<SceneEntityId> = self.editor.hidden_handles.iter().copied().filter(|handle| loaded(handle)).collect();
-        if objects == 0 && items.is_empty() {
+        commands.extend(
+            self.project_item_refs()
+                .filter_map(|item| self.item_style_command(item, |style| if style.loaded() { style.with_hidden(false) } else { style })),
+        );
+        let items = commands.len() - objects;
+        if commands.is_empty() {
             userspace_log!("{}", tr!("cmd-unhide-all-nothing-hidden"));
             return;
         }
-        self.editor.hidden_handles.retain(|handle| !items.contains(handle));
-        if !commands.is_empty() {
-            self.execute_edit(Command::Batch(commands));
-        }
+        self.execute_edit(Command::Batch(commands));
         self.invalidate_geometry();
-        if items.is_empty() {
+        if items == 0 {
             userspace_log!("{}", tr!("cmd-unhide-all-count", count = objects.to_string()));
         } else {
-            userspace_log!(
-                "{}",
-                tr!("cmd-unhide-all-objects-items-count", objects = objects.to_string(), items = items.len().to_string())
-            );
+            userspace_log!("{}", tr!("cmd-unhide-all-objects-items-count", objects = objects.to_string(), items = items.to_string()));
         }
     }
 }

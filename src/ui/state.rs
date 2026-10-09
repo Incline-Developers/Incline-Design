@@ -2685,7 +2685,7 @@ impl EditorState {
         let handle = SceneEntityId::Object(id);
         document
             .get_object(id)
-            .is_some_and(|object| document.layer(object.layer()).is_some_and(|layer| layer.loaded) && !self.locked_layers.contains(&object.layer()))
+            .is_some_and(|object| document.layer(object.layer()).is_some_and(crate::model::Layer::is_visible) && !self.locked_layers.contains(&object.layer()))
             && !document.is_object_hidden(id)
             && !self.hidden_handles.contains(&handle)
             && !self.frozen_handles.contains(&handle)
