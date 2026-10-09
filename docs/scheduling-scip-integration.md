@@ -45,11 +45,11 @@ Movement columns outside all authorising task windows are omitted instead of
 created and constrained to zero. This reduces model size without changing the
 feasible schedules.
 
-Improve refuses to start when the whole-horizon model would exceed about
-4 million movement columns (movements × intervals × event positions), and the
-status line gives the estimate. The first schedule is solved hour by hour and is
-not limited this way: DreamLand at 50 days and 1-hour intervals needs 6.7 million
-columns, so it schedules through day 50 but cannot be improved.
+Improve no longer refuses a horizon whose whole-horizon model would exceed
+about 4 million movement columns (movements × intervals × event positions):
+it searches it instead (see "Improve's search" below), and only the
+whole-horizon SCIP solve and its relaxation bound are skipped past that
+size.
 
 ## Grade thresholds
 
@@ -927,6 +927,68 @@ A Setup step that has not been run, or has gone stale, no longer reads as
 "Cannot run": a run validates the Setup steps itself. A Setup step that
 failed is marked stale once its inputs change, rather than staying failed
 against inputs it never saw.
+
+## Improve's search
+
+`optimisation::scip::anytime` is Improve's first stage, between the first
+schedule and the whole-horizon SCIP solve. It exists because that solve is
+one model of every candidate in every hour: a real project's 21 days needed
+49.8 million columns, ten times what a run can build, and even a model that
+fits rarely improves on the first schedule inside a run's time. The search
+instead gets better the longer it runs, and says how far from the best
+possible it is.
+
+It is built from two models at two resolutions:
+
+- **A daily plan** (`scip::plan`): per loader, block and day the tonnes dug
+  along its authored sequence, a 0/1 per block and day saying it is
+  finished, which the next block waits on, and each material's split between
+  its destinations. Crusher days, room, fleet hours and grade targets are
+  linear in those tonnes. It is about a three-hundredth of the hourly
+  model's size and is solved by HiGHS, which on it found plans and bounds
+  where SCIP did not.
+- **The hourly dispatch following the plan's targets**
+  (`blended::plan::PlanTargets`, `greedy::dispatch_following`): per loader,
+  destination and day, paced through the day, as objective weights only. The
+  dispatch still decides every hour under authored bar priority, and the
+  replay checks the result.
+
+The search slides plan windows of 5 days through the horizon, each started
+from the state the best schedule leaves and seeded with its days, and keeps
+a window's targets only when the whole schedule replays worth more. When a
+cycle of windows keeps nothing, each day is polished: its exact hourly model
+with a day of look-ahead, solved by SCIP from the best schedule's hours
+(`polish_window`), with every block held where the best schedule leaves it
+at the day's end. Polishing rearranges hours; the plan decides strategy -
+left free, a day solved a day ahead sent the trucks to paying ore and undid
+a stripping plan the days after paid for. Windows then double in length up
+to the whole horizon.
+
+The bound is the plan's: its linear relaxation over the whole horizon at the
+start, and its mixed-integer dual bound from a solve that runs in the
+background throughout. Every simplification of the plan is optimistic
+(free order within a day, each route at its best candidate, the fleet
+pooled), so either bounds any schedule - except reclaim, which the plan
+does not model, so with reclaim bars no bound is reported. A schedule the
+bound proves within the run's gap target is published as proven and the
+whole-horizon solve is skipped; a horizon too large for that solve
+publishes the search's schedule.
+
+Measured on test worlds with 10-minute budgets (values in the worlds' own
+currency):
+
+| world | first schedule | search | proven gap | whole-horizon SCIP, 10 min |
+| --- | --- | --- | --- | --- |
+| 7 days, a loader stripping waste to reach ore | 1,687,700 | 2,243,419 in 4 min | 0.9% | 1,935,150 |
+| 21 days, four such pairs | 8,813,817 | 11,785,042 in 4 min | 17.9% | out of memory |
+| 21 days, 8 loaders x 85 blocks, 49k candidates | 57,205,500 | the same | 0% in 2 min | too large to build |
+
+On the long stripping world 30 more minutes of HiGHS on the whole-horizon
+plan improved neither the plan nor its bound (21.7% by its own figures,
+never past the root node), so how much of that 17.9% is real is unknown.
+
+Open: the plan's grade estimates per destination and day are not shown, and
+a run cannot yet be stopped keeping the search's best schedule so far.
 
 ## Idle reasons
 

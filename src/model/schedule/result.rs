@@ -535,6 +535,9 @@ pub(crate) enum StartMethod {
     DayByDay,
     /// Interval by interval, one linear program each.
     Hourly,
+    /// The search from the first schedule: plans over windows of days the
+    /// dispatch follows, and days polished hour by hour.
+    Search,
 }
 
 /// What became of the first schedule.
@@ -558,6 +561,9 @@ pub(crate) enum DayByDayRole {
     /// It is published as asked for: the run was a recalculation that does
     /// not look for a better schedule. Improve does.
     Only,
+    /// It is published because the whole horizon is too large to solve at
+    /// once: the search's schedule is Improve's answer.
+    Searched,
 }
 
 /// Which solve proved a published bound.

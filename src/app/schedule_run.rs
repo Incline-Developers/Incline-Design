@@ -408,7 +408,7 @@ impl crate::app::App<'_> {
                 None => SCHEDULE_PERIOD_H.min(end_h),
             },
         };
-        let snapshot = match self.capture_schedule_snapshot(requested_end_h, mode == ScheduleRunMode::Improve) {
+        let snapshot = match self.capture_schedule_snapshot(requested_end_h) {
             Ok(snapshot) => snapshot,
             Err(problems) => {
                 let semantic = self.schedule_semantic_key();
@@ -1046,6 +1046,7 @@ fn result_details(calculation: &CalculatedSchedule) -> Vec<String> {
         let method = match start.method {
             StartMethod::DayByDay => tr!("schedule-detail-start-day-by-day", windows = start.windows.to_string()),
             StartMethod::Hourly => tr!("schedule-detail-start-hourly", intervals = start.windows.to_string()),
+            StartMethod::Search => tr!("schedule-detail-start-search", kept = start.windows.to_string()),
         };
         lines.push(match (start.value, start.failure.as_ref()) {
             (Some(value), _) => {
@@ -1057,6 +1058,7 @@ fn result_details(calculation: &CalculatedSchedule) -> Vec<String> {
                     DayByDayRole::Stopped => tr!("schedule-detail-start-stopped", start = method, seconds = seconds, value = value),
                     DayByDayRole::Proven => tr!("schedule-detail-start-proven", start = method, seconds = seconds, value = value),
                     DayByDayRole::Only => tr!("schedule-detail-start-only", start = method, seconds = seconds, value = value),
+                    DayByDayRole::Searched => tr!("schedule-detail-start-searched", start = method, seconds = seconds, value = value),
                 }
             }
             (None, reason) => tr!("schedule-detail-day-by-day-failed", reason = reason.cloned().unwrap_or_default()),

@@ -1,5 +1,4 @@
-//! Targets from a coarse whole-horizon plan for the hourly dispatch to follow
-//! (prototype).
+//! Targets from a coarse whole-horizon plan for the hourly dispatch to follow.
 //!
 //! The plan (`scip::plan` with the `scip` feature) decides, per loader and
 //! day, how many tonnes go to each destination. The dispatch still chooses
@@ -8,7 +7,7 @@
 //! its objective. Each loader's route is paced through the day: tonnes up to
 //! the planned share of the day so far earn [`PlanTargets::follow`] per
 //! tonne, and tonnes past it cost [`PlanTargets::overrun`]. Neither is money.
-#![allow(dead_code, reason = "prototype, not yet called by Improve")]
+#![cfg_attr(not(feature = "scip"), allow(dead_code, reason = "only Improve's search sets targets, and it needs SCIP"))]
 
 use std::collections::{BTreeMap, BTreeSet};
 
