@@ -242,10 +242,15 @@ fn folder_group<Z: DropZone>(ui: &mut egui::Ui, section: SectionKind, folder: &F
             ui.close();
         }
         context_menu_separator(ui);
-        // Deleting a folder is not deleting what is in it: its members return
+        // Removing a folder is not deleting what is in it: its members return
         // to the section root.
-        if ContextMenuAction::new(tr!("common-delete-collection")).show(ui).clicked() {
+        if ContextMenuAction::new(tr!("explorer-remove-collection")).show(ui).clicked() {
             commands.push(UiCommand::DeleteFolder { section, folder: folder.id });
+            ui.close();
+        }
+        // Deleting one takes its members with it, so it asks first.
+        if ContextMenuAction::new(tr!("common-delete-collection")).show(ui).clicked() {
+            commands.push(UiCommand::RequestDeleteItem(RenameTarget::Folder(section, folder.id)));
             ui.close();
         }
     });

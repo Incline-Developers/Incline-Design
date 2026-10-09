@@ -1045,7 +1045,7 @@ impl RenameTarget {
             Self::PointCloud(id) => UiCommand::RemovePointCloud(id),
             Self::BlockModel(id) => UiCommand::RemoveBlockModel(id),
             Self::DrillHole(id) => UiCommand::RemoveDrillHole(id),
-            Self::Folder(section, id) => UiCommand::DeleteFolder { section, folder: id },
+            Self::Folder(section, id) => UiCommand::DeleteFolderAndContents { section, folder: id },
         }
     }
 }
@@ -3340,6 +3340,11 @@ pub(crate) enum UiCommand {
         section: SectionKind,
         folder: FolderId,
     },
+    /// Delete a folder and everything in it, as one undo step.
+    DeleteFolderAndContents {
+        section: SectionKind,
+        folder: FolderId,
+    },
     /// Move an item into a collection of `section`, or to that section's root
     /// with `None`.
     ///
@@ -3968,6 +3973,14 @@ impl UiCommand {
                 tr!("state-new-collection-under-section", section = ExplorerSection::from_kind(*section).label().to_string()),
             ),
             Self::DeleteFolder { section, folder } => report(
+                tr!("explorer-remove-collection"),
+                tr!(
+                    "state-folder-section",
+                    folder = format!("{folder:?}"),
+                    section = ExplorerSection::from_kind(*section).label().to_string()
+                ),
+            ),
+            Self::DeleteFolderAndContents { section, folder } => report(
                 tr!("common-delete-collection"),
                 tr!(
                     "state-folder-section",

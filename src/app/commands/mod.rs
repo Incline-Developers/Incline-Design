@@ -116,6 +116,7 @@ impl<'a> App<'a> {
                 | UiCommand::CreateLayer { .. }
                 | UiCommand::CreateFolder(_)
                 | UiCommand::DeleteFolder { .. }
+                | UiCommand::DeleteFolderAndContents { .. }
                 | UiCommand::MoveToFolder { .. }
                 | UiCommand::OpenCreateTriangulation
                 | UiCommand::OpenCreateBlockModel
@@ -343,6 +344,7 @@ impl<'a> App<'a> {
             UiCommand::CreateLayer { name } => self.create_layer(name),
             UiCommand::CreateFolder(section) => self.create_folder(section),
             UiCommand::DeleteFolder { section, folder } => self.delete_folder(section, folder),
+            UiCommand::DeleteFolderAndContents { section, folder } => self.delete_folder_and_contents(section, folder),
             UiCommand::MoveToFolder { member, section, folder } => {
                 self.move_to_folder(member, section, folder);
                 Ok(())

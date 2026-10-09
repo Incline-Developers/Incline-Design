@@ -78,6 +78,8 @@ dialog-delete-title = Delete { $kind }
 dialog-delete-confirm =
     Delete '{ $name }' from the project?
     This cannot be undone.
+dialog-delete-collection-confirm =
+    Delete collection '{ $name }' and everything in it from the project?
 confirm-delete-product =
     Delete product '{ $name }' from the palette?
     This cannot be undone.
@@ -571,6 +573,7 @@ cmd-folder-collection-named-name-already-exists = A collection named '{ $name }'
 cmd-folder-collection-no-longer-exists = That collection no longer exists
 cmd-folder-created-collection-name = Created collection '{ $name }'
 cmd-folder-deleted-collection-name = Deleted collection '{ $name }'
+cmd-folder-deleted-collection-contents = Deleted collection '{ $name }' and its contents
 cmd-folder-moved-item-into-collection-name = Moved item into collection '{ $name }'
 cmd-folder-moved-item-root-section = Moved item to the root of { $section }
 cmd-folder-renamed-collection-before-after = Renamed collection '{ $before }' to '{ $after }'
@@ -1276,6 +1279,7 @@ explorer-load = Load
 explorer-lock = Lock
 explorer-new-collection = New Collection
 explorer-no-collection = No Collection
+explorer-remove-collection = Remove Collection
 explorer-select-all-objects = Select All Objects
 explorer-source-name = Source: { $name }
 explorer-unload = Unload

@@ -3,7 +3,7 @@
 use crate::{
     i18n::tr,
     ui::{
-        state::{EditorState, UiCommand, UiProjectView},
+        state::{EditorState, RenameTarget, UiCommand, UiProjectView},
         widgets::menu::{self, DragableMenu, MenuButton},
     },
 };
@@ -164,7 +164,12 @@ pub(crate) fn draw_delete_item_confirm_dialog(ui: &mut egui::Ui, commands: &mut 
         .open(&mut open)
         .min_width(280.0)
         .show(ui.ctx(), |ui| {
-            ui.label(tr!("dialog-delete-confirm", name = name.clone()));
+            // A collection takes everything in it along, which the plain
+            // sentence would not say.
+            ui.label(match target {
+                RenameTarget::Folder(..) => tr!("dialog-delete-collection-confirm", name = name.clone()),
+                _ => tr!("dialog-delete-confirm", name = name.clone()),
+            });
             menu::menu_actions(ui, |ui| {
                 if ui.add(MenuButton::new(title.clone()).danger()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                     commands.push(target.remove_command());
