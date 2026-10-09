@@ -56,7 +56,7 @@ pub(crate) struct ImportedStrat {
 /// the Column tab would show first. Pure and silent, for the import's
 /// worker; `None` when there is no field to order.
 pub(crate) fn imported_strat(dataset: &DrillHoleDataset) -> Option<ImportedStrat> {
-    let field = crate::ui::widgets::borehole_log::default_strat_field(&dataset.fields, &[], None)?.key.clone();
+    let field = crate::model::strat_order::default_strat_field(&dataset.fields, &[], None)?.key.clone();
     let found = majority_order(dataset, &field)?;
     if found.order.is_empty() {
         return None;

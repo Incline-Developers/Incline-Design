@@ -6,7 +6,7 @@ use std::{fmt::Debug, hash::Hash};
 use super::viewport::{Outline, outlined_galley, trim_decimal_zeros};
 use crate::{
     i18n::tr,
-    model::drill_hole::{OpenDrillHoleDataset, ShiftDirection, UNKNOWN_NAME},
+    model::drill_hole::{ShiftDirection, UNKNOWN_NAME},
     ui::widgets::{
         context_menu::{ContextMenuAction, context_menu_popup, context_menu_popup_with_fields, context_menu_separator},
         log_traces::{self, ColumnTraces, TraceColumn, WellLogStyle},
@@ -620,7 +620,7 @@ impl<'a> BoreholeLog<'a> {
     /// still categorical: the panel holds one choice while the inspection
     /// moves, and a numeric field here would draw a block per number.
     fn lithology_field(&self) -> Option<&crate::model::drill_hole::DrillField> {
-        strat_field_of(self.dataset, self.strat_field.as_deref())
+        crate::model::strat_order::strat_field_of(self.dataset, self.strat_field.as_deref())
     }
 
     /// The seam name the strat column shows at `depth`, exactly as the
@@ -1262,58 +1262,6 @@ fn log_columns(width: f32, strat: bool, density: bool, gamma: bool) -> LogColumn
         track: (rest - strat - density - gamma - gaps).max(track_min),
         gamma,
     }
-}
-
-/// The field a hole's strat column reads in `dataset`: `chosen` while it is
-/// one of the dataset's and still categorical, else
-/// [`default_strat_field`]. The log and the strat column tab both read
-/// through here, so the two never disagree.
-pub(crate) fn strat_field_of<'a>(dataset: &'a OpenDrillHoleDataset, chosen: Option<&str>) -> Option<&'a crate::model::drill_hole::DrillField> {
-    chosen
-        .and_then(|key| dataset.dataset.field(key))
-        .filter(|field| is_categorical(field))
-        .or_else(|| default_strat_field(&dataset.dataset.fields, &dataset.color.working_sections, dataset.color.strat_field.as_deref()))
-}
-
-/// Parts of a key a stratigraphic field is usually written under, the most
-/// detailed first.
-const STRAT_KEY_HINTS: [&str; 3] = ["code", "seam", "ply"];
-
-fn is_categorical(field: &crate::model::drill_hole::DrillField) -> bool {
-    matches!(field.kind, crate::model::drill_hole::DrillFieldKind::Categorical { .. })
-}
-
-/// The strat field when none is picked: `recorded`, the field an import
-/// noted (the parent, seam field when it found one); else the categorical
-/// field holding working sections; else the first whose key holds a part of
-/// [`STRAT_KEY_HINTS`], tried in order; else the first categorical field.
-/// A lithology field is never taken unless it holds sections: it is read
-/// only when picked by hand.
-pub(crate) fn default_strat_field<'a>(
-    fields: &'a [crate::model::drill_hole::DrillField],
-    sections: &[crate::model::drill_hole::WorkingSection],
-    recorded: Option<&str>,
-) -> Option<&'a crate::model::drill_hole::DrillField> {
-    let lithology = |field: &crate::model::drill_hole::DrillField| crate::model::strat_order::is_lithology_key(&field.key);
-    let mut candidates = fields.iter().filter(|field| is_categorical(field));
-    let noted = recorded.and_then(|key| fields.iter().find(|field| field.key == key && is_categorical(field) && !lithology(field)));
-    let sectioned = || {
-        fields
-            .iter()
-            .filter(|field| is_categorical(field))
-            .find(|field| sections.iter().any(|section| section.field == field.key))
-    };
-    noted
-        .or_else(sectioned)
-        .or_else(|| {
-            STRAT_KEY_HINTS.iter().find_map(|hint| {
-                fields
-                    .iter()
-                    .filter(|field| is_categorical(field) && !lithology(field))
-                    .find(|field| field.key.to_ascii_lowercase().contains(hint))
-            })
-        })
-        .or_else(|| candidates.find(|field| !lithology(field)))
 }
 
 /// What the reader asked of the log this frame.

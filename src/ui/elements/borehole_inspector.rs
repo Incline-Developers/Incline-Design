@@ -191,7 +191,7 @@ fn draw_body(
                 .show(ui, |ui| draw_strat_field_picker(ui, editor, dataset));
             ui.add_space(4.0);
             let chosen = strat_choice_for(editor, dataset);
-            match crate::ui::widgets::borehole_log::strat_field_of(dataset, chosen.as_deref()) {
+            match crate::model::strat_order::strat_field_of(dataset, chosen.as_deref()) {
                 // Scrolls in what the panel has left, so a long column never
                 // runs off the bottom of the window.
                 Some(field) => {
