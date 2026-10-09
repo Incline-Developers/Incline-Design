@@ -21,9 +21,12 @@
 //! the horizon ended with it takes value now that the days after it lose
 //! more than, and the dispatch after it has to live with that. Even a day
 //! ahead is too short to see why the plan strips waste now, so a polished
-//! day must also leave every block dug at least as far as the best schedule
-//! leaves it: polishing rearranges the hours, the plan windows decide the
-//! strategy.
+//! day must also leave every block exactly as the best schedule leaves it:
+//! polishing rearranges the hours, the plan windows decide the strategy.
+//! The ground the days after it open with is then the same, so they can
+//! keep the best schedule's own hours, which the dispatch rarely matches:
+//! those hours came from dispatches following earlier targets. The dispatch
+//! from the day's end is tried as well, and the better kept.
 //!
 //! Every candidate keeps the best schedule's hours before its window and is
 //! dispatched from the state they leave, so a polished day is not undone by
@@ -81,8 +84,8 @@ pub(crate) struct AnytimeSettings {
 
 /// Solves one window's exact hourly model from a schedule of it, within a
 /// time limit: the window's own input and schedule, in its own interval
-/// numbering, and the most each block of its input (by position) may hold
-/// at the end of interval `kept`. The SCIP side lives with the app's other
+/// numbering, and what each block of its input (by position) must hold at
+/// the end of interval `kept`. The SCIP side lives with the app's other
 /// solves.
 pub(crate) type Polisher<'a> = &'a (dyn Fn(&BlendInput, &BlendSolution, &[(usize, f64)], usize, Duration) -> Option<BlendSolution> + Sync);
 
@@ -226,8 +229,8 @@ fn polish(
         end: solved_to,
     };
     let local = carry.window_input(input, window);
-    // At least as far along every block as the best schedule by the end of
-    // the kept days.
+    // Every block where the best schedule leaves it by the end of the kept
+    // days.
     let left_by_then = Window::opening(input, &best.solution, first_day + days, 0).remaining;
     let progress: Vec<(usize, f64)> = local
         .ground
@@ -238,6 +241,13 @@ fn polish(
     let Some(polished) = polisher(&local, &slice(best, first, solved_to), &progress, end - first - 1, limit) else {
         return Ok(None);
     };
+    // The window's own objective prices its grade targets on its days
+    // alone; the replay's figure is the one reported, as when stitching.
+    let mut polished = polished;
+    let Some(first_look) = replay_cancellable(&local, &polished, cancel) else {
+        return Ok(None);
+    };
+    polished.reported_objective = first_look.ranked_objective();
     let Some(checked) = replay_cancellable(&local, &polished, cancel) else {
         return Ok(None);
     };
@@ -248,12 +258,12 @@ fn polish(
     if end == count {
         return Ok(stitch(input, best, first, &[(whole(first, end), &polished)], cancel));
     }
+    let kept_after = stitch(input, best, first, &[(window, &polished), (whole(end, count), &slice(best, end, count))], cancel);
     carry.advance(input, window, &polished, &checked);
     let tail = carry.window_input(input, whole(end, count));
-    let Some(found) = greedy::dispatch_following(&tail, Some(&targets.rebased(&tail)), cancel)? else {
-        return Ok(None);
-    };
-    Ok(stitch(input, best, first, &[(window, &polished), (whole(end, count), &found.solution)], cancel))
+    let dispatched_after = greedy::dispatch_following(&tail, Some(&targets.rebased(&tail)), cancel)?
+        .and_then(|found| stitch(input, best, first, &[(window, &polished), (whole(end, count), &found.solution)], cancel));
+    Ok([kept_after, dispatched_after].into_iter().flatten().max_by(|a, b| a.value().total_cmp(&b.value())))
 }
 
 #[derive(Clone, Debug)]

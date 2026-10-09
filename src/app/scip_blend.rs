@@ -912,13 +912,13 @@ pub(crate) fn polish_window(input: &BlendInput, seed: &BlendSolution, progress: 
     let cancel = CancelFlag::default();
     let deadline = Instant::now() + limit;
     let mut built = formulate_scip_with_cancel(input, Some(&cancel.signal()), None, false).ok()?;
-    // Each block holds no more at the end of the kept intervals than
-    // `progress` allows: the seed meets this by construction.
+    // Each block holds what `progress` says at the end of the kept
+    // intervals: the seed meets this by construction.
     let segments = input.segments_per_interval.max(1);
     let last = crate::model::schedule::optimisation::blended::input::flat_cell(kept, segments - 1, segments);
-    for &(source, most) in progress {
+    for &(source, held) in progress {
         if let Some(remaining) = built.columns.ground_remaining.get(&(source, last)) {
-            built.model.add_cons(vec![remaining], &[1.0], f64::NEG_INFINITY, most + 1e-6, &format!("progress_{source}"));
+            built.model.add_cons(vec![remaining], &[1.0], held - 1e-6, held + 1e-6, &format!("progress_{source}"));
         }
     }
     let values = complete_seed(input, seed, Some(Instant::now() + limit.mul_f64(SEED_COMPLETION_SHARE)), &cancel).ok();
