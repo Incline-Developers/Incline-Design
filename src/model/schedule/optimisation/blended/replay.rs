@@ -901,7 +901,7 @@ fn covers(task: &crate::model::schedule::optimisation::Task, interval: crate::mo
 
 /// The destinations with room for a dig bar as each interval opened, from the
 /// replayed pile balances and the published receipts; see
-/// [`super::input::block_outlets`].
+/// [`super::input::OutletIndex::of`].
 fn dig_room(input: &BlendInput, solution: &BlendSolution, piles: &BTreeMap<(StockpileId, usize), PileInterval>) -> BTreeSet<(DestinationId, usize)> {
     let horizon = input.intervals.len();
     let mut received: BTreeMap<DestinationId, Vec<f64>> = input.destinations.iter().map(|entry| (entry.id, vec![0.0; horizon])).collect();
@@ -977,6 +977,7 @@ fn check_bar_priority(
         cell_rows.entry((row.interval, row.segment)).or_default().push(index);
     }
     let empty = Vec::new();
+    let outlets = super::input::OutletIndex::new(input);
 
     for loader in loaders {
         if checker.cancelled() {
@@ -1006,13 +1007,12 @@ fn check_bar_priority(
             if checker.cancelled() {
                 return;
             }
+            let rate = input
+                .loaders
+                .iter()
+                .find(|entry| entry.id == loader)
+                .and_then(|entry| entry.rates.iter().find(|entry| entry.interval == interval.index));
             for segment in 0..segments {
-                let rate = input
-                    .loaders
-                    .iter()
-                    .find(|entry| entry.id == loader)
-                    .and_then(|entry| entry.rates.iter().find(|entry| entry.interval == interval.index));
-
                 let ready = |bar: usize, remaining: &BTreeMap<_, f64>, spent: &BTreeMap<usize, f64>| -> bool {
                     let task = &input.tasks[bar];
                     if !covers(task, *interval) {
@@ -1028,9 +1028,7 @@ fn check_bar_priority(
                                     .iter()
                                     .find(|source| remaining.get(*source).copied().unwrap_or(0.0) > REPLAY_TOLERANCE_T)
                                     .is_some_and(|current| {
-                                        super::input::block_diggable(&super::input::block_outlets(input, task, *current), |destination| {
-                                            room.contains(&(destination, interval.index))
-                                        })
+                                        super::input::block_diggable(&outlets.of(input, task, *current), |destination| room.contains(&(destination, interval.index)))
                                     })
                         }
                         TaskKind::Reclaim { approved_sources, maximum_t } => {

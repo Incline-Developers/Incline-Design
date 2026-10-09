@@ -1887,6 +1887,9 @@ struct HaulCapture<'a> {
     plan: &'a SchedulePlan,
     /// Unconnected blocks are reported once by the Readiness step, not here.
     searches: BTreeMap<(ProjectDestinationId, trucking::TruckClassId), Option<crate::model::haulage::routing::DestinationSearch<'a>>>,
+    /// Cycles already worked out, by everything one depends on. A block's
+    /// portions share its haul, so all but the first are looked up here.
+    cycles: std::collections::HashMap<CycleKey, Option<trucking::CycleBreakdown>>,
     /// Sources each destination offered by routing could not be reached
     /// from by road, so no candidate was made for them.
     unroutable: BTreeMap<ProjectDestinationId, BTreeSet<SourceId>>,
@@ -1902,6 +1905,7 @@ impl<'a> HaulCapture<'a> {
             index: crate::model::haulage::network::RoadIndex::new(network),
             plan,
             searches: BTreeMap::new(),
+            cycles: std::collections::HashMap::new(),
             unroutable: BTreeMap::new(),
             offered: BTreeSet::new(),
             routed: BTreeSet::new(),
@@ -1929,19 +1933,29 @@ impl<'a> HaulCapture<'a> {
             RouteSource::Stockpile(id) => self.point(id, true),
         };
         let target = self.point(args.destination, false);
-        if let (Some(source), Some(target)) = (source, target) {
-            let search = self
-                .searches
-                .entry((args.destination, class.id))
-                .or_insert_with(|| crate::model::haulage::routing::DestinationSearch::new(self.network, &self.index, class, target));
-            if let Some(route) = search
-                .as_ref()
-                .and_then(|s| s.route(&self.index, source, args.haul_link, args.activity == Activity::Dig, rate, spot, dump))
-            {
-                return Some(route.cycle);
-            }
+        let (Some(source), Some(target)) = (source, target) else { return None };
+        let dig = args.activity == Activity::Dig;
+        let key = CycleKey {
+            destination: args.destination,
+            class: class.id,
+            dig,
+            source: source.to_array().map(f64::to_bits),
+            link: args.haul_link.to_vec(),
+            rate: rate.to_bits(),
+            spot: spot.to_bits(),
+            dump: dump.map(f64::to_bits),
+        };
+        if let Some(cycle) = self.cycles.get(&key) {
+            return *cycle;
         }
-        None
+        let search = self
+            .searches
+            .entry((args.destination, class.id))
+            .or_insert_with(|| crate::model::haulage::routing::DestinationSearch::new(self.network, &self.index, class, target));
+        // The cycle alone: the drawn path and profile are the Haulage page's.
+        let cycle = search.as_ref().and_then(|s| s.cycle(&self.index, source, args.haul_link, dig, rate, spot, dump));
+        self.cycles.insert(key, cycle);
+        cycle
     }
 
     /// What the roads could not reach, for the Haulage step: one note per
@@ -1960,6 +1974,20 @@ impl<'a> HaulCapture<'a> {
             problems.push(CaptureDiagnostic::global(tr!("schedule-capture-stranded", count = stranded.to_string())).at(ScheduleStep::Haulage));
         }
     }
+}
+
+/// What one haul's cycle depends on: where it starts and is held to, where it
+/// goes, the truck, and the loader's rate and spot time and the dump's time.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct CycleKey {
+    destination: ProjectDestinationId,
+    class: trucking::TruckClassId,
+    dig: bool,
+    source: [u64; 3],
+    link: Vec<crate::model::haulage::NodeId>,
+    rate: u64,
+    spot: u64,
+    dump: Option<u64>,
 }
 
 /// Everything one candidate needs, so the expansion below takes one argument
@@ -2153,7 +2181,35 @@ fn reclaim_conditions(conditions: &[FieldCondition], grades: &[GradeField], fiel
 /// Returns the derived figure *before* the shared [`SEGMENT_CEILING`] guard
 /// is applied, so the caller can report that the budget was restricted.
 fn derived_segments(intervals: &[Interval], loaders: &[Loader], tasks: &[Task], movements: &[MovementCandidate]) -> usize {
-    let digs = |loader: LoaderId, ground: GroundId| movements.iter().any(|candidate| candidate.loader == loader && candidate.source == SourceId::Ground(ground));
+    // Which loaders have a candidate on each block or pile, looked up once:
+    // asked of the whole candidate list per interval, block and loader, this
+    // was most of a large capture's time.
+    let mut movers: std::collections::HashMap<SourceId, BTreeSet<LoaderId>> = std::collections::HashMap::new();
+    for candidate in movements {
+        movers.entry(candidate.source).or_default().insert(candidate.loader);
+    }
+    let moves = |loader: LoaderId, source: SourceId| movers.get(&source).is_some_and(|by| by.contains(&loader));
+    let shared_with_another = |loader: LoaderId, source: SourceId| movers.get(&source).is_some_and(|by| by.iter().any(|other| *other != loader));
+    // A bar's phases depend only on the bar, so each is worked out once and
+    // each interval only asks which bars it covers and can work.
+    let phases: Vec<(usize, bool)> = tasks
+        .iter()
+        .map(|task| match &task.kind {
+            TaskKind::Dig { sequence } => {
+                let worked: Vec<GroundId> = sequence.iter().copied().filter(|ground| moves(task.loader, SourceId::Ground(*ground))).collect();
+                if worked.is_empty() {
+                    return (0, true);
+                }
+                let shared = worked.windows(2).filter(|pair| shared_with_another(task.loader, SourceId::Ground(pair[0]))).count();
+                (1 + shared, true)
+            }
+            TaskKind::Reclaim { approved_sources, .. } => {
+                let piles: BTreeSet<StockpileId> = approved_sources.iter().copied().filter(|pile| moves(task.loader, SourceId::Stockpile(*pile))).collect();
+                (piles.len(), false)
+            }
+            TaskKind::Delay => (0, true),
+        })
+        .collect();
     let mut highest = 1;
     for interval in intervals {
         let mut budget = 1;
@@ -2161,39 +2217,16 @@ fn derived_segments(intervals: &[Interval], loaders: &[Loader], tasks: &[Task], 
             let rate = loader.rates.get(interval.index);
             let can_dig = rate.is_some_and(|rate| rate.dig_tph > 0.0);
             let can_reclaim = rate.is_some_and(|rate| rate.reclaim_tph > 0.0);
-            let mut phases = 0usize;
-            for task in tasks.iter().filter(|task| task.loader == loader.id) {
+            let mut count = 0usize;
+            for (task, &(task_phases, dig)) in tasks.iter().zip(&phases).filter(|(task, _)| task.loader == loader.id) {
                 if task.window_start_h > interval.start_h + 1e-9 || task.window_end_h < interval.end_h - 1e-9 {
                     continue;
                 }
-                match &task.kind {
-                    TaskKind::Dig { sequence } if can_dig => {
-                        let worked: Vec<GroundId> = sequence.iter().copied().filter(|ground| digs(loader.id, *ground)).collect();
-                        if worked.is_empty() {
-                            continue;
-                        }
-                        let shared = worked
-                            .windows(2)
-                            .filter(|pair| loaders.iter().any(|other| other.id != loader.id && digs(other.id, pair[0])))
-                            .count();
-                        phases += 1 + shared;
-                    }
-                    TaskKind::Reclaim { approved_sources, .. } if can_reclaim => {
-                        let piles: BTreeSet<StockpileId> = approved_sources
-                            .iter()
-                            .copied()
-                            .filter(|pile| {
-                                movements
-                                    .iter()
-                                    .any(|candidate| candidate.loader == loader.id && candidate.source == SourceId::Stockpile(*pile))
-                            })
-                            .collect();
-                        phases += piles.len();
-                    }
-                    _ => {}
+                if (dig && can_dig) || (!dig && can_reclaim) {
+                    count += task_phases;
                 }
             }
-            budget += phases.saturating_sub(1);
+            budget += count.saturating_sub(1);
         }
         highest = highest.max(budget);
     }

@@ -82,8 +82,8 @@ use std::collections::BTreeMap;
 
 use super::grade::GradeTable;
 use crate::model::schedule::optimisation::{
-    Activity, CashflowRuleId, Destination, DestinationId, DestinationKind, GroundId, GroundSource, Interval, IntervalRate, Loader, LoaderId, MovementCandidate, ReclaimOrder,
-    RoutingRuleId, SourceId, StockpileId, Task, TaskKind, TruckClass,
+    Activity, CashflowRuleId, Destination, DestinationId, DestinationKind, GroundId, GroundSource, Interval, IntervalRate, Loader, LoaderId, MaterialId, MovementCandidate,
+    ReclaimOrder, RoutingRuleId, SourceId, StockpileId, Task, TaskKind, TruckClass,
 };
 pub(crate) use crate::model::schedule::stockpile_operation::PileMode;
 
@@ -668,8 +668,8 @@ pub(crate) fn task_operable(loader: &Loader, task: &Task, interval: usize) -> bo
 /// a dig bar has work. A machine is not held for an hour by a few tonnes.
 pub(crate) const DIG_ROOM_T: f64 = 1.0;
 
-/// Where `task` can send each material of `ground`, one list of destinations
-/// per material the block holds.
+/// Where a bar can send each material of a block, one list of destinations
+/// per material the block holds ([`OutletIndex::of`]).
 ///
 /// A dig bar's work is its current block - the first of its sequence with
 /// ground left - and a block is dug whole, its materials in proportion. So
@@ -681,26 +681,47 @@ pub(crate) const DIG_ROOM_T: f64 = 1.0;
 /// [`DIG_ROOM_T`] below its capacity, a dump more than that below its
 /// capacity, a crusher more than that below its day's budget; unlimited ones
 /// always have room.
-pub(crate) fn block_outlets(input: &BlendInput, task: &Task, ground: GroundId) -> Vec<Vec<DestinationId>> {
-    let Some(source) = input.ground.iter().find(|source| source.id == ground) else {
-        return Vec::new();
-    };
-    source
-        .material
-        .iter()
-        .filter(|share| share.fraction > 0.0)
-        .map(|share| {
-            let mut outlets: Vec<DestinationId> = input
-                .movements
-                .iter()
-                .filter(|candidate| candidate.source == SourceId::Ground(ground) && candidate.material == share.material && task_authorises(task, candidate))
-                .map(|candidate| candidate.destination)
-                .collect();
+pub(crate) struct OutletIndex {
+    /// Dig candidates' destinations by (loader, block, material), sorted.
+    /// Indexed once: walking every candidate for every readiness check is the
+    /// candidate count times the horizon.
+    digs: BTreeMap<(LoaderId, GroundId, MaterialId), Vec<DestinationId>>,
+}
+
+impl OutletIndex {
+    pub(crate) fn new(input: &BlendInput) -> Self {
+        let mut digs: BTreeMap<_, Vec<DestinationId>> = BTreeMap::new();
+        for candidate in &input.movements {
+            if let SourceId::Ground(ground) = candidate.source
+                && candidate.activity == Activity::Dig
+            {
+                digs.entry((candidate.loader, ground, candidate.material)).or_default().push(candidate.destination);
+            }
+        }
+        for outlets in digs.values_mut() {
             outlets.sort_unstable();
             outlets.dedup();
-            outlets
-        })
-        .collect()
+        }
+        Self { digs }
+    }
+
+    pub(crate) fn of(&self, input: &BlendInput, task: &Task, ground: GroundId) -> Vec<Vec<DestinationId>> {
+        let Some(source) = input.ground.iter().find(|source| source.id == ground) else {
+            return Vec::new();
+        };
+        let authorised = matches!(&task.kind, TaskKind::Dig { sequence } if sequence.contains(&ground));
+        source
+            .material
+            .iter()
+            .filter(|share| share.fraction > 0.0)
+            .map(|share| {
+                authorised
+                    .then(|| self.digs.get(&(task.loader, ground, share.material)).cloned())
+                    .flatten()
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
 }
 
 /// Whether every material of a block has a destination with room.

@@ -10,8 +10,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::input::{
-    BlendInput, BlendPile, CHUNK_FULL_T, DIG_ROOM_T, GRADE_CUSHION_T, GRADE_MARGIN, GradeBound, GradeEndpoint, GradeHalfSpace, GradePredicate, GradeQualification, REST_RECEIPT_T,
-    authored_tasks, block_outlets, delivers_to_pile, dig_authority, flat_cell, interval_rate, loader_rate, task_active, task_authorises, task_operable,
+    BlendInput, BlendPile, CHUNK_FULL_T, DIG_ROOM_T, GRADE_CUSHION_T, GRADE_MARGIN, GradeBound, GradeEndpoint, GradeHalfSpace, GradePredicate, GradeQualification, OutletIndex,
+    REST_RECEIPT_T, authored_tasks, delivers_to_pile, dig_authority, flat_cell, interval_rate, loader_rate, task_active, task_authorises, task_operable,
 };
 use crate::model::schedule::optimisation::{
     Activity, Destination, DestinationId, DestinationKind, GroundId, Interval, LoaderId, MaterialId, MovementCandidate, ReclaimOrder, SourceId, StockpileId, TaskKind,
@@ -1035,7 +1035,7 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
     }
 
     // Room for a dig bar's material as each interval opens (see
-    // `block_outlets`): one flag per destination and interval, forced to 1
+    // `OutletIndex::of`): one flag per destination and interval, forced to 1
     // by more than `DIG_ROOM_T` of room - so a bar cannot claim to be
     // blocked while it is not. Unlimited destinations always have room; a
     // stockpile not building has none.
@@ -1043,6 +1043,7 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
     let mut outlet_flags: BTreeMap<(Vec<DestinationId>, usize), Flag<R::Var>> = BTreeMap::new();
     // Each dig bar's sequence, by ground index, with where each block's
     // materials can go.
+    let outlets = OutletIndex::new(input);
     let task_blocks: BTreeMap<usize, Vec<BlockOutlets>> = input
         .tasks
         .iter()
@@ -1052,7 +1053,7 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
                 task_index,
                 sequence
                     .iter()
-                    .filter_map(|ground| Some((input.ground.iter().position(|entry| entry.id == *ground)?, block_outlets(input, task, *ground))))
+                    .filter_map(|ground| Some((input.ground.iter().position(|entry| entry.id == *ground)?, outlets.of(input, task, *ground))))
                     .collect(),
             )),
             _ => None,
@@ -1082,7 +1083,7 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
                             // Ready while its current block - the first of
                             // the sequence holding material as the cell
                             // opens - has somewhere with room for each of its
-                            // materials; see `block_outlets`. Forced in the
+                            // materials; see `OutletIndex::of`. Forced in the
                             // one direction, as every readiness here, by a
                             // chain over the sequence:
                             //   ready >= P_i - E_i - Z_i
@@ -1703,7 +1704,7 @@ enum Flag<V> {
 type RoomFlags<V> = BTreeMap<(DestinationId, usize), Flag<V>>;
 
 /// Whether each destination has room for a dig bar as each interval opens;
-/// see `block_outlets`.
+/// see `OutletIndex::of`.
 fn dig_room_flags<R: Rows>(rows: &mut R, input: &BlendInput, segments: usize) -> Result<RoomFlags<R::Var>, FormulationCancelled> {
     let mut room = BTreeMap::new();
     for destination in &input.destinations {

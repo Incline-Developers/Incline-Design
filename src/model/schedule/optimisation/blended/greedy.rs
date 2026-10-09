@@ -17,7 +17,7 @@
 //!   the start of the interval. A dig bar whose current block has a material
 //!   with nowhere to go - every destination full, or a pile not building - has
 //!   no work, so the loader works its next bar and comes back the first
-//!   interval there is room; see `block_outlets`.
+//!   interval there is room; see `OutletIndex::of`.
 //! - A dig bar works its current block, and the next ones in authored order
 //!   once each is finished, up to the loader's rate. A block's materials
 //!   leave in proportion. A block another loader may also dig must be gone a
@@ -102,7 +102,7 @@ use std::{
 use super::{
     drill_blast::Chain,
     input::{
-        BlendInput, BlendPile, DIG_ROOM_T, GRADE_CUSHION_T, GRADE_MARGIN, GradeQualification, REST_RECEIPT_T, attribute_reclaim, authored_tasks, block_diggable, block_outlets,
+        BlendInput, BlendPile, DIG_ROOM_T, GRADE_CUSHION_T, GRADE_MARGIN, GradeQualification, OutletIndex, REST_RECEIPT_T, attribute_reclaim, authored_tasks, block_diggable,
         interval_rate, task_active, task_authorises,
     },
     lp::{Col, LinearProgram},
@@ -231,6 +231,7 @@ struct State<'a> {
     /// by (loader, pile).
     digs: BTreeMap<(usize, GroundId, u32), Vec<usize>>,
     reclaims: BTreeMap<(usize, StockpileId), Vec<usize>>,
+    outlets: OutletIndex,
     /// Blocks some other loader could dig, keyed (loader, block).
     shared: BTreeMap<(usize, GroundId), bool>,
     /// Objective per tonne of each candidate: its value, the production
@@ -425,6 +426,7 @@ impl<'a> State<'a> {
             reclaimed: BTreeMap::new(),
             digs,
             reclaims,
+            outlets: OutletIndex::new(input),
             shared,
             weight,
             credit,
@@ -1472,9 +1474,9 @@ impl<'a> State<'a> {
     }
 
     /// Whether `task` could dig `block` as `interval` opens: every material
-    /// of it has a destination with room; see [`block_outlets`].
+    /// of it has a destination with room; see [`OutletIndex::of`].
     fn diggable(&self, task: &super::super::Task, block: GroundId, interval: Interval) -> bool {
-        block_diggable(&block_outlets(self.input, task, block), |destination| self.room_at_opening(destination, interval))
+        block_diggable(&self.outlets.of(self.input, task, block), |destination| self.room_at_opening(destination, interval))
     }
 
     /// Whether `destination` has room as `interval` opens, for a dig bar's
