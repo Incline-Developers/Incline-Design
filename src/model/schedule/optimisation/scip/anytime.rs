@@ -30,15 +30,17 @@
 //!
 //! Every candidate keeps the best schedule's hours before its window and is
 //! dispatched from the state they leave, so a polished day is not undone by
-//! a later plan window starting after it.
+//! a later plan window starting after it. A polished day also leaves each
+//! pile having received and given up what the best schedule's did, so the
+//! piles the days after open with hold the same tonnes.
 //!
 //! The gap is measured against the plan's linear relaxation over the whole
 //! horizon, which is an upper bound on any schedule's value while every
 //! simplification of the plan is optimistic: free order within a day, each
-//! route at its best candidate, the fleet pooled. Reclaim is not planned, so
-//! with stockpiles to reclaim it is no bound, and none is reported. Once a
-//! window is the whole horizon, the plan's own dual bound is one as well,
-//! and the tighter of the two is kept. The whole horizon's plan is also
+//! route at its best candidate, the fleet pooled, a reclaim's grade the one
+//! that suits each use of it best. Once a window is the whole horizon, and
+//! nothing is reclaimed, the plan's own dual bound is one as well, and the
+//! tighter of the two is kept. The whole horizon's plan is also
 //! solved as a mixed-integer program in the background from the start, for
 //! its dual bound and for one more set of targets when it finishes.
 //!
@@ -65,7 +67,7 @@ use super::{
     },
     plan::{self, PlanSolve, Settings, Window},
 };
-use crate::model::schedule::optimisation::TaskKind;
+use crate::model::schedule::optimisation::{DestinationKind, SourceId, StockpileId, TaskKind};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct AnytimeSettings {
@@ -90,11 +92,20 @@ pub(crate) struct AnytimeSettings {
 }
 
 /// Solves one window's exact hourly model from a schedule of it, within a
-/// time limit: the window's own input and schedule, in its own interval
-/// numbering, and what each block of its input (by position) must hold at
-/// the end of interval `kept`. The SCIP side lives with the app's other
-/// solves.
-pub(crate) type Polisher<'a> = &'a (dyn Fn(&BlendInput, &BlendSolution, &[(usize, f64)], usize, Duration) -> Option<BlendSolution> + Sync);
+/// time limit, holding what [`Hold`] says: the window's own input and
+/// schedule, in its own interval numbering. The SCIP side lives with the
+/// app's other solves.
+pub(crate) type Polisher<'a> = &'a (dyn Fn(&BlendInput, &BlendSolution, &Hold, Duration) -> Option<BlendSolution> + Sync);
+
+/// Where a polished window must leave things at the end of its interval
+/// `kept`, as the schedule it polishes does.
+pub(crate) struct Hold {
+    pub(crate) kept: usize,
+    /// What each block of the window's input (by position) holds.
+    pub(crate) blocks: Vec<(usize, f64)>,
+    /// What each pile has received and given up over the kept intervals.
+    pub(crate) piles: Vec<(StockpileId, f64, f64)>,
+}
 
 impl AnytimeSettings {
     /// The settings Improve runs the search with, within `budget` and to the
@@ -267,14 +278,32 @@ fn polish(
     let local = carry.window_input(input, window);
     // Every block where the best schedule leaves it by the end of the kept
     // days.
-    let left_by_then = Window::opening(input, &best.solution, first_day + days, 0).remaining;
-    let progress: Vec<(usize, f64)> = local
-        .ground
-        .iter()
-        .enumerate()
-        .map(|(index, source)| (index, left_by_then.get(&source.id).copied().unwrap_or(0.0)))
-        .collect();
-    let Some(polished) = polisher(&local, &slice(best, first, solved_to), &progress, end - first - 1, limit) else {
+    let left_by_then = Window::opening(input, &best.solution, None, first_day + days, 0).remaining;
+    let mut piles: BTreeMap<StockpileId, (f64, f64)> = input.piles.iter().map(|pile| (pile.id, (0.0, 0.0))).collect();
+    for row in best.solution.movements.iter().filter(|row| (first..end).contains(&row.interval)) {
+        let candidate = &input.movements[row.candidate];
+        if let Some(DestinationKind::Stockpile(pile)) = input.destinations.iter().find(|entry| entry.id == candidate.destination).map(|entry| entry.kind)
+            && let Some(flows) = piles.get_mut(&pile)
+        {
+            flows.0 += row.tonnes_t;
+        }
+        if let SourceId::Stockpile(pile) = candidate.source
+            && let Some(flows) = piles.get_mut(&pile)
+        {
+            flows.1 += row.tonnes_t;
+        }
+    }
+    let hold = Hold {
+        kept: end - first - 1,
+        blocks: local
+            .ground
+            .iter()
+            .enumerate()
+            .map(|(index, source)| (index, left_by_then.get(&source.id).copied().unwrap_or(0.0)))
+            .collect(),
+        piles: piles.into_iter().map(|(pile, (received, reclaimed))| (pile, received, reclaimed)).collect(),
+    };
+    let Some(polished) = polisher(&local, &slice(best, first, solved_to), &hold, limit) else {
         return Ok(None);
     };
     // The window's own objective prices its grade targets on its days
@@ -372,27 +401,27 @@ pub(crate) fn run(
     };
     record(value, None, "first schedule".into());
 
+    // A window plan prices reclaim at the blend the best schedule leaves, so
+    // only a plan of the whole horizon from scratch bounds a schedule that
+    // reclaims; see `plan`.
     let reclaims = input.tasks.iter().any(|task| matches!(task.kind, TaskKind::Reclaim { .. }));
-    let bound = if reclaims {
-        None
-    } else {
-        let relaxed = plan::solve(
-            input,
-            None,
-            None,
-            Settings {
-                time_limit: settings.bound_limit,
-                relative_gap: 0.0,
-                relax: true,
-            },
-            cancel,
-        );
-        relaxed.ok().and_then(|relaxed| relaxed.bound)
-    };
+    let bound = plan::solve(
+        input,
+        None,
+        None,
+        Settings {
+            time_limit: settings.bound_limit,
+            relative_gap: 0.0,
+            relax: true,
+        },
+        cancel,
+    )
+    .ok()
+    .and_then(|relaxed| relaxed.bound);
     record(value, bound, "relaxation bound".into());
     // Raised when the search ends, so the background plan stops with it.
     let ending = Arc::new(AtomicBool::new(false));
-    let mut background = (settings.background_bound && !reclaims && !cancel.load(Ordering::Relaxed)).then(|| {
+    let mut background = (settings.background_bound && !cancel.load(Ordering::Relaxed)).then(|| {
         let (input, seed, ending) = (input.clone(), best.solution.clone(), Arc::clone(&ending));
         let limit = settings.budget.saturating_sub(started.elapsed());
         std::thread::spawn(move || {
@@ -569,7 +598,7 @@ pub(crate) fn run(
                 break 'passes;
             }
             let first_day = days[start];
-            let window = Window::opening(input, &best.solution, first_day, length);
+            let window = Window::opening(input, &best.solution, Some(&best.replay), first_day, length);
             let solve = Settings {
                 time_limit: limit.min(left),
                 relative_gap: 1e-3,

@@ -1115,9 +1115,7 @@ impl<'a> State<'a> {
             let mut flows: BTreeMap<(usize, DestinationId), Vec<Col>> = BTreeMap::new();
             for &(index, _, col) in &columns {
                 let candidate = &input.movements[index];
-                if candidate.activity == Activity::Dig
-                    && let Some(loader) = input_loader(input, candidate.loader)
-                {
+                if let Some(loader) = input_loader(input, candidate.loader) {
                     flows.entry((loader, candidate.destination)).or_default().push(col);
                 }
             }
@@ -1340,9 +1338,7 @@ impl<'a> State<'a> {
         if self.plan.is_some() {
             for (index, _, tonnes) in &rows {
                 let candidate = &input.movements[*index];
-                if candidate.activity == Activity::Dig
-                    && let Some(loader) = input_loader(input, candidate.loader)
-                {
+                if let Some(loader) = input_loader(input, candidate.loader) {
                     *self.followed.entry((loader, candidate.destination, interval.day())).or_default() += tonnes;
                 }
             }
