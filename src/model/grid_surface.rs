@@ -164,6 +164,29 @@ impl GridSurface {
         covered
     }
 
+    /// Height at `at` read bilinearly off the four nodes of the lattice cell
+    /// under it, when the surface has all four.
+    pub(crate) fn bilinear(&self, at: DVec2) -> Option<f64> {
+        if self.columns < 2 || self.rows < 2 {
+            return None;
+        }
+        let local = (at - self.origin) / self.spacing;
+        let (last_column, last_row) = ((self.columns - 1) as f64, (self.rows - 1) as f64);
+        // A hair of slack so a point on the last row or column, nudged by
+        // rounding, still reads.
+        if local.x < -NODE_TOLERANCE || local.y < -NODE_TOLERANCE || local.x > last_column + NODE_TOLERANCE || local.y > last_row + NODE_TOLERANCE {
+            return None;
+        }
+        // The cell to the lower left; the last column and row use the cell
+        // before them.
+        let column = (local.x.floor().max(0.0) as usize).min(self.columns - 2);
+        let row = (local.y.floor().max(0.0) as usize).min(self.rows - 2);
+        let (u, v) = (local.x - column as f64, local.y - row as f64);
+        let (z00, z10) = (self.height(column, row)?, self.height(column + 1, row)?);
+        let (z01, z11) = (self.height(column, row + 1)?, self.height(column + 1, row + 1)?);
+        Some(z00 * (1.0 - u) * (1.0 - v) + z10 * u * (1.0 - v) + z01 * (1.0 - u) * v + z11 * u * v)
+    }
+
     /// Slope dz/dx, dz/dy at `at`: the plane z = a + gx x + gy y fitted by
     /// least squares to the nodes in the window around the nearest node.
     /// Where those nodes lie on one line the slope across it is zero.

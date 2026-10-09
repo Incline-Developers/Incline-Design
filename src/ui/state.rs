@@ -434,6 +434,9 @@ impl EditorState {
             || self.reference_surface_dialog.is_some()
             || self.thickness_points_dialog.is_some()
             || self.seam_surface_dialog.is_some()
+            // Its limits are picked from the view, so the lock lifts while a
+            // pick is armed.
+            || (self.tri_cut_to_open && self.triangulation_pick_target.is_none())
     }
 
     /// Lock or unlock one scene entity by name. Layer locks go through
@@ -522,6 +525,34 @@ pub(crate) enum TriSurfaceCutSide {
     CutBottom,
 }
 
+/// Where a Clip to Surface limit comes from, as chosen in its dialog row.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum TriCutSource {
+    /// A surface picked in the dialog or the view, the usual choice.
+    #[default]
+    Surface,
+    /// A typed RL, the same height everywhere.
+    Level,
+    /// A typed depth below a surface (Keep above only).
+    Depth,
+}
+
+/// The Keep below limit of Clip to Surface: a surface, or an RL.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum TriUpperCut {
+    Surface(TriangulationId),
+    Level(f64),
+}
+
+/// The Keep above limit of Clip to Surface: a surface, an RL, or a depth
+/// below a ground surface.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum TriLowerCut {
+    Surface(TriangulationId),
+    Level(f64),
+    Depth { ground: TriangulationId, depth: f64 },
+}
+
 /// Which part of a surface to retain when clipping it with an XY polyline.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum TriPolylineClipMode {
@@ -579,6 +610,8 @@ pub(crate) enum TriangulationPickTarget {
     CutPitShell,
     IncludeTopology,
     IncludeShape,
+    ClipToUpper,
+    ClipToLower,
 }
 
 impl TriangulationPickTarget {
@@ -587,7 +620,7 @@ impl TriangulationPickTarget {
             Self::TrimTopology | Self::CutPitTopology | Self::IncludeTopology => tr!("state-click-topology-viewport"),
             Self::CutPitShell => tr!("state-click-pit-shell-viewport"),
             Self::IncludeShape => tr!("state-click-pit-stockpile-solid-viewport"),
-            Self::TrimSurface => tr!("state-click-surface-viewport"),
+            Self::TrimSurface | Self::ClipToUpper | Self::ClipToLower => tr!("state-click-surface-viewport"),
         }
     }
 }
@@ -1928,6 +1961,20 @@ pub(crate) struct EditorState {
     pub(crate) tri_cut_surface_name_auto: bool,
     pub(crate) tri_cut_surface_unload_source: bool,
 
+    // Clip to Surface: the seam's roof and floor selected at open, and its limits
+    pub(crate) tri_cut_to_open: bool,
+    pub(crate) tri_cut_to_targets: Vec<TriangulationId>,
+    /// Keep below: a surface, or an RL as typed.
+    pub(crate) tri_cut_to_upper_source: TriCutSource,
+    pub(crate) tri_cut_to_upper_id: Option<TriangulationId>,
+    pub(crate) tri_cut_to_upper_level_input: String,
+    /// Keep above: a surface, an RL as typed, or a depth below a surface.
+    pub(crate) tri_cut_to_lower_source: TriCutSource,
+    pub(crate) tri_cut_to_lower_id: Option<TriangulationId>,
+    pub(crate) tri_cut_to_lower_level_input: String,
+    /// The depth in metres as typed; empty until one is typed.
+    pub(crate) tri_cut_to_depth_input: String,
+
     // Cut Topology to Pit Shell
     pub(crate) tri_cut_pitshell_open: bool,
     pub(crate) tri_cut_pitshell_topology_id: Option<TriangulationId>,
@@ -2387,6 +2434,7 @@ impl EditorState {
             || self.reference_surface_dialog.is_some()
             || self.thickness_points_dialog.is_some()
             || self.seam_surface_dialog.is_some()
+            || self.tri_cut_to_open
             || self.show_modelling_settings
             || self.drill_pattern_open
             || self.plot_dialog.is_some()
@@ -2822,6 +2870,8 @@ impl EditorState {
         self.thickness_points_dialog = None;
         self.thickness_table = None;
         self.seam_surface_dialog = None;
+        self.tri_cut_to_open = false;
+        self.tri_cut_to_targets.clear();
         self.seam_table = None;
         self.seam_rename_dialog = None;
         self.name_shift_dialog = None;
@@ -3153,6 +3203,15 @@ impl EditorState {
             tri_cut_surface_name_input: String::new(),
             tri_cut_surface_name_auto: true,
             tri_cut_surface_unload_source: true,
+            tri_cut_to_open: false,
+            tri_cut_to_targets: Vec::new(),
+            tri_cut_to_upper_source: TriCutSource::Surface,
+            tri_cut_to_upper_id: None,
+            tri_cut_to_upper_level_input: String::new(),
+            tri_cut_to_lower_source: TriCutSource::Surface,
+            tri_cut_to_lower_id: None,
+            tri_cut_to_lower_level_input: String::new(),
+            tri_cut_to_depth_input: String::new(),
             tri_cut_pitshell_open: false,
             tri_cut_pitshell_topology_id: None,
             tri_cut_pitshell_pitshell_id: None,
@@ -4087,6 +4146,11 @@ pub(crate) enum UiCommand {
         target: crate::model::drill_hole::ReferenceTarget,
         side: crate::model::drill_hole::ReferenceSide,
     },
+    /// One point per hole at its collar, as a new layer, on the holes the
+    /// command was opened on.
+    BuildCollarPoints {
+        holes: Vec<DrillHoleRef>,
+    },
     /// Sends one named hole to the inspector and shows the panel, bypassing
     /// the lock since this is an explicit request.
     InspectDrillHole(DrillHoleRef),
@@ -4314,6 +4378,15 @@ pub(crate) enum UiCommand {
         /// Unload the source surface once the slice lands.
         unload_source: bool,
     },
+    /// Open the "Clip to Surface" dialog on the surfaces selected.
+    OpenCutTriangulationToSurface,
+    /// Clip the seam whose roof and floor are `targets` to the limits, Keep
+    /// below first, into a new roof, floor and solid on the same lattice.
+    ExecuteCutTriangulationToSurface {
+        targets: Vec<TriangulationId>,
+        upper: Option<TriUpperCut>,
+        lower: Option<TriLowerCut>,
+    },
     /// Open the "Trim to Topology" dialog.
     OpenCutTriangulationBySurface,
     /// Trim one surface against a topology in the vertical direction.
@@ -4488,6 +4561,7 @@ impl UiCommand {
             | Self::OpenThicknessPoints
             | Self::ChooseThicknessPairs
             | Self::OpenSeamSurface
+            | Self::OpenCutTriangulationToSurface
             | Self::ShowThicknessTable { .. }
             | Self::ShowSeamTable(_)
             | Self::OpenModellingSettings
@@ -4712,6 +4786,8 @@ impl UiCommand {
                 },
             ),
             Self::MakeSeamSurface { .. } => report(tr!("common-thickness-surfaces"), tr!("state-seam-surface-from-thickness")),
+            Self::ExecuteCutTriangulationToSurface { targets, .. } => report(tr!("tri-clip-to-surface"), tr!("state-clip-to-surface-count", count = targets.len().to_string())),
+            Self::BuildCollarPoints { holes } => report(tr!("state-build-reference-points"), tr!("state-collar-points-holes", count = holes.len().to_string())),
             Self::MakeThicknessPoints { pairs, .. } => report(
                 tr!("common-thickness-points"),
                 match pairs {
@@ -5538,6 +5614,8 @@ impl EditorState {
 pub(crate) struct ReferencePointsDraft {
     pub(crate) holes: Vec<DrillHoleRef>,
     pub(crate) seam: SeamChoice,
+    /// Points at the holes' collars instead of at a logged pick.
+    pub(crate) collars: bool,
 }
 
 /// The seam a tool works on, as its dialog chooses it: the categorical

@@ -657,6 +657,19 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                     commands.push(UiCommand::OpenSeamSurface);
                     ui.close();
                 }
+                context_menu_separator(ui);
+                // Select first, then act: the seam's roof and floor selected are
+                // clipped; the limits, surfaces of the same kind, are picked in
+                // the dialog.
+                if ContextMenuAction::new(tr!("common-clip-to-surface-ellipsis"))
+                    .enabled(editor.selection_counts.triangulations == 2)
+                    .disabled_hover_text(tr!("ws-menubar-modelling-select-surfaces"))
+                    .show(ui)
+                    .clicked()
+                {
+                    commands.push(UiCommand::OpenCutTriangulationToSurface);
+                    ui.close();
+                }
             });
             return;
         }
@@ -721,6 +734,15 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
             }
             if ContextMenuAction::new(tr!("common-trim-topology")).show(ui).clicked() {
                 commands.push(UiCommand::OpenCutTriangulationBySurface);
+                ui.close();
+            }
+            if ContextMenuAction::new(tr!("common-clip-to-surface-ellipsis"))
+                .enabled(editor.selection_counts.triangulations == 2)
+                .disabled_hover_text(tr!("ws-menubar-modelling-select-surfaces"))
+                .show(ui)
+                .clicked()
+            {
+                commands.push(UiCommand::OpenCutTriangulationToSurface);
                 ui.close();
             }
             context_menu_separator(ui);

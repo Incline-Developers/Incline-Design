@@ -281,6 +281,10 @@ pub(crate) struct ModellingSettings {
     /// spacing.
     pub(crate) steep_distance: f64,
     pub(crate) steep_degrees: f64,
+    /// The depth below ground, in metres, Clip to Surface last kept a seam
+    /// above. It differs per deposit, so there is none until one is typed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) cut_depth: Option<f64>,
 }
 
 impl ModellingSettings {
@@ -294,6 +298,7 @@ impl ModellingSettings {
         for value in [self.steep_distance, self.steep_degrees] {
             value.to_bits().hash(hasher);
         }
+        self.cut_depth.map(f64::to_bits).hash(hasher);
     }
 
     /// Why these settings cannot be built with, or `None` when they can.
@@ -303,6 +308,9 @@ impl ModellingSettings {
         }
         if !(self.steep_degrees.is_finite() && self.steep_degrees > 0.0 && self.steep_degrees <= 90.0) {
             return Some(tr!("project-steep-pair-angle-range"));
+        }
+        if self.cut_depth.is_some_and(|depth| !(depth.is_finite() && depth > 0.0)) {
+            return Some(tr!("project-cut-depth-positive"));
         }
         None
     }
@@ -362,6 +370,7 @@ impl Default for ModellingSettings {
             surface_method: SurfaceMethod::ThinPlateSpline,
             steep_distance: 5.0,
             steep_degrees: 80.0,
+            cut_depth: None,
         }
     }
 }

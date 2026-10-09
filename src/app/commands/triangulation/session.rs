@@ -276,6 +276,10 @@ impl<'a> App<'a> {
             self.editor.tri_cut_surface_reference_id = None;
             self.editor.tri_cut_surface_open = false;
         }
+        if self.editor.tri_cut_to_targets.contains(&id) {
+            self.editor.tri_cut_to_targets.clear();
+            self.editor.tri_cut_to_open = false;
+        }
         if self.editor.tri_cut_pitshell_topology_id == Some(id) || self.editor.tri_cut_pitshell_pitshell_id == Some(id) {
             self.editor.tri_cut_pitshell_topology_id = None;
             self.editor.tri_cut_pitshell_pitshell_id = None;

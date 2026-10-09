@@ -30,7 +30,7 @@ use crate::{
     app::App,
     i18n::tr,
     model::{Command, SceneEntityId},
-    ui::state::{ActiveTool, TriCreatePhase, UiCommand},
+    ui::state::{ActiveTool, TriCreatePhase, TriCutSource, UiCommand},
     userspace_error, userspace_log, userspace_warn,
 };
 
@@ -143,6 +143,9 @@ impl<'a> App<'a> {
                 | UiCommand::MakeThicknessPoints { .. }
                 | UiCommand::OpenSeamSurface
                 | UiCommand::MakeSeamSurface { .. }
+                | UiCommand::OpenCutTriangulationToSurface
+                | UiCommand::ExecuteCutTriangulationToSurface { .. }
+                | UiCommand::BuildCollarPoints { .. }
                 | UiCommand::OpenModellingSettings
                 | UiCommand::SetModellingSettings(_)
                 | UiCommand::BuildReferencePoints { .. }
@@ -610,7 +613,7 @@ impl<'a> App<'a> {
                 holes.sort_unstable_by_key(|hole| (hole.dataset.0, hole.hole));
                 // The seam last chosen comes back, so it is chosen once.
                 let seam = self.editor.last_seam.clone().unwrap_or_default();
-                self.editor.reference_points_dialog = Some(crate::ui::state::ReferencePointsDraft { holes, seam });
+                self.editor.reference_points_dialog = Some(crate::ui::state::ReferencePointsDraft { holes, seam, collars: false });
                 Ok(())
             }
             UiCommand::OpenReferenceSurface => {
@@ -716,6 +719,10 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::MakeSeamSurface { surface } => self.make_seam_surface(surface),
+            UiCommand::BuildCollarPoints { holes } => {
+                self.build_collar_points(holes);
+                Ok(())
+            }
             UiCommand::OpenModellingSettings => {
                 self.editor.show_modelling_settings = true;
                 Ok(())
@@ -1345,6 +1352,36 @@ impl<'a> App<'a> {
                 let result = self.cut_triangulation_by_z(tri_id, z_min, z_max, name, unload_source);
                 if result.is_ok() {
                     self.editor.tri_cut_z_open = false;
+                }
+                result
+            }
+            UiCommand::OpenCutTriangulationToSurface => {
+                // Select first, then act: the seam clipped is the roof and floor
+                // selected; the limits, surfaces of the same kind, are picked in
+                // the dialog.
+                let targets = self.selected_triangulations();
+                if triangulation::seam_targets(&targets).is_none() {
+                    userspace_warn!("{}", tr!("cmd-cuts-to-surface-select-seam"));
+                    return Ok(());
+                }
+                // A surface is the primary choice for both rows; the deposit's
+                // last depth waits in its field for when Depth is chosen.
+                let depth = self.workspace.active_project().and_then(|project| project.project.metadata.modelling.cut_depth);
+                self.editor.tri_cut_to_open = true;
+                self.editor.tri_cut_to_targets = targets;
+                self.editor.tri_cut_to_upper_source = TriCutSource::Surface;
+                self.editor.tri_cut_to_upper_id = None;
+                self.editor.tri_cut_to_upper_level_input.clear();
+                self.editor.tri_cut_to_lower_source = TriCutSource::Surface;
+                self.editor.tri_cut_to_lower_id = None;
+                self.editor.tri_cut_to_lower_level_input.clear();
+                self.editor.tri_cut_to_depth_input = depth.map(|depth| depth.to_string()).unwrap_or_default();
+                Ok(())
+            }
+            UiCommand::ExecuteCutTriangulationToSurface { targets, upper, lower } => {
+                let result = self.cut_triangulation_to_surface(targets, upper, lower);
+                if result.is_ok() {
+                    self.editor.tri_cut_to_open = false;
                 }
                 result
             }

@@ -5,7 +5,10 @@ use crate::{
     model::{Document, Object, ObjectId, SceneEntityId, triangulation::TriangulationId},
     rendering::color::{color32_to_rgba, rgba_to_color32},
     ui::{
-        state::{ContourOutputLayer, EditorState, TriCreatePhase, TriPolylineClipMode, TriSurfaceCutSide, TriSurfaceType, TriangulationPickTarget, UiCommand, UiProjectView},
+        state::{
+            ContourOutputLayer, EditorState, TriCreatePhase, TriCutSource, TriLowerCut, TriPolylineClipMode, TriSurfaceCutSide, TriSurfaceType, TriUpperCut,
+            TriangulationPickTarget, UiCommand, UiProjectView,
+        },
         widgets::menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32, selected_source_field},
     },
 };
@@ -736,6 +739,195 @@ pub(crate) fn draw_cut_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
 
     if !open {
         editor.tri_cut_surface_open = false;
+    }
+}
+
+/// Clip to Surface: the seam whose roof and floor were selected when it
+/// opened is clipped to the Keep below and Keep above limits, into a new
+/// roof, floor and solid. Each limit is a surface, the usual choice, or a
+/// typed RL; Keep above may also be a depth below a surface.
+pub(crate) fn draw_cut_to_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    if !editor.tri_cut_to_open || editor.triangulation_pick_target.is_some() {
+        return;
+    }
+
+    let mut open = true;
+    DragableMenu::new("clip_to_surface_dialog", tr!("tri-clip-to-surface"))
+        .open(&mut open)
+        .min_width(PICKER_DIALOG_MIN_WIDTH)
+        .max_width(PICKER_DIALOG_MAX_WIDTH)
+        .show(ui.ctx(), |ui| {
+            // A surface being clipped is never offered as a cut.
+            let cuts: Vec<(TriangulationId, &str)> = project
+                .triangulations
+                .iter()
+                .filter(|entry| entry.is_loaded && !editor.tri_cut_to_targets.contains(&entry.id))
+                .map(|entry| (entry.id, entry.name.as_str()))
+                .collect();
+            for value in [&mut editor.tri_cut_to_upper_id, &mut editor.tri_cut_to_lower_id] {
+                if value.is_some_and(|id| !cuts.iter().any(|(cut, _)| *cut == id)) {
+                    *value = None;
+                }
+            }
+            let name_of = |id: Option<TriangulationId>| {
+                id.and_then(|id| cuts.iter().find(|(cut, _)| *cut == id))
+                    .map_or_else(|| tr!("common-none"), |(_, name)| (*name).to_owned())
+            };
+            let options = || std::iter::once((None, tr!("common-none").into())).chain(cuts.iter().map(|(id, name)| (Some(*id), (*name).into())));
+            let source_label = |source: TriCutSource| match source {
+                TriCutSource::Surface => tr!("tri-clip-to-surface-from-surface"),
+                TriCutSource::Level => tr!("tri-clip-to-surface-from-level"),
+                TriCutSource::Depth => tr!("tri-clip-to-surface-from-depth"),
+            };
+            // Empty text is an empty row; anything else must read as a number.
+            let level_of = |input: &str| -> Result<Option<f64>, ()> {
+                let input = input.trim();
+                if input.is_empty() {
+                    return Ok(None);
+                }
+                input.parse::<f64>().ok().filter(|level| level.is_finite()).map(Some).ok_or(())
+            };
+
+            selected_source_field(
+                ui,
+                tr!("tri-clip-to-surface-targets"),
+                tr!("state-clip-to-surface-count", count = editor.tri_cut_to_targets.len().to_string()),
+                tr!("tri-clip-to-surface-targets-help"),
+                picker_control_width(ui),
+            );
+            ui.add_space(4.0);
+
+            // Keep below: a surface or an RL. Ok(None) is a row left empty,
+            // Err a row that cannot run as typed.
+            let upper_source_text = source_label(editor.tri_cut_to_upper_source);
+            MenuFieldCombo::new(
+                "clip_to_surface_upper_source",
+                tr!("tri-clip-to-surface-upper"),
+                &mut editor.tri_cut_to_upper_source,
+                upper_source_text,
+                [TriCutSource::Surface, TriCutSource::Level].map(|source| (source, source_label(source).into())),
+            )
+            .help_text(tr!("tri-clip-to-surface-upper-help"))
+            .width(picker_control_width(ui))
+            .show(ui);
+            let upper: Result<Option<TriUpperCut>, ()> = match editor.tri_cut_to_upper_source {
+                TriCutSource::Level => {
+                    MenuFieldText::new(tr!("tri-clip-to-surface-level"), &mut editor.tri_cut_to_upper_level_input)
+                        .help_text(tr!("tri-clip-to-surface-level-help"))
+                        .width(picker_control_width(ui))
+                        .show(ui);
+                    let level = level_of(&editor.tri_cut_to_upper_level_input);
+                    if level.is_err() {
+                        tool_help_panel(ui, tr!("tri-clip-to-surface-level-invalid"));
+                    }
+                    level.map(|level| level.map(TriUpperCut::Level))
+                }
+                TriCutSource::Surface | TriCutSource::Depth => {
+                    let upper_label = name_of(editor.tri_cut_to_upper_id);
+                    if triangulation_picker_field(
+                        ui,
+                        "clip_to_surface_upper",
+                        tr!("tri-clip-to-surface-surface"),
+                        &mut editor.tri_cut_to_upper_id,
+                        upper_label,
+                        options(),
+                        tr!("tri-clip-to-surface-surface-help"),
+                    ) {
+                        editor.triangulation_pick_target = Some(TriangulationPickTarget::ClipToUpper);
+                    }
+                    Ok(editor.tri_cut_to_upper_id.map(TriUpperCut::Surface))
+                }
+            };
+            ui.add_space(4.0);
+
+            // Keep above: a surface, an RL, or a depth below a surface.
+            let lower_source_text = source_label(editor.tri_cut_to_lower_source);
+            MenuFieldCombo::new(
+                "clip_to_surface_lower_source",
+                tr!("tri-clip-to-surface-lower"),
+                &mut editor.tri_cut_to_lower_source,
+                lower_source_text,
+                [TriCutSource::Surface, TriCutSource::Level, TriCutSource::Depth].map(|source| (source, source_label(source).into())),
+            )
+            .help_text(tr!("tri-clip-to-surface-lower-help"))
+            .width(picker_control_width(ui))
+            .show(ui);
+            let lower: Result<Option<TriLowerCut>, ()> = match editor.tri_cut_to_lower_source {
+                TriCutSource::Level => {
+                    MenuFieldText::new(tr!("tri-clip-to-surface-level"), &mut editor.tri_cut_to_lower_level_input)
+                        .help_text(tr!("tri-clip-to-surface-level-help"))
+                        .width(picker_control_width(ui))
+                        .show(ui);
+                    let level = level_of(&editor.tri_cut_to_lower_level_input);
+                    if level.is_err() {
+                        tool_help_panel(ui, tr!("tri-clip-to-surface-level-invalid"));
+                    }
+                    level.map(|level| level.map(TriLowerCut::Level))
+                }
+                TriCutSource::Surface | TriCutSource::Depth => {
+                    let by_depth = editor.tri_cut_to_lower_source == TriCutSource::Depth;
+                    let lower_label = name_of(editor.tri_cut_to_lower_id);
+                    if triangulation_picker_field(
+                        ui,
+                        "clip_to_surface_lower",
+                        tr!("tri-clip-to-surface-surface"),
+                        &mut editor.tri_cut_to_lower_id,
+                        lower_label,
+                        options(),
+                        if by_depth {
+                            tr!("tri-clip-to-surface-ground-help")
+                        } else {
+                            tr!("tri-clip-to-surface-surface-help")
+                        },
+                    ) {
+                        editor.triangulation_pick_target = Some(TriangulationPickTarget::ClipToLower);
+                    }
+                    if by_depth {
+                        MenuFieldText::new(tr!("tri-clip-to-surface-depth"), &mut editor.tri_cut_to_depth_input)
+                            .help_text(tr!("tri-clip-to-surface-depth-help"))
+                            .width(picker_control_width(ui))
+                            .show(ui);
+                        let depth = editor.tri_cut_to_depth_input.trim().parse::<f64>().ok().filter(|depth| depth.is_finite() && *depth > 0.0);
+                        if depth.is_none() {
+                            tool_help_panel(ui, tr!("project-cut-depth-positive"));
+                        }
+                        // A depth with no surface above it is an empty row.
+                        match (editor.tri_cut_to_lower_id, depth) {
+                            (None, _) => Ok(None),
+                            (Some(ground), Some(depth)) => Ok(Some(TriLowerCut::Depth { ground, depth })),
+                            (Some(_), None) => Err(()),
+                        }
+                    } else {
+                        Ok(editor.tri_cut_to_lower_id.map(TriLowerCut::Surface))
+                    }
+                }
+            };
+            tool_help_panel(ui, tr!("tri-clip-to-surface-note"));
+
+            // At least one row complete, and no row half typed.
+            let can_run = matches!((upper, lower), (Ok(upper), Ok(lower)) if upper.is_some() || lower.is_some());
+
+            ui.add_space(6.0);
+            ui.separator();
+            menu::menu_actions(ui, |ui| {
+                let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                if (ui.add(MenuButton::new(tr!("tri-clip")).primary().enabled(can_run)).clicked() || (confirm && can_run))
+                    && let (Ok(upper), Ok(lower)) = (upper, lower)
+                {
+                    commands.push(UiCommand::ExecuteCutTriangulationToSurface {
+                        targets: editor.tri_cut_to_targets.clone(),
+                        upper,
+                        lower,
+                    });
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                    editor.tri_cut_to_open = false;
+                }
+            });
+        });
+
+    if !open {
+        editor.tri_cut_to_open = false;
     }
 }
 

@@ -626,7 +626,7 @@ impl<'a> App<'a> {
         }
     }
 
-    fn triangulation_name(&self, id: TriangulationId) -> String {
+    pub(super) fn triangulation_name(&self, id: TriangulationId) -> String {
         self.triangulations
             .iter()
             .find(|triangulation| triangulation.id == id)
@@ -692,7 +692,7 @@ fn pairs_bytes(file: &PairsFile) -> Result<Arc<[u8]>> {
 }
 
 /// Why `name` cannot be read as one regular grid, in words.
-fn not_a_grid(name: &str, problem: NotAGrid) -> String {
+pub(super) fn not_a_grid(name: &str, problem: NotAGrid) -> String {
     let reason = match problem {
         NotAGrid::NoCells => tr!("cmd-thickness-not-a-grid-cells"),
         NotAGrid::TwoHeights => tr!("cmd-thickness-not-a-grid-heights"),

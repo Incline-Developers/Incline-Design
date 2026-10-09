@@ -876,6 +876,60 @@ impl<'a> App<'a> {
         }
         self.invalidate_geometry();
     }
+
+    /// One point per hole at its collar, as a new layer of points: what a
+    /// ground surface is built from where the project has no topography.
+    /// Like the reference points, derived from the holes and never edited.
+    pub(crate) fn build_collar_points(&mut self, holes: Vec<DrillHoleRef>) {
+        let mut collars = Vec::new();
+        let mut absent = 0usize;
+        for reference in &holes {
+            let hole = self
+                .drill_holes
+                .iter()
+                .find(|dataset| dataset.id == reference.dataset && dataset.state.loaded)
+                .and_then(|dataset| dataset.dataset.holes.get(reference.hole));
+            match hole.map(crate::model::drill_hole::DrillHole::collar_position).filter(|collar| collar.is_finite()) {
+                Some(collar) => collars.push(collar),
+                None => absent += 1,
+            }
+        }
+        if collars.is_empty() {
+            userspace_warn!("{}", tr!("cmd-drill-hole-no-collars"));
+            return;
+        }
+        let Some(project) = self.workspace.active_project_mut() else {
+            return;
+        };
+        let document = &mut project.project.document;
+        let layer_id = document.allocate_layer_id();
+        let layer = crate::model::Layer {
+            id: layer_id,
+            name: crate::model::project::unique_item_name(tr!("cmd-drill-hole-collars-layer"), document.layers().iter().map(|layer| layer.name.as_str())),
+            color_index: None,
+            color: [1.0, 1.0, 1.0, 1.0],
+            loaded: true,
+            elevation: 0.0,
+            folder: None,
+            section: crate::model::SectionKind::Modelling,
+        };
+        let objects: Vec<crate::model::Object> = collars
+            .iter()
+            .map(|&pos| crate::model::Object::Point {
+                id: document.allocate_object_id(),
+                layer: layer_id,
+                pos,
+                color: crate::model::ObjectColor::ByLayer,
+            })
+            .collect();
+        let used = objects.len();
+        let made: Vec<crate::model::ObjectId> = objects.iter().map(|object| object.id()).collect();
+        self.execute_edit(Command::AddLayerSnapshot { layer, objects });
+        // The points become the selection, so Build Surface is ready for them.
+        self.select_only(made.into_iter().map(SceneEntityId::Object));
+        userspace_log!("{}", tr!("cmd-drill-hole-collar-points", used = used.to_string(), absent = absent.to_string()));
+        self.invalidate_geometry();
+    }
 }
 
 /// The codes a reference pick on `target` looks for in each dataset, found

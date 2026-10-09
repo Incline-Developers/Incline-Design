@@ -51,6 +51,7 @@ pub(crate) fn draw_reference_points_dialog(ui: &mut egui::Ui, editor: &mut Edito
         .unwrap_or_default();
     let mut open = true;
     let mut build = None;
+    let mut collars = false;
     DragableMenu::new("reference_points_dialog", tr!("reference-points-reference-points"))
         .open(&mut open)
         .min_width(380.0)
@@ -65,6 +66,25 @@ pub(crate) fn draw_reference_points_dialog(ui: &mut egui::Ui, editor: &mut Edito
             );
             ui.add_space(4.0);
 
+            // A ground surface is built from the collars where the project
+            // has no topography of its own.
+            let source_label = source_label_of(draft.collars);
+            MenuFieldCombo::new(
+                ("reference_points", "source"),
+                tr!("reference-points-points-at"),
+                &mut draft.collars,
+                source_label,
+                [false, true].map(|collars| (collars, source_label_of(collars).into())),
+            )
+            .show(ui);
+            if draft.collars {
+                ui.small(tr!("reference-points-one-point-per-hole-collar"));
+                if ui.add(MenuButton::new(tr!("reference-points-make")).primary()).clicked() {
+                    collars = true;
+                }
+                return;
+            }
+
             seam_controls(ui, "reference_points", &involved, &categories, &mut draft.seam);
 
             ui.small(tr!("reference-points-one-point-per-hole-boundary"));
@@ -76,6 +96,10 @@ pub(crate) fn draw_reference_points_dialog(ui: &mut egui::Ui, editor: &mut Edito
                 build = Some((field, target, draft.seam.side));
             }
         });
+    if collars {
+        commands.push(UiCommand::BuildCollarPoints { holes: draft.holes.clone() });
+        open = false;
+    }
     if let Some((field, target, side)) = build {
         editor.last_seam = Some(draft.seam.clone());
         commands.push(UiCommand::BuildReferencePoints {
@@ -88,6 +112,15 @@ pub(crate) fn draw_reference_points_dialog(ui: &mut egui::Ui, editor: &mut Edito
     }
     if !open {
         editor.reference_points_dialog = None;
+    }
+}
+
+/// Where the points go: at a logged pick, or at the collars.
+fn source_label_of(collars: bool) -> String {
+    if collars {
+        tr!("reference-points-at-collars")
+    } else {
+        tr!("reference-points-at-logged-pick")
     }
 }
 

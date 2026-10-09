@@ -51,6 +51,9 @@ struct MenuState {
     /// Whether exactly one loaded surface is selected, which is what
     /// thickness points are measured against.
     can_make_thickness_points: bool,
+    /// Whether two loaded surfaces are selected, the seam's roof and floor
+    /// that Clip to Surface clips.
+    can_clip_to_surface: bool,
     /// Whether exactly one loaded block model is selected, which is what ore
     /// thresholding runs on.
     can_create_ore_triangulation: bool,
@@ -115,6 +118,11 @@ pub(crate) enum MacMenuAction {
     OpenThicknessPoints,
     /// The Modelling menu's row that opens the thickness surfaces dialog.
     OpenSeamSurface,
+    /// The Modelling menu's row that opens the clip to surface dialog.
+    OpenModellingClipToSurface,
+    /// The Triangulation menu's row that opens the same dialog, beside the
+    /// other cuts.
+    OpenCutTriangulationToSurface,
     /// One row of File > Open Recent, by its index in the recent list the menu
     /// was last built from.
     OpenRecent(usize),
@@ -188,6 +196,8 @@ impl MacMenuAction {
         Self::OpenReferenceSurface,
         Self::OpenThicknessPoints,
         Self::OpenSeamSurface,
+        Self::OpenModellingClipToSurface,
+        Self::OpenCutTriangulationToSurface,
     ];
 
     /// The `NSMenuItem` tag this action is carried by.
@@ -453,6 +463,14 @@ pub(crate) fn install_menu_bar() {
         &target,
         mtm,
     );
+    add_action(
+        &triangulation_menu,
+        &tr!("common-clip-to-surface-ellipsis"),
+        "",
+        MacMenuAction::OpenCutTriangulationToSurface,
+        &target,
+        mtm,
+    );
     add_separator(&triangulation_menu, mtm);
     add_action(
         &triangulation_menu,
@@ -538,6 +556,15 @@ pub(crate) fn install_menu_bar() {
         &tr!("common-thickness-surfaces-ellipsis"),
         "",
         MacMenuAction::OpenSeamSurface,
+        &target,
+        mtm,
+    );
+    add_separator(&modelling_menu, mtm);
+    add_action(
+        &modelling_menu,
+        &tr!("common-clip-to-surface-ellipsis"),
+        "",
+        MacMenuAction::OpenModellingClipToSurface,
         &target,
         mtm,
     );
@@ -677,6 +704,7 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         can_build_reference_points: editor.selection_counts.reference_holes > 0,
         can_build_reference_surface: editor.selection_counts.surface_points >= crate::app::commands::triangulation::reference_surface::MINIMUM_POINTS,
         can_make_thickness_points: editor.selection_counts.triangulations == 1,
+        can_clip_to_surface: editor.selection_counts.triangulations == 2,
         can_create_ore_triangulation: editor.selection_counts.block_models == 1,
         can_undrape_rasters: project.raster_textures.iter().any(|raster| raster.is_draped),
         has_design_selection: editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_))),
@@ -720,6 +748,8 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     set_enabled(&root, MacMenuAction::OpenReferenceSurface, state.can_build_reference_surface);
     set_enabled(&root, MacMenuAction::OpenThicknessPoints, state.can_make_thickness_points);
     set_enabled(&root, MacMenuAction::OpenSeamSurface, state.can_make_thickness_points);
+    set_enabled(&root, MacMenuAction::OpenModellingClipToSurface, state.can_clip_to_surface);
+    set_enabled(&root, MacMenuAction::OpenCutTriangulationToSurface, state.can_clip_to_surface);
     set_enabled(&root, MacMenuAction::OpenCreateOreTriangulation, state.can_create_ore_triangulation);
     for action in [MacMenuAction::OpenCutTriangulationByZ, MacMenuAction::OpenContourTriangulation] {
         set_enabled(&root, action, state.one_surface_selected);

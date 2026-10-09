@@ -1336,6 +1336,10 @@ fn draw_global_dialogs(
         dialogs::triangulation::draw_cut_surface_dialog(root_ui, editor, project, commands);
     }
 
+    if editor.tri_cut_to_open {
+        dialogs::triangulation::draw_cut_to_surface_dialog(root_ui, editor, project, commands);
+    }
+
     if editor.tri_cut_pitshell_open {
         dialogs::triangulation::draw_cut_topology_to_pit_shell_dialog(root_ui, editor, project, commands);
     }

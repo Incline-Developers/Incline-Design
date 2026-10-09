@@ -248,6 +248,15 @@ impl<'a> App<'a> {
                     self.editor.tri_include_solid_topology_id = None;
                 }
             }
+            TriangulationPickTarget::ClipToUpper | TriangulationPickTarget::ClipToLower if self.editor.tri_cut_to_targets.contains(&id) => {
+                crate::userspace_warn!("{}", tr!("cmd-cuts-to-surface-cuts-itself"));
+            }
+            TriangulationPickTarget::ClipToUpper => {
+                self.editor.tri_cut_to_upper_id = Some(id);
+            }
+            TriangulationPickTarget::ClipToLower => {
+                self.editor.tri_cut_to_lower_id = Some(id);
+            }
         }
         self.editor.triangulation_pick_target = None;
         self.editor.viewport_pick_hover_label = None;

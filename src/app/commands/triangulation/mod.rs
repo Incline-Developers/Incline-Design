@@ -13,7 +13,7 @@ use crate::{
         formats::mesh_data,
         triangulation::{LoadedTriangulation, OpenTriangulation, TriangulationId},
     },
-    ui::state::{ContourOutputLayer, TriPolylineClipMode, TriSurfaceCutSide, TriSurfaceType},
+    ui::state::{ContourOutputLayer, TriLowerCut, TriPolylineClipMode, TriSurfaceCutSide, TriSurfaceType, TriUpperCut},
     userspace_log, userspace_warn,
 };
 
@@ -29,5 +29,6 @@ mod point_cloud_tin;
 pub(crate) mod reference_surface;
 pub(crate) mod session;
 
+pub(crate) use cuts::seam_targets;
 use geometry::*;
 pub(crate) use point_cloud_tin::{TerrainBudget, TerrainSampler, TerrainTinParams, estimate_terrain_tin_memory_bytes, terrain_budget_target};
