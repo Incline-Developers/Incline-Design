@@ -11,6 +11,16 @@
 //! whole-horizon plan keeps nothing more, the gap is closed or the budget is
 //! spent. Every kept schedule is a replayed one, so the value only rises.
 //!
+//! When a cycle of plan windows keeps nothing, each day is polished before
+//! the windows grow: the exact hourly model of that day, opening in the
+//! state the best schedule leaves, is solved from that schedule's own hours,
+//! and the dispatch works the days after it again from where it ends. That
+//! goes after what following a plan loses - the plan sees days, not hours.
+//!
+//! Every candidate keeps the best schedule's hours before its window and is
+//! dispatched from the state they leave, so a polished day is not undone by
+//! a later plan window starting after it.
+//!
 //! The gap is measured against the plan's linear relaxation over the whole
 //! horizon, which is an upper bound on any schedule's value while every
 //! simplification of the plan is optimistic: free order within a day, each
@@ -27,7 +37,13 @@ use std::{
 };
 
 use super::{
-    super::blended::{greedy, input::BlendInput, plan::PlanTargets, replay::BlendSolution},
+    super::blended::{
+        greedy,
+        input::BlendInput,
+        plan::PlanTargets,
+        replay::{BlendSolution, ChunkRow, MovementRow, ReplayReport, replay_cancellable},
+        rolling::{self, Carry, Stitched},
+    },
     plan::{self, Backend, Settings, Window},
 };
 use crate::model::schedule::optimisation::TaskKind;
@@ -40,6 +56,167 @@ pub(crate) struct AnytimeSettings {
     pub(crate) window_limit: Duration,
     pub(crate) bound_limit: Duration,
     pub(crate) backend: Backend,
+    /// Days per polished window, and the time each gets.
+    pub(crate) polish_days: u32,
+    pub(crate) polish_limit: Duration,
+    /// Windows whose exact model would have more movement columns than this
+    /// are not polished.
+    pub(crate) polish_columns: usize,
+}
+
+/// Solves one window's exact hourly model from a schedule of it, within a
+/// time limit: the window's own input and schedule, in its own interval
+/// numbering. The SCIP side lives with the app's other solves.
+pub(crate) type Polisher<'a> = &'a (dyn Fn(&BlendInput, &BlendSolution, Duration) -> Option<BlendSolution> + Sync);
+
+/// The best schedule so far and the replay's report on it.
+struct Best {
+    solution: BlendSolution,
+    replay: ReplayReport,
+}
+
+impl Best {
+    fn value(&self) -> f64 {
+        self.replay.replayed_objective
+    }
+}
+
+/// The state `best` leaves as interval `first` opens.
+fn carried(input: &BlendInput, best: &Best, first: usize) -> Carry {
+    let mut carry = Carry::opening(input);
+    if first > 0 {
+        carry.advance(input, whole(0, first), &best.solution, &best.replay);
+    }
+    carry
+}
+
+fn whole(first: usize, end: usize) -> rolling::Window {
+    rolling::Window {
+        first,
+        committed: end - first,
+        end,
+    }
+}
+
+/// `best`'s intervals before `first`, then `pieces` (each in its own
+/// numbering), replayed against the whole horizon: `None` unless valid.
+fn stitch(input: &BlendInput, best: &Best, first: usize, pieces: &[(rolling::Window, &BlendSolution)], cancel: &AtomicBool) -> Option<Best> {
+    let mut stitched = Stitched::new();
+    if first > 0 {
+        stitched.keep(input, whole(0, first), &best.solution, 0.0);
+    }
+    for (window, solution) in pieces {
+        stitched.keep(input, *window, solution, 0.0);
+    }
+    let mut solution = stitched.finish(input);
+    // The pieces' own objectives do not add up to the whole's: grade
+    // targets are priced by day over all of them. The replay's figure is
+    // the one reported.
+    let first_look = replay_cancellable(input, &solution, cancel)?;
+    solution.reported_objective = first_look.ranked_objective();
+    let replay = replay_cancellable(input, &solution, cancel)?;
+    replay.is_valid().then_some(Best { solution, replay })
+}
+
+/// The dispatch from interval `first` to the end, following `targets`, after
+/// `best`'s intervals before it.
+fn redispatch(input: &BlendInput, best: &Best, first: usize, targets: &PlanTargets, cancel: &AtomicBool) -> Option<Best> {
+    if first == 0 {
+        let found = greedy::dispatch_following(input, Some(targets), cancel).ok()??;
+        return found.replay.is_valid().then_some(Best {
+            solution: found.solution,
+            replay: found.replay,
+        });
+    }
+    let count = input.intervals.len();
+    let tail = carried(input, best, first).window_input(input, whole(first, count));
+    let found = greedy::dispatch_following(&tail, Some(&targets.rebased(&tail)), cancel).ok()??;
+    stitch(input, best, first, &[(whole(first, count), &found.solution)], cancel)
+}
+
+/// `best`'s rows in intervals `first..end`, renumbered from `first`.
+fn slice(best: &Best, first: usize, end: usize) -> BlendSolution {
+    let range = first..end;
+    BlendSolution {
+        movements: best
+            .solution
+            .movements
+            .iter()
+            .filter(|row| range.contains(&row.interval))
+            .map(|row| MovementRow {
+                interval: row.interval - first,
+                ..*row
+            })
+            .collect(),
+        durations: best
+            .solution
+            .durations
+            .iter()
+            .filter(|((interval, _), _)| range.contains(interval))
+            .map(|(&(interval, segment), &duration)| ((interval - first, segment), duration))
+            .collect(),
+        chunks: best
+            .solution
+            .chunks
+            .iter()
+            .filter(|row| range.contains(&row.interval))
+            .map(|row| ChunkRow {
+                interval: row.interval - first,
+                ..row.clone()
+            })
+            .collect(),
+        reported_objective: 0.0,
+        adjustments: Default::default(),
+        drill_blast: None,
+    }
+}
+
+/// Polish `days` days from `first_day`: their exact hourly model from
+/// `best`'s hours, then the dispatch again from where they end.
+#[allow(clippy::too_many_arguments)]
+fn polish(
+    input: &BlendInput,
+    best: &Best,
+    first_day: u32,
+    days: u32,
+    targets: &PlanTargets,
+    polisher: Polisher,
+    limit: Duration,
+    columns: usize,
+    cancel: &AtomicBool,
+) -> Result<Option<Best>, String> {
+    let first = input.intervals.iter().position(|interval| interval.day() >= first_day).ok_or("past the horizon")?;
+    let end = input
+        .intervals
+        .iter()
+        .position(|interval| interval.day() >= first_day + days)
+        .unwrap_or(input.intervals.len());
+    let size = input.movements.len() * (end - first) * input.segments_per_interval.max(1);
+    if size > columns {
+        return Err(format!("{size} movement columns"));
+    }
+    let mut carry = carried(input, best, first);
+    let window = whole(first, end);
+    let local = carry.window_input(input, window);
+    let Some(polished) = polisher(&local, &slice(best, first, end), limit) else {
+        return Ok(None);
+    };
+    let Some(checked) = replay_cancellable(&local, &polished, cancel) else {
+        return Ok(None);
+    };
+    if !checked.is_valid() {
+        return Ok(None);
+    }
+    let count = input.intervals.len();
+    if end == count {
+        return Ok(stitch(input, best, first, &[(window, &polished)], cancel));
+    }
+    carry.advance(input, window, &polished, &checked);
+    let tail = carry.window_input(input, whole(end, count));
+    let Some(found) = greedy::dispatch_following(&tail, Some(&targets.rebased(&tail)), cancel)? else {
+        return Ok(None);
+    };
+    Ok(stitch(input, best, first, &[(window, &polished), (whole(end, count), &found.solution)], cancel))
 }
 
 #[derive(Clone, Debug)]
@@ -63,15 +240,18 @@ const WEIGHTS: [(f64, f64); 3] = [(1.0, 0.0), (1.0, 1.0), (2.0, 2.0)];
 /// A gap at or below which there is nothing left worth searching for.
 const CLOSED_GAP: f64 = 1e-4;
 
-pub(crate) fn run(input: &BlendInput, settings: AnytimeSettings, mut report: impl FnMut(&Progress)) -> Result<(BlendSolution, Vec<Progress>), String> {
+pub(crate) fn run(input: &BlendInput, settings: AnytimeSettings, polisher: Option<Polisher>, mut report: impl FnMut(&Progress)) -> Result<(BlendSolution, Vec<Progress>), String> {
     let started = Instant::now();
     let cancel = AtomicBool::new(false);
     let first = greedy::dispatch_cancellable(input, &cancel)?.ok_or("cancelled")?;
     if !first.replay.is_valid() {
         return Err("the hourly dispatch schedule was rejected".into());
     }
-    let mut best = first.solution;
-    let mut value = first.replay.replayed_objective;
+    let mut best = Best {
+        solution: first.solution,
+        replay: first.replay,
+    };
+    let mut value = best.value();
     let mut log = Vec::new();
     let mut record = |log: &mut Vec<Progress>, value: f64, bound: Option<f64>, note: String| {
         let progress = Progress {
@@ -114,6 +294,8 @@ pub(crate) fn run(input: &BlendInput, settings: AnytimeSettings, mut report: imp
     let mut limit = settings.window_limit;
     let mut offset = 0;
     let mut quiet_passes = 0;
+    // Whether the days have been polished since a plan window was last kept.
+    let mut polished_since = false;
     'passes: loop {
         let closed = Progress {
             elapsed_s: 0.0,
@@ -126,6 +308,48 @@ pub(crate) fn run(input: &BlendInput, settings: AnytimeSettings, mut report: imp
         if closed {
             record(&mut log, value, bound, "gap closed".into());
             break;
+        }
+        if quiet_passes >= step
+            && let Some(polisher) = polisher
+            && !polished_since
+        {
+            // A whole cycle of plan windows kept nothing: polish each day
+            // before the windows grow.
+            polished_since = true;
+            let mut kept_any = false;
+            for &day in days.iter().step_by(settings.polish_days.max(1) as usize) {
+                let left = settings.budget.saturating_sub(started.elapsed());
+                if left.is_zero() {
+                    break 'passes;
+                }
+                match polish(
+                    input,
+                    &best,
+                    day,
+                    settings.polish_days.max(1),
+                    &targets,
+                    polisher,
+                    settings.polish_limit.min(left),
+                    settings.polish_columns,
+                    &cancel,
+                ) {
+                    Ok(Some(found)) if found.value() > value + 1e-7 * value.abs().max(1.0) => {
+                        value = found.value();
+                        best = found;
+                        kept_any = true;
+                        record(&mut log, value, bound, format!("polished day {day}: kept"));
+                    }
+                    Ok(_) => {}
+                    Err(reason) => {
+                        record(&mut log, value, bound, format!("day {day} not polished: {reason}"));
+                        break;
+                    }
+                }
+            }
+            if kept_any {
+                quiet_passes = 0;
+                continue;
+            }
         }
         if quiet_passes >= step {
             // A whole cycle of offsets kept nothing: longer windows.
@@ -144,14 +368,14 @@ pub(crate) fn run(input: &BlendInput, settings: AnytimeSettings, mut report: imp
                 break 'passes;
             }
             let first_day = days[start];
-            let window = Window::opening(input, &best, first_day, length);
+            let window = Window::opening(input, &best.solution, first_day, length);
             let solve = Settings {
                 backend: settings.backend,
                 time_limit: limit.min(left),
                 relative_gap: 1e-3,
                 relax: false,
             };
-            let planned = match plan::solve(input, Some(&best), Some(&window), solve) {
+            let planned = match plan::solve(input, Some(&best.solution), Some(&window), solve) {
                 Ok(planned) => planned,
                 Err(reason) => {
                     record(&mut log, value, bound, format!("days {first_day}+: no plan ({reason})"));
@@ -168,27 +392,26 @@ pub(crate) fn run(input: &BlendInput, settings: AnytimeSettings, mut report: imp
                 bound = Some(bound.map_or(proved, |held: f64| held.min(proved)));
             }
             let covered: BTreeSet<u32> = (first_day..first_day + length).collect();
-            let mut chosen: Option<(f64, BlendSolution, PlanTargets)> = None;
+            let from = input.intervals.iter().position(|interval| interval.day() >= first_day).unwrap_or(0);
+            let mut chosen: Option<(Best, PlanTargets)> = None;
             for (follow, overrun) in WEIGHTS {
                 if started.elapsed() >= settings.budget {
                     break;
                 }
                 let candidate = targets.replacing(&covered, &planned.routes, follow * spread, overrun * spread);
-                let Ok(Some(found)) = greedy::dispatch_following(input, Some(&candidate), &cancel) else {
-                    continue;
-                };
-                let worth = found.replay.replayed_objective;
-                if found.replay.is_valid() && chosen.as_ref().is_none_or(|(kept, _, _)| worth > *kept) {
-                    chosen = Some((worth, found.solution, candidate));
+                let Some(found) = redispatch(input, &best, from, &candidate, &cancel) else { continue };
+                if chosen.as_ref().is_none_or(|(kept, _)| found.value() > kept.value()) {
+                    chosen = Some((found, candidate));
                 }
             }
-            if let Some((worth, solution, candidate)) = chosen
-                && worth > value + 1e-7 * value.abs().max(1.0)
+            if let Some((found, candidate)) = chosen
+                && found.value() > value + 1e-7 * value.abs().max(1.0)
             {
-                value = worth;
-                best = solution;
+                value = found.value();
+                best = found;
                 targets = candidate;
                 improved = true;
+                polished_since = false;
                 record(
                     &mut log,
                     value,
@@ -216,5 +439,5 @@ pub(crate) fn run(input: &BlendInput, settings: AnytimeSettings, mut report: imp
         }
     }
     record(&mut log, value, bound, "done".into());
-    Ok((best, log))
+    Ok((best.solution, log))
 }

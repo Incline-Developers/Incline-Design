@@ -48,6 +48,14 @@ impl PlanTargets {
         }
     }
 
+    /// These targets for a part of the horizon `input` holds: the same
+    /// routes and planned days, paced through its days.
+    pub(crate) fn rebased(&self, input: &BlendInput) -> Self {
+        let mut rebased = Self::new(input, self.routes.clone(), self.follow, self.overrun);
+        rebased.planned = self.planned.clone();
+        rebased
+    }
+
     /// These targets with `days` replaced by `routes`' for them.
     pub(crate) fn replacing(&self, days: &BTreeSet<u32>, routes: &BTreeMap<(usize, DestinationId, u32), f64>, follow: f64, overrun: f64) -> Self {
         let mut merged: BTreeMap<_, _> = self
