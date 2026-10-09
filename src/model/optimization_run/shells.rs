@@ -34,11 +34,9 @@ pub(crate) struct ShellSummary {
     pub(crate) factor: f64,
     /// A directional shell's share of the distance across the final pit.
     pub(crate) distance: Option<f64>,
+    /// Rock blocks in the shell's pit (cumulative). Tonnes, costs and value
+    /// are in the run's report, at the base price.
     pub(crate) blocks: usize,
-    pub(crate) tonnes: f64,
-    pub(crate) ore_tonnes: f64,
-    pub(crate) waste_tonnes: f64,
-    pub(crate) value: f64,
 }
 
 /// Every shell of a run.
@@ -85,10 +83,6 @@ impl ShellValues<'_> {
         } else {
             self.values.waste[cell]
         }
-    }
-
-    fn is_ore(&self, shell: usize, cell: usize) -> bool {
-        self.earns(shell, cell) && self.values.destination(cell, self.revenue_factor(shell)).is_some()
     }
 }
 
@@ -278,38 +272,22 @@ pub(crate) fn solve(plan: &ShellPlan, grid: &Grid, values: &BlockValues, slopes:
             .collect();
     }
 
+    // Blocks first held by each shell, then summed into each shell's pit.
+    let mut first_held = vec![0usize; count + 1];
+    for (cell, &shell) in label.iter().enumerate() {
+        if shell != OUTSIDE && !values.air[cell] {
+            first_held[usize::from(shell)] += 1;
+        }
+    }
+    let mut blocks = 0;
     let summaries = (1..=count)
         .map(|shell| {
-            (0..cells)
-                .into_par_iter()
-                .filter(|&cell| label[cell] != OUTSIDE && label[cell] as usize <= shell && !values.air[cell])
-                .fold(ShellSummary::default, |mut summary, cell| {
-                    let tonnes = values.tonnes[cell];
-                    summary.blocks += 1;
-                    summary.tonnes += tonnes;
-                    if shell_values.is_ore(shell, cell) {
-                        summary.ore_tonnes += tonnes;
-                    } else {
-                        summary.waste_tonnes += tonnes;
-                    }
-                    summary.value += shell_values.value(shell, cell);
-                    summary
-                })
-                .reduce(ShellSummary::default, |a, b| ShellSummary {
-                    factor: 0.0,
-                    distance: None,
-                    blocks: a.blocks + b.blocks,
-                    tonnes: a.tonnes + b.tonnes,
-                    ore_tonnes: a.ore_tonnes + b.ore_tonnes,
-                    waste_tonnes: a.waste_tonnes + b.waste_tonnes,
-                    value: a.value + b.value,
-                })
-        })
-        .zip(1..=count)
-        .map(|(summary, shell)| ShellSummary {
-            factor: shell_values.revenue_factor(shell),
-            distance: shell_values.distance_share(shell),
-            ..summary
+            blocks += first_held[shell];
+            ShellSummary {
+                factor: shell_values.revenue_factor(shell),
+                distance: shell_values.distance_share(shell),
+                blocks,
+            }
         })
         .collect();
     Ok(Shells { label, summaries })

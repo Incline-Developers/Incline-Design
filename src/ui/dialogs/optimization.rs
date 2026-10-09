@@ -64,6 +64,8 @@ pub(crate) fn draw_optimization_dialogs(ui: &mut egui::Ui, editor: &mut EditorSt
     } else if editor.optimization.list_open {
         draw_scenarios_list(ui, &mut editor.optimization, commands);
     }
+    // The Results window stands apart from the list and the editor.
+    super::optimization_results::draw_results_window(ui, &mut editor.optimization, commands);
     value_field::draw_constant_picker(ui.ctx());
 }
 
@@ -73,6 +75,7 @@ fn draw_scenarios_list(ui: &mut egui::Ui, state: &mut OptimizationState, command
     let mut open = true;
     let mut close = false;
     let mut run = None;
+    let mut show_results = None;
     // What the buttons ask for, sent after any name still being typed is committed.
     let mut actions: Vec<UiCommand> = Vec::new();
     DragableMenu::new("optimization_scenarios_dialog", tr!("opt-scenarios-title"))
@@ -90,9 +93,19 @@ fn draw_scenarios_list(ui: &mut egui::Ui, state: &mut OptimizationState, command
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
                         // Drawn right to left, so they read: edit, duplicate,
-                        // delete, state, run.
+                        // delete, state, results, run.
                         if play_button(ui, status).clicked() {
                             run = Some(scenario.id);
+                        }
+                        let has_results = state.results.contains_key(&scenario.id);
+                        let results = ToolbarButton::new(
+                            egui::Image::new(unthemed_icon!("results_scenario.svg")).tint(menu::accent_fill(ui.visuals())),
+                            if has_results { tr!("opt-results-show") } else { tr!("opt-results-not-run") },
+                        )
+                        .id_salt(("opt_results", scenario.id))
+                        .button_side(ICON_SIDE);
+                        if ui.add_enabled_ui(has_results, |ui| ui.add(results)).inner.clicked() {
+                            show_results = Some(scenario.id);
                         }
                         status_icon(ui, status);
                         let delete = ToolbarButton::new(egui::Image::new(unthemed_icon!("delete_scenario.svg")), tr!("opt-delete"))
@@ -150,6 +163,9 @@ fn draw_scenarios_list(ui: &mut egui::Ui, state: &mut OptimizationState, command
         commit_typed_names(ui.ctx(), state, commands);
     }
     commands.extend(actions);
+    if let Some(id) = show_results {
+        state.results_view = Some(crate::ui::state::ResultsView::new(crate::ui::state::ResultsSource::Run(id)));
+    }
     if let Some(id) = run {
         let busy = state
             .scenarios
@@ -1550,7 +1566,12 @@ fn draw_outputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: 
             ui,
             &mut (&mut *output, &mut *commands),
             |ui, (output, commands)| {
-                if ui.checkbox(&mut output.create_reports, tr!("opt-create-reports")).changed() && output.create_reports && output.reports_folder.is_empty() {
+                let ticked = ui
+                    .checkbox(&mut output.create_reports, tr!("opt-create-reports"))
+                    .on_hover_text(tr!("opt-create-reports-hint"))
+                    .changed();
+                // A browser downloads the report instead, so asks for no folder.
+                if ticked && output.create_reports && output.reports_folder.is_empty() && !cfg!(target_arch = "wasm32") {
                     commands.push(UiCommand::ChooseOptimizationReportsFolder);
                 }
             },
@@ -1559,11 +1580,15 @@ fn draw_outputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: 
                     let mut shown = output.reports_folder.clone();
                     let response = ui.add(
                         egui::TextEdit::singleline(&mut shown)
-                            .hint_text(tr!("opt-reports-folder-hint"))
+                            .hint_text(if cfg!(target_arch = "wasm32") {
+                                tr!("opt-reports-downloaded")
+                            } else {
+                                tr!("opt-reports-folder-hint")
+                            })
                             .interactive(false)
                             .desired_width(CONTROL_WIDTH - 90.0),
                     );
-                    if output.create_reports && output.reports_folder.is_empty() {
+                    if output.create_reports && output.reports_folder.is_empty() && !cfg!(target_arch = "wasm32") {
                         mark_invalid(ui, &response);
                     }
                     // A browser has no folders to write into.

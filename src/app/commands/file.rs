@@ -174,6 +174,12 @@ pub(crate) enum FileDialogAction {
     #[cfg(not(target_arch = "wasm32"))]
     OptimizationReportsFolder(PathBuf),
     #[cfg(not(target_arch = "wasm32"))]
+    ExportOptimizationReport(PathBuf, Vec<u8>),
+    #[cfg(not(target_arch = "wasm32"))]
+    OpenOptimizationReport(PathBuf),
+    #[cfg(target_arch = "wasm32")]
+    WebOpenOptimizationReport(std::result::Result<crate::model::input::InputFile, String>),
+    #[cfg(not(target_arch = "wasm32"))]
     ExportOmf { snapshot: Box<formats::omf::ProjectSnapshot>, path: PathBuf },
     #[cfg(not(target_arch = "wasm32"))]
     ExportTriangulation { id: TriangulationId, path: PathBuf },
@@ -805,6 +811,19 @@ impl<'a> App<'a> {
                 let file = file.map_err(anyhow::Error::msg)?;
                 let text = String::from_utf8(file.bytes).context("The file is not text")?;
                 self.merge_imported_optimization_scenarios(&text)
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            FileDialogAction::ExportOptimizationReport(path, bytes) => self.write_optimization_report_export(path, bytes),
+            #[cfg(not(target_arch = "wasm32"))]
+            FileDialogAction::OpenOptimizationReport(path) => {
+                let bytes = std::fs::read(&path).with_context(|| format!("Could not read {}", path.display()))?;
+                let name = path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned());
+                self.show_optimization_report_file(name, &bytes)
+            }
+            #[cfg(target_arch = "wasm32")]
+            FileDialogAction::WebOpenOptimizationReport(file) => {
+                let file = file.map_err(anyhow::Error::msg)?;
+                self.show_optimization_report_file(file.source.name.clone(), &file.bytes)
             }
             #[cfg(not(target_arch = "wasm32"))]
             FileDialogAction::OptimizationReportsFolder(path) => {

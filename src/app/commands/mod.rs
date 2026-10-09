@@ -715,6 +715,14 @@ impl<'a> App<'a> {
                 self.import_optimization_scenarios();
                 Ok(())
             }
+            UiCommand::ExportOptimizationReport => {
+                self.export_optimization_report();
+                Ok(())
+            }
+            UiCommand::OpenOptimizationReport => {
+                self.open_optimization_report();
+                Ok(())
+            }
             UiCommand::ChooseOptimizationReportsFolder => {
                 self.choose_optimization_reports_folder();
                 Ok(())

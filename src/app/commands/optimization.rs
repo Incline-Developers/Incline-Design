@@ -24,12 +24,13 @@ use crate::{
             self, RunInput, RunOutcome, RunResult, ShellField,
             grid::{BlockLayout, Topography},
             prepare,
+            report::{self, Basis},
         },
         progress::Progress,
         project::ProjectItemState,
         triangulation::{GeneratedTriangulation, TriangulationId},
     },
-    ui::state::{MAX_CONCURRENT_RUNS, RunState, ScenarioDraft, ShellStartPick, TriSurfaceType},
+    ui::state::{MAX_CONCURRENT_RUNS, ResultsSource, ResultsView, RunState, ScenarioDraft, ShellStartPick, TriSurfaceType},
     userspace_error, userspace_log, userspace_warn,
 };
 
@@ -353,6 +354,8 @@ impl<'a> App<'a> {
 struct FinishedRun {
     outcome: RunOutcome,
     triangulations: Vec<ShellItem>,
+    /// The report as CSV, when reports are made.
+    csv: Option<Vec<u8>>,
 }
 
 /// One shell's triangulation, ready to insert.
@@ -536,6 +539,11 @@ impl<'a> App<'a> {
                 return;
             }
         };
+        // A browser downloads the report instead, so needs no folder.
+        if cfg!(not(target_arch = "wasm32")) && scenario.output.create_reports && scenario.output.reports_folder.trim().is_empty() {
+            self.fail_optimization_run(id, &scenario.name, &[tr!("opt-run-reports-folder-missing")]);
+            return;
+        }
         let prepared = match prepare::prepare(&scenario, &model.model, topography) {
             Ok(prepared) => prepared,
             Err(issues) => {
@@ -563,9 +571,7 @@ impl<'a> App<'a> {
             make_surfaces: output.shell_as_surface,
             field_value: shell_field.is_some().then_some(output.shell_field_value),
         };
-        if output.create_reports {
-            userspace_log!("{}", tr!("opt-run-outputs-stub"));
-        }
+        let create_reports = output.create_reports;
         userspace_log!("{}", tr!("opt-run-started", name = scenario.name.clone(), cells = cells.to_string()));
 
         let fingerprint = scenario.fingerprint();
@@ -589,7 +595,8 @@ impl<'a> App<'a> {
                         })
                     })
                     .collect::<Result<Vec<_>>>()?;
-                Ok(FinishedRun { outcome, triangulations })
+                let csv = create_reports.then(|| report::write_csv(&outcome.report)).transpose()?;
+                Ok(FinishedRun { outcome, triangulations, csv })
             },
             move |app, result| app.finish_optimization_run(scenario, fingerprint, started, model_id, shell_field, result),
         );
@@ -607,7 +614,7 @@ impl<'a> App<'a> {
     ) {
         let id = scenario.id;
         match result {
-            Ok(FinishedRun { mut outcome, triangulations }) => {
+            Ok(FinishedRun { mut outcome, triangulations, csv }) => {
                 self.editor.optimization.runs.insert(id, RunState::Finished { fingerprint });
                 let summaries = &outcome.shells.summaries;
                 userspace_log!(
@@ -625,23 +632,30 @@ impl<'a> App<'a> {
                 if outcome.blocks_with_default_density > 0 {
                     userspace_warn!("{}", tr!("opt-run-no-density", count = outcome.blocks_with_default_density.to_string()));
                 }
-                for (index, summary) in summaries.iter().enumerate() {
+                // Each shell's pit at the base price, as the report has it.
+                let report = &outcome.report;
+                for (index, shell) in report.shells.iter().enumerate() {
+                    let pit = report.bucket(Basis::Cumulative, index, None);
+                    let (ore, waste) = report.ore_waste(Basis::Cumulative, index);
                     userspace_log!(
                         "{}",
                         tr!(
                             "opt-run-shell-summary",
-                            shell = (index + 1).to_string(),
-                            factor = match summary.distance {
-                                None => crate::model::optimization::format_factor(summary.factor),
-                                Some(share) => format!("{}, {:.0}%", crate::model::optimization::format_factor(summary.factor), share * 100.0),
+                            shell = shell.number.to_string(),
+                            factor = match shell.distance {
+                                None => crate::model::optimization::format_factor(shell.factor),
+                                Some(share) => format!("{}, {:.0}%", crate::model::optimization::format_factor(shell.factor), share * 100.0),
                             },
-                            blocks = summary.blocks.to_string(),
-                            tonnes = format!("{:.0}", summary.tonnes),
-                            ore = format!("{:.0}", summary.ore_tonnes),
-                            waste = format!("{:.0}", summary.waste_tonnes),
-                            value = format!("{:.0}", summary.value)
+                            blocks = pit.blocks.to_string(),
+                            tonnes = format!("{:.0}", pit.tonnes),
+                            ore = format!("{ore:.0}"),
+                            waste = format!("{waste:.0}"),
+                            value = format!("{:.0}", pit.cash_flow())
                         )
                     );
+                }
+                if let Some(bytes) = csv {
+                    self.write_optimization_report(&scenario, bytes);
                 }
                 // One seed for the shells' colours and the field's, so a shell
                 // and its blocks share a colour.
@@ -657,6 +671,7 @@ impl<'a> App<'a> {
                 self.editor.optimization.results.insert(
                     id,
                     Arc::new(RunResult {
+                        report: Arc::new(outcome.report),
                         grid: outcome.grid,
                         shells: outcome.shells,
                     }),
@@ -791,6 +806,106 @@ impl<'a> App<'a> {
         self.evict_unloaded_items();
         self.invalidate_geometry();
     }
+}
+
+impl<'a> App<'a> {
+    /// Write a run's report: on the desktop into `<reports folder>/<scenario>/`,
+    /// replacing only the report file (the folder and anything else in it are
+    /// left alone); in the browser, as a download.
+    fn write_optimization_report(&mut self, scenario: &OptimizationScenario, bytes: Vec<u8>) {
+        #[cfg(target_arch = "wasm32")]
+        Self::trigger_browser_download(format!("{}_{}", folder_name(&scenario.name), report::FILE_NAME), bytes, "text/csv", "optimization report");
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let folder = std::path::Path::new(scenario.output.reports_folder.trim()).join(folder_name(&scenario.name));
+            let path = folder.join(report::FILE_NAME);
+            let written = std::fs::create_dir_all(&folder)
+                .map_err(anyhow::Error::from)
+                .and_then(|()| crate::model::atomic_file::write_atomic(&path, |file| Ok(io::Write::write_all(file, &bytes)?)));
+            match written {
+                Ok(()) => userspace_log!("{}", tr!("opt-run-report-written", path = path.display().to_string())),
+                Err(error) => userspace_error!("{}", tr!("opt-run-report-failed", path = path.display().to_string(), error = format!("{error:#}"))),
+            }
+        }
+    }
+}
+
+impl<'a> App<'a> {
+    /// Save the report the Results window shows as CSV: a file the user
+    /// chooses, or a download in the browser.
+    pub(crate) fn export_optimization_report(&mut self) {
+        let Some((name, report)) = self.editor.optimization.results_report() else {
+            return;
+        };
+        let bytes = match report::write_csv(&report) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                userspace_error!("{}", tr!("opt-results-export-failed", error = format!("{error:#}")));
+                return;
+            }
+        };
+        let file_name = format!("{}_{}", folder_name(&name), report::FILE_NAME);
+        #[cfg(target_arch = "wasm32")]
+        Self::trigger_browser_download(file_name, bytes, "text/csv", "optimization report");
+        #[cfg(not(target_arch = "wasm32"))]
+        self.spawn_file_dialog(async move {
+            let handle = rfd::AsyncFileDialog::new().add_filter("CSV", &["csv"]).set_file_name(file_name).save_file().await?;
+            Some(FileDialogAction::ExportOptimizationReport(handle.path().to_owned(), bytes))
+        });
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn write_optimization_report_export(&mut self, mut path: std::path::PathBuf, bytes: Vec<u8>) -> Result<()> {
+        if path.extension().is_none() {
+            path.set_extension("csv");
+        }
+        crate::model::atomic_file::write_atomic(&path, |file| Ok(io::Write::write_all(file, &bytes)?))
+            .map_err(|error| anyhow::anyhow!("{}", tr!("opt-results-export-failed", error = format!("{error:#}"))))?;
+        userspace_log!("{}", tr!("opt-results-exported", path = path.display().to_string()));
+        Ok(())
+    }
+
+    /// Ask for a report CSV and show it in the Results window.
+    pub(crate) fn open_optimization_report(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        self.spawn_file_dialog(async {
+            let handle = rfd::AsyncFileDialog::new().add_filter("CSV", &["csv"]).pick_file().await?;
+            Some(FileDialogAction::WebOpenOptimizationReport(crate::model::input::read_browser_handle(handle).await))
+        });
+        #[cfg(not(target_arch = "wasm32"))]
+        self.spawn_file_dialog(async {
+            let handle = rfd::AsyncFileDialog::new().add_filter("CSV", &["csv"]).pick_file().await?;
+            Some(FileDialogAction::OpenOptimizationReport(handle.path().to_owned()))
+        });
+    }
+
+    /// Show the report in `bytes`, read from the file `name`, in the Results window.
+    pub(crate) fn show_optimization_report_file(&mut self, name: String, bytes: &[u8]) -> Result<()> {
+        let report = report::read_csv(bytes).map_err(|error| anyhow::anyhow!("{}", tr!("opt-results-open-failed", name = name.clone(), error = format!("{error:#}"))))?;
+        userspace_log!("{}", tr!("opt-results-opened", name = name.clone(), count = report.shells.len().to_string()));
+        self.editor.optimization.results_view = Some(ResultsView::new(ResultsSource::File { name, report: Arc::new(report) }));
+        Ok(())
+    }
+}
+
+/// A scenario name made safe as a folder or file name: characters no file
+/// system takes become `_`, and invisible direction marks (pasted names often
+/// carry them) are dropped.
+fn folder_name(name: &str) -> String {
+    let safe: String = name
+        .trim()
+        .chars()
+        .filter(|character| !matches!(character, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}'))
+        .map(|character| {
+            if matches!(character, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || character.is_control() {
+                '_'
+            } else {
+                character
+            }
+        })
+        .collect();
+    let safe = safe.trim_matches(|character: char| character == '.' || character.is_whitespace()).to_owned();
+    if safe.is_empty() { "scenario".to_owned() } else { safe }
 }
 
 /// A random, easily told apart colour for a shell: hues a golden angle apart

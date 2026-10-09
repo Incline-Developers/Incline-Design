@@ -49,6 +49,8 @@ pub(crate) fn finite_or_zero(value: f64) -> f64 {
 /// One element a method recovers.
 #[derive(Clone, Debug)]
 pub(crate) struct Element {
+    /// Index into [`Economics::elements`].
+    pub(crate) index: usize,
     pub(crate) values: Arc<Vec<f64>>,
     /// Subtracted from the grade before recovery: the method's threshold for
     /// the main quality field, 0 for the others.
@@ -66,6 +68,7 @@ pub(crate) struct Element {
 /// One processing method (one row of the methods grid).
 #[derive(Clone, Debug)]
 pub(crate) struct Method {
+    pub(crate) name: String,
     /// Whether it takes each rock type code; `None` takes every block.
     pub(crate) accepts: Option<Vec<bool>>,
     /// Main quality grade range, `min <= grade < max`.
@@ -73,6 +76,9 @@ pub(crate) struct Method {
     pub(crate) max: f64,
     /// Processing cost plus G&A, per tonne of feed.
     pub(crate) per_tonne: f64,
+    /// The two parts of `per_tonne`, for reports.
+    pub(crate) processing: f64,
+    pub(crate) ga: f64,
     pub(crate) ore_haulage_factor: f64,
     pub(crate) elements: Vec<Element>,
 }
@@ -115,7 +121,20 @@ pub(crate) struct Economics {
     pub(crate) waste_haulage: PerTonne,
     pub(crate) ore_haulage: PerTonne,
     pub(crate) methods: Vec<Method>,
+    /// Every element some method recovers, once each, in the order first met.
+    pub(crate) elements: Vec<ReportElement>,
     pub(crate) air: Air,
+}
+
+/// An element as reports show it: its grade in every block, and the units.
+#[derive(Clone, Debug)]
+pub(crate) struct ReportElement {
+    pub(crate) name: String,
+    pub(crate) values: Arc<Vec<f64>>,
+    /// Sales units per tonne of rock per grade unit (see [`metal_factor`]).
+    pub(crate) factor: f64,
+    pub(crate) grade_unit: String,
+    pub(crate) sales_unit: String,
 }
 
 impl Economics {
@@ -299,7 +318,7 @@ pub(crate) fn prepare(scenario: &OptimizationScenario, model: &BlockModelData, t
     let ore_haulage = check.per_tonne(&scenario.ore_haulage, || tr!("opt-ore-haulage"));
 
     // Revenues: the first row per element counts.
-    let mut revenues: BTreeMap<&str, (f64, f64)> = BTreeMap::new();
+    let mut revenues: BTreeMap<&str, (f64, f64, String, String)> = BTreeMap::new();
     for row in &scenario.revenues {
         if row.element.is_empty() {
             continue;
@@ -313,7 +332,15 @@ pub(crate) fn prepare(scenario: &OptimizationScenario, model: &BlockModelData, t
         if selling > price {
             check.issues.push(tr!("opt-run-selling-above-price", element = row.element.clone()));
         }
-        revenues.insert(row.element.as_str(), ((price - selling).max(0.0), metal_factor(row.grade_unit, row.sales_unit)));
+        revenues.insert(
+            row.element.as_str(),
+            (
+                (price - selling).max(0.0),
+                metal_factor(row.grade_unit, row.sales_unit),
+                row.grade_unit.label(),
+                row.sales_unit.label(),
+            ),
+        );
     }
 
     // Processing methods.
@@ -321,6 +348,7 @@ pub(crate) fn prepare(scenario: &OptimizationScenario, model: &BlockModelData, t
         check.issues.push(tr!("opt-run-no-methods"));
     }
     let mut methods = Vec::with_capacity(scenario.methods.len());
+    let mut report_elements: Vec<ReportElement> = Vec::new();
     for method in &scenario.methods {
         let name = method.name.clone();
         let min = check.value(&method.min_grade, || tr!("opt-run-what-method", method = name.clone(), what = tr!("opt-col-min-grade")));
@@ -355,11 +383,25 @@ pub(crate) fn prepare(scenario: &OptimizationScenario, model: &BlockModelData, t
             let Some(values) = check.numeric(&element.element, what) else {
                 continue;
             };
-            let (net_price, factor) = revenues.get(element.element.as_str()).copied().unwrap_or_else(|| {
+            let (net_price, factor, grade_unit, sales_unit) = revenues.get(element.element.as_str()).cloned().unwrap_or_else(|| {
                 check.warnings.push(tr!("opt-run-no-revenue", element = element.element.clone()));
-                (0.0, 1.0)
+                (0.0, 1.0, String::new(), String::new())
             });
+            let index = match report_elements.iter().position(|known| known.name == element.element) {
+                Some(index) => index,
+                None => {
+                    report_elements.push(ReportElement {
+                        name: element.element.clone(),
+                        values: Arc::clone(&values),
+                        factor,
+                        grade_unit,
+                        sales_unit,
+                    });
+                    report_elements.len() - 1
+                }
+            };
             elements.push(Element {
+                index,
                 values,
                 threshold: if element.element == scenario.quality_field { threshold } else { 0.0 },
                 recovery: recovery / 100.0,
@@ -369,10 +411,13 @@ pub(crate) fn prepare(scenario: &OptimizationScenario, model: &BlockModelData, t
             });
         }
         methods.push(Method {
+            name: name.trim().to_owned(),
             accepts,
             min,
             max,
             per_tonne: processing + ga,
+            processing,
+            ga,
             ore_haulage_factor: factor,
             elements,
         });
@@ -422,6 +467,7 @@ pub(crate) fn prepare(scenario: &OptimizationScenario, model: &BlockModelData, t
             waste_haulage,
             ore_haulage,
             methods,
+            elements: report_elements,
             air,
         },
         slope,

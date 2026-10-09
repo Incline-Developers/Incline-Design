@@ -3637,6 +3637,10 @@ pub(crate) enum UiCommand {
     ImportOptimizationScenarios,
     /// Choose the folder the reports are written to.
     ChooseOptimizationReportsFolder,
+    /// Save the report the Results window shows as a CSV file the user chooses.
+    ExportOptimizationReport,
+    /// Read an optimization report CSV into the Results window.
+    OpenOptimizationReport,
     /// Hide everything but the scenario's block model, show it in plan view
     /// and wait for a click that sets the directional shells' starting point.
     BeginShellStartPick,
@@ -3908,6 +3912,8 @@ impl UiCommand {
             | Self::EditOptimizationScenario(_)
             | Self::RenameOptimizationScenario { .. }
             | Self::ChooseOptimizationReportsFolder
+            | Self::ExportOptimizationReport
+            | Self::OpenOptimizationReport
             | Self::BeginShellStartPick
             | Self::RunOptimizationScenario(_)
             | Self::CancelOptimizationScenario(_)
@@ -4638,6 +4644,60 @@ pub(crate) struct OptimizationState {
     /// A pick was up on the last frame drawn, so an Escape still pending on the
     /// first frame without it belongs to the pick, not to the editor.
     pub(crate) pick_was_active: bool,
+    /// The Results window, when open.
+    pub(crate) results_view: Option<ResultsView>,
+}
+
+/// The Results window: a run's report, charted and tabled.
+#[derive(Clone, Debug)]
+pub(crate) struct ResultsView {
+    pub(crate) source: ResultsSource,
+    pub(crate) basis: crate::model::optimization_run::report::Basis,
+    /// One destination, or every one together (`None`).
+    pub(crate) destination: Option<usize>,
+    /// The shell picked in the chart, 0-based.
+    pub(crate) selected: Option<usize>,
+}
+
+impl ResultsView {
+    pub(crate) fn new(source: ResultsSource) -> Self {
+        Self {
+            source,
+            basis: Default::default(),
+            destination: None,
+            selected: None,
+        }
+    }
+}
+
+/// Where the Results window's report comes from.
+#[derive(Clone, Debug)]
+pub(crate) enum ResultsSource {
+    /// The last run of a scenario this session.
+    Run(u64),
+    /// A report CSV read from a file.
+    File {
+        name: String,
+        report: std::sync::Arc<crate::model::optimization_run::report::OptimizationReport>,
+    },
+}
+
+impl OptimizationState {
+    /// The report the Results window shows, and its title.
+    pub(crate) fn results_report(&self) -> Option<(String, std::sync::Arc<crate::model::optimization_run::report::OptimizationReport>)> {
+        match &self.results_view.as_ref()?.source {
+            ResultsSource::Run(id) => {
+                let report = std::sync::Arc::clone(&self.results.get(id)?.report);
+                let name = self
+                    .scenarios
+                    .iter()
+                    .find(|scenario| scenario.id == *id)
+                    .map_or_else(|| report.scenario.clone(), |scenario| scenario.name.clone());
+                Some((name, report))
+            }
+            ResultsSource::File { name, report } => Some((name.clone(), std::sync::Arc::clone(report))),
+        }
+    }
 }
 
 /// A directional-shell starting point being picked from the viewport.

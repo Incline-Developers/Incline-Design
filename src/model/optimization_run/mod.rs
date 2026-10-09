@@ -11,6 +11,7 @@
 pub(crate) mod grid;
 pub(crate) mod mesh;
 pub(crate) mod prepare;
+pub(crate) mod report;
 pub(crate) mod shells;
 pub(crate) mod values;
 
@@ -23,6 +24,7 @@ use self::{
     grid::{BlockLayout, Grid},
     mesh::ShellMesh,
     prepare::{Air, Prepared},
+    report::OptimizationReport,
     shells::Shells,
 };
 use crate::{
@@ -59,6 +61,7 @@ pub(crate) struct RunOutcome {
     pub(crate) meshes: Vec<ShellTriangulation>,
     /// The shell field to write into the block model (see [`block_field`]).
     pub(crate) field: Option<ShellField>,
+    pub(crate) report: OptimizationReport,
     pub(crate) blocks_with_default_density: usize,
     pub(crate) blocks_with_default_angle: usize,
 }
@@ -73,10 +76,13 @@ pub(crate) struct ShellField {
 
 /// What a finished run keeps for later: the grid and every cell's shell.
 #[derive(Debug)]
-#[allow(dead_code, reason = "read back by stage 3: reports")]
 pub(crate) struct RunResult {
+    #[allow(dead_code, reason = "kept for later reports (bench by bench, scheduling)")]
     pub(crate) grid: Grid,
+    #[allow(dead_code, reason = "kept for later reports (bench by bench, scheduling)")]
     pub(crate) shells: Shells,
+    /// Per shell and destination, at the base price; the Results view reads it.
+    pub(crate) report: std::sync::Arc<OptimizationReport>,
 }
 
 /// The name of a shell's triangulation: `<scenario> <layer>_RAF 0.85`, with
@@ -121,6 +127,7 @@ pub(crate) fn run(input: RunInput, cancel: &CancelFlag, progress: &Progress) -> 
 
     let shells = shells::solve(&prepared.plan, &grid, &values, &slopes, cancel, &progress.phase(0.2, 0.85))?;
     let field = field_value.map(|kind| block_field(&shells, &values.air, &block_of_cell, layout.blocks.len(), kind));
+    let report = report::build(&scenario_name, &prepared.economics, &grid, &block_of_cell, &values, &shells, cancel)?;
     drop(block_of_cell);
 
     // One mesh per shell and kind, built side by side.
@@ -163,6 +170,7 @@ pub(crate) fn run(input: RunInput, cancel: &CancelFlag, progress: &Progress) -> 
         shells,
         meshes,
         field,
+        report,
     })
 }
 

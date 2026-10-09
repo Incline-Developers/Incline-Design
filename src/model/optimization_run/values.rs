@@ -152,6 +152,102 @@ pub(crate) fn compute(economics: &Economics, grid: &Grid, block_of_cell: &[u32],
     Ok(values)
 }
 
+/// What mining a block costs, whichever way it goes.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct BlockBase {
+    pub(crate) tonnes: f64,
+    pub(crate) mining: f64,
+    /// Waste haulage and rehabilitation: paid only when the block goes to waste.
+    pub(crate) waste_haulage: f64,
+    pub(crate) rehab: f64,
+    /// The default density stood in for a blank, zero or negative one.
+    pub(crate) default_density: bool,
+}
+
+impl BlockBase {
+    /// The waste route's value.
+    pub(crate) fn waste_value(&self) -> f64 {
+        -self.mining - (self.waste_haulage + self.rehab)
+    }
+}
+
+/// What processing a block one way costs and earns at revenue factor 1.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct RouteCosts {
+    pub(crate) ore_haulage: f64,
+    pub(crate) processing: f64,
+    pub(crate) ga: f64,
+    pub(crate) revenue: f64,
+    /// Every cost of mining and processing the block this way.
+    pub(crate) cost: f64,
+}
+
+/// One element's share of a route.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ElementTake {
+    /// Sales units recovered.
+    pub(crate) recovered: f64,
+    /// At revenue factor 1, net of selling costs.
+    pub(crate) revenue: f64,
+    pub(crate) cost: f64,
+}
+
+/// The tonnes and the mining, waste haulage and rehabilitation costs of a
+/// (non-air) block. The one place block costs are worked out: the solver's
+/// values and the reports both come from here and [`route_costs`].
+pub(crate) fn block_base(economics: &Economics, volume: f64, block: usize) -> BlockBase {
+    let (density, default_density) = match &economics.density {
+        None => (economics.default_density, false),
+        Some(values) if values[block].is_finite() && values[block] > 0.0 => (values[block], false),
+        Some(_) => (economics.default_density, true),
+    };
+    let tonnes = volume * density;
+    BlockBase {
+        tonnes,
+        mining: tonnes * economics.mining_cost(block),
+        waste_haulage: tonnes * economics.waste_haulage.at(block),
+        rehab: tonnes * economics.rehab.at(block),
+        default_density,
+    }
+}
+
+/// What processing method `method` makes of a block, or `None` when the
+/// method does not take it. `take` hears each of the method's elements (its
+/// index in [`Economics::elements`]) and its share.
+pub(crate) fn route_costs(economics: &Economics, method: usize, block: usize, base: &BlockBase, mut take: impl FnMut(usize, ElementTake)) -> Option<RouteCosts> {
+    let rock = economics.rock.as_ref().map(|codes| codes[block]);
+    let method = &economics.methods[method];
+    if !method.takes(rock, economics.quality[block]) {
+        return None;
+    }
+    let tonnes = base.tonnes;
+    let mut revenue = 0.0;
+    let mut element_cost = 0.0;
+    for element in &method.elements {
+        let grade = finite_or_zero(element.values[block]);
+        let contained = tonnes * grade * element.factor;
+        let recoverable = tonnes * (grade - element.threshold).max(0.0) * element.factor;
+        let recovered = recoverable * element.recovery;
+        let share = ElementTake {
+            recovered,
+            revenue: recovered * element.net_price,
+            cost: contained * element.cost,
+        };
+        revenue += share.revenue;
+        element_cost += share.cost;
+        take(element.index, share);
+    }
+    let ore_haulage = tonnes * economics.ore_haulage.at(block) * method.ore_haulage_factor;
+    let processing_and_ga = tonnes * (method.per_tonne + economics.ore_haulage.at(block) * method.ore_haulage_factor);
+    Some(RouteCosts {
+        ore_haulage,
+        processing: tonnes * method.processing,
+        ga: tonnes * method.ga,
+        revenue,
+        cost: base.mining + processing_and_ga + element_cost,
+    })
+}
+
 /// Value one block; pushes its processing routes. Returns (waste value, tonnes, is air).
 fn value_block(economics: &Economics, grid: &Grid, heights: Option<&[f64]>, volume: f64, cell: usize, block: usize, chunk: &mut Chunk) -> (f64, f64, bool) {
     let rock = economics.rock.as_ref().map(|codes| codes[block]);
@@ -166,38 +262,18 @@ fn value_block(economics: &Economics, grid: &Grid, heights: Option<&[f64]>, volu
     if is_air {
         return (0.0, 0.0, true);
     }
-    let density = match &economics.density {
-        None => economics.default_density,
-        Some(values) if values[block].is_finite() && values[block] > 0.0 => values[block],
-        Some(_) => {
-            chunk.default_density += 1;
-            economics.default_density
-        }
-    };
-    let tonnes = volume * density;
-    let mining = tonnes * economics.mining_cost(block);
-    let waste = -mining - tonnes * (economics.waste_haulage.at(block) + economics.rehab.at(block));
-
-    let grade = economics.quality[block];
-    for (index, method) in economics.methods.iter().enumerate() {
-        if !method.takes(rock, grade) {
-            continue;
-        }
-        let mut revenue = 0.0;
-        let mut element_costs = 0.0;
-        for element in &method.elements {
-            let grade = finite_or_zero(element.values[block]);
-            let contained = tonnes * grade * element.factor;
-            let recoverable = tonnes * (grade - element.threshold).max(0.0) * element.factor;
-            revenue += recoverable * element.recovery * element.net_price;
-            element_costs += contained * element.cost;
-        }
-        let processing = tonnes * (method.per_tonne + economics.ore_haulage.at(block) * method.ore_haulage_factor);
-        chunk.routes.push(Route {
-            method: index as u16,
-            revenue,
-            cost: mining + processing + element_costs,
-        });
+    let base = block_base(economics, volume, block);
+    if base.default_density {
+        chunk.default_density += 1;
     }
-    (waste, tonnes, false)
+    for method in 0..economics.methods.len() {
+        if let Some(costs) = route_costs(economics, method, block, &base, |_, _| {}) {
+            chunk.routes.push(Route {
+                method: method as u16,
+                revenue: costs.revenue,
+                cost: costs.cost,
+            });
+        }
+    }
+    (base.waste_value(), base.tonnes, false)
 }
