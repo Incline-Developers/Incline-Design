@@ -7,21 +7,6 @@ use crate::{
     userspace_log,
 };
 
-fn unique_layer_name(document: &Document, preferred: &str) -> String {
-    if document.layer_id_by_name(preferred).is_none() {
-        return preferred.to_string();
-    }
-
-    for index in 2.. {
-        let candidate = format!("{preferred} {index}");
-        if document.layer_id_by_name(&candidate).is_none() {
-            return candidate;
-        }
-    }
-
-    unreachable!("unbounded iterator should always find a unique layer name")
-}
-
 fn objects_on_layer(document: &Document, layer_id: LayerId) -> Vec<Object> {
     document.objects().iter().filter(|object| object.layer() == layer_id).cloned().collect()
 }
@@ -110,7 +95,10 @@ impl<'a> App<'a> {
             return;
         };
         let source_objects = objects_on_layer(&project.project.document, layer_id);
-        let duplicate_name = unique_layer_name(&project.project.document, &tr!("cmd-layer-name-copy", name = source_layer.name.to_string()));
+        let duplicate_name = crate::model::project::unique_item_name(
+            tr!("cmd-layer-name-copy", name = source_layer.name.to_string()),
+            project.project.document.layers().iter().map(|layer| layer.name.as_str()),
+        );
 
         let doc = &mut project.project.document;
         let new_layer_id = doc.allocate_layer_id();
