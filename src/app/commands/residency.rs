@@ -31,6 +31,18 @@ impl<'a> App<'a> {
         }
     }
 
+    /// Every project item the app holds, in the order the explorer lists the
+    /// collections. Paired with [`Self::project_item_state`] to ask which
+    /// items sit in a folder or a section.
+    pub(crate) fn project_item_refs(&self) -> impl Iterator<Item = ItemRef> + '_ {
+        let triangulations = self.triangulations.iter().map(|item| ItemRef::Triangulation(item.id));
+        let rasters = self.raster_textures.iter().map(|item| ItemRef::Raster(item.id));
+        let point_clouds = self.point_clouds.iter().map(|item| ItemRef::PointCloud(item.id));
+        let block_models = self.block_models.iter().map(|item| ItemRef::BlockModel(item.id));
+        let drill_holes = self.drill_holes.iter().map(|item| ItemRef::DrillHole(item.id));
+        triangulations.chain(rasters).chain(point_clouds).chain(block_models).chain(drill_holes)
+    }
+
     fn clone_project_item(&self, item: ItemRef) -> Option<OpenItem> {
         match item {
             ItemRef::Triangulation(id) => self

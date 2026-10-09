@@ -1706,13 +1706,7 @@ impl EditTarget<'_> {
     }
 
     fn item_epoch(&self, item: ItemRef) -> Option<u64> {
-        match item {
-            ItemRef::Triangulation(id) => self.triangulations.iter().find(|entry| entry.id == id).map(|entry| entry.state.epoch()),
-            ItemRef::BlockModel(id) => self.block_models.iter().find(|entry| entry.id == id).map(|entry| entry.state.epoch()),
-            ItemRef::DrillHole(id) => self.drill_holes.iter().find(|entry| entry.id == id).map(|entry| entry.state.epoch()),
-            ItemRef::PointCloud(id) => self.point_clouds.iter().find(|entry| entry.id == id).map(|entry| entry.state.epoch()),
-            ItemRef::Raster(id) => self.rasters.iter().find(|entry| entry.id == id).map(|entry| entry.state.epoch()),
-        }
+        self.item_state(item).map(project::ProjectItemState::epoch)
     }
 
     /// Mark one item and the project's content as changed, and report the

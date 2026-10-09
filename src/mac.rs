@@ -61,6 +61,7 @@ struct MenuState {
     has_design_selection: bool,
     has_polyline_selection: bool,
     has_selection_intersections: bool,
+    can_clean_strings: bool,
     /// Whether the active project is a file that can be shown in Finder.
     has_project_file: bool,
     /// The workspace decides which discipline menus are visible and active.
@@ -89,6 +90,7 @@ pub(crate) enum MacMenuAction {
     RequestExit,
     InsertPointsAtIntersections,
     OpenInsertPointAtElevation,
+    CleanStrings,
     OpenMoveToX,
     OpenMoveToY,
     OpenMoveToZ,
@@ -171,6 +173,7 @@ impl MacMenuAction {
         Self::RequestExit,
         Self::InsertPointsAtIntersections,
         Self::OpenInsertPointAtElevation,
+        Self::CleanStrings,
         Self::OpenMoveToX,
         Self::OpenMoveToY,
         Self::OpenMoveToZ,
@@ -398,6 +401,7 @@ pub(crate) fn install_menu_bar() {
         mtm,
     );
     add_submenu(&design_menu, &tr!("ws-menubar-design-insert-point"), &insert_point_menu, mtm);
+    add_action(&design_menu, &tr!("cmd-string-clean-clean-strings"), "", MacMenuAction::CleanStrings, &target, mtm);
     add_separator(&design_menu, mtm);
     let move_to_menu = menu(&tr!("ws-menubar-design-move-to"), mtm);
     move_to_menu.setAutoenablesItems(false);
@@ -710,6 +714,7 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         has_design_selection: editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_))),
         has_polyline_selection: editor.selection_has_polylines,
         has_selection_intersections: editor.selection_has_intersections,
+        can_clean_strings: editor.selection_counts.open_strings > 0,
         has_project_file: project.active_path.is_some(),
         active_workspace: editor.active_workspace,
         view_toggles: VIEW_TOGGLES.map(|toggle| toggle.get(editor)),
@@ -762,6 +767,7 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     // Inserting at intersections additionally needs two polylines that cross.
     set_enabled(&root, MacMenuAction::OpenInsertPointAtElevation, state.has_polyline_selection);
     set_enabled(&root, MacMenuAction::InsertPointsAtIntersections, state.has_selection_intersections);
+    set_enabled(&root, MacMenuAction::CleanStrings, state.can_clean_strings);
     for (index, checked) in state.view_toggles.iter().enumerate() {
         set_checked(&root, MacMenuAction::ToggleView(index), *checked);
     }

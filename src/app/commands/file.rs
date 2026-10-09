@@ -1610,7 +1610,7 @@ impl<'a> App<'a> {
                 .into_iter()
                 .map(FileHandleExt::into_path)
                 .collect();
-            paths.sort_by(|a, b| formats::csv_geophysics::natural_cmp(&file_name(a), &file_name(b)));
+            paths.sort_by(|a, b| crate::natural_sort::natural_cmp(&file_name(a), &file_name(b)));
             Some(FileDialogAction::LinkGeophysics { dataset: id, paths })
         });
         #[cfg(target_arch = "wasm32")]
@@ -1622,7 +1622,7 @@ impl<'a> App<'a> {
                 .into_iter()
                 .map(|handle| handle.inner().clone())
                 .collect();
-            files.sort_by(|a, b| formats::csv_geophysics::natural_cmp(&a.name(), &b.name()));
+            files.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name(), &b.name()));
             Some(FileDialogAction::WebLinkGeophysics { dataset: id, files })
         });
     }

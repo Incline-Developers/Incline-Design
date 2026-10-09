@@ -10,7 +10,7 @@ use anyhow::Result;
 use crate::{
     app::App,
     i18n::tr,
-    model::{Command, Folder, FolderId, FolderMember, ItemRef, MemberTarget, Placement, SectionKind},
+    model::{Command, Folder, FolderId, FolderMember, MemberTarget, Placement, SectionKind},
     ui::state::ExplorerSection,
     userspace_log, userspace_warn,
 };
@@ -54,7 +54,10 @@ impl<'a> App<'a> {
         // Deleting a folder returns its members to the section root, never
         // deletes them - ids are unique registry-wide across both halves.
         let layers = project.project.document.layers_in_folder(folder);
-        let items = self.project_items_in_folder(folder);
+        let items = self
+            .project_item_refs()
+            .filter(|item| self.project_item_state(*item).is_some_and(|state| state.folder == Some(folder)))
+            .collect();
         let name = folder_data.name.clone();
         self.execute_edit(Command::DeleteFolder {
             section,
@@ -65,19 +68,6 @@ impl<'a> App<'a> {
         });
         userspace_log!("{}", tr!("cmd-folder-deleted-collection-name", name = name.to_string()));
         Ok(())
-    }
-
-    /// Project items currently sitting in `folder`, whichever section shows
-    /// them. Layers are the caller's other half, read straight off the
-    /// document.
-    fn project_items_in_folder(&self, folder: FolderId) -> Vec<ItemRef> {
-        let in_folder = |state: &crate::model::project::ProjectItemState| state.folder == Some(folder);
-        let triangulations = self.triangulations.iter().filter(|item| in_folder(&item.state)).map(|item| ItemRef::Triangulation(item.id));
-        let rasters = self.raster_textures.iter().filter(|item| in_folder(&item.state)).map(|item| ItemRef::Raster(item.id));
-        let point_clouds = self.point_clouds.iter().filter(|item| in_folder(&item.state)).map(|item| ItemRef::PointCloud(item.id));
-        let block_models = self.block_models.iter().filter(|item| in_folder(&item.state)).map(|item| ItemRef::BlockModel(item.id));
-        let drill_holes = self.drill_holes.iter().filter(|item| in_folder(&item.state)).map(|item| ItemRef::DrillHole(item.id));
-        triangulations.chain(rasters).chain(point_clouds).chain(block_models).chain(drill_holes).collect()
     }
 
     /// Rename an explorer folder through the undo history. Blank names and a

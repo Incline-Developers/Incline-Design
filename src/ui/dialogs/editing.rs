@@ -201,10 +201,7 @@ pub(crate) fn draw_right_click_context(
             context_menu_separator(ui);
         }
 
-        let open_string_selected = editor.selected_handles.iter().any(|handle| match handle {
-            crate::model::SceneEntityId::Object(id) => matches!(document.get_object(*id), Some(crate::model::Object::Polyline { closed: false, .. })),
-            _ => false,
-        });
+        let open_string_selected = editor.selection_counts.open_strings > 0;
         let join_offered = (0..editor.string_rings.len()).any(|index| editor.string_ring_joinable(index));
         if open_string_selected && ContextMenuAction::new(tr!("cmd-string-clean-clean-strings")).show(ui).clicked() {
             commands.push(UiCommand::CleanStrings);

@@ -119,14 +119,14 @@ struct DatasetIntercepts {
 
 impl<'a> App<'a> {
     pub(crate) fn remember_reference_source(&mut self, runtime_id: u32, layer: LayerId, source: ReferenceSource) {
-        self.reference_sources.insert((runtime_id, layer), source);
+        self.session.reference_sources.insert((runtime_id, layer), source);
     }
 
     /// The seam a surface's points were picked on, when they all sit on one
     /// reference points layer made this session.
     pub(crate) fn reference_source_of(&self, runtime_id: u32, layers: &[LayerId]) -> Option<ReferenceSource> {
         match layers {
-            [layer] => self.reference_sources.get(&(runtime_id, *layer)).cloned(),
+            [layer] => self.session.reference_sources.get(&(runtime_id, *layer)).cloned(),
             _ => None,
         }
     }
@@ -135,7 +135,7 @@ impl<'a> App<'a> {
     /// made the active one, to prefill its thickness points dialog.
     pub(crate) fn keep_surface_source(&mut self, source: Option<ReferenceSource>) {
         if let (Some(id), Some(source)) = (self.active_triangulation, source) {
-            self.surface_seams.insert(id, source);
+            self.session.surface_seams.insert(id, source);
         }
     }
 
@@ -149,7 +149,7 @@ impl<'a> App<'a> {
         let mut holes = Vec::new();
         self.for_each_reference_hole(|hole| holes.push(hole));
         holes.sort_unstable_by_key(|hole| (hole.dataset.0, hole.hole));
-        let seam = seam_prefill(self.surface_seams.get(&surface), self.editor.last_seam.as_ref());
+        let seam = seam_prefill(self.session.surface_seams.get(&surface), self.editor.last_seam.as_ref());
         self.editor.thickness_points_dialog = Some(ThicknessPointsDraft {
             surface,
             surface_label: self.triangulation_name(surface),
@@ -444,7 +444,7 @@ impl<'a> App<'a> {
                 Err(line) => userspace_warn!("{}", line),
             }
         }
-        self.thickness_runs.insert(against.0, run_record(against.1, name.clone(), &chosen, &run.points));
+        self.session.thickness_runs.insert(against.0, run_record(against.1, name.clone(), &chosen, &run.points));
         // The surface stays the selection, so Thickness Surfaces is ready.
         self.select_only([SceneEntityId::Triangulation(against.0)]);
         let Some(layer) = made_layer else {
@@ -456,7 +456,7 @@ impl<'a> App<'a> {
             surface,
             points: run.points,
         });
-        self.editor.thickness_tables.insert((runtime_id, layer), table);
+        self.session.thickness_tables.insert((runtime_id, layer), table);
         true
     }
 
@@ -507,7 +507,7 @@ impl<'a> App<'a> {
     /// thickness run to grid, or the reason there is none.
     fn seam_surface_input(&self, surface: TriangulationId) -> std::result::Result<SeamInput, String> {
         let read = self.surface_read(surface).ok_or_else(|| tr!("cmd-thickness-points-surface-gone"))?;
-        let run = seam::current_run(read.revision, self.thickness_runs.get(&surface)).map_err(|problem| match problem {
+        let run = seam::current_run(read.revision, self.session.thickness_runs.get(&surface)).map_err(|problem| match problem {
             RunProblem::Missing => tr!("cmd-seam-surface-no-run", name = read.name.clone()),
             RunProblem::Stale => tr!("cmd-seam-surface-stale-run", name = read.name.clone()),
         })?;
@@ -600,7 +600,7 @@ impl<'a> App<'a> {
                         surface: surface_name,
                         nodes: grid.nodes,
                     });
-                    app.editor.seam_tables.insert(id, table);
+                    app.session.seam_tables.insert(id, table);
                 }
             }
             Err(error) => crate::userspace_error!("{}", tr!("cmd-seam-surface-failed", error = format!("{error:#}"))),

@@ -692,6 +692,14 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                     ui.close();
                 }
             });
+            if ContextMenuAction::new(tr!("cmd-string-clean-clean-strings"))
+                .enabled(editor.selection_counts.open_strings > 0)
+                .show(ui)
+                .clicked()
+            {
+                commands.push(UiCommand::CleanStrings);
+                ui.close();
+            }
             context_menu_separator(ui);
             context_submenu(ui, &tr!("ws-menubar-design-move-to"), has_selection, |ui| {
                 for axis in [Axis::X, Axis::Y, Axis::Z] {

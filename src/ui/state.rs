@@ -597,6 +597,9 @@ pub(crate) struct SelectionCounts {
     pub(crate) reference_holes: usize,
     /// Selected block models that are loaded, and so have blocks to work on.
     pub(crate) block_models: usize,
+    /// Selected design polylines that are not closed, which Clean Strings
+    /// works on.
+    pub(crate) open_strings: usize,
 }
 
 /// A triangulation selector temporarily being filled from a viewport click.
@@ -2070,16 +2073,10 @@ pub(crate) struct EditorState {
     pub(crate) last_seam: Option<SeamChoice>,
     /// The thickness table shown, until closed.
     pub(crate) thickness_table: Option<std::sync::Arc<ThicknessTable>>,
-    /// Every thickness points layer's table made this session, by project
-    /// runtime id and layer, to show again from the explorer.
-    pub(crate) thickness_tables: std::collections::HashMap<(u32, crate::model::LayerId), std::sync::Arc<ThicknessTable>>,
     /// The thickness surfaces dialog's surface while it is open.
     pub(crate) seam_surface_dialog: Option<SeamSurfaceDraft>,
     /// The thickness grid table shown, until closed.
     pub(crate) seam_table: Option<std::sync::Arc<SeamTable>>,
-    /// Every surface made by Thickness Surfaces this session, with its
-    /// grid's table, to show again from the explorer.
-    pub(crate) seam_tables: std::collections::HashMap<TriangulationId, std::sync::Arc<SeamTable>>,
     /// The rename seam dialog's seam and entries while it is open.
     pub(crate) seam_rename_dialog: Option<SeamRenameDraft>,
     /// The shift names dialog's hole, direction and reason while it is open.
@@ -3266,10 +3263,8 @@ impl EditorState {
             thickness_points_dialog: None,
             last_seam: None,
             thickness_table: None,
-            thickness_tables: std::collections::HashMap::new(),
             seam_surface_dialog: None,
             seam_table: None,
-            seam_tables: std::collections::HashMap::new(),
             seam_rename_dialog: None,
             name_shift_dialog: None,
             block_model_create_open: false,
@@ -4099,6 +4094,7 @@ pub(crate) enum UiCommand {
         points: Vec<ObjectId>,
         controls: Vec<ObjectId>,
         extent: Option<ObjectId>,
+        name: String,
     },
     OpenThicknessPoints,
     /// Ask for a measured pairs file for the open thickness points dialog.
@@ -4774,7 +4770,7 @@ impl UiCommand {
                     (crate::model::drill_hole::ShiftDirection::Down, Some(_)) => tr!("state-shift-names-down-from-here", field = field.clone()),
                 },
             ),
-            Self::BuildReferenceSurface { points, controls, extent } => report(
+            Self::BuildReferenceSurface { points, controls, extent, .. } => report(
                 tr!("common-build-surface"),
                 match extent {
                     Some(_) => tr!("state-points-controls-clipped", count = points.len().to_string(), controls = controls.len().to_string()),
@@ -5118,6 +5114,11 @@ pub(crate) struct UiProjectView {
     pub(crate) active_triangulation_for_menu: Option<TriangulationMenuStyle>,
     /// Every explorer folder, across every section.
     pub(crate) folders: FolderRegistry,
+    /// Thickness points layers (project runtime id and layer) whose table is
+    /// still held, so the explorer can offer to show it.
+    pub(crate) thickness_table_layers: std::collections::HashSet<(u32, crate::model::LayerId)>,
+    /// Surfaces made by Thickness Surfaces whose grid's table is still held.
+    pub(crate) seam_table_surfaces: std::collections::HashSet<TriangulationId>,
 }
 
 /// How many remembered projects a Recent list offers before the file chooser
@@ -5439,6 +5440,8 @@ pub(crate) enum DataMenu {
 /// is what the build runs on. `None` extent means the whole triangulation.
 #[derive(Clone, Debug)]
 pub(crate) struct ReferenceSurfaceDraft {
+    /// The output name, offered from the points' seam or layer at open time.
+    pub(crate) name: String,
     pub(crate) points: Vec<ObjectId>,
     pub(crate) controls: Vec<ObjectId>,
     pub(crate) extent: Option<ObjectId>,

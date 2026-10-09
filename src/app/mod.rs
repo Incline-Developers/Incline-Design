@@ -354,15 +354,8 @@ pub(crate) struct App<'a> {
     triangulations: Vec<OpenTriangulation>,
     active_triangulation: Option<TriangulationId>,
     next_triangulation_id: u64,
-    /// What each reference points layer was made from, by project and
-    /// layer. Held for the session only.
-    reference_sources: std::collections::HashMap<(u32, LayerId), commands::thickness_points::ReferenceSource>,
-    /// The seam each surface Build Surface made this session was picked on,
-    /// to prefill its thickness points dialog.
-    surface_seams: std::collections::HashMap<TriangulationId, commands::thickness_points::ReferenceSource>,
-    /// The latest thickness points measured against each surface, held for
-    /// its thickness grid.
-    thickness_runs: std::collections::HashMap<TriangulationId, commands::triangulation::reference_surface::seam::ThicknessRunRecord>,
+    /// Thickness work's results, held for the session only.
+    session: commands::session_results::SessionResults,
     block_models: Vec<OpenBlockModel>,
     next_block_model_id: u64,
     drill_holes: Vec<OpenDrillHoleDataset>,
@@ -514,9 +507,7 @@ impl<'a> Default for App<'a> {
             triangulations: Vec::new(),
             active_triangulation: None,
             next_triangulation_id: 0,
-            reference_sources: std::collections::HashMap::new(),
-            surface_seams: std::collections::HashMap::new(),
-            thickness_runs: std::collections::HashMap::new(),
+            session: commands::session_results::SessionResults::default(),
             block_models: Vec::new(),
             next_block_model_id: 0,
             drill_holes: Vec::new(),
@@ -607,6 +598,7 @@ impl<'a> App<'a> {
             }
             MacMenuAction::RequestExit => Some(UiCommand::RequestExit),
             MacMenuAction::InsertPointsAtIntersections => Some(UiCommand::InsertPointsAtIntersections),
+            MacMenuAction::CleanStrings => Some(UiCommand::CleanStrings),
             MacMenuAction::OpenInsertPointAtElevation => Some(UiCommand::OpenInsertPointAtElevationDialog),
             MacMenuAction::OpenMoveToX => Some(UiCommand::OpenMoveToAxisDialog(crate::model::Axis::X)),
             MacMenuAction::OpenMoveToY => Some(UiCommand::OpenMoveToAxisDialog(crate::model::Axis::Y)),
@@ -1091,6 +1083,15 @@ impl<'a> App<'a> {
         }
         let drill_holes = &self.drill_holes;
         self.editor.retain_drill_hole_datasets(|dataset| drill_holes.iter().any(|item| item.id == dataset));
+        let (projects, triangulations) = (&self.workspace.projects, &self.triangulations);
+        self.session.retain_live(
+            |runtime_id, layer| {
+                projects
+                    .iter()
+                    .any(|project| project.runtime_id == runtime_id && project.project.document.layer(layer).is_some())
+            },
+            |surface| triangulations.iter().any(|item| item.id == surface),
+        );
         if self
             .editor
             .initiation_dialog
@@ -1274,11 +1275,7 @@ impl<'a> App<'a> {
         self.next_triangulation_id = 0;
         self.active_triangulation = None;
         // Keyed by ids that restart here, so they cannot outlive the project.
-        self.reference_sources.clear();
-        self.surface_seams.clear();
-        self.thickness_runs.clear();
-        self.editor.thickness_tables.clear();
-        self.editor.seam_tables.clear();
+        self.session.clear();
         self.block_models.clear();
         self.next_block_model_id = 0;
         self.drill_holes.clear();
@@ -1680,6 +1677,7 @@ impl<'a> App<'a> {
         let mut hasher = DefaultHasher::new();
         self.workspace.active_index.hash(&mut hasher);
         self.startup_dialog_dismissed.hash(&mut hasher);
+        self.session.tables_fingerprint().hash(&mut hasher);
         #[cfg(not(target_arch = "wasm32"))]
         self.tracked_project_paths.hash(&mut hasher);
         #[cfg(target_arch = "wasm32")]
@@ -2019,6 +2017,8 @@ impl<'a> App<'a> {
             active_path,
             modelling,
             active_triangulation_for_menu,
+            thickness_table_layers: self.session.thickness_tables.keys().copied().collect(),
+            seam_table_surfaces: self.session.seam_tables.keys().copied().collect(),
             folders: self.workspace.active_project().map(|project| project.project.folders.clone()).unwrap_or_default(),
         });
         *self.ui_project_view_cache.borrow_mut() = Some((key, Arc::clone(&view)));

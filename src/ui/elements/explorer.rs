@@ -268,7 +268,7 @@ struct LayerRowContext<'a> {
     /// layer's kind, not only the one it is drawn under.
     folders: &'a crate::model::FolderRegistry,
     /// Thickness points layers whose table is still in memory.
-    thickness_tables: &'a std::collections::HashMap<(u32, crate::model::LayerId), std::sync::Arc<crate::ui::state::ThicknessTable>>,
+    thickness_tables: &'a std::collections::HashSet<(u32, crate::model::LayerId)>,
 }
 
 /// One layer row: eye, padlock, drag payload and right-click menu. The same
@@ -340,7 +340,7 @@ fn layer_row(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, layer: &UiLayerEn
                 ui.close();
             }
             let runtime_id = cx.entry.runtime_id;
-            if cx.thickness_tables.contains_key(&(runtime_id, layer_id)) && ContextMenuAction::new(tr!("explorer-show-thickness-table")).show(ui).clicked() {
+            if cx.thickness_tables.contains(&(runtime_id, layer_id)) && ContextMenuAction::new(tr!("explorer-show-thickness-table")).show(ui).clicked() {
                 commands.push(UiCommand::ShowThicknessTable { runtime_id, layer: layer_id });
                 ui.close();
             }
@@ -578,10 +578,9 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                         locked_layers,
                         locked_rasters,
                         frozen_handles,
-                        thickness_tables,
-                        seam_tables,
                         ..
                     } = &*editor;
+                    let (thickness_tables, seam_tables) = (&project.thickness_table_layers, &project.seam_table_surfaces);
 
                     // Keep the scroll area's contents as wide as the side panel even
                     // when every section is collapsed. `ScrollArea` otherwise shrinks
@@ -731,7 +730,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                         commands.push(UiCommand::CloseTriangulation(tri_id));
                                         ui.close();
                                     }
-                                    if seam_tables.contains_key(&tri_id) && ContextMenuAction::new(tr!("explorer-show-thickness-table")).show(ui).clicked() {
+                                    if seam_tables.contains(&tri_id) && ContextMenuAction::new(tr!("explorer-show-thickness-table")).show(ui).clicked() {
                                         commands.push(UiCommand::ShowSeamTable(tri_id));
                                         ui.close();
                                     }

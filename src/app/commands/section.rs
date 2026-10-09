@@ -61,13 +61,9 @@ impl<'a> App<'a> {
     /// Empty for the layer sections, since a layer is never an `ItemRef`.
     fn section_items(&self, section: ExplorerSection) -> Vec<ItemRef> {
         let tag = section.kind();
-        let tagged = |state: &crate::model::project::ProjectItemState| state.section == tag;
-        let triangulations = self.triangulations.iter().filter(|item| tagged(&item.state)).map(|item| ItemRef::Triangulation(item.id));
-        let rasters = self.raster_textures.iter().filter(|item| tagged(&item.state)).map(|item| ItemRef::Raster(item.id));
-        let point_clouds = self.point_clouds.iter().filter(|item| tagged(&item.state)).map(|item| ItemRef::PointCloud(item.id));
-        let block_models = self.block_models.iter().filter(|item| tagged(&item.state)).map(|item| ItemRef::BlockModel(item.id));
-        let drill_holes = self.drill_holes.iter().filter(|item| tagged(&item.state)).map(|item| ItemRef::DrillHole(item.id));
-        triangulations.chain(rasters).chain(point_clouds).chain(block_models).chain(drill_holes).collect()
+        self.project_item_refs()
+            .filter(|item| self.project_item_state(*item).is_some_and(|state| state.section == tag))
+            .collect()
     }
 
     /// Load or unload every item in one explorer section, as a single

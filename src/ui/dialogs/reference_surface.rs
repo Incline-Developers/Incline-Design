@@ -5,7 +5,7 @@ use crate::{
     i18n::tr,
     ui::{
         state::{EditorState, UiCommand, UiProjectView},
-        widgets::menu::{self, DragableMenu, MenuButton, selected_source_field},
+        widgets::menu::{self, DragableMenu, MenuButton, MenuFieldText, selected_source_field},
     },
 };
 
@@ -47,9 +47,15 @@ pub(crate) fn draw_reference_surface_dialog(ui: &mut egui::Ui, editor: &mut Edit
             // what the project holds.
             ui.small(project.modelling.summary());
             ui.small(tr!("reference-surface-change-these-in-preferences"));
+            MenuFieldText::new(tr!("tri-create-output-name"), &mut draft.name)
+                .help_text(tr!("tri-create-output-name-help"))
+                .width(width)
+                .hint_text(tr!("tri-create-output-name-hint"))
+                .show(ui);
             menu::menu_actions(ui, |ui| {
-                let confirm = menu::dialog_confirm_pressed(ui.ctx());
-                if ui.add(MenuButton::new(tr!("reference-points-make")).primary()).clicked() || confirm {
+                let ready = !draft.name.trim().is_empty();
+                let confirm = ready && menu::dialog_confirm_pressed(ui.ctx());
+                if ui.add(MenuButton::new(tr!("reference-points-make")).primary().enabled(ready)).clicked() || confirm {
                     build = true;
                 }
                 if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
@@ -62,6 +68,7 @@ pub(crate) fn draw_reference_surface_dialog(ui: &mut egui::Ui, editor: &mut Edit
             points: draft.points.clone(),
             controls: draft.controls.clone(),
             extent: draft.extent,
+            name: draft.name.trim().to_owned(),
         });
         open = false;
     }

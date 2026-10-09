@@ -435,14 +435,15 @@ impl<'a> App<'a> {
             // than occupying the scene, so a marquee never produces one.
             SceneEntityId::Raster(_) => false,
         });
-        // Holes ride the same box, taken by their collars: they are not
-        // rendered geometry the picker walks, so `enclosed` never holds one,
-        // and Move takes none because it marquees only what it can move.
+        // Holes ride the same box, crossing or window as the box was drawn:
+        // they are not rendered geometry the picker walks, so `enclosed`
+        // never holds one, and Move takes none because it marquees only what
+        // it can move.
         let holes = self
             .graphics
             .as_ref()
             .filter(|_| !objects_only)
-            .map(|graphics| graphics.drill_hole_collars_in_screen_rect(&self.drill_holes, start, end, &self.editor.hidden_handles, &self.editor.frozen_handles))
+            .map(|graphics| graphics.drill_holes_in_screen_rect(&self.drill_holes, start, end, cross_select, &self.editor.hidden_handles, &self.editor.frozen_handles))
             .unwrap_or_default();
         if self.modifiers.shift_key() {
             for handle in enclosed {

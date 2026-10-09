@@ -236,10 +236,33 @@ fn refused_rings(ids: &[ObjectId], refused: &[usize], positions: &[DVec3], verte
 }
 
 impl<'a> App<'a> {
+    /// The output name Build Surface offers for a surface made from
+    /// `points`: the seam's surface name when they are reference points made
+    /// this session, else their one layer's name, else the generic word.
+    pub(crate) fn reference_surface_name(&self, points: &[ObjectId]) -> String {
+        let mut layers: Vec<LayerId> = Vec::new();
+        for id in points {
+            if let Some(Object::Point { layer, .. }) = self.scene_document.get_object(*id)
+                && !layers.contains(layer)
+            {
+                layers.push(*layer);
+            }
+        }
+        let source = self.workspace.active_project().and_then(|project| self.reference_source_of(project.runtime_id, &layers));
+        match (&source, layers.len()) {
+            (Some(source), _) => crate::app::commands::thickness_points::seam_names::surface(source.target.name(), source.side),
+            (None, 1) => self
+                .scene_document
+                .layer(layers[0])
+                .map(|layer| layer.name.clone())
+                .unwrap_or_else(|| tr!("tri-type-open-surface")),
+            _ => tr!("tri-type-open-surface"),
+        }
+    }
+
     /// Grid a thin plate spline through the selected points into a new
-    /// surface, named for their layer when they share one. Every run adds a
-    /// surface; nothing is replaced.
-    pub(crate) fn build_reference_surface(&mut self, points: Vec<ObjectId>, controls: Vec<ObjectId>, extent: Option<ObjectId>) -> Result<()> {
+    /// surface named `name`. Every run adds a surface; nothing is replaced.
+    pub(crate) fn build_reference_surface(&mut self, points: Vec<ObjectId>, controls: Vec<ObjectId>, extent: Option<ObjectId>, name: String) -> Result<()> {
         // The last refusal's rings go as the next build starts, whatever it
         // finds; a fresh refusal rings its own.
         if !self.editor.string_rings.is_empty() {
@@ -293,15 +316,6 @@ impl<'a> App<'a> {
         let sections = layers.iter().filter_map(|id| self.scene_document.layer(*id)).map(|layer| layer.section);
         let section = SectionKind::derived_for(MemberKind::Triangulation, sections);
         let source = self.reference_source_of(runtime_id, &layers);
-        let name = match (&source, layers.len()) {
-            (Some(source), _) => crate::app::commands::thickness_points::seam_names::surface(source.target.name(), source.side),
-            (None, 1) => self
-                .scene_document
-                .layer(layers[0])
-                .map(|layer| layer.name.clone())
-                .unwrap_or_else(|| tr!("tri-type-open-surface")),
-            _ => tr!("tri-type-open-surface"),
-        };
         // Said rather than guessed at: layers that disagree on a section send
         // the surface to its natural one, but layers that agree still keep it
         // beside them, so the line names where it actually went.
@@ -1782,7 +1796,7 @@ impl<'a> RingBands<'a> {
             if point.distance(closest) <= kernel::XY_TOL {
                 return PolyContainment::OnBoundary;
             }
-            inside ^= crosses_rightward(a, b, point);
+            inside ^= kernel::edge_crosses_ray(point, a, b);
         }
         if self.edges >= 3 && inside { PolyContainment::Inside } else { PolyContainment::Outside }
     }
@@ -1809,19 +1823,11 @@ impl<'a> RingBands<'a> {
         self.members[self.starts[band]..self.starts[band + 1]]
             .iter()
             .map(|&index| (self.ring[index], self.ring[(index + 1) % count]))
-            .filter(|(a, b)| a != b && crosses_rightward(*a, *b, point))
+            .filter(|(a, b)| a != b && kernel::edge_crosses_ray(point, *a, *b))
             .count()
             % 2
             == 1
     }
-}
-
-/// Whether the edge from `a` to `b` crosses the ray from `point` towards
-/// +x, counted once where two edges meet on the ray.
-fn crosses_rightward(a: DVec2, b: DVec2, point: DVec2) -> bool {
-    let upward = a.y <= point.y && point.y < b.y;
-    let downward = b.y <= point.y && point.y < a.y;
-    (upward && kernel::orient2d(a, b, point) > 0.0) || (downward && kernel::orient2d(a, b, point) < 0.0)
 }
 
 /// The vertical box the surface is modelled in: the surface's own range R

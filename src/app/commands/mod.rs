@@ -15,6 +15,7 @@ pub(crate) mod rename; // Handles renaming layers and project items.
 pub(crate) mod residency;
 pub(crate) mod scene_selection; // What the selection-driven tools take from the scene selection.
 pub(crate) mod section; // Handles the explorer headings' bulk show/hide/lock actions.
+pub(crate) mod session_results; // Thickness work's session-only results, pruned with their layers and surfaces.
 pub(crate) mod slice; // Handles the vertical slice view mode.
 pub(crate) mod strat_check; // Orders a strat column by majority and flags the holes that disagree.
 pub(crate) mod string_clean; // Clean Strings: the app side of the open-string clean-up and the rings it leaves.
@@ -672,7 +673,9 @@ impl<'a> App<'a> {
                         }
                     }
                 };
+                let name = self.reference_surface_name(&input.points);
                 self.editor.reference_surface_dialog = Some(crate::ui::state::ReferenceSurfaceDraft {
+                    name,
                     points: input.points,
                     controls: input.controls,
                     extent: input.extent,
@@ -682,7 +685,7 @@ impl<'a> App<'a> {
                 });
                 Ok(())
             }
-            UiCommand::BuildReferenceSurface { points, controls, extent } => self.build_reference_surface(points, controls, extent),
+            UiCommand::BuildReferenceSurface { points, controls, extent, name } => self.build_reference_surface(points, controls, extent, name),
             UiCommand::OpenThicknessPoints => {
                 self.open_thickness_points();
                 Ok(())
@@ -711,11 +714,11 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::ShowThicknessTable { runtime_id, layer } => {
-                self.editor.thickness_table = self.editor.thickness_tables.get(&(runtime_id, layer)).cloned();
+                self.editor.thickness_table = self.session.thickness_tables.get(&(runtime_id, layer)).cloned();
                 Ok(())
             }
             UiCommand::ShowSeamTable(surface) => {
-                self.editor.seam_table = self.editor.seam_tables.get(&surface).cloned();
+                self.editor.seam_table = self.session.seam_tables.get(&surface).cloned();
                 Ok(())
             }
             UiCommand::MakeSeamSurface { surface } => self.make_seam_surface(surface),
