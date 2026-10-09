@@ -106,6 +106,7 @@ use super::{
         interval_rate, task_active, task_authorises,
     },
     lp::{Col, LinearProgram},
+    plan::PlanTargets,
     replay::{BlendSolution, ChunkRow, ExtractionAdjustments, MovementRow, ReplayReport, replay_cancellable},
 };
 use crate::model::schedule::optimisation::{Activity, DestinationId, DestinationKind, GroundId, Interval, LoaderId, ReclaimOrder, SourceId, StockpileId, TaskKind, TruckClassId};
@@ -151,15 +152,21 @@ pub(crate) struct Dispatched {
 /// two the replay accepts, the one it values more is kept. The replay is
 /// returned with it, so the caller need not run it again.
 pub(crate) fn dispatch_cancellable(input: &BlendInput, cancel: &AtomicBool) -> Result<Option<Dispatched>, String> {
+    dispatch_following(input, None, cancel)
+}
+
+/// [`dispatch_cancellable`], steered towards a whole-horizon plan's targets
+/// when there is one; see [`super::plan`].
+pub(crate) fn dispatch_following(input: &BlendInput, plan: Option<&PlanTargets>, cancel: &AtomicBool) -> Result<Option<Dispatched>, String> {
     let checked = |found: Result<Option<BlendSolution>, String>| -> Result<Option<Dispatched>, String> {
         let Some(solution) = found? else { return Ok(None) };
         let Some(replay) = replay_cancellable(input, &solution, cancel) else { return Ok(None) };
         Ok(Some(Dispatched { solution, replay }))
     };
     if input.segments_per_interval <= 1 {
-        return checked(dispatch(input, cancel, false));
+        return checked(dispatch(input, plan, cancel, false));
     }
-    let (segmented, single) = rayon::join(|| checked(dispatch(input, cancel, true)), || checked(dispatch(input, cancel, false)));
+    let (segmented, single) = rayon::join(|| checked(dispatch(input, plan, cancel, true)), || checked(dispatch(input, plan, cancel, false)));
     let (segmented, single) = match (segmented, single) {
         (Ok(Some(segmented)), Ok(Some(single))) => (segmented, single),
         (Ok(None), _) | (_, Ok(None)) => return Ok(None),
@@ -181,9 +188,10 @@ pub(crate) fn dispatch_cancellable(input: &BlendInput, cancel: &AtomicBool) -> R
 
 /// The dispatch schedule, with loaders moving to their next bar inside an
 /// interval when `segmented`.
-fn dispatch(input: &BlendInput, cancel: &AtomicBool, segmented: bool) -> Result<Option<BlendSolution>, String> {
+fn dispatch(input: &BlendInput, plan: Option<&PlanTargets>, cancel: &AtomicBool, segmented: bool) -> Result<Option<BlendSolution>, String> {
     let mut state = State::new(input, cancel);
     state.segmented = segmented;
+    state.plan = plan;
     for interval in &input.intervals {
         if state.cancelled() {
             return Ok(None);
@@ -253,6 +261,10 @@ struct State<'a> {
     now_h: f64,
     /// Whether a loader may move to its next bar inside an interval.
     segmented: bool,
+    /// Targets to follow, and the dug tonnes each (loader, destination, day)
+    /// has delivered so far.
+    plan: Option<&'a PlanTargets>,
+    followed: BTreeMap<(usize, DestinationId, u32), f64>,
     cancel: &'a AtomicBool,
 }
 
@@ -436,6 +448,8 @@ impl<'a> State<'a> {
             chain: input.drill_blast.as_ref().map(Chain::new),
             now_h: 0.0,
             segmented: true,
+            plan: None,
+            followed: BTreeMap::new(),
             cancel,
         }
     }
@@ -888,10 +902,12 @@ impl<'a> State<'a> {
     }
 
     fn has_incentive(&self, interval: Interval) -> bool {
-        self.input
-            .loaders
-            .iter()
-            .any(|loader| interval_rate(loader, interval.index).is_some_and(|rate| rate.utilisation_incentive > 0.0 && rate.dig_tph > 0.0))
+        self.plan.is_some()
+            || self
+                .input
+                .loaders
+                .iter()
+                .any(|loader| interval_rate(loader, interval.index).is_some_and(|rate| rate.utilisation_incentive > 0.0 && rate.dig_tph > 0.0))
     }
 
     fn solve_priced(&self, interval: Interval, topology: &Topology, priced: bool) -> Result<Plan, String> {
@@ -1091,6 +1107,41 @@ impl<'a> State<'a> {
             problem.add_row(..=0.0, band_hours);
         }
 
+        // A plan's targets: each loader's dug tonnes to each destination,
+        // paced through the day. Never money.
+        if let Some(plan) = self.plan.filter(|_| priced) {
+            let day = interval.day();
+            let paced = plan.paced(interval);
+            let mut flows: BTreeMap<(usize, DestinationId), Vec<Col>> = BTreeMap::new();
+            for &(index, _, col) in &columns {
+                let candidate = &input.movements[index];
+                if candidate.activity == Activity::Dig
+                    && let Some(loader) = input_loader(input, candidate.loader)
+                {
+                    flows.entry((loader, candidate.destination)).or_default().push(col);
+                }
+            }
+            for ((loader, destination), cols) in flows {
+                let planned = plan.routes.get(&(loader, destination, day)).copied().unwrap_or(0.0);
+                let due = (planned * paced - self.followed.get(&(loader, destination, day)).copied().unwrap_or(0.0)).max(0.0);
+                let mut over: Vec<(Col, f64)> = cols.iter().map(|col| (*col, 1.0)).collect();
+                if due > NEGLIGIBLE_T && plan.follow > 0.0 {
+                    let kept = problem.add_column(plan.follow, 0.0..=due);
+                    incentive.push((kept, plan.follow));
+                    let mut row = vec![(kept, 1.0)];
+                    row.extend(cols.iter().map(|col| (*col, -1.0)));
+                    problem.add_row(..=0.0, row);
+                    over.push((kept, -1.0));
+                }
+                if plan.overrun > 0.0 {
+                    let past = problem.add_column(-plan.overrun, 0.0..);
+                    incentive.push((past, -plan.overrun));
+                    over.push((past, -1.0));
+                    problem.add_row(..=0.0, over);
+                }
+            }
+        }
+
         if columns.is_empty() && extractions.is_empty() {
             return Ok(Plan {
                 durations: (0..segments).map(|segment| if segment == 0 { duration } else { 0.0 }).collect(),
@@ -1285,6 +1336,16 @@ impl<'a> State<'a> {
             let day = self.utilisation.entry((loader, interval.day())).or_default();
             day.0 += worked;
             day.1 += duration;
+        }
+        if self.plan.is_some() {
+            for (index, _, tonnes) in &rows {
+                let candidate = &input.movements[*index];
+                if candidate.activity == Activity::Dig
+                    && let Some(loader) = input_loader(input, candidate.loader)
+                {
+                    *self.followed.entry((loader, candidate.destination, interval.day())).or_default() += tonnes;
+                }
+            }
         }
         for (index, segment, tonnes) in rows {
             let candidate = &input.movements[index];

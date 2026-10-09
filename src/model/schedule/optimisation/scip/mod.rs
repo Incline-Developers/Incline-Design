@@ -30,3 +30,4 @@
 pub(crate) mod adapter;
 pub(crate) mod blend;
 pub(crate) mod experiments;
+pub(crate) mod plan;
