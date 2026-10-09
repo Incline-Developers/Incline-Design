@@ -98,6 +98,8 @@ pub(crate) struct PlanSolve {
     pub(crate) solve_s: f64,
     /// Whether SCIP accepted the seed, and what the plan valued it at.
     pub(crate) seeded: Option<f64>,
+    /// What the plan's movements earn on each day it plans.
+    pub(crate) day_values: BTreeMap<u32, f64>,
     pub(crate) status: String,
 }
 
@@ -862,7 +864,17 @@ pub(crate) fn solve(input: &BlendInput, seed: Option<&BlendSolution>, window: Op
     }
     let objective = Some(answer.objective);
     let bound = answer.bound;
+    // A movement column's name ends in its period: x_l_b_p and r_b_m_d_p.
+    let mut day_values: BTreeMap<u32, f64> = BTreeMap::new();
+    for (column, name) in builder.names.iter().enumerate() {
+        if (name.starts_with("x_") || name.starts_with("r_"))
+            && let Some(p) = name.rsplit('_').next().and_then(|p| p.parse::<usize>().ok())
+        {
+            *day_values.entry(days[p]).or_default() += builder.cost[column] * answer.values[column];
+        }
+    }
     Ok(PlanSolve {
+        day_values,
         routes,
         grades: planned_grades,
         objective,
