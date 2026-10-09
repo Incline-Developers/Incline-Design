@@ -1,4 +1,4 @@
-//! A coarse whole-horizon plan for the hourly dispatch to follow (prototype).
+//! A coarse whole-horizon plan for the hourly dispatch to follow.
 //!
 //! Each loader digs its authored sequence in order, so where it stands is one
 //! number: how far along that sequence it has dug. Per loader, block and day
@@ -14,18 +14,17 @@
 //! values (a route takes its best candidate's value) and reclaim. Its answer
 //! is only targets; see [`super::super::blended::plan`].
 //!
-//! A prototype, not yet called by Improve: on a 21-day horizon of 85-block
-//! sequences its relaxation alone takes HiGHS and SCIP most of a minute.
-#![allow(dead_code, reason = "prototype, not yet called by Improve")]
+//! Solved by HiGHS, which on these models found plans and bounds where SCIP
+//! did not.
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
-    ffi::c_void,
+    ffi::{c_char, c_int, c_void},
+    sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
 
-use highs_sys::HighsInt;
-use russcip::{Model, prelude::*};
+use highs_sys::{HighsCallbackDataIn, HighsCallbackDataOut, HighsInt};
 
 use super::super::blended::{
     input::{BlendInput, authored_tasks, interval_rate, task_active},
@@ -75,7 +74,6 @@ impl Window {
 /// How to solve a plan.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Settings {
-    pub(crate) backend: Backend,
     pub(crate) time_limit: Duration,
     pub(crate) relative_gap: f64,
     /// Solve the linear relaxation only, by HiGHS's interior point method:
@@ -87,8 +85,6 @@ pub(crate) struct Settings {
 pub(crate) struct PlanSolve {
     /// Planned dug tonnes per (loader index, destination, day).
     pub(crate) routes: BTreeMap<(usize, DestinationId, u32), f64>,
-    /// Planned delivered grade per (destination, day, grade).
-    pub(crate) grades: BTreeMap<(DestinationId, u32, usize), f64>,
     pub(crate) objective: Option<f64>,
     pub(crate) bound: Option<f64>,
     pub(crate) variables: usize,
@@ -96,21 +92,14 @@ pub(crate) struct PlanSolve {
     pub(crate) rows: usize,
     pub(crate) build_s: f64,
     pub(crate) solve_s: f64,
-    /// Whether SCIP accepted the seed, and what the plan valued it at.
+    /// What the plan valued its seed at, when it had one.
     pub(crate) seeded: Option<f64>,
     /// What the plan's movements earn on each day it plans.
     pub(crate) day_values: BTreeMap<u32, f64>,
     pub(crate) status: String,
 }
 
-/// The solver the plan is handed to.
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum Backend {
-    Highs,
-    Scip,
-}
-
-/// The plan's columns and rows, kept row-wise for either backend.
+/// The plan's columns and rows, kept row-wise for HiGHS.
 #[derive(Default)]
 struct Builder {
     names: Vec<String>,
@@ -122,7 +111,6 @@ struct Builder {
     starts: Vec<usize>,
     index: Vec<usize>,
     value: Vec<f64>,
-    names_of_rows: Vec<String>,
     binaries: usize,
 }
 
@@ -143,7 +131,7 @@ impl Builder {
     }
 
     /// One row, its repeated columns merged.
-    fn row(&mut self, terms: &[(usize, f64)], lhs: f64, rhs: f64, name: &str) {
+    fn row(&mut self, terms: &[(usize, f64)], lhs: f64, rhs: f64, _name: &str) {
         if terms.is_empty() {
             return;
         }
@@ -161,7 +149,6 @@ impl Builder {
         }
         self.row_lower.push(lhs);
         self.row_upper.push(rhs);
-        self.names_of_rows.push(name.to_owned());
     }
 }
 
@@ -173,7 +160,7 @@ struct Answer {
     status: String,
 }
 
-fn solve_highs(builder: &Builder, seed: Option<&[f64]>, time_limit: Duration, relative_gap: f64, relax: bool) -> Result<Answer, String> {
+fn solve_highs(builder: &Builder, seed: Option<&[f64]>, time_limit: Duration, relative_gap: f64, relax: bool, stop: &AtomicBool) -> Result<Answer, String> {
     let fits = |count: usize| HighsInt::try_from(count).map_err(|_| format!("the plan has {count} entries, more than HiGHS can index"));
     let columns = builder.cost.len();
     let starts = builder.starts.iter().map(|&start| fits(start)).collect::<Result<Vec<_>, _>>()?;
@@ -235,6 +222,15 @@ fn solve_highs(builder: &Builder, seed: Option<&[f64]>, time_limit: Duration, re
                 "the seed",
             )?;
         }
+        let data = stop as *const AtomicBool as *mut c_void;
+        ok(highs_sys::Highs_setCallback(highs.0, Some(interrupt), data), "the interrupt callback")?;
+        for kind in [
+            highs_sys::kHighsCallbackMipInterrupt,
+            highs_sys::kHighsCallbackIpmInterrupt,
+            highs_sys::kHighsCallbackSimplexInterrupt,
+        ] {
+            ok(highs_sys::Highs_startCallback(highs.0, kind), "the interrupt callback")?;
+        }
         ok(highs_sys::Highs_run(highs.0), "the plan solve")?;
         let status = highs_sys::Highs_getModelStatus(highs.0);
         let mut values = vec![0.0; columns];
@@ -268,52 +264,17 @@ fn solve_highs(builder: &Builder, seed: Option<&[f64]>, time_limit: Duration, re
     }
 }
 
-fn solve_scip(builder: &Builder, seed: Option<&[f64]>, time_limit: Duration, relative_gap: f64) -> Result<Answer, String> {
-    let mut model = Model::new()
-        .hide_output()
-        .include_default_plugins()
-        .create_prob("horizon_plan")
-        .set_obj_sense(ObjSense::Maximize)
-        .set_real_param("limits/time", time_limit.as_secs_f64())
-        .map_err(|error| format!("{error:?}"))?
-        .set_real_param("limits/gap", relative_gap)
-        .map_err(|error| format!("{error:?}"))?;
-    let variables: Vec<_> = (0..builder.cost.len())
-        .map(|column| {
-            let name = builder.names[column].as_str();
-            if builder.integer[column] {
-                model.add(var().bin().name(name))
-            } else {
-                let upper = if builder.upper[column].is_finite() { builder.upper[column] } else { 1e20 };
-                model.add(var().cont(0.0..=upper).obj(builder.cost[column]).name(name))
-            }
-        })
-        .collect();
-    for row in 0..builder.row_lower.len() {
-        let end = builder.starts.get(row + 1).copied().unwrap_or(builder.index.len());
-        let span = builder.starts[row]..end;
-        let vars: Vec<_> = builder.index[span.clone()].iter().map(|&column| &variables[column]).collect();
-        let lower = if builder.row_lower[row].is_finite() { builder.row_lower[row] } else { -1e20 };
-        let upper = if builder.row_upper[row].is_finite() { builder.row_upper[row] } else { 1e20 };
-        model.add_cons(vars, &builder.value[span], lower, upper, &builder.names_of_rows[row]);
-    }
-    if let Some(seed) = seed {
-        let solution = model.create_orig_sol();
-        for (variable, value) in variables.iter().zip(seed) {
-            solution.set_val(variable, *value);
+/// HiGHS's interrupt callback: `data` is the `stop` flag [`solve_highs`]
+/// passed.
+unsafe extern "C" fn interrupt(_kind: c_int, _message: *const c_char, _out: *const HighsCallbackDataOut, input: *mut HighsCallbackDataIn, data: *mut c_void) {
+    // SAFETY: `data` points at `solve_highs`' `stop`, alive for the whole
+    // `Highs_run`; `input` is HiGHS's own and may be written.
+    unsafe {
+        let stop = &*(data as *const AtomicBool);
+        if !input.is_null() && stop.load(Ordering::Relaxed) {
+            (*input).user_interrupt = 1;
         }
-        let _ = model.add_sol(solution);
     }
-    let solved = model.solve();
-    let Some(best) = solved.best_sol() else {
-        return Err(format!("no plan found: {:?}", solved.status()));
-    };
-    Ok(Answer {
-        values: variables.iter().map(|variable| best.val(variable)).collect(),
-        objective: solved.obj_val(),
-        bound: Some(solved.best_bound()).filter(|value| value.is_finite() && value.abs() < 1e19),
-        status: format!("SCIP {:?}, {} nodes", solved.status(), solved.n_nodes()),
-    })
 }
 
 /// One destination a block's material can go to, on its best candidate.
@@ -339,7 +300,7 @@ type Routed = ((GroundId, MaterialId, DestinationId, usize), usize, f64, Option<
 
 /// The plan for `input`, started from `seed` (the hourly dispatch's schedule)
 /// when there is one, so it is never worse than the schedule it improves.
-pub(crate) fn solve(input: &BlendInput, seed: Option<&BlendSolution>, window: Option<&Window>, settings: Settings) -> Result<PlanSolve, String> {
+pub(crate) fn solve(input: &BlendInput, seed: Option<&BlendSolution>, window: Option<&Window>, settings: Settings, stop: &AtomicBool) -> Result<PlanSolve, String> {
     let started = Instant::now();
     // ---- days ---------------------------------------------------------------
     let mut day_intervals: BTreeMap<u32, Vec<Interval>> = BTreeMap::new();
@@ -816,10 +777,7 @@ pub(crate) fn solve(input: &BlendInput, seed: Option<&BlendSolution>, window: Op
     let build_s = started.elapsed().as_secs_f64();
     let (variables, binaries, rows) = (builder.cost.len(), builder.binaries, builder.row_lower.len());
     let solving = Instant::now();
-    let answer = match settings.backend {
-        Backend::Scip if !settings.relax => solve_scip(&builder, seed_values.as_deref(), settings.time_limit, settings.relative_gap)?,
-        _ => solve_highs(&builder, seed_values.as_deref(), settings.time_limit, settings.relative_gap, settings.relax)?,
-    };
+    let answer = solve_highs(&builder, seed_values.as_deref(), settings.time_limit, settings.relative_gap, settings.relax, stop)?;
     let solve_s = solving.elapsed().as_secs_f64();
 
     // ---- read back ----------------------------------------------------------
@@ -831,11 +789,9 @@ pub(crate) fn solve(input: &BlendInput, seed: Option<&BlendSolution>, window: Op
         }
     }
     let mut routes: BTreeMap<(usize, DestinationId, u32), f64> = BTreeMap::new();
-    let mut delivered: BTreeMap<(DestinationId, u32), (f64, Vec<f64>)> = BTreeMap::new();
-    let grades = input.grades.count();
     // A split column is the block's, shared between its diggers by what each
     // dug that day.
-    for ((ground, material, id, p), column, per_unit, owner) in &routed {
+    for ((ground, _, id, p), column, per_unit, owner) in &routed {
         let tonnes_t = answer.values[*column].max(0.0) * per_unit * UNIT;
         if tonnes_t <= 1e-6 {
             continue;
@@ -846,19 +802,6 @@ pub(crate) fn solve(input: &BlendInput, seed: Option<&BlendSolution>, window: Op
             let total: f64 = diggers.iter().map(|(_, t)| t).sum();
             for (loader_index, share) in diggers {
                 *routes.entry((*loader_index, *id, days[*p])).or_default() += tonnes_t * share / total;
-            }
-        }
-        let entry = delivered.entry((*id, days[*p])).or_insert_with(|| (0.0, vec![0.0; grades]));
-        entry.0 += tonnes_t;
-        for (grade, slot) in entry.1.iter_mut().enumerate() {
-            *slot += tonnes_t * input.grades.fraction(*material, grade).unwrap_or(0.0);
-        }
-    }
-    let mut planned_grades = BTreeMap::new();
-    for ((id, day), (tonnes_t, contained)) in delivered {
-        for (grade, quantity) in contained.into_iter().enumerate() {
-            if tonnes_t > 0.0 {
-                planned_grades.insert((id, day, grade), quantity / tonnes_t);
             }
         }
     }
@@ -876,7 +819,6 @@ pub(crate) fn solve(input: &BlendInput, seed: Option<&BlendSolution>, window: Op
     Ok(PlanSolve {
         day_values,
         routes,
-        grades: planned_grades,
         objective,
         bound,
         variables,

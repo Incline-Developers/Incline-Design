@@ -48,6 +48,7 @@ use crate::model::schedule::{
         },
         scip::{
             adapter::{self, SolveReport},
+            anytime::{self, AnytimeSettings},
             blend::formulate_scip_with_cancel,
             experiments::extract_solution,
         },
@@ -239,6 +240,10 @@ pub(crate) fn improve(
     let mut seed = None;
     let mut relaxation = None;
     let mut windows = None;
+    // Whether the whole-horizon model is small enough to build: past that,
+    // neither SCIP nor its relaxation is attempted and the search has the
+    // whole budget.
+    let fits = whole_horizon_columns(&out.input) <= COLUMN_CEILING;
     if let DayByDay::Failed(reason) = &attempt {
         log::info!("schedule run {}: no hourly dispatch schedule: {reason}", out.identity.run_id);
         // A recalculation does not fall through to the solver: that takes
@@ -249,7 +254,9 @@ pub(crate) fn improve(
             return out;
         }
         if let Some(planned) = rolling::plan(&out.input, 0.0) {
-            relaxation = RelaxationJob::start(&out.input, options.time_limit, cancel, out.identity.run_id);
+            if fits {
+                relaxation = RelaxationJob::start(&out.input, options.time_limit, cancel, out.identity.run_id);
+            }
             // Days alone first; with a look-ahead only when that fails (see
             // `rolling`), from the start and within the same share of the budget.
             let budget = options.time_limit.map(|limit| limit.mul_f64(DAY_BY_DAY_SHARE));
@@ -275,7 +282,7 @@ pub(crate) fn improve(
             }
             windows = Some(planned.len());
         }
-    } else if !options.first_schedule_only {
+    } else if !options.first_schedule_only && fits {
         relaxation = RelaxationJob::start(&out.input, options.time_limit, cancel, out.identity.run_id);
     }
     match attempt {
@@ -320,10 +327,85 @@ pub(crate) fn improve(
             return out;
         }
     }
+    // ---- the search (`scip::anytime`) --------------------------------------
+    // From the first schedule, with the whole budget where the whole-horizon
+    // model is too large to build, and a share of it where SCIP may still
+    // improve on what the search finds.
+    let mut searched_bound = None;
+    if let Some(found) = seed.take() {
+        let left = options.time_limit.map_or(SEARCH_WITHOUT_LIMIT, |limit| limit.saturating_sub(budget_started.elapsed()));
+        let budget = if fits { left.mul_f64(SEARCH_SHARE) } else { left };
+        activity.set(3);
+        let started = Instant::now();
+        let polish = |input: &BlendInput, seed: &BlendSolution, progress: &[(usize, f64)], kept: usize, limit: Duration| polish_window(input, seed, progress, kept, limit, cancel);
+        let drill_blast = found.solution.drill_blast.clone();
+        let run_id = out.identity.run_id;
+        let searched = anytime::run(
+            &out.input,
+            (found.solution, found.replay),
+            AnytimeSettings::within(budget, options.relative_gap),
+            Some(&polish),
+            &cancel.signal(),
+            |progress| {
+                let gap = progress.gap().map_or("-".into(), |gap| format!("{:.2}%", gap * 100.0));
+                log::info!(
+                    "schedule run {run_id}: search at {:.1}s worth {:.2}, gap {gap}: {}",
+                    progress.elapsed_s,
+                    progress.value,
+                    progress.note
+                );
+            },
+        );
+        out.timings.solver += started.elapsed();
+        if cancel.is_cancelled() {
+            out.stop(SolveTermination::Cancelled, "cancelled during the search");
+            return out;
+        }
+        searched_bound = searched.bound;
+        let mut solution = searched.solution;
+        solution.drill_blast = drill_blast;
+        let value = searched.replay.replayed_objective;
+        log::info!(
+            "schedule run {}: the search kept {} improvements in {:.2?}, worth {value:.2}",
+            out.identity.run_id,
+            searched.kept,
+            started.elapsed()
+        );
+        let found = Seed {
+            solution,
+            replay: searched.replay,
+            summary: DayByDaySummary {
+                method: StartMethod::Search,
+                windows: searched.kept,
+                seconds: found.summary.seconds + started.elapsed().as_secs_f64(),
+                value: Some(value),
+                role: DayByDayRole::Improved,
+                failure: None,
+            },
+        };
+        let proved = tighter(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound);
+        let proven = proved
+            .zip(options.relative_gap)
+            .is_some_and(|(bound, target)| gap_closed(found.solution.reported_objective, bound, target));
+        if proven {
+            log::info!(
+                "schedule run {}: the search's schedule is within the gap target of its bound; no whole-horizon solve",
+                out.identity.run_id
+            );
+            adopt_seed(&mut out, found, None, proved, DayByDayRole::Proven);
+            return out;
+        }
+        if !fits {
+            adopt_seed(&mut out, found, None, proved, DayByDayRole::Searched);
+            return out;
+        }
+        seed = Some(found);
+    }
+
     let remaining = options.time_limit.map(|limit| limit.saturating_sub(budget_started.elapsed()));
     if let Some(found) = seed.take_if(|_| remaining.is_some_and(|left| left < WHOLE_HORIZON_MINIMUM)) {
         log::info!("schedule run {}: no time left for a whole-horizon solve; keeping the first schedule", out.identity.run_id);
-        let proved = relaxation.as_mut().and_then(RelaxationJob::ready);
+        let proved = tighter(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound);
         adopt_seed(&mut out, found, None, proved, DayByDayRole::Kept);
         return out;
     }
@@ -348,7 +430,7 @@ pub(crate) fn improve(
     }
     let remaining = options.time_limit.map(|limit| limit.saturating_sub(budget_started.elapsed()));
     if let Some(found) = seed.take_if(|_| remaining.is_some_and(|left| left < WHOLE_HORIZON_MINIMUM)) {
-        let proved = relaxation.as_mut().and_then(RelaxationJob::ready);
+        let proved = tighter(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound);
         adopt_seed(&mut out, found, None, proved, DayByDayRole::Kept);
         return out;
     }
@@ -383,7 +465,7 @@ pub(crate) fn improve(
     let remaining = options.time_limit.map(|limit| limit.saturating_sub(budget_started.elapsed()));
     if let Some(found) = seed.take_if(|_| remaining.is_some_and(|left| left < WHOLE_HORIZON_MINIMUM)) {
         log::info!("schedule run {}: no time left after building the model; keeping the first schedule", out.identity.run_id);
-        let proved = relaxation.as_mut().and_then(RelaxationJob::ready);
+        let proved = tighter(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound);
         adopt_seed(&mut out, found, None, proved, DayByDayRole::Kept);
         return out;
     }
@@ -444,7 +526,7 @@ pub(crate) fn improve(
             "schedule run {}: the relaxation bound proves the first schedule within the gap target; whole-horizon solve stopped after {solve_time:.2?}",
             out.identity.run_id
         );
-        let proved = relaxation.as_mut().and_then(RelaxationJob::ready);
+        let proved = tighter(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound);
         adopt_seed(&mut out, found, None, proved, DayByDayRole::Proven);
         return out;
     }
@@ -479,7 +561,7 @@ pub(crate) fn improve(
     let Some(mut solution) = extracted.expect("checked extraction result") else {
         if let Some(found) = seed {
             // A dual bound needs no incumbent, so it still bounds the seed.
-            let (bound, proved) = (out.primary_bound, relaxation.as_mut().and_then(RelaxationJob::ready));
+            let (bound, proved) = (out.primary_bound, tighter(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound));
             adopt_seed(&mut out, found, bound, proved, DayByDayRole::Kept);
             return out;
         }
@@ -509,7 +591,7 @@ pub(crate) fn improve(
         for issue in checked.issues.iter().chain(&checked.grade_issues).take(5) {
             log::warn!("schedule run {}: whole-horizon incumbent rejected by replay: {issue}", out.identity.run_id);
         }
-        let proved = relaxation.as_mut().and_then(RelaxationJob::ready);
+        let proved = tighter(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound);
         adopt_seed(&mut out, found, None, proved, DayByDayRole::Kept);
         return out;
     }
@@ -530,7 +612,7 @@ pub(crate) fn improve(
             return out;
         }
     }
-    let proved = relaxation.as_mut().and_then(RelaxationJob::ready);
+    let proved = tighter(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound);
     let mut termination = classify_status(report.status, true);
     {
         let slack = out.replay.as_ref().map_or(0.0, |report| report.boundary_value_slack);
@@ -638,6 +720,18 @@ const SEED_COMPLETION_SHARE: f64 = 0.25;
 /// Below this, a whole-horizon solve cannot build and presolve its model,
 /// let alone improve on the seed, so the day-by-day schedule is kept as is.
 const WHOLE_HORIZON_MINIMUM: Duration = Duration::from_secs(2);
+
+/// Movement columns past which the whole-horizon model is not built: the
+/// search then has the whole budget. Past about this many, the model's first
+/// LP alone took most of a run's time, and its build most of the memory.
+const COLUMN_CEILING: usize = 4_000_000;
+
+/// The share of what is left of the budget the search has when SCIP may
+/// still improve on what it finds.
+const SEARCH_SHARE: f64 = 0.5;
+
+/// The search's time when the run has no limit.
+const SEARCH_WITHOUT_LIMIT: Duration = Duration::from_secs(600);
 
 /// How far the relaxation's optimum is loosened before it is used as a bound:
 /// HiGHS solves the LP to feasibility and optimality tolerances of 1e-7, so
@@ -904,21 +998,21 @@ fn solve_day_by_day(
 }
 
 /// One window's exact hourly model solved from `seed`, a schedule of it,
-/// within `limit`: the polishing step of the anytime search (prototype; see
-/// `optimisation::scip::anytime`). Anything short of an extracted schedule
-/// is `None`, and the caller keeps what it had.
-#[allow(dead_code, reason = "prototype, not yet called by Improve")]
-pub(crate) fn polish_window(input: &BlendInput, seed: &BlendSolution, progress: &[(usize, f64)], kept: usize, limit: Duration) -> Option<BlendSolution> {
-    let cancel = CancelFlag::default();
+/// within `limit`, with each block held where `progress` says at the end of
+/// interval `kept`: the search's polishing step (`scip::anytime`). Anything
+/// short of an extracted schedule is `None`, and the search keeps what it
+/// had.
+fn polish_window(input: &BlendInput, seed: &BlendSolution, progress: &[(usize, f64)], kept: usize, limit: Duration, cancel: &CancelFlag) -> Option<BlendSolution> {
     let deadline = Instant::now() + limit;
     let mut built = formulate_scip_with_cancel(input, Some(&cancel.signal()), None, false).ok()?;
     let held = Some((progress, kept));
     hold_progress(&mut built.model, &built.columns, input, held);
-    let values = complete_seed(input, seed, held, Some(Instant::now() + limit.mul_f64(SEED_COMPLETION_SHARE)), &cancel).ok();
+    let values = complete_seed(input, seed, held, Some(Instant::now() + limit.mul_f64(SEED_COMPLETION_SHARE)), cancel).ok();
     let mut model = configure(built.model.hide_output(), Some(deadline.saturating_duration_since(Instant::now())), Some(1e-4)).ok()?;
     if let Some(values) = values.as_ref() {
         model = offer_seed(model, values).ok()?.0;
     }
+    adapter::install_cancellation(&mut model, cancel.signal(), Arc::new(adapter::InterruptAudit::default()));
     let solved = model.solve();
     extract_solution(&solved, &built.columns, || false).ok().flatten()
 }
@@ -937,6 +1031,24 @@ fn hold_progress(model: &mut Model<ProblemCreated>, columns: &BlendColumns<Varia
         if let Some(remaining) = columns.ground_remaining.get(&(source, last)) {
             model.add_cons(vec![remaining], &[1.0], held - 1e-6, held + 1e-6, &format!("progress_{source}"));
         }
+    }
+}
+
+/// The whole-horizon model's movement columns, as its formulation would
+/// create them at most: every candidate in every interval and segment.
+fn whole_horizon_columns(input: &BlendInput) -> usize {
+    input
+        .movements
+        .len()
+        .saturating_mul(input.intervals.len())
+        .saturating_mul(input.segments_per_interval.max(1))
+}
+
+/// The tighter of two upper bounds.
+fn tighter(left: Option<f64>, right: Option<f64>) -> Option<f64> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (bound, None) | (None, bound) => bound,
     }
 }
 

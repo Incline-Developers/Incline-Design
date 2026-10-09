@@ -240,9 +240,6 @@ pub(crate) struct CaptureSnapshot {
     pub(crate) runtime: u32,
     /// The horizon this run was asked to cover, from project hour zero.
     pub(crate) horizon_h: f64,
-    /// Whether the run solves the whole horizon at once (Improve), which the
-    /// column ceiling guards; the hourly first schedule never builds that model.
-    pub(crate) whole_horizon: bool,
     pub(crate) generation: u64,
     pub(crate) plan_revision: u64,
     plan: SchedulePlan,
@@ -256,11 +253,6 @@ pub(crate) struct CaptureSnapshot {
     /// Each solid's ground taken out of mining, read as the run started.
     exclusions: Vec<(crate::model::SolidId, crate::model::MiningExclusions)>,
 }
-
-/// Cap on the estimated column count of a whole-horizon solve (Improve), so a
-/// horizon somebody typed three extra zeroes into is refused with a figure
-/// rather than allocated.
-const COLUMN_CEILING: usize = 4_000_000;
 
 /// A bar in scope for the experimental run: assigned, with work, and with a
 /// window that reaches the horizon.
@@ -333,7 +325,7 @@ impl crate::app::App<'_> {
     ///
     /// Bounded: it clones the plan and the field list, borrows the cached
     /// planning snapshot and reports through `Arc`, and resolves no candidate.
-    pub(crate) fn capture_schedule_snapshot(&mut self, horizon_h: f64, whole_horizon: bool) -> Result<CaptureSnapshot, Vec<CaptureDiagnostic>> {
+    pub(crate) fn capture_schedule_snapshot(&mut self, horizon_h: f64) -> Result<CaptureSnapshot, Vec<CaptureDiagnostic>> {
         let inputs = match self.schedule_run_inputs() {
             Ok(inputs) => inputs,
             Err(reason) => return Err(vec![CaptureDiagnostic::global(reason.describe())]),
@@ -355,7 +347,6 @@ impl crate::app::App<'_> {
         Ok(CaptureSnapshot {
             runtime: project.runtime_id,
             horizon_h,
-            whole_horizon,
             generation: inputs.generation,
             plan_revision,
             plan,
@@ -1790,7 +1781,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         });
     }
 
-    // ---- event budget and size guard ---------------------------------------
+    // ---- event budget --------------------------------------------------------
     let derived = derived_segments(&intervals, &loaders, &tasks, &movements);
     let event_capacity = experiment.event_capacity.unwrap_or(SEGMENT_CEILING);
     if !(1..=SEGMENT_CEILING).contains(&event_capacity) {
@@ -1798,17 +1789,6 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
     }
     let event_budget_restricted = derived > event_capacity;
     let segments_per_interval = derived.clamp(1, event_capacity);
-    let estimated_columns = movements.len().saturating_mul(intervals.len()).saturating_mul(segments_per_interval);
-    if source.whole_horizon && estimated_columns > COLUMN_CEILING {
-        problems.push(
-            CaptureDiagnostic::global(tr!(
-                "schedule-capture-too-many-columns",
-                columns = format!("{:.1}", estimated_columns as f64 / 1e6),
-                ceiling = format!("{:.0}", COLUMN_CEILING as f64 / 1e6)
-            ))
-            .at(ScheduleStep::Configuration),
-        );
-    }
     // ---- drill and blast ----------------------------------------------------
     let drill_blast = if plan.drill_blast().enabled {
         capture_drill_blast(source, horizon_h, &intervals, &block_ground, &scoped, &mut identities, &mut notes, &mut problems, cancel)

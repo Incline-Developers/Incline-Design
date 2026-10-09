@@ -1,6 +1,6 @@
-//! An Improve that gets better the longer it runs (prototype).
+//! Improve's search: a schedule that gets better the longer it runs.
 //!
-//! The hourly dispatch gives the first schedule. A daily plan over a window
+//! The run's first schedule is where it starts. A daily plan over a window
 //! of days, started from the state the best schedule so far leaves as the
 //! window opens and seeded with that schedule's own days, sets targets for
 //! those days; the dispatch works the whole horizon again following every
@@ -41,11 +41,16 @@
 //! and the tighter of the two is kept. The whole horizon's plan is also
 //! solved as a mixed-integer program in the background from the start, for
 //! its dual bound and for one more set of targets when it finishes.
-#![allow(dead_code, reason = "prototype, not yet called by Improve")]
+//!
+//! Cancelling the run, or its time running out, stops every solve the search
+//! has under way and leaves it with the best schedule it has.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::atomic::AtomicBool,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     thread::JoinHandle,
     time::{Duration, Instant},
 };
@@ -58,7 +63,7 @@ use super::{
         replay::{BlendSolution, ChunkRow, MovementRow, ReplayReport, replay_cancellable},
         rolling::{self, Carry, Stitched},
     },
-    plan::{self, Backend, PlanSolve, Settings, Window},
+    plan::{self, PlanSolve, Settings, Window},
 };
 use crate::model::schedule::optimisation::TaskKind;
 
@@ -69,7 +74,6 @@ pub(crate) struct AnytimeSettings {
     pub(crate) step_days: u32,
     pub(crate) window_limit: Duration,
     pub(crate) bound_limit: Duration,
-    pub(crate) backend: Backend,
     /// Days per polished window, and the time each gets.
     pub(crate) polish_days: u32,
     /// Days solved past each polished window and then discarded.
@@ -80,6 +84,9 @@ pub(crate) struct AnytimeSettings {
     pub(crate) polish_columns: usize,
     /// Solve the whole horizon's plan in the background for a bound.
     pub(crate) background_bound: bool,
+    /// A gap to the bound at or below which there is nothing left worth
+    /// searching for.
+    pub(crate) closed_gap: f64,
 }
 
 /// Solves one window's exact hourly model from a schedule of it, within a
@@ -88,6 +95,35 @@ pub(crate) struct AnytimeSettings {
 /// the end of interval `kept`. The SCIP side lives with the app's other
 /// solves.
 pub(crate) type Polisher<'a> = &'a (dyn Fn(&BlendInput, &BlendSolution, &[(usize, f64)], usize, Duration) -> Option<BlendSolution> + Sync);
+
+impl AnytimeSettings {
+    /// The settings Improve runs the search with, within `budget` and to the
+    /// run's gap target.
+    pub(crate) fn within(budget: Duration, gap_target: Option<f64>) -> Self {
+        Self {
+            budget,
+            window_days: 5,
+            step_days: 3,
+            window_limit: Duration::from_secs(60),
+            bound_limit: Duration::from_secs(240),
+            polish_days: 1,
+            polish_lookahead_days: 1,
+            polish_limit: Duration::from_secs(60),
+            polish_columns: 400_000,
+            background_bound: true,
+            closed_gap: gap_target.unwrap_or(DEFAULT_CLOSED_GAP),
+        }
+    }
+}
+
+/// What a search found: its best schedule and the replay's report on it, the
+/// tightest bound it proved and how many improvements it kept.
+pub(crate) struct Found {
+    pub(crate) solution: BlendSolution,
+    pub(crate) replay: ReplayReport,
+    pub(crate) bound: Option<f64>,
+    pub(crate) kept: usize,
+}
 
 /// The best schedule so far and the replay's report on it.
 struct Best {
@@ -284,8 +320,11 @@ impl Progress {
 /// per tonne: (follow, overrun).
 const WEIGHTS: [(f64, f64); 3] = [(1.0, 0.0), (1.0, 1.0), (2.0, 2.0)];
 
-/// A gap at or below which there is nothing left worth searching for.
-const CLOSED_GAP: f64 = 1e-4;
+/// How long the search waits for its background plan to stop.
+const BACKGROUND_GRACE: Duration = Duration::from_secs(2);
+
+/// [`AnytimeSettings::closed_gap`] for a run with no gap target.
+const DEFAULT_CLOSED_GAP: f64 = 1e-4;
 
 /// What `solution` earns from its movements on each day.
 fn earned(input: &BlendInput, solution: &BlendSolution) -> BTreeMap<u32, f64> {
@@ -306,30 +345,32 @@ fn finished(background: &mut Option<JoinHandle<Result<PlanSolve, String>>>, wait
     None
 }
 
-pub(crate) fn run(input: &BlendInput, settings: AnytimeSettings, polisher: Option<Polisher>, mut report: impl FnMut(&Progress)) -> Result<(BlendSolution, Vec<Progress>), String> {
+/// Search from `start`, a schedule of `input` the replay accepted, until the
+/// budget is spent, `cancel` is set or there is nothing left to find.
+pub(crate) fn run(
+    input: &BlendInput,
+    start: (BlendSolution, ReplayReport),
+    settings: AnytimeSettings,
+    polisher: Option<Polisher>,
+    cancel: &AtomicBool,
+    mut report: impl FnMut(&Progress),
+) -> Found {
     let started = Instant::now();
-    let cancel = AtomicBool::new(false);
-    let first = greedy::dispatch_cancellable(input, &cancel)?.ok_or("cancelled")?;
-    if !first.replay.is_valid() {
-        return Err("the hourly dispatch schedule was rejected".into());
-    }
     let mut best = Best {
-        solution: first.solution,
-        replay: first.replay,
+        solution: start.0,
+        replay: start.1,
     };
     let mut value = best.value();
-    let mut log = Vec::new();
-    let mut record = |log: &mut Vec<Progress>, value: f64, bound: Option<f64>, note: String| {
-        let progress = Progress {
+    let mut kept = 0;
+    let mut record = |value: f64, bound: Option<f64>, note: String| {
+        report(&Progress {
             elapsed_s: started.elapsed().as_secs_f64(),
             value,
             bound,
             note,
-        };
-        report(&progress);
-        log.push(progress);
+        });
     };
-    record(&mut log, value, None, "hourly dispatch".into());
+    record(value, None, "first schedule".into());
 
     let reclaims = input.tasks.iter().any(|task| matches!(task.kind, TaskKind::Reclaim { .. }));
     let bound = if reclaims {
@@ -340,29 +381,31 @@ pub(crate) fn run(input: &BlendInput, settings: AnytimeSettings, polisher: Optio
             None,
             None,
             Settings {
-                backend: Backend::Highs,
                 time_limit: settings.bound_limit,
                 relative_gap: 0.0,
                 relax: true,
             },
+            cancel,
         );
         relaxed.ok().and_then(|relaxed| relaxed.bound)
     };
-    record(&mut log, value, bound, "relaxation bound".into());
-    let mut background = (settings.background_bound && !reclaims).then(|| {
-        let (input, seed) = (input.clone(), best.solution.clone());
-        let limit = settings.budget.saturating_sub(started.elapsed()).mul_f64(0.9);
+    record(value, bound, "relaxation bound".into());
+    // Raised when the search ends, so the background plan stops with it.
+    let ending = Arc::new(AtomicBool::new(false));
+    let mut background = (settings.background_bound && !reclaims && !cancel.load(Ordering::Relaxed)).then(|| {
+        let (input, seed, ending) = (input.clone(), best.solution.clone(), Arc::clone(&ending));
+        let limit = settings.budget.saturating_sub(started.elapsed());
         std::thread::spawn(move || {
             plan::solve(
                 &input,
                 Some(&seed),
                 None,
                 Settings {
-                    backend: Backend::Highs,
                     time_limit: limit,
                     relative_gap: 1e-4,
                     relax: false,
                 },
+                &ending,
             )
         })
     });
@@ -389,7 +432,6 @@ pub(crate) fn run(input: &BlendInput, settings: AnytimeSettings, polisher: Optio
                         bound = Some(bound.map_or(proved, |held: f64| held.min(proved)));
                     }
                     record(
-                        &mut log,
                         value,
                         bound,
                         format!(
@@ -402,18 +444,19 @@ pub(crate) fn run(input: &BlendInput, settings: AnytimeSettings, polisher: Optio
                     let all: BTreeSet<u32> = days.iter().copied().collect();
                     for (follow, overrun) in WEIGHTS {
                         let candidate = targets.replacing(&all, &whole_plan.routes, follow * spread, overrun * spread);
-                        if let Some(found) = redispatch(input, &best, 0, &candidate, &cancel)
+                        if let Some(found) = redispatch(input, &best, 0, &candidate, cancel)
                             && found.value() > value + 1e-7 * value.abs().max(1.0)
                         {
                             value = found.value();
                             best = found;
                             targets = candidate;
                             polished_since = false;
-                            record(&mut log, value, bound, "whole-horizon plan's targets: kept".into());
+                            kept += 1;
+                            record(value, bound, "whole-horizon plan's targets: kept".into());
                         }
                     }
                 }
-                Err(reason) => record(&mut log, value, bound, format!("whole-horizon plan: {reason}")),
+                Err(reason) => record(value, bound, format!("whole-horizon plan: {reason}")),
             }
         }
         let closed = Progress {
@@ -423,9 +466,9 @@ pub(crate) fn run(input: &BlendInput, settings: AnytimeSettings, polisher: Optio
             note: String::new(),
         }
         .gap()
-        .is_some_and(|gap| gap <= CLOSED_GAP);
+        .is_some_and(|gap| gap <= settings.closed_gap);
         if closed {
-            record(&mut log, value, bound, "gap closed".into());
+            record(value, bound, "gap closed".into());
             break;
         }
         if quiet_passes >= step
@@ -452,7 +495,7 @@ pub(crate) fn run(input: &BlendInput, settings: AnytimeSettings, polisher: Optio
                 .collect();
             for (short, day) in order {
                 let left = settings.budget.saturating_sub(started.elapsed());
-                if left.is_zero() {
+                if left.is_zero() || cancel.load(Ordering::Relaxed) {
                     break 'passes;
                 }
                 let polishing = Instant::now();
@@ -466,21 +509,20 @@ pub(crate) fn run(input: &BlendInput, settings: AnytimeSettings, polisher: Optio
                     polisher,
                     settings.polish_limit.min(left),
                     settings.polish_columns,
-                    &cancel,
+                    cancel,
                 ) {
                     Ok(Some(found)) if found.value() > value + 1e-7 * value.abs().max(1.0) => {
                         value = found.value();
                         best = found;
                         kept_any = true;
+                        kept += 1;
                         record(
-                            &mut log,
                             value,
                             bound,
                             format!("polished day {day} (short {short:.0}) in {:.1}s: kept", polishing.elapsed().as_secs_f64()),
                         );
                     }
                     Ok(Some(found)) => record(
-                        &mut log,
                         value,
                         bound,
                         format!(
@@ -490,13 +532,12 @@ pub(crate) fn run(input: &BlendInput, settings: AnytimeSettings, polisher: Optio
                         ),
                     ),
                     Ok(None) => record(
-                        &mut log,
                         value,
                         bound,
                         format!("polished day {day} (short {short:.0}) in {:.1}s: no schedule", polishing.elapsed().as_secs_f64()),
                     ),
                     Err(reason) => {
-                        record(&mut log, value, bound, format!("days not polished: {reason}"));
+                        record(value, bound, format!("days not polished: {reason}"));
                         break;
                     }
                 }
@@ -518,27 +559,26 @@ pub(crate) fn run(input: &BlendInput, settings: AnytimeSettings, polisher: Optio
             limit *= 2;
             quiet_passes = 0;
             offset = 0;
-            record(&mut log, value, bound, format!("windows of {length} days, {:.0}s each", limit.as_secs_f64()));
+            record(value, bound, format!("windows of {length} days, {:.0}s each", limit.as_secs_f64()));
         }
         let mut improved = false;
         let starts: Vec<usize> = if length == horizon { vec![0] } else { (offset..days.len()).step_by(step).collect() };
         for start in starts {
             let left = settings.budget.saturating_sub(started.elapsed());
-            if left.is_zero() {
+            if left.is_zero() || cancel.load(Ordering::Relaxed) {
                 break 'passes;
             }
             let first_day = days[start];
             let window = Window::opening(input, &best.solution, first_day, length);
             let solve = Settings {
-                backend: settings.backend,
                 time_limit: limit.min(left),
                 relative_gap: 1e-3,
                 relax: false,
             };
-            let planned = match plan::solve(input, Some(&best.solution), Some(&window), solve) {
+            let planned = match plan::solve(input, Some(&best.solution), Some(&window), solve, cancel) {
                 Ok(planned) => planned,
                 Err(reason) => {
-                    record(&mut log, value, bound, format!("days {first_day}+: no plan ({reason})"));
+                    record(value, bound, format!("days {first_day}+: no plan ({reason})"));
                     continue;
                 }
             };
@@ -556,11 +596,11 @@ pub(crate) fn run(input: &BlendInput, settings: AnytimeSettings, polisher: Optio
             let from = input.intervals.iter().position(|interval| interval.day() >= first_day).unwrap_or(0);
             let mut chosen: Option<(Best, PlanTargets)> = None;
             for (follow, overrun) in WEIGHTS {
-                if started.elapsed() >= settings.budget {
+                if started.elapsed() >= settings.budget || cancel.load(Ordering::Relaxed) {
                     break;
                 }
                 let candidate = targets.replacing(&covered, &planned.routes, follow * spread, overrun * spread);
-                let Some(found) = redispatch(input, &best, from, &candidate, &cancel) else { continue };
+                let Some(found) = redispatch(input, &best, from, &candidate, cancel) else { continue };
                 if chosen.as_ref().is_none_or(|(kept, _)| found.value() > kept.value()) {
                     chosen = Some((found, candidate));
                 }
@@ -572,16 +612,20 @@ pub(crate) fn run(input: &BlendInput, settings: AnytimeSettings, polisher: Optio
                 best = found;
                 targets = candidate;
                 improved = true;
+                kept += 1;
                 polished_since = false;
                 record(
-                    &mut log,
                     value,
                     bound,
                     format!(
-                        "days {first_day}..{}: kept, plan {:.0} (seed {:.0}) in {:.1}s, {}",
+                        "days {first_day}..{}: kept, plan {:.0} (seed {:.0}) of {} columns ({} binary) and {} rows, built in {:.1}s and solved in {:.1}s, {}",
                         first_day + length,
                         planned.objective.unwrap_or(f64::NAN),
                         planned.seeded.unwrap_or(f64::NAN),
+                        planned.variables,
+                        planned.binaries,
+                        planned.rows,
+                        planned.build_s,
                         planned.solve_s,
                         planned.status
                     ),
@@ -599,11 +643,25 @@ pub(crate) fn run(input: &BlendInput, settings: AnytimeSettings, polisher: Optio
             quiet_passes = 0;
         }
     }
-    if let Some(Ok(whole_plan)) = finished(&mut background, true)
+    // Stopped, the background plan still reports the bound it has proved.
+    // HiGHS reads the stop only between steps of its search, not inside its
+    // first LP, so it gets a moment; one that takes longer is left to end on
+    // its own time limit, which is the search's, and its bound goes unused.
+    ending.store(true, Ordering::Release);
+    let waiting = Instant::now();
+    while background.as_ref().is_some_and(|handle| !handle.is_finished()) && waiting.elapsed() < BACKGROUND_GRACE {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    if let Some(Ok(whole_plan)) = finished(&mut background, false)
         && let Some(proved) = whole_plan.bound
     {
         bound = Some(bound.map_or(proved, |held: f64| held.min(proved)));
     }
-    record(&mut log, value, bound, "done".into());
-    Ok((best.solution, log))
+    record(value, bound, "done".into());
+    Found {
+        solution: best.solution,
+        replay: best.replay,
+        bound,
+        kept,
+    }
 }
