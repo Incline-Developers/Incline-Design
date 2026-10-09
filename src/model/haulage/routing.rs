@@ -14,6 +14,11 @@ struct Leg {
     last_speed: f64,
     points: Vec<DVec3>,
     samples: Vec<[f64; 3]>,
+    /// Times, lengths and end speeds only, without the geometry: what a
+    /// schedule capture prices tens of thousands of hauls by. The points and
+    /// profile samples are for drawing a route, and copying them for every
+    /// block and destination was most of capture's time.
+    light: bool,
 }
 impl Leg {
     fn append(&mut self, other: &Self) {
@@ -23,18 +28,25 @@ impl Leg {
         if other.km > 0.0 {
             self.last_speed = other.last_speed;
         }
-        let offset = self.km * 1000.0;
-        self.samples.extend(other.samples.iter().map(|s| [offset + s[0], s[1], s[2]]));
+        if !self.light {
+            let offset = self.km * 1000.0;
+            self.samples.extend(other.samples.iter().map(|s| [offset + s[0], s[1], s[2]]));
+            self.points.extend(other.points.iter().copied().skip(usize::from(!self.points.is_empty())));
+        }
         self.hours += other.hours;
         self.km += other.km;
         self.rise += other.rise;
-        self.points.extend(other.points.iter().copied().skip(usize::from(!self.points.is_empty())));
     }
 }
 
 fn travel(points: &[DVec3], class: &TruckClass, loaded: bool, limit: Option<f64>) -> Leg {
+    travel_as(points, class, loaded, limit, false)
+}
+
+fn travel_as(points: &[DVec3], class: &TruckClass, loaded: bool, limit: Option<f64>, light: bool) -> Leg {
     let mut leg = Leg {
-        points: points.to_vec(),
+        points: if light { Vec::new() } else { points.to_vec() },
+        light,
         ..Leg::default()
     };
     for pair in points.windows(2) {
@@ -47,8 +59,10 @@ fn travel(points: &[DVec3], class: &TruckClass, loaded: bool, limit: Option<f64>
             leg.first_speed = speed;
         }
         leg.last_speed = speed;
-        leg.samples.push([leg.km * 1000.0, pair[0].z, speed]);
-        leg.samples.push([leg.km * 1000.0 + length, pair[1].z, speed]);
+        if !light {
+            leg.samples.push([leg.km * 1000.0, pair[0].z, speed]);
+            leg.samples.push([leg.km * 1000.0 + length, pair[1].z, speed]);
+        }
         leg.km += length / 1000.0;
         leg.hours += length / 1000.0 / speed;
         leg.rise += (pair[1].z - pair[0].z).max(0.0);
@@ -137,7 +151,7 @@ impl Search {
         }
         search
     }
-    fn path(&self, mut node: NodeId) -> Option<Leg> {
+    fn path(&self, mut node: NodeId, light: bool) -> Option<Leg> {
         let total = *self.times.get(&node)?;
         let mut pieces = Vec::new();
         loop {
@@ -152,7 +166,7 @@ impl Search {
         if self.outward {
             pieces.reverse();
         }
-        let mut path = Leg::default();
+        let mut path = Leg { light, ..Leg::default() };
         for piece in pieces {
             path.append(piece);
         }
@@ -210,7 +224,7 @@ impl<'a> DestinationSearch<'a> {
             empty: Search::new(network, class, target, true),
         })
     }
-    fn road_leg(&self, join: (RoadId, usize, DVec3), outward: bool) -> Option<Leg> {
+    fn road_leg(&self, join: (RoadId, usize, DVec3), outward: bool, light: bool) -> Option<Leg> {
         let road = self.network.road(join.0)?;
         let mut best: Option<Leg> = None;
         // A source and destination on the same road can travel directly,
@@ -226,15 +240,15 @@ impl<'a> DestinationSearch<'a> {
             if forward == outward {
                 direct.reverse();
             }
-            let mut leg = travel(&direct, self.class, !outward, road.speed_limit_kph);
+            let mut leg = travel_as(&direct, self.class, !outward, road.speed_limit_kph, light);
             leg.hours += loss(if outward { leg.first_speed } else { leg.last_speed }, self.network);
             best = Some(leg);
         }
         for (node, points) in connectors(self.network, road, join.1, join.2) {
             let search = if outward { &self.empty } else { &self.loaded };
-            let Some(mut path) = search.path(node) else { continue };
+            let Some(mut path) = search.path(node, light) else { continue };
             let points: Vec<_> = if outward { points.into_iter().rev().collect() } else { points };
-            let connector = travel(&points, self.class, !outward, road.speed_limit_kph);
+            let connector = travel_as(&points, self.class, !outward, road.speed_limit_kph, light);
             // A node at the destination itself carries no stop of its own;
             // the connector meets the destination, so the stop is its.
             if path.km <= 1e-9 {
@@ -264,11 +278,42 @@ impl<'a> DestinationSearch<'a> {
     /// them is taken.
     #[allow(clippy::too_many_arguments, reason = "one block's whole question; a struct would only be unpacked again")]
     pub(crate) fn route(&self, index: &RoadIndex, source: DVec3, link: &[NodeId], bench_access: bool, loader_rate: f64, spot_s: f64, dump_s: Option<f64>) -> Option<RouteCheck> {
+        self.route_as(index, source, link, bench_access, loader_rate, spot_s, dump_s, false)
+    }
+
+    /// The same haul's cycle alone - exactly [`Self::route`]'s - without the
+    /// path and profile that only drawing a route needs.
+    #[allow(clippy::too_many_arguments, reason = "the same question as `route`")]
+    pub(crate) fn cycle(
+        &self,
+        index: &RoadIndex,
+        source: DVec3,
+        link: &[NodeId],
+        bench_access: bool,
+        loader_rate: f64,
+        spot_s: f64,
+        dump_s: Option<f64>,
+    ) -> Option<CycleBreakdown> {
+        self.route_as(index, source, link, bench_access, loader_rate, spot_s, dump_s, true).map(|check| check.cycle)
+    }
+
+    #[allow(clippy::too_many_arguments, reason = "one block's whole question; a struct would only be unpacked again")]
+    fn route_as(
+        &self,
+        index: &RoadIndex,
+        source: DVec3,
+        link: &[NodeId],
+        bench_access: bool,
+        loader_rate: f64,
+        spot_s: f64,
+        dump_s: Option<f64>,
+        light: bool,
+    ) -> Option<RouteCheck> {
         let mut best: Option<RouteCheck> = None;
         let linked = link.iter().any(|id| index.node_join(*id).is_some());
         for join in index.joins(source, link, self.class.maximum_grade) {
-            let Some(mut loaded) = self.road_leg(join, false) else { continue };
-            let Some(mut empty) = self.road_leg(join, true) else { continue };
+            let Some(mut loaded) = self.road_leg(join, false, light) else { continue };
+            let Some(mut empty) = self.road_leg(join, true, light) else { continue };
             // The road leg already carries a stop at the destination end at
             // its own end speed, when it moves at all.
             let road_end = |km: f64, speed: f64| if km > 1e-9 { speed } else { 0.0 };
