@@ -10,7 +10,7 @@
 //! tonne, and tonnes past it cost [`PlanTargets::overrun`]. Neither is money.
 #![allow(dead_code, reason = "prototype, not yet called by Improve")]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::input::BlendInput;
 use crate::model::schedule::optimisation::{DestinationId, Interval};
@@ -25,6 +25,9 @@ pub(crate) struct PlanTargets {
     pub(crate) overrun: f64,
     /// Start and end hour of each day the horizon touches.
     days: BTreeMap<u32, (f64, f64)>,
+    /// Days the plan covers. Any other day is worked as if there were no
+    /// plan.
+    pub(crate) planned: BTreeSet<u32>,
 }
 
 impl PlanTargets {
@@ -35,7 +38,34 @@ impl PlanTargets {
             span.0 = span.0.min(interval.start_h);
             span.1 = span.1.max(interval.end_h);
         }
-        Self { routes, follow, overrun, days }
+        let planned = routes.keys().map(|(_, _, day)| *day).collect();
+        Self {
+            routes,
+            follow,
+            overrun,
+            days,
+            planned,
+        }
+    }
+
+    /// These targets with `days` replaced by `routes`' for them.
+    pub(crate) fn replacing(&self, days: &BTreeSet<u32>, routes: &BTreeMap<(usize, DestinationId, u32), f64>, follow: f64, overrun: f64) -> Self {
+        let mut merged: BTreeMap<_, _> = self
+            .routes
+            .iter()
+            .filter(|((_, _, day), _)| !days.contains(day))
+            .map(|(key, tonnes)| (*key, *tonnes))
+            .collect();
+        merged.extend(routes.iter().filter(|((_, _, day), _)| days.contains(day)).map(|(key, tonnes)| (*key, *tonnes)));
+        let mut planned: BTreeSet<u32> = self.planned.difference(days).copied().collect();
+        planned.extend(days.iter().copied());
+        Self {
+            routes: merged,
+            follow,
+            overrun,
+            days: self.days.clone(),
+            planned,
+        }
     }
 
     /// The share of `interval`'s day that has passed by its end.

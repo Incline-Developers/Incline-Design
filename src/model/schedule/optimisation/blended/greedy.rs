@@ -1109,7 +1109,7 @@ impl<'a> State<'a> {
 
         // A plan's targets: each loader's dug tonnes to each destination,
         // paced through the day. Never money.
-        if let Some(plan) = self.plan.filter(|_| priced) {
+        if let Some(plan) = self.plan.filter(|_| priced).filter(|plan| plan.planned.contains(&interval.day())) {
             let day = interval.day();
             let paced = plan.paced(interval);
             let mut flows: BTreeMap<(usize, DestinationId), Vec<Col>> = BTreeMap::new();
