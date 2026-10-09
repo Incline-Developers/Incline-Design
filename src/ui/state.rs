@@ -1045,7 +1045,7 @@ impl RenameTarget {
             Self::PointCloud(id) => UiCommand::RemovePointCloud(id),
             Self::BlockModel(id) => UiCommand::RemoveBlockModel(id),
             Self::DrillHole(id) => UiCommand::RemoveDrillHole(id),
-            Self::Folder(section, id) => UiCommand::DeleteFolder { section, folder: id },
+            Self::Folder(section, id) => UiCommand::DeleteFolderAndContents { section, folder: id },
         }
     }
 }
@@ -1082,6 +1082,12 @@ pub(crate) struct EditorState {
     /// The row a Shift-click measures its run from: the last row clicked
     /// without Shift.
     pub(crate) explorer_anchor: Option<ExplorerRow>,
+    /// Layer rows taken into the selection from the explorer. A layer is a
+    /// container rather than a scene entity, so its row's membership is held
+    /// here; an unloaded or hidden layer has nothing in the scene to stand
+    /// for it. A visible layer drops out once none of its objects are
+    /// selected - see `App::refresh_selection_counts`.
+    pub(crate) selected_layers: HashSet<LayerId>,
     /// Individually selected drill holes - see [`DrillHoleRef`]. A canvas
     /// click lands here in every workspace; the explorer selects a dataset
     /// whole into [`Self::selected_handles`] instead, which draws every hole
@@ -1191,6 +1197,10 @@ pub(crate) struct EditorState {
     pub(crate) downscale_raster_previews: bool,
     pub(crate) frame_counter_enabled: bool,
     pub(crate) measured_fps: Option<f32>,
+    /// What the app holds against the machine's memory, refreshed by
+    /// `App` every `memory_usage::SAMPLE_PERIOD`. `None` until the first
+    /// reading, or where the platform cannot say.
+    pub(crate) memory_usage: Option<crate::app::memory_usage::MemoryUsage>,
     /// Frames and busy seconds counted towards the next `measured_fps`, which
     /// is published once per window rather than every frame. See
     /// `App::record_frame_time`.
@@ -1292,6 +1302,9 @@ pub(crate) struct EditorState {
     /// Non-layer explorer item (triangulation, raster, point cloud, block
     /// model, drill hole dataset) awaiting destructive deletion confirmation.
     pub(crate) pending_delete_item: Option<(RenameTarget, String)>,
+    /// Several explorer rows awaiting deletion together: the commands that
+    /// delete each, issued once confirmed.
+    pub(crate) pending_delete_rows: Option<Vec<UiCommand>>,
     /// Vertices accumulated for an in-progress MakeLine / MakePoly stroke.
     pub(crate) pending_stroke: Vec<DVec3>,
     pub(crate) circle_draft: Option<CircleDraft>,
@@ -2080,6 +2093,7 @@ impl EditorState {
             || self.delete_confirm_open
             || self.pending_delete_layer.is_some()
             || self.pending_delete_item.is_some()
+            || self.pending_delete_rows.is_some()
             || self.pending_delete_delay_product.is_some()
             || self.pending_close_project.is_some()
             || self.pending_discard_project.is_some()
@@ -2397,6 +2411,7 @@ impl EditorState {
             selected_handles: HashSet::new(),
             explorer_rows: Vec::new(),
             explorer_anchor: None,
+            selected_layers: HashSet::new(),
             selected_drill_holes: HashSet::new(),
             selected_tie_ins: HashSet::new(),
             inspected_hole: None,
@@ -2435,6 +2450,7 @@ impl EditorState {
             downscale_raster_previews: crate::app::io::default_downscale_raster_previews(),
             frame_counter_enabled: false,
             measured_fps: None,
+            memory_usage: None,
             frame_rate_window: (0, 0.0),
             debug_surface_chunks: false,
             debug_surface_stats: None,
@@ -2490,6 +2506,7 @@ impl EditorState {
             new_layer_name: tr!("ws-menubar-design"),
             renaming_item: None,
             pending_delete_layer: None,
+            pending_delete_rows: None,
             pending_delete_item: None,
             pending_stroke: Vec::new(),
             circle_draft: None,
@@ -3340,6 +3357,11 @@ pub(crate) enum UiCommand {
         section: SectionKind,
         folder: FolderId,
     },
+    /// Delete a folder and everything in it, as one undo step.
+    DeleteFolderAndContents {
+        section: SectionKind,
+        folder: FolderId,
+    },
     /// Move an item into a collection of `section`, or to that section's root
     /// with `None`.
     ///
@@ -3478,6 +3500,14 @@ pub(crate) enum UiCommand {
     CancelCollarRotation,
     LoadLayer(LayerId),
     UnloadLayer(LayerId),
+    /// The explorer's eye on a layer: hide it while leaving it loaded, or
+    /// show it, loading it first when it is unloaded.
+    SetLayerVisible(LayerId, bool),
+    /// The same for a project item.
+    SetItemVisible(crate::model::ItemRef, bool),
+    /// Ask before deleting several explorer rows at once; carries the
+    /// commands that delete each.
+    RequestDeleteRows(Vec<UiCommand>),
     /// Lock/unlock every object on a design layer against selection and editing.
     ToggleLayerLocked(LayerId),
     /// Lock/unlock one scene entity against selection and editing.
@@ -3968,6 +3998,14 @@ impl UiCommand {
                 tr!("state-new-collection-under-section", section = ExplorerSection::from_kind(*section).label().to_string()),
             ),
             Self::DeleteFolder { section, folder } => report(
+                tr!("explorer-remove-collection"),
+                tr!(
+                    "state-folder-section",
+                    folder = format!("{folder:?}"),
+                    section = ExplorerSection::from_kind(*section).label().to_string()
+                ),
+            ),
+            Self::DeleteFolderAndContents { section, folder } => report(
                 tr!("common-delete-collection"),
                 tr!(
                     "state-folder-section",
@@ -4032,6 +4070,15 @@ impl UiCommand {
             Self::ApplyCollarRotation => report(tr!("common-rotate-collar"), tr!("state-apply-selection")),
             Self::LoadLayer(id) => report(tr!("state-load-layer"), format!("{id:?}")),
             Self::UnloadLayer(id) => report(tr!("state-unload-layer"), format!("{id:?}")),
+            Self::SetLayerVisible(id, visible) => report(
+                tr!("state-set-visibility"),
+                format!("{id:?}: {}", if *visible { tr!("state-shown") } else { tr!("state-hidden") }),
+            ),
+            Self::RequestDeleteRows(rows) => report(tr!("explorer-delete-selected", count = rows.len().to_string()), String::new()),
+            Self::SetItemVisible(item, visible) => report(
+                tr!("state-set-visibility"),
+                format!("{item:?}: {}", if *visible { tr!("state-shown") } else { tr!("state-hidden") }),
+            ),
             Self::ToggleLayerLocked(id) => report(tr!("state-set-layer-lock"), format!("{id:?}")),
             Self::ToggleEntityLocked(handle) => report(tr!("state-set-entity-lock"), format!("{handle:?}")),
             Self::SetSectionVisible(section, visible) => report(
@@ -4200,6 +4247,8 @@ pub(crate) struct UiLayerEntry {
     pub(crate) name: String,
     /// Whether the layer is loaded and drawn in the viewport.
     pub(crate) is_loaded: bool,
+    /// Loaded but kept out of the viewport by the explorer's eye.
+    pub(crate) is_hidden: bool,
     pub(crate) dirty: bool,
     /// Folder the layer sits in, or `None` for the section root.
     pub(crate) folder: Option<FolderId>,
@@ -4321,6 +4370,8 @@ pub(crate) struct UiPointCloudEntry {
     pub(crate) name: String,
     pub(crate) source_name: Option<String>,
     pub(crate) is_loaded: bool,
+    /// Loaded but kept out of the viewport by the explorer's eye.
+    pub(crate) is_hidden: bool,
     pub(crate) dirty: bool,
     pub(crate) point_count: usize,
     /// Folder the point cloud sits in, or `None` for the section root.
@@ -4337,6 +4388,8 @@ pub(crate) struct UiRasterTextureEntry {
     pub(crate) name: String,
     pub(crate) source_name: Option<String>,
     pub(crate) is_loaded: bool,
+    /// Loaded but kept out of the viewport by the explorer's eye.
+    pub(crate) is_hidden: bool,
     pub(crate) dirty: bool,
     /// Currently draped over at least one triangulation.
     pub(crate) is_draped: bool,
@@ -4353,8 +4406,9 @@ pub(crate) struct UiTriangulationEntry {
     pub(crate) id: TriangulationId,
     pub(crate) name: String,
     pub(crate) source_name: Option<String>,
-    pub(crate) is_active: bool,
     pub(crate) is_loaded: bool,
+    /// Loaded but kept out of the viewport by the explorer's eye.
+    pub(crate) is_hidden: bool,
     pub(crate) dirty: bool,
     /// Face colour edited in the context menu.
     pub(crate) color: [f32; 4],
@@ -4369,6 +4423,8 @@ pub(crate) struct UiBlockModelEntry {
     pub(crate) name: String,
     pub(crate) source_name: Option<String>,
     pub(crate) is_loaded: bool,
+    /// Loaded but kept out of the viewport by the explorer's eye.
+    pub(crate) is_hidden: bool,
     pub(crate) dirty: bool,
     pub(crate) _block_count: usize,
     pub(crate) variable_count: usize,
@@ -4383,6 +4439,8 @@ pub(crate) struct UiDrillHoleEntry {
     pub(crate) name: String,
     pub(crate) source_name: Option<String>,
     pub(crate) is_loaded: bool,
+    /// Loaded but kept out of the viewport by the explorer's eye.
+    pub(crate) is_hidden: bool,
     pub(crate) dirty: bool,
     pub(crate) hole_count: usize,
     pub(crate) field_count: usize,

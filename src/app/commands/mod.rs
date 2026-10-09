@@ -116,6 +116,7 @@ impl<'a> App<'a> {
                 | UiCommand::CreateLayer { .. }
                 | UiCommand::CreateFolder(_)
                 | UiCommand::DeleteFolder { .. }
+                | UiCommand::DeleteFolderAndContents { .. }
                 | UiCommand::MoveToFolder { .. }
                 | UiCommand::OpenCreateTriangulation
                 | UiCommand::OpenCreateBlockModel
@@ -343,6 +344,7 @@ impl<'a> App<'a> {
             UiCommand::CreateLayer { name } => self.create_layer(name),
             UiCommand::CreateFolder(section) => self.create_folder(section),
             UiCommand::DeleteFolder { section, folder } => self.delete_folder(section, folder),
+            UiCommand::DeleteFolderAndContents { section, folder } => self.delete_folder_and_contents(section, folder),
             UiCommand::MoveToFolder { member, section, folder } => {
                 self.move_to_folder(member, section, folder);
                 Ok(())
@@ -389,6 +391,10 @@ impl<'a> App<'a> {
                 self.activate_project_for_layer(layer_id);
                 self.delete_layer(layer_id)
             }
+            UiCommand::RequestDeleteRows(rows) => {
+                self.editor.pending_delete_rows = (!rows.is_empty()).then_some(rows);
+                Ok(())
+            }
             UiCommand::RequestDeleteItem(target) => {
                 let name = self.rename_target_name(target);
                 self.editor.pending_delete_item = name.map(|name| (target, name));
@@ -425,6 +431,14 @@ impl<'a> App<'a> {
             }
             UiCommand::UnloadLayer(layer) => {
                 self.unload_layer(layer);
+                Ok(())
+            }
+            UiCommand::SetLayerVisible(layer, visible) => {
+                self.set_layer_visible(layer, visible);
+                Ok(())
+            }
+            UiCommand::SetItemVisible(item, visible) => {
+                self.set_item_visible(item, visible);
                 Ok(())
             }
             UiCommand::ToggleLayerLocked(layer) => {
@@ -1384,7 +1398,7 @@ impl<'a> App<'a> {
             selected
                 .iter()
                 .filter_map(|handle| crate::model::ItemRef::from_entity(*handle))
-                .filter_map(|item| self.item_style_command(item, |style| style.with_loaded(false))),
+                .filter_map(|item| self.item_style_command(item, |style| if style.loaded() { style.with_hidden(true) } else { style })),
         );
 
         // Persisted visibility now owns ordinary Hide Selection. Remove any

@@ -1300,7 +1300,7 @@ impl TriangulationGpuCache {
     ) {
         // A drape survives unloading and hiding the raster, so the texture a
         // surface actually samples is the drape filtered by what can be drawn.
-        let drawable_rasters: HashSet<_> = rasters.iter().filter(|raster| raster.state.loaded).map(|raster| raster.id).collect();
+        let drawable_rasters: HashSet<_> = rasters.iter().filter(|raster| raster.state.is_visible()).map(|raster| raster.id).collect();
         // With fragment barycentrics the surface shader draws its own edges and
         // the instanced edge chunks are never built: on a dense surface they
         // cost six vertices per edge, several times the surface itself.
