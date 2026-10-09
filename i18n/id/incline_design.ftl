@@ -1666,16 +1666,6 @@ main-incline-design-web-startup-failed = Permulaan Incline Design Web gagal: { $
 ## Menu strings
 
 menu-count-files-selected = { $count } file dipilih
-modelling-settings-modelling-settings = Pengaturan Pemodelan
-modelling-settings-thin-plate-spline-exact = Thin plate spline, eksak
-modelling-settings-anisotropic-spline = Spline anisotropik
-modelling-settings-auto-axis-spline = Spline sumbu otomatis
-modelling-settings-surface-method = Metode permukaan
-modelling-settings-hermite-dips = Hermite dengan kemiringan (memerlukan data kemiringan)
-modelling-settings-steep-pair-distance = Jarak pasangan curam
-modelling-settings-steep-pair-distance-help = Pasangan titik yang lebih dekat dari ini pada denah, dan lebih curam dari sudut di bawah, disebutkan saat pembangunan berhasil. Tidak pernah ditolak atau diperbaiki.
-modelling-settings-steep-pair-angle = Sudut pasangan curam
-modelling-settings-surface-help = Cara Bangun Permukaan menggambar gridnya. Pengaturan tingkat proyek, disimpan bersama proyek.
 
 ## Object strings
 
@@ -1870,6 +1860,8 @@ properties-limits-newly-loaded-geotiff-previews = Membatasi pratinjau GeoTIFF ba
 properties-line-colour = Warna garis
 properties-look-sensitivity = Lihat sensitivitas
 properties-max-clip-span = Maksimal rentang clip
+properties-modelling = Pemodelan
+properties-modelling-help = Cara Bangun Permukaan menggambar gridnya. Pengaturan tingkat proyek, disimpan bersama proyek.
 properties-move-layer = Pindah ke Lapisan...
 properties-near-clip-limit = Dekat batas klip
 properties-no-drillhole-datasets-open = Tidak ada set data lubang bor yang terbuka.
@@ -1884,6 +1876,9 @@ properties-restore-defaults = Pulihkan Bawaan
 properties-show-console = Tampilkan konsol
 properties-shows-live-near-far-projection = Tampilkan jarak proyeksi dekat dan jauh langsung di status bar.
 properties-snap-polling = Polling snap
+properties-steep-pair-angle = Sudut pasangan curam
+properties-steep-pair-distance = Jarak pasangan curam
+properties-steep-pair-distance-help = Pasangan titik yang lebih dekat dari ini pada denah, dan lebih curam dari sudut di bawah, disebutkan saat pembangunan berhasil. Tidak pernah ditolak atau diperbaiki.
 properties-surface-chunk-debug-view = Tampilan debug chunk permukaan
 properties-vertical-sync = Sinkronisasi vertikal
 properties-world-axis-gizmo = Gizmo sumbu dunia
@@ -1912,7 +1907,7 @@ reference-surface-points-surface-built-from-selected = Titik yang menjadi dasar 
 reference-surface-extent-help = Garis tertutup terpilih yang menjadi batas pemotongan permukaan akhir; titik di luarnya tetap membentuk permukaan.
 reference-surface-selected-open-strings-surface-made = Garis terbuka terpilih yang harus dilalui permukaan, sesuai pilihan saat dialog dibuka. Tutup dialog untuk memilih yang lain.
 reference-surface-grids-selected-points-plan-into = Membuat grid dari titik terpilih pada denah menjadi permukaan baru. Setiap pembangunan menambah satu permukaan.
-reference-surface-change-these-under-modelling-settings = Ubah ini di Pemodelan, Pengaturan
+reference-surface-change-these-in-preferences = Ubah ini di Preferensi, Pemodelan
 reference-surface-triangulates-selected-points-plan-in = Mentriangulasi titik terpilih dalam denah menjadi permukaan baru. Setiap pembangunan menambah satu permukaan.
 
 ## Screenshot strings

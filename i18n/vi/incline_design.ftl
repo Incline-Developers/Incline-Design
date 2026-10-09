@@ -1692,16 +1692,6 @@ main-incline-design-web-startup-failed = Khởi động Incline Design Web thấ
 ## Menu strings
 
 menu-count-files-selected = Đã chọn { $count } tệp
-modelling-settings-modelling-settings = Thiết lập mô hình hóa
-modelling-settings-thin-plate-spline-exact = Spline tấm mỏng, chính xác
-modelling-settings-anisotropic-spline = Spline dị hướng
-modelling-settings-auto-axis-spline = Spline trục tự động
-modelling-settings-surface-method = Phương pháp bề mặt
-modelling-settings-hermite-dips = Hermite với góc dốc (cần số đo góc dốc)
-modelling-settings-steep-pair-distance = Khoảng cách cặp dốc
-modelling-settings-steep-pair-distance-help = Các cặp điểm gần nhau hơn mức này trong mặt bằng, và dốc hơn góc bên dưới, sẽ được nêu tên khi dựng thành công. Không bao giờ bị từ chối hay sửa.
-modelling-settings-steep-pair-angle = Góc cặp dốc
-modelling-settings-surface-help = Cách Dựng bề mặt vẽ lưới của nó. Thiết lập cấp dự án, được lưu cùng dự án.
 
 ## Object strings
 
@@ -1896,6 +1886,8 @@ properties-limits-newly-loaded-geotiff-previews = Giới hạn ảnh xem trướ
 properties-line-colour = Màu đường
 properties-look-sensitivity = Độ nhạy quan sát
 properties-max-clip-span = Phạm vi cắt tối đa
+properties-modelling = Mô hình hóa
+properties-modelling-help = Cách Dựng bề mặt vẽ lưới của nó. Thiết lập cấp dự án, được lưu cùng dự án.
 properties-move-layer = Di chuyển đến lớp...
 properties-near-clip-limit = Giới hạn cắt gần
 properties-no-drillhole-datasets-open = Không có bộ dữ liệu lỗ khoan nào đang mở.
@@ -1910,6 +1902,9 @@ properties-restore-defaults = Khôi phục mặc định
 properties-show-console = Hiện bảng điều khiển
 properties-shows-live-near-far-projection = Hiển thị khoảng cách chiếu gần và xa theo thời gian thực trên thanh trạng thái.
 properties-snap-polling = Thăm dò bắt điểm
+properties-steep-pair-angle = Góc cặp dốc
+properties-steep-pair-distance = Khoảng cách cặp dốc
+properties-steep-pair-distance-help = Các cặp điểm gần nhau hơn mức này trong mặt bằng, và dốc hơn góc bên dưới, sẽ được nêu tên khi dựng thành công. Không bao giờ bị từ chối hay sửa.
 properties-surface-chunk-debug-view = Khung nhìn gỡ lỗi chunk bề mặt
 properties-vertical-sync = Đồng bộ dọc
 properties-world-axis-gizmo = Gizmo trục tọa độ
@@ -1938,7 +1933,7 @@ reference-surface-points-surface-built-from-selected = Các điểm dùng để 
 reference-surface-extent-help = Đường khép kín đã chọn mà bề mặt hoàn thiện bị cắt theo; các điểm nằm ngoài nó vẫn định hình bề mặt.
 reference-surface-selected-open-strings-surface-made = Các đường hở đã chọn mà bề mặt buộc phải đi qua, như đã chọn khi hộp thoại mở. Đóng hộp thoại để chọn đường khác.
 reference-surface-grids-selected-points-plan-into = Chia lưới các điểm đã chọn trong mặt bằng thành một bề mặt mới. Mỗi lần dựng thêm một bề mặt.
-reference-surface-change-these-under-modelling-settings = Thay đổi các mục này trong Mô hình hóa, Thiết lập
+reference-surface-change-these-in-preferences = Thay đổi các mục này trong Tùy chọn, Mô hình hóa
 reference-surface-triangulates-selected-points-plan-in = Tạo lưới tam giác từ các điểm đã chọn trong mặt bằng thành một bề mặt mới. Mỗi lần dựng thêm một bề mặt.
 
 ## Screenshot strings

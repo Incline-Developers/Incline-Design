@@ -1666,16 +1666,6 @@ main-incline-design-web-startup-failed = Incline Design Web का आरंभ 
 ## Menu strings
 
 menu-count-files-selected = { $count } फ़ाइलें चुनी गईं
-modelling-settings-modelling-settings = मॉडलिंग सेटिंग्स
-modelling-settings-thin-plate-spline-exact = थिन प्लेट स्प्लाइन, सटीक
-modelling-settings-anisotropic-spline = अनाइसोट्रोपिक स्प्लाइन
-modelling-settings-auto-axis-spline = ऑटो-अक्ष स्प्लाइन
-modelling-settings-surface-method = सतह विधि
-modelling-settings-hermite-dips = नति के साथ हर्माइट (नति माप चाहिए)
-modelling-settings-steep-pair-distance = तीव्र जोड़ी की दूरी
-modelling-settings-steep-pair-distance-help = प्लान में इससे करीब और नीचे दिए कोण से ज़्यादा ढलान वाले बिंदुओं के जोड़े, बिल्ड सफल होने पर बताए जाते हैं। कभी अस्वीकार या ठीक नहीं किए जाते।
-modelling-settings-steep-pair-angle = तीव्र जोड़ी का कोण
-modelling-settings-surface-help = सतह बनाएँ अपनी ग्रिड कैसे खींचता है। प्रोजेक्ट-स्तर की सेटिंग्स, प्रोजेक्ट के साथ सहेजी जाती हैं।
 
 ## Object strings
 
@@ -1870,6 +1860,8 @@ properties-limits-newly-loaded-geotiff-previews = नए GeoTIFF पूर्व
 properties-line-colour = रेखा का रंग
 properties-look-sensitivity = दृष्टि संवेदनशीलता
 properties-max-clip-span = अधिकतम क्लिप स्पैन
+properties-modelling = मॉडलिंग
+properties-modelling-help = सतह बनाएँ अपनी ग्रिड कैसे खींचता है। प्रोजेक्ट-स्तर की सेटिंग्स, प्रोजेक्ट के साथ सहेजी जाती हैं।
 properties-move-layer = लेयर पर स्थानांतरित करें...
 properties-near-clip-limit = निकट क्लिप सीमा
 properties-no-drillhole-datasets-open = कोई ड्रिल होल डेटासेट खुला नहीं है।
@@ -1884,6 +1876,9 @@ properties-restore-defaults = डिफ़ॉल्ट पुनर्स्थ�
 properties-show-console = कंसोल दिखाएँ
 properties-shows-live-near-far-projection = स्थिति पट्टी में प्रत्यक्ष निकट और दूर प्रक्षेपण दूरी दिखाता है।
 properties-snap-polling = स्नैप मतदान
+properties-steep-pair-angle = तीव्र जोड़ी का कोण
+properties-steep-pair-distance = तीव्र जोड़ी की दूरी
+properties-steep-pair-distance-help = प्लान में इससे करीब और नीचे दिए कोण से ज़्यादा ढलान वाले बिंदुओं के जोड़े, बिल्ड सफल होने पर बताए जाते हैं। कभी अस्वीकार या ठीक नहीं किए जाते।
 properties-surface-chunk-debug-view = सतह चंक डीबग दृश्य
 properties-vertical-sync = वर्टिकल सिंक
 properties-world-axis-gizmo = विश्व अक्ष गज़्मो
@@ -1912,7 +1907,7 @@ reference-surface-points-surface-built-from-selected = वे बिंदु �
 reference-surface-extent-help = चुनी गई बंद स्ट्रिंग जिस तक तैयार सतह क्लिप की जाती है; उसके बाहर के बिंदु फिर भी सतह को आकार देते हैं।
 reference-surface-selected-open-strings-surface-made = चुनी गई खुली स्ट्रिंग जिनसे होकर सतह गुज़रती है, जैसे संवाद खुलने पर चुनी गई थीं। दूसरी चुनने के लिए संवाद बंद करें।
 reference-surface-grids-selected-points-plan-into = चुने गए बिंदुओं को प्लान में ग्रिड करके नई सतह बनाता है। हर बिल्ड एक सतह जोड़ता है।
-reference-surface-change-these-under-modelling-settings = इन्हें मॉडलिंग, सेटिंग्स में बदलें
+reference-surface-change-these-in-preferences = इन्हें प्राथमिकताएँ, मॉडलिंग में बदलें
 reference-surface-triangulates-selected-points-plan-in = चुने गए बिंदुओं को प्लान में त्रिभुजित करके नई सतह बनाता है। हर बिल्ड एक सतह जोड़ता है।
 
 ## Screenshot strings

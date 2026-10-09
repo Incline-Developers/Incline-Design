@@ -1698,16 +1698,6 @@ main-incline-design-web-startup-failed = Uanzishaji wa Incline Design Web umeshi
 ## Menu strings
 
 menu-count-files-selected = faili { $count } zimechaguliwa
-modelling-settings-modelling-settings = Mipangilio ya Uundaji wa Mifano
-modelling-settings-thin-plate-spline-exact = Thin plate spline, kamili
-modelling-settings-anisotropic-spline = Spline isiyo sawa kila upande
-modelling-settings-auto-axis-spline = Spline ya mhimili otomatiki
-modelling-settings-surface-method = Njia ya uso
-modelling-settings-hermite-dips = Hermite yenye miteremko (inahitaji vipimo vya mteremko)
-modelling-settings-steep-pair-distance = Umbali wa jozi kali
-modelling-settings-steep-pair-distance-help = Jozi za vidokezo vilivyo karibu kuliko hii kwenye mpango, na vyenye mteremko mkali kuliko pembe iliyo chini, hutajwa ujenzi unapofanikiwa. Hazikataliwi wala kurekebishwa kamwe.
-modelling-settings-steep-pair-angle = Pembe ya jozi kali
-modelling-settings-surface-help = Jinsi Jenga Uso inavyochora gridi yake. Mipangilio ya kiwango cha mradi, inahifadhiwa na mradi.
 
 ## Object strings
 
@@ -1902,6 +1892,8 @@ properties-limits-newly-loaded-geotiff-previews = Hupunguza hakikisho za GeoTIFF
 properties-line-colour = Rangi ya mstari
 properties-look-sensitivity = Uelekevu wa mtazamo
 properties-max-clip-span = Wigo wa juu wa kukata
+properties-modelling = Uundaji wa Mifano
+properties-modelling-help = Jinsi Jenga Uso inavyochora gridi yake. Mipangilio ya kiwango cha mradi, inahifadhiwa na mradi.
 properties-move-layer = Hamishia kwenye Tabaka...
 properties-near-clip-limit = Kikomo cha kukata karibu
 properties-no-drillhole-datasets-open = Hakuna seti za data za mashimo ya uchimbaji zilizofunguliwa.
@@ -1916,6 +1908,9 @@ properties-restore-defaults = Rejesha Chaguo-msingi
 properties-show-console = Onyesha dashibodi
 properties-shows-live-near-far-projection = Huonyesha umbali wa makadirio wa karibu na mbali wa moja kwa moja kwenye pau ya hali.
 properties-snap-polling = Ukaguzi wa kubandika
+properties-steep-pair-angle = Pembe ya jozi kali
+properties-steep-pair-distance = Umbali wa jozi kali
+properties-steep-pair-distance-help = Jozi za vidokezo vilivyo karibu kuliko hii kwenye mpango, na vyenye mteremko mkali kuliko pembe iliyo chini, hutajwa ujenzi unapofanikiwa. Hazikataliwi wala kurekebishwa kamwe.
 properties-surface-chunk-debug-view = Mwonekano wa utatuzi wa vipande vya uso
 properties-vertical-sync = Usawazishaji wima
 properties-world-axis-gizmo = Kifaa cha mhimili wa dunia
@@ -1944,7 +1939,7 @@ reference-surface-points-surface-built-from-selected = Vidokezo ambavyo uso unaj
 reference-surface-extent-help = Mfuatano uliofungwa uliochaguliwa ambao uso uliokamilika hukatwa kwake; vidokezo vilivyo nje yake bado huumba uso.
 reference-surface-selected-open-strings-surface-made = Mifuatano iliyo wazi iliyochaguliwa ambayo uso unafanywa kupita ndani yake, kama ilivyochaguliwa dirisha lilipofunguliwa. Funga dirisha ili kuchagua tofauti.
 reference-surface-grids-selected-points-plan-into = Hupanga vidokezo vilivyochaguliwa kwenye mpango kuwa gridi ya uso mpya. Kila ujenzi huongeza uso.
-reference-surface-change-these-under-modelling-settings = Badilisha hivi chini ya Uundaji wa Mifano, Mipangilio
+reference-surface-change-these-in-preferences = Badilisha haya katika Mapendeleo, Uundaji wa Mifano
 reference-surface-triangulates-selected-points-plan-in = Hutatua vidokezo vilivyochaguliwa kwenye mpango kuwa uso mpya. Kila ujenzi huongeza uso.
 
 ## Screenshot strings

@@ -1666,16 +1666,6 @@ main-incline-design-web-startup-failed = راه‌اندازی Incline Design We
 ## Menu strings
 
 menu-count-files-selected = { $count } فایل انتخاب شده است
-modelling-settings-modelling-settings = تنظیمات مدل‌سازی
-modelling-settings-thin-plate-spline-exact = اسپلاین صفحه نازک، دقیق
-modelling-settings-anisotropic-spline = اسپلاین ناهمسانگرد
-modelling-settings-auto-axis-spline = اسپلاین با محور خودکار
-modelling-settings-surface-method = روش سطح
-modelling-settings-hermite-dips = هرمیت با شیب‌ها (نیازمند اندازه‌گیری شیب)
-modelling-settings-steep-pair-distance = فاصله جفت تند
-modelling-settings-steep-pair-distance-help = جفت نقاطی که در پلان از این مقدار نزدیک‌ترند و شیبشان از زاویه زیر تندتر است، هنگام ساخت موفق نام برده می‌شوند. هرگز رد یا اصلاح نمی‌شوند.
-modelling-settings-steep-pair-angle = زاویه جفت تند
-modelling-settings-surface-help = ساخت سطح چگونه شبکه خود را می‌کشد. تنظیمات سطح پروژه، همراه با پروژه ذخیره می‌شوند.
 
 ## Object strings
 
@@ -1870,6 +1860,8 @@ properties-limits-newly-loaded-geotiff-previews = پیش‌نمایش GeoTIFF ت
 properties-line-colour = رنگ خط
 properties-look-sensitivity = حساسیت نگاه
 properties-max-clip-span = بیشینه بازه کلیپ
+properties-modelling = مدل‌سازی
+properties-modelling-help = ساخت سطح چگونه شبکه خود را می‌کشد. تنظیمات سطح پروژه، همراه با پروژه ذخیره می‌شوند.
 properties-move-layer = انتقال به لایه...
 properties-near-clip-limit = حد کلیپ نزدیک
 properties-no-drillhole-datasets-open = هیچ مجموعه‌داده گمانه‌ای باز نیست.
@@ -1884,6 +1876,9 @@ properties-restore-defaults = بازیابی پیش‌فرض‌ها
 properties-show-console = نمایش کنسول
 properties-shows-live-near-far-projection = فاصله‌های زنده تصویرسازی نزدیک و دور را در نوار وضعیت نشان می‌دهد.
 properties-snap-polling = پایش گیره
+properties-steep-pair-angle = زاویه جفت تند
+properties-steep-pair-distance = فاصله جفت تند
+properties-steep-pair-distance-help = جفت نقاطی که در پلان از این مقدار نزدیک‌ترند و شیبشان از زاویه زیر تندتر است، هنگام ساخت موفق نام برده می‌شوند. هرگز رد یا اصلاح نمی‌شوند.
 properties-surface-chunk-debug-view = نمای اشکال‌زدایی تکه‌های سطح
 properties-vertical-sync = همگام‌سازی عمودی
 properties-world-axis-gizmo = محور جهان
@@ -1912,7 +1907,7 @@ reference-surface-points-surface-built-from-selected = نقاطی که سطح ا
 reference-surface-extent-help = خط بسته انتخاب‌شده که سطح نهایی به آن بریده می‌شود؛ نقاط بیرون از آن همچنان سطح را شکل می‌دهند.
 reference-surface-selected-open-strings-surface-made = خطوط باز انتخاب‌شده که سطح باید از آن‌ها بگذرد، همان‌طور که هنگام باز شدن پنجره انتخاب شده بودند. برای انتخاب دیگر، پنجره را ببندید.
 reference-surface-grids-selected-points-plan-into = نقاط انتخاب‌شده را در پلان به یک سطح جدید شبکه‌بندی می‌کند. هر ساخت یک سطح اضافه می‌کند.
-reference-surface-change-these-under-modelling-settings = این‌ها را در مدل‌سازی، تنظیمات تغییر دهید
+reference-surface-change-these-in-preferences = این‌ها را در ترجیحات، مدل‌سازی تغییر دهید
 reference-surface-triangulates-selected-points-plan-in = نقاط انتخاب‌شده را در پلان به یک سطح جدید مثلث‌بندی می‌کند. هر ساخت یک سطح اضافه می‌کند.
 
 ## Screenshot strings

@@ -30,7 +30,7 @@ use crate::{
     app::App,
     i18n::tr,
     model::{Command, SceneEntityId},
-    ui::state::{ActiveTool, TriCreatePhase, TriCutSource, UiCommand},
+    ui::state::{ActiveTool, PropertyTab, TriCreatePhase, TriCutSource, UiCommand},
     userspace_error, userspace_log, userspace_warn,
 };
 
@@ -724,7 +724,8 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::OpenModellingSettings => {
-                self.editor.show_modelling_settings = true;
+                self.editor.active_property_tab = PropertyTab::Modelling;
+                self.editor.show_preferences = true;
                 Ok(())
             }
             UiCommand::SetModellingSettings(settings) => {

@@ -1708,16 +1708,6 @@ main-incline-design-web-startup-failed = Avvio di Incline Design Web non riuscit
 ## Menu strings
 
 menu-count-files-selected = { $count } file selezionati
-modelling-settings-modelling-settings = Impostazioni di modellazione
-modelling-settings-thin-plate-spline-exact = Spline a lamina sottile, esatta
-modelling-settings-anisotropic-spline = Spline anisotropa
-modelling-settings-auto-axis-spline = Spline ad asse automatico
-modelling-settings-surface-method = Metodo di superficie
-modelling-settings-hermite-dips = Hermite con inclinazioni (richiede misure di inclinazione)
-modelling-settings-steep-pair-distance = Distanza delle coppie ripide
-modelling-settings-steep-pair-distance-help = Le coppie di punti più vicine di questo valore in pianta e più ripide dell'angolo qui sotto vengono segnalate quando una costruzione riesce. Mai rifiutate né riparate.
-modelling-settings-steep-pair-angle = Angolo delle coppie ripide
-modelling-settings-surface-help = Come Costruisci superficie disegna la sua griglia. Impostazioni a livello di progetto, salvate con il progetto.
 
 ## Object strings
 
@@ -1912,6 +1902,8 @@ properties-limits-newly-loaded-geotiff-previews = Limita le anteprime dei GeoTIF
 properties-line-colour = Colore linea
 properties-look-sensitivity = Sensibilità di sguardo
 properties-max-clip-span = Intervallo massimo di clip
+properties-modelling = Modellazione
+properties-modelling-help = Come Costruisci superficie disegna la sua griglia. Impostazioni a livello di progetto, salvate con il progetto.
 properties-move-layer = Sposta al livello...
 properties-near-clip-limit = Limite di clip vicino
 properties-no-drillhole-datasets-open = Nessun dataset di fori di sondaggio aperto.
@@ -1926,6 +1918,9 @@ properties-restore-defaults = Ripristina predefiniti
 properties-show-console = Mostra console
 properties-shows-live-near-far-projection = Mostra le distanze di proiezione vicina e lontana in tempo reale nella barra di stato.
 properties-snap-polling = Polling dello snap
+properties-steep-pair-angle = Angolo delle coppie ripide
+properties-steep-pair-distance = Distanza delle coppie ripide
+properties-steep-pair-distance-help = Le coppie di punti più vicine di questo valore in pianta e più ripide dell'angolo qui sotto vengono segnalate quando una costruzione riesce. Mai rifiutate né riparate.
 properties-surface-chunk-debug-view = Vista di debug dei chunk della superficie
 properties-vertical-sync = Sincronizzazione verticale
 properties-world-axis-gizmo = Gizmo assi del mondo
@@ -1954,7 +1949,7 @@ reference-surface-points-surface-built-from-selected = I punti da cui è costrui
 reference-surface-extent-help = La linea chiusa selezionata a cui viene ritagliata la superficie finita; i punti al di fuori modellano comunque la superficie.
 reference-surface-selected-open-strings-surface-made = Le linee aperte selezionate attraverso cui passa la superficie, come selezionate all'apertura della finestra. Chiudi la finestra per selezionarne altre.
 reference-surface-grids-selected-points-plan-into = Genera in pianta una griglia dai punti selezionati per creare una nuova superficie. Ogni costruzione aggiunge una superficie.
-reference-surface-change-these-under-modelling-settings = Modificali in Modellazione, Impostazioni
+reference-surface-change-these-in-preferences = Modificali in Preferenze, Modellazione
 reference-surface-triangulates-selected-points-plan-in = Triangola in pianta i punti selezionati in una nuova superficie. Ogni costruzione aggiunge una superficie.
 
 ## Screenshot strings

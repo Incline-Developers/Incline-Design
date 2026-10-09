@@ -1666,16 +1666,6 @@ main-incline-design-web-startup-failed = Échec du démarrage d’Incline Design
 ## Menu strings
 
 menu-count-files-selected = { $count } fichiers sélectionnés
-modelling-settings-modelling-settings = Paramètres de modélisation
-modelling-settings-thin-plate-spline-exact = Spline plaque mince, exacte
-modelling-settings-anisotropic-spline = Spline anisotrope
-modelling-settings-auto-axis-spline = Spline à axes automatiques
-modelling-settings-surface-method = Méthode de surface
-modelling-settings-hermite-dips = Hermite avec pendages (exige des mesures de pendage)
-modelling-settings-steep-pair-distance = Distance des paires raides
-modelling-settings-steep-pair-distance-help = Les paires de points plus proches que cette valeur en plan et plus raides que l’angle ci-dessous sont signalées quand une construction réussit. Jamais refusées ni réparées.
-modelling-settings-steep-pair-angle = Angle des paires raides
-modelling-settings-surface-help = Comment Construire une surface trace sa grille. Paramètres au niveau du projet, enregistrés avec le projet.
 
 ## Object strings
 
@@ -1870,6 +1860,8 @@ properties-limits-newly-loaded-geotiff-previews = Limite les aperçus GeoTIFF no
 properties-line-colour = Couleur de la ligne
 properties-look-sensitivity = Sensibilité de la vue
 properties-max-clip-span = Durée maximale du clip
+properties-modelling = Modélisation
+properties-modelling-help = Comment Construire une surface trace sa grille. Paramètres au niveau du projet, enregistrés avec le projet.
 properties-move-layer = Déplacer vers la couche...
 properties-near-clip-limit = Près de la limite du clip
 properties-no-drillhole-datasets-open = Aucun jeu de sondages n’est ouvert.
@@ -1884,6 +1876,9 @@ properties-restore-defaults = Restaurer les valeurs par défaut
 properties-show-console = Afficher la console
 properties-shows-live-near-far-projection = Affiche les distances de projection près et loin en direct dans la barre de statut.
 properties-snap-polling = Fréquence d'accrochage
+properties-steep-pair-angle = Angle des paires raides
+properties-steep-pair-distance = Distance des paires raides
+properties-steep-pair-distance-help = Les paires de points plus proches que cette valeur en plan et plus raides que l’angle ci-dessous sont signalées quand une construction réussit. Jamais refusées ni réparées.
 properties-surface-chunk-debug-view = Vue de débogage des blocs de surface
 properties-vertical-sync = Synchronisation verticale
 properties-world-axis-gizmo = Repère des axes du monde
@@ -1912,7 +1907,7 @@ reference-surface-points-surface-built-from-selected = Les points à partir desq
 reference-surface-extent-help = La ligne fermée sélectionnée à laquelle la surface finale est rognée ; les points hors de celle-ci façonnent toujours la surface.
 reference-surface-selected-open-strings-surface-made = Les lignes ouvertes sélectionnées par lesquelles la surface est forcée de passer, telles que sélectionnées à l’ouverture de la boîte de dialogue. Fermez-la pour en sélectionner d’autres.
 reference-surface-grids-selected-points-plan-into = Interpole en plan les points sélectionnés sur une grille pour créer une nouvelle surface. Chaque construction ajoute une surface.
-reference-surface-change-these-under-modelling-settings = Modifiez-les sous Modélisation, Paramètres
+reference-surface-change-these-in-preferences = Modifiez-les dans Préférences, Modélisation
 reference-surface-triangulates-selected-points-plan-in = Triangule en plan les points sélectionnés en une nouvelle surface. Chaque construction ajoute une surface.
 
 ## Screenshot strings

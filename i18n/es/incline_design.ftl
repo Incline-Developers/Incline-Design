@@ -1664,16 +1664,6 @@ main-incline-design-web-startup-failed = Error al iniciar Incline Design Web: { 
 ## Menu strings
 
 menu-count-files-selected = { $count } archivos seleccionados
-modelling-settings-modelling-settings = Configuración de modelización
-modelling-settings-thin-plate-spline-exact = Spline de placa delgada, exacto
-modelling-settings-anisotropic-spline = Spline anisótropo
-modelling-settings-auto-axis-spline = Spline de eje automático
-modelling-settings-surface-method = Método de superficie
-modelling-settings-hermite-dips = Hermite con buzamientos (requiere mediciones de buzamiento)
-modelling-settings-steep-pair-distance = Distancia de pares empinados
-modelling-settings-steep-pair-distance-help = Los pares de puntos más cercanos que este valor en planta y más empinados que el ángulo de abajo se indican cuando una construcción tiene éxito. Nunca se rechazan ni se reparan.
-modelling-settings-steep-pair-angle = Ángulo de pares empinados
-modelling-settings-surface-help = Cómo Construir superficie dibuja su cuadrícula. Configuración a nivel de proyecto, guardada con el proyecto.
 
 ## Object strings
 
@@ -1868,6 +1858,8 @@ properties-limits-newly-loaded-geotiff-previews = Limita las vistas previas de G
 properties-line-colour = Color de la línea
 properties-look-sensitivity = Sensibilidad de vista
 properties-max-clip-span = Rango máximo de recorte
+properties-modelling = Modelización
+properties-modelling-help = Cómo Construir superficie dibuja su cuadrícula. Configuración a nivel de proyecto, guardada con el proyecto.
 properties-move-layer = Mover a la capa...
 properties-near-clip-limit = Límite de recorte cercano
 properties-no-drillhole-datasets-open = No hay conjuntos de sondajes abiertos.
@@ -1882,6 +1874,9 @@ properties-restore-defaults = Restaurar valores predeterminados
 properties-show-console = Mostrar consola
 properties-shows-live-near-far-projection = Muestra las distancias de proyección en vivo cerca y lejos en la barra de estado.
 properties-snap-polling = Muestreo de ajuste
+properties-steep-pair-angle = Ángulo de pares empinados
+properties-steep-pair-distance = Distancia de pares empinados
+properties-steep-pair-distance-help = Los pares de puntos más cercanos que este valor en planta y más empinados que el ángulo de abajo se indican cuando una construcción tiene éxito. Nunca se rechazan ni se reparan.
 properties-surface-chunk-debug-view = Vista de depuración de fragmentos de superficie
 properties-vertical-sync = Sincronización vertical
 properties-world-axis-gizmo = Gizmo de ejes del mundo
@@ -1910,7 +1905,7 @@ reference-surface-points-surface-built-from-selected = Los puntos a partir de lo
 reference-surface-extent-help = La cadena cerrada seleccionada a la que se recorta la superficie terminada; los puntos fuera de ella siguen dando forma a la superficie.
 reference-surface-selected-open-strings-surface-made = Las cadenas abiertas seleccionadas por las que se hace pasar la superficie, tal como estaban seleccionadas al abrir el diálogo. Cierre el diálogo para seleccionar otras.
 reference-surface-grids-selected-points-plan-into = Genera en planta una cuadrícula con los puntos seleccionados para crear una superficie nueva. Cada construcción añade una superficie.
-reference-surface-change-these-under-modelling-settings = Cámbielos en Modelización, Configuración
+reference-surface-change-these-in-preferences = Cámbielos en Preferencias, Modelización
 reference-surface-triangulates-selected-points-plan-in = Triangula en planta los puntos seleccionados en una superficie nueva. Cada construcción añade una superficie.
 
 ## Screenshot strings

@@ -1718,16 +1718,6 @@ main-incline-design-web-startup-failed = Не удалось запустить 
 ## Menu strings
 
 menu-count-files-selected = Выбрано файлов: { $count }
-modelling-settings-modelling-settings = Настройки моделирования
-modelling-settings-thin-plate-spline-exact = Тонкопластинчатый сплайн, точный
-modelling-settings-anisotropic-spline = Анизотропный сплайн
-modelling-settings-auto-axis-spline = Сплайн с автоосями
-modelling-settings-surface-method = Метод построения поверхности
-modelling-settings-hermite-dips = Эрмитов сплайн с углами падения (нужны замеры угла падения)
-modelling-settings-steep-pair-distance = Расстояние крутой пары
-modelling-settings-steep-pair-distance-help = Пары точек, которые в плане ближе этого расстояния и круче угла ниже, указываются при успешном построении. Никогда не отклоняются и не исправляются.
-modelling-settings-steep-pair-angle = Угол крутой пары
-modelling-settings-surface-help = Как «Построить поверхность» строит свою сетку. Настройки уровня проекта, сохраняются вместе с проектом.
 
 ## Object strings
 
@@ -1922,6 +1912,8 @@ properties-limits-newly-loaded-geotiff-previews = Ограничивает пр�
 properties-line-colour = Цвет линии
 properties-look-sensitivity = Чувствительность обзора
 properties-max-clip-span = Максимальная протяженность клипа
+properties-modelling = Моделирование
+properties-modelling-help = Как «Построить поверхность» строит свою сетку. Настройки уровня проекта, сохраняются вместе с проектом.
 properties-move-layer = Переместить в слой...
 properties-near-clip-limit = Ближний предел отсечения
 properties-no-drillhole-datasets-open = Нет открытых наборов скважин.
@@ -1936,6 +1928,9 @@ properties-restore-defaults = Восстановить значения по у�
 properties-show-console = Показать консоль
 properties-shows-live-near-far-projection = Показывает актуальные ближнее и дальнее расстояния проекции в строке состояния.
 properties-snap-polling = Опрос привязки
+properties-steep-pair-angle = Угол крутой пары
+properties-steep-pair-distance = Расстояние крутой пары
+properties-steep-pair-distance-help = Пары точек, которые в плане ближе этого расстояния и круче угла ниже, указываются при успешном построении. Никогда не отклоняются и не исправляются.
 properties-surface-chunk-debug-view = Отладочный вид фрагментов поверхности
 properties-vertical-sync = Вертикальная синхронизация
 properties-world-axis-gizmo = Мировая ось
@@ -1964,7 +1959,7 @@ reference-surface-points-surface-built-from-selected = Точки, по кото
 reference-surface-extent-help = Выбранная замкнутая линия, по которой обрезается готовая поверхность; точки вне её по-прежнему формируют поверхность.
 reference-surface-selected-open-strings-surface-made = Выбранные разомкнутые линии, через которые проходит поверхность, — выбранные при открытии диалога. Закройте диалог, чтобы выбрать другие.
 reference-surface-grids-selected-points-plan-into = Строит по выбранным точкам в плане новую поверхность сеткой. Каждое построение добавляет поверхность.
-reference-surface-change-these-under-modelling-settings = Измените их: Моделирование, Настройки
+reference-surface-change-these-in-preferences = Измените их в Параметры, Моделирование
 reference-surface-triangulates-selected-points-plan-in = Триангулирует выбранные точки в плане в новую поверхность. Каждое построение добавляет поверхность.
 
 ## Screenshot strings

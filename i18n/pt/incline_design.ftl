@@ -1664,16 +1664,6 @@ main-incline-design-web-startup-failed = Falha na inicialização do Incline Des
 ## Menu strings
 
 menu-count-files-selected = { $count } ficheiros selecionados
-modelling-settings-modelling-settings = Configurações de modelação
-modelling-settings-thin-plate-spline-exact = Spline de placa fina, exato
-modelling-settings-anisotropic-spline = Spline anisotrópico
-modelling-settings-auto-axis-spline = Spline de eixo automático
-modelling-settings-surface-method = Método de superfície
-modelling-settings-hermite-dips = Hermite com mergulhos (requer medições de mergulho)
-modelling-settings-steep-pair-distance = Distância de pares íngremes
-modelling-settings-steep-pair-distance-help = Os pares de pontos mais próximos do que este valor em planta e mais íngremes do que o ângulo abaixo são indicados quando uma construção tem êxito. Nunca são recusados nem reparados.
-modelling-settings-steep-pair-angle = Ângulo de pares íngremes
-modelling-settings-surface-help = Como Construir superfície desenha a sua grelha. Configurações ao nível do projeto, guardadas com o projeto.
 
 ## Object strings
 
@@ -1868,6 +1858,8 @@ properties-limits-newly-loaded-geotiff-previews = Limita as pré-visualizações
 properties-line-colour = Cor de linha
 properties-look-sensitivity = Sensibilidade ao olhar
 properties-max-clip-span = Máximo comprimento do clip
+properties-modelling = Modelação
+properties-modelling-help = Como Construir superfície desenha a sua grelha. Configurações ao nível do projeto, guardadas com o projeto.
 properties-move-layer = Mover para a camada...
 properties-near-clip-limit = Limite próximo do clip
 properties-no-drillhole-datasets-open = Nenhum conjunto de furos de sondagem aberto.
@@ -1882,6 +1874,9 @@ properties-restore-defaults = Restaurar predefinições
 properties-show-console = Mostrar console
 properties-shows-live-near-far-projection = Mostra as distâncias de projeção próxima e distante em tempo real na barra de status.
 properties-snap-polling = Verificação de encaixe
+properties-steep-pair-angle = Ângulo de pares íngremes
+properties-steep-pair-distance = Distância de pares íngremes
+properties-steep-pair-distance-help = Os pares de pontos mais próximos do que este valor em planta e mais íngremes do que o ângulo abaixo são indicados quando uma construção tem êxito. Nunca são recusados nem reparados.
 properties-surface-chunk-debug-view = Vista de depuração de blocos da superfície
 properties-vertical-sync = Sincronização vertical
 properties-world-axis-gizmo = Gizmo do eixo mundial
@@ -1910,7 +1905,7 @@ reference-surface-points-surface-built-from-selected = Os pontos a partir dos qu
 reference-surface-extent-help = A linha fechada selecionada pela qual a superfície final é recortada; os pontos fora dela continuam a moldar a superfície.
 reference-surface-selected-open-strings-surface-made = As linhas abertas selecionadas pelas quais a superfície é obrigada a passar, tal como selecionadas quando a caixa de diálogo abriu. Feche a caixa de diálogo para selecionar outras.
 reference-surface-grids-selected-points-plan-into = Gera em planta uma grelha com os pontos selecionados para criar uma nova superfície. Cada construção acrescenta uma superfície.
-reference-surface-change-these-under-modelling-settings = Altere-os em Modelação, Configurações
+reference-surface-change-these-in-preferences = Altere-os em Preferências, Modelação
 reference-surface-triangulates-selected-points-plan-in = Triangula em planta os pontos selecionados numa nova superfície. Cada construção acrescenta uma superfície.
 
 ## Screenshot strings

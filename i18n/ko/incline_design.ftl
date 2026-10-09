@@ -1699,16 +1699,6 @@ main-incline-design-web-startup-failed = Incline Design Web 시작 실패: { $er
 ## Menu strings
 
 menu-count-files-selected = 파일 { $count }개 선택됨
-modelling-settings-modelling-settings = 모델링 설정
-modelling-settings-thin-plate-spline-exact = 박판 스플라인, 정확
-modelling-settings-anisotropic-spline = 이방성 스플라인
-modelling-settings-auto-axis-spline = 자동 축 스플라인
-modelling-settings-surface-method = 표면 방법
-modelling-settings-hermite-dips = 경사각을 쓰는 에르미트(경사각 측정값 필요)
-modelling-settings-steep-pair-distance = 급경사 쌍 거리
-modelling-settings-steep-pair-distance-help = 평면상에서 이 거리보다 가깝고 아래 각도보다 급한 점 쌍은 구축이 성공할 때 표시됩니다. 거부하거나 수정하지는 않습니다.
-modelling-settings-steep-pair-angle = 급경사 쌍 각도
-modelling-settings-surface-help = 표면 만들기가 그리드를 그리는 방식입니다. 프로젝트 수준 설정이며 프로젝트와 함께 저장됩니다.
 
 ## Object strings
 
@@ -1903,6 +1893,8 @@ properties-limits-newly-loaded-geotiff-previews = 새로 로드된 GeoTIFF 미�
 properties-line-colour = 선 색상
 properties-look-sensitivity = 시점 감도
 properties-max-clip-span = 최대 클립 범위
+properties-modelling = 모델링
+properties-modelling-help = 표면 만들기가 그리드를 그리는 방식입니다. 프로젝트 수준 설정이며 프로젝트와 함께 저장됩니다.
 properties-move-layer = 레이어로 이동...
 properties-near-clip-limit = 근접 클립 한계
 properties-no-drillhole-datasets-open = 열린 시추공 데이터 세트가 없습니다.
@@ -1917,6 +1909,9 @@ properties-restore-defaults = 기본값 복원
 properties-show-console = 콘솔 표시
 properties-shows-live-near-far-projection = 상태 표시줄에 실시간 근/원 투영 거리를 표시합니다.
 properties-snap-polling = 스냅 폴링
+properties-steep-pair-angle = 급경사 쌍 각도
+properties-steep-pair-distance = 급경사 쌍 거리
+properties-steep-pair-distance-help = 평면상에서 이 거리보다 가깝고 아래 각도보다 급한 점 쌍은 구축이 성공할 때 표시됩니다. 거부하거나 수정하지는 않습니다.
 properties-surface-chunk-debug-view = 표면 청크 디버그 뷰
 properties-vertical-sync = 수직 동기화
 properties-world-axis-gizmo = 월드 축 표시기
@@ -1945,7 +1940,7 @@ reference-surface-points-surface-built-from-selected = 표면을 만드는 데 �
 reference-surface-extent-help = 완성된 표면을 클립할 선택한 닫힌 선입니다. 그 밖의 점도 표면 형태에 영향을 줍니다.
 reference-surface-selected-open-strings-surface-made = 표면이 통과하도록 할 선택한 열린 선으로, 대화상자를 열 때 선택한 항목입니다. 다른 선을 선택하려면 대화상자를 닫으세요.
 reference-surface-grids-selected-points-plan-into = 선택한 점을 평면상에서 그리드화하여 새 표면을 만듭니다. 실행할 때마다 표면이 추가됩니다.
-reference-surface-change-these-under-modelling-settings = 모델링, 설정에서 변경하세요
+reference-surface-change-these-in-preferences = 환경설정의 모델링에서 변경하십시오
 reference-surface-triangulates-selected-points-plan-in = 선택한 점을 평면상에서 삼각화하여 새 표면을 만듭니다. 실행할 때마다 표면이 추가됩니다.
 
 ## Screenshot strings

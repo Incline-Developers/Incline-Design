@@ -265,15 +265,17 @@ pub(crate) struct ProjectMetadata {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SurfaceMethod {
-    /// The thin plate spline, exact through every point.
+    /// The thin plate spline, exact through every point. Also what a method
+    /// this build does not have reads as, so an older project still opens.
     #[default]
+    #[serde(other)]
     ThinPlateSpline,
 }
 
 /// The Modelling branch's project-level settings for Build Surface. The
-/// defaults build the exact spline.
+/// defaults build the exact spline; an unknown field is ignored on read.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub(crate) struct ModellingSettings {
     pub(crate) surface_method: SurfaceMethod,
     /// Pairs of points closer than this in plan, in metres, and steeper than
@@ -315,23 +317,9 @@ impl ModellingSettings {
         None
     }
 
-    /// The settings as a project stored them. A method Build Surface no
-    /// longer has, and the settings only it read, quietly give way to the
-    /// exact spline, so an older project still opens.
+    /// The settings as a project stored them.
     pub(crate) fn read(stored: &serde_json::Value) -> Option<Self> {
-        let mut stored = stored.clone();
-        if let Some(fields) = stored.as_object_mut() {
-            let removed = fields
-                .get("surface_method")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|method| ["anisotropic_thin_plate_spline", "auto_axis"].contains(&method));
-            if removed {
-                fields.remove("surface_method");
-            }
-            fields.remove("axis_azimuth");
-            fields.remove("axis_ratio");
-        }
-        Self::deserialize(&stored).ok()
+        Self::deserialize(stored).ok()
     }
 }
 

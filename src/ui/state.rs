@@ -2084,8 +2084,6 @@ pub(crate) struct EditorState {
     pub(crate) seam_rename_dialog: Option<SeamRenameDraft>,
     /// The shift names dialog's hole, direction and reason while it is open.
     pub(crate) name_shift_dialog: Option<NameShiftDraft>,
-    /// The Modelling branch's settings dialog: the datum the model is built in.
-    pub(crate) show_modelling_settings: bool,
     pub(crate) block_model_create_open: bool,
     pub(crate) kriging_drill_hole_id: Option<DrillHoleId>,
     pub(crate) kriging_variables: Vec<String>,
@@ -2435,7 +2433,6 @@ impl EditorState {
             || self.thickness_points_dialog.is_some()
             || self.seam_surface_dialog.is_some()
             || self.tri_cut_to_open
-            || self.show_modelling_settings
             || self.drill_pattern_open
             || self.plot_dialog.is_some()
             || self.move_to_layer_dialog.is_some()
@@ -3275,7 +3272,6 @@ impl EditorState {
             seam_tables: std::collections::HashMap::new(),
             seam_rename_dialog: None,
             name_shift_dialog: None,
-            show_modelling_settings: false,
             block_model_create_open: false,
             kriging_drill_hole_id: None,
             kriging_variables: Vec::new(),
@@ -4134,9 +4130,9 @@ pub(crate) enum UiCommand {
     /// Show again the thickness grid behind a surface Thickness Surfaces
     /// made this session.
     ShowSeamTable(TriangulationId),
+    /// The Preferences window, open on its Modelling tab.
     OpenModellingSettings,
-    /// The project's modelling settings, whole; the dialog sends them only
-    /// when valid.
+    /// The project's modelling settings, whole, sent only when valid.
     SetModellingSettings(crate::model::project::ModellingSettings),
     /// One point per hole at the chosen boundary of a working section, as a
     /// new layer, on the holes the command was opened on.
@@ -5415,6 +5411,7 @@ pub(crate) enum PropertyTab {
     Performance,
     Developer,
     Drillholes,
+    Modelling,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

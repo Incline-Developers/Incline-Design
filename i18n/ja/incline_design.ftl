@@ -1694,16 +1694,6 @@ main-incline-design-web-startup-failed = Incline Design Web の起動に失敗�
 ## Menu strings
 
 menu-count-files-selected = { $count } 個のファイルを選択中
-modelling-settings-modelling-settings = モデリング設定
-modelling-settings-thin-plate-spline-exact = 薄板スプライン（厳密）
-modelling-settings-anisotropic-spline = 異方性スプライン
-modelling-settings-auto-axis-spline = 自動軸スプライン
-modelling-settings-surface-method = 曲面の方式
-modelling-settings-hermite-dips = 傾斜角を用いたエルミート（傾斜の測定値が必要）
-modelling-settings-steep-pair-distance = 急勾配ペアの距離
-modelling-settings-steep-pair-distance-help = 平面上でこの距離より近く、下の角度より急勾配の点のペアは、構築が成功したときに報告されます。構築が拒否されたり補正されたりすることはありません。
-modelling-settings-steep-pair-angle = 急勾配ペアの角度
-modelling-settings-surface-help = 「曲面を構築」でグリッドをどのように描くかを設定します。プロジェクト単位の設定で、プロジェクトとともに保存されます。
 
 ## Object strings
 
@@ -1898,6 +1888,8 @@ properties-limits-newly-loaded-geotiff-previews = 新規に読み込むGeoTIFF�
 properties-line-colour = 線の色
 properties-look-sensitivity = 視点操作の感度
 properties-max-clip-span = 最大クリップ幅
+properties-modelling = モデリング
+properties-modelling-help = 「曲面を構築」でグリッドをどのように描くかを設定します。プロジェクト単位の設定で、プロジェクトとともに保存されます。
 properties-move-layer = レイヤーへ移動...
 properties-near-clip-limit = ニアクリップ限界
 properties-no-drillhole-datasets-open = 開いている削孔データセットはありません。
@@ -1912,6 +1904,9 @@ properties-restore-defaults = 既定値に戻す
 properties-show-console = コンソールを表示
 properties-shows-live-near-far-projection = ステータスバーに現在のニア/ファー投影距離を表示します。
 properties-snap-polling = スナップのポーリング
+properties-steep-pair-angle = 急勾配ペアの角度
+properties-steep-pair-distance = 急勾配ペアの距離
+properties-steep-pair-distance-help = 平面上でこの距離より近く、下の角度より急勾配の点のペアは、構築が成功したときに報告されます。構築が拒否されたり補正されたりすることはありません。
 properties-surface-chunk-debug-view = 曲面チャンクのデバッグビュー
 properties-vertical-sync = 垂直同期
 properties-world-axis-gizmo = ワールド軸ギズモ
@@ -1940,7 +1935,7 @@ reference-surface-points-surface-built-from-selected = 曲面の構築に使用�
 reference-surface-extent-help = 完成した曲面をクリップする、選択した閉じたストリング。範囲外の点も曲面の形状に影響します。
 reference-surface-selected-open-strings-surface-made = 曲面が通過するように作られる、選択した開いたストリング。ダイアログを開いたときの選択です。別のものを選択するにはダイアログを閉じてください。
 reference-surface-grids-selected-points-plan-into = 選択した点を平面上でグリッド化し、新しい曲面を作成します。構築のたびに曲面が追加されます。
-reference-surface-change-these-under-modelling-settings = これらはモデリング、設定で変更できます
+reference-surface-change-these-in-preferences = これらは 環境設定 の モデリング で変更します
 reference-surface-triangulates-selected-points-plan-in = 選択した点を平面上で三角網化し、新しい曲面を作成します。構築のたびに曲面が追加されます。
 
 ## Screenshot strings

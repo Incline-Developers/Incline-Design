@@ -1717,16 +1717,6 @@ main-incline-design-web-startup-failed = Incline Design Web-н эхлэл амж
 ## Menu strings
 
 menu-count-files-selected = { $count } файл сонгогдсон
-modelling-settings-modelling-settings = Загварчлалын тохиргоо
-modelling-settings-thin-plate-spline-exact = Нимгэн хавтангийн сплайн, яг
-modelling-settings-anisotropic-spline = Анизотроп сплайн
-modelling-settings-auto-axis-spline = Автомат тэнхлэгтэй сплайн
-modelling-settings-surface-method = Гадаргуугийн арга
-modelling-settings-hermite-dips = Уналттай Эрмит (уналтын хэмжилт шаардлагатай)
-modelling-settings-steep-pair-distance = Эгц хосын зай
-modelling-settings-steep-pair-distance-help = Төлөвлөгөөн дээр энэ зайгаас ойр, доорх өнцгөөс эгц цэгийн хосуудыг бүтээлт амжилттай болоход нэрлэнэ. Хэзээ ч татгалзаж, засдаггүй.
-modelling-settings-steep-pair-angle = Эгц хосын өнцөг
-modelling-settings-surface-help = Гадаргуу бүтээх нь торыг хэрхэн зурахыг тодорхойлно. Төслийн түвшний тохиргоо бөгөөд төсөлтэйгээ хамт хадгалагдана.
 
 ## Object strings
 
@@ -1921,6 +1911,8 @@ properties-limits-newly-loaded-geotiff-previews = Шинээр ачаалагд�
 properties-line-colour = Шугамын өнгө
 properties-look-sensitivity = Харцны мэдрэмж
 properties-max-clip-span = Огтлолын дээд урт
+properties-modelling = Загварчлал
+properties-modelling-help = Гадаргуу бүтээх нь торыг хэрхэн зурахыг тодорхойлно. Төслийн түвшний тохиргоо бөгөөд төсөлтэйгээ хамт хадгалагдана.
 properties-move-layer = Давхарга руу шилжүүлэх...
 properties-near-clip-limit = Ойрын огтлолын хязгаар
 properties-no-drillhole-datasets-open = Нээлттэй цооногийн өгөгдлийн багц алга.
@@ -1935,6 +1927,9 @@ properties-restore-defaults = Үндсэн тохиргоог сэргээх
 properties-show-console = Консол харуулах
 properties-shows-live-near-far-projection = Төлөв байдлын мөрөнд шууд ойр ба хол проекцийн зайг харуулна.
 properties-snap-polling = Наалдацыг шалгах
+properties-steep-pair-angle = Эгц хосын өнцөг
+properties-steep-pair-distance = Эгц хосын зай
+properties-steep-pair-distance-help = Төлөвлөгөөн дээр энэ зайгаас ойр, доорх өнцгөөс эгц цэгийн хосуудыг бүтээлт амжилттай болоход нэрлэнэ. Хэзээ ч татгалзаж, засдаггүй.
 properties-surface-chunk-debug-view = Гадаргуугийн хэсгийн дибаг харагдац
 properties-vertical-sync = Босоо синхрончлол
 properties-world-axis-gizmo = Дэлхийн тэнхлэгийн гизмо
@@ -1963,7 +1958,7 @@ reference-surface-points-surface-built-from-selected = Гадаргууг бүт
 reference-surface-extent-help = Дууссан гадаргууг огтлох сонгосон хаалттай шугам; түүнээс гадуурх цэгүүд гадаргууг хэвээр хэлбэржүүлнэ.
 reference-surface-selected-open-strings-surface-made = Гадаргууг дайрч өнгөрүүлэх сонгосон задгай шугамууд, цонх нээгдэх үед сонгогдсон ёсоор. Өөрийг сонгохын тулд цонхыг хаана уу.
 reference-surface-grids-selected-points-plan-into = Сонгосон цэгүүдийг төлөвлөгөөн дээр торлон шинэ гадаргуу үүсгэнэ. Бүтээлт бүр гадаргуу нэмнэ.
-reference-surface-change-these-under-modelling-settings = Эдгээрийг Загварчлал, Тохиргоо хэсгээс өөрчилнө үү
+reference-surface-change-these-in-preferences = Эдгээрийг Тохиргоо, Загварчлал хэсэгт өөрчилнө
 reference-surface-triangulates-selected-points-plan-in = Сонгосон цэгүүдийг төлөвлөгөөн дээр триангуляц хийж шинэ гадаргуу үүсгэнэ. Бүтээлт бүр гадаргуу нэмнэ.
 
 ## Screenshot strings

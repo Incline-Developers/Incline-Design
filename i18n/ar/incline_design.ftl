@@ -1666,16 +1666,6 @@ main-incline-design-web-startup-failed = فشل بدء Incline Design Web: { $er
 ## Menu strings
 
 menu-count-files-selected = تم تحديد { $count } ملف
-modelling-settings-modelling-settings = إعدادات النمذجة
-modelling-settings-thin-plate-spline-exact = سبلاين الصفيحة الرقيقة، دقيق
-modelling-settings-anisotropic-spline = سبلاين متباين الخواص
-modelling-settings-auto-axis-spline = سبلاين بمحور تلقائي
-modelling-settings-surface-method = طريقة السطح
-modelling-settings-hermite-dips = هيرميت مع الميول (يحتاج إلى قياسات الميل)
-modelling-settings-steep-pair-distance = مسافة الزوج الشديد الانحدار
-modelling-settings-steep-pair-distance-help = تُسمّى أزواج النقاط الأقرب من هذه المسافة في المسقط الأفقي والأشد انحدارًا من الزاوية أدناه عند نجاح الإنشاء. لا تُرفض ولا تُصلح أبدًا.
-modelling-settings-steep-pair-angle = زاوية الزوج الشديد الانحدار
-modelling-settings-surface-help = كيف يرسم إنشاء سطح شبكته. إعدادات على مستوى المشروع، تُحفظ مع المشروع.
 
 ## Object strings
 
@@ -1870,6 +1860,8 @@ properties-limits-newly-loaded-geotiff-previews = يقصر معاينات GeoTIF
 properties-line-colour = لون الخط
 properties-look-sensitivity = حساسية النظر
 properties-max-clip-span = أقصى طول المقطوعة
+properties-modelling = النمذجة
+properties-modelling-help = كيف يرسم إنشاء سطح شبكته. إعدادات على مستوى المشروع، تُحفظ مع المشروع.
 properties-move-layer = انتقل إلى الطبقة...
 properties-near-clip-limit = حد القطع القريب
 properties-no-drillhole-datasets-open = لا توجد مجموعات بيانات ثقوب حفر مفتوحة.
@@ -1884,6 +1876,9 @@ properties-restore-defaults = استعادة الإعدادات الافتراض
 properties-show-console = إظهار وحدة التحكم
 properties-shows-live-near-far-projection = يظهر المسافات المباشرة القريبة والبعيدة في شريط الحالة.
 properties-snap-polling = استطلاع الالتقاط
+properties-steep-pair-angle = زاوية الزوج الشديد الانحدار
+properties-steep-pair-distance = مسافة الزوج الشديد الانحدار
+properties-steep-pair-distance-help = تُسمّى أزواج النقاط الأقرب من هذه المسافة في المسقط الأفقي والأشد انحدارًا من الزاوية أدناه عند نجاح الإنشاء. لا تُرفض ولا تُصلح أبدًا.
 properties-surface-chunk-debug-view = عرض تنقيح قطع السطح
 properties-vertical-sync = التزامن الرأسي
 properties-world-axis-gizmo = أداة المحور العالمي
@@ -1912,7 +1907,7 @@ reference-surface-points-surface-built-from-selected = النقاط التي ي�
 reference-surface-extent-help = الخط المغلق المحدد الذي يُقص إليه السطح النهائي؛ والنقاط خارجه لا تزال تشكّل السطح.
 reference-surface-selected-open-strings-surface-made = الخطوط المفتوحة المحددة التي يُجعل السطح يمر عبرها، كما حُددت عند فتح الحوار. أغلق الحوار لتحديد خطوط مختلفة.
 reference-surface-grids-selected-points-plan-into = يشبّك النقاط المحددة في المسقط الأفقي إلى سطح جديد. كل عملية إنشاء تضيف سطحًا.
-reference-surface-change-these-under-modelling-settings = غيّرها ضمن النمذجة، الإعدادات
+reference-surface-change-these-in-preferences = غيّر هذه في التفضيلات، النمذجة
 reference-surface-triangulates-selected-points-plan-in = يثلّث النقاط المحددة في المسقط الأفقي إلى سطح جديد. كل عملية إنشاء تضيف سطحًا.
 
 ## Screenshot strings

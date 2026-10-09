@@ -1666,16 +1666,6 @@ main-incline-design-web-startup-failed = Incline Design Web 启动失败：{ $er
 ## Menu strings
 
 menu-count-files-selected = 已选择 { $count } 个文件
-modelling-settings-modelling-settings = 建模设置
-modelling-settings-thin-plate-spline-exact = 薄板样条，精确
-modelling-settings-anisotropic-spline = 各向异性样条
-modelling-settings-auto-axis-spline = 自动轴样条
-modelling-settings-surface-method = 曲面方法
-modelling-settings-hermite-dips = 带倾角的埃尔米特（需要倾角测量值）
-modelling-settings-steep-pair-distance = 陡坡点对距离
-modelling-settings-steep-pair-distance-help = 在平面上比此距离更近、且坡度大于下方角度的点对，会在构建成功时列出。不会拒绝或修复。
-modelling-settings-steep-pair-angle = 陡坡点对角度
-modelling-settings-surface-help = 设置“构建曲面”如何绘制其网格。这是项目级设置，随项目一起保存。
 
 ## Object strings
 
@@ -1870,6 +1860,8 @@ properties-limits-newly-loaded-geotiff-previews = 将新加载的 GeoTIFF 预览
 properties-line-colour = 线条颜色
 properties-look-sensitivity = 视角灵敏度
 properties-max-clip-span = 最大裁剪跨度
+properties-modelling = 建模
+properties-modelling-help = 设置“构建曲面”如何绘制其网格。这是项目级设置，随项目一起保存。
 properties-move-layer = 移动到层...
 properties-near-clip-limit = 近裁剪限制
 properties-no-drillhole-datasets-open = 没有打开的钻孔数据集。
@@ -1884,6 +1876,9 @@ properties-restore-defaults = 恢复默认值
 properties-show-console = 显示控制台
 properties-shows-live-near-far-projection = 在状态栏中显示实时的近/远投影距离。
 properties-snap-polling = 捕捉轮询
+properties-steep-pair-angle = 陡坡点对角度
+properties-steep-pair-distance = 陡坡点对距离
+properties-steep-pair-distance-help = 在平面上比此距离更近、且坡度大于下方角度的点对，会在构建成功时列出。不会拒绝或修复。
 properties-surface-chunk-debug-view = 曲面分块调试视图
 properties-vertical-sync = 垂直同步
 properties-world-axis-gizmo = 世界坐标轴指示器
@@ -1912,7 +1907,7 @@ reference-surface-points-surface-built-from-selected = 构建曲面所用的点�
 reference-surface-extent-help = 所选闭合线，完成的曲面将裁剪到该范围；其外的点仍会影响曲面形状。
 reference-surface-selected-open-strings-surface-made = 曲面必须穿过的所选开放线，即打开对话框时所选的线。关闭对话框以选择其他线。
 reference-surface-grids-selected-points-plan-into = 在平面上将所选点网格化，生成新曲面。每次构建都会新增一个曲面。
-reference-surface-change-these-under-modelling-settings = 可在“建模”“设置”下更改
+reference-surface-change-these-in-preferences = 在 偏好设置 的 建模 中更改这些
 reference-surface-triangulates-selected-points-plan-in = 在平面上对所选点进行三角剖分，生成新曲面。每次构建都会新增一个曲面。
 
 ## Screenshot strings

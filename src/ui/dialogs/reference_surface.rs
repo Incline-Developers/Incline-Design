@@ -46,7 +46,7 @@ pub(crate) fn draw_reference_surface_dialog(ui: &mut egui::Ui, editor: &mut Edit
             // Read only here: one place to change them, and the build uses
             // what the project holds.
             ui.small(project.modelling.summary());
-            ui.small(tr!("reference-surface-change-these-under-modelling-settings"));
+            ui.small(tr!("reference-surface-change-these-in-preferences"));
             menu::menu_actions(ui, |ui| {
                 let confirm = menu::dialog_confirm_pressed(ui.ctx());
                 if ui.add(MenuButton::new(tr!("reference-points-make")).primary()).clicked() || confirm {

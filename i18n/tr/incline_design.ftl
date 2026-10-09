@@ -1708,16 +1708,6 @@ main-incline-design-web-startup-failed = Incline Design Web başlatma işlemi ba
 ## Menu strings
 
 menu-count-files-selected = { $count } dosya seçildi
-modelling-settings-modelling-settings = Modelleme Ayarları
-modelling-settings-thin-plate-spline-exact = İnce plaka spline, tam
-modelling-settings-anisotropic-spline = Anizotropik spline
-modelling-settings-auto-axis-spline = Otomatik eksenli spline
-modelling-settings-surface-method = Yüzey yöntemi
-modelling-settings-hermite-dips = Eğimli Hermite (eğim ölçümleri gerekir)
-modelling-settings-steep-pair-distance = Dik çift mesafesi
-modelling-settings-steep-pair-distance-help = Planda bu mesafeden yakın ve aşağıdaki açıdan daha dik nokta çiftleri, oluşturma başarılı olunca bildirilir. Asla reddedilmez veya onarılmaz.
-modelling-settings-steep-pair-angle = Dik çift açısı
-modelling-settings-surface-help = Yüzey Oluştur ağını nasıl çizer. Proje düzeyinde ayarlar, projeyle birlikte kaydedilir.
 
 ## Object strings
 
@@ -1912,6 +1902,8 @@ properties-limits-newly-loaded-geotiff-previews = Yeni yüklenen GeoTIFF önizle
 properties-line-colour = Çizgi rengi
 properties-look-sensitivity = Bakış duyarlılığı
 properties-max-clip-span = Maks kırpma aralığı
+properties-modelling = Modelleme
+properties-modelling-help = Yüzey Oluştur ağını nasıl çizer. Proje düzeyinde ayarlar, projeyle birlikte kaydedilir.
 properties-move-layer = Katmana Taşı...
 properties-near-clip-limit = Yakın kırpma sınırı
 properties-no-drillhole-datasets-open = Açık sondaj deliği veri kümesi yok.
@@ -1926,6 +1918,9 @@ properties-restore-defaults = Varsayılanları Geri Yükle
 properties-show-console = Konsolu göster
 properties-shows-live-near-far-projection = Durum çubuğunda canlı yakın ve uzak izdüşüm mesafelerini gösterir.
 properties-snap-polling = Yapışma sorgusu
+properties-steep-pair-angle = Dik çift açısı
+properties-steep-pair-distance = Dik çift mesafesi
+properties-steep-pair-distance-help = Planda bu mesafeden yakın ve aşağıdaki açıdan daha dik nokta çiftleri, oluşturma başarılı olunca bildirilir. Asla reddedilmez veya onarılmaz.
 properties-surface-chunk-debug-view = Yüzey parça hata ayıklama görünümü
 properties-vertical-sync = Dikey eşitleme
 properties-world-axis-gizmo = Dünya ekseni göstergesi
@@ -1954,7 +1949,7 @@ reference-surface-points-surface-built-from-selected = Yüzeyin oluşturulduğu 
 reference-surface-extent-help = Tamamlanmış yüzeyin kırpılacağı seçili kapalı dizgi; dışındaki noktalar yüzeyi yine de şekillendirir.
 reference-surface-selected-open-strings-surface-made = Yüzeyin içlerinden geçecek şekilde oluşturulduğu seçili açık dizgiler, iletişim kutusu açıldığında seçili olanlar. Farklılarını seçmek için iletişim kutusunu kapatın.
 reference-surface-grids-selected-points-plan-into = Seçili noktaları planda ağa dökerek yeni bir yüzey oluşturur. Her oluşturma bir yüzey ekler.
-reference-surface-change-these-under-modelling-settings = Bunları şuradan değiştirin: Modelleme, Ayarlar
+reference-surface-change-these-in-preferences = Bunları Tercihler, Modelleme altında değiştirin
 reference-surface-triangulates-selected-points-plan-in = Seçili noktaları planda yeni bir yüzeye üçgenler. Her oluşturma bir yüzey ekler.
 
 ## Screenshot strings

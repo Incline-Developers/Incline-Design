@@ -1736,16 +1736,6 @@ main-incline-design-web-startup-failed = Uruchamianie Incline Design Web nie pow
 ## Menu strings
 
 menu-count-files-selected = Wybrano plików: { $count }
-modelling-settings-modelling-settings = Ustawienia modelowania
-modelling-settings-thin-plate-spline-exact = Spline cienkiej płyty, dokładny
-modelling-settings-anisotropic-spline = Spline anizotropowy
-modelling-settings-auto-axis-spline = Spline z automatycznymi osiami
-modelling-settings-surface-method = Metoda budowy powierzchni
-modelling-settings-hermite-dips = Hermite'a z upadami (wymaga pomiarów upadu)
-modelling-settings-steep-pair-distance = Odległość stromej pary
-modelling-settings-steep-pair-distance-help = Pary punktów bliższych niż ta odległość w rzucie i bardziej stromych niż kąt poniżej są wymieniane po udanej budowie. Nigdy nie są odrzucane ani naprawiane.
-modelling-settings-steep-pair-angle = Kąt stromej pary
-modelling-settings-surface-help = Jak Zbuduj powierzchnię rysuje swoją siatkę. Ustawienia na poziomie projektu, zapisywane z projektem.
 
 ## Object strings
 
@@ -1940,6 +1930,8 @@ properties-limits-newly-loaded-geotiff-previews = Ogranicza podglądy nowo wczyt
 properties-line-colour = Kolor linii
 properties-look-sensitivity = Czułość rozglądania się
 properties-max-clip-span = Maks. rozpiętość przycięcia
+properties-modelling = Modelowanie
+properties-modelling-help = Jak Zbuduj powierzchnię rysuje swoją siatkę. Ustawienia na poziomie projektu, zapisywane z projektem.
 properties-move-layer = Przenieś do warstwy...
 properties-near-clip-limit = Granica bliskiego przycięcia
 properties-no-drillhole-datasets-open = Brak otwartych zbiorów otworów wiertniczych.
@@ -1954,6 +1946,9 @@ properties-restore-defaults = Przywróć domyślne
 properties-show-console = Pokaż konsolę
 properties-shows-live-near-far-projection = Wyświetla na pasku stanu bieżące odległości bliskiej i dalekiej projekcji.
 properties-snap-polling = Odpytywanie przyciągania
+properties-steep-pair-angle = Kąt stromej pary
+properties-steep-pair-distance = Odległość stromej pary
+properties-steep-pair-distance-help = Pary punktów bliższych niż ta odległość w rzucie i bardziej stromych niż kąt poniżej są wymieniane po udanej budowie. Nigdy nie są odrzucane ani naprawiane.
 properties-surface-chunk-debug-view = Widok debugowania fragmentów powierzchni
 properties-vertical-sync = Synchronizacja pionowa
 properties-world-axis-gizmo = Gizmo osi świata
@@ -1982,7 +1977,7 @@ reference-surface-points-surface-built-from-selected = Punkty, z których budowa
 reference-surface-extent-help = Wybrana zamknięta linia, do której przycinana jest gotowa powierzchnia; punkty poza nią nadal kształtują powierzchnię.
 reference-surface-selected-open-strings-surface-made = Wybrane otwarte linie, przez które przechodzi powierzchnia, zaznaczone w chwili otwarcia okna. Zamknij okno, aby wybrać inne.
 reference-surface-grids-selected-points-plan-into = Buduje siatką nową powierzchnię z wybranych punktów w rzucie. Każda budowa dodaje powierzchnię.
-reference-surface-change-these-under-modelling-settings = Zmień je w: Modelowanie, Ustawienia
+reference-surface-change-these-in-preferences = Zmień je w Preferencje, Modelowanie
 reference-surface-triangulates-selected-points-plan-in = Triangulacja wybranych punktów w rzucie do nowej powierzchni. Każda budowa dodaje powierzchnię.
 
 ## Screenshot strings

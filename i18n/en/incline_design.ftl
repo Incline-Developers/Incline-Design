@@ -1741,16 +1741,6 @@ menu-count-files-selected = { $count } files selected
 
 ## Modelling strings
 
-modelling-settings-modelling-settings = Modelling Settings
-modelling-settings-thin-plate-spline-exact = Thin plate spline, exact
-modelling-settings-anisotropic-spline = Anisotropic spline
-modelling-settings-auto-axis-spline = Auto-axis spline
-modelling-settings-surface-method = Surface method
-modelling-settings-hermite-dips = Hermite with dips (needs dip measurements)
-modelling-settings-steep-pair-distance = Steep-pair distance
-modelling-settings-steep-pair-distance-help = Pairs of points closer than this in plan, and steeper than the angle below, are named when a build succeeds. Never refused or repaired.
-modelling-settings-steep-pair-angle = Steep-pair angle
-modelling-settings-surface-help = How Build Surface draws its grid. Project-level settings, saved with the project.
 
 ## Object strings
 
@@ -1948,6 +1938,8 @@ properties-limits-newly-loaded-geotiff-previews = Limits newly loaded GeoTIFF pr
 properties-line-colour = Line colour
 properties-look-sensitivity = Look sensitivity
 properties-max-clip-span = Max clip span
+properties-modelling = Modelling
+properties-modelling-help = How Build Surface draws its grid. Project-level settings, saved with the project.
 properties-move-layer = Move to Layer...
 properties-near-clip-limit = Near clip limit
 properties-no-drillhole-datasets-open = No drillhole datasets are open.
@@ -1962,6 +1954,9 @@ properties-restore-defaults = Restore Defaults
 properties-show-console = Show console
 properties-shows-live-near-far-projection = Shows the live near and far projection distances in the status bar.
 properties-snap-polling = Snap polling
+properties-steep-pair-angle = Steep-pair angle
+properties-steep-pair-distance = Steep-pair distance
+properties-steep-pair-distance-help = Pairs of points closer than this in plan, and steeper than the angle below, are named when a build succeeds. Never refused or repaired.
 properties-surface-chunk-debug-view = Surface chunk debug view
 properties-vertical-sync = Vertical sync
 properties-world-axis-gizmo = World axis gizmo
@@ -1993,7 +1988,7 @@ reference-surface-points-surface-built-from-selected = The points the surface is
 reference-surface-extent-help = The selected closed string the finished surface is clipped to; points outside it still shape the surface.
 reference-surface-selected-open-strings-surface-made = The selected open strings the surface is made to pass through, as selected when the dialog opened. Close the dialog to select different ones.
 reference-surface-grids-selected-points-plan-into = Grids the selected points in plan into a new surface. Each build adds a surface.
-reference-surface-change-these-under-modelling-settings = Change these under Modelling, Settings
+reference-surface-change-these-in-preferences = Change these in Preferences, Modelling
 
 ## Screenshot strings
 

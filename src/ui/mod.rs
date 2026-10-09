@@ -970,7 +970,7 @@ fn draw_ui(
     dialogs::editing::draw_insert_point_at_elevation_dialog(root_ui, editor, commands);
     dialogs::object_edit::draw_object_edit_dialog(root_ui, editor, commands);
     dialogs::about::draw_about_dialog(root_ui, editor);
-    elements::properties::draw_preferences(root_ui, editor, drill_holes, commands);
+    elements::properties::draw_preferences(root_ui, editor, drill_holes, project.has_active_project.then_some(&project.modelling), commands);
     elements::properties::draw_block_model_controls(root_ui, editor, block_models, commands, canvas_rect);
 
     // --- Canvas right-click context menu ---
@@ -1258,7 +1258,6 @@ fn draw_global_dialogs(
     dialogs::thickness_points::draw_thickness_table(root_ui, editor);
     dialogs::thickness_points::draw_seam_surface_dialog(root_ui, editor, commands);
     dialogs::thickness_points::draw_seam_table(root_ui, editor);
-    dialogs::modelling_settings::draw_modelling_settings_dialog(root_ui, editor, project, commands);
     geometry_dirty |= dialogs::drill_pattern::draw_drill_pattern_dialog(root_ui, editor, document, commands);
     dialogs::charging::draw_charge_product_dialog(root_ui, editor, commands);
     dialogs::charging::draw_charge_rule_dialog(root_ui, editor, drill_holes, commands);

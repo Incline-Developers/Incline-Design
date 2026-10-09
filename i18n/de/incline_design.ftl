@@ -1707,16 +1707,6 @@ main-incline-design-web-startup-failed = Start von Incline Design Web fehlgeschl
 ## Menu strings
 
 menu-count-files-selected = { $count } Dateien ausgewählt
-modelling-settings-modelling-settings = Modellierungseinstellungen
-modelling-settings-thin-plate-spline-exact = Dünnplattenspline, exakt
-modelling-settings-anisotropic-spline = Anisotroper Spline
-modelling-settings-auto-axis-spline = Spline mit automatischer Achse
-modelling-settings-surface-method = Oberflächenmethode
-modelling-settings-hermite-dips = Hermite mit Fallwerten (benötigt Fallmessungen)
-modelling-settings-steep-pair-distance = Steilpaar-Abstand
-modelling-settings-steep-pair-distance-help = Punktepaare, die im Grundriss näher beieinander liegen als dieser Wert und steiler sind als der Winkel darunter, werden bei einem erfolgreichen Aufbau genannt. Nie abgelehnt oder repariert.
-modelling-settings-steep-pair-angle = Steilpaar-Winkel
-modelling-settings-surface-help = Wie Oberfläche erstellen sein Raster zeichnet. Einstellungen auf Projektebene, mit dem Projekt gespeichert.
 
 ## Object strings
 
@@ -1911,6 +1901,8 @@ properties-limits-newly-loaded-geotiff-previews = Begrenzt neu geladene GeoTIFF-
 properties-line-colour = Linienfarbe
 properties-look-sensitivity = Blickempfindlichkeit
 properties-max-clip-span = Max. Clip-Spanne
+properties-modelling = Modellierung
+properties-modelling-help = Wie Oberfläche erstellen sein Raster zeichnet. Einstellungen auf Projektebene, mit dem Projekt gespeichert.
 properties-move-layer = Auf Ebene verschieben...
 properties-near-clip-limit = Nahe Clip-Grenze
 properties-no-drillhole-datasets-open = Keine Bohrloch-Datensätze geöffnet.
@@ -1925,6 +1917,9 @@ properties-restore-defaults = Standardwerte wiederherstellen
 properties-show-console = Konsole anzeigen
 properties-shows-live-near-far-projection = Zeigt die aktuellen nahen und fernen Projektionsabstände in der Statusleiste an.
 properties-snap-polling = Fangabfrage
+properties-steep-pair-angle = Steilpaar-Winkel
+properties-steep-pair-distance = Steilpaar-Abstand
+properties-steep-pair-distance-help = Punktepaare, die im Grundriss näher beieinander liegen als dieser Wert und steiler sind als der Winkel darunter, werden bei einem erfolgreichen Aufbau genannt. Nie abgelehnt oder repariert.
 properties-surface-chunk-debug-view = Debug-Ansicht der Oberflächen-Chunks
 properties-vertical-sync = Vertikale Synchronisierung
 properties-world-axis-gizmo = Weltachsen-Gizmo
@@ -1953,7 +1948,7 @@ reference-surface-points-surface-built-from-selected = Die Punkte, aus denen die
 reference-surface-extent-help = Der ausgewählte geschlossene Linienzug, auf den die fertige Oberfläche beschnitten wird; Punkte außerhalb formen die Oberfläche weiterhin.
 reference-surface-selected-open-strings-surface-made = Die ausgewählten offenen Linienzüge, durch die die Oberfläche verläuft, wie beim Öffnen des Dialogs ausgewählt. Schließen Sie den Dialog, um andere auszuwählen.
 reference-surface-grids-selected-points-plan-into = Rastert die ausgewählten Punkte im Grundriss zu einer neuen Oberfläche. Jeder Aufbau fügt eine Oberfläche hinzu.
-reference-surface-change-these-under-modelling-settings = Ändern Sie diese unter Modellierung, Einstellungen
+reference-surface-change-these-in-preferences = Diese unter Einstellungen, Modellierung ändern
 reference-surface-triangulates-selected-points-plan-in = Trianguliert die ausgewählten Punkte im Grundriss zu einer neuen Oberfläche. Jeder Aufbau fügt eine Oberfläche hinzu.
 
 ## Screenshot strings
