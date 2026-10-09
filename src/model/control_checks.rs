@@ -263,12 +263,14 @@ pub(crate) fn validate_controls(controls: &[Vec<DVec3>], names: &[usize], cancel
     .into())
 }
 
-/// The refusal for controls crossing or doubling back on themselves, typed
-/// so the UI thread can select the strings it names without reading the
-/// text: `refused` holds every one, past the report's line limit too, by
-/// place in the selection counting from zero, in that order. `positions`
-/// holds where each goes wrong, in the same order: the turn vertex, or the
-/// self-crossing point at the height of the first segment there.
+/// The refusal for controls crossing or doubling back on themselves, or
+/// read before the build as gone, empty or not numbers, typed so the UI
+/// thread can select the strings it names without reading the text:
+/// `refused` holds every one, past the report's line limit too, by place in
+/// the selection counting from zero, in that order. `positions` holds where
+/// each goes wrong, in the same order: the turn vertex, the self-crossing
+/// point at the height of the first segment there, or a vertex of a string
+/// that is not numbers; empty when the one string refused has none.
 #[derive(Debug)]
 pub(crate) struct MisshapenControls {
     pub(crate) refused: Vec<usize>,

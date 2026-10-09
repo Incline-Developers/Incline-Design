@@ -646,6 +646,7 @@ impl<'a> App<'a> {
                 // change under it.
                 let layer_name = |id| self.scene_document.layer(id).map(|layer| layer.name.clone()).unwrap_or_default();
                 let points_label = match input.layers.as_slice() {
+                    [] => tr!("cmd-commands-no-points"),
                     [layer] => tr!(
                         "cmd-commands-count-point-s-layer",
                         count = input.points.len().to_string(),

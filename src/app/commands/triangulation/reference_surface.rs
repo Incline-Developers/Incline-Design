@@ -17,7 +17,7 @@ use crate::{
             BoxGrid, Crossing, MisshapenControls, PlanCells, SEARCH_MARGIN, SELF_SHAPE_LINES, canonical_order, cell_of, cells_across, control_crossings, control_points,
             control_points_spaced, elevation_along, grid_cell, nearer_end, segment_box, self_intersects, stop_if_cancelled, too_few_control_vertices, validate_controls,
         },
-        kernel::{self, PolyContainment, SegSeg},
+        kernel::{self, PolyContainment},
         progress::Progress,
         project::ModellingSettings,
         rbf::{self, DEFAULT_SPACING, MERGE_DISTANCE, POINT_BUDGET, RbfSurface, SteepPair},
@@ -183,6 +183,7 @@ pub(crate) fn surface_input(document: &Document, selected: &HashSet<SceneEntityI
     let mut points = Vec::new();
     let mut layers = Vec::new();
     let mut controls = Vec::new();
+    let mut control_vertices = 0;
     let mut extents = Vec::new();
     for object in document.objects() {
         if !selected.contains(&SceneEntityId::Object(object.id())) {
@@ -198,7 +199,10 @@ pub(crate) fn surface_input(document: &Document, selected: &HashSet<SceneEntityI
             // Shape tells the two kinds of string apart: an open one is a
             // control the surface passes through, a closed one bounds the
             // ground the surface covers.
-            Object::Polyline { id, closed: false, .. } => controls.push(*id),
+            Object::Polyline { id, closed: false, verts, .. } => {
+                controls.push(*id);
+                control_vertices += verts.len();
+            }
             // `extent_ring` below accepts a closed polyline and nothing else,
             // so that is all that is offered as an extent here - not
             // everything `Object::encloses_area()` would admit.
@@ -206,8 +210,9 @@ pub(crate) fn surface_input(document: &Document, selected: &HashSet<SceneEntityI
             _ => {}
         }
     }
-    if points.len() < MINIMUM_POINTS {
-        anyhow::bail!("{}", too_few_points(points.len()));
+    // Picks and control vertices both count; the fit refuses a line of them.
+    if points.len() + control_vertices < MINIMUM_POINTS {
+        anyhow::bail!("{}", too_few_points(points.len(), control_vertices));
     }
     let extent = match extents.len() {
         0 => None,
@@ -286,10 +291,21 @@ impl<'a> App<'a> {
         // Points, controls and extent all come from the scene document, which
         // is what the selection was read against: a string the geologist could
         // see and choose is the string that clips.
+        let runtime_id = project.runtime_id;
         let ring = extent.map(|id| extent_ring(&self.scene_document, id)).transpose()?;
         let control_ids = controls;
-        let controls = control_strings(&self.scene_document, &control_ids)?;
-        let runtime_id = project.runtime_id;
+        let controls = match control_strings(&self.scene_document, &control_ids) {
+            Ok(controls) => controls,
+            Err(error) => {
+                let mut message = format!("{error:#}");
+                if let Some(misshapen) = error.downcast_ref::<MisshapenControls>() {
+                    message.push_str(&self.isolate_refused_controls(runtime_id, &control_ids, &misshapen.refused, |app| {
+                        app.ring_refused_controls(&control_ids, &misshapen.refused, &misshapen.positions)
+                    }));
+                }
+                anyhow::bail!("{message}");
+            }
+        };
         // Snapshot the geometry and its source layers on the UI thread; the
         // worker never sees the scene document. A point whose layer was
         // hidden since the dialog opened no longer resolves and is dropped,
@@ -372,42 +388,41 @@ impl<'a> App<'a> {
             Err(error) => {
                 let mut message = format!("{error:#}");
                 if let Some(misshapen) = error.downcast_ref::<MisshapenControls>() {
-                    let selected = app.select_refused_controls(runtime_id, &control_ids, &misshapen.refused);
-                    if selected > 0 {
-                        message.push('\n');
-                        message.push_str(&tr!("cmd-reference-surface-count-refused-strings-selected", count = selected.to_string()));
-                        let hidden = app.hide_other_controls(&control_ids, &misshapen.refused);
-                        if hidden > 0 {
-                            message.push('\n');
-                            message.push_str(&tr!("cmd-reference-surface-count-other-strings-hidden", count = hidden.to_string()));
-                        }
-                        app.frame_selected_strings();
-                        app.ring_refused_controls(&control_ids, &misshapen.refused, &misshapen.positions);
-                    }
+                    message.push_str(&app.isolate_refused_controls(runtime_id, &control_ids, &misshapen.refused, |app| {
+                        app.ring_refused_controls(&control_ids, &misshapen.refused, &misshapen.positions)
+                    }));
                 } else if let Some(placed) = error.downcast_ref::<PlacedRefusal>() {
                     // Reported after the build's own text, which stands as
                     // it was; then treated as a shape refusal is.
                     message.push('\n');
                     message.push_str(&placed_report(&placed.problems, &placed.odd_ones));
                     let involved = placed_strings(&placed.problems);
-                    let selected = app.select_refused_controls(runtime_id, &control_ids, &involved);
-                    if selected > 0 {
-                        message.push('\n');
-                        message.push_str(&tr!("cmd-reference-surface-count-refused-strings-selected", count = selected.to_string()));
-                        let hidden = app.hide_other_controls(&control_ids, &involved);
-                        if hidden > 0 {
-                            message.push('\n');
-                            message.push_str(&tr!("cmd-reference-surface-count-other-strings-hidden", count = hidden.to_string()));
-                        }
-                        app.frame_selected_strings();
-                        app.ring_placed_controls(&control_ids, &placed.problems);
-                    }
+                    message.push_str(&app.isolate_refused_controls(runtime_id, &control_ids, &involved, |app| app.ring_placed_controls(&control_ids, &placed.problems)));
                 }
                 crate::userspace_error!("{}", tr!("cmd-reference-surface-build-surface-failed-error", error = message))
             }
         };
         self.spawn_job_reporting_progress(tr!("cmd-reference-surface-building-surface"), vec![project_key], compute, apply);
         Ok(())
+    }
+
+    /// Select, isolate, frame and `ring` the controls a refusal names; the
+    /// lines saying so, each after a break, empty when none can be selected.
+    fn isolate_refused_controls(&mut self, runtime_id: u32, ids: &[ObjectId], refused: &[usize], ring: impl FnOnce(&mut Self)) -> String {
+        let mut lines = String::new();
+        let selected = self.select_refused_controls(runtime_id, ids, refused);
+        if selected > 0 {
+            lines.push('\n');
+            lines.push_str(&tr!("cmd-reference-surface-count-refused-strings-selected", count = selected.to_string()));
+            let hidden = self.hide_other_controls(ids, refused);
+            if hidden > 0 {
+                lines.push('\n');
+                lines.push_str(&tr!("cmd-reference-surface-count-other-strings-hidden", count = hidden.to_string()));
+            }
+            self.frame_selected_strings();
+            ring(self);
+        }
+        lines
     }
 
     /// Replace the selection with the controls a build refused or left out,
@@ -501,7 +516,11 @@ impl<'a> App<'a> {
             },
             _ => None,
         }));
-        if let (Some((min, max)), Some(graphics)) = (bounds, self.graphics.as_mut()) {
+        // A string refused for non-numeric coordinates must not move the camera.
+        if let (Some((min, max)), Some(graphics)) = (bounds, self.graphics.as_mut())
+            && min.is_finite()
+            && max.is_finite()
+        {
             graphics.zoom_to_bounds(min, max);
             self.redraw_requested = true;
         }
@@ -526,10 +545,18 @@ fn strings_bounds<'a>(strings: impl IntoIterator<Item = (&'a [crate::model::Poly
         .reduce(|(min, max), (other_min, other_max)| (min.min(other_min), max.max(other_max)))
 }
 
-fn too_few_points(count: usize) -> String {
+fn too_few_points(count: usize, vertices: usize) -> String {
+    if vertices == 0 {
+        return tr!(
+            "cmd-reference-surface-count-point-s-selected-surface",
+            count = count.to_string(),
+            minimum = MINIMUM_POINTS.to_string()
+        );
+    }
     tr!(
-        "cmd-reference-surface-count-point-s-selected-surface",
-        count = count.to_string(),
+        "cmd-reference-surface-picks-and-vertices-selected-surface",
+        picks = count.to_string(),
+        vertices = vertices.to_string(),
         minimum = MINIMUM_POINTS.to_string()
     )
 }
@@ -540,12 +567,6 @@ fn control_not_finite(index: usize) -> String {
 
 fn control_not_available(index: usize) -> String {
     tr!("cmd-reference-surface-control-string-index-no-longer", index = (index + 1).to_string())
-}
-
-/// A control running along the extent's edge rather than across it leaves the
-/// clip with no side to keep the string on.
-fn control_along_extent(index: usize) -> String {
-    tr!("cmd-reference-surface-control-string-index-runs-along", index = (index + 1).to_string())
 }
 
 fn too_few_points_inside(count: usize) -> String {
@@ -589,20 +610,28 @@ fn extent_ring(document: &crate::model::Document, id: ObjectId) -> Result<Vec<DV
 /// the dialog opened is refused by its place in `ids`, like the extent, so
 /// every later string keeps the number the dialog gave it.
 fn control_strings(document: &crate::model::Document, ids: &[ObjectId]) -> Result<Vec<Vec<DVec3>>> {
+    // Typed as a shape refusal is, so the string named is selected and,
+    // where it has a vertex to put one on, ringed.
+    let refuse = |index: usize, at: Option<DVec3>, report: String| MisshapenControls {
+        refused: vec![index],
+        positions: at.into_iter().collect(),
+        report,
+    };
     let mut strings: Vec<Vec<DVec3>> = Vec::new();
     for (index, id) in ids.iter().enumerate() {
         let Some(Object::Polyline { verts, closed: false, .. }) = document.get_object(*id) else {
-            anyhow::bail!("{}", control_not_available(index));
+            return Err(refuse(index, None, control_not_available(index)).into());
         };
         let mut string = crate::model::geometry::tessellate_polyline_bulges(verts, false);
         if string.iter().any(|vertex| !vertex.is_finite()) {
-            anyhow::bail!("{}", control_not_finite(index));
+            let at = string.iter().copied().find(|vertex| vertex.is_finite());
+            return Err(refuse(index, at, control_not_finite(index)).into());
         }
         string.dedup();
         // A string of one point is the build's to leave out and name; one
         // of none has nowhere to be named.
         if string.is_empty() {
-            anyhow::bail!("{}", too_few_control_vertices(index, string.len()));
+            return Err(refuse(index, None, too_few_control_vertices(index, string.len())).into());
         }
         strings.push(string);
     }
@@ -790,8 +819,9 @@ fn surface_mesh(
     progress: &Progress,
 ) -> Result<SurfaceMesh> {
     let cancelled = || cancel.is_cancelled();
-    if points.len() < MINIMUM_POINTS {
-        anyhow::bail!("{}", too_few_points(points.len()));
+    let vertices: usize = selected.strings.iter().map(Vec::len).sum();
+    if points.len() + vertices < MINIMUM_POINTS {
+        anyhow::bail!("{}", too_few_points(points.len(), vertices));
     }
     if points.iter().any(|point| !point.is_finite()) {
         anyhow::bail!("{}", tr!("cmd-reference-surface-selected-point-has-non-finite"));
@@ -830,9 +860,9 @@ fn surface_mesh(
         if self_intersects(ring, true) {
             anyhow::bail!("{}", tr!("cmd-reference-surface-extent-string-crosses-itself-plan"));
         }
-        refuse_controls_along(ring, controls, names, &cancelled)?;
         support = points.iter().filter(|point| !inside(bands, point.truncate())).count();
-        let covered = points.len() - support;
+        let vertices_inside = controls.iter().flatten().filter(|vertex| inside(bands, vertex.truncate())).count();
+        let covered = points.len() - support + vertices_inside;
         if covered < MINIMUM_POINTS {
             anyhow::bail!("{}", too_few_points_inside(covered));
         }
@@ -849,8 +879,13 @@ fn surface_mesh(
     fitted
         .try_reserve_exact(picks.len() + fit_controls.len())
         .context("Not enough memory for the surface points")?;
+    let kept = picks.len();
     fitted.extend(picks);
     fitted.extend(fit_controls.iter().copied());
+    // Picks may all have given way to strings too short to stand in for them.
+    if fitted.len() < MINIMUM_POINTS {
+        anyhow::bail!("{}", too_few_points(kept, fit_controls.len()));
+    }
 
     // Without a mask the points' outline is the extent, cut exactly as a
     // drawn one is. Every fitted point is the buffer inside it, so the
@@ -1507,27 +1542,6 @@ fn buffered_outline(points: &[DVec3]) -> Result<Vec<DVec2>> {
         ring.pop();
     }
     Ok(ring)
-}
-
-/// A control running along the extent's edge rather than across it has no
-/// side of the clip to keep it on, so it is refused.
-fn refuse_controls_along(ring: &[DVec2], controls: &[Vec<DVec3>], names: &[usize], cancelled: &dyn Fn() -> bool) -> Result<()> {
-    let edges = BoxGrid::new((0..ring.len()).map(|edge| segment_box(ring[edge], ring[(edge + 1) % ring.len()])).collect());
-    let mut near = Vec::new();
-    for (index, control) in controls.iter().enumerate() {
-        stop_if_cancelled(cancelled)?;
-        for segment in control.windows(2) {
-            let (start, end) = (segment[0].truncate(), segment[1].truncate());
-            let (low, high) = segment_box(start, end);
-            edges.overlapping(low, high, &mut near);
-            for &edge in &near {
-                if let SegSeg::CollinearOverlap { .. } = kernel::segment_segment(start, end, ring[edge], ring[(edge + 1) % ring.len()]) {
-                    anyhow::bail!("{}", control_along_extent(names[index]));
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
 /// The picks no control passes within [`MERGE_DISTANCE`] of in plan, with

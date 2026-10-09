@@ -132,8 +132,9 @@ impl App<'_> {
                         if matches!(object, Object::Point { .. }) {
                             counts.surface_points += 1;
                         }
-                        if matches!(object, Object::Polyline { closed: false, .. }) {
+                        if let Object::Polyline { closed: false, verts, .. } = object {
                             counts.open_strings += 1;
+                            counts.surface_points += verts.len();
                         }
                     }
                 }

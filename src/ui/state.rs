@@ -583,7 +583,8 @@ pub(crate) struct SelectionCounts {
     /// Selected design objects that enclose an area, and so can serve as a
     /// clipping boundary.
     pub(crate) clip_boundaries: usize,
-    /// Selected design points, which a surface can be triangulated from.
+    /// Selected design points and open-string vertices, which a surface can
+    /// be built from.
     pub(crate) surface_points: usize,
     /// Selected triangulations that are loaded, and so have a mesh to work on.
     pub(crate) triangulations: usize,
