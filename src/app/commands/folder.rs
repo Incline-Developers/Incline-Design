@@ -15,27 +15,13 @@ use crate::{
     userspace_log, userspace_warn,
 };
 
-fn unique_collection_name(base: &str, taken: impl Fn(&str) -> bool) -> String {
-    if !taken(base) {
-        return base.to_owned();
-    }
-    let mut number = 2_u64;
-    loop {
-        let name = format!("{base} ({number})");
-        if !taken(&name) {
-            return name;
-        }
-        number += 1;
-    }
-}
-
 impl<'a> App<'a> {
     pub(crate) fn create_folder(&mut self, section: SectionKind) -> Result<()> {
         let Some(project) = self.workspace.active_project_mut() else {
             return Ok(());
         };
         let registry = &mut project.project.folders;
-        let name = unique_collection_name(&tr!("common-collection"), |candidate| registry.has_name(section, candidate));
+        let name = crate::model::project::unique_item_name(tr!("common-collection"), registry.names(section).into_iter());
         let id = registry.allocate_id();
         let folder = Folder { id, name: name.clone() };
         self.execute_edit(Command::AddFolder { section, folder });
