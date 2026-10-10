@@ -229,6 +229,15 @@ pub(crate) enum PolyContainment {
     OnBoundary,
 }
 
+/// Whether the edge `a`-`b` crosses the ray cast from `point` toward +X,
+/// answering as the crossing step inside [`point_in_polyline`] does, for
+/// callers that walk only some of a ring's edges (a banded index).
+pub(crate) fn edge_crosses_ray(point: DVec2, a: DVec2, b: DVec2) -> bool {
+    let upward = a.y <= point.y && point.y < b.y;
+    let downward = b.y <= point.y && point.y < a.y;
+    (upward && orient2d(a, b, point) > 0.0) || (downward && orient2d(a, b, point) < 0.0)
+}
+
 /// Robust point-in-polyline: exact-sign crossing count ([`orient2d`] decides
 /// which side of an edge the ray passes), with points within [`XY_TOL`] of
 /// the ring classified [`PolyContainment::OnBoundary`] first so callers make

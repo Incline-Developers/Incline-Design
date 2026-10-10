@@ -1119,8 +1119,12 @@ impl<'a> App<'a> {
                 self.cancel_active_tool();
                 self.redraw_requested = true;
             } else if is_quick_press && self.editor.active_tool == ActiveTool::None && !self.editor.selection_locked_by_tool() {
+                // A right click on a ring opens the menu on that ring and
+                // leaves the selection as it is.
+                let ring_radius = self.points_to_px(crate::ui::state::STRING_RING_RADIUS);
+                let ring = self.editor.cursor_screen_px.and_then(|px| self.editor.string_ring_near(px, ring_radius));
                 let frozen = &self.editor.frozen_handles;
-                let picked = self.graphics.as_ref().and_then(|g| {
+                let picked = self.graphics.as_ref().filter(|_| ring.is_none()).and_then(|g| {
                     g.pick_scene_entity_at_cursor(
                         crate::app::PICK_THRESHOLD_PX,
                         &self.triangulations,
@@ -1154,10 +1158,17 @@ impl<'a> App<'a> {
                     // rows act on the hole under the cursor, selected or not.
                     self.editor.show_picked_hole(pick.hole);
                     self.editor.canvas_context_menu_hole = pick.hole;
+                    self.editor.canvas_context_menu_ring = None;
                     self.active_triangulation = match handle {
                         crate::model::SceneEntityId::Triangulation(id) => Some(id),
                         _ => None,
                     };
+                    self.editor.canvas_context_menu_open = true;
+                    self.editor.canvas_context_menu_px = self.editor.cursor_screen_px;
+                    self.redraw_requested = true;
+                } else if ring.is_some() {
+                    self.editor.canvas_context_menu_hole = None;
+                    self.editor.canvas_context_menu_ring = ring;
                     self.editor.canvas_context_menu_open = true;
                     self.editor.canvas_context_menu_px = self.editor.cursor_screen_px;
                     self.redraw_requested = true;
@@ -1264,8 +1275,8 @@ impl<'a> App<'a> {
             return;
         };
         match state {
-            // A held C is one press: the toggle must not chatter with the key's auto-repeat.
-            ElementState::Pressed if *repeat && *key == KeyCode::KeyC => {}
+            // A held C or B is one press, so a toggle never chatters on repeat.
+            ElementState::Pressed if *repeat && matches!(key, KeyCode::KeyC | KeyCode::KeyB) => {}
             ElementState::Pressed => self.handle_key_code(*key),
             ElementState::Released => {
                 // Once the Enter that opened the polyline finish dialog is
@@ -1437,6 +1448,10 @@ impl<'a> App<'a> {
             // C: the centre of rotation, on and off, the same as its toolbar button.
             KeyCode::KeyC if !self.editor.text_editing_enabled && !self.modifiers.control_key() && !self.modifiers.super_key() && !self.modifiers.alt_key() => {
                 self.toggle_rotation_centre();
+            }
+            // B: the borehole inspector, as its Geology viewport bar button.
+            KeyCode::KeyB if !self.editor.text_editing_enabled && !self.modifiers.control_key() && !self.modifiers.super_key() && !self.modifiers.alt_key() => {
+                self.toggle_borehole_inspector();
             }
             KeyCode::Backquote => {
                 let picked = self.pick_under_cursor();

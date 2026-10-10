@@ -417,9 +417,9 @@ fn draw_geology_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, side: f3
         ToolbarButton::new(
             egui::Image::new(unthemed_icon!("borehole_inspector.svg")),
             if shown {
-                tr!("viewport-bar-hide-borehole-inspector")
+                format!("{} (B)", tr!("viewport-bar-hide-borehole-inspector"))
             } else {
-                tr!("viewport-bar-show-borehole-inspector")
+                format!("{} (B)", tr!("viewport-bar-show-borehole-inspector"))
             },
         )
         .id_salt("borehole_inspector")
@@ -702,6 +702,17 @@ fn draw_scene_modes(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut 
     );
     if xray.clicked() {
         editor.xray_enabled = !editor.xray_enabled;
+    }
+
+    // Hide Selection is saved with the project, in any layer, so the way back
+    // stays on the bar in every workspace.
+    let unhide = ui.add(
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("reveal_all.svg")), tr!("viewport-bar-unhide-all"))
+            .id_salt("unhide_all")
+            .button_side(side),
+    );
+    if unhide.clicked() {
+        commands.push(UiCommand::UnhideAll);
     }
 }
 

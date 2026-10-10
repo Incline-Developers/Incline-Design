@@ -729,6 +729,22 @@ fn draw_ui(
         }
     }
 
+    // Where strings go wrong, from a refused build or a clean: one ring per
+    // place, the same size at any zoom, a dark rim under a bright one so it
+    // reads on either theme and over the blue of the selected strings.
+    // The painted list is clustered and capped when the view changes, see
+    // `EditorState::project_string_rings`; here it is only walked.
+    if !editor.string_ring_cache.paint_px.is_empty() {
+        const RING_RADIUS: f32 = crate::ui::state::STRING_RING_RADIUS;
+        let pixels_per_point = root_ui.ctx().pixels_per_point();
+        let painter = root_ui.painter().with_clip_rect(canvas_rect);
+        for &(x, y) in &editor.string_ring_cache.paint_px {
+            let position = egui::pos2(x / pixels_per_point, y / pixels_per_point);
+            painter.circle_stroke(position, RING_RADIUS, egui::Stroke::new(5.0, egui::Color32::BLACK));
+            painter.circle_stroke(position, RING_RADIUS, egui::Stroke::new(3.0, egui::Color32::from_rgb(255, 220, 0)));
+        }
+    }
+
     // Either translate tool: the Blender-style gizmo and the numeric delta
     // panel, over whichever selection the active one moves.
     if editor.move_tool_has_targets() {
@@ -954,7 +970,7 @@ fn draw_ui(
     dialogs::editing::draw_insert_point_at_elevation_dialog(root_ui, editor, commands);
     dialogs::object_edit::draw_object_edit_dialog(root_ui, editor, commands);
     dialogs::about::draw_about_dialog(root_ui, editor);
-    elements::properties::draw_preferences(root_ui, editor, drill_holes, commands);
+    elements::properties::draw_preferences(root_ui, editor, drill_holes, project.has_active_project.then_some(&project.modelling), commands);
     elements::properties::draw_block_model_controls(root_ui, editor, block_models, commands, canvas_rect);
 
     // --- Canvas right-click context menu ---
@@ -1234,8 +1250,14 @@ fn draw_global_dialogs(
     dialogs::survey::draw_definitions_dialog(root_ui, editor, commands);
     dialogs::survey::draw_transform_dialog(root_ui, editor, project.has_active_project, commands);
     dialogs::drill_hole::draw_drill_hole_color_dialog(root_ui, editor, drill_holes, commands);
+    dialogs::drill_hole::draw_seam_rename_dialog(root_ui, editor, drill_holes, commands);
+    dialogs::drill_hole::draw_name_shift_dialog(root_ui, editor, drill_holes, commands);
     dialogs::reference_points::draw_reference_points_dialog(root_ui, editor, drill_holes, commands);
-    dialogs::reference_surface::draw_reference_surface_dialog(root_ui, editor, commands);
+    dialogs::reference_surface::draw_reference_surface_dialog(root_ui, editor, project, commands);
+    dialogs::thickness_points::draw_thickness_points_dialog(root_ui, editor, drill_holes, commands);
+    dialogs::thickness_points::draw_thickness_table(root_ui, editor);
+    dialogs::thickness_points::draw_seam_surface_dialog(root_ui, editor, commands);
+    dialogs::thickness_points::draw_seam_table(root_ui, editor);
     geometry_dirty |= dialogs::drill_pattern::draw_drill_pattern_dialog(root_ui, editor, document, commands);
     dialogs::charging::draw_charge_product_dialog(root_ui, editor, commands);
     dialogs::charging::draw_charge_rule_dialog(root_ui, editor, drill_holes, commands);
@@ -1316,6 +1338,10 @@ fn draw_global_dialogs(
 
     if editor.tri_cut_surface_open {
         dialogs::triangulation::draw_cut_surface_dialog(root_ui, editor, project, commands);
+    }
+
+    if editor.tri_cut_to_open {
+        dialogs::triangulation::draw_cut_to_surface_dialog(root_ui, editor, project, commands);
     }
 
     if editor.tri_cut_pitshell_open {

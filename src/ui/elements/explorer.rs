@@ -6,7 +6,9 @@ use crate::{
     ui::{
         EditorState, UiCommand, UiProjectView,
         fonts::bold,
-        state::{ExplorerRow, ExplorerSection, RenameTarget, UiBlockModelEntry, UiDrillHoleEntry, UiLayerEntry, UiPointCloudEntry, UiProjectEntry, UiRasterTextureEntry},
+        state::{
+            ExplorerRow, ExplorerSection, PropertyTab, RenameTarget, UiBlockModelEntry, UiDrillHoleEntry, UiLayerEntry, UiPointCloudEntry, UiProjectEntry, UiRasterTextureEntry,
+        },
         unthemed_icon,
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup, context_menu_separator, context_submenu},
@@ -481,6 +483,8 @@ struct LayerRowContext<'a> {
     /// the Move to Collection submenu offers every section that admits this
     /// layer's kind, not only the one it is drawn under.
     folders: &'a crate::model::FolderRegistry,
+    /// Thickness points layers whose table is still in memory.
+    thickness_tables: &'a std::collections::HashSet<(u32, crate::model::LayerId)>,
     /// Every selected row, for the menu's actions on all of them.
     selection: &'a [RowState],
     /// Layers taken into the selection from the tree.
@@ -549,6 +553,11 @@ fn layer_row(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, layer: &UiLayerEn
         // Hidden objects cannot be selected, so neither can a hidden layer's.
         if row_state.visible() && ContextMenuAction::new(tr!("explorer-select-all-objects")).show(ui).clicked() {
             commands.push(UiCommand::SelectAllObjectsInLayer(layer_id));
+            ui.close();
+        }
+        let runtime_id = cx.entry.runtime_id;
+        if layer.is_loaded && cx.thickness_tables.contains(&(runtime_id, layer_id)) && ContextMenuAction::new(tr!("explorer-show-thickness-table")).show(ui).clicked() {
+            commands.push(UiCommand::ShowThicknessTable { runtime_id, layer: layer_id });
             ui.close();
         }
         if ContextMenuAction::new(tr!("dialog-rename-submit")).enabled(!layer_locked).show(ui).clicked() {
@@ -782,6 +791,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                         selected_layers,
                         ..
                     } = &*editor;
+                    let (thickness_tables, seam_tables) = (&project.thickness_table_layers, &project.seam_table_surfaces);
 
                     // Keep the scroll area's contents as wide as the side panel even
                     // when every section is collapsed. `ScrollArea` otherwise shrinks
@@ -827,6 +837,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                     locked_layers,
                                     draggable: rows_draggable,
                                     folders: &project.folders,
+                                    thickness_tables,
                                     selection: &selection,
                                     selected_layers,
                                 };
@@ -930,6 +941,10 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                         }
                                     }
                                     context_menu_separator(ui);
+                                }
+                                if tri_loaded && seam_tables.contains(&tri_id) && ContextMenuAction::new(tr!("explorer-show-thickness-table")).show(ui).clicked() {
+                                    commands.push(UiCommand::ShowSeamTable(tri_id));
+                                    ui.close();
                                 }
                                 #[cfg(target_arch = "wasm32")]
                                 if ContextMenuAction::new(tr!("explorer-download")).show(ui).clicked() {
@@ -1413,7 +1428,9 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
 
                         // Modelling holds what the project derives from its data,
                         // such as reference points and the surfaces built from
-                        // them. It admits layers and triangulations because
+                        // them. Its settings leaf, always there whether or not a
+                        // project is, opens Preferences on the Modelling tab. It
+                        // admits layers and triangulations because
                         // `SectionKind::admitted` says so; nothing here special-
                         // cases Modelling.
                         let modelling_dirty = project.modelling_dirty || project.triangulations.iter().any(|item| item.section == SectionKind::Modelling && item.dirty);
@@ -1423,6 +1440,12 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                             .color(HEADER_MODELLING)
                             .dirty(modelling_dirty)
                             .show(ui, |ui| {
+                                let settings = ExplorerEntry::new(egui::Id::new("explorer_modelling_settings"), tr!("explorer-settings"))
+                                    .selected(editor.show_preferences && editor.active_property_tab == PropertyTab::Modelling)
+                                    .show(ui);
+                                if settings.response.clicked() {
+                                    commands.push(UiCommand::OpenModellingSettings);
+                                }
                                 // Triangulations live on `App` directly, not inside a
                                 // design project, so they draw here whether or not a
                                 // project is open - the same as under Triangulations.
@@ -1440,6 +1463,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                             locked_layers,
                                             draggable: rows_draggable,
                                             folders: &project.folders,
+                                            thickness_tables,
                                             selection: &selection,
                                             selected_layers,
                                         };

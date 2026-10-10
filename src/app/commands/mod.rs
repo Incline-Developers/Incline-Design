@@ -15,9 +15,13 @@ pub(crate) mod rename; // Handles renaming layers and project items.
 pub(crate) mod residency;
 pub(crate) mod scene_selection; // What the selection-driven tools take from the scene selection.
 pub(crate) mod section; // Handles the explorer headings' bulk show/hide/lock actions.
+pub(crate) mod session_results; // Thickness work's session-only results, pruned with their layers and surfaces.
 pub(crate) mod slice; // Handles the vertical slice view mode.
+pub(crate) mod strat_check; // Orders a strat column by majority and flags the holes that disagree.
+pub(crate) mod string_clean; // Clean Strings: the app side of the open-string clean-up and the rings it leaves.
 mod survey; // Handles saved mine grids and transformations of project data.
 pub(crate) mod text; // Handles text editing commands
+pub(crate) mod thickness_points; // True thickness at each hole and measured pair, against a reference surface.
 pub(crate) mod triangulation; // Handles loading meshes, deleting meshes, etc. commands
 pub(crate) mod view; /* Handles resetting camera view, , etc. commands */
 
@@ -27,8 +31,8 @@ use crate::{
     app::App,
     i18n::tr,
     model::{Command, SceneEntityId},
-    ui::state::{ActiveTool, TriCreatePhase, UiCommand},
-    userspace_error, userspace_warn,
+    ui::state::{ActiveTool, PropertyTab, TriCreatePhase, TriCutSource, UiCommand},
+    userspace_error, userspace_log, userspace_warn,
 };
 
 impl<'a> App<'a> {
@@ -61,6 +65,10 @@ impl<'a> App<'a> {
         }
         self.editor.selected_handles.clear();
         self.editor.canvas_context_menu_open = false;
+        // Rings describe the strings as a build or a clean left them, by
+        // vertex number; a step back or forward leaves them describing
+        // strings that are no longer there, so they go.
+        self.editor.clear_string_rings();
         self.reset_fuse();
         self.cancel_chamfer();
         self.clear_bezier_state();
@@ -70,6 +78,15 @@ impl<'a> App<'a> {
         self.drop_editor_references_to_missing_items();
         self.apply_step_effects(effects);
         self.invalidate_geometry();
+    }
+
+    /// Every string ring `index` names may be edited from the canvas.
+    fn ring_strings_editable(&self, index: usize) -> bool {
+        let document = self.active_document();
+        self.editor
+            .string_rings
+            .get(index)
+            .is_some_and(|ring| ring.sides.iter().all(|&(id, _)| self.editor.canvas_edits_object(document, id)))
     }
 
     pub(crate) fn handle_ui_commands(&mut self, commands: Vec<UiCommand>) {
@@ -123,8 +140,26 @@ impl<'a> App<'a> {
                 | UiCommand::OpenReferencePoints
                 | UiCommand::OpenReferenceSurface
                 | UiCommand::BuildReferenceSurface { .. }
+                | UiCommand::OpenThicknessPoints
+                | UiCommand::ChooseThicknessPairs
+                | UiCommand::MakeThicknessPoints { .. }
+                | UiCommand::OpenSeamSurface
+                | UiCommand::MakeSeamSurface { .. }
+                | UiCommand::OpenCutTriangulationToSurface
+                | UiCommand::ExecuteCutTriangulationToSurface { .. }
+                | UiCommand::BuildCollarPoints { .. }
+                | UiCommand::OpenModellingSettings
+                | UiCommand::SetModellingSettings(_)
                 | UiCommand::BuildReferencePoints { .. }
                 | UiCommand::OpenCreateOreTriangulation
+                | UiCommand::RenameSeam { .. }
+                | UiCommand::CleanStrings
+                | UiCommand::CleanString(_)
+                | UiCommand::JoinAllAtHalfway
+                | UiCommand::JoinHereAtHalfway(_)
+                | UiCommand::DeleteRingVertex { .. }
+                | UiCommand::ShowObjectVertex { .. }
+                | UiCommand::ShiftStratColumn { .. }
         );
         if requires_project && !self.workspace.has_active_project() {
             anyhow::bail!("Create or open a project before importing, drawing, or generating data");
@@ -328,6 +363,10 @@ impl<'a> App<'a> {
             }
             UiCommand::HideSelection => {
                 self.hide_selected_elements();
+                Ok(())
+            }
+            UiCommand::UnhideAll => {
+                self.unhide_all_objects();
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -587,7 +626,9 @@ impl<'a> App<'a> {
                 // The selection is two unordered sets; sorting here keeps the
                 // layer's points and the flagged list in a settled order.
                 holes.sort_unstable_by_key(|hole| (hole.dataset.0, hole.hole));
-                self.editor.reference_points_dialog = Some(crate::ui::state::ReferencePointsDraft { holes, ..Default::default() });
+                // The seam last chosen comes back, so it is chosen once.
+                let seam = self.editor.last_seam.clone().unwrap_or_default();
+                self.editor.reference_points_dialog = Some(crate::ui::state::ReferencePointsDraft { holes, seam, collars: false });
                 Ok(())
             }
             UiCommand::OpenReferenceSurface => {
@@ -605,6 +646,7 @@ impl<'a> App<'a> {
                 // change under it.
                 let layer_name = |id| self.scene_document.layer(id).map(|layer| layer.name.clone()).unwrap_or_default();
                 let points_label = match input.layers.as_slice() {
+                    [] => tr!("cmd-commands-no-points"),
                     [layer] => tr!(
                         "cmd-commands-count-point-s-layer",
                         count = input.points.len().to_string(),
@@ -646,7 +688,9 @@ impl<'a> App<'a> {
                         }
                     }
                 };
+                let name = self.reference_surface_name(&input.points);
                 self.editor.reference_surface_dialog = Some(crate::ui::state::ReferenceSurfaceDraft {
+                    name,
                     points: input.points,
                     controls: input.controls,
                     extent: input.extent,
@@ -656,7 +700,68 @@ impl<'a> App<'a> {
                 });
                 Ok(())
             }
-            UiCommand::BuildReferenceSurface { points, controls, extent } => self.build_reference_surface(points, controls, extent),
+            UiCommand::BuildReferenceSurface { points, controls, extent, name } => self.build_reference_surface(points, controls, extent, name),
+            UiCommand::OpenThicknessPoints => {
+                self.open_thickness_points();
+                Ok(())
+            }
+            UiCommand::ChooseThicknessPairs => {
+                self.choose_thickness_pairs();
+                Ok(())
+            }
+            UiCommand::MakeThicknessPoints {
+                surface,
+                holes,
+                field,
+                target,
+                side,
+                pairs,
+                then_surface,
+            } => self.make_thickness_points(
+                surface,
+                holes,
+                crate::app::commands::thickness_points::ReferenceSeam { field, target, side },
+                pairs,
+                then_surface,
+            ),
+            UiCommand::OpenSeamSurface => {
+                self.open_seam_surface();
+                Ok(())
+            }
+            UiCommand::ShowThicknessTable { runtime_id, layer } => {
+                self.editor.thickness_table = self.session.thickness_tables.get(&(runtime_id, layer)).cloned();
+                Ok(())
+            }
+            UiCommand::ShowSeamTable(surface) => {
+                self.editor.seam_table = self.session.seam_tables.get(&surface).cloned();
+                Ok(())
+            }
+            UiCommand::MakeSeamSurface { surface } => self.make_seam_surface(surface),
+            UiCommand::BuildCollarPoints { holes } => {
+                self.build_collar_points(holes);
+                Ok(())
+            }
+            UiCommand::OpenModellingSettings => {
+                self.editor.active_property_tab = PropertyTab::Modelling;
+                self.editor.show_preferences = true;
+                Ok(())
+            }
+            UiCommand::SetModellingSettings(settings) => {
+                if let Some(problem) = settings.problem() {
+                    anyhow::bail!("{problem}");
+                }
+                let changed = self.workspace.active_project_mut().is_some_and(|project| {
+                    let metadata = &mut project.project.metadata;
+                    let changed = metadata.modelling != settings;
+                    metadata.modelling = settings;
+                    changed
+                });
+                if changed {
+                    self.touch_active_project_content();
+                    userspace_log!("{}", tr!("cmd-commands-modelling-settings-set-settings", settings = settings.summary()));
+                }
+                Ok(())
+            }
             UiCommand::BuildReferencePoints { holes, field, target, side } => {
                 self.build_reference_points(holes, field, target, side);
                 Ok(())
@@ -696,6 +801,36 @@ impl<'a> App<'a> {
             }
             UiCommand::SetDrillHoleCategoryColors { id, categories } => {
                 self.set_drill_hole_category_colors(id, categories);
+                Ok(())
+            }
+            UiCommand::RenameSeam {
+                dataset,
+                field,
+                from,
+                to,
+                scope,
+                reason,
+            } => {
+                self.rename_seam(dataset, field, from, to, scope, reason);
+                Ok(())
+            }
+            UiCommand::SetStratColumn { id, field, codes } => {
+                self.set_strat_column(id, field, codes);
+                Ok(())
+            }
+            UiCommand::CheckStratColumn { id, field } => {
+                self.check_strat_column(id, field);
+                Ok(())
+            }
+            UiCommand::ShiftStratColumn {
+                dataset,
+                hole,
+                field,
+                direction,
+                from,
+                reason,
+            } => {
+                self.shift_strat_column(dataset, hole, field, direction, from, reason);
                 Ok(())
             }
             UiCommand::SetDrillHoleWorkingSections { id, sections } => {
@@ -961,6 +1096,7 @@ impl<'a> App<'a> {
             }
             UiCommand::CloseCanvasContextMenu => {
                 self.editor.canvas_context_menu_open = false;
+                self.editor.canvas_context_menu_ring = None;
                 Ok(())
             }
             UiCommand::ZoomToExtents => {
@@ -1037,6 +1173,48 @@ impl<'a> App<'a> {
             }
             UiCommand::OpenObjectEditDialog(id) => {
                 self.open_object_edit_dialog(id);
+                Ok(())
+            }
+            UiCommand::ShowObjectVertex { id, row } => {
+                self.show_object_vertex(id, row);
+                Ok(())
+            }
+            UiCommand::CleanStrings => {
+                self.clean_selected_strings();
+                Ok(())
+            }
+            // The ring rows edit only strings the canvas could edit itself:
+            // shown and not locked. The menu offers no other, and a ring
+            // that went hidden or locked since the menu was drawn is refused
+            // here.
+            UiCommand::CleanString(id) => {
+                if self.editor.canvas_edits_object(self.active_document(), id) {
+                    self.clean_strings(&[id]);
+                }
+                Ok(())
+            }
+            UiCommand::ClearRings => {
+                self.editor.clear_string_rings();
+                self.redraw_requested = true;
+                Ok(())
+            }
+            UiCommand::JoinAllAtHalfway => {
+                let rings: Vec<usize> = (0..self.editor.string_rings.len())
+                    .filter(|&index| self.editor.string_rings[index].joinable() && self.ring_strings_editable(index))
+                    .collect();
+                self.join_at_halfway(&rings);
+                Ok(())
+            }
+            UiCommand::JoinHereAtHalfway(index) => {
+                if self.editor.string_rings.get(index).is_some_and(|ring| ring.joinable()) && self.ring_strings_editable(index) {
+                    self.join_at_halfway(&[index]);
+                }
+                Ok(())
+            }
+            UiCommand::DeleteRingVertex { id, vertex } => {
+                if self.editor.canvas_edits_object(self.active_document(), id) {
+                    self.delete_ring_vertex(id, vertex);
+                }
                 Ok(())
             }
             UiCommand::ApplyObjectEdit { id, object, close } => {
@@ -1193,6 +1371,36 @@ impl<'a> App<'a> {
                 let result = self.cut_triangulation_by_z(tri_id, z_min, z_max, name, unload_source);
                 if result.is_ok() {
                     self.editor.tri_cut_z_open = false;
+                }
+                result
+            }
+            UiCommand::OpenCutTriangulationToSurface => {
+                // Select first, then act: the seam clipped is the roof and floor
+                // selected; the limits, surfaces of the same kind, are picked in
+                // the dialog.
+                let targets = self.selected_triangulations();
+                if triangulation::seam_targets(&targets).is_none() {
+                    userspace_warn!("{}", tr!("cmd-cuts-to-surface-select-seam"));
+                    return Ok(());
+                }
+                // A surface is the primary choice for both rows; the deposit's
+                // last depth waits in its field for when Depth is chosen.
+                let depth = self.workspace.active_project().and_then(|project| project.project.metadata.modelling.cut_depth);
+                self.editor.tri_cut_to_open = true;
+                self.editor.tri_cut_to_targets = targets;
+                self.editor.tri_cut_to_upper_source = TriCutSource::Surface;
+                self.editor.tri_cut_to_upper_id = None;
+                self.editor.tri_cut_to_upper_level_input.clear();
+                self.editor.tri_cut_to_lower_source = TriCutSource::Surface;
+                self.editor.tri_cut_to_lower_id = None;
+                self.editor.tri_cut_to_lower_level_input.clear();
+                self.editor.tri_cut_to_depth_input = depth.map(|depth| depth.to_string()).unwrap_or_default();
+                Ok(())
+            }
+            UiCommand::ExecuteCutTriangulationToSurface { targets, upper, lower } => {
+                let result = self.cut_triangulation_to_surface(targets, upper, lower);
+                if result.is_ok() {
+                    self.editor.tri_cut_to_open = false;
                 }
                 result
             }
@@ -1411,5 +1619,38 @@ impl<'a> App<'a> {
         }
         self.execute_edit(Command::Batch(commands));
         self.invalidate_geometry();
+    }
+
+    /// Show the objects Hide Selection hid in loaded layers and every loaded
+    /// item that is hidden, as one undo step. Nothing unloaded is loaded;
+    /// the rings are left alone.
+    fn unhide_all_objects(&mut self) {
+        let Some(document) = self.workspace.active_document() else {
+            userspace_log!("{}", tr!("cmd-unhide-all-nothing-hidden"));
+            return;
+        };
+        let layer_loaded = |id: crate::model::ObjectId| document.get_object(id).and_then(|object| document.layer(object.layer())).is_some_and(|layer| layer.loaded);
+        let mut commands: Vec<Command> = document
+            .hidden_object_ids()
+            .filter(|&id| layer_loaded(id))
+            .map(|id| Command::SetObjectHidden { id, before: true, after: false })
+            .collect();
+        let objects = commands.len();
+        commands.extend(
+            self.project_item_refs()
+                .filter_map(|item| self.item_style_command(item, |style| if style.loaded() { style.with_hidden(false) } else { style })),
+        );
+        let items = commands.len() - objects;
+        if commands.is_empty() {
+            userspace_log!("{}", tr!("cmd-unhide-all-nothing-hidden"));
+            return;
+        }
+        self.execute_edit(Command::Batch(commands));
+        self.invalidate_geometry();
+        if items == 0 {
+            userspace_log!("{}", tr!("cmd-unhide-all-count", count = objects.to_string()));
+        } else {
+            userspace_log!("{}", tr!("cmd-unhide-all-objects-items-count", objects = objects.to_string(), items = items.to_string()));
+        }
     }
 }

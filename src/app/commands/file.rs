@@ -117,6 +117,9 @@ fn mesh_format_mime_type(format: MeshFormat) -> &'static str {
 // On wasm the native variants are compiled out, leaving only the `Web`-prefixed ones.
 #[cfg_attr(target_arch = "wasm32", allow(clippy::enum_variant_names))]
 pub(crate) enum FileDialogAction {
+    /// A measured pairs file for the open thickness points dialog, or why it
+    /// could not be read.
+    ThicknessPairs(std::result::Result<crate::ui::state::PairsFile, String>),
     /// Start a new, never-saved project. It carries no path until the first
     /// Save asks for one.
     #[cfg(not(target_arch = "wasm32"))]
@@ -467,6 +470,10 @@ impl<'a> App<'a> {
         }
         self.project_replacement_bypass = false;
         match action {
+            FileDialogAction::ThicknessPairs(file) => {
+                self.set_thickness_pairs(file);
+                Ok(())
+            }
             #[cfg(not(target_arch = "wasm32"))]
             FileDialogAction::NewProject => {
                 self.start_untitled_project()?;
@@ -1603,7 +1610,7 @@ impl<'a> App<'a> {
                 .into_iter()
                 .map(FileHandleExt::into_path)
                 .collect();
-            paths.sort_by(|a, b| formats::csv_geophysics::natural_cmp(&file_name(a), &file_name(b)));
+            paths.sort_by(|a, b| crate::natural_sort::natural_cmp(&file_name(a), &file_name(b)));
             Some(FileDialogAction::LinkGeophysics { dataset: id, paths })
         });
         #[cfg(target_arch = "wasm32")]
@@ -1615,7 +1622,7 @@ impl<'a> App<'a> {
                 .into_iter()
                 .map(|handle| handle.inner().clone())
                 .collect();
-            files.sort_by(|a, b| formats::csv_geophysics::natural_cmp(&a.name(), &b.name()));
+            files.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name(), &b.name()));
             Some(FileDialogAction::WebLinkGeophysics { dataset: id, files })
         });
     }

@@ -87,6 +87,13 @@ pub(crate) enum JobKey {
         runtime_id: u32,
         document_revision: u64,
     },
+    /// A Clean Strings or Join run on the active project. Stale once that
+    /// project is not the active one or its document has been edited, so the
+    /// batch it would write never lands on strings that have moved on.
+    StringClean {
+        runtime_id: u32,
+        document_revision: u64,
+    },
     /// A browser project save whose OMF encoding runs on a worker. Never tied
     /// to the project's revision: the snapshot was taken when the save was
     /// asked for and has to reach storage even if the document has moved on.
@@ -230,6 +237,10 @@ impl<'a> App<'a> {
                 .iter()
                 .find(|project| project.runtime_id == runtime_id)
                 .is_some_and(|project| project.project.document.revision() == document_revision),
+            JobKey::StringClean { runtime_id, document_revision } => self
+                .workspace
+                .active_project()
+                .is_some_and(|project| project.runtime_id == runtime_id && project.project.document.revision() == document_revision),
             JobKey::HistoryResidency { runtime_id, .. } => self.workspace.active_project().is_some_and(|project| project.runtime_id == runtime_id),
             JobKey::LayerResidency {
                 layer, runtime_id, content_hash, ..

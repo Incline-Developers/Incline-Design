@@ -91,6 +91,8 @@ pub(crate) struct ObjectEditDialog {
     pub(crate) tab: ObjectEditTab,
     /// Row highlighted in the vertex sheet, and the target of the row buttons.
     pub(crate) selected_row: Option<usize>,
+    /// Row the vertex sheet scrolls to the next time it is drawn, once.
+    pub(crate) scroll_to_row: Option<usize>,
     /// Cell currently being typed into, with its full-precision text buffer.
     pub(crate) editing_cell: Option<(usize, VertexColumn, String)>,
     /// Bumped by every edit; the derived-value and arc-segment caches rebuild
@@ -121,6 +123,7 @@ impl ObjectEditDialog {
             layer_rgba,
             tab: ObjectEditTab::default(),
             selected_row: None,
+            scroll_to_row: None,
             editing_cell: None,
             revision: 0,
             message: None,
@@ -458,16 +461,21 @@ fn draw_vertices_tab(ui: &mut egui::Ui, dialog: &mut ObjectEditDialog) {
     };
     draw_sheet_header(ui, &headings);
 
-    egui::ScrollArea::vertical()
+    let mut sheet = egui::ScrollArea::vertical()
         .id_salt("object_edit_vertex_sheet")
         .auto_shrink([false; 2])
         .min_scrolled_height(0.0)
-        .max_height(SHEET_HEIGHT)
-        .show_rows(ui, ROW_HEIGHT, row_count, |ui, visible| {
-            for row in visible {
-                draw_vertex_row(ui, dialog, row, columns);
-            }
-        });
+        .max_height(SHEET_HEIGHT);
+    if let Some(row) = dialog.scroll_to_row.take() {
+        // Once, when sent to a row: that row mid-sheet, the top row at most.
+        let pitch = ROW_HEIGHT + ui.spacing().item_spacing.y;
+        sheet = sheet.vertical_scroll_offset((row as f32 * pitch - (SHEET_HEIGHT - ROW_HEIGHT) / 2.0).max(0.0));
+    }
+    sheet.show_rows(ui, ROW_HEIGHT, row_count, |ui, visible| {
+        for row in visible {
+            draw_vertex_row(ui, dialog, row, columns);
+        }
+    });
 
     if !is_polyline {
         return;

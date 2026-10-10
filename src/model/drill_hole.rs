@@ -139,6 +139,73 @@ impl DrillInterval {
     }
 }
 
+/// What a correction does to an interval.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum CorrectionKind {
+    /// A code or a name changes.
+    Value,
+    /// A from or a to moves.
+    Boundary,
+    /// An interval is added where nothing was logged.
+    Insertion,
+}
+
+/// Where a correction stands on its way back to the site's database.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum CorrectionStatus {
+    Proposed,
+    Approved,
+    Denied,
+    Sent,
+    Confirmed,
+    Flagged,
+}
+
+/// One change to one interval of one hole, kept whatever is decided about it.
+/// The interval is named by its hole and its as-logged from and to, which a
+/// correction never moves.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct Correction {
+    pub(crate) hole: String,
+    pub(crate) logged_from: f64,
+    pub(crate) logged_to: f64,
+    pub(crate) kind: CorrectionKind,
+    pub(crate) field: String,
+    pub(crate) before: Option<DrillValue>,
+    pub(crate) after: Option<DrillValue>,
+    pub(crate) author: String,
+    pub(crate) date: String,
+    pub(crate) reason: String,
+    pub(crate) status: CorrectionStatus,
+    /// Filled when a decision is made; empty until then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) approver: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) decision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) decided: Option<String>,
+}
+
+/// Which intervals a seam rename reaches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RenameScope {
+    /// One horizon of one hole: the block the log draws around interval
+    /// `interval` of hole `hole`, that interval and the touching intervals
+    /// either side holding the same name. Same-named horizons elsewhere in
+    /// the hole are not reached.
+    Horizon { hole: usize, interval: usize },
+    /// Every hole of the set.
+    Set,
+}
+
+/// Who proposed a correction, when and why.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct CorrectionNote {
+    pub(crate) author: String,
+    pub(crate) date: String,
+    pub(crate) reason: String,
+}
+
 /// One surface connector: the delay laid between two holes.
 ///
 /// Undirected: the signal crosses it from whichever end it reaches first, so
@@ -792,9 +859,15 @@ pub(crate) struct DrillHoleDataset {
     /// Holes the round can start at. One initiation per collar, with any
     /// number of collars participating in the same firing graph.
     pub(crate) initiations: Vec<Initiation>,
+    /// Every correction proposed against the set, oldest first. Append-only:
+    /// only undoing the edit that made one takes it back out.
+    pub(crate) corrections: Vec<Correction>,
     /// What each loaded hole is charged with, by hole index. Content, like
     /// the ties: undone with everything else and written with the dataset.
     pub(crate) charges: BTreeMap<usize, crate::model::blast::HoleCharge>,
+    /// Interval columns an Incline tool wrote and may write again. A column
+    /// of the same name that came in with the data is never written over.
+    pub(crate) derived_columns: BTreeSet<String>,
 }
 
 impl DrillHoleDataset {
@@ -812,7 +885,9 @@ impl DrillHoleDataset {
             hole_boxes: Vec::new(),
             ties: Vec::new(),
             initiations: Vec::new(),
+            corrections: Vec::new(),
             charges: BTreeMap::new(),
+            derived_columns: BTreeSet::new(),
         };
         // The one gate every importer and project load passes through, so the
         // boxes cannot fall out of step with the traces.
@@ -870,6 +945,157 @@ impl DrillHoleDataset {
         times
     }
 
+    /// Every interval holding `name` in `field` within `scope`, with its hole
+    /// and interval index. An interval missing a depth is left out: it is
+    /// never drawn, and its record could not be saved.
+    pub(crate) fn intervals_named<'a>(&'a self, field: &'a str, name: &str, scope: RenameScope) -> impl Iterator<Item = ((usize, usize), &'a DrillHole, &'a DrillInterval)> + 'a {
+        let holes: Box<dyn Iterator<Item = (usize, &DrillHole)>> = match scope {
+            RenameScope::Horizon { hole, .. } => Box::new(self.holes.get(hole).map(|drilled| (hole, drilled)).into_iter()),
+            RenameScope::Set => Box::new(self.holes.iter().enumerate()),
+        };
+        let horizon = match scope {
+            RenameScope::Horizon { hole, interval } => Some(self.horizon(hole, field, interval)),
+            RenameScope::Set => None,
+        };
+        let wanted = DrillValue::Category(name.to_owned());
+        holes.flat_map(move |(hole_index, hole)| {
+            let wanted = wanted.clone();
+            let horizon = horizon.clone();
+            hole.intervals
+                .iter()
+                .enumerate()
+                .filter(move |(index, interval)| {
+                    interval.from.is_finite()
+                        && interval.to.is_finite()
+                        && interval.values.get(field) == Some(&wanted)
+                        && horizon.as_ref().is_none_or(|members| members.contains(index))
+                })
+                .map(move |(interval_index, interval)| ((hole_index, interval_index), hole, interval))
+        })
+    }
+
+    /// The horizon around interval `interval` of hole `hole` in `field`, as
+    /// the log draws it: that interval and, in depth order, the touching
+    /// intervals either side holding the same name, by interval index. A
+    /// gap, or an interval of another name or of none, ends it. Empty when
+    /// the interval holds no name or has no depths.
+    pub(crate) fn horizon(&self, hole: usize, field: &str, interval: usize) -> Vec<usize> {
+        let Some(drilled) = self.holes.get(hole) else {
+            return Vec::new();
+        };
+        let name_of = |index: usize| match drilled.intervals[index].values.get(field) {
+            Some(DrillValue::Category(name)) if !name.trim().is_empty() => Some(name),
+            _ => None,
+        };
+        let mut order: Vec<usize> = (0..drilled.intervals.len())
+            .filter(|&index| drilled.intervals[index].from.is_finite() && drilled.intervals[index].to.is_finite())
+            .collect();
+        order.sort_by(|&a, &b| drilled.intervals[a].from.total_cmp(&drilled.intervals[b].from).then(a.cmp(&b)));
+        let Some(at) = order.iter().position(|&index| index == interval) else {
+            return Vec::new();
+        };
+        let Some(name) = name_of(interval) else {
+            return Vec::new();
+        };
+        let joins = |upper: usize, lower: usize| name_of(lower) == Some(name) && drilled.intervals[lower].from <= drilled.intervals[upper].to + 1.0e-9;
+        let mut start = at;
+        while start > 0 && joins(order[start - 1], order[start]) && name_of(order[start - 1]) == Some(name) {
+            start -= 1;
+        }
+        let mut end = at;
+        while end + 1 < order.len() && joins(order[end], order[end + 1]) {
+            end += 1;
+        }
+        order[start..=end].to_vec()
+    }
+
+    /// The value corrections renaming `from` to `to` in `field`, one per
+    /// interval carrying `from` within `scope`, each paired with its hole and
+    /// interval index. Nothing is changed here; the edit is the caller's.
+    pub(crate) fn rename_corrections(&self, field: &str, from: &str, to: &str, scope: RenameScope, note: &CorrectionNote) -> Vec<((usize, usize), Correction)> {
+        if from == to {
+            return Vec::new();
+        }
+        self.intervals_named(field, from, scope)
+            .map(|(target, hole, interval)| {
+                let (logged_from, logged_to, _) = interval.logged();
+                let record = Correction {
+                    hole: hole.dhid.clone(),
+                    logged_from,
+                    logged_to,
+                    kind: CorrectionKind::Value,
+                    field: field.to_owned(),
+                    before: Some(DrillValue::Category(from.to_owned())),
+                    after: Some(DrillValue::Category(to.to_owned())),
+                    author: note.author.clone(),
+                    date: note.date.clone(),
+                    reason: note.reason.clone(),
+                    status: CorrectionStatus::Proposed,
+                    approver: None,
+                    decision: None,
+                    decided: None,
+                };
+                (target, record)
+            })
+            .collect()
+    }
+
+    /// How many holes renaming `from` to `to` in `field` within `scope` would
+    /// leave with `to` out of `column`'s order: in such a hole, once renamed
+    /// and with touching runs of one name joined, a column name above a
+    /// renamed run comes after `to` in the column, or one below it comes no
+    /// later. Names outside the column and UNK are passed over, and a `to`
+    /// the column lacks is never out of order. Disorder elsewhere in a hole
+    /// does not count; only the renamed runs are judged. Nothing is changed.
+    pub(crate) fn rename_out_of_sequence(&self, field: &str, from: &str, to: &str, scope: RenameScope, column: &[String]) -> usize {
+        let rank = |name: &str| (name != UNKNOWN_NAME).then(|| column.iter().position(|code| code == name)).flatten();
+        let Some(target) = rank(to) else {
+            return 0;
+        };
+        let mut renamed: Vec<(usize, usize)> = self.intervals_named(field, from, scope).map(|(at, _, _)| at).collect();
+        renamed.sort_unstable();
+        let mut out = 0;
+        let mut start = 0;
+        while start < renamed.len() {
+            let hole = renamed[start].0;
+            let end = start + renamed[start..].iter().take_while(|at| at.0 == hole).count();
+            let members: Vec<usize> = renamed[start..end].iter().map(|at| at.1).collect();
+            start = end;
+            let drilled = &self.holes[hole];
+            let mut order: Vec<usize> = (0..drilled.intervals.len())
+                .filter(|&index| drilled.intervals[index].from.is_finite() && drilled.intervals[index].to.is_finite())
+                .collect();
+            order.sort_by(|&a, &b| drilled.intervals[a].from.total_cmp(&drilled.intervals[b].from).then(a.cmp(&b)));
+            // Runs top to bottom: place in the column, and whether renamed.
+            let mut runs: Vec<(usize, bool)> = Vec::new();
+            for index in order {
+                let is_renamed = members.contains(&index);
+                let place = if is_renamed {
+                    Some(target)
+                } else {
+                    match drilled.intervals[index].values.get(field) {
+                        Some(DrillValue::Category(name)) => rank(name),
+                        _ => None,
+                    }
+                };
+                let Some(place) = place else { continue };
+                match runs.last_mut() {
+                    Some(run) if run.0 == place => run.1 |= is_renamed,
+                    _ => runs.push((place, is_renamed)),
+                }
+            }
+            let wrong = runs
+                .iter()
+                .enumerate()
+                .filter(|(_, run)| run.1)
+                .any(|(at, _)| runs[..at].iter().any(|run| run.0 >= target) || runs[at + 1..].iter().any(|run| run.0 <= target));
+            if wrong {
+                out += 1;
+            }
+        }
+        out
+    }
+
     /// Which way the round crossed each tie, given [`Self::firing_times`],
     /// in the order of [`Self::ties`].
     pub(crate) fn tie_flows(&self, times: &[Option<u32>]) -> Vec<TieFlow> {
@@ -883,6 +1109,167 @@ impl DrillHoleDataset {
                 _ => TieFlow::Redundant,
             })
             .collect()
+    }
+
+    /// The value corrections sliding the names of `field` in hole `hole` one
+    /// run along the hole. A run is one name over consecutive intervals that
+    /// name a code of `column`; intervals with no name, a name the column
+    /// lacks, or [`UNKNOWN_NAME`] keep theirs, are counted, and are not part
+    /// of the slide. Up, each run takes the name of the run below it and the
+    /// bottom run the column's name after the hole's last; down is the
+    /// mirror. With no such column name the end run is named
+    /// [`UNKNOWN_NAME`].
+    ///
+    /// With `from`, an interval index, only its horizon ([`Self::horizon`]),
+    /// a run of its own as the log draws it, and the runs on the side the
+    /// names move to slide: up, the runs above it each take the name of the
+    /// run below, and the horizon is named [`UNKNOWN_NAME`], opened for a
+    /// name to be put in; the runs below are untouched. Down is the mirror.
+    /// A `from` in no run slides nothing.
+    ///
+    /// Only intervals whose name changes get a record; depths never move,
+    /// and an interval missing a depth is left out as a rename leaves it
+    /// out. Nothing is changed here; the edit is the caller's.
+    pub(crate) fn column_shift(&self, hole: usize, field: &str, column: &[String], direction: ShiftDirection, from: Option<usize>, note: &CorrectionNote) -> ColumnShift {
+        let mut shift = ColumnShift::default();
+        let Some(drilled) = self.holes.get(hole) else {
+            return shift;
+        };
+        let mut named: Vec<(usize, &String)> = Vec::new();
+        for (index, interval) in drilled.intervals.iter().enumerate() {
+            if !(interval.from.is_finite() && interval.to.is_finite()) {
+                continue;
+            }
+            let Some(DrillValue::Category(code)) = interval.values.get(field) else {
+                continue;
+            };
+            if code != UNKNOWN_NAME && column.contains(code) {
+                named.push((index, code));
+            } else {
+                shift.untouched += 1;
+            }
+        }
+        named.sort_by(|a, b| drilled.intervals[a.0].from.total_cmp(&drilled.intervals[b.0].from).then(a.0.cmp(&b.0)));
+        let horizon = from.map(|interval| self.horizon(hole, field, interval)).unwrap_or_default();
+        let mut runs: Vec<(&str, Vec<usize>)> = Vec::new();
+        let mut last_inside = false;
+        for (index, code) in named {
+            let inside = horizon.contains(&index);
+            match runs.last_mut() {
+                Some((name, members)) if *name == code.as_str() && inside == last_inside => members.push(index),
+                _ => runs.push((code.as_str(), vec![index])),
+            }
+            last_inside = inside;
+        }
+        let clicked = match from {
+            Some(interval) => match runs.iter().position(|(_, members)| members.contains(&interval)) {
+                Some(at) => Some(at),
+                None => return shift,
+            },
+            None => None,
+        };
+        let place = |code: &str| column.iter().position(|held| held == code);
+        let last = runs.len().saturating_sub(1);
+        for (at, (old, members)) in runs.iter().enumerate() {
+            let new: Option<&str> = match (direction, clicked) {
+                (ShiftDirection::Up, Some(clicked)) if at > clicked => continue,
+                (ShiftDirection::Down, Some(clicked)) if at < clicked => continue,
+                (_, Some(clicked)) if at == clicked => None,
+                (ShiftDirection::Up, _) if at < last => Some(runs[at + 1].0),
+                (ShiftDirection::Up, _) => place(old).and_then(|place| column.get(place + 1)).map(String::as_str),
+                (ShiftDirection::Down, _) if at > 0 => Some(runs[at - 1].0),
+                (ShiftDirection::Down, _) => place(old).and_then(|place| place.checked_sub(1)).and_then(|place| column.get(place)).map(String::as_str),
+            };
+            if new == Some(*old) {
+                continue;
+            }
+            let new = new.unwrap_or_else(|| {
+                shift.unknown += members.len();
+                UNKNOWN_NAME
+            });
+            for &index in members {
+                let (logged_from, logged_to, _) = drilled.intervals[index].logged();
+                let record = Correction {
+                    hole: drilled.dhid.clone(),
+                    logged_from,
+                    logged_to,
+                    kind: CorrectionKind::Value,
+                    field: field.to_owned(),
+                    before: Some(DrillValue::Category((*old).to_owned())),
+                    after: Some(DrillValue::Category(new.to_owned())),
+                    author: note.author.clone(),
+                    date: note.date.clone(),
+                    reason: note.reason.clone(),
+                    status: CorrectionStatus::Proposed,
+                    approver: None,
+                    decision: None,
+                    decided: None,
+                };
+                shift.corrections.push(((hole, index), record));
+            }
+        }
+        shift.corrections.sort_by_key(|(target, _)| target.1);
+        shift
+    }
+
+    /// Write each value correction's `after` as its interval's interpreted
+    /// value and append its record. The as-logged interval is kept aside the
+    /// first time anything parts the two, and is never written after that.
+    pub(crate) fn apply_corrections(&mut self, targets: &[(usize, usize)], records: &[Correction]) {
+        for (&(hole, interval), record) in targets.iter().zip(records) {
+            let Some(interval) = self.holes.get_mut(hole).and_then(|hole| hole.intervals.get_mut(interval)) else {
+                continue;
+            };
+            if interval.logged.is_none() {
+                interval.logged = Some(LoggedInterval {
+                    from: interval.from,
+                    to: interval.to,
+                    values: interval.values.clone(),
+                });
+            }
+            set_value(&mut interval.values, &record.field, record.after.as_ref());
+            self.corrections.push(record.clone());
+        }
+        self.fields = collect_fields(&self.holes);
+    }
+
+    /// Write cells of a derived `column`, each `(hole, interval, value)`, and
+    /// mark the column derived or not. A derived value is no correction: it is
+    /// written beside an interval's logged values too, so it never makes the
+    /// interval read as corrected.
+    pub(crate) fn write_column(&mut self, column: &str, cells: &[(usize, usize, Option<DrillValue>)], derived: bool) {
+        for (hole, interval, value) in cells {
+            let Some(interval) = self.holes.get_mut(*hole).and_then(|hole| hole.intervals.get_mut(*interval)) else {
+                continue;
+            };
+            set_value(&mut interval.values, column, value.as_ref());
+            if let Some(logged) = &mut interval.logged {
+                set_value(&mut logged.values, column, value.as_ref());
+            }
+        }
+        if derived {
+            self.derived_columns.insert(column.to_owned());
+        } else {
+            self.derived_columns.remove(column);
+        }
+        self.fields = collect_fields(&self.holes);
+    }
+
+    /// Undo [`Self::apply_corrections`]: the `before` values go back and the
+    /// records are withdrawn, latest first.
+    pub(crate) fn withdraw_corrections(&mut self, targets: &[(usize, usize)], records: &[Correction]) {
+        for (&(hole, interval), record) in targets.iter().zip(records).rev() {
+            if let Some(interval) = self.holes.get_mut(hole).and_then(|hole| hole.intervals.get_mut(interval)) {
+                set_value(&mut interval.values, &record.field, record.before.as_ref());
+                if !interval.is_corrected() {
+                    interval.logged = None;
+                }
+            }
+            if let Some(position) = self.corrections.iter().rposition(|kept| kept == record) {
+                self.corrections.remove(position);
+            }
+        }
+        self.fields = collect_fields(&self.holes);
     }
 
     /// The ties as a file holds them, keyed by hole name.
@@ -1047,6 +1434,11 @@ impl DrillHoleDataset {
             + self.ties.iter().map(|tie| size_of::<TieIn>() + tie.product.len()).fold(0usize, usize::saturating_add)
             + self.initiations.len() * size_of::<Initiation>()
             + self
+                .corrections
+                .iter()
+                .map(|record| size_of::<Correction>() + record.hole.len() + record.field.len() + record.author.len() + record.date.len() + record.reason.len())
+                .fold(0usize, usize::saturating_add)
+            + self
                 .fields
                 .iter()
                 .map(|field| {
@@ -1209,6 +1601,17 @@ pub(crate) struct DrillColorState {
     /// the group's colour, any other code keeps its own.
     #[serde(default)]
     pub(crate) by_working_section: bool,
+    /// The order of each categorical field's codes down the deposit, kept
+    /// beside the working sections and read as leniently, so a project
+    /// written before there was one loads with none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "lenient_strat_columns")]
+    pub(crate) strat_columns: Vec<StratColumn>,
+    /// The field the strat column reads until one is picked by hand: the
+    /// parent (seam) field an import found, else the field it ordered.
+    /// Written by import only and read as leniently as the columns, so a
+    /// project written before it loads with none.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lenient_strat_field")]
+    pub(crate) strat_field: Option<String>,
     /// How the set is drawn. A set saved before there was a choice reads
     /// back at its true diameter, the look it was saved with; an imported
     /// set starts as string and discs (see `Self::for_logged_holes`).
@@ -1252,6 +1655,88 @@ pub(crate) struct WorkingSection {
     pub(crate) codes: Vec<String>,
 }
 
+/// One categorical field's codes in order down the deposit, seams, plies and
+/// splits alike, as the geologist placed them. Nothing here is inferred.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub(crate) struct StratColumn {
+    pub(crate) field: String,
+    pub(crate) codes: Vec<String>,
+}
+
+/// The name a shift gives a run it leaves with no name: unknown, until it
+/// is renamed. Never a strat column entry.
+pub(crate) const UNKNOWN_NAME: &str = "UNK";
+
+/// Which way a whole-column shift moves a hole's names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ShiftDirection {
+    /// The hole's names slide up one run: each run takes the name of the run
+    /// below it, the bottom run the column's next name.
+    Up,
+    /// The mirror: each run takes the name of the run above it, the top run
+    /// the column's name before the hole's first.
+    Down,
+}
+
+/// What a whole-column shift of one hole would do, worked out from its names
+/// as they stand, so no name is shifted twice.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ColumnShift {
+    /// One value correction per interval whose name moves, with its hole and
+    /// interval index.
+    pub(crate) corrections: Vec<((usize, usize), Correction)>,
+    /// Of those, the intervals named [`UNKNOWN_NAME`]: the run a shift
+    /// from a horizon opens, or the end run when the column has no name past
+    /// the hole's last (or first).
+    pub(crate) unknown: usize,
+    /// Intervals naming a code the column does not hold, left alone.
+    pub(crate) untouched: usize,
+}
+
+impl ColumnShift {
+    /// Each distinct rename the shift makes, old name to new, a name
+    /// replaced by [`UNKNOWN_NAME`] left out: no section or colour follows it.
+    pub(crate) fn renames(&self) -> Vec<(String, String)> {
+        let mut pairs: Vec<(String, String)> = Vec::new();
+        for (_, record) in &self.corrections {
+            if let (Some(DrillValue::Category(from)), Some(DrillValue::Category(to))) = (&record.before, &record.after)
+                && to != UNKNOWN_NAME
+                && !pairs.iter().any(|(known, _)| known == from)
+            {
+                pairs.push((from.clone(), to.clone()));
+            }
+        }
+        pairs
+    }
+}
+
+/// `sections` after the renames of a shift, each judged against the
+/// sections as they stood, as [`sections_after_rename`] judges one: a
+/// section holding an old name takes the new one in its place, or beside it
+/// while `remains` says an interval still holds the old one, unless some
+/// section of the field already holds the new name. Judged together so no
+/// section gains a name by way of another rename.
+pub(crate) fn sections_after_shift(sections: &[WorkingSection], field: &str, renames: &[(String, String)], remains: impl Fn(&str) -> bool) -> Vec<WorkingSection> {
+    let held = |code: &str| sections.iter().any(|section| section.field == field && section.codes.iter().any(|member| member == code));
+    let mut after = sections.to_vec();
+    for section in after.iter_mut().filter(|section| section.field == field) {
+        let mut codes = Vec::with_capacity(section.codes.len());
+        for code in &section.codes {
+            match renames.iter().find(|(from, _)| from == code).map(|(_, to)| to) {
+                Some(to) if !held(to) => {
+                    if remains(code) {
+                        codes.push(code.clone());
+                    }
+                    codes.push(to.clone());
+                }
+                _ => codes.push(code.clone()),
+            }
+        }
+        section.codes = codes;
+    }
+    after
+}
+
 /// Why a working section cannot be kept as named.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SectionProblem {
@@ -1293,6 +1778,36 @@ pub(crate) struct DroppedSection {
 /// Case-blind comparison of two names, without allocating.
 fn same_name(a: &str, b: &str) -> bool {
     a.chars().flat_map(char::to_lowercase).eq(b.chars().flat_map(char::to_lowercase))
+}
+
+/// The working section of `field` named like `code` without holding it: a
+/// code renamed to `code` would cost that section its name on the next open.
+pub(crate) fn section_named_apart<'a>(sections: &'a [WorkingSection], field: &str, code: &str) -> Option<&'a WorkingSection> {
+    sections
+        .iter()
+        .find(|section| section.field == field && same_name(&section.name, code) && !section.codes.iter().any(|held| held == code))
+}
+
+/// `sections` after `from` is renamed `to` in `field`: a section holding
+/// `from` takes `to` in its place, or beside it while an interval still holds
+/// `from`, so the renamed intervals keep their pick. A `to` some section of
+/// the field already holds stays where it is.
+pub(crate) fn sections_after_rename(sections: &[WorkingSection], field: &str, from: &str, to: &str, from_remains: bool) -> Vec<WorkingSection> {
+    let mut sections = sections.to_vec();
+    if sections.iter().any(|section| section.field == field && section.codes.iter().any(|code| code == to)) {
+        return sections;
+    }
+    for section in sections.iter_mut().filter(|section| section.field == field) {
+        let Some(at) = section.codes.iter().position(|code| code == from) else {
+            continue;
+        };
+        if from_remains {
+            section.codes.insert(at + 1, to.to_owned());
+        } else {
+            section.codes[at] = to.to_owned();
+        }
+    }
+    sections
 }
 
 /// What stops `name` naming a new working section of `field` holding
@@ -1463,6 +1978,47 @@ fn lenient_working_sections<'de, D: serde::Deserializer<'de>>(deserializer: D) -
     })
 }
 
+/// Reads the strat field; anything but a non-blank string reads as none.
+fn lenient_strat_field<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Field {
+        Key(String),
+        Unreadable(serde::de::IgnoredAny),
+    }
+    Ok(match Field::deserialize(deserializer)? {
+        Field::Key(key) if !key.trim().is_empty() => Some(key),
+        _ => None,
+    })
+}
+
+/// Reads the strat columns a field at a time, so one malformed entry costs
+/// only itself and not the colours saved beside it.
+fn lenient_strat_columns<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<StratColumn>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Entry {
+        Column(StratColumn),
+        Unreadable(serde::de::IgnoredAny),
+    }
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum List {
+        Entries(Vec<Entry>),
+        Unreadable(serde::de::IgnoredAny),
+    }
+    Ok(match List::deserialize(deserializer)? {
+        List::Entries(entries) => entries
+            .into_iter()
+            .filter_map(|entry| match entry {
+                Entry::Column(column) => Some(column),
+                Entry::Unreadable(_) => None,
+            })
+            .collect(),
+        List::Unreadable(_) => Vec::new(),
+    })
+}
+
 /// How many saved working sections the reader passes over in a colour
 /// state's JSON: each list entry that is not a section, or one for a value
 /// that is not a list. Nothing saved counts nothing.
@@ -1578,6 +2134,8 @@ impl Default for DrillColorState {
             min_pixel_diameter: default_min_pixel_diameter(),
             working_sections: Vec::new(),
             by_working_section: false,
+            strat_columns: Vec::new(),
+            strat_field: None,
             // The look a set had before there was a choice. A new set takes
             // the constructor for where it came from instead.
             hole_style: saved_before_styles_hole_style(),
@@ -1631,6 +2189,34 @@ impl DrillColorState {
         self.working_sections
             .iter()
             .find(|section| section.field == field && section.codes.iter().any(|member| member == code))
+    }
+
+    /// `field`'s strat column, top first; empty when it has none.
+    pub(crate) fn strat_column(&self, field: &str) -> &[String] {
+        self.strat_columns.iter().find(|column| column.field == field).map_or(&[], |column| column.codes.as_slice())
+    }
+
+    /// Replace `field`'s strat column with `codes`, blanks, UNK and
+    /// duplicates left out, keeping the field's place among the others. An empty
+    /// column is kept as none.
+    pub(crate) fn set_strat_column(&mut self, field: &str, codes: Vec<String>) {
+        let mut kept: Vec<String> = Vec::with_capacity(codes.len());
+        for code in codes {
+            if !code.trim().is_empty() && code != UNKNOWN_NAME && !kept.contains(&code) {
+                kept.push(code);
+            }
+        }
+        match self.strat_columns.iter().position(|column| column.field == field) {
+            Some(at) if kept.is_empty() => {
+                self.strat_columns.remove(at);
+            }
+            Some(at) => self.strat_columns[at].codes = kept,
+            None if kept.is_empty() => {}
+            None => self.strat_columns.push(StratColumn {
+                field: field.to_owned(),
+                codes: kept,
+            }),
+        }
     }
 
     /// The working section of `field` called `name`, if any.
@@ -1694,6 +2280,43 @@ impl DrillColorState {
     /// Every write goes through here so the order the lookup searches holds.
     pub(crate) fn set_categories(&mut self, categories: Vec<DrillCategoryColor>) {
         self.categories = CategoryTable::new(categories);
+    }
+
+    /// Give `to` the colour `from` has in `field`, when `field` is the one
+    /// coloured by and `to` has none of its own, so a renamed code keeps its
+    /// look. Returns whether anything changed.
+    pub(crate) fn carry_category_color(&mut self, field: &str, from: &str, to: &str) -> bool {
+        if self.active_field.as_deref() != Some(field) || self.category_color(to).is_some() {
+            return false;
+        }
+        let Some(color) = self.category_color(from) else {
+            return false;
+        };
+        let mut table = Vec::from(std::mem::take(&mut self.categories));
+        table.push(DrillCategoryColor { value: to.to_owned(), color });
+        self.set_categories(table);
+        true
+    }
+
+    /// [`Self::carry_category_color`] for several renames made at once: each
+    /// new name without a colour takes its old name's colour as it stood, so
+    /// no colour is passed along by way of another rename.
+    pub(crate) fn carry_category_colors(&mut self, field: &str, renames: &[(String, String)]) -> bool {
+        if self.active_field.as_deref() != Some(field) {
+            return false;
+        }
+        let carried = renames
+            .iter()
+            .filter(|(_, to)| self.category_color(to).is_none())
+            .filter_map(|(from, to)| self.category_color(from).map(|color| DrillCategoryColor { value: to.clone(), color }))
+            .collect::<Vec<_>>();
+        if carried.is_empty() {
+            return false;
+        }
+        let mut table = Vec::from(std::mem::take(&mut self.categories));
+        table.extend(carried);
+        self.set_categories(table);
+        true
     }
 
     /// Give every code in `field`, and every working section of it, a
@@ -1884,6 +2507,18 @@ fn project_tangent(origin: DVec3, distance: f64, azimuth_degrees: f64, dip_degre
     let dip = dip_degrees.to_radians();
     let horizontal = distance * dip.cos();
     origin + DVec3::new(horizontal * azimuth.sin(), horizontal * azimuth.cos(), distance * dip.sin())
+}
+
+/// Set `key` to `value`, or leave it unrecorded when there is none.
+fn set_value(values: &mut BTreeMap<String, DrillValue>, key: &str, value: Option<&DrillValue>) {
+    match value {
+        Some(value) => {
+            values.insert(key.to_owned(), value.clone());
+        }
+        None => {
+            values.remove(key);
+        }
+    }
 }
 
 fn collect_fields(holes: &[DrillHole]) -> Vec<DrillField> {
@@ -2160,6 +2795,46 @@ pub(crate) struct ReferencePick {
 /// `codes` is one code, or every code of a working section: consecutive
 /// intervals holding any of them form a single run.
 pub(crate) fn reference_pick(hole: &DrillHole, field: &str, codes: &[String], side: ReferenceSide) -> ReferencePick {
+    let (runs, _) = value_runs(hole, field, codes);
+    let depth = runs.first().map(|&(top, base)| match side {
+        ReferenceSide::Roof => top,
+        ReferenceSide::Floor => base,
+    });
+    ReferencePick { depth, runs: runs.len() }
+}
+
+/// The uppermost run of a working section in one hole, whole.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SectionRun {
+    /// Down-hole depth of the roof: the top of the run's first interval.
+    pub(crate) top: f64,
+    /// Down-hole depth of the floor: the deepest base in the run.
+    pub(crate) base: f64,
+    /// How many separate runs the hole holds, as for [`ReferencePick`].
+    pub(crate) runs: usize,
+    /// The hole was logged past the run: a different value follows it. False
+    /// where the intervals ran out with the run open, so the base is only
+    /// where logging stopped.
+    pub(crate) closed: bool,
+}
+
+/// The uppermost run of intervals carrying any of `codes` in `field`, read by
+/// the same rules as [`reference_pick`], or `None` where the hole never holds
+/// them.
+pub(crate) fn section_run(hole: &DrillHole, field: &str, codes: &[String]) -> Option<SectionRun> {
+    let (runs, last_open) = value_runs(hole, field, codes);
+    let &(top, base) = runs.first()?;
+    Some(SectionRun {
+        top,
+        base,
+        runs: runs.len(),
+        closed: runs.len() > 1 || !last_open,
+    })
+}
+
+/// The `(top, base)` of every run of `codes` in `field`, uppermost first, and
+/// whether the last run was still open when the intervals ran out.
+fn value_runs(hole: &DrillHole, field: &str, codes: &[String]) -> (Vec<(f64, f64)>, bool) {
     let mut intervals: Vec<&DrillInterval> = hole.intervals.iter().collect();
     intervals.sort_by(|a, b| a.from.total_cmp(&b.from));
     let mut runs: Vec<(f64, f64)> = Vec::new();
@@ -2183,14 +2858,11 @@ pub(crate) fn reference_pick(hole: &DrillHole, field: &str, codes: &[String], si
             }
         }
     }
+    let last_open = open.is_some();
     if let Some(run) = open {
         runs.push(run);
     }
-    let depth = runs.first().map(|&(top, base)| match side {
-        ReferenceSide::Roof => top,
-        ReferenceSide::Floor => base,
-    });
-    ReferencePick { depth, runs: runs.len() }
+    (runs, last_open)
 }
 
 /// One disc of a hole drawn as string and discs: a stretch of the trace and

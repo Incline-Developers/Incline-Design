@@ -610,6 +610,39 @@ impl<'a> Graphics<'a> {
             editor.tri_create_diagnostic_segments_screen_px.clear();
         }
 
+        // Rings follow the edits of their strings and their strings' hiding
+        // before they are drawn, then are projected again only when the view
+        // or the rings changed: thousands of them must not cost a frame.
+        editor.settle_string_rings(document);
+        if !editor.string_rings.is_empty() {
+            use std::hash::{Hash, Hasher};
+            let vp = self.view_proj();
+            let slab = self.section_slab();
+            let pixels_per_point = self.window.scale_factor() as f32 * (editor.ui_size_percent as f32 / 100.0);
+            let ring_px = crate::ui::state::STRING_RING_RADIUS * pixels_per_point;
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            vp.to_cols_array().map(f64::to_bits).hash(&mut hasher);
+            slab.map(|slab| [slab.point.x, slab.point.y, slab.point.z, slab.normal.x, slab.normal.y, slab.normal.z, slab.half_width].map(f64::to_bits))
+                .hash(&mut hasher);
+            (
+                self.size.width,
+                self.size.height,
+                self.viewport_rect.x,
+                self.viewport_rect.y,
+                self.viewport_rect.width,
+                self.viewport_rect.height,
+            )
+                .hash(&mut hasher);
+            ring_px.to_bits().hash(&mut hasher);
+            // Off the window by more than a ring, a ring paints nothing.
+            let margin = ring_px + 4.0;
+            let bounds = [-margin, -margin, self.size.width as f32 + margin, self.size.height as f32 + margin];
+            // A section shows the rings inside its slab.
+            editor.project_string_rings(hasher.finish(), ring_px, bounds, |at| {
+                slab.is_none_or(|slab| slab.contains(at)).then(|| self.world_to_window_px(&vp, at)).flatten()
+            });
+        }
+
         if editor.offset_awaiting_side_pick {
             let vp = self.view_proj();
             // A clipped vertex must keep its slot so preview ranges stay index-aligned.

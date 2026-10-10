@@ -357,6 +357,8 @@ pub(crate) struct App<'a> {
     triangulations: Vec<OpenTriangulation>,
     active_triangulation: Option<TriangulationId>,
     next_triangulation_id: u64,
+    /// Thickness work's results, held for the session only.
+    session: commands::session_results::SessionResults,
     block_models: Vec<OpenBlockModel>,
     next_block_model_id: u64,
     drill_holes: Vec<OpenDrillHoleDataset>,
@@ -513,6 +515,7 @@ impl<'a> Default for App<'a> {
             triangulations: Vec::new(),
             active_triangulation: None,
             next_triangulation_id: 0,
+            session: commands::session_results::SessionResults::default(),
             block_models: Vec::new(),
             next_block_model_id: 0,
             drill_holes: Vec::new(),
@@ -604,6 +607,7 @@ impl<'a> App<'a> {
             }
             MacMenuAction::RequestExit => Some(UiCommand::RequestExit),
             MacMenuAction::InsertPointsAtIntersections => Some(UiCommand::InsertPointsAtIntersections),
+            MacMenuAction::CleanStrings => Some(UiCommand::CleanStrings),
             MacMenuAction::OpenInsertPointAtElevation => Some(UiCommand::OpenInsertPointAtElevationDialog),
             MacMenuAction::OpenMoveToX => Some(UiCommand::OpenMoveToAxisDialog(crate::model::Axis::X)),
             MacMenuAction::OpenMoveToY => Some(UiCommand::OpenMoveToAxisDialog(crate::model::Axis::Y)),
@@ -621,6 +625,9 @@ impl<'a> App<'a> {
             MacMenuAction::OpenCreateBlockModel => Some(UiCommand::OpenCreateBlockModel),
             MacMenuAction::OpenReferencePoints => Some(UiCommand::OpenReferencePoints),
             MacMenuAction::OpenReferenceSurface => Some(UiCommand::OpenReferenceSurface),
+            MacMenuAction::OpenThicknessPoints => Some(UiCommand::OpenThicknessPoints),
+            MacMenuAction::OpenSeamSurface => Some(UiCommand::OpenSeamSurface),
+            MacMenuAction::OpenModellingClipToSurface | MacMenuAction::OpenCutTriangulationToSurface => Some(UiCommand::OpenCutTriangulationToSurface),
             MacMenuAction::OpenSurveyDefinitions => Some(UiCommand::OpenSurveyDefinitions),
             MacMenuAction::OpenSurveyTransform => Some(UiCommand::OpenSurveyTransform),
             MacMenuAction::OpenCreateOreTriangulation => Some(UiCommand::OpenCreateOreTriangulation),
@@ -1085,6 +1092,15 @@ impl<'a> App<'a> {
         }
         let drill_holes = &self.drill_holes;
         self.editor.retain_drill_hole_datasets(|dataset| drill_holes.iter().any(|item| item.id == dataset));
+        let (projects, triangulations) = (&self.workspace.projects, &self.triangulations);
+        self.session.retain_live(
+            |runtime_id, layer| {
+                projects
+                    .iter()
+                    .any(|project| project.runtime_id == runtime_id && project.project.document.layer(layer).is_some())
+            },
+            |surface| triangulations.iter().any(|item| item.id == surface),
+        );
         if self
             .editor
             .initiation_dialog
@@ -1270,6 +1286,8 @@ impl<'a> App<'a> {
         self.triangulations.clear();
         self.next_triangulation_id = 0;
         self.active_triangulation = None;
+        // Keyed by ids that restart here, so they cannot outlive the project.
+        self.session.clear();
         self.block_models.clear();
         self.next_block_model_id = 0;
         self.drill_holes.clear();
@@ -1689,6 +1707,7 @@ impl<'a> App<'a> {
         let mut hasher = DefaultHasher::new();
         self.workspace.active_index.hash(&mut hasher);
         self.startup_dialog_dismissed.hash(&mut hasher);
+        self.session.tables_fingerprint().hash(&mut hasher);
         #[cfg(not(target_arch = "wasm32"))]
         self.tracked_project_paths.hash(&mut hasher);
         #[cfg(target_arch = "wasm32")]
@@ -1702,6 +1721,7 @@ impl<'a> App<'a> {
             #[cfg(target_arch = "wasm32")]
             matches!(project.persistence, crate::model::project::ProjectPersistence::BrowserRecord(_)).hash(&mut hasher);
             project.project.metadata.name.hash(&mut hasher);
+            project.project.metadata.modelling.hash_into(&mut hasher);
             project.lossy_save_warnings.hash(&mut hasher);
             project.has_unsaved_changes().hash(&mut hasher);
             // Edits and successful async save completions can each change the
@@ -1965,6 +1985,7 @@ impl<'a> App<'a> {
         raster_textures.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
 
         let active_path = self.workspace.active_project().and_then(|p| p.path.clone());
+        let modelling = self.workspace.active_project().map(|p| p.project.metadata.modelling).unwrap_or_default();
         let same_membership = |current: &[u64], saved: &[(u64, u64)]| current.len() == saved.len() && current.iter().all(|id| saved.iter().any(|(saved_id, _)| saved_id == id));
         // A section's item membership can stay byte-identical while its
         // folder list changes - a folder created and left empty, say - so
@@ -2029,7 +2050,10 @@ impl<'a> App<'a> {
             has_active_project: self.workspace.has_active_project(),
             needs_startup_dialog: !self.startup_dialog_dismissed,
             active_path,
+            modelling,
             active_triangulation_for_menu,
+            thickness_table_layers: self.session.thickness_tables.keys().copied().collect(),
+            seam_table_surfaces: self.session.seam_tables.keys().copied().collect(),
             folders: self.workspace.active_project().map(|project| project.project.folders.clone()).unwrap_or_default(),
         });
         *self.ui_project_view_cache.borrow_mut() = Some((key, Arc::clone(&view)));

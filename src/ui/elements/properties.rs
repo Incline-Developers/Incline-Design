@@ -2,7 +2,7 @@
 
 use crate::{
     i18n::tr,
-    model::{Document, FillStyle, ObjectColor, ObjectId, SceneEntityId, block_model::OpenBlockModel, drill_hole::OpenDrillHoleDataset},
+    model::{Document, FillStyle, ObjectColor, ObjectId, SceneEntityId, block_model::OpenBlockModel, drill_hole::OpenDrillHoleDataset, project::ModellingSettings},
     rendering::color::{byte_to_linear_rgba, color32_to_rgba, linear_to_srgb_byte, rgba_to_color32},
     ui::{
         UiCommand, UiProjectView,
@@ -16,7 +16,13 @@ use crate::{
     },
 };
 
-pub(crate) fn draw_preferences(ui: &mut egui::Ui, editor: &mut EditorState, drill_holes: &[OpenDrillHoleDataset], commands: &mut Vec<UiCommand>) {
+pub(crate) fn draw_preferences(
+    ui: &mut egui::Ui,
+    editor: &mut EditorState,
+    drill_holes: &[OpenDrillHoleDataset],
+    modelling: Option<&ModellingSettings>,
+    commands: &mut Vec<UiCommand>,
+) {
     if !editor.show_preferences {
         return;
     }
@@ -56,6 +62,7 @@ pub(crate) fn draw_preferences(ui: &mut egui::Ui, editor: &mut EditorState, dril
                     (PropertyTab::Performance, tr!("properties-performance")),
                     (PropertyTab::Developer, tr!("properties-developer")),
                     (PropertyTab::Drillholes, tr!("properties-drillholes")),
+                    (PropertyTab::Modelling, tr!("properties-modelling")),
                 ] {
                     let response = crate::ui::widgets::explorer::ExplorerEntry::new(ui.id().with(tab as u8), label)
                         .selected(editor.active_property_tab == tab)
@@ -77,6 +84,7 @@ pub(crate) fn draw_preferences(ui: &mut egui::Ui, editor: &mut EditorState, dril
                         PropertyTab::Performance => draw_performance_settings(ui, editor, commands),
                         PropertyTab::Developer => draw_developer_settings(ui, editor, commands),
                         PropertyTab::Drillholes => draw_drillhole_settings(ui, editor, drill_holes, commands),
+                        PropertyTab::Modelling => draw_modelling_settings(ui, modelling, commands),
                     });
             });
         });
@@ -624,6 +632,40 @@ fn draw_drillhole_settings(ui: &mut egui::Ui, editor: &mut EditorState, drill_ho
         return;
     };
     crate::ui::dialogs::drill_hole::draw_drill_hole_color_editor(ui, current, commands, crate::ui::dialogs::drill_hole::ColorEditorHost::Page);
+}
+
+/// The open project's settings for Build Surface. A number being dragged is
+/// held in the window's memory and sent once, when the drag ends.
+fn draw_modelling_settings(ui: &mut egui::Ui, modelling: Option<&ModellingSettings>, commands: &mut Vec<UiCommand>) {
+    menu::menu_section(ui, tr!("properties-modelling"));
+    let Some(stored) = modelling.copied() else {
+        ui.label(egui::RichText::new(tr!("common-no-open-project")).weak());
+        return;
+    };
+    let draft_id = ui.id().with("modelling_settings_draft");
+    let mut settings = ui.data(|data| data.get_temp::<ModellingSettings>(draft_id)).unwrap_or(stored);
+    let responses = [
+        // Every range here is exactly what `ModellingSettings::problem` accepts:
+        // a narrower one would clamp a loaded value just by being drawn.
+        MenuFieldF64::new(tr!("properties-steep-pair-distance"), &mut settings.steep_distance, f64::MIN_POSITIVE..=f64::MAX)
+            .suffix(" m")
+            .max_decimals(2)
+            .help_text(tr!("properties-steep-pair-distance-help"))
+            .show(ui),
+        MenuFieldF64::new(tr!("properties-steep-pair-angle"), &mut settings.steep_degrees, f64::MIN_POSITIVE..=90.0)
+            .suffix("°")
+            .max_decimals(1)
+            .show(ui),
+    ];
+    menu::menu_note(ui, tr!("properties-modelling-help"));
+    if responses.iter().any(|response| response.dragged()) {
+        ui.data_mut(|data| data.insert_temp(draft_id, settings));
+    } else {
+        ui.data_mut(|data| data.remove::<ModellingSettings>(draft_id));
+    }
+    if responses.iter().any(committed) && settings != stored && settings.problem().is_none() {
+        commands.push(UiCommand::SetModellingSettings(settings));
+    }
 }
 
 /// A labelled value the panel only reports, laid out like the editable fields

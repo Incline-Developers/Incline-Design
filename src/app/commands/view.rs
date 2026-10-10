@@ -2,7 +2,7 @@ use crate::{
     app::App,
     i18n::tr,
     rendering::camera::CameraPose,
-    ui::state::{ActiveTool, DelayProduct},
+    ui::state::{ActiveTool, DelayProduct, Workspace},
     userspace_log, userspace_warn,
 };
 
@@ -17,6 +17,15 @@ impl<'a> App<'a> {
             userspace_warn!("{}", tr!("cmd-view-centre-rotation-not-available-flying"));
         } else {
             self.set_active_tool_from_toolbar(ActiveTool::PickRotationCentre);
+        }
+    }
+
+    /// Geology's viewport bar switch for the borehole inspector; the panel
+    /// only exists in Geology, so the key does nothing elsewhere.
+    pub(crate) fn toggle_borehole_inspector(&mut self) {
+        if self.editor.active_workspace == Workspace::Geology {
+            self.editor.show_borehole_inspector = !self.editor.show_borehole_inspector;
+            self.redraw_requested = true;
         }
     }
 

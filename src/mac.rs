@@ -48,6 +48,12 @@ struct MenuState {
     /// Whether enough design points are selected to triangulate a surface
     /// from, which is what Build Surface runs on.
     can_build_reference_surface: bool,
+    /// Whether exactly one loaded surface is selected, which is what
+    /// thickness points are measured against.
+    can_make_thickness_points: bool,
+    /// Whether two loaded surfaces are selected, the seam's roof and floor
+    /// that Clip to Surface clips.
+    can_clip_to_surface: bool,
     /// Whether exactly one loaded block model is selected, which is what ore
     /// thresholding runs on.
     can_create_ore_triangulation: bool,
@@ -55,6 +61,7 @@ struct MenuState {
     has_design_selection: bool,
     has_polyline_selection: bool,
     has_selection_intersections: bool,
+    can_clean_strings: bool,
     /// Whether the active project is a file that can be shown in Finder.
     has_project_file: bool,
     /// The workspace decides which discipline menus are visible and active.
@@ -83,6 +90,7 @@ pub(crate) enum MacMenuAction {
     RequestExit,
     InsertPointsAtIntersections,
     OpenInsertPointAtElevation,
+    CleanStrings,
     OpenMoveToX,
     OpenMoveToY,
     OpenMoveToZ,
@@ -108,6 +116,15 @@ pub(crate) enum MacMenuAction {
     OpenReferencePoints,
     /// The Drillholes menu's row that opens the build surface dialog.
     OpenReferenceSurface,
+    /// The Modelling menu's row that opens the thickness points dialog.
+    OpenThicknessPoints,
+    /// The Modelling menu's row that opens the thickness surfaces dialog.
+    OpenSeamSurface,
+    /// The Modelling menu's row that opens the clip to surface dialog.
+    OpenModellingClipToSurface,
+    /// The Triangulation menu's row that opens the same dialog, beside the
+    /// other cuts.
+    OpenCutTriangulationToSurface,
     /// One row of File > Open Recent, by its index in the recent list the menu
     /// was last built from.
     OpenRecent(usize),
@@ -125,6 +142,7 @@ const TRIANGULATION_MENU_TAG: isize = -1;
 const BLOCK_MODEL_MENU_TAG: isize = -3;
 const DRILL_HOLES_MENU_TAG: isize = -5;
 const COORDINATES_MENU_TAG: isize = -6;
+const MODELLING_MENU_TAG: isize = -7;
 
 /// Tags at or above this carry a recent-project index rather than naming a
 /// fixed action, leaving room for the fixed list to grow.
@@ -155,6 +173,7 @@ impl MacMenuAction {
         Self::RequestExit,
         Self::InsertPointsAtIntersections,
         Self::OpenInsertPointAtElevation,
+        Self::CleanStrings,
         Self::OpenMoveToX,
         Self::OpenMoveToY,
         Self::OpenMoveToZ,
@@ -178,6 +197,10 @@ impl MacMenuAction {
         Self::ShowProjectInFileManager,
         Self::OpenReferencePoints,
         Self::OpenReferenceSurface,
+        Self::OpenThicknessPoints,
+        Self::OpenSeamSurface,
+        Self::OpenModellingClipToSurface,
+        Self::OpenCutTriangulationToSurface,
     ];
 
     /// The `NSMenuItem` tag this action is carried by.
@@ -378,6 +401,7 @@ pub(crate) fn install_menu_bar() {
         mtm,
     );
     add_submenu(&design_menu, &tr!("ws-menubar-design-insert-point"), &insert_point_menu, mtm);
+    add_action(&design_menu, &tr!("cmd-string-clean-clean-strings"), "", MacMenuAction::CleanStrings, &target, mtm);
     add_separator(&design_menu, mtm);
     let move_to_menu = menu(&tr!("ws-menubar-design-move-to"), mtm);
     move_to_menu.setAutoenablesItems(false);
@@ -443,6 +467,14 @@ pub(crate) fn install_menu_bar() {
         &target,
         mtm,
     );
+    add_action(
+        &triangulation_menu,
+        &tr!("common-clip-to-surface-ellipsis"),
+        "",
+        MacMenuAction::OpenCutTriangulationToSurface,
+        &target,
+        mtm,
+    );
     add_separator(&triangulation_menu, mtm);
     add_action(
         &triangulation_menu,
@@ -500,18 +532,48 @@ pub(crate) fn install_menu_bar() {
         &target,
         mtm,
     );
-    add_separator(&drill_hole_menu, mtm);
-    add_action(&drill_hole_menu, &tr!("common-reference-points"), "", MacMenuAction::OpenReferencePoints, &target, mtm);
+    let drill_hole_item = add_submenu(&root, &tr!("ws-menubar-drillholes"), &drill_hole_menu, mtm);
+    drill_hole_item.setTag(DRILL_HOLES_MENU_TAG);
+
+    let modelling_menu = menu(&tr!("ws-menubar-modelling"), mtm);
+    modelling_menu.setAutoenablesItems(false);
+    add_action(&modelling_menu, &tr!("common-reference-points"), "", MacMenuAction::OpenReferencePoints, &target, mtm);
     add_action(
-        &drill_hole_menu,
+        &modelling_menu,
         &tr!("common-build-surface-ellipsis"),
         "",
         MacMenuAction::OpenReferenceSurface,
         &target,
         mtm,
     );
-    let drill_hole_item = add_submenu(&root, &tr!("ws-menubar-drillholes"), &drill_hole_menu, mtm);
-    drill_hole_item.setTag(DRILL_HOLES_MENU_TAG);
+    add_separator(&modelling_menu, mtm);
+    add_action(
+        &modelling_menu,
+        &tr!("common-thickness-points-ellipsis"),
+        "",
+        MacMenuAction::OpenThicknessPoints,
+        &target,
+        mtm,
+    );
+    add_action(
+        &modelling_menu,
+        &tr!("common-thickness-surfaces-ellipsis"),
+        "",
+        MacMenuAction::OpenSeamSurface,
+        &target,
+        mtm,
+    );
+    add_separator(&modelling_menu, mtm);
+    add_action(
+        &modelling_menu,
+        &tr!("common-clip-to-surface-ellipsis"),
+        "",
+        MacMenuAction::OpenModellingClipToSurface,
+        &target,
+        mtm,
+    );
+    let modelling_item = add_submenu(&root, &tr!("ws-menubar-modelling"), &modelling_menu, mtm);
+    modelling_item.setTag(MODELLING_MENU_TAG);
 
     let coordinates_menu = menu(&tr!("survey-coordinates-menu"), mtm);
     coordinates_menu.setAutoenablesItems(false);
@@ -587,6 +649,10 @@ fn set_workspace_menus(root: &NSMenu, workspace: Workspace) {
     if let Some(item) = find_item(root, DRILL_HOLES_MENU_TAG) {
         item.setHidden(workspace != Workspace::Geology);
     }
+
+    if let Some(item) = find_item(root, MODELLING_MENU_TAG) {
+        item.setHidden(workspace != Workspace::Geology);
+    }
 }
 
 fn set_checked(root: &NSMenu, action: MacMenuAction, checked: bool) {
@@ -641,11 +707,14 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         can_create_block_model: editor.selection_counts.drill_holes == 1,
         can_build_reference_points: editor.selection_counts.reference_holes > 0,
         can_build_reference_surface: editor.selection_counts.surface_points >= crate::app::commands::triangulation::reference_surface::MINIMUM_POINTS,
+        can_make_thickness_points: editor.selection_counts.triangulations == 1,
+        can_clip_to_surface: editor.selection_counts.triangulations == 2,
         can_create_ore_triangulation: editor.selection_counts.block_models == 1,
         can_undrape_rasters: project.raster_textures.iter().any(|raster| raster.is_draped),
         has_design_selection: editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_))),
         has_polyline_selection: editor.selection_has_polylines,
         has_selection_intersections: editor.selection_has_intersections,
+        can_clean_strings: editor.selection_counts.open_strings > 0,
         has_project_file: project.active_path.is_some(),
         active_workspace: editor.active_workspace,
         view_toggles: VIEW_TOGGLES.map(|toggle| toggle.get(editor)),
@@ -682,6 +751,10 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     set_enabled(&root, MacMenuAction::OpenCreateBlockModel, state.can_create_block_model);
     set_enabled(&root, MacMenuAction::OpenReferencePoints, state.can_build_reference_points);
     set_enabled(&root, MacMenuAction::OpenReferenceSurface, state.can_build_reference_surface);
+    set_enabled(&root, MacMenuAction::OpenThicknessPoints, state.can_make_thickness_points);
+    set_enabled(&root, MacMenuAction::OpenSeamSurface, state.can_make_thickness_points);
+    set_enabled(&root, MacMenuAction::OpenModellingClipToSurface, state.can_clip_to_surface);
+    set_enabled(&root, MacMenuAction::OpenCutTriangulationToSurface, state.can_clip_to_surface);
     set_enabled(&root, MacMenuAction::OpenCreateOreTriangulation, state.can_create_ore_triangulation);
     for action in [MacMenuAction::OpenCutTriangulationByZ, MacMenuAction::OpenContourTriangulation] {
         set_enabled(&root, action, state.one_surface_selected);
@@ -694,6 +767,7 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     // Inserting at intersections additionally needs two polylines that cross.
     set_enabled(&root, MacMenuAction::OpenInsertPointAtElevation, state.has_polyline_selection);
     set_enabled(&root, MacMenuAction::InsertPointsAtIntersections, state.has_selection_intersections);
+    set_enabled(&root, MacMenuAction::CleanStrings, state.can_clean_strings);
     for (index, checked) in state.view_toggles.iter().enumerate() {
         set_checked(&root, MacMenuAction::ToggleView(index), *checked);
     }

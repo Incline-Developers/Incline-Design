@@ -9,6 +9,7 @@ pub(crate) mod layer_residency;
 pub(crate) mod atomic_file;
 pub(crate) mod blast;
 pub(crate) mod block_model;
+pub(crate) mod control_checks;
 pub(crate) mod crs;
 pub(crate) mod drill_hole;
 pub(crate) mod folders;
@@ -16,6 +17,7 @@ pub(crate) mod forest;
 pub(crate) mod formats;
 pub(crate) mod geometry;
 pub(crate) mod geophysics;
+pub(crate) mod grid_surface;
 pub(crate) mod ground_filter;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod input;
@@ -28,8 +30,17 @@ pub(crate) mod point_features;
 pub(crate) mod progress;
 pub(crate) mod project;
 pub(crate) mod raster;
+// Build Surface grids through `rbf_spans`, so the spline's own grid
+// calls and the whole-box `Lattice` have no caller. rbf.rs allows that
+// itself outside test builds.
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) mod rbf;
+pub(crate) mod rbf_spans;
 pub(crate) mod spatial;
+pub(crate) mod strat_order;
+pub(crate) mod string_clean;
 pub(crate) mod survey;
+pub(crate) mod thickness_points;
 pub(crate) mod triangulation;
 
 use std::{borrow::Cow, collections::HashMap};
@@ -1760,13 +1771,7 @@ impl EditTarget<'_> {
     }
 
     fn item_epoch(&self, item: ItemRef) -> Option<u64> {
-        match item {
-            ItemRef::Triangulation(id) => self.triangulations.iter().find(|entry| entry.id == id).map(|entry| entry.state.epoch()),
-            ItemRef::BlockModel(id) => self.block_models.iter().find(|entry| entry.id == id).map(|entry| entry.state.epoch()),
-            ItemRef::DrillHole(id) => self.drill_holes.iter().find(|entry| entry.id == id).map(|entry| entry.state.epoch()),
-            ItemRef::PointCloud(id) => self.point_clouds.iter().find(|entry| entry.id == id).map(|entry| entry.state.epoch()),
-            ItemRef::Raster(id) => self.rasters.iter().find(|entry| entry.id == id).map(|entry| entry.state.epoch()),
-        }
+        self.item_state(item).map(project::ProjectItemState::epoch)
     }
 
     /// Mark one item and the project's content as changed, and report the
@@ -2007,6 +2012,30 @@ impl EditTarget<'_> {
         self.touch_item(ItemRef::DrillHole(dataset));
     }
 
+    /// Apply a set of interval corrections, or withdraw them when `apply` is
+    /// false. The dataset's revision carries the new values to its colours.
+    fn correct_intervals(&mut self, dataset: drill_hole::DrillHoleId, targets: &[(usize, usize)], records: &[drill_hole::Correction], apply: bool) {
+        let Some(entry) = self.drill_holes.iter_mut().find(|entry| entry.id == dataset) else {
+            return;
+        };
+        let data = std::sync::Arc::make_mut(&mut entry.dataset);
+        if apply {
+            data.apply_corrections(targets, records);
+        } else {
+            data.withdraw_corrections(targets, records);
+        }
+        self.touch_item(ItemRef::DrillHole(dataset));
+    }
+
+    /// Write one side of a derived interval column edit.
+    fn write_interval_column(&mut self, dataset: drill_hole::DrillHoleId, column: &str, cells: &[(usize, usize, Option<drill_hole::DrillValue>)], derived: bool) {
+        let Some(entry) = self.drill_holes.iter_mut().find(|entry| entry.id == dataset) else {
+            return;
+        };
+        std::sync::Arc::make_mut(&mut entry.dataset).write_column(column, cells, derived);
+        self.touch_item(ItemRef::DrillHole(dataset));
+    }
+
     /// Write each named hole's charge, emptying those given `None`.
     fn write_charges(&mut self, dataset: drill_hole::DrillHoleId, charges: &[(usize, Option<blast::HoleCharge>)]) {
         let Some(entry) = self.drill_holes.iter_mut().find(|entry| entry.id == dataset) else {
@@ -2219,6 +2248,25 @@ pub(crate) enum Command {
         before: Option<drill_hole::Initiation>,
         after: Option<drill_hole::Initiation>,
     },
+    /// Propose corrections to drill-hole intervals: applying writes each
+    /// interpreted value and appends its record, reverting puts the value
+    /// back and withdraws the record.
+    CorrectIntervals {
+        dataset: drill_hole::DrillHoleId,
+        /// Hole and interval index of each record's interval, in step.
+        targets: Vec<(usize, usize)>,
+        records: Vec<drill_hole::Correction>,
+    },
+    /// Write cells of an interval column a tool derives, such as true
+    /// thickness. Both sides name the same cells, `(hole, interval, value)`;
+    /// `derived` says whether the column was the tool's own before and after.
+    WriteIntervalColumn {
+        dataset: drill_hole::DrillHoleId,
+        column: String,
+        before: Vec<(usize, usize, Option<drill_hole::DrillValue>)>,
+        after: Vec<(usize, usize, Option<drill_hole::DrillValue>)>,
+        derived: (bool, bool),
+    },
     /// Load, reload or unload holes. Each side names the same holes: `before`
     /// is what they held (`None` for empty), `after` what they hold now.
     SetCharges {
@@ -2317,6 +2365,18 @@ impl Command {
                     .map(|tie| size_of::<drill_hole::TieIn>() + tie.product.len())
                     .fold(0usize, usize::saturating_add),
                 Command::SetInitiation { .. } => 0,
+                Command::CorrectIntervals { targets, records, .. } => {
+                    targets.len() * size_of::<(usize, usize)>()
+                        + records
+                            .iter()
+                            .map(|record| {
+                                size_of::<drill_hole::Correction>() + record.hole.len() + record.field.len() + record.author.len() + record.date.len() + record.reason.len()
+                            })
+                            .fold(0usize, usize::saturating_add)
+                }
+                Command::WriteIntervalColumn { column, before, after, .. } => {
+                    column.len() + (before.len() + after.len()) * size_of::<(usize, usize, Option<drill_hole::DrillValue>)>()
+                }
                 Command::SetCharges { before, after, .. } => before
                     .iter()
                     .chain(after)
@@ -2423,6 +2483,8 @@ impl Command {
             | Self::RotateCollars { dataset, .. }
             | Self::SetTieIns { dataset, .. }
             | Self::SetInitiation { dataset, .. }
+            | Self::CorrectIntervals { dataset, .. }
+            | Self::WriteIntervalColumn { dataset, .. }
             | Self::SetCharges { dataset, .. } => into.push(ItemRef::DrillHole(*dataset)),
             // The swap lifts the resident version out, so it has to be there.
             Self::ReplaceItem { item, .. } => into.push(*item),
@@ -2465,6 +2527,8 @@ impl Command {
             | Command::RotateCollars { dataset, .. }
             | Command::SetTieIns { dataset, .. }
             | Command::SetInitiation { dataset, .. }
+            | Command::CorrectIntervals { dataset, .. }
+            | Command::WriteIntervalColumn { dataset, .. }
             | Command::SetCharges { dataset, .. } => {
                 let item = ItemRef::DrillHole(*dataset);
                 if !into.contains(&item) {
@@ -2623,6 +2687,10 @@ impl Command {
             Command::RotateCollars { dataset, originals, rotation } => target.rotate_collars(*dataset, originals, *rotation),
             Command::SetTieIns { dataset, before, after } => target.write_tie_ins(*dataset, before, after),
             Command::SetInitiation { dataset, before, after } => target.set_initiation(*dataset, *before, *after),
+            Command::CorrectIntervals { dataset, targets, records } => target.correct_intervals(*dataset, targets, records, true),
+            Command::WriteIntervalColumn {
+                dataset, column, after, derived, ..
+            } => target.write_interval_column(*dataset, column, after, derived.1),
             Command::SetCharges { dataset, after, .. } => target.write_charges(*dataset, after),
             Command::AddItem { item, index, added } => {
                 if let Some(added_item) = added.take() {
@@ -2776,6 +2844,10 @@ impl Command {
             // the edit touched are named by both of them.
             Command::SetTieIns { dataset, before, after } => target.write_tie_ins(*dataset, after, before),
             Command::SetInitiation { dataset, before, after } => target.set_initiation(*dataset, *after, *before),
+            Command::CorrectIntervals { dataset, targets, records } => target.correct_intervals(*dataset, targets, records, false),
+            Command::WriteIntervalColumn {
+                dataset, column, before, derived, ..
+            } => target.write_interval_column(*dataset, column, before, derived.0),
             Command::SetCharges { dataset, before, .. } => target.write_charges(*dataset, before),
             Command::AddItem { item, index, added } => {
                 if let Some((taken_index, taken)) = target.take_item(*item) {

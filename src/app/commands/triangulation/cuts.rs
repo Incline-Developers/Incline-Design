@@ -1,5 +1,18 @@
+use std::sync::Arc;
+
+use glam::DVec2;
+use rayon::prelude::*;
+
 use super::*;
-use crate::model::geometry::{clip_polyline_by_xy_edge, signed_area_xy, triangle_xy_area};
+use crate::{
+    app::jobs::CancelFlag,
+    model::{
+        geometry::{clip_polyline_by_xy_edge, signed_area_xy, triangle_xy_area},
+        grid_surface::GridSurface,
+        progress::Phase,
+        spatial::TriangleBvh,
+    },
+};
 
 impl<'a> App<'a> {
     /// Cut the triangulation, clipping each triangle against the XY polyline boundary
@@ -251,6 +264,192 @@ impl<'a> App<'a> {
             compute,
             apply,
         );
+        Ok(())
+    }
+
+    /// Clip the seam whose roof and floor are `targets` to the limits
+    /// given, Keep below first, into a new roof, floor and solid between
+    /// them in the Modelling section, selected when made; the originals stay
+    /// as they are. A depth below ground is kept with the project, since it
+    /// is the deposit's.
+    pub(crate) fn cut_triangulation_to_surface(&mut self, targets: Vec<TriangulationId>, upper: Option<TriUpperCut>, lower: Option<TriLowerCut>) -> Result<()> {
+        if seam_targets(&targets).is_none() {
+            anyhow::bail!("{}", tr!("cmd-cuts-to-surface-select-seam"));
+        }
+        if upper.is_none() && lower.is_none() {
+            anyhow::bail!("{}", tr!("cmd-cuts-to-surface-no-cut"));
+        }
+        let (upper_id, upper_level) = match upper {
+            Some(TriUpperCut::Surface(id)) => (Some(id), None),
+            Some(TriUpperCut::Level(level)) => (None, Some(level)),
+            None => (None, None),
+        };
+        let (lower_id, lower_level) = match lower {
+            Some(TriLowerCut::Surface(id) | TriLowerCut::Depth { ground: id, .. }) => (Some(id), None),
+            Some(TriLowerCut::Level(level)) => (None, Some(level)),
+            None => (None, None),
+        };
+        if [upper_level, lower_level].into_iter().flatten().any(|level| !level.is_finite()) {
+            anyhow::bail!("{}", tr!("tri-clip-to-surface-level-invalid"));
+        }
+        if [upper_id, lower_id].into_iter().flatten().any(|id| targets.contains(&id)) {
+            anyhow::bail!("{}", tr!("cmd-cuts-to-surface-cuts-itself"));
+        }
+        let depth = match lower {
+            Some(TriLowerCut::Depth { depth, .. }) if !(depth.is_finite() && depth > 0.0) => anyhow::bail!("{}", tr!("project-cut-depth-positive")),
+            Some(TriLowerCut::Depth { depth, .. }) => Some(depth),
+            _ => None,
+        };
+        let read = |id: TriangulationId| -> Result<(String, Arc<mesh_data::Triangulation>, Arc<TriangleBvh>)> {
+            let item = self
+                .triangulations
+                .iter()
+                .find(|item| item.id == id && item.state.loaded)
+                .ok_or_else(|| anyhow::anyhow!("{}", tr!("cmd-thickness-points-surface-gone")))?;
+            Ok((item.name.clone(), Arc::clone(&item.mesh), Arc::clone(&item.spatial)))
+        };
+        let surfaces = targets.iter().map(|&id| read(id)).collect::<Result<Vec<_>>>()?;
+        let (upper_read, lower_read) = (upper_id.map(read).transpose()?, lower_id.map(read).transpose()?);
+        let cuts = to_surface_cuts_label(
+            upper_read.as_ref().map(|read| read.0.as_str()),
+            upper_level,
+            lower_read.as_ref().map(|read| read.0.as_str()),
+            lower_level,
+            depth,
+        );
+        if let Some(depth) = depth {
+            let changed = self.workspace.active_project_mut().is_some_and(|project| {
+                let modelling = &mut project.project.metadata.modelling;
+                let changed = modelling.cut_depth != Some(depth);
+                modelling.cut_depth = Some(depth);
+                changed
+            });
+            if changed {
+                self.touch_active_project_content();
+            }
+        }
+        let mut keys = Vec::new();
+        if let Some(project) = self.workspace.active_project() {
+            keys.push(crate::app::jobs::JobKey::Project {
+                runtime_id: project.runtime_id,
+                document_revision: project.project.document.revision(),
+            });
+        }
+        keys.extend(
+            targets
+                .iter()
+                .chain(upper_id.iter())
+                .chain(lower_id.iter())
+                .map(|&id| crate::app::jobs::JobKey::Triangulation(id)),
+        );
+        let section = SectionKind::derived_for(MemberKind::Triangulation, [SectionKind::Modelling]);
+        let compute = move |cancel: &CancelFlag, progress: &crate::model::progress::Progress| -> Result<ToSurfaceOutcome> {
+            let upper_surface = upper_read.map(|(_, mesh, spatial)| CutReader::new(mesh, spatial)).transpose()?;
+            let ground = lower_read.map(|(_, mesh, spatial)| CutReader::new(mesh, spatial)).transpose()?;
+            let upper = match (upper_surface.as_ref(), upper_level) {
+                (Some(surface), _) => Some(UpperCut::Surface(surface)),
+                (None, Some(level)) => Some(UpperCut::Level(level)),
+                (None, None) => None,
+            };
+            let lower = match (ground.as_ref(), depth, lower_level) {
+                (Some(ground), Some(depth), _) => Some(LowerCut::Depth { ground, depth }),
+                (Some(ground), None, _) => Some(LowerCut::Surface(ground)),
+                (None, _, Some(level)) => Some(LowerCut::Level(level)),
+                (None, _, None) => None,
+            };
+            let mut grids = Vec::with_capacity(2);
+            for (name, mesh, spatial) in surfaces {
+                match GridSurface::read(mesh, spatial) {
+                    Ok(grid) => grids.push((name, grid)),
+                    Err(problem) => return Ok(ToSurfaceOutcome::Refused(crate::app::commands::thickness_points::not_a_grid(&name, problem))),
+                }
+            }
+            let [(first_name, first), (second_name, second)] = <[_; 2]>::try_from(grids).map_err(|_| anyhow::anyhow!("{}", tr!("cmd-cuts-to-surface-select-seam")))?;
+            let mut cut = clip_seam_by_cuts(&first, &second, upper.as_ref(), lower.as_ref(), cancel, &progress.phase(0.0, 0.6))?;
+            let (roof_name, floor_name) = if cut.swapped { (second_name, first_name) } else { (first_name, second_name) };
+            let seam = tr!("cmd-cuts-to-surface-seam", roof = roof_name.clone(), floor = floor_name.clone());
+            if !cut.changed {
+                return Ok(ToSurfaceOutcome::NotCut { seam, cut });
+            }
+            let named = |name: &str, word: String| crate::app::canvas::derived_triangulation_name(name, &word);
+            let edges = crate::model::triangulation::unique_edges;
+            let faces = std::mem::take(&mut cut.faces);
+            let roof = session::build_generated_triangulation(
+                named(&roof_name, tr!("common-cut")),
+                std::mem::take(&mut cut.roof),
+                faces.clone(),
+                TriSurfaceType::Surface,
+                edges,
+            )?;
+            let floor = session::build_generated_triangulation(named(&floor_name, tr!("common-cut")), std::mem::take(&mut cut.floor), faces, TriSurfaceType::Surface, edges)?;
+            let solid = session::build_generated_triangulation(
+                named(&roof_name, tr!("cmd-cuts-to-surface-solid")),
+                std::mem::take(&mut cut.solid_vertices),
+                std::mem::take(&mut cut.solid_faces),
+                TriSurfaceType::SolidClosed,
+                edges,
+            )?;
+            Ok(ToSurfaceOutcome::Made {
+                seam,
+                generated: Box::new([roof, floor, solid]),
+                cut,
+            })
+        };
+        let apply = move |app: &mut App, result: Result<ToSurfaceOutcome>| {
+            let outcome = match result {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    userspace_warn!("{}", tr!("cmd-session-triangulation-failed", message = format!("{error:#}")));
+                    return;
+                }
+            };
+            match outcome {
+                ToSurfaceOutcome::Made { seam, generated, cut } => {
+                    let mut made = Vec::new();
+                    for generated in *generated {
+                        app.insert_generated_triangulation_in(generated, section);
+                        made.extend(app.active_triangulation);
+                    }
+                    let name_of = |index: usize| {
+                        made.get(index)
+                            .and_then(|id| app.triangulations.iter().find(|item| item.id == *id))
+                            .map(|item| item.name.clone())
+                            .unwrap_or_default()
+                    };
+                    userspace_log!(
+                        "{}",
+                        tr!(
+                            "cmd-cuts-to-surface-made",
+                            roof = name_of(0),
+                            floor = name_of(1),
+                            solid = name_of(2),
+                            surface = seam.clone(),
+                            upper = cut.to_upper.to_string(),
+                            lower = cut.to_lower.to_string(),
+                            removed = cut.removed.to_string(),
+                            crossed = cut.crossed.to_string(),
+                            uncovered = cut.uncovered.to_string(),
+                            nodes = cut.nodes.to_string(),
+                            volume = format!("{:.0}", cut.volume),
+                            cuts = cuts.clone()
+                        )
+                    );
+                    warn_uncovered(&seam, &cut);
+                    // The roof, floor and solid become the selection, ready for
+                    // the next step.
+                    if !made.is_empty() {
+                        app.select_only(made.into_iter().map(SceneEntityId::Triangulation));
+                        app.invalidate_geometry();
+                    }
+                }
+                ToSurfaceOutcome::NotCut { seam, cut } => {
+                    userspace_log!("{}", tr!("cmd-cuts-to-surface-not-cut", surface = seam.clone(), cuts = cuts.clone()));
+                    warn_uncovered(&seam, &cut);
+                }
+                ToSurfaceOutcome::Refused(reason) => userspace_warn!("{}", reason),
+            }
+        };
+        self.spawn_job_reporting_progress(tr!("cmd-cuts-to-surface-cutting"), keys, compute, apply);
         Ok(())
     }
 }
@@ -1297,4 +1496,404 @@ pub(super) fn clip_surface_polyline(polyline: Vec<SurfaceClipVertex>, side: TriS
 
 pub(super) fn append_surface_clip_polyline(polyline: &[SurfaceClipVertex], vertices: &mut Vec<mesh_data::Vertex>, faces: &mut Vec<[u32; 3]>) {
     append_polyline_fan(polyline.iter().map(|vertex| vertex.point), vertices, faces);
+}
+
+/// The roof and floor of one seam, in either order, when `targets` is
+/// exactly two different surfaces; anything else is not one seam.
+pub(crate) fn seam_targets(targets: &[TriangulationId]) -> Option<[TriangulationId; 2]> {
+    match *targets {
+        [first, second] if first != second => Some([first, second]),
+        _ => None,
+    }
+}
+
+/// What became of one seam clipped to the cuts.
+enum ToSurfaceOutcome {
+    Made {
+        seam: String,
+        /// Roof, floor and solid, in that order.
+        generated: Box<[crate::model::triangulation::GeneratedTriangulation; 3]>,
+        cut: SeamCut,
+    },
+    /// No node lay beyond the cuts, so nothing was made.
+    NotCut { seam: String, cut: SeamCut },
+    /// Not one regular grid, with the reason.
+    Refused(String),
+}
+
+/// The cuts a run used, for every line it reports.
+fn to_surface_cuts_label(upper: Option<&str>, upper_level: Option<f64>, lower: Option<&str>, lower_level: Option<f64>, depth: Option<f64>) -> String {
+    let upper = match (upper, upper_level) {
+        (Some(name), _) => Some(tr!("cmd-cuts-to-surface-upper", name = name.to_owned())),
+        (None, Some(level)) => Some(tr!("cmd-cuts-to-surface-upper-level", level = level.to_string())),
+        (None, None) => None,
+    };
+    let lower = match (lower, depth, lower_level) {
+        (Some(name), Some(depth), _) => Some(tr!("cmd-cuts-to-surface-lower-depth", depth = depth.to_string(), name = name.to_owned())),
+        (Some(name), None, _) => Some(tr!("cmd-cuts-to-surface-lower", name = name.to_owned())),
+        (None, _, Some(level)) => Some(tr!("cmd-cuts-to-surface-lower-level", level = level.to_string())),
+        (None, _, None) => None,
+    };
+    [upper, lower].into_iter().flatten().collect::<Vec<_>>().join(", ")
+}
+
+/// Nodes with no cut under them are never passed over in silence.
+fn warn_uncovered(seam: &str, cut: &SeamCut) {
+    if cut.uncovered > 0 {
+        userspace_warn!("{}", tr!("cmd-cuts-to-surface-uncovered", surface = seam.to_owned(), count = cut.uncovered.to_string()));
+    }
+}
+
+// Clipping a seam to cuts. Unlike the clips above, which remove what lies
+// beyond a cutter and re-triangulate along the crossing, a seam's roof and
+// floor are read node for node: where only the roof crosses a cut it is laid
+// flat on the cut, where both cross the node goes, so roof and floor end
+// where they meet on the cut, and the result lines up node for node with
+// the surfaces it came from.
+
+/// Vertices between cancellation checks.
+const CANCEL_STRIDE: usize = 4096;
+
+/// Per-vertex outcome bits, tallied per node afterwards.
+const TO_UPPER: u8 = 1;
+const TO_LOWER: u8 = 2;
+const UNCOVERED: u8 = 4;
+const CROSSED: u8 = 8;
+
+/// A cut surface as [`clip_seam_by_cuts`] reads it: off its lattice when
+/// it is a grid, else off the triangle under the point.
+pub(super) struct CutReader {
+    /// The surface as a lattice, when its triangles are one.
+    grid: Option<GridSurface>,
+    surface: PreparedReferenceSurface,
+}
+
+impl CutReader {
+    /// Read `mesh` as a grid when it is one. A triangulated cut must be
+    /// single-valued in plan, as Trim to Topology requires of its topology.
+    pub(super) fn new(mesh: Arc<mesh_data::Triangulation>, spatial: Arc<TriangleBvh>) -> Result<Self> {
+        let grid = GridSurface::read(Arc::clone(&mesh), spatial).ok();
+        let surface = match grid {
+            // One height per node already, so the overlap check is not needed.
+            Some(_) => prepare_reference_surface_relaxed(&mesh)?,
+            None => validate_reference_surface(&mesh)?,
+        };
+        if surface.skipped_vertical_faces > 0 {
+            userspace_warn!("{}", tr!("cmd-cuts-ignored-vertical-faces", count = surface.skipped_vertical_faces.to_string()));
+        }
+        Ok(Self { grid, surface })
+    }
+
+    /// The cut's height under `at`, `None` where it does not cover `at` in
+    /// plan. On a grid it is read bilinearly; a cell missing a node at the
+    /// grid's cut edge falls back to the triangle under `at`.
+    pub(super) fn height(&self, at: DVec2) -> Option<f64> {
+        match &self.grid {
+            Some(grid) if !grid.covers(at) => None,
+            Some(grid) => grid.bilinear(at).or_else(|| self.under(at)),
+            None => self.under(at),
+        }
+    }
+
+    /// The height of the triangle under `at`, edges included; the highest
+    /// where two share an edge.
+    fn under(&self, at: DVec2) -> Option<f64> {
+        let mut height: Option<f64> = None;
+        self.surface.spatial.for_each_xy_bounds_candidate_index(at, at, |index| {
+            if let Some(z) = point_in_triangle_bary_z(at.x, at.y, self.surface.triangles[index]) {
+                height = Some(height.map_or(z, |found| found.max(z)));
+            }
+        });
+        height
+    }
+}
+
+/// The upper cut (Keep below): a surface, or an RL.
+pub(super) enum UpperCut<'a> {
+    /// A surface cut as it stands.
+    Surface(&'a CutReader),
+    /// A level, the same height everywhere, so it covers every node.
+    Level(f64),
+}
+
+impl UpperCut<'_> {
+    /// Height of the upper cut under `at`.
+    pub(super) fn height(&self, at: DVec2) -> Option<f64> {
+        match self {
+            UpperCut::Surface(surface) => surface.height(at),
+            UpperCut::Level(level) => Some(*level),
+        }
+    }
+}
+
+/// The lower cut (Keep above): a surface, an RL, or a depth below a ground
+/// surface.
+pub(super) enum LowerCut<'a> {
+    /// A surface cut as it stands.
+    Surface(&'a CutReader),
+    /// A level, the same height everywhere, so it covers every node.
+    Level(f64),
+    /// The ground surface lowered by `depth` metres.
+    Depth { ground: &'a CutReader, depth: f64 },
+}
+
+impl LowerCut<'_> {
+    /// Height of the lower cut under `at` (ground - depth for Depth).
+    pub(super) fn height(&self, at: DVec2) -> Option<f64> {
+        match self {
+            LowerCut::Surface(surface) => surface.height(at),
+            LowerCut::Level(level) => Some(*level),
+            LowerCut::Depth { ground, depth } => ground.height(at).map(|height| height - depth),
+        }
+    }
+}
+
+/// Heights a roof and floor node may differ by and still be one point of
+/// the solid, in metres.
+const SEAM_WELD: f64 = 1e-6;
+
+/// A seam after its cuts: roof and floor on the nodes kept, one set of
+/// faces for both, the solid between them, and what the cuts did, counted
+/// per lattice node.
+pub(super) struct SeamCut {
+    pub(super) roof: Vec<mesh_data::Vertex>,
+    pub(super) floor: Vec<mesh_data::Vertex>,
+    /// Faces of roof and floor alike, anticlockwise in plan.
+    pub(super) faces: Vec<[u32; 3]>,
+    pub(super) solid_vertices: Vec<mesh_data::Vertex>,
+    pub(super) solid_faces: Vec<[u32; 3]>,
+    /// Volume between roof and floor, in cubic metres.
+    pub(super) volume: f64,
+    /// Lattice nodes the roof and floor share.
+    pub(super) nodes: usize,
+    /// Nodes whose roof was laid flat on the upper cut.
+    pub(super) to_upper: usize,
+    /// Nodes whose floor was laid flat on the lower cut.
+    pub(super) to_lower: usize,
+    /// Nodes where roof and floor both lay beyond a cut: gone from both.
+    pub(super) removed: usize,
+    /// Nodes where a chosen cut (either one) has no height: left as they
+    /// were by that cut.
+    pub(super) uncovered: usize,
+    /// Nodes where the upper cut lies below the lower cut.
+    pub(super) crossed: usize,
+    /// Whether any node moved or went; false means "not cut", no surface is
+    /// made.
+    pub(super) changed: bool,
+    /// Whether the second surface given is the roof.
+    pub(super) swapped: bool,
+}
+
+const REMOVED: u8 = 16;
+
+/// Clip the seam whose roof and floor are `first` and `second`, in either
+/// order (the roof is the higher on average), to the cuts: per node, Keep
+/// below lays the roof flat on the upper cut where only the roof crosses it
+/// and removes the node where the floor does too; Keep above mirrors it.
+/// Only the nodes and faces the two share are read; a node with no cut
+/// under it is left as it was.
+pub(super) fn clip_seam_by_cuts(
+    first: &GridSurface,
+    second: &GridSurface,
+    upper: Option<&UpperCut<'_>>,
+    lower: Option<&LowerCut<'_>>,
+    cancel: &CancelFlag,
+    progress: &Phase,
+) -> Result<SeamCut> {
+    if upper.is_none() && lower.is_none() {
+        anyhow::bail!("{}", tr!("cmd-cuts-to-surface-no-cut"));
+    }
+    if (first.spacing() - second.spacing()).abs() > first.spacing() * 1e-6 {
+        anyhow::bail!("{}", tr!("cmd-cuts-to-surface-not-one-lattice"));
+    }
+    // The faces of the first whose three corners are nodes of both.
+    let given = first.mesh().vertices();
+    let shared = |index: usize| -> Option<((usize, usize), DVec2, f64)> {
+        let at = DVec2::new(given[index].x, given[index].y);
+        let node = first.node_at(at)?;
+        let other = second.node_at(at).and_then(|(column, row)| second.height(column, row))?;
+        Some((node, at, other))
+    };
+    let no_memory = || anyhow::anyhow!("{}", tr!("cmd-cuts-to-surface-no-memory"));
+    let mut slot: std::collections::HashMap<(usize, usize), u32> = std::collections::HashMap::new();
+    let (mut plan, mut top, mut bottom, mut faces) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for face in first.mesh().face_vertex_indices_iter() {
+        let Some(corners) = face.iter().map(|&index| shared(index)).collect::<Option<Vec<_>>>() else {
+            continue;
+        };
+        let mut indices = [0u32; 3];
+        for (corner, (node, at, other)) in indices.iter_mut().zip(corners) {
+            *corner = *slot.entry(node).or_insert_with(|| {
+                plan.push(at);
+                top.push(first.height(node.0, node.1).unwrap_or(f64::NAN));
+                bottom.push(other);
+                (plan.len() - 1) as u32
+            });
+        }
+        faces.try_reserve(1).map_err(|_| no_memory())?;
+        faces.push(indices);
+    }
+    if faces.is_empty() {
+        anyhow::bail!("{}", tr!("cmd-cuts-to-surface-not-one-lattice"));
+    }
+    let mean_gap = top.iter().zip(&bottom).map(|(a, b)| a - b).sum::<f64>() / top.len() as f64;
+    let swapped = mean_gap < 0.0;
+    let (mut roof, mut floor) = if swapped { (bottom, top) } else { (top, bottom) };
+    let mut flags: Vec<u8> = Vec::new();
+    flags.try_reserve_exact(plan.len()).map_err(|_| no_memory())?;
+    flags.resize(plan.len(), 0);
+    let phase = progress.phase(0.0, 1.0);
+    let done = phase.counter(plan.len());
+    plan.par_chunks(CANCEL_STRIDE)
+        .zip(roof.par_chunks_mut(CANCEL_STRIDE))
+        .zip(floor.par_chunks_mut(CANCEL_STRIDE))
+        .zip(flags.par_chunks_mut(CANCEL_STRIDE))
+        .try_for_each(|(((plan, roof), floor), flags)| -> Result<()> {
+            if cancel.is_cancelled() {
+                anyhow::bail!("{}", tr!("common-cancelled"));
+            }
+            for (((&at, roof), floor), flag) in plan.iter().zip(roof.iter_mut()).zip(floor.iter_mut()).zip(flags.iter_mut()) {
+                let upper_height = upper.and_then(|cut| cut.height(at));
+                let lower_height = lower.and_then(|cut| cut.height(at));
+                if (upper.is_some() && upper_height.is_none()) || (lower.is_some() && lower_height.is_none()) {
+                    *flag |= UNCOVERED;
+                }
+                // Equality is not a crossing: only a node strictly beyond the
+                // cut counts.
+                if let Some(cut) = upper_height {
+                    if *floor > cut {
+                        *flag |= REMOVED;
+                    } else if *roof > cut {
+                        *roof = cut;
+                        *flag |= TO_UPPER;
+                    }
+                }
+                if let Some(cut) = lower_height.filter(|_| *flag & REMOVED == 0) {
+                    if *roof < cut {
+                        *flag |= REMOVED;
+                    } else if *floor < cut {
+                        *floor = cut;
+                        *flag |= TO_LOWER;
+                    }
+                }
+                if let (Some(top), Some(bottom)) = (upper_height, lower_height)
+                    && top < bottom
+                {
+                    *flag |= CROSSED;
+                }
+            }
+            done.advance_by(plan.len());
+            Ok(())
+        })?;
+    let count = |bit: u8| flags.iter().filter(|&&flag| flag & bit != 0 && (bit == REMOVED || flag & REMOVED == 0)).count();
+    let (to_upper, to_lower, removed) = (count(TO_UPPER), count(TO_LOWER), count(REMOVED));
+    let (uncovered, crossed) = (
+        flags.iter().filter(|&&flag| flag & UNCOVERED != 0).count(),
+        flags.iter().filter(|&&flag| flag & CROSSED != 0).count(),
+    );
+    let changed = to_upper + to_lower + removed > 0;
+
+    // The faces kept, anticlockwise in plan, on the nodes they use.
+    let mut renumber = vec![u32::MAX; plan.len()];
+    let mut kept_nodes = Vec::new();
+    let mut kept = Vec::new();
+    for face in faces {
+        if face.iter().any(|&index| flags[index as usize] & REMOVED != 0) {
+            continue;
+        }
+        let [a, b, c] = face.map(|index| plan[index as usize]);
+        let face = if (b - a).perp_dot(c - a) < 0.0 { [face[0], face[2], face[1]] } else { face };
+        kept.push(face.map(|index| {
+            let slot = &mut renumber[index as usize];
+            if *slot == u32::MAX {
+                *slot = kept_nodes.len() as u32;
+                kept_nodes.push(index as usize);
+            }
+            *slot
+        }));
+    }
+    if kept.is_empty() {
+        anyhow::bail!("{}", tr!("cmd-cuts-to-surface-nothing-left"));
+    }
+    let vertex = |index: usize, z: f64| mesh_data::Vertex {
+        x: plan[index].x,
+        y: plan[index].y,
+        z,
+    };
+    let roof_vertices: Vec<_> = kept_nodes.iter().map(|&index| vertex(index, roof[index])).collect();
+    let floor_vertices: Vec<_> = kept_nodes.iter().map(|&index| vertex(index, floor[index])).collect();
+    let thickness = |index: u32| (roof_vertices[index as usize].z - floor_vertices[index as usize].z).max(0.0);
+    let volume = kept
+        .iter()
+        .map(|&[a, b, c]| {
+            let corner = |index: u32| DVec2::new(roof_vertices[index as usize].x, roof_vertices[index as usize].y);
+            let area = 0.5 * (corner(b) - corner(a)).perp_dot(corner(c) - corner(a));
+            area * (thickness(a) + thickness(b) + thickness(c)) / 3.0
+        })
+        .sum();
+    let (solid_vertices, solid_faces) = close_seam_solid(&roof_vertices, &floor_vertices, &kept);
+    phase.finish();
+    Ok(SeamCut {
+        roof: roof_vertices,
+        floor: floor_vertices,
+        faces: kept,
+        solid_vertices,
+        solid_faces,
+        volume,
+        nodes: plan.len(),
+        to_upper,
+        to_lower,
+        removed,
+        uncovered,
+        crossed,
+        changed,
+        swapped,
+    })
+}
+
+/// Interim, until a shared solid builder replaces it: builds a closed solid
+/// between the roof and floor grids.
+///
+/// The roof faces are its top and the floor faces, turned over, its bottom;
+/// a wall stands on every outer edge of the faces where roof and floor are
+/// apart. Where they meet the two share the point, so no wall is needed and
+/// faces flat between them are left out.
+fn close_seam_solid(roof: &[mesh_data::Vertex], floor: &[mesh_data::Vertex], faces: &[[u32; 3]]) -> (Vec<mesh_data::Vertex>, Vec<[u32; 3]>) {
+    let mut vertices = roof.to_vec();
+    let below: Vec<u32> = roof
+        .iter()
+        .zip(floor)
+        .enumerate()
+        .map(|(index, (top, bottom))| {
+            if top.z - bottom.z <= SEAM_WELD {
+                index as u32
+            } else {
+                vertices.push(*bottom);
+                (vertices.len() - 1) as u32
+            }
+        })
+        .collect();
+    let apart = |index: u32| below[index as usize] != index;
+    let mut solid = Vec::new();
+    let mut edges: std::collections::HashMap<(u32, u32), (u32, [u32; 2])> = std::collections::HashMap::new();
+    for &[a, b, c] in faces {
+        for (from, to) in [(a, b), (b, c), (c, a)] {
+            edges.entry((from.min(to), from.max(to))).or_insert((0, [from, to])).0 += 1;
+        }
+        if apart(a) || apart(b) || apart(c) {
+            solid.push([a, b, c]);
+            solid.push([below[a as usize], below[c as usize], below[b as usize]]);
+        }
+    }
+    let mut outer: Vec<[u32; 2]> = edges.into_values().filter(|(count, _)| *count == 1).map(|(_, edge)| edge).collect();
+    outer.sort_unstable();
+    for [from, to] in outer {
+        let (from_below, to_below) = (below[from as usize], below[to as usize]);
+        for wall in [[to, from, from_below], [to, from_below, to_below]] {
+            if wall[0] != wall[1] && wall[1] != wall[2] && wall[0] != wall[2] {
+                solid.push(wall);
+            }
+        }
+    }
+    (vertices, solid)
 }

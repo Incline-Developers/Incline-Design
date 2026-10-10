@@ -605,10 +605,15 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                 }
             });
 
-            MenuBarMenu::new(&tr!("ws-menubar-drillholes")).show(ui, |ui| {
+            MenuBarMenu::new(&tr!("ws-menubar-modelling")).show(ui, |ui| {
                 // Select first, then act: placed on the holes selected at open.
                 let can_build_points = editor.selection_counts.reference_holes > 0;
-                if ContextMenuAction::new(tr!("common-reference-points")).enabled(can_build_points).show(ui).clicked() {
+                if ContextMenuAction::new(tr!("common-reference-points"))
+                    .enabled(can_build_points)
+                    .disabled_hover_text(tr!("ws-menubar-modelling-select-holes"))
+                    .show(ui)
+                    .clicked()
+                {
                     commands.push(UiCommand::OpenReferencePoints);
                     ui.close();
                 }
@@ -616,8 +621,53 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                 // that are selected when it opens, not from a layer picked
                 // inside the dialog.
                 let can_build_surface = editor.selection_counts.surface_points >= crate::app::commands::triangulation::reference_surface::MINIMUM_POINTS;
-                if ContextMenuAction::new(tr!("common-build-surface-ellipsis")).enabled(can_build_surface).show(ui).clicked() {
+                if ContextMenuAction::new(tr!("common-build-surface-ellipsis"))
+                    .enabled(can_build_surface)
+                    .disabled_hover_text(tr!(
+                        "ws-menubar-modelling-select-points",
+                        count = crate::app::commands::triangulation::reference_surface::MINIMUM_POINTS.to_string()
+                    ))
+                    .show(ui)
+                    .clicked()
+                {
                     commands.push(UiCommand::OpenReferenceSurface);
+                    ui.close();
+                }
+                context_menu_separator(ui);
+                // Select first, then act: measured against the one surface
+                // selected, for the seam it was built from.
+                let can_make_thickness = editor.selection_counts.triangulations == 1;
+                if ContextMenuAction::new(tr!("common-thickness-points-ellipsis"))
+                    .enabled(can_make_thickness)
+                    .disabled_hover_text(tr!("ws-menubar-modelling-select-surface"))
+                    .show(ui)
+                    .clicked()
+                {
+                    commands.push(UiCommand::OpenThicknessPoints);
+                    ui.close();
+                }
+                // Select first, then act: the same one surface, once its
+                // thickness points are made.
+                if ContextMenuAction::new(tr!("common-thickness-surfaces-ellipsis"))
+                    .enabled(can_make_thickness)
+                    .disabled_hover_text(tr!("ws-menubar-modelling-select-surface"))
+                    .show(ui)
+                    .clicked()
+                {
+                    commands.push(UiCommand::OpenSeamSurface);
+                    ui.close();
+                }
+                context_menu_separator(ui);
+                // Select first, then act: the seam's roof and floor selected are
+                // clipped; the limits, surfaces of the same kind, are picked in
+                // the dialog.
+                if ContextMenuAction::new(tr!("common-clip-to-surface-ellipsis"))
+                    .enabled(editor.selection_counts.triangulations == 2)
+                    .disabled_hover_text(tr!("ws-menubar-modelling-select-surfaces"))
+                    .show(ui)
+                    .clicked()
+                {
+                    commands.push(UiCommand::OpenCutTriangulationToSurface);
                     ui.close();
                 }
             });
@@ -642,6 +692,14 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                     ui.close();
                 }
             });
+            if ContextMenuAction::new(tr!("cmd-string-clean-clean-strings"))
+                .enabled(editor.selection_counts.open_strings > 0)
+                .show(ui)
+                .clicked()
+            {
+                commands.push(UiCommand::CleanStrings);
+                ui.close();
+            }
             context_menu_separator(ui);
             context_submenu(ui, &tr!("ws-menubar-design-move-to"), has_selection, |ui| {
                 for axis in [Axis::X, Axis::Y, Axis::Z] {
@@ -684,6 +742,15 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
             }
             if ContextMenuAction::new(tr!("common-trim-topology")).show(ui).clicked() {
                 commands.push(UiCommand::OpenCutTriangulationBySurface);
+                ui.close();
+            }
+            if ContextMenuAction::new(tr!("common-clip-to-surface-ellipsis"))
+                .enabled(editor.selection_counts.triangulations == 2)
+                .disabled_hover_text(tr!("ws-menubar-modelling-select-surfaces"))
+                .show(ui)
+                .clicked()
+            {
+                commands.push(UiCommand::OpenCutTriangulationToSurface);
                 ui.close();
             }
             context_menu_separator(ui);

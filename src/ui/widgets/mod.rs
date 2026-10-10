@@ -1,5 +1,6 @@
 //! Custom egui widget implementations used across the UI.
 
+pub(crate) mod borehole_log;
 pub(crate) mod collapsible_section;
 pub(crate) mod color;
 pub(crate) mod context_menu;

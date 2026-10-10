@@ -36,7 +36,7 @@ use crate::{
         },
         point_cloud::{LoadedPointCloud, OpenPointCloud, prepare_for_render},
         progress::Phase,
-        project::{self, ProjectFile, ProjectMetadata},
+        project::{self, ModellingSettings, ProjectFile, ProjectMetadata},
         raster::{LoadedRasterTexture, OpenRasterTexture},
         triangulation::{LoadedTriangulation, OpenTriangulation, spatial_surface_face_order, unique_edges},
     },
@@ -60,6 +60,10 @@ const META_LAYER: &str = "incline:layer";
 /// has no folders, so a project without folders writes byte for byte as
 /// before.
 const META_FOLDERS: &str = "incline:folders";
+/// The project's modelling settings, on the OMF project record; omitted
+/// while they are the defaults, so such a project writes byte for byte as
+/// before they existed.
+const META_MODELLING: &str = "incline:modelling";
 /// A layer's or item's folder membership: the name of the folder in its
 /// own section, absent when the member is at the section root.
 const META_FOLDER: &str = "incline:folder";
@@ -77,6 +81,11 @@ const META_RENDER_RANGES: &str = "incline:render_ranges";
 /// Where each hole's orientation came from, keyed like the render ranges and
 /// written only for holes whose source is known.
 const META_ORIENTATION_SOURCES: &str = "incline:orientation_sources";
+/// As-logged values of corrected intervals, keyed like the render ranges: per
+/// hole, pairs of interval index and what the site sent.
+const META_LOGGED_INTERVALS: &str = "incline:logged_intervals";
+/// The dataset's correction records, whatever their status.
+const META_CORRECTIONS: &str = "incline:corrections";
 /// The category on every drillhole row naming the hole it belongs to.
 const DRILL_HOLE_ATTRIBUTE: &str = "Hole";
 /// A dataset's tie-in: its surface connectors and where the round starts,
@@ -84,6 +93,9 @@ const DRILL_HOLE_ATTRIBUTE: &str = "Hole";
 /// they are what joins its holes rather than anything one hole holds.
 const META_TIE_INS: &str = "incline:tie_ins";
 const META_CHARGES: &str = "incline:charges";
+/// Interval columns an Incline tool wrote, by name, so a later run may write
+/// them again while a column that came in with the data is left alone.
+const META_DERIVED_COLUMNS: &str = "incline:derived_columns";
 const MAX_ARRAY_ITEMS: u64 = 200_000_000;
 
 /// Owned, cheaply-cloned state captured before OMF encoding moves to a worker.
@@ -238,6 +250,9 @@ pub(crate) struct ImportBundle {
     /// per-element membership below always resolves against it, and grown by
     /// `ensure` for a name the project record did not list.
     pub(crate) folders: FolderRegistry,
+    /// The project record's modelling settings; the defaults when it has
+    /// none, or none that can be read.
+    pub(crate) modelling: ModellingSettings,
     pub(crate) warnings: Vec<String>,
 }
 
@@ -445,6 +460,13 @@ fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, compre
             }
         }
         project.metadata.insert(META_FOLDERS.to_owned(), Value::Object(sections));
+    }
+    // Beside the coordinate system, from the same place.
+    if let Some(design) = snapshot.designs.as_ref()
+        && design.metadata.modelling != ModellingSettings::default()
+    {
+        let settings = serde_json::to_value(design.metadata.modelling).context("write modelling settings")?;
+        project.metadata.insert(META_MODELLING.to_owned(), settings);
     }
     let (output, _warnings) = writer.finish(project).context("finish project")?;
     progress.finish();
@@ -1291,6 +1313,28 @@ fn write_drill_holes<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
     if !orientation_sources.is_empty() {
         put(&mut element, META_ORIENTATION_SOURCES, Value::Object(orientation_sources));
     }
+    let logged_intervals = holes
+        .iter()
+        .enumerate()
+        .filter_map(|(index, hole)| {
+            let pairs = hole
+                .intervals
+                .iter()
+                .enumerate()
+                .filter_map(|(slot, interval)| interval.logged.as_ref().map(|logged| json!([slot, logged])))
+                .collect::<Vec<_>>();
+            (!pairs.is_empty()).then(|| (index.to_string(), Value::Array(pairs)))
+        })
+        .collect::<serde_json::Map<_, _>>();
+    if !logged_intervals.is_empty() {
+        put(&mut element, META_LOGGED_INTERVALS, Value::Object(logged_intervals));
+    }
+    if !open.dataset.corrections.is_empty() {
+        put(&mut element, META_CORRECTIONS, serde_json::to_value(&open.dataset.corrections)?);
+    }
+    if !open.dataset.derived_columns.is_empty() {
+        put(&mut element, META_DERIVED_COLUMNS, serde_json::to_value(&open.dataset.derived_columns)?);
+    }
     Ok(Some(element))
 }
 
@@ -1793,7 +1837,20 @@ pub(crate) fn from_bytes(source_name: &str, bytes: Vec<u8>, progress: &Phase) ->
             }
         }
     }
-    let unsupported_project_metadata = project.metadata.keys().filter(|key| key.as_str() != META_FOLDERS).cloned().collect::<Vec<_>>();
+    // Settings that fail to read, or to validate, are dropped for the
+    // defaults and said so, never half applied.
+    if let Some(value) = project.metadata.get(META_MODELLING) {
+        match ModellingSettings::read(value).filter(|settings| settings.problem().is_none()) {
+            Some(settings) => bundle.modelling = settings,
+            None => bundle.warnings.push(tr!("omf-modelling-settings-unreadable")),
+        }
+    }
+    let unsupported_project_metadata = project
+        .metadata
+        .keys()
+        .filter(|key| key.as_str() != META_FOLDERS && key.as_str() != META_MODELLING)
+        .cloned()
+        .collect::<Vec<_>>();
     if !unsupported_project_metadata.is_empty() {
         bundle
             .warnings
@@ -1885,6 +1942,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     name: file_stem(self.source_name),
                     coordinate_reference_system: self.project_crs.clone(),
                     units: self.project_units.clone(),
+                    ..Default::default()
                 },
                 // The bundle's registry is the single source of truth for
                 // membership; a decoded `ProjectFile` never carries its own.
@@ -2234,8 +2292,11 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             META_ID,
             META_RENDER_RANGES,
             META_ORIENTATION_SOURCES,
+            META_LOGGED_INTERVALS,
+            META_CORRECTIONS,
             META_TIE_INS,
             META_CHARGES,
+            META_DERIVED_COLUMNS,
         ];
         let unknown_metadata = element.metadata.keys().filter(|key| !KNOWN_METADATA.contains(&key.as_str())).cloned().collect::<Vec<_>>();
         if !unknown_metadata.is_empty() {
@@ -2394,6 +2455,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 name: element_name(element).to_owned(),
                 coordinate_reference_system: self.project_crs.clone(),
                 units: self.project_units.clone(),
+                ..Default::default()
             },
             // The bundle's registry is the single source of truth for
             // membership; a decoded `ProjectFile` never carries its own.
@@ -3162,10 +3224,40 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 }
             }
         }
+        if let Some(logged) = element.metadata.get(META_LOGGED_INTERVALS).and_then(Value::as_object) {
+            for (index, pairs) in logged {
+                let (Some(hole), Some(pairs)) = (index.parse::<usize>().ok().and_then(|index| holes.get_mut(index)), pairs.as_array()) else {
+                    continue;
+                };
+                for pair in pairs {
+                    if let Ok((slot, logged)) = <(usize, crate::model::drill_hole::LoggedInterval)>::deserialize(pair)
+                        && let Some(interval) = hole.intervals.get_mut(slot)
+                    {
+                        interval.logged = Some(logged);
+                    }
+                }
+            }
+        }
         if holes.is_empty() {
             return Ok(None);
         }
         let mut dataset = DrillHoleDataset::new(holes);
+        if let Some(corrections) = element
+            .metadata
+            .get(META_CORRECTIONS)
+            .and_then(|value| Vec::<crate::model::drill_hole::Correction>::deserialize(value).ok())
+        {
+            dataset.corrections = corrections;
+        }
+        // Only columns the file still holds: a name with no column behind it
+        // would let a later import of that name be written over.
+        if let Some(columns) = element
+            .metadata
+            .get(META_DERIVED_COLUMNS)
+            .and_then(|value| std::collections::BTreeSet::<String>::deserialize(value).ok())
+        {
+            dataset.derived_columns = columns.into_iter().filter(|column| dataset.fields.iter().any(|field| &field.key == column)).collect();
+        }
         // Resolved after construction: it is `new` that fixes the hole order
         // the stored names are looked up against.
         if let Some(value) = element.metadata.get(META_TIE_INS)
