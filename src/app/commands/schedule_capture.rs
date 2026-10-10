@@ -516,6 +516,11 @@ fn capture_drill_blast(
             if !near(block_bounds[position]) || plan_gap(&block.ground, &record.face) > reach || excluded(block, &source.exclusions) {
                 continue;
             }
+            // With no buffer, only ground over the blast itself holds it:
+            // ground that merely shares an edge with it does not.
+            if config.buffer_m <= 0.0 && crate::model::arrangement::overlap_area(&block.ground, &record.face) <= SHARED_GROUND_M2 {
+                continue;
+            }
             match (block_ground.get(&position), empty_cleared_by.get(&position)) {
                 (Some(ground), _) | (None, Some(Some(ground))) => above.push(*ground),
                 (None, Some(None)) => {}
@@ -681,6 +686,11 @@ fn plan_gap(a: &crate::model::arrangement::Face, b: &crate::model::arrangement::
     }
     gap
 }
+
+/// Plan area, m², that ground in a higher bench must share with a blast to
+/// stand over it when the clearance buffer is zero: anything less is where
+/// two outlines drawn along the same line meet, not ground over the blast.
+const SHARED_GROUND_M2: f64 = 1.0;
 
 /// Whether a dig block is ground the planner has taken out of mining.
 fn excluded(block: &crate::app::commands::solids_view::DigBlockRecord, exclusions: &[(crate::model::SolidId, crate::model::MiningExclusions)]) -> bool {
