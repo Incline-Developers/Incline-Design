@@ -196,7 +196,7 @@ impl<'a> App<'a> {
         self.commit_inserted_vertices(&source, updated, &tr!("common-elevation"));
     }
 
-    fn selected_polylines(&self) -> Vec<ObjectId> {
+    pub(crate) fn selected_polylines(&self) -> Vec<ObjectId> {
         self.editor
             .selected_handles
             .iter()

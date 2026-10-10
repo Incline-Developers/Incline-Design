@@ -1729,6 +1729,8 @@ pub(crate) struct EditorState {
     pub(crate) drape_phase: DrapePhase,
     /// Design objects retained while the second selection step chooses surfaces.
     pub(crate) drape_object_ids: Vec<ObjectId>,
+    /// Whether this drape also follows the surface between vertices.
+    pub(crate) drape_along_triangles: bool,
 
     // Offset Element tool
     pub(crate) offset_dialog_open: bool,
@@ -3091,6 +3093,7 @@ impl EditorState {
             selection_box_start_px: None,
             selection_box_current_px: None,
             drape_phase: DrapePhase::Designs,
+            drape_along_triangles: false,
             drape_object_ids: Vec::new(),
             offset_dialog_open: false,
             offset_target_id: None,
@@ -3628,6 +3631,9 @@ pub(crate) enum ActiveTool {
     BatterBermOffset,
     Bezier,
     VerticalSlice,
+    /// Open the vertex sheet of the string under the cursor at the vertex
+    /// nearest it.
+    EditVertex,
 }
 
 impl ActiveTool {
@@ -3695,16 +3701,16 @@ impl ActiveTool {
         )
     }
 
-    /// The bench tool and the two measures, which only production carries.
+    /// The bench tool and the distance measure, which only production carries.
     pub(crate) fn designs_pit(self) -> bool {
-        matches!(self, Self::BatterBermOffset | Self::MeasureDistance | Self::MeasureBatterAngle)
+        matches!(self, Self::BatterBermOffset | Self::MeasureDistance)
     }
 
     /// The editing tools that keep a string on its section.
     pub(crate) fn edits_in_slice_view(self) -> bool {
         matches!(
             self,
-            Self::Move | Self::DrapeToTopology | Self::Bezier | Self::DeletePoints | Self::ExplodePolyline | Self::SplitAtPoints | Self::FuseIntoPolyline
+            Self::Move | Self::DrapeToTopology | Self::Bezier | Self::DeletePoints | Self::ExplodePolyline | Self::SplitAtPoints | Self::FuseIntoPolyline | Self::EditVertex
         )
     }
 
@@ -4338,6 +4344,10 @@ pub(crate) enum UiCommand {
     OpenMoveToAxisDialog(Axis),
     /// Insert vertices at every plan-view crossing between selected polylines.
     InsertPointsAtIntersections,
+    /// Reverse the direction of every selected polyline.
+    ReverseSelectedStrings,
+    /// Arm Drape so that strings follow the surface between their vertices.
+    ArmDrapeAlongTriangles,
     /// Open the elevation input for inserting vertices into selected polylines.
     OpenInsertPointAtElevationDialog,
     /// Insert vertices where selected polylines cross an elevation.
@@ -4571,6 +4581,7 @@ impl UiCommand {
             | Self::OpenInsertPointAtElevationDialog
             | Self::OpenObjectEditDialog(_)
             | Self::ShowObjectVertex { .. }
+            | Self::ArmDrapeAlongTriangles
             | Self::OpenPointCloudTin
             | Self::OpenPointCloudJoin
             | Self::OpenPointCloudClassify
@@ -4860,6 +4871,7 @@ impl UiCommand {
             Self::RelimitLineResize { source_id, .. } => report(tr!("common-relimit-line"), format!("{source_id:?}")),
             Self::CommitBatterBerm => report(tr!("common-create-batter-berm"), tr!("state-apply-generated-rings")),
             Self::InsertPointsAtIntersections => report(tr!("state-insert-intersection-points"), tr!("state-selected-polylines")),
+            Self::ReverseSelectedStrings => report(tr!("toolbars-reverse-strings"), tr!("state-selected-polylines")),
             Self::ApplyObjectEdit { object, .. } => report(tr!("common-edit-object"), object.kind_name()),
             Self::CleanStrings => report(tr!("cmd-string-clean-clean-strings"), tr!("state-selected-polylines")),
             Self::CleanString(id) => report(tr!("cmd-string-clean-clean-this-string"), format!("{id:?}")),

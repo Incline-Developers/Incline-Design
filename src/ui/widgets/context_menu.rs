@@ -328,6 +328,14 @@ pub(crate) fn context_menu_separator(ui: &mut egui::Ui) {
     ui.add_space(2.0);
 }
 
+/// A subdued label naming the group of rows below it, in the header's type.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub(crate) fn context_menu_heading(ui: &mut egui::Ui, title: &str) {
+    let color = ui.visuals().weak_text_color();
+    ui.add_space(2.0);
+    ui.label(egui::RichText::new(title).size(11.0).color(color));
+}
+
 /// A menu-bar dropdown wearing the context-menu frame, header and rows.
 ///
 /// The bar button itself stays an ordinary egui button so the menu bar keeps

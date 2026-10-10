@@ -6,21 +6,21 @@
 //! this bar carries only what is true whichever workspace is open, the way
 //! Blender's topbar does.
 
-use crate::ui::{
-    EditorState, UiCommand, UiProjectView,
-    state::{ActiveTool, Workspace},
-    themed_icon,
-    widgets::toolbar::GROUP_CORNER_RADIUS,
-};
 // The dropdowns below are all in the system menu bar on macOS (`mac.rs`), and
 // nothing this module still draws there needs any of this.
 #[cfg(not(target_os = "macos"))]
+use crate::ui::{
+    state::{UiProjectEntry, ViewToggle},
+    widgets::context_menu::{ContextMenuAction, MenuBarMenu, context_menu_heading, context_menu_separator, context_submenu},
+};
 use crate::{
     i18n::tr,
     model::{Axis, SceneEntityId},
     ui::{
-        state::{UiProjectEntry, ViewToggle},
-        widgets::context_menu::{ContextMenuAction, MenuBarMenu, context_menu_separator, context_submenu},
+        EditorState, UiCommand, UiProjectView,
+        state::{ActiveTool, Workspace},
+        themed_icon,
+        widgets::toolbar::GROUP_CORNER_RADIUS,
     },
 };
 
@@ -504,6 +504,202 @@ fn draw_open_recent(ui: &mut egui::Ui, project: &UiProjectView, commands: &mut V
     });
 }
 
+/// The Design menu's entries, shared by production's Design and the top
+/// of Geology Design.
+#[cfg(not(target_os = "macos"))]
+fn draw_design_menu_entries(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
+    // Every entry here acts on the current design selection.
+    let has_selection = editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_)));
+    context_submenu(ui, &tr!("ws-menubar-design-insert-point"), editor.selection_has_polylines, |ui| {
+        // Needs two or more crossing polylines to insert anything.
+        if ContextMenuAction::new(tr!("ws-menubar-design-insert-point-at-intersection"))
+            .enabled(editor.selection_has_intersections)
+            .show(ui)
+            .clicked()
+        {
+            commands.push(UiCommand::InsertPointsAtIntersections);
+            ui.close();
+        }
+        if ContextMenuAction::new(tr!("ws-menubar-design-insert-point-at-elevation")).show(ui).clicked() {
+            commands.push(UiCommand::OpenInsertPointAtElevationDialog);
+            ui.close();
+        }
+    });
+    if ContextMenuAction::new(tr!("cmd-string-clean-clean-strings"))
+        .enabled(editor.selection_counts.open_strings > 0)
+        .show(ui)
+        .clicked()
+    {
+        commands.push(UiCommand::CleanStrings);
+        ui.close();
+    }
+    context_menu_separator(ui);
+    context_submenu(ui, &tr!("ws-menubar-design-move-to"), has_selection, |ui| {
+        for axis in [Axis::X, Axis::Y, Axis::Z] {
+            if ContextMenuAction::new(tr!("common-set") + &format!(" {}...", axis.label())).show(ui).clicked() {
+                commands.push(UiCommand::OpenMoveToAxisDialog(axis));
+                ui.close();
+            }
+        }
+    });
+    context_menu_separator(ui);
+    // Like the entries above, this runs on the selection: only objects
+    // that can contribute an edge count towards it.
+    if ContextMenuAction::new(tr!("ws-menubar-design-create-triangulation"))
+        .enabled(editor.selection_counts.triangulation_sources > 0)
+        .show(ui)
+        .clicked()
+    {
+        commands.push(UiCommand::OpenCreateTriangulation);
+        ui.close();
+    }
+}
+
+/// One row of Geology Design's lower half: a tool it arms, or a command it
+/// pushes. Leo's Design functions sit here too, so the half is a superset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GeologyRow {
+    Tool(ActiveTool),
+    SetAxis(Axis),
+    InsertAtCrossings,
+    InsertAtElevation,
+    CleanStrings,
+    CreateTriangulation,
+    Reverse,
+    DrapeAlongTriangles,
+}
+
+/// Geology Design's lower half in menu order; [`geology_design_groups`] cuts
+/// it into submenus and the macOS menu tags rows by index into it.
+pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 26] = [
+    GeologyRow::Tool(ActiveTool::MakePoint),
+    GeologyRow::Tool(ActiveTool::MakeLine),
+    GeologyRow::Tool(ActiveTool::MakePoly),
+    GeologyRow::Tool(ActiveTool::MakeCircle),
+    GeologyRow::Tool(ActiveTool::MakeText),
+    GeologyRow::Tool(ActiveTool::Move),
+    GeologyRow::SetAxis(Axis::X),
+    GeologyRow::SetAxis(Axis::Y),
+    GeologyRow::SetAxis(Axis::Z),
+    GeologyRow::Tool(ActiveTool::OffsetElement),
+    GeologyRow::Tool(ActiveTool::RelimitLine),
+    GeologyRow::Tool(ActiveTool::Bezier),
+    GeologyRow::Tool(ActiveTool::Chamfer),
+    GeologyRow::Reverse,
+    GeologyRow::CleanStrings,
+    GeologyRow::Tool(ActiveTool::FuseIntoPolyline),
+    GeologyRow::Tool(ActiveTool::SplitAtPoints),
+    GeologyRow::Tool(ActiveTool::ExplodePolyline),
+    GeologyRow::Tool(ActiveTool::EditVertex),
+    GeologyRow::Tool(ActiveTool::DeletePoints),
+    GeologyRow::InsertAtCrossings,
+    GeologyRow::InsertAtElevation,
+    GeologyRow::Tool(ActiveTool::DrapeToTopology),
+    GeologyRow::DrapeAlongTriangles,
+    GeologyRow::CreateTriangulation,
+    GeologyRow::Tool(ActiveTool::MeasureBatterAngle),
+];
+
+/// Geology Design's submenus: title and run of [`GEOLOGY_DESIGN_ROWS`]. The
+/// rows after the last run stand on the menu itself.
+pub(crate) fn geology_design_groups() -> [(String, std::ops::Range<usize>); 5] {
+    [
+        (tr!("ws-menubar-geology-draw"), 0..5),
+        (tr!("ws-menubar-geology-edit"), 5..15),
+        (tr!("ws-menubar-geology-join-split"), 15..18),
+        (tr!("ws-menubar-geology-vertices"), 18..22),
+        (tr!("ws-menubar-geology-surface"), 22..25),
+    ]
+}
+
+impl GeologyRow {
+    /// The row's words, its toolbar cell's or Design entry's where it has one.
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::Tool(tool) => match tool {
+                ActiveTool::MakePoint => tr!("common-create-point"),
+                ActiveTool::MakeLine => tr!("common-create-line"),
+                ActiveTool::MakePoly => tr!("common-create-polyline"),
+                ActiveTool::MakeCircle => tr!("common-create-circle"),
+                ActiveTool::MakeText => tr!("toolbars-create-text"),
+                ActiveTool::Move => tr!("common-move-design"),
+                ActiveTool::OffsetElement => tr!("common-offset"),
+                ActiveTool::RelimitLine => tr!("common-relimit-line"),
+                ActiveTool::Bezier => tr!("toolbars-bezier-polyline"),
+                ActiveTool::Chamfer => tr!("toolbars-chamfer-polyline-corners"),
+                ActiveTool::FuseIntoPolyline => tr!("toolbars-fuse-polylines"),
+                ActiveTool::SplitAtPoints => tr!("toolbars-split-polyline-points"),
+                ActiveTool::ExplodePolyline => tr!("toolbars-explode-polyline-lines"),
+                ActiveTool::DeletePoints => tr!("toolbars-delete-points"),
+                ActiveTool::EditVertex => tr!("toolbars-edit-vertex"),
+                ActiveTool::DrapeToTopology => tr!("common-drape-topology"),
+                _ => tr!("toolbars-strike-dip"),
+            },
+            Self::SetAxis(axis) => tr!("common-set") + &format!(" {}...", axis.label()),
+            Self::InsertAtCrossings => tr!("toolbars-insert-points-crossings"),
+            Self::InsertAtElevation => tr!("ws-menubar-geology-insert-at-elevation"),
+            Self::CleanStrings => tr!("cmd-string-clean-clean-strings"),
+            Self::CreateTriangulation => tr!("ws-menubar-design-create-triangulation"),
+            Self::Reverse => tr!("toolbars-reverse-strings"),
+            Self::DrapeAlongTriangles => tr!("ws-menubar-geology-drape-along-triangles"),
+        }
+    }
+
+    pub(crate) fn command(self) -> UiCommand {
+        match self {
+            Self::Tool(tool) => UiCommand::SetActiveTool(tool),
+            Self::SetAxis(axis) => UiCommand::OpenMoveToAxisDialog(axis),
+            Self::InsertAtCrossings => UiCommand::InsertPointsAtIntersections,
+            Self::InsertAtElevation => UiCommand::OpenInsertPointAtElevationDialog,
+            Self::CleanStrings => UiCommand::CleanStrings,
+            Self::CreateTriangulation => UiCommand::OpenCreateTriangulation,
+            Self::Reverse => UiCommand::ReverseSelectedStrings,
+            Self::DrapeAlongTriangles => UiCommand::ArmDrapeAlongTriangles,
+        }
+    }
+
+    /// Whether the row can run now: Leo's rows on the selection his Design
+    /// entries ask for, a tool as its toolbar cell is (layer, fly, section).
+    pub(crate) fn enabled(self, editor: &EditorState) -> bool {
+        match self {
+            Self::Tool(tool) => {
+                !editor.fly_mode_enabled
+                    && (!tool.requires_active_layer() || editor.active_layer.is_some())
+                    && !(editor.slice_mode_enabled && tool.section_refuses(editor.active_workspace))
+            }
+            Self::SetAxis(_) => editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_))),
+            Self::InsertAtCrossings => editor.selection_has_intersections,
+            Self::InsertAtElevation | Self::Reverse => editor.selection_has_polylines,
+            Self::CleanStrings => editor.selection_counts.open_strings > 0,
+            Self::CreateTriangulation => editor.selection_counts.triangulation_sources > 0,
+            Self::DrapeAlongTriangles => true,
+        }
+    }
+}
+
+/// Geology Design's lower half: Leo's Design functions and every R116 tool,
+/// grouped by what each does to a string.
+#[cfg(not(target_os = "macos"))]
+fn draw_geology_design_entries(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
+    let row = |ui: &mut egui::Ui, row: GeologyRow, commands: &mut Vec<UiCommand>| {
+        if ContextMenuAction::new(row.label()).enabled(row.enabled(editor)).show(ui).clicked() {
+            commands.push(row.command());
+            ui.close();
+        }
+    };
+    let groups = geology_design_groups();
+    for (title, run) in &groups {
+        context_submenu(ui, title, true, |ui| {
+            for &each in &GEOLOGY_DESIGN_ROWS[run.clone()] {
+                row(ui, each, commands);
+            }
+        });
+    }
+    for &each in &GEOLOGY_DESIGN_ROWS[groups[groups.len() - 1].1.end..] {
+        row(ui, each, commands);
+    }
+}
+
 /// Draw the menus belonging to the active workspace, for the viewport bar to
 /// place at the head of its own row.
 ///
@@ -580,6 +776,13 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
         }
 
         if editor.active_workspace == Workspace::Geology {
+            MenuBarMenu::new(&tr!("ws-menubar-geology-design")).show(ui, |ui| {
+                context_menu_heading(ui, &tr!("ws-menubar-production-design"));
+                draw_design_menu_entries(ui, editor, commands);
+                context_menu_separator(ui);
+                context_menu_heading(ui, &tr!("ws-menubar-geology-design"));
+                draw_geology_design_entries(ui, editor, commands);
+            });
             // Thresholding runs on the block model, so - like the entry below
             // it - the menu is the input's own and the one selected model is
             // what the tool opens on.
@@ -677,53 +880,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
             return;
         }
 
-        MenuBarMenu::new(&tr!("ws-menubar-design")).show(ui, |ui| {
-            // Every entry here acts on the current design selection.
-            let has_selection = editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_)));
-            context_submenu(ui, &tr!("ws-menubar-design-insert-point"), editor.selection_has_polylines, |ui| {
-                // Needs two or more crossing polylines to insert anything.
-                if ContextMenuAction::new(tr!("ws-menubar-design-insert-point-at-intersection"))
-                    .enabled(editor.selection_has_intersections)
-                    .show(ui)
-                    .clicked()
-                {
-                    commands.push(UiCommand::InsertPointsAtIntersections);
-                    ui.close();
-                }
-                if ContextMenuAction::new(tr!("ws-menubar-design-insert-point-at-elevation")).show(ui).clicked() {
-                    commands.push(UiCommand::OpenInsertPointAtElevationDialog);
-                    ui.close();
-                }
-            });
-            if ContextMenuAction::new(tr!("cmd-string-clean-clean-strings"))
-                .enabled(editor.selection_counts.open_strings > 0)
-                .show(ui)
-                .clicked()
-            {
-                commands.push(UiCommand::CleanStrings);
-                ui.close();
-            }
-            context_menu_separator(ui);
-            context_submenu(ui, &tr!("ws-menubar-design-move-to"), has_selection, |ui| {
-                for axis in [Axis::X, Axis::Y, Axis::Z] {
-                    if ContextMenuAction::new(tr!("common-set") + &format!(" {}...", axis.label())).show(ui).clicked() {
-                        commands.push(UiCommand::OpenMoveToAxisDialog(axis));
-                        ui.close();
-                    }
-                }
-            });
-            context_menu_separator(ui);
-            // Like the entries above, this runs on the selection: only objects
-            // that can contribute an edge count towards it.
-            if ContextMenuAction::new(tr!("ws-menubar-design-create-triangulation"))
-                .enabled(editor.selection_counts.triangulation_sources > 0)
-                .show(ui)
-                .clicked()
-            {
-                commands.push(UiCommand::OpenCreateTriangulation);
-                ui.close();
-            }
-        });
+        MenuBarMenu::new(&tr!("ws-menubar-design")).show(ui, |ui| draw_design_menu_entries(ui, editor, commands));
 
         MenuBarMenu::new(&tr!("ws-menubar-triangulation")).show(ui, |ui| {
             // The tools below whose inputs the selection can name take them

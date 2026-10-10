@@ -18,7 +18,10 @@ use objc2_foundation::{NSObject, NSObjectProtocol, NSString};
 use crate::{
     i18n::tr,
     model::{Axis, SceneEntityId},
-    ui::state::{EditorState, UiProjectView, ViewToggle, Workspace},
+    ui::{
+        elements::main_menu::{GEOLOGY_DESIGN_ROWS, geology_design_groups},
+        state::{EditorState, UiProjectView, ViewToggle, Workspace},
+    },
 };
 
 static PENDING_ACTIONS: Mutex<Vec<MacMenuAction>> = Mutex::new(Vec::new());
@@ -62,6 +65,9 @@ struct MenuState {
     has_polyline_selection: bool,
     has_selection_intersections: bool,
     can_clean_strings: bool,
+    /// Whether each Geology Design row can run, in
+    /// [`GEOLOGY_DESIGN_ROWS`] order.
+    geology_rows: Vec<bool>,
     /// Whether the active project is a file that can be shown in Finder.
     has_project_file: bool,
     /// The workspace decides which discipline menus are visible and active.
@@ -130,6 +136,9 @@ pub(crate) enum MacMenuAction {
     OpenRecent(usize),
     /// One View menu switch, by its position in [`VIEW_TOGGLES`].
     ToggleView(usize),
+    /// One row of Geology Design's lower half, by its position in
+    /// [`GEOLOGY_DESIGN_ROWS`].
+    GeologyRow(usize),
 }
 
 /// The View menu's rows, in the order they are drawn. The egui menu bar draws
@@ -143,6 +152,10 @@ const BLOCK_MODEL_MENU_TAG: isize = -3;
 const DRILL_HOLES_MENU_TAG: isize = -5;
 const COORDINATES_MENU_TAG: isize = -6;
 const MODELLING_MENU_TAG: isize = -7;
+const DESIGN_MENU_TAG: isize = -8;
+/// Geology Design's own rows that carry no action of their own - its
+/// headings, separator and submenus - shown in Geology alone.
+const GEOLOGY_ROW_TAG: isize = -9;
 
 /// Tags at or above this carry a recent-project index rather than naming a
 /// fixed action, leaving room for the fixed list to grow.
@@ -150,6 +163,9 @@ const RECENT_TAG_BASE: isize = 1000;
 /// Tags at or above this, and below [`RECENT_SUBMENU_TAG`], carry a View menu
 /// switch by its index in [`VIEW_TOGGLES`].
 const VIEW_TAG_BASE: isize = 500;
+/// Tags at or above this, and below [`VIEW_TAG_BASE`], carry a Geology
+/// Design row by its index in [`GEOLOGY_DESIGN_ROWS`].
+const GEOLOGY_ROW_TAG_BASE: isize = 400;
 /// Tag of the Open Recent item itself. It opens a submenu rather than
 /// performing anything, so [`MacMenuAction::from_tag`] rejects it: no fixed
 /// action sits this far up the range.
@@ -208,6 +224,7 @@ impl MacMenuAction {
         match self {
             Self::OpenRecent(index) => RECENT_TAG_BASE + index as isize,
             Self::ToggleView(index) => VIEW_TAG_BASE + index as isize,
+            Self::GeologyRow(index) => GEOLOGY_ROW_TAG_BASE + index as isize,
             action => Self::FIXED.iter().position(|fixed| *fixed == action).map_or(0, |index| index as isize + 1),
         }
     }
@@ -219,6 +236,10 @@ impl MacMenuAction {
         if (VIEW_TAG_BASE..RECENT_SUBMENU_TAG).contains(&tag) {
             let index = usize::try_from(tag - VIEW_TAG_BASE).ok()?;
             return (index < VIEW_TOGGLES.len()).then_some(Self::ToggleView(index));
+        }
+        if (GEOLOGY_ROW_TAG_BASE..VIEW_TAG_BASE).contains(&tag) {
+            let index = usize::try_from(tag - GEOLOGY_ROW_TAG_BASE).ok()?;
+            return (index < GEOLOGY_DESIGN_ROWS.len()).then_some(Self::GeologyRow(index));
         }
         Self::FIXED.get(usize::try_from(tag - 1).ok()?).copied()
     }
@@ -298,6 +319,15 @@ fn add_disabled_submenu(root: &NSMenu, title: &str, mtm: MainThreadMarker) {
     let empty_menu = menu(title, mtm);
     let item = add_submenu(root, title, &empty_menu, mtm);
     item.setEnabled(false);
+}
+
+/// A disabled row naming the group below it, shown in Geology alone like
+/// the rest of Geology Design's own rows.
+fn add_heading(menu: &NSMenu, title: &str, mtm: MainThreadMarker) {
+    let item = menu_item(title, None, "", mtm);
+    item.setEnabled(false);
+    item.setTag(GEOLOGY_ROW_TAG);
+    menu.addItem(&item);
 }
 
 fn add_action(menu: &NSMenu, title: &str, key: &str, action: MacMenuAction, target: &MenuTarget, mtm: MainThreadMarker) -> Retained<NSMenuItem> {
@@ -382,6 +412,7 @@ pub(crate) fn install_menu_bar() {
 
     let design_menu = menu(&tr!("ws-menubar-design"), mtm);
     design_menu.setAutoenablesItems(false);
+    add_heading(&design_menu, &tr!("ws-menubar-production-design"), mtm);
     let insert_point_menu = menu(&tr!("ws-menubar-design-insert-point"), mtm);
     insert_point_menu.setAutoenablesItems(false);
     add_action(
@@ -439,7 +470,25 @@ pub(crate) fn install_menu_bar() {
         &target,
         mtm,
     );
-    add_submenu(&root, &tr!("ws-menubar-design"), &design_menu, mtm);
+    // Geology Design below the line, the same rows the egui menu draws; see
+    // `main_menu::draw_geology_design_entries`.
+    let separator = NSMenuItem::separatorItem(mtm);
+    separator.setTag(GEOLOGY_ROW_TAG);
+    design_menu.addItem(&separator);
+    add_heading(&design_menu, &tr!("ws-menubar-geology-design"), mtm);
+    let groups = geology_design_groups();
+    for (title, run) in &groups {
+        let submenu = menu(title, mtm);
+        submenu.setAutoenablesItems(false);
+        for (index, row) in GEOLOGY_DESIGN_ROWS.iter().enumerate().take(run.end).skip(run.start) {
+            add_action(&submenu, &row.label(), "", MacMenuAction::GeologyRow(index), &target, mtm);
+        }
+        add_submenu(&design_menu, title, &submenu, mtm).setTag(GEOLOGY_ROW_TAG);
+    }
+    for (index, row) in GEOLOGY_DESIGN_ROWS.iter().enumerate().skip(groups[groups.len() - 1].1.end) {
+        add_action(&design_menu, &row.label(), "", MacMenuAction::GeologyRow(index), &target, mtm);
+    }
+    add_submenu(&root, &tr!("ws-menubar-design"), &design_menu, mtm).setTag(DESIGN_MENU_TAG);
 
     let triangulation_menu = menu(&tr!("ws-menubar-triangulation"), mtm);
     triangulation_menu.setAutoenablesItems(false);
@@ -620,7 +669,7 @@ fn set_enabled(root: &NSMenu, action: MacMenuAction, enabled: bool) {
 /// so Drill & Blast and Planning show none at all. The egui bar does the same -
 /// see `main_menu::draw_workspace_menus`.
 ///
-/// Design, Raster and Point Cloud are looked up by title, so the titles below
+/// Raster and Point Cloud are looked up by title, so the titles below
 /// must stay in sync with the ones `install_menu_bar` gives the same root
 /// menus; the rest carry tags.
 fn set_workspace_menus(root: &NSMenu, workspace: Workspace) {
@@ -632,9 +681,23 @@ fn set_workspace_menus(root: &NSMenu, workspace: Workspace) {
     if let Some(item) = root.itemWithTitle(&NSString::from_str(&tr!("ws-menubar-point-cloud"))) {
         item.setHidden(workspace != Workspace::Survey);
     }
-    for title in [tr!("ws-menubar-design"), tr!("ws-menubar-raster")] {
-        if let Some(item) = root.itemWithTitle(&NSString::from_str(&title)) {
-            item.setHidden(workspace != Workspace::Production);
+    if let Some(item) = root.itemWithTitle(&NSString::from_str(&tr!("ws-menubar-raster"))) {
+        item.setHidden(workspace != Workspace::Production);
+    }
+    // Geology shows Design retitled, with its own rows under the line.
+    if let Some(item) = find_item(root, DESIGN_MENU_TAG) {
+        item.setHidden(!workspace.has_drawing_tools());
+        let geology = workspace == Workspace::Geology;
+        let title = NSString::from_str(&if geology { tr!("ws-menubar-geology-design") } else { tr!("ws-menubar-design") });
+        item.setTitle(&title);
+        if let Some(submenu) = item.submenu() {
+            submenu.setTitle(&title);
+            for row in submenu.itemArray().iter() {
+                let tag = row.tag();
+                if tag == GEOLOGY_ROW_TAG || (GEOLOGY_ROW_TAG_BASE..VIEW_TAG_BASE).contains(&tag) {
+                    row.setHidden(!geology);
+                }
+            }
         }
     }
 
@@ -715,6 +778,7 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         has_polyline_selection: editor.selection_has_polylines,
         has_selection_intersections: editor.selection_has_intersections,
         can_clean_strings: editor.selection_counts.open_strings > 0,
+        geology_rows: GEOLOGY_DESIGN_ROWS.iter().map(|row| row.enabled(editor)).collect(),
         has_project_file: project.active_path.is_some(),
         active_workspace: editor.active_workspace,
         view_toggles: VIEW_TOGGLES.map(|toggle| toggle.get(editor)),
@@ -768,6 +832,9 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     set_enabled(&root, MacMenuAction::OpenInsertPointAtElevation, state.has_polyline_selection);
     set_enabled(&root, MacMenuAction::InsertPointsAtIntersections, state.has_selection_intersections);
     set_enabled(&root, MacMenuAction::CleanStrings, state.can_clean_strings);
+    for (index, enabled) in state.geology_rows.iter().enumerate() {
+        set_enabled(&root, MacMenuAction::GeologyRow(index), *enabled);
+    }
     for (index, checked) in state.view_toggles.iter().enumerate() {
         set_checked(&root, MacMenuAction::ToggleView(index), *checked);
     }

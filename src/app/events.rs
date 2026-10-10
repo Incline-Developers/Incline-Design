@@ -344,8 +344,11 @@ impl<'a> App<'a> {
                                     self.editor.move_panel_last_preview = [f64::NAN; 3];
                                     self.cancel_move_delta();
                                 }
-                                let hover_highlight_active = matches!(self.editor.active_tool, ActiveTool::ExplodePolyline | ActiveTool::Move | ActiveTool::DeletePoints)
-                                    || (self.editor.active_tool == ActiveTool::RelimitLine && (self.editor.relimit_awaiting_source_pick || self.editor.relimit_waiting_for_pick));
+                                let hover_highlight_active = matches!(
+                                    self.editor.active_tool,
+                                    ActiveTool::ExplodePolyline | ActiveTool::Move | ActiveTool::DeletePoints | ActiveTool::EditVertex
+                                ) || (self.editor.active_tool == ActiveTool::RelimitLine
+                                    && (self.editor.relimit_awaiting_source_pick || self.editor.relimit_waiting_for_pick));
                                 if !hover_highlight_active
                                     && self.editor.tool_highlight_id.is_some()
                                     && self.editor.offset_target_ids.is_empty()
@@ -539,7 +542,7 @@ impl<'a> App<'a> {
                         }
                     }
                     let hover_pick_due = snap_poll_due
-                        && (matches!(self.editor.active_tool, ActiveTool::Move | ActiveTool::DeletePoints)
+                        && (matches!(self.editor.active_tool, ActiveTool::Move | ActiveTool::DeletePoints | ActiveTool::EditVertex)
                             || self.editor.active_tool == ActiveTool::ExplodePolyline
                             || self.editor.relimit_awaiting_source_pick
                             || self.editor.relimit_waiting_for_pick
@@ -549,9 +552,10 @@ impl<'a> App<'a> {
                     if hover_pick_due {
                         self.last_snap_poll_instant = Some(now);
                     }
-                    if matches!(self.editor.active_tool, ActiveTool::Move | ActiveTool::DeletePoints) && hover_pick_due {
+                    if matches!(self.editor.active_tool, ActiveTool::Move | ActiveTool::DeletePoints | ActiveTool::EditVertex) && hover_pick_due {
                         self.update_move_delete_hover();
-                    } else if !matches!(self.editor.active_tool, ActiveTool::Move | ActiveTool::DeletePoints) && self.editor.tool_hover_vertex_px.is_some() {
+                    } else if !matches!(self.editor.active_tool, ActiveTool::Move | ActiveTool::DeletePoints | ActiveTool::EditVertex) && self.editor.tool_hover_vertex_px.is_some()
+                    {
                         self.editor.tool_hover_vertex_px = None;
                         self.editor.tool_hover_vertex_world = None;
                         self.invalidate_overlay();
@@ -661,6 +665,7 @@ impl<'a> App<'a> {
                         || self.editor.active_tool == ActiveTool::MeasureDistance
                         || self.editor.active_tool == ActiveTool::MeasureBatterAngle
                         || self.editor.active_tool == ActiveTool::DeletePoints
+                        || self.editor.active_tool == ActiveTool::EditVertex
                         || self.editor.active_tool == ActiveTool::Chamfer
                         || self.editor.active_tool == ActiveTool::Bezier
                         || self.editor.slice_pending_start.is_some()
@@ -883,6 +888,7 @@ impl<'a> App<'a> {
                 ActiveTool::MakeCircle => self.make_circle_click(),
                 ActiveTool::MeasureDistance => self.measure_distance_click(),
                 ActiveTool::MeasureBatterAngle => self.measure_batter_angle_click(),
+                ActiveTool::EditVertex => self.edit_vertex_at_cursor(),
                 ActiveTool::VerticalSlice => self.slice_line_click(),
                 ActiveTool::DeletePoints => {
                     self.editor.selection_box_start_px = self.editor.cursor_screen_px;
@@ -1633,6 +1639,7 @@ impl<'a> App<'a> {
         if next_tool == ActiveTool::DrapeToTopology && previous_tool != ActiveTool::DrapeToTopology {
             self.editor.drape_phase = crate::ui::state::DrapePhase::Designs;
             self.editor.drape_object_ids.clear();
+            self.editor.drape_along_triangles = false;
             self.editor.selected_handles.clear();
             self.invalidate_geometry();
         }
