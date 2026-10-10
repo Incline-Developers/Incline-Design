@@ -62,6 +62,11 @@ pub(crate) struct StrokeInstance {
     pub(crate) end: [f32; 3],
     pub(crate) style: u32,
     pub(crate) color: [f32; 4],
+    /// How wide, in metres on plan, the ground the stroke outlines is; zero
+    /// for strokes that keep their width. Zoomed out until that ground spans
+    /// only a few pixels, the stroke thins and then fades, so a bench of
+    /// small blocks reads as a tint rather than solid ink.
+    pub(crate) fade_size_m: f32,
 }
 
 impl StrokeInstance {

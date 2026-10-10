@@ -500,6 +500,59 @@ impl Graph {
 }
 
 /// Tessellate stored planning polylines into open or explicitly closed XY cuts.
+/// How far apart a drawing's cut lines typically run on plan: the median,
+/// over the lines, of how far each line keeps from its nearest neighbour.
+/// Zero with fewer than two lines.
+pub(crate) fn typical_spacing(lines: &[Vec<DVec2>]) -> f64 {
+    const SAMPLES: usize = 8;
+    let segment_distance = |point: DVec2, a: DVec2, b: DVec2| {
+        let ab = b - a;
+        let t = if ab.length_squared() > 0.0 {
+            ((point - a).dot(ab) / ab.length_squared()).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        point.distance(a + ab * t)
+    };
+    let median = |values: &mut Vec<f64>| {
+        values.sort_by(f64::total_cmp);
+        values.get(values.len() / 2).copied()
+    };
+    let mut spacings: Vec<f64> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let length: f64 = line.windows(2).map(|pair| pair[0].distance(pair[1])).sum();
+            if length <= 0.0 {
+                return None;
+            }
+            // Samples spread over the line's length, each measured to the
+            // nearest point of any other line.
+            let mut distances: Vec<f64> = (0..SAMPLES)
+                .filter_map(|sample| {
+                    let mut along = length * (sample as f64 + 0.5) / SAMPLES as f64;
+                    let point = line.windows(2).find_map(|pair| {
+                        let step = pair[0].distance(pair[1]);
+                        if along <= step && step > 0.0 {
+                            return Some(pair[0].lerp(pair[1], along / step));
+                        }
+                        along -= step;
+                        None
+                    })?;
+                    lines
+                        .iter()
+                        .enumerate()
+                        .filter(|(other, _)| *other != index)
+                        .flat_map(|(_, other)| other.windows(2).map(move |pair| segment_distance(point, pair[0], pair[1])))
+                        .min_by(f64::total_cmp)
+                })
+                .collect();
+            median(&mut distances)
+        })
+        .collect();
+    median(&mut spacings).unwrap_or(0.0)
+}
+
 pub(crate) fn cut_lines(objects: &[crate::model::Object]) -> Vec<Vec<DVec2>> {
     objects
         .iter()

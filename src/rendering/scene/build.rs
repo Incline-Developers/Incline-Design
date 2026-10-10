@@ -232,6 +232,9 @@ pub(crate) fn rebuild_document_scene(input: DocumentSceneBuildInput<'_>) {
             continue;
         }
         draw_ctx.style = slots.slot(object.id());
+        // A planning step's scene is its cut lines alone; they fade by how
+        // closely they run.
+        draw_ctx.fade_size_m = if editor.is_planning_cut_step() { editor.planning_cut_spacing_m } else { 0.0 };
         let rgba = document.object_rgba(object);
         let stroke_start = draw_ctx.strokes.len() as u32;
         let fill_start = draw_ctx.fill_vertex_buf.len() as u32;
@@ -365,6 +368,7 @@ pub(crate) fn rebuild_document_scene(input: DocumentSceneBuildInput<'_>) {
             });
         }
     }
+    draw_ctx.fade_size_m = 0.0;
     if editor.is_haulage_page() {
         for block in editor.haul_blocks.iter().filter(|b| !editor.haul_hidden.hides(b.solid, b.bench, b.flitch, b.blast)) {
             let mut points = Vec::new();

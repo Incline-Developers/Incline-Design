@@ -56,6 +56,20 @@ pub(crate) fn haul_block_tint(block: &crate::ui::state::HaulBlock) -> [f32; 3] {
     }
 }
 
+/// How wide a block of ground is on plan, for its outline's fade: four times
+/// its area over its perimeter, the side of a square and about twice the
+/// width of a long strip.
+fn plan_fade_size(rings: &[Vec<DVec3>]) -> f32 {
+    let Some(ring) = rings.first() else { return 0.0 };
+    let (mut twice_area, mut perimeter) = (0.0, 0.0);
+    for (index, a) in ring.iter().enumerate() {
+        let b = ring[(index + 1) % ring.len()];
+        twice_area += a.x * b.y - b.x * a.y;
+        perimeter += a.truncate().distance(b.truncate());
+    }
+    if perimeter > 0.0 { (2.0 * twice_area.abs() / perimeter) as f32 } else { 0.0 }
+}
+
 /// Dashes in an automatic join's line, which tell it from a chosen one.
 const HAUL_AUTO_DASHES: u32 = 7;
 
@@ -125,6 +139,7 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
     // are drawn here rather than through the scene's document geometry.
     for outline in editor.blasting_outlines.iter().filter(|_| editor.is_blasting_step()) {
         let selected = editor.selected_blast == Some(crate::ui::state::BlastShapeRef::new(outline.solid, outline.bench_base, outline.anchor));
+        overlay.fade_size_m = if selected { 0.0 } else { plan_fade_size(&outline.rings) };
         for ring in &outline.rings {
             let verts: Vec<crate::model::PolyVertex> = ring.iter().map(|point| crate::model::PolyVertex::straight(*point)).collect();
             tessellate_polyline_stroke(
@@ -146,6 +161,7 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
     if editor.is_dig_strips_step() {
         for outline in &editor.dig_outlines {
             let selected = editor.selected_dig_block == Some(crate::ui::state::BlastShapeRef::new(outline.solid, outline.bench_base, outline.anchor));
+            overlay.fade_size_m = if selected { 0.0 } else { plan_fade_size(&outline.rings) };
             for ring in &outline.rings {
                 let verts: Vec<_> = ring.iter().map(|point| crate::model::PolyVertex::straight(*point)).collect();
                 tessellate_polyline_stroke(
@@ -162,6 +178,8 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
             }
         }
     }
+
+    overlay.fade_size_m = 0.0;
 
     let stroke_preview = editor.pending_stroke.clone();
     for pair in stroke_preview.windows(2) {
@@ -190,10 +208,12 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
             } else {
                 ([r, g, b, 0.3], 1.0)
             };
+            overlay.fade_size_m = if selected { 0.0 } else { plan_fade_size(&block.rings) };
             for ring in &block.rings {
                 let verts: Vec<_> = ring.iter().copied().map(crate::model::PolyVertex::straight).collect();
                 tessellate_polyline_stroke(&mut overlay, &verts, true, width, color);
             }
+            overlay.fade_size_m = 0.0;
             for &(_, at) in block.links.iter().filter(|_| selected) {
                 match manual.iter_mut().find(|group| group.0 == at && group.1 == block.flitch.base) {
                     Some(group) => group.2.push(block.point()),

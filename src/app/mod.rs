@@ -1625,6 +1625,11 @@ impl<'a> App<'a> {
                 );
                 self.scene_document.rebuild_object_index();
             }
+            self.editor.planning_cut_spacing_m = if self.editor.is_planning_cut_step() {
+                crate::model::arrangement::typical_spacing(&crate::model::arrangement::cut_lines(self.scene_document.objects())) as f32
+            } else {
+                0.0
+            };
             self.scene_document_key = Some(composite_key);
             // The snap index rebuild is deferred to the next snap/orbit
             // query: many edits never snap before the next edit, and the

@@ -2307,6 +2307,11 @@ pub(crate) struct EditorState {
     pub(crate) blasting_outlines: Vec<BlastOutline>,
     pub(crate) dig_outlines: Vec<BlastOutline>,
     pub(crate) dig_outlines_key: Option<u64>,
+    /// How far apart the cut lines in view on a Blasting or Dig Strips step
+    /// typically run, in metres, so they fade together as the camera pulls
+    /// back rather than merging into ink. Mirrored out of `App` with the
+    /// scene; zero elsewhere.
+    pub(crate) planning_cut_spacing_m: f32,
     /// Flitches whose ground Blasting took wholly out of mining, by solid and
     /// base RL bits: Dig Strips leaves them out, as nothing on them is dug.
     pub(crate) dig_excluded_flitches: std::collections::HashSet<(crate::model::SolidId, u64)>,
@@ -3992,6 +3997,7 @@ impl EditorState {
             solid_preview_summary: SolidPreviewSummary::Empty,
             blasting_outlines: Vec::new(),
             dig_outlines: Vec::new(),
+            planning_cut_spacing_m: 0.0,
             dig_outlines_key: None,
             dig_excluded_flitches: Default::default(),
             selected_dig_block: None,

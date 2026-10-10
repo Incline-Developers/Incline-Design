@@ -303,7 +303,7 @@ pub(crate) fn create_scene_pipelines(
     let stroke_instance_buffers = [Some(wgpu::VertexBufferLayout {
         array_stride: size_of::<StrokeInstance>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Instance,
-        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32, 2 => Float32x3, 3 => Uint32, 4 => Float32x4],
+        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32, 2 => Float32x3, 3 => Uint32, 4 => Float32x4, 5 => Float32],
     })];
     let edge_instance_buffers = [Some(wgpu::VertexBufferLayout {
         array_stride: size_of::<EdgeInstance>() as wgpu::BufferAddress,
