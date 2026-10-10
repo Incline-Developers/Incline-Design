@@ -141,6 +141,16 @@ impl<'a> App<'a> {
     /// The picked files are split by role here, once.
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn import_web_drill_hole_source(&mut self, mut source: DrillHoleSource) -> Result<()> {
+        // An ignored file leaves the bundle here, and its picked file with it
+        // below: the two lists pair by position.
+        let ignored = match &mut source {
+            DrillHoleSource::Csv { files, .. } => {
+                let ignored = files.iter().map(|file| file.role == csv_drill_hole::CsvDrillFileRole::Ignore).collect::<Vec<_>>();
+                files.retain(|file| file.role != csv_drill_hole::CsvDrillFileRole::Ignore);
+                ignored
+            }
+            _ => Vec::new(),
+        };
         let key = match self.drill_hole_load(&source) {
             Ok(Some(key)) => key,
             refused => {
@@ -153,10 +163,11 @@ impl<'a> App<'a> {
             anyhow::bail!("{}", tr!("cmd-drill-hole-only-mapped-csv-bundles-imported"));
         };
         let picked = self.take_web_import_picked_files();
-        if picked.len() != mappings.len() {
+        if picked.len() != ignored.len() {
             self.clear_browser_import_selection(crate::ui::state::DataMenu::CsvDrillHole);
             anyhow::bail!("{}", tr!("cmd-drill-hole-choose-drillhole-source-files-again"));
         }
+        let picked = picked.into_iter().zip(ignored).filter_map(|(file, ignored)| (!ignored).then_some(file));
         let mut table_files = Vec::new();
         let mut geophysics = Vec::new();
         for (mapping, file) in mappings.iter().cloned().zip(picked) {
@@ -274,7 +285,11 @@ impl<'a> App<'a> {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn import_drill_hole_source(&mut self, source: DrillHoleSource) -> Result<()> {
+    pub(crate) fn import_drill_hole_source(&mut self, mut source: DrillHoleSource) -> Result<()> {
+        // An ignored file is listed in the dialog, never kept in the bundle.
+        if let DrillHoleSource::Csv { files, .. } = &mut source {
+            files.retain(|file| file.role != csv_drill_hole::CsvDrillFileRole::Ignore);
+        }
         match &source {
             DrillHoleSource::LegacyDhd { .. } => anyhow::bail!("DHD drillhole sources are no longer supported"),
             DrillHoleSource::Csv { files, .. } if files.iter().any(|file| !file.path.is_file()) => anyhow::bail!("One or more drillhole CSV sources no longer exist"),

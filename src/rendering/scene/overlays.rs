@@ -187,7 +187,7 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
         }
     }
 
-    if matches!(editor.active_tool, ActiveTool::Move | ActiveTool::DeletePoints)
+    if matches!(editor.active_tool, ActiveTool::Move | ActiveTool::DeletePoints | ActiveTool::EditVertex)
         && let Some(hover) = editor.tool_hover_vertex_world
     {
         draw_screen_point_marker_sized(&mut overlay, hover, 11.0, ACTIVE_POINT_COLOR);

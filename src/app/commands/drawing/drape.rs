@@ -1,13 +1,16 @@
 use std::collections::HashSet;
 
-use glam::DVec3;
+use glam::{DVec2, DVec3};
 
 use crate::{
     app::App,
     i18n::tr,
     logging::CommandReportSpec,
     model::{
-        Command, Object, SceneEntityId,
+        Command, Object, PolyVertex, SceneEntityId,
+        formats::mesh_data::Triangulation,
+        kernel::{self, SegSeg},
+        spatial::TriangleBvh,
         triangulation::{OpenTriangulation, TriangulationId},
     },
     ui::state::{ActiveTool, DrapePhase},
@@ -67,7 +70,19 @@ impl<'a> App<'a> {
         }
     }
 
+    /// Arm Drape so that each string also follows the surface between its
+    /// vertices; a Drape already armed keeps its selection step.
+    pub(crate) fn arm_drape_along_triangles(&mut self) {
+        if self.editor.active_tool != ActiveTool::DrapeToTopology {
+            self.set_active_tool_from_toolbar(ActiveTool::DrapeToTopology);
+        }
+        if self.editor.active_tool == ActiveTool::DrapeToTopology {
+            self.editor.drape_along_triangles = true;
+        }
+    }
+
     pub(crate) fn cancel_drape(&mut self) {
+        self.editor.drape_along_triangles = false;
         self.editor.drape_phase = DrapePhase::Designs;
         self.editor.drape_object_ids.clear();
         self.editor.selection_box_start_px = None;
@@ -87,6 +102,8 @@ impl<'a> App<'a> {
 
         let mut intersected_vertices = 0usize;
         let mut changed_vertices = 0usize;
+        let along_triangles = self.editor.drape_along_triangles;
+        let meshes: Vec<_> = surfaces.iter().map(|surface| (&*surface.mesh, &*surface.spatial)).collect();
         let replacements: Vec<_> = self
             .editor
             .drape_object_ids
@@ -94,6 +111,9 @@ impl<'a> App<'a> {
             .filter_map(|id| {
                 let before = self.active_document().get_object(*id)?.clone();
                 let mut after = before.clone();
+                if along_triangles && let Object::Polyline { verts, closed, .. } = &mut after {
+                    *verts = with_triangle_edge_vertices(verts, *closed, &meshes);
+                }
                 let (intersected, changed) = drape_object(&mut after, &surfaces);
                 intersected_vertices += intersected;
                 changed_vertices += changed;
@@ -134,6 +154,56 @@ impl<'a> App<'a> {
             );
         }
     }
+}
+
+/// `verts` with a vertex added wherever a straight span crosses a triangle
+/// edge of `surfaces` in plan, so a drape lays the string on the surface
+/// everywhere rather than only at its vertices. Bulged spans are left as
+/// they are. The new vertices sit on the span; the drape sets their height.
+fn with_triangle_edge_vertices(verts: &[PolyVertex], closed: bool, surfaces: &[(&Triangulation, &TriangleBvh)]) -> Vec<PolyVertex> {
+    let count = verts.len();
+    if count < 2 {
+        return verts.to_vec();
+    }
+    let spans = if closed { count } else { count - 1 };
+    let mut result = Vec::with_capacity(count);
+    let mut stack = Vec::new();
+    for index in 0..spans {
+        let start = verts[index];
+        let end = verts[(index + 1) % count];
+        result.push(start);
+        if start.bulge.abs() > f64::EPSILON {
+            continue;
+        }
+        let (a, b) = (start.pos.truncate(), end.pos.truncate());
+        let mut crossings = Vec::new();
+        for (mesh, spatial) in surfaces {
+            let mesh_vertices = mesh.vertices();
+            let corner = |vertex: usize| DVec2::new(mesh_vertices[vertex].x, mesh_vertices[vertex].y);
+            spatial.for_each_xy_bounds_candidate_index_with_stack(a.min(b), a.max(b), &mut stack, |triangle| {
+                let Some(face) = mesh.face(triangle) else {
+                    return;
+                };
+                let [p, q, r] = face.indices_zero_based();
+                for (c, d) in [(p, q), (q, r), (r, p)] {
+                    if let SegSeg::Crossing { t, .. } | SegSeg::Touching { t, .. } = kernel::segment_segment(a, b, corner(c), corner(d)) {
+                        crossings.push(t);
+                    }
+                }
+            });
+        }
+        crossings.retain(|t| *t > 1.0e-9 && *t < 1.0 - 1.0e-9);
+        crossings.sort_by(f64::total_cmp);
+        crossings.dedup_by(|later, earlier| (*later - *earlier).abs() <= 1.0e-9);
+        result.extend(crossings.into_iter().map(|t| PolyVertex {
+            pos: start.pos.lerp(end.pos, t),
+            bulge: 0.0,
+        }));
+    }
+    if !closed {
+        result.push(verts[count - 1]);
+    }
+    result
 }
 
 /// Move every stored design vertex vertically to the uppermost selected

@@ -74,7 +74,7 @@ impl<'a> App<'a> {
         let mut best_idx: Option<usize> = None;
 
         for (i, vert) in verts.iter().enumerate() {
-            if let Some(sp) = pick::world_to_screen(&vp, vert.pos, screen) {
+            if let Some(sp) = pick::slab_screen_point(graphics.section_slab(), &vp, screen, vert.pos) {
                 let d = sp.distance(cursor_d);
                 if d < best_dist {
                     best_dist = d;

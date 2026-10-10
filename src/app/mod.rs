@@ -608,6 +608,7 @@ impl<'a> App<'a> {
             MacMenuAction::RequestExit => Some(UiCommand::RequestExit),
             MacMenuAction::InsertPointsAtIntersections => Some(UiCommand::InsertPointsAtIntersections),
             MacMenuAction::CleanStrings => Some(UiCommand::CleanStrings),
+            MacMenuAction::GeologyRow(index) => crate::ui::elements::main_menu::GEOLOGY_DESIGN_ROWS.get(index).map(|row| row.command()),
             MacMenuAction::OpenInsertPointAtElevation => Some(UiCommand::OpenInsertPointAtElevationDialog),
             MacMenuAction::OpenMoveToX => Some(UiCommand::OpenMoveToAxisDialog(crate::model::Axis::X)),
             MacMenuAction::OpenMoveToY => Some(UiCommand::OpenMoveToAxisDialog(crate::model::Axis::Y)),

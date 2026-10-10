@@ -9,7 +9,7 @@ use crate::{
         formats::{
             MeshFormat,
             csv_block_model::{CsvColumnRole, validate_mapping},
-            csv_drill_hole::{CsvDrillColumnRole, CsvDrillFileMapping, CsvDrillFileRole, CsvDrillPreview, bundle_anchor},
+            csv_drill_hole::{CsvDrillColumnRole, CsvDrillFileMapping, CsvDrillFileRole, CsvDrillPreview, FileShape, bundle_anchor},
         },
         triangulation::TriangulationId,
     },
@@ -142,7 +142,7 @@ pub(crate) fn draw_import_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
                             commands.push(command);
                             close_after_action = true;
                         }
-                        if ui.add(MenuButton::new(tr!("io-default"))).clicked() {
+                        if ui.add(MenuButton::new(tr!("io-reset"))).clicked() {
                             #[cfg(target_arch = "wasm32")]
                             let import_kind = editor.data_menu;
                             reset_import_defaults(editor, project);
@@ -197,7 +197,7 @@ pub(crate) fn draw_export_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
                             commands.push(command);
                             close_after_action = true;
                         }
-                        if ui.add(MenuButton::new(tr!("io-default"))).clicked() {
+                        if ui.add(MenuButton::new(tr!("io-reset"))).clicked() {
                             reset_export_defaults(editor, project);
                         }
                     },
@@ -517,6 +517,7 @@ fn draw_import_csv_drill_holes(ui: &mut egui::Ui, editor: &mut EditorState, comm
     if editor.import_drill_csv.is_empty() {
         return;
     }
+    let mut moved_collar = None;
     egui::ScrollArea::both().auto_shrink([false, false]).max_height(ui.available_height()).show(ui, |ui| {
         for (file_index, (mapping, preview)) in editor.import_drill_csv.iter_mut().enumerate() {
             ui.push_id(("drill_csv_file", file_index), |ui| {
@@ -532,12 +533,19 @@ fn draw_import_csv_drill_holes(ui: &mut egui::Ui, editor: &mut EditorState, comm
                             CsvDrillFileRole::Interval,
                             CsvDrillFileRole::ExplicitSegments,
                             CsvDrillFileRole::Geophysics,
+                            CsvDrillFileRole::Ignore,
                         ] {
                             ui.selectable_value(&mut mapping.role, role, file_role_label(role));
                         }
                     });
                     if mapping.role != previous {
                         mapping.columns = crate::model::formats::csv_drill_hole::default_columns(mapping.role, &preview.headers);
+                        if mapping.role == CsvDrillFileRole::Collar {
+                            moved_collar = Some(file_index);
+                        }
+                    }
+                    if let Some(reason) = role_reason(mapping.role, preview.shape.as_ref()) {
+                        ui.weak(reason);
                     }
                 });
                 if mapping.role == CsvDrillFileRole::Unassigned {
@@ -547,7 +555,7 @@ fn draw_import_csv_drill_holes(ui: &mut egui::Ui, editor: &mut EditorState, comm
                     for (column, header) in preview.headers.iter().enumerate() {
                         ui.vertical(|ui| {
                             ui.strong(header);
-                            if mapping.role == CsvDrillFileRole::Unassigned {
+                            if matches!(mapping.role, CsvDrillFileRole::Unassigned | CsvDrillFileRole::Ignore) {
                                 ui.weak(tr!("io-unmapped"));
                             } else {
                                 let selected = &mut mapping.columns[column];
@@ -577,6 +585,9 @@ fn draw_import_csv_drill_holes(ui: &mut egui::Ui, editor: &mut EditorState, comm
             });
         }
     });
+    if let Some(keep) = moved_collar {
+        crate::model::formats::csv_drill_hole::keep_collar(&mut editor.import_drill_csv, keep);
+    }
     if geophysics_without_holes(&editor.import_drill_csv) {
         ui.weak(tr!("io-add-collar-file-explicit-segments"));
     }
@@ -590,6 +601,25 @@ fn file_role_label(role: CsvDrillFileRole) -> String {
         CsvDrillFileRole::Interval => tr!("io-interval"),
         CsvDrillFileRole::ExplicitSegments => tr!("io-explicit-segments"),
         CsvDrillFileRole::Geophysics => tr!("io-downhole-geophysics"),
+        CsvDrillFileRole::Ignore => tr!("io-ignore-file"),
+    }
+}
+
+/// Why a file was given its purpose, while it still has it.
+fn role_reason(role: CsvDrillFileRole, shape: Option<&FileShape>) -> Option<String> {
+    let looks_like = shape?.looks_like;
+    match (role, looks_like) {
+        (CsvDrillFileRole::Ignore, Some(CsvDrillFileRole::Collar)) => Some(tr!("io-role-reason-also-collar")),
+        (CsvDrillFileRole::Ignore, None) => Some(tr!("io-role-reason-not-recognised")),
+        (role, Some(found)) if role == found => match role {
+            CsvDrillFileRole::Collar => Some(tr!("io-role-reason-collar")),
+            CsvDrillFileRole::Survey => Some(tr!("io-role-reason-survey")),
+            CsvDrillFileRole::Interval => Some(tr!("io-role-reason-interval")),
+            CsvDrillFileRole::ExplicitSegments => Some(tr!("io-role-reason-segments")),
+            CsvDrillFileRole::Geophysics => Some(tr!("io-role-reason-geophysics")),
+            CsvDrillFileRole::Unassigned | CsvDrillFileRole::Ignore => None,
+        },
+        _ => None,
     }
 }
 
@@ -636,7 +666,7 @@ fn column_role_help(file: CsvDrillFileRole, column: &CsvDrillColumnRole) -> Opti
 fn available_column_roles(role: CsvDrillFileRole, header: &str) -> Vec<CsvDrillColumnRole> {
     let mut roles = vec![CsvDrillColumnRole::Ignore, CsvDrillColumnRole::Dhid];
     match role {
-        CsvDrillFileRole::Unassigned => roles.truncate(1),
+        CsvDrillFileRole::Unassigned | CsvDrillFileRole::Ignore => roles.truncate(1),
         CsvDrillFileRole::Collar => roles.extend([
             CsvDrillColumnRole::East,
             CsvDrillColumnRole::North,
@@ -886,22 +916,31 @@ fn import_command(editor: &EditorState) -> Option<UiCommand> {
             if editor.import_csv_error.is_none()
                 && !editor.import_drill_csv.is_empty()
                 && editor.import_drill_csv.iter().all(|(mapping, _)| mapping.role != CsvDrillFileRole::Unassigned)
+                && editor.import_drill_csv.iter().any(|(mapping, _)| mapping.role != CsvDrillFileRole::Ignore)
                 && !geophysics_without_holes(&editor.import_drill_csv) =>
         {
-            let anchor = bundle_anchor(editor.import_drill_csv.iter().map(|(mapping, _)| mapping));
+            let read = editor
+                .import_drill_csv
+                .iter()
+                .map(|(mapping, _)| mapping)
+                .filter(|mapping| mapping.role != CsvDrillFileRole::Ignore)
+                .collect::<Vec<_>>();
+            let anchor = bundle_anchor(read.iter().copied());
             let name = anchor
-                .or_else(|| editor.import_drill_csv.first().map(|(mapping, _)| mapping))?
+                .or_else(|| read.first().copied())?
                 .path
                 .file_stem()
                 .and_then(|stem| stem.to_str())
                 .map(str::to_owned)
                 .unwrap_or_else(|| tr!("io-drill-holes"));
             Some(UiCommand::ImportDrillHole(crate::model::drill_hole::DrillHoleSource::Csv {
-                name: if editor.import_drill_csv.len() > 1 {
-                    tr!("io-name-count-files", name = name.to_string(), count = (editor.import_drill_csv.len() - 1).to_string())
+                name: if read.len() > 1 {
+                    tr!("io-name-count-files", name = name.to_string(), count = (read.len() - 1).to_string())
                 } else {
                     name
                 },
+                // Ignored files leave the bundle App-side, in step with the
+                // browser's picked files.
                 files: editor.import_drill_csv.iter().map(|(mapping, _)| mapping.clone()).collect(),
                 browser_path: None,
             }))

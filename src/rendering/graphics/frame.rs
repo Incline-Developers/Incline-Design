@@ -253,7 +253,7 @@ impl<'a> Graphics<'a> {
             &editor.hidden_handles,
             self.scene_origin,
             scale_factor,
-            editor.show_points || editor.active_tool == crate::ui::state::ActiveTool::DeletePoints,
+            editor.show_points || matches!(editor.active_tool, crate::ui::state::ActiveTool::DeletePoints | crate::ui::state::ActiveTool::EditVertex),
             self.geometry_dirty || self.cached_document_revision != document.revision(),
         );
         // Selection, hover and translucency only restyle: the shaders read

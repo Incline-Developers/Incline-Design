@@ -641,6 +641,7 @@ impl<'a> App<'a> {
                             }
                         }
                     }
+                    crate::model::formats::csv_drill_hole::settle_collars(&mut self.editor.import_drill_csv);
                 }
                 Ok(())
             }
@@ -688,6 +689,7 @@ impl<'a> App<'a> {
                             }
                         }
                     }
+                    crate::model::formats::csv_drill_hole::settle_collars(&mut self.editor.import_drill_csv);
                     // The import reads the picked files, not the previews.
                     self.web_import_files = None;
                     self.web_import_picked_files = Some(picked_files);

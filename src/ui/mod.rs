@@ -388,15 +388,25 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
                 None => ViewportMessage::text(tr!("ui-dip-horizontal-no-strike", dip = dip.to_string())),
             });
         }
-        return Some(ViewportMessage::text(match editor.batter_angle_points.len() {
-            0 => tr!("ui-select-first-crest-toe-point"),
-            1 => tr!("ui-select-second-crest-toe-point"),
-            _ => tr!("ui-select-opposite-berm-point"),
+        // Geology measures a bed or a fault, not a bench, so its steps name
+        // points on a plane.
+        let geology = editor.active_workspace == state::Workspace::Geology;
+        return Some(ViewportMessage::text(match (editor.batter_angle_points.len(), geology) {
+            (0, true) => tr!("ui-pick-first-plane-point"),
+            (1, true) => tr!("ui-pick-second-plane-point"),
+            (_, true) => tr!("ui-pick-third-plane-point"),
+            (0, false) => tr!("ui-select-first-crest-toe-point"),
+            (1, false) => tr!("ui-select-second-crest-toe-point"),
+            (_, false) => tr!("ui-select-opposite-berm-point"),
         }));
     }
 
     if editor.slice_mode_enabled {
-        return Some(ViewportMessage::text(tr!("ui-slice-view")).minor(tr!("slice-viewport-gestures")));
+        // A workspace editing on the section shows the tool's next step first.
+        let prompt = (editor.active_workspace.edits_in_slice_view() && editor.active_tool.edits_in_slice_view())
+            .then(|| tool_prompt(editor))
+            .flatten();
+        return Some(prompt.unwrap_or_else(|| ViewportMessage::text(tr!("ui-slice-view")).minor(tr!("slice-viewport-gestures"))));
     }
 
     if editor.active_tool == ActiveTool::MakeCircle {
@@ -408,6 +418,11 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
         });
     }
 
+    tool_prompt(editor)
+}
+
+/// The armed tool's next step, when it has one to say.
+fn tool_prompt(editor: &EditorState) -> Option<ViewportMessage> {
     let message = match editor.active_tool {
         ActiveTool::Move if !editor.move_tool_has_targets() => ViewportMessage::text(tr!("ui-select-item")),
         ActiveTool::MoveCollar if !editor.move_tool_has_targets() => ViewportMessage::text(tr!("ui-select-drill-hole")),
@@ -426,7 +441,11 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
         ActiveTool::TieHoles if editor.active_product().is_none() => ViewportMessage::text(tr!("ui-no-delay-product-tie")).minor(tr!("ui-right-click-delay-palette-heading")),
         ActiveTool::OffsetElement if editor.offset_awaiting_side_pick => ViewportMessage::text(tr!("ui-choose-offset-side")),
         ActiveTool::OffsetElement if editor.offset_target_ids.is_empty() => ViewportMessage::text(tr!("ui-select-line-polyline")),
+        ActiveTool::DrapeToTopology if editor.drape_phase == state::DrapePhase::Designs && editor.drape_along_triangles => {
+            ViewportMessage::text(tr!("ui-select-designs")).minor(tr!("ui-drape-follows-triangles"))
+        }
         ActiveTool::DrapeToTopology if editor.drape_phase == state::DrapePhase::Designs => ViewportMessage::text(tr!("ui-select-designs")),
+        ActiveTool::DrapeToTopology if editor.drape_along_triangles => ViewportMessage::text(tr!("ui-select-topologies")).minor(tr!("ui-drape-follows-triangles")),
         ActiveTool::DrapeToTopology => ViewportMessage::text(tr!("ui-select-topologies")),
         ActiveTool::RelimitLine if editor.relimit_confirming_end => ViewportMessage::text(tr!("ui-choose-relimit-side")),
         ActiveTool::RelimitLine if editor.relimit_waiting_for_pick => ViewportMessage::text(tr!("relimit-select-boundary")),
@@ -444,6 +463,7 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
         ActiveTool::ExplodePolyline => ViewportMessage::text(tr!("ui-select-polyline")),
         ActiveTool::BatterBermOffset if editor.batter_berm_target_id.is_none() => ViewportMessage::text(tr!("ui-select-polyline")),
         ActiveTool::DeletePoints => ViewportMessage::text(tr!("ui-select-point")),
+        ActiveTool::EditVertex => ViewportMessage::text(tr!("ui-select-polyline-vertex")),
         _ => return None,
     };
     Some(message)

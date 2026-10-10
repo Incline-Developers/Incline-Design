@@ -1167,6 +1167,14 @@ impl<'a> App<'a> {
                 self.insert_points_at_selected_intersections();
                 Ok(())
             }
+            UiCommand::ReverseSelectedStrings => {
+                self.reverse_selected_strings();
+                Ok(())
+            }
+            UiCommand::ArmDrapeAlongTriangles => {
+                self.arm_drape_along_triangles();
+                Ok(())
+            }
             UiCommand::OpenInsertPointAtElevationDialog => {
                 self.open_insert_point_at_elevation_dialog();
                 Ok(())
