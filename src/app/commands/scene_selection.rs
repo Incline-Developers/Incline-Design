@@ -145,6 +145,37 @@ impl App<'_> {
         self.for_each_reference_hole(|_| reference_holes += 1);
         counts.reference_holes = reference_holes;
         self.editor.selection_counts = counts;
+        self.prune_selected_layers();
+    }
+
+    /// Drop explorer-selected layers the selection has moved away from: a
+    /// visible layer stays selected only while some of its objects do. One
+    /// that is unloaded, hidden or empty has no objects to say so, and stays
+    /// until the next explorer click.
+    fn prune_selected_layers(&mut self) {
+        if self.editor.selected_layers.is_empty() {
+            return;
+        }
+        let with_selected: HashSet<_> = self
+            .editor
+            .selected_handles
+            .iter()
+            .filter_map(|handle| match handle {
+                SceneEntityId::Object(id) => self.scene_document.get_object(*id).map(Object::layer),
+                _ => None,
+            })
+            .collect();
+        let workspace = &self.workspace;
+        let populated = &self.populated_layers;
+        self.editor.selected_layers.retain(|layer_id| {
+            let Some(layer) = workspace
+                .project_index_for_layer(*layer_id)
+                .and_then(|index| workspace.projects[index].project.document.layer(*layer_id))
+            else {
+                return false;
+            };
+            !layer.is_visible() || !populated.contains(layer_id) || with_selected.contains(layer_id)
+        });
     }
 
     /// Apply an explorer row's click to the scene selection.
@@ -165,10 +196,11 @@ impl App<'_> {
         }
         // A layer belongs to one project, and its objects can only be read out
         // of that project's document - so clicking it makes that project the
-        // active one, exactly as the row's own Select All Objects does.
+        // active one, exactly as the row's own Select All Objects does. It
+        // does not make the layer the one drawn onto: that is the viewport
+        // bar's layer picker's to say.
         if let ExplorerRow::Layer(layer_id) = row {
             self.activate_project_for_layer(layer_id);
-            self.editor.active_layer = Some(layer_id);
         }
         let toggle = self.modifiers.control_key() || (cfg!(target_os = "macos") && self.modifiers.super_key());
         if self.modifiers.shift_key() {
@@ -180,20 +212,39 @@ impl App<'_> {
             if run.is_none() {
                 self.editor.explorer_anchor = Some(row);
             }
-            let handles = self.handles_for_rows(run.as_deref().unwrap_or(&[row]));
+            let single = [row];
+            let rows = run.as_deref().unwrap_or(&single);
+            let handles = self.handles_for_rows(rows);
             self.clear_scene_selection();
             self.editor.selected_handles.extend(handles);
+            self.editor.selected_layers.extend(rows.iter().filter_map(|row| match row {
+                ExplorerRow::Layer(id) => Some(*id),
+                ExplorerRow::Entity(_) => None,
+            }));
         } else if toggle {
             let handles = self.handles_for_rows(&[row]);
             let selected = &mut self.editor.selected_handles;
             // A row already wholly selected drops out; one only partly
             // selected - a layer some of whose objects are - fills in.
-            if !handles.is_empty() && handles.iter().all(|handle| selected.contains(handle)) {
+            let deselect = match row {
+                // An unloaded or hidden layer has no handles to read its state
+                // from, so its own membership says which way the click goes.
+                ExplorerRow::Layer(id) if handles.is_empty() => self.editor.selected_layers.contains(&id),
+                _ => !handles.is_empty() && handles.iter().all(|handle| selected.contains(handle)),
+            };
+            if deselect {
                 for handle in &handles {
                     selected.remove(handle);
                 }
             } else {
                 selected.extend(handles);
+            }
+            if let ExplorerRow::Layer(id) = row {
+                if deselect {
+                    self.editor.selected_layers.remove(&id);
+                } else {
+                    self.editor.selected_layers.insert(id);
+                }
             }
             // The anchor follows the last row the user pointed at, so a Shift
             // click after a Ctrl click runs from there rather than from
@@ -203,6 +254,9 @@ impl App<'_> {
             let handles = self.handles_for_rows(&[row]);
             self.clear_scene_selection();
             self.editor.selected_handles.extend(handles);
+            if let ExplorerRow::Layer(id) = row {
+                self.editor.selected_layers.insert(id);
+            }
             self.editor.explorer_anchor = Some(row);
         }
         self.sync_active_triangulation();
@@ -226,7 +280,7 @@ impl App<'_> {
                     let Some(project) = self.workspace.project_index_for_layer(*layer_id).map(|index| &self.workspace.projects[index]) else {
                         continue;
                     };
-                    if !project.project.document.layer(*layer_id).is_some_and(|layer| layer.loaded) {
+                    if !project.project.document.layer(*layer_id).is_some_and(crate::model::Layer::is_visible) {
                         continue;
                     }
                     handles.extend(
@@ -250,6 +304,7 @@ impl App<'_> {
     /// viewport.
     fn clear_scene_selection(&mut self) {
         self.editor.selected_handles.clear();
+        self.editor.selected_layers.clear();
         self.editor.selected_drill_holes.clear();
         self.editor.selected_tie_ins.clear();
     }

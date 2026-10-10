@@ -1,6 +1,7 @@
-//! The background-task readout that sits at the right end of the bottom
-//! toolbar: a ring that fills green around its circumference, with the task
-//! text and the counts to its left.
+//! The readouts that sit at the right end of the bottom toolbar: rings that
+//! fill green around their circumference, each with its text to its left:
+//! the background task and its counts, and at the very end the machine's
+//! memory in use.
 //!
 //! Painted rather than assembled from `egui::ProgressBar`, for two reasons: a
 //! ring is not a shape egui offers at all, and an indeterminate task has to
@@ -34,7 +35,9 @@ const TEXT_GAP: f32 = 8.0;
 /// Room left between the ring and the end of the strip. The region's own
 /// outline is drawn over the inside of its edge, so a ring sitting flush
 /// against it comes back cut down one side.
-const END_INSET: f32 = 6.0;
+pub(crate) const END_INSET: f32 = 6.0;
+/// Gap between the task readout and the memory ring to its right.
+pub(crate) const READOUT_GAP: f32 = 16.0;
 /// Least room the task text is given before it is dropped in favour of the
 /// counts: below this an elided label is all ellipsis and says nothing.
 const TASK_MIN_WIDTH: f32 = 48.0;
@@ -72,21 +75,30 @@ enum RingFill {
 /// at a full ring with the last task's "…: Finished" text; before then there
 /// is nothing to report and nothing is drawn. The toolbar has a fixed height,
 /// so the empty case needn't reserve any space.
-pub(crate) fn draw_task_progress(ui: &mut egui::Ui, editor: &EditorState) {
+///
+/// `end_inset` is the room left on its right: the end of the strip's, when
+/// it is last on the bar, or the gap to the readout beside it.
+pub(crate) fn draw_task_progress(ui: &mut egui::Ui, editor: &EditorState, end_inset: f32) {
     match &editor.status_message {
         Some(message) => match message.progress {
             Some(progress) => {
                 let progress = progress.clamp(0.0, 1.0);
-                draw_ring(ui, &ring_status_text(progress, message.units), &message.text, RingFill::Fraction(progress));
+                draw_ring(ui, &ring_status_text(progress, message.units), &message.text, RingFill::Fraction(progress), end_inset);
             }
-            None => draw_ring(ui, "", &message.text, RingFill::Spinner),
+            None => draw_ring(ui, "", &message.text, RingFill::Spinner, end_inset),
         },
         // Idle: hold the last task at a full ring. Nothing about the parked
         // readout moves, so it costs no repaints.
         None => {
             if let Some(finished) = &editor.last_finished_task {
                 let status = ring_status_text(1.0, finished.total_units.map(|total| (total, total)));
-                draw_ring(ui, &status, &tr!("progress-task-finished", task = finished.text.to_string()), RingFill::Fraction(1.0));
+                draw_ring(
+                    ui,
+                    &status,
+                    &tr!("progress-task-finished", task = finished.text.to_string()),
+                    RingFill::Fraction(1.0),
+                    end_inset,
+                );
             }
         }
     }
@@ -111,10 +123,10 @@ fn ring_status_text(fraction: f32, units: Option<(u64, u64)>) -> String {
 /// Only as wide as it needs to be. The strip lays it out right to left, so the
 /// ring keeps one place at the end of the toolbar and the text grows leftwards
 /// away from it - the counts nearest the ring, the task label beyond them.
-fn draw_ring(ui: &mut egui::Ui, status: &str, task: &str, fill: RingFill) {
+fn draw_ring(ui: &mut egui::Ui, status: &str, task: &str, fill: RingFill, end_inset: f32) {
     let available = ui.available_width();
-    let diameter = (ui.available_height() - 2.0 * RING_VERTICAL_MARGIN).clamp(*RING_DIAMETER_RANGE.start(), *RING_DIAMETER_RANGE.end());
-    if available < diameter + END_INSET {
+    let diameter = ring_diameter(ui);
+    if available < diameter + end_inset {
         return;
     }
 
@@ -123,7 +135,7 @@ fn draw_ring(ui: &mut egui::Ui, status: &str, task: &str, fill: RingFill) {
     // task is, where a label with no percentage does not.
     let font = TEXT_STYLE.resolve(ui.style());
     let painter = ui.painter().clone();
-    let mut text_budget = available - diameter - END_INSET - TEXT_GAP;
+    let mut text_budget = available - diameter - end_inset - TEXT_GAP;
     let status_galley = (!status.is_empty() && text_budget > 0.0).then(|| {
         // Truncated as well, so a cramped strip can't hand the readout a
         // wider block of text than the toolbar has room for.
@@ -146,7 +158,7 @@ fn draw_ring(ui: &mut egui::Ui, status: &str, task: &str, fill: RingFill) {
         .flatten()
         .map(|galley| galley.size().x + TEXT_GAP)
         .sum();
-    let size = egui::vec2(text_width + diameter + END_INSET, ui.available_height());
+    let size = egui::vec2(text_width + diameter + end_inset, ui.available_height());
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
     if !ui.is_rect_visible(rect) {
         return;
@@ -155,13 +167,42 @@ fn draw_ring(ui: &mut egui::Ui, status: &str, task: &str, fill: RingFill) {
     // full export path, say - is only readable on hover.
     response.on_hover_text(task);
 
+    let center = egui::pos2(rect.right() - end_inset - diameter / 2.0, rect.center().y);
+    paint_ring(ui, &painter, center, diameter, fill);
+
+    // Both texts sit on the toolbar rather than on the ring, so neither needs
+    // to change colour anywhere: the counts take the strong shade, the label
+    // the ordinary one, which is the pairing the status bar uses.
+    let visuals = ui.visuals();
+    let mut right = rect.right() - end_inset - diameter - TEXT_GAP;
+    for (galley, color) in [(status_galley, visuals.strong_text_color()), (task_galley, visuals.text_color())] {
+        if let Some(galley) = galley {
+            let pos = egui::pos2(right - galley.size().x, rect.center().y - galley.size().y / 2.0);
+            painter.galley(pos, galley, color);
+            right = pos.x - TEXT_GAP;
+        }
+    }
+}
+
+/// The ring's diameter: as tall as the strip allows, less its margins, held
+/// to [`RING_DIAMETER_RANGE`].
+fn ring_diameter(ui: &egui::Ui) -> f32 {
+    (ui.available_height() - 2.0 * RING_VERTICAL_MARGIN).clamp(*RING_DIAMETER_RANGE.start(), *RING_DIAMETER_RANGE.end())
+}
+
+/// Thickness of a ring of `diameter`.
+fn ring_stroke_width(diameter: f32) -> f32 {
+    (diameter * RING_STROKE_FRACTION).clamp(*RING_STROKE_RANGE.start(), *RING_STROKE_RANGE.end())
+}
+
+/// Paint the ring itself - its track, then its fill - centred on `center`.
+fn paint_ring(ui: &egui::Ui, painter: &egui::Painter, center: egui::Pos2, diameter: f32, fill: RingFill) {
     let visuals = ui.visuals();
     let track = shifted(visuals.panel_fill, if visuals.dark_mode { TRACK_SHIFT_DARK } else { TRACK_SHIFT_LIGHT });
     let filled = if visuals.dark_mode { FILL_DARK } else { FILL_LIGHT };
 
-    let center = egui::pos2(rect.right() - END_INSET - diameter / 2.0, rect.center().y);
     let radius = diameter / 2.0;
-    let width = (diameter * RING_STROKE_FRACTION).clamp(*RING_STROKE_RANGE.start(), *RING_STROKE_RANGE.end());
+    let width = ring_stroke_width(diameter);
     // The track is the whole circumference, so the ring reads as a ring at 0%
     // rather than as nothing at all.
     painter.circle_stroke(center, radius - width / 2.0, egui::Stroke::new(width, track));
@@ -176,19 +217,35 @@ fn draw_ring(ui: &mut egui::Ui, status: &str, task: &str, fill: RingFill) {
             (turns * std::f32::consts::TAU, SPIN_FRACTION * std::f32::consts::TAU)
         }
     };
-    paint_arc(&painter, center, radius - width / 2.0, start, sweep, egui::Stroke::new(width, filled));
+    paint_arc(painter, center, radius - width / 2.0, start, sweep, egui::Stroke::new(width, filled));
+}
 
-    // Both texts sit on the toolbar rather than on the ring, so neither needs
-    // to change colour anywhere: the counts take the strong shade, the label
-    // the ordinary one, which is the pairing the status bar uses.
-    let mut right = rect.right() - END_INSET - diameter - TEXT_GAP;
-    for (galley, color) in [(status_galley, visuals.strong_text_color()), (task_galley, visuals.text_color())] {
-        if let Some(galley) = galley {
-            let pos = egui::pos2(right - galley.size().x, rect.center().y - galley.size().y / 2.0);
-            painter.galley(pos, galley, color);
-            right = pos.x - TEXT_GAP;
-        }
-    }
+/// Draw the memory readout: a ring filled to the share of the machine's
+/// memory in use, with "Memory Utilisation" and the used and total amounts to
+/// its left - the same pairing as the task readout, the amounts in the strong
+/// shade nearest the ring.
+///
+/// Sits at the very end of the strip, `END_INSET` from its edge, so the task
+/// readout to its left keeps one place whatever it says.
+pub(crate) fn draw_memory_usage(ui: &mut egui::Ui, editor: &EditorState) {
+    let Some(usage) = editor.memory_usage else {
+        return;
+    };
+    // Rendering is on demand, so an idle window would otherwise hold the
+    // first reading forever.
+    ui.ctx().request_repaint_after(crate::app::memory_usage::SAMPLE_PERIOD);
+    let amounts = tr!(
+        "progress-memory-used-total",
+        used = crate::ui::dialogs::triangulation::format_bytes(usage.used),
+        total = crate::ui::dialogs::triangulation::format_bytes(usage.total)
+    );
+    // A browser does not say what the machine is doing, so the web build
+    // reports its own heap instead - see `MemoryUsage`.
+    #[cfg(not(target_arch = "wasm32"))]
+    let label = tr!("progress-memory-utilisation");
+    #[cfg(target_arch = "wasm32")]
+    let label = tr!("progress-memory-utilisation-web");
+    draw_ring(ui, &amounts, &label, RingFill::Fraction(usage.fraction()), END_INSET);
 }
 
 /// Stroke `sweep` radians of arc, clockwise from `start` radians past twelve

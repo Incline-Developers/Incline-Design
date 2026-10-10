@@ -708,7 +708,7 @@ impl<'a> Graphics<'a> {
             let draped: std::collections::HashSet<_> = triangulations.iter().filter_map(|triangulation| triangulation.raster_texture).collect();
             let mut pipeline_bound = false;
             for raster in rasters {
-                if draped.contains(&raster.id) || !raster.state.loaded {
+                if draped.contains(&raster.id) || !raster.state.is_visible() {
                     continue;
                 }
                 let Some((bind_group, vertex_buffer)) = self.raster_gpu.plane(raster.id) else {

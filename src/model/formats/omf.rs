@@ -611,6 +611,9 @@ fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
         // blob denies unknown fields.
         portable_layer.folder = None;
         portable_layer.section = SectionKind::natural_layer();
+        // The file records visibility: a hidden layer opens unloaded.
+        portable_layer.loaded = layer.is_visible();
+        portable_layer.hidden = false;
         put(&mut element, META_LAYER, serde_json::to_value(portable_layer)?);
         if let Some(folder) = folder_name {
             put(&mut element, META_FOLDER, folder);
@@ -812,7 +815,7 @@ fn triangulation_element(triangulation: &OpenTriangulation, geometry: omf_crate:
         &mut element,
         META_STYLE,
         json!({
-            "loaded": triangulation.state.loaded,
+            "loaded": triangulation.state.is_visible(),
             "color": triangulation.color,
             "line_color": triangulation.line_color,
             "line_weight": triangulation.line_weight,
@@ -855,7 +858,7 @@ fn point_cloud_element(cloud: &OpenPointCloud, geometry: omf_crate::Geometry, at
     put(
         &mut element,
         META_STYLE,
-        json!({ "loaded": cloud.state.loaded, "color": cloud.color, "point_size": cloud.point_size }),
+        json!({ "loaded": cloud.state.is_visible(), "color": cloud.color, "point_size": cloud.point_size }),
     );
     element
 }
@@ -1121,7 +1124,7 @@ fn write_block_model<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
         &mut element,
         META_STYLE,
         json!({
-            "loaded": open.state.loaded,
+            "loaded": open.state.is_visible(),
             "color": open.color,
             "slice": open.slice,
             "active_color_variable": open.active_color_variable,
@@ -1256,7 +1259,7 @@ fn write_drill_holes<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
         open.state.source_format.as_deref(),
         "drill-holes",
     );
-    let mut style = json!({ "loaded": open.state.loaded, "color": open.color });
+    let mut style = json!({ "loaded": open.state.is_visible(), "color": open.color });
     // The link and its index only: the readings stay in the linked files.
     if let Some(link) = open.geophysics.as_deref() {
         style["geophysics"] = serde_json::to_value(link)?;
@@ -1337,7 +1340,7 @@ fn write_raster<W: Write + Seek + Send>(
         &mut element,
         META_STYLE,
         json!({
-            "loaded": raster.state.loaded,
+            "loaded": raster.state.is_visible(),
             "world_to_uv": raster.world_to_uv,
             "source_size": raster.source_size,
             "preview_size": raster.preview_size,

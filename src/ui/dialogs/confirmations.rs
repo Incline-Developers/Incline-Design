@@ -3,7 +3,7 @@
 use crate::{
     i18n::tr,
     ui::{
-        state::{EditorState, UiCommand, UiProjectView},
+        state::{EditorState, RenameTarget, UiCommand, UiProjectView},
         widgets::menu::{self, DragableMenu, MenuButton},
     },
 };
@@ -164,7 +164,12 @@ pub(crate) fn draw_delete_item_confirm_dialog(ui: &mut egui::Ui, commands: &mut 
         .open(&mut open)
         .min_width(280.0)
         .show(ui.ctx(), |ui| {
-            ui.label(tr!("dialog-delete-confirm", name = name.clone()));
+            // A collection takes everything in it along, which the plain
+            // sentence would not say.
+            ui.label(match target {
+                RenameTarget::Folder(..) => tr!("dialog-delete-collection-confirm", name = name.clone()),
+                _ => tr!("dialog-delete-confirm", name = name.clone()),
+            });
             menu::menu_actions(ui, |ui| {
                 if ui.add(MenuButton::new(title.clone()).danger()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                     commands.push(target.remove_command());
@@ -177,6 +182,34 @@ pub(crate) fn draw_delete_item_confirm_dialog(ui: &mut egui::Ui, commands: &mut 
         });
     if !open {
         editor.pending_delete_item = None;
+    }
+}
+
+/// Draw the confirmation dialog shown before deleting several explorer rows
+/// at once, from a right-click on a multi-row selection.
+pub(crate) fn draw_delete_rows_confirm_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState) {
+    let Some(rows) = editor.pending_delete_rows.clone() else {
+        return;
+    };
+    let title = tr!("explorer-delete-selected", count = rows.len().to_string());
+    let mut open = true;
+    DragableMenu::new("delete_rows_confirmation_dialog", title.clone())
+        .open(&mut open)
+        .min_width(280.0)
+        .show(ui.ctx(), |ui| {
+            ui.label(tr!("dialog-delete-rows-confirm", count = rows.len().to_string()));
+            menu::menu_actions(ui, |ui| {
+                if ui.add(MenuButton::new(title.clone()).danger()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+                    commands.extend(rows.iter().cloned());
+                    editor.pending_delete_rows = None;
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                    editor.pending_delete_rows = None;
+                }
+            });
+        });
+    if !open {
+        editor.pending_delete_rows = None;
     }
 }
 

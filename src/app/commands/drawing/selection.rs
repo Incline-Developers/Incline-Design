@@ -34,7 +34,7 @@ impl<'a> App<'a> {
                 .document
                 .objects()
                 .iter()
-                .filter(|object| project.project.document.layer(object.layer()).is_some_and(|layer| layer.loaded))
+                .filter(|object| project.project.document.layer(object.layer()).is_some_and(crate::model::Layer::is_visible))
                 .map(|object| SceneEntityId::Object(object.id()))
                 .filter(|handle| !self.editor.hidden_handles.contains(handle) && !self.editor.frozen_handles.contains(handle))
                 .collect::<Vec<_>>()
