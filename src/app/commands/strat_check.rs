@@ -9,7 +9,7 @@ use crate::{
     i18n::tr,
     model::{
         drill_hole::{DrillFieldKind, DrillHoleDataset, DrillHoleId, WorkingSection, tidy_working_sections},
-        strat_order::{HoleFlag, MajorityOrder, flags_against, majority_order, seeded_sections},
+        strat_order::{HoleFlag, MajorityOrder, default_strat_field, flags_against, majority_order, seeded_sections},
     },
     ui::state::StratCheckReport,
     userspace_log, userspace_warn,
@@ -44,25 +44,87 @@ fn flagged_holes(flags: &[HoleFlag]) -> usize {
 }
 
 /// What an import works out for its new set: the field it orders, the order
-/// found with the holes that disagree, and one working section per group of
-/// the order, already tidied.
+/// found with the holes that disagree, one working section per group of the
+/// order, already tidied, the field the strat column reads until one is
+/// picked, and the check of the field the Column tab opens on when that is
+/// another field.
 pub(crate) struct ImportedStrat {
     field: String,
     found: MajorityOrder,
     sections: Vec<WorkingSection>,
+    recorded: String,
+    shown: Option<ShownCheck>,
 }
 
-/// The strat column a freshly imported `dataset` starts with, on the field
-/// the Column tab would show first. Pure and silent, for the import's
-/// worker; `None` when there is no field to order.
+/// The check of the field the Column tab opens on, against the column the
+/// import gives it.
+struct ShownCheck {
+    field: String,
+    column: Vec<String>,
+    outcome: StratCheckOutcome,
+}
+
+impl ShownCheck {
+    /// The holes that disagree with the column, as the Column tab counts.
+    fn flags(&self) -> &[HoleFlag] {
+        match &self.outcome.majority {
+            Some(majority) if self.column.is_empty() || self.column == majority.order => &majority.flags,
+            Some(_) => &self.outcome.column_flags,
+            None => &[],
+        }
+    }
+}
+
+impl ImportedStrat {
+    /// The field the import's count is for, the one the Column tab opens on,
+    /// and how many holes disagree on it.
+    fn counted(&self) -> (&str, usize) {
+        match &self.shown {
+            Some(shown) => (&shown.field, flagged_holes(shown.flags())),
+            None => (&self.field, flagged_holes(&self.found.flags)),
+        }
+    }
+}
+
+/// The strat column a freshly imported `dataset` starts with, on the most
+/// detailed field, and the check of the field the Column tab opens on, the
+/// parent when one is found. Pure and silent, for the import's worker;
+/// `None` when there is no field to order.
 pub(crate) fn imported_strat(dataset: &DrillHoleDataset) -> Option<ImportedStrat> {
-    let field = crate::model::strat_order::default_strat_field(&dataset.fields, &[], None)?.key.clone();
+    let field = default_strat_field(&dataset.fields, &[], None)?.key.clone();
     let found = majority_order(dataset, &field)?;
     if found.order.is_empty() {
         return None;
     }
     let (sections, _) = tidy_working_sections(seeded_sections(&found, &field), &dataset.fields);
-    Some(ImportedStrat { field, found, sections })
+    let recorded = found.parent.as_ref().map_or_else(|| field.clone(), |parent| parent.field.clone());
+    let shown = default_strat_field(&dataset.fields, &sections, Some(&recorded))
+        .filter(|shown| shown.key != field)
+        .map(|shown| {
+            let column = if found.parent.as_ref().is_some_and(|parent| parent.field == shown.key) {
+                parent_column(&found)
+            } else {
+                Vec::new()
+            };
+            let outcome = run_strat_check(dataset, &shown.key, &column);
+            ShownCheck {
+                field: shown.key.clone(),
+                column,
+                outcome,
+            }
+        });
+    Some(ImportedStrat {
+        field,
+        found,
+        sections,
+        recorded,
+        shown,
+    })
+}
+
+/// The parent's column an import writes: its named values in group order.
+fn parent_column(found: &MajorityOrder) -> Vec<String> {
+    found.groups.iter().filter_map(|group| group.name.clone()).collect()
 }
 
 impl<'a> App<'a> {
@@ -71,9 +133,18 @@ impl<'a> App<'a> {
     /// an opened project keeps the column it was saved with, empty or not.
     /// No undo step: the import added the set as new and unsaved.
     pub(crate) fn fill_imported_strat(&mut self, id: DrillHoleId, strat: Option<ImportedStrat>) {
-        let Some(ImportedStrat { field, found, sections }) = strat else {
+        let Some(strat) = strat else {
             return;
         };
+        let (counted, flagged) = strat.counted();
+        let counted = counted.to_owned();
+        let ImportedStrat {
+            field,
+            found,
+            sections,
+            recorded,
+            shown,
+        } = strat;
         let Some(open) = self.drill_holes.iter_mut().find(|item| item.id == id) else {
             return;
         };
@@ -86,24 +157,22 @@ impl<'a> App<'a> {
         }
         // The parent gets the order of its named values as its own column,
         // and becomes the field the strat column reads until one is picked.
-        match &found.parent {
-            Some(parent) => {
-                if open.color.strat_column(&parent.field).is_empty() {
-                    let names = found.groups.iter().filter_map(|group| group.name.clone()).collect();
-                    open.color.set_strat_column(&parent.field, names);
-                }
-                open.color.strat_field = Some(parent.field.clone());
-            }
-            None => open.color.strat_field = Some(field.clone()),
+        if let Some(parent) = &found.parent
+            && open.color.strat_column(&parent.field).is_empty()
+        {
+            open.color.set_strat_column(&parent.field, parent_column(&found));
         }
+        open.color.strat_field = Some(recorded);
         let checked = Arc::downgrade(&open.dataset);
-        let flagged = flagged_holes(&found.flags);
+        // Counted on the field the Column tab opens on, so the number here is
+        // the one the tab shows.
         let message = if found.groups.is_empty() {
             tr!(
                 "cmd-strat-import-filled",
                 field = field.clone(),
                 names = found.order.len().to_string(),
-                flagged = flagged.to_string()
+                flagged = flagged.to_string(),
+                checked = counted.to_string()
             )
         } else {
             tr!(
@@ -111,10 +180,35 @@ impl<'a> App<'a> {
                 field = field.clone(),
                 names = found.order.len().to_string(),
                 groups = found.groups.len().to_string(),
-                flagged = flagged.to_string()
+                flagged = flagged.to_string(),
+                checked = counted.to_string()
             )
         };
-        userspace_log!("{}", message);
+        // Disagreeing holes are worth a look, so they stand out in the console.
+        if flagged > 0 {
+            userspace_warn!("{}", message);
+        } else {
+            userspace_log!("{}", message);
+        }
+        if let Some(ShownCheck { field, column, outcome }) = shown {
+            let StratCheckOutcome { majority, column_flags } = outcome;
+            let (order, order_flags, overruled, holes) = match majority {
+                Some(majority) => (Some(majority.order), majority.flags, majority.overruled, majority.holes),
+                None => (None, Vec::new(), 0, 0),
+            };
+            self.editor.keep_strat_check(StratCheckReport {
+                dataset: id,
+                field,
+                checked: checked.clone(),
+                order,
+                order_flags,
+                column,
+                column_flags,
+                overruled,
+                holes,
+                comparing: false,
+            });
+        }
         self.editor.keep_strat_check(StratCheckReport {
             dataset: id,
             field,
