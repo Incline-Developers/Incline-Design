@@ -349,17 +349,31 @@ impl<'a> Chain<'a> {
     }
 
     /// The bar `agent` works at `at` on `step`: its highest-priority open bar
-    /// with work left there, or a delay. Without `follow`, only its own blast
+    /// with work ready there, or a delay. Without `follow`, only its own blast
     /// bars count - what a follower looks for on its leader, so a leader
     /// standing for a delay, or following someone itself, still leads.
+    ///
+    /// As a loader's dig bar does, a bar works its blasts in order: the first
+    /// with work left on `step` is its current one, and while that is not
+    /// ready - not yet clear, or its step before unfinished - the bar has no
+    /// work and the machine works its next bar, coming back once it is.
     fn open_task(&self, agent: usize, at: f64, step: usize, follow: bool) -> Option<&'a BlastTask> {
+        let activity = BlastActivity::ALL[step];
         self.input
             .tasks
             .iter()
             .enumerate()
             .filter(|(_, task)| task.agent == agent && task.start_h <= at + 1e-9 && at < task.end_h - 1e-9)
             .filter(|(_, task)| follow || (task.follow.is_none() && !task.delay))
-            .filter(|(_, task)| task.delay || self.sequence_of(task, at, step).iter().any(|&blast| self.left[blast][step] > DONE))
+            .filter(|(_, task)| {
+                task.delay
+                    || self
+                        .sequence_of(task, at, step)
+                        .iter()
+                        .copied()
+                        .find(|&blast| self.left[blast][step] > DONE)
+                        .is_some_and(|blast| self.ready(blast, activity, at))
+            })
             .min_by(|a, b| a.1.priority.cmp(&b.1.priority).then(a.1.start_h.total_cmp(&b.1.start_h)).then(a.0.cmp(&b.0)))
             .map(|(_, task)| task)
     }
