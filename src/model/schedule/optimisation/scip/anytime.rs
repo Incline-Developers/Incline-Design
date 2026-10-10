@@ -40,9 +40,11 @@
 //! route at its best candidate, the fleet pooled, a reclaim's grade the one
 //! that suits each use of it best. Once a window is the whole horizon, and
 //! nothing is reclaimed, the plan's own dual bound is one as well, and the
-//! tighter of the two is kept. The whole horizon's plan is also
-//! solved as a mixed-integer program in the background from the start, for
-//! its dual bound and for one more set of targets when it finishes.
+//! tighter of the two is kept. The relaxation is solved in the background
+//! from the start, beside the search rather than ahead of it: on a long
+//! horizon it can take longer than the budget. So is the whole horizon's
+//! plan as a mixed-integer program, for its dual bound and for one more set
+//! of targets when it finishes.
 //!
 //! Cancelling the run, or its time running out, stops every solve the search
 //! has under way and leaves it with the best schedule it has.
@@ -56,6 +58,8 @@ use std::{
     thread::JoinHandle,
     time::{Duration, Instant},
 };
+
+use rayon::prelude::*;
 
 use super::{
     super::blended::{
@@ -75,7 +79,6 @@ pub(crate) struct AnytimeSettings {
     pub(crate) window_days: u32,
     pub(crate) step_days: u32,
     pub(crate) window_limit: Duration,
-    pub(crate) bound_limit: Duration,
     /// Days per polished window, and the time each gets.
     pub(crate) polish_days: u32,
     /// Days solved past each polished window and then discarded.
@@ -116,7 +119,6 @@ impl AnytimeSettings {
             window_days: 5,
             step_days: 3,
             window_limit: Duration::from_secs(60),
-            bound_limit: Duration::from_secs(240),
             polish_days: 1,
             polish_lookahead_days: 1,
             polish_limit: Duration::from_secs(60),
@@ -374,6 +376,20 @@ fn finished(background: &mut Option<JoinHandle<Result<PlanSolve, String>>>, wait
     None
 }
 
+/// The relaxation's bound, tightening `bound`, once it has been solved; what
+/// to report of it then.
+fn relaxed(relaxation: &mut Option<JoinHandle<Result<PlanSolve, String>>>, bound: &mut Option<f64>) -> Option<String> {
+    Some(match finished(relaxation, false)? {
+        Ok(relaxed) => {
+            if let Some(proved) = relaxed.bound {
+                *bound = Some(bound.map_or(proved, |held: f64| held.min(proved)));
+            }
+            format!("relaxation bound in {:.0}s, {}", relaxed.solve_s, relaxed.status)
+        }
+        Err(reason) => format!("relaxation bound: {reason}"),
+    })
+}
+
 /// Search from `start`, a schedule of `input` the replay accepted, until the
 /// budget is spent, `cancel` is set or there is nothing left to find.
 pub(crate) fn run(
@@ -405,22 +421,29 @@ pub(crate) fn run(
     // only a plan of the whole horizon from scratch bounds a schedule that
     // reclaims; see `plan`.
     let reclaims = input.tasks.iter().any(|task| matches!(task.kind, TaskKind::Reclaim { .. }));
-    let mut bound = plan::solve(
-        input,
-        None,
-        None,
-        Settings {
-            time_limit: settings.bound_limit,
-            relative_gap: 0.0,
-            relax: true,
-        },
-        cancel,
-    )
-    .ok()
-    .and_then(|relaxed| relaxed.bound);
-    record(value, bound, "relaxation bound".into());
-    // Raised when the search ends, so the background plan stops with it.
+    let mut bound = None;
+    // Raised when the search ends, so the background plans stop with it.
     let ending = Arc::new(AtomicBool::new(false));
+    // The relaxation is solved beside the search, not ahead of it: on a long
+    // horizon it can take longer than the whole budget, and the search has
+    // no use for the bound until there is a gap to report.
+    let mut relaxation = (!cancel.load(Ordering::Relaxed)).then(|| {
+        let (input, ending) = (input.clone(), Arc::clone(&ending));
+        let limit = settings.budget;
+        std::thread::spawn(move || {
+            plan::solve(
+                &input,
+                None,
+                None,
+                Settings {
+                    time_limit: limit,
+                    relative_gap: 0.0,
+                    relax: true,
+                },
+                &ending,
+            )
+        })
+    });
     let mut background = (settings.background_bound && !cancel.load(Ordering::Relaxed)).then(|| {
         let (input, seed, ending) = (input.clone(), best.solution.clone(), Arc::clone(&ending));
         let limit = settings.budget.saturating_sub(started.elapsed());
@@ -453,6 +476,9 @@ pub(crate) fn run(
     // Whether the days have been polished since a plan window was last kept.
     let mut polished_since = false;
     'passes: loop {
+        if let Some(note) = relaxed(&mut relaxation, &mut bound) {
+            record(value, bound, note);
+        }
         if let Some(outcome) = finished(&mut background, false) {
             match outcome {
                 Ok(whole_plan) => {
@@ -569,6 +595,9 @@ pub(crate) fn run(
                         break;
                     }
                 }
+                if let Some(note) = relaxed(&mut relaxation, &mut bound) {
+                    record(value, bound, note);
+                }
                 if let Some(outcome) = finished(&mut background, false) {
                     // Picked up at the top of the next pass.
                     background = Some(std::thread::spawn(move || outcome));
@@ -622,17 +651,22 @@ pub(crate) fn run(
             promised.extend(planned.day_values.iter().map(|(day, earned)| (*day, *earned)));
             let covered: BTreeSet<u32> = (first_day..first_day + length).collect();
             let from = input.intervals.iter().position(|interval| interval.day() >= first_day).unwrap_or(0);
-            let mut chosen: Option<(Best, PlanTargets)> = None;
-            for (follow, overrun) in WEIGHTS {
-                if started.elapsed() >= settings.budget || cancel.load(Ordering::Relaxed) {
-                    break;
-                }
-                let candidate = targets.replacing(&covered, &planned.routes, follow * spread, overrun * spread);
-                let Some(found) = redispatch(input, &best, from, &candidate, cancel) else { continue };
-                if chosen.as_ref().is_none_or(|(kept, _)| found.value() > kept.value()) {
-                    chosen = Some((found, candidate));
-                }
-            }
+            // Each weight is dispatched at once, side by side; the first of the
+            // best is chosen, as it would be one after another.
+            let chosen = (started.elapsed() < settings.budget && !cancel.load(Ordering::Relaxed))
+                .then(|| {
+                    WEIGHTS
+                        .par_iter()
+                        .map(|&(follow, overrun)| {
+                            let candidate = targets.replacing(&covered, &planned.routes, follow * spread, overrun * spread);
+                            redispatch(input, &best, from, &candidate, cancel).map(|found| (found, candidate))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .into_iter()
+                .flatten()
+                .flatten()
+                .reduce(|kept, next| if next.0.value() > kept.0.value() { next } else { kept });
             if let Some((found, candidate)) = chosen
                 && found.value() > value + 1e-7 * value.abs().max(1.0)
             {
@@ -659,6 +693,9 @@ pub(crate) fn run(
                     ),
                 );
             }
+            if let Some(note) = relaxed(&mut relaxation, &mut bound) {
+                record(value, bound, note);
+            }
         }
         quiet_passes = if improved { 0 } else { quiet_passes + 1 };
         offset = (offset + 1) % step;
@@ -677,9 +714,10 @@ pub(crate) fn run(
     // its own time limit, which is the search's, and its bound goes unused.
     ending.store(true, Ordering::Release);
     let waiting = Instant::now();
-    while background.as_ref().is_some_and(|handle| !handle.is_finished()) && waiting.elapsed() < BACKGROUND_GRACE {
+    while [&background, &relaxation].iter().any(|plan| plan.as_ref().is_some_and(|handle| !handle.is_finished())) && waiting.elapsed() < BACKGROUND_GRACE {
         std::thread::sleep(Duration::from_millis(20));
     }
+    relaxed(&mut relaxation, &mut bound);
     if let Some(Ok(whole_plan)) = finished(&mut background, false)
         && let Some(proved) = whole_plan.bound
     {
