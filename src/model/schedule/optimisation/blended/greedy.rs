@@ -373,11 +373,13 @@ impl<'a> State<'a> {
                 _ => {}
             }
         }
-        let mut shared = BTreeMap::new();
+        // A block is shared when more than one loader digs it; counted once
+        // per block rather than by searching every key for every key.
+        let mut diggers: BTreeMap<GroundId, BTreeSet<usize>> = BTreeMap::new();
         for &(loader, ground, _) in digs.keys() {
-            let other = digs.keys().any(|&(other, block, _)| other != loader && block == ground);
-            shared.insert((loader, ground), other);
+            diggers.entry(ground).or_default().insert(loader);
         }
+        let shared: BTreeMap<(usize, GroundId), bool> = digs.keys().map(|&(loader, ground, _)| ((loader, ground), diggers[&ground].len() > 1)).collect();
         let values: Vec<f64> = input.movements.iter().map(|candidate| candidate.value_per_tonne().unwrap_or(0.0)).collect();
         // The most a reclaim's conditional costs could take off its value,
         // so the production credit covers them too.
