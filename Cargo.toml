@@ -32,8 +32,10 @@ winresource = "0.1.31"
 #                 highs-sys, so it needs cmake and a C++ compiler).
 #   scip          Improve: the whole-horizon SCIP solve, the day-by-day
 #                 fallback and the HiGHS relaxation bound, run in a solver
-#                 process. The relaxation bound links HiGHS whether or not
-#                 `highs` is on. Enable it through one of the two linking
+#                 process. It turns `highs` on too: the build links HiGHS
+#                 for the bound anyway, and Improve's search runs the
+#                 dispatch over and over, which HiGHS solves in about half
+#                 microlp's time. Enable it through one of the two linking
 #                 features:
 #
 #   scip-source   build SCIP 10.0.2 and SoPlex 8.0.2 from source (cmake, a
@@ -44,7 +46,7 @@ winresource = "0.1.31"
 #                 library path must then reach that installation.
 default = []
 highs = ["dep:highs", "dep:highs-sys"]
-scip = ["dep:highs-sys", "dep:russcip", "dep:scip-sys"]
+scip = ["highs", "dep:russcip", "dep:scip-sys"]
 scip-source = ["scip", "russcip/from-source"]
 scip-system = ["scip", "russcip/bindgen"]
 
