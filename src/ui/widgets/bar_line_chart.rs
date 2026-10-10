@@ -1,6 +1,7 @@
-//! A bar-and-line chart: stacked bars against the left axis, one line against
-//! the right, one category per column - the pit-by-pit graph (tonnes per
-//! shell as bars, cash flow as the line), and later the schedule charts.
+//! A bar-and-line chart: stacked bars against the left axis, lines each
+//! against an axis of their own on the right, one category per column - the
+//! pit-by-pit graph (tonnes per shell as bars, cash flow and grade as lines),
+//! and later the schedule charts.
 //!
 //! Painted by hand so it looks the same on every platform and needs no plot
 //! crate. Hovering a column shows the caller's text for it; clicking selects it.
@@ -25,18 +26,24 @@ pub(crate) struct BarSeries<'a> {
     pub(crate) values: &'a [f64],
 }
 
-/// The line, against the right axis.
+/// A line, against an axis of its own right of the plot (the first line's
+/// axis nearest the plot).
 pub(crate) struct LineSeries<'a> {
     pub(crate) name: String,
     pub(crate) color: egui::Color32,
     pub(crate) values: &'a [f64],
+    /// Where the line's values sit, as fractions of the plot height from the
+    /// bottom (lowest value, highest value): `None` spans a round-numbered axis
+    /// over the whole height, taking in 0; `Some((0.35, 0.65))` keeps the line
+    /// in the middle, clear of the bars' tops and the other lines.
+    pub(crate) band: Option<(f32, f32)>,
 }
 
 pub(crate) struct BarLineChart<'a> {
     labels: &'a [String],
     bars: Vec<BarSeries<'a>>,
-    line: Option<LineSeries<'a>>,
-    selected: Option<usize>,
+    lines: Vec<LineSeries<'a>>,
+    selected: Vec<usize>,
     height: f32,
     hover_text: Option<&'a dyn Fn(usize) -> String>,
 }
@@ -55,8 +62,8 @@ impl<'a> BarLineChart<'a> {
         Self {
             labels,
             bars: Vec::new(),
-            line: None,
-            selected: None,
+            lines: Vec::new(),
+            selected: Vec::new(),
             height: 260.0,
             hover_text: None,
         }
@@ -68,12 +75,13 @@ impl<'a> BarLineChart<'a> {
     }
 
     pub(crate) fn line(mut self, series: LineSeries<'a>) -> Self {
-        self.line = Some(series);
+        self.lines.push(series);
         self
     }
 
-    pub(crate) fn selected(mut self, column: Option<usize>) -> Self {
-        self.selected = column;
+    /// Columns shown as selected: tinted and outlined.
+    pub(crate) fn selected(mut self, columns: impl IntoIterator<Item = usize>) -> Self {
+        self.selected = columns.into_iter().collect();
         self
     }
 
@@ -102,7 +110,7 @@ impl<'a> BarLineChart<'a> {
 
         let plot = egui::Rect::from_min_max(
             rect.min + egui::vec2(AXIS_WIDTH, LEGEND_HEIGHT + 6.0),
-            rect.max - egui::vec2(if self.line.is_some() { AXIS_WIDTH } else { 12.0 }, LABEL_HEIGHT + 4.0),
+            rect.max - egui::vec2(if self.lines.is_empty() { 12.0 } else { AXIS_WIDTH * self.lines.len() as f32 }, LABEL_HEIGHT + 4.0),
         );
         if plot.width() <= 10.0 || plot.height() <= 10.0 {
             return out;
@@ -121,32 +129,31 @@ impl<'a> BarLineChart<'a> {
         for tick in left.ticks() {
             let y = left_y(tick);
             painter.line_segment([egui::pos2(plot.left(), y), egui::pos2(plot.right(), y)], egui::Stroke::new(1.0, grid));
-            painter.text(egui::pos2(plot.left() - 6.0, y), egui::Align2::RIGHT_CENTER, compact(tick), font.clone(), weak);
+            painter.text(
+                egui::pos2(plot.left() - 6.0, y),
+                egui::Align2::RIGHT_CENTER,
+                tick_label(tick, left.step),
+                font.clone(),
+                weak,
+            );
         }
 
-        // Right axis: the line's range, always taking in 0.
-        let right = self.line.as_ref().map(|line| {
-            let finite = line.values.iter().copied().filter(|value| value.is_finite());
-            let (low, high) = finite.fold((0.0_f64, 0.0_f64), |(low, high), value| (low.min(value), high.max(value)));
-            nice_axis(low, high)
-        });
-        let right_y = |value: f64| {
-            right
-                .as_ref()
-                .map_or(plot.bottom(), |axis| plot.bottom() - ((value - axis.min) / (axis.max - axis.min)) as f32 * plot.height())
-        };
-        if let (Some(axis), Some(line)) = (&right, &self.line) {
+        // Right axes, one per line, each a column further out.
+        let axes: Vec<LineAxis> = self.lines.iter().map(|line| LineAxis::of(line.values, line.band)).collect();
+        let line_y = |axis: &LineAxis, value: f64| plot.bottom() - ((value - axis.low) / (axis.high - axis.low)) as f32 * plot.height();
+        for (index, (line, axis)) in self.lines.iter().zip(&axes).enumerate() {
+            let x = plot.right() + 6.0 + AXIS_WIDTH * index as f32;
             for tick in axis.ticks() {
                 painter.text(
-                    egui::pos2(plot.right() + 6.0, right_y(tick)),
+                    egui::pos2(x, line_y(axis, tick)),
                     egui::Align2::LEFT_CENTER,
-                    compact(tick),
+                    tick_label(tick, axis.step),
                     font.clone(),
                     line.color,
                 );
             }
-            if axis.min < 0.0 {
-                let zero = right_y(0.0);
+            if line.band.is_none() && axis.low < 0.0 {
+                let zero = line_y(axis, 0.0);
                 painter.line_segment(
                     [egui::pos2(plot.left(), zero), egui::pos2(plot.right(), zero)],
                     egui::Stroke::new(1.0, line.color.gamma_multiply(0.5)),
@@ -159,10 +166,13 @@ impl<'a> BarLineChart<'a> {
         let column_rect = |column: usize| egui::Rect::from_x_y_ranges(plot.left() + width * column as f32..=plot.left() + width * (column + 1) as f32, plot.y_range());
         let pointer = response.hover_pos().filter(|pos| plot.contains(*pos));
         let hovered = pointer.map(|pos| (((pos.x - plot.left()) / width) as usize).min(columns - 1));
-        for (column, alpha) in [(self.selected, 0.25), (hovered, 0.12)] {
-            if let Some(column) = column {
-                painter.rect_filled(column_rect(column), 0.0, visuals.selection.bg_fill.gamma_multiply(alpha));
-            }
+        for &column in self.selected.iter().filter(|&&column| column < columns) {
+            let area = column_rect(column);
+            painter.rect_filled(area, 0.0, visuals.selection.bg_fill.gamma_multiply(0.25));
+            painter.rect_stroke(area.shrink(0.5), 0.0, egui::Stroke::new(1.0, visuals.selection.stroke.color), egui::StrokeKind::Inside);
+        }
+        if let Some(column) = hovered {
+            painter.rect_filled(column_rect(column), 0.0, visuals.selection.bg_fill.gamma_multiply(0.12));
         }
         for column in 0..columns {
             let bar = column_rect(column).shrink2(egui::vec2(width * (1.0 - BAR_FILL) / 2.0, 0.0));
@@ -177,12 +187,12 @@ impl<'a> BarLineChart<'a> {
             }
         }
 
-        // The line, one point per column centre.
-        if let Some(line) = &self.line {
+        // The lines, one point per column centre.
+        for (line, axis) in self.lines.iter().zip(&axes) {
             let points: Vec<egui::Pos2> = (0..columns)
                 .filter_map(|column| {
                     let value = *line.values.get(column)?;
-                    value.is_finite().then(|| egui::pos2(column_rect(column).center().x, right_y(value)))
+                    value.is_finite().then(|| egui::pos2(column_rect(column).center().x, line_y(axis, value)))
                 })
                 .collect();
             painter.add(egui::Shape::line(points.clone(), egui::Stroke::new(2.0, line.color)));
@@ -211,7 +221,7 @@ impl<'a> BarLineChart<'a> {
             .bars
             .iter()
             .map(|series| (&series.name, series.color, false))
-            .chain(self.line.iter().map(|line| (&line.name, line.color, true)));
+            .chain(self.lines.iter().map(|line| (&line.name, line.color, true)));
         for (name, color, is_line) in entries {
             let swatch = egui::Rect::from_center_size(egui::pos2(x + 6.0, legend_y), egui::vec2(12.0, if is_line { 3.0 } else { 10.0 }));
             painter.rect_filled(swatch, 0.0, color);
@@ -232,6 +242,65 @@ impl<'a> BarLineChart<'a> {
         }
         out
     }
+}
+
+/// A line's axis: the values `low..high` span the plot's height; ticks are
+/// round multiples of `step` within it.
+struct LineAxis {
+    low: f64,
+    high: f64,
+    step: f64,
+}
+
+impl LineAxis {
+    fn of(values: &[f64], band: Option<(f32, f32)>) -> Self {
+        let finite = values.iter().copied().filter(|value| value.is_finite());
+        match band {
+            None => {
+                let (low, high) = finite.fold((0.0_f64, 0.0_f64), |(low, high), value| (low.min(value), high.max(value)));
+                let axis = nice_axis(low, high);
+                Self {
+                    low: axis.min,
+                    high: axis.max,
+                    step: axis.step,
+                }
+            }
+            Some((bottom, top)) => {
+                let (mut low, mut high) = finite.fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), value| (low.min(value), high.max(value)));
+                if !low.is_finite() {
+                    (low, high) = (0.0, 1.0);
+                }
+                if high - low <= f64::EPSILON * high.abs().max(1.0) {
+                    let pad = (low.abs() * 0.1).max(1e-6);
+                    (low, high) = (low - pad, high + pad);
+                }
+                // Stretch the range so the values fill only the band.
+                let (bottom, top) = (f64::from(bottom), f64::from(top.max(bottom + 0.05)));
+                let span = (high - low) / (top - bottom);
+                let (low, high) = (low - span * bottom, low - span * bottom + span);
+                Self {
+                    low,
+                    high,
+                    step: nice_axis(low, high).step,
+                }
+            }
+        }
+    }
+
+    fn ticks(&self) -> impl Iterator<Item = f64> + '_ {
+        let first = (self.low / self.step).ceil() as i64;
+        let last = (self.high / self.step).floor() as i64;
+        (first..=last).map(move |index| index as f64 * self.step)
+    }
+}
+
+/// A tick's number: short for big values, with as many decimals as the step needs.
+fn tick_label(value: f64, step: f64) -> String {
+    if value.abs() >= 1000.0 {
+        return compact(value);
+    }
+    let decimals = (-step.log10().floor()).clamp(0.0, 6.0) as usize;
+    format!("{value:.decimals$}")
 }
 
 /// An axis from `min` to `max` stepped in round numbers.

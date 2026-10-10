@@ -121,7 +121,8 @@ pub(crate) struct Economics {
     pub(crate) waste_haulage: PerTonne,
     pub(crate) ore_haulage: PerTonne,
     pub(crate) methods: Vec<Method>,
-    /// Every element some method recovers, once each, in the order first met.
+    /// The main quality field first, then every other element some method
+    /// recovers, once each, in the order first met.
     pub(crate) elements: Vec<ReportElement>,
     pub(crate) air: Air,
 }
@@ -348,7 +349,19 @@ pub(crate) fn prepare(scenario: &OptimizationScenario, model: &BlockModelData, t
         check.issues.push(tr!("opt-run-no-methods"));
     }
     let mut methods = Vec::with_capacity(scenario.methods.len());
+    // The main quality field is always the first element, so reports (and a
+    // report read back from CSV) know which grade is the main one.
     let mut report_elements: Vec<ReportElement> = Vec::new();
+    if let Some(values) = &quality {
+        let (_, factor, grade_unit, sales_unit) = revenues.get(scenario.quality_field.as_str()).cloned().unwrap_or((0.0, 1.0, String::new(), String::new()));
+        report_elements.push(ReportElement {
+            name: scenario.quality_field.clone(),
+            values: Arc::clone(values),
+            factor,
+            grade_unit,
+            sales_unit,
+        });
+    }
     for method in &scenario.methods {
         let name = method.name.clone();
         let min = check.value(&method.min_grade, || tr!("opt-run-what-method", method = name.clone(), what = tr!("opt-col-min-grade")));

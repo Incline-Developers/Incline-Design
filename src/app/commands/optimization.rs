@@ -41,13 +41,31 @@ impl<'a> App<'a> {
     /// The first time it opens in a session the saved scenarios file is read,
     /// so scenarios saved earlier are there without asking.
     pub(crate) fn open_optimization_scenarios(&mut self) {
+        self.ensure_optimization_scenarios_loaded();
+        self.editor.optimization.list_open = true;
+    }
+
+    /// Read the saved scenarios file once a session, before anything that
+    /// shows or writes it - a write before the read would replace the saved
+    /// scenarios with an empty list.
+    fn ensure_optimization_scenarios_loaded(&mut self) {
         if !self.editor.optimization.loaded_from_file {
             self.editor.optimization.loaded_from_file = true;
             if let Err(error) = self.load_saved_optimization_scenarios() {
                 userspace_warn!("{error:#}");
             }
         }
-        self.editor.optimization.list_open = true;
+    }
+
+    /// Keep the Results table's column choices, with the scenarios.
+    pub(crate) fn save_optimization_report_columns(&mut self) -> Result<()> {
+        if !self.editor.optimization.loaded_from_file {
+            // The choices made before the read would be lost to it; keep them.
+            let chosen = std::mem::take(&mut self.editor.optimization.report_columns);
+            self.ensure_optimization_scenarios_loaded();
+            self.editor.optimization.report_columns.extend(chosen);
+        }
+        self.write_optimization_scenarios().map(|_| ())
     }
 
     /// Start a scenario in the editor. The list steps aside rather than staying
@@ -126,7 +144,14 @@ impl<'a> App<'a> {
     pub(crate) fn rename_optimization_scenario(&mut self, id: u64, name: String) -> Result<()> {
         let name = name.trim().to_owned();
         match self.editor.optimization.scenarios.iter_mut().find(|scenario| scenario.id == id) {
-            Some(scenario) if !name.is_empty() && scenario.name != name => scenario.name = name,
+            Some(scenario) if !name.is_empty() && scenario.name != name => {
+                // The report's column choices follow the scenario's name.
+                let old = std::mem::replace(&mut scenario.name, name.clone());
+                let columns = &mut self.editor.optimization.report_columns;
+                if let Some(chosen) = columns.remove(&old) {
+                    columns.insert(name, chosen);
+                }
+            }
             _ => return Ok(()),
         }
         self.write_optimization_scenarios().map(|_| ())
@@ -139,6 +164,7 @@ impl<'a> App<'a> {
             Ok(file) => {
                 let count = file.scenarios.len();
                 self.editor.optimization.scenarios = file.scenarios;
+                self.editor.optimization.report_columns = file.report_columns;
                 userspace_log!("{}", tr!("opt-scenarios-loaded", count = count.to_string()));
                 Ok(())
             }
@@ -149,7 +175,8 @@ impl<'a> App<'a> {
 
     /// Write the scenarios file, and say where it is.
     fn write_optimization_scenarios(&self) -> Result<String> {
-        let file = ScenarioFile::new(self.editor.optimization.scenarios.clone());
+        let mut file = ScenarioFile::new(self.editor.optimization.scenarios.clone());
+        file.report_columns = self.editor.optimization.report_columns.clone();
         crate::app::io::save_optimization_scenarios(&file).map_err(|error| anyhow::anyhow!("{}", tr!("opt-scenarios-save-failed", error = error.to_string())))
     }
 
@@ -881,6 +908,8 @@ impl<'a> App<'a> {
 
     /// Show the report in `bytes`, read from the file `name`, in the Results window.
     pub(crate) fn show_optimization_report_file(&mut self, name: String, bytes: &[u8]) -> Result<()> {
+        // Its column choices are saved with the scenarios.
+        self.ensure_optimization_scenarios_loaded();
         let report = report::read_csv(bytes).map_err(|error| anyhow::anyhow!("{}", tr!("opt-results-open-failed", name = name.clone(), error = format!("{error:#}"))))?;
         userspace_log!("{}", tr!("opt-results-opened", name = name.clone(), count = report.shells.len().to_string()));
         self.editor.optimization.results_view = Some(ResultsView::new(ResultsSource::File { name, report: Arc::new(report) }));

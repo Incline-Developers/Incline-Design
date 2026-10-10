@@ -719,6 +719,7 @@ impl<'a> App<'a> {
                 self.export_optimization_report();
                 Ok(())
             }
+            UiCommand::SaveOptimizationReportColumns => self.save_optimization_report_columns(),
             UiCommand::OpenOptimizationReport => {
                 self.open_optimization_report();
                 Ok(())

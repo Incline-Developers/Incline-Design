@@ -38,7 +38,8 @@ const EDITOR_WIDTH: f32 = 800.0;
 const SIDE_GAP: f32 = 8.0;
 const MENU_ITEM_HEIGHT: f32 = 32.0;
 const MENU_ICON: f32 = 22.0;
-const LIST_WIDTH: f32 = 560.0;
+/// Wide enough for the long names sensitivity studies get.
+const LIST_WIDTH: f32 = 806.0;
 const ICON_SIDE: f32 = 26.0;
 const LABEL_WIDTH: f32 = 270.0;
 /// Width of the starting point and mining direction stacks, label over control.
@@ -83,54 +84,60 @@ fn draw_scenarios_list(ui: &mut egui::Ui, state: &mut OptimizationState, command
         .min_width(LIST_WIDTH)
         .max_width(LIST_WIDTH)
         .show(ui.ctx(), |ui| {
+            // The name fields outlined in the light theme, as in the editor.
+            outline_fields(ui);
             ui.add_space(4.0);
             if state.scenarios.is_empty() {
                 menu_note(ui, tr!("opt-scenarios-empty"));
             }
-            for scenario in &state.scenarios {
-                let status = state.status(scenario);
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.spacing_mut().item_spacing.x = 2.0;
-                        // Drawn right to left, so they read: edit, duplicate,
-                        // delete, state, results, run.
-                        if play_button(ui, status).clicked() {
-                            run = Some(scenario.id);
-                        }
-                        let has_results = state.results.contains_key(&scenario.id);
-                        let results = ToolbarButton::new(
-                            egui::Image::new(unthemed_icon!("results_scenario.svg")).tint(menu::accent_fill(ui.visuals())),
-                            if has_results { tr!("opt-results-show") } else { tr!("opt-results-not-run") },
-                        )
-                        .id_salt(("opt_results", scenario.id))
-                        .button_side(ICON_SIDE);
-                        if ui.add_enabled_ui(has_results, |ui| ui.add(results)).inner.clicked() {
-                            show_results = Some(scenario.id);
-                        }
-                        status_icon(ui, status);
-                        let delete = ToolbarButton::new(egui::Image::new(unthemed_icon!("delete_scenario.svg")), tr!("opt-delete"))
-                            .id_salt(("opt_delete", scenario.id))
+            // As tall as the rows up to the editor's body height, then they scroll.
+            let max_height = body_height(ui.ctx());
+            egui::ScrollArea::vertical().max_height(max_height).auto_shrink([false, true]).show(ui, |ui| {
+                for scenario in &state.scenarios {
+                    let status = state.status(scenario);
+                    ui.horizontal(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.spacing_mut().item_spacing.x = 2.0;
+                            // Drawn right to left, so they read: edit, duplicate,
+                            // delete, state, results, run.
+                            if play_button(ui, status).clicked() {
+                                run = Some(scenario.id);
+                            }
+                            let has_results = state.results.contains_key(&scenario.id);
+                            let results = ToolbarButton::new(
+                                egui::Image::new(unthemed_icon!("results_scenario.svg")).tint(menu::accent_fill(ui.visuals())),
+                                if has_results { tr!("opt-results-show") } else { tr!("opt-results-not-run") },
+                            )
+                            .id_salt(("opt_results", scenario.id))
                             .button_side(ICON_SIDE);
-                        if ui.add(delete).clicked() {
-                            actions.push(UiCommand::DeleteOptimizationScenario(scenario.id));
-                        }
-                        let duplicate = ToolbarButton::new(egui::Image::new(themed_icon!(ui, "duplicate.svg")), tr!("opt-duplicate"))
-                            .id_salt(("opt_duplicate", scenario.id))
-                            .button_side(ICON_SIDE);
-                        if ui.add(duplicate).clicked() {
-                            actions.push(UiCommand::DuplicateOptimizationScenario(scenario.id));
-                        }
-                        let edit = ToolbarButton::new(egui::Image::new(themed_icon!(ui, "edit.svg")), tr!("opt-edit"))
-                            .id_salt(("opt_edit", scenario.id))
-                            .button_side(ICON_SIDE);
-                        if ui.add(edit).clicked() {
-                            actions.push(UiCommand::EditOptimizationScenario(scenario.id));
-                        }
-                        draw_name_field(ui, scenario.id, &scenario.name, commands);
+                            if ui.add_enabled_ui(has_results, |ui| ui.add(results)).inner.clicked() {
+                                show_results = Some(scenario.id);
+                            }
+                            status_icon(ui, status);
+                            let delete = ToolbarButton::new(egui::Image::new(unthemed_icon!("delete_scenario.svg")), tr!("opt-delete"))
+                                .id_salt(("opt_delete", scenario.id))
+                                .button_side(ICON_SIDE);
+                            if ui.add(delete).clicked() {
+                                actions.push(UiCommand::DeleteOptimizationScenario(scenario.id));
+                            }
+                            let duplicate = ToolbarButton::new(egui::Image::new(themed_icon!(ui, "duplicate.svg")), tr!("opt-duplicate"))
+                                .id_salt(("opt_duplicate", scenario.id))
+                                .button_side(ICON_SIDE);
+                            if ui.add(duplicate).clicked() {
+                                actions.push(UiCommand::DuplicateOptimizationScenario(scenario.id));
+                            }
+                            let edit = ToolbarButton::new(egui::Image::new(themed_icon!(ui, "edit.svg")), tr!("opt-edit"))
+                                .id_salt(("opt_edit", scenario.id))
+                                .button_side(ICON_SIDE);
+                            if ui.add(edit).clicked() {
+                                actions.push(UiCommand::EditOptimizationScenario(scenario.id));
+                            }
+                            draw_name_field(ui, scenario.id, &scenario.name, commands);
+                        });
                     });
-                });
-                ui.add_space(2.0);
-            }
+                    ui.add_space(2.0);
+                }
+            });
             menu::menu_actions(ui, |ui| {
                 if ui.add(MenuButton::new(tr!("opt-add-scenario")).primary()).clicked() {
                     actions.push(UiCommand::AddOptimizationScenario);
@@ -181,6 +188,12 @@ fn draw_scenarios_list(ui: &mut egui::Ui, state: &mut OptimizationState, command
     if close || !open {
         state.list_open = false;
     }
+}
+
+/// Height the editor's sections scroll within, and the list's rows: fixed, so
+/// neither window grows past the screen.
+fn body_height(ctx: &egui::Context) -> f32 {
+    (ctx.content_rect().height() - 260.0).clamp(240.0, 560.0)
 }
 
 fn name_field_ids(id: u64) -> (egui::Id, egui::Id) {
@@ -297,7 +310,7 @@ fn draw_scenario_editor(ui: &mut egui::Ui, state: &mut OptimizationState, block_
     let mut close_requested = false;
     let mut save = false;
     let title = format!("{}: {}{}", tr!("opt-scenario-title"), draft.scenario.name, if draft.dirty() { "*" } else { "" });
-    let body_height = (ctx.content_rect().height() - 260.0).clamp(240.0, 560.0);
+    let body_height = body_height(&ctx);
     let menu_expanded = draft.menu_expanded;
     let side_width = section_menu_width(&ctx, menu_expanded);
     let mut toggle_menu = false;

@@ -151,6 +151,7 @@ pub(crate) struct OptimizationReport {
     /// The first is always [`WASTE`]; then each processing method, rows of the
     /// methods grid sharing a name being one.
     pub(crate) destinations: Vec<String>,
+    /// The first is the main quality field.
     pub(crate) elements: Vec<ElementInfo>,
     /// `[shell][destination]`, each shell's increment over the one before.
     pub(crate) incremental: Vec<Vec<Bucket>>,
@@ -160,15 +161,23 @@ impl OptimizationReport {
     /// Shell `shell`'s (0-based) bucket for `destination`, or the sum over all
     /// destinations when `None`.
     pub(crate) fn bucket(&self, basis: Basis, shell: usize, destination: Option<usize>) -> Bucket {
-        let shells = match basis {
-            Basis::Cumulative => 0..=shell,
-            Basis::Incremental => shell..=shell,
+        let after = match basis {
+            Basis::Cumulative => None,
+            Basis::Incremental => shell.checked_sub(1),
         };
+        self.bucket_since(after, shell, destination)
+    }
+
+    /// What shell `shell` (0-based) adds over shell `after` (`None` = from
+    /// nothing, the whole pit), for one destination or all (`None`). With
+    /// `after` the shell before, this is the run's increment; with an earlier
+    /// shell, the pushback between two chosen shells.
+    pub(crate) fn bucket_since(&self, after: Option<usize>, shell: usize, destination: Option<usize>) -> Bucket {
         let mut sum = Bucket::empty(self.elements.len());
-        for shell in shells {
+        for increment in &self.incremental[after.map_or(0, |after| after + 1)..=shell] {
             match destination {
-                Some(destination) => sum.add(&self.incremental[shell][destination]),
-                None => self.incremental[shell].iter().for_each(|bucket| sum.add(bucket)),
+                Some(destination) => sum.add(&increment[destination]),
+                None => increment.iter().for_each(|bucket| sum.add(bucket)),
             }
         }
         sum

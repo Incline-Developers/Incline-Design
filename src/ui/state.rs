@@ -3641,6 +3641,8 @@ pub(crate) enum UiCommand {
     ExportOptimizationReport,
     /// Read an optimization report CSV into the Results window.
     OpenOptimizationReport,
+    /// Write the Results table's column choices (with the scenarios).
+    SaveOptimizationReportColumns,
     /// Hide everything but the scenario's block model, show it in plan view
     /// and wait for a click that sets the directional shells' starting point.
     BeginShellStartPick,
@@ -3914,6 +3916,7 @@ impl UiCommand {
             | Self::ChooseOptimizationReportsFolder
             | Self::ExportOptimizationReport
             | Self::OpenOptimizationReport
+            | Self::SaveOptimizationReportColumns
             | Self::BeginShellStartPick
             | Self::RunOptimizationScenario(_)
             | Self::CancelOptimizationScenario(_)
@@ -4646,6 +4649,9 @@ pub(crate) struct OptimizationState {
     pub(crate) pick_was_active: bool,
     /// The Results window, when open.
     pub(crate) results_view: Option<ResultsView>,
+    /// The Results table's columns per report (scenario name), saved with the
+    /// scenarios; a report not in here shows the default columns.
+    pub(crate) report_columns: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 /// The Results window: a run's report, charted and tabled.
@@ -4657,6 +4663,21 @@ pub(crate) struct ResultsView {
     pub(crate) destination: Option<usize>,
     /// The shell picked in the chart, 0-based.
     pub(crate) selected: Option<usize>,
+    /// Showing only some shells, or choosing them.
+    pub(crate) filter: ShellFilter,
+}
+
+/// The Results window's shell filter: off, being chosen in the chart, or applied.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) enum ShellFilter {
+    #[default]
+    Off,
+    /// Clicking a column of the chart adds its shell; clicking it again takes
+    /// it out. 0-based shells, in the order clicked.
+    Choosing(Vec<usize>),
+    /// The chart and table show these shells only (0-based, ascending), and an
+    /// increment is measured from the chosen shell before.
+    Applied(Vec<usize>),
 }
 
 impl ResultsView {
@@ -4666,6 +4687,7 @@ impl ResultsView {
             basis: Default::default(),
             destination: None,
             selected: None,
+            filter: ShellFilter::Off,
         }
     }
 }

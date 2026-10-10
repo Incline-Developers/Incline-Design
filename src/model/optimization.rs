@@ -17,7 +17,7 @@
 //! back.
 
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     hash::{Hash, Hasher},
 };
 
@@ -1251,6 +1251,11 @@ impl BlockModelFields {
 pub(crate) struct ScenarioFile {
     pub(crate) version: u32,
     pub(crate) scenarios: Vec<OptimizationScenario>,
+    /// The Results table's columns per report, keyed by scenario name (a
+    /// report read from CSV carries it too), so a rerun keeps them. Outside
+    /// the scenarios, so choosing columns never makes a run look stale.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) report_columns: BTreeMap<String, Vec<String>>,
 }
 
 impl ScenarioFile {
@@ -1258,6 +1263,7 @@ impl ScenarioFile {
         Self {
             version: SCENARIO_FILE_VERSION,
             scenarios,
+            report_columns: BTreeMap::new(),
         }
     }
 }
