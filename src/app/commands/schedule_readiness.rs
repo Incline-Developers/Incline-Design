@@ -812,10 +812,13 @@ impl crate::app::App<'_> {
     /// was picked from, and a pick found to name a different run is refused
     /// rather than relabelled: refreshing provenance to fit is exactly the
     /// silent repair the identity layer exists to prevent.
-    pub(crate) fn pick_into_sequence_draft(&mut self, block: Option<crate::model::DigBlockId>, generation: u64) {
+    ///
+    /// `stroke` says the pick came from a drag stroke, which may have ended
+    /// since: it is bounded by that stroke's flitch all the same.
+    pub(crate) fn pick_into_sequence_draft(&mut self, block: Option<crate::model::DigBlockId>, generation: u64, stroke: bool) {
         // A stroke that ran off the ground has not finished: the pointer is
         // still down and will cross more blocks. Only a click clears.
-        let painting = self.editor.sequence_paint.is_some();
+        let painting = stroke;
         let Some(block) = block else {
             if let Some(draft) = self.editor.sequence_editor.as_mut().filter(|_| !painting) {
                 draft.selected.clear();
@@ -848,7 +851,7 @@ impl crate::app::App<'_> {
         // the level below is part of drawing the stroke, not a mistake to be
         // reported.
         let flitch = snapshot.blocks[index].flitch.base;
-        if let Some(paint) = self.editor.sequence_paint.as_mut() {
+        if let Some(paint) = self.editor.sequence_paint.as_mut().filter(|_| stroke) {
             match paint.flitch {
                 Some(started) if started != flitch => return,
                 Some(_) => {}

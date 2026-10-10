@@ -324,7 +324,7 @@ impl EditorState {
             return None;
         }
         match request.owner {
-            SolidPreviewPickOwner::SequenceEditor { bar, edition } => (draft.bar == bar && draft.edition == edition && !draft.confirming_close).then_some(draft),
+            SolidPreviewPickOwner::SequenceEditor { bar, edition, .. } => (draft.bar == bar && draft.edition == edition && !draft.confirming_close).then_some(draft),
             SolidPreviewPickOwner::SolidsView | SolidPreviewPickOwner::BlastSequence { .. } => None,
         }
     }
@@ -615,6 +615,9 @@ pub(crate) enum SolidPreviewPickOwner {
         /// fresh one, so a click from a closed editor - or from the same bar
         /// reopened, or a reloaded draft - cannot land in the one on screen now.
         edition: u64,
+        /// Made by a drag stroke rather than a click, so it is held to the
+        /// stroke's flitch even when it is answered after the button is up.
+        stroke: bool,
     },
 }
 
@@ -7869,6 +7872,11 @@ pub(crate) struct SequenceListDrag {
 /// never saw themselves touch. It is held here rather than in the draft
 /// because a stroke is a gesture, not an edit: cancelling the editor leaves
 /// nothing of it behind.
+///
+/// It outlives the button: a stroke's last picks are answered frames after
+/// the release, and by then the block they took has been lifted off the
+/// image to uncover the flitch below. Each pick says it came from a stroke,
+/// so it is still held to this flitch; the next stroke replaces it.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct SequencePaint {
     pub(crate) flitch: Option<f64>,

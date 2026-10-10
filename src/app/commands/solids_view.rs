@@ -1295,7 +1295,8 @@ impl crate::app::App<'_> {
                 self.editor.selected_dig_block = hit.map(|(_, key)| key);
             }
             PickRouting::SequenceEditor { block, generation } => {
-                self.pick_into_sequence_draft(block, generation);
+                let stroke = matches!(result.request.owner, crate::ui::state::SolidPreviewPickOwner::SequenceEditor { stroke: true, .. });
+                self.pick_into_sequence_draft(block, generation, stroke);
             }
             PickRouting::BlastSequence => {
                 // Through the part's own blast, not the block key: a block is

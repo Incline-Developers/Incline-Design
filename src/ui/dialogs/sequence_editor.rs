@@ -46,6 +46,9 @@ const LIST_PADDING: f32 = 80.0;
 const ROW_PADDING: f32 = 5.0;
 /// Side of the square a row's remove cross is drawn inside.
 const REMOVE_CROSS: f32 = 18.0;
+/// Room between a row's remove cross and the list's right-hand edge, so the
+/// cross is never pressed up against the scroll bar beside it.
+const CROSS_INSET: f32 = 6.0;
 /// Half-height of the triangle marking the preview slider's place in the list.
 const PLAYHEAD_MARK: f32 = 5.0;
 
@@ -393,14 +396,12 @@ fn draw_view(ui: &mut egui::Ui, editor: &mut EditorState, draft: &mut SequenceDr
     // the app knows what flitch the stroke started on - so all that is
     // recorded here is that a stroke is in progress.
     //
-    // A stroke lasts exactly as long as the button is held, read from the
-    // pointer rather than from the drag that began it: a release the pane
-    // never saw - off the window, or with the application unfocused - ends
-    // the stroke as surely as one it did.
-    if !ui.input(|input| input.pointer.primary_down()) {
-        editor.sequence_paint = None;
-    } else if has_run && !confirming && response.drag_started_by(egui::PointerButton::Primary) {
-        editor.sequence_paint = Some(crate::ui::state::SequencePaint::default());
+    // A stroke picks exactly as long as the drag that began it is held, and
+    // egui ends that drag on any release, seen by the pane or not. Its flitch
+    // is kept past the release, for the picks still on their way: see
+    // `SequencePaint`.
+    if response.drag_started_by(egui::PointerButton::Primary) {
+        editor.sequence_paint = (has_run && !confirming).then(crate::ui::state::SequencePaint::default);
     }
     let painting = editor.sequence_paint.is_some() && response.dragged_by(egui::PointerButton::Primary);
     // A press that never moved is a click and never a stroke, so the two can
@@ -429,6 +430,7 @@ fn draw_view(ui: &mut egui::Ui, editor: &mut EditorState, draft: &mut SequenceDr
             owner: crate::ui::state::SolidPreviewPickOwner::SequenceEditor {
                 bar: draft.bar,
                 edition: draft.edition,
+                stroke: painting,
             },
             generation: editor.sequence_generation,
             image: editor.solid_preview_image_revision,
@@ -514,6 +516,9 @@ fn draw_order_list(ui: &mut egui::Ui, editor: &mut EditorState, draft: &Sequence
         // while the discard question is up: neither a selection nor a remove
         // or reorder may reach a draft the user is being asked whether to keep.
         ui.add_enabled_ui(!confirming, |ui| {
+            // The bar gets a lane of its own rather than floating over the
+            // rows' right-hand end, where each row's remove cross sits.
+            ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 let (list_edit, list_selection) = draw_order_rows(ui, editor, draft, confirming);
                 edit = list_edit;
@@ -561,7 +566,10 @@ fn draw_order_rows(ui: &mut egui::Ui, editor: &mut EditorState, draft: &Sequence
             _ if is_selected => visuals.strong_text_color(),
             _ => visuals.text_color(),
         };
-        let cross = egui::Rect::from_center_size(egui::pos2(rect.right() - REMOVE_CROSS * 0.6, rect.center().y), egui::Vec2::splat(REMOVE_CROSS));
+        let cross = egui::Rect::from_center_size(
+            egui::pos2(rect.right() - REMOVE_CROSS * 0.5 - CROSS_INSET, rect.center().y),
+            egui::Vec2::splat(REMOVE_CROSS),
+        );
         let text_width = (cross.left() - rect.left() - 12.0).max(1.0);
         let galley = ui.painter().layout(member_label(view), font.clone(), color, text_width);
         let painter = ui.painter().with_clip_rect(rect);
@@ -650,6 +658,7 @@ fn draw_order_rows(ui: &mut egui::Ui, editor: &mut EditorState, draft: &Sequence
         accent,
         egui::Stroke::NONE,
     ));
+    follow_playhead(ui, draft, &rows, playhead, row_height);
     if let Some(active) = drag.filter(|active| active.mode == SequenceListDragMode::Carry) {
         // Where the carried rows would land, drawn between the two rows it
         // would separate rather than over either of them - and in the text
@@ -682,6 +691,29 @@ fn draw_order_rows(ui: &mut egui::Ui, editor: &mut EditorState, draft: &Sequence
     }
     editor.sequence_list_drag = drag;
     (edit, selected)
+}
+
+/// Keep the playhead in view as it moves, and only then: when the slider is
+/// dragged, or a pick lands a block at the playhead and steps it on.
+///
+/// A playhead that was in view is followed, scrolled by as little as keeps it
+/// a row clear of either edge, so the block just added and the one next to dig
+/// both show. One the user had scrolled away from is brought back to the
+/// middle of the list. A playhead standing still never moves the list, so
+/// scrolling elsewhere to look stays where it was put.
+fn follow_playhead(ui: &mut egui::Ui, draft: &SequenceDraft, rows: &[egui::Rect], playhead: f32, row_height: f32) {
+    let Some(first) = rows.first() else { return };
+    let memory = egui::Id::new(("sequence_playhead", draft.edition));
+    let last: Option<(usize, bool)> = ui.data(|data| data.get_temp(memory));
+    let around = egui::Rect::from_x_y_ranges(first.x_range(), (playhead - row_height)..=(playhead + row_height));
+    let moved = last.is_some_and(|(preview, _)| preview != draft.preview);
+    if let Some((_, was_visible)) = last.filter(|_| moved) {
+        ui.scroll_to_rect(around, (!was_visible).then_some(egui::Align::Center));
+    }
+    // The scroll lands next frame; a playhead just sent into view counts as in
+    // it, or a quick second pick would read it as lost and recentre the list.
+    let visible = moved || ui.clip_rect().y_range().contains(playhead);
+    ui.data_mut(|data| data.insert_temp(memory, (draft.preview, visible)));
 }
 
 /// Whether moving `rows` to the gap `to` would leave the order exactly as it
