@@ -165,9 +165,10 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, edi
 
 /// The Optimization tools: the scenarios list, which also holds import and
 /// export.
-fn optimization_tools() -> Vec<LeftTool> {
+fn optimization_tools(ui: &egui::Ui) -> Vec<LeftTool> {
     vec![LeftTool {
-        icon: egui::Image::new(unthemed_icon!("optimization_scenarios.svg")),
+        // A blocky pit-shell slice under a rising arrow: the optimal pit.
+        icon: egui::Image::new(themed_icon!(ui, "optimization_scenarios.svg")),
         tooltip: tr!("opt-scenarios-button"),
         action: LeftToolAction::OptimizationScenarios,
         enabled: true,
@@ -235,7 +236,7 @@ pub(crate) fn draw_left_toolbar(
     let tools = match editor.active_workspace {
         workspace if workspace.has_production_tools() => left_tools(ui, editor, editing_enabled, project_active),
         Workspace::DrillAndBlast => blast_tools(ui, project, editor, editing_enabled, project_active),
-        Workspace::Optimization => optimization_tools(),
+        Workspace::Optimization => optimization_tools(ui),
         _ => Vec::new(),
     };
     // The run wraps into further columns rather than off the bottom of a short
