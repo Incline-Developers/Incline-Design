@@ -974,9 +974,14 @@ periods of a week, then four days, two and one, each within what is left of
 the budget, the tightest that finishes kept (`plan::relaxation_bound`):
 joining days only loosens the plan, so each is a bound, and the coarse ones
 are small enough for long horizons - Centralia's 52 days by the week in
-14 s, where by the day they take more than five minutes. A mixed-integer
-dual bound is taken only once its solve is past its first relaxation; before
-then it is the trivial one each column's own bounds allow. A schedule the
+14 s, where by the day they take more than five minutes. Over the whole
+horizon a reclaim's blend is free, but each pile's metal of every targeted
+grade is balanced: a pile gives up no more than it was given and keeps no
+more than its stock holds at the grade's ceiling. On a 21-day world whose
+crusher is fed from stockpiles that took the gap from 18.9% to 4.2%. A
+mixed-integer dual bound is taken only once its solve is past its first
+relaxation; before then it is the trivial one each column's own bounds
+allow. A schedule the
 bound proves within the run's gap target is published as proven and the
 whole-horizon solve is skipped; a horizon too large for that solve
 publishes the search's schedule.

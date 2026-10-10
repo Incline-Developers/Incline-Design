@@ -331,7 +331,7 @@ pub(super) struct Outlet {
 }
 
 /// Whose grade a flow carries.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Carried {
     /// A dug material's own.
     Material(MaterialId),
@@ -1031,6 +1031,7 @@ fn solve_periods(input: &BlendInput, seed: Option<&BlendSolution>, window: Optio
             builder.row(&terms, f64::NEG_INFINITY, hours, &format!("hours_{loader_index}_{p}"));
         }
     }
+    let mut inventory: BTreeMap<(StockpileId, usize), usize> = BTreeMap::new();
     // Each pile's inventory, day by day: what it held, plus what the plan
     // delivers, less what it reclaims, within its capacity. Reclaim may draw
     // the day's own deliveries, which the dispatch's rests and release
@@ -1046,6 +1047,7 @@ fn solve_periods(input: &BlendInput, seed: Option<&BlendSolution>, window: Optio
         let mut previous: Option<usize> = None;
         for p in 0..periods {
             let held = builder.cont(pile.capacity_t / UNIT, 0.0, &format!("inv_{}_{p}", pile.id.0));
+            inventory.insert((pile.id, p), held);
             let mut terms = vec![(held, 1.0)];
             if let Some(previous) = previous {
                 terms.push((previous, -1.0));
@@ -1094,6 +1096,75 @@ fn solve_periods(input: &BlendInput, seed: Option<&BlendSolution>, window: Optio
     for (p, terms) in &trucks {
         builder.row(terms, f64::NEG_INFINITY, prepared.fleet_hours(*p), &format!("fleet_{p}"));
     }
+    // What a reclaim carries, over the whole horizon. Any blend the pile
+    // could hold would do for a bound, so each reclaimed flow carries its own
+    // metal of each targeted grade, at most its tonnes at the grade's
+    // ceiling - but a pile gives up no more metal than it was given, and
+    // keeps no more than its stock at the ceiling holds. A schedule keeps
+    // both, so the plan still allows every one; it only loses the freedom
+    // to reclaim off-grade stock as though it were on grade.
+    let mut contained: HashMap<(usize, usize), usize> = HashMap::new();
+    if prepared.optimistic {
+        let targeted: BTreeSet<usize> = input.grade_targets.iter().map(|target| target.grade).collect();
+        for (&(_, p), list) in &flows {
+            for &(column, per_unit, of) in list {
+                if let Carried::Pile(_) = of {
+                    for &grade in &targeted {
+                        let ceiling = prepared.ceilings.get(grade).copied().unwrap_or(0.0);
+                        let q = builder.cont(f64::INFINITY, 0.0, &format!("cq_{column}_{grade}_{p}"));
+                        builder.row(&[(q, 1.0), (column, -per_unit * ceiling)], f64::NEG_INFINITY, 0.0, &format!("cqcap_{column}_{grade}"));
+                        contained.insert((column, grade), q);
+                    }
+                }
+            }
+        }
+        for pile in &input.piles {
+            let delivering: BTreeSet<DestinationId> = input
+                .destinations
+                .iter()
+                .filter(|entry| entry.kind == DestinationKind::Stockpile(pile.id))
+                .map(|entry| entry.id)
+                .collect();
+            let opening = pile_opening.get(&pile.id).map(|(_, contained)| contained.clone()).unwrap_or_default();
+            for &grade in &targeted {
+                let ceiling = prepared.ceilings.get(grade).copied().unwrap_or(0.0);
+                let mut previous: Option<usize> = None;
+                for p in 0..periods {
+                    // Metal held at the end of the period, in grade-kilotonnes.
+                    let held = builder.cont(f64::INFINITY, 0.0, &format!("metal_{}_{grade}_{p}", pile.id.0));
+                    let mut terms = vec![(held, 1.0)];
+                    if let Some(previous) = previous {
+                        terms.push((previous, -1.0));
+                    }
+                    for (&(id, at), list) in &flows {
+                        if at != p {
+                            continue;
+                        }
+                        for &(column, per_unit, of) in list {
+                            let into = delivering.contains(&id);
+                            let from = of == Carried::Pile(pile.id);
+                            if !into && !from {
+                                continue;
+                            }
+                            let metal: Vec<(usize, f64)> = match of {
+                                Carried::Material(material) => vec![(column, per_unit * input.grades.fraction(material, grade).unwrap_or(0.0))],
+                                Carried::Pile(_) => contained.get(&(column, grade)).map(|q| vec![(*q, 1.0)]).unwrap_or_default(),
+                            };
+                            for (variable, coefficient) in metal {
+                                terms.push((variable, if into { -coefficient } else { coefficient }));
+                            }
+                        }
+                    }
+                    let rhs = if previous.is_none() { opening.get(grade).copied().unwrap_or(0.0) / UNIT } else { 0.0 };
+                    builder.row(&terms, rhs, rhs, &format!("metal_{}_{grade}_{p}", pile.id.0));
+                    if let Some(stock) = inventory.get(&(pile.id, p)) {
+                        builder.row(&[(held, 1.0), (*stock, -ceiling)], f64::NEG_INFINITY, 0.0, &format!("metalcap_{}_{grade}_{p}", pile.id.0));
+                    }
+                    previous = Some(held);
+                }
+            }
+        }
+    }
     // Daily soft grade targets, priced as the dispatch and the replay price
     // them.
     for (index, target) in input.grade_targets.iter().enumerate() {
@@ -1120,10 +1191,14 @@ fn solve_periods(input: &BlendInput, seed: Option<&BlendSolution>, window: Optio
                 continue;
             }
             let slack = builder.cont(f64::INFINITY, -slope * UNIT, &format!("pen_{index}_{hinge}"));
-            let mut terms: Vec<(usize, f64)> = list
-                .iter()
-                .map(|(v, c, of)| (*v, c * direction * (carried(*of, target.grade, direction) - boundary)))
-                .collect();
+            let mut terms: Vec<(usize, f64)> = Vec::with_capacity(list.len() + 1);
+            for &(v, c, of) in list {
+                match contained.get(&(v, target.grade)) {
+                    // A reclaim's own metal, above.
+                    Some(&q) => terms.extend([(q, direction), (v, -c * direction * boundary)]),
+                    None => terms.push((v, c * direction * (carried(of, target.grade, direction) - boundary))),
+                }
+            }
             terms.push((slack, -1.0));
             builder.row(&terms, f64::NEG_INFINITY, 0.0, &format!("grade_{index}_{hinge}"));
         }
