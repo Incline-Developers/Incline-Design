@@ -2466,12 +2466,15 @@ impl crate::app::App<'_> {
     /// does not name one; `Some` whether or not it is currently resident.
     pub(crate) fn surface_content_version(&self, id: Option<crate::model::triangulation::TriangulationId>) -> Option<u64> {
         let id = id?;
-        let epoch = self.triangulations.iter().find(|item| item.id == id).map(|item| item.state.epoch());
+        // The geometry token, not the item epoch: the epoch also moves for a
+        // colour, visibility or other display edit, and none of those is a
+        // change to the ground a solid is built from.
+        let geometry = self.triangulations.iter().find(|item| item.id == id).map(|item| item.geometry);
         let mut version = DefaultHasher::new();
         id.hash(&mut version);
         // A named surface that is not in the project at all is distinct from
         // one that is present but unloaded.
-        epoch.hash(&mut version);
+        geometry.hash(&mut version);
         Some(version.finish())
     }
 }
