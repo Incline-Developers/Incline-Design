@@ -1331,8 +1331,8 @@ impl<'a> App<'a> {
                 KeyCode::KeyA => {
                     self.select_all_active_objects();
                 }
-                KeyCode::KeyC if self.editor.is_dig_strips_step() => self.copy_dig_strips(),
-                KeyCode::KeyV if self.editor.is_dig_strips_step() => self.paste_dig_strips(),
+                KeyCode::KeyC if self.editor.is_planning_cut_step() => self.copy_planning_cuts(),
+                KeyCode::KeyV if self.editor.is_planning_cut_step() => self.paste_planning_cuts(),
                 KeyCode::KeyD => {
                     self.duplicate_selection();
                 }

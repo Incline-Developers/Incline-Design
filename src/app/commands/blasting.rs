@@ -18,7 +18,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use glam::{DVec2, DVec3};
 
 use crate::{
-    model::{BlastShape, LayerId, SolidEdit, SolidId, arrangement},
+    model::{BlastShape, Command, LayerId, Object, SceneEntityId, SolidEdit, SolidId, arrangement},
     ui::state::{BenchSelection, BlastOutline, BlastShapeRef, BlastingRestore},
 };
 
@@ -204,6 +204,52 @@ impl crate::app::App<'_> {
     /// Deliberately lazy. Creating a layer is a document edit and an undo
     /// entry, and looking through a pit's benches to see how they came out is
     /// not an edit - so nothing is created until the user reaches for a tool.
+    /// Copy the selected lines of a planning cut step: blast lines on a
+    /// bench in Blasting, strips on a flitch in Dig Strips.
+    pub(crate) fn copy_planning_cuts(&mut self) {
+        if !self.editor.is_planning_cut_step() {
+            return;
+        }
+        let lines = self
+            .scene_document
+            .objects()
+            .iter()
+            .filter(|object| self.editor.selected_handles.contains(&SceneEntityId::Object(object.id())))
+            .filter(|object| matches!(object, Object::Polyline { .. }))
+            .cloned()
+            .collect();
+        self.editor.cut_clipboard = (self.editor.is_dig_strips_step(), lines);
+        self.redraw_requested = true;
+    }
+
+    /// Paste copied lines onto the bench or flitch selected in the step they
+    /// were copied from, at its top, and select them.
+    pub(crate) fn paste_planning_cuts(&mut self) {
+        let (strips, lines) = &self.editor.cut_clipboard;
+        if !self.editor.is_planning_cut_step() || *strips != self.editor.is_dig_strips_step() || lines.is_empty() {
+            return;
+        }
+        let Some((_, band)) = self.editor.planning_cut_target() else { return };
+        let Some(layer) = self.ensure_bench_cut_layer() else { return };
+        let mut commands = Vec::new();
+        let mut selected = std::collections::HashSet::new();
+        let Some(document) = self.workspace.active_document_mut() else { return };
+        for source in &self.editor.cut_clipboard.1 {
+            let id = document.allocate_object_id();
+            let mut object = source.with_id_and_layer(id, layer);
+            if let Object::Polyline { verts, .. } = &mut object {
+                for vertex in verts {
+                    vertex.pos.z = band.top;
+                }
+            }
+            selected.insert(SceneEntityId::Object(id));
+            commands.push(Command::AddObject(object));
+        }
+        self.execute_edit(Command::Batch(commands));
+        self.editor.selected_handles = selected;
+        self.invalidate_geometry();
+    }
+
     pub(crate) fn ensure_bench_cut_layer(&mut self) -> Option<LayerId> {
         let (solid, band) = self.editor.planning_cut_target()?;
         if let Some(layer) = self.bench_cut_layer(solid, band.base) {

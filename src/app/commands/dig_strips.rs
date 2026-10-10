@@ -4,7 +4,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use glam::{DVec2, DVec3};
 
 use crate::{
-    model::{Command, Object, SceneEntityId, arrangement},
+    model::{Object, arrangement},
     ui::state::{BenchSelection, BlastOutline},
 };
 
@@ -99,46 +99,6 @@ pub(crate) fn count_dig_block_faces(solids: &[crate::model::Solid], caches: &std
 }
 
 impl crate::app::App<'_> {
-    pub(crate) fn copy_dig_strips(&mut self) {
-        if !self.editor.is_dig_strips_step() {
-            return;
-        }
-        self.editor.dig_clipboard = self
-            .scene_document
-            .objects()
-            .iter()
-            .filter(|object| self.editor.selected_handles.contains(&SceneEntityId::Object(object.id())))
-            .filter(|object| matches!(object, Object::Polyline { .. }))
-            .cloned()
-            .collect();
-        self.redraw_requested = true;
-    }
-
-    pub(crate) fn paste_dig_strips(&mut self) {
-        if !self.editor.is_dig_strips_step() || self.editor.dig_clipboard.is_empty() {
-            return;
-        }
-        let Some((_, band)) = self.editor.planning_cut_target() else { return };
-        let Some(layer) = self.ensure_bench_cut_layer() else { return };
-        let mut commands = Vec::new();
-        let mut selected = std::collections::HashSet::new();
-        let Some(document) = self.workspace.active_document_mut() else { return };
-        for source in &self.editor.dig_clipboard {
-            let id = document.allocate_object_id();
-            let mut object = source.with_id_and_layer(id, layer);
-            if let Object::Polyline { verts, .. } = &mut object {
-                for vertex in verts {
-                    vertex.pos.z = band.top;
-                }
-            }
-            selected.insert(SceneEntityId::Object(id));
-            commands.push(Command::AddObject(object));
-        }
-        self.execute_edit(Command::Batch(commands));
-        self.editor.selected_handles = selected;
-        self.invalidate_geometry();
-    }
-
     pub(crate) fn sync_dig_blocks(&mut self) {
         // Only the Dig Strips step draws and lists these. View shows the blocks
         // as cut-apart geometry instead, and Blasting comes before the strips

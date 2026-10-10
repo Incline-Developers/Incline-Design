@@ -3,6 +3,9 @@
 //! The shapes themselves are derived geometry, drawn over the scene. What
 //! this panel is for is reading off and correcting their names, which is the
 //! only part of a blast the user owns.
+//!
+//! Blast lines are copied and pasted between benches with Ctrl+C and Ctrl+V,
+//! handled with the rest of the keyboard in `app/events.rs`.
 
 use crate::{
     i18n::tr,

@@ -2343,7 +2343,10 @@ pub(crate) struct EditorState {
     /// The selected dig block as the figures panel reports it: identity,
     /// parents and what it is worth. Mirrored out of the committed artifacts.
     pub(crate) selected_dig_block_info: Option<DigBlockInfo>,
-    pub(crate) dig_clipboard: Vec<crate::model::Object>,
+    /// Lines copied in a planning cut step, and whether they came from Dig
+    /// Strips (flitch strips) or Blasting (bench blast lines): each pastes
+    /// only into the step it was copied from.
+    pub(crate) cut_clipboard: (bool, Vec<crate::model::Object>),
     pub(crate) selected_blast: Option<BlastShapeRef>,
     pub(crate) scroll_to_blast: bool,
     pub(crate) blast_labels: Vec<(String, (f32, f32), bool)>,
@@ -4010,7 +4013,7 @@ impl EditorState {
             solid_preview_pivot: None,
             solid_preview_image_revision: 0,
             selected_dig_block_info: None,
-            dig_clipboard: Vec::new(),
+            cut_clipboard: (false, Vec::new()),
             selected_blast: None,
             scroll_to_blast: false,
             blast_labels: Vec::new(),
