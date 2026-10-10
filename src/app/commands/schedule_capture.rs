@@ -407,6 +407,8 @@ fn capture_drill_blast(
     problems: &mut Diagnostics,
     cancel: &CancelFlag,
 ) -> Option<crate::model::schedule::optimisation::blended::drill_blast::DrillBlastInput> {
+    use rayon::prelude::*;
+
     use crate::model::{
         drill_hole::{DrillPatternLayout, generate_pattern_collars},
         schedule::{
@@ -445,108 +447,120 @@ fn capture_drill_blast(
         })
     };
     let block_bounds: Vec<_> = snapshot.blocks.iter().map(|block| bounds(&block.ground)).collect();
-    let mut blasts = Vec::with_capacity(snapshot.blasts.len());
-    let mut unclearable: Vec<String> = Vec::new();
-    for record in &snapshot.blasts {
-        if cancel.is_cancelled() {
-            return None;
-        }
-        let (blast_lo, blast_hi) = bounds(&record.face);
-        let reach = config.buffer_m + 1e-9;
-        let near = |(lo, hi): (glam::DVec2, glam::DVec2)| {
-            let gap = (blast_lo - hi).max(lo - blast_hi).max(glam::DVec2::ZERO);
-            gap.x <= reach && gap.y <= reach
-        };
-        let reference = record.reference();
-        let pattern = config
-            .patterns
-            .iter()
-            .find(|entry| record.holds(&entry.blast))
-            .map_or(config.pattern, |entry| entry.pattern);
-        let depth = (record.bench.top - record.bench.base) + pattern.subdrill_m;
-        let outer: Vec<glam::DVec3> = record
-            .face
-            .first()
-            .map_or_else(Vec::new, |ring| ring.iter().map(|point| point.extend(record.bench.top)).collect());
-        let layout = if pattern.staggered { DrillPatternLayout::Staggered } else { DrillPatternLayout::Square };
-        // Collars are laid out for Animate to draw. A blast too big or too
-        // odd in shape for that is counted by its area instead: a schedule
-        // needs how much drilling there is, not where each hole goes.
-        let collars: Vec<glam::DVec2> = generate_pattern_collars(&outer, pattern.burden_m, pattern.spacing_m, 0.0, glam::DVec2::ZERO, layout, SCHEDULE_PATTERN_HOLES)
-            .map(|collars| {
-                collars
-                    .into_iter()
-                    .map(|collar| collar.truncate())
-                    .filter(|collar| crate::model::arrangement::point_in_face(&record.face, *collar))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let holes = if collars.is_empty() {
-            (record.area / (pattern.burden_m * pattern.spacing_m)).ceil().max(f64::from(record.area > 0.0))
-        } else {
-            collars.len() as f64
-        };
-        let quantity = [record.area, holes * depth, holes * config.charge_per_hole_t(depth)];
-        // Configured statuses name a blast by a point inside it.
-        let stage = config
-            .statuses
-            .iter()
-            .find(|entry| record.holds(&entry.blast))
-            .map_or(crate::model::schedule::BlastStage::NotStarted, |entry| entry.stage);
-        let mut releases = Vec::new();
-        let mut above = Vec::new();
-        let mut blocked = false;
-        for (position, block) in snapshot.blocks.iter().enumerate() {
-            let in_blast = block.solid == record.solid
-                && block.blast.is_some_and(|blast| {
-                    (blast.bench_base() - record.bench.base).abs() < 1e-6 && crate::model::arrangement::point_in_face(&record.face, glam::DVec2::from(blast.anchor()))
-                });
-            if in_blast {
-                if let Some(ground) = block_ground.get(&position) {
-                    releases.push(*ground);
+    // Each blast is measured on its own, so they are measured side by side
+    // and gathered in order.
+    let measured: Vec<Option<(BlastJob, CapturedBlast, bool)>> = snapshot
+        .blasts
+        .par_iter()
+        .map(|record| {
+            if cancel.is_cancelled() {
+                return None;
+            }
+            let (blast_lo, blast_hi) = bounds(&record.face);
+            let reach = config.buffer_m + 1e-9;
+            let near = |(lo, hi): (glam::DVec2, glam::DVec2)| {
+                let gap = (blast_lo - hi).max(lo - blast_hi).max(glam::DVec2::ZERO);
+                gap.x <= reach && gap.y <= reach
+            };
+            let reference = record.reference();
+            let pattern = config
+                .patterns
+                .iter()
+                .find(|entry| record.holds(&entry.blast))
+                .map_or(config.pattern, |entry| entry.pattern);
+            let depth = (record.bench.top - record.bench.base) + pattern.subdrill_m;
+            let outer: Vec<glam::DVec3> = record
+                .face
+                .first()
+                .map_or_else(Vec::new, |ring| ring.iter().map(|point| point.extend(record.bench.top)).collect());
+            let layout = if pattern.staggered { DrillPatternLayout::Staggered } else { DrillPatternLayout::Square };
+            // Collars are laid out for Animate to draw. A blast too big or too
+            // odd in shape for that is counted by its area instead: a schedule
+            // needs how much drilling there is, not where each hole goes.
+            let collars: Vec<glam::DVec2> = generate_pattern_collars(&outer, pattern.burden_m, pattern.spacing_m, 0.0, glam::DVec2::ZERO, layout, SCHEDULE_PATTERN_HOLES)
+                .map(|collars| {
+                    collars
+                        .into_iter()
+                        .map(|collar| collar.truncate())
+                        .filter(|collar| crate::model::arrangement::point_in_face(&record.face, *collar))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let holes = if collars.is_empty() {
+                (record.area / (pattern.burden_m * pattern.spacing_m)).ceil().max(f64::from(record.area > 0.0))
+            } else {
+                collars.len() as f64
+            };
+            let quantity = [record.area, holes * depth, holes * config.charge_per_hole_t(depth)];
+            // Configured statuses name a blast by a point inside it.
+            let stage = config
+                .statuses
+                .iter()
+                .find(|entry| record.holds(&entry.blast))
+                .map_or(crate::model::schedule::BlastStage::NotStarted, |entry| entry.stage);
+            let mut releases = Vec::new();
+            let mut above = Vec::new();
+            let mut blocked = false;
+            for (position, block) in snapshot.blocks.iter().enumerate() {
+                let in_blast = block.solid == record.solid
+                    && block.blast.is_some_and(|blast| {
+                        (blast.bench_base() - record.bench.base).abs() < 1e-6 && crate::model::arrangement::point_in_face(&record.face, glam::DVec2::from(blast.anchor()))
+                    });
+                if in_blast {
+                    if let Some(ground) = block_ground.get(&position) {
+                        releases.push(*ground);
+                    }
+                    continue;
                 }
-                continue;
+                // Ground in a higher bench, within the buffer in plan. Ground
+                // excluded from mining is treated as never having been there, so
+                // it holds nothing up; `snapshot.excluded` is passed over whole.
+                if block.flitch.base < record.bench.top - 1e-6 {
+                    continue;
+                }
+                if !near(block_bounds[position]) || !plan_within(&block.ground, &record.face, reach) || excluded(block, &source.exclusions) {
+                    continue;
+                }
+                // With no buffer, only ground over the blast itself holds it:
+                // ground that merely shares an edge with it does not.
+                if config.buffer_m <= 0.0 && crate::model::arrangement::overlap_area(&block.ground, &record.face) <= SHARED_GROUND_M2 {
+                    continue;
+                }
+                match (block_ground.get(&position), empty_cleared_by.get(&position)) {
+                    (Some(ground), _) | (None, Some(Some(ground))) => above.push(*ground),
+                    (None, Some(None)) => {}
+                    // Standing ground no bar digs never goes.
+                    (None, None) => blocked = true,
+                }
             }
-            // Ground in a higher bench, within the buffer in plan. Ground
-            // excluded from mining is treated as never having been there, so
-            // it holds nothing up; `snapshot.excluded` is passed over whole.
-            if block.flitch.base < record.bench.top - 1e-6 {
-                continue;
-            }
-            if !near(block_bounds[position]) || plan_gap(&block.ground, &record.face) > reach || excluded(block, &source.exclusions) {
-                continue;
-            }
-            // With no buffer, only ground over the blast itself holds it:
-            // ground that merely shares an edge with it does not.
-            if config.buffer_m <= 0.0 && crate::model::arrangement::overlap_area(&block.ground, &record.face) <= SHARED_GROUND_M2 {
-                continue;
-            }
-            match (block_ground.get(&position), empty_cleared_by.get(&position)) {
-                (Some(ground), _) | (None, Some(Some(ground))) => above.push(*ground),
-                (None, Some(None)) => {}
-                // Standing ground no bar digs never goes.
-                (None, None) => blocked = true,
-            }
-        }
-        if blocked && stage == crate::model::schedule::BlastStage::NotStarted {
+            let job = BlastJob {
+                quantity,
+                stage,
+                releases,
+                above,
+                never_clear: blocked,
+            };
+            let captured = CapturedBlast {
+                reference,
+                solid_name: record.solid_name.clone(),
+                name: record.name.clone(),
+                bench: record.bench,
+                face: Arc::clone(&record.face),
+                collars,
+                quantity,
+            };
+            Some((job, captured, blocked && stage == crate::model::schedule::BlastStage::NotStarted))
+        })
+        .collect();
+    let mut blasts = Vec::with_capacity(measured.len());
+    let mut unclearable: Vec<String> = Vec::new();
+    for (record, item) in snapshot.blasts.iter().zip(measured) {
+        let (job, captured, stands) = item?;
+        if stands {
             unclearable.push(crate::ui::elements::solids_view::blast_path(&record.solid_name, record.bench.base, &record.name));
         }
-        blasts.push(BlastJob {
-            quantity,
-            stage,
-            releases,
-            above,
-            never_clear: blocked,
-        });
-        identities.blasts.push(CapturedBlast {
-            reference,
-            solid_name: record.solid_name.clone(),
-            name: record.name.clone(),
-            bench: record.bench,
-            face: Arc::clone(&record.face),
-            collars,
-            quantity,
-        });
+        blasts.push(job);
+        identities.blasts.push(captured);
     }
     if !unclearable.is_empty() {
         notes.push(tr!("drill-blast-unclearable", blasts = unclearable.join(", ")));
@@ -647,17 +661,41 @@ fn capture_drill_blast(
     })
 }
 
-/// The gap between two pieces of ground in plan: zero where they touch or
-/// overlap, otherwise the shortest distance between their outlines.
-fn plan_gap(a: &crate::model::arrangement::Face, b: &crate::model::arrangement::Face) -> f64 {
+/// Whether two pieces of ground in plan lie within `reach` of each other:
+/// touching or overlapping, or with outlines no further apart than that.
+///
+/// It stops at the first pair close enough, and passes over every edge and
+/// corner of one that lies further than `reach` from the other's box: a
+/// blast's outline can run to thousands of points, of which a block a few
+/// metres across is near a handful.
+fn plan_within(a: &crate::model::arrangement::Face, b: &crate::model::arrangement::Face, reach: f64) -> bool {
     use crate::model::arrangement::point_in_face;
     let (Some(outer_a), Some(outer_b)) = (a.first(), b.first()) else {
-        return f64::INFINITY;
+        return false;
     };
-    if outer_a.iter().any(|point| point_in_face(b, *point)) || outer_b.iter().any(|point| point_in_face(a, *point)) {
-        return 0.0;
+    let bounds = |face: &crate::model::arrangement::Face| {
+        face.iter()
+            .flatten()
+            .fold((glam::DVec2::INFINITY, glam::DVec2::NEG_INFINITY), |(lo, hi), point| (lo.min(*point), hi.max(*point)))
+    };
+    let ((a_lo, a_hi), (b_lo, b_hi)) = (bounds(a), bounds(b));
+    let in_box = |point: glam::DVec2, lo: glam::DVec2, hi: glam::DVec2| point.cmpge(lo).all() && point.cmple(hi).all();
+    if outer_a.iter().any(|point| in_box(*point, b_lo, b_hi) && point_in_face(b, *point)) || outer_b.iter().any(|point| in_box(*point, a_lo, a_hi) && point_in_face(a, *point)) {
+        return true;
     }
-    let edges = |ring: &Vec<glam::DVec2>| (0..ring.len()).map(|i| (ring[i], ring[(i + 1) % ring.len()])).collect::<Vec<_>>();
+    // An edge whose box is further than `reach` from the other ground's box
+    // is further than that from all of it.
+    let near_box = |(s, e): (glam::DVec2, glam::DVec2), lo: glam::DVec2, hi: glam::DVec2| {
+        let gap = (lo - s.max(e)).max(s.min(e) - hi).max(glam::DVec2::ZERO);
+        gap.x <= reach && gap.y <= reach
+    };
+    let edges = |face: &crate::model::arrangement::Face, lo: glam::DVec2, hi: glam::DVec2| {
+        face.iter()
+            .flat_map(|ring| (0..ring.len()).map(move |i| (ring[i], ring[(i + 1) % ring.len()])))
+            .filter(|edge| near_box(*edge, lo, hi))
+            .collect::<Vec<_>>()
+    };
+    let (edges_a, edges_b) = (edges(a, b_lo, b_hi), edges(b, a_lo, a_hi));
     let point_segment = |p: glam::DVec2, (s, e): (glam::DVec2, glam::DVec2)| {
         let d = e - s;
         let t = if d.length_squared() > 0.0 {
@@ -671,20 +709,15 @@ fn plan_gap(a: &crate::model::arrangement::Face, b: &crate::model::arrangement::
         let side = |p: glam::DVec2, q: glam::DVec2, r: glam::DVec2| (q - p).perp_dot(r - p);
         side(a0, a1, b0) * side(a0, a1, b1) < 0.0 && side(b0, b1, a0) * side(b0, b1, a1) < 0.0
     };
-    let mut gap = f64::INFINITY;
-    for edge_a in a.iter().flat_map(edges) {
-        for edge_b in b.iter().flat_map(edges) {
-            if crosses(edge_a, edge_b) {
-                return 0.0;
-            }
-            gap = gap
-                .min(point_segment(edge_a.0, edge_b))
-                .min(point_segment(edge_a.1, edge_b))
-                .min(point_segment(edge_b.0, edge_a))
-                .min(point_segment(edge_b.1, edge_a));
-        }
-    }
-    gap
+    edges_a.iter().any(|&edge_a| {
+        edges_b.iter().any(|&edge_b| {
+            crosses(edge_a, edge_b)
+                || point_segment(edge_a.0, edge_b) <= reach
+                || point_segment(edge_a.1, edge_b) <= reach
+                || point_segment(edge_b.0, edge_a) <= reach
+                || point_segment(edge_b.1, edge_a) <= reach
+        })
+    })
 }
 
 /// Plan area, m², that ground in a higher bench must share with a blast to

@@ -17,6 +17,10 @@
 
 use std::collections::{HashMap, HashSet};
 
+/// The graph's own maps hash small integer keys many times a cut: a fast
+/// fixed hasher, not the default one built to resist collision attacks.
+type FastState = foldhash::fast::FixedState;
+
 use glam::DVec2;
 
 use crate::model::kernel::{SegSeg, XY_TOL, segment_segment};
@@ -429,11 +433,11 @@ struct Graph {
     nodes: Vec<DVec2>,
     /// Nodes by [`XY_TOL`]-sized cell, so welding a point is a look at nine
     /// cells rather than a scan of every node placed so far.
-    buckets: HashMap<(i64, i64), Vec<usize>>,
+    buckets: HashMap<(i64, i64), Vec<usize>, FastState>,
     /// Neighbours of each node, sorted counter-clockwise by the direction the
     /// edge leaves in. The sort is what makes the face walk possible.
     adjacency: Vec<Vec<usize>>,
-    edges: HashSet<(usize, usize)>,
+    edges: HashSet<(usize, usize), FastState>,
 }
 
 impl Graph {
@@ -526,7 +530,7 @@ impl Graph {
             });
         }
 
-        let mut visited: HashSet<(usize, usize)> = HashSet::new();
+        let mut visited: HashSet<(usize, usize), FastState> = HashSet::default();
         let mut cycles = Vec::new();
         for from in 0..self.nodes.len() {
             for index in 0..self.adjacency[from].len() {
