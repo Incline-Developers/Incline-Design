@@ -2605,6 +2605,21 @@ opt-run-cancelled = Scenario { $name } was cancelled
 opt-run-failed = Scenario { $name } failed: { $error }
 opt-run-finished = Scenario { $name } finished: { $count } shell(s) in { $seconds } s
 opt-run-shell-summary = Shell { $shell } (factor { $factor }): { $blocks } blocks, { $tonnes } t, ore { $ore } t, waste { $waste } t, cash flow at base price { $value }
+opt-missing-title = This scenario names things the project no longer has:
+opt-missing-block-model = Block model “{ $name }” is not in the project
+opt-missing-field = Field “{ $field }” ({ $what }) is not in the block model, or is of the wrong kind
+opt-missing-topography = Topography “{ $name }” is not in the project
+opt-missing-air-value = Air value “{ $value }” is not a value of { $field }
+opt-missing-choice = “{ $name }” is no longer there to choose; pick another
+opt-load-title = Load for optimization
+opt-load-question = { $count ->
+    [one] { $names } is unloaded. Load it to go on?
+   *[other] { $names } are unloaded. Load them to go on?
+}
+opt-load-note = It stays loaded, hidden, so later runs need no loading. Cancel leaves it unloaded and does not go on.
+opt-load = Load
+opt-load-declined = Not loaded; the optimization did not go on
+opt-run-unloaded = { $names } was unloaded while the run waited; run it again to load it
 opt-results-show = Results
 opt-results-not-run = Results (run the scenario first)
 opt-results-title = Results: { $name }
@@ -2692,4 +2707,3 @@ opt-factor-list-empty = Type at least one revenue factor
 opt-factor-list-invalid = "{ $piece }" is not a revenue factor above 0
 opt-directional-shells-hint = Shell k uses the k-th revenue factor and lets ore count only up to k/N of the way across the final pit as the mining front advances from the starting point: a straight front towards the chosen direction, or rings out from the point for Radial. Shells are named like "RAF 0.85 DIR 50%".
 opt-direction-radial = Radial (out from the point)
-opt-pick-show-failed = The block model could not be shown for picking; show it in the explorer and pick again

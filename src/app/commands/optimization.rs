@@ -30,7 +30,7 @@ use crate::{
         project::ProjectItemState,
         triangulation::{GeneratedTriangulation, TriangulationId},
     },
-    ui::state::{MAX_CONCURRENT_RUNS, ResultsSource, ResultsView, RunState, ScenarioDraft, ShellStartPick, TriSurfaceType},
+    ui::state::{LoadPrompt, LoadThen, MAX_CONCURRENT_RUNS, ResultsSource, ResultsView, RunState, ScenarioDraft, ShellStartPick, TriSurfaceType},
     userspace_error, userspace_log, userspace_warn,
 };
 
@@ -281,32 +281,14 @@ impl<'a> App<'a> {
             userspace_warn!("{}", tr!("opt-pick-needs-block-model"));
             return;
         };
-        // A hidden model is shown for the pick (read back in first if it was
-        // moved out of memory) and hidden again afterwards.
+        // An unloaded model is loaded (hidden) first, if the user agrees.
         if !loaded {
-            self.set_item_loaded(ItemRef::BlockModel(block_model), true);
+            self.ask_to_load_for_optimization(vec![(ItemRef::BlockModel(block_model), name)], LoadThen::Pick);
+            return;
         }
-        let keep = SceneEntityId::BlockModel(block_model);
-        let previously_hidden = self.editor.hidden_handles.clone();
-        let everything = self
-            .scene_document
-            .objects()
-            .iter()
-            .map(|object| SceneEntityId::Object(object.id()))
-            .chain(self.triangulations.iter().map(|item| SceneEntityId::Triangulation(item.id)))
-            .chain(self.point_clouds.iter().map(|item| SceneEntityId::PointCloud(item.id)))
-            .chain(self.drill_holes.iter().map(|item| SceneEntityId::DrillHole(item.id)))
-            .chain(self.block_models.iter().map(|item| SceneEntityId::BlockModel(item.id)))
-            .filter(|entity| *entity != keep);
-        self.editor.hidden_handles.extend(everything);
-        self.editor.hidden_handles.remove(&keep);
-        self.editor.optimization.start_pick = Some(ShellStartPick {
-            block_model,
-            previously_hidden,
-            marker_z,
-            hide_after: !loaded,
-            loading: !loaded,
-        });
+        // Shown alone, even when hidden; its eye is left as it was.
+        self.editor.isolated_entity = Some(SceneEntityId::BlockModel(block_model));
+        self.editor.optimization.start_pick = Some(ShellStartPick { block_model, marker_z });
         self.invalidate_geometry();
         self.invalidate_overlay();
         self.fit_view_for_shell_start_pick();
@@ -333,14 +315,12 @@ impl<'a> App<'a> {
     }
 
     fn end_shell_start_pick(&mut self) -> bool {
-        let Some(pick) = self.editor.optimization.start_pick.take() else {
+        if self.editor.optimization.start_pick.take().is_none() {
             return false;
-        };
-        self.editor.hidden_handles = pick.previously_hidden;
-        self.editor.viewport_pick_hover_label = None;
-        if pick.hide_after && self.block_models.iter().any(|model| model.id == pick.block_model) {
-            self.set_item_loaded(ItemRef::BlockModel(pick.block_model), false);
         }
+        // The saved visibility comes back: a hidden model is hidden again.
+        self.editor.isolated_entity = None;
+        self.editor.viewport_pick_hover_label = None;
         self.invalidate_geometry();
         self.invalidate_overlay();
         true
@@ -403,6 +383,13 @@ impl<'a> App<'a> {
         if matches!(state.runs.get(&id), Some(RunState::Running { .. } | RunState::Queued)) {
             return;
         }
+        // Unloaded inputs are loaded first, if the user agrees.
+        let unloaded = self.unloaded_optimization_inputs(&scenario);
+        if !unloaded.is_empty() {
+            self.ask_to_load_for_optimization(unloaded, LoadThen::Run(vec![id]));
+            return;
+        }
+        let state = &mut self.editor.optimization;
         if state.running_count() >= MAX_CONCURRENT_RUNS {
             state.runs.insert(id, RunState::Queued);
             userspace_log!("{}", tr!("opt-run-queued", name = scenario.name.clone()));
@@ -445,30 +432,6 @@ impl<'a> App<'a> {
         }
     }
 
-    /// Follow a hidden block model being shown for a pick: fit the view once it
-    /// is there, or warn and end the pick if it could not be shown.
-    pub(crate) fn watch_shell_start_pick_load(&mut self) {
-        let Some(pick) = self.editor.optimization.start_pick.as_ref().filter(|pick| pick.loading) else {
-            return;
-        };
-        let item = ItemRef::BlockModel(pick.block_model);
-        let loaded = self.block_models.iter().find(|model| model.id == pick.block_model).map(|model| model.state.loaded);
-        match loaded {
-            Some(true) => {
-                if let Some(pick) = self.editor.optimization.start_pick.as_mut() {
-                    pick.loading = false;
-                }
-                self.invalidate_geometry();
-                self.fit_view_for_shell_start_pick();
-            }
-            Some(false) if self.item_load_pending(item) || self.restore_pending() => {}
-            _ => {
-                userspace_warn!("{}", tr!("opt-pick-show-failed"));
-                self.end_shell_start_pick();
-            }
-        }
-    }
-
     /// Drop the state of runs whose job is gone without applying (its block
     /// model closed, say), so they do not show as running for ever.
     pub(crate) fn reconcile_optimization_runs(&mut self) {
@@ -505,35 +468,107 @@ impl<'a> App<'a> {
         self.start_queued_optimization_runs();
     }
 
-    /// Check the scenario, read its block model and topography back in if they
-    /// were moved out of memory, and start the job.
+    /// Check the scenario and start the job. Its inputs are loaded by now (a
+    /// run asks first, [`Self::run_optimization_scenario`]); one unloaded while
+    /// the run waited in the queue fails it rather than being read back silently.
     fn start_optimization_run(&mut self, scenario: OptimizationScenario) {
-        let id = scenario.id;
-        // Hidden (unloaded) models run too: their values are read back below.
-        let Some(model_index) = self.block_models.iter().position(|model| model.name == scenario.block_model) else {
-            let issue = tr!("opt-run-needs-block-model", name = scenario.name.clone(), model = scenario.block_model.clone());
-            self.fail_optimization_run(id, &scenario.name, &[issue]);
+        let unloaded = self.unloaded_optimization_inputs(&scenario);
+        if !unloaded.is_empty() {
+            let names = unloaded.into_iter().map(|(_, name)| name).collect::<Vec<_>>().join(", ");
+            self.fail_optimization_run(scenario.id, &scenario.name, &[tr!("opt-run-unloaded", names = names)]);
+            return;
+        }
+        self.launch_optimization_run(scenario);
+    }
+
+    /// The block model and air topography `scenario` needs that are unloaded.
+    fn unloaded_optimization_inputs(&self, scenario: &OptimizationScenario) -> Vec<(ItemRef, String)> {
+        let model = self
+            .block_models
+            .iter()
+            .find(|model| model.name == scenario.block_model)
+            .filter(|model| !model.state.loaded)
+            .map(|model| (ItemRef::BlockModel(model.id), model.name.clone()));
+        let topography = (scenario.exclude_air && scenario.air_mode == AirMode::Topography)
+            .then(|| self.triangulations.iter().find(|item| item.name == scenario.air_topography))
+            .flatten()
+            .filter(|item| !item.state.loaded)
+            .map(|item| (ItemRef::Triangulation(item.id), item.name.clone()));
+        model.into_iter().chain(topography).collect()
+    }
+
+    /// Ask whether to load `items` before `then`. Asked while a question is
+    /// already up, the items and runs join it.
+    pub(crate) fn ask_to_load_for_optimization(&mut self, items: Vec<(ItemRef, String)>, then: LoadThen) {
+        let prompt = self.editor.optimization.load_prompt.get_or_insert_with(|| LoadPrompt {
+            items: Vec::new(),
+            then: then.clone(),
+        });
+        for item in items {
+            if !prompt.items.iter().any(|(known, _)| *known == item.0) {
+                prompt.items.push(item);
+            }
+        }
+        match (&mut prompt.then, then) {
+            (LoadThen::Run(ids), LoadThen::Run(more)) => {
+                for id in more {
+                    if !ids.contains(&id) {
+                        ids.push(id);
+                    }
+                }
+            }
+            (current, then) => *current = then,
+        }
+    }
+
+    /// The answer to the load question. Loading reads the items back in, marks
+    /// them loaded and hidden - they stay loaded for later runs - and goes on
+    /// with the runs or the pick; not loading drops them.
+    pub(crate) fn confirm_optimization_load(&mut self, load: bool) {
+        let Some(LoadPrompt { items, then }) = self.editor.optimization.load_prompt.take() else {
             return;
         };
-        let topography = (scenario.exclude_air && scenario.air_mode == AirMode::Topography)
-            .then(|| self.triangulations.iter().position(|item| item.name == scenario.air_topography))
-            .flatten();
-
-        let mut needed = vec![ItemRef::BlockModel(self.block_models[model_index].id)];
-        needed.extend(topography.map(|index| ItemRef::Triangulation(self.triangulations[index].id)));
-        let deferred = {
+        if !load {
+            userspace_log!("{}", tr!("opt-load-declined"));
+            return;
+        }
+        let items: Vec<ItemRef> = items.into_iter().map(|(item, _)| item).collect();
+        // Runs show as running while their inputs load.
+        if let LoadThen::Run(ids) = &then {
             let state = &mut self.editor.optimization;
-            state.runs.insert(id, RunState::Running { progress: Progress::new() });
-            state.awaiting_restore.insert(id);
-            let scenario = scenario.clone();
-            self.restore_items_for(needed, move |app| {
-                if matches!(app.editor.optimization.runs.get(&id), Some(RunState::Running { .. })) {
-                    app.launch_optimization_run(scenario);
-                }
-            })
-        };
+            for id in ids {
+                state.runs.insert(*id, RunState::Running { progress: Progress::new() });
+                state.awaiting_restore.insert(*id);
+            }
+        }
+        let deferred = self.restore_items_for(items.clone(), {
+            let (items, then) = (items.clone(), then.clone());
+            move |app| app.finish_optimization_load(&items, then)
+        });
         if !deferred {
-            self.launch_optimization_run(scenario);
+            self.finish_optimization_load(&items, then);
+        }
+    }
+
+    fn finish_optimization_load(&mut self, items: &[ItemRef], then: LoadThen) {
+        for item in items {
+            if let Some(style) = self.item_style(*item) {
+                self.set_item_style(*item, style.with_loaded(true).with_hidden(true));
+            }
+        }
+        self.invalidate_geometry();
+        match then {
+            LoadThen::Run(ids) => {
+                for id in ids {
+                    // A run cancelled while its inputs loaded is not started.
+                    let state = &mut self.editor.optimization;
+                    if state.awaiting_restore.remove(&id) {
+                        state.runs.remove(&id);
+                        self.run_optimization_scenario(id);
+                    }
+                }
+            }
+            LoadThen::Pick => self.begin_shell_start_pick(),
         }
     }
 

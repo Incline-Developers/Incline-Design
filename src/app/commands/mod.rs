@@ -734,6 +734,10 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::SaveOptimizationReportColumns => self.save_optimization_report_columns(),
+            UiCommand::ConfirmOptimizationLoad(load) => {
+                self.confirm_optimization_load(load);
+                Ok(())
+            }
             UiCommand::OpenOptimizationReport => {
                 self.open_optimization_report();
                 Ok(())

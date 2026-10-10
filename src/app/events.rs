@@ -205,7 +205,6 @@ impl<'a> App<'a> {
                     self.poll_saves();
                     self.poll_jobs();
                     self.reconcile_optimization_runs();
-                    self.watch_shell_start_pick_load();
                     self.refresh_status_message();
                     if let Some(usage) = self.memory_sampler.poll() {
                         self.editor.memory_usage = Some(usage);

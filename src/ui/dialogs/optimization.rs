@@ -63,16 +63,54 @@ pub(crate) fn draw_optimization_dialogs(ui: &mut egui::Ui, editor: &mut EditorSt
         }
         draw_scenario_editor(ui, &mut editor.optimization, block_models, project, commands);
     } else if editor.optimization.list_open {
-        draw_scenarios_list(ui, &mut editor.optimization, commands);
+        draw_scenarios_list(ui, &mut editor.optimization, block_models, project, commands);
     }
     // The Results window stands apart from the list and the editor.
     super::optimization_results::draw_results_window(ui, &mut editor.optimization, commands);
+    draw_load_prompt(ui, &mut editor.optimization, commands);
     value_field::draw_constant_picker(ui.ctx());
+}
+
+/// "These inputs are unloaded: load them?" before a run or a pick.
+fn draw_load_prompt(ui: &mut egui::Ui, state: &mut OptimizationState, commands: &mut Vec<UiCommand>) {
+    let Some(prompt) = state.load_prompt.as_ref() else {
+        return;
+    };
+    let names = prompt.items.iter().map(|(_, name)| format!("\u{201C}{name}\u{201D}")).collect::<Vec<_>>().join(", ");
+    let mut open = true;
+    let mut answer = None;
+    DragableMenu::new("optimization_load_prompt", tr!("opt-load-title"))
+        .open(&mut open)
+        .min_width(360.0)
+        .max_width(360.0)
+        .show(ui.ctx(), |ui| {
+            ui.label(tr!("opt-load-question", names = names.clone(), count = prompt.items.len()));
+            menu_note(ui, tr!("opt-load-note"));
+            menu::menu_actions(ui, |ui| {
+                if ui.add(MenuButton::new(tr!("opt-load")).primary()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+                    answer = Some(true);
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                    answer = Some(false);
+                }
+            });
+        });
+    if let Some(load) = answer.or((!open).then_some(false)) {
+        commands.push(UiCommand::ConfirmOptimizationLoad(load));
+    }
 }
 
 // ── Scenarios list ──
 
-fn draw_scenarios_list(ui: &mut egui::Ui, state: &mut OptimizationState, commands: &mut Vec<UiCommand>) {
+fn draw_scenarios_list(ui: &mut egui::Ui, state: &mut OptimizationState, block_models: &[OpenBlockModel], project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    // What each scenario names that the project no longer has, from names only.
+    let models: std::collections::HashMap<String, BlockModelFields> = block_models.iter().map(|model| (model.name.clone(), BlockModelFields::of_open(model))).collect();
+    let surfaces: Vec<String> = project
+        .triangulations
+        .iter()
+        .map(|entry| entry.name.clone())
+        .chain(project.point_clouds.iter().map(|entry| entry.name.clone()))
+        .collect();
     let mut open = true;
     let mut close = false;
     let mut run = None;
@@ -114,6 +152,13 @@ fn draw_scenarios_list(ui: &mut egui::Ui, state: &mut OptimizationState, command
                                 show_results = Some(scenario.id);
                             }
                             status_icon(ui, status);
+                            let missing = scenario.missing_references(&models, &surfaces);
+                            if !missing.is_empty() {
+                                let image = egui::Image::new(unthemed_icon!("status_broken.svg")).fit_to_exact_size(egui::Vec2::splat(ICON_SIDE - 8.0));
+                                let lines: Vec<String> = missing.iter().map(|issue| format!("• {issue}")).collect();
+                                ui.add_sized([ICON_SIDE, ICON_SIDE], image)
+                                    .on_hover_text(format!("{}\n{}", tr!("opt-missing-title"), lines.join("\n")));
+                            }
                             let delete = ToolbarButton::new(egui::Image::new(unthemed_icon!("delete_scenario.svg")), tr!("opt-delete"))
                                 .id_salt(("opt_delete", scenario.id))
                                 .button_side(ICON_SIDE);
@@ -708,6 +753,12 @@ fn inline_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, v
     if changed {
         response.mark_changed();
     }
+    // A name the choices no longer hold (a renamed or deleted field, layer or
+    // model) stays shown, outlined red, rather than being cleared.
+    if !value.is_empty() && !names.iter().any(|name| name == value) {
+        mark_invalid(ui, &response);
+        response = response.on_hover_text(tr!("opt-missing-choice", name = value.clone()));
+    }
     response
 }
 
@@ -755,7 +806,7 @@ fn option_group(ui: &mut egui::Ui, title: String, rows: impl FnOnce(&mut egui::U
 // ── Inputs ──
 
 fn draw_inputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: &mut BlockModelFields, block_models: &[OpenBlockModel], project: &UiProjectView) {
-    // Hidden models too: an unloaded model keeps its fields, and a run reads its values back.
+    // Unloaded models too: one keeps its field list, and a run asks to load it.
     let models: Vec<String> = block_models.iter().map(|model| model.name.clone()).collect();
     option_group(ui, tr!("opt-group-block-model"), |ui| {
         if form_combo(ui, "opt_block_model", tr!("common-block-model"), &mut scenario.block_model, &models).changed() {

@@ -1106,6 +1106,11 @@ pub(crate) struct EditorState {
     pub(crate) borehole_inspector_locked: bool,
     /// Entities removed from view (skipped by the renderer).
     pub(crate) hidden_handles: HashSet<SceneEntityId>,
+    /// While set, the only entity shown, whatever the explorer's eyes say -
+    /// a hidden one too (the optimization's start-point pick). Transient:
+    /// applied by `App::sync_hidden_handles`, so a rebuild keeps it, and
+    /// clearing it brings the saved visibility back.
+    pub(crate) isolated_entity: Option<SceneEntityId>,
     /// Entities frozen: still visible, but excluded from editing and snapping.
     ///
     /// Derived: the union of [`Self::explicitly_frozen`] and every design
@@ -2424,6 +2429,7 @@ impl EditorState {
             inspected_hole: None,
             borehole_inspector_locked: false,
             hidden_handles: HashSet::new(),
+            isolated_entity: None,
             frozen_handles: HashSet::new(),
             explicitly_frozen: HashSet::new(),
             locked_layers: HashSet::new(),
@@ -3673,6 +3679,8 @@ pub(crate) enum UiCommand {
     OpenOptimizationReport,
     /// Write the Results table's column choices (with the scenarios).
     SaveOptimizationReportColumns,
+    /// The answer to "load the unloaded inputs?": load them and go on, or not.
+    ConfirmOptimizationLoad(bool),
     /// Hide everything but the scenario's block model, show it in plan view
     /// and wait for a click that sets the directional shells' starting point.
     BeginShellStartPick,
@@ -3947,6 +3955,7 @@ impl UiCommand {
             | Self::ExportOptimizationReport
             | Self::OpenOptimizationReport
             | Self::SaveOptimizationReportColumns
+            | Self::ConfirmOptimizationLoad(_)
             | Self::BeginShellStartPick
             | Self::RunOptimizationScenario(_)
             | Self::CancelOptimizationScenario(_)
@@ -4710,6 +4719,25 @@ pub(crate) struct OptimizationState {
     /// The Results table's columns per report (scenario name), saved with the
     /// scenarios; a report not in here shows the default columns.
     pub(crate) report_columns: std::collections::BTreeMap<String, Vec<String>>,
+    /// Asking whether to load the unloaded inputs a run or pick needs.
+    pub(crate) load_prompt: Option<LoadPrompt>,
+}
+
+/// Inputs of an optimization that are unloaded, and what to do once they are
+/// loaded (hidden, and kept loaded for later runs).
+#[derive(Clone, Debug)]
+pub(crate) struct LoadPrompt {
+    /// The block model and topography, with their names.
+    pub(crate) items: Vec<(crate::model::ItemRef, String)>,
+    pub(crate) then: LoadThen,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum LoadThen {
+    /// Run these scenarios.
+    Run(Vec<u64>),
+    /// Pick the directional shells' starting point.
+    Pick,
 }
 
 /// The Results window: a run's report, charted and tabled.
@@ -4783,19 +4811,12 @@ impl OptimizationState {
 /// A directional-shell starting point being picked from the viewport.
 #[derive(Clone, Debug)]
 pub(crate) struct ShellStartPick {
-    /// The block model the click must land on.
+    /// The block model the click must land on; shown alone for the pick
+    /// (`EditorState::isolated_entity`), even when its eye is shut.
     pub(crate) block_model: crate::model::block_model::BlockModelId,
-    /// What was hidden before the pick hid everything else.
-    pub(crate) previously_hidden: HashSet<SceneEntityId>,
     /// Height the old point's marker is drawn at: the top of the model, so it
     /// stays inside the depth range the camera fits to the model. Never saved.
     pub(crate) marker_z: f64,
-    /// The block model was hidden (unloaded) and is being shown for the pick;
-    /// it is hidden again when the pick ends.
-    pub(crate) hide_after: bool,
-    /// Its values are still being read back in, so the view is fitted again
-    /// once they are there.
-    pub(crate) loading: bool,
 }
 
 impl OptimizationState {

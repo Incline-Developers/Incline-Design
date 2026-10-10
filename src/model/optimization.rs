@@ -1134,6 +1134,92 @@ impl OptimizationScenario {
         Ok(Some(name.to_owned()))
     }
 
+    /// What this scenario names that the project no longer has: its block
+    /// model, a field of it (or one of the wrong kind), the air topography or
+    /// the air rock type value. `models` are the project's block models by
+    /// name (an unloaded one keeps its field list, so nothing is loaded);
+    /// `surfaces` the triangulation and point cloud names. Names only - cheap
+    /// enough to check every frame.
+    pub(crate) fn missing_references(&self, models: &std::collections::HashMap<String, BlockModelFields>, surfaces: &[String]) -> Vec<String> {
+        let mut missing = Vec::new();
+        if self.block_model.is_empty() {
+            return missing;
+        }
+        let Some(fields) = models.get(&self.block_model) else {
+            missing.push(tr!("opt-missing-block-model", name = self.block_model.clone()));
+            return missing;
+        };
+        let has = |list: &[String], name: &str| list.iter().any(|field| field == name);
+        // Each missing field once, with every place that uses it.
+        let mut gone: Vec<(String, Vec<String>)> = Vec::new();
+        let mut note = |name: &str, what: String| match gone.iter_mut().find(|(field, _)| field == name) {
+            Some((_, uses)) => {
+                if !uses.contains(&what) {
+                    uses.push(what);
+                }
+            }
+            None => gone.push((name.to_owned(), vec![what])),
+        };
+        let mut numeric = |name: &str, what: String| {
+            if !name.is_empty() && !has(&fields.numeric, name) {
+                note(name, what);
+            }
+        };
+        numeric(&self.density_field, tr!("opt-density-field"));
+        numeric(&self.quality_field, tr!("opt-quality-field"));
+        if self.slope.mode == SlopeMode::Field {
+            numeric(&self.slope.field, tr!("opt-slope-field"));
+        }
+        for (haulage, what) in [
+            (&self.rehab_cost, tr!("opt-rehab-cost")),
+            (&self.waste_haulage, tr!("opt-waste-haulage")),
+            (&self.ore_haulage, tr!("opt-ore-haulage")),
+        ] {
+            if haulage.mode == HaulageMode::Field {
+                numeric(&haulage.field, what);
+            }
+        }
+        for method in &self.methods {
+            for element in &method.elements {
+                numeric(&element.element, method.name.clone());
+            }
+        }
+        for revenue in &self.revenues {
+            numeric(&revenue.element, tr!("opt-section-revenues"));
+        }
+        let mut text = |name: &str, what: String| {
+            if !name.is_empty() && !has(&fields.text, name) {
+                note(name, what);
+            }
+        };
+        text(&self.rocktype_field, tr!("opt-rocktype-field"));
+        text(&self.cost_field, tr!("opt-cost-by-field"));
+        if self.output.write_shell_field && self.output.shell_field_mode == ShellFieldMode::Existing {
+            text(&self.output.shell_field, tr!("opt-write-shell-field"));
+        }
+        for (field, uses) in gone {
+            missing.push(tr!("opt-missing-field", field = field, what = uses.join(", ")));
+        }
+        if self.exclude_air {
+            match self.air_mode {
+                AirMode::Topography => {
+                    if !self.air_topography.is_empty() && !surfaces.contains(&self.air_topography) {
+                        missing.push(tr!("opt-missing-topography", name = self.air_topography.clone()));
+                    }
+                }
+                AirMode::Rocktype => {
+                    let values = fields.rocktype_values(&self.rocktype_field);
+                    if !self.air_rocktype.is_empty() && !values.is_empty() && !values.contains(&self.air_rocktype) {
+                        missing.push(tr!("opt-missing-air-value", value = self.air_rocktype.clone(), field = self.rocktype_field.clone()));
+                    }
+                }
+            }
+        }
+        missing.sort();
+        missing.dedup();
+        missing
+    }
+
     /// Every element a processing method recovers, once each.
     pub(crate) fn processed_elements(&self) -> Vec<String> {
         let mut elements: Vec<String> = Vec::new();
