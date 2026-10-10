@@ -811,7 +811,7 @@ impl crate::app::App<'_> {
                 now
             }
         };
-        if now < since + PLANNING_AUTO_SETTLE {
+        if now < since + PLANNING_AUTO_SETTLE && self.editing_near(since, PLANNING_AUTO_SETTLE) {
             self.planning_auto_deadline = Some(since + PLANNING_AUTO_SETTLE);
             return;
         }

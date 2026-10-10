@@ -144,7 +144,7 @@ impl crate::app::App<'_> {
                 now
             }
         };
-        if now < since + HAULAGE_AUTO_SETTLE {
+        if now < since + HAULAGE_AUTO_SETTLE && self.editing_near(since, HAULAGE_AUTO_SETTLE) {
             self.haulage_auto_deadline = Some(since + HAULAGE_AUTO_SETTLE);
             return;
         }

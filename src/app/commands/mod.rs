@@ -83,6 +83,9 @@ impl<'a> App<'a> {
 
     pub(crate) fn handle_ui_commands(&mut self, commands: Vec<UiCommand>) {
         let had_commands = !commands.is_empty();
+        if had_commands {
+            self.last_ui_command_at = Some(web_time::Instant::now());
+        }
         for command in commands {
             // A widget being dragged reports the same command every frame.
             // The first opens a console entry for the edit; the rest are that

@@ -520,6 +520,13 @@ pub(crate) struct App<'a> {
     pub(crate) haulage_auto_attempted: Option<[u64; crate::ui::state::HaulageStep::ALL.len()]>,
     pub(crate) haulage_auto_settle: Option<([u64; crate::ui::state::HaulageStep::ALL.len()], Instant)>,
     pub(crate) haulage_auto_deadline: Option<Instant>,
+    /// When the UI last asked for anything, so the Auto runs above wait out
+    /// an edit but not inputs that changed with nobody editing; see
+    /// [`Self::editing_near`].
+    pub(crate) last_ui_command_at: Option<Instant>,
+    /// Whether a Setup run was keeping unloaded items resident last frame;
+    /// see [`Self::release_pipeline_residency`].
+    pub(crate) residency_held_by_pipeline: bool,
     pub(crate) schedule_animation: crate::app::schedule_animation::ScheduleAnimation,
     pub(crate) solid_preview_restore_requested: Option<crate::app::commands::solids::SolidPreviewKey>,
     slice_preview_cursor_px: Option<(f64, f64)>,
@@ -682,6 +689,8 @@ impl<'a> Default for App<'a> {
             haulage_auto_attempted: None,
             haulage_auto_settle: None,
             haulage_auto_deadline: None,
+            last_ui_command_at: None,
+            residency_held_by_pipeline: false,
             schedule_animation: Default::default(),
             solid_preview_restore_requested: None,
             slice_preview_cursor_px: None,
@@ -1138,6 +1147,14 @@ impl<'a> App<'a> {
         let result = body(&mut self.history, &mut target);
         let effects = std::mem::take(&mut target.effects);
         Some((result, effects))
+    }
+
+    /// Whether the user was at work within `settle` of `since`, when an Auto
+    /// run's inputs last changed. Only then is there an edit to wait out:
+    /// inputs that changed with nobody editing - a project opening, a step
+    /// finishing - are already settled.
+    pub(crate) fn editing_near(&self, since: Instant, settle: std::time::Duration) -> bool {
+        self.ui_pointer_gesture_active || self.last_ui_command_at.is_some_and(|at| at + settle >= since)
     }
 
     /// Apply `command` to the active project and record it as one undo step.

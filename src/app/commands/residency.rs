@@ -188,8 +188,26 @@ impl<'a> App<'a> {
         true
     }
 
+    /// Whether a Setup run is under way. Its steps read the same items one
+    /// after another, so an unloaded item restored for one step stays resident
+    /// until the run ends, rather than being written out and read back
+    /// between steps. [`Self::release_pipeline_residency`] unloads it then.
+    fn pipeline_holds_residency(&self) -> bool {
+        self.planning_pipeline.as_ref().is_some_and(|pipeline| pipeline.is_running())
+            || self.schedule_pipeline.as_ref().is_some_and(|pipeline| pipeline.is_running())
+            || self.haulage_pipeline.as_ref().is_some_and(|pipeline| pipeline.is_running())
+    }
+
+    /// Unload what a Setup run kept resident, once the last one has finished.
+    pub(crate) fn release_pipeline_residency(&mut self) {
+        let held = self.pipeline_holds_residency();
+        if std::mem::replace(&mut self.residency_held_by_pipeline, held) && !held {
+            self.evict_unloaded_items();
+        }
+    }
+
     pub(crate) fn evict_unloaded_items(&mut self) {
-        if self.restore_pending() {
+        if self.restore_pending() || self.pipeline_holds_residency() {
             return;
         }
         let Some(runtime_id) = self.workspace.active_project().map(|project| project.runtime_id) else {

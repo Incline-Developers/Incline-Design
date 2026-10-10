@@ -652,7 +652,7 @@ impl crate::app::App<'_> {
                 now
             }
         };
-        if now < since + AUTO_SETTLE {
+        if now < since + AUTO_SETTLE && self.editing_near(since, AUTO_SETTLE) {
             self.schedule_auto_deadline = Some(since + AUTO_SETTLE);
             return;
         }
