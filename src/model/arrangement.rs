@@ -210,10 +210,41 @@ pub(crate) fn face_area(face: &[Vec<DVec2>]) -> f64 {
 /// that fall inside `b` summed. Faces that only touch, along an edge or at a
 /// point, share none.
 pub(crate) fn overlap_area(a: &[Vec<DVec2>], b: &[Vec<DVec2>]) -> f64 {
-    let cuts: Vec<Vec<DVec2>> = b
-        .iter()
-        .filter_map(|ring| Some(ring.iter().copied().chain(std::iter::once(*ring.first()?)).collect()))
-        .collect();
+    let Some((low, high)) = a.iter().flatten().fold(None, |bounds: Option<(DVec2, DVec2)>, &point| {
+        Some(bounds.map_or((point, point), |(low, high)| (low.min(point), high.max(point))))
+    }) else {
+        return 0.0;
+    };
+    let (low, high) = (low - DVec2::splat(XY_TOL), high + DVec2::splat(XY_TOL));
+    // Only the runs of `b`'s boundary that reach `a`'s bounds can cut it, and
+    // each run starts and ends outside them. Cutting along those alone keeps a
+    // large `b` from costing every pair of its own edges.
+    let mut cuts: Vec<Vec<DVec2>> = Vec::new();
+    for ring in b {
+        let mut run: Vec<DVec2> = Vec::new();
+        for (index, &start) in ring.iter().enumerate() {
+            let end = ring[(index + 1) % ring.len()];
+            if start.min(end).cmple(high).all() && start.max(end).cmpge(low).all() {
+                if run.is_empty() {
+                    run.push(start);
+                }
+                run.push(end);
+            } else if !run.is_empty() {
+                cuts.push(std::mem::take(&mut run));
+            }
+        }
+        if !run.is_empty() {
+            cuts.push(run);
+        }
+    }
+    // Nothing of `b`'s boundary reaches `a`: it lies wholly inside or outside.
+    if cuts.is_empty() {
+        return if representative_point(a).is_some_and(|point| point_in_face(b, point)) {
+            face_area(a)
+        } else {
+            0.0
+        };
+    }
     subdivide(a, &cuts)
         .iter()
         .filter(|piece| representative_point(piece).is_some_and(|point| point_in_face(b, point)))
@@ -320,9 +351,28 @@ fn push_ring(segments: &mut Vec<[DVec2; 2]>, points: &[DVec2], closed: bool) {
 /// tested.
 fn split_at_intersections(segments: Vec<[DVec2; 2]>, cut_start: usize) -> Vec<[DVec2; 2]> {
     let mut splits: Vec<Vec<f64>> = vec![Vec::new(); segments.len()];
-    let pairs = (0..cut_start).flat_map(|i| (cut_start..segments.len()).map(move |j| (i, j)));
-    let pairs = pairs.chain((cut_start..segments.len()).flat_map(|i| (i + 1..segments.len()).map(move |j| (i, j))));
-    for (i, j) in pairs.collect::<Vec<_>>() {
+    // Only segments whose bounds come within tolerance can meet: sweeping
+    // them in order of their left ends reaches those pairs without visiting
+    // the rest.
+    let margin = 2.0 * XY_TOL;
+    let mut order: Vec<usize> = (0..segments.len()).collect();
+    order.sort_by(|&i, &j| segments[i][0].x.min(segments[i][1].x).total_cmp(&segments[j][0].x.min(segments[j][1].x)));
+    let mut pairs = Vec::new();
+    for (position, &first) in order.iter().enumerate() {
+        let [a, b] = segments[first];
+        let (right, low, high) = (a.x.max(b.x) + margin, a.y.min(b.y) - margin, a.y.max(b.y) + margin);
+        for &second in &order[position + 1..] {
+            let [c, d] = segments[second];
+            if c.x.min(d.x) > right {
+                break;
+            }
+            if c.y.min(d.y) > high || c.y.max(d.y) < low || (first < cut_start && second < cut_start) {
+                continue;
+            }
+            pairs.push((first.min(second), first.max(second)));
+        }
+    }
+    for (i, j) in pairs {
         let ([a, b], [c, d]) = (segments[i], segments[j]);
         match segment_segment(a, b, c, d) {
             SegSeg::Crossing { t, u, .. } | SegSeg::Touching { t, u, .. } => {
