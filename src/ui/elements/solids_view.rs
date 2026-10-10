@@ -350,22 +350,27 @@ struct Family<'a> {
 
 impl Family<'_> {
     /// A solid hidden whole becomes its other benches, hidden one by one.
-    fn open_solid(&self, hidden: &mut crate::ui::state::SolidsVisibility) {
-        if hidden.solids.remove(&self.bench.solid) {
+    /// Whether it was hidden, so the caller can hand the hiding further down.
+    fn open_solid(&self, hidden: &mut crate::ui::state::SolidsVisibility) -> bool {
+        let was_hidden = hidden.solids.remove(&self.bench.solid);
+        if was_hidden {
             for bench in self.benches.iter().filter(|row| **row != self.bench) {
                 if !hidden.rows.contains(bench) {
                     hidden.rows.push(*bench);
                 }
             }
         }
+        was_hidden
     }
 
-    /// Open the solid and the bench above `blast`, a bench hidden whole
-    /// becoming its other blasts, hidden one by one.
+    /// Open the solid and the bench above `blast`. A bench hidden whole - on
+    /// its own or with its solid - becomes its other blasts, hidden one by
+    /// one, so only `blast` comes back rather than the whole RL.
     fn open_bench(&self, hidden: &mut crate::ui::state::SolidsVisibility, blast: BlastShapeRef) {
-        self.open_solid(hidden);
-        if hidden.rows.contains(&self.bench) {
-            hidden.rows.retain(|hidden| *hidden != self.bench);
+        let solid_was_hidden = self.open_solid(hidden);
+        let bench_was_hidden = hidden.rows.contains(&self.bench);
+        hidden.rows.retain(|hidden| *hidden != self.bench);
+        if solid_was_hidden || bench_was_hidden {
             hidden.blasts.extend(self.blasts.iter().filter(|other| **other != blast));
         }
     }
