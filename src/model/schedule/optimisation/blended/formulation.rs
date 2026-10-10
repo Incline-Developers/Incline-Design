@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::input::{
     BlendInput, BlendPile, CHUNK_FULL_T, DIG_ROOM_T, GRADE_CUSHION_T, GRADE_MARGIN, GradeBound, GradeEndpoint, GradeHalfSpace, GradePredicate, GradeQualification, OutletIndex,
-    REST_RECEIPT_T, authored_tasks, delivers_to_pile, dig_authority, flat_cell, interval_rate, loader_rate, task_active, task_authorises, task_operable,
+    REST_RECEIPT_T, authored_tasks, delivers_to_pile, flat_cell, interval_rate, loader_rate, task_active, task_authorises, task_operable,
 };
 use crate::model::schedule::optimisation::{
     Activity, Destination, DestinationId, DestinationKind, GroundId, Interval, LoaderId, MaterialId, MovementCandidate, ReclaimOrder, SourceId, StockpileId, TaskKind,
@@ -656,8 +656,8 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
         }
     }
 
-    // Each bar's order binds only the digs it authorises; see `dig_authority`.
-    let ordered: Vec<Vec<usize>> = (0..input.loaders.len()).map(|loader| authored_tasks(input, loader)).collect();
+    // Each bar's order binds only the digs worked under it: those of a cell
+    // where it is the selected bar, as the replay attributes them.
     for (task_index, task) in input.tasks.iter().enumerate() {
         if rows.cancelled() {
             return Err(FormulationCancelled);
@@ -687,9 +687,14 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
                 continue;
             }
             for (position, &(interval, segment)) in cells.iter().enumerate() {
-                if dig_authority(input, &ordered[loader_index], *later, input.intervals[interval]) != Some(task_index) {
+                // A bar never selected here works nothing here.
+                let Some(selected) = rows.columns().active.get(&(loader_index, task_index, interval, segment)).cloned() else {
                     continue;
-                }
+                };
+                let Some(rate) = interval_rate(loader, interval).map(|rate| rate.dig_tph).filter(|rate| *rate > 0.0) else {
+                    continue;
+                };
+                let big_m = rate * input.intervals[interval].duration_h();
                 let mut terms: Vec<(R::Var, f64)> = later_candidates
                     .iter()
                     .filter_map(|&index| rows.columns().movement.get(&(index, interval, segment)).cloned())
@@ -699,26 +704,27 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
                     continue;
                 }
                 let name = format!("{}_{}_{}_{}_{interval}_{segment}", task.id.0, earlier.0, later.0, task.loader.0);
-                // Digging `later` in this cell requires `earlier` to be
-                // exhausted by the end of this cell, or of the previous one
-                // when `earlier` is shared. Before the first cell nothing can
-                // be exhausted, and an untouched earlier block has no flag
-                // because it cannot be: either way the later block is
-                // unavailable here.
-                let flag = if shared { position.checked_sub(1) } else { Some(position) }.and_then(|cell| rows.columns().exhausted.get(&(earlier_index, cell)).cloned());
-                let Some(flag) = flag else {
-                    rows.leq(terms, 0.0, &format!("order0_{name}"));
-                    continue;
-                };
+                // Digging `later` under this bar in this cell requires
+                // `earlier` to be exhausted by the end of this cell, or of the
+                // previous one when `earlier` is shared. Before the first cell
+                // nothing can be exhausted, and an untouched earlier block has
+                // no flag because it cannot be: either way the later block is
+                // unavailable to this bar here.
+                //
                 // One row for all of this loader's candidates on `later`:
-                // sum <= rate x interval x flag. The loader's `rate` row caps
-                // the sum at that anyway, so this admits the same schedules as
-                // a row per candidate, and binds harder on a fractional flag.
-                let Some(rate) = interval_rate(loader, interval).map(|rate| rate.dig_tph).filter(|rate| *rate > 0.0) else {
-                    continue;
-                };
-                terms.push((flag, -rate * input.intervals[interval].duration_h()));
-                rows.leq(terms, 0.0, &format!("order_{name}"));
+                // sum <= rate x interval x (flag + 1 - selected). The loader's
+                // `rate` row caps the sum at that anyway, so this admits the
+                // same schedules as a row per candidate, and binds harder on a
+                // fractional flag.
+                terms.push((selected, big_m));
+                let flag = if shared { position.checked_sub(1) } else { Some(position) }.and_then(|cell| rows.columns().exhausted.get(&(earlier_index, cell)).cloned());
+                match flag {
+                    Some(flag) => {
+                        terms.push((flag, -big_m));
+                        rows.leq(terms, big_m, &format!("order_{name}"));
+                    }
+                    None => rows.leq(terms, big_m, &format!("order0_{name}")),
+                }
             }
         }
     }
@@ -1093,7 +1099,9 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
                             // left rather than from E, which is truthful only
                             // the other way: an emptied block always counts as
                             // exhausted there, so no earlier block can be
-                            // claimed current to excuse the bar.
+                            // claimed current to excuse the bar. A block its
+                            // blast has not released by the cell's interval
+                            // counts as Z = 1: it gives the bar no work.
                             let k = interval.index;
                             let state: Vec<Flag<R::Var>> = task_blocks[&task_index]
                                 .iter()
@@ -1128,10 +1136,13 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
                                 rows.leq(terms, count, &format!("rdydighi_{loader_index}_{task_index}_{position}"));
                             }
                             let mut prefix: Flag<R::Var> = Flag::One;
-                            for (rank, (((_, outlets), exhausted), remaining)) in task_blocks[&task_index].iter().zip(&state).zip(&left).enumerate() {
+                            for (rank, (((source_index, outlets), exhausted), remaining)) in task_blocks[&task_index].iter().zip(&state).zip(&left).enumerate() {
                                 // ready - P + E + Z >= 0, constants moved right.
                                 let mut terms = vec![(ready.clone(), 1.0)];
                                 let mut rhs = 0.0;
+                                if releases.get(&input.ground[*source_index].id).is_some_and(|released| *released > interval.start_h + 1e-9) {
+                                    rhs -= 1.0;
+                                }
                                 match &prefix {
                                     Flag::One => rhs += 1.0,
                                     Flag::Zero => {}

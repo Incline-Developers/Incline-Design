@@ -437,68 +437,6 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
         }
     }
 
-    // ---- authored dig-block order -------------------------------------------
-    // Walked cell by cell from the rows. A loader may work several blocks of
-    // its sequence back to back inside one segment, so the later block needs
-    // the earlier one gone by the end of the same cell - unless another
-    // loader also dug the earlier block in that cell, when nothing says who
-    // finished it first and the earlier block must be gone a cell before.
-    {
-        let mut remaining: BTreeMap<_, f64> = input.ground.iter().map(|source| (source.id, source.tonnes_t)).collect();
-        let ordered: BTreeMap<_, Vec<usize>> = input.loaders.iter().enumerate().map(|(index, loader)| (loader.id, authored_tasks(input, index))).collect();
-        let tolerance = |ground| {
-            input
-                .ground
-                .iter()
-                .find(|source| source.id == ground)
-                .map_or(REPLAY_TOLERANCE_T, |source| indicator_leak(source.tonnes_t).max(REPLAY_TOLERANCE_T))
-        };
-        for interval in &input.intervals {
-            if checker.cancelled() {
-                return None;
-            }
-            for segment in 0..segments {
-                let before = remaining.clone();
-                // Tonnes each (loader, block) dug in this cell.
-                let mut dug: BTreeMap<_, f64> = BTreeMap::new();
-                for row in by_cell.get(&(interval.index, segment)).map(Vec::as_slice).unwrap_or_default() {
-                    let Some(candidate) = input.movements.get(row.candidate) else { continue };
-                    let SourceId::Ground(ground) = candidate.source else { continue };
-                    if candidate.activity != Activity::Dig {
-                        continue;
-                    }
-                    *dug.entry((candidate.loader, ground)).or_default() += row.tonnes_t;
-                    if let Some(slot) = remaining.get_mut(&ground) {
-                        *slot -= row.tonnes_t;
-                    }
-                }
-                // Each dig is held only to the order of the bar it was
-                // worked under; see `dig_authority`.
-                for (&(loader, later), _) in dug.iter().filter(|(_, tonnes)| **tonnes > REPLAY_TOLERANCE_T) {
-                    let Some(ordered) = ordered.get(&loader) else { continue };
-                    let Some(task) = dig_authority(input, ordered, later, *interval).map(|index| &input.tasks[index]) else {
-                        continue;
-                    };
-                    let TaskKind::Dig { sequence } = &task.kind else { continue };
-                    for pair in sequence.windows(2).filter(|pair| pair[1] == later) {
-                        let [earlier, later] = pair else { continue };
-                        let Some(&left) = remaining.get(earlier) else { continue };
-                        let shared = dug
-                            .iter()
-                            .any(|(&(other, ground), &tonnes)| other != task.loader && ground == *earlier && tonnes > REPLAY_TOLERANCE_T);
-                        let left = if shared { before.get(earlier).copied().unwrap_or(0.0) } else { left };
-                        if left > tolerance(*earlier) {
-                            checker.report.issues.push(format!(
-                                "authored order broken: loader {} dug block {} in interval {} segment {segment} while block {} still held {left:.6} t",
-                                task.loader.0, later.0, interval.index, earlier.0
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     // ---- loader and truck capacity per segment ------------------------------
     for interval in &input.intervals {
         if checker.cancelled() {
@@ -671,11 +609,11 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
     // Ground is dug only once its blast has released it: by the dispatch's
     // own timeline when the schedule carries one, otherwise by the release
     // times the input fixes.
+    let releases: BTreeMap<GroundId, f64> = input.drill_blast.as_ref().map_or_else(BTreeMap::new, |chain| match solution.drill_blast.as_ref() {
+        Some(timeline) if timeline.blasts.len() == chain.blasts.len() => timeline.releases(chain).into_iter().collect(),
+        _ => chain.releases(),
+    });
     if let Some(chain) = input.drill_blast.as_ref() {
-        let releases: BTreeMap<GroundId, f64> = match solution.drill_blast.as_ref() {
-            Some(timeline) if timeline.blasts.len() == chain.blasts.len() => timeline.releases(chain).into_iter().collect(),
-            _ => chain.releases(),
-        };
         if let Some(timeline) = solution.drill_blast.as_ref().or(chain.fixed.as_ref()) {
             if timeline.blasts.len() != chain.blasts.len() {
                 checker.report.issues.push("drill and blast timeline has the wrong number of blasts".to_owned());
@@ -818,9 +756,77 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
 
     // ---- mandatory authored bar priority ------------------------------------
     let room = dig_room(checker.input, solution, &checker.report.pile_intervals);
-    check_bar_priority(&mut checker, solution, &openings, &room, segments);
+    let worked_bars = check_bar_priority(&mut checker, solution, &openings, &room, &releases, segments);
     if checker.cancelled() {
         return None;
+    }
+
+    // ---- authored dig-block order -------------------------------------------
+    // Walked cell by cell from the rows. A loader may work several blocks of
+    // its sequence back to back inside one segment, so the later block needs
+    // the earlier one gone by the end of the same cell - unless another
+    // loader also dug the earlier block in that cell, when nothing says who
+    // finished it first and the earlier block must be gone a cell before.
+    {
+        let mut remaining: BTreeMap<_, f64> = input.ground.iter().map(|source| (source.id, source.tonnes_t)).collect();
+        let ordered: BTreeMap<_, Vec<usize>> = input.loaders.iter().enumerate().map(|(index, loader)| (loader.id, authored_tasks(input, index))).collect();
+        let tolerance = |ground| {
+            input
+                .ground
+                .iter()
+                .find(|source| source.id == ground)
+                .map_or(REPLAY_TOLERANCE_T, |source| indicator_leak(source.tonnes_t).max(REPLAY_TOLERANCE_T))
+        };
+        for interval in &input.intervals {
+            if checker.cancelled() {
+                return None;
+            }
+            for segment in 0..segments {
+                let before = remaining.clone();
+                // Tonnes each (loader, block) dug in this cell.
+                let mut dug: BTreeMap<_, f64> = BTreeMap::new();
+                for row in by_cell.get(&(interval.index, segment)).map(Vec::as_slice).unwrap_or_default() {
+                    let Some(candidate) = input.movements.get(row.candidate) else { continue };
+                    let SourceId::Ground(ground) = candidate.source else { continue };
+                    if candidate.activity != Activity::Dig {
+                        continue;
+                    }
+                    *dug.entry((candidate.loader, ground)).or_default() += row.tonnes_t;
+                    if let Some(slot) = remaining.get_mut(&ground) {
+                        *slot -= row.tonnes_t;
+                    }
+                }
+                // Each dig is held only to the order of the bar it was
+                // worked under: the loader's highest-priority ready bar when
+                // that holds the block, as the priority check found it, and
+                // otherwise as `dig_authority` reads it.
+                for (&(loader, later), _) in dug.iter().filter(|(_, tonnes)| **tonnes > REPLAY_TOLERANCE_T) {
+                    let Some(ordered) = ordered.get(&loader) else { continue };
+                    let worked = worked_bars
+                        .get(&(loader, interval.index, segment))
+                        .copied()
+                        .filter(|bar| matches!(&input.tasks[*bar].kind, TaskKind::Dig { sequence } if sequence.contains(&later)));
+                    let Some(task) = worked.or_else(|| dig_authority(input, ordered, later, *interval)).map(|index| &input.tasks[index]) else {
+                        continue;
+                    };
+                    let TaskKind::Dig { sequence } = &task.kind else { continue };
+                    for pair in sequence.windows(2).filter(|pair| pair[1] == later) {
+                        let [earlier, later] = pair else { continue };
+                        let Some(&left) = remaining.get(earlier) else { continue };
+                        let shared = dug
+                            .iter()
+                            .any(|(&(other, ground), &tonnes)| other != task.loader && ground == *earlier && tonnes > REPLAY_TOLERANCE_T);
+                        let left = if shared { before.get(earlier).copied().unwrap_or(0.0) } else { left };
+                        if left > tolerance(*earlier) {
+                            checker.report.issues.push(format!(
+                                "authored order broken: loader {} dug block {} in interval {} segment {segment} while block {} still held {left:.6} t",
+                                task.loader.0, later.0, interval.index, earlier.0
+                            ));
+                        }
+                    }
+                }
+            }
+        }
     }
 
     checker.report.target_totals = target_totals(input, solution, &checker.report.movement_contained);
@@ -960,13 +966,17 @@ fn dig_room(input: &BlendInput, solution: &BlendSolution, piles: &BTreeMap<(Stoc
 ///   ordinary idling - but when it does move material it must be under its
 ///   highest-priority ready bar, so standing down cannot be used to make a
 ///   lower-priority bar look like the only option.
+///
+/// Returns each loader's highest-priority ready bar by (loader, interval,
+/// segment): the bar whose block order its digs there follow.
 fn check_bar_priority(
     checker: &mut Checker<'_>,
     solution: &BlendSolution,
     openings: &BTreeMap<(StockpileId, usize), f64>,
     room: &BTreeSet<(DestinationId, usize)>,
+    releases: &BTreeMap<GroundId, f64>,
     segments: usize,
-) {
+) -> BTreeMap<(LoaderId, usize, usize), usize> {
     let input = checker.input;
     let loaders: Vec<_> = input.loaders.iter().map(|entry| entry.id).collect();
     checker.report.row_tasks = vec![None; solution.movements.len()];
@@ -978,10 +988,12 @@ fn check_bar_priority(
     }
     let empty = Vec::new();
     let outlets = super::input::OutletIndex::new(input);
+    // Each loader's highest-priority ready bar, by cell.
+    let mut worked_bars = BTreeMap::new();
 
     for loader in loaders {
         if checker.cancelled() {
-            return;
+            return worked_bars;
         }
         // Authored order: priority, then window start, then id.
         let mut bars: Vec<usize> = input.tasks.iter().enumerate().filter(|(_, task)| task.loader == loader).map(|(index, _)| index).collect();
@@ -1005,7 +1017,7 @@ fn check_bar_priority(
 
         for interval in &input.intervals {
             if checker.cancelled() {
-                return;
+                return worked_bars;
             }
             let rate = input
                 .loaders
@@ -1020,15 +1032,17 @@ fn check_bar_priority(
                     }
                     let Some(rate) = rate else { return false };
                     match &task.kind {
-                        // Its current block, and somewhere with room for all
-                        // of it as the interval opened.
+                        // Its current block, released by its blast, and
+                        // somewhere with room for all of it as the interval
+                        // opened.
                         TaskKind::Dig { sequence } => {
                             rate.dig_tph > 0.0
                                 && sequence
                                     .iter()
                                     .find(|source| remaining.get(*source).copied().unwrap_or(0.0) > REPLAY_TOLERANCE_T)
                                     .is_some_and(|current| {
-                                        super::input::block_diggable(&outlets.of(input, task, *current), |destination| room.contains(&(destination, interval.index)))
+                                        releases.get(current).is_none_or(|released| *released <= interval.start_h + 1e-9)
+                                            && super::input::block_diggable(&outlets.of(input, task, *current), |destination| room.contains(&(destination, interval.index)))
                                     })
                         }
                         TaskKind::Reclaim { approved_sources, maximum_t } => {
@@ -1050,6 +1064,9 @@ fn check_bar_priority(
                 };
 
                 let highest = bars.iter().copied().find(|bar| ready(*bar, &remaining, &spent));
+                if let Some(bar) = highest {
+                    worked_bars.insert((loader, interval.index, segment), bar);
+                }
                 let rows = cell_rows.get(&(interval.index, segment)).unwrap_or(&empty);
 
                 // What this loader actually moved in this cell, by bar.
@@ -1106,10 +1123,9 @@ fn check_bar_priority(
             }
         }
     }
+    worked_bars
 }
 
-/// Walk one pile forward through the horizon, recomputing its blend.
-#[allow(clippy::needless_range_loop, clippy::too_many_arguments)]
 fn replay_pile(
     checker: &mut Checker<'_>,
     pile: &BlendPile,

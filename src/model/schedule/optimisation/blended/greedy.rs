@@ -578,7 +578,7 @@ impl<'a> State<'a> {
     }
 
     /// A loader's bar as it opens in a segment, or `None` when it has no
-    /// work there: a delay, or a dig bar held by a block not yet blasted.
+    /// work there: a delay.
     fn open_bar(&self, loader: usize, task: usize, done: &BTreeSet<GroundId>, opening_ground: &BTreeMap<GroundId, f64>) -> Option<Bar> {
         match &self.input.tasks[task].kind {
             TaskKind::Dig { sequence } => Some(Bar {
@@ -808,7 +808,7 @@ impl<'a> State<'a> {
                     .copied()
                     .filter(|block| !gone.contains(block) && self.ground.get(block).is_some_and(|left| *left > FINISHED_T))
                     .collect();
-                if left.is_empty() || !self.diggable(entry, left[0], interval) {
+                if left.is_empty() || !self.blasted(left[0]) || !self.diggable(entry, left[0], interval) {
                     Some(false)
                 } else if left.iter().any(|block| !worked.contains(block) && self.ground[block] > SURELY_HELD_T) {
                     Some(true)
@@ -867,9 +867,9 @@ impl<'a> State<'a> {
             }
             previous = Some(block);
             if left > FINISHED_T {
-                // A block not yet blasted holds the bar: the loader waits for
-                // it rather than skipping ahead.
-                if self.chain.as_ref().is_some_and(|chain| !chain.available(block, self.now_h)) {
+                // A block not yet blasted ends the bar's work here rather
+                // than letting it skip ahead in its sequence.
+                if !self.blasted(block) {
                     return None;
                 }
                 return Some(block);
@@ -1504,13 +1504,15 @@ impl<'a> State<'a> {
             return false;
         }
         match &task.kind {
-            // Its current block, and somewhere with room for all of it.
+            // Its current block, blasted, and somewhere with room for all
+            // of it. One still waiting on its blast leaves the loader to its
+            // next bar until it fires.
             TaskKind::Dig { sequence } => {
                 dig_tph > 0.0
                     && sequence
                         .iter()
                         .find(|block| opening_ground.get(block).is_some_and(|left| *left > FINISHED_T))
-                        .is_some_and(|current| self.diggable(task, *current, interval))
+                        .is_some_and(|current| self.blasted(*current) && self.diggable(task, *current, interval))
             }
             TaskKind::Reclaim { approved_sources, maximum_t } => {
                 reclaim_tph > 0.0
@@ -1528,6 +1530,12 @@ impl<'a> State<'a> {
             }
             TaskKind::Delay => true,
         }
+    }
+
+    /// Whether `block` is released to dig as the interval opens: not part of
+    /// any blast, or its blast fired.
+    fn blasted(&self, block: GroundId) -> bool {
+        self.chain.as_ref().is_none_or(|chain| chain.available(block, self.now_h))
     }
 
     /// Whether `task` could dig `block` as `interval` opens: every material

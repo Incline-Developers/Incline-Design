@@ -618,16 +618,17 @@ pub(crate) fn authored_tasks(input: &BlendInput, loader_index: usize) -> Vec<usi
     tasks
 }
 
-/// The bar a dig of `ground` in `interval` is worked under: the first of the
+/// The bar a dig of `ground` in `interval` is held to when the loader's
+/// highest-priority ready bar does not hold the block: the first of the
 /// loader's bars in authored order (`ordered`, from [`authored_tasks`]) whose
 /// window covers the interval and whose sequence holds the block.
 ///
-/// Only that bar's sequence orders the dig. Ground is shared but membership
-/// is authored per bar, so a later bar listing the block behind another does
-/// not hold it back while an earlier bar digs it alone. Replay attributes
-/// rows to bars the same way: a covering bar holding the block is ready, so
-/// any higher-priority bar ahead of it that is ready but does not hold the
-/// block is a priority break in its own right.
+/// Only one bar's sequence orders a dig: the one it was worked under. Ground
+/// is shared but membership is authored per bar, so a bar listing the block
+/// in another order does not hold it back while it waits - on a blast, or
+/// for room - and the loader digs it under another. A dig under no ready bar
+/// holding it is a priority break in its own right, which this only keeps
+/// ordered.
 pub(crate) fn dig_authority(input: &BlendInput, ordered: &[usize], ground: GroundId, interval: Interval) -> Option<usize> {
     ordered.iter().copied().find(|&index| {
         let task = &input.tasks[index];
