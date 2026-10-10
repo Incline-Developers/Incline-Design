@@ -185,6 +185,18 @@ pub(super) struct HeldFraming {
     upper: glam::DVec3,
 }
 
+/// The preview texture's size for a pane of `pane_px`: the pane itself,
+/// scaled down as a whole when either side is over the largest target drawn.
+/// Clamping each side on its own changed the image's shape, and the pane then
+/// stretched it back across its own width.
+fn preview_target_size(pane_px: [u32; 2]) -> PhysicalSize<u32> {
+    const LARGEST: f64 = 2048.0;
+    const SMALLEST: u32 = 120;
+    let [width, height] = pane_px.map(|side| f64::from(side.max(1)));
+    let scale = (LARGEST / width.max(height)).min(1.0);
+    PhysicalSize::new(((width * scale).round() as u32).max(SMALLEST), ((height * scale).round() as u32).max(SMALLEST))
+}
+
 /// Advance the preview's content revision over a redraw that changes what is
 /// on screen.
 ///
@@ -240,7 +252,7 @@ impl Graphics<'_> {
             return;
         }
 
-        let requested = PhysicalSize::new(editor.solid_preview_size_px[0].clamp(120, 2048), editor.solid_preview_size_px[1].clamp(120, 2048));
+        let requested = preview_target_size(editor.solid_preview_size_px);
         let mut target = self.solid_preview.take().unwrap_or_else(|| SolidPreviewTarget::new(self, requested));
         let resized = target.size != requested;
         if resized {
