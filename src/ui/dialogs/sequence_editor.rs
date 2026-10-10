@@ -244,6 +244,16 @@ pub(crate) fn draw_navigation_column(ui: &mut egui::Ui, editor: &mut EditorState
         // it - so without this the objects tree stripes the whole dialog and
         // the order list beside it reads as sitting on the navigation panel.
         ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+        // The trees are the explorer's, so their rows are as tall as the
+        // explorer's. The dialog's taller controls and padding would stretch
+        // every row past the height its background bands are tiled at, and
+        // the bands would drift off the rows a little more each line.
+        let explorer = ui.ctx().global_style();
+        ui.spacing_mut().interact_size.y = explorer.spacing.interact_size.y;
+        ui.spacing_mut().button_padding.y = explorer.spacing.button_padding.y;
+        // A floating scroll bar lies over the rows' trailing eyes and takes
+        // the clicks meant for them, so the bar keeps a lane of its own.
+        ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
         let half = (size.y - ui.spacing().item_spacing.y) * 0.5;
         // Each tree under its own id: both bring a scroll area with the
         // default id, and two children of one parent share a stable id, so
@@ -251,7 +261,7 @@ pub(crate) fn draw_navigation_column(ui: &mut egui::Ui, editor: &mut EditorState
         ui.push_id("solids_navigation", |ui| {
             ui.allocate_ui(egui::vec2(ui.available_width(), half), |ui| {
                 ui.label(egui::RichText::new(tr!("sequence-solids-navigation")).strong());
-                crate::ui::elements::solids_view::draw_tree(ui, editor, document, commands);
+                crate::ui::elements::solids_view::draw_sequence_tree(ui, editor, document, commands);
             });
         });
         ui.separator();

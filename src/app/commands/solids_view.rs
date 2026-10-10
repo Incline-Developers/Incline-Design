@@ -1371,6 +1371,8 @@ impl crate::app::App<'_> {
         let selected_block = (!editing).then_some(self.editor.selected_dig_block).flatten();
         let selected_blast = (!editing).then_some(self.editor.selected_blast).flatten();
         let view_selection: Vec<SolidsViewRow> = self.editor.solids_view_selection.clone();
+        // What the sequence editors' own tree has hidden from their preview.
+        let hidden = editing.then(|| self.editor.sequence_hidden.clone());
         // Which draft position each block sits at, and how far the order
         // preview has been walked. Taken from the mirror rather than resolved
         // again here: the mirror is this frame's, and resolving one reference
@@ -1416,6 +1418,22 @@ impl crate::app::App<'_> {
             .map(|doc| doc.solids().iter().map(|solid| solid.id).collect())
             .unwrap_or_default();
         solid_ids.hash(&mut hasher);
+        if let Some(hidden) = &hidden {
+            // Summed per entry: the sets do not iterate in a stable order, and
+            // a sum does not care what order it was added up in.
+            let unordered = |hash: &dyn Fn(&mut DefaultHasher)| {
+                let mut entry = DefaultHasher::new();
+                hash(&mut entry);
+                entry.finish()
+            };
+            let solids = hidden.solids.iter().fold(0u64, |sum, solid| sum.wrapping_add(unordered(&|h| solid.hash(h))));
+            let blasts = hidden.blasts.iter().fold(0u64, |sum, blast| sum.wrapping_add(unordered(&|h| blast.hash(h))));
+            (solids, blasts).hash(&mut hasher);
+            for row in &hidden.rows {
+                row.solid.hash(&mut hasher);
+                row.band.map(|band| (band.base.to_bits(), band.top.to_bits(), band.is_flitch)).hash(&mut hasher);
+            }
+        }
         for row in &view_selection {
             row.solid.hash(&mut hasher);
             row.band.map(|band| (band.base.to_bits(), band.top.to_bits(), band.is_flitch)).hash(&mut hasher);
@@ -1535,6 +1553,9 @@ impl crate::app::App<'_> {
                 .flatten();
             for (index, part) in parts.iter().enumerate() {
                 if !selected(&view_selection, solid.id, Some(part.band.selection)) {
+                    continue;
+                }
+                if hidden.as_ref().is_some_and(|hidden| hidden.hides(solid.id, part.bench, part.band.selection, part.blast)) {
                     continue;
                 }
                 // Ground out of mining is gone from every step after

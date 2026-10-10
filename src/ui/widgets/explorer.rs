@@ -409,6 +409,9 @@ pub(crate) struct ExplorerHeader {
     collapse_on_click: bool,
     /// Draw the heading with the selected highlight its entries use.
     selected: bool,
+    /// A trailing visibility toggle, showing this state: see
+    /// [`ExplorerHeader::show_with_visibility`].
+    visibility: Option<bool>,
 }
 
 impl ExplorerHeader {
@@ -422,7 +425,15 @@ impl ExplorerHeader {
             default_open: true,
             collapse_on_click: true,
             selected: false,
+            visibility: None,
         }
+    }
+
+    /// End the heading with the entries' eye toggle, showing `visible`.
+    /// [`ExplorerHeader::show_with_visibility`] reports its click.
+    pub(crate) fn visibility_toggle(mut self, visible: bool) -> Self {
+        self.visibility = Some(visible);
+        self
     }
 
     /// Let the heading act on its own click instead of collapsing the
@@ -472,6 +483,16 @@ impl ExplorerHeader {
         ui: &mut egui::Ui,
         add_contents: impl FnOnce(&mut egui::Ui) -> R,
     ) -> (egui::Response, egui::InnerResponse<egui::Response>, Option<egui::InnerResponse<R>>) {
+        let (toggle, header, body, _) = self.show_with_visibility(ui, add_contents);
+        (toggle, header, body)
+    }
+
+    /// [`ExplorerHeader::show`], and whether the visibility toggle was clicked.
+    pub(crate) fn show_with_visibility<R>(
+        self,
+        ui: &mut egui::Ui,
+        add_contents: impl FnOnce(&mut egui::Ui) -> R,
+    ) -> (egui::Response, egui::InnerResponse<egui::Response>, Option<egui::InnerResponse<R>>, bool) {
         let Self {
             id,
             mut title,
@@ -481,7 +502,9 @@ impl ExplorerHeader {
             default_open,
             collapse_on_click,
             selected,
+            visibility,
         } = self;
+        let mut visibility_clicked = false;
         let state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, default_open);
         if dirty && !state.is_open() {
             title.push_str(" *");
@@ -504,14 +527,33 @@ impl ExplorerHeader {
                         // just its text, so clicking - or right-clicking, for
                         // the section menu - anywhere along the heading hits
                         // a widget that senses it.
-                        let label = ui.add(
-                            egui::Button::new("")
-                                .left_text(text)
-                                .frame(false)
-                                .selected(selected)
-                                .sense(egui::Sense::click())
-                                .min_size(egui::vec2(ui.available_width(), height)),
-                        );
+                        let toggle_width = if visibility.is_some() { TOGGLE_WIDTH } else { 0.0 };
+                        let label_width = (ui.available_width() - toggle_width).max(0.0);
+                        // No gap after the label: the toggle is in the width
+                        // it gave up, and a gap would push it off the row.
+                        if visibility.is_some() {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                        }
+                        let label = ui
+                            .allocate_ui_with_layout(egui::vec2(label_width, height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                                ui.add(
+                                    egui::Button::new("")
+                                        .left_text(text)
+                                        .frame(false)
+                                        .selected(selected)
+                                        .sense(egui::Sense::click())
+                                        .min_size(egui::vec2(label_width, height)),
+                                )
+                            })
+                            .inner;
+                        if let Some(visible) = visibility {
+                            let icon = if visible {
+                                crate::ui::unthemed_icon!("entry_visible.svg")
+                            } else {
+                                crate::ui::unthemed_icon!("entry_hidden.svg")
+                            };
+                            visibility_clicked = entry_toggle(ui, icon, visible, true, height);
+                        }
                         match icon_response {
                             Some(icon_response) => icon_response.union(label),
                             None => label,
@@ -527,7 +569,7 @@ impl ExplorerHeader {
                 state.store(ui.ctx());
             }
 
-            (toggle_response, header_response, body_response)
+            (toggle_response, header_response, body_response, visibility_clicked)
         })
         .inner
     }

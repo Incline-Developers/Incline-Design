@@ -2143,6 +2143,10 @@ pub(crate) struct EditorState {
     /// The Layout's own Solids Navigation.
     pub(crate) haul_hidden: SolidsVisibility,
     pub(crate) haul_navigation_selection: Vec<SolidsViewRow>,
+    /// What the sequence editors' Solids Navigation has hidden from their
+    /// preview. Shared by the dig and blast sequence editors, and kept
+    /// between editing sessions so reopening one finds the ground as it was.
+    pub(crate) sequence_hidden: SolidsVisibility,
     /// Where the next road point would land: on a road or node to join it,
     /// on the surface under the cursor, or level with the previous point.
     pub(crate) haul_cursor: Option<DVec3>,
@@ -3576,6 +3580,7 @@ impl EditorState {
         self.haul_link_pick = false;
         self.haul_link_points.clear();
         self.haul_hidden = SolidsVisibility::default();
+        self.sequence_hidden = SolidsVisibility::default();
         self.haul_navigation_selection.clear();
         self.haul_pins.clear();
         self.circle_draft = None;
@@ -3909,6 +3914,7 @@ impl EditorState {
             haul_page_drawn: false,
             haul_hidden: SolidsVisibility::default(),
             haul_navigation_selection: Vec::new(),
+            sequence_hidden: SolidsVisibility::default(),
             haul_cursor: None,
             haul_drag: None,
             haul_menu_point: None,

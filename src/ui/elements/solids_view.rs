@@ -31,7 +31,13 @@ use crate::{
 /// label; flitches start collapsed, since a pit has tens of them and the
 /// benches are what the tree is read for.
 pub(crate) fn draw_tree(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document, commands: &mut Vec<UiCommand>) {
-    draw_tree_to_depth(ui, editor, document, true, commands);
+    draw_tree_to_depth(ui, editor, document, true, false, commands);
+}
+
+/// The same tree for the sequence editors, with an eye on every row that
+/// hides its ground from their preview - see [`EditorState::sequence_hidden`].
+pub(crate) fn draw_sequence_tree(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document, commands: &mut Vec<UiCommand>) {
+    draw_tree_to_depth(ui, editor, document, true, true, commands);
 }
 
 /// Which page a Solids Navigation tree drives. Each keeps its own hidden
@@ -312,12 +318,20 @@ fn select_animation_rows(ui: &egui::Ui, editor: &mut EditorState, tree: Navigati
 }
 
 fn set_animation_solid_visible(editor: &mut EditorState, tree: NavigationTree, solid: crate::model::SolidId, visible: bool) {
+    set_solid_visible(hidden_mut(editor, tree), solid, visible);
+}
+
+/// Show or hide a whole solid. Either way what was hidden under it goes:
+/// a parent's eye sets everything below it, so showing it again brings
+/// back every bench, blast and flitch rather than only those not hidden
+/// on their own before.
+fn set_solid_visible(hidden: &mut crate::ui::state::SolidsVisibility, solid: crate::model::SolidId, visible: bool) {
+    hidden.rows.retain(|row| row.solid != solid);
+    hidden.blasts.retain(|blast| blast.solid != solid);
     if visible {
-        hidden_mut(editor, tree).solids.remove(&solid);
-        hidden_mut(editor, tree).rows.retain(|row| row.solid != solid);
-        hidden_mut(editor, tree).blasts.retain(|blast| blast.solid != solid);
+        hidden.solids.remove(&solid);
     } else {
-        hidden_mut(editor, tree).solids.insert(solid);
+        hidden.solids.insert(solid);
     }
 }
 
@@ -347,6 +361,11 @@ impl Family<'_> {
 }
 
 fn set_animation_row_visible(hidden: &mut crate::ui::state::SolidsVisibility, family: &Family<'_>, row: SolidsViewRow, visible: bool) {
+    // A bench's eye sets its blasts and flitches with it, as a solid's does.
+    if row == family.bench {
+        hidden.rows.retain(|hidden| !family.flitches.contains(hidden));
+        hidden.blasts.retain(|blast| !family.blasts.contains(blast));
+    }
     if !visible {
         if !hidden.rows.contains(&row) {
             hidden.rows.push(row);
@@ -383,7 +402,7 @@ fn set_animation_blast_visible(hidden: &mut crate::ui::state::SolidsVisibility, 
 /// The same tree stopping at benches, for the Blasting step: a blast divides
 /// a bench, and flitches have nothing to say about it.
 pub(crate) fn draw_bench_tree(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document, commands: &mut Vec<UiCommand>) {
-    draw_tree_to_depth(ui, editor, document, false, commands);
+    draw_tree_to_depth(ui, editor, document, false, false, commands);
 }
 
 /// Dig Strips chooses a whole flitch, independently of blast partitions.
@@ -499,7 +518,7 @@ fn open_row(ui: &egui::Ui, id: egui::Id) {
     state.store(ui.ctx());
 }
 
-fn draw_tree_to_depth(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document, show_flitches: bool, commands: &mut Vec<UiCommand>) {
+fn draw_tree_to_depth(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document, show_flitches: bool, toggles: bool, commands: &mut Vec<UiCommand>) {
     ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
     let reveal = std::mem::take(&mut editor.solids_tree_reveal);
     egui::ScrollArea::vertical().auto_shrink([false; 2]).min_scrolled_height(0.0).show(ui, |ui| {
@@ -514,6 +533,9 @@ fn draw_tree_to_depth(ui: &mut egui::Ui, editor: &mut EditorState, document: &Do
         // longer mined; the Solids pages list it, to put it back.
         let mined = editor.mined_ground.clone();
         let selection = &editor.solids_view_selection;
+        // Edited on a copy, because the rows read the editor as they draw,
+        // and written back once the tree is done.
+        let mut hidden = toggles.then(|| editor.sequence_hidden.clone());
         let mut clicked: Option<Vec<SolidsViewRow>> = None;
         let mut clicked_blast = None;
         for kind in SolidKind::ALL {
@@ -529,134 +551,209 @@ fn draw_tree_to_depth(ui: &mut egui::Ui, editor: &mut EditorState, document: &Do
             if reveal && solids.iter().any(|solid| selection.iter().any(|row| row.solid == solid.id)) {
                 open_row(ui, kind_id);
             }
-            let (_, kind_heading, _) = ExplorerHeader::new(kind_id, kind_label(kind))
+            let kind_visible = hidden.as_ref().map(|hidden| solids.iter().any(|solid| !hidden.solids.contains(&solid.id)));
+            let kind_solids: Vec<_> = solids.iter().map(|solid| solid.id).collect();
+            let mut kind_header = ExplorerHeader::new(kind_id, kind_label(kind))
                 .icon(unthemed_icon!("layer.svg"))
                 .collapse_on_click(false)
-                .selected(group_selected(selection, &kind_rows))
-                .show(ui, |ui| {
-                    for solid in solids {
-                        let occupied = editor.solid_view_bands.get(&solid.id);
-                        let solid_rows = descendants(solid, occupied, show_flitches);
-                        // `.1` is the heading itself; its `.inner` is the clickable
-                        // label, where `.response` is only the row's hover area.
-                        let solid_id = egui::Id::new(("solids_view_solid", solid.id.0));
-                        if reveal && selection.iter().any(|row| row.solid == solid.id) {
-                            open_row(ui, solid_id);
+                .selected(group_selected(selection, &kind_rows));
+            if let Some(visible) = kind_visible {
+                kind_header = kind_header.visibility_toggle(visible);
+            }
+            let (_, kind_heading, _, kind_visibility_clicked) = kind_header.show_with_visibility(ui, |ui| {
+                for solid in solids {
+                    let occupied = editor.solid_view_bands.get(&solid.id);
+                    let solid_rows = descendants(solid, occupied, show_flitches);
+                    // `.1` is the heading itself; its `.inner` is the clickable
+                    // label, where `.response` is only the row's hover area.
+                    let solid_id = egui::Id::new(("solids_view_solid", solid.id.0));
+                    if reveal && selection.iter().any(|row| row.solid == solid.id) {
+                        open_row(ui, solid_id);
+                    }
+                    let solid_visible = hidden.as_ref().map(|hidden| !hidden.solids.contains(&solid.id));
+                    let benches = solid.benching.benches();
+                    let listed: Vec<_> = benches
+                        .iter()
+                        .rev()
+                        .filter(|bench| holds(occupied, bench.base, bench.top()))
+                        .filter(|bench| mined.as_ref().is_none_or(|mined| mined.bench(solid.id, bench.base)))
+                        .collect();
+                    // Every bench row the tree lists, which showing one
+                    // bench of a hidden solid hides one by one.
+                    let listed_rows: Vec<_> = listed
+                        .iter()
+                        .map(|bench| SolidsViewRow {
+                            solid: solid.id,
+                            band: Some(BenchSelection {
+                                base: bench.base,
+                                top: bench.top(),
+                                is_flitch: false,
+                            }),
+                        })
+                        .collect();
+                    let mut solid_header = ExplorerHeader::new(solid_id, solid.name.clone())
+                        .icon(unthemed_icon!("triangulation.svg"))
+                        .collapse_on_click(false)
+                        .selected(group_selected(selection, &solid_rows));
+                    if let Some(visible) = solid_visible {
+                        solid_header = solid_header.visibility_toggle(visible);
+                    }
+                    let (_, heading, _, solid_visibility_clicked) = solid_header.show_with_visibility(ui, |ui| {
+                        if occupied.is_none() {
+                            explorer_note(ui, tr!("planning-solid-geometry-pending"));
                         }
-                        let (_, heading, _) = ExplorerHeader::new(solid_id, solid.name.clone())
-                            .icon(unthemed_icon!("triangulation.svg"))
-                            .collapse_on_click(false)
-                            .selected(group_selected(selection, &solid_rows))
-                            .show(ui, |ui| {
-                                if occupied.is_none() {
-                                    explorer_note(ui, tr!("planning-solid-geometry-pending"));
+                        for (bench, &bench_row) in listed.iter().zip(&listed_rows) {
+                            let bench_band = BenchSelection {
+                                base: bench.base,
+                                top: bench.top(),
+                                is_flitch: false,
+                            };
+                            let flitches: Vec<_> = if show_flitches {
+                                bench.flitches.iter().rev().filter(|flitch| holds(occupied, flitch.base, flitch.top())).collect()
+                            } else {
+                                Vec::new()
+                            };
+                            let bench_rows: Vec<_> = std::iter::once(bench_band)
+                                .chain(flitches.iter().map(|flitch| BenchSelection {
+                                    base: flitch.base,
+                                    top: flitch.top(),
+                                    is_flitch: true,
+                                }))
+                                .map(|band| SolidsViewRow {
+                                    solid: solid.id,
+                                    band: Some(band),
+                                })
+                                .collect();
+                            let bench_id = egui::Id::new(("solids_view_bench", solid.id.0, bench.base.to_bits()));
+                            let bench_target = crate::model::ExclusionTarget::Bench(bench.base);
+                            let bench_label = exclusion_label(&format_rl(bench.base), solid.exclusions.is_target_excluded(bench_target));
+                            let bench_selected = group_selected(selection, &bench_rows);
+                            let bench_visible = hidden.as_ref().zip(solid_visible).map(|(hidden, visible)| visible && !hidden.rows.contains(&bench_row));
+                            let flitch_rows: Vec<_> = bench_rows.iter().filter(|row| row.band.is_some_and(|band| band.is_flitch)).copied().collect();
+                            let blast_refs: Vec<_> = solid
+                                .blasting
+                                .bench(bench.base)
+                                .map(|entry| entry.blasts.iter().map(|blast| BlastShapeRef::new(solid.id, bench.base, blast.anchor)).collect())
+                                .unwrap_or_default();
+                            if !show_flitches {
+                                let response = leaf_row_response(ui, bench_id, &bench_label, bench_selected);
+                                exclusion_menu(&response, &bench_label, solid, bench_target, commands);
+                                if response.clicked() {
+                                    clicked = Some(bench_rows);
                                 }
-                                for bench in solid
-                                    .benching
-                                    .benches()
-                                    .iter()
-                                    .rev()
-                                    .filter(|bench| holds(occupied, bench.base, bench.top()))
-                                    .filter(|bench| mined.as_ref().is_none_or(|mined| mined.bench(solid.id, bench.base)))
-                                {
-                                    let bench_band = BenchSelection {
-                                        base: bench.base,
-                                        top: bench.top(),
-                                        is_flitch: false,
-                                    };
-                                    let flitches: Vec<_> = if show_flitches {
-                                        bench.flitches.iter().rev().filter(|flitch| holds(occupied, flitch.base, flitch.top())).collect()
-                                    } else {
-                                        Vec::new()
-                                    };
-                                    let bench_rows: Vec<_> = std::iter::once(bench_band)
-                                        .chain(flitches.iter().map(|flitch| BenchSelection {
-                                            base: flitch.base,
-                                            top: flitch.top(),
-                                            is_flitch: true,
-                                        }))
-                                        .map(|band| SolidsViewRow {
-                                            solid: solid.id,
-                                            band: Some(band),
-                                        })
-                                        .collect();
-                                    let bench_id = egui::Id::new(("solids_view_bench", solid.id.0, bench.base.to_bits()));
-                                    let bench_target = crate::model::ExclusionTarget::Bench(bench.base);
-                                    let bench_label = exclusion_label(&format_rl(bench.base), solid.exclusions.is_target_excluded(bench_target));
-                                    let bench_selected = group_selected(selection, &bench_rows);
-                                    if !show_flitches {
-                                        let response = leaf_row_response(ui, bench_id, &bench_label, bench_selected);
-                                        exclusion_menu(&response, &bench_label, solid, bench_target, commands);
-                                        if response.clicked() {
-                                            clicked = Some(bench_rows);
-                                        }
+                                continue;
+                            }
+                            // Flitches start closed: a pit carries tens of them,
+                            // and the benches are what the tree is scanned for.
+                            let (bench_response, bench_visibility_clicked) = collapsible_toggle_row(ui, bench_id, &bench_label, bench_selected, bench_visible, |ui| {
+                                let blasts = solid.blasting.bench(bench.base).map(|entry| entry.blasts.as_slice()).unwrap_or_default();
+                                if blasts.is_empty() {
+                                    explorer_note(ui, tr!("planning-solid-geometry-pending"));
+                                    return;
+                                }
+                                for (blast_index, blast) in blasts.iter().enumerate() {
+                                    let shape = crate::ui::state::BlastShapeRef::new(solid.id, bench.base, blast.anchor);
+                                    if mined.as_ref().is_some_and(|mined| !mined.blast(shape)) {
                                         continue;
                                     }
-                                    // Flitches start closed: a pit carries tens of them,
-                                    // and the benches are what the tree is scanned for.
-                                    let bench_response = collapsible_row(ui, bench_id, &bench_label, bench_selected, |ui| {
-                                        let blasts = solid.blasting.bench(bench.base).map(|entry| entry.blasts.as_slice()).unwrap_or_default();
-                                        if blasts.is_empty() {
-                                            explorer_note(ui, tr!("planning-solid-geometry-pending"));
-                                            return;
-                                        }
-                                        for (blast_index, blast) in blasts.iter().enumerate() {
-                                            let shape = crate::ui::state::BlastShapeRef::new(solid.id, bench.base, blast.anchor);
-                                            if mined.as_ref().is_some_and(|mined| !mined.blast(shape)) {
-                                                continue;
-                                            }
-                                            let blast_ref = Some(shape);
-                                            let blast_selected = editor.selected_blast == blast_ref || (editor.selected_blast.is_none() && bench_selected);
-                                            let blast_target = crate::model::ExclusionTarget::Blast {
-                                                bench: bench.base,
-                                                anchor: blast.anchor,
-                                            };
-                                            let blast_label = exclusion_label(&blast.name, solid.exclusions.is_target_excluded(blast_target));
-                                            let blast_response = collapsible_row(ui, bench_id.with(("blast", blast_index)), &blast_label, blast_selected, |ui| {
-                                                for flitch in flitches.iter().filter(|flitch| mined.as_ref().is_none_or(|mined| mined.flitch(shape, flitch.base))) {
-                                                    let flitch_row = SolidsViewRow {
-                                                        solid: solid.id,
-                                                        band: Some(BenchSelection {
-                                                            base: flitch.base,
-                                                            top: flitch.top(),
-                                                            is_flitch: true,
-                                                        }),
-                                                    };
-                                                    if leaf_row(
-                                                        ui,
-                                                        egui::Id::new(("solids_view_flitch", solid.id.0, bench.base.to_bits(), blast_index, flitch.base.to_bits())),
-                                                        &format_rl(flitch.base),
-                                                        group_selected(selection, std::slice::from_ref(&flitch_row))
-                                                            && (editor.selected_blast.is_none() || editor.selected_blast == blast_ref),
-                                                    ) {
-                                                        clicked = Some(vec![flitch_row]);
-                                                        clicked_blast = blast_ref;
-                                                    }
+                                    let blast_ref = Some(shape);
+                                    let blast_selected = editor.selected_blast == blast_ref || (editor.selected_blast.is_none() && bench_selected);
+                                    let blast_target = crate::model::ExclusionTarget::Blast {
+                                        bench: bench.base,
+                                        anchor: blast.anchor,
+                                    };
+                                    let blast_label = exclusion_label(&blast.name, solid.exclusions.is_target_excluded(blast_target));
+                                    let blast_visible = hidden.as_ref().zip(bench_visible).map(|(hidden, visible)| visible && !hidden.blasts.contains(&shape));
+                                    let (blast_response, blast_visibility_clicked) =
+                                        collapsible_toggle_row(ui, bench_id.with(("blast", blast_index)), &blast_label, blast_selected, blast_visible, |ui| {
+                                            for flitch in flitches.iter().filter(|flitch| mined.as_ref().is_none_or(|mined| mined.flitch(shape, flitch.base))) {
+                                                let flitch_row = SolidsViewRow {
+                                                    solid: solid.id,
+                                                    band: Some(BenchSelection {
+                                                        base: flitch.base,
+                                                        top: flitch.top(),
+                                                        is_flitch: true,
+                                                    }),
+                                                };
+                                                let flitch_visible = hidden.as_ref().zip(blast_visible).map(|(hidden, visible)| visible && !hidden.rows.contains(&flitch_row));
+                                                let (response, visibility_clicked) = leaf_toggle_row(
+                                                    ui,
+                                                    egui::Id::new(("solids_view_flitch", solid.id.0, bench.base.to_bits(), blast_index, flitch.base.to_bits())),
+                                                    &format_rl(flitch.base),
+                                                    group_selected(selection, std::slice::from_ref(&flitch_row))
+                                                        && (editor.selected_blast.is_none() || editor.selected_blast == blast_ref),
+                                                    flitch_visible,
+                                                );
+                                                if response.clicked() {
+                                                    clicked = Some(vec![flitch_row]);
+                                                    clicked_blast = blast_ref;
                                                 }
-                                            });
-                                            exclusion_menu(&blast_response, &blast_label, solid, blast_target, commands);
-                                            if blast_response.clicked() {
-                                                clicked = Some(bench_rows.clone());
-                                                clicked_blast = blast_ref;
+                                                if visibility_clicked && let Some(hidden) = hidden.as_mut() {
+                                                    let family = Family {
+                                                        benches: &listed_rows,
+                                                        bench: bench_row,
+                                                        flitches: &flitch_rows,
+                                                        blasts: &blast_refs,
+                                                    };
+                                                    set_animation_row_visible(hidden, &family, flitch_row, !flitch_visible.unwrap_or(true));
+                                                }
                                             }
-                                        }
-                                    });
-                                    exclusion_menu(&bench_response, &bench_label, solid, bench_target, commands);
-                                    if bench_response.clicked() {
-                                        clicked = Some(bench_rows);
+                                        });
+                                    if blast_visibility_clicked && let Some(hidden) = hidden.as_mut() {
+                                        let family = Family {
+                                            benches: &listed_rows,
+                                            bench: bench_row,
+                                            flitches: &flitch_rows,
+                                            blasts: &blast_refs,
+                                        };
+                                        set_animation_blast_visible(hidden, &family, shape, !blast_visible.unwrap_or(true));
+                                    }
+                                    exclusion_menu(&blast_response, &blast_label, solid, blast_target, commands);
+                                    if blast_response.clicked() {
+                                        clicked = Some(bench_rows.clone());
+                                        clicked_blast = blast_ref;
                                     }
                                 }
                             });
-                        if heading.inner.clicked() {
-                            clicked = Some(solid_rows);
+                            exclusion_menu(&bench_response, &bench_label, solid, bench_target, commands);
+                            if bench_visibility_clicked && let Some(hidden) = hidden.as_mut() {
+                                let family = Family {
+                                    benches: &listed_rows,
+                                    bench: bench_row,
+                                    flitches: &flitch_rows,
+                                    blasts: &blast_refs,
+                                };
+                                set_animation_row_visible(hidden, &family, bench_row, !bench_visible.unwrap_or(true));
+                            }
+                            if bench_response.clicked() {
+                                clicked = Some(bench_rows);
+                            }
                         }
+                    });
+                    if heading.inner.clicked() {
+                        clicked = Some(solid_rows);
                     }
-                });
+                    if solid_visibility_clicked && let Some(hidden) = hidden.as_mut() {
+                        set_solid_visible(hidden, solid.id, !solid_visible.unwrap_or(true));
+                    }
+                }
+            });
             if kind_heading.inner.clicked() {
                 clicked = Some(kind_rows);
             }
+            if kind_visibility_clicked && let Some(hidden) = hidden.as_mut() {
+                for &solid in &kind_solids {
+                    set_solid_visible(hidden, solid, !kind_visible.unwrap_or(true));
+                }
+            }
         }
         paint_fixed_stripes(ui, slot, top, crate::ui::widgets::tree_row_colors(ui).1);
+        if let Some(hidden) = hidden
+            && hidden != editor.sequence_hidden
+        {
+            editor.sequence_hidden = hidden;
+            ui.ctx().request_repaint();
+        }
 
         if let Some(rows) = clicked {
             let extend = ui.input(|input| input.modifiers.command || input.modifiers.shift);
@@ -755,16 +852,27 @@ pub(crate) fn format_rl(value: f64) -> String {
 /// selects it *and* its children, because the figures beside the tree are
 /// read across whatever is picked.
 fn collapsible_row(ui: &mut egui::Ui, id: egui::Id, label: &str, selected: bool, body: impl FnOnce(&mut egui::Ui)) -> egui::Response {
+    collapsible_toggle_row(ui, id, label, selected, None, body).0
+}
+
+/// [`collapsible_row`] ending in an eye showing `visible`, when there is
+/// one, and whether it was clicked.
+fn collapsible_toggle_row(ui: &mut egui::Ui, id: egui::Id, label: &str, selected: bool, visible: Option<bool>, body: impl FnOnce(&mut egui::Ui)) -> (egui::Response, bool) {
     let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
     let header = ui
         .horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
             state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
-            ExplorerEntry::new(id.with("row"), label.to_owned()).selected(selected).show(ui).response
+            let entry = ExplorerEntry::new(id.with("row"), label.to_owned()).selected(selected);
+            match visible {
+                Some(visible) => entry.visibility_toggle(visible),
+                None => entry,
+            }
+            .show(ui)
         })
         .inner;
-    state.show_body_indented(&header, ui, body);
-    header
+    state.show_body_indented(&header.response, ui, body);
+    (header.response, header.visibility_clicked)
 }
 
 /// A tree row with nothing under it, gutter-aligned with the rows that have
@@ -774,11 +882,24 @@ fn leaf_row(ui: &mut egui::Ui, id: egui::Id, label: &str, selected: bool) -> boo
 }
 
 fn leaf_row_response(ui: &mut egui::Ui, id: egui::Id, label: &str, selected: bool) -> egui::Response {
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        ExplorerEntry::new(id, label.to_owned()).reserve_toggle_gutter(true).selected(selected).show(ui).response
-    })
-    .inner
+    leaf_toggle_row(ui, id, label, selected, None).0
+}
+
+/// [`leaf_row_response`] ending in an eye showing `visible`, when there is
+/// one, and whether it was clicked.
+fn leaf_toggle_row(ui: &mut egui::Ui, id: egui::Id, label: &str, selected: bool, visible: Option<bool>) -> (egui::Response, bool) {
+    let entry = ui
+        .horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            let entry = ExplorerEntry::new(id, label.to_owned()).reserve_toggle_gutter(true).selected(selected);
+            match visible {
+                Some(visible) => entry.visibility_toggle(visible),
+                None => entry,
+            }
+            .show(ui)
+        })
+        .inner;
+    (entry.response, entry.visibility_clicked)
 }
 
 /// A bench or blast row's label, saying so when it is out of mining.
