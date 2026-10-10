@@ -551,8 +551,7 @@ pub(crate) fn draw_blast_bar_dialog(
                     let height = ui.available_height();
                     draw_blast_sequence_preview(ui, editor, &mut draft, session, height);
                 });
-                ui.allocate_ui_with_layout(egui::vec2(list_width, body_height), egui::Layout::top_down(egui::Align::Min), |ui| {
-                    ui.set_min_size(egui::vec2(list_width, body_height));
+                super::sequence_editor::fixed_column(ui, egui::vec2(list_width, body_height), |ui| {
                     ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
                     ui.label(egui::RichText::new(tr!("blast-bar-order")).strong());
                     if draft.members.is_empty() {

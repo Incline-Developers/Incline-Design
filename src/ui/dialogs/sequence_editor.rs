@@ -161,8 +161,7 @@ pub(crate) fn draw_sequence_editor(
                 ui.set_min_size(egui::vec2(view_width, body_height));
                 changed |= draw_view(ui, editor, &mut draft, session, confirming);
             });
-            ui.allocate_ui_with_layout(egui::vec2(list_width, body_height), egui::Layout::top_down(egui::Align::Min), |ui| {
-                ui.set_min_size(egui::vec2(list_width, body_height));
+            fixed_column(ui, egui::vec2(list_width, body_height), |ui| {
                 ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
                 let (list_edit, selection) = draw_order_list(ui, editor, &draft, confirming);
                 edit = list_edit;
@@ -237,8 +236,7 @@ pub(crate) fn draw_sequence_editor(
 /// The navigation column the sequence editors share: the Solids Navigation
 /// tree above the Objects tree, each taking half of `size`.
 pub(crate) fn draw_navigation_column(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, document: &Document, commands: &mut Vec<UiCommand>, size: egui::Vec2) {
-    ui.allocate_ui_with_layout(size, egui::Layout::top_down(egui::Align::Min), |ui| {
-        ui.set_min_size(size);
+    fixed_column(ui, size, |ui| {
         // Both trees band their background across their clip rect, and a
         // vertical scroll area leaves the horizontal clip exactly as it found
         // it - so without this the objects tree stripes the whole dialog and
@@ -272,6 +270,18 @@ pub(crate) fn draw_navigation_column(ui: &mut egui::Ui, editor: &mut EditorState
             });
         });
     });
+}
+
+/// A column exactly `size`, whatever is drawn in it.
+///
+/// Allocated before it is drawn rather than measured after: a row that comes
+/// out wider than the column is clipped at its edge, where a column sized by
+/// its content would widen, and push the columns beside it - and the right
+/// edge of a window as wide as the screen - off the screen.
+pub(crate) fn fixed_column<R>(ui: &mut egui::Ui, size: egui::Vec2, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    let mut column = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::top_down(egui::Align::Min)));
+    add(&mut column)
 }
 
 /// Ask before throwing an editing session away.

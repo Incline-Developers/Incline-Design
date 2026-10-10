@@ -211,7 +211,7 @@ fn draw_animation_solid(ui: &mut egui::Ui, editor: &mut EditorState, _document: 
                                     if mined.as_ref().is_some_and(|mined| !mined.flitch(blast_ref, flitch.base)) {
                                         continue;
                                     }
-                                    let flitch_visible = blast_visible && !hidden(editor, tree).rows.contains(&flitch_row);
+                                    let flitch_visible = blast_visible && !hidden(editor, tree).hides_flitch(blast_ref, flitch.base);
                                     let flitch_title = reach_text(editor, tree, format_rl(flitch.base), |b| b.blast == Some(blast_ref) && b.flitch.base == flitch.base);
                                     let row = animation_leaf_row(
                                         ui,
@@ -230,7 +230,7 @@ fn draw_animation_solid(ui: &mut egui::Ui, editor: &mut EditorState, _document: 
                                             flitches: &flitch_rows,
                                             blasts: &blast_refs,
                                         };
-                                        set_animation_row_visible(hidden_mut(editor, tree), &family, flitch_row, !flitch_visible);
+                                        set_animation_flitch_visible(hidden_mut(editor, tree), &family, blast_ref, flitch.base, !flitch_visible);
                                     }
                                 }
                             },
@@ -257,7 +257,7 @@ fn draw_animation_solid(ui: &mut egui::Ui, editor: &mut EditorState, _document: 
                     flitches: &flitch_rows,
                     blasts: &blast_refs,
                 };
-                set_animation_row_visible(hidden_mut(editor, tree), &family, bench_row, !bench_visible);
+                set_animation_bench_visible(hidden_mut(editor, tree), &family, !bench_visible);
             }
         }
     });
@@ -328,6 +328,7 @@ fn set_animation_solid_visible(editor: &mut EditorState, tree: NavigationTree, s
 fn set_solid_visible(hidden: &mut crate::ui::state::SolidsVisibility, solid: crate::model::SolidId, visible: bool) {
     hidden.rows.retain(|row| row.solid != solid);
     hidden.blasts.retain(|blast| blast.solid != solid);
+    hidden.flitches.retain(|(blast, _)| blast.solid != solid);
     if visible {
         hidden.solids.remove(&solid);
     } else {
@@ -358,45 +359,57 @@ impl Family<'_> {
             }
         }
     }
+
+    /// Open the solid and the bench above `blast`, a bench hidden whole
+    /// becoming its other blasts, hidden one by one.
+    fn open_bench(&self, hidden: &mut crate::ui::state::SolidsVisibility, blast: BlastShapeRef) {
+        self.open_solid(hidden);
+        if hidden.rows.contains(&self.bench) {
+            hidden.rows.retain(|hidden| *hidden != self.bench);
+            hidden.blasts.extend(self.blasts.iter().filter(|other| **other != blast));
+        }
+    }
 }
 
-fn set_animation_row_visible(hidden: &mut crate::ui::state::SolidsVisibility, family: &Family<'_>, row: SolidsViewRow, visible: bool) {
-    // A bench's eye sets its blasts and flitches with it, as a solid's does.
-    if row == family.bench {
-        hidden.rows.retain(|hidden| !family.flitches.contains(hidden));
-        hidden.blasts.retain(|blast| !family.blasts.contains(blast));
+/// A bench's eye sets its blasts and flitches with it, as a solid's does.
+fn set_animation_bench_visible(hidden: &mut crate::ui::state::SolidsVisibility, family: &Family<'_>, visible: bool) {
+    hidden.rows.retain(|hidden| *hidden != family.bench && !family.flitches.contains(hidden));
+    hidden.blasts.retain(|blast| !family.blasts.contains(blast));
+    hidden.flitches.retain(|(blast, _)| !family.blasts.contains(blast));
+    if visible {
+        family.open_solid(hidden);
+    } else {
+        hidden.rows.push(family.bench);
     }
-    if !visible {
-        if !hidden.rows.contains(&row) {
-            hidden.rows.push(row);
-        }
-        return;
-    }
-    family.open_solid(hidden);
-    // A flitch of a hidden bench: the bench becomes its other flitches.
-    if row != family.bench && hidden.rows.contains(&family.bench) {
-        hidden.rows.retain(|hidden| *hidden != family.bench);
-        for flitch in family.flitches.iter().filter(|flitch| **flitch != row) {
-            if !hidden.rows.contains(flitch) {
-                hidden.rows.push(*flitch);
-            }
-        }
-    }
-    hidden.rows.retain(|hidden| *hidden != row);
 }
 
 fn set_animation_blast_visible(hidden: &mut crate::ui::state::SolidsVisibility, family: &Family<'_>, blast: BlastShapeRef, visible: bool) {
+    // A blast's eye sets its flitches with it.
+    hidden.flitches.retain(|(hidden, _)| *hidden != blast);
     if !visible {
         hidden.blasts.insert(blast);
         return;
     }
-    family.open_solid(hidden);
-    // A blast of a hidden bench: the bench becomes its other blasts.
-    if hidden.rows.contains(&family.bench) {
-        hidden.rows.retain(|hidden| *hidden != family.bench);
-        hidden.blasts.extend(family.blasts.iter().filter(|other| **other != blast));
-    }
+    family.open_bench(hidden, blast);
     hidden.blasts.remove(&blast);
+}
+
+/// One flitch under one blast. Showing it under a hidden blast, bench or
+/// solid opens each of them, and hands their hiding down to everything
+/// else they hold, so only this flitch comes back.
+fn set_animation_flitch_visible(hidden: &mut crate::ui::state::SolidsVisibility, family: &Family<'_>, blast: BlastShapeRef, flitch_base: f64, visible: bool) {
+    let key = (blast, flitch_base.to_bits());
+    if !visible {
+        hidden.flitches.insert(key);
+        return;
+    }
+    family.open_bench(hidden, blast);
+    if hidden.blasts.remove(&blast) {
+        for flitch in family.flitches.iter().filter_map(|row| row.band) {
+            hidden.flitches.insert((blast, flitch.base.to_bits()));
+        }
+    }
+    hidden.flitches.remove(&key);
 }
 
 /// The same tree stopping at benches, for the Blasting step: a blast divides
@@ -675,7 +688,10 @@ fn draw_tree_to_depth(ui: &mut egui::Ui, editor: &mut EditorState, document: &Do
                                                         is_flitch: true,
                                                     }),
                                                 };
-                                                let flitch_visible = hidden.as_ref().zip(blast_visible).map(|(hidden, visible)| visible && !hidden.rows.contains(&flitch_row));
+                                                let flitch_visible = hidden
+                                                    .as_ref()
+                                                    .zip(blast_visible)
+                                                    .map(|(hidden, visible)| visible && !hidden.hides_flitch(shape, flitch.base));
                                                 let (response, visibility_clicked) = leaf_toggle_row(
                                                     ui,
                                                     egui::Id::new(("solids_view_flitch", solid.id.0, bench.base.to_bits(), blast_index, flitch.base.to_bits())),
@@ -695,7 +711,7 @@ fn draw_tree_to_depth(ui: &mut egui::Ui, editor: &mut EditorState, document: &Do
                                                         flitches: &flitch_rows,
                                                         blasts: &blast_refs,
                                                     };
-                                                    set_animation_row_visible(hidden, &family, flitch_row, !flitch_visible.unwrap_or(true));
+                                                    set_animation_flitch_visible(hidden, &family, shape, flitch.base, !flitch_visible.unwrap_or(true));
                                                 }
                                             }
                                         });
@@ -723,7 +739,7 @@ fn draw_tree_to_depth(ui: &mut egui::Ui, editor: &mut EditorState, document: &Do
                                     flitches: &flitch_rows,
                                     blasts: &blast_refs,
                                 };
-                                set_animation_row_visible(hidden, &family, bench_row, !bench_visible.unwrap_or(true));
+                                set_animation_bench_visible(hidden, &family, !bench_visible.unwrap_or(true));
                             }
                             if bench_response.clicked() {
                                 clicked = Some(bench_rows);

@@ -676,6 +676,10 @@ pub(crate) struct SolidsVisibility {
     pub(crate) solids: HashSet<crate::model::SolidId>,
     pub(crate) rows: Vec<SolidsViewRow>,
     pub(crate) blasts: HashSet<BlastShapeRef>,
+    /// One flitch under one blast, by the flitch base's bits: a flitch runs
+    /// under every blast of its bench, and its eye under one blast is that
+    /// blast's alone.
+    pub(crate) flitches: HashSet<(BlastShapeRef, u64)>,
 }
 
 impl SolidsVisibility {
@@ -683,7 +687,12 @@ impl SolidsVisibility {
         self.solids.contains(&solid)
             || self.rows.contains(&SolidsViewRow { solid, band: Some(bench) })
             || self.rows.contains(&SolidsViewRow { solid, band: Some(flitch) })
-            || blast.is_some_and(|blast| self.blasts.contains(&blast))
+            || blast.is_some_and(|blast| self.blasts.contains(&blast) || self.hides_flitch(blast, flitch.base))
+    }
+
+    /// Whether this flitch is hidden under this blast on its own.
+    pub(crate) fn hides_flitch(&self, blast: BlastShapeRef, flitch_base: f64) -> bool {
+        self.flitches.contains(&(blast, flitch_base.to_bits()))
     }
 }
 

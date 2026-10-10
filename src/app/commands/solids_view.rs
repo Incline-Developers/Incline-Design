@@ -1428,7 +1428,8 @@ impl crate::app::App<'_> {
             };
             let solids = hidden.solids.iter().fold(0u64, |sum, solid| sum.wrapping_add(unordered(&|h| solid.hash(h))));
             let blasts = hidden.blasts.iter().fold(0u64, |sum, blast| sum.wrapping_add(unordered(&|h| blast.hash(h))));
-            (solids, blasts).hash(&mut hasher);
+            let flitches = hidden.flitches.iter().fold(0u64, |sum, flitch| sum.wrapping_add(unordered(&|h| flitch.hash(h))));
+            (solids, blasts, flitches).hash(&mut hasher);
             for row in &hidden.rows {
                 row.solid.hash(&mut hasher);
                 row.band.map(|band| (band.base.to_bits(), band.top.to_bits(), band.is_flitch)).hash(&mut hasher);

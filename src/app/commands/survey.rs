@@ -375,6 +375,8 @@ fn transform_item(item: &mut OpenItem, transform: &SurveyTransform, target_syste
             ensure!(!cancel.is_cancelled(), "Cancelled");
             item.surface_face_order = Arc::new(triangulation::spatial_surface_face_order(&mesh));
             item.mesh = Arc::new(mesh);
+            // New ground: what was built from the old geometry is stale.
+            item.geometry = crate::model::triangulation::GeometryVersion::mint();
             item.raster_texture = None;
         }
         OpenItem::BlockModel(item) => {
