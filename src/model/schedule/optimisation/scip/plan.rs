@@ -359,8 +359,12 @@ type Routed = ((GroundId, MaterialId, DestinationId, usize), usize, f64, Option<
 pub(super) struct Prepared<'a> {
     pub(super) input: &'a BlendInput,
     pub(super) window: Option<&'a Window>,
+    /// Each period's label: its day, or for a plan over periods of several
+    /// days the first of them.
     pub(super) days: Vec<u32>,
     pub(super) day_intervals: BTreeMap<u32, Vec<Interval>>,
+    /// The calendar days each period covers.
+    pub(super) period_days: Vec<Vec<u32>>,
     /// Kilotonnes left in each block the plan may dig.
     pub(super) tonnes: BTreeMap<GroundId, f64>,
     /// Whether this plans the whole horizon from scratch, and so must bound
@@ -406,15 +410,23 @@ fn ground_materials(input: &BlendInput, ground: GroundId) -> Vec<(MaterialId, f6
 }
 
 impl<'a> Prepared<'a> {
-    pub(super) fn new(input: &'a BlendInput, window: Option<&'a Window>) -> Self {
+    /// The plan's preparation, over periods of `period_days` days each:
+    /// one, but for the whole-horizon relaxation's bound, which may join days
+    /// (see [`relaxation_bound`]).
+    pub(super) fn new(input: &'a BlendInput, window: Option<&'a Window>, period_days: u32) -> Self {
         // ---- days ---------------------------------------------------------------
+        let period_days = period_days.max(1);
         let mut day_intervals: BTreeMap<u32, Vec<Interval>> = BTreeMap::new();
+        let mut covered: BTreeMap<u32, BTreeSet<u32>> = BTreeMap::new();
         for interval in &input.intervals {
             if window.is_none_or(|window| (window.first_day..window.first_day + window.days).contains(&interval.day())) {
-                day_intervals.entry(interval.day()).or_default().push(*interval);
+                let label = interval.day() / period_days * period_days;
+                day_intervals.entry(label).or_default().push(*interval);
+                covered.entry(label).or_default().insert(interval.day());
             }
         }
         let days: Vec<u32> = day_intervals.keys().copied().collect();
+        let period_days: Vec<Vec<u32>> = covered.into_values().map(|days| days.into_iter().collect()).collect();
         let day_end: Vec<f64> = days
             .iter()
             .map(|day| day_intervals[day].iter().map(|interval| interval.end_h).fold(f64::MIN, f64::max))
@@ -612,6 +624,7 @@ impl<'a> Prepared<'a> {
             window,
             days,
             day_intervals,
+            period_days,
             tonnes,
             optimistic,
             ceilings,
@@ -710,10 +723,41 @@ impl<'a> Prepared<'a> {
 /// The plan for `input`, started from `seed` (the hourly dispatch's schedule)
 /// when there is one, so it is never worse than the schedule it improves.
 pub(crate) fn solve(input: &BlendInput, seed: Option<&BlendSolution>, window: Option<&Window>, settings: Settings, stop: &AtomicBool) -> Result<PlanSolve, String> {
+    solve_periods(input, seed, window, settings, 1, stop)
+}
+
+/// The whole horizon's linear relaxation over periods of `period_days` days,
+/// an upper bound on every schedule's value as the daily one is, and looser.
+///
+/// Every row of the daily plan only gets weaker when days join: a period's
+/// loader hours, fleet hours and crusher budgets are its days' summed; a
+/// block is released for the period if it is by the period's end; a block
+/// may follow the one ahead of it in the same period, as in the same day; and
+/// piles are held to their room and stock only at each period's end. A
+/// grade target is kept for a period only where every day of it has the same
+/// one, and then priced on the period's blend, which costs no more than the
+/// days' blends do apart; any other is left off, and so costs nothing. So
+/// the plan over periods allows every plan by day, and its optimum is no
+/// less - for a model a fraction of the size, which a long horizon needs.
+pub(crate) fn relaxation_bound(input: &BlendInput, period_days: u32, time_limit: Duration, stop: &AtomicBool) -> Result<PlanSolve, String> {
+    let settings = Settings {
+        time_limit,
+        relative_gap: 0.0,
+        relax: true,
+    };
+    solve_periods(input, None, None, settings, period_days, stop)
+}
+
+fn solve_periods(input: &BlendInput, seed: Option<&BlendSolution>, window: Option<&Window>, settings: Settings, period_days: u32, stop: &AtomicBool) -> Result<PlanSolve, String> {
     let started = Instant::now();
-    let prepared = Prepared::new(input, window);
+    let prepared = Prepared::new(input, window, period_days);
+    let joined = prepared.period_days.iter().any(|days| days.len() > 1);
+    // Days joined, the seed would have to be mapped onto periods; nothing
+    // seeds a relaxation.
+    let seed = seed.filter(|_| !joined);
     let Prepared {
         days,
+        period_days: covered,
         tonnes,
         pile_opening,
         outlets,
@@ -1025,10 +1069,14 @@ pub(crate) fn solve(input: &BlendInput, seed: Option<&BlendSolution>, window: Op
         if !building(id, p) {
             builder.row(&terms, f64::NEG_INFINITY, 0.0, &format!("closed_{}_{p}", id.0));
         }
+        // A period's budget is its days', and none if any day has none.
         if entry.kind == DestinationKind::Crusher
-            && let Some(Some(budget)) = entry.crusher_daily_t.get(days[p] as usize)
+            && let Some(budget) = covered[p]
+                .iter()
+                .map(|day| entry.crusher_daily_t.get(*day as usize).copied().flatten())
+                .sum::<Option<f64>>()
         {
-            builder.row(&terms, f64::NEG_INFINITY, *budget / UNIT, &format!("crush_{}_{p}", id.0));
+            builder.row(&terms, f64::NEG_INFINITY, budget / UNIT, &format!("crush_{}_{p}", id.0));
         }
     }
     for (id, terms) in &totals {
@@ -1049,7 +1097,23 @@ pub(crate) fn solve(input: &BlendInput, seed: Option<&BlendSolution>, window: Op
     // Daily soft grade targets, priced as the dispatch and the replay price
     // them.
     for (index, target) in input.grade_targets.iter().enumerate() {
-        let Some(p) = days.iter().position(|day| *day == target.day) else { continue };
+        let Some(p) = covered.iter().position(|days| days.contains(&target.day)) else {
+            continue;
+        };
+        // Days joined, a period carries one target per destination and grade,
+        // the one every day of it has; see `relaxation_bound`.
+        if covered[p].len() > 1 {
+            let same: Vec<_> = input
+                .grade_targets
+                .iter()
+                .enumerate()
+                .filter(|(_, other)| other.destination == target.destination && other.grade == target.grade && covered[p].contains(&other.day))
+                .collect();
+            let shared = same.len() == covered[p].len() && same.iter().all(|(_, other)| other.specification.hinges() == target.specification.hinges());
+            if !shared || same.first().is_some_and(|(first, _)| *first != index) {
+                continue;
+            }
+        }
         let Some(list) = flows.get(&(target.destination, p)) else { continue };
         for (hinge, (boundary, direction, slope)) in target.specification.hinges().into_iter().enumerate() {
             if slope == 0.0 {

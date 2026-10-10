@@ -964,12 +964,19 @@ left free, a day solved a day ahead sent the trucks to paying ore and undid
 a stripping plan the days after paid for. Windows then double in length up
 to the whole horizon.
 
-The bound is the plan's: its linear relaxation over the whole horizon at the
-start, and its mixed-integer dual bound from a solve that runs in the
-background throughout. Every simplification of the plan is optimistic
-(free order within a day, each route at its best candidate, the fleet
-pooled), so either bounds any schedule - except reclaim, which the plan
-does not model, so with reclaim bars no bound is reported. A schedule the
+The bound is the plan's: its linear relaxation over the whole horizon, and
+its mixed-integer dual bound from a solve that runs in the background
+throughout. Every simplification of the plan is optimistic (free order
+within a day, each route at its best candidate, the fleet pooled, a
+reclaim's grade the one that suits each use of it best), so either bounds
+any schedule. The relaxation is solved beside the search, first over
+periods of a week, then four days, two and one, each within what is left of
+the budget, the tightest that finishes kept (`plan::relaxation_bound`):
+joining days only loosens the plan, so each is a bound, and the coarse ones
+are small enough for long horizons - Centralia's 52 days by the week in
+14 s, where by the day they take more than five minutes. A mixed-integer
+dual bound is taken only once its solve is past its first relaxation; before
+then it is the trivial one each column's own bounds allow. A schedule the
 bound proves within the run's gap target is published as proven and the
 whole-horizon solve is skipped; a horizon too large for that solve
 publishes the search's schedule.
