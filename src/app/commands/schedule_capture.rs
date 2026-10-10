@@ -445,7 +445,6 @@ fn capture_drill_blast(
         })
     };
     let block_bounds: Vec<_> = snapshot.blocks.iter().map(|block| bounds(&block.ground)).collect();
-    let excluded_bounds: Vec<_> = snapshot.excluded.iter().map(|block| bounds(&block.ground)).collect();
     let mut blasts = Vec::with_capacity(snapshot.blasts.len());
     let mut unclearable: Vec<String> = Vec::new();
     for record in &snapshot.blasts {
@@ -508,11 +507,13 @@ fn capture_drill_blast(
                 }
                 continue;
             }
-            // Ground in a higher bench, within the buffer in plan.
+            // Ground in a higher bench, within the buffer in plan. Ground
+            // excluded from mining is treated as never having been there, so
+            // it holds nothing up; `snapshot.excluded` is passed over whole.
             if block.flitch.base < record.bench.top - 1e-6 {
                 continue;
             }
-            if !near(block_bounds[position]) || plan_gap(&block.ground, &record.face) > reach {
+            if !near(block_bounds[position]) || plan_gap(&block.ground, &record.face) > reach || excluded(block, &source.exclusions) {
                 continue;
             }
             match (block_ground.get(&position), empty_cleared_by.get(&position)) {
@@ -522,14 +523,6 @@ fn capture_drill_blast(
                 (None, None) => blocked = true,
             }
         }
-        // Ground excluded from mining is never dug, so it stands for good.
-        blocked |= snapshot.excluded.iter().zip(&excluded_bounds).any(|(block, bounds)| {
-            let in_blast = block.solid == record.solid
-                && block.blast.is_some_and(|blast| {
-                    (blast.bench_base() - record.bench.base).abs() < 1e-6 && crate::model::arrangement::point_in_face(&record.face, glam::DVec2::from(blast.anchor()))
-                });
-            !in_blast && block.flitch.base >= record.bench.top - 1e-6 && near(*bounds) && plan_gap(&block.ground, &record.face) <= reach
-        });
         if blocked && stage == crate::model::schedule::BlastStage::NotStarted {
             unclearable.push(crate::ui::elements::solids_view::blast_path(&record.solid_name, record.bench.base, &record.name));
         }
