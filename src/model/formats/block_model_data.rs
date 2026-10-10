@@ -212,6 +212,54 @@ impl BlockModelData {
                 .fold(0usize, usize::saturating_add)
     }
 
+    /// Set categorical column `name`: per block a code of `categories` (`NaN`
+    /// blank), each named, with the colours `colors` gives. The column is added
+    /// when the model has none of that name; a numeric column of that name is
+    /// refused rather than turned into categories.
+    pub(crate) fn set_category_column(
+        &mut self,
+        name: &str,
+        codes: Arc<Vec<f64>>,
+        categories: BTreeMap<u32, String>,
+        colors: BTreeMap<u32, [f32; 4]>,
+    ) -> Result<(), BlockModelDataError> {
+        if codes.len() != self.metadata.n_blocks {
+            return Err(invalid(format!("column '{name}' has {} values for {} blocks", codes.len(), self.metadata.n_blocks)));
+        }
+        if let Some(code) = codes
+            .iter()
+            .copied()
+            .find(|code| code.is_finite() && (code.fract() != 0.0 || !(0.0..=u32::MAX as f64).contains(code) || !categories.contains_key(&(*code as u32))))
+        {
+            return Err(invalid(format!("column '{name}' holds unnamed category code {code}")));
+        }
+        let physical_type = if categories.len() <= u8::MAX as usize + 1 { "namedbyte" } else { "namedshort" };
+        let variable = match self.metadata.variables.iter().position(|variable| variable.name == name) {
+            Some(index) if self.metadata.variables[index].strings.is_empty() && is_numeric_type(&self.metadata.variables[index].physical_type) => {
+                return Err(invalid(format!("column '{name}' is not categorical")));
+            }
+            Some(index) => &mut self.metadata.variables[index],
+            None => {
+                self.metadata.variables.push(BlockVariable {
+                    name: name.to_owned(),
+                    ..BlockVariable::default()
+                });
+                self.metadata.variables.last_mut().expect("just pushed")
+            }
+        };
+        variable.physical_type = physical_type.to_owned();
+        variable.strings = categories;
+        variable.category_colors = colors;
+        self.numeric_values.insert(name.to_owned(), codes);
+        // The reservation cannot grow, so it is taken again for the new total;
+        // the values exist already, so a refusal leaves the model untracked.
+        self._reservation = crate::app::memory::MemoryReservation::untracked();
+        if let Ok(reservation) = crate::app::memory::reserve(self.estimated_bytes(), "block model") {
+            self._reservation = reservation;
+        }
+        Ok(())
+    }
+
     pub(crate) fn shared_numeric_values(&self, name: &str) -> Option<Arc<Vec<f64>>> {
         self.numeric_values.get(name).map(Arc::clone)
     }

@@ -19,12 +19,13 @@ Paths relative to `src/`, except `crates/` paths, which are relative to the repo
 | Asset loading | `app/commands/residency.rs` owns transitions; `model/asset_residency.rs`, `layer_residency.rs`, `history_storage.rs` move payloads to temporary backing in `asset_storage.rs` |
 | Persistence | `model/formats/`, `model/atomic_file.rs` (native), `app/web_storage.rs` (browser) |
 | Ultimate pit optimization | `crates/mineflow/src/` (`pseudoflow.rs`, `solver.rs`, `pattern.rs`, `precedence.rs`); see its README; check with `cargo check -p mineflow` |
-| Reusable UI widgets | `ui/widgets/` (`menu.rs` buttons and fields, `collapsible_section.rs`, `data_table.rs`, `toolbar.rs`) |
+| Reusable UI widgets | `ui/widgets/` (`menu.rs` buttons and fields, `collapsible_section.rs`, `data_table.rs`, `toolbar.rs`, `data_grid.rs` editable grid and `value_field.rs` input/constant field - see `.claude/skills/ui-components/SKILL.md`) |
 | Drill & Blast | `model/drill_hole.rs` (patterns, ties, firing times), `model/blast.rs` (charge library, `charge_hole`, `BlastAnalysis`), `app/tie_in.rs`, `app/blast.rs`, `ui/elements/products.rs` (palette, rules, shot summary), `ui/elements/blast.rs` (contours, relief legend, hole card, timeline) |
+| Pit optimization | `.claude/skills/optimization/SKILL.md` (all stages); `model/optimization.rs` (settings), `model/optimization_run/` (values, shells, meshes, `report.rs`), `app/commands/optimization.rs`, `ui/dialogs/optimization.rs`, `ui/dialogs/optimization_results.rs` |
 | Translations | `src/i18n.rs` (`tr!` macro, loader), `i18n/en/incline_design.ftl` |
 | Web shell | `web/` (`index.html`, `web-initializer.js`, `_headers`), built by Trunk via `Trunk.toml` |
 
-`res/` holds embedded assets, `docs/` documentation assets, `vendor/` patched dependencies. `examples/` holds an import-ready project with real data for manual validation; format fixtures live in `src/model/formats/fixtures/`.
+`res/` holds embedded assets, `docs/` documentation assets, `vendor/` patched dependencies. `examples/` holds an import-ready project with real data for manual validation; format fixtures live in `src/model/formats/fixtures/`. Larger real data (block models for pit optimization) lives outside the repository in `../incline-test-data/`; see the optimization skill.
 
 ## Commands
 

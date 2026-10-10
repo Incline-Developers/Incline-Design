@@ -163,6 +163,22 @@ pub(crate) enum FileDialogAction {
     /// Export the project selected when the chooser opened to DXF.
     #[cfg(not(target_arch = "wasm32"))]
     ExportProjectDxf { project_runtime_id: u32, path: PathBuf },
+    /// Write the Optimization scenarios to the file the user chose.
+    #[cfg(not(target_arch = "wasm32"))]
+    ExportOptimizationScenarios(PathBuf),
+    #[cfg(not(target_arch = "wasm32"))]
+    ImportOptimizationScenarios(PathBuf),
+    #[cfg(target_arch = "wasm32")]
+    WebImportOptimizationScenarios(std::result::Result<crate::model::input::InputFile, String>),
+    /// The folder chosen for the open scenario's reports.
+    #[cfg(not(target_arch = "wasm32"))]
+    OptimizationReportsFolder(PathBuf),
+    #[cfg(not(target_arch = "wasm32"))]
+    ExportOptimizationReport(PathBuf, Vec<u8>),
+    #[cfg(not(target_arch = "wasm32"))]
+    OpenOptimizationReport(PathBuf),
+    #[cfg(target_arch = "wasm32")]
+    WebOpenOptimizationReport(std::result::Result<crate::model::input::InputFile, String>),
     #[cfg(not(target_arch = "wasm32"))]
     ExportOmf { snapshot: Box<formats::omf::ProjectSnapshot>, path: PathBuf },
     #[cfg(not(target_arch = "wasm32"))]
@@ -781,6 +797,37 @@ impl<'a> App<'a> {
                     save_as_previous_name: Some(previous_name),
                 };
                 self.spawn_project_write(kind, snapshot, path);
+                Ok(())
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            FileDialogAction::ExportOptimizationScenarios(path) => self.write_optimization_scenarios_export(path),
+            #[cfg(not(target_arch = "wasm32"))]
+            FileDialogAction::ImportOptimizationScenarios(path) => {
+                let text = std::fs::read_to_string(&path).with_context(|| format!("Could not read {}", path.display()))?;
+                self.merge_imported_optimization_scenarios(&text)
+            }
+            #[cfg(target_arch = "wasm32")]
+            FileDialogAction::WebImportOptimizationScenarios(file) => {
+                let file = file.map_err(anyhow::Error::msg)?;
+                let text = String::from_utf8(file.bytes).context("The file is not text")?;
+                self.merge_imported_optimization_scenarios(&text)
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            FileDialogAction::ExportOptimizationReport(path, bytes) => self.write_optimization_report_export(path, bytes),
+            #[cfg(not(target_arch = "wasm32"))]
+            FileDialogAction::OpenOptimizationReport(path) => {
+                let bytes = std::fs::read(&path).with_context(|| format!("Could not read {}", path.display()))?;
+                let name = path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned());
+                self.show_optimization_report_file(name, &bytes)
+            }
+            #[cfg(target_arch = "wasm32")]
+            FileDialogAction::WebOpenOptimizationReport(file) => {
+                let file = file.map_err(anyhow::Error::msg)?;
+                self.show_optimization_report_file(file.source.name.clone(), &file.bytes)
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            FileDialogAction::OptimizationReportsFolder(path) => {
+                self.set_optimization_reports_folder(path);
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]

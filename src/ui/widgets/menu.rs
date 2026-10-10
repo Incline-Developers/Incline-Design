@@ -277,7 +277,7 @@ fn paint_title_text(ui: &mut egui::Ui, title: &egui::WidgetText, rect: egui::Rec
 ///
 /// The selection blue, darkened in the light theme so white text on it stays
 /// legible against a bright surface.
-fn accent_fill(visuals: &egui::Visuals) -> egui::Color32 {
+pub(crate) fn accent_fill(visuals: &egui::Visuals) -> egui::Color32 {
     let accent = visuals.selection.stroke.color;
     if visuals.dark_mode { accent } else { shifted(accent, -45) }
 }

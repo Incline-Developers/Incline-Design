@@ -344,6 +344,67 @@ pub(crate) fn load_session() -> io::Result<Session> {
     Ok(session)
 }
 
+/// Write every scenario to the one scenarios file.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn save_optimization_scenarios(file: &crate::model::optimization::ScenarioFile) -> io::Result<String> {
+    let path = data_path("optimization_scenarios.json")?;
+    let contents = serde_json::to_string_pretty(file).map_err(io::Error::other)?;
+    write_atomic(&path, contents.as_bytes())?;
+    Ok(path.display().to_string())
+}
+
+/// Write the scenarios to a file the user chose, to keep or to move to another machine.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn export_optimization_scenarios(path: &std::path::Path, file: &crate::model::optimization::ScenarioFile) -> io::Result<()> {
+    let contents = serde_json::to_string_pretty(file).map_err(io::Error::other)?;
+    write_atomic(path, contents.as_bytes())
+}
+
+/// Read the scenarios file. A missing file is a `NotFound` error, which the
+/// caller reports as "nothing saved yet" rather than as a failure.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn load_optimization_scenarios() -> io::Result<crate::model::optimization::ScenarioFile> {
+    let contents = fs::read_to_string(data_path("optimization_scenarios.json")?)?;
+    parse_optimization_scenarios(&contents)
+}
+
+#[cfg(target_arch = "wasm32")]
+const WEB_SCENARIOS_KEY: &str = "incline.optimization_scenarios.v1";
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn save_optimization_scenarios(file: &crate::model::optimization::ScenarioFile) -> io::Result<String> {
+    let json = serde_json::to_string(file).map_err(io::Error::other)?;
+    let storage = web_sys::window()
+        .and_then(|window| window.local_storage().ok().flatten())
+        .ok_or_else(|| io::Error::other("localStorage is unavailable"))?;
+    storage
+        .set_item(WEB_SCENARIOS_KEY, &json)
+        .map_err(|error| io::Error::other(format!("localStorage write failed: {error:?}")))?;
+    Ok(WEB_SCENARIOS_KEY.to_owned())
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn load_optimization_scenarios() -> io::Result<crate::model::optimization::ScenarioFile> {
+    let storage = web_sys::window()
+        .and_then(|window| window.local_storage().ok().flatten())
+        .ok_or_else(|| io::Error::other("localStorage is unavailable"))?;
+    let json = storage
+        .get_item(WEB_SCENARIOS_KEY)
+        .map_err(|error| io::Error::other(format!("localStorage read failed: {error:?}")))?
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no browser scenarios"))?;
+    parse_optimization_scenarios(&json)
+}
+
+/// Refuse a file written by a newer build rather than misread it.
+pub(crate) fn parse_optimization_scenarios(json: &str) -> io::Result<crate::model::optimization::ScenarioFile> {
+    let mut file: crate::model::optimization::ScenarioFile = serde_json::from_str(json).map_err(io::Error::other)?;
+    if file.version > crate::model::optimization::SCENARIO_FILE_VERSION {
+        return Err(io::Error::other(format!("scenarios file version {} is newer than this build reads", file.version)));
+    }
+    file.scenarios.iter_mut().for_each(crate::model::optimization::OptimizationScenario::migrate);
+    Ok(file)
+}
+
 /// Resolve a path inside the editor's data directory: the platform config
 /// directory (`$XDG_CONFIG_HOME`, `~/Library/Application Support`,
 /// `%APPDATA%`) under `incline/`.

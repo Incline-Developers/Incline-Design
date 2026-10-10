@@ -1,14 +1,18 @@
 //! Custom egui widget implementations used across the UI.
 
+pub(crate) mod bar_line_chart;
 pub(crate) mod collapsible_section;
 pub(crate) mod color;
 pub(crate) mod context_menu;
+pub(crate) mod data_grid;
 pub(crate) mod data_table;
 pub(crate) mod explorer;
 pub(crate) mod log_traces;
 pub(crate) mod menu;
 pub(crate) mod progress;
+pub(crate) mod rosette_diagram;
 pub(crate) mod toolbar;
+pub(crate) mod value_field;
 pub(crate) mod viewport;
 
 /// Step a colour by `delta` levels per channel.

@@ -4,8 +4,9 @@ pub(crate) mod drill_hole;
 pub(crate) mod file; // Handles importing, exportings, etc. commands
 pub(crate) mod folder; // Handles explorer folder create/delete/rename/move commands, for every section
 pub(crate) mod layer; // Handles creating layers, deleting layers, etc. commands
-pub(crate) mod object_edit; // Handles the "Edit Object" dialog's working-copy writeback.
+pub(crate) mod object_edit;
 pub(crate) mod omf; // Whole-project Open Mining Format interchange.
+pub(crate) mod optimization; // Handles the Optimization workspace's scenario list, editor and scenarios file. // Handles the "Edit Object" dialog's working-copy writeback.
 pub(crate) mod plot; // Handles printable plot sheets
 pub(crate) mod point_cloud; // Handles importing/loading point clouds, etc. commands
 pub(crate) mod products; // Handles the Drill & Blast workspace's stored products.
@@ -125,6 +126,7 @@ impl<'a> App<'a> {
                 | UiCommand::BuildReferenceSurface { .. }
                 | UiCommand::BuildReferencePoints { .. }
                 | UiCommand::OpenCreateOreTriangulation
+                | UiCommand::RunOptimizationScenario(_)
         );
         if requires_project && !self.workspace.has_active_project() {
             anyhow::bail!("Create or open a project before importing, drawing, or generating data");
@@ -704,6 +706,59 @@ impl<'a> App<'a> {
             }
             UiCommand::SetDrillHoleColorByWorkingSection { id, field } => {
                 self.set_drill_hole_color_by_working_section(id, field);
+                Ok(())
+            }
+            UiCommand::OpenOptimizationScenarios => {
+                self.open_optimization_scenarios();
+                Ok(())
+            }
+            UiCommand::AddOptimizationScenario => {
+                self.add_optimization_scenario();
+                Ok(())
+            }
+            UiCommand::EditOptimizationScenario(id) => {
+                self.edit_optimization_scenario(id);
+                Ok(())
+            }
+            UiCommand::SaveOptimizationScenario { scenario, then_close } => self.save_optimization_scenario(*scenario, then_close),
+            UiCommand::ExportOptimizationScenarios => {
+                self.export_optimization_scenarios();
+                Ok(())
+            }
+            UiCommand::ImportOptimizationScenarios => {
+                self.import_optimization_scenarios();
+                Ok(())
+            }
+            UiCommand::ExportOptimizationReport => {
+                self.export_optimization_report();
+                Ok(())
+            }
+            UiCommand::SaveOptimizationReportColumns => self.save_optimization_report_columns(),
+            UiCommand::ConfirmOptimizationLoad(load) => {
+                self.confirm_optimization_load(load);
+                Ok(())
+            }
+            UiCommand::OpenOptimizationReport => {
+                self.open_optimization_report();
+                Ok(())
+            }
+            UiCommand::ChooseOptimizationReportsFolder => {
+                self.choose_optimization_reports_folder();
+                Ok(())
+            }
+            UiCommand::BeginShellStartPick => {
+                self.begin_shell_start_pick();
+                Ok(())
+            }
+            UiCommand::DuplicateOptimizationScenario(id) => self.duplicate_optimization_scenario(id),
+            UiCommand::RenameOptimizationScenario { id, name } => self.rename_optimization_scenario(id, name),
+            UiCommand::DeleteOptimizationScenario(id) => self.delete_optimization_scenario(id),
+            UiCommand::RunOptimizationScenario(id) => {
+                self.run_optimization_scenario(id);
+                Ok(())
+            }
+            UiCommand::CancelOptimizationScenario(id) => {
+                self.cancel_optimization_scenario(id);
                 Ok(())
             }
             UiCommand::OpenCreateBlockModel => {

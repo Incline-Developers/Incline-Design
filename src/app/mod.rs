@@ -621,6 +621,7 @@ impl<'a> App<'a> {
             MacMenuAction::OpenCreateBlockModel => Some(UiCommand::OpenCreateBlockModel),
             MacMenuAction::OpenReferencePoints => Some(UiCommand::OpenReferencePoints),
             MacMenuAction::OpenReferenceSurface => Some(UiCommand::OpenReferenceSurface),
+            MacMenuAction::OpenOptimizationScenarios => Some(UiCommand::OpenOptimizationScenarios),
             MacMenuAction::OpenSurveyDefinitions => Some(UiCommand::OpenSurveyDefinitions),
             MacMenuAction::OpenSurveyTransform => Some(UiCommand::OpenSurveyTransform),
             MacMenuAction::OpenCreateOreTriangulation => Some(UiCommand::OpenCreateOreTriangulation),
@@ -1448,6 +1449,23 @@ impl<'a> App<'a> {
             .chain(self.point_clouds.iter().filter(|item| item.state.hidden).map(|item| item.entity_id()))
             .chain(self.raster_textures.iter().filter(|item| item.state.hidden).map(|item| SceneEntityId::Raster(item.id)));
         self.editor.hidden_handles.extend(hidden);
+        // One entity shown alone, hidden or not (a pick on it).
+        if let Some(keep) = self.editor.isolated_entity {
+            let everything = self
+                .scene_document
+                .objects()
+                .iter()
+                .map(|object| SceneEntityId::Object(object.id()))
+                .chain(self.triangulations.iter().map(|item| item.entity_id()))
+                .chain(self.block_models.iter().map(|item| item.entity_id()))
+                .chain(self.drill_holes.iter().map(|item| item.entity_id()))
+                .chain(self.point_clouds.iter().map(|item| item.entity_id()))
+                .chain(self.raster_textures.iter().map(|item| SceneEntityId::Raster(item.id)))
+                .filter(|entity| *entity != keep)
+                .collect::<Vec<_>>();
+            self.editor.hidden_handles.extend(everything);
+            self.editor.hidden_handles.remove(&keep);
+        }
     }
 
     fn invalidate_geometry(&mut self) {

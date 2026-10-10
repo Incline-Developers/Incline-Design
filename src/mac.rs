@@ -108,6 +108,8 @@ pub(crate) enum MacMenuAction {
     OpenReferencePoints,
     /// The Drillholes menu's row that opens the build surface dialog.
     OpenReferenceSurface,
+    /// The Optimization menu's row that opens the scenarios list.
+    OpenOptimizationScenarios,
     /// One row of File > Open Recent, by its index in the recent list the menu
     /// was last built from.
     OpenRecent(usize),
@@ -125,6 +127,7 @@ const TRIANGULATION_MENU_TAG: isize = -1;
 const BLOCK_MODEL_MENU_TAG: isize = -3;
 const DRILL_HOLES_MENU_TAG: isize = -5;
 const COORDINATES_MENU_TAG: isize = -6;
+const OPTIMIZATION_MENU_TAG: isize = -7;
 
 /// Tags at or above this carry a recent-project index rather than naming a
 /// fixed action, leaving room for the fixed list to grow.
@@ -178,6 +181,7 @@ impl MacMenuAction {
         Self::ShowProjectInFileManager,
         Self::OpenReferencePoints,
         Self::OpenReferenceSurface,
+        Self::OpenOptimizationScenarios,
     ];
 
     /// The `NSMenuItem` tag this action is carried by.
@@ -527,6 +531,12 @@ pub(crate) fn install_menu_bar() {
     add_action(&point_cloud_menu, &tr!("common-classify"), "", MacMenuAction::OpenPointCloudClassify, &target, mtm);
     add_submenu(&root, &tr!("ws-menubar-point-cloud"), &point_cloud_menu, mtm);
 
+    let optimization_menu = menu(&tr!("ws-optimization"), mtm);
+    optimization_menu.setAutoenablesItems(false);
+    add_action(&optimization_menu, &tr!("opt-scenarios-button"), "", MacMenuAction::OpenOptimizationScenarios, &target, mtm);
+    let optimization_item = add_submenu(&root, &tr!("ws-optimization"), &optimization_menu, mtm);
+    optimization_item.setTag(OPTIMIZATION_MENU_TAG);
+
     app.setMainMenu(Some(&root));
     NSMenu::setMenuBarVisible(true, mtm);
 }
@@ -578,6 +588,10 @@ fn set_workspace_menus(root: &NSMenu, workspace: Workspace) {
 
     if let Some(item) = find_item(root, TRIANGULATION_MENU_TAG) {
         item.setHidden(workspace != Workspace::Production);
+    }
+
+    if let Some(item) = find_item(root, OPTIMIZATION_MENU_TAG) {
+        item.setHidden(workspace != Workspace::Optimization);
     }
 
     if let Some(item) = find_item(root, BLOCK_MODEL_MENU_TAG) {
