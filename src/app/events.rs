@@ -258,6 +258,7 @@ impl<'a> App<'a> {
                     self.auto_run_haulage();
                     self.auto_recalculate_schedule();
                     self.release_pipeline_residency();
+                    self.sync_improve_progress();
                     self.pick_entry_ground();
                     self.sync_solid_preview();
                     self.sync_schedule_animation();

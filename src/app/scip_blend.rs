@@ -46,6 +46,7 @@ use crate::model::schedule::{
             replay::{BlendSolution, ExtractionAdjustments, MovementRow, ReplayReport, replay_cancellable},
             rolling::{self, Carry, Stitched, Window},
         },
+        progress::ImproveStage,
         scip::{
             adapter::{self, SolveReport},
             anytime::{self, AnytimeSettings, Hold},
@@ -336,8 +337,12 @@ pub(crate) fn improve(
         let left = options.time_limit.map_or(SEARCH_WITHOUT_LIMIT, |limit| limit.saturating_sub(budget_started.elapsed()));
         let budget = if fits { left.mul_f64(SEARCH_SHARE) } else { left };
         activity.set(3);
+        activity.stage(ImproveStage::Search);
         let started = Instant::now();
-        let polish = |input: &BlendInput, seed: &BlendSolution, hold: &Hold, limit: Duration| polish_window(input, seed, hold, limit, cancel);
+        // The search and its polishing stop when the run is finished early as
+        // well as when it is cancelled; only a cancelled run discards them.
+        let stopping = CancelFlag::from_signal(Arc::clone(&activity.finish));
+        let polish = |input: &BlendInput, seed: &BlendSolution, hold: &Hold, limit: Duration| polish_window(input, seed, hold, limit, &stopping);
         let drill_blast = found.solution.drill_blast.clone();
         let run_id = out.identity.run_id;
         let searched = anytime::run(
@@ -345,7 +350,7 @@ pub(crate) fn improve(
             (found.solution, found.replay),
             AnytimeSettings::within(budget, options.relative_gap),
             Some(&polish),
-            &cancel.signal(),
+            &activity.finish,
             |progress| {
                 let gap = progress.gap().map_or("-".into(), |gap| format!("{:.2}%", gap * 100.0));
                 log::info!(
@@ -354,6 +359,7 @@ pub(crate) fn improve(
                     progress.value,
                     progress.note
                 );
+                activity.value(progress.value, progress.bound);
             },
         );
         out.timings.solver += started.elapsed();
@@ -384,6 +390,11 @@ pub(crate) fn improve(
             },
         };
         let proved = tighter(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound);
+        if activity.finishing() {
+            log::info!("schedule run {}: finished early; keeping the search's schedule", out.identity.run_id);
+            adopt_seed(&mut out, found, None, proved, DayByDayRole::Stopped);
+            return out;
+        }
         let proven = proved
             .zip(options.relative_gap)
             .is_some_and(|(bound, target)| gap_closed(found.solution.reported_objective, bound, target));
@@ -410,6 +421,7 @@ pub(crate) fn improve(
         return out;
     }
 
+    activity.stage(ImproveStage::WholeHorizon);
     let mut completed = None;
     if let Some(found) = seed.as_ref() {
         activity.set(3);
@@ -463,6 +475,15 @@ pub(crate) fn improve(
     // The budget is the whole run's: what completing the seed and building
     // the model took comes out of SCIP's share.
     let remaining = options.time_limit.map(|limit| limit.saturating_sub(budget_started.elapsed()));
+    if let Some(found) = seed.take_if(|_| activity.finishing()) {
+        log::info!(
+            "schedule run {}: finished early before the whole-horizon solve; keeping the search's schedule",
+            out.identity.run_id
+        );
+        let proved = tighter(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound);
+        adopt_seed(&mut out, found, None, proved, DayByDayRole::Stopped);
+        return out;
+    }
     if let Some(found) = seed.take_if(|_| remaining.is_some_and(|left| left < WHOLE_HORIZON_MINIMUM)) {
         log::info!("schedule run {}: no time left after building the model; keeping the first schedule", out.identity.run_id);
         let proved = tighter(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound);
@@ -511,7 +532,8 @@ pub(crate) fn improve(
     let proving = seed.as_ref().map(|found| found.solution.reported_objective).zip(options.relative_gap);
     let solved = std::thread::scope(|scope| {
         let (interrupt, finished_ref, proof, relaxation) = (&*interrupt, &finished, &proof, &mut relaxation);
-        scope.spawn(move || watch_solve(cancel, interrupt, finished_ref, proof, proving, relaxation));
+        let finishing = &*activity.finish;
+        scope.spawn(move || watch_solve(cancel, finishing, interrupt, finished_ref, proof, proving, relaxation));
         let solved = model.solve();
         finished.store(true, Ordering::Release);
         solved
@@ -670,10 +692,20 @@ pub(crate) fn improve(
 /// solve has started, and SCIP's own bound on a long horizon stays loose.
 /// Whatever SCIP has found by then is set aside; it cannot be worth more
 /// than the gap target above the seed.
-fn watch_solve(cancel: &CancelFlag, interrupt: &AtomicBool, finished: &AtomicBool, proof: &AtomicBool, proving: Option<(f64, f64)>, relaxation: &mut Option<RelaxationJob>) {
+fn watch_solve(
+    cancel: &CancelFlag,
+    finishing: &AtomicBool,
+    interrupt: &AtomicBool,
+    finished: &AtomicBool,
+    proof: &AtomicBool,
+    proving: Option<(f64, f64)>,
+    relaxation: &mut Option<RelaxationJob>,
+) {
     let mut proving = proving.filter(|_| relaxation.is_some());
     while !finished.load(Ordering::Acquire) {
-        if cancel.is_cancelled() {
+        // Finished early, the solve stops as cancelled does, and what it has
+        // found is replayed and weighed against the search's as usual.
+        if cancel.is_cancelled() || finishing.load(Ordering::Acquire) {
             interrupt.store(true, Ordering::Release);
             return;
         }

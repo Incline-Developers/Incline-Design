@@ -524,6 +524,10 @@ pub(crate) struct App<'a> {
     /// an edit but not inputs that changed with nobody editing; see
     /// [`Self::editing_near`].
     pub(crate) last_ui_command_at: Option<Instant>,
+    /// The Improve run in flight, or the last one until its progress card is
+    /// put away, and the revision of it the editor last copied.
+    pub(crate) improve_progress: Option<Arc<crate::app::schedule_run::ImproveFeed>>,
+    pub(crate) improve_progress_seen: Option<u64>,
     /// Whether a Setup run was keeping unloaded items resident last frame;
     /// see [`Self::release_pipeline_residency`].
     pub(crate) residency_held_by_pipeline: bool,
@@ -690,6 +694,8 @@ impl<'a> Default for App<'a> {
             haulage_auto_settle: None,
             haulage_auto_deadline: None,
             last_ui_command_at: None,
+            improve_progress: None,
+            improve_progress_seen: None,
             residency_held_by_pipeline: false,
             schedule_animation: Default::default(),
             solid_preview_restore_requested: None,

@@ -291,11 +291,14 @@ fn solve_highs(builder: &Builder, seed: Option<&[f64]>, time_limit: Duration, re
         if !objective.is_finite() {
             return Err(format!("no plan found: HiGHS model status {status}"));
         }
-        // A relaxation interrupted before its optimum bounds nothing.
+        // A relaxation interrupted before its optimum bounds nothing. Nor,
+        // usefully, does a mixed-integer solve stopped inside its first
+        // relaxation: its dual bound is then only what each column's own
+        // bounds allow, valid but many times any schedule's value.
         let bound = if relax {
             (status == highs_sys::MODEL_STATUS_OPTIMAL).then_some(objective)
         } else {
-            (found != highs_sys::STATUS_ERROR && bound.is_finite()).then_some(bound)
+            (found != highs_sys::STATUS_ERROR && bound.is_finite() && (status == highs_sys::MODEL_STATUS_OPTIMAL || nodes > 0)).then_some(bound)
         };
         Ok(Answer {
             values,

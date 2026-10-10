@@ -43,10 +43,17 @@ use std::{
 
 use super::{
     jobs::CancelFlag,
+    schedule_run::ImproveFeed,
     schedule_solve::{ScheduleActivity, ScheduleCompletion, ScheduleRunIdentity, ScheduleSolveOptions, SolveTermination, execute_schedule},
     scip_blend::ReportedCompletion,
 };
-use crate::{i18n::tr, model::schedule::optimisation::blended::input::BlendInput};
+use crate::{
+    i18n::tr,
+    model::schedule::optimisation::{
+        blended::input::BlendInput,
+        progress::{ImproveEvent, ImproveStage},
+    },
+};
 
 /// The command-line argument that starts the app's binary as a solver
 /// process instead of the app.
@@ -85,8 +92,14 @@ enum Message {
     },
     /// The day-by-day schedule, shown while the whole horizon solves.
     Early(Box<ReportedCompletion>),
+    /// How an Improve run is going, for its progress card.
+    Progress(ImproveEvent),
     Done(Box<ReportedCompletion>),
 }
+
+/// The line the app writes to a solver process's stdin to end an Improve
+/// run early, keeping the best schedule it has.
+const FINISH: &[u8] = b"finish\n";
 
 /// Whether this process was started as a solver process.
 pub(crate) fn is_solver_invocation() -> bool {
@@ -97,12 +110,16 @@ pub(crate) fn is_solver_invocation() -> bool {
 /// same completion, and `early` called at most once with a usable
 /// day-by-day schedule. Returns once the run has finished, failed or been
 /// cancelled; the process is gone by then.
+///
+/// `feed` takes the run's progress, and says when the user has asked it to
+/// finish early.
 pub(crate) fn solve(
     input: Arc<BlendInput>,
     identity: ScheduleRunIdentity,
     options: ScheduleSolveOptions,
     cancel: &CancelFlag,
     early: &dyn Fn(&ScheduleCompletion),
+    feed: &ImproveFeed,
 ) -> ScheduleCompletion {
     let run_id = identity.run_id;
     let failed = |termination: SolveTermination, diagnostic: String| {
@@ -127,13 +144,21 @@ pub(crate) fn solve(
     let sent = process.send(&request);
 
     let mut answer = None;
+    let mut finish_sent = false;
     if sent.is_ok() {
         loop {
             if cancel.is_cancelled() {
                 process.kill();
                 return failed(SolveTermination::Cancelled, "cancelled while the solver process ran".into());
             }
+            if !finish_sent && feed.finish_requested() {
+                finish_sent = true;
+                if let Err(error) = process.finish_early() {
+                    log::warn!("schedule run {run_id}: could not ask the solver process to finish: {error}");
+                }
+            }
             match process.messages.recv_timeout(POLL) {
+                Ok(Message::Progress(event)) => feed.apply(event),
                 Ok(Message::Log { level, target, text }) => {
                     let level = log::Level::iter().nth(level.saturating_sub(1)).unwrap_or(log::Level::Info);
                     log::log!(target: &target, level, "{text}");
@@ -147,6 +172,7 @@ pub(crate) fn solve(
                     }
                 }
                 Ok(Message::Done(report)) => {
+                    feed.apply(ImproveEvent::Stage(ImproveStage::Publish));
                     answer = Some(report);
                     break;
                 }
@@ -234,6 +260,14 @@ impl Process {
         serde_json::to_writer(&mut writer, request)?;
         writer.write_all(b"\n")?;
         writer.flush()
+    }
+
+    /// Ask the process to end its Improve run and answer with the best
+    /// schedule it has.
+    fn finish_early(&mut self) -> std::io::Result<()> {
+        let stdin = self.child.stdin.as_mut().expect("stdin was piped");
+        stdin.write_all(FINISH)?;
+        stdin.flush()
     }
 
     fn kill(&mut self) {
@@ -354,18 +388,27 @@ pub(crate) fn run_solver() -> i32 {
 
     let cancel = CancelFlag::default();
     let watched = cancel.clone();
-    // Nothing more is ever written to stdin, so it ends only when the app
-    // closes it or exits. Either way no one will read an answer: stop the
-    // solve, and if it does not stop, stop the process.
+    let sink = Arc::clone(&output);
+    let activity = ScheduleActivity::reporting(move |event| send(&sink, &Message::Progress(event)));
+    let finish = Arc::clone(&activity.finish);
+    // All the app writes to stdin after the request is [`FINISH`], so it
+    // otherwise ends only when the app closes it or exits. Either way no
+    // one will read an answer: stop the solve, and if it does not stop,
+    // stop the process.
     let _ = std::thread::Builder::new().name("schedule-solver-watch".into()).spawn(move || {
-        let _ = std::io::copy(&mut stdin, &mut std::io::sink());
+        for line in lines(stdin) {
+            if line.as_bytes() == FINISH.trim_ascii_end() {
+                finish.store(true, std::sync::atomic::Ordering::Release);
+            }
+        }
         watched.cancel();
+        finish.store(true, std::sync::atomic::Ordering::Release);
         std::thread::sleep(ORPHAN_GRACE);
         std::process::abort();
     });
 
     let early = |completion: &ScheduleCompletion| send(&output, &Message::Early(Box::new(completion.report())));
-    let completion = execute_schedule(Arc::new(request.input), request.identity, request.options, &cancel, &ScheduleActivity::default(), &early);
+    let completion = execute_schedule(Arc::new(request.input), request.identity, request.options, &cancel, &activity, &early);
     send(&output, &Message::Done(Box::new(completion.report())));
     0
 }

@@ -565,6 +565,14 @@ impl<'a> App<'a> {
                 self.cancel_schedule_run_calculation();
                 Ok(())
             }
+            UiCommand::FinishImprove => {
+                self.finish_improve();
+                Ok(())
+            }
+            UiCommand::CloseImproveProgress => {
+                self.close_improve_progress();
+                Ok(())
+            }
             UiCommand::CancelScheduleRun => {
                 self.cancel_schedule_run();
                 Ok(())

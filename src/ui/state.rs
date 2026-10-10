@@ -3034,6 +3034,14 @@ pub(crate) struct EditorState {
     pub(crate) schedule_run_improving: bool,
     /// Whether the run in flight is an Improve run, so its control shows it.
     pub(crate) schedule_run_improve: bool,
+    /// The Improve run in flight, or the last one until its card is put
+    /// away: what its progress card shows.
+    pub(crate) improve_progress: Option<std::sync::Arc<crate::model::schedule::optimisation::progress::ImproveProgress>>,
+    /// Whether the progress card is folded down to its title.
+    pub(crate) improve_card_collapsed: bool,
+    /// Minutes the search may go without a better schedule before the run is
+    /// finished on its own; `None` to let it run to its limit.
+    pub(crate) improve_stop_after_stall_min: Option<u32>,
     /// Whether the schedule recalculates on its own once edits settle. On by
     /// default: the first schedule takes a fraction of a second.
     pub(crate) schedule_auto_recalculate: bool,
@@ -3672,6 +3680,7 @@ impl EditorState {
         self.schedule_run_working = false;
         self.schedule_run_improving = false;
         self.schedule_run_improve = false;
+        self.improve_progress = None;
         self.schedule_run_repair = None;
         self.close_sequence_editor();
         self.new_loader_class_open = false;
@@ -4366,6 +4375,9 @@ impl EditorState {
             schedule_run_working: false,
             schedule_run_improving: false,
             schedule_run_improve: false,
+            improve_progress: None,
+            improve_card_collapsed: false,
+            improve_stop_after_stall_min: None,
             schedule_auto_recalculate: true,
             planning_auto_run: true,
             planning_cut_labels: true,
@@ -5156,6 +5168,11 @@ pub(crate) enum UiCommand {
     ImproveSchedule,
     /// Stop a schedule run in flight. The held result is untouched.
     CancelScheduleCalculation,
+    /// End the Improve run in flight early and publish the best schedule it
+    /// has found.
+    FinishImprove,
+    /// Put away the progress card of an Improve run that has ended.
+    CloseImproveProgress,
     /// Reset the Schedule Setup pipeline and rerun every step.
     RunAllScheduleStages,
     /// Stop a Schedule Setup run in flight. A cancelled run publishes nothing:
@@ -5779,7 +5796,9 @@ impl UiCommand {
             | Self::RunSchedulePeriod
             | Self::RunAllSchedulePeriods
             | Self::ImproveSchedule
-            | Self::CancelScheduleCalculation => None,
+            | Self::CancelScheduleCalculation
+            | Self::FinishImprove
+            | Self::CloseImproveProgress => None,
 
             #[cfg(target_arch = "wasm32")]
             Self::ClearBrowserImportSelection(_) => None,

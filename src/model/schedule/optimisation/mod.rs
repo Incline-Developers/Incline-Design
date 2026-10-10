@@ -21,6 +21,9 @@
 /// published schedule passes.
 pub(crate) mod blended;
 
+/// How an Improve run is going, for its progress card.
+pub(crate) mod progress;
+
 /// The nonlinear SCIP solver for that same blended model, separate from
 /// [`blended`] because it is the only part that needs SCIP.
 #[cfg(all(not(target_arch = "wasm32"), feature = "scip"))]

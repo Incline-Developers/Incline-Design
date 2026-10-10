@@ -526,7 +526,12 @@ pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &mut EditorSt
         )
         .clicked()
     {
-        commands.push(UiCommand::CancelScheduleCalculation);
+        // Stopping Improve keeps the best schedule it has found.
+        commands.push(if editor.schedule_run_improve {
+            UiCommand::FinishImprove
+        } else {
+            UiCommand::CancelScheduleCalculation
+        });
     }
     ui.spacing_mut().item_spacing.x = spacing;
     ui.add_space(6.0);

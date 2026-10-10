@@ -12,7 +12,7 @@ use std::{
     collections::BTreeSet,
     sync::{
         Arc,
-        atomic::{AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
     },
     time::Duration,
 };
@@ -30,6 +30,7 @@ use crate::model::schedule::{
             lp,
             replay::{BlendSolution, ExtractionAdjustments, ReplayReport},
         },
+        progress::{ImproveEvent, ImproveStage},
     },
     result::{BoundSource, DayByDayRole, DayByDaySummary, StartMethod},
 };
@@ -201,8 +202,10 @@ pub(crate) enum BackendStatus {
     Terminate,
 }
 
-/// Observable worker phase for developer lifecycle checks. SCIP objects are
-/// never stored here; only atomics cross between the worker and poller.
+/// Observable worker phase for developer lifecycle checks, and what an
+/// Improve run reports and is told while it runs. SCIP objects are never
+/// stored here; only atomics and the report sink cross between the worker
+/// and poller.
 #[derive(Default)]
 pub(crate) struct ScheduleActivity {
     phase: AtomicU8,
@@ -210,9 +213,43 @@ pub(crate) struct ScheduleActivity {
     pub(crate) formulation_checks: std::sync::atomic::AtomicU64,
     #[cfg(feature = "scip")]
     pub(crate) interrupt: Arc<crate::model::schedule::optimisation::scip::adapter::InterruptAudit>,
+    /// Where an Improve run's stages and values go: the solver process sends
+    /// them on to the app.
+    pub(crate) report: Option<Box<dyn Fn(ImproveEvent) + Send + Sync>>,
+    /// Raised to end an Improve run early and publish the best schedule it
+    /// has. A cancelled run raises it too, so every solve stops either way.
+    pub(crate) finish: Arc<AtomicBool>,
 }
 
 impl ScheduleActivity {
+    /// An activity whose Improve run reports to `report`.
+    #[cfg_attr(not(feature = "scip"), allow(dead_code, reason = "only the solver process reports"))]
+    pub(crate) fn reporting(report: impl Fn(ImproveEvent) + Send + Sync + 'static) -> Self {
+        Self {
+            report: Some(Box::new(report)),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn stage(&self, stage: ImproveStage) {
+        if let Some(report) = self.report.as_ref() {
+            report(ImproveEvent::Stage(stage));
+        }
+    }
+
+    #[cfg_attr(not(feature = "scip"), allow(dead_code, reason = "only Improve's search reports values"))]
+    pub(crate) fn value(&self, value: f64, bound: Option<f64>) {
+        if let Some(report) = self.report.as_ref() {
+            report(ImproveEvent::Point { value, bound });
+        }
+    }
+
+    /// Whether the run has been asked to stop and keep what it has.
+    #[cfg_attr(not(feature = "scip"), allow(dead_code, reason = "only Improve finishes early"))]
+    pub(crate) fn finishing(&self) -> bool {
+        self.finish.load(Ordering::Acquire)
+    }
+
     #[allow(dead_code, reason = "read by the developer lifecycle checks")]
     pub(crate) fn phase(&self) -> u8 {
         self.phase.load(Ordering::Acquire)
@@ -735,6 +772,7 @@ pub(crate) fn execute_schedule(
 
     let budget_started = Instant::now();
     activity.set(3);
+    activity.stage(ImproveStage::FirstSchedule);
     let attempt = hourly_dispatch(&mut out, cancel);
     #[cfg(feature = "scip")]
     if !options.first_schedule_only {

@@ -1458,6 +1458,8 @@ fn draw_global_dialogs(
     commands: &mut Vec<UiCommand>,
 ) -> bool {
     let mut geometry_dirty = false;
+    // An Improve run goes on whichever page is open, and so does its card.
+    elements::improve_progress::draw_improve_card(root_ui, editor, commands);
     dialogs::survey::draw_definitions_dialog(root_ui, editor, commands);
     dialogs::survey::draw_transform_dialog(root_ui, editor, project.has_active_project, commands);
     dialogs::drill_hole::draw_drill_hole_color_dialog(root_ui, editor, drill_holes, commands);

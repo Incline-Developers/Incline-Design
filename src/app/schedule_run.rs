@@ -56,7 +56,10 @@
 
 use std::{
     hash::{Hash, Hasher},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
 };
 
 use crate::{
@@ -64,6 +67,7 @@ use crate::{
     i18n::tr,
     model::schedule::{
         SCHEDULE_PERIOD_H,
+        optimisation::progress::{ImproveEnd, ImproveEvent, ImproveProgress, ImproveStage},
         result::{BoundSource, CalculatedSchedule, DayByDayRole, SolveQuality, StartMethod},
     },
     ui::state::{ScheduleRepairTarget, ScheduleStep},
@@ -110,6 +114,59 @@ pub(crate) struct PendingScheduleRun {
     early: Arc<Mutex<Option<Arc<CalculatedSchedule>>>>,
     /// Whether the held result is this run's day-by-day schedule.
     showing_early: bool,
+    /// Its progress, and the request to finish it early.
+    feed: Arc<ImproveFeed>,
+}
+
+/// What a run in flight shares between its worker and the app: how it is
+/// going, and whether the user has asked it to finish early and publish the
+/// best schedule it has.
+#[derive(Debug)]
+pub(crate) struct ImproveFeed {
+    progress: Mutex<ImproveProgress>,
+    finish: AtomicBool,
+    /// Moves with every change, so the app copies the progress only then.
+    revision: AtomicU64,
+}
+
+impl ImproveFeed {
+    fn new(time_limit_s: Option<f64>) -> Self {
+        Self {
+            progress: Mutex::new(ImproveProgress::new(time_limit_s)),
+            finish: AtomicBool::new(false),
+            revision: AtomicU64::new(0),
+        }
+    }
+
+    fn update(&self, change: impl FnOnce(&mut ImproveProgress)) {
+        change(&mut self.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        self.revision.fetch_add(1, Ordering::AcqRel);
+    }
+
+    pub(crate) fn apply(&self, event: ImproveEvent) {
+        self.update(|progress| progress.apply(event));
+    }
+
+    pub(crate) fn finish_requested(&self) -> bool {
+        self.finish.load(Ordering::Acquire)
+    }
+
+    fn request_finish(&self) {
+        self.finish.store(true, Ordering::Release);
+        self.update(|progress| progress.finishing = true);
+    }
+
+    fn end(&self, how: ImproveEnd) {
+        self.update(|progress| progress.end(how));
+    }
+
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn snapshot(&self) -> ImproveProgress {
+        self.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+    }
 }
 
 /// Why the last attempt published nothing.
@@ -447,6 +504,11 @@ impl crate::app::App<'_> {
         let early_slot = Arc::new(Mutex::new(None));
         let worker_slot = Arc::clone(&early_slot);
         let window = self.window.clone();
+        let feed = Arc::new(ImproveFeed::new(options.time_limit.map(|limit| limit.as_secs_f64())));
+        let worker_feed = Arc::clone(&feed);
+        if mode == ScheduleRunMode::Improve {
+            self.improve_progress = Some(Arc::clone(&feed));
+        }
         self.pending_schedule_run = Some(PendingScheduleRun {
             serial,
             runtime,
@@ -457,6 +519,7 @@ impl crate::app::App<'_> {
             improve: mode == ScheduleRunMode::Improve,
             early: early_slot,
             showing_early: false,
+            feed,
         });
         let identity = ScheduleRunIdentity {
             run_id: serial,
@@ -534,9 +597,12 @@ impl crate::app::App<'_> {
                 // Improve runs every solve in a solver process. Without it the
                 // run is the hourly dispatch alone, and runs here.
                 #[cfg(feature = "scip")]
-                let completion = super::solver_process::solve(Arc::clone(&input), identity, options, cancel, &early);
+                let completion = super::solver_process::solve(Arc::clone(&input), identity, options, cancel, &early, &worker_feed);
                 #[cfg(not(feature = "scip"))]
-                let completion = super::schedule_solve::execute_schedule(Arc::clone(&input), identity, options, cancel, &Default::default(), &early);
+                let completion = {
+                    worker_feed.apply(ImproveEvent::Stage(ImproveStage::FirstSchedule));
+                    super::schedule_solve::execute_schedule(Arc::clone(&input), identity, options, cancel, &Default::default(), &early)
+                };
                 if !completion.usable() {
                     return Ok(not_published(&completion));
                 }
@@ -562,11 +628,15 @@ impl crate::app::App<'_> {
                 if !same_request {
                     return;
                 }
-                let showing_early = app.pending_schedule_run.take().is_some_and(|pending| pending.showing_early);
+                let Some(pending) = app.pending_schedule_run.take() else { return };
+                let showing_early = pending.showing_early;
                 // Checked again here, not only when the run started: an edit
                 // that landed while it was solving retires it, and a late
                 // answer is never published under inputs it did not read.
-                if app.schedule_run_inputs().ok() != Some(inputs) || app.schedule_semantic_key() != semantic || app.planning_end_h() < requested_end_h - 1e-9 {
+                let superseded = app.schedule_run_inputs().ok() != Some(inputs) || app.schedule_semantic_key() != semantic || app.planning_end_h() < requested_end_h - 1e-9;
+                let published = !superseded && matches!(result, Ok(RunOutcome::Published(_)));
+                pending.feed.end(if published { ImproveEnd::Published } else { ImproveEnd::NotPublished });
+                if superseded {
                     if !auto {
                         crate::userspace_warn!("{}", tr!("schedule-run-superseded"));
                     }
@@ -732,10 +802,66 @@ impl crate::app::App<'_> {
         }
     }
 
+    /// End the Improve run in flight early: its search, or its whole-horizon
+    /// solve, stops, and the best schedule it has found is published.
+    pub(crate) fn finish_improve(&mut self) {
+        let Some(pending) = self.pending_schedule_run.as_ref().filter(|pending| pending.improve) else {
+            return;
+        };
+        if !pending.feed.finish_requested() {
+            pending.feed.request_finish();
+            crate::userspace_log!("{}", tr!("schedule-improve-finishing", run = pending.serial.to_string()));
+        }
+        self.redraw_requested = true;
+    }
+
+    /// Put away the card of an Improve run that has ended.
+    pub(crate) fn close_improve_progress(&mut self) {
+        let ended = self
+            .pending_schedule_run
+            .as_ref()
+            .is_none_or(|pending| !self.improve_progress.as_ref().is_some_and(|feed| Arc::ptr_eq(feed, &pending.feed)));
+        if ended {
+            self.improve_progress = None;
+        }
+    }
+
+    /// Copy the Improve run's progress to the editor whenever it has moved,
+    /// and finish a search that has gone as long without a better schedule
+    /// as its card allows.
+    pub(crate) fn sync_improve_progress(&mut self) {
+        let Some(feed) = self.improve_progress.as_ref() else {
+            self.improve_progress_seen = None;
+            if self.editor.improve_progress.take().is_some() {
+                self.redraw_requested = true;
+            }
+            return;
+        };
+        let revision = feed.revision();
+        if self.improve_progress_seen != Some(revision) {
+            self.improve_progress_seen = Some(revision);
+            self.editor.improve_progress = Some(Arc::new(feed.snapshot()));
+            self.redraw_requested = true;
+        }
+        let Some((minutes, progress)) = self.editor.improve_stop_after_stall_min.zip(self.editor.improve_progress.as_ref()) else {
+            return;
+        };
+        if progress.ended.is_some() || progress.finishing || progress.stage() != ImproveStage::Search {
+            return;
+        }
+        let searching_since = progress.stages.iter().find(|(stage, _)| *stage == ImproveStage::Search).map_or(0.0, |(_, at_s)| *at_s);
+        let since = progress.improved_at_s.unwrap_or(searching_since).max(searching_since);
+        if progress.elapsed_s() - since >= f64::from(minutes) * 60.0 {
+            crate::userspace_log!("{}", tr!("schedule-improve-stalled", minutes = minutes.to_string()));
+            self.finish_improve();
+        }
+    }
+
     /// Stop a run in flight without reporting it: it is being replaced, or the
     /// project it belongs to is going away.
     pub(crate) fn cancel_schedule_run_calculation_quietly(&mut self) {
         if let Some(pending) = self.pending_schedule_run.take() {
+            pending.feed.end(ImproveEnd::NotPublished);
             self.cancel_jobs(|key| matches!(key, crate::app::jobs::JobKey::ScheduleRun { serial, runtime } if *serial == pending.serial && *runtime == pending.runtime));
             if pending.showing_early {
                 self.settle_early_schedule(pending.serial, DayByDayRole::Stopped);
