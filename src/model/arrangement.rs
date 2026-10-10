@@ -210,7 +210,10 @@ pub(crate) fn face_area(face: &[Vec<DVec2>]) -> f64 {
 /// that fall inside `b` summed. Faces that only touch, along an edge or at a
 /// point, share none.
 pub(crate) fn overlap_area(a: &[Vec<DVec2>], b: &[Vec<DVec2>]) -> f64 {
-    let cuts: Vec<Vec<DVec2>> = b.iter().filter_map(|ring| Some(ring.iter().copied().chain(std::iter::once(*ring.first()?)).collect())).collect();
+    let cuts: Vec<Vec<DVec2>> = b
+        .iter()
+        .filter_map(|ring| Some(ring.iter().copied().chain(std::iter::once(*ring.first()?)).collect()))
+        .collect();
     subdivide(a, &cuts)
         .iter()
         .filter(|piece| representative_point(piece).is_some_and(|point| point_in_face(b, point)))
