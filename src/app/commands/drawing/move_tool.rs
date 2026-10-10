@@ -20,6 +20,7 @@ impl<'a> App<'a> {
             self.apply_collar_move_delta(delta);
             return;
         }
+        let delta = self.held_to_section(delta);
         self.ensure_move_session_original();
         self.preview_move_delta(delta);
         let Some(session) = self.move_session_original.take() else {
@@ -211,6 +212,7 @@ impl<'a> App<'a> {
                 gizmo.start_delta + axes[0] * first + axes[1] * second
             }
         };
+        let world_delta = self.held_to_section(world_delta);
         self.editor.move_panel_delta = [world_delta.x, world_delta.y, world_delta.z];
         self.preview_move_delta(world_delta);
         self.invalidate_geometry();
@@ -269,6 +271,7 @@ impl<'a> App<'a> {
             self.preview_collar_move_delta(delta);
             return;
         }
+        let delta = self.held_to_section(delta);
         let Some(session) = self.move_session_original.as_ref() else {
             return;
         };
@@ -283,6 +286,15 @@ impl<'a> App<'a> {
                 translate_move_target(&mut moved, vertex_target, delta);
                 project.project.document.replace_object(moved);
             }
+        }
+    }
+
+    /// On a section a move stays on it: the part of `delta` across the
+    /// section plane is dropped, typed or dragged.
+    fn held_to_section(&self, delta: DVec3) -> DVec3 {
+        match self.graphics.as_ref().and_then(|graphics| graphics.section_slab()) {
+            Some(slab) => delta - slab.normal * delta.dot(slab.normal),
+            None => delta,
         }
     }
 

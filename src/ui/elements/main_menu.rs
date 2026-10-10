@@ -249,8 +249,8 @@ fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, commands: &m
 /// Open `workspace`, putting down anything the tools it does not carry had
 /// picked up.
 ///
-/// The drawing tools leave the window with production - see
-/// [`Workspace::has_production_tools`] - so a tool still armed after the switch
+/// The drawing tools leave the window with the workspaces that draw - see
+/// [`Workspace::has_drawing_tools`] - so a tool still armed after the switch
 /// would have nothing left to put it down. Entering a workspace without them
 /// hands the pointer back to plain picking first. Flying and the slice view are
 /// not among them: their buttons sit in the run every workspace carries - see
@@ -288,8 +288,11 @@ fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, wor
         ActiveTool::MoveCollar | ActiveTool::RotateCollar | ActiveTool::TieHoles | ActiveTool::SetInitiationPoint | ActiveTool::ChargeHoles => {
             workspace == Workspace::DrillAndBlast
         }
-        _ => workspace.has_production_tools(),
+        tool if tool.designs_pit() => workspace.has_production_tools(),
+        _ => workspace.has_drawing_tools(),
     };
+    // A tool one workspace edits with on a section, another may refuse there.
+    let survives = survives && !(editor.slice_mode_enabled && editor.active_tool.section_refuses(workspace));
     if !survives {
         commands.push(UiCommand::SetActiveTool(ActiveTool::None));
     }

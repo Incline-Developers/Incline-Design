@@ -61,7 +61,7 @@ struct LeftTool {
 fn left_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, project_active: bool) -> Vec<LeftTool> {
     let tool = |icon: egui::ImageSource<'static>, tooltip: String, tool: ActiveTool| {
         let layer_ok = !tool.requires_active_layer() || editor.active_layer.is_some();
-        let blocked_by_section = editor.slice_mode_enabled && tool.section_refuses();
+        let blocked_by_section = editor.slice_mode_enabled && tool.section_refuses(editor.active_workspace);
         LeftTool {
             icon: egui::Image::new(icon),
             hint: (blocked_by_section && editing_enabled && layer_ok).then(|| tr!("toolbars-tool-not-available-section-view", tool = tooltip.as_str().to_string())),
@@ -95,6 +95,13 @@ fn left_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, projec
         tool(unthemed_icon!("explode_polyline.svg"), tr!("toolbars-explode-polyline-lines"), ActiveTool::ExplodePolyline),
         tool(unthemed_icon!("delete_element.svg"), tr!("toolbars-delete-points"), ActiveTool::DeletePoints),
     ]
+}
+
+/// Production's drawing run less the tools that design a pit.
+fn drawing_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, project_active: bool) -> Vec<LeftTool> {
+    let mut tools = left_tools(ui, editor, editing_enabled, project_active);
+    tools.retain(|tool| !matches!(tool.action, LeftToolAction::Tool(active) if active.designs_pit()));
+    tools
 }
 
 /// The Drill & Blast tools, in the order they are drawn: lay a pattern out,
@@ -218,6 +225,7 @@ pub(crate) fn draw_left_toolbar(
 ) -> egui::Rect {
     let tools = match editor.active_workspace {
         workspace if workspace.has_production_tools() => left_tools(ui, editor, editing_enabled, project_active),
+        workspace if workspace.has_drawing_tools() => drawing_tools(ui, editor, editing_enabled, project_active),
         Workspace::DrillAndBlast => blast_tools(ui, project, editor, editing_enabled, project_active),
         _ => Vec::new(),
     };

@@ -76,7 +76,7 @@ impl<'a> App<'a> {
         let mut best_idx = None;
 
         for (index, vertex) in verts.iter().enumerate() {
-            if let Some(screen_pos) = pick::world_to_screen(&vp, vertex.pos, screen) {
+            if let Some(screen_pos) = pick::slab_screen_point(graphics.section_slab(), &vp, screen, vertex.pos) {
                 let dist = screen_pos.distance(cursor);
                 if dist < best_dist {
                     best_dist = dist;

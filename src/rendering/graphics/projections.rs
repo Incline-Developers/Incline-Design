@@ -842,7 +842,11 @@ impl<'a> Graphics<'a> {
                     let n = verts.len();
                     editor.bezier_poly_closed = *closed;
 
-                    editor.bezier_poly_verts_screen_px = verts.iter().map(|v| project(v.pos)).collect();
+                    let slab = self.section_slab();
+                    editor.bezier_poly_verts_screen_px = verts
+                        .iter()
+                        .map(|v| slab.is_none_or(|slab| slab.contains(v.pos)).then(|| project(v.pos)).flatten())
+                        .collect();
 
                     if let [Some(vi), Some(vj)] = editor.bezier_selected_verts
                         && vi < n
@@ -897,9 +901,13 @@ impl<'a> Graphics<'a> {
 
         if editor.active_tool == ActiveTool::SplitAtPoints {
             let vp = self.view_proj();
+            let slab = self.section_slab();
             if let Some(oid) = editor.split_poly_id {
                 if let Some(Object::Polyline { verts, .. }) = document.get_object(oid) {
-                    editor.split_poly_verts_screen_px = verts.iter().map(|v| self.world_to_window_px(&vp, v.pos)).collect();
+                    editor.split_poly_verts_screen_px = verts
+                        .iter()
+                        .map(|v| slab.is_none_or(|slab| slab.contains(v.pos)).then(|| self.world_to_window_px(&vp, v.pos)).flatten())
+                        .collect();
                 } else {
                     editor.split_poly_verts_screen_px.clear();
                 }

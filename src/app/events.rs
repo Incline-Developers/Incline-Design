@@ -1576,7 +1576,7 @@ impl<'a> App<'a> {
         if self.editor.fly_mode_enabled && tool != ActiveTool::None {
             return;
         }
-        if self.editor.slice_mode_enabled && tool.section_refuses() {
+        if self.editor.slice_mode_enabled && tool.section_refuses(self.editor.active_workspace) {
             userspace_warn!("{}", tr!("events-tool-not-available-section-view"));
             return;
         }

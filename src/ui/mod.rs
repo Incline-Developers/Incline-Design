@@ -396,7 +396,11 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
     }
 
     if editor.slice_mode_enabled {
-        return Some(ViewportMessage::text(tr!("ui-slice-view")).minor(tr!("slice-viewport-gestures")));
+        // A workspace editing on the section shows the tool's next step first.
+        let prompt = (editor.active_workspace.edits_in_slice_view() && editor.active_tool.edits_in_slice_view())
+            .then(|| tool_prompt(editor))
+            .flatten();
+        return Some(prompt.unwrap_or_else(|| ViewportMessage::text(tr!("ui-slice-view")).minor(tr!("slice-viewport-gestures"))));
     }
 
     if editor.active_tool == ActiveTool::MakeCircle {
@@ -408,6 +412,11 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
         });
     }
 
+    tool_prompt(editor)
+}
+
+/// The armed tool's next step, when it has one to say.
+fn tool_prompt(editor: &EditorState) -> Option<ViewportMessage> {
     let message = match editor.active_tool {
         ActiveTool::Move if !editor.move_tool_has_targets() => ViewportMessage::text(tr!("ui-select-item")),
         ActiveTool::MoveCollar if !editor.move_tool_has_targets() => ViewportMessage::text(tr!("ui-select-drill-hole")),

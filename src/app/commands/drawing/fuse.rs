@@ -188,7 +188,7 @@ impl<'a> App<'a> {
         let threshold = PICK_THRESHOLD_PX * 2.0;
 
         let dist_sq = |world: DVec3| -> Option<f64> {
-            let sp = pick::world_to_screen(&vp, world, screen)?;
+            let sp = pick::slab_screen_point(graphics.section_slab(), &vp, screen, world)?;
             let dx = sp.x - cursor_px.0 as f64;
             let dy = sp.y - cursor_px.1 as f64;
             Some(dx * dx + dy * dy)
@@ -213,7 +213,8 @@ impl<'a> App<'a> {
         };
         let vp = graphics.view_proj();
         let screen = graphics.screen_size_pub();
-        let (Some(sa), Some(sb)) = (pick::world_to_screen(&vp, a, screen), pick::world_to_screen(&vp, b, screen)) else {
+        let slab = graphics.section_slab();
+        let (Some(sa), Some(sb)) = (pick::slab_screen_point(slab, &vp, screen, a), pick::slab_screen_point(slab, &vp, screen, b)) else {
             return false;
         };
         let dx = sa.x - sb.x;
@@ -226,7 +227,7 @@ impl<'a> App<'a> {
             return false;
         };
         let cursor = graphics.window_to_viewport_px(cursor);
-        let Some(screen_point) = pick::world_to_screen(&graphics.view_proj(), world, graphics.screen_size_pub()) else {
+        let Some(screen_point) = pick::slab_screen_point(graphics.section_slab(), &graphics.view_proj(), graphics.screen_size_pub(), world) else {
             return false;
         };
         let dx = screen_point.x - f64::from(cursor.0);

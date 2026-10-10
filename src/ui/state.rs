@@ -2385,7 +2385,7 @@ impl EditorState {
     }
 
     pub(crate) fn view_mode_owns_canvas_click(&self) -> bool {
-        self.fly_mode_enabled || (self.slice_mode_enabled && self.active_tool.section_refuses())
+        self.fly_mode_enabled || (self.slice_mode_enabled && self.active_tool.section_refuses(self.active_workspace))
     }
 
     /// Dialogs that take Enter as their confirm shortcut.
@@ -3695,8 +3695,21 @@ impl ActiveTool {
         )
     }
 
-    pub(crate) fn section_refuses(self) -> bool {
-        self != Self::None && !self.works_in_slice_view()
+    /// The bench tool and the two measures, which only production carries.
+    pub(crate) fn designs_pit(self) -> bool {
+        matches!(self, Self::BatterBermOffset | Self::MeasureDistance | Self::MeasureBatterAngle)
+    }
+
+    /// The editing tools that keep a string on its section.
+    pub(crate) fn edits_in_slice_view(self) -> bool {
+        matches!(
+            self,
+            Self::Move | Self::DrapeToTopology | Self::Bezier | Self::DeletePoints | Self::ExplodePolyline | Self::SplitAtPoints | Self::FuseIntoPolyline
+        )
+    }
+
+    pub(crate) fn section_refuses(self, workspace: Workspace) -> bool {
+        self != Self::None && !self.works_in_slice_view() && !(workspace.edits_in_slice_view() && self.edits_in_slice_view())
     }
 }
 
@@ -5233,13 +5246,23 @@ impl Workspace {
 
     /// Whether this workspace carries the mine production tools.
     ///
-    /// The drawing toolbar, the cursor modes, the design menus and the layer / Z
-    /// / colour / fill settings those tools draw with all belong to production
-    /// alone. A workspace without them keeps what is true everywhere: the
+    /// The design menus and the tools that design a pit belong to production
+    /// alone; [`Self::has_drawing_tools`] says who shares the drawing
+    /// tools. A workspace without them keeps what is true everywhere: the
     /// project actions, the camera controls, the switches over how the scene is
     /// drawn, and the editors of its own discipline.
     pub(crate) fn has_production_tools(self) -> bool {
         matches!(self, Self::Production)
+    }
+
+    /// Whether this workspace carries the drawing toolbar and its settings.
+    pub(crate) fn has_drawing_tools(self) -> bool {
+        matches!(self, Self::Production | Self::Geology)
+    }
+
+    /// Whether this workspace edits strings on a section.
+    pub(crate) fn edits_in_slice_view(self) -> bool {
+        matches!(self, Self::Geology)
     }
 }
 
