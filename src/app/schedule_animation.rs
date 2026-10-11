@@ -754,9 +754,13 @@ impl crate::app::App<'_> {
                         }
                         let next = ((done * collars.len() as f64).floor() as usize).min(collars.len() - 1);
                         let model = if activity == BlastActivity::Drill { MachineModel::DrillRig } else { MachineModel::Mpu };
-                        // Each on its own share of the holes still to do.
+                        // Each on one of the next holes in drilling order, as
+                        // many holes apart as keeps them from standing on
+                        // one another.
+                        let spacing = collars.get(next + 1).map_or(model.length(), |after| after.distance(collars[next])).max(0.5);
+                        let gap = (model.length() / spacing).ceil().max(1.0) as usize;
                         for share in 0..count {
-                            let hole = (next + share * (collars.len() - next) / count).min(collars.len() - 1);
+                            let hole = (next + share * gap).min(collars.len() - 1);
                             let along = match (hole.checked_sub(1), collars.get(hole + 1)) {
                                 (_, Some(after)) => *after - collars[hole],
                                 (Some(before), None) => collars[hole] - collars[before],
@@ -936,35 +940,71 @@ impl crate::app::App<'_> {
                 .iter()
                 .filter_map(|block| crate::model::arrangement::representative_point(&block.face).map(|center| (block.id, center)))
                 .collect();
-            // Which block each one is dug toward, in each dig bar's resolved
-            // order as the run captured it. `None` marks ground the bars
-            // disagree about: a block two of them name has no one successor,
-            // and the answer must not be whichever bar happens to be listed
-            // first. Those keep the +Y fallback, which is what the fallback is
-            // for.
-            let mut successors: HashMap<DigBlockId, Option<DigBlockId>> = HashMap::new();
-            for (_, blocks) in &calculation.bar_blocks {
+            // Which way each block is dug: toward the next block its bar digs
+            // on the same flitch. A bar's order runs down through flitches and
+            // across benches, so the next block it names is often the one
+            // beneath, or a strip on another bench - neither is the way this
+            // face moves. When the next same-flitch block is a jump back to
+            // the start of another strip, the way in from the previous one is
+            // the face's direction instead. A block more than one bar digs
+            // takes the direction of the bar that dug it, or the bars'
+            // directions together while none has; where they cancel it keeps
+            // the +Y fallback.
+            let layer: HashMap<_, _> = source.iter().map(|block| (block.id, (block.solid, block.flitch))).collect();
+            // The bar that dug each block first: two bars can name the same
+            // strip from opposite ends, and the block faces the way the one
+            // that dug it went.
+            let mut dug_by: HashMap<DigBlockId, (f64, crate::model::schedule::BarId)> = HashMap::new();
+            for execution in &calculation.executions {
+                if let crate::model::schedule::result::WorkSource::Block(id) = execution.source {
+                    let first = dug_by.entry(id).or_insert((execution.start_h, execution.bar));
+                    if execution.start_h < first.0 {
+                        *first = (execution.start_h, execution.bar);
+                    }
+                }
+            }
+            let mut directions: HashMap<DigBlockId, glam::DVec2> = HashMap::new();
+            let mut digger_directions: HashMap<DigBlockId, glam::DVec2> = HashMap::new();
+            for (bar, blocks) in &calculation.bar_blocks {
                 let mut ordered = blocks.clone();
                 ordered.dedup();
-                for pair in ordered.windows(2) {
-                    successors
-                        .entry(pair[0])
-                        .and_modify(|held| {
-                            if *held != Some(pair[1]) {
-                                *held = None;
-                            }
-                        })
-                        .or_insert(Some(pair[1]));
+                let hop = |from: DigBlockId, to: DigBlockId| {
+                    let (here, there) = centers.get(&from).zip(centers.get(&to))?;
+                    let step = *there - *here;
+                    (step.length_squared() > 1e-6).then_some(step)
+                };
+                let neighbour = |at: usize, later: bool| {
+                    let same = |id: &DigBlockId| {
+                        layer
+                            .get(id)
+                            .is_some_and(|held| layer.get(&ordered[at]).is_some_and(|this| held.0 == this.0 && (held.1.base - this.1.base).abs() < 1e-6))
+                    };
+                    if later {
+                        ordered[at + 1..].iter().find(|id| same(id)).copied()
+                    } else {
+                        ordered[..at].iter().rev().find(|id| same(id)).copied()
+                    }
+                };
+                for (at, &id) in ordered.iter().enumerate() {
+                    let ahead = neighbour(at, true).and_then(|next| hop(id, next));
+                    let behind = neighbour(at, false).and_then(|previous| hop(previous, id));
+                    let step = match (ahead, behind) {
+                        (Some(ahead), Some(behind)) if ahead.length() > 1.5 * behind.length() => behind,
+                        (Some(ahead), _) => ahead,
+                        (None, Some(behind)) => behind,
+                        (None, None) => continue,
+                    };
+                    *directions.entry(id).or_default() += step.normalize();
+                    if dug_by.get(&id).is_some_and(|(_, digger)| digger == bar) {
+                        digger_directions.insert(id, step.normalize());
+                    }
                 }
             }
             for block in &mut source {
-                let Some(next) = successors.get(&block.id).copied().flatten() else { continue };
-                let Some((here, there)) = centers.get(&block.id).zip(centers.get(&next)) else {
-                    continue;
-                };
-                let toward_next = *there - *here;
-                if toward_next.length_squared() > 1e-12 {
-                    block.direction = toward_next.normalize();
+                if let Some(direction) = digger_directions.get(&block.id) {
+                    block.direction = *direction;
+                } else if let Some(sum) = directions.get(&block.id).filter(|sum| sum.length() > 0.3) {
+                    block.direction = sum.normalize();
                 }
             }
         }

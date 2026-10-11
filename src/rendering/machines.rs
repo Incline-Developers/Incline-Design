@@ -30,6 +30,17 @@ impl MachineModel {
         }
     }
 
+    /// Roughly how long the model is, in metres: how far apart two of them
+    /// working side by side have to stand.
+    pub(crate) fn length(self) -> f64 {
+        match self {
+            Self::Excavator => 10.0,
+            Self::Dozer => 8.0,
+            Self::DrillRig => 7.0,
+            Self::Mpu => 9.0,
+        }
+    }
+
     /// How far behind the work a machine's origin stands, in metres along
     /// its heading: an excavator's bucket reaches the face from its tracks,
     /// a dozer's blade is ahead of its middle.
