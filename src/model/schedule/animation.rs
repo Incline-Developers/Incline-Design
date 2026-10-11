@@ -16,6 +16,12 @@ use crate::model::{
 
 const TONNE_TOLERANCE: f64 = 1.0e-7;
 
+/// The least the ledger and the spans may disagree by: the replay's own
+/// tolerance (`REPLAY_TOLERANCE_T`). A schedule the replay accepted is one
+/// its solver satisfied to its feasibility tolerance - HiGHS leaves a few
+/// micro-tonnes on a block - and the view must not reject it for that.
+const MIN_TONNE_TOLERANCE_T: f64 = 1.0e-5;
+
 #[derive(Clone, Debug)]
 struct Interval {
     start_h: f64,
@@ -123,7 +129,7 @@ impl AnimationIndex {
             }
 
             let expected = balance.started_t - balance.remaining_t;
-            let tolerance = TONNE_TOLERANCE * balance.started_t.max(1.0);
+            let tolerance = (TONNE_TOLERANCE * balance.started_t).max(MIN_TONNE_TOLERANCE_T);
             if (segment_total - expected).abs() > tolerance {
                 return Err(AnimationError::Conservation {
                     block: balance.block,
