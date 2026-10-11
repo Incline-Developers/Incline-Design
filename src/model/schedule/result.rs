@@ -16,7 +16,7 @@
 //!   [`WorkSource`]; reclaim is never dressed up as a dig block.
 //! - [`Delivery`]: one movement to one destination on one truck class, with
 //!   its truck-hours, its movement value and its contained quantity.
-//! - [`GroundBalance`], [`PileTrack`], [`ChunkDraw`]: the balances.
+//! - [`GroundBalance`], [`PileTrack`]: the balances.
 //! - [`SolveReport`]: how the answer was found and what it does not claim.
 //!
 //! # Timing
@@ -458,18 +458,6 @@ impl PileTrack {
     }
 }
 
-/// Material a reclaim drew from one chunk of an ordered chunked pile.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ChunkDraw {
-    pub(crate) pile: DestinationId,
-    pub(crate) chunk: usize,
-    /// "Opening lot <name>" or "Receiving chunk <n>", resolved at capture.
-    pub(crate) label: String,
-    pub(crate) start_h: f64,
-    pub(crate) end_h: f64,
-    pub(crate) tonnes: f64,
-}
-
 /// How the backend finished, for an accepted calculation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SolveQuality {
@@ -614,10 +602,6 @@ pub(crate) struct SolveReport {
     /// Blasts a dig bar needs that no machine bar works, so their loaders
     /// wait on them all horizon.
     pub(crate) unworked_blasts: usize,
-    pub(crate) chunk_slots: usize,
-    /// Every receiving chunk of some pile filled, which is the point at which
-    /// non-reusable slots can start to limit receipts.
-    pub(crate) chunk_slots_full: bool,
     pub(crate) grade_margin: f64,
     pub(crate) boundary_rows: usize,
     pub(crate) boundary_tonnes_t: f64,
@@ -887,7 +871,6 @@ pub(crate) struct CalculatedSchedule {
     pub(crate) deliveries: Vec<Delivery>,
     pub(crate) ground: Vec<GroundBalance>,
     pub(crate) piles: Vec<PileTrack>,
-    pub(crate) chunk_draws: Vec<ChunkDraw>,
     /// Loader time inside the requested horizon with no execution, per agent,
     /// each with the reason publication found for it.
     pub(crate) idle: Vec<IdleSpan>,
@@ -918,7 +901,6 @@ pub(crate) struct ScheduleParts {
     pub(crate) deliveries: Vec<Delivery>,
     pub(crate) ground: Vec<GroundBalance>,
     pub(crate) piles: Vec<PileTrack>,
-    pub(crate) chunk_draws: Vec<ChunkDraw>,
     pub(crate) agents: Vec<LoaderAgentId>,
     pub(crate) bar_blocks: Vec<(BarId, Vec<DigBlockId>)>,
     pub(crate) reclaim_caps: Vec<(BarId, Option<f64>)>,
@@ -1002,7 +984,6 @@ impl CalculatedSchedule {
             deliveries: parts.deliveries,
             ground: parts.ground,
             piles: parts.piles,
-            chunk_draws: parts.chunk_draws,
             idle,
             bar_blocks: parts.bar_blocks,
             reclaim_caps: parts.reclaim_caps,
@@ -1187,15 +1168,6 @@ impl CalculatedSchedule {
 
     pub(crate) fn hourly_receipts(&self, destination: DestinationId) -> Option<&HourlyReceipts> {
         self.hourly.get(&destination)
-    }
-
-    /// Which chunks of an ordered chunked pile were drawn during the calendar
-    /// intervals a span falls in. Pile-wide per interval: when two loaders
-    /// reclaim one pile in the same interval, the draw is theirs together.
-    pub(crate) fn chunk_draws_during(&self, pile: DestinationId, start_h: f64, end_h: f64) -> impl Iterator<Item = &ChunkDraw> {
-        self.chunk_draws
-            .iter()
-            .filter(move |draw| draw.pile == pile && draw.start_h < end_h - 1e-9 && draw.end_h > start_h + 1e-9)
     }
 
     /// The spans being worked at `hour`. Half-open, so an instant on a

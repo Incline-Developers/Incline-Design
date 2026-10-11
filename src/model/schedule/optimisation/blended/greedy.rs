@@ -81,18 +81,18 @@
 //! and a pile not reclaiming gives a reclaim bar no work, so its loader moves
 //! on to its next bar as it would from an empty pile.
 //!
-//! A chunked pile follows the formulation's chunk lifecycle: chunks fill in
-//! their order, and a chunk closes when it is full and at no other time.
-//! Receipts go to the first chunk still open, up to its room, so one left
-//! partly filled when its pile stops building is topped up when building
-//! resumes. A chunk is open or closed for a whole interval, so one that fills
-//! during an interval closes at the start of the next, and the next chunk
-//! starts receiving then. A chunk holding material is reclaimable once its
-//! last delivery has rested, open or closed. Reclaim draws one chunk, the one
-//! next in the authored order - FIFO the first holding material, LIFO the
-//! last - and only once it has rested, at that chunk's own blend: a chunk
-//! still resting holds the whole pile, as a loader waits at the face rather
-//! than digging in behind it.
+//! A chunked pile follows the formulation's cell lifecycle (see
+//! [`BlendPile::chunks`]). Receipts go to the receiving cell, up to its room
+//! as the interval opens, so one left partly filled when its pile stops
+//! building is topped up when building resumes. The receiving cell moves at
+//! most once, as the next interval opens: on to the next cell once full and
+//! that cell is empty, or under LIFO down onto a cell with room below an
+//! empty one, so a partly drawn top is topped up. A cell holding material is
+//! reclaimable once its last delivery has rested, receiving or not. Reclaim
+//! draws one cell, the one next in the authored order - FIFO the oldest
+//! chunk, LIFO the newest - and only once it has rested, at that cell's own
+//! blend: a cell still resting holds the whole pile, as a loader waits at the
+//! face rather than digging in behind it.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -221,7 +221,7 @@ struct State<'a> {
     /// pile's is the sum of its chunks.
     piles: BTreeMap<StockpileId, (f64, Vec<f64>)>,
     /// Chunked piles only.
-    chunks: BTreeMap<StockpileId, Vec<Chunk>>,
+    chunks: BTreeMap<StockpileId, Cells>,
     chunk_rows: Vec<ChunkRow>,
     /// What each dump has taken, and each crusher day.
     dumped: BTreeMap<DestinationId, f64>,
@@ -268,12 +268,18 @@ struct State<'a> {
     cancel: &'a AtomicBool,
 }
 
-/// One chunk of a chunked pile, as it opens an interval.
+/// A chunked pile's cells, as they open an interval.
+struct Cells {
+    cells: Vec<Chunk>,
+    /// The cell taking receipts.
+    receiving: usize,
+}
+
+/// One cell of a chunked pile, as it opens an interval.
 struct Chunk {
     capacity_t: f64,
     held_t: f64,
     held_q: Vec<f64>,
-    closed: bool,
     /// End of the last interval it received in, for its rest; `None` for
     /// none in this run.
     received_h: Option<f64>,
@@ -1395,32 +1401,29 @@ impl<'a> State<'a> {
             }
         }
         for (pile, (open_t, open_q)) in &mut self.piles {
-            if let Some(chunks) = self.chunks.get_mut(pile) {
+            if let Some(Cells { cells, receiving }) = self.chunks.get_mut(pile) {
                 let reclaimed = drawn.get(pile).copied().unwrap_or(0.0);
                 let drawn_chunk = released.get(pile).and_then(|found| found.chunk);
-                let receiving = chunks.iter().position(|chunk| !chunk.closed);
                 let pile_receipts = receipts.remove(pile).unwrap_or_default();
-                for (index, chunk) in chunks.iter_mut().enumerate() {
+                for (index, chunk) in cells.iter_mut().enumerate() {
                     let draw = if Some(index) == drawn_chunk { reclaimed.min(chunk.held_t) } else { 0.0 };
-                    let (taken_t, taken_q) = if Some(index) == receiving {
+                    let (taken_t, taken_q) = if index == *receiving {
                         received.get(pile).cloned().unwrap_or((0.0, vec![0.0; grades]))
                     } else {
                         (0.0, vec![0.0; grades])
                     };
-                    // Only a live chunk is published: the one receiving, and
-                    // any holding material. One not yet reached, or emptied
-                    // and closed, has nothing to say, and a pile may have
-                    // many of those.
-                    if Some(index) == receiving || chunk.held_t > FINISHED_T || draw > 0.0 {
+                    // Only a live cell is published: the one receiving, and
+                    // any holding material. An empty one has nothing to say.
+                    if index == *receiving || chunk.held_t > FINISHED_T || draw > 0.0 {
                         self.chunk_rows.push(ChunkRow {
                             pile: *pile,
                             chunk: index,
                             interval: k,
                             open_t: chunk.held_t,
                             reclaimed_t: draw,
-                            closed: chunk.closed,
+                            receiving: index == *receiving,
                             received_t: taken_t,
-                            receipts: if Some(index) == receiving { pile_receipts.clone() } else { Vec::new() },
+                            receipts: if index == *receiving { pile_receipts.clone() } else { Vec::new() },
                         });
                     }
                     if draw > 0.0 && chunk.held_t > 0.0 {
@@ -1441,13 +1444,21 @@ impl<'a> State<'a> {
                     if taken_t > REST_RECEIPT_T {
                         chunk.received_h = Some(interval.end_h);
                     }
-                    // Full, it closes for the next interval.
-                    if !chunk.closed && chunk.capacity_t - chunk.held_t <= SNAP_T {
-                        chunk.closed = true;
-                    }
                 }
-                *open_t = chunks.iter().map(|chunk| chunk.held_t).sum();
-                *open_q = (0..grades).map(|grade| chunks.iter().map(|chunk| chunk.held_q[grade]).sum()).collect();
+                // Receiving moves on, for the next interval: past a full
+                // cell to an empty one, or under LIFO down onto a cell with
+                // room below an empty one.
+                let entry = input.piles.iter().find(|entry| entry.id == *pile).expect("chunked pile");
+                let full = |chunk: &Chunk| chunk.capacity_t - chunk.held_t <= SNAP_T;
+                if full(&cells[*receiving]) {
+                    if let Some(next) = entry.chunk_after(*receiving).filter(|&next| cells[next].held_t <= FINISHED_T) {
+                        *receiving = next;
+                    }
+                } else if entry.order == ReclaimOrder::Lifo && *receiving > 0 && cells[*receiving].held_t <= FINISHED_T && !full(&cells[*receiving - 1]) {
+                    *receiving -= 1;
+                }
+                *open_t = cells.iter().map(|chunk| chunk.held_t).sum();
+                *open_q = (0..grades).map(|grade| cells.iter().map(|chunk| chunk.held_q[grade]).sum()).collect();
                 continue;
             }
             let reclaimed = drawn.get(pile).copied().unwrap_or(0.0).min(*open_t);
@@ -1473,7 +1484,7 @@ impl<'a> State<'a> {
     fn released(&self, pile: StockpileId, interval: Interval) -> Option<Released> {
         let blend = |tonnes: f64, contained: &[f64]| contained.iter().map(|value| if tonnes > 0.0 { value / tonnes } else { 0.0 }).collect();
         let entry = self.input.piles.iter().find(|entry| entry.id == pile)?;
-        let Some(chunks) = self.chunks.get(&pile) else {
+        let Some(Cells { cells, receiving }) = self.chunks.get(&pile) else {
             if !self.rested(pile, interval) {
                 return None;
             }
@@ -1484,14 +1495,11 @@ impl<'a> State<'a> {
                 blend: blend(*open_t, open_q),
             });
         };
-        // The chunk next in order, once its last delivery has rested; while
+        // The cell next in order, once its last delivery has rested; while
         // it rests the pile releases nothing.
-        let next = match entry.order {
-            ReclaimOrder::Fifo => chunks.iter().position(|chunk| chunk.held_t > FINISHED_T)?,
-            ReclaimOrder::Lifo => chunks.iter().rposition(|chunk| chunk.held_t > FINISHED_T)?,
-        };
-        let index = Some(next).filter(|&index| entry.chunk_rested(index, chunks[index].received_h, interval))?;
-        let chunk = &chunks[index];
+        let next = entry.chunk_drawn(*receiving, |c| cells[c].held_t > FINISHED_T)?;
+        let index = Some(next).filter(|&index| entry.chunk_rested(index, cells[index].received_h, interval))?;
+        let chunk = &cells[index];
         Some(Released {
             chunk: Some(index),
             tonnes: chunk.held_t,
@@ -1642,15 +1650,14 @@ impl<'a> State<'a> {
                 None => f64::INFINITY,
             },
             // The pile's own room is held segment by segment in `solve`; a
-            // chunked pile takes no more than its receiving chunk's room as
-            // the interval opened, which reclaim from other chunks does not
-            // free.
+            // chunked pile takes no more than its receiving cell's room as
+            // the interval opened, which reclaim does not free.
             DestinationKind::Stockpile(pile) => {
                 if !input.piles.iter().any(|entry| entry.id == pile && entry.builds(interval)) || self.blocked.contains(&pile) {
                     return 0.0;
                 }
                 match self.chunks.get(&pile) {
-                    Some(chunks) => chunks.iter().find(|chunk| !chunk.closed).map_or(0.0, |chunk| chunk.capacity_t - chunk.held_t),
+                    Some(Cells { cells, receiving }) => cells[*receiving].capacity_t - cells[*receiving].held_t,
                     None => f64::INFINITY,
                 }
             }
@@ -1725,10 +1732,11 @@ fn input_loader(input: &BlendInput, id: LoaderId) -> Option<usize> {
     input.loaders.iter().position(|loader| loader.id == id)
 }
 
-/// A chunked pile's chunks as the horizon opens. Without authored per-chunk
-/// opening the pile's opening goes into chunk 0, as the formulation puts it.
-fn opening_chunks(pile: &BlendPile, grades: usize) -> Vec<Chunk> {
-    pile.chunks
+/// A chunked pile's cells as the horizon opens. Without authored per-cell
+/// opening the pile's opening goes into cell 0, as the formulation puts it.
+fn opening_chunks(pile: &BlendPile, grades: usize) -> Cells {
+    let cells = pile
+        .chunks
         .iter()
         .enumerate()
         .map(|(index, capacity_t)| {
@@ -1742,11 +1750,14 @@ fn opening_chunks(pile: &BlendPile, grades: usize) -> Vec<Chunk> {
                 capacity_t: *capacity_t,
                 held_t,
                 held_q,
-                closed: pile.chunk_starts_closed(index),
                 received_h: None,
             }
         })
-        .collect()
+        .collect();
+    Cells {
+        cells,
+        receiving: pile.starting_receiver(),
+    }
 }
 
 /// The grade-conditional value per tonne a reclaim on candidate `index`

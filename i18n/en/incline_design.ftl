@@ -1698,7 +1698,6 @@ schedule-run-first = Scheduled through day { $day }
 schedule-run-optimal = Scheduled through day { $day } · optimal
 schedule-run-limited-no-gap = Scheduled through day { $day }
 schedule-run-suffix-event-budget = {" "}· event budget capped
-schedule-run-suffix-chunks-full = {" "}· chunk slots full
 schedule-run-suffix-unworked-blasts =
     { $count ->
         [one] {" "}· 1 blast has no machine to work it
@@ -1718,7 +1717,6 @@ schedule-tonnes-per-day = { $value } t/day
 schedule-dispatch-tonnes-rate = { $tonnes } t at { $rate } t/h
 schedule-dispatch-shared-with = Also on this block: { $agents }
 schedule-dispatch-delivered = → { $destination }: { $tonnes } t
-schedule-dispatch-chunks = Chunks drawn in this interval: { $chunks }
 schedule-dispatch-pile-holds = { $stockpile } holds { $tonnes } t at the end of this execution
 schedule-calendar-schedule = Schedule
 schedule-animation-stale = The schedule result is stale. Run Period or Run All Periods again.
@@ -1767,7 +1765,6 @@ schedule-detail-root-lp-unobserved = Root-node processing did not finish; no com
 schedule-detail-capture = Captured { $candidates } movement candidates over { $blocks } dig blocks · model identity { $identity }
 schedule-detail-optimal-scope = Optimality is for the model as encoded, within the gap target; the approximations below still apply.
 schedule-detail-release = Stockpile receipts occupy capacity on arrival and join the reclaimable blend at the next interval boundary.
-schedule-detail-chunks = { $slots } chunk slot(s) in use; an emptied slot is not reused within the horizon, which can limit total receipts.
 schedule-detail-grade-margin = Grade boundaries: a route is closed within { $fraction } (fraction) or { $percent } percentage points inside each bound. Conditional values within that band are valued conservatively by the optimiser; published values use the authored boundary.
 schedule-detail-grade-band = { $deliveries } conditional-value deliveries ({ $tonnes } t) fell within that band; they could shift the value by at most { $value }.
 schedule-detail-indicator-leak = Conditional-value indicators were solved to the backend's integrality tolerance; the optimiser's own figure may differ from the published value by up to { $value }.
@@ -2394,10 +2391,8 @@ experiment-grades-none = None
 experiment-no-grade-fields = No tonnes-weighted average field is defined, so no blend grade can be tracked.
 experiment-representation = Representation
 experiment-blended-help = Reclaim uses the pile's tonnes-weighted average grades. Opening chunks are combined into one blend, so there is no reclaim order.
-experiment-chunks-help = Chunks of the chunk size are filled in order, opening stock first, and reclaimed in the pile's FIFO or LIFO order, each with its own composition. A partly filled chunk keeps receiving until it is full, even across days the pile is not building. Material delivered after a full chunk is emptied goes into the next chunk, so the pile refills all run; its maximum tonnes limit what it holds at once.
+experiment-chunks-help = The pile is divided into chunks of the chunk size, filled one at a time, opening stock first, each with its own composition. A partly filled chunk keeps receiving until it is full, even across days the pile is not building. Under FIFO the oldest chunk is reclaimed first, and under LIFO the newest, so a partly reclaimed newest chunk is topped up when building resumes. An emptied chunk's place is reused, and the pile's maximum tonnes limit what it holds at once.
 experiment-chunk-size = Chunk size
-experiment-receiving-chunks = Receiving chunks
-experiment-receiving-unlimited = { $size } each, as many as the run needs
 
 # Schedule calculation: capture refusals
 schedule-capture-horizon = The requested horizon is not a finite, positive number of hours.
@@ -2442,8 +2437,6 @@ schedule-capture-too-many-intervals = The horizon splits into more than { $limit
 schedule-capture-no-work = No assigned bar has work inside the requested horizon. Add dig blocks to a bar (right-click it, then Edit Sequence), or move a bar into the horizon.
 schedule-capture-no-movement = No movement is permitted by the current rules, so there is nothing to schedule.
 schedule-capture-rehandle = { $rule } permits moving reclaimed material into a stockpile. Rehandling between stockpiles is not modelled, so those movements were left out.
-schedule-chunk-opening = Opening chunk { $lot }
-schedule-chunk-receiving = Receiving chunk { $number }
 schedule-unblasted = Unblasted
 schedule-dig-sequence = Dig sequence
 schedule-leave-blank-use-ground = Leave blank to use the ground-derived name

@@ -507,8 +507,8 @@ pub(crate) fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, o
         if pile.chunks.is_empty() && !pile.chunk_opening.is_empty() {
             return Err(format!("chunk opening without chunks on pile {}", pile.id.0));
         }
-        if !pile.chunk_closed.is_empty() && pile.chunk_closed.len() != pile.chunks.len() {
-            return Err(format!("chunk closure flags do not match the chunks on pile {}", pile.id.0));
+        if pile.chunk_receiving.is_some_and(|receiving| receiving >= pile.chunks.len()) {
+            return Err(format!("the receiving chunk is not one of the chunks on pile {}", pile.id.0));
         }
         if pile.chunk_opening.len() > pile.chunks.len() || pile.chunks.iter().any(|cap| !cap.is_finite() || *cap <= 0.0) {
             return Err(format!("invalid chunks on pile {}", pile.id.0));

@@ -72,7 +72,7 @@ use crate::{
                 SourceId, StockpileId, Task, TaskId, TaskKind, TruckClass, TruckClassId,
                 blended::{
                     grade::{GradeBasis, GradeField, GradeTable},
-                    input::{BlendInput, BlendPile, ConditionalValue, GradeBound, GradeEndpoint, GradePredicate, GradeQualification},
+                    input::{BlendInput, BlendPile, CHUNK_FULL_T, ConditionalValue, GradeBound, GradeEndpoint, GradePredicate, GradeQualification},
                 },
                 build_intervals,
             },
@@ -181,11 +181,6 @@ pub(crate) struct CaptureIdentities {
     /// Every stockpile's authored opening tonnes, whether or not the run uses
     /// it, so an untouched pile still reports the stock it holds.
     pub(crate) pile_openings: Vec<(ProjectDestinationId, f64)>,
-    /// What each chunk of a chunked pile is, by position.
-    pub(crate) chunk_labels: BTreeMap<StockpileId, Vec<String>>,
-    /// How many of a chunked pile's chunks hold opening lots; the rest
-    /// receive.
-    pub(crate) opening_chunks: BTreeMap<StockpileId, usize>,
     /// Drill and blast, by position in the input's chain: each blast, and
     /// the machine each chain agent is.
     pub(crate) blasts: Vec<CapturedBlast>,
@@ -972,9 +967,9 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         .sum();
     let unlimited_t = (dug_t + source.destinations.iter().map(|view| view.opening_t).sum::<f64>()).max(1.0);
     let mut piles: Vec<BlendPile> = Vec::new();
-    // Chunked piles, by position in `piles`, still to be given their
-    // receiving chunks.
-    let mut chunked_piles: Vec<(usize, ProjectDestinationId, f64)> = Vec::new();
+    // Chunked piles, by position in `piles`, still to be given their empty
+    // cells, with the most their capacity needs.
+    let mut chunked_piles: Vec<(usize, ProjectDestinationId, f64, Option<usize>)> = Vec::new();
     for project_id in &used_piles {
         if cancel.is_cancelled() {
             return Err(Vec::new());
@@ -992,7 +987,6 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         // missing, never zero.
         let inventory = routing.inventory(*project_id);
         let mut lots: Vec<(f64, Vec<f64>)> = Vec::new();
-        let mut lot_names: Vec<String> = Vec::new();
         for lot in inventory.map(|inventory| inventory.lots.as_slice()).unwrap_or_default() {
             let mut tonnes = 0.0;
             let mut contained = vec![0.0; grades];
@@ -1031,7 +1025,6 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             }
             if sound {
                 lots.push((tonnes, contained));
-                lot_names.push(lot.name.clone());
             }
         }
         let total_opening: f64 = lots.iter().map(|(tonnes, _)| tonnes).sum();
@@ -1060,7 +1053,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 ProjectReclaimOrder::Lifo => ReclaimOrder::Lifo,
             },
             chunk_opening: Vec::new(),
-            chunk_closed: Vec::new(),
+            chunk_receiving: None,
             modes: {
                 let operation = plan.stockpile_operation(*project_id);
                 let mut modes: Vec<_> = (0..days).map(|day| operation.mode_at(CalendarPeriod(day as u32))).collect();
@@ -1083,12 +1076,10 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 }
             }
             StockpileRepresentation::Chunks => {
-                // Receiving chunks of the chunk size are added once the dug
-                // material is known: enough for everything its rules can
-                // send it. A chunk closes only when full and is not refilled
-                // once emptied, so material delivered after that goes into
-                // the next chunk; the pile's maximum tonnes bound what it
-                // holds at once.
+                // Cells of the chunk size, reused once drawn empty. The
+                // opening lots fill the first, each split into whole chunks
+                // and a remainder of its own blend, and the empty cells are
+                // added once the dug material is known.
                 let Some(chunk_t) = experiment.chunk_t(*project_id) else {
                     problems.push(CaptureDiagnostic::new(view.name.clone(), tr!("pile-chunk-size-missing")).at(ScheduleStep::Stockpiles));
                     continue;
@@ -1097,20 +1088,29 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                     problems.push(CaptureDiagnostic::new(view.name.clone(), tr!("pile-chunk-over-capacity")).at(ScheduleStep::Stockpiles));
                     continue;
                 }
-                chunked_piles.push((piles.len(), *project_id, chunk_t));
-                let receiving: Vec<f64> = Vec::new();
-                // Each opening chunk holds its own actual composition and is
-                // the chunk size, so one opening partly filled is topped up
-                // first; the receiving chunks fill in order behind them.
-                let mut capacities: Vec<f64> = lots.iter().map(|(tonnes, _)| tonnes.max(chunk_t)).collect();
-                let mut openings: Vec<(f64, Vec<f64>)> = lots.clone();
-                capacities.extend(receiving.iter().copied());
-                openings.extend(receiving.iter().map(|_| (0.0, vec![0.0; grades])));
-                let mut labels: Vec<String> = lot_names.iter().map(|name| tr!("schedule-chunk-opening", lot = name.clone())).collect();
-                labels.extend((1..=receiving.len()).map(|number| tr!("schedule-chunk-receiving", number = number.to_string())));
-                identities.chunk_labels.insert(pile, labels);
-                identities.opening_chunks.insert(pile, lots.len());
-                blend.chunks = capacities;
+                let mut openings: Vec<(f64, Vec<f64>)> = Vec::new();
+                for (tonnes, contained) in &lots {
+                    for piece in crate::model::schedule::experiment::chunk_sizes(*tonnes, chunk_t) {
+                        openings.push((piece, contained.iter().map(|quantity| quantity * piece / tonnes).collect()));
+                    }
+                }
+                // What the capacity needs. Under FIFO only the oldest and the
+                // receiving chunk are partly full, besides opening lots'
+                // remainders. Under LIFO a chunk is left partly drawn below
+                // the receiving one whenever reclaim takes from it while the
+                // cell above starts to fill, so cells are allowed for chunks
+                // half full.
+                let partial = openings.iter().filter(|(tonnes, _)| *tonnes < chunk_t - CHUNK_FULL_T).count();
+                let needed = view.capacity_t.map(|capacity| {
+                    let whole = (capacity / chunk_t + 1e-9).floor() as usize;
+                    let held = match blend.order {
+                        ReclaimOrder::Fifo => whole,
+                        ReclaimOrder::Lifo => 2 * whole,
+                    };
+                    (held + 2 + partial).max(openings.len() + 1)
+                });
+                chunked_piles.push((piles.len(), *project_id, chunk_t, needed));
+                blend.chunks = vec![chunk_t; openings.len()];
                 blend.chunk_opening = openings;
             }
         }
@@ -1263,7 +1263,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
     // ---- receiving chunks of chunked piles -------------------------------
     // Every permitted destination is a candidate, so a pile can receive no
     // more than the dug material some enabled rule sends it.
-    for (index, project_id, chunk_t) in chunked_piles {
+    for (index, project_id, chunk_t, needed) in chunked_piles {
         let mut counted: std::collections::BTreeSet<(GroundId, MaterialId)> = std::collections::BTreeSet::new();
         let mut routable = 0.0;
         for bar in &scoped {
@@ -1290,16 +1290,16 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 }
             }
         }
-        // Every chunk but the last fills before the next receives, so whole
-        // chunks of everything the pile can receive are enough. A pile
-        // nothing is sent to still needs a chunk to be one.
-        let receiving = vec![chunk_t; ((routable / chunk_t - 1e-9).ceil().max(1.0)) as usize];
+        // A chunk fills before the next receives, so whole chunks of
+        // everything the pile can receive are enough without reusing a
+        // cell, and the capacity's needs are enough with it. A pile nothing
+        // is sent to still needs a cell to be one.
         let pile = &mut piles[index];
-        pile.chunks.extend(receiving.iter().copied());
-        pile.chunk_opening.extend(receiving.iter().map(|_| (0.0, vec![0.0; grades])));
-        if let Some(labels) = identities.chunk_labels.get_mut(&pile.id) {
-            labels.extend((1..=receiving.len()).map(|number| tr!("schedule-chunk-receiving", number = number.to_string())));
-        }
+        let unrolled = pile.chunks.len() + (routable / chunk_t - 1e-9).ceil().max(1.0) as usize;
+        let cells = needed.map_or(unrolled, |needed| needed.min(unrolled));
+        let empty = cells.saturating_sub(pile.chunks.len());
+        pile.chunks.extend(std::iter::repeat_n(chunk_t, empty));
+        pile.chunk_opening.extend(std::iter::repeat_n((0.0, vec![0.0; grades]), empty));
     }
 
     if mixed_blocks > 0 {

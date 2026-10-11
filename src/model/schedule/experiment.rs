@@ -8,7 +8,7 @@
 //!   a bounded horizon and has to be told where it ends, because a bar may be
 //!   open-ended and "the last bar's end" is then not a number.
 //! - **What a stockpile *is*.** A blended pile is one composition; a chunked
-//!   pile is an ordered run of closed chunks reclaimed FIFO or LIFO. Each pile
+//!   pile is a set of chunks, each its own blend, reclaimed FIFO or LIFO. Each pile
 //!   is blended until chosen otherwise.
 //! - **Which grade columns to track.** Numeric tonnes-weighted fields can be
 //!   carried through blends, targets and actuals. Their stored numbers are
@@ -63,9 +63,9 @@ pub(crate) enum StockpileRepresentation {
     #[default]
     #[serde(alias = "not_configured")]
     Blended,
-    /// Ordered blended chunks of the pile's chunk size, each with its own
-    /// composition: the opening chunks first, then receiving chunks filling
-    /// in order behind them.
+    /// Blended chunks of the pile's chunk size, each with its own
+    /// composition, held in cells reused once drawn empty: the opening
+    /// chunks first, then chunks filling one at a time behind them.
     Chunks,
 }
 
@@ -83,15 +83,13 @@ impl StockpileRepresentation {
 #[serde(from = "StoredStockpileExperiment")]
 pub(crate) struct StockpileExperiment {
     pub(crate) representation: StockpileRepresentation,
-    /// The size of a chunked pile's *receiving* chunks, filled in order behind
-    /// the opening chunks. Each closes when full and is not refilled once
-    /// emptied; what is delivered after that goes into the next, and the
-    /// pile's maximum tonnes bound what it holds at once.
+    /// The size of a chunked pile's chunks, and so of its cells: opening
+    /// lots are split into it, and chunks fill one at a time behind them.
+    /// The pile's maximum tonnes bound what it holds at once.
     ///
-    /// Never derived from a truck payload or a tonnage: how many chunks a
-    /// pile is divided into is a modelling decision with a throughput
-    /// consequence - an emptied chunk slot is not reused within the horizon -
-    /// and inventing them to make a solve succeed would hide that.
+    /// Never derived from a truck payload or a tonnage: how finely a pile is
+    /// divided is a modelling decision, which sets how closely reclaim
+    /// follows the order material arrived in.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) chunk_t: Option<f64>,
 }

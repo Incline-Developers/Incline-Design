@@ -110,27 +110,36 @@ pub(crate) struct BlendPile {
     pub(crate) opening_t: f64,
     /// Contained quantity per tracked grade, in tonnes of the component.
     pub(crate) opening_q: Vec<f64>,
-    /// Authored chunk capacities, oldest first. Empty means one blended pile
+    /// The capacities of a chunked pile's cells. Empty means one blended pile
     /// with no internal order, which is the §4 model; a non-empty list
     /// selects the §8 chunked variant, whose lifecycle is documented on
-    /// [`super::chunks`].
+    /// [`super::formulation`]'s `chunked_pile`.
+    ///
+    /// A cell is a physical place on the pile, holding one chunk at a time
+    /// and reused once drawn empty, so a pile needs only the cells its
+    /// capacity can fill, however much passes through it. Receipts go to the
+    /// one *receiving* cell until it is full. Under FIFO the cells are a
+    /// ring: the receiving cell then moves on to the next cell round, once
+    /// that is empty, and reclaim draws the oldest chunk, the first holding
+    /// material after the receiving cell going round. Under LIFO they are a
+    /// stack: the receiving cell moves up to the empty cell above a full one,
+    /// or down onto the cell below an empty one, so a partly drawn top is
+    /// topped up, and reclaim draws the highest cell holding material. Either
+    /// way the order is the chunks' age, not their material's.
     pub(crate) chunks: Vec<f64>,
-    /// Which end of the chunk list a reclaim must draw from. Meaningless for
-    /// an unchunked pile, where it is ignored rather than reinterpreted.
+    /// Which end of the chunk order a reclaim must draw from. Meaningless
+    /// for an unchunked pile, where it is ignored rather than reinterpreted.
     pub(crate) order: ReclaimOrder,
-    /// Opening material already sitting in each chunk, as
-    /// `(tonnes, contained per grade)`, aligned with [`Self::chunks`]. A
-    /// chunk opening full is closed from the start; one opening partly filled
-    /// is the first to receive. Either is reclaimable once rested. Empty
-    /// means every chunk starts empty and [`Self::opening_t`] goes into
-    /// chunk 0.
+    /// Opening material already sitting in each cell, as
+    /// `(tonnes, contained per grade)`, aligned with [`Self::chunks`]. Either
+    /// is reclaimable once rested. Empty means every cell starts empty and
+    /// [`Self::opening_t`] goes into cell 0.
     pub(crate) chunk_opening: Vec<(f64, Vec<f64>)>,
-    /// Which chunks start closed - full, and taking no more - aligned with
-    /// [`Self::chunks`]. Empty means the authored rule: a chunk opening full
-    /// starts closed and every other chunk starts open. A day-by-day window
-    /// sets it from the state the day before left, where an emptied chunk
-    /// that once filled is closed for good.
-    pub(crate) chunk_closed: Vec<bool>,
+    /// The cell receiving as the input opens. `None` means the authored rule
+    /// in [`Self::starting_receiver`]; a day-by-day window states the one the
+    /// day before left.
+    #[serde(default)]
+    pub(crate) chunk_receiving: Option<usize>,
     /// The authored mode of each calendar day from hour 0. A day past the
     /// end builds and reclaims.
     #[serde(default)]
@@ -210,18 +219,50 @@ impl BlendPile {
         (tonnes, contained)
     }
 
-    /// Whether chunk `c` is closed from the start: full, unless a window
-    /// says otherwise.
-    pub(crate) fn chunk_starts_closed(&self, c: usize) -> bool {
-        if self.chunk_closed.is_empty() {
-            let opening_t = match self.chunk_opening.get(c) {
-                Some((tonnes, _)) => *tonnes,
-                None if self.chunk_opening.is_empty() && c == 0 => self.opening_t,
-                None => 0.0,
-            };
-            self.chunks.get(c).is_some_and(|capacity| opening_t > 0.0 && opening_t >= capacity - CHUNK_FULL_T)
-        } else {
-            self.chunk_closed.get(c).copied().unwrap_or(false)
+    /// The cell receiving as the input opens: the one a window states, or
+    /// else the last cell holding opening material while it has room, and
+    /// otherwise the empty cell after it. With none, a full last cell stays
+    /// receiving with no room until the next is drawn empty.
+    pub(crate) fn starting_receiver(&self) -> usize {
+        let count = self.chunks.len();
+        if let Some(receiving) = self.chunk_receiving.filter(|&receiving| receiving < count) {
+            return receiving;
+        }
+        let held = |c: usize| match self.chunk_opening.get(c) {
+            Some((tonnes, _)) => *tonnes,
+            None if self.chunk_opening.is_empty() && c == 0 => self.opening_t,
+            None => 0.0,
+        };
+        let Some(last) = (0..count).rev().find(|&c| held(c) > 0.0) else {
+            return 0;
+        };
+        if held(last) < self.chunks[last] - CHUNK_FULL_T {
+            return last;
+        }
+        self.chunk_after(last).filter(|&next| held(next) <= 0.0).unwrap_or(last)
+    }
+
+    /// The cell a reclaim draws, given which cells hold material and which
+    /// is receiving: under FIFO the oldest chunk, the first holding material
+    /// after the receiving cell going round (the receiving cell itself
+    /// last); under LIFO the newest, the highest holding material. Whether
+    /// it has rested is for the caller to judge: while it rests the pile
+    /// releases nothing.
+    pub(crate) fn chunk_drawn(&self, receiving: usize, holds: impl Fn(usize) -> bool) -> Option<usize> {
+        let count = self.chunks.len();
+        match self.order {
+            ReclaimOrder::Fifo => (1..=count).map(|step| (receiving + step) % count).find(|&c| holds(c)),
+            ReclaimOrder::Lifo => (0..count).rev().find(|&c| holds(c)),
+        }
+    }
+
+    /// The cell `c` hands receiving on to when full: the next round the ring
+    /// under FIFO, the one above under LIFO.
+    pub(crate) fn chunk_after(&self, c: usize) -> Option<usize> {
+        let count = self.chunks.len();
+        match self.order {
+            ReclaimOrder::Fifo => (count > 1).then(|| (c + 1) % count),
+            ReclaimOrder::Lifo => (c + 1 < count).then_some(c + 1),
         }
     }
 }

@@ -1809,16 +1809,6 @@ pub(super) fn execution_tooltip(
                 Some(cap) => tr!("schedule-bar-reclaimed-of", tonnes = format_tonnes(drawn), cap = format_tonnes(cap)),
                 None => tr!("schedule-bar-reclaimed", tonnes = format_tonnes(drawn)),
             });
-            // Which chunks the pile gave up in these intervals, when it is an
-            // ordered chunked pile: the actual source choice, not the permitted
-            // set.
-            let chunks: Vec<String> = schedule
-                .chunk_draws_during(pile, execution.start_h, execution.end_h)
-                .map(|draw| format!("{} ({:.1} t)", draw.label, draw.tonnes))
-                .collect();
-            if !chunks.is_empty() {
-                lines.push(tr!("schedule-dispatch-chunks", chunks = chunks.join(", ")));
-            }
             if let Some((held, _)) = schedule.inventory_at(pile, execution.end_h) {
                 lines.push(tr!(
                     "schedule-dispatch-pile-holds",

@@ -42,14 +42,27 @@ chunks offers to combine them. Changing the representation or the chunk size
 re-splits stock that is still one blend, and leaves chunks edited one by one
 as they are.
 
-Chunks are numbered, and the number is the order: deliveries go to the
-lowest-numbered chunk that is not yet full, and FIFO draws the lowest chunk
-holding material, LIFO the highest. Opening stock sits in the first chunks,
-the last of them topped up first when it is not full. A chunk closes once it
-is full and never takes material again, so material delivered after it is
-emptied goes into the next chunk; a chunked pile refills all run, its
-maximum tonnes limiting what it holds at once. A chunk size larger than the
-pile's maximum tonnes is an error, since no chunk could fill.
+A chunked pile is a set of cells, each holding one chunk at a time and
+reused once drawn empty, so its model grows with what the pile can hold, not
+with what passes through it over the horizon: the chunks its maximum tonnes
+can fill plus two (twice that plus two under LIFO, see below), or fewer when
+less can ever reach it. Opening stock sits in the first cells. Deliveries go
+to the **receiving** cell, and the reclaim order is the chunks' age, not
+their material's:
+
+- **FIFO** uses the cells as a ring. Once the receiving cell is full the
+  next cell round receives, once it is empty, and reclaim draws the oldest
+  chunk. A partly drawn chunk is never topped up, since it holds the oldest
+  material.
+- **LIFO** uses them as a stack. Deliveries go to the top: once full, the
+  empty cell above receives, and once the receiving cell is emptied, the
+  cell below receives again if it has room, so a partly drawn top chunk is
+  topped up with new material. Reclaim draws the top chunk. A chunk drawn
+  while the cell above it starts filling is left partly full beneath it, so
+  LIFO allows twice the cells.
+
+A chunk size larger than the pile's maximum tonnes is an error, since no
+chunk could fill.
 
 What would stop a calculation is reported on the step, as an error when the
 pile is used and a warning otherwise: a chunked pile without a chunk size,
@@ -77,17 +90,14 @@ on a forbidden day.
 
 ## Filling and reclaiming chunks
 
-A chunk of an ordered chunked pile closes - stops receiving - only when it
-is **full** (within 1e-3 t of its capacity); it closes at the start of the
-next hour and the next chunk starts receiving. One left partly filled when
-the pile's Mode stops building stays the receiving chunk and is topped up
-when building resumes, so a pile that alternates building and reclaiming
-never strands room. The hourly dispatch, the model and the replay all apply
-this. Before, a pile stopping building closed its partly filled chunk, and
-a pile that alternated could run out of chunks.
+Receiving moves on from a chunk only when it is **full** (within 1e-3 t of
+its capacity), at the start of the next hour. One left partly filled when the
+pile's Mode stops building stays the receiving chunk and is topped up when
+building resumes, so a pile that alternates building and reclaiming never
+strands room. The hourly dispatch, the model and the replay all apply this.
 
 Reclaim draws the chunk next in the pile's order - under FIFO the oldest
-holding material, under LIFO the newest - open or closed, once its last
+holding material, under LIFO the newest - receiving or not, once its last
 delivery has rested. While that chunk rests the pile cannot be reclaimed at
 all: a loader waits at the face it is to load from rather than digging in
 behind it, so with a rest a LIFO pile still being tipped on is not reclaimed

@@ -1119,9 +1119,6 @@ fn result_status(calculation: &CalculatedSchedule) -> String {
     if report.event_budget_restricted {
         status.push_str(&tr!("schedule-run-suffix-event-budget"));
     }
-    if report.chunk_slots_full {
-        status.push_str(&tr!("schedule-run-suffix-chunks-full"));
-    }
     if report.unworked_blasts > 0 {
         status.push_str(&tr!("schedule-run-suffix-unworked-blasts", count = report.unworked_blasts));
     }
@@ -1241,9 +1238,6 @@ fn result_details(calculation: &CalculatedSchedule) -> Vec<String> {
         lines.push(tr!("schedule-detail-optimal-scope"));
     }
     lines.push(tr!("schedule-detail-release"));
-    if report.chunk_slots > 0 {
-        lines.push(tr!("schedule-detail-chunks", slots = report.chunk_slots.to_string()));
-    }
     lines.push(tr!(
         "schedule-detail-grade-margin",
         fraction = format!("{:e}", report.grade_margin),

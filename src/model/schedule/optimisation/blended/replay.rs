@@ -34,12 +34,11 @@ pub(crate) struct MovementRow {
     pub(crate) tonnes_t: f64,
 }
 
-/// One chunk's published state in one interval.
+/// One cell's published state in one interval.
 ///
-/// Published for every live chunk: the one receiving, and any holding
-/// material or drawn from. A chunk with no row in an interval holds nothing -
-/// not yet reached, or emptied and closed - and keeps the state its last row
-/// gave it.
+/// Published for every live cell: the one receiving, and any holding
+/// material or drawn from. A cell with no row in an interval holds nothing:
+/// not yet reached, or drawn empty and not receiving again yet.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct ChunkRow {
     pub(crate) pile: StockpileId,
@@ -47,8 +46,9 @@ pub(crate) struct ChunkRow {
     pub(crate) interval: usize,
     pub(crate) open_t: f64,
     pub(crate) reclaimed_t: f64,
-    /// Closed to further receipts, and therefore reclaimable.
-    pub(crate) closed: bool,
+    /// The pile's receiving cell in this interval, the only one that may
+    /// take receipts.
+    pub(crate) receiving: bool,
     pub(crate) received_t: f64,
     /// What each movement candidate delivered into this chunk in this
     /// interval. Published per candidate, not just as a total, so the replay
@@ -1614,56 +1614,78 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> ChunkDra
             }
         }
 
-        // Each chunk's state walked forward through its rows: closed or not,
-        // and when it last received, for its rest. A chunk with no row keeps
-        // its state.
-        let mut closed_state: Vec<bool> = (0..count).map(|chunk| pile.chunk_starts_closed(chunk)).collect();
+        // Each cell's last receipt, for its rest, and the receiving cell,
+        // walked forward through the rows.
         let mut received_h: Vec<Option<f64>> = vec![None; count];
+        let mut receiving = pile.starting_receiver();
         for interval in 0..horizon {
             if checker.cancelled() {
                 return (drawn, released_t);
             }
             let at = checker.input.intervals[interval];
             let here: &[usize] = live.get(&(pile.id, interval)).map(Vec::as_slice).unwrap_or_default();
+            let open_t = |chunk: usize| published.get(&(pile.id, chunk, interval)).map_or(0.0, |state| state.open_t);
 
-            // Transitions first, so the checks below read every chunk's
-            // state in this interval.
-            let mut closing: Vec<usize> = Vec::new();
-            for &chunk in here {
-                let state = published[&(pile.id, chunk, interval)];
-                if closed_state[chunk] && !state.closed {
-                    if interval == 0 && pile.chunk_starts_closed(chunk) {
+            // The receiving cell: one, and moved at most once as the interval
+            // opened - on from a full cell to the next, empty one, or under
+            // LIFO down from an empty cell to the one below.
+            let stated: Vec<usize> = here.iter().copied().filter(|&chunk| published[&(pile.id, chunk, interval)].receiving).collect();
+            match stated.as_slice() {
+                [now] if interval == 0 && *now != receiving => checker
+                    .report
+                    .issues
+                    .push(format!("pile {} opens the horizon receiving into cell {now}, not cell {receiving}", pile.id.0)),
+                [now] if *now != receiving => {
+                    let forward = pile.chunk_after(receiving) == Some(*now);
+                    let down = pile.order == crate::model::schedule::optimisation::ReclaimOrder::Lifo && now + 1 == receiving;
+                    if forward && open_t(receiving) < pile.chunks[receiving] - super::input::CHUNK_FULL_T - dust.max(REPLAY_TOLERANCE_T) {
+                        checker.report.issues.push(format!(
+                            "pile {} moved receiving on from cell {receiving} in interval {interval} holding {:.6} t of {:.6} t",
+                            pile.id.0,
+                            open_t(receiving),
+                            pile.chunks[receiving]
+                        ));
+                    } else if forward && open_t(*now) > dust {
+                        checker.report.issues.push(format!(
+                            "pile {} moved receiving into cell {now} in interval {interval} while it held {:.6} t",
+                            pile.id.0,
+                            open_t(*now)
+                        ));
+                    } else if down && open_t(receiving) > dust {
+                        checker.report.issues.push(format!(
+                            "pile {} moved receiving down from cell {receiving} in interval {interval} while it held {:.6} t",
+                            pile.id.0,
+                            open_t(receiving)
+                        ));
+                    } else if !forward && !down {
                         checker
                             .report
                             .issues
-                            .push(format!("pile {} chunk {chunk} opens the horizon open but must start closed", pile.id.0));
-                    } else {
-                        // A chunk is filled once: an emptied one is not refilled.
-                        checker.report.issues.push(format!("pile {} chunk {chunk} reopened in interval {interval}", pile.id.0));
+                            .push(format!("pile {} moved receiving from cell {receiving} to cell {now} in interval {interval}", pile.id.0));
                     }
                 }
-                if !closed_state[chunk] && state.closed {
-                    closing.push(chunk);
-                }
-                closed_state[chunk] = state.closed;
+                [_] => {}
+                _ => checker
+                    .report
+                    .issues
+                    .push(format!("pile {} has {} receiving cells in interval {interval}", pile.id.0, stated.len())),
             }
-            // Open or closed, a chunk is released once its last delivery has
-            // rested.
+            if let [now] = stated.as_slice() {
+                receiving = *now;
+            }
+
+            // A cell is released once its last delivery has rested.
             let released = |chunk: usize| pile.chunk_rested(chunk, received_h[chunk], at);
-            // What the pile releases: the chunk next in order, once rested.
+            // What the pile releases: the cell next in order, once rested.
             // While it rests the pile releases nothing.
-            let holding = |chunk: &&usize| published[&(pile.id, **chunk, interval)].open_t > dust;
-            let next = match pile.order {
-                crate::model::schedule::optimisation::ReclaimOrder::Fifo => here.iter().find(holding),
-                crate::model::schedule::optimisation::ReclaimOrder::Lifo => here.iter().rev().find(holding),
-            };
-            let held = next.filter(|&&chunk| released(chunk)).map_or(0.0, |&chunk| published[&(pile.id, chunk, interval)].open_t);
+            let next = pile.chunk_drawn(receiving, |chunk| open_t(chunk) > dust);
+            let held = next.filter(|&chunk| released(chunk)).map_or(0.0, open_t);
             released_t.insert((pile.id, interval), held);
 
             for &chunk in here {
                 let state = published[&(pile.id, chunk, interval)];
 
-                // Capacity is authored per chunk.
+                // Capacity is authored per cell.
                 checker.breach(
                     &format!("pile {} chunk {chunk} capacity in interval {interval}", pile.id.0),
                     state.open_t,
@@ -1677,15 +1699,15 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> ChunkDra
                     pile.chunks[chunk],
                 );
 
-                // A chunk may not receive while closed, nor be reclaimed
-                // before its last delivery has rested.
-                if state.closed && state.received_t > REPLAY_TOLERANCE_T {
+                // Only the receiving cell receives, and a cell is not
+                // reclaimed before its last delivery has rested.
+                if chunk != receiving && state.received_t > REPLAY_TOLERANCE_T {
                     if state.received_t <= dust {
                         checker.report.chunk_dust_events += 1;
                         checker.report.chunk_dust_tonnes_t += state.received_t;
                     } else {
                         checker.report.issues.push(format!(
-                            "pile {} chunk {chunk} received {:.6} t in interval {interval} after being closed",
+                            "pile {} chunk {chunk} received {:.6} t in interval {interval} while cell {receiving} was receiving",
                             pile.id.0, state.received_t
                         ));
                     }
@@ -1702,49 +1724,16 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> ChunkDra
                     }
                 }
 
-                // Sequential fill: receiving into a chunk requires every
-                // earlier chunk to be closed, published this interval or not.
-                if state.received_t > dust
-                    && let Some(earlier) = (0..chunk).find(|&earlier| !closed_state[earlier])
-                {
+                // Authored order: only the cell next in order is drawn.
+                if state.reclaimed_t > dust && next != Some(chunk) {
                     checker.report.issues.push(format!(
-                        "pile {} chunk {chunk} received in interval {interval} while chunk {earlier} was still open",
-                        pile.id.0
-                    ));
-                }
-
-                // Authored order among released, non-empty chunks. A chunk
-                // with no row holds nothing, so only published ones count.
-                if state.reclaimed_t > dust {
-                    match pile.order {
-                        crate::model::schedule::optimisation::ReclaimOrder::Fifo => {
-                            for &earlier in here.iter().filter(|&&other| other < chunk) {
-                                if published[&(pile.id, earlier, interval)].open_t > dust {
-                                    checker.report.issues.push(format!(
-                                        "FIFO violated: pile {} drew chunk {chunk} in interval {interval} while chunk {earlier} still held material",
-                                        pile.id.0
-                                    ));
-                                }
-                            }
-                        }
-                        crate::model::schedule::optimisation::ReclaimOrder::Lifo => {
-                            for &later in here.iter().filter(|&&other| other > chunk) {
-                                if published[&(pile.id, later, interval)].open_t > dust {
-                                    checker.report.issues.push(format!(
-                                        "LIFO violated: pile {} drew chunk {chunk} in interval {interval} while chunk {later} still held material",
-                                        pile.id.0
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // A chunk closes only when full.
-                if closing.contains(&chunk) && state.open_t < pile.chunks[chunk] - super::input::CHUNK_FULL_T - dust.max(REPLAY_TOLERANCE_T) {
-                    checker.report.issues.push(format!(
-                        "pile {} chunk {chunk} closed in interval {interval} holding {:.6} t of {:.6} t",
-                        pile.id.0, state.open_t, pile.chunks[chunk]
+                        "{} violated: pile {} drew chunk {chunk} in interval {interval} while chunk {} was next",
+                        match pile.order {
+                            crate::model::schedule::optimisation::ReclaimOrder::Fifo => "FIFO",
+                            crate::model::schedule::optimisation::ReclaimOrder::Lifo => "LIFO",
+                        },
+                        pile.id.0,
+                        next.map_or_else(|| "none".to_string(), |next| next.to_string())
                     ));
                 }
             }

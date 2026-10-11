@@ -104,7 +104,11 @@ pub(crate) fn extract_solution(solved: &Model<Solved>, columns: &BlendColumns<Va
             return Err(());
         }
         let reclaimed_t = columns.chunk_recl_t.get(&(pile, chunk, interval)).map(|variable| best.val(variable)).unwrap_or(0.0);
-        let closed = columns.chunk_closed.get(&(pile, chunk, interval)).map(|variable| best.val(variable) > 0.5).unwrap_or(false);
+        let receiving = columns
+            .chunk_receiving
+            .get(&(pile, chunk, interval))
+            .map(|variable| best.val(variable) > 0.5)
+            .unwrap_or(false);
         let receipts = split.remove(&(pile, chunk, interval)).unwrap_or_default();
         let received_t = receipts.iter().map(|(_, tonnes)| tonnes).sum();
         chunks.push(ChunkRow {
@@ -113,7 +117,7 @@ pub(crate) fn extract_solution(solved: &Model<Solved>, columns: &BlendColumns<Va
             interval,
             open_t: best.val(open),
             reclaimed_t,
-            closed,
+            receiving,
             received_t,
             receipts,
         });

@@ -27,7 +27,7 @@ use crate::{
                 replay::{BlendSolution, ReplayReport},
             },
         },
-        result::{CalculatedSchedule, ChunkDraw, Delivery, Execution, GroundBalance, PileStep, PileTrack, ScheduleParts, SolveQuality, SolveReport, WorkSource},
+        result::{CalculatedSchedule, Delivery, Execution, GroundBalance, PileStep, PileTrack, ScheduleParts, SolveQuality, SolveReport, WorkSource},
         trucking,
     },
 };
@@ -456,40 +456,6 @@ pub(crate) fn publish(
         });
     }
 
-    // Which chunk a reclaim actually drew, per interval.
-    let mut chunk_draws = Vec::new();
-    let mut chunk_slots_full = false;
-    for pile in input.piles.iter().filter(|pile| !pile.chunks.is_empty()) {
-        let Some(project) = lookup.piles.get(&pile.id) else { continue };
-        let labels = identities.chunk_labels.get(&pile.id);
-        let opening = identities.opening_chunks.get(&pile.id).copied().unwrap_or(0);
-        let mut received = 0.0;
-        for row in solution.chunks.iter().filter(|row| row.pile == pile.id) {
-            received += if row.chunk >= opening { row.received_t } else { 0.0 };
-            if row.reclaimed_t <= DUST_T {
-                continue;
-            }
-            let Some(interval) = input.intervals.get(row.interval) else { continue };
-            chunk_draws.push(ChunkDraw {
-                pile: *project,
-                chunk: row.chunk,
-                label: labels.and_then(|labels| labels.get(row.chunk)).cloned().unwrap_or_else(|| format!("{}", row.chunk + 1)),
-                start_h: interval.start_h,
-                end_h: interval.end_h,
-                tonnes: row.reclaimed_t,
-            });
-        }
-        let receiving: f64 = pile.chunks.iter().skip(opening).sum();
-        if receiving > 0.0 && received >= receiving - 1e-6 * receiving.max(1.0) {
-            chunk_slots_full = true;
-        }
-    }
-    chunk_draws.sort_by(|left, right| {
-        (left.pile, left.start_h, left.chunk)
-            .partial_cmp(&(right.pile, right.start_h, right.chunk))
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
     let completion = meta.completion;
     let report = SolveReport {
         quality: Some(match completion.termination {
@@ -521,8 +487,6 @@ pub(crate) fn publish(
         segments_per_interval: input.segments_per_interval,
         event_budget_restricted: meta.event_budget_restricted,
         unworked_blasts: meta.unworked_blasts,
-        chunk_slots: input.piles.iter().map(|pile| pile.chunks.len()).sum(),
-        chunk_slots_full,
         grade_margin: GRADE_MARGIN,
         boundary_rows: replay.boundary_rows,
         boundary_tonnes_t: replay.boundary_tonnes_t,
@@ -542,7 +506,6 @@ pub(crate) fn publish(
         deliveries: merged_deliveries,
         ground,
         piles,
-        chunk_draws,
         agents: identities.loaders.iter().map(|(_, agent, _)| *agent).collect(),
         bar_blocks: identities.bar_blocks.clone(),
         reclaim_caps: identities.reclaim_caps.clone(),
@@ -667,22 +630,26 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
     let (dug, received, hauled) = (Spans::index(dug), Spans::index(received), Spans::index(hauled));
     let sum_within = |spans: Option<&Spans>, from_h: f64, to_h: f64| spans.map_or(0.0, |spans| spans.within(from_h, to_h));
 
-    // Which chunked piles release something in each interval: the chunk
+    // Which chunked piles release something in each interval: the cell
     // holding material next in the pile's order, once its last delivery has
     // rested. While it rests the pile releases nothing.
     let mut chunk_rows: Vec<_> = solution.chunks.iter().collect();
-    chunk_rows.sort_by_key(|row| (row.pile, row.chunk, row.interval));
+    chunk_rows.sort_by_key(|row| (row.pile, row.interval, row.chunk));
     let mut received_h: BTreeMap<(StockpileId, usize), f64> = BTreeMap::new();
-    // Per pile and interval, each chunk holding material and whether it has
-    // rested, in chunk order.
-    let mut holding: BTreeMap<(StockpileId, usize), Vec<bool>> = BTreeMap::new();
+    // Per pile and interval, each cell holding material with whether it has
+    // rested, and the receiving cell.
+    type Cells = (BTreeMap<usize, bool>, Option<usize>);
+    let mut holding: BTreeMap<(StockpileId, usize), Cells> = BTreeMap::new();
     for row in chunk_rows {
         let (Some(pile), Some(interval)) = (input.piles.iter().find(|pile| pile.id == row.pile), input.intervals.get(row.interval)) else {
             continue;
         };
+        let (cells, receiving) = holding.entry((row.pile, row.interval)).or_default();
         if row.open_t > IDLE_NEGLIGIBLE_T {
-            let rested = pile.chunk_rested(row.chunk, received_h.get(&(row.pile, row.chunk)).copied(), *interval);
-            holding.entry((row.pile, row.interval)).or_default().push(rested);
+            cells.insert(row.chunk, pile.chunk_rested(row.chunk, received_h.get(&(row.pile, row.chunk)).copied(), *interval));
+        }
+        if row.receiving {
+            *receiving = Some(row.chunk);
         }
         if row.received_t > crate::model::schedule::optimisation::blended::input::REST_RECEIPT_T {
             received_h.insert((row.pile, row.chunk), interval.end_h);
@@ -690,12 +657,12 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
     }
     let released: std::collections::BTreeSet<(StockpileId, usize)> = holding
         .into_iter()
-        .filter(|((pile, _), rested)| {
-            let next = match input.piles.iter().find(|entry| entry.id == *pile).map(|entry| entry.order) {
-                Some(crate::model::schedule::optimisation::ReclaimOrder::Lifo) => rested.last(),
-                _ => rested.first(),
+        .filter(|((pile, _), (cells, receiving))| {
+            let Some(entry) = input.piles.iter().find(|entry| entry.id == *pile) else {
+                return false;
             };
-            next.copied().unwrap_or(false)
+            let receiving = receiving.unwrap_or_else(|| entry.starting_receiver());
+            entry.chunk_drawn(receiving, |c| cells.contains_key(&c)).is_some_and(|next| cells[&next])
         })
         .map(|(key, _)| key)
         .collect();

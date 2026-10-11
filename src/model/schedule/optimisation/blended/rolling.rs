@@ -11,9 +11,8 @@
 //! Days are first solved alone ([`plan`] with no look-ahead), which is
 //! fastest and on DreamLand's week also the best; only if that fails is the
 //! run planned again with [`LOOKAHEAD_H`]. A day solved alone cannot see a
-//! dead end it walks into: the chunked LIFO fixture closed every chunk on its
-//! second day, because an open chunk was worth nothing that day, and left the
-//! third day's diggers nowhere to put material.
+//! dead end it walks into, such as a day that leaves the next day's diggers
+//! nowhere to put material.
 //!
 //! # What crosses a window boundary
 //!
@@ -27,12 +26,10 @@
 //!   independent replay of the window. Receipts in the last committed
 //!   interval join the released blend at that boundary, exactly as they
 //!   would inside one model.
-//! - **Chunks.** Each chunk's closing tonnes and contained quantity, again
-//!   from the replay, and whether it closed in any kept interval. A closed
-//!   chunk opens the next window closed, so an emptied chunk is never
-//!   refilled - the next one takes what follows - and the formulation leaves
-//!   it out; an open one may be closed at the boundary or keep filling, as it
-//!   could inside one model.
+//! - **Chunks.** Each cell's closing tonnes and contained quantity, again
+//!   from the replay, and which cell is receiving as the next window opens:
+//!   the one the window's solution says, or else the one the receiving cell
+//!   hands on to by the pile's rule.
 //! - **Horizon-wide allowances.** What is left of each reclaim bar's cap and
 //!   each dump's capacity, and what each crusher day has already taken.
 //!
@@ -46,11 +43,11 @@
 //! starting point for a whole-horizon solve that can improve on it and bound
 //! it.
 //!
-//! Every lifecycle rule a boundary could break - a chunk reopening, a fill
-//! out of sequence - is checked again when the stitched schedule is replayed
+//! Every lifecycle rule a boundary could break - receiving moved out of
+//! turn, a draw out of order - is checked again when the stitched schedule is replayed
 //! against the whole horizon.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use super::{
     input::{BlendInput, BlendPile},
@@ -121,9 +118,10 @@ pub(crate) struct Carry {
     target_totals: BTreeMap<(usize, u32), (f64, f64)>,
     /// Released opening tonnes and contained quantity per grade.
     piles: BTreeMap<StockpileId, (f64, Vec<f64>)>,
-    /// A chunked pile's chunks: tonnes, contained quantity per grade, and
-    /// whether the chunk is closed.
-    chunks: BTreeMap<StockpileId, Vec<(f64, Vec<f64>, bool)>>,
+    /// A chunked pile's cells: tonnes and contained quantity per grade.
+    chunks: BTreeMap<StockpileId, Vec<(f64, Vec<f64>)>>,
+    /// A chunked pile's receiving cell.
+    receiving: BTreeMap<StockpileId, usize>,
     /// End of the last interval each pile received in, for its rest.
     last_receipt_h: BTreeMap<StockpileId, f64>,
     /// End of the last interval each chunk received in, for its rest;
@@ -156,11 +154,17 @@ impl Carry {
                                 None => (0.0, Vec::new()),
                             };
                             contained.resize(grades, 0.0);
-                            (tonnes, contained, pile.chunk_starts_closed(c))
+                            (tonnes, contained)
                         })
                         .collect();
                     (pile.id, chunks)
                 })
+                .collect(),
+            receiving: input
+                .piles
+                .iter()
+                .filter(|pile| !pile.chunks.is_empty())
+                .map(|pile| (pile.id, pile.starting_receiver()))
                 .collect(),
             last_receipt_h: input.piles.iter().filter_map(|pile| Some((pile.id, pile.last_receipt_h?))).collect(),
             chunk_received_h: input
@@ -267,7 +271,7 @@ impl Carry {
                 if let Some(chunks) = self.chunks.get(&pile.id) {
                     let mut opening_t = 0.0;
                     let mut opening_q = vec![0.0; grades];
-                    for (tonnes, contained, _) in chunks {
+                    for (tonnes, contained) in chunks {
                         opening_t += tonnes;
                         for (slot, value) in opening_q.iter_mut().zip(contained) {
                             *slot += value;
@@ -280,8 +284,8 @@ impl Carry {
                         opening_q,
                         chunks: pile.chunks.clone(),
                         order: pile.order,
-                        chunk_opening: chunks.iter().map(|(tonnes, contained, _)| (*tonnes, contained.clone())).collect(),
-                        chunk_closed: chunks.iter().map(|(_, _, closed)| *closed).collect(),
+                        chunk_opening: chunks.clone(),
+                        chunk_receiving: self.receiving.get(&pile.id).copied().or(pile.chunk_receiving),
                         modes: pile.modes.clone(),
                         exclusive: pile.exclusive,
                         rest_h: pile.rest_h,
@@ -298,7 +302,7 @@ impl Carry {
                     chunks: Vec::new(),
                     order: pile.order,
                     chunk_opening: Vec::new(),
-                    chunk_closed: Vec::new(),
+                    chunk_receiving: None,
                     modes: pile.modes.clone(),
                     exclusive: pile.exclusive,
                     rest_h: pile.rest_h,
@@ -430,18 +434,15 @@ impl Carry {
             }
             let Some(chunks) = self.chunks.get_mut(&pile.id) else { continue };
             let received_h = self.chunk_received_h.entry(pile.id).or_insert_with(|| vec![None; pile.chunks.len()]);
-            // Which chunks are published closed in a kept interval, and the
-            // last kept interval each received in. Rows are published only
-            // for live chunks, so a chunk that closed and was emptied inside
-            // the window has none at its end; it is closed all the same, and
-            // stays so.
-            let mut closed: BTreeSet<usize> = BTreeSet::new();
+            // The receiving cell in the last kept interval and the next, and
+            // the last kept interval each cell received in.
+            let mut receiving: BTreeMap<usize, usize> = BTreeMap::new();
             let mut last_receipt: BTreeMap<usize, usize> = BTreeMap::new();
-            for row in solution.chunks.iter().filter(|row| row.pile == pile.id && row.interval < window.committed) {
-                if row.closed {
-                    closed.insert(row.chunk);
+            for row in solution.chunks.iter().filter(|row| row.pile == pile.id && row.interval <= window.committed) {
+                if row.receiving {
+                    receiving.insert(row.interval, row.chunk);
                 }
-                if row.received_t > super::input::REST_RECEIPT_T {
+                if row.received_t > super::input::REST_RECEIPT_T && row.interval < window.committed {
                     let last = last_receipt.entry(row.chunk).or_insert(row.interval);
                     *last = (*last).max(row.interval);
                 }
@@ -470,7 +471,23 @@ impl Carry {
                         chunk.1.iter_mut().for_each(|quantity| *quantity = 0.0);
                     }
                 }
-                chunk.2 |= closed.contains(&c);
+            }
+            // Receiving as the next window opens: as this window's solution
+            // has it, or else handed on from the last kept interval's by the
+            // pile's rule - past a full cell to an empty one, or under LIFO
+            // down from an empty cell onto one with room.
+            let current = self.receiving.entry(pile.id).or_insert_with(|| pile.starting_receiver());
+            if let Some(&now) = receiving.get(&window.committed) {
+                *current = now;
+            } else if let Some(&then) = receiving.get(&last) {
+                let full = |c: usize| chunks[c].0 >= pile.chunks[c] - super::input::CHUNK_FULL_T;
+                *current = if full(then) {
+                    pile.chunk_after(then).filter(|&next| chunks[next].0 <= FINISHED_T).unwrap_or(then)
+                } else if pile.order == crate::model::schedule::optimisation::ReclaimOrder::Lifo && then > 0 && chunks[then].0 <= FINISHED_T && !full(then - 1) {
+                    then - 1
+                } else {
+                    then
+                };
             }
         }
     }
