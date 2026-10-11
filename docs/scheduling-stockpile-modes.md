@@ -44,9 +44,10 @@ as they are.
 
 A chunked pile is a set of cells, each holding one chunk at a time and
 reused once drawn empty, so its model grows with what the pile can hold, not
-with what passes through it over the horizon: the chunks its maximum tonnes
-can fill plus two (twice that plus two under LIFO, see below), or fewer when
-less can ever reach it. Opening stock sits in the first cells. Deliveries go
+with what passes through it over the horizon: under FIFO the chunks its
+maximum tonnes can hold, rounded up, plus one, so receiving always has an
+empty cell to move to while the pile has room (under LIFO twice the whole
+chunks plus two, see below); fewer when less can ever reach it. Opening stock sits in the first cells. Deliveries go
 to the **receiving** cell, and the reclaim order is the chunks' age, not
 their material's:
 

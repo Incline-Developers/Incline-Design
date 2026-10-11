@@ -1096,18 +1096,20 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                 }
                 // What the capacity needs. Under FIFO only the oldest and the
                 // receiving chunk are partly full, besides opening lots'
-                // remainders. Under LIFO a chunk is left partly drawn below
-                // the receiving one whenever reclaim takes from it while the
+                // remainders, so with every cell holding material and the
+                // receiving one full the pile holds more than its capacity:
+                // receiving always has an empty cell to move to while there
+                // is room. Under LIFO a chunk is left partly drawn below the
+                // receiving one whenever reclaim takes from it while the
                 // cell above starts to fill, so cells are allowed for chunks
                 // half full.
                 let partial = openings.iter().filter(|(tonnes, _)| *tonnes < chunk_t - CHUNK_FULL_T).count();
                 let needed = view.capacity_t.map(|capacity| {
-                    let whole = (capacity / chunk_t + 1e-9).floor() as usize;
                     let held = match blend.order {
-                        ReclaimOrder::Fifo => whole,
-                        ReclaimOrder::Lifo => 2 * whole,
+                        ReclaimOrder::Fifo => (capacity / chunk_t - 1e-9).ceil() as usize + 1,
+                        ReclaimOrder::Lifo => 2 * (capacity / chunk_t + 1e-9).floor() as usize + 2,
                     };
-                    (held + 2 + partial).max(openings.len() + 1)
+                    (held + partial).max(openings.len() + 1)
                 });
                 chunked_piles.push((piles.len(), *project_id, chunk_t, needed));
                 blend.chunks = vec![chunk_t; openings.len()];
