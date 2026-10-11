@@ -53,6 +53,10 @@ pub(crate) struct BlendColumns<V> {
     pub(crate) chunk_recl_t: BTreeMap<(StockpileId, usize, usize), V>,
     /// Whether each cell is the pile's receiving one.
     pub(crate) chunk_receiving: BTreeMap<(StockpileId, usize, usize), V>,
+    /// Under LIFO, at most 1, and above 0 only while every cell above this
+    /// one is empty; missing for the top cell and below an empty run that
+    /// is out of play.
+    pub(crate) chunk_clear: BTreeMap<(StockpileId, usize, usize), V>,
     /// Whether each chunk is empty, the same way: `open_t > 0` forces it to 0.
     pub(crate) chunk_empty: BTreeMap<(StockpileId, usize, usize), V>,
     /// Whether each chunk of a pile with a rest received in the interval,
@@ -87,6 +91,7 @@ impl<V> BlendColumns<V> {
             chunk_open_t: BTreeMap::new(),
             chunk_recl_t: BTreeMap::new(),
             chunk_receiving: BTreeMap::new(),
+            chunk_clear: BTreeMap::new(),
             chunk_empty: BTreeMap::new(),
             chunk_fresh: BTreeMap::new(),
             chunk_recv: BTreeMap::new(),
@@ -1007,6 +1012,7 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
                     };
                     // A gate cell out of play is empty, so always open.
                     let opens: Vec<Option<R::Var>> = match gate.and_then(|gate| Some((voids[gate].clone()?, gate))) {
+                        Some(_) if pile.order == ReclaimOrder::Lifo => vec![rows.columns().chunk_clear.get(&(pile.id, c, k)).cloned()],
                         Some((gate_void, gate)) => {
                             let mut opens = vec![Some(gate_void)];
                             if pile.order == ReclaimOrder::Fifo
@@ -2184,14 +2190,15 @@ fn predicate_owed<R: Rows>(rows: &mut R, pile: StockpileId, interval: usize, tes
 ///   partly filled when its pile stops building is topped up when building
 ///   resumes.
 /// - Receiving **moves** at most once, as an interval opens: on from a full
-///   cell to the next, which must be empty - round the ring under FIFO, up
-///   the stack under LIFO - or, under LIFO only, down from an empty cell to
-///   the one below, so a partly drawn top is topped up.
+///   cell to the next - round the ring under FIFO, into an empty cell, up
+///   the stack under LIFO - or, under LIFO, down to the cell below, so it
+///   follows the lowest cell that isn't full and a partly drawn chunk is
+///   topped up while the one above it is reclaimed.
 /// - A cell **becomes reclaimable**, receiving or not, once its last
 ///   delivery has rested.
-/// - **FIFO/LIFO** is chunk age. The cells holding material are a run ending
-///   at the receiving cell, so FIFO draws the cell after an empty or the
-///   receiving one, and LIFO the cell below an empty one or the top.
+/// - **FIFO/LIFO** is chunk age. Under FIFO the cells holding material are a
+///   run ending at the receiving cell, so FIFO draws the cell after an empty
+///   or the receiving one. LIFO draws the highest cell holding material.
 ///
 /// **Opening stock** occupies the first cells, and the receiving cell is the
 /// last of them while it has room (see [`BlendPile::starting_receiver`]). A
@@ -2419,12 +2426,11 @@ fn chunked_pile<R: Rows>(
 
             // Receiving moves at most once as the interval opens. It stays,
             // or comes on from the cell before in fill order once that is
-            // full and this one empty, or under LIFO down from the cell above
-            // once that is empty:
+            // full - under FIFO only into an empty cell - or under LIFO down
+            // from the cell above, following the lowest cell that isn't full:
             //   recv[c,k] <= recv[c,k-1] + recv[before,k-1] (+ recv[c+1,k-1])
             //   recv[c,k] + recv[before,k-1] - open_t[before,k] / (cap - CHUNK_FULL_T) <= 1
-            //   recv[c,k] + recv[before,k-1] - empty[c,k] <= 1
-            //   recv[c,k] + recv[c+1,k-1] - empty[c+1,k] <= 1
+            //   FIFO: recv[c,k] + recv[before,k-1] - empty[c,k] <= 1
             if k > 0 {
                 let flag = |c: usize, k: usize| match &taking[c][k] {
                     Flag::Var(column) => Some(column.clone()),
@@ -2447,23 +2453,16 @@ fn chunked_pile<R: Rows>(
                         ),
                         None => rows.leq(vec![(receives.clone(), 1.0), (came.clone(), 1.0)], 1.0, &format!("cTakeFull_{}_{c}_{k}", pile.id.0)),
                     }
-                    rows.leq(
-                        vec![(receives.clone(), 1.0), (came, 1.0), (void.clone(), -1.0)],
-                        1.0,
-                        &format!("cTakeEmpty_{}_{c}_{k}", pile.id.0),
-                    );
-                }
-                if let Some(above) = above
-                    && let Some(came) = flag(above, k - 1)
-                {
-                    terms.push((came.clone(), -1.0));
-                    if let Flag::Var(above_void) = &empty[above][k] {
+                    if pile.order == ReclaimOrder::Fifo {
                         rows.leq(
-                            vec![(receives.clone(), 1.0), (came, 1.0), (above_void.clone(), -1.0)],
+                            vec![(receives.clone(), 1.0), (came, 1.0), (void.clone(), -1.0)],
                             1.0,
-                            &format!("cTakeDown_{}_{c}_{k}", pile.id.0),
+                            &format!("cTakeEmpty_{}_{c}_{k}", pile.id.0),
                         );
                     }
+                }
+                if let Some(came) = above.and_then(|above| flag(above, k - 1)) {
+                    terms.push((came, -1.0));
                 }
                 rows.leq(terms, 0.0, &format!("cTakeMove_{}_{c}_{k}", pile.id.0));
             }
@@ -2559,33 +2558,66 @@ fn chunked_pile<R: Rows>(
         }
     }
 
-    // Authored order. The cells holding material are a run ending at the
-    // receiving cell, so under FIFO the oldest is the one after an empty or
-    // the receiving cell, and under LIFO the newest is the one below an empty
-    // cell, or the top. Resting or not, so a cell still resting holds the
-    // pile rather than letting a loader dig in behind it:
+    // Authored order. Under FIFO the cells holding material are a run
+    // ending at the receiving cell, so the oldest is the one after an empty
+    // or the receiving cell. Under LIFO the newest is the highest holding
+    // material: every cell above it empty, carried down the stack by a
+    // running bound, since a cell drawn empty in the hour the one above
+    // starts filling leaves a gap. Resting or not, so a cell still resting
+    // holds the pile rather than letting a loader dig in behind it:
     //   FIFO: draw[c] <= draw_m * (empty[before] + recv[before])
-    //   LIFO: draw[c] <= draw_m * empty[c+1]
+    //   LIFO: clear[c] <= empty[c+1], clear[c] <= clear[c+1], draw[c] <= draw_m * clear[c]
     // A cell out of play is empty and not receiving.
     for k in 0..horizon {
         if rows.cancelled() {
             return Err(FormulationCancelled);
         }
-        for c in (0..count).filter(|&c| active(c, k)) {
-            let gate = match pile.order {
-                ReclaimOrder::Fifo => (0..count).find(|&other| pile.chunk_after(other) == Some(c)).filter(|&before| before != c),
-                ReclaimOrder::Lifo => (c + 1 < count).then_some(c + 1),
-            };
-            let Some(gate) = gate else { continue };
-            let Flag::Var(gate_void) = &empty[gate][k] else { continue };
+        let mut carried: Option<R::Var> = None;
+        for c in (0..count).rev() {
             let chunk_m = pile.chunks[c].min(interval_draw[k]).max(0.0);
-            let mut terms = vec![(take(&recl_t[c][k]), 1.0), (gate_void.clone(), -chunk_m)];
-            if pile.order == ReclaimOrder::Fifo
-                && let Flag::Var(gate_receives) = &taking[gate][k]
-            {
-                terms.push((gate_receives.clone(), -chunk_m));
+            match pile.order {
+                ReclaimOrder::Fifo => {
+                    if !active(c, k) {
+                        continue;
+                    }
+                    let Some(before) = (0..count).find(|&other| pile.chunk_after(other) == Some(c)).filter(|&before| before != c) else {
+                        continue;
+                    };
+                    let Flag::Var(gate_void) = &empty[before][k] else { continue };
+                    let mut terms = vec![(take(&recl_t[c][k]), 1.0), (gate_void.clone(), -chunk_m)];
+                    if let Flag::Var(gate_receives) = &taking[before][k] {
+                        terms.push((gate_receives.clone(), -chunk_m));
+                    }
+                    rows.leq(terms, 0.0, &format!("cOrderDraw_{}_{c}_{k}", pile.id.0));
+                }
+                ReclaimOrder::Lifo => {
+                    // Clear while every cell above this one is empty. A cell
+                    // above out of play is empty, so passes the bound on.
+                    let above = carried.take();
+                    let gate = match empty.get(c + 1).map(|flags| &flags[k]) {
+                        Some(Flag::Var(void)) => {
+                            let clear = rows.cont(1.0, &format!("cOrder_{}_{c}_{k}", pile.id.0));
+                            rows.leq(vec![(clear.clone(), 1.0), (void.clone(), -1.0)], 0.0, &format!("cOrderNext_{}_{c}_{k}", pile.id.0));
+                            if let Some(above) = above {
+                                rows.leq(vec![(clear.clone(), 1.0), (above, -1.0)], 0.0, &format!("cOrderRun_{}_{c}_{k}", pile.id.0));
+                            }
+                            Some(clear)
+                        }
+                        _ => above,
+                    };
+                    if active(c, k)
+                        && let Some(clear) = gate.clone()
+                    {
+                        rows.leq(
+                            vec![(take(&recl_t[c][k]), 1.0), (clear.clone(), -chunk_m)],
+                            0.0,
+                            &format!("cOrderDraw_{}_{c}_{k}", pile.id.0),
+                        );
+                        rows.columns().chunk_clear.insert((pile.id, c, k), clear);
+                    }
+                    carried = gate;
+                }
             }
-            rows.leq(terms, 0.0, &format!("cOrderDraw_{}_{c}_{k}", pile.id.0));
         }
         // One cell receives.
         let terms: Vec<(R::Var, f64)> = (0..count)

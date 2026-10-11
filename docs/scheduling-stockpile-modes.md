@@ -44,10 +44,9 @@ as they are.
 
 A chunked pile is a set of cells, each holding one chunk at a time and
 reused once drawn empty, so its model grows with what the pile can hold, not
-with what passes through it over the horizon: under FIFO the chunks its
-maximum tonnes can hold, rounded up, plus one, so receiving always has an
-empty cell to move to while the pile has room (under LIFO twice the whole
-chunks plus two, see below); fewer when less can ever reach it. Opening stock sits in the first cells. Deliveries go
+with what passes through it over the horizon: the chunks its maximum tonnes
+can hold, rounded up, plus one, so receiving always has a cell to move to
+while the pile has room; fewer when less can ever reach it. Opening stock sits in the first cells. Deliveries go
 to the **receiving** cell, and the reclaim order is the chunks' age, not
 their material's:
 
@@ -55,12 +54,10 @@ their material's:
   next cell round receives, once it is empty, and reclaim draws the oldest
   chunk. A partly drawn chunk is never topped up, since it holds the oldest
   material.
-- **LIFO** uses them as a stack. Deliveries go to the top: once full, the
-  empty cell above receives, and once the receiving cell is emptied, the
-  cell below receives again if it has room, so a partly drawn top chunk is
-  topped up with new material. Reclaim draws the top chunk. A chunk drawn
-  while the cell above it starts filling is left partly full beneath it, so
-  LIFO allows twice the cells.
+- **LIFO** uses them as a stack. Deliveries go to the lowest cell that isn't
+  full, and reclaim draws the highest chunk holding material. So a partly
+  reclaimed chunk is topped up while the chunk above it is reclaimed, and
+  only those two are ever partly full.
 
 A chunk size larger than the pile's maximum tonnes is an error, since no
 chunk could fill.

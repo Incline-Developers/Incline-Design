@@ -85,9 +85,9 @@
 //! [`BlendPile::chunks`]). Receipts go to the receiving cell, up to its room
 //! as the interval opens, so one left partly filled when its pile stops
 //! building is topped up when building resumes. The receiving cell moves at
-//! most once, as the next interval opens: on to the next cell once full and
-//! that cell is empty, or under LIFO down onto a cell with room below an
-//! empty one, so a partly drawn top is topped up. A cell holding material is
+//! most once, as the next interval opens: under FIFO on to the next cell once
+//! full and that cell is empty, under LIFO to the lowest cell that isn't
+//! full, so a partly drawn chunk is topped up. A cell holding material is
 //! reclaimable once its last delivery has rested, receiving or not. Reclaim
 //! draws one cell, the one next in the authored order - FIFO the oldest
 //! chunk, LIFO the newest - and only once it has rested, at that cell's own
@@ -109,7 +109,7 @@ use super::{
     plan::PlanTargets,
     replay::{BlendSolution, ChunkRow, ExtractionAdjustments, MovementRow, ReplayReport, replay_cancellable},
 };
-use crate::model::schedule::optimisation::{Activity, DestinationId, DestinationKind, GroundId, Interval, LoaderId, ReclaimOrder, SourceId, StockpileId, TaskKind, TruckClassId};
+use crate::model::schedule::optimisation::{Activity, DestinationId, DestinationKind, GroundId, Interval, LoaderId, SourceId, StockpileId, TaskKind, TruckClassId};
 
 /// Remaining tonnes at or below which a block counts as finished.
 const FINISHED_T: f64 = 1e-9;
@@ -1445,18 +1445,10 @@ impl<'a> State<'a> {
                         chunk.received_h = Some(interval.end_h);
                     }
                 }
-                // Receiving moves on, for the next interval: past a full
-                // cell to an empty one, or under LIFO down onto a cell with
-                // room below an empty one.
+                // Receiving moves on, for the next interval, by the pile's
+                // rule (see `BlendPile::next_receiver`).
                 let entry = input.piles.iter().find(|entry| entry.id == *pile).expect("chunked pile");
-                let full = |chunk: &Chunk| chunk.capacity_t - chunk.held_t <= SNAP_T;
-                if full(&cells[*receiving]) {
-                    if let Some(next) = entry.chunk_after(*receiving).filter(|&next| cells[next].held_t <= FINISHED_T) {
-                        *receiving = next;
-                    }
-                } else if entry.order == ReclaimOrder::Lifo && *receiving > 0 && cells[*receiving].held_t <= FINISHED_T && !full(&cells[*receiving - 1]) {
-                    *receiving -= 1;
-                }
+                *receiving = entry.next_receiver(*receiving, |c| cells[c].held_t, FINISHED_T);
                 *open_t = cells.iter().map(|chunk| chunk.held_t).sum();
                 *open_q = (0..grades).map(|grade| cells.iter().map(|chunk| chunk.held_q[grade]).sum()).collect();
                 continue;

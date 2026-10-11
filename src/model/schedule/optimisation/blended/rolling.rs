@@ -474,20 +474,12 @@ impl Carry {
             }
             // Receiving as the next window opens: as this window's solution
             // has it, or else handed on from the last kept interval's by the
-            // pile's rule - past a full cell to an empty one, or under LIFO
-            // down from an empty cell onto one with room.
+            // pile's rule.
             let current = self.receiving.entry(pile.id).or_insert_with(|| pile.starting_receiver());
             if let Some(&now) = receiving.get(&window.committed) {
                 *current = now;
             } else if let Some(&then) = receiving.get(&last) {
-                let full = |c: usize| chunks[c].0 >= pile.chunks[c] - super::input::CHUNK_FULL_T;
-                *current = if full(then) {
-                    pile.chunk_after(then).filter(|&next| chunks[next].0 <= FINISHED_T).unwrap_or(then)
-                } else if pile.order == crate::model::schedule::optimisation::ReclaimOrder::Lifo && then > 0 && chunks[then].0 <= FINISHED_T && !full(then - 1) {
-                    then - 1
-                } else {
-                    then
-                };
+                *current = pile.next_receiver(then, |c| chunks[c].0, FINISHED_T);
             }
         }
     }

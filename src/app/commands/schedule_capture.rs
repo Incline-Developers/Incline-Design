@@ -1094,23 +1094,15 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                         openings.push((piece, contained.iter().map(|quantity| quantity * piece / tonnes).collect()));
                     }
                 }
-                // What the capacity needs. Under FIFO only the oldest and the
-                // receiving chunk are partly full, besides opening lots'
+                // What the capacity needs. Only the chunk being drawn and the
+                // receiving one are partly full, besides opening lots'
                 // remainders, so with every cell holding material and the
                 // receiving one full the pile holds more than its capacity:
-                // receiving always has an empty cell to move to while there
-                // is room. Under LIFO a chunk is left partly drawn below the
-                // receiving one whenever reclaim takes from it while the
-                // cell above starts to fill, so cells are allowed for chunks
-                // half full.
+                // receiving always has a cell to move to while there is room.
                 let partial = openings.iter().filter(|(tonnes, _)| *tonnes < chunk_t - CHUNK_FULL_T).count();
-                let needed = view.capacity_t.map(|capacity| {
-                    let held = match blend.order {
-                        ReclaimOrder::Fifo => (capacity / chunk_t - 1e-9).ceil() as usize + 1,
-                        ReclaimOrder::Lifo => 2 * (capacity / chunk_t + 1e-9).floor() as usize + 2,
-                    };
-                    (held + partial).max(openings.len() + 1)
-                });
+                let needed = view
+                    .capacity_t
+                    .map(|capacity| ((capacity / chunk_t - 1e-9).ceil() as usize + 1 + partial).max(openings.len() + 1));
                 chunked_piles.push((piles.len(), *project_id, chunk_t, needed));
                 blend.chunks = vec![chunk_t; openings.len()];
                 blend.chunk_opening = openings;

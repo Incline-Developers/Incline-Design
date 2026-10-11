@@ -1441,7 +1441,14 @@ fn offer_seed(model: Model<ProblemCreated>, values: &HashMap<String, f64>) -> Re
     let solution = model.create_orig_sol();
     for variable in model.orig_vars() {
         if let Some(value) = values.get(&variable.name()) {
-            solution.set_val(&variable, *value);
+            // An integer read back within SCIP's integrality tolerance, such
+            // as a receiving flag at -2.5e-7, breaks a row that scales it by
+            // a pile's receipts, so it is offered whole.
+            let value = match variable.var_type() {
+                russcip::VarType::Binary | russcip::VarType::Integer => value.round(),
+                _ => *value,
+            };
+            solution.set_val(&variable, value);
         }
     }
     let stored = model.add_sol(solution).is_ok();

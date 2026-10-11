@@ -122,10 +122,11 @@ pub(crate) struct BlendPile {
     /// ring: the receiving cell then moves on to the next cell round, once
     /// that is empty, and reclaim draws the oldest chunk, the first holding
     /// material after the receiving cell going round. Under LIFO they are a
-    /// stack: the receiving cell moves up to the empty cell above a full one,
-    /// or down onto the cell below an empty one, so a partly drawn top is
-    /// topped up, and reclaim draws the highest cell holding material. Either
-    /// way the order is the chunks' age, not their material's.
+    /// stack: receipts go to the lowest cell that isn't full and reclaim
+    /// draws the highest holding material, so a partly drawn chunk is topped
+    /// up while the one above it is reclaimed. Either way the order is the
+    /// chunks' age, not their material's, and at most two cells are partly
+    /// full besides opening lots.
     pub(crate) chunks: Vec<f64>,
     /// Which end of the chunk order a reclaim must draw from. Meaningless
     /// for an unchunked pile, where it is ignored rather than reinterpreted.
@@ -220,9 +221,10 @@ impl BlendPile {
     }
 
     /// The cell receiving as the input opens: the one a window states, or
-    /// else the last cell holding opening material while it has room, and
-    /// otherwise the empty cell after it. With none, a full last cell stays
-    /// receiving with no room until the next is drawn empty.
+    /// else under LIFO the lowest cell that isn't full, and under FIFO the
+    /// last cell holding opening material while it has room, and otherwise
+    /// the empty cell after it. With none, a full last cell stays receiving
+    /// with no room until the next is drawn.
     pub(crate) fn starting_receiver(&self) -> usize {
         let count = self.chunks.len();
         if let Some(receiving) = self.chunk_receiving.filter(|&receiving| receiving < count) {
@@ -233,6 +235,9 @@ impl BlendPile {
             None if self.chunk_opening.is_empty() && c == 0 => self.opening_t,
             None => 0.0,
         };
+        if self.order == ReclaimOrder::Lifo {
+            return (0..count).find(|&c| held(c) < self.chunks[c] - CHUNK_FULL_T).unwrap_or(count - 1);
+        }
         let Some(last) = (0..count).rev().find(|&c| held(c) > 0.0) else {
             return 0;
         };
@@ -253,6 +258,21 @@ impl BlendPile {
         match self.order {
             ReclaimOrder::Fifo => (1..=count).map(|step| (receiving + step) % count).find(|&c| holds(c)),
             ReclaimOrder::Lifo => (0..count).rev().find(|&c| holds(c)),
+        }
+    }
+
+    /// Where receiving goes as the next interval opens, from `receiving`,
+    /// given what each cell holds: at most one cell on. Under FIFO on to the
+    /// next cell round once this one is full and that one empty; under LIFO
+    /// down onto the cell below while it has room, or else up once this one
+    /// is full, so it follows the lowest cell that isn't full.
+    pub(crate) fn next_receiver(&self, receiving: usize, held: impl Fn(usize) -> f64, empty_t: f64) -> usize {
+        let full = |c: usize| held(c) >= self.chunks[c] - CHUNK_FULL_T;
+        match self.order {
+            ReclaimOrder::Lifo if receiving > 0 && !full(receiving - 1) => receiving - 1,
+            ReclaimOrder::Lifo if full(receiving) => self.chunk_after(receiving).unwrap_or(receiving),
+            ReclaimOrder::Fifo if full(receiving) => self.chunk_after(receiving).filter(|&next| held(next) <= empty_t).unwrap_or(receiving),
+            _ => receiving,
         }
     }
 

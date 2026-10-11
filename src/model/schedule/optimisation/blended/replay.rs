@@ -1627,8 +1627,8 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> ChunkDra
             let open_t = |chunk: usize| published.get(&(pile.id, chunk, interval)).map_or(0.0, |state| state.open_t);
 
             // The receiving cell: one, and moved at most once as the interval
-            // opened - on from a full cell to the next, empty one, or under
-            // LIFO down from an empty cell to the one below.
+            // opened - on from a full cell to the next, under FIFO an empty
+            // one, or under LIFO down to the cell below.
             let stated: Vec<usize> = here.iter().copied().filter(|&chunk| published[&(pile.id, chunk, interval)].receiving).collect();
             match stated.as_slice() {
                 [now] if interval == 0 && *now != receiving => checker
@@ -1645,17 +1645,11 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> ChunkDra
                             open_t(receiving),
                             pile.chunks[receiving]
                         ));
-                    } else if forward && open_t(*now) > dust {
+                    } else if forward && pile.order == crate::model::schedule::optimisation::ReclaimOrder::Fifo && open_t(*now) > dust {
                         checker.report.issues.push(format!(
                             "pile {} moved receiving into cell {now} in interval {interval} while it held {:.6} t",
                             pile.id.0,
                             open_t(*now)
-                        ));
-                    } else if down && open_t(receiving) > dust {
-                        checker.report.issues.push(format!(
-                            "pile {} moved receiving down from cell {receiving} in interval {interval} while it held {:.6} t",
-                            pile.id.0,
-                            open_t(receiving)
                         ));
                     } else if !forward && !down {
                         checker
