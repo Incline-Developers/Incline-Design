@@ -1361,6 +1361,86 @@ pub(crate) fn draw_move_panel(ui: &mut egui::Ui, editor: &mut EditorState, comma
     });
 }
 
+/// Draw the Next Vertex panel beside a string being drawn: a point to add as
+/// typed, and a step from the last vertex by bearing, level distance and dip.
+/// Enter in a field adds from that part; it never finishes the string.
+pub(crate) fn draw_next_vertex_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect) {
+    // The panel goes down with the tool that drew it.
+    if !matches!(editor.active_tool, ActiveTool::MakeLine | ActiveTool::MakePoly) || !editor.active_workspace.has_drawing_aids() {
+        editor.next_vertex_panel = None;
+        return;
+    }
+    let on_section = editor.slice_mode_enabled && editor.active_workspace.edits_in_slice_view();
+    let can_add = !editor.poly_finish_dialog;
+    let can_step = can_add && !editor.pending_stroke.is_empty();
+    let Some(panel) = editor.next_vertex_panel.as_mut() else {
+        return;
+    };
+    let submitted = |ui: &egui::Ui, response: &egui::Response| response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+    let mut close = false;
+    ViewportDockPanel::new("next_vertex_panel", tr!("edit-next-vertex"), viewport_rect)
+        .min_width(230.0)
+        .show(ui.ctx(), |ui| {
+            let mut add_point = false;
+            for (axis, value) in panel.point.iter_mut().enumerate() {
+                let name = crate::model::survey::axis_name(axis);
+                let response = MenuFieldF64::new(name.clone(), value, f64::MIN..=f64::MAX)
+                    .help_text(tr!("edit-next-vertex-axis-help", axis = name))
+                    .speed(0.1)
+                    .max_decimals(3)
+                    .show(ui);
+                add_point |= submitted(ui, &response);
+            }
+            ui.add_space(4.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                add_point |= ui.add(MenuButton::new(tr!("edit-next-vertex-add")).primary().enabled(can_add)).clicked();
+            });
+            if add_point && can_add {
+                commands.push(UiCommand::AddTypedStrokeVertex(glam::DVec3::from(panel.point)));
+            }
+
+            menu::menu_section(ui, tr!("edit-next-vertex-from-last"));
+            let mut add_step = false;
+            if on_section {
+                ui.label(tr!("edit-next-vertex-section-bearing"));
+            } else {
+                let response = MenuFieldF64::new(tr!("edit-next-vertex-bearing"), &mut panel.bearing, 0.0..=360.0)
+                    .help_text(tr!("edit-next-vertex-bearing-help"))
+                    .speed(0.25)
+                    .show(ui);
+                add_step |= submitted(ui, &response);
+            }
+            let response = MenuFieldF64::new(tr!("edit-distance"), &mut panel.distance, f64::MIN..=f64::MAX)
+                .help_text(tr!("edit-next-vertex-distance-help"))
+                .speed(0.1)
+                .max_decimals(3)
+                .show(ui);
+            add_step |= submitted(ui, &response);
+            let response = MenuFieldF64::new(tr!("edit-dip"), &mut panel.dip, -89.9..=89.9)
+                .help_text(tr!("edit-next-vertex-dip-help"))
+                .speed(0.25)
+                .show(ui);
+            add_step |= submitted(ui, &response);
+            ui.add_space(4.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.add(MenuButton::new(tr!("common-close"))).clicked() {
+                    close = true;
+                }
+                add_step |= ui.add(MenuButton::new(tr!("edit-next-vertex-add")).primary().enabled(can_step)).clicked();
+            });
+            if add_step && can_step {
+                commands.push(UiCommand::AddStrokeVertexAlongBearing {
+                    bearing: panel.bearing,
+                    distance: panel.distance,
+                    dip: panel.dip,
+                });
+            }
+        });
+    if close {
+        editor.next_vertex_panel = None;
+    }
+}
+
 /// Draw the floating Rotate Collar panel: the two angles a drill plan is
 /// written in, and an Apply button.
 ///

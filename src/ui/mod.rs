@@ -772,6 +772,11 @@ fn draw_ui(
         dialogs::editing::draw_move_panel(root_ui, editor, commands, canvas_rect);
     }
 
+    // A string being drawn in Geology: its typed next vertex.
+    if editor.next_vertex_panel.is_some() {
+        dialogs::editing::draw_next_vertex_panel(root_ui, editor, commands, canvas_rect);
+    }
+
     // Rotate Collar: the two-ring gizmo and its angle panel, over the holes it
     // would turn.
     if editor.rotate_tool_has_targets() {

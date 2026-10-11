@@ -917,6 +917,22 @@ impl<'a> App<'a> {
                 self.commit_stroke_open();
                 Ok(())
             }
+            UiCommand::RemoveLastStrokeVertex => {
+                self.remove_last_stroke_vertex();
+                Ok(())
+            }
+            UiCommand::OpenNextVertexPanel => {
+                self.open_next_vertex_panel();
+                Ok(())
+            }
+            UiCommand::AddTypedStrokeVertex(world) => {
+                self.add_typed_stroke_vertex(world);
+                Ok(())
+            }
+            UiCommand::AddStrokeVertexAlongBearing { bearing, distance, dip } => {
+                self.add_stroke_vertex_along_bearing(bearing, distance, dip);
+                Ok(())
+            }
             UiCommand::CommitCircleTypedRadius => {
                 self.commit_circle_typed_radius();
                 Ok(())

@@ -132,7 +132,16 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
             }
         }
     } else if let (Some(&last), Some(cursor)) = (editor.pending_stroke.last(), editor.cursor_world) {
-        draw_line(&mut overlay, last, cursor, DOC_LINE_WIDTH, PREVIEW_COLOR);
+        if editor.stroke_leg_broken {
+            // Solid, it would retrace the segment Backspace just took back.
+            for dash in (0..TIE_OVERWRITE_DASHES).step_by(2) {
+                let from = dash as f64 / TIE_OVERWRITE_DASHES as f64;
+                let to = (dash + 1) as f64 / TIE_OVERWRITE_DASHES as f64;
+                draw_line(&mut overlay, last.lerp(cursor, from), last.lerp(cursor, to), DOC_LINE_WIDTH, PREVIEW_COLOR);
+            }
+        } else {
+            draw_line(&mut overlay, last, cursor, DOC_LINE_WIDTH, PREVIEW_COLOR);
+        }
     }
 
     if editor.active_tool == ActiveTool::MakeCircle

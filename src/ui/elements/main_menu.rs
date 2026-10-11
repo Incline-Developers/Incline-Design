@@ -568,16 +568,20 @@ pub(crate) enum GeologyRow {
     Reverse,
     DrapeAlongTriangles,
     Thin,
+    RemoveLastVertex,
+    NextVertex,
 }
 
 /// Geology Design's lower half in menu order; [`geology_design_groups`] cuts
 /// it into submenus and the macOS menu tags rows by index into it.
-pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 27] = [
+pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 29] = [
     GeologyRow::Tool(ActiveTool::MakePoint),
     GeologyRow::Tool(ActiveTool::MakeLine),
     GeologyRow::Tool(ActiveTool::MakePoly),
     GeologyRow::Tool(ActiveTool::MakeCircle),
     GeologyRow::Tool(ActiveTool::MakeText),
+    GeologyRow::RemoveLastVertex,
+    GeologyRow::NextVertex,
     GeologyRow::Tool(ActiveTool::Move),
     GeologyRow::SetAxis(Axis::X),
     GeologyRow::SetAxis(Axis::Y),
@@ -606,11 +610,11 @@ pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 27] = [
 /// rows after the last run stand on the menu itself.
 pub(crate) fn geology_design_groups() -> [(String, std::ops::Range<usize>); 5] {
     [
-        (tr!("ws-menubar-geology-draw"), 0..5),
-        (tr!("ws-menubar-geology-edit"), 5..15),
-        (tr!("ws-menubar-geology-join-split"), 15..18),
-        (tr!("ws-menubar-geology-vertices"), 18..23),
-        (tr!("ws-menubar-geology-surface"), 23..26),
+        (tr!("ws-menubar-geology-draw"), 0..7),
+        (tr!("ws-menubar-geology-edit"), 7..17),
+        (tr!("ws-menubar-geology-join-split"), 17..20),
+        (tr!("ws-menubar-geology-vertices"), 20..25),
+        (tr!("ws-menubar-geology-surface"), 25..28),
     ]
 }
 
@@ -645,6 +649,8 @@ impl GeologyRow {
             Self::Reverse => tr!("toolbars-reverse-strings"),
             Self::DrapeAlongTriangles => tr!("ws-menubar-geology-drape-along-triangles"),
             Self::Thin => tr!("ws-menubar-geology-thin"),
+            Self::RemoveLastVertex => tr!("ws-menubar-geology-remove-last-vertex"),
+            Self::NextVertex => tr!("ws-menubar-geology-next-vertex"),
         }
     }
 
@@ -659,6 +665,8 @@ impl GeologyRow {
             Self::Reverse => UiCommand::ReverseSelectedStrings,
             Self::DrapeAlongTriangles => UiCommand::ArmDrapeAlongTriangles,
             Self::Thin => UiCommand::OpenThinStringsDialog,
+            Self::RemoveLastVertex => UiCommand::RemoveLastStrokeVertex,
+            Self::NextVertex => UiCommand::OpenNextVertexPanel,
         }
     }
 
@@ -677,6 +685,8 @@ impl GeologyRow {
             Self::CleanStrings => editor.selection_counts.open_strings > 0,
             Self::CreateTriangulation => editor.selection_counts.triangulation_sources > 0,
             Self::DrapeAlongTriangles => true,
+            Self::RemoveLastVertex => !editor.pending_stroke.is_empty() && !editor.poly_finish_dialog,
+            Self::NextVertex => matches!(editor.active_tool, ActiveTool::MakeLine | ActiveTool::MakePoly),
         }
     }
 }

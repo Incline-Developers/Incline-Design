@@ -433,6 +433,10 @@ impl<'a> App<'a> {
                 }
                 WindowEvent::CursorMoved { position, .. } => {
                     self.editor.cursor_screen_px = Some((position.x as f32, position.y as f32));
+                    if self.editor.stroke_leg_broken {
+                        self.editor.stroke_leg_broken = false;
+                        self.invalidate_overlay();
+                    }
                     let pixels_per_point = self.points_to_px(1.0);
                     let circle_input_reset = self
                         .editor
@@ -1491,6 +1495,17 @@ impl<'a> App<'a> {
                 } else {
                     self.try_finish_tool();
                 }
+            }
+            // In the middle of a string, Backspace gives back its last vertex
+            // rather than deleting the selection.
+            KeyCode::Backspace
+                if self.editor.active_workspace.has_drawing_tools()
+                    && !self.editor.pending_stroke.is_empty()
+                    && !self.editor.text_editing_enabled
+                    && !self.editor.poly_finish_dialog
+                    && self.editor.object_edit_dialog.is_none() =>
+            {
+                self.remove_last_stroke_vertex();
             }
             // The "Edit Object" dialog has its own row Delete button and no
             // keyboard shortcut for it, and it is opened on a selected object,

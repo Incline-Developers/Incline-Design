@@ -6,6 +6,7 @@ pub(crate) mod explode;
 pub(crate) mod fuse;
 pub(crate) mod insert_point;
 pub(crate) mod move_tool;
+pub(crate) mod next_vertex;
 pub(crate) mod offset;
 pub(crate) mod placement;
 pub(crate) mod relimit;

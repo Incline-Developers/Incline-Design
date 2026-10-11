@@ -92,14 +92,28 @@ impl<'a> App<'a> {
         };
         // A vertex is pinned to the plane showing when it was clicked; the
         // section can move afterwards (W/S walk, Q/E turn), so a line may span planes.
+        self.push_stroke_point(world, layer);
+        self.sync_next_vertex_panel();
+    }
+
+    /// Add `world` to the stroke as a click would, finishing a line at its
+    /// second vertex and a polyline brought back to its first.
+    pub(crate) fn push_stroke_point(&mut self, world: glam::DVec3, layer: LayerId) {
+        // A new run: Backspace must not reach back into the segments of one
+        // already finished.
+        if self.editor.pending_stroke.is_empty() {
+            self.editor.line_chain.clear();
+        }
         self.editor.pending_stroke.push(world);
         match self.editor.active_tool {
             ActiveTool::MakeLine if self.editor.pending_stroke.len() >= 2 => {
                 let verts: Vec<PolyVertex> = self.editor.pending_stroke.iter().map(|&p| PolyVertex::straight(p)).collect();
                 let chain_start = *self.editor.pending_stroke.last().unwrap();
+                let segment_start = self.editor.pending_stroke[0];
                 if !self.commit_polyline(verts, false, layer) {
                     return;
                 }
+                self.record_line_segment(segment_start);
                 crate::logging::report_completed_action(
                     CommandReportSpec::new(crate::i18n::tr!("common-create-line"), crate::i18n::tr!("cmd-placement-2-vertices")),
                     crate::i18n::tr!("cmd-placement-created-line-segment-2-vertices"),

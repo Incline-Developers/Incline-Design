@@ -981,6 +981,18 @@ pub(crate) fn batter_angle_measurement(points: &[DVec3]) -> Option<BatterAngleMe
 
 pub(crate) const CIRCLE_TYPED_RESET_DISTANCE_POINTS: f32 = 8.0;
 
+/// What the Next Vertex panel holds: a point to add as typed, and a step
+/// from the last vertex by bearing, level distance and dip.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct NextVertexPanel {
+    pub(crate) point: [f64; 3],
+    /// Degrees clockwise from grid north.
+    pub(crate) bearing: f64,
+    pub(crate) distance: f64,
+    /// Degrees above level; 0 keeps the last vertex's height.
+    pub(crate) dip: f64,
+}
+
 /// Transient state for the centre-to-radius phase of MakeCircle.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct CircleDraft {
@@ -1598,6 +1610,15 @@ pub(crate) struct EditorState {
     /// Vertices accumulated for an in-progress MakeLine / MakePoly stroke.
     pub(crate) pending_stroke: Vec<DVec3>,
     pub(crate) circle_draft: Option<CircleDraft>,
+    /// The Next Vertex panel beside a string being drawn, while it is open.
+    pub(crate) next_vertex_panel: Option<NextVertexPanel>,
+    /// Where each segment the Line tool saved in the run being drawn starts,
+    /// newest last, so Backspace can take one back.
+    pub(crate) line_chain: Vec<DVec3>,
+    /// Set when Backspace gives back a vertex: until the mouse moves, the
+    /// leg to the cursor would retrace the segment just removed, so it is
+    /// drawn broken.
+    pub(crate) stroke_leg_broken: bool,
     pub(crate) measurement_start: Option<DVec3>,
     pub(crate) measurement_end: Option<DVec3>,
     pub(crate) batter_angle_points: Vec<DVec3>,
@@ -3041,6 +3062,9 @@ impl EditorState {
             pending_delete_item: None,
             pending_stroke: Vec::new(),
             circle_draft: None,
+            next_vertex_panel: None,
+            line_chain: Vec::new(),
+            stroke_leg_broken: false,
             measurement_start: None,
             measurement_end: None,
             batter_angle_points: Vec::new(),
@@ -3979,6 +4003,18 @@ pub(crate) enum UiCommand {
     },
     FinishPolyClose,
     CommitStrokeOpen,
+    /// Give back the last vertex of the string being drawn.
+    RemoveLastStrokeVertex,
+    OpenNextVertexPanel,
+    /// Add this point to the string being drawn.
+    AddTypedStrokeVertex(DVec3),
+    /// Add the vertex a step from the last: bearing and dip in degrees,
+    /// distance on the level in metres.
+    AddStrokeVertexAlongBearing {
+        bearing: f64,
+        distance: f64,
+        dip: f64,
+    },
     CommitCircleTypedRadius,
     CancelOffset,
     ConfirmDrapeSelection,
@@ -4553,6 +4589,10 @@ impl UiCommand {
         }
         match self {
             Self::SetActiveTool(_)
+            | Self::RemoveLastStrokeVertex
+            | Self::OpenNextVertexPanel
+            | Self::AddTypedStrokeVertex(_)
+            | Self::AddStrokeVertexAlongBearing { .. }
             | Self::ToggleCreateDrillPattern
             | Self::BeginDrillPatternShapePick
             | Self::ClearSelection
@@ -5297,6 +5337,12 @@ impl Workspace {
 
     /// Whether this workspace edits strings on a section.
     pub(crate) fn edits_in_slice_view(self) -> bool {
+        matches!(self, Self::Geology)
+    }
+
+    /// Whether this workspace's drawing tools take the next vertex typed, by
+    /// point or by bearing and distance.
+    pub(crate) fn has_drawing_aids(self) -> bool {
         matches!(self, Self::Geology)
     }
 }

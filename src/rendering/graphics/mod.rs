@@ -1083,6 +1083,12 @@ impl<'a> Graphics<'a> {
         self.slice_view.as_ref().map(SliceViewState::slab)
     }
 
+    /// Whether the section is seen from the side it was entered on, where
+    /// screen right runs along the section; `None` with no section up.
+    pub(crate) fn section_viewed_from_front(&self) -> Option<bool> {
+        self.slice_view.as_ref().map(|slice| slice.viewing_from_front)
+    }
+
     /// Turn the section camera to a standard view: the section line itself
     /// turns, so the camera ends square-on looking along that axis - the turn
     /// Q/E make, taken in one eased step.
