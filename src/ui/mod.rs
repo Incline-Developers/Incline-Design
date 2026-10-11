@@ -473,6 +473,7 @@ fn tool_prompt(editor: &EditorState) -> Option<ViewportMessage> {
         ActiveTool::BatterBermOffset if editor.batter_berm_target_id.is_none() => ViewportMessage::text(tr!("ui-select-polyline")),
         ActiveTool::DeletePoints => ViewportMessage::text(tr!("ui-select-point")),
         ActiveTool::EditVertex => ViewportMessage::text(tr!("ui-select-polyline-vertex")),
+        ActiveTool::InsertPoint => ViewportMessage::text(tr!("ui-click-string-insert-point")).minor(tr!("ui-esc-cancels")),
         _ => return None,
     };
     Some(message)

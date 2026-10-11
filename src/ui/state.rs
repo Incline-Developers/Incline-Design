@@ -3691,6 +3691,8 @@ pub(crate) enum ActiveTool {
     /// Open the vertex sheet of the string under the cursor at the vertex
     /// nearest it.
     EditVertex,
+    /// Geology's: add a vertex where a click lands on a string's segment.
+    InsertPoint,
 }
 
 impl ActiveTool {
@@ -3767,7 +3769,15 @@ impl ActiveTool {
     pub(crate) fn edits_in_slice_view(self) -> bool {
         matches!(
             self,
-            Self::Move | Self::DrapeToTopology | Self::Bezier | Self::DeletePoints | Self::ExplodePolyline | Self::SplitAtPoints | Self::FuseIntoPolyline | Self::EditVertex
+            Self::Move
+                | Self::DrapeToTopology
+                | Self::Bezier
+                | Self::DeletePoints
+                | Self::ExplodePolyline
+                | Self::SplitAtPoints
+                | Self::FuseIntoPolyline
+                | Self::EditVertex
+                | Self::InsertPoint
         )
     }
 

@@ -346,7 +346,7 @@ impl<'a> App<'a> {
                                 }
                                 let hover_highlight_active = matches!(
                                     self.editor.active_tool,
-                                    ActiveTool::ExplodePolyline | ActiveTool::Move | ActiveTool::DeletePoints | ActiveTool::EditVertex
+                                    ActiveTool::ExplodePolyline | ActiveTool::Move | ActiveTool::DeletePoints | ActiveTool::EditVertex | ActiveTool::InsertPoint
                                 ) || (self.editor.active_tool == ActiveTool::RelimitLine
                                     && (self.editor.relimit_awaiting_source_pick || self.editor.relimit_waiting_for_pick));
                                 if !hover_highlight_active
@@ -546,8 +546,10 @@ impl<'a> App<'a> {
                         }
                     }
                     let hover_pick_due = snap_poll_due
-                        && (matches!(self.editor.active_tool, ActiveTool::Move | ActiveTool::DeletePoints | ActiveTool::EditVertex)
-                            || self.editor.active_tool == ActiveTool::ExplodePolyline
+                        && (matches!(
+                            self.editor.active_tool,
+                            ActiveTool::Move | ActiveTool::DeletePoints | ActiveTool::EditVertex | ActiveTool::InsertPoint
+                        ) || self.editor.active_tool == ActiveTool::ExplodePolyline
                             || self.editor.relimit_awaiting_source_pick
                             || self.editor.relimit_waiting_for_pick
                             || self.editor.relimit_confirming_end
@@ -556,9 +558,16 @@ impl<'a> App<'a> {
                     if hover_pick_due {
                         self.last_snap_poll_instant = Some(now);
                     }
-                    if matches!(self.editor.active_tool, ActiveTool::Move | ActiveTool::DeletePoints | ActiveTool::EditVertex) && hover_pick_due {
+                    if matches!(
+                        self.editor.active_tool,
+                        ActiveTool::Move | ActiveTool::DeletePoints | ActiveTool::EditVertex | ActiveTool::InsertPoint
+                    ) && hover_pick_due
+                    {
                         self.update_move_delete_hover();
-                    } else if !matches!(self.editor.active_tool, ActiveTool::Move | ActiveTool::DeletePoints | ActiveTool::EditVertex) && self.editor.tool_hover_vertex_px.is_some()
+                    } else if !matches!(
+                        self.editor.active_tool,
+                        ActiveTool::Move | ActiveTool::DeletePoints | ActiveTool::EditVertex | ActiveTool::InsertPoint
+                    ) && self.editor.tool_hover_vertex_px.is_some()
                     {
                         self.editor.tool_hover_vertex_px = None;
                         self.editor.tool_hover_vertex_world = None;
@@ -896,6 +905,7 @@ impl<'a> App<'a> {
                 ActiveTool::MeasureDistance => self.measure_distance_click(),
                 ActiveTool::MeasureBatterAngle => self.measure_batter_angle_click(),
                 ActiveTool::EditVertex => self.edit_vertex_at_cursor(),
+                ActiveTool::InsertPoint => self.insert_point_at_cursor(),
                 ActiveTool::VerticalSlice => self.slice_line_click(),
                 ActiveTool::DeletePoints => {
                     self.editor.selection_box_start_px = self.editor.cursor_screen_px;
@@ -1438,6 +1448,11 @@ impl<'a> App<'a> {
                     self.cancel_chamfer();
                 } else if self.editor.active_tool == ActiveTool::Bezier {
                     self.cancel_bezier();
+                } else if self.editor.active_tool == ActiveTool::InsertPoint {
+                    self.clear_insert_point_marker();
+                    self.editor.tool_highlight_id = None;
+                    self.editor.active_tool = ActiveTool::None;
+                    self.invalidate_geometry();
                 } else if self.editor.active_tool == ActiveTool::ExplodePolyline {
                     self.editor.tool_highlight_id = None;
                     self.editor.active_tool = ActiveTool::None;
@@ -1651,6 +1666,9 @@ impl<'a> App<'a> {
             }
             ActiveTool::SplitAtPoints if next_tool != ActiveTool::SplitAtPoints => {
                 self.cancel_split_at_points();
+            }
+            ActiveTool::InsertPoint if next_tool != ActiveTool::InsertPoint => {
+                self.clear_insert_point_marker();
             }
             _ => {}
         }

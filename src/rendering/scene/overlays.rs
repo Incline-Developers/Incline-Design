@@ -210,10 +210,23 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
         draw_screen_point_marker_sized(&mut overlay, first, 11.0, ACTIVE_POINT_COLOR);
     }
 
-    if matches!(editor.active_tool, ActiveTool::Move | ActiveTool::DeletePoints | ActiveTool::EditVertex)
-        && let Some(hover) = editor.tool_hover_vertex_world
+    if matches!(
+        editor.active_tool,
+        ActiveTool::Move | ActiveTool::DeletePoints | ActiveTool::EditVertex | ActiveTool::InsertPoint
+    ) && let Some(hover) = editor.tool_hover_vertex_world
     {
         draw_screen_point_marker_sized(&mut overlay, hover, 11.0, ACTIVE_POINT_COLOR);
+    }
+
+    // Inserting: every vertex of the string under the cursor is marked, a
+    // size below the point a click would add, so the new point reads against
+    // the ones already there.
+    if editor.active_tool == ActiveTool::InsertPoint
+        && let Some(Object::Polyline { verts, .. }) = editor.tool_highlight_id.and_then(|id| document.get_object(id))
+    {
+        for vertex in verts {
+            draw_screen_point_marker_sized(&mut overlay, vertex.pos, 9.0, PREVIEW_COLOR);
+        }
     }
 
     let marker_target_id = editor.move_vertex_target.map(|(id, _)| id);

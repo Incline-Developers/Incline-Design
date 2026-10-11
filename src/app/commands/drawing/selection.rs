@@ -102,6 +102,7 @@ impl<'a> App<'a> {
             ActiveTool::EditVertex => self
                 .polyline_vertex_hit(pick::VertexPickFilter::AnyEditable)
                 .map(|hit| (hit.object_id, hit.screen_px, hit.world)),
+            ActiveTool::InsertPoint => self.insert_point_hit(),
             _ => None,
         };
         let hover_px = vertex_hit.map(|(_, screen_px, _)| screen_px);
@@ -123,6 +124,10 @@ impl<'a> App<'a> {
         if self.editor.tool_highlight_id != hovered_object {
             self.editor.tool_highlight_id = hovered_object;
             self.invalidate_geometry();
+            // Insert Point marks the hovered string's vertices on the overlay.
+            if self.editor.active_tool == ActiveTool::InsertPoint {
+                self.invalidate_overlay();
+            }
         }
     }
 

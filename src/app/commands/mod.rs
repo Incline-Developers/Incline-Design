@@ -82,6 +82,10 @@ impl<'a> App<'a> {
         // A copy's first pick is a vertex number on a string the step may
         // have renumbered or removed.
         self.editor.copy_along = None;
+        // Insert Point's marker sits on the string as it was.
+        if self.editor.active_tool == ActiveTool::InsertPoint {
+            self.clear_insert_point_marker();
+        }
         self.invalidate_geometry();
     }
 

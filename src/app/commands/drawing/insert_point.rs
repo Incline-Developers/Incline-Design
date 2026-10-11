@@ -4,18 +4,23 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use glam::{DVec2, DVec3};
+use glam::{DMat4, DVec2, DVec3};
 
 use crate::{
-    app::App,
+    Size,
+    app::{App, PICK_THRESHOLD_PX},
     i18n::tr,
     logging::CommandReportSpec,
     model::{
         Command, Object, ObjectId, PolyVertex, SceneEntityId,
         kernel::{self, SegSeg, XY_TOL},
     },
+    rendering::{camera::SectionSlab, pick},
     userspace_warn,
 };
+
+/// How many chords an arc is cut into when a click is tested against it.
+const ARC_PICK_CHORDS: usize = 24;
 
 #[derive(Clone, Copy, Debug)]
 enum Curve {
@@ -194,6 +199,69 @@ impl<'a> App<'a> {
             .collect();
         let updated = source.iter().map(|(_, verts, closed)| insert_at_elevation(verts, *closed, elevation)).collect();
         self.commit_inserted_vertices(&source, updated, &tr!("common-elevation"));
+    }
+
+    /// Insert Point: add a vertex where the click is on the string under the
+    /// cursor, on the segment itself, so the string keeps its shape.
+    pub(crate) fn insert_point_at_cursor(&mut self) {
+        if !self.editing_ready() {
+            return;
+        }
+        let Some((id, ..)) = self.insert_point_hit() else {
+            return;
+        };
+        // Picking refuses hidden and locked strings; the string is read
+        // again from its own project, not from the last frame's scene.
+        if !self.activate_project_for_object(id) || !self.editor.canvas_edits_object(self.active_document(), id) {
+            return;
+        }
+        let Some(Object::Polyline { verts, closed, .. }) = self.active_document().get_object(id) else {
+            return;
+        };
+        let (verts, closed) = (verts.clone(), *closed);
+        let Some((edge, t, _)) = self.edge_point_under_cursor(&verts, closed) else {
+            return;
+        };
+        let mut parameters = vec![Vec::new(); edge_count(&verts, closed)];
+        parameters[edge].push(t);
+        let updated = insert_parameters(&verts, closed, parameters);
+        self.commit_inserted_vertices(&[(id, verts, closed)], vec![updated], &tr!("cmd-insert-point-segment"));
+        self.clear_insert_point_marker();
+    }
+
+    /// Take down the point Insert Point shows under the cursor: the overlay
+    /// it is drawn on repaints only when asked.
+    pub(crate) fn clear_insert_point_marker(&mut self) {
+        let shown = self.editor.tool_hover_vertex_px.take().is_some();
+        self.editor.tool_hover_vertex_world = None;
+        if shown {
+            self.invalidate_overlay();
+        }
+    }
+
+    /// The string under the cursor and the point Insert Point would add to
+    /// it, with that point on screen; `None` off a string or by a vertex.
+    pub(crate) fn insert_point_hit(&self) -> Option<(ObjectId, (f32, f32), DVec3)> {
+        let (SceneEntityId::Object(id), _) = self.pick_under_cursor()? else {
+            return None;
+        };
+        if !self.editor.canvas_edits_object(&self.scene_document, id) {
+            return None;
+        }
+        let Some(Object::Polyline { verts, closed, .. }) = self.scene_document.get_object(id) else {
+            return None;
+        };
+        let (_, _, world) = self.edge_point_under_cursor(verts, *closed)?;
+        let graphics = self.graphics.as_ref()?;
+        Some((id, graphics.world_to_window_px(&graphics.view_proj(), world)?, world))
+    }
+
+    fn edge_point_under_cursor(&self, verts: &[PolyVertex], closed: bool) -> Option<(usize, f64, DVec3)> {
+        let graphics = self.graphics.as_ref()?;
+        let cursor = graphics.window_to_viewport_px(self.editor.cursor_screen_px?);
+        let cursor = DVec2::new(f64::from(cursor.0), f64::from(cursor.1));
+        let reach = (f64::from(PICK_THRESHOLD_PX * 2.0), f64::from(PICK_THRESHOLD_PX));
+        nearest_edge_point(verts, closed, cursor, reach, &graphics.view_proj(), graphics.screen_size_pub(), graphics.section_slab())
     }
 
     pub(crate) fn selected_polylines(&self) -> Vec<ObjectId> {
@@ -437,6 +505,64 @@ fn insert_parameters(verts: &[PolyVertex], closed: bool, mut parameters: Vec<Vec
         result.push(last);
     }
     result
+}
+
+/// The point of string `verts` nearest `cursor` on screen, within the first
+/// of `reach` (segment, vertex) in pixels: its edge, the parameter along the
+/// edge that [`insert_parameters`] takes, and the point, on the edge itself.
+/// Only what the section's slab shows is hit, and nothing within the vertex
+/// reach of a vertex, where a click would double it.
+fn nearest_edge_point(
+    verts: &[PolyVertex],
+    closed: bool,
+    cursor: DVec2,
+    reach: (f64, f64),
+    view_proj: &DMat4,
+    screen: Size,
+    slab: Option<SectionSlab>,
+) -> Option<(usize, f64, DVec3)> {
+    let edge_point = |edge: usize, t: f64| {
+        let (start, end) = (verts[edge], verts[(edge + 1) % verts.len()]);
+        let xy = Curve::from_vertices(start, end).point(t);
+        DVec3::new(xy.x, xy.y, start.pos.z + (end.pos.z - start.pos.z) * t)
+    };
+    let mut best: Option<(f64, usize, f64, DVec2)> = None;
+    for edge in 0..edge_count(verts, closed) {
+        let chords = match Curve::from_vertices(verts[edge], verts[(edge + 1) % verts.len()]) {
+            Curve::Line { .. } => 1,
+            Curve::Arc { .. } => ARC_PICK_CHORDS,
+        };
+        for chord in 0..chords {
+            let (from, to) = (chord as f64 / chords as f64, (chord + 1) as f64 / chords as f64);
+            let (a, b) = (edge_point(edge, from), edge_point(edge, to));
+            let Some((clipped_a, clipped_b)) = pick::slab_clipped_segment(slab, a, b) else {
+                continue;
+            };
+            let (Some(screen_a), Some(screen_b)) = (pick::world_to_screen(view_proj, clipped_a, screen), pick::world_to_screen(view_proj, clipped_b, screen)) else {
+                continue;
+            };
+            let screen_t = pick::closest_t_on_segment(cursor, screen_a, screen_b);
+            let on_screen = screen_a.lerp(screen_b, screen_t);
+            let distance = cursor.distance(on_screen);
+            if distance > reach.0 || best.is_some_and(|(nearest, ..)| nearest <= distance) {
+                continue;
+            }
+            let world = pick::perspective_correct_segment_point(view_proj, clipped_a, clipped_b, screen_t);
+            let span = b - a;
+            if span.length_squared() <= f64::EPSILON {
+                continue;
+            }
+            let along = ((world - a).dot(span) / span.length_squared()).clamp(0.0, 1.0);
+            best = Some((distance, edge, from + (to - from) * along, on_screen));
+        }
+    }
+    let (_, edge, t, on_screen) = best?;
+    let next = (edge + 1) % verts.len();
+    let by_vertex = [verts[edge].pos, verts[next].pos]
+        .into_iter()
+        .filter_map(|vertex| pick::slab_screen_point(slab, view_proj, screen, vertex))
+        .any(|vertex| vertex.distance(on_screen) < reach.1);
+    (!by_vertex && t > 0.0 && t < 1.0).then(|| (edge, t, edge_point(edge, t)))
 }
 
 fn split_bulge(bulge: f64, fraction: f64) -> f64 {
