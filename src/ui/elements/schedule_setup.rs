@@ -421,6 +421,23 @@ pub(crate) fn draw_class_properties(ui: &mut egui::Ui, rect: egui::Rect, editor:
         {
             edits.push(UiCommand::schedule(session, ScheduleEdit::SetClassKind { class: class.id, kind }));
         }
+        if !class.kind.is_drill_blast() {
+            let mut loader_type = class.loader_type;
+            let type_label = loader_type.label();
+            if rows
+                .combo(
+                    ("schedule_class_loader_type", class.id),
+                    &tr!("loader-type"),
+                    &mut loader_type,
+                    &type_label,
+                    crate::model::schedule::LoaderType::ALL.map(|loader_type| (loader_type, loader_type.label())),
+                )
+                .on_hover_text(tr!("loader-type-help"))
+                .changed()
+            {
+                edits.push(UiCommand::schedule(session, ScheduleEdit::SetClassLoaderType { class: class.id, loader_type }));
+            }
+        }
         let rate_label = if class.kind.is_drill_blast() {
             tr!("machine-work-rate", unit = class.kind.rate_unit())
         } else {

@@ -137,6 +137,9 @@ struct SourceBlock {
     fired_h: f64,
     /// The lowest point of the block: the floor a loader digging it stands on.
     floor: f64,
+    /// The middle of the block on its top, where a loader's icon stays while
+    /// it digs the block.
+    center: glam::DVec3,
 }
 
 /// A blast drawn whole, bench high, until it fires: before then its ground
@@ -307,7 +310,7 @@ pub(crate) struct ScheduleAnimation {
 /// drill's or MPU's rows of the run's drill and blast work (by position).
 #[derive(Default)]
 struct MachineWork {
-    loaders: Vec<Vec<(f64, crate::model::schedule::result::WorkSource)>>,
+    loaders: Vec<(crate::model::schedule::LoaderAgentId, Vec<(f64, crate::model::schedule::result::WorkSource)>)>,
     drill_blast: Vec<Vec<usize>>,
 }
 
@@ -326,8 +329,8 @@ impl MachineWork {
                 rows.sort_by(|a, b| result.work[*a].start_h.total_cmp(&result.work[*b].start_h));
             }
         }
-        let mut loaders: Vec<_> = loaders.into_values().collect();
-        for spans in &mut loaders {
+        let mut loaders: Vec<_> = loaders.into_iter().collect();
+        for (_, spans) in &mut loaders {
             spans.sort_by(|a, b| a.0.total_cmp(&b.0));
         }
         Self {
@@ -364,6 +367,28 @@ fn across_face(face: &Face, direction: glam::DVec2, at: f64) -> Option<(glam::DV
 /// stands: the middle of its own equal part.
 fn spread(from: glam::DVec2, to: glam::DVec2, share: usize, count: usize) -> glam::DVec2 {
     from.lerp(to, (share as f64 + 0.5) / count as f64)
+}
+
+/// The middle of a face by area, where a machine's icon sits: a dig block
+/// can be a sliver hundreds of metres long, and any point inside it would
+/// put the icon far from the middle. The point inside it where the area
+/// centroid falls outside, as for a crescent.
+fn face_middle(face: &Face) -> Option<glam::DVec2> {
+    // About its first point: products of mine coordinates run to trillions.
+    let origin = *face.first()?.first()?;
+    let (mut area, mut moment) = (0.0, glam::DVec2::ZERO);
+    for ring in face {
+        for (i, a) in ring.iter().enumerate() {
+            let (a, b) = (*a - origin, ring[(i + 1) % ring.len()] - origin);
+            let cross = a.perp_dot(b);
+            area += cross;
+            moment += (a + b) * cross;
+        }
+    }
+    let centroid = (area.abs() > 1e-9).then(|| origin + moment / (3.0 * area));
+    centroid
+        .filter(|centroid| crate::model::arrangement::point_in_face(face, *centroid))
+        .or_else(|| crate::model::arrangement::representative_point(face))
 }
 
 /// How far along `direction` a face reaches, behind and ahead.
@@ -664,19 +689,31 @@ impl crate::app::App<'_> {
         };
         let animation = &self.schedule_animation;
         let shown_h = self.editor.schedule_animation_shown_h;
-        let key = (shown_h.to_bits(), animation.body_generation, animation.hidden_generation);
+        // The document's revision too: a class's loader type is drawn, and
+        // changing it moves nothing else.
+        let revision = self.workspace.active_document().map_or(0, |document| document.revision());
+        let key = (shown_h.to_bits(), animation.body_generation ^ revision.rotate_left(32), animation.hidden_generation);
         if animation.machines_key == Some(key) {
             return;
         }
         // Which job each machine is on: a loader's block by its slot, and a
         // drill and blast machine's blast and step.
-        let mut digging: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
-        for spans in &animation.machine_work.loaders {
+        let plan = self.workspace.active_document().map(|document| document.schedule());
+        let mut digging: std::collections::BTreeMap<usize, Vec<MachineModel>> = std::collections::BTreeMap::new();
+        for (agent, spans) in &animation.machine_work.loaders {
             let Some(&(_, WorkSource::Block(id))) = spans.partition_point(|span| span.0 <= shown_h).checked_sub(1).map(|at| &spans[at]) else {
                 continue;
             };
+            let loader_type = plan
+                .and_then(|plan| plan.class(plan.agent(*agent)?.class_id))
+                .map(|class| class.loader_type)
+                .unwrap_or_default();
+            let model = match loader_type {
+                crate::model::schedule::LoaderType::Excavator => MachineModel::Excavator,
+                crate::model::schedule::LoaderType::WheelLoader => MachineModel::WheelLoader,
+            };
             if let Some(&slot) = animation.block_slots.get(&id) {
-                *digging.entry(slot).or_default() += 1;
+                digging.entry(slot).or_default().push(model);
             }
         }
         let result = self.schedule_calculation.as_ref().and_then(|calculation| calculation.drill_blast.as_ref());
@@ -690,7 +727,8 @@ impl crate::app::App<'_> {
         }
 
         let mut placements = Vec::new();
-        for (&slot, &count) in &digging {
+        for (&slot, models) in &digging {
+            let count = models.len();
             let (block, held) = (&animation.source[slot], &animation.slots[slot]);
             if animation.hidden.hides_block(block) {
                 continue;
@@ -707,11 +745,11 @@ impl crate::app::App<'_> {
             let Some((from, to)) = across_face(&block.face, block.direction, inside_span(at, low, high)) else {
                 continue;
             };
-            let model = MachineModel::Excavator;
-            placements.extend((0..count).map(|share| MachinePlacement {
+            placements.extend(models.iter().enumerate().map(|(share, &model)| MachinePlacement {
                 model,
                 position: (spread(from, to, share, count) - block.direction * model.reach()).extend(block.floor),
                 heading: block.direction,
+                anchor: block.center,
             }));
         }
         if let Some(result) = result {
@@ -728,6 +766,11 @@ impl crate::app::App<'_> {
                 let top = self.editor.schedule_animation_blasts.get(index).and_then(|animated| animated.top.as_deref());
                 let ground = |point: glam::DVec2| point.extend(top.and_then(|top| top.height(point)).unwrap_or(blast.bench_top));
                 let done = result.done_share(index, activity, shown_h);
+                // Its icon stays on the blast's middle while the machine
+                // works across it.
+                let Some(anchor) = face_middle(&blast.face).map(ground) else {
+                    continue;
+                };
                 match activity {
                     BlastActivity::Prep => {
                         // Along the blast's longer side, as its hatching clears.
@@ -745,6 +788,7 @@ impl crate::app::App<'_> {
                             model,
                             position: ground(spread(from, to, share, count) - direction * model.reach()),
                             heading: direction,
+                            anchor,
                         }));
                     }
                     BlastActivity::Drill | BlastActivity::Charge => {
@@ -770,6 +814,7 @@ impl crate::app::App<'_> {
                                 model,
                                 position: ground(collars[hole]),
                                 heading: along.try_normalize().unwrap_or(glam::DVec2::X),
+                                anchor,
                             });
                         }
                     }
@@ -864,6 +909,7 @@ impl crate::app::App<'_> {
                     volume: part.volume,
                     profile: Arc::default(),
                     floor: part.mesh.mesh.bounds().min.z,
+                    center: face_middle(&block.face).unwrap_or_default().extend(part.mesh.mesh.bounds().max.z),
                     mesh,
                     fired_h: 0.0,
                 });

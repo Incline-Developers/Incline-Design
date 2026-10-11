@@ -9,6 +9,10 @@ use crate::{
 
 pub(crate) type ScreenSegmentPx = ((f32, f32), (f32, f32));
 
+/// How long, in points on screen, a machine has to be before Animate draws
+/// its model rather than its icon.
+const MACHINE_MODEL_POINTS: f32 = 48.0;
+
 fn point_to_screen_segment_distance_sq(point: (f32, f32), segment: ScreenSegmentPx) -> f32 {
     let (a, b) = segment;
     let ab = (b.0 - a.0, b.1 - a.1);
@@ -467,6 +471,33 @@ impl<'a> Graphics<'a> {
             );
         }
         (lines, Some(elevation_spacing))
+    }
+
+    /// Which of Animate's machines are close enough to draw as their model -
+    /// one spanning at least [`MACHINE_MODEL_POINTS`] on screen - and where
+    /// the icons of the rest go, in window pixels.
+    pub(super) fn split_machines(
+        &self,
+        placements: &[crate::rendering::machines::MachinePlacement],
+        scale_factor: f32,
+    ) -> (Vec<crate::rendering::machines::MachinePlacement>, Vec<crate::rendering::machines::MachineIcon>) {
+        let view_proj = self.view_proj();
+        let mut near = Vec::new();
+        let mut icons = Vec::new();
+        for placement in placements {
+            let length = placement.model.length();
+            let span = |axis: glam::DVec3| {
+                self.world_to_window_px(&view_proj, placement.position)
+                    .zip(self.world_to_window_px(&view_proj, placement.position + axis * length))
+                    .map_or(0.0, |(a, b)| (a.0 - b.0).hypot(a.1 - b.1))
+            };
+            if span(glam::DVec3::X).max(span(glam::DVec3::Y)) >= MACHINE_MODEL_POINTS * scale_factor {
+                near.push(*placement);
+            } else if let Some(at) = self.world_to_window_px(&view_proj, placement.anchor) {
+                icons.push(crate::rendering::machines::MachineIcon { model: placement.model, at });
+            }
+        }
+        (near, icons)
     }
 
     /// Animate's flows at the shown instant: every delivery under way adds

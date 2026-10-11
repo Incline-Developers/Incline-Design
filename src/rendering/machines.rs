@@ -13,17 +13,19 @@ use serde::Deserialize;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) enum MachineModel {
     Excavator,
+    WheelLoader,
     Dozer,
     DrillRig,
     Mpu,
 }
 
 impl MachineModel {
-    pub(crate) const ALL: [Self; 4] = [Self::Excavator, Self::Dozer, Self::DrillRig, Self::Mpu];
+    pub(crate) const ALL: [Self; 5] = [Self::Excavator, Self::WheelLoader, Self::Dozer, Self::DrillRig, Self::Mpu];
 
     fn glb(self) -> &'static [u8] {
         match self {
             Self::Excavator => include_bytes!("../../res/machines/excavator.glb"),
+            Self::WheelLoader => include_bytes!("../../res/machines/wheel_loader.glb"),
             Self::Dozer => include_bytes!("../../res/machines/dozer.glb"),
             Self::DrillRig => include_bytes!("../../res/machines/drill_rig.glb"),
             Self::Mpu => include_bytes!("../../res/machines/mpu.glb"),
@@ -35,6 +37,7 @@ impl MachineModel {
     pub(crate) fn length(self) -> f64 {
         match self {
             Self::Excavator => 10.0,
+            Self::WheelLoader => 7.5,
             Self::Dozer => 8.0,
             Self::DrillRig => 7.0,
             Self::Mpu => 9.0,
@@ -47,6 +50,7 @@ impl MachineModel {
     pub(crate) fn reach(self) -> f64 {
         match self {
             Self::Excavator => 6.0,
+            Self::WheelLoader => 4.0,
             Self::Dozer => 4.0,
             Self::DrillRig | Self::Mpu => 0.0,
         }
@@ -61,6 +65,17 @@ pub(crate) struct MachinePlacement {
     pub(crate) position: DVec3,
     /// Unit vector in plan the model's front points along.
     pub(crate) heading: DVec2,
+    /// Where its icon stands, zoomed out: the middle of the block or blast it
+    /// works, which holds still while the machine moves across it.
+    pub(crate) anchor: DVec3,
+}
+
+/// A machine drawn as an icon, zoomed out.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct MachineIcon {
+    pub(crate) model: MachineModel,
+    /// In window pixels.
+    pub(crate) at: (f32, f32),
 }
 
 #[repr(C)]

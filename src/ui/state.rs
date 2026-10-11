@@ -2180,6 +2180,9 @@ pub(crate) struct EditorState {
     pub(crate) animation_flows: Vec<HaulFlowSegment>,
     /// Animate's machines where they work at the instant shown.
     pub(crate) animation_machines: Vec<crate::rendering::machines::MachinePlacement>,
+    /// Those too small on screen to draw as models, as icons; set by the
+    /// renderer each frame.
+    pub(crate) animation_machine_icons: Vec<crate::rendering::machines::MachineIcon>,
     pub(crate) haul_route: Option<crate::model::haulage::routing::RouteCheck>,
     /// Browser-only viewport prompt shown before creating a named project.
     #[cfg(target_arch = "wasm32")]
@@ -3955,6 +3958,7 @@ impl EditorState {
             animation_routes_key: None,
             animation_flows: Vec::new(),
             animation_machines: Vec::new(),
+            animation_machine_icons: Vec::new(),
             haul_route: None,
             #[cfg(target_arch = "wasm32")]
             new_project_dialog_open: false,
@@ -5915,6 +5919,7 @@ impl UiCommand {
                 ScheduleEdit::AddFollowBar { .. } => report(tr!("schedule-add-follow-bar"), String::new()),
                 ScheduleEdit::AddBlastBar { .. } => report(tr!("blast-add-bar"), String::new()),
                 ScheduleEdit::SetClassKind { .. }
+                | ScheduleEdit::SetClassLoaderType { .. }
                 | ScheduleEdit::SetDrillBlast(_)
                 | ScheduleEdit::SetBlastWindows(_)
                 | ScheduleEdit::SetBlastStatus { .. }
@@ -7451,6 +7456,11 @@ pub(crate) enum ScheduleEdit {
     SetClassKind {
         class: crate::model::schedule::LoaderClassId,
         kind: crate::model::schedule::MachineKind,
+    },
+    /// Set what a loader class's machines are drawn as in Animate.
+    SetClassLoaderType {
+        class: crate::model::schedule::LoaderClassId,
+        loader_type: crate::model::schedule::LoaderType,
     },
     /// Replace the drill and blast settings, as one edit.
     SetDrillBlast(crate::model::schedule::DrillBlastSettings),

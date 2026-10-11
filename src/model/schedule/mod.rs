@@ -411,6 +411,29 @@ pub(crate) struct LoaderClass {
     /// [`MachineKind::rate_unit`]), so its calendar works exactly as a
     /// loader's does.
     pub(crate) kind: MachineKind,
+    /// What a loader of this class looks like in Animate. Display only: it
+    /// changes nothing a schedule is calculated from.
+    pub(crate) loader_type: LoaderType,
+}
+
+/// The machine a loader class is drawn as.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LoaderType {
+    #[default]
+    Excavator,
+    WheelLoader,
+}
+
+impl LoaderType {
+    pub(crate) const ALL: [Self; 2] = [Self::Excavator, Self::WheelLoader];
+
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::Excavator => crate::i18n::tr!("loader-type-excavator"),
+            Self::WheelLoader => crate::i18n::tr!("loader-type-wheel-loader"),
+        }
+    }
 }
 
 /// What a saved class is read through: a project written before reclaim existed
@@ -428,6 +451,8 @@ struct ClassRepr {
     spot_time_s: f64,
     #[serde(default)]
     kind: MachineKind,
+    #[serde(default)]
+    loader_type: LoaderType,
 }
 
 impl From<ClassRepr> for LoaderClass {
@@ -439,6 +464,7 @@ impl From<ClassRepr> for LoaderClass {
             default_reclaim_rate_tph: repr.default_reclaim_rate_tph.unwrap_or(repr.default_dig_rate_tph),
             spot_time_s: repr.spot_time_s,
             kind: repr.kind,
+            loader_type: repr.loader_type,
         }
     }
 }
@@ -1142,6 +1168,7 @@ impl SchedulePlan {
             default_reclaim_rate_tph: rate,
             spot_time_s: 45.0,
             kind: MachineKind::Loader,
+            loader_type: LoaderType::default(),
         });
         Ok(id)
     }
@@ -1866,6 +1893,12 @@ impl SchedulePlan {
     /// What machines of `agent`'s class do.
     pub(crate) fn agent_kind(&self, agent: LoaderAgentId) -> Option<MachineKind> {
         self.class(self.agent(agent)?.class_id).map(|class| class.kind)
+    }
+
+    /// Change what a loader class's machines are drawn as.
+    pub(crate) fn set_class_loader_type(&mut self, id: LoaderClassId, loader_type: LoaderType) -> ScheduleResult {
+        self.classes.iter_mut().find(|class| class.id == id).ok_or(ScheduleError::UnknownClass)?.loader_type = loader_type;
+        Ok(())
     }
 
     /// Change what a class's machines do. Refused while any of them holds a

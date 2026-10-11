@@ -427,15 +427,23 @@ impl<'a> Graphics<'a> {
             );
         }
 
-        // Animate's machines: uploaded when they move, not every frame.
-        let placements: &[crate::rendering::machines::MachinePlacement] = if editor.is_schedule_animation() { &editor.animation_machines } else { &[] };
-        if !placements.is_empty() && self.machines.is_none() {
+        // Animate's machines: each drawn as its model where it is close
+        // enough to read, and otherwise as an icon the UI paints, held on the
+        // block or blast it works. Uploaded when the drawn ones move, not
+        // every frame.
+        let (near, icons) = if editor.is_schedule_animation() {
+            self.split_machines(&editor.animation_machines, scale_factor)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        editor.animation_machine_icons = icons;
+        if !near.is_empty() && self.machines.is_none() {
             self.machines = Some(crate::rendering::machines::MachineGpu::new(&self.device).map_err(|error| {
                 crate::userspace_error!("{error:#}");
             }));
         }
         if let Some(Ok(machines)) = &mut self.machines {
-            machines.place(&self.device, &self.queue, placements, self.scene_origin);
+            machines.place(&self.device, &self.queue, &near, self.scene_origin);
         }
 
         let measurement_state = (

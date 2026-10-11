@@ -1292,6 +1292,8 @@ fn draw_ui(
         );
         painter.galley(rect.min + egui::vec2(6.0, 3.0), galley, visuals.text_color());
     }
+    // Under the flows' read-out, which is what the pointer is asking for.
+    draw_machine_icons(root_ui, editor, canvas_rect);
     draw_haul_flows(root_ui, editor, canvas_rect);
     // --- Canvas overlays ---
 
@@ -1793,6 +1795,54 @@ fn theme_visuals(dark_mode: bool, selection_color: egui::Color32) -> egui::Visua
 /// instant. Stripes run from the loader towards the destination, faster and
 /// wider - and the line under them warmer - the more tonnes per hour cross
 /// that piece of road, so where the haulage concentrates reads at a glance.
+/// Animate's machines too far off to draw as models: a badge each, on the
+/// block or blast it works. Machines sharing one stand side by side.
+fn draw_machine_icons(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect) {
+    use crate::rendering::machines::MachineModel;
+    const SIZE: f32 = 22.0;
+    const GAP: f32 = 2.0;
+    let icons = &editor.animation_machine_icons;
+    if icons.is_empty() {
+        return;
+    }
+    let scale = ui.ctx().pixels_per_point();
+    let painter = ui.painter().with_clip_rect(canvas_rect);
+    let mut groups: Vec<(egui::Pos2, Vec<MachineModel>)> = Vec::new();
+    for icon in icons {
+        let at = egui::pos2(icon.at.0 / scale, icon.at.1 / scale);
+        match groups.iter_mut().find(|(held, _)| held.distance(at) < 1.0) {
+            Some((_, models)) => models.push(icon.model),
+            None => groups.push((at, vec![icon.model])),
+        }
+    }
+    for (at, mut models) in groups {
+        models.sort();
+        let width = models.len() as f32 * (SIZE + GAP) - GAP;
+        for (position, model) in models.into_iter().enumerate() {
+            let center = egui::pos2(at.x - width / 2.0 + SIZE / 2.0 + position as f32 * (SIZE + GAP), at.y);
+            let rect = egui::Rect::from_center_size(center, egui::vec2(SIZE, SIZE));
+            if !canvas_rect.intersects(rect) {
+                continue;
+            }
+            let (image, tint) = match model {
+                MachineModel::Excavator => (egui::include_image!("../../res/ui/icons/machine_excavator.svg"), egui::Color32::from_rgb(242, 170, 30)),
+                MachineModel::WheelLoader => (egui::include_image!("../../res/ui/icons/machine_wheel_loader.svg"), egui::Color32::from_rgb(242, 170, 30)),
+                MachineModel::Dozer => (egui::include_image!("../../res/ui/icons/machine_dozer.svg"), egui::Color32::from_rgb(242, 170, 30)),
+                MachineModel::DrillRig => (egui::include_image!("../../res/ui/icons/machine_drill.svg"), egui::Color32::from_rgb(242, 170, 30)),
+                MachineModel::Mpu => (egui::include_image!("../../res/ui/icons/machine_mpu.svg"), egui::Color32::from_rgb(235, 235, 228)),
+            };
+            painter.rect(
+                rect,
+                widgets::toolbar::GROUP_CORNER_RADIUS,
+                egui::Color32::from_black_alpha(200),
+                egui::Stroke::new(1.0, tint.gamma_multiply(0.8)),
+                egui::StrokeKind::Inside,
+            );
+            egui::Image::new(image).tint(tint).paint_at(ui, rect.shrink(3.0));
+        }
+    }
+}
+
 fn draw_haul_flows(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect) {
     // The flows themselves are scene strokes (`rebuild_flow_scene`), hidden
     // where solids stand in front of them; this adds the read-outs.
