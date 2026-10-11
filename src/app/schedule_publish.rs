@@ -583,6 +583,59 @@ fn share_within(start_h: f64, end_h: f64, from_h: f64, to_h: f64) -> f64 {
     ((end_h.min(to_h) - start_h.max(from_h)) / duration).clamp(0.0, 1.0)
 }
 
+/// Quantities spread over time spans, sorted by start, for the quantity
+/// falling inside any window without walking them all: [`Spans::within`] is
+/// asked for every idle interval and every route a loader could take, and a
+/// truck-limited run has thousands of both.
+#[derive(Default)]
+struct Spans {
+    /// (start, end, quantity), by start.
+    spans: Vec<(f64, f64, f64)>,
+    /// Quantity of the spans before each index.
+    before: Vec<f64>,
+    longest_h: f64,
+}
+
+impl Spans {
+    fn new(mut spans: Vec<(f64, f64, f64)>) -> Self {
+        spans.sort_by(|left, right| left.0.total_cmp(&right.0));
+        let mut before = Vec::with_capacity(spans.len() + 1);
+        let mut total = 0.0;
+        before.push(total);
+        for (_, _, quantity) in &spans {
+            total += quantity;
+            before.push(total);
+        }
+        let longest_h = spans.iter().map(|(start, end, _)| end - start).fold(0.0, f64::max);
+        Self { spans, before, longest_h }
+    }
+
+    fn index<K: Ord>(spans: BTreeMap<K, Vec<(f64, f64, f64)>>) -> BTreeMap<K, Self> {
+        spans.into_iter().map(|(key, spans)| (key, Self::new(spans))).collect()
+    }
+
+    /// The quantity falling before `at_h`, each span's spread evenly over
+    /// it ([`share_within`] from the start of time).
+    fn until(&self, at_h: f64) -> f64 {
+        // A span starting before `at_h - longest_h` ends by `at_h`.
+        let whole = self.spans.partition_point(|span| span.0 < at_h - self.longest_h);
+        let started = self.spans.partition_point(|span| span.0 < at_h);
+        self.before[whole]
+            + self.spans[whole..started]
+                .iter()
+                .map(|&(start, end, quantity)| quantity * share_within(start, end, f64::NEG_INFINITY, at_h))
+                .sum::<f64>()
+    }
+
+    /// The quantity falling inside `[from_h, to_h)`.
+    fn within(&self, from_h: f64, to_h: f64) -> f64 {
+        if self.spans.is_empty() {
+            return 0.0;
+        }
+        self.until(to_h) - if from_h == f64::NEG_INFINITY { 0.0 } else { self.until(from_h) }
+    }
+}
+
 /// Say why each idle span happened (see [`IdleReason`] for the order the
 /// reasons are checked in), from the published schedule and the captured
 /// input alone - so the same answer is given whichever optimiser made it.
@@ -611,11 +664,8 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
         received.entry(delivery.destination).or_default().push((delivery.start_h, delivery.end_h, delivery.tonnes));
         hauled.entry(delivery.truck).or_default().push((delivery.start_h, delivery.end_h, delivery.truck_hours));
     }
-    let sum_within = |spans: Option<&Vec<(f64, f64, f64)>>, from_h: f64, to_h: f64| {
-        spans.map_or(0.0, |spans| {
-            spans.iter().map(|&(start, end, quantity)| quantity * share_within(start, end, from_h, to_h)).sum::<f64>()
-        })
-    };
+    let (dug, received, hauled) = (Spans::index(dug), Spans::index(received), Spans::index(hauled));
+    let sum_within = |spans: Option<&Spans>, from_h: f64, to_h: f64| spans.map_or(0.0, |spans| spans.within(from_h, to_h));
 
     // Which chunked piles release something in each interval: the chunk
     // holding material next in the pile's order, once its last delivery has
