@@ -848,6 +848,7 @@ impl<'a> Graphics<'a> {
             flow_stroke_capacity: 1,
             flow_underlay: 0,
             flow_clock: web_time::Instant::now(),
+            machines: None,
             text_vertex_buf: Vec::new(),
             text_index_buf: Vec::new(),
             text_vertex_capacity: 1,

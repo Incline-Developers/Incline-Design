@@ -198,6 +198,9 @@ pub(crate) struct ScenePipelines {
     /// ordinary view's; the cinematic copy exists only so the two sets share
     /// one shape.
     pub(crate) overlay_render_pipeline: wgpu::RenderPipeline,
+    /// Animate's machines, depth-tested against the scene and drawn by the
+    /// editor overlay pass.
+    pub(crate) machine_render_pipeline: wgpu::RenderPipeline,
 }
 
 pub(crate) fn create_scene_pipelines(
@@ -619,6 +622,57 @@ pub(crate) fn create_scene_pipelines(
         cache: None,
     });
     let overlay_render_pipeline = create_stroke_pipeline("Editor Overlay Render Pipeline", Some(overlay_depth));
+
+    let machine_shader = make_shader(device, "../shaders/machine.wgsl", include_str!("../shaders/machine.wgsl"));
+    let machine_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Machine Pipeline Layout"),
+        bind_group_layouts: &[Some(layouts.camera)],
+        immediate_size: 0,
+    });
+    let machine_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Machine Pipeline"),
+        layout: Some(&machine_pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &machine_shader,
+            entry_point: Some("vs_main"),
+            buffers: &[
+                Some(wgpu::VertexBufferLayout {
+                    array_stride: size_of::<crate::rendering::machines::MachineVertex>() as wgpu::BufferAddress,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3],
+                }),
+                Some(wgpu::VertexBufferLayout {
+                    array_stride: size_of::<crate::rendering::machines::MachineInstance>() as wgpu::BufferAddress,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &wgpu::vertex_attr_array![3 => Float32x3, 4 => Float32, 5 => Float32x2],
+                }),
+            ],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &machine_shader,
+            entry_point: Some("fs_main"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            cull_mode: None,
+            ..Default::default()
+        },
+        depth_stencil: Some(Graphics::depth_state(true, 0)),
+        multisample: wgpu::MultisampleState {
+            count: sample_count,
+            mask: !0,
+            alpha_to_coverage_enabled: false,
+        },
+        multiview_mask: None,
+        cache: None,
+    });
 
     let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Render Pipeline"),
@@ -1062,5 +1116,6 @@ pub(crate) fn create_scene_pipelines(
         xray_drill_collar_render_pipeline,
         design_point_render_pipeline,
         overlay_render_pipeline,
+        machine_render_pipeline,
     }
 }

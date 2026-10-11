@@ -423,6 +423,9 @@ pub(crate) struct Graphics<'a> {
     pub(super) flow_underlay: u32,
     /// The clock the flow stripes move by.
     pub(super) flow_clock: web_time::Instant,
+    /// Animate's machine models, loaded the first time one is shown; `Err`
+    /// once loading them has failed, so it is not retried every frame.
+    pub(super) machines: Option<Result<crate::rendering::machines::MachineGpu, ()>>,
     pub(super) text_vertex_buf: Vec<Vertex>,
     pub(super) text_index_buf: Vec<u32>,
     pub(super) text_vertex_capacity: usize,

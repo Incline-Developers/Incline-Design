@@ -135,6 +135,8 @@ struct SourceBlock {
     /// When the blast this block lies in fires: until then the blast is
     /// drawn whole in its place. Zero for ground that is never held back.
     fired_h: f64,
+    /// The lowest point of the block: the floor a loader digging it stands on.
+    floor: f64,
 }
 
 /// A blast drawn whole, bench high, until it fires: before then its ground
@@ -173,6 +175,9 @@ struct Slot {
     stale: bool,
     /// What to draw, or `None` once the block has been dug out entirely.
     mesh: Option<OpenTriangulation>,
+    /// Where the solved cut stands, along the block's direction, when it is
+    /// part way through the block.
+    front: Option<f64>,
 }
 
 /// Everything a solved cut of one block depends on.
@@ -224,8 +229,9 @@ struct AnimationWork {
 
 /// What came back for one slot.
 enum Cut {
-    /// Solved: the mesh to draw, or nothing once the block is entirely mined.
-    Solved(Option<Box<OpenTriangulation>>),
+    /// Solved: the mesh to draw, or nothing once the block is entirely mined,
+    /// and where the cut stands when it is part way through.
+    Solved(Option<Box<OpenTriangulation>>, Option<f64>),
     /// Could not be solved.  The slot keeps whatever it was showing, and is
     /// marked stale so that the view stops claiming to be the instant it
     /// names.  The key is stamped anyway, so a block whose geometry cannot be
@@ -288,6 +294,91 @@ pub(crate) struct ScheduleAnimation {
     stale_slots: usize,
     hidden: Visibility,
     error: Option<String>,
+    /// Each machine's work in time order, for placing it.
+    machine_work: MachineWork,
+    /// Which source block each dig block is.
+    block_slots: HashMap<DigBlockId, usize>,
+    /// The shown instant, body and visibility the machines were last placed
+    /// for.
+    machines_key: Option<(u64, u64, u64)>,
+}
+
+/// Each machine's work, in time order: a loader's spans, and a dozer's,
+/// drill's or MPU's rows of the run's drill and blast work (by position).
+#[derive(Default)]
+struct MachineWork {
+    loaders: Vec<Vec<(f64, crate::model::schedule::result::WorkSource)>>,
+    drill_blast: Vec<Vec<usize>>,
+}
+
+impl MachineWork {
+    fn of(calculation: &crate::model::schedule::result::CalculatedSchedule) -> Self {
+        let mut loaders: std::collections::BTreeMap<_, Vec<_>> = std::collections::BTreeMap::new();
+        for execution in &calculation.executions {
+            loaders.entry(execution.agent).or_default().push((execution.start_h, execution.source));
+        }
+        let mut drill_blast: std::collections::BTreeMap<_, Vec<usize>> = std::collections::BTreeMap::new();
+        if let Some(result) = &calculation.drill_blast {
+            for (row, work) in result.work.iter().enumerate() {
+                drill_blast.entry(work.agent).or_default().push(row);
+            }
+            for rows in drill_blast.values_mut() {
+                rows.sort_by(|a, b| result.work[*a].start_h.total_cmp(&result.work[*b].start_h));
+            }
+        }
+        let mut loaders: Vec<_> = loaders.into_values().collect();
+        for spans in &mut loaders {
+            spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+        }
+        Self {
+            loaders,
+            drill_blast: drill_blast.into_values().collect(),
+        }
+    }
+}
+
+/// The ends of the widest stretch of `face` a line across it makes, at `at`
+/// along `direction`.
+fn across_face(face: &Face, direction: glam::DVec2, at: f64) -> Option<(glam::DVec2, glam::DVec2)> {
+    let tangent = glam::DVec2::new(-direction.y, direction.x);
+    let mut crossings = Vec::new();
+    for ring in face {
+        for (i, a) in ring.iter().enumerate() {
+            let b = ring[(i + 1) % ring.len()];
+            let (da, db) = (a.dot(direction) - at, b.dot(direction) - at);
+            if (da < 0.0) != (db < 0.0) {
+                crossings.push(a.lerp(b, da / (da - db)).dot(tangent));
+            }
+        }
+    }
+    crossings.sort_by(f64::total_cmp);
+    crossings
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .max_by(|x, y| (x[1] - x[0]).total_cmp(&(y[1] - y[0])))
+        .map(|pair| (direction * at + tangent * pair[0], direction * at + tangent * pair[1]))
+}
+
+/// Where the `share`th of `count` machines working along `from`..`to`
+/// stands: the middle of its own equal part.
+fn spread(from: glam::DVec2, to: glam::DVec2, share: usize, count: usize) -> glam::DVec2 {
+    from.lerp(to, (share as f64 + 0.5) / count as f64)
+}
+
+/// How far along `direction` a face reaches, behind and ahead.
+fn face_span(face: &Face, direction: glam::DVec2) -> (f64, f64) {
+    face.iter()
+        .flatten()
+        .map(|point| point.dot(direction))
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), projection| (low.min(projection), high.max(projection)))
+}
+
+/// `at`, kept far enough inside `low..high` that a line there crosses the
+/// face rather than grazing its end.
+fn inside_span(at: f64, low: f64, high: f64) -> f64 {
+    let margin = ((high - low) / 4.0).min(0.5);
+    at.clamp(low + margin, high - margin)
 }
 
 impl ScheduleAnimation {
@@ -434,6 +525,7 @@ impl crate::app::App<'_> {
             // Built before the result is stored, so the borrow of the held
             // calculation ends before the animation state is written.
             let index = self.schedule_calculation.as_ref().map(|calculation| AnimationIndex::build(calculation));
+            self.schedule_animation.machine_work = self.schedule_calculation.as_deref().map(MachineWork::of).unwrap_or_default();
             match index {
                 Some(Ok(index)) => self.schedule_animation.index = Some(index),
                 Some(Err(error)) => self.schedule_animation.error = Some(error.to_string()),
@@ -488,6 +580,8 @@ impl crate::app::App<'_> {
             self.schedule_animation.set_depleted(false);
             self.editor.schedule_animation_shown_h = 0.0;
             self.editor.schedule_animation_degraded = false;
+            self.editor.animation_machines.clear();
+            self.schedule_animation.machines_key = None;
             // Why the slider is off and what turns it back on. What the
             // viewport is showing while it is off is on the screen already.
             self.editor.schedule_animation_status = if let Some(error) = &self.schedule_animation.error {
@@ -554,6 +648,135 @@ impl crate::app::App<'_> {
         }
         self.editor.schedule_animation_degraded = self.schedule_animation.stale_slots > 0;
         self.refresh_animation_scene();
+        self.place_animation_machines();
+    }
+
+    /// Stand each machine where it is working at the instant the view shows,
+    /// or where it last worked: a loader on its block's cut face, a dozer on
+    /// the line its prep has reached, a drill or MPU on the next hole it is to
+    /// drill or charge. Machines sharing one job spread out along it. A
+    /// machine yet to start work, or one reclaiming from a stockpile, is not
+    /// shown.
+    fn place_animation_machines(&mut self) {
+        use crate::{
+            model::schedule::{BlastActivity, result::WorkSource},
+            rendering::machines::{MachineModel, MachinePlacement},
+        };
+        let animation = &self.schedule_animation;
+        let shown_h = self.editor.schedule_animation_shown_h;
+        let key = (shown_h.to_bits(), animation.body_generation, animation.hidden_generation);
+        if animation.machines_key == Some(key) {
+            return;
+        }
+        // Which job each machine is on: a loader's block by its slot, and a
+        // drill and blast machine's blast and step.
+        let mut digging: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
+        for spans in &animation.machine_work.loaders {
+            let Some(&(_, WorkSource::Block(id))) = spans.partition_point(|span| span.0 <= shown_h).checked_sub(1).map(|at| &spans[at]) else {
+                continue;
+            };
+            if let Some(&slot) = animation.block_slots.get(&id) {
+                *digging.entry(slot).or_default() += 1;
+            }
+        }
+        let result = self.schedule_calculation.as_ref().and_then(|calculation| calculation.drill_blast.as_ref());
+        let mut blasting: std::collections::BTreeMap<(usize, BlastActivity), usize> = std::collections::BTreeMap::new();
+        if let Some(result) = result {
+            for rows in &animation.machine_work.drill_blast {
+                if let Some(&row) = rows.partition_point(|&row| result.work[row].start_h <= shown_h).checked_sub(1).map(|at| &rows[at]) {
+                    *blasting.entry((result.work[row].blast, result.work[row].activity)).or_default() += 1;
+                }
+            }
+        }
+
+        let mut placements = Vec::new();
+        for (&slot, &count) in &digging {
+            let (block, held) = (&animation.source[slot], &animation.slots[slot]);
+            if animation.hidden.hides_block(block) {
+                continue;
+            }
+            let (low, high) = face_span(&block.face, block.direction);
+            if !low.is_finite() || high <= low {
+                continue;
+            }
+            let at = match held.cut {
+                Some(CutKey::Gone) => high,
+                Some(CutKey::Partial(_)) => held.front.unwrap_or_else(|| low + (high - low) * held.cut.map_or(0.0, CutKey::fraction)),
+                _ => low,
+            };
+            let Some((from, to)) = across_face(&block.face, block.direction, inside_span(at, low, high)) else {
+                continue;
+            };
+            let model = MachineModel::Excavator;
+            placements.extend((0..count).map(|share| MachinePlacement {
+                model,
+                position: (spread(from, to, share, count) - block.direction * model.reach()).extend(block.floor),
+                heading: block.direction,
+            }));
+        }
+        if let Some(result) = result {
+            for (&(index, activity), &count) in &blasting {
+                let Some(blast) = result.blasts.get(index) else { continue };
+                if animation
+                    .blasts
+                    .iter()
+                    .find(|piece| piece.published == index)
+                    .is_some_and(|piece| animation.hidden.hides(piece.solid, piece.bench, piece.flitch, Some(piece.blast)))
+                {
+                    continue;
+                }
+                let top = self.editor.schedule_animation_blasts.get(index).and_then(|animated| animated.top.as_deref());
+                let ground = |point: glam::DVec2| point.extend(top.and_then(|top| top.height(point)).unwrap_or(blast.bench_top));
+                let done = result.done_share(index, activity, shown_h);
+                match activity {
+                    BlastActivity::Prep => {
+                        // Along the blast's longer side, as its hatching clears.
+                        let points = || blast.face.iter().flatten().copied();
+                        let (Some(min), Some(max)) = (points().reduce(glam::DVec2::min), points().reduce(glam::DVec2::max)) else {
+                            continue;
+                        };
+                        let direction = if max.x - min.x >= max.y - min.y { glam::DVec2::X } else { glam::DVec2::Y };
+                        let (low, high) = (min.dot(direction), max.dot(direction));
+                        let Some((from, to)) = across_face(&blast.face, direction, inside_span(low + (high - low) * done, low, high)) else {
+                            continue;
+                        };
+                        let model = MachineModel::Dozer;
+                        placements.extend((0..count).map(|share| MachinePlacement {
+                            model,
+                            position: ground(spread(from, to, share, count) - direction * model.reach()),
+                            heading: direction,
+                        }));
+                    }
+                    BlastActivity::Drill | BlastActivity::Charge => {
+                        let collars = &blast.collars;
+                        if collars.is_empty() {
+                            continue;
+                        }
+                        let next = ((done * collars.len() as f64).floor() as usize).min(collars.len() - 1);
+                        let model = if activity == BlastActivity::Drill { MachineModel::DrillRig } else { MachineModel::Mpu };
+                        // Each on its own share of the holes still to do.
+                        for share in 0..count {
+                            let hole = (next + share * (collars.len() - next) / count).min(collars.len() - 1);
+                            let along = match (hole.checked_sub(1), collars.get(hole + 1)) {
+                                (_, Some(after)) => *after - collars[hole],
+                                (Some(before), None) => collars[hole] - collars[before],
+                                (None, None) => glam::DVec2::X,
+                            };
+                            placements.push(MachinePlacement {
+                                model,
+                                position: ground(collars[hole]),
+                                heading: along.try_normalize().unwrap_or(glam::DVec2::X),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        self.schedule_animation.machines_key = Some(key);
+        if self.editor.animation_machines != placements {
+            self.editor.animation_machines = placements;
+            self.redraw_requested = true;
+        }
     }
 
     /// What the derived source is taken from: the calculated solids, and the
@@ -636,6 +859,7 @@ impl crate::app::App<'_> {
                     direction: glam::DVec2::Y,
                     volume: part.volume,
                     profile: Arc::default(),
+                    floor: part.mesh.mesh.bounds().min.z,
                     mesh,
                     fired_h: 0.0,
                 });
@@ -768,9 +992,11 @@ impl crate::app::App<'_> {
                     cut: Some(CutKey::Whole),
                     stale: false,
                     mesh: Some(block.mesh.clone()),
+                    front: None,
                 }),
             }
         }
+        self.schedule_animation.block_slots = source.iter().enumerate().map(|(slot, block)| (block.id, slot)).collect();
         self.schedule_animation.slots = slots;
         self.schedule_animation.stale_slots = stale_slots;
         self.schedule_animation.source = source;
@@ -914,7 +1140,10 @@ impl crate::app::App<'_> {
                         newly_stale += if failed { 1 } else { -1 };
                     }
                     match cut {
-                        Cut::Solved(mesh) => held.mesh = mesh.map(|mesh| *mesh),
+                        Cut::Solved(mesh, front) => {
+                            held.mesh = mesh.map(|mesh| *mesh);
+                            held.front = front;
+                        }
                         // Reported to the activity console rather than to the
                         // timeline's status line, which is only drawn while
                         // the page is disabled - and this is a failure that
@@ -1036,12 +1265,12 @@ fn build_animation_cuts(work: Vec<AnimationWork>, cancel: &crate::app::jobs::Can
             anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
             let unmeasured = work.volume.is_none() || work.volume == Some(0.0);
             let cut = if unmeasured || work.cut == CutKey::Whole {
-                Cut::Solved(Some(Box::new(work.mesh)))
+                Cut::Solved(Some(Box::new(work.mesh)), None)
             } else if work.cut == CutKey::Gone {
-                Cut::Solved(None)
+                Cut::Solved(None, None)
             } else {
                 match clip_in_direction(&work.mesh, &work.face, work.direction, &work.profile, work.cut.fraction(), cancel) {
-                    Ok(clipped) => Cut::Solved(clipped.map(Box::new)),
+                    Ok((clipped, front)) => Cut::Solved(clipped.map(Box::new), front),
                     // A cancellation is the whole job going away, not this one
                     // block failing to cut.
                     Err(error) if cancel.is_cancelled() => return Err(error),
@@ -1062,14 +1291,14 @@ fn clip_in_direction(
     profile: &OnceLock<VolumeProfile>,
     removed_fraction: f64,
     cancel: &crate::app::jobs::CancelFlag,
-) -> anyhow::Result<Option<OpenTriangulation>> {
+) -> anyhow::Result<(Option<OpenTriangulation>, Option<f64>)> {
     let (low, high) = face
         .iter()
         .flatten()
         .map(|point| point.dot(direction))
         .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), projection| (low.min(projection), high.max(projection)));
     if !low.is_finite() || high <= low {
-        return Ok(Some(source.clone()));
+        return Ok((Some(source.clone()), None));
     }
     let profile = match profile.get() {
         Some(profile) => profile,
@@ -1084,12 +1313,12 @@ fn clip_in_direction(
         }
     };
     if profile.whole() <= f64::EPSILON {
-        return Ok(Some(source.clone()));
+        return Ok((Some(source.clone()), None));
     }
     let cut = profile.cut_retaining(&source.mesh, direction, profile.whole() * (1.0 - removed_fraction), cancel)?;
     let (vertices, faces, _, boundary_wall) = clip_at_cut(&source.mesh, face, direction, cut, cancel)?;
     if faces.is_empty() {
-        return Ok(None);
+        return Ok((None, Some(cut)));
     }
     // Every retained component is independently capped.  The clip records
     // its boundary walls, so only their rim is drawn: no ghost edge survives
@@ -1106,7 +1335,7 @@ fn clip_in_direction(
     result.cull_back_faces = true;
     result.always_show_edges = true;
     result.line_weight = source.line_weight.or(Some(1.5));
-    Ok(Some(result))
+    Ok((Some(result), Some(cut)))
 }
 
 /// How much of one immutable block survives a cut, against where the cut is

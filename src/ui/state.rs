@@ -2178,6 +2178,8 @@ pub(crate) struct EditorState {
     /// The road segments trucks are loaded on at the shown instant, projected
     /// to the window each frame like the other tool overlays.
     pub(crate) animation_flows: Vec<HaulFlowSegment>,
+    /// Animate's machines where they work at the instant shown.
+    pub(crate) animation_machines: Vec<crate::rendering::machines::MachinePlacement>,
     pub(crate) haul_route: Option<crate::model::haulage::routing::RouteCheck>,
     /// Browser-only viewport prompt shown before creating a named project.
     #[cfg(target_arch = "wasm32")]
@@ -3952,6 +3954,7 @@ impl EditorState {
             animation_routes: HashMap::new(),
             animation_routes_key: None,
             animation_flows: Vec::new(),
+            animation_machines: Vec::new(),
             haul_route: None,
             #[cfg(target_arch = "wasm32")]
             new_project_dialog_open: false,

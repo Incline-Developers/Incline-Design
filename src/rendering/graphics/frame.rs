@@ -427,6 +427,17 @@ impl<'a> Graphics<'a> {
             );
         }
 
+        // Animate's machines: uploaded when they move, not every frame.
+        let placements: &[crate::rendering::machines::MachinePlacement] = if editor.is_schedule_animation() { &editor.animation_machines } else { &[] };
+        if !placements.is_empty() && self.machines.is_none() {
+            self.machines = Some(crate::rendering::machines::MachineGpu::new(&self.device).map_err(|error| {
+                crate::userspace_error!("{error:#}");
+            }));
+        }
+        if let Some(Ok(machines)) = &mut self.machines {
+            machines.place(&self.device, &self.queue, placements, self.scene_origin);
+        }
+
         let measurement_state = (
             matches!(
                 editor.active_tool,

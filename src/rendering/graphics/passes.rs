@@ -1349,6 +1349,16 @@ impl<'a> Graphics<'a> {
             render_pass.draw(0..6, self.flow_underlay..flows);
         }
 
+        // Depth-tested against the scene, so a machine behind a bench is
+        // hidden by it.
+        if let Some(Ok(machines)) = &self.machines
+            && !machines.is_empty()
+        {
+            render_pass.set_pipeline(&self.pipes().machine_render_pipeline);
+            render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
+            machines.draw(&mut render_pass);
+        }
+
         if !self.overlay_strokes.is_empty() {
             render_pass.set_pipeline(&self.pipes().overlay_render_pipeline);
             render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);

@@ -2,6 +2,7 @@ pub(crate) mod camera;
 pub(crate) mod color;
 pub(crate) mod geometry;
 pub(crate) mod graphics;
+pub(crate) mod machines;
 pub(crate) mod pick;
 pub(crate) mod query;
 pub(crate) mod scene;
