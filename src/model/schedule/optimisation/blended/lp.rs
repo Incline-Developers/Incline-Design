@@ -194,8 +194,17 @@ impl LinearProgram {
             .zip(&self.column_bounds)
             .map(|(&weight, &(lower, upper))| problem.add_column(weight, lower..=upper))
             .collect();
+        // HiGHS drops a coefficient this small from the matrix, and warns
+        // that it has for every program: thousands a dispatch, each one a
+        // line in the log. Dropped here, it solves the same program quietly.
         for row in &self.rows {
-            problem.add_row(row.lower..=row.upper, row.terms.iter().map(|&(col, coefficient)| (cols[col.0], coefficient)));
+            problem.add_row(
+                row.lower..=row.upper,
+                row.terms
+                    .iter()
+                    .filter(|(_, coefficient)| coefficient.abs() > HIGHS_SMALL_MATRIX_VALUE)
+                    .map(|&(col, coefficient)| (cols[col.0], coefficient)),
+            );
         }
         let mut model = problem.optimise(Sense::Maximise);
         model.make_quiet();
@@ -272,3 +281,7 @@ impl LinearProgram {
 pub(crate) fn backend_name() -> &'static str {
     if cfg!(feature = "highs") { "HiGHS" } else { "microlp 0.6.0" }
 }
+
+/// HiGHS's `small_matrix_value`: matrix entries no larger are dropped.
+#[cfg(feature = "highs")]
+const HIGHS_SMALL_MATRIX_VALUE: f64 = 1e-9;
