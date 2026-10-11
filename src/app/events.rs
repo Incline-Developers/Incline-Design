@@ -474,6 +474,9 @@ impl<'a> App<'a> {
                         self.redraw_requested = true;
                     }
                     self.drag_to_cursor();
+                    if self.vertex_drag.is_some() {
+                        self.drag_vertex_to_cursor();
+                    }
                     if self.gizmo_drag.is_some() {
                         self.move_gizmo_to_cursor();
                         self.invalidate_overlay();
@@ -918,7 +921,9 @@ impl<'a> App<'a> {
                             Some(GizmoHandleHit::Plane(plane_idx, axes)) => self.begin_gizmo_plane_drag(plane_idx, axes, cursor_px),
                             Some(GizmoHandleHit::Axis(axis_idx, axis)) => self.begin_gizmo_drag(axis_idx, axis, cursor_px),
                             None => {
-                                if !self.pick_move_vertex_target() {
+                                if self.pick_move_vertex_target() {
+                                    self.begin_vertex_drag();
+                                } else {
                                     self.begin_select_or_drag();
                                 }
                             }
@@ -1008,6 +1013,9 @@ impl<'a> App<'a> {
     fn finish_left_button_interactions(&mut self) {
         self.finish_box_selection();
         self.finish_drag();
+        if self.vertex_drag.is_some() {
+            self.finish_vertex_drag();
+        }
         if self.gizmo_drag.is_some() {
             self.finish_gizmo_drag();
         }
@@ -1397,6 +1405,7 @@ impl<'a> App<'a> {
         }
         match &key {
             KeyCode::Escape => {
+                self.editor.vertex_edit_run = None;
                 if self.editor.tie_anchor.is_some() {
                     self.end_tie_chain();
                     self.redraw_requested = true;
@@ -1517,6 +1526,17 @@ impl<'a> App<'a> {
                 } else {
                     self.try_finish_tool();
                 }
+            }
+            // Geology's Nudge RL panel: the arrows raise and lower the vertex
+            // Move holds by the panel's step.
+            KeyCode::ArrowUp | KeyCode::ArrowDown
+                if self.editor.nudge_panel_open
+                    && self.editor.active_tool == ActiveTool::Move
+                    && self.editor.active_workspace.has_drawing_aids()
+                    && !self.editor.text_editing_enabled =>
+            {
+                let step = self.editor.nudge_step;
+                self.nudge_held_vertex(if key == KeyCode::ArrowUp { step } else { -step });
             }
             // In the middle of a string, Backspace gives back its last vertex
             // rather than deleting the selection.
@@ -1639,6 +1659,8 @@ impl<'a> App<'a> {
         if self.editor.copy_along.take().is_some() {
             self.invalidate_overlay();
         }
+        // Putting Move down, or any tool change, ends a vertex's undo step.
+        self.editor.vertex_edit_run = None;
         let previous_tool = self.editor.active_tool;
         let next_tool = if previous_tool == tool { ActiveTool::None } else { tool };
 

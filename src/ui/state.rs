@@ -1893,6 +1893,18 @@ pub(crate) struct EditorState {
 
     // Move tool gizmo
     pub(crate) move_vertex_target: Option<(ObjectId, ObjectPoint)>,
+    /// Geology's Nudge RL panel beside Move, while it is open.
+    pub(crate) nudge_panel_open: bool,
+    /// How far one nudge raises or lowers the held vertex, in metres: the
+    /// last step used.
+    pub(crate) nudge_step: f64,
+    /// The vertex Geology's drags and nudges are working on, and the history
+    /// revision the last of them left: while it stands they undo as one step.
+    /// Ended by Esc, a tool, workspace or project switch, and undo or redo.
+    pub(crate) vertex_edit_run: Option<((ObjectId, ObjectPoint), u64)>,
+    /// Where the vertex the last drag or nudge held was left, so a string
+    /// renumbered since (reversed, thinned) cannot turn a nudge on another.
+    pub(crate) held_vertex_at: Option<((ObjectId, ObjectPoint), DVec3)>,
     /// Projected Move gizmo for the current frame.
     pub(crate) move_gizmo: MoveGizmoScreen,
     pub(crate) move_gizmo_hovered_axis: Option<u8>,
@@ -2804,6 +2816,7 @@ impl EditorState {
         self.drape_object_ids.clear();
         self.pending_stroke.clear();
         self.copy_along = None;
+        self.vertex_edit_run = None;
         self.circle_draft = None;
         self.poly_finish_dialog = false;
         self.poly_finish_dialog_confirm_armed = false;
@@ -3209,6 +3222,10 @@ impl EditorState {
             chamfer_gizmo_drag_start_px: None,
             chamfer_gizmo_drag_start_radius: 0.0,
             move_vertex_target: None,
+            nudge_panel_open: false,
+            nudge_step: 0.1,
+            vertex_edit_run: None,
+            held_vertex_at: None,
             move_gizmo: MoveGizmoScreen::default(),
             move_gizmo_hovered_axis: None,
             move_gizmo_hovered_plane: None,
@@ -4041,6 +4058,11 @@ pub(crate) enum UiCommand {
     /// Give back the last vertex of the string being drawn.
     RemoveLastStrokeVertex,
     OpenNextVertexPanel,
+    /// Arm Move for dragging a vertex, unless it is armed already.
+    ArmDragVertex,
+    OpenNudgePanel,
+    /// Raise the vertex Move holds by this many metres; negative lowers it.
+    NudgeHeldVertex(f64),
     /// Take the next two clicks as a run of an existing string to copy.
     ArmCopyAlongString,
     /// Add this point to the string being drawn.
@@ -4628,6 +4650,9 @@ impl UiCommand {
             Self::SetActiveTool(_)
             | Self::RemoveLastStrokeVertex
             | Self::OpenNextVertexPanel
+            | Self::ArmDragVertex
+            | Self::OpenNudgePanel
+            | Self::NudgeHeldVertex(_)
             | Self::ArmCopyAlongString
             | Self::AddTypedStrokeVertex(_)
             | Self::AddStrokeVertexAlongBearing { .. }

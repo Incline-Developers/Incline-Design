@@ -125,7 +125,7 @@ impl<'a> App<'a> {
             self.editor.tool_highlight_id = hovered_object;
             self.invalidate_geometry();
             // Insert Point marks the hovered string's vertices on the overlay.
-            if self.editor.active_tool == ActiveTool::InsertPoint {
+            if self.editor.active_tool == ActiveTool::InsertPoint || (self.editor.active_tool == ActiveTool::Move && self.editor.active_workspace.has_drawing_aids()) {
                 self.invalidate_overlay();
             }
         }

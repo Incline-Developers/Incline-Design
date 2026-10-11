@@ -82,6 +82,9 @@ impl<'a> App<'a> {
         // A copy's first pick is a vertex number on a string the step may
         // have renumbered or removed.
         self.editor.copy_along = None;
+        // Drags and nudges after an undo or redo start an undo step of
+        // their own.
+        self.editor.vertex_edit_run = None;
         // Insert Point's marker sits on the string as it was.
         if self.editor.active_tool == ActiveTool::InsertPoint {
             self.clear_insert_point_marker();
@@ -930,6 +933,18 @@ impl<'a> App<'a> {
             }
             UiCommand::ArmCopyAlongString => {
                 self.arm_copy_along_string();
+                Ok(())
+            }
+            UiCommand::ArmDragVertex => {
+                self.arm_drag_vertex();
+                Ok(())
+            }
+            UiCommand::OpenNudgePanel => {
+                self.open_nudge_panel();
+                Ok(())
+            }
+            UiCommand::NudgeHeldVertex(rise) => {
+                self.nudge_held_vertex(rise);
                 Ok(())
             }
             UiCommand::OpenNextVertexPanel => {

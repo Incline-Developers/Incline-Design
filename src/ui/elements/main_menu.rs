@@ -266,6 +266,7 @@ fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, wor
     }
     let previous_workspace = editor.active_workspace;
     editor.active_workspace = workspace;
+    editor.vertex_edit_run = None;
     if workspace != Workspace::DrillAndBlast && editor.drill_pattern_open {
         editor.close_drill_pattern();
     }
@@ -572,11 +573,13 @@ pub(crate) enum GeologyRow {
     RemoveLastVertex,
     NextVertex,
     CopyAlongString,
+    DragVertex,
+    NudgeRl,
 }
 
 /// Geology Design's lower half in menu order; [`geology_design_groups`] cuts
 /// it into submenus and the macOS menu tags rows by index into it.
-pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 31] = [
+pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 33] = [
     GeologyRow::Tool(ActiveTool::MakePoint),
     GeologyRow::Tool(ActiveTool::MakeLine),
     GeologyRow::Tool(ActiveTool::MakePoly),
@@ -600,6 +603,8 @@ pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 31] = [
     GeologyRow::Tool(ActiveTool::ExplodePolyline),
     GeologyRow::Tool(ActiveTool::EditVertex),
     GeologyRow::Tool(ActiveTool::InsertPoint),
+    GeologyRow::DragVertex,
+    GeologyRow::NudgeRl,
     GeologyRow::Tool(ActiveTool::DeletePoints),
     GeologyRow::InsertAtCrossings,
     GeologyRow::InsertAtElevation,
@@ -617,8 +622,8 @@ pub(crate) fn geology_design_groups() -> [(String, std::ops::Range<usize>); 5] {
         (tr!("ws-menubar-geology-draw"), 0..8),
         (tr!("ws-menubar-geology-edit"), 8..18),
         (tr!("ws-menubar-geology-join-split"), 18..21),
-        (tr!("ws-menubar-geology-vertices"), 21..27),
-        (tr!("ws-menubar-geology-surface"), 27..30),
+        (tr!("ws-menubar-geology-vertices"), 21..29),
+        (tr!("ws-menubar-geology-surface"), 29..32),
     ]
 }
 
@@ -657,6 +662,8 @@ impl GeologyRow {
             Self::RemoveLastVertex => tr!("ws-menubar-geology-remove-last-vertex"),
             Self::NextVertex => tr!("ws-menubar-geology-next-vertex"),
             Self::CopyAlongString => tr!("ws-menubar-geology-copy-along-string"),
+            Self::DragVertex => tr!("ws-menubar-geology-drag-vertex"),
+            Self::NudgeRl => tr!("ws-menubar-geology-nudge-rl"),
         }
     }
 
@@ -674,6 +681,8 @@ impl GeologyRow {
             Self::RemoveLastVertex => UiCommand::RemoveLastStrokeVertex,
             Self::NextVertex => UiCommand::OpenNextVertexPanel,
             Self::CopyAlongString => UiCommand::ArmCopyAlongString,
+            Self::DragVertex => UiCommand::ArmDragVertex,
+            Self::NudgeRl => UiCommand::OpenNudgePanel,
         }
     }
 
@@ -695,6 +704,8 @@ impl GeologyRow {
             Self::RemoveLastVertex => !editor.pending_stroke.is_empty() && !editor.poly_finish_dialog,
             Self::NextVertex => matches!(editor.active_tool, ActiveTool::MakeLine | ActiveTool::MakePoly),
             Self::CopyAlongString => !editor.poly_finish_dialog,
+            // Move works on a section in Geology and needs no layer.
+            Self::DragVertex | Self::NudgeRl => !editor.fly_mode_enabled,
         }
     }
 }

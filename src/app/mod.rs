@@ -123,6 +123,16 @@ struct DragState {
     moved: bool,
 }
 
+/// A press on a vertex under Geology's Move: where it was pressed, and the
+/// cursor's world point then, on the level of the vertex or on the section.
+#[derive(Clone, Copy)]
+pub(crate) struct VertexDrag {
+    pub(crate) press_px: (f32, f32),
+    pub(crate) level: f64,
+    pub(crate) start_world: DVec3,
+    pub(crate) moved: bool,
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum GizmoDragConstraint {
     Axis {
@@ -403,6 +413,11 @@ pub(crate) struct App<'a> {
     modifiers: ModifiersState,
     drag: Option<DragState>,
     pub(crate) gizmo_drag: Option<GizmoDragState>,
+    /// Geology's Move: a vertex pressed on, dragged once the mouse moves.
+    pub(crate) vertex_drag: Option<VertexDrag>,
+    /// Set only while a drag or nudge of a held vertex records itself: the
+    /// revision it may extend, then the one it left.
+    vertex_edit_revision: Option<Option<u64>>,
     /// Screen position where the right mouse button was pressed (physical px).
     /// Used to distinguish a quick context-menu click from a camera orbit drag.
     right_press_px: Option<(f32, f32)>,
@@ -539,6 +554,8 @@ impl<'a> Default for App<'a> {
             modifiers: ModifiersState::empty(),
             drag: None,
             gizmo_drag: None,
+            vertex_drag: None,
+            vertex_edit_revision: None,
             right_press_px: None,
             right_orbit_active: false,
             slice_preview_cursor_px: None,
@@ -1036,6 +1053,11 @@ impl<'a> App<'a> {
     /// such as an interactive drag committed on mouse release.
     pub(crate) fn record_applied_edit(&mut self, command: Command) {
         let epoch = self.active_project_content_epoch();
+        // Geology's drag and nudge of one held vertex undo as one step.
+        if let Some(onto) = self.vertex_edit_revision {
+            self.vertex_edit_revision = Some(Some(self.history.push_applied_merging(epoch, command, onto)));
+            return;
+        }
         self.history.push_applied(epoch, command);
     }
 

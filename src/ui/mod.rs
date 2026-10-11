@@ -777,9 +777,22 @@ fn draw_ui(
 
     // Either translate tool: the Blender-style gizmo and the numeric delta
     // panel, over whichever selection the active one moves.
+    // Geology's Nudge RL panel takes the dock while it holds a vertex, or
+    // asks for one with nothing to move; a selection moved whole keeps the
+    // Move panel and its Apply and Cancel.
+    let nudge_shown = editor.nudge_panel_open && (editor.move_vertex_target.is_some() || !editor.move_tool_has_targets());
     if editor.move_tool_has_targets() {
         draw_move_gizmo(root_ui, editor);
-        dialogs::editing::draw_move_panel(root_ui, editor, commands, canvas_rect);
+        if !nudge_shown {
+            dialogs::editing::draw_move_panel(root_ui, editor, commands, canvas_rect);
+        }
+    }
+    if nudge_shown {
+        let held_rl = editor
+            .move_vertex_target
+            .and_then(|(id, point)| crate::app::commands::drawing::move_tool::move_target_position(document.get_object(id)?, point))
+            .map(|position| position.z);
+        dialogs::editing::draw_nudge_panel(root_ui, editor, commands, canvas_rect, held_rl);
     }
 
     // A string being drawn in Geology: its typed next vertex.

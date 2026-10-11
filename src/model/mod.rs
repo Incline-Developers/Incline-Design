@@ -3058,6 +3058,24 @@ impl History {
         self.push_entry(command, snapshot.clone(), snapshot, false);
     }
 
+    /// [`Self::push_applied`] for one edit of a run that undoes as one step:
+    /// it extends the newest entry when `onto` is the revision the run's
+    /// previous push returned, so nothing has been recorded, undone or redone
+    /// since, and otherwise starts an entry of its own. Returns the revision
+    /// to pass as `onto` next time.
+    pub(crate) fn push_applied_merging(&mut self, project_epoch: u64, command: Command, onto: Option<u64>) -> u64 {
+        let continuing = onto == Some(self.archive_revision);
+        let snapshot = EpochSnapshot {
+            project: project_epoch,
+            items: Vec::new(),
+        };
+        self.open_run = continuing;
+        self.push_entry(command, snapshot.clone(), snapshot, continuing);
+        // The run is not a pointer gesture: no gesture may extend its entry.
+        self.open_run = false;
+        self.archive_revision
+    }
+
     fn push_entry(&mut self, command: Command, before: EpochSnapshot, after: EpochSnapshot, continuing: bool) {
         self.archive_revision = self.archive_revision.wrapping_add(1);
         self.retained_bytes = self

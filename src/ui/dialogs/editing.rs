@@ -1361,6 +1361,47 @@ pub(crate) fn draw_move_panel(ui: &mut egui::Ui, editor: &mut EditorState, comma
     });
 }
 
+/// Geology's Nudge RL panel beside Move: the held vertex's RL, and the step
+/// Raise and Lower move it by, as the Up and Down arrows do while it is open.
+pub(crate) fn draw_nudge_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect, held_rl: Option<f64>) {
+    // The panel goes down with the tool it nudges for.
+    if editor.active_tool != ActiveTool::Move || !editor.active_workspace.has_drawing_aids() {
+        editor.nudge_panel_open = false;
+        return;
+    }
+    let mut close = false;
+    ViewportDockPanel::new("nudge_panel", tr!("edit-nudge-rl"), viewport_rect)
+        .min_width(210.0)
+        .show(ui.ctx(), |ui| {
+            MenuFieldF64::new(tr!("edit-nudge-rl-step"), &mut editor.nudge_step, 0.001..=1000.0)
+                .help_text(tr!("edit-nudge-rl-step-help"))
+                .speed(0.01)
+                .max_decimals(3)
+                .show(ui);
+            match held_rl {
+                Some(rl) => crate::ui::elements::properties::read_only_row(ui, &tr!("edit-nudge-rl-vertex"), &format!("{rl:.3}")),
+                None => {
+                    ui.label(tr!("edit-nudge-rl-click-vertex"));
+                }
+            }
+            ui.add_space(4.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.add(MenuButton::new(tr!("common-close"))).clicked() {
+                    close = true;
+                }
+                if ui.add(MenuButton::new(tr!("edit-nudge-rl-lower")).enabled(held_rl.is_some())).clicked() {
+                    commands.push(UiCommand::NudgeHeldVertex(-editor.nudge_step));
+                }
+                if ui.add(MenuButton::new(tr!("edit-nudge-rl-raise")).primary().enabled(held_rl.is_some())).clicked() {
+                    commands.push(UiCommand::NudgeHeldVertex(editor.nudge_step));
+                }
+            });
+        });
+    if close {
+        editor.nudge_panel_open = false;
+    }
+}
+
 /// Draw the Next Vertex panel beside a string being drawn: a point to add as
 /// typed, and a step from the last vertex by bearing, level distance and dip.
 /// Enter in a field adds from that part; it never finishes the string.

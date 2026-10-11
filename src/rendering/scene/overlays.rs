@@ -221,7 +221,7 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
     // Inserting: every vertex of the string under the cursor is marked, a
     // size below the point a click would add, so the new point reads against
     // the ones already there.
-    if editor.active_tool == ActiveTool::InsertPoint
+    if (editor.active_tool == ActiveTool::InsertPoint || (editor.active_tool == ActiveTool::Move && editor.active_workspace.has_drawing_aids()))
         && let Some(Object::Polyline { verts, .. }) = editor.tool_highlight_id.and_then(|id| document.get_object(id))
     {
         for vertex in verts {
