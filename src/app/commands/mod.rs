@@ -79,6 +79,9 @@ impl<'a> App<'a> {
         self.apply_step_effects(effects);
         // An open Thin Strings dialog previews the strings as they were.
         self.refresh_thin_preview(true);
+        // A copy's first pick is a vertex number on a string the step may
+        // have renumbered or removed.
+        self.editor.copy_along = None;
         self.invalidate_geometry();
     }
 
@@ -919,6 +922,10 @@ impl<'a> App<'a> {
             }
             UiCommand::RemoveLastStrokeVertex => {
                 self.remove_last_stroke_vertex();
+                Ok(())
+            }
+            UiCommand::ArmCopyAlongString => {
+                self.arm_copy_along_string();
                 Ok(())
             }
             UiCommand::OpenNextVertexPanel => {

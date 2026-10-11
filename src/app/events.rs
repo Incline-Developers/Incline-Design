@@ -888,6 +888,9 @@ impl<'a> App<'a> {
             match self.editor.active_tool {
                 ActiveTool::MakePoint => self.place_point_at_cursor(),
                 ActiveTool::MakeText if !self.editor.text_editing_enabled => self.text_tool_click(),
+                // Geology's Copy Along a String takes the Polyline tool's
+                // clicks as its picks.
+                ActiveTool::MakePoly if crate::ui::state::copy_along_live(&self.editor).is_some() => self.copy_along_click(),
                 ActiveTool::MakeLine | ActiveTool::MakePoly if !self.editor.poly_finish_dialog => self.place_stroke_point(),
                 ActiveTool::MakeCircle => self.make_circle_click(),
                 ActiveTool::MeasureDistance => self.measure_distance_click(),
@@ -1402,6 +1405,10 @@ impl<'a> App<'a> {
                     self.editor.viewport_pick_hover_label = None;
                     self.editor.tool_highlight_id = self.editor.drill_pattern_boundary_id;
                     self.invalidate_geometry();
+                } else if crate::ui::state::copy_along_live(&self.editor).is_some() {
+                    // Copying along a string is a step inside the Polyline
+                    // tool: Escape leaves it and drawing goes on.
+                    self.cancel_copy_along();
                 } else if self.editor.slice_mode_enabled && self.editor.active_tool == ActiveTool::None && self.editor.pending_stroke.is_empty() {
                     // Escape unwinds one step at a time: a tool up or a stroke half drawn falls through to the cancel paths below.
                     self.leave_slice_mode();
@@ -1612,6 +1619,11 @@ impl<'a> App<'a> {
             return;
         }
 
+        // A copy along a string belongs to the tool that started it; its
+        // first pick is marked on the overlay, which repaints only when asked.
+        if self.editor.copy_along.take().is_some() {
+            self.invalidate_overlay();
+        }
         let previous_tool = self.editor.active_tool;
         let next_tool = if previous_tool == tool { ActiveTool::None } else { tool };
 

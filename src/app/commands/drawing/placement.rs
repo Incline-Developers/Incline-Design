@@ -100,9 +100,10 @@ impl<'a> App<'a> {
     /// second vertex and a polyline brought back to its first.
     pub(crate) fn push_stroke_point(&mut self, world: glam::DVec3, layer: LayerId) {
         // A new run: Backspace must not reach back into the segments of one
-        // already finished.
+        // already finished, nor a copy armed for another stroke wake up.
         if self.editor.pending_stroke.is_empty() {
             self.editor.line_chain.clear();
+            self.editor.copy_along = None;
         }
         self.editor.pending_stroke.push(world);
         match self.editor.active_tool {

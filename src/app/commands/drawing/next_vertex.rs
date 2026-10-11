@@ -1,15 +1,17 @@
 //! Drawing aids for a string being drawn: give back the last vertex, add
-//! the next one as typed, or a step from the last by bearing and distance.
-//! On a section the vertex goes onto the plane, as a click there does.
+//! the next one as typed, or a step from the last by bearing and distance,
+//! or copy a run of an existing string. On a section the vertex goes onto
+//! the plane, as a click there does.
 
 use glam::{DVec2, DVec3};
 
+use super::bezier::{choose_closed_span, directed_span_points};
 use crate::{
-    app::App,
+    app::{App, PICK_THRESHOLD_PX},
     i18n::tr,
-    model::{Command, Object},
-    rendering::camera::SectionSlab,
-    ui::state::{ActiveTool, EditorState, NextVertexPanel},
+    model::{Command, Object, ObjectId, PolyVertex, SceneEntityId},
+    rendering::{camera::SectionSlab, pick},
+    ui::state::{ActiveTool, CopyAlong, EditorState, NextVertexPanel, copy_along_live},
     userspace_log,
 };
 
@@ -111,7 +113,7 @@ impl<'a> App<'a> {
         }
         // The point already ends the stroke: adding it again would close a
         // polyline on itself or save a line of no length.
-        if self.editor.pending_stroke.last().is_some_and(|last| (*last - world).length_squared() <= 1.0e-16) {
+        if ends_stroke(&self.editor.pending_stroke, world) {
             return;
         }
         let Some(layer) = self.active_layer() else {
@@ -120,6 +122,147 @@ impl<'a> App<'a> {
         self.push_stroke_point(world, layer);
         self.invalidate_overlay();
         self.sync_next_vertex_panel();
+    }
+
+    /// Start Copy Along a String on the polyline being drawn: its next two
+    /// clicks pick a run of an existing string to append.
+    pub(crate) fn arm_copy_along_string(&mut self) {
+        // Asked for before a polyline is begun, it begins one: the copied run
+        // then starts the new string.
+        if self.editor.active_workspace.has_drawing_aids() && self.editor.active_tool != ActiveTool::MakePoly {
+            self.set_active_tool_from_toolbar(ActiveTool::MakePoly);
+        }
+        if !self.editor.active_workspace.has_drawing_aids() || self.editor.active_tool != ActiveTool::MakePoly || self.editor.poly_finish_dialog {
+            return;
+        }
+        self.editor.copy_along = Some(CopyAlong {
+            anchor: self.editor.pending_stroke.first().copied(),
+            first: None,
+        });
+        self.invalidate_overlay();
+    }
+
+    /// Leave Copy Along a String and go on drawing.
+    pub(crate) fn cancel_copy_along(&mut self) {
+        if self.editor.copy_along.take().is_some() {
+            self.invalidate_overlay();
+        }
+    }
+
+    /// A click while copying: the vertex the run starts from, then the one
+    /// it ends at on the same string, which appends the run.
+    pub(crate) fn copy_along_click(&mut self) {
+        let Some(copy) = copy_along_live(&self.editor).copied() else {
+            self.cancel_copy_along();
+            return;
+        };
+        match copy.first {
+            None => {
+                let Some((SceneEntityId::Object(id), _)) = self.pick_copy_source() else {
+                    return;
+                };
+                let Some((index, world)) = self.string_vertex_under_cursor(id, None) else {
+                    return;
+                };
+                self.editor.copy_along = Some(CopyAlong {
+                    first: Some((id, index, world)),
+                    ..copy
+                });
+                self.invalidate_overlay();
+            }
+            Some((id, first, _)) => {
+                let Some((second, _)) = self.string_vertex_under_cursor(id, Some(first)) else {
+                    return;
+                };
+                if second == first {
+                    return;
+                }
+                let run = match self.scene_document.get_object(id) {
+                    Some(Object::Polyline { verts, closed, .. }) => copy_run(verts, *closed, first, second),
+                    _ => Vec::new(),
+                };
+                self.editor.copy_along = None;
+                self.append_copied_run(run);
+            }
+        }
+    }
+
+    /// The string a copy starts from, picked as any click picks but with
+    /// locked strings allowed: the copy only reads it.
+    fn pick_copy_source(&self) -> Option<(SceneEntityId, DVec3)> {
+        self.graphics.as_ref()?.pick_at_cursor(
+            PICK_THRESHOLD_PX,
+            &self.triangulations,
+            &self.editor.hidden_handles,
+            &Default::default(),
+            self.editor.xray_enabled,
+        )
+    }
+
+    /// The vertex of string `id` nearest the cursor on screen, within reach
+    /// and inside the section's slab when one is up.
+    fn string_vertex_under_cursor(&self, id: ObjectId, other_than: Option<usize>) -> Option<(usize, DVec3)> {
+        let graphics = self.graphics.as_ref()?;
+        let cursor = graphics.window_to_viewport_px(self.editor.cursor_screen_px?);
+        let cursor = DVec2::new(f64::from(cursor.0), f64::from(cursor.1));
+        let Some(Object::Polyline { verts, .. }) = self.scene_document.get_object(id) else {
+            return None;
+        };
+        let (view_proj, screen, slab) = (graphics.view_proj(), graphics.screen_size_pub(), graphics.section_slab());
+        verts
+            .iter()
+            .enumerate()
+            .filter_map(|(index, vertex)| Some((index, vertex.pos, pick::slab_screen_point(slab, &view_proj, screen, vertex.pos)?.distance(cursor))))
+            .filter(|&(_, _, distance)| distance < f64::from(PICK_THRESHOLD_PX * 2.5))
+            // Of vertices equally near, one other than `other_than`: an open
+            // string whose ends meet has two at the same place.
+            .min_by(|a, b| a.2.total_cmp(&b.2).then((Some(a.0) == other_than).cmp(&(Some(b.0) == other_than))))
+            .map(|(index, world, _)| (index, world))
+    }
+
+    /// Append a copied run vertex by vertex, as clicks would: a vertex that
+    /// already ends the stroke is not doubled, and one back on the stroke's
+    /// first vertex closes the polyline there.
+    fn append_copied_run(&mut self, run: Vec<DVec3>) {
+        let originals = run.clone();
+        let run = match self.drawing_section() {
+            Some(slab) => {
+                let (run, shift) = pinned_run(run, &slab);
+                if shift > REPORTED_SECTION_SHIFT {
+                    userspace_log!("{}", tr!("cmd-next-vertex-moved-onto-section", distance = format!("{shift:.2}")));
+                }
+                run
+            }
+            None => run,
+        };
+        let mut added = 0;
+        for (original, point) in originals.into_iter().zip(run) {
+            // A click snapped to the string keeps the vertex where it is, off
+            // the plane within the slab, so the stroke is matched against the
+            // vertex as it was as well as as it is now.
+            if ends_stroke(&self.editor.pending_stroke, original) {
+                continue;
+            }
+            let point = match self.editor.pending_stroke.first() {
+                Some(&first) if self.editor.pending_stroke.len() > 1 && (first - original).length_squared() <= 1.0e-16 => first,
+                _ => point,
+            };
+            let before = self.editor.pending_stroke.len();
+            self.add_stroke_vertex(point);
+            let after = self.editor.pending_stroke.len();
+            if after > before {
+                added += 1;
+            }
+            // Closed on its first vertex and saved: the run ends with it.
+            if after == 0 {
+                break;
+            }
+        }
+        self.editor.stroke_leg_broken = false;
+        self.invalidate_overlay();
+        if added > 0 {
+            userspace_log!("{}", tr!("cmd-next-vertex-copied-vertices", count = added.to_string()));
+        }
     }
 
     /// The section a vertex must go onto: a Geology section, while one is up.
@@ -141,6 +284,12 @@ impl<'a> App<'a> {
         }
         on_plane
     }
+}
+
+/// Whether `point` is where the stroke already ends, by the coincidence test
+/// the polyline tool uses for a string brought back to its first vertex.
+fn ends_stroke(stroke: &[DVec3], point: DVec3) -> bool {
+    stroke.last().is_some_and(|last| (*last - point).length_squared() <= 1.0e-16)
 }
 
 fn draws_strings(tool: ActiveTool) -> bool {
@@ -170,4 +319,34 @@ fn section_bearing(slab: &SectionSlab) -> f64 {
 /// `world` moved square onto the section plane.
 fn onto_section(slab: &SectionSlab, world: DVec3) -> DVec3 {
     world - slab.normal * slab.signed_distance(world)
+}
+
+/// The points of a string from vertex `first` to vertex `second`, in that
+/// order, arcs tessellated. An open string runs back when `second` comes
+/// first; a ring goes the shorter way round, forward on a tie.
+pub(crate) fn copy_run(verts: &[PolyVertex], closed: bool, first: usize, second: usize) -> Vec<DVec3> {
+    let (start, end) = match closed {
+        true => choose_closed_span(verts, first, second, false),
+        false => (first.min(second), first.max(second)),
+    };
+    let mut run = directed_span_points(verts, closed, start, end);
+    if start != first {
+        run.reverse();
+    }
+    run
+}
+
+/// A copied run moved square onto the section, with the furthest any point
+/// had to move.
+fn pinned_run(run: Vec<DVec3>, slab: &SectionSlab) -> (Vec<DVec3>, f64) {
+    let mut shift = 0.0_f64;
+    let run = run
+        .into_iter()
+        .map(|point| {
+            let on_plane = onto_section(slab, point);
+            shift = shift.max(on_plane.distance(point));
+            on_plane
+        })
+        .collect();
+    (run, shift)
 }

@@ -205,6 +205,11 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
         }
     }
 
+    // Copy Along a String: the vertex its run starts from, once picked.
+    if let Some((_, _, first)) = crate::ui::state::copy_along_live(editor).and_then(|copy| copy.first) {
+        draw_screen_point_marker_sized(&mut overlay, first, 11.0, ACTIVE_POINT_COLOR);
+    }
+
     if matches!(editor.active_tool, ActiveTool::Move | ActiveTool::DeletePoints | ActiveTool::EditVertex)
         && let Some(hover) = editor.tool_hover_vertex_world
     {

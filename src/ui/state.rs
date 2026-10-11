@@ -981,6 +981,27 @@ pub(crate) fn batter_angle_measurement(points: &[DVec3]) -> Option<BatterAngleMe
 
 pub(crate) const CIRCLE_TYPED_RESET_DISTANCE_POINTS: f32 = 8.0;
 
+/// Copy Along a String, a step inside the Polyline tool: the stroke's first
+/// vertex when it was started, and the run's first pick once made.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct CopyAlong {
+    /// A finished or restarted stroke no longer starts here, and ends it.
+    pub(crate) anchor: Option<DVec3>,
+    /// The string, its vertex and where that vertex is.
+    pub(crate) first: Option<(ObjectId, usize, DVec3)>,
+}
+
+/// The copy along a string under way, if it still belongs to the Polyline
+/// tool and the stroke it was started on.
+pub(crate) fn copy_along_live(editor: &EditorState) -> Option<&CopyAlong> {
+    editor.copy_along.as_ref().filter(|copy| {
+        editor.active_tool == ActiveTool::MakePoly
+            && !editor.poly_finish_dialog
+            && editor.active_workspace.has_drawing_aids()
+            && editor.pending_stroke.first().copied() == copy.anchor
+    })
+}
+
 /// What the Next Vertex panel holds: a point to add as typed, and a step
 /// from the last vertex by bearing, level distance and dip.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -1612,6 +1633,8 @@ pub(crate) struct EditorState {
     pub(crate) circle_draft: Option<CircleDraft>,
     /// The Next Vertex panel beside a string being drawn, while it is open.
     pub(crate) next_vertex_panel: Option<NextVertexPanel>,
+    /// Copy Along a String, while its picks are being made.
+    pub(crate) copy_along: Option<CopyAlong>,
     /// Where each segment the Line tool saved in the run being drawn starts,
     /// newest last, so Backspace can take one back.
     pub(crate) line_chain: Vec<DVec3>,
@@ -2780,6 +2803,7 @@ impl EditorState {
         self.drape_phase = DrapePhase::Designs;
         self.drape_object_ids.clear();
         self.pending_stroke.clear();
+        self.copy_along = None;
         self.circle_draft = None;
         self.poly_finish_dialog = false;
         self.poly_finish_dialog_confirm_armed = false;
@@ -3063,6 +3087,7 @@ impl EditorState {
             pending_stroke: Vec::new(),
             circle_draft: None,
             next_vertex_panel: None,
+            copy_along: None,
             line_chain: Vec::new(),
             stroke_leg_broken: false,
             measurement_start: None,
@@ -4006,6 +4031,8 @@ pub(crate) enum UiCommand {
     /// Give back the last vertex of the string being drawn.
     RemoveLastStrokeVertex,
     OpenNextVertexPanel,
+    /// Take the next two clicks as a run of an existing string to copy.
+    ArmCopyAlongString,
     /// Add this point to the string being drawn.
     AddTypedStrokeVertex(DVec3),
     /// Add the vertex a step from the last: bearing and dip in degrees,
@@ -4591,6 +4618,7 @@ impl UiCommand {
             Self::SetActiveTool(_)
             | Self::RemoveLastStrokeVertex
             | Self::OpenNextVertexPanel
+            | Self::ArmCopyAlongString
             | Self::AddTypedStrokeVertex(_)
             | Self::AddStrokeVertexAlongBearing { .. }
             | Self::ToggleCreateDrillPattern

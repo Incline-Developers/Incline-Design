@@ -210,7 +210,7 @@ pub(crate) fn bezier_eval(p0: DVec3, p1: DVec3, p2: DVec3, p3: DVec3, t: f64) ->
 
 /// Pick one of the two directed paths between vertices of a closed polyline.
 /// Length is measured along the actual source geometry, including bulged arcs.
-fn choose_closed_span(verts: &[PolyVertex], first: usize, second: usize, longer: bool) -> (usize, usize) {
+pub(crate) fn choose_closed_span(verts: &[PolyVertex], first: usize, second: usize, longer: bool) -> (usize, usize) {
     let forward = directed_span_length(verts, true, first, second);
     let reverse = directed_span_length(verts, true, second, first);
     if (longer && forward >= reverse) || (!longer && forward <= reverse) {

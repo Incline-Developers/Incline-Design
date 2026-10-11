@@ -363,6 +363,15 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
     if editor.drill_pattern_awaiting_shape_pick {
         return Some(ViewportMessage::text(tr!("ui-click-closed-polyline-use-blast")).minor(tr!("ui-esc-cancels")));
     }
+    // Ahead of the section's own message: the copy's picks are made there too.
+    if let Some(copy) = state::copy_along_live(editor) {
+        let step = if copy.first.is_none() {
+            tr!("ui-click-copy-first-vertex")
+        } else {
+            tr!("ui-click-copy-last-vertex")
+        };
+        return Some(ViewportMessage::text(step).minor(tr!("ui-esc-cancels")));
+    }
     if editor.active_tool == ActiveTool::VerticalSlice {
         return Some(ViewportMessage::text(if editor.slice_pending_start.is_none() {
             tr!("ui-click-first-point-slice-line")

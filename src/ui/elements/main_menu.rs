@@ -570,11 +570,12 @@ pub(crate) enum GeologyRow {
     Thin,
     RemoveLastVertex,
     NextVertex,
+    CopyAlongString,
 }
 
 /// Geology Design's lower half in menu order; [`geology_design_groups`] cuts
 /// it into submenus and the macOS menu tags rows by index into it.
-pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 29] = [
+pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 30] = [
     GeologyRow::Tool(ActiveTool::MakePoint),
     GeologyRow::Tool(ActiveTool::MakeLine),
     GeologyRow::Tool(ActiveTool::MakePoly),
@@ -582,6 +583,7 @@ pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 29] = [
     GeologyRow::Tool(ActiveTool::MakeText),
     GeologyRow::RemoveLastVertex,
     GeologyRow::NextVertex,
+    GeologyRow::CopyAlongString,
     GeologyRow::Tool(ActiveTool::Move),
     GeologyRow::SetAxis(Axis::X),
     GeologyRow::SetAxis(Axis::Y),
@@ -610,11 +612,11 @@ pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 29] = [
 /// rows after the last run stand on the menu itself.
 pub(crate) fn geology_design_groups() -> [(String, std::ops::Range<usize>); 5] {
     [
-        (tr!("ws-menubar-geology-draw"), 0..7),
-        (tr!("ws-menubar-geology-edit"), 7..17),
-        (tr!("ws-menubar-geology-join-split"), 17..20),
-        (tr!("ws-menubar-geology-vertices"), 20..25),
-        (tr!("ws-menubar-geology-surface"), 25..28),
+        (tr!("ws-menubar-geology-draw"), 0..8),
+        (tr!("ws-menubar-geology-edit"), 8..18),
+        (tr!("ws-menubar-geology-join-split"), 18..21),
+        (tr!("ws-menubar-geology-vertices"), 21..26),
+        (tr!("ws-menubar-geology-surface"), 26..29),
     ]
 }
 
@@ -651,6 +653,7 @@ impl GeologyRow {
             Self::Thin => tr!("ws-menubar-geology-thin"),
             Self::RemoveLastVertex => tr!("ws-menubar-geology-remove-last-vertex"),
             Self::NextVertex => tr!("ws-menubar-geology-next-vertex"),
+            Self::CopyAlongString => tr!("ws-menubar-geology-copy-along-string"),
         }
     }
 
@@ -667,6 +670,7 @@ impl GeologyRow {
             Self::Thin => UiCommand::OpenThinStringsDialog,
             Self::RemoveLastVertex => UiCommand::RemoveLastStrokeVertex,
             Self::NextVertex => UiCommand::OpenNextVertexPanel,
+            Self::CopyAlongString => UiCommand::ArmCopyAlongString,
         }
     }
 
@@ -687,6 +691,7 @@ impl GeologyRow {
             Self::DrapeAlongTriangles => true,
             Self::RemoveLastVertex => !editor.pending_stroke.is_empty() && !editor.poly_finish_dialog,
             Self::NextVertex => matches!(editor.active_tool, ActiveTool::MakeLine | ActiveTool::MakePoly),
+            Self::CopyAlongString => !editor.poly_finish_dialog,
         }
     }
 }
