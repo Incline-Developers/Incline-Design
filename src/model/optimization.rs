@@ -6,8 +6,9 @@
 //! each block into one value for the optimizer) and reading the result back
 //! are later stages and live elsewhere.
 //!
-//! Scenarios are not project content: they are kept together in one JSON file
-//! beside the application config, see [`crate::app::io::save_optimization_scenarios`].
+//! Scenarios belong to the project: [`ScenarioFile`] is saved in the OMF
+//! project record's `incline:optimization` metadata, so each project keeps
+//! its own. Export and Import move them between projects as JSON.
 //! A scenario names its block model and fields rather than holding ids,
 //! because ids are handed out afresh each session.
 //!
@@ -135,6 +136,53 @@ pub(crate) fn unique_name<'a>(existing: impl IntoIterator<Item = &'a str>, typed
         .map(|number| format!("{typed}_{number}"))
         .find(|candidate| !taken.contains(&candidate.to_lowercase()))
         .expect("an unbounded range always yields a free name")
+}
+
+/// The name of a copy of `name`: `<base><separator><suffix>`, then
+/// `..._2`, `..._3`... when taken, where `base` is `name` without a copy
+/// suffix it already carries - so a copy of a copy counts up (`X copy`,
+/// `X copy_2`, `X copy_3`) rather than growing (`X copy copy`). Built by plain
+/// concatenation: the translated suffix carries no placeable, so no Unicode
+/// isolation marks end up in the name.
+pub(crate) fn copy_name<'a>(existing: impl IntoIterator<Item = &'a str>, name: &str, separator: &str, suffix: &str) -> String {
+    let name = name.trim();
+    let marker = format!("{separator}{suffix}");
+    let base = name
+        .rfind(&marker)
+        .filter(|&at| {
+            let rest = &name[at + marker.len()..];
+            rest.is_empty()
+                || rest
+                    .strip_prefix('_')
+                    .is_some_and(|number| !number.is_empty() && number.chars().all(|digit| digit.is_ascii_digit()))
+        })
+        .map_or(name, |at| &name[..at]);
+    let taken: HashSet<String> = existing.into_iter().map(|name| name.trim().to_lowercase()).collect();
+    let first = format!("{base}{marker}");
+    if !taken.contains(&first.to_lowercase()) {
+        return first;
+    }
+    (2..)
+        .map(|number| format!("{first}_{number}"))
+        .find(|candidate| !taken.contains(&candidate.to_lowercase()))
+        .expect("an unbounded range always yields a free name")
+}
+
+/// Whether a scenario other than `id` already uses `prefix` (trimmed, any
+/// case) to name its shells. Shell names are `<prefix>_RAF 0.85`, so a
+/// unique prefix keeps every scenario's shells apart even if their
+/// collections are removed.
+pub(crate) fn shell_prefix_taken(scenarios: &[OptimizationScenario], id: u64, prefix: &str) -> bool {
+    let prefix = prefix.trim();
+    scenarios
+        .iter()
+        .any(|scenario| scenario.id != id && scenario.output.shell_layer_name.trim().eq_ignore_ascii_case(prefix))
+}
+
+/// `wanted` as a shell name prefix no scenario uses yet: `wanted`, or
+/// `wanted_1`, `wanted_2`...
+pub(crate) fn unique_shell_prefix(scenarios: &[OptimizationScenario], wanted: &str) -> String {
+    unique_name(scenarios.iter().map(|scenario| scenario.output.shell_layer_name.trim()), wanted.trim())
 }
 
 pub(crate) fn group_names(rows: &[ConstantsRow]) -> impl Iterator<Item = &str> {

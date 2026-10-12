@@ -17,7 +17,7 @@ use crate::{
         optimization::{
             AirMode, BlockModelFields, Constant, ConstantValue, ConstantsRow, ElementCost, FactorInput, FieldValue, GradeUnit, HaulageCost, HaulageMode, OptimizationScenario,
             ProcessingMethod, RevenueRow, RocktypeCost, RosetteInterpolation, RosetteIssue, RosetteRow, SalesUnit, ShellDirection, ShellFieldMode, ShellFieldValue, ShellMode,
-            SlopeMode, ValueType, group_names, move_constants_row, parse_factor_list, shell_count_for_step, shell_step_for_count, unique_name,
+            SlopeMode, ValueType, group_names, move_constants_row, parse_factor_list, shell_count_for_step, shell_prefix_taken, shell_step_for_count, unique_name,
         },
     },
     ui::{
@@ -346,6 +346,8 @@ fn model_fields(block_models: &[OpenBlockModel], name: &str) -> BlockModelFields
 }
 
 fn draw_scenario_editor(ui: &mut egui::Ui, state: &mut OptimizationState, block_models: &[OpenBlockModel], project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    // The saved scenarios, for the shell prefix's uniqueness check.
+    let others = state.scenarios.clone();
     let Some(draft) = state.draft.as_mut() else {
         return;
     };
@@ -394,7 +396,7 @@ fn draw_scenario_editor(ui: &mut egui::Ui, state: &mut OptimizationState, block_
                                 ScenarioTab::ProcessingCosts => draw_processing(ui, scenario, &fields, selections),
                                 ScenarioTab::Revenues => draw_revenues(ui, scenario, &fields, selections),
                                 ScenarioTab::Constraints => draw_constraints(ui, scenario, &fields, selections),
-                                ScenarioTab::Outputs => draw_outputs(ui, scenario, &fields, commands),
+                                ScenarioTab::Outputs => draw_outputs(ui, scenario, &fields, &others, commands),
                             }
                         });
                 });
@@ -1471,7 +1473,8 @@ fn draw_constraints(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fiel
 
 // ── Outputs ──
 
-fn draw_outputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: &BlockModelFields, commands: &mut Vec<UiCommand>) {
+fn draw_outputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: &BlockModelFields, others: &[OptimizationScenario], commands: &mut Vec<UiCommand>) {
+    let prefix_taken = shell_prefix_taken(others, scenario.id, &scenario.output.shell_layer_name);
     // The shell value is a category (each shell its own colour), so only text
     // fields are offered, less any the settings use, so a run cannot overwrite one.
     let free: Vec<String> = {
@@ -1674,12 +1677,31 @@ fn draw_outputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: 
             |ui, output| {
                 ui.checkbox(&mut output.shell_as_solid, tr!("opt-shell-solid"));
                 ui.checkbox(&mut output.shell_as_surface, tr!("opt-shell-surface"));
-                ui.add_enabled_ui(output.shell_as_solid || output.shell_as_surface, |ui| {
-                    ui.add(
+            },
+        );
+        // The shells' names start with this, so no two scenarios may share it.
+        let shells = output.shell_as_solid || output.shell_as_surface;
+        form_row_with(
+            ui,
+            &mut *output,
+            |ui, _| {
+                ui.add_enabled(shells, egui::Label::new(tr!("opt-shell-name-prefix")))
+                    .on_hover_text(tr!("opt-shell-name-prefix-hint"));
+            },
+            |ui, output| {
+                ui.add_enabled_ui(shells, |ui| {
+                    let response = ui.add(
                         egui::TextEdit::singleline(&mut output.shell_layer_name)
                             .hint_text(tr!("opt-layer-name"))
-                            .desired_width(180.0),
+                            .desired_width(ui.available_width()),
                     );
+                    let empty = output.shell_layer_name.trim().is_empty();
+                    if shells && (empty || prefix_taken) {
+                        mark_invalid(ui, &response);
+                        response.on_hover_text(if empty { tr!("opt-shell-prefix-empty") } else { tr!("opt-shell-prefix-taken") });
+                    } else {
+                        response.on_hover_text(tr!("opt-shell-name-prefix-hint"));
+                    }
                 });
             },
         );

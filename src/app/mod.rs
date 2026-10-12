@@ -1282,6 +1282,9 @@ impl<'a> App<'a> {
         self.next_raster_texture_id = 0;
         self.project_asset_baseline = SaveToken::default();
         self.clear_editor_transient_state();
+        // Scenarios, runs and results belong to the outgoing project; the next
+        // one's scenarios are read from it when the list first opens.
+        self.editor.optimization = Default::default();
         self.scene_document_key = None;
         // Item and object ids restart with the replacement project, so the
         // renderer's id-keyed caches would otherwise keep drawing this

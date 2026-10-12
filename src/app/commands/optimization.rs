@@ -1,7 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap},
     hash::{Hash, Hasher},
-    io,
     sync::Arc,
 };
 
@@ -19,7 +18,10 @@ use crate::{
         ItemRef, MemberKind, SceneEntityId, SectionKind,
         block_model::{BlockModelId, ColorTransferFunction},
         folders::FolderId,
-        optimization::{AirMode, BlockModelFields, GridIssue, OptimizationScenario, ScenarioFile, unique_name},
+        optimization::{
+            AirMode, BlockModelFields, FactorInput, GridIssue, OptimizationScenario, ScenarioFile, ShellMode, copy_name, format_factor, shell_prefix_taken, unique_name,
+            unique_shell_prefix,
+        },
         optimization_run::{
             self, RunInput, RunOutcome, RunResult, ShellField,
             grid::{BlockLayout, Topography},
@@ -38,22 +40,20 @@ impl<'a> App<'a> {
     /// Show the list. With a scenario open in the editor the list stays behind
     /// it: closing the editor is what asks about unsaved changes.
     ///
-    /// The first time it opens in a session the saved scenarios file is read,
-    /// so scenarios saved earlier are there without asking.
+    /// The first time it opens for a project the project's scenarios are
+    /// read, so scenarios saved with it earlier are there without asking.
     pub(crate) fn open_optimization_scenarios(&mut self) {
         self.ensure_optimization_scenarios_loaded();
         self.editor.optimization.list_open = true;
     }
 
-    /// Read the saved scenarios file once a session, before anything that
-    /// shows or writes it - a write before the read would replace the saved
-    /// scenarios with an empty list.
+    /// Read the project's scenarios once per opened project, before anything
+    /// that shows or writes them - a write before the read would replace the
+    /// saved scenarios with an empty list.
     fn ensure_optimization_scenarios_loaded(&mut self) {
         if !self.editor.optimization.loaded_from_file {
             self.editor.optimization.loaded_from_file = true;
-            if let Err(error) = self.load_saved_optimization_scenarios() {
-                userspace_warn!("{error:#}");
-            }
+            self.load_saved_optimization_scenarios();
         }
     }
 
@@ -65,7 +65,7 @@ impl<'a> App<'a> {
             self.ensure_optimization_scenarios_loaded();
             self.editor.optimization.report_columns.extend(chosen);
         }
-        self.write_optimization_scenarios().map(|_| ())
+        self.write_optimization_scenarios()
     }
 
     /// Start a scenario in the editor. The list steps aside rather than staying
@@ -76,7 +76,10 @@ impl<'a> App<'a> {
             self.editor.optimization.scenarios.iter().map(|scenario| scenario.name.as_str()),
             &tr!("opt-scenario-default-name", number = (self.editor.optimization.scenarios.len() + 1).to_string()),
         );
-        self.editor.optimization.draft = Some(ScenarioDraft::new(OptimizationScenario::new(id, name), true));
+        let mut scenario = OptimizationScenario::new(id, name);
+        // Each scenario names its shells with its own prefix.
+        scenario.output.shell_layer_name = unique_shell_prefix(&self.editor.optimization.scenarios, &scenario.output.shell_layer_name);
+        self.editor.optimization.draft = Some(ScenarioDraft::new(scenario, true));
         self.editor.optimization.list_open = false;
     }
 
@@ -102,11 +105,8 @@ impl<'a> App<'a> {
             Some(existing) => *existing = scenario.clone(),
             None => state.scenarios.push(scenario.clone()),
         }
-        let location = self.write_optimization_scenarios()?;
-        userspace_log!(
-            "{}",
-            tr!("opt-scenarios-saved-to", count = self.editor.optimization.scenarios.len().to_string(), location = location)
-        );
+        self.write_optimization_scenarios()?;
+        userspace_log!("{}", tr!("opt-scenarios-saved-to-project", count = self.editor.optimization.scenarios.len().to_string()));
         let state = &mut self.editor.optimization;
         if then_close {
             state.draft = None;
@@ -122,7 +122,7 @@ impl<'a> App<'a> {
     pub(crate) fn delete_optimization_scenario(&mut self, id: u64) -> Result<()> {
         self.editor.optimization.scenarios.retain(|scenario| scenario.id != id);
         self.editor.optimization.runs.remove(&id);
-        self.write_optimization_scenarios().map(|_| ())
+        self.write_optimization_scenarios()
     }
 
     /// Copy a scenario to a new one right after it. The copy has not been run.
@@ -133,12 +133,41 @@ impl<'a> App<'a> {
         };
         let mut copy = state.scenarios[position].clone();
         copy.id = state.fresh_id();
-        copy.name = unique_name(
-            state.scenarios.iter().map(|scenario| scenario.name.as_str()),
-            &tr!("opt-copy-name", name = copy.name.clone()),
-        );
+        copy.name = scenario_copy_name(&state.scenarios, &copy.name);
+        copy.output.shell_layer_name = copy_prefix(&state.scenarios, &copy.output.shell_layer_name);
         state.scenarios.insert(position + 1, copy);
-        self.write_optimization_scenarios().map(|_| ())
+        self.write_optimization_scenarios()
+    }
+
+    /// Copy a scenario into a new one right after it that runs only `factors`,
+    /// typed in as its revenue factors: the shells picked in the Results
+    /// window. Named `<name> (0.6, 0.85, 1)`, or as a copy of that name if it
+    /// is taken.
+    pub(crate) fn copy_scenario_with_shells(&mut self, id: u64, factors: &[f64]) -> Result<()> {
+        if factors.is_empty() {
+            return Ok(());
+        }
+        let state = &mut self.editor.optimization;
+        let Some(position) = state.scenarios.iter().position(|scenario| scenario.id == id) else {
+            return Ok(());
+        };
+        let mut copy = state.scenarios[position].clone();
+        let listed = factors.iter().map(|factor| format_factor(*factor)).collect::<Vec<_>>().join(", ");
+        let wanted = format!("{} ({listed})", copy.name);
+        let taken = |name: &str| state.scenarios.iter().any(|scenario| scenario.name.eq_ignore_ascii_case(name));
+        copy.name = if taken(&wanted) { scenario_copy_name(&state.scenarios, &wanted) } else { wanted };
+        copy.id = state.fresh_id();
+        copy.output.shell_layer_name = copy_prefix(&state.scenarios, &copy.output.shell_layer_name);
+        copy.output.mode = ShellMode::Multiple;
+        copy.output.factor_input = FactorInput::List;
+        copy.output.factor_list = listed;
+        let name = copy.name.clone();
+        state.scenarios.insert(position + 1, copy);
+        state.list_open = true;
+        let message = tr!("opt-shells-copied", name = name, count = factors.len().to_string());
+        userspace_log!("{message}");
+        self.editor.toasts.push(message);
+        self.write_optimization_scenarios()
     }
 
     pub(crate) fn rename_optimization_scenario(&mut self, id: u64, name: String) -> Result<()> {
@@ -154,30 +183,32 @@ impl<'a> App<'a> {
             }
             _ => return Ok(()),
         }
-        self.write_optimization_scenarios().map(|_| ())
+        self.write_optimization_scenarios()
     }
 
-    /// Read the saved scenarios file into the list. A file that is not there
-    /// yet is not an error: nothing has been saved.
-    fn load_saved_optimization_scenarios(&mut self) -> Result<()> {
-        match crate::app::io::load_optimization_scenarios() {
-            Ok(file) => {
-                let count = file.scenarios.len();
-                self.editor.optimization.scenarios = file.scenarios;
-                self.editor.optimization.report_columns = file.report_columns;
-                userspace_log!("{}", tr!("opt-scenarios-loaded", count = count.to_string()));
-                Ok(())
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(error) => anyhow::bail!("{}", tr!("opt-scenarios-load-failed", error = error.to_string())),
+    /// Read the active project's scenarios into the list.
+    fn load_saved_optimization_scenarios(&mut self) {
+        let Some(project) = self.workspace.active_project() else {
+            return;
+        };
+        let file = project.project.optimization.clone();
+        if !file.scenarios.is_empty() {
+            userspace_log!("{}", tr!("opt-scenarios-loaded", count = file.scenarios.len().to_string()));
         }
+        self.editor.optimization.scenarios = file.scenarios;
+        self.editor.optimization.report_columns = file.report_columns;
     }
 
-    /// Write the scenarios file, and say where it is.
-    fn write_optimization_scenarios(&self) -> Result<String> {
+    /// Hand the scenarios to the active project, which then reads as unsaved
+    /// until the project itself is saved.
+    fn write_optimization_scenarios(&mut self) -> Result<()> {
         let mut file = ScenarioFile::new(self.editor.optimization.scenarios.clone());
         file.report_columns = self.editor.optimization.report_columns.clone();
-        crate::app::io::save_optimization_scenarios(&file).map_err(|error| anyhow::anyhow!("{}", tr!("opt-scenarios-save-failed", error = error.to_string())))
+        let Some(project) = self.workspace.active_project_mut() else {
+            anyhow::bail!("{}", tr!("opt-scenarios-save-failed", error = tr!("opt-scenarios-no-project")));
+        };
+        project.set_optimization(file);
+        Ok(())
     }
 
     /// Ask where to write the scenarios, and write them there.
@@ -234,6 +265,8 @@ impl<'a> App<'a> {
     /// the list does not already use. They have not been run.
     pub(crate) fn merge_imported_optimization_scenarios(&mut self, text: &str) -> Result<()> {
         let file = crate::app::io::parse_optimization_scenarios(text).map_err(|error| anyhow::anyhow!("{}", tr!("opt-scenarios-import-failed", error = error.to_string())))?;
+        // Merged into the project's own list, not into one not read yet.
+        self.ensure_optimization_scenarios_loaded();
         let count = file.scenarios.len();
         let state = &mut self.editor.optimization;
         for mut scenario in file.scenarios {
@@ -601,6 +634,15 @@ impl<'a> App<'a> {
                 return;
             }
         };
+        // Shells are named after the prefix, so it must be the scenario's own.
+        let output = &scenario.output;
+        if (output.shell_as_solid || output.shell_as_surface)
+            && (output.shell_layer_name.trim().is_empty() || shell_prefix_taken(&self.editor.optimization.scenarios, scenario.id, &output.shell_layer_name))
+        {
+            let issue = tr!("opt-run-prefix-taken", prefix = output.shell_layer_name.trim().to_owned());
+            self.fail_optimization_run(id, &scenario.name, &[issue]);
+            return;
+        }
         // A browser downloads the report instead, so needs no folder.
         if cfg!(not(target_arch = "wasm32")) && scenario.output.create_reports && scenario.output.reports_folder.trim().is_empty() {
             self.fail_optimization_run(id, &scenario.name, &[tr!("opt-run-reports-folder-missing")]);
@@ -883,7 +925,7 @@ impl<'a> App<'a> {
             let path = folder.join(report::FILE_NAME);
             let written = std::fs::create_dir_all(&folder)
                 .map_err(anyhow::Error::from)
-                .and_then(|()| crate::model::atomic_file::write_atomic(&path, |file| Ok(io::Write::write_all(file, &bytes)?)));
+                .and_then(|()| crate::model::atomic_file::write_atomic(&path, |file| Ok(std::io::Write::write_all(file, &bytes)?)));
             match written {
                 Ok(()) => userspace_log!("{}", tr!("opt-run-report-written", path = path.display().to_string())),
                 Err(error) => userspace_error!("{}", tr!("opt-run-report-failed", path = path.display().to_string(), error = format!("{error:#}"))),
@@ -921,7 +963,7 @@ impl<'a> App<'a> {
         if path.extension().is_none() {
             path.set_extension("csv");
         }
-        crate::model::atomic_file::write_atomic(&path, |file| Ok(io::Write::write_all(file, &bytes)?))
+        crate::model::atomic_file::write_atomic(&path, |file| Ok(std::io::Write::write_all(file, &bytes)?))
             .map_err(|error| anyhow::anyhow!("{}", tr!("opt-results-export-failed", error = format!("{error:#}"))))?;
         userspace_log!("{}", tr!("opt-results-exported", path = path.display().to_string()));
         Ok(())
@@ -950,6 +992,17 @@ impl<'a> App<'a> {
         self.editor.optimization.results_view = Some(ResultsView::new(ResultsSource::File { name, report: Arc::new(report) }));
         Ok(())
     }
+}
+
+/// A copied scenario's shell prefix: `<prefix>-copy`, numbered if taken.
+fn copy_prefix(scenarios: &[OptimizationScenario], prefix: &str) -> String {
+    copy_name(scenarios.iter().map(|scenario| scenario.output.shell_layer_name.as_str()), prefix, "-", "copy")
+}
+
+/// A copied scenario's name: `<name> copy`, then `<name> copy_2`... (the
+/// word translated); a copy of a copy counts up.
+fn scenario_copy_name(scenarios: &[OptimizationScenario], name: &str) -> String {
+    copy_name(scenarios.iter().map(|scenario| scenario.name.as_str()), name, " ", &tr!("opt-copy-suffix"))
 }
 
 /// A scenario name made safe as a folder or file name: characters no file

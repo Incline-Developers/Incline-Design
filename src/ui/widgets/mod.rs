@@ -11,6 +11,7 @@ pub(crate) mod log_traces;
 pub(crate) mod menu;
 pub(crate) mod progress;
 pub(crate) mod rosette_diagram;
+pub(crate) mod toast;
 pub(crate) mod toolbar;
 pub(crate) mod value_field;
 pub(crate) mod viewport;

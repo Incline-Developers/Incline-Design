@@ -734,6 +734,7 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::SaveOptimizationReportColumns => self.save_optimization_report_columns(),
+            UiCommand::CopyScenarioWithShells { id, factors } => self.copy_scenario_with_shells(id, &factors),
             UiCommand::ConfirmOptimizationLoad(load) => {
                 self.confirm_optimization_load(load);
                 Ok(())

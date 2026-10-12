@@ -1348,6 +1348,7 @@ fn draw_global_dialogs(
         elements::block_model::draw_create_block_model_dialog(root_ui, editor, drill_holes, commands);
     }
     dialogs::optimization::draw_optimization_dialogs(root_ui, editor, block_models, project, commands);
+    widgets::toast::draw_toasts(root_ui.ctx(), &mut editor.toasts);
     if editor.ore_triangulation_open {
         elements::block_model::draw_ore_triangulation_dialog(root_ui, editor, block_models, commands);
     }

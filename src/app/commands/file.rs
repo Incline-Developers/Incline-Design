@@ -2644,6 +2644,8 @@ impl<'a> App<'a> {
         // fresh one decoded from the file, or `preserved_layers`' folder ids
         // would dangle.
         let live_folders = portable_current.folders.clone();
+        // Scenarios are not layers: the reload keeps the live ones too.
+        let live_optimization = portable_current.optimization.clone();
         let preserved_deferred = portable_current.document.deferred_layers.clone();
         let preserved_layers: Vec<LayerSnapshot> = portable_current
             .document
@@ -2678,6 +2680,9 @@ impl<'a> App<'a> {
             // a folder deleted since the last save must stay gone even
             // though the file on disk still names it.
             design.folders = live_folders;
+            let scenarios_json = |file: &crate::model::optimization::ScenarioFile| serde_json::to_string(&(&file.scenarios, &file.report_columns)).unwrap_or_default();
+            let optimization_diverges = scenarios_json(&live_optimization) != scenarios_json(&bundle.optimization.unwrap_or_default());
+            design.optimization = live_optimization;
             let folder_map = reloaded_folder_map(&design.folders, &bundle.folders);
             for imported in bundle.designs {
                 project::merge_document_preserve_ids(&mut design.document, &imported.document, &folder_map);
@@ -2685,7 +2690,7 @@ impl<'a> App<'a> {
             // `open_project` below is about to mark this registry saved. It is
             // the live one, not the file's, so capture whether the two differ
             // while both are still in hand; `apply` re-dirties after the fact.
-            let folders_diverge = folders_diverge_from_file(&design.folders, &bundle.folders);
+            let folders_diverge = folders_diverge_from_file(&design.folders, &bundle.folders) || optimization_diverges;
             Ok((path, design, folders_diverge))
         };
         let apply = move |app: &mut App, result: Result<(PathBuf, project::ProjectFile, bool)>| {
@@ -2710,8 +2715,8 @@ impl<'a> App<'a> {
                     return;
                 }
             };
-            // `open_project` just marked the live folder registry saved. Put
-            // that folder work back into unsaved state so it is not lost
+            // `open_project` just marked the live folder registry and scenarios
+            // saved. Put that work back into unsaved state so it is not lost
             // silently the next time the project closes.
             if folders_diverge {
                 replacement.touch_content();

@@ -85,13 +85,15 @@ pub(crate) struct RunResult {
     pub(crate) report: std::sync::Arc<OptimizationReport>,
 }
 
-/// The name of a shell's triangulation: `<scenario> <layer>_RAF 0.85`, with
-/// ` DIR 50%` after it for a directional shell (its share of the distance).
-pub(crate) fn shell_name(scenario: &str, layer: &str, factor: f64, distance: Option<f64>) -> String {
+/// The name of a shell's triangulation: `<prefix>_RAF 0.85`, with ` DIR 50%`
+/// after it for a directional shell (its share of the distance). The
+/// scenario's name is on the collection the shell goes in, not on the shell.
+pub(crate) fn shell_name(prefix: &str, factor: f64, distance: Option<f64>) -> String {
     let factor = crate::model::optimization::format_factor(factor);
+    let base = if prefix.is_empty() { format!("RAF {factor}") } else { format!("{prefix}_RAF {factor}") };
     match distance {
-        None => format!("{scenario} {layer}_RAF {factor}"),
-        Some(share) => format!("{scenario} {layer}_RAF {factor} DIR {:.0}%", share * 100.0),
+        None => base,
+        Some(share) => format!("{base} DIR {:.0}%", share * 100.0),
     }
 }
 
@@ -147,7 +149,7 @@ pub(crate) fn run(input: RunInput, cancel: &CancelFlag, progress: &Progress) -> 
         .into_par_iter()
         .map(|(shell, solid)| {
             let summary = &shells.summaries[shell - 1];
-            let name = shell_name(&scenario_name, &layer_name, summary.factor, summary.distance);
+            let name = shell_name(&layer_name, summary.factor, summary.distance);
             let (name, mesh) = if solid {
                 (name, mesh::solid(&grid, &shells.label, &values.air, shell as u16))
             } else {

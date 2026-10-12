@@ -1111,6 +1111,8 @@ pub(crate) struct EditorState {
     /// applied by `App::sync_hidden_handles`, so a rebuild keeps it, and
     /// clearing it brings the saved visibility back.
     pub(crate) isolated_entity: Option<SceneEntityId>,
+    /// Short messages fading out above the status bar (`widgets::toast`).
+    pub(crate) toasts: crate::ui::widgets::toast::Toasts,
     /// Entities frozen: still visible, but excluded from editing and snapping.
     ///
     /// Derived: the union of [`Self::explicitly_frozen`] and every design
@@ -2430,6 +2432,7 @@ impl EditorState {
             borehole_inspector_locked: false,
             hidden_handles: HashSet::new(),
             isolated_entity: None,
+            toasts: Default::default(),
             frozen_handles: HashSet::new(),
             explicitly_frozen: HashSet::new(),
             locked_layers: HashSet::new(),
@@ -3660,7 +3663,7 @@ pub(crate) enum UiCommand {
     AddOptimizationScenario,
     /// Open the scenario with this id in the editor, hiding the list.
     EditOptimizationScenario(u64),
-    /// Keep the edited scenario and write the scenarios file. The editor stays
+    /// Keep the edited scenario and hand the scenarios to the project. The editor stays
     /// open unless `then_close`.
     SaveOptimizationScenario {
         scenario: Box<OptimizationScenario>,
@@ -3681,6 +3684,12 @@ pub(crate) enum UiCommand {
     SaveOptimizationReportColumns,
     /// The answer to "load the unloaded inputs?": load them and go on, or not.
     ConfirmOptimizationLoad(bool),
+    /// Copy scenario `id` into a new one beside it that runs just these
+    /// revenue factors, typed in (the Results window's filtered shells).
+    CopyScenarioWithShells {
+        id: u64,
+        factors: Vec<f64>,
+    },
     /// Hide everything but the scenario's block model, show it in plan view
     /// and wait for a click that sets the directional shells' starting point.
     BeginShellStartPick,
@@ -3956,6 +3965,7 @@ impl UiCommand {
             | Self::OpenOptimizationReport
             | Self::SaveOptimizationReportColumns
             | Self::ConfirmOptimizationLoad(_)
+            | Self::CopyScenarioWithShells { .. }
             | Self::BeginShellStartPick
             | Self::RunOptimizationScenario(_)
             | Self::CancelOptimizationScenario(_)
@@ -4689,9 +4699,10 @@ pub(crate) const MAX_CONCURRENT_RUNS: usize = 1;
 
 /// What the Optimization workspace holds while the app runs.
 ///
-/// The scenarios are loaded from, and saved to, one JSON file, read the first
-/// time the list is opened. Runs are not saved: what
-/// a run produced is gone with the session.
+/// A working copy of the active project's scenarios, read from it the first
+/// time the list is opened and handed back on every change; reset when another
+/// project opens. Runs are not saved: what a run produced is gone with the
+/// session.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct OptimizationState {
     pub(crate) scenarios: Vec<OptimizationScenario>,
@@ -4705,8 +4716,8 @@ pub(crate) struct OptimizationState {
     pub(crate) awaiting_restore: HashSet<u64>,
     /// What each scenario's last run produced, for stage 3 to read back.
     pub(crate) results: HashMap<u64, std::sync::Arc<crate::model::optimization_run::RunResult>>,
-    /// The saved scenarios file has been read this session. It is read the
-    /// first time the list opens.
+    /// The project's scenarios have been read into `scenarios`. They are read
+    /// the first time the list opens.
     pub(crate) loaded_from_file: bool,
     /// Set while the user is clicking the starting point of a directional
     /// shell in the viewport. The editor steps aside meanwhile.

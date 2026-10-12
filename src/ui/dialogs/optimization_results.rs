@@ -13,7 +13,7 @@ use crate::{
         plot::format_quantity,
     },
     ui::{
-        state::{OptimizationState, ShellFilter, UiCommand},
+        state::{OptimizationState, ResultsSource, ShellFilter, UiCommand},
         themed_icon,
         widgets::{
             bar_line_chart::{BarLineChart, BarSeries, LineSeries},
@@ -43,6 +43,7 @@ pub(crate) fn draw_results_window(ui: &mut egui::Ui, state: &mut OptimizationSta
     let Some(view) = state.results_view.as_ref() else {
         return;
     };
+    let source = view.source.clone();
     let report = state.results_report();
     let mut open = true;
     let mut close = false;
@@ -61,7 +62,13 @@ pub(crate) fn draw_results_window(ui: &mut egui::Ui, state: &mut OptimizationSta
                 Some((_, report)) => {
                     let columns = catalogue(report);
                     let mut shown = shown_columns(report, &columns, state.report_columns.get(&report.scenario));
-                    if draw_controls(ui, report, &mut basis, &mut destination, &mut filter, &columns, &mut shown) {
+                    // The scenario a copy is made from: the run's, or the one a
+                    // report file names, if it is still in the list.
+                    let copy_to = match &source {
+                        ResultsSource::Run(id) => Some(*id),
+                        ResultsSource::File { .. } => state.scenarios.iter().find(|scenario| scenario.name == report.scenario).map(|scenario| scenario.id),
+                    };
+                    if draw_controls(ui, report, &mut basis, &mut destination, &mut filter, &columns, &mut shown, copy_to, commands) {
                         state.report_columns.insert(report.scenario.clone(), shown.iter().map(|column| column.id(report)).collect());
                         commands.push(UiCommand::SaveOptimizationReportColumns);
                     }
@@ -142,8 +149,10 @@ fn destination_label(report: &OptimizationReport, destination: usize) -> String 
     if destination == 0 && name == WASTE { tr!("opt-results-waste") } else { name.clone() }
 }
 
-/// Basis, destination, the shell filter and the table's column chooser.
-/// Returns whether the columns changed.
+/// Basis, destination, the shell filter (and, with it on, the copy into a
+/// new scenario) and the table's column chooser. Returns whether the columns
+/// changed.
+#[allow(clippy::too_many_arguments, reason = "one row of the window's controls, each bound to its own piece of view state")]
 fn draw_controls(
     ui: &mut egui::Ui,
     report: &OptimizationReport,
@@ -152,6 +161,8 @@ fn draw_controls(
     filter: &mut ShellFilter,
     columns: &[Column],
     shown: &mut Vec<Column>,
+    copy_to: Option<u64>,
+    commands: &mut Vec<UiCommand>,
 ) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
@@ -209,6 +220,20 @@ fn draw_controls(
                     ShellFilter::Off => ShellFilter::Choosing(Vec::new()),
                     _ => ShellFilter::Off,
                 };
+            }
+            // With shells filtered: copy the scenario with just those shells,
+            // typed in as its revenue factors. Only for a scenario in the list
+            // (a report opened from a file whose scenario is gone has none).
+            if let ShellFilter::Applied(shells) = filter {
+                let copy = ToolbarButton::new(egui::Image::new(themed_icon!(ui, "copy_shells_scenario.svg")), tr!("opt-results-copy-shells"))
+                    .id_salt("opt_results_copy_shells")
+                    .button_side(ICON_SIDE);
+                if ui.add_enabled_ui(copy_to.is_some(), |ui| ui.add(copy)).inner.clicked()
+                    && let Some(id) = copy_to
+                {
+                    let factors = shells.iter().filter_map(|&shell| report.shells.get(shell)).map(|shell| shell.factor).collect();
+                    commands.push(UiCommand::CopyScenarioWithShells { id, factors });
+                }
             }
         });
     });
