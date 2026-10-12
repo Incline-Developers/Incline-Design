@@ -401,31 +401,8 @@ impl<'a> Graphics<'a> {
         // Animate's haul flows move every frame while shown, and clear once
         // when they stop.
         // Drill and blast's blasts are drawn with them, at the shown hour.
-        let blasts = editor
-            .is_schedule_animation()
-            .then(|| editor.schedule_result.as_ref().and_then(|schedule| schedule.drill_blast.as_ref()))
-            .flatten()
-            .map(|result| (result, editor.schedule_animation_shown_h, editor.schedule_animation_blasts.as_slice()));
-        if !editor.animation_flows.is_empty() || blasts.is_some() || !self.flow_strokes.is_empty() {
-            let view_proj = self.view_proj();
-            self.flow_underlay = rebuild_flow_scene(FlowSceneBuildInput {
-                blasts,
-                flows: &editor.animation_flows,
-                flow_strokes: &mut self.flow_strokes,
-                view_proj,
-                scene_origin: self.scene_origin,
-                scale_factor,
-                time_s: self.flow_clock.elapsed().as_secs_f64(),
-            });
-            Self::upload_instance_stream(
-                &self.device,
-                &self.queue,
-                &mut self.flow_stroke_gpu,
-                &mut self.flow_stroke_capacity,
-                &mut self.flow_strokes,
-                "Haul Flow Stroke Buffer",
-            );
-        }
+        let time_s = self.flow_clock.elapsed().as_secs_f64();
+        self.upload_flow_scene(editor, scale_factor, time_s);
 
         // Animate's machines: each drawn as its model where it is close
         // enough to read, and otherwise as an icon the UI paints, held on the
@@ -631,10 +608,6 @@ impl<'a> Graphics<'a> {
             [camera_up.x as f32, camera_up.y as f32, camera_up.z as f32],
             world_per_physical_pixel,
         );
-        // The video export's frame: the viewport as just drawn, egui and all,
-        // copied before the canvas rect moves on to next frame's layout.
-        #[cfg(not(target_arch = "wasm32"))]
-        let video_capture = self.encode_video_capture(&mut encoder, &output.texture);
         // Apply this frame's egui layout for next frame's scene pass - the
         // scene renders before egui lays out, so it's always one frame behind
         // (see `apply_canvas_rect`).
@@ -673,13 +646,42 @@ impl<'a> Graphics<'a> {
         if let Some(capture) = pending_screenshot {
             self.finish_screenshot_capture(capture);
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(capture) = video_capture {
-            self.finish_video_capture(capture);
-        }
         self.frame_index = self.frame_index.wrapping_add(1);
         self.release_retired_attachments();
 
         Ok(ui_output)
+    }
+}
+
+impl Graphics<'_> {
+    /// Rebuild and upload Animate's haul flows and blast marks for the
+    /// editor's current projections, `time_s` setting where the stripes have
+    /// flowed to. Shared by the window's frame and the video export's.
+    pub(super) fn upload_flow_scene(&mut self, editor: &EditorState, scale_factor: f32, time_s: f64) {
+        let blasts = editor
+            .is_schedule_animation()
+            .then(|| editor.schedule_result.as_ref().and_then(|schedule| schedule.drill_blast.as_ref()))
+            .flatten()
+            .map(|result| (result, editor.schedule_animation_shown_h, editor.schedule_animation_blasts.as_slice()));
+        if !editor.animation_flows.is_empty() || blasts.is_some() || !self.flow_strokes.is_empty() {
+            let view_proj = self.view_proj();
+            self.flow_underlay = rebuild_flow_scene(FlowSceneBuildInput {
+                blasts,
+                flows: &editor.animation_flows,
+                flow_strokes: &mut self.flow_strokes,
+                view_proj,
+                scene_origin: self.scene_origin,
+                scale_factor,
+                time_s,
+            });
+            Self::upload_instance_stream(
+                &self.device,
+                &self.queue,
+                &mut self.flow_stroke_gpu,
+                &mut self.flow_stroke_capacity,
+                &mut self.flow_strokes,
+                "Haul Flow Stroke Buffer",
+            );
+        }
     }
 }

@@ -30,9 +30,13 @@ use crate::{
 
 const DEFAULT_FPS: f64 = 30.0;
 /// The sizes offered, as whole factors the viewport is shrunk by.
-const SCALES: [u32; 4] = [1, 2, 3, 4];
-/// The widest the size opens at.
-const DEFAULT_MAX_WIDTH: u32 = 1920;
+/// The sizes offered by name, (width, height, label); the viewport's own is
+/// offered beside them.
+const PRESETS: [(u32, u32, &str); 4] = [(1280, 720, "720p"), (1920, 1080, "1080p"), (2560, 1440, "1440p"), (3840, 2160, "4K")];
+/// The size a new recording opens at: 1080p.
+const DEFAULT_SIZE: (u32, u32) = (1920, 1080);
+/// The largest side the size fields take; AV1's own limit is far above it.
+const MAX_SIDE: u32 = 7680;
 const MAX_FPS: f64 = 240.0;
 /// The list's height before it scrolls.
 const LIST_HEIGHT: f32 = 260.0;
@@ -66,8 +70,9 @@ pub(crate) struct VideoExportDialog {
     /// The video's length as typed, `mm:ss`.
     duration: String,
     fps: f64,
-    /// The whole factor the viewport is shrunk by.
-    scale: u32,
+    /// The video's size in pixels, rounded to even when recorded.
+    width: u32,
+    height: u32,
 }
 
 impl VideoExportDialog {
@@ -86,7 +91,8 @@ impl VideoExportDialog {
             seconds: editor.schedule_animation_play_seconds,
             duration: String::new(),
             fps: DEFAULT_FPS,
-            scale: 0,
+            width: DEFAULT_SIZE.0,
+            height: DEFAULT_SIZE.1,
         };
         let segments = dialog.segments(horizon).unwrap_or_default();
         dialog.duration = duration_text(dialog.playback_seconds(&segments));
@@ -167,6 +173,9 @@ pub(crate) fn draw_video_export_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
     }
     if !editor.is_schedule_animation() || editor.video_export_progress.is_some() {
         editor.video_export_dialog = None;
+        if editor.video_export_progress.is_none() {
+            editor.video_export_frame = None;
+        }
         return;
     }
     let horizon = editor.schedule_animation_horizon_h.max(0.0);
@@ -250,39 +259,39 @@ pub(crate) fn draw_video_export_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
                     egui::DragValue::new(&mut dialog.fps).range(1.0..=MAX_FPS).speed(0.1).max_decimals(3).suffix(" fps"),
                 )
             });
-            // Opened at the largest size no wider than full HD: a 4K
-            // viewport encodes four times slower for little a viewer sees.
-            if dialog.scale == 0 {
-                dialog.scale = SCALES.into_iter().find(|scale| size.0 / scale <= DEFAULT_MAX_WIDTH).unwrap_or(SCALES[SCALES.len() - 1]);
-            }
-            let scaled = |scale: u32| ((size.0 / scale) & !1, (size.1 / scale) & !1);
-            let current = scaled(dialog.scale);
-            let current_text = tr!(
-                "video-export-size-option",
-                percent = (100 / dialog.scale).to_string(),
-                width = current.0.to_string(),
-                height = current.1.to_string()
-            );
-            menu::MenuFieldCombo::new(
-                "video_export_scale",
-                tr!("video-export-size"),
-                &mut dialog.scale,
-                current_text,
-                SCALES.into_iter().map(|scale| {
-                    let (width, height) = scaled(scale);
+            // A named size, the viewport's own, or whatever is typed below.
+            let named = PRESETS
+                .iter()
+                .map(|&(width, height, label)| {
                     (
-                        scale,
-                        tr!(
-                            "video-export-size-option",
-                            percent = (100 / scale).to_string(),
-                            width = width.to_string(),
-                            height = height.to_string()
-                        )
-                        .into(),
+                        (width, height),
+                        tr!("video-export-size-named", name = label, width = width.to_string(), height = height.to_string()),
                     )
-                }),
+                })
+                .chain(std::iter::once((
+                    size,
+                    tr!("video-export-size-viewport", width = size.0.to_string(), height = size.1.to_string()),
+                )));
+            let options: Vec<((u32, u32), String)> = named.collect();
+            let mut chosen = (dialog.width, dialog.height);
+            let selected = options
+                .iter()
+                .find(|(option, _)| *option == chosen)
+                .map_or_else(|| tr!("video-export-size-custom"), |(_, label)| label.clone());
+            menu::MenuFieldCombo::new(
+                "video_export_size",
+                tr!("video-export-size"),
+                &mut chosen,
+                selected,
+                options.into_iter().map(|(option, label)| (option, label.into())),
             )
+            .help_text(tr!("video-export-size-help"))
             .show(ui);
+            (dialog.width, dialog.height) = chosen;
+            menu::MenuFieldU32::new(tr!("video-export-width"), &mut dialog.width, 16..=MAX_SIDE).suffix(" px").show(ui);
+            menu::MenuFieldU32::new(tr!("video-export-height"), &mut dialog.height, 16..=MAX_SIDE)
+                .suffix(" px")
+                .show(ui);
 
             let request = segments.as_ref().filter(|segments| !segments.is_empty()).and_then(|segments| {
                 let hours_per_second = dialog.hours_per_second(segments)?;
@@ -290,7 +299,8 @@ pub(crate) fn draw_video_export_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
                     segments: segments.clone(),
                     hours_per_second,
                     fps: dialog.fps,
-                    scale: dialog.scale.max(1),
+                    width: dialog.width,
+                    height: dialog.height,
                 })
             });
             let summary = match &request {
@@ -316,8 +326,11 @@ pub(crate) fn draw_video_export_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
                 }
             });
         });
+    // The viewport marks what the video will frame while the dialog is open.
+    editor.video_export_frame = editor.video_export_dialog.as_ref().map(|dialog| (dialog.width, dialog.height));
     if close || !open {
         editor.video_export_dialog = None;
+        editor.video_export_frame = None;
     }
 }
 

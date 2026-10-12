@@ -518,17 +518,10 @@ pub(crate) struct Graphics<'a> {
     /// Destination for a one-shot viewport image export; consumed by the next
     /// `render` call (see `screenshot.rs`).
     pub(super) pending_screenshot: Option<screenshot::ScreenshotTarget>,
-    /// Whether the window's surface can be copied from, which the video
-    /// export needs; see `video_capture.rs`.
+    /// The video export's offscreen target and the frames it has in flight;
+    /// see `video_capture.rs`.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(super) surface_copyable: bool,
-    /// The video export's frame size, asked for by the next `render`.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(super) pending_video_frame: Option<(u32, u32)>,
-    /// The frame that render copied back: `None` inside when the viewport
-    /// no longer had the size asked for.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(super) video_frame: Option<Option<Vec<u8>>>,
+    pub(super) video_target: Option<video_capture::VideoTarget>,
 }
 
 impl Graphics<'_> {

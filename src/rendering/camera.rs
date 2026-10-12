@@ -193,6 +193,20 @@ impl Projection {
         self.aspect = width.max(1) as f64 / height.max(1) as f64;
     }
 
+    /// This projection reshaped for a `width` x `height` target, framing the
+    /// largest centred part of what it framed that has the target's shape:
+    /// the same height where the target is no wider, the same width where it
+    /// is wider. The video export frames its picture this way.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn cropped_to(&self, width: u32, height: u32) -> Self {
+        let mut cropped = self.clone();
+        cropped.resize(width, height);
+        let shrink = (self.aspect / cropped.aspect).min(1.0);
+        cropped.zoom *= shrink;
+        cropped.perspective_fov_y = 2.0 * ((self.perspective_fov_y * 0.5).tan() * shrink).atan();
+        cropped
+    }
+
     pub(crate) fn set_symmetric_depth_extent(&mut self, half_depth: f64) {
         let half_depth = half_depth.max(1.0);
         self.znear = -half_depth;

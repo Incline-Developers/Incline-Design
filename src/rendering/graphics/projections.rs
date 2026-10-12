@@ -507,7 +507,7 @@ impl<'a> Graphics<'a> {
     /// Animate's flows at the shown instant: every delivery under way adds
     /// its tonnes per hour to each road segment of its loaded route, so a road
     /// shared by several blocks carries their sum, drawn once.
-    fn project_haul_flows(&self, editor: &mut EditorState) {
+    pub(super) fn project_haul_flows(&self, editor: &mut EditorState) {
         let mut flows = std::mem::take(&mut editor.animation_flows);
         flows.clear();
         if editor.is_schedule_animation()

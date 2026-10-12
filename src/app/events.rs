@@ -316,6 +316,26 @@ impl<'a> App<'a> {
                             project: &project,
                         }) {
                             Ok(ui_output) => {
+                                // The video export's frame, drawn from the
+                                // geometry this frame just uploaded.
+                                #[cfg(not(target_arch = "wasm32"))]
+                                if let Some((size, clock_s)) = self.video_recording.as_mut().and_then(|recording| recording.take_render_request()) {
+                                    graphics.render_video_frame(crate::rendering::graphics::video_capture::VideoFrameInput {
+                                        editor: &mut self.editor,
+                                        document: &self.scene_document,
+                                        triangulations: drawn.0,
+                                        block_models: &self.block_models,
+                                        drill_holes: &self.drill_holes,
+                                        point_clouds: &self.point_clouds,
+                                        rasters: &self.raster_textures,
+                                        project: &project,
+                                        size,
+                                        clock_s,
+                                    });
+                                    if let Some(next) = self.video_recording.as_ref().and_then(|recording| recording.upcoming_time()) {
+                                        self.editor.schedule_time_h = next;
+                                    }
+                                }
                                 if self.surface_retry_pending {
                                     log::info!("Main render surface recovered");
                                 }
@@ -335,7 +355,7 @@ impl<'a> App<'a> {
                                 }
                                 self.set_ui_pointer_gesture_active(ui_output.pointer_gesture_active);
                                 #[cfg(not(target_arch = "wasm32"))]
-                                self.collect_video_frame();
+                                self.collect_video_frames();
                                 self.handle_ui_commands(ui_output.commands);
                                 self.sync_slice_preview_window(event_loop);
                                 if let Some(graphics) = self.graphics.as_mut() {

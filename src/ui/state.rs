@@ -3104,6 +3104,9 @@ pub(crate) struct EditorState {
     /// A recording's frames captured and to capture, mirrored from the app
     /// while one runs; the timeline shows it in place of playback.
     pub(crate) video_export_progress: Option<(usize, usize)>,
+    /// The video's size while the Record Video dialog is open or a video
+    /// records: the viewport marks the part of the view it frames.
+    pub(crate) video_export_frame: Option<(u32, u32)>,
     /// How Animate draws each drill and blast blast, by its position in the
     /// run's blasts: the ground its marks lie on.
     pub(crate) schedule_animation_blasts: Vec<crate::model::schedule::animation::AnimatedBlast>,
@@ -4426,6 +4429,7 @@ impl EditorState {
             schedule_animation_play_clock: None,
             video_export_dialog: None,
             video_export_progress: None,
+            video_export_frame: None,
             schedule_animation_blasts: Vec::new(),
             schedule_animation_horizon_h: 0.0,
             schedule_animation_enabled: false,
@@ -6674,8 +6678,9 @@ pub(crate) struct VideoExportRequest {
     /// Hours of schedule per second of video.
     pub(crate) hours_per_second: f64,
     pub(crate) fps: f64,
-    /// The video is the viewport shrunk by this whole factor: 1 is full size.
-    pub(crate) scale: u32,
+    /// The video's size in pixels.
+    pub(crate) width: u32,
+    pub(crate) height: u32,
 }
 
 impl VideoExportRequest {

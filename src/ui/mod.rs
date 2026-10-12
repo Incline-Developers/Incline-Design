@@ -151,6 +151,18 @@ impl Gui {
         }
     }
 
+    /// Points to physical pixels in the window, as the last frame drew.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn pixels_per_point(&self) -> f32 {
+        self.ctx.pixels_per_point()
+    }
+
+    /// The window's look, for another surface that has to match it.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn visuals(&self) -> egui::Visuals {
+        self.ctx.global_style().visuals.clone()
+    }
+
     pub(crate) fn register_native_texture(&mut self, device: &wgpu::Device, view: &wgpu::TextureView) -> egui::TextureId {
         self.renderer.register_native_texture(device, view, wgpu::FilterMode::Linear)
     }
@@ -314,6 +326,94 @@ impl Gui {
             commands,
             canvas_rect,
             pointer_gesture_active,
+        }
+    }
+}
+
+/// What the video export paints over each frame it renders: the destination
+/// labels, the machine icons and the haul flows' key - the parts of
+/// Animate's picture the viewport draws through egui rather than the scene
+/// renderer. Its own context and renderer, so the window's frame is
+/// untouched by it and its font atlas never collides with the window's.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct VideoOverlay {
+    ctx: egui::Context,
+    renderer: egui_wgpu::Renderer,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl VideoOverlay {
+    pub(crate) fn new(device: &wgpu::Device, format: wgpu::TextureFormat, visuals: egui::Visuals) -> Self {
+        let ctx = egui::Context::default();
+        setup_custom_fonts(&ctx);
+        ctx.set_visuals(visuals);
+        Self {
+            ctx,
+            renderer: egui_wgpu::Renderer::new(device, format, egui_wgpu::RendererOptions::default()),
+        }
+    }
+
+    /// Paint over `target`, `size` physical pixels, at `pixels_per_point`.
+    /// The editor's projections (icons, pins, flows) must already be in this
+    /// target's pixels.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn paint(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        size: [u32; 2],
+        pixels_per_point: f32,
+        editor: &EditorState,
+        document: &Document,
+        project: &UiProjectView,
+    ) {
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size[0] as f32, size[1] as f32) / pixels_per_point);
+        let mut raw_input = egui::RawInput {
+            screen_rect: Some(rect),
+            ..Default::default()
+        };
+        raw_input.viewports.entry(egui::ViewportId::ROOT).or_default().native_pixels_per_point = Some(pixels_per_point);
+        let output = self.ctx.run_ui(raw_input, |ui| {
+            draw_haul_pin_labels(ui, editor, project, document, rect);
+            draw_machine_icons(ui, editor, rect);
+            draw_haul_flows(ui, editor, rect);
+        });
+        for (id, deltas) in &output.textures_delta.set {
+            for delta in deltas {
+                self.renderer.update_texture(device, queue, *id, delta);
+            }
+        }
+        let jobs = self.ctx.tessellate(output.shapes, output.pixels_per_point);
+        let screen = ScreenDescriptor {
+            size_in_pixels: size,
+            pixels_per_point: output.pixels_per_point,
+        };
+        for buffer in self.renderer.update_buffers(device, queue, encoder, &jobs, &screen) {
+            queue.submit(std::iter::once(buffer));
+        }
+        {
+            let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Video overlay pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            self.renderer.render(&mut pass.forget_lifetime(), &jobs, &screen);
+        }
+        for id in &output.textures_delta.free {
+            self.renderer.free_texture(id);
         }
     }
 }
@@ -1251,51 +1351,15 @@ fn draw_ui(
             painter.galley(rect.min + egui::vec2(6.0, 4.0), galley, root_ui.visuals().text_color());
         }
     }
-    let scale = root_ui.ctx().pixels_per_point();
-    // Destination points: the name, and what trucks do there, on a pill
-    // that stays legible over pale ground. Zoomed out, a label that would
-    // land on one already drawn gives way rather than stacking illegibly.
-    let mut placed: Vec<egui::Rect> = Vec::new();
-    for ((x, y), role) in &editor.haul_pins {
-        use crate::model::{haulage::NodeRole, schedule::DestinationKind};
-        let (name, kind) = match role.destination() {
-            crate::model::schedule::DestinationId::Standalone(id) => project.schedule.routing().standalone(id).map(|d| (d.name.clone(), Some(d.kind))),
-            crate::model::schedule::DestinationId::Solid(id) => document.solid(id).map(|d| (d.name.clone(), DestinationKind::of_solid(d.kind))),
-        }
-        .unwrap_or_else(|| (tr!("destination-unresolved"), None));
-        // What the destination is; and for a stockpile dumped at one point
-        // and reclaimed at another, which point this is.
-        let what = match (kind, role) {
-            (Some(DestinationKind::Stockpile), NodeRole::Dump(_)) => tr!("haul-pin-stockpile-dump"),
-            (Some(DestinationKind::Stockpile), NodeRole::Reclaim(_)) => tr!("haul-pin-stockpile-reclaim"),
-            (Some(kind), _) => kind.label(),
-            (None, _) => String::new(),
-        };
-        let painter = root_ui.painter().with_clip_rect(canvas_rect);
-        let visuals = root_ui.visuals();
-        let mut job = egui::text::LayoutJob::default();
-        job.append(&name, 0.0, egui::TextFormat::simple(egui::FontId::proportional(12.0), visuals.strong_text_color()));
-        job.append(&what, 6.0, egui::TextFormat::simple(egui::FontId::proportional(11.0), visuals.weak_text_color()));
-        let galley = painter.layout_job(job);
-        let anchor = egui::pos2(x / scale, y / scale);
-        let rect = egui::Rect::from_min_size(anchor + egui::vec2(10.0, -galley.size().y - 14.0), galley.size() + egui::vec2(12.0, 6.0));
-        if placed.iter().any(|other| other.intersects(rect)) {
-            continue;
-        }
-        placed.push(rect);
-        painter.line_segment([anchor, rect.left_bottom()], egui::Stroke::new(1.0, visuals.weak_text_color()));
-        painter.rect(
-            rect,
-            widgets::toolbar::GROUP_CORNER_RADIUS,
-            visuals.window_fill().gamma_multiply(0.92),
-            visuals.window_stroke(),
-            egui::StrokeKind::Inside,
-        );
-        painter.galley(rect.min + egui::vec2(6.0, 3.0), galley, visuals.text_color());
-    }
+    draw_haul_pin_labels(root_ui, editor, project, document, canvas_rect);
     // Under the flows' read-out, which is what the pointer is asking for.
     draw_machine_icons(root_ui, editor, canvas_rect);
     draw_haul_flows(root_ui, editor, canvas_rect);
+    if editor.is_schedule_animation()
+        && let Some(frame) = editor.video_export_frame
+    {
+        draw_video_frame_marker(root_ui, frame, canvas_rect);
+    }
     // --- Canvas overlays ---
 
     // Orbit marker (clipped to the 3D viewport)
@@ -1798,6 +1862,82 @@ fn theme_visuals(dark_mode: bool, selection_color: egui::Color32) -> egui::Visua
 /// that piece of road, so where the haulage concentrates reads at a glance.
 /// Animate's machines too far off to draw as models: a badge each, on the
 /// block or blast it works. Machines sharing one stand side by side.
+/// The part of the viewport a video of `width` x `height` frames: the largest
+/// centred rect of its shape. The rest is dimmed, so the shot can be set up
+/// before recording and watched while it records.
+fn draw_video_frame_marker(ui: &egui::Ui, (width, height): (u32, u32), canvas_rect: egui::Rect) {
+    let aspect = width.max(1) as f32 / height.max(1) as f32;
+    let size = if canvas_rect.aspect_ratio() > aspect {
+        egui::vec2(canvas_rect.height() * aspect, canvas_rect.height())
+    } else {
+        egui::vec2(canvas_rect.width(), canvas_rect.width() / aspect)
+    };
+    let frame = egui::Rect::from_center_size(canvas_rect.center(), size);
+    let painter = ui.painter().with_clip_rect(canvas_rect);
+    let shade = egui::Color32::from_black_alpha(110);
+    for outside in [
+        egui::Rect::from_min_max(canvas_rect.min, egui::pos2(frame.left(), canvas_rect.bottom())),
+        egui::Rect::from_min_max(egui::pos2(frame.right(), canvas_rect.top()), canvas_rect.max),
+        egui::Rect::from_min_max(egui::pos2(frame.left(), canvas_rect.top()), egui::pos2(frame.right(), frame.top())),
+        egui::Rect::from_min_max(egui::pos2(frame.left(), frame.bottom()), egui::pos2(frame.right(), canvas_rect.bottom())),
+    ] {
+        if outside.is_positive() {
+            painter.rect_filled(outside, 0.0, shade);
+        }
+    }
+    painter.rect_stroke(
+        frame.shrink(1.0),
+        0.0,
+        egui::Stroke::new(1.5, egui::Color32::from_white_alpha(200)),
+        egui::StrokeKind::Inside,
+    );
+}
+
+/// Destination points: the name, and what trucks do there, on a pill that
+/// stays legible over pale ground. Zoomed out, a label that would land on one
+/// already drawn gives way rather than stacking illegibly.
+fn draw_haul_pin_labels(ui: &egui::Ui, editor: &EditorState, project: &UiProjectView, document: &Document, canvas_rect: egui::Rect) {
+    let scale = ui.ctx().pixels_per_point();
+    let mut placed: Vec<egui::Rect> = Vec::new();
+    for ((x, y), role) in &editor.haul_pins {
+        use crate::model::{haulage::NodeRole, schedule::DestinationKind};
+        let (name, kind) = match role.destination() {
+            crate::model::schedule::DestinationId::Standalone(id) => project.schedule.routing().standalone(id).map(|d| (d.name.clone(), Some(d.kind))),
+            crate::model::schedule::DestinationId::Solid(id) => document.solid(id).map(|d| (d.name.clone(), DestinationKind::of_solid(d.kind))),
+        }
+        .unwrap_or_else(|| (tr!("destination-unresolved"), None));
+        // What the destination is; and for a stockpile dumped at one point
+        // and reclaimed at another, which point this is.
+        let what = match (kind, role) {
+            (Some(DestinationKind::Stockpile), NodeRole::Dump(_)) => tr!("haul-pin-stockpile-dump"),
+            (Some(DestinationKind::Stockpile), NodeRole::Reclaim(_)) => tr!("haul-pin-stockpile-reclaim"),
+            (Some(kind), _) => kind.label(),
+            (None, _) => String::new(),
+        };
+        let painter = ui.painter().with_clip_rect(canvas_rect);
+        let visuals = ui.visuals();
+        let mut job = egui::text::LayoutJob::default();
+        job.append(&name, 0.0, egui::TextFormat::simple(egui::FontId::proportional(12.0), visuals.strong_text_color()));
+        job.append(&what, 6.0, egui::TextFormat::simple(egui::FontId::proportional(11.0), visuals.weak_text_color()));
+        let galley = painter.layout_job(job);
+        let anchor = egui::pos2(x / scale, y / scale);
+        let rect = egui::Rect::from_min_size(anchor + egui::vec2(10.0, -galley.size().y - 14.0), galley.size() + egui::vec2(12.0, 6.0));
+        if placed.iter().any(|other| other.intersects(rect)) {
+            continue;
+        }
+        placed.push(rect);
+        painter.line_segment([anchor, rect.left_bottom()], egui::Stroke::new(1.0, visuals.weak_text_color()));
+        painter.rect(
+            rect,
+            widgets::toolbar::GROUP_CORNER_RADIUS,
+            visuals.window_fill().gamma_multiply(0.92),
+            visuals.window_stroke(),
+            egui::StrokeKind::Inside,
+        );
+        painter.galley(rect.min + egui::vec2(6.0, 3.0), galley, visuals.text_color());
+    }
+}
+
 fn draw_machine_icons(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect) {
     use crate::rendering::machines::MachineIcon;
     const HEIGHT: f32 = 30.0;

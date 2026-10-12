@@ -1,12 +1,13 @@
-//! Animate's video export: the schedule played through the viewport, frame by
-//! frame, into a video file.
+//! Animate's video export: the schedule played through, frame by frame, into
+//! a video file.
 //!
 //! Recording does not run in real time. Each frame moves the schedule's time
-//! slider to the next instant, waits until Animate has cut the ground, placed
-//! the machines and drawn them for exactly that instant, and only then copies
-//! the finished viewport - the scene and the labels and icons drawn over it -
-//! back from the GPU. The pixels go to an encoder running as a background
-//! job, so a slow encode holds the recording back rather than the window.
+//! slider to the next instant and waits until Animate has cut the ground and
+//! placed the machines for exactly that instant. The window's own frame then
+//! uploads that geometry, and right after it the video's frame is drawn
+//! offscreen at the video's size from the viewport's camera (see
+//! `rendering/graphics/video_capture.rs`). Its pixels arrive a frame or two
+//! later and go to an encoder running as a background job.
 
 mod encode;
 #[cfg(feature = "video-av1")]
@@ -21,24 +22,46 @@ pub(crate) use encode::VideoFormat;
 use super::{App, jobs::JobKey};
 use crate::{i18n::tr, ui::state::VideoExportRequest, userspace_log, userspace_warn};
 
-/// Frames queued for the encoder before capture waits for it.
-const QUEUED_FRAMES: usize = 3;
+/// Frames queued for the encoder before collecting them waits for it.
+const QUEUED_FRAMES: usize = 4;
 
 /// A recording in progress.
 pub(crate) struct Recording {
     /// The schedule instant of every frame, in hours.
     times: Vec<f64>,
-    /// The next frame to capture.
+    /// The next frame to render.
     next: usize,
-    /// The viewport region copied back each frame, in physical pixels.
+    /// Frames whose pixels have reached the encoder.
+    collected: usize,
     width: u32,
     height: u32,
+    fps: f64,
     /// Frames to the encoder; dropped to tell it the last has been sent.
     frames: mpsc::SyncSender<Vec<u8>>,
-    /// Whether this frame's render was asked to copy the viewport back.
-    capture_requested: bool,
+    /// Whether Animate shows the next frame's instant, so the video frame is
+    /// drawn after this frame's window render.
+    render_requested: bool,
     /// Where the slider was, to put it back afterwards.
     restore_time_h: f64,
+}
+
+impl Recording {
+    /// The frame to draw after this window frame, if one is due: its size
+    /// and its time into the video in seconds.
+    /// The instant the next frame shows, once this one is drawn: the slider
+    /// moves there straight away, so the next frame's ground is cut while
+    /// this one is still being encoded.
+    pub(crate) fn upcoming_time(&self) -> Option<f64> {
+        self.times.get(self.next).copied()
+    }
+
+    pub(crate) fn take_render_request(&mut self) -> Option<((u32, u32), f64)> {
+        std::mem::take(&mut self.render_requested).then(|| {
+            let clock = self.next as f64 / self.fps;
+            self.next += 1;
+            ((self.width, self.height), clock)
+        })
+    }
 }
 
 impl<'a> App<'a> {
@@ -58,7 +81,7 @@ impl<'a> App<'a> {
 
     /// Start recording `request` into `path`.
     pub(crate) fn start_video_export(&mut self, mut path: PathBuf, request: VideoExportRequest) -> anyhow::Result<()> {
-        use anyhow::{Context as _, bail};
+        use anyhow::bail;
 
         if self.video_recording.is_some() {
             bail!("{}", tr!("video-export-already-recording"));
@@ -79,19 +102,13 @@ impl<'a> App<'a> {
                 format
             }
         };
-        let graphics = self.graphics.as_ref().context("The renderer is not initialised yet")?;
-        if !graphics.can_capture_video() {
-            bail!("{}", tr!("video-export-unsupported-display"));
+        if self.graphics.is_none() {
+            bail!("The renderer is not initialised yet");
         }
-        // Encoders work on whole 2x2 blocks of chroma, so an odd edge is
-        // trimmed rather than padded.
-        let (viewport_width, viewport_height) = graphics.viewport_size();
-        let (width, height) = (viewport_width & !1, viewport_height & !1);
-        let scale = request.scale.max(1);
-        // Shrunk by the factor, then trimmed to even again.
-        let (video_width, video_height) = ((width / scale) & !1, (height / scale) & !1);
-        if video_width < 16 || video_height < 16 {
-            bail!("{}", tr!("video-export-viewport-too-small"));
+        // Encoders work on whole 2x2 blocks of chroma.
+        let (width, height) = (request.width & !1, request.height & !1);
+        if width < 16 || height < 16 {
+            bail!("{}", tr!("video-export-too-small"));
         }
         let times = request.frame_times();
         if times.is_empty() {
@@ -111,17 +128,13 @@ impl<'a> App<'a> {
             vec![JobKey::VideoExport],
             move |cancel, progress| {
                 let result = (|| {
-                    let mut encoder = encode::open(&target, format, video_width, video_height, fps)?;
+                    let mut encoder = encode::open(&target, format, width, height, fps)?;
                     let mut done = 0u64;
                     for frame in receiver {
                         if cancel.is_cancelled() {
                             bail!("{}", tr!("video-export-cancelled"));
                         }
-                        if scale == 1 {
-                            encoder.push(&frame)?;
-                        } else {
-                            encoder.push(&encode::downscale(&frame, width, video_width, video_height, scale))?;
-                        }
+                        encoder.push(&frame)?;
                         done += 1;
                         progress.set_items(done, total as u64);
                     }
@@ -150,12 +163,15 @@ impl<'a> App<'a> {
         self.video_recording = Some(Recording {
             times,
             next: 0,
+            collected: 0,
             width,
             height,
+            fps,
             frames: sender,
-            capture_requested: false,
+            render_requested: false,
             restore_time_h: self.editor.schedule_time_h,
         });
+        self.editor.video_export_frame = Some((width, height));
         self.editor.video_export_dialog = None;
         self.editor.schedule_animation_playing = false;
         self.editor.video_export_progress = Some((0, total));
@@ -163,14 +179,13 @@ impl<'a> App<'a> {
         Ok(())
     }
 
-    /// Move the slider to the frame being recorded, and once Animate shows
-    /// exactly that instant, have this frame's render copy the viewport.
-    /// Runs after Animate's own sync, before the render.
+    /// Move the slider to the next frame to record, and once Animate shows
+    /// exactly that instant, have the video frame drawn after this frame's
+    /// window render. Runs after Animate's own sync, before the render.
     pub(crate) fn drive_video_recording(&mut self) {
         let Some(recording) = self.video_recording.as_ref() else {
             return;
         };
-        let (target, width, height) = (recording.times[recording.next], recording.width, recording.height);
         self.redraw_requested = true;
         self.editor.schedule_animation_playing = false;
         if !self.editor.is_schedule_animation() || !self.editor.schedule_animation_enabled {
@@ -178,47 +193,51 @@ impl<'a> App<'a> {
             self.cancel_video_export();
             return;
         }
+        // Every frame drawn: wait for the last copies to arrive.
+        let Some(&target) = recording.times.get(recording.next) else {
+            return;
+        };
         if self.editor.schedule_time_h != target {
             self.editor.schedule_time_h = target;
             return;
         }
-        if !self.animation_shows(target) {
-            return;
-        }
-        if let Some(recording) = self.video_recording.as_mut() {
-            recording.capture_requested = true;
-        }
-        if let Some(graphics) = self.graphics.as_mut() {
-            graphics.request_video_frame(width, height);
+        if self.animation_shows(target)
+            && let Some(recording) = self.video_recording.as_mut()
+        {
+            recording.render_requested = true;
         }
     }
 
-    /// Hand the frame this render copied back to the encoder. Runs after the
-    /// render.
-    pub(crate) fn collect_video_frame(&mut self) {
-        let Some(recording) = self.video_recording.as_mut() else {
+    /// Hand the frames whose pixels have arrived to the encoder, and finish
+    /// once the last has. Runs after the render.
+    pub(crate) fn collect_video_frames(&mut self) {
+        let Some(recording) = self.video_recording.as_ref() else {
             return;
         };
-        if !std::mem::take(&mut recording.capture_requested) {
+        let rendered_all = recording.next == recording.times.len();
+        let Some(graphics) = self.graphics.as_mut() else {
             return;
+        };
+        let frames = match graphics.take_video_frames(rendered_all) {
+            Ok(frames) => frames,
+            Err(error) => {
+                userspace_warn!("{}", tr!("video-export-failed", error = format!("{error:#}")));
+                self.cancel_video_export();
+                return;
+            }
+        };
+        let recording = self.video_recording.as_mut().expect("checked above");
+        for frame in frames {
+            if recording.frames.send(frame).is_err() {
+                // The encoder has stopped; its job reports why.
+                self.stop_video_recording();
+                return;
+            }
+            recording.collected += 1;
         }
-        let Some(capture) = self.graphics.as_mut().and_then(|graphics| graphics.take_video_frame()) else {
-            return;
-        };
-        let Some(pixels) = capture else {
-            userspace_warn!("{}", tr!("video-export-viewport-resized"));
-            self.cancel_video_export();
-            return;
-        };
-        if recording.frames.send(pixels).is_err() {
-            // The encoder has stopped; its job reports why.
-            self.stop_video_recording();
-            return;
-        }
-        recording.next += 1;
         let total = recording.times.len();
-        self.editor.video_export_progress = Some((recording.next, total));
-        if recording.next == total {
+        self.editor.video_export_progress = Some((recording.collected, total));
+        if recording.collected == total {
             // Dropping the sender is what tells the encoder it has them all.
             self.stop_video_recording();
         }
@@ -230,7 +249,11 @@ impl<'a> App<'a> {
         if let Some(recording) = self.video_recording.take() {
             self.editor.schedule_time_h = recording.restore_time_h;
         }
+        if let Some(graphics) = self.graphics.as_mut() {
+            graphics.release_video_target();
+        }
         self.editor.video_export_progress = None;
+        self.editor.video_export_frame = None;
     }
 
     /// Abandon the recording: the encoder stops and removes its file.
