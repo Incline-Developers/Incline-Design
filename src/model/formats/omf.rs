@@ -84,6 +84,8 @@ const DRILL_HOLE_ATTRIBUTE: &str = "Hole";
 /// they are what joins its holes rather than anything one hole holds.
 const META_TIE_INS: &str = "incline:tie_ins";
 const META_CHARGES: &str = "incline:charges";
+/// Project-level: the pit optimization scenarios, as their own versioned JSON.
+const META_OPTIMIZATION: &str = "incline:optimization";
 const MAX_ARRAY_ITEMS: u64 = 200_000_000;
 
 /// Owned, cheaply-cloned state captured before OMF encoding moves to a worker.
@@ -100,6 +102,9 @@ pub(crate) struct ProjectSnapshot {
     /// source of truth for export: `designs`'s own `ProjectFile::folders` is
     /// not consulted, so there is exactly one registry to keep in sync.
     pub(crate) folders: FolderRegistry,
+    /// The project's optimization scenarios. Only a save of the whole
+    /// project carries them; an export of a selection does not.
+    pub(crate) optimization: Option<crate::model::optimization::ScenarioFile>,
 }
 
 impl std::fmt::Debug for ProjectSnapshot {
@@ -114,6 +119,7 @@ impl std::fmt::Debug for ProjectSnapshot {
             .field("point_clouds", &self.point_clouds.len())
             .field("rasters", &self.rasters.len())
             .field("folders", &self.folders)
+            .field("optimization", &self.optimization.as_ref().map(|file| file.scenarios.len()))
             .finish()
     }
 }
@@ -131,6 +137,7 @@ impl ProjectSnapshot {
             && self.point_clouds.is_empty()
             && self.rasters.is_empty()
             && self.folders.is_empty()
+            && self.optimization.is_none()
     }
 
     pub(crate) fn item_count(&self) -> usize {
@@ -238,6 +245,8 @@ pub(crate) struct ImportBundle {
     /// per-element membership below always resolves against it, and grown by
     /// `ensure` for a name the project record did not list.
     pub(crate) folders: FolderRegistry,
+    /// The project record's optimization scenarios, when it carries any.
+    pub(crate) optimization: Option<crate::model::optimization::ScenarioFile>,
     pub(crate) warnings: Vec<String>,
 }
 
@@ -445,6 +454,11 @@ fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, compre
             }
         }
         project.metadata.insert(META_FOLDERS.to_owned(), Value::Object(sections));
+    }
+    if let Some(optimization) = &snapshot.optimization {
+        project
+            .metadata
+            .insert(META_OPTIMIZATION.to_owned(), serde_json::to_value(optimization).context("encode optimization scenarios")?);
     }
     let (output, _warnings) = writer.finish(project).context("finish project")?;
     progress.finish();
@@ -1793,7 +1807,18 @@ pub(crate) fn from_bytes(source_name: &str, bytes: Vec<u8>, progress: &Phase) ->
             }
         }
     }
-    let unsupported_project_metadata = project.metadata.keys().filter(|key| key.as_str() != META_FOLDERS).cloned().collect::<Vec<_>>();
+    if let Some(value) = project.metadata.get(META_OPTIMIZATION) {
+        match crate::app::io::parse_optimization_scenarios(&value.to_string()) {
+            Ok(file) => bundle.optimization = Some(file),
+            Err(error) => bundle.warnings.push(tr!("omf-optimization-scenarios-unreadable", error = error.to_string())),
+        }
+    }
+    let unsupported_project_metadata = project
+        .metadata
+        .keys()
+        .filter(|key| key.as_str() != META_FOLDERS && key.as_str() != META_OPTIMIZATION)
+        .cloned()
+        .collect::<Vec<_>>();
     if !unsupported_project_metadata.is_empty() {
         bundle
             .warnings
@@ -1889,6 +1914,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 // The bundle's registry is the single source of truth for
                 // membership; a decoded `ProjectFile` never carries its own.
                 folders: FolderRegistry::default(),
+                optimization: Default::default(),
             });
         }
         Ok(self.bundle)
@@ -2398,6 +2424,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             // The bundle's registry is the single source of truth for
             // membership; a decoded `ProjectFile` never carries its own.
             folders: FolderRegistry::default(),
+            optimization: Default::default(),
         })
     }
 

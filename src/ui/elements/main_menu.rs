@@ -706,6 +706,15 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
             }
         });
 
+        // Pit optimization works over a block model, but it opens on its
+        // scenarios rather than on a selection: each scenario names its own.
+        MenuBarMenu::new(&tr!("ws-menubar-block-model")).show(ui, |ui| {
+            if ContextMenuAction::new(tr!("menu-pit-optimization")).show(ui).clicked() {
+                commands.push(UiCommand::OpenOptimizationScenarios);
+                ui.close();
+            }
+        });
+
         MenuBarMenu::new(&tr!("ws-menubar-raster")).show(ui, |ui| {
             let any_draped = project.raster_textures.iter().any(|raster| raster.is_draped);
             if ContextMenuAction::new(tr!("common-undrape-all")).enabled(any_draped).show(ui).clicked() {

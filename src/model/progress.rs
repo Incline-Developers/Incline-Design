@@ -43,6 +43,12 @@ pub(crate) struct ProgressSnapshot {
     pub(crate) units: Option<(u64, u64)>,
 }
 
+impl std::fmt::Debug for Progress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Progress").field(&self.snapshot()).finish()
+    }
+}
+
 impl Default for Progress {
     fn default() -> Self {
         Self::new()

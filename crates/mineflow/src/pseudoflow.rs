@@ -25,12 +25,11 @@ struct Node {
     first_child: Idx,
     next_child: Idx,
     next_scan: Idx,
-    label: Idx,
     next_arc: Idx,
     initialized: bool,
 }
 impl Node {
-    fn new(excess: i128, label: Idx) -> Self {
+    fn new(excess: i128) -> Self {
         Self {
             excess,
             to_root: NONE,
@@ -38,7 +37,6 @@ impl Node {
             first_child: NONE,
             next_child: NONE,
             next_scan: NONE,
-            label,
             next_arc: 0,
             initialized: false,
         }
@@ -58,8 +56,17 @@ pub(crate) struct Forest {
     scratch: Vec<i64>,
     arcs: Vec<Arc>,
     free_arcs: Vec<Idx>,
+    /// Per node, its distance label. Kept apart from [`Node`] because
+    /// `find_weak` reads one per candidate arc, scattered across the model:
+    /// four bytes per miss rather than a whole node's cache line.
     labels: Vec<Idx>,
+    /// How many nodes carry each label, for gap detection.
+    label_counts: Vec<Idx>,
+    /// Strong roots by label. Only `buckets[..active]` can be non-empty; the
+    /// emptied buckets above stay allocated, since the highest label rises
+    /// and falls constantly and each drop would cost a free and a regrowth.
     buckets: Vec<VecDeque<Idx>>,
+    active: usize,
     pub(crate) used_arcs: usize,
 }
 impl Forest {
@@ -69,15 +76,17 @@ impl Forest {
             return Err(invalid("the solver addresses at most 4294967294 blocks"));
         }
         let mut nodes = Vec::with_capacity(n);
-        let mut labels = vec![0; 2];
+        let mut labels = Vec::with_capacity(n);
+        let mut label_counts = vec![0; 2];
         let mut buckets = vec![VecDeque::new(); 2];
         for value in values {
             let label = Idx::from(value > 0);
-            labels[label as usize] += 1;
+            label_counts[label as usize] += 1;
             if value > 0 {
                 buckets[1].push_back(nodes.len() as Idx);
             }
-            nodes.push(Node::new(value, label));
+            nodes.push(Node::new(value));
+            labels.push(label);
         }
         let mut out_of_tree = Vec::new();
         out_of_tree.try_reserve_exact(n).map_err(|_| invalid("graph exceeds memory"))?;
@@ -87,7 +96,9 @@ impl Forest {
             out_of_tree,
             scratch: Vec::new(),
             labels,
+            label_counts,
             buckets,
+            active: 2,
             arcs: Vec::new(),
             free_arcs: Vec::new(),
             used_arcs: 0,
@@ -130,27 +141,28 @@ impl Forest {
         self.node_mut(child).next_child = NONE;
     }
     fn increment_label(&mut self, node: Idx) {
-        let label = self.node(node).label as usize;
-        self.labels[label] -= 1;
-        self.node_mut(node).label += 1;
-        if self.labels.len() <= label + 1 {
-            self.labels.resize(label + 2, 0);
+        let label = self.labels[node as usize] as usize;
+        self.label_counts[label] -= 1;
+        self.labels[node as usize] += 1;
+        if self.label_counts.len() <= label + 1 {
+            self.label_counts.resize(label + 2, 0);
         }
-        self.labels[label + 1] += 1;
+        self.label_counts[label + 1] += 1;
     }
     fn push_strong(&mut self, node: Idx) {
-        let label = self.node(node).label as usize;
+        let label = self.labels[node as usize] as usize;
         if self.buckets.len() <= label {
             self.buckets.resize_with(label + 1, VecDeque::new);
         }
+        self.active = self.active.max(label + 1);
         self.buckets[label].push_back(node);
     }
     fn next_strong(&mut self, cancelled: &mut impl FnMut() -> bool) -> Result<Option<Idx>> {
         let sink = self.nodes.len() as Idx;
-        for label in (1..self.buckets.len()).rev() {
+        for label in (1..self.active).rev() {
             if self.buckets[label].is_empty() {
-                self.buckets.pop();
-            } else if self.labels[label - 1] > 0 {
+                self.active -= 1;
+            } else if self.label_counts[label - 1] > 0 {
                 return Ok(self.buckets[label].pop_front());
             } else {
                 // Iterative traversal avoids a stack overflow on deep mine models.
@@ -160,9 +172,9 @@ impl Forest {
                         if cancelled() {
                             return Err(Error::Cancelled);
                         }
-                        let label = self.node(node).label as usize;
-                        self.labels[label] -= 1;
-                        self.node_mut(node).label = sink;
+                        let label = self.labels[node as usize] as usize;
+                        self.label_counts[label] -= 1;
+                        self.labels[node as usize] = sink;
                         let mut child = self.node(node).first_child;
                         while child != NONE {
                             stack.push(child);
@@ -192,15 +204,15 @@ impl Forest {
             list.extend(self.scratch.iter().map(|&v| v as Idx));
             self.node_mut(node).initialized = true;
         }
-        let Some(target_label) = self.node(node).label.checked_sub(1) else {
+        let Some(target_label) = self.labels[node as usize].checked_sub(1) else {
             return Ok(None);
         };
-        // `out_of_tree` and `nodes` are separate fields, so the scan borrows
+        // `out_of_tree` and `labels` are separate fields, so the scan borrows
         // both at once and costs one random access per candidate.
         let start = self.node(node).next_arc as usize;
         let list = &self.out_of_tree[node as usize];
-        let nodes = &self.nodes;
-        let found = list[start..].iter().position(|&target| nodes[target as usize].label == target_label);
+        let labels = &self.labels;
+        let found = list[start..].iter().position(|&target| labels[target as usize] == target_label);
         let Some(offset) = found else {
             self.node_mut(node).next_arc = list.len() as Idx;
             return Ok(None);
@@ -210,11 +222,11 @@ impl Forest {
         Ok(Some(self.out_of_tree[node as usize].swap_remove(i)))
     }
     fn process_children(&mut self, node: Idx) {
-        let label = self.node(node).label;
+        let label = self.labels[node as usize];
         let mut child = self.node(node).next_scan;
         while child != NONE {
-            debug_assert!(self.node(child).label >= label);
-            if self.node(child).label == label {
+            debug_assert!(self.labels[child as usize] >= label);
+            if self.labels[child as usize] == label {
                 self.node_mut(node).next_scan = child;
                 return;
             }
@@ -343,7 +355,7 @@ impl Forest {
             self.process_strong(root, precedence, cancelled)?;
         }
         let sink = self.nodes.len() as Idx;
-        Ok(self.nodes.iter().map(|node| node.label == sink).collect())
+        Ok(self.labels.iter().map(|&label| label == sink).collect())
     }
 
     /// The largest optimal cut excludes precisely the nodes that can reach
@@ -415,7 +427,7 @@ impl Forest {
                 let successor = successor as Idx;
                 // The smallest optimal cut is already closed and cannot reach
                 // a deficit, so it never carries exclusion onwards.
-                if !excluded[successor as usize] && self.node(successor).label != sink {
+                if !excluded[successor as usize] && self.labels[successor as usize] != sink {
                     self.exclude_branch(successor, excluded, queue, branch);
                 }
             }
@@ -446,7 +458,7 @@ impl Forest {
             if cancelled() {
                 return Err(Error::Cancelled);
             }
-            if self.nodes[node].label == sink {
+            if self.labels[node] == sink {
                 continue;
             }
             let branch = component[node];
@@ -474,7 +486,7 @@ impl Forest {
             if cancelled() {
                 return Err(Error::Cancelled);
             }
-            if self.nodes[node].label == sink {
+            if self.labels[node] == sink {
                 continue;
             }
             let branch = component[node];
