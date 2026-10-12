@@ -582,12 +582,13 @@ impl<'a> Graphics<'a> {
             label: Some("point_cloud_style_bind_group_layout"),
         });
 
-        // One instance per block: lower.xyz + grade, then upper.xyz + pad.
+        // One instance per block: lower.xyz + grade, then upper.xyz + the
+        // exposed-face mask the outline reads.
         // The shader expands vertex_index 0..36 into the cube's faces.
         let block_model_vertex_buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: size_of::<BlockInstance>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32, 2 => Float32x3],
+            attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32, 2 => Float32x3, 3 => Uint32],
         })];
         // Built now because the drill pipeline layout borrows its own.
         let drill_hole_gpu = DrillHoleGpuCache::new(&device);

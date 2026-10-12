@@ -1096,23 +1096,6 @@ impl<'a> Graphics<'a> {
                 render_pass.draw(0..6, 0..chunk.instance_count);
             }
         }
-        for block_model in block_models {
-            let entity = block_model.entity_id();
-            if !block_model.state.loaded || editor.hidden_handles.contains(&entity) || !block_model_intersects_frustum(block_model, self.scene_origin, &frustum) {
-                continue;
-            }
-            let Some(cached) = self.block_model_gpu.get(block_model.id) else {
-                continue;
-            };
-            if cached.edge_chunks.is_empty() {
-                continue;
-            }
-            render_pass.set_bind_group(1, &cached.edge_style_bind_group, &[]);
-            for chunk in &cached.edge_chunks {
-                render_pass.set_vertex_buffer(0, chunk.instance_buffer.slice(..));
-                render_pass.draw(0..6, 0..chunk.instance_count);
-            }
-        }
 
         if draw_documents {
             self.draw_design_points_and_labels(&mut render_pass, editor, include_editor_overlays);
