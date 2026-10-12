@@ -2192,6 +2192,8 @@ pub(crate) struct EditorState {
     /// Those too small on screen to draw as models, as icons; set by the
     /// renderer each frame.
     pub(crate) animation_machine_icons: Vec<crate::rendering::machines::MachineIcon>,
+    /// Where the machines drawn as models are labelled; set with the icons.
+    pub(crate) animation_machine_labels: Vec<crate::rendering::machines::MachineLabel>,
     pub(crate) haul_route: Option<crate::model::haulage::routing::RouteCheck>,
     /// Browser-only viewport prompt shown before creating a named project.
     #[cfg(target_arch = "wasm32")]
@@ -3988,6 +3990,7 @@ impl EditorState {
             animation_flows: Vec::new(),
             animation_machines: Vec::new(),
             animation_machine_icons: Vec::new(),
+            animation_machine_labels: Vec::new(),
             haul_route: None,
             #[cfg(target_arch = "wasm32")]
             new_project_dialog_open: false,
@@ -6681,6 +6684,9 @@ pub(crate) struct VideoExportRequest {
     /// The video's size in pixels.
     pub(crate) width: u32,
     pub(crate) height: u32,
+    /// Whether the destinations' and the machines' names are drawn.
+    pub(crate) destination_labels: bool,
+    pub(crate) machine_labels: bool,
 }
 
 impl VideoExportRequest {

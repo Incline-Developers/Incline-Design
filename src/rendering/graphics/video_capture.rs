@@ -29,6 +29,13 @@ const MAP_PENDING: u8 = 0;
 const MAP_DONE: u8 = 1;
 const MAP_FAILED: u8 = 2;
 
+/// Which names are drawn over the video's scene.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct VideoLabels {
+    pub(crate) destinations: bool,
+    pub(crate) machines: bool,
+}
+
 /// What one video frame is drawn from.
 pub(crate) struct VideoFrameInput<'frame> {
     pub(crate) editor: &'frame mut EditorState,
@@ -44,6 +51,7 @@ pub(crate) struct VideoFrameInput<'frame> {
     /// Seconds into the video, which sets how far the flows' stripes have
     /// travelled, so they move at the video's pace rather than the window's.
     pub(crate) clock_s: f64,
+    pub(crate) labels: VideoLabels,
 }
 
 struct InFlight {
@@ -185,6 +193,7 @@ impl Graphics<'_> {
             project,
             size: (width, height),
             clock_s,
+            labels: shown_labels,
         } = input;
         let mut target = match self.video_target.take() {
             Some(target) if target.size.width == width && target.size.height == height => target,
@@ -208,6 +217,7 @@ impl Graphics<'_> {
         let window_flows = std::mem::take(&mut editor.animation_flows);
         let window_pins = std::mem::take(&mut editor.haul_pins);
         let window_icons = std::mem::take(&mut editor.animation_machine_icons);
+        let window_labels = std::mem::take(&mut editor.animation_machine_labels);
 
         target.swap_into(self);
         self.camera_uniform
@@ -231,8 +241,9 @@ impl Graphics<'_> {
             Vec::new()
         };
         self.upload_flow_scene(editor, pixels_per_point, clock_s);
-        let (near, icons) = self.split_machines(&editor.animation_machines, pixels_per_point);
+        let (near, icons, labels) = self.split_machines(&editor.animation_machines, pixels_per_point);
         editor.animation_machine_icons = icons;
+        editor.animation_machine_labels = labels;
         if !near.is_empty() && self.machines.is_none() {
             self.machines = Some(crate::rendering::machines::MachineGpu::new(&self.device).map_err(|error| {
                 crate::userspace_error!("{error:#}");
@@ -270,6 +281,7 @@ impl Graphics<'_> {
             editor,
             document,
             project,
+            shown_labels,
         );
         let readback = RgbaReadback::record(&self.device, &mut encoder, &target.texture, "Video frame readback");
         self.queue.submit(std::iter::once(encoder.finish()));
@@ -285,6 +297,7 @@ impl Graphics<'_> {
         editor.animation_flows = window_flows;
         editor.haul_pins = window_pins;
         editor.animation_machine_icons = window_icons;
+        editor.animation_machine_labels = window_labels;
         self.video_target = Some(target);
     }
 

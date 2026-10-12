@@ -331,8 +331,9 @@ impl Gui {
 }
 
 /// What the video export paints over each frame it renders: the destination
-/// labels and the machine icons - the parts of Animate's picture the
-/// viewport draws through egui rather than the scene renderer. Its own context and renderer, so the window's frame is
+/// labels, the machine icons and the machines' names - the parts of
+/// Animate's picture the viewport draws through egui rather than the scene
+/// renderer. Either set of labels can be left out. Its own context and renderer, so the window's frame is
 /// untouched by it and its font atlas never collides with the window's.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct VideoOverlay {
@@ -367,6 +368,7 @@ impl VideoOverlay {
         editor: &EditorState,
         document: &Document,
         project: &UiProjectView,
+        labels: crate::rendering::graphics::video_capture::VideoLabels,
     ) {
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size[0] as f32, size[1] as f32) / pixels_per_point);
         let mut raw_input = egui::RawInput {
@@ -375,8 +377,13 @@ impl VideoOverlay {
         };
         raw_input.viewports.entry(egui::ViewportId::ROOT).or_default().native_pixels_per_point = Some(pixels_per_point);
         let output = self.ctx.run_ui(raw_input, |ui| {
-            draw_haul_pin_labels(ui, editor, project, document, rect);
+            if labels.destinations {
+                draw_haul_pin_labels(ui, editor, project, document, rect);
+            }
             draw_machine_icons(ui, editor, rect);
+            if labels.machines {
+                draw_machine_labels(ui, editor, &project.schedule, rect);
+            }
         });
         for (id, deltas) in &output.textures_delta.set {
             for delta in deltas {
@@ -1352,6 +1359,7 @@ fn draw_ui(
     draw_haul_pin_labels(root_ui, editor, project, document, canvas_rect);
     // Under the flows' read-out, which is what the pointer is asking for.
     draw_machine_icons(root_ui, editor, canvas_rect);
+    draw_machine_labels(root_ui, editor, &project.schedule, canvas_rect);
     draw_haul_flows(root_ui, editor, canvas_rect);
     if editor.is_schedule_animation()
         && let Some(frame) = editor.video_export_frame
@@ -1936,45 +1944,88 @@ fn draw_haul_pin_labels(ui: &egui::Ui, editor: &EditorState, project: &UiProject
     }
 }
 
-fn draw_machine_icons(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect) {
-    use crate::rendering::machines::MachineIcon;
-    const HEIGHT: f32 = 30.0;
-    const GAP: f32 = 1.0;
-    let icons = &editor.animation_machine_icons;
-    if icons.is_empty() {
-        return;
-    }
-    let scale = ui.ctx().pixels_per_point();
-    let painter = ui.painter().with_clip_rect(canvas_rect);
-    let mut groups: Vec<(egui::Pos2, Vec<&MachineIcon>)> = Vec::new();
-    for icon in icons {
+/// The height a machine icon is drawn at, in points.
+const MACHINE_ICON_HEIGHT: f32 = 30.0;
+
+/// Animate's machine icons gathered by the job they stand on - machines
+/// sharing a block or blast share its anchor - each group's in drawing
+/// order, and the groups with a machine at work last, so theirs go on top.
+fn machine_icon_groups(editor: &EditorState, scale: f32) -> Vec<(egui::Pos2, Vec<&crate::rendering::machines::MachineIcon>)> {
+    let mut groups: Vec<(egui::Pos2, Vec<&crate::rendering::machines::MachineIcon>)> = Vec::new();
+    for icon in &editor.animation_machine_icons {
         let at = egui::pos2(icon.at.0 / scale, icon.at.1 / scale);
         match groups.iter_mut().find(|(held, _)| held.distance(at) < 1.0) {
             Some((_, members)) => members.push(icon),
             None => groups.push((at, vec![icon])),
         }
     }
-    // Where neighbouring jobs' icons overlap, the ones at work go on top.
     groups.sort_by_key(|(_, members)| members.iter().any(|icon| icon.working));
-    for (at, mut members) in groups {
-        members.sort_by_key(|icon| (icon.model, !icon.working));
+    for (_, members) in &mut groups {
+        members.sort_by_key(|icon| (icon.model, !icon.working, icon.agent));
+    }
+    groups
+}
+
+fn draw_machine_icons(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect) {
+    const GAP: f32 = 1.0;
+    if editor.animation_machine_icons.is_empty() {
+        return;
+    }
+    let painter = ui.painter().with_clip_rect(canvas_rect);
+    for (at, members) in machine_icon_groups(editor, ui.ctx().pixels_per_point()) {
         let badges: Vec<_> = members
             .iter()
             .filter_map(|icon| {
                 let texture = machine_icon_texture(ui.ctx(), icon.model, icon.working)?;
                 let size = texture.size_vec2();
-                Some((texture, HEIGHT * size.x / size.y.max(1.0)))
+                Some((texture, MACHINE_ICON_HEIGHT * size.x / size.y.max(1.0)))
             })
             .collect();
         let width = badges.iter().map(|badge| badge.1 + GAP).sum::<f32>() - GAP;
         let mut left = at.x - width / 2.0;
         for (texture, icon_width) in badges {
-            let rect = egui::Rect::from_min_size(egui::pos2(left, at.y - HEIGHT / 2.0), egui::vec2(icon_width, HEIGHT));
+            let rect = egui::Rect::from_min_size(egui::pos2(left, at.y - MACHINE_ICON_HEIGHT / 2.0), egui::vec2(icon_width, MACHINE_ICON_HEIGHT));
             left += icon_width + GAP;
             if canvas_rect.intersects(rect) {
                 painter.image(texture.id(), rect, egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
             }
         }
+    }
+}
+
+/// Each machine's name: under the model of one drawn close up, and under
+/// the icons of the rest - one line naming every machine on a job, in the
+/// order its icons run. Like the destination labels, one that would land on
+/// a label already drawn gives way.
+fn draw_machine_labels(ui: &egui::Ui, editor: &EditorState, plan: &crate::model::schedule::SchedulePlan, canvas_rect: egui::Rect) {
+    let scale = ui.ctx().pixels_per_point();
+    let name = |agent| plan.agent(agent).map(|agent| agent.name.as_str()).unwrap_or_default();
+    let mut lines: Vec<(egui::Pos2, String)> = editor
+        .animation_machine_labels
+        .iter()
+        .map(|label| (egui::pos2(label.at.0 / scale, label.at.1 / scale + 10.0), name(label.agent).to_owned()))
+        .collect();
+    // Those at work last among the icons, as drawn, so they win a clash -
+    // reversed here because the first label placed is the one kept.
+    for (at, members) in machine_icon_groups(editor, scale).into_iter().rev() {
+        let names: Vec<&str> = members.iter().map(|icon| name(icon.agent)).filter(|name| !name.is_empty()).collect();
+        lines.push((egui::pos2(at.x, at.y + MACHINE_ICON_HEIGHT / 2.0 + 2.0), names.join(" · ")));
+    }
+    let painter = ui.painter().with_clip_rect(canvas_rect);
+    let visuals = ui.visuals();
+    let mut placed: Vec<egui::Rect> = Vec::new();
+    for (top_centre, text) in lines {
+        if text.is_empty() {
+            continue;
+        }
+        let galley = painter.layout_no_wrap(text, egui::FontId::proportional(11.0), visuals.strong_text_color());
+        let rect = egui::Rect::from_min_size(top_centre - egui::vec2(galley.size().x / 2.0 + 5.0, 0.0), galley.size() + egui::vec2(10.0, 4.0));
+        if !canvas_rect.intersects(rect) || placed.iter().any(|other| other.intersects(rect)) {
+            continue;
+        }
+        placed.push(rect);
+        painter.rect_filled(rect, widgets::toolbar::GROUP_CORNER_RADIUS, visuals.window_fill().gamma_multiply(0.85));
+        painter.galley(rect.min + egui::vec2(5.0, 2.0), galley, visuals.strong_text_color());
     }
 }
 

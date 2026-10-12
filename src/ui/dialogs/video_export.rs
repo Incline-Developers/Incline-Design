@@ -73,6 +73,9 @@ pub(crate) struct VideoExportDialog {
     /// The video's size in pixels, rounded to even when recorded.
     width: u32,
     height: u32,
+    /// What is drawn over the scene in the video.
+    destination_labels: bool,
+    machine_labels: bool,
 }
 
 impl VideoExportDialog {
@@ -93,6 +96,8 @@ impl VideoExportDialog {
             fps: DEFAULT_FPS,
             width: DEFAULT_SIZE.0,
             height: DEFAULT_SIZE.1,
+            destination_labels: true,
+            machine_labels: true,
         };
         let segments = dialog.segments(horizon).unwrap_or_default();
         dialog.duration = duration_text(dialog.playback_seconds(&segments));
@@ -293,6 +298,11 @@ pub(crate) fn draw_video_export_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
                 .suffix(" px")
                 .show(ui);
 
+            if menu::menu_section_folding(ui, "video_export_display", tr!("video-export-display")) {
+                menu::MenuFieldBool::new(tr!("video-export-destination-labels"), &mut dialog.destination_labels).show(ui);
+                menu::MenuFieldBool::new(tr!("video-export-machine-labels"), &mut dialog.machine_labels).show(ui);
+            }
+
             let request = segments.as_ref().filter(|segments| !segments.is_empty()).and_then(|segments| {
                 let hours_per_second = dialog.hours_per_second(segments)?;
                 Some(VideoExportRequest {
@@ -301,6 +311,8 @@ pub(crate) fn draw_video_export_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
                     fps: dialog.fps,
                     width: dialog.width,
                     height: dialog.height,
+                    destination_labels: dialog.destination_labels,
+                    machine_labels: dialog.machine_labels,
                 })
             });
             let summary = match &request {

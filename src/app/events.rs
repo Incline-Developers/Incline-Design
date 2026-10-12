@@ -319,7 +319,7 @@ impl<'a> App<'a> {
                                 // The video export's frame, drawn from the
                                 // geometry this frame just uploaded.
                                 #[cfg(not(target_arch = "wasm32"))]
-                                if let Some((size, clock_s)) = self.video_recording.as_mut().and_then(|recording| recording.take_render_request()) {
+                                if let Some((size, clock_s, labels)) = self.video_recording.as_mut().and_then(|recording| recording.take_render_request()) {
                                     graphics.render_video_frame(crate::rendering::graphics::video_capture::VideoFrameInput {
                                         editor: &mut self.editor,
                                         document: &self.scene_document,
@@ -331,6 +331,7 @@ impl<'a> App<'a> {
                                         project: &project,
                                         size,
                                         clock_s,
+                                        labels,
                                     });
                                     if let Some(next) = self.video_recording.as_ref().and_then(|recording| recording.upcoming_time()) {
                                         self.editor.schedule_time_h = next;

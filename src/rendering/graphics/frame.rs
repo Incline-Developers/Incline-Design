@@ -408,12 +408,13 @@ impl<'a> Graphics<'a> {
         // enough to read, and otherwise as an icon the UI paints, held on the
         // block or blast it works. Uploaded when the drawn ones move, not
         // every frame.
-        let (near, icons) = if editor.is_schedule_animation() {
+        let (near, icons, labels) = if editor.is_schedule_animation() {
             self.split_machines(&editor.animation_machines, scale_factor)
         } else {
-            (Vec::new(), Vec::new())
+            (Vec::new(), Vec::new(), Vec::new())
         };
         editor.animation_machine_icons = icons;
+        editor.animation_machine_labels = labels;
         if !near.is_empty() && self.machines.is_none() {
             self.machines = Some(crate::rendering::machines::MachineGpu::new(&self.device).map_err(|error| {
                 crate::userspace_error!("{error:#}");

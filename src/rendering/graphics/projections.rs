@@ -474,16 +474,22 @@ impl<'a> Graphics<'a> {
     }
 
     /// Which of Animate's machines are close enough to draw as their model -
-    /// one spanning at least [`MACHINE_MODEL_POINTS`] on screen - and where
-    /// the icons of the rest go, in window pixels.
+    /// one spanning at least [`MACHINE_MODEL_POINTS`] on screen - where the
+    /// icons of the rest go, and where the models are labelled, in window
+    /// pixels.
     pub(super) fn split_machines(
         &self,
         placements: &[crate::rendering::machines::MachinePlacement],
         scale_factor: f32,
-    ) -> (Vec<crate::rendering::machines::MachinePlacement>, Vec<crate::rendering::machines::MachineIcon>) {
+    ) -> (
+        Vec<crate::rendering::machines::MachinePlacement>,
+        Vec<crate::rendering::machines::MachineIcon>,
+        Vec<crate::rendering::machines::MachineLabel>,
+    ) {
         let view_proj = self.view_proj();
         let mut near = Vec::new();
         let mut icons = Vec::new();
+        let mut labels = Vec::new();
         for placement in placements {
             let length = placement.model.length();
             let span = |axis: glam::DVec3| {
@@ -493,15 +499,19 @@ impl<'a> Graphics<'a> {
             };
             if span(glam::DVec3::X).max(span(glam::DVec3::Y)) >= MACHINE_MODEL_POINTS * scale_factor {
                 near.push(*placement);
+                if let Some(at) = self.world_to_window_px(&view_proj, placement.position) {
+                    labels.push(crate::rendering::machines::MachineLabel { agent: placement.agent, at });
+                }
             } else if let Some(at) = self.world_to_window_px(&view_proj, placement.anchor) {
                 icons.push(crate::rendering::machines::MachineIcon {
                     model: placement.model,
+                    agent: placement.agent,
                     at,
                     working: placement.working,
                 });
             }
         }
-        (near, icons)
+        (near, icons, labels)
     }
 
     /// Animate's flows at the shown instant: every delivery under way adds

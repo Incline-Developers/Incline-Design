@@ -36,6 +36,7 @@ pub(crate) struct Recording {
     width: u32,
     height: u32,
     fps: f64,
+    labels: crate::rendering::graphics::video_capture::VideoLabels,
     /// Frames to the encoder; dropped to tell it the last has been sent.
     frames: mpsc::SyncSender<Vec<u8>>,
     /// Whether Animate shows the next frame's instant, so the video frame is
@@ -55,11 +56,11 @@ impl Recording {
         self.times.get(self.next).copied()
     }
 
-    pub(crate) fn take_render_request(&mut self) -> Option<((u32, u32), f64)> {
+    pub(crate) fn take_render_request(&mut self) -> Option<((u32, u32), f64, crate::rendering::graphics::video_capture::VideoLabels)> {
         std::mem::take(&mut self.render_requested).then(|| {
             let clock = self.next as f64 / self.fps;
             self.next += 1;
-            ((self.width, self.height), clock)
+            ((self.width, self.height), clock, self.labels)
         })
     }
 }
@@ -167,6 +168,10 @@ impl<'a> App<'a> {
             width,
             height,
             fps,
+            labels: crate::rendering::graphics::video_capture::VideoLabels {
+                destinations: request.destination_labels,
+                machines: request.machine_labels,
+            },
             frames: sender,
             render_requested: false,
             restore_time_h: self.editor.schedule_time_h,

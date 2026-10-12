@@ -62,6 +62,8 @@ impl MachineModel {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct MachinePlacement {
     pub(crate) model: MachineModel,
+    /// The machine, whose name its label shows.
+    pub(crate) agent: crate::model::schedule::LoaderAgentId,
     pub(crate) position: DVec3,
     /// Unit vector in plan the model's front points along.
     pub(crate) heading: DVec2,
@@ -73,10 +75,19 @@ pub(crate) struct MachinePlacement {
     pub(crate) working: bool,
 }
 
+/// Where a machine drawn as its model is labelled, in window pixels: under
+/// the point it stands on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct MachineLabel {
+    pub(crate) agent: crate::model::schedule::LoaderAgentId,
+    pub(crate) at: (f32, f32),
+}
+
 /// A machine drawn as an icon, zoomed out.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct MachineIcon {
     pub(crate) model: MachineModel,
+    pub(crate) agent: crate::model::schedule::LoaderAgentId,
     /// In window pixels.
     pub(crate) at: (f32, f32),
     pub(crate) working: bool,

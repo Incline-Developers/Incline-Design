@@ -317,6 +317,7 @@ struct MachineWork {
 }
 
 struct DrillBlastMachine {
+    agent: crate::model::schedule::LoaderAgentId,
     activity: crate::model::schedule::BlastActivity,
     rows: Vec<usize>,
     bars: Vec<(f64, Option<f64>, Vec<usize>)>,
@@ -342,7 +343,12 @@ impl MachineWork {
                     .filter(|bar| bar.agent == Some(agent.id))
                     .map(|bar| (bar.window.start_h, bar.window.end_h, calculation.bar_blasts(bar)))
                     .collect();
-                drill_blast.push(DrillBlastMachine { activity, rows, bars });
+                drill_blast.push(DrillBlastMachine {
+                    agent: agent.id,
+                    activity,
+                    rows,
+                    bars,
+                });
             }
         }
         let mut loaders: Vec<_> = loaders.into_iter().collect();
@@ -734,7 +740,7 @@ impl crate::app::App<'_> {
         // drill and blast machine's blast and step.
         let plan = self.workspace.active_document().map(|document| document.schedule());
         let calculation = self.schedule_calculation.as_deref();
-        let mut digging: std::collections::BTreeMap<usize, Vec<(MachineModel, bool)>> = std::collections::BTreeMap::new();
+        let mut digging: std::collections::BTreeMap<usize, Vec<(MachineModel, bool, crate::model::schedule::LoaderAgentId)>> = std::collections::BTreeMap::new();
         for (agent, spans) in &animation.machine_work.loaders {
             // Its last span, until its next starts. Past that span's end it
             // stands where it was, greyed while something holds it up, and
@@ -759,11 +765,11 @@ impl crate::app::App<'_> {
                 crate::model::schedule::LoaderType::WheelLoader => MachineModel::WheelLoader,
             };
             if let Some(&slot) = animation.block_slots.get(&id) {
-                digging.entry(slot).or_default().push((model, working));
+                digging.entry(slot).or_default().push((model, working, *agent));
             }
         }
         let result = calculation.and_then(|calculation| calculation.drill_blast.as_ref());
-        let mut blasting: std::collections::BTreeMap<(usize, BlastActivity), Vec<bool>> = std::collections::BTreeMap::new();
+        let mut blasting: std::collections::BTreeMap<(usize, BlastActivity), Vec<(bool, crate::model::schedule::LoaderAgentId)>> = std::collections::BTreeMap::new();
         if let Some(result) = result {
             for machine in &animation.machine_work.drill_blast {
                 let rows = &machine.rows;
@@ -772,7 +778,7 @@ impl crate::app::App<'_> {
                     .checked_sub(1)
                     .map(|at| &result.work[rows[at]]);
                 match current {
-                    Some(work) if shown_h < work.end_h => blasting.entry((work.blast, work.activity)).or_default().push(true),
+                    Some(work) if shown_h < work.end_h => blasting.entry((work.blast, work.activity)).or_default().push((true, machine.agent)),
                     // Not working: greyed on the blast that holds it up, if
                     // its open bars still have one, and not drawn otherwise.
                     // An MPU done charging leaves, and comes back only to a
@@ -785,7 +791,7 @@ impl crate::app::App<'_> {
                         if let Some(blast) = result.first_needing(open.flat_map(|(_, _, blasts)| blasts.iter().copied()), machine.activity, shown_h)
                             && (machine.activity != BlastActivity::Charge || result.done_share(blast, machine.activity, shown_h) > 0.0)
                         {
-                            blasting.entry((blast, machine.activity)).or_default().push(false);
+                            blasting.entry((blast, machine.activity)).or_default().push((false, machine.agent));
                         }
                     }
                 }
@@ -811,8 +817,9 @@ impl crate::app::App<'_> {
             let Some((from, to)) = across_face(&block.face, block.direction, inside_span(at, low, high)) else {
                 continue;
             };
-            placements.extend(models.iter().enumerate().map(|(share, &(model, working))| MachinePlacement {
+            placements.extend(models.iter().enumerate().map(|(share, &(model, working, agent))| MachinePlacement {
                 model,
+                agent,
                 position: (spread(from, to, share, count) - block.direction * model.reach()).extend(block.floor),
                 heading: block.direction,
                 anchor: block.center,
@@ -852,8 +859,9 @@ impl crate::app::App<'_> {
                             continue;
                         };
                         let model = MachineModel::Dozer;
-                        placements.extend(working.iter().enumerate().map(|(share, &working)| MachinePlacement {
+                        placements.extend(working.iter().enumerate().map(|(share, &(working, agent))| MachinePlacement {
                             model,
+                            agent,
                             position: ground(spread(from, to, share, count) - direction * model.reach()),
                             heading: direction,
                             anchor,
@@ -872,7 +880,7 @@ impl crate::app::App<'_> {
                         // one another.
                         let spacing = collars.get(next + 1).map_or(model.length(), |after| after.distance(collars[next])).max(0.5);
                         let gap = (model.length() / spacing).ceil().max(1.0) as usize;
-                        for (share, &working) in working.iter().enumerate() {
+                        for (share, &(working, agent)) in working.iter().enumerate() {
                             let hole = (next + share * gap).min(collars.len() - 1);
                             let along = match (hole.checked_sub(1), collars.get(hole + 1)) {
                                 (_, Some(after)) => *after - collars[hole],
@@ -881,6 +889,7 @@ impl crate::app::App<'_> {
                             };
                             placements.push(MachinePlacement {
                                 model,
+                                agent,
                                 position: ground(collars[hole]),
                                 heading: along.try_normalize().unwrap_or(glam::DVec2::X),
                                 anchor,
