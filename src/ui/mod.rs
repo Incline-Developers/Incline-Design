@@ -1838,9 +1838,9 @@ fn draw_machine_icons(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Re
             }
             // Amber at work; grey where it stands idle at its last job.
             let (fill, stroke) = if working {
-                (egui::Color32::from_black_alpha(200), egui::Color32::from_rgb(194, 136, 24))
+                (egui::Color32::from_white_alpha(240), egui::Color32::from_rgb(194, 136, 24))
             } else {
-                (egui::Color32::from_black_alpha(200), egui::Color32::from_gray(110))
+                (egui::Color32::from_rgba_unmultiplied(215, 215, 215, 240), egui::Color32::from_gray(130))
             };
             painter.rect(rect, widgets::toolbar::GROUP_CORNER_RADIUS, fill, egui::Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
             painter.image(
