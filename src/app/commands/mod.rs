@@ -768,17 +768,18 @@ impl<'a> App<'a> {
             }
             UiCommand::OpenCreateBlockModel => {
                 // One dataset is estimated at a time, so the selection has to
-                // name exactly which one before the dialog opens on it.
-                let selected = self.selected_drill_hole_datasets();
-                let [drill_hole_id] = selected[..] else {
+                // name exactly which one - whole, or some of its holes picked
+                // in the viewport - before the dialog opens on it.
+                let Some((drill_hole_id, holes)) = self.block_model_source() else {
                     userspace_warn!("{}", tr!("cmd-commands-select-one-loaded-drill-hole"));
                     return Ok(());
                 };
-                self.open_create_block_model_dialog(drill_hole_id);
+                self.open_create_block_model_dialog(drill_hole_id, holes);
                 Ok(())
             }
             UiCommand::ExecuteCreateBlockModel {
                 drill_hole_id,
+                holes,
                 variables,
                 name,
                 lower,
@@ -790,7 +791,7 @@ impl<'a> App<'a> {
                 min_samples,
                 max_samples,
             } => {
-                let result = self.create_block_model_ordinary_kriging(drill_hole_id, variables, name, lower, upper, cell, range, sill, nugget, min_samples, max_samples);
+                let result = self.create_block_model_ordinary_kriging(drill_hole_id, holes, variables, name, lower, upper, cell, range, sill, nugget, min_samples, max_samples);
                 if result.is_ok() {
                     self.editor.block_model_create_open = false;
                 }

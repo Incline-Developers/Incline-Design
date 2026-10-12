@@ -83,13 +83,39 @@ impl App<'_> {
             .collect()
     }
 
-    /// Selected drill-hole datasets that are loaded, in project order.
+    /// Loaded drill-hole datasets the selection reaches, in project order:
+    /// one selected whole in the explorer, or one with holes picked in the
+    /// viewport.
     pub(crate) fn selected_drill_hole_datasets(&self) -> Vec<DrillHoleId> {
         self.drill_holes
             .iter()
-            .filter(|dataset| dataset.state.loaded && self.editor.selected_handles.contains(&SceneEntityId::DrillHole(dataset.id)))
+            .filter(|dataset| {
+                dataset.state.loaded
+                    && (self.editor.selected_handles.contains(&SceneEntityId::DrillHole(dataset.id))
+                        || self.editor.selected_drill_holes.iter().any(|hole| hole.dataset == dataset.id))
+            })
             .map(|dataset| dataset.id)
             .collect()
+    }
+
+    /// What Create Block Model estimates from: the one dataset the selection
+    /// reaches, and the holes picked in it - `None` when it is selected whole.
+    pub(crate) fn block_model_source(&self) -> Option<(DrillHoleId, Option<Vec<usize>>)> {
+        let [dataset] = self.selected_drill_hole_datasets()[..] else {
+            return None;
+        };
+        if self.editor.selected_handles.contains(&SceneEntityId::DrillHole(dataset)) {
+            return Some((dataset, None));
+        }
+        let mut holes: Vec<usize> = self
+            .editor
+            .selected_drill_holes
+            .iter()
+            .filter(|hole| hole.dataset == dataset)
+            .map(|hole| hole.hole)
+            .collect();
+        holes.sort_unstable();
+        Some((dataset, Some(holes)))
     }
 
     /// Selected block models that are loaded, in project order.
@@ -130,15 +156,13 @@ impl App<'_> {
                 SceneEntityId::PointCloud(id) if self.point_clouds.iter().any(|cloud| cloud.id == *id && cloud.state.loaded) => {
                     counts.point_clouds += 1;
                 }
-                SceneEntityId::DrillHole(id) if self.drill_holes.iter().any(|dataset| dataset.id == *id && dataset.state.loaded) => {
-                    counts.drill_holes += 1;
-                }
                 SceneEntityId::BlockModel(id) if self.block_models.iter().any(|model| model.id == *id && model.state.loaded) => {
                     counts.block_models += 1;
                 }
                 _ => {}
             }
         }
+        counts.drill_holes = self.selected_drill_hole_datasets().len();
         // Holes are named by the viewport as well as by the tree, so this
         // one is counted through the same walk the tool runs on.
         let mut reference_holes = 0usize;

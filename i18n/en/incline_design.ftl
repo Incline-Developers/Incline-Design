@@ -356,6 +356,7 @@ block-model-min-samples-help = Minimum nearby samples required to estimate a blo
 block-model-minimum-samples = Minimum samples
 block-model-no-block-model-selected = No block model selected
 block-model-no-drill-holes-selected = No drill holes selected
+block-model-source-some-holes = { $name } ({ $count } holes)
 block-model-nugget = Nugget
 block-model-numeric-interval-fields-interpolate = Numeric interval fields to interpolate. Each selected field becomes one block-model variable.
 block-model-kriging-help = Ordinary Kriging estimates numeric drill-hole intervals at each block centre using a spherical variogram.
@@ -364,7 +365,7 @@ block-model-range-search-radius = Range / search radius
 block-model-range-help = Samples farther than this distance are excluded; covariance reaches zero at this range.
 block-model-select-all = Select all
 block-model-selected-block-model-whose-blocks = The selected block model, whose blocks are thresholded into a solid. Close the dialog to threshold a different one.
-block-model-source-drill-holes-help = The selected Drill Holes collection, whose numeric intervals are estimated into blocks. Close the dialog to estimate from a different one.
+block-model-source-drill-holes-help = The selected Drill Holes collection, or the holes picked from it in the viewport, whose numeric intervals are estimated into blocks. Close the dialog to estimate from a different one.
 block-model-sill-help = Spatially correlated variance contributed by the spherical model. Together with the nugget, it sets covariance at zero distance.
 block-model-spherical-variogram-search = Spherical variogram and search
 block-model-threshold-at-most = <= threshold

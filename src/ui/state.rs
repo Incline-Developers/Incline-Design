@@ -309,8 +309,8 @@ pub(crate) struct SelectionCounts {
     pub(crate) triangulations: usize,
     /// Selected point clouds that are loaded, and so have points to work on.
     pub(crate) point_clouds: usize,
-    /// Selected drill-hole datasets that are loaded, and so have intervals to
-    /// estimate from.
+    /// Loaded drill-hole datasets the selection reaches, whole or by
+    /// individually picked holes, and so with intervals to estimate from.
     pub(crate) drill_holes: usize,
     /// Selected holes, a dataset taken whole standing for every hole in it,
     /// which reference points are placed on.
@@ -1759,6 +1759,9 @@ pub(crate) struct EditorState {
     pub(crate) optimization: OptimizationState,
     pub(crate) block_model_create_open: bool,
     pub(crate) kriging_drill_hole_id: Option<DrillHoleId>,
+    /// The holes picked in that dataset when the dialog opened, or `None`
+    /// when it was selected whole.
+    pub(crate) kriging_holes: Option<Vec<usize>>,
     pub(crate) kriging_variables: Vec<String>,
     pub(crate) kriging_name_input: String,
     pub(crate) kriging_lower: DVec3,
@@ -2748,6 +2751,7 @@ impl EditorState {
             optimization: OptimizationState::default(),
             block_model_create_open: false,
             kriging_drill_hole_id: None,
+            kriging_holes: None,
             kriging_variables: Vec::new(),
             kriging_name_input: tr!("state-kriged-block-model"),
             kriging_lower: DVec3::ZERO,
@@ -3695,6 +3699,8 @@ pub(crate) enum UiCommand {
     OpenCreateBlockModel,
     ExecuteCreateBlockModel {
         drill_hole_id: DrillHoleId,
+        /// Only these holes' intervals, or every hole when `None`.
+        holes: Option<Vec<usize>>,
         variables: Vec<String>,
         name: String,
         lower: DVec3,
