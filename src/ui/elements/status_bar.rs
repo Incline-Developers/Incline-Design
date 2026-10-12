@@ -104,7 +104,7 @@ const READOUT_GAP: f32 = 24.0;
 /// Diameter of the memory readout's ring: a little over the body text's
 /// height, so it sits in the line rather than standing out of it.
 const MEMORY_RING_SIZE: f32 = 14.0;
-/// Gap between the memory amounts and the ring after them.
+/// Gap between the memory ring and its label.
 const MEMORY_RING_GAP: f32 = 6.0;
 /// Below this share of memory free the ring turns yellow, and below
 /// [`MEMORY_LOW_FREE`] red.
@@ -117,11 +117,11 @@ const MEMORY_TIGHT_LIGHT: egui::Color32 = egui::Color32::from_rgb(0xB0, 0x82, 0x
 const MEMORY_LOW_DARK: egui::Color32 = egui::Color32::from_rgb(0xF8, 0x51, 0x49);
 const MEMORY_LOW_LIGHT: egui::Color32 = egui::Color32::from_rgb(0xC9, 0x2A, 0x2A);
 
-/// "x GB / y GB memory" and a ring, like the task readout's, filled to the
-/// share in use: green while plenty is free, yellow under 40% free and red
-/// under 20%. Natively the whole machine's memory; in the browser the app's
+/// A ring, like the task readout's, then "mem"; the amounts in use and in
+/// total show on hover. The ring is filled to the share in use: green while
+/// plenty is free, yellow under 40% free and red under 20%. Natively the whole machine's memory; in the browser the app's
 /// own heap - see [`crate::app::memory_usage::MemoryUsage`]. Drawn right to
-/// left: the ring first, then the text before it.
+/// left: the label first, then the ring before it.
 fn draw_memory_usage(ui: &mut egui::Ui, editor: &EditorState) {
     let Some(usage) = editor.memory_usage else {
         return;
@@ -140,14 +140,16 @@ fn draw_memory_usage(ui: &mut egui::Ui, editor: &EditorState) {
         (progress::FILL_DARK, progress::FILL_LIGHT)
     };
     let color = if dark { dark_fill } else { light_fill };
-    let (ring, _) = ui.allocate_exact_size(egui::Vec2::splat(MEMORY_RING_SIZE), egui::Sense::hover());
-    progress::paint_fraction_ring(ui, ui.painter(), ring.center(), MEMORY_RING_SIZE, fraction, color);
-    ui.add_space((MEMORY_RING_GAP - ui.spacing().item_spacing.x).max(0.0));
-    ui.label(tr!(
+    let amounts = tr!(
         "status-memory-used-total",
         used = crate::ui::dialogs::triangulation::format_bytes(usage.used),
         total = crate::ui::dialogs::triangulation::format_bytes(usage.total)
-    ));
+    );
+    ui.label(tr!("status-memory")).on_hover_text(&amounts);
+    ui.add_space((MEMORY_RING_GAP - ui.spacing().item_spacing.x).max(0.0));
+    let (ring, response) = ui.allocate_exact_size(egui::Vec2::splat(MEMORY_RING_SIZE), egui::Sense::hover());
+    progress::paint_fraction_ring(ui, ui.painter(), ring.center(), MEMORY_RING_SIZE, fraction, color);
+    response.on_hover_text(amounts);
 }
 
 /// Draw the bottom status bar panel.
