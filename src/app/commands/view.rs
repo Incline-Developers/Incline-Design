@@ -1,7 +1,6 @@
 use crate::{
     app::App,
     i18n::tr,
-    rendering::camera::CameraPose,
     ui::state::{ActiveTool, DelayProduct},
     userspace_log, userspace_warn,
 };
@@ -292,40 +291,20 @@ impl<'a> App<'a> {
         }
     }
 
-    /// Reset in two stages: plan view where the camera stands, then, clicked
-    /// again with the camera unmoved, plan view fitted to all visible content.
+    /// Reset the camera to a plan view that fits all visible content.
     pub(crate) fn reset_view(&mut self) {
-        let Some(graphics) = self.graphics.as_mut() else {
-            return;
-        };
-        let rotation_centre = self.editor.rotation_centre;
-        let stage = next_reset_stage(graphics.camera_pose(), graphics.plan_pose_keeping_distance(rotation_centre));
-        match stage {
-            ResetStage::PlanKeepingDistance => {
-                graphics.plan_view_keeping_distance(
-                    rotation_centre,
-                    &self.scene_document,
-                    &self.triangulations,
-                    &self.block_models,
-                    &self.drill_holes,
-                    &self.point_clouds,
-                    &self.editor.hidden_handles,
-                );
-                userspace_log!("{}", tr!("cmd-view-reset-view-plan-same-distance"));
-            }
-            ResetStage::FitAll => {
-                graphics.fit_to_extents(
-                    &self.scene_document,
-                    &self.triangulations,
-                    &self.block_models,
-                    &self.drill_holes,
-                    &self.point_clouds,
-                    &self.editor.hidden_handles,
-                );
-                userspace_log!("{}", tr!("cmd-view-reset-view-fit-extents"));
-            }
+        if let Some(graphics) = self.graphics.as_mut() {
+            graphics.fit_to_extents(
+                &self.scene_document,
+                &self.triangulations,
+                &self.block_models,
+                &self.drill_holes,
+                &self.point_clouds,
+                &self.editor.hidden_handles,
+            );
+            self.redraw_requested = true;
         }
-        self.redraw_requested = true;
+        userspace_log!("{}", tr!("cmd-view-reset-view-fit-extents"));
     }
 
     /// Fit all visible content while preserving the current orbit angle.
@@ -400,24 +379,5 @@ pub(crate) fn config_from(
         coordinate_systems,
         mine_coordinate_system,
         workspace_order: workspace_order.to_vec(),
-    }
-}
-
-/// What a click on Reset does.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ResetStage {
-    /// Look straight down from where the camera stands.
-    PlanKeepingDistance,
-    /// Plan view fitted to all visible content.
-    FitAll,
-}
-
-/// Square the view up to plan, unless the camera already stands in that plan,
-/// as the first click leaves it: then the click fits everything instead.
-pub(crate) fn next_reset_stage(current: CameraPose, plan_from_here: CameraPose) -> ResetStage {
-    if plan_from_here.matches(&current) {
-        ResetStage::FitAll
-    } else {
-        ResetStage::PlanKeepingDistance
     }
 }
