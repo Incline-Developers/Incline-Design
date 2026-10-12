@@ -230,16 +230,19 @@ pub(crate) fn draw_block_model_controls(ui: &mut egui::Ui, editor: &mut EditorSt
     // tool panels open in: a narrowing viewport pushes the card right from
     // there, and once it would reach the scale bar it is not drawn at all.
     let area_id = egui::Id::new("block_model_viewport_controls");
-    let (card_width, scale_bar) = ui.ctx().memory(|memory| {
+    let (card_size, scale_bar) = ui.ctx().memory(|memory| {
         (
-            memory.area_rect(area_id).map_or(BLOCK_MODEL_CARD_WIDTH, |rect| rect.width()),
+            memory.area_rect(area_id).map_or(egui::vec2(BLOCK_MODEL_CARD_WIDTH, 0.0), |rect| rect.size()),
             memory.area_rect(egui::Id::new("viewport_scale_bar")).filter(|_| editor.show_scale_bar),
         )
     });
+    let card_width = card_size.x;
     let left_bound = canvas.left() + crate::ui::widgets::viewport::DOCK_PANEL_RESERVED_WIDTH + BLOCK_MODEL_CARD_GAP;
     let right_bound = scale_bar.map_or(canvas.right(), |rect| rect.left()) - BLOCK_MODEL_CARD_GAP;
     let left = (ui.ctx().content_rect().center().x - card_width / 2.0).max(left_bound);
-    if left + card_width > right_bound {
+    // Always its full height, never scrolled or squeezed: a viewport too
+    // short to hold it hides it, the same as one too narrow.
+    if left + card_width > right_bound || card_size.y > canvas.height() - 2.0 * BLOCK_MODEL_CARD_GAP {
         return;
     }
     egui::Area::new(area_id)
@@ -270,10 +273,8 @@ pub(crate) fn draw_block_model_controls(ui: &mut egui::Ui, editor: &mut EditorSt
                             bottom: 10,
                         })
                         .show(ui, |ui| {
-                            egui::ScrollArea::both().max_height((canvas.height() * 0.4).max(80.0)).show(ui, |ui| {
-                                ui.push_id(model.id, |ui| {
-                                    BlockModelProperties::new(("block_model_controls", model.id), model).show(ui, editor, commands)
-                                });
+                            ui.push_id(model.id, |ui| {
+                                BlockModelProperties::new(("block_model_controls", model.id), model).show(ui, editor, commands)
                             });
                         });
                 });
