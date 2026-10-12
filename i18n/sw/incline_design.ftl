@@ -827,7 +827,6 @@ common-m = m
 common-max = Kiwango cha juu
 common-merge-shell-into-topology = Unganisha Ganda kwenye Tofolojia
 common-merge-shell-into-topology-ellipsis = Unganisha Ganda kwenye Tofolojia...
-common-modelling = Uundaji wa Mifano
 common-move-collar = Hamisha Kola
 common-move-collection = Hamisha hadi Mkusanyiko
 common-move-design = Hamisha Muundo

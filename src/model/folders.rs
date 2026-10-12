@@ -36,23 +36,10 @@ pub(crate) enum SectionKind {
     PointClouds,
     BlockModels,
     DrillHoles,
-    /// What the project derives from its data, such as reference points and the
-    /// surfaces built from them, and whatever is kept beside them.
-    /// An item is shown here because it is tagged here, never because of what
-    /// it holds - see [`Self::natural_for`].
-    Modelling,
 }
 
 impl SectionKind {
-    pub(crate) const ALL: [Self; 7] = [
-        Self::Designs,
-        Self::Triangulations,
-        Self::Rasters,
-        Self::PointClouds,
-        Self::BlockModels,
-        Self::DrillHoles,
-        Self::Modelling,
-    ];
+    pub(crate) const ALL: [Self; 6] = [Self::Designs, Self::Triangulations, Self::Rasters, Self::PointClouds, Self::BlockModels, Self::DrillHoles];
 
     /// Stable key this section's folder list is written under. Never
     /// translated and never renamed: it is file content.
@@ -64,7 +51,6 @@ impl SectionKind {
             Self::PointClouds => "point_clouds",
             Self::BlockModels => "block_models",
             Self::DrillHoles => "drill_holes",
-            Self::Modelling => "modelling",
         }
     }
 
@@ -80,15 +66,10 @@ impl SectionKind {
             Self::PointClouds => 3,
             Self::BlockModels => 4,
             Self::DrillHoles => 5,
-            Self::Modelling => 6,
         }
     }
 
     /// Section an item of `kind` shows under until something tags it otherwise.
-    ///
-    /// Modelling is never natural for anything: a plain new layer is a design
-    /// layer, and a modelling layer is one tagged Modelling, when it was made
-    /// or by being moved there.
     pub(crate) const fn natural_for(kind: MemberKind) -> Self {
         match kind {
             MemberKind::Layer => Self::Designs,
@@ -114,8 +95,6 @@ impl SectionKind {
             Self::PointClouds => &[MemberKind::PointCloud],
             Self::BlockModels => &[MemberKind::BlockModel],
             Self::DrillHoles => &[MemberKind::DrillHole],
-            // Points and the surfaces built from them sit side by side here.
-            Self::Modelling => &[MemberKind::Layer, MemberKind::Triangulation],
         }
     }
 
@@ -137,9 +116,7 @@ impl SectionKind {
     /// beside its sources when they agree on a section that can show it, at
     /// its natural section otherwise.
     ///
-    /// A derived item belongs next to what it was derived from, so a surface
-    /// built from points kept under Modelling appears there rather than away
-    /// from them. Sources that disagree name no one place to be beside, and
+    /// A derived item belongs next to what it was derived from. Sources that disagree name no one place to be beside, and
     /// nor does a section with no row for the kind, so both fall back to where
     /// the kind puts it. Stated once here so the next tool that builds
     /// something from something else does not restate it.

@@ -795,7 +795,6 @@ common-m = m
 common-max = मैक्स
 common-merge-shell-into-topology = शेल को स्थलाकृतिक सतह में मिलाएं
 common-merge-shell-into-topology-ellipsis = शेल को स्थलाकृतिक सतह में मिलाएं...
-common-modelling = मॉडलिंग
 common-move-collar = कॉलर ले जाएँ
 common-move-collection = संग्रह में ले जाएँ
 common-move-design = डिज़ाइन ले जाएँ

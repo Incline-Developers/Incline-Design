@@ -837,7 +837,6 @@ common-m = m
 common-max = Maks
 common-merge-shell-into-topology = Kabuğu Topolojiyle Birleştir
 common-merge-shell-into-topology-ellipsis = Kabuğu Topolojiyle Birleştir...
-common-modelling = Modelleme
 common-move-collar = Ağzı Taşı
 common-move-collection = Koleksiyona Taşı
 common-move-design = Tasarımı Taşı

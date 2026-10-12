@@ -836,7 +836,6 @@ common-m = m
 common-max = Max.
 common-merge-shell-into-topology = Hülle in Topologie einfügen
 common-merge-shell-into-topology-ellipsis = Hülle in Topologie einfügen...
-common-modelling = Modellierung
 common-move-collar = Ansatzpunkt verschieben
 common-move-collection = In Sammlung verschieben
 common-move-design = Design verschieben

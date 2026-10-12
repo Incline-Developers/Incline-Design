@@ -821,7 +821,6 @@ common-m = m
 common-max = Tối đa
 common-merge-shell-into-topology = Gộp vỏ vào bề mặt địa hình
 common-merge-shell-into-topology-ellipsis = Gộp vỏ vào bề mặt địa hình...
-common-modelling = Mô hình hóa
 common-move-collar = Di chuyển miệng lỗ
 common-move-collection = Chuyển vào bộ sưu tập
 common-move-design = Di chuyển thiết kế

@@ -795,7 +795,6 @@ common-m = m
 common-max = أقصى
 common-merge-shell-into-topology = دمج القشرة في السطح الطبوغرافي
 common-merge-shell-into-topology-ellipsis = دمج القشرة في السطح الطبوغرافي...
-common-modelling = النمذجة
 common-move-collar = نقل الطوق
 common-move-collection = نقل إلى مجموعة
 common-move-design = نقل التصميم

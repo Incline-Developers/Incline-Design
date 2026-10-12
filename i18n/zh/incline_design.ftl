@@ -795,7 +795,6 @@ common-m = m
 common-max = 最大
 common-merge-shell-into-topology = 将壳体合并到地形表面
 common-merge-shell-into-topology-ellipsis = 将壳体合并到地形表面...
-common-modelling = 建模
 common-move-collar = 移动孔口
 common-move-collection = 移动到集合
 common-move-design = 移动设计

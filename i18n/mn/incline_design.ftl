@@ -846,7 +846,6 @@ common-m = м
 common-max = Дээд
 common-merge-shell-into-topology = Бүрхүүлийг топологид нэгтгэх
 common-merge-shell-into-topology-ellipsis = Бүрхүүлийг топологид нэгтгэх...
-common-modelling = Загварчлал
 common-move-collar = Амсрыг шилжүүлэх
 common-move-collection = Цуглуулга руу зөөх
 common-move-design = Объектыг шилжүүлэх

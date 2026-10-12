@@ -795,7 +795,6 @@ common-m = m
 common-max = بیشینه
 common-merge-shell-into-topology = ادغام پوسته با سطح توپوگرافی
 common-merge-shell-into-topology-ellipsis = ادغام پوسته با سطح توپوگرافی...
-common-modelling = مدل‌سازی
 common-move-collar = جابه‌جایی یقه
 common-move-collection = انتقال به مجموعه
 common-move-design = جابه‌جایی طرح

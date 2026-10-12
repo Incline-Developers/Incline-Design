@@ -4403,7 +4403,6 @@ pub(crate) enum ExplorerSection {
     PointClouds,
     BlockModels,
     DrillHoles,
-    Modelling,
 }
 
 impl ExplorerSection {
@@ -4416,7 +4415,6 @@ impl ExplorerSection {
             Self::PointClouds => tr!("common-point-clouds"),
             Self::BlockModels => tr!("common-block-models"),
             Self::DrillHoles => tr!("ws-menubar-drillholes"),
-            Self::Modelling => tr!("common-modelling"),
         }
     }
 
@@ -4430,7 +4428,6 @@ impl ExplorerSection {
             Self::PointClouds => SectionKind::PointClouds,
             Self::BlockModels => SectionKind::BlockModels,
             Self::DrillHoles => SectionKind::DrillHoles,
-            Self::Modelling => SectionKind::Modelling,
         }
     }
 
@@ -4444,7 +4441,6 @@ impl ExplorerSection {
             SectionKind::PointClouds => Self::PointClouds,
             SectionKind::BlockModels => Self::BlockModels,
             SectionKind::DrillHoles => Self::DrillHoles,
-            SectionKind::Modelling => Self::Modelling,
         }
     }
 }
@@ -4549,10 +4545,6 @@ pub(crate) struct UiProjectView {
     pub(crate) point_clouds: Vec<UiPointCloudEntry>,
     pub(crate) raster_textures: Vec<UiRasterTextureEntry>,
     pub(crate) triangulations_membership_dirty: bool,
-    /// Modelling's unsaved work that no Modelling row shows: its folders,
-    /// which triangulations it holds, and the layers tagged with it - a
-    /// deleted layer has no row left to carry a mark.
-    pub(crate) modelling_dirty: bool,
     pub(crate) block_models_membership_dirty: bool,
     pub(crate) drill_holes_membership_dirty: bool,
     pub(crate) point_clouds_membership_dirty: bool,

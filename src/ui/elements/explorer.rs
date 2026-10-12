@@ -31,7 +31,6 @@ const HEADER_RASTERS: egui::Color32 = egui::Color32::from_rgb(0x2F, 0x91, 0x99);
 const HEADER_POINT_CLOUDS: egui::Color32 = egui::Color32::from_rgb(0xC9, 0x3B, 0x2C);
 const HEADER_BLOCK_MODELS: egui::Color32 = egui::Color32::from_rgb(0x69, 0x8F, 0x3F);
 const HEADER_DRILL_HOLES: egui::Color32 = egui::Color32::from_rgb(0xDB, 0x5F, 0x58);
-const HEADER_MODELLING: egui::Color32 = egui::Color32::from_rgb(0xD9, 0x8E, 0x2B);
 
 /// What every dragged explorer row has in common: the folder member it
 /// stands for, tag and all.
@@ -469,7 +468,7 @@ fn row_menu_delete(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, row: RowSta
 }
 
 /// Everything a layer row reads besides the layer itself, bundled so the
-/// row builder Designs and Modelling share takes it as one argument.
+/// row builder takes it as one argument.
 struct LayerRowContext<'a> {
     /// The project the layer belongs to; the discard row reads its path.
     entry: &'a UiProjectEntry,
@@ -487,9 +486,9 @@ struct LayerRowContext<'a> {
     selected_layers: &'a std::collections::HashSet<LayerId>,
 }
 
-/// One layer row: eye, padlock, drag payload and right-click menu. The same
-/// row under Designs and under Modelling - which section it belongs to is
-/// read off the layer, and the drag payload is always [`LayerDrag`].
+/// One layer row: eye, padlock, drag payload and right-click menu. Which
+/// section it belongs to is read off the layer, and the drag payload is
+/// always [`LayerDrag`].
 fn layer_row(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, layer: &UiLayerEntry, rows: &mut Vec<ExplorerRow>, cx: &LayerRowContext<'_>) {
     // Only the discard row reads the project entry, and it is native-only.
     #[cfg(target_arch = "wasm32")]
@@ -598,7 +597,7 @@ impl<T: SectionEntry, F: FnMut(&mut egui::Ui, &mut Vec<UiCommand>, &mut Vec<Expl
 
 /// Draw one section's rows: a group per folder, then whatever sits at the
 /// section root. `sources` is one [`RowSource`] per kind the section admits,
-/// so a section holding two kinds (Modelling) draws both under the one
+/// so a section holding several kinds draws them all under the one
 /// heading and the one collection, in one pass.
 fn draw_section_body<Z: DropZone>(
     ui: &mut egui::Ui,
@@ -850,10 +849,8 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                             commands,
                         );
 
-                        // Hoisted above Triangulations and Modelling, which draw
-                        // the same row. `mut` so the two `.show()` calls below can
-                        // each borrow it as `&mut`; they run one after the other,
-                        // so the borrows never overlap.
+                        // Hoisted above Triangulations, which draws it. `mut` so the
+                        // `.show()` call below can borrow it as `&mut`.
                         let mut render_tri_entry = |ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, rows: &mut Vec<ExplorerRow>, tri: &crate::ui::UiTriangulationEntry| {
                             rows.push(ExplorerRow::Entity(SceneEntityId::Triangulation(tri.id)));
                             let source_suffix = tri
@@ -1408,75 +1405,6 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                             &drill_holes_row,
                             ExplorerSection::DrillHoles,
                             tagged_count(&project.drill_holes, SectionKind::DrillHoles),
-                            commands,
-                        );
-
-                        // Modelling holds what the project derives from its data,
-                        // such as reference points and the surfaces built from
-                        // them. It admits layers and triangulations because
-                        // `SectionKind::admitted` says so; nothing here special-
-                        // cases Modelling.
-                        let modelling_dirty = project.modelling_dirty || project.triangulations.iter().any(|item| item.section == SectionKind::Modelling && item.dirty);
-                        let modelling_folders = project.folders.folders(SectionKind::Modelling);
-                        let (modelling_header_toggle, modelling_header, _) = ExplorerHeader::new(egui::Id::new("modelling_collapse"), tr!("common-modelling"))
-                            .icon(unthemed_icon!("modelling.svg"))
-                            .color(HEADER_MODELLING)
-                            .dirty(modelling_dirty)
-                            .show(ui, |ui| {
-                                // Triangulations live on `App` directly, not inside a
-                                // design project, so they draw here whether or not a
-                                // project is open - the same as under Triangulations.
-                                let mut triangulations_source = Rows {
-                                    items: &project.triangulations,
-                                    draw: &mut render_tri_entry,
-                                };
-                                match project.projects.first() {
-                                    Some(entry) => {
-                                        // The same row Designs draws, from the same
-                                        // builder: what puts a layer here is its tag,
-                                        // not anything about the layer itself.
-                                        let modelling_row_context = LayerRowContext {
-                                            entry,
-                                            locked_layers,
-                                            draggable: rows_draggable,
-                                            folders: &project.folders,
-                                            selection: &selection,
-                                            selected_layers,
-                                        };
-                                        let mut layers_source = Rows {
-                                            items: &entry.layers,
-                                            draw: |ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, rows: &mut Vec<ExplorerRow>, layer: &UiLayerEntry| {
-                                                layer_row(ui, commands, layer, rows, &modelling_row_context)
-                                            },
-                                        };
-                                        draw_section_body::<(LayerDrag, TriangulationDrag)>(
-                                            ui,
-                                            SectionKind::Modelling,
-                                            modelling_folders,
-                                            commands,
-                                            &mut rows,
-                                            &mut [&mut layers_source, &mut triangulations_source],
-                                        );
-                                    }
-                                    None => {
-                                        draw_section_body::<(LayerDrag, TriangulationDrag)>(
-                                            ui,
-                                            SectionKind::Modelling,
-                                            modelling_folders,
-                                            commands,
-                                            &mut rows,
-                                            &mut [&mut triangulations_source],
-                                        );
-                                    }
-                                }
-                            });
-                        let modelling_row = modelling_header_toggle.union(modelling_header.inner);
-                        attach_header_drop::<(LayerDrag, TriangulationDrag)>(ui, &modelling_row, SectionKind::Modelling, commands);
-                        section_heading_menu(
-                            &modelling_row,
-                            ExplorerSection::Modelling,
-                            project.projects.first().map_or(0, |entry| tagged_count(&entry.layers, SectionKind::Modelling))
-                                + tagged_count(&project.triangulations, SectionKind::Modelling),
                             commands,
                         );
 

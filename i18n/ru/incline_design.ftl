@@ -848,7 +848,6 @@ common-m = m
 common-max = Макс
 common-merge-shell-into-topology = Слить оболочку с топологией
 common-merge-shell-into-topology-ellipsis = Слить оболочку с топологией...
-common-modelling = Моделирование
 common-move-collar = Переместить устье
 common-move-collection = Переместить в коллекцию
 common-move-design = Переместить объект

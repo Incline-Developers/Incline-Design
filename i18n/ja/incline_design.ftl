@@ -823,7 +823,6 @@ common-m = m
 common-max = 最大
 common-merge-shell-into-topology = シェルをトポロジーに統合
 common-merge-shell-into-topology-ellipsis = シェルをトポロジーに統合...
-common-modelling = モデリング
 common-move-collar = 孔口を移動
 common-move-collection = コレクションへ移動
 common-move-design = デザインを移動

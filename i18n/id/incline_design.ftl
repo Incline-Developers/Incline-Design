@@ -795,7 +795,6 @@ common-m = m
 common-max = Maks.
 common-merge-shell-into-topology = Gabungkan Cangkang ke Topologi
 common-merge-shell-into-topology-ellipsis = Gabungkan Cangkang ke Topologi...
-common-modelling = Pemodelan
 common-move-collar = Pindahkan Kerah
 common-move-collection = Pindah ke Koleksi
 common-move-design = Pindahkan Desain

@@ -865,7 +865,6 @@ common-m = m
 common-max = Maks.
 common-merge-shell-into-topology = Scal powłokę z topologią
 common-merge-shell-into-topology-ellipsis = Scal powłokę z topologią...
-common-modelling = Modelowanie
 common-move-collar = Przesuń wylot
 common-move-collection = Przenieś do kolekcji
 common-move-design = Przesuń projekt

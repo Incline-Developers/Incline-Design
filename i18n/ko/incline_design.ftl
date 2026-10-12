@@ -828,7 +828,6 @@ common-m = m
 common-max = 최대
 common-merge-shell-into-topology = 쉘을 지형면에 병합
 common-merge-shell-into-topology-ellipsis = 쉘을 지형면에 병합...
-common-modelling = 모델링
 common-move-collar = 공구 이동
 common-move-collection = 컬렉션으로 이동
 common-move-design = 설계 이동

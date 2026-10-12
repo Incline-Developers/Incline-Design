@@ -793,7 +793,6 @@ common-m = m
 common-max = Máx.
 common-merge-shell-into-topology = Fusionar cáscara en topografía
 common-merge-shell-into-topology-ellipsis = Fusionar cáscara en topografía...
-common-modelling = Modelización
 common-move-collar = Mover brocal
 common-move-collection = Mover a colección
 common-move-design = Mover diseño
