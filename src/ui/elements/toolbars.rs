@@ -266,10 +266,8 @@ pub(crate) fn draw_left_toolbar(
 /// explorer's rows rather than as whole-scene toolbar actions: see
 /// `ExplorerEntry::toggles`.
 ///
-/// Every workspace shows and edits the same shared cursor mode. The two
-/// measurements are of a pit being designed, so only that run belongs to the
-/// production workspace - see
-/// [`crate::ui::state::Workspace::has_production_tools`].
+/// Every workspace shows and edits the same shared cursor mode, and carries
+/// the measuring and hiding run.
 pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) -> egui::Rect {
     let claimed = bottom_toolbar_height(ui.ctx());
     egui::Panel::bottom("bottom_tools_strip")
@@ -345,13 +343,8 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
         .rect
 }
 
-/// The measuring run, which only a workspace designing a pit has anything to
-/// measure in - see [`crate::ui::state::Workspace::has_production_tools`].
+/// The measuring and hiding run, which every workspace carries.
 fn draw_measure_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, side: f32) {
-    if !editor.active_workspace.has_production_tools() {
-        return;
-    }
-
     ui.add_enabled_ui(!editor.fly_mode_enabled, |ui| {
         tool_button(
             ui,
