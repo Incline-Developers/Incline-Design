@@ -763,12 +763,16 @@ impl crate::app::App<'_> {
                     Some(work) if shown_h < work.end_h => blasting.entry((work.blast, work.activity)).or_default().push(true),
                     // Not working: greyed on the blast that holds it up, if
                     // its open bars still have one, and not drawn otherwise.
+                    // An MPU done charging leaves, and comes back only to a
+                    // blast it is part way through.
                     _ => {
                         let open = machine
                             .bars
                             .iter()
                             .filter(|(start_h, end_h, _)| *start_h <= shown_h + 1e-9 && end_h.is_none_or(|end| shown_h < end - 1e-9));
-                        if let Some(blast) = result.first_needing(open.flat_map(|(_, _, blasts)| blasts.iter().copied()), machine.activity, shown_h) {
+                        if let Some(blast) = result.first_needing(open.flat_map(|(_, _, blasts)| blasts.iter().copied()), machine.activity, shown_h)
+                            && (machine.activity != BlastActivity::Charge || result.done_share(blast, machine.activity, shown_h) > 0.0)
+                        {
                             blasting.entry((blast, machine.activity)).or_default().push(false);
                         }
                     }
