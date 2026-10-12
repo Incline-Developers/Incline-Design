@@ -676,7 +676,10 @@ impl BlockModelGpuCache {
             });
             let volume_ready = prepared_volume.is_some();
             let mut line_color = if selected { crate::ui::SELECTION_COLOR_F32 } else { [0.03, 0.05, 0.06, 1.0] };
-            if translucent {
+            // A translucent model fades its wireframe with it, but never the
+            // selection outline: faded, it mixes with the block colours and
+            // stops reading as the selection blue used everywhere else.
+            if translucent && !selected {
                 make_translucent(&mut line_color);
             }
             let show_edges = selected || editor.topology_wireframes_enabled;
