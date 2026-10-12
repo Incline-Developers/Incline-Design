@@ -1504,24 +1504,6 @@ pub(super) fn blast_activity_color(activity: crate::model::schedule::BlastActivi
     }
 }
 
-/// The published blasts a blast bar names, by position.
-pub(super) fn bar_blasts(bar: &ScheduleBar, schedule: &CalculatedSchedule) -> Vec<usize> {
-    let (Some(order), Some(result)) = (bar.blast_order(), schedule.drill_blast.as_ref()) else {
-        return Vec::new();
-    };
-    order
-        .members
-        .iter()
-        .filter_map(|member| {
-            result.blasts.iter().position(|blast| {
-                blast.reference.solid == member.solid
-                    && (blast.reference.bench - member.bench).abs() < 1e-6
-                    && crate::model::arrangement::point_in_face(&blast.face, glam::DVec2::from(member.anchor))
-            })
-        })
-        .collect()
-}
-
 /// Why a blast is not ready yet at `hour`: a short phrase for a detail line
 /// and the explanation for a hover. `None` once it has fired.
 pub(super) fn blast_hold_text(result: &crate::model::schedule::result::DrillBlastResult, index: usize, hour: f64) -> Option<(String, String)> {
@@ -2571,7 +2553,7 @@ fn draw_bars(
 /// events belong to the dedicated blasting row.
 fn draw_blast_band(ui: &mut egui::Ui, body: egui::Rect, band: egui::Rect, view: GanttView, bar: &ScheduleBar, schedule: &CalculatedSchedule) {
     let Some(result) = schedule.drill_blast.as_ref() else { return };
-    let blasts = bar_blasts(bar, schedule);
+    let blasts = schedule.bar_blasts(bar);
     // A follow bar works whatever its leader has next, so all of its
     // machine's work inside its window is its own.
     let follows = bar.follow().is_some();
@@ -3268,7 +3250,7 @@ fn calendar_delay_tooltip(plan: &SchedulePlan, agent: LoaderAgentId, at_h: f64) 
 
 fn blast_bar_completion_h(plan: &SchedulePlan, bar: &ScheduleBar, schedule: &CalculatedSchedule) -> Option<f64> {
     let activity = plan.agent_kind(bar.agent?)?.activity()?;
-    let blasts = bar_blasts(bar, schedule);
+    let blasts = schedule.bar_blasts(bar);
     if blasts.is_empty() || blasts.len() != bar.blast_order()?.members.len() {
         return None;
     }

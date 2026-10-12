@@ -307,37 +307,49 @@ pub(crate) struct ScheduleAnimation {
 }
 
 /// Each machine's work, in time order: a loader's spans (start, end and
-/// source), and a dozer's,
-/// drill's or MPU's rows of the run's drill and blast work (by position).
+/// source), and for each dozer, drill or MPU its step, its rows of the run's
+/// drill and blast work (by position), and its blast bars - each one's
+/// window and blasts - in priority order, for what holds it up when idle.
 #[derive(Default)]
 struct MachineWork {
     loaders: Vec<(crate::model::schedule::LoaderAgentId, Vec<(f64, f64, crate::model::schedule::result::WorkSource)>)>,
-    drill_blast: Vec<Vec<usize>>,
+    drill_blast: Vec<DrillBlastMachine>,
+}
+
+struct DrillBlastMachine {
+    activity: crate::model::schedule::BlastActivity,
+    rows: Vec<usize>,
+    bars: Vec<(f64, Option<f64>, Vec<usize>)>,
 }
 
 impl MachineWork {
-    fn of(calculation: &crate::model::schedule::result::CalculatedSchedule) -> Self {
+    fn of(calculation: &crate::model::schedule::result::CalculatedSchedule, plan: Option<&crate::model::schedule::SchedulePlan>) -> Self {
         let mut loaders: std::collections::BTreeMap<_, Vec<_>> = std::collections::BTreeMap::new();
         for execution in &calculation.executions {
             loaders.entry(execution.agent).or_default().push((execution.start_h, execution.end_h, execution.source));
         }
-        let mut drill_blast: std::collections::BTreeMap<_, Vec<usize>> = std::collections::BTreeMap::new();
-        if let Some(result) = &calculation.drill_blast {
-            for (row, work) in result.work.iter().enumerate() {
-                drill_blast.entry(work.agent).or_default().push(row);
-            }
-            for rows in drill_blast.values_mut() {
+        let mut drill_blast = Vec::new();
+        if let (Some(result), Some(plan)) = (&calculation.drill_blast, plan) {
+            for agent in plan.agents() {
+                let Some(activity) = plan.agent_kind(agent.id).and_then(crate::model::schedule::MachineKind::activity) else {
+                    continue;
+                };
+                let mut rows: Vec<usize> = (0..result.work.len()).filter(|row| result.work[*row].agent == agent.id).collect();
                 rows.sort_by(|a, b| result.work[*a].start_h.total_cmp(&result.work[*b].start_h));
+                let bars = plan
+                    .bars()
+                    .iter()
+                    .filter(|bar| bar.agent == Some(agent.id))
+                    .map(|bar| (bar.window.start_h, bar.window.end_h, calculation.bar_blasts(bar)))
+                    .collect();
+                drill_blast.push(DrillBlastMachine { activity, rows, bars });
             }
         }
         let mut loaders: Vec<_> = loaders.into_iter().collect();
         for (_, spans) in &mut loaders {
             spans.sort_by(|a, b| a.0.total_cmp(&b.0));
         }
-        Self {
-            loaders,
-            drill_blast: drill_blast.into_values().collect(),
-        }
+        Self { loaders, drill_blast }
     }
 }
 
@@ -551,7 +563,13 @@ impl crate::app::App<'_> {
             // Built before the result is stored, so the borrow of the held
             // calculation ends before the animation state is written.
             let index = self.schedule_calculation.as_ref().map(|calculation| AnimationIndex::build(calculation));
-            self.schedule_animation.machine_work = self.schedule_calculation.as_deref().map(MachineWork::of).unwrap_or_default();
+            let plan = self.workspace.active_document().map(|document| document.schedule());
+            let machine_work = self
+                .schedule_calculation
+                .as_deref()
+                .map(|calculation| MachineWork::of(calculation, plan))
+                .unwrap_or_default();
+            self.schedule_animation.machine_work = machine_work;
             match index {
                 Some(Ok(index)) => self.schedule_animation.index = Some(index),
                 Some(Err(error)) => self.schedule_animation.error = Some(error.to_string()),
@@ -685,7 +703,10 @@ impl crate::app::App<'_> {
     /// shown.
     fn place_animation_machines(&mut self) {
         use crate::{
-            model::schedule::{BlastActivity, result::WorkSource},
+            model::schedule::{
+                BlastActivity,
+                result::{IdleReason, WorkSource},
+            },
             rendering::machines::{MachineModel, MachinePlacement},
         };
         let animation = &self.schedule_animation;
@@ -700,13 +721,23 @@ impl crate::app::App<'_> {
         // Which job each machine is on: a loader's block by its slot, and a
         // drill and blast machine's blast and step.
         let plan = self.workspace.active_document().map(|document| document.schedule());
+        let calculation = self.schedule_calculation.as_deref();
         let mut digging: std::collections::BTreeMap<usize, Vec<(MachineModel, bool)>> = std::collections::BTreeMap::new();
         for (agent, spans) in &animation.machine_work.loaders {
-            // Its last span, until its next starts: past that span's end it stands
-            // idle where it was.
+            // Its last span, until its next starts. Past that span's end it
+            // stands where it was, greyed while something holds it up, and
+            // is not drawn once it has no work.
             let Some(&(_, end_h, WorkSource::Block(id))) = spans.partition_point(|span| span.0 <= shown_h).checked_sub(1).map(|at| &spans[at]) else {
                 continue;
             };
+            let working = shown_h < end_h;
+            if !working
+                && calculation
+                    .and_then(|calculation| calculation.idle_at(*agent, shown_h))
+                    .is_none_or(|span| matches!(span.reason, Some(IdleReason::NoWork | IdleReason::WorkFinished)))
+            {
+                continue;
+            }
             let loader_type = plan
                 .and_then(|plan| plan.class(plan.agent(*agent)?.class_id))
                 .map(|class| class.loader_type)
@@ -716,16 +747,31 @@ impl crate::app::App<'_> {
                 crate::model::schedule::LoaderType::WheelLoader => MachineModel::WheelLoader,
             };
             if let Some(&slot) = animation.block_slots.get(&id) {
-                digging.entry(slot).or_default().push((model, shown_h < end_h));
+                digging.entry(slot).or_default().push((model, working));
             }
         }
-        let result = self.schedule_calculation.as_ref().and_then(|calculation| calculation.drill_blast.as_ref());
+        let result = calculation.and_then(|calculation| calculation.drill_blast.as_ref());
         let mut blasting: std::collections::BTreeMap<(usize, BlastActivity), Vec<bool>> = std::collections::BTreeMap::new();
         if let Some(result) = result {
-            for rows in &animation.machine_work.drill_blast {
-                if let Some(&row) = rows.partition_point(|&row| result.work[row].start_h <= shown_h).checked_sub(1).map(|at| &rows[at]) {
-                    let work = &result.work[row];
-                    blasting.entry((work.blast, work.activity)).or_default().push(shown_h < work.end_h);
+            for machine in &animation.machine_work.drill_blast {
+                let rows = &machine.rows;
+                let current = rows
+                    .partition_point(|&row| result.work[row].start_h <= shown_h)
+                    .checked_sub(1)
+                    .map(|at| &result.work[rows[at]]);
+                match current {
+                    Some(work) if shown_h < work.end_h => blasting.entry((work.blast, work.activity)).or_default().push(true),
+                    // Not working: greyed on the blast that holds it up, if
+                    // its open bars still have one, and not drawn otherwise.
+                    _ => {
+                        let open = machine
+                            .bars
+                            .iter()
+                            .filter(|(start_h, end_h, _)| *start_h <= shown_h + 1e-9 && end_h.is_none_or(|end| shown_h < end - 1e-9));
+                        if let Some(blast) = result.first_needing(open.flat_map(|(_, _, blasts)| blasts.iter().copied()), machine.activity, shown_h) {
+                            blasting.entry((blast, machine.activity)).or_default().push(false);
+                        }
+                    }
                 }
             }
         }

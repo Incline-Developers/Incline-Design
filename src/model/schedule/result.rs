@@ -206,6 +206,19 @@ pub(crate) struct PublishedBlastWork {
 }
 
 impl DrillBlastResult {
+    /// The first of `blasts` still needing `activity` at `hour` and not yet
+    /// fired: the one a dozer, drill or MPU with those blasts in its open
+    /// bars is held up on when it is not working. `None` when none is left,
+    /// so it has no work rather than being held up.
+    pub(crate) fn first_needing(&self, blasts: impl IntoIterator<Item = usize>, activity: super::BlastActivity, hour: f64) -> Option<usize> {
+        let reached = |at: Option<f64>| at.is_some_and(|at| at <= hour + 1e-9);
+        blasts.into_iter().find(|index| {
+            self.blasts
+                .get(*index)
+                .is_some_and(|blast| !reached(blast.done_h[activity as usize]) && !reached(blast.fired_h))
+        })
+    }
+
     /// How much of `activity` a blast has had done by `at_h`, as a share of
     /// what it needs.
     pub(crate) fn done_share(&self, blast: usize, activity: super::BlastActivity, at_h: f64) -> f64 {
@@ -1179,6 +1192,25 @@ impl CalculatedSchedule {
     /// The movements under way at `hour`, half-open like [`Self::executions_at`].
     pub(crate) fn deliveries_at(&self, hour: f64) -> impl Iterator<Item = &Delivery> {
         self.deliveries.iter().filter(move |delivery| delivery.start_h <= hour && hour < delivery.end_h)
+    }
+
+    /// The blasts a blast bar names, by position in [`Self::drill_blast`], in
+    /// its order.
+    pub(crate) fn bar_blasts(&self, bar: &super::ScheduleBar) -> Vec<usize> {
+        let (Some(order), Some(result)) = (bar.blast_order(), self.drill_blast.as_ref()) else {
+            return Vec::new();
+        };
+        order
+            .members
+            .iter()
+            .filter_map(|member| {
+                result.blasts.iter().position(|blast| {
+                    blast.reference.solid == member.solid
+                        && (blast.reference.bench - member.bench).abs() < 1e-6
+                        && crate::model::arrangement::point_in_face(&blast.face, glam::DVec2::from(member.anchor))
+                })
+            })
+            .collect()
     }
 
     /// The idle span one loader is in at `hour`, if it is idle then.

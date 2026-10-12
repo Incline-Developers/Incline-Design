@@ -201,13 +201,7 @@ fn drill_blast_idle_detail(
         return Some(super::schedule_gantt::next_bar_note(plan, agent, hour).unwrap_or_else(|| sentence_case(&idle_reason_text(Some(IdleReason::NoWork)).0)));
     }
     let activity = plan.agent_kind(agent).and_then(crate::model::schedule::MachineKind::activity)?;
-    let reached = |at: Option<f64>| at.is_some_and(|at| at <= hour + 1e-9);
-    let waiting = open.iter().flat_map(|bar| super::schedule_gantt::bar_blasts(bar, schedule)).find(|index| {
-        result
-            .blasts
-            .get(*index)
-            .is_some_and(|blast| !reached(blast.done_h[activity as usize]) && !reached(blast.fired_h))
-    })?;
+    let waiting = result.first_needing(open.iter().flat_map(|bar| schedule.bar_blasts(bar)), activity, hour)?;
     let (short, _) = super::schedule_gantt::blast_hold_text(result, waiting, hour)?;
     Some(format!("{} · {short}", super::schedule_gantt::blast_title(&result.blasts[waiting])))
 }
