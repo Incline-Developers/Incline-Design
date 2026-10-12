@@ -1135,12 +1135,6 @@ pub(crate) struct EditorState {
     /// Show every vertex of all visible design objects. These are kept in a
     /// persistent GPU instance cache rather than a decimated UI overlay.
     pub(crate) show_points: bool,
-    /// Draw classified point clouds in their ASPRS class colours. Survey's
-    /// reading of a cloud - what a delivery's ground filter decided - so the
-    /// switch appears there and the renderer honours it there only. On by
-    /// default: a classified cloud arrives to be checked, and a flat one hides
-    /// the vegetation and noise that check is looking for.
-    pub(crate) point_cloud_classification_colors: bool,
     /// The UI language in force, which the status bar's picker changes live.
     /// Read only to tick the running language in that picker - what the strings
     /// themselves come from is the loader in [`crate::i18n`].
@@ -2436,7 +2430,6 @@ impl EditorState {
             translucent_handles: HashSet::new(),
             topology_wireframes_enabled: false,
             show_points: false,
-            point_cloud_classification_colors: true,
             language: crate::app::io::default_language(),
             dark_mode: crate::app::io::default_dark_mode(),
             show_console: crate::app::io::default_show_console(),
@@ -2997,7 +2990,7 @@ impl EditorState {
     /// it is also part of `EditorSceneState` - the editor state a cached scene
     /// image is only valid for.
     pub(crate) fn colors_points_by_classification(&self) -> bool {
-        self.active_workspace == Workspace::Survey && self.point_cloud_classification_colors
+        self.active_workspace == Workspace::Survey
     }
 
     /// Whether the active translate tool has anything to move: design
@@ -3431,7 +3424,6 @@ pub(crate) enum UiCommand {
     ToggleRotationCentre,
     /// The grid button: the RL grid in a section, the XY grid in plan.
     SetGridShown(bool),
-    SetPointCloudClassificationColors(bool),
     SetTopologyWireframes(bool),
     SetShowPoints(bool),
     /// Presentation shading over the scene pass. Native only.
@@ -4116,7 +4108,6 @@ impl UiCommand {
             Self::ToggleRotationCentre => report(tr!("state-centre-rotation"), tr!("state-fix-release-centre-both-views")),
             Self::SetTopologyWireframes(enabled) => report(tr!("state-set-topology-wireframes"), if *enabled { tr!("state-shown") } else { tr!("state-hidden") }),
             Self::SetGridShown(shown) => report(tr!("state-set-grid"), if *shown { tr!("state-shown") } else { tr!("state-hidden") }),
-            Self::SetPointCloudClassificationColors(enabled) => report(tr!("state-colour-points-classification"), if *enabled { tr!("state-on") } else { tr!("state-off") }),
             Self::SetShowPoints(enabled) => report(tr!("state-set-point-visibility"), if *enabled { tr!("state-shown") } else { tr!("state-hidden") }),
             #[cfg(not(target_arch = "wasm32"))]
             Self::SetCinematicEnabled(enabled) => report(tr!("state-set-cinematic-view"), if *enabled { tr!("state-enabled") } else { tr!("state-disabled") }),
