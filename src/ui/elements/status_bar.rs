@@ -155,12 +155,10 @@ fn draw_cpu_usage(ui: &mut egui::Ui, editor: &EditorState) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, CPU_BAR_HEIGHT), egui::Sense::hover());
     if ui.is_rect_visible(rect) {
         let visuals = ui.visuals();
-        let track = progress::track_color(visuals);
         let painter = ui.painter();
         for (index, load) in cores.iter().enumerate() {
             let left = rect.left() + index as f32 * (CPU_BAR_WIDTH + CPU_BAR_GAP);
             let bar = egui::Rect::from_min_size(egui::pos2(left, rect.top()), egui::vec2(CPU_BAR_WIDTH, CPU_BAR_HEIGHT));
-            painter.rect_filled(bar, 0.0, track);
             let filled = egui::Rect::from_min_max(egui::pos2(bar.left(), bar.bottom() - bar.height() * load), bar.max);
             painter.rect_filled(filled, 0.0, load_color(visuals.dark_mode, 1.0 - load));
         }
