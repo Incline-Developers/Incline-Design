@@ -268,9 +268,13 @@ pub(crate) fn draw_left_toolbar(
 ///
 /// Every workspace shows and edits the same shared cursor mode, and carries
 /// the measuring and hiding run.
-pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) -> egui::Rect {
+///
+/// Returns the toolbar's rect and the screen x of the cursor-mode run's
+/// middle, which the console's grip lines up with.
+pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) -> (egui::Rect, f32) {
     let claimed = bottom_toolbar_height(ui.ctx());
-    egui::Panel::bottom("bottom_tools_strip")
+    let mut cursor_modes_centre = ui.ctx().content_rect().center().x;
+    let rect = egui::Panel::bottom("bottom_tools_strip")
         .resizable(false)
         .show_separator_line(crate::ui::chrome::show_separator_line(ui))
         .exact_size(claimed)
@@ -316,9 +320,10 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
                     let band_right = right.left() - CENTRE_CLEARANCE;
                     let x = (strip.left() + centre_offset - width / 2.0).clamp(band_left, (band_right - width).max(band_left));
                     let run = egui::Rect::from_min_max(egui::pos2(x, strip.top()), egui::pos2(strip.right(), strip.bottom()));
-                    super::cluster(ui, run, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    let modes = super::cluster(ui, run, egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         draw_cursor_modes(ui, editor, commands, side);
                     });
+                    cursor_modes_centre = modes.center().x;
 
                     // The width the strip has to keep: the three clusters, the
                     // centre one with its clearance either side.
@@ -328,7 +333,8 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
             });
         })
         .response
-        .rect
+        .rect;
+    (rect, cursor_modes_centre)
 }
 
 /// The measuring and hiding run, which every workspace carries.

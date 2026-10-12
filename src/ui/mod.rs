@@ -621,7 +621,7 @@ fn draw_ui(
         root_ui.skip_ahead_auto_ids(1);
     }
 
-    let bottom_toolbar_rect = elements::toolbars::draw_bottom_toolbar(root_ui, editor, commands);
+    let (bottom_toolbar_rect, cursor_modes_centre) = elements::toolbars::draw_bottom_toolbar(root_ui, editor, commands);
 
     // Down the right edge. Claimed after the two strips below it, so it stops
     // at the bottom toolbar's top and they carry on underneath it, and after
@@ -1155,7 +1155,7 @@ fn draw_ui(
         &ctx,
         [
             chrome::Grip::new(explorer.column, chrome::Edge::Right, elements::explorer::PANEL_ID),
-            chrome::Grip::new(console_claimed, chrome::Edge::Top, elements::console::PANEL_ID).centred_at_x(ctx.content_rect().center().x),
+            chrome::Grip::new(console_claimed, chrome::Edge::Top, elements::console::PANEL_ID).centred_at_x(cursor_modes_centre),
             chrome::Grip::new(products_claimed, chrome::Edge::Top, elements::products::PANEL_ID),
             chrome::Grip::new(borehole_inspector_claimed, chrome::Edge::Left, elements::borehole_inspector::PANEL_ID),
         ],
