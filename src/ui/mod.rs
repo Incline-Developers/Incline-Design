@@ -1799,9 +1799,8 @@ fn theme_visuals(dark_mode: bool, selection_color: egui::Color32) -> egui::Visua
 /// block or blast it works. Machines sharing one stand side by side.
 fn draw_machine_icons(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect) {
     use crate::rendering::machines::MachineIcon;
-    const HEIGHT: f32 = 20.0;
-    const PAD: f32 = 3.0;
-    const GAP: f32 = 2.0;
+    const HEIGHT: f32 = 30.0;
+    const GAP: f32 = 1.0;
     let icons = &editor.animation_machine_icons;
     if icons.is_empty() {
         return;
@@ -1825,36 +1824,23 @@ fn draw_machine_icons(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Re
             .filter_map(|icon| {
                 let texture = machine_icon_texture(ui.ctx(), icon.model, icon.working)?;
                 let size = texture.size_vec2();
-                Some((icon.working, texture, HEIGHT * size.x / size.y.max(1.0) + 2.0 * PAD))
+                Some((texture, HEIGHT * size.x / size.y.max(1.0)))
             })
             .collect();
-        let width = badges.iter().map(|badge| badge.2 + GAP).sum::<f32>() - GAP;
+        let width = badges.iter().map(|badge| badge.1 + GAP).sum::<f32>() - GAP;
         let mut left = at.x - width / 2.0;
-        for (working, texture, badge_width) in badges {
-            let rect = egui::Rect::from_min_size(egui::pos2(left, at.y - HEIGHT / 2.0 - PAD), egui::vec2(badge_width, HEIGHT + 2.0 * PAD));
-            left += badge_width + GAP;
-            if !canvas_rect.intersects(rect) {
-                continue;
+        for (texture, icon_width) in badges {
+            let rect = egui::Rect::from_min_size(egui::pos2(left, at.y - HEIGHT / 2.0), egui::vec2(icon_width, HEIGHT));
+            left += icon_width + GAP;
+            if canvas_rect.intersects(rect) {
+                painter.image(texture.id(), rect, egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
             }
-            // Amber at work; grey where it stands idle at its last job.
-            let (fill, stroke) = if working {
-                (egui::Color32::from_white_alpha(240), egui::Color32::from_rgb(194, 136, 24))
-            } else {
-                (egui::Color32::from_rgba_unmultiplied(215, 215, 215, 240), egui::Color32::from_gray(130))
-            };
-            painter.rect(rect, widgets::toolbar::GROUP_CORNER_RADIUS, fill, egui::Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
-            painter.image(
-                texture.id(),
-                rect.shrink(PAD),
-                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
-                egui::Color32::WHITE,
-            );
         }
     }
 }
 
-/// A machine's icon - its model rendered from the right side - uploaded once,
-/// and in grey for a machine standing idle.
+/// A machine's icon, uploaded once: in grey for a machine standing idle, and
+/// ringed by a light halo so it reads over dark ground and light alike.
 fn machine_icon_texture(ctx: &egui::Context, model: crate::rendering::machines::MachineModel, working: bool) -> Option<egui::TextureHandle> {
     use crate::rendering::machines::MachineModel;
     let id = egui::Id::new(("machine-icon", model, working));
@@ -1884,7 +1870,48 @@ fn machine_icon_texture(ctx: &egui::Context, model: crate::rendering::machines::
             *pixel = [grey, grey, grey, pixel[3]];
         }
     }
-    let image = egui::ColorImage::from_rgba_unmultiplied([info.width as usize, info.height as usize], &pixels);
+    // The halo: the icon's shape grown by a few pixels, under the icon.
+    const HALO: usize = 3;
+    let halo = if working { [255.0, 255.0, 255.0] } else { [215.0, 215.0, 215.0] };
+    let (width, height) = (info.width as usize, info.height as usize);
+    let (wide, high) = (width + 2 * HALO, height + 2 * HALO);
+    let alpha = |x: isize, y: isize| -> f32 {
+        if x < 0 || y < 0 || x as usize >= width || y as usize >= height {
+            return 0.0;
+        }
+        f32::from(pixels[(y as usize * width + x as usize) * 4 + 3]) / 255.0
+    };
+    let reach = HALO as isize;
+    let mut ringed = vec![0u8; wide * high * 4];
+    for y in 0..high {
+        for x in 0..wide {
+            let (sx, sy) = (x as isize - reach, y as isize - reach);
+            let mut cover: f32 = 0.0;
+            for dy in -reach..=reach {
+                for dx in -reach..=reach {
+                    if dx * dx + dy * dy <= reach * reach {
+                        cover = cover.max(alpha(sx + dx, sy + dy));
+                    }
+                }
+            }
+            let halo_alpha = cover * 0.9;
+            let icon_alpha = alpha(sx, sy);
+            let out_alpha = icon_alpha + halo_alpha * (1.0 - icon_alpha);
+            let at = (y * wide + x) * 4;
+            if out_alpha > 0.0 {
+                for channel in 0..3 {
+                    let icon = if icon_alpha > 0.0 {
+                        f32::from(pixels[(sy as usize * width + sx as usize) * 4 + channel])
+                    } else {
+                        0.0
+                    };
+                    ringed[at + channel] = ((icon * icon_alpha + halo[channel] * halo_alpha * (1.0 - icon_alpha)) / out_alpha) as u8;
+                }
+                ringed[at + 3] = (out_alpha * 255.0) as u8;
+            }
+        }
+    }
+    let image = egui::ColorImage::from_rgba_unmultiplied([wide, high], &ringed);
     let texture = ctx.load_texture(format!("machine-icon-{model:?}-{working}"), image, egui::TextureOptions::LINEAR);
     ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
     Some(texture)
