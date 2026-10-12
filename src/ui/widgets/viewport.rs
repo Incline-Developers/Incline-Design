@@ -15,6 +15,11 @@ use crate::{
     },
 };
 
+/// Room the bottom-left tool panels are given: their usual widest plus the
+/// margin they sit in. Anything else along the viewport's bottom edge keeps
+/// clear of it, so a tool opening never lands on top of it.
+pub(crate) const DOCK_PANEL_RESERVED_WIDTH: f32 = 340.0 + 10.0;
+
 /// A compact tool panel pinned inside the 3D viewport.
 ///
 /// Apears in the bottom left. Used for tool configuration.
