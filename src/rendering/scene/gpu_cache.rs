@@ -177,6 +177,10 @@ struct BlockModelStyleUniform {
     wire_params: [f32; 4],
 }
 
+/// Width of the block outline in logical pixels. It is centred on each edge,
+/// so a model's silhouette shows half of it.
+const BLOCK_WIRE_WIDTH: f32 = 2.5;
+
 /// The outline the block-model shaders draw round each block - selection's,
 /// or the topology wireframe's - in place of separately built edge geometry.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -678,7 +682,7 @@ impl BlockModelGpuCache {
             let show_edges = selected || editor.topology_wireframes_enabled;
             let wire = BlockWire {
                 color: line_color,
-                width: if show_edges { scale_factor.max(1.0) } else { 0.0 },
+                width: if show_edges { BLOCK_WIRE_WIDTH * scale_factor.max(1.0) } else { 0.0 },
             };
             let boundary_highlights = editor.show_block_model_boundary_highlights;
 
