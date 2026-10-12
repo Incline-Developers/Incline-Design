@@ -141,6 +141,8 @@ const CPU_BAR_WIDTH: f32 = 3.0;
 const CPU_BAR_GAP: f32 = 1.0;
 /// Height of the bars: the memory ring's, so the two readouts line up.
 const CPU_BAR_HEIGHT: f32 = MEMORY_RING_SIZE;
+/// Least share of its height a core's bar fills, whatever its load.
+const CPU_BAR_MIN_FILL: f32 = 0.05;
 
 /// "cpu", then one bar per core filling from the bottom with that core's
 /// load: green, yellow over 60% and red over 80% - the memory ring's
@@ -159,7 +161,9 @@ fn draw_cpu_usage(ui: &mut egui::Ui, editor: &EditorState) {
         for (index, load) in cores.iter().enumerate() {
             let left = rect.left() + index as f32 * (CPU_BAR_WIDTH + CPU_BAR_GAP);
             let bar = egui::Rect::from_min_size(egui::pos2(left, rect.top()), egui::vec2(CPU_BAR_WIDTH, CPU_BAR_HEIGHT));
-            let filled = egui::Rect::from_min_max(egui::pos2(bar.left(), bar.bottom() - bar.height() * load), bar.max);
+            // Never below a sliver, so an idle core still shows where it is.
+            let shown = load.max(CPU_BAR_MIN_FILL);
+            let filled = egui::Rect::from_min_max(egui::pos2(bar.left(), bar.bottom() - bar.height() * shown), bar.max);
             painter.rect_filled(filled, 0.0, load_color(visuals.dark_mode, 1.0 - load));
         }
     }
