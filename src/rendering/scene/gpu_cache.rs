@@ -179,7 +179,7 @@ struct BlockModelStyleUniform {
 
 /// Width of the block outline in logical pixels. It is centred on each edge,
 /// so a model's silhouette shows half of it.
-const BLOCK_WIRE_WIDTH: f32 = 2.5;
+const BLOCK_WIRE_WIDTH: f32 = 1.0;
 
 /// The outline the block-model shaders draw round each block - selection's,
 /// or the topology wireframe's - in place of separately built edge geometry.
