@@ -26,6 +26,8 @@ use crate::{
 };
 
 const DEFAULT_BLOCK_MODEL_COLOR: [f32; 4] = [0.2, 0.65, 0.95, 1.0];
+/// Edge length new kriged blocks start at in Create Block Model.
+const DEFAULT_KRIGING_BLOCK_SIZE: f64 = 4.0;
 
 impl<'a> App<'a> {
     fn clear_block_model_entity_state(&mut self, handle: SceneEntityId) {
@@ -390,12 +392,12 @@ impl<'a> App<'a> {
             .map(|field| vec![field.key.clone()])
             .unwrap_or_default();
         self.editor.kriging_name_input = format!("{} Block Model", dataset.name);
+        self.editor.kriging_cell = DVec3::splat(DEFAULT_KRIGING_BLOCK_SIZE);
         if let Some((lower, upper)) = dataset.dataset.bounds {
             let characteristic = (upper - lower).max_element().max(1.0);
             let padding = DVec3::splat(characteristic * 0.025);
             self.editor.kriging_lower = lower - padding;
             self.editor.kriging_upper = upper + padding;
-            self.editor.kriging_cell = DVec3::splat((characteristic / 25.0).max(0.001));
             self.editor.kriging_range = (characteristic / 3.0).max(self.editor.kriging_cell.max_element());
         }
         if let Some(DrillFieldKind::Numeric { min, max }) = self
