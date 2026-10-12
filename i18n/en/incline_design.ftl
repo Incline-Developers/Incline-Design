@@ -1875,6 +1875,7 @@ state-select-layer-objects = Select Layer Objects
 state-selected-objects = Selected objects
 state-selected-polylines = Selected polylines
 state-selected-scene-elements = Selected scene elements
+state-individually-hidden-designs = Individually hidden designs
 state-set-block-model-variable = Set Block Model Variable
 state-set-cinematic-view = Set Cinematic View
 state-set-drillhole-colour-preset = Set Drillhole Colour Preset
@@ -1963,6 +1964,8 @@ toolbars-measure-distance = Measure Distance
 toolbars-new-layer = New Layer
 toolbars-split-polyline-points = Split Polyline At Points
 toolbars-strike-dip = Strike and Dip
+toolbars-hide = Hide
+toolbars-show-all-hidden = Show All Hidden
 toolbars-tool-not-available-section-view = { $tool } - not available in the section view
 
 ## Tri strings
@@ -2115,6 +2118,7 @@ ui-select-line-relimit = Select line to relimit
 ui-select-next-line-fuse = Select the next line to fuse
 ui-select-opposite-berm-point = Select opposite berm point
 ui-select-point = Select a point
+ui-select-designs-to-hide = Click or drag over designs to hide them
 ui-select-polyline = Select a polyline
 ui-select-polyline-open-line = Select a polyline or open line
 ui-select-polyline-vertex = Select a polyline vertex

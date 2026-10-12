@@ -332,6 +332,10 @@ impl<'a> App<'a> {
                 self.hide_selected_elements();
                 Ok(())
             }
+            UiCommand::ShowAllHidden => {
+                self.show_all_hidden_objects();
+                Ok(())
+            }
             #[cfg(not(target_arch = "wasm32"))]
             UiCommand::RequestExit => self.request_exit(),
             UiCommand::SaveAndExit => self.save_and_exit(),
@@ -1462,6 +1466,44 @@ impl<'a> App<'a> {
         // truth for the same action. Transient state is not part of the undo
         // step: undo restores the persisted visibility these override.
         self.editor.hidden_handles.retain(|handle| !selected.contains(handle));
+        if commands.is_empty() {
+            return;
+        }
+        self.execute_edit(Command::Batch(commands));
+        self.invalidate_geometry();
+    }
+
+    /// Hide design objects of the active project, as the Hide tool's click or
+    /// box takes them. Already hidden or foreign ids are skipped.
+    pub(crate) fn hide_objects(&mut self, ids: impl IntoIterator<Item = crate::model::ObjectId>) {
+        let Some(document) = self.workspace.active_document() else {
+            return;
+        };
+        let commands: Vec<Command> = ids
+            .into_iter()
+            .filter(|id| document.get_object(*id).is_some() && !document.is_object_hidden(*id))
+            .map(|id| Command::SetObjectHidden { id, before: false, after: true })
+            .collect();
+        if commands.is_empty() {
+            return;
+        }
+        for command in &commands {
+            if let Command::SetObjectHidden { id, .. } = command {
+                self.editor.selected_handles.remove(&crate::model::SceneEntityId::Object(*id));
+            }
+        }
+        self.execute_edit(Command::Batch(commands));
+        self.invalidate_geometry();
+    }
+
+    /// Bring back every design object hidden on its own. Hidden layers and
+    /// project items keep their explorer eye: only what has no row of its own
+    /// to unhide from comes back here.
+    fn show_all_hidden_objects(&mut self) {
+        let Some(document) = self.workspace.active_document() else {
+            return;
+        };
+        let commands: Vec<Command> = document.hidden_object_ids().map(|id| Command::SetObjectHidden { id, before: true, after: false }).collect();
         if commands.is_empty() {
             return;
         }

@@ -372,6 +372,27 @@ fn draw_measure_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mu
             ActiveTool::MeasureBatterAngle,
             side,
         );
+
+        tool_button(
+            ui,
+            egui::Image::new(themed_icon!(ui, "hide_items.svg")),
+            tr!("toolbars-hide").as_str(),
+            editor,
+            commands,
+            ActiveTool::Hide,
+            side,
+        );
+
+        if ui
+            .add(
+                ToolbarButton::new(egui::Image::new(themed_icon!(ui, "show_all_hidden.svg")), tr!("toolbars-show-all-hidden"))
+                    .id_salt("show_all_hidden")
+                    .button_side(side),
+            )
+            .clicked()
+        {
+            commands.push(UiCommand::ShowAllHidden);
+        }
     });
 }
 

@@ -889,7 +889,7 @@ impl<'a> App<'a> {
                 ActiveTool::MeasureDistance => self.measure_distance_click(),
                 ActiveTool::MeasureBatterAngle => self.measure_batter_angle_click(),
                 ActiveTool::VerticalSlice => self.slice_line_click(),
-                ActiveTool::DeletePoints => {
+                ActiveTool::DeletePoints | ActiveTool::Hide => {
                     self.editor.selection_box_start_px = self.editor.cursor_screen_px;
                     self.editor.selection_box_current_px = self.editor.cursor_screen_px;
                 }

@@ -3074,6 +3074,8 @@ pub(crate) enum ActiveTool {
     DeletePoints,
     MeasureDistance,
     MeasureBatterAngle,
+    /// Click or box over designs to hide them. Show All Hidden brings them back.
+    Hide,
     OffsetElement,
     DrapeToTopology,
     RelimitLine,
@@ -3728,6 +3730,8 @@ pub(crate) enum UiCommand {
     },
     RemoveTriangulation(TriangulationId),
     HideSelection,
+    /// Show every design object hidden on its own, leaving hidden layers and items alone.
+    ShowAllHidden,
     ZoomToExtents,
     /// Dialog "Apply" pressed - begin the canvas side-pick phase.
     BeginOffsetPick {
@@ -4237,6 +4241,7 @@ impl UiCommand {
             Self::ExportPlotSheet => report(tr!("common-export-engineering-drawing"), tr!("state-choose-destination")),
             Self::RemoveTriangulation(id) => report(tr!("state-remove-triangulation"), format!("{id:?}")),
             Self::HideSelection => report(tr!("common-hide-selection"), tr!("state-selected-scene-elements")),
+            Self::ShowAllHidden => report(tr!("toolbars-show-all-hidden"), tr!("state-individually-hidden-designs")),
             Self::ZoomToExtents => report(tr!("common-zoom-extents"), tr!("state-preserve-view-angle")),
             Self::BeginOffsetPick { object_ids, .. } => report(tr!("common-offset"), tr!("common-count-object-s", count = object_ids.len().to_string())),
             Self::RelimitLineResize { source_id, .. } => report(tr!("common-relimit-line"), format!("{source_id:?}")),
