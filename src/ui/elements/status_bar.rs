@@ -99,8 +99,6 @@ fn draw_language_picker(ui: &mut egui::Ui, editor: &EditorState, commands: &mut 
     });
 }
 
-/// Space between the frame rate, the memory readout and the language picker.
-const READOUT_GAP: f32 = 24.0;
 /// Diameter of the memory readout's ring: a little over the body text's
 /// height, so it sits in the line rather than standing out of it.
 const MEMORY_RING_SIZE: f32 = 14.0;
@@ -117,7 +115,7 @@ const MEMORY_TIGHT_LIGHT: egui::Color32 = egui::Color32::from_rgb(0xB0, 0x82, 0x
 const MEMORY_LOW_DARK: egui::Color32 = egui::Color32::from_rgb(0xF8, 0x51, 0x49);
 const MEMORY_LOW_LIGHT: egui::Color32 = egui::Color32::from_rgb(0xC9, 0x2A, 0x2A);
 
-/// A ring, like the task readout's, then "mem"; the amounts in use and in
+/// A ring, like the task readout's, then "memory"; the amounts in use and in
 /// total show on hover. The ring is filled to the share in use: green while
 /// plenty is free, yellow under 40% free and red under 20%. Natively the whole machine's memory; in the browser the app's
 /// own heap - see [`crate::app::memory_usage::MemoryUsage`]. Drawn right to
@@ -224,11 +222,13 @@ pub(crate) fn draw_status_bar(ui: &mut egui::Ui, editor: &EditorState, commands:
                 // before it.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     draw_language_picker(ui, editor, commands);
-                    ui.add_space(READOUT_GAP);
-                    draw_memory_usage(ui, editor);
-                    ui.add_space(READOUT_GAP);
+                    ui.separator();
                     let fps = editor.measured_fps.map_or_else(|| "--".to_owned(), |fps| format!("{fps:.0}"));
                     ui.label(tr!("status-fps", fps = fps));
+                    if editor.memory_usage.is_some() {
+                        ui.separator();
+                        draw_memory_usage(ui, editor);
+                    }
                 });
             });
         })

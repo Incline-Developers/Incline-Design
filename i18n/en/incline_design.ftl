@@ -20,7 +20,7 @@ common-set = Set
 # Title of the status bar's language menu. The languages themselves are never
 # translated: each names itself in its own script, from `LanguageChoice`.
 status-fps = { $fps } fps
-status-memory = mem
+status-memory = memory
 status-memory-used-total = { $used } / { $total }
 status-language = Language
 
