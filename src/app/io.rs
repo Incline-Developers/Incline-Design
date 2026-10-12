@@ -187,8 +187,6 @@ pub(crate) struct Config {
     /// Bound large GeoTIFF previews to reduce CPU/GPU memory use.
     #[serde(default = "default_downscale_raster_previews")]
     pub(crate) downscale_raster_previews: bool,
-    #[serde(default)]
-    pub(crate) frame_counter_enabled: bool,
     #[serde(default = "default_show_world_axis_gizmo")]
     pub(crate) show_world_axis_gizmo: bool,
     /// Show the cartographic distance scale in the viewport.
@@ -292,7 +290,6 @@ impl Default for Config {
             block_model_interaction_resolution_divisor: default_block_model_interaction_resolution_divisor(),
             show_block_model_boundary_highlights: default_show_block_model_boundary_highlights(),
             downscale_raster_previews: default_downscale_raster_previews(),
-            frame_counter_enabled: false,
             show_world_axis_gizmo: default_show_world_axis_gizmo(),
             show_scale_bar: default_show_scale_bar(),
             debug_surface_chunks: false,

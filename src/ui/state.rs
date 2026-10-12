@@ -62,7 +62,6 @@ pub(crate) struct PreferencesDraft {
     pub(crate) block_model_interaction_resolution_divisor: u32,
     pub(crate) show_block_model_boundary_highlights: bool,
     pub(crate) downscale_raster_previews: bool,
-    pub(crate) frame_counter_enabled: bool,
     pub(crate) debug_surface_chunks: bool,
     pub(crate) debug_clip_planes: bool,
     pub(crate) debug_point_cloud_chunks: bool,
@@ -105,7 +104,6 @@ impl Default for PreferencesDraft {
             block_model_interaction_resolution_divisor: crate::app::io::default_block_model_interaction_resolution_divisor(),
             show_block_model_boundary_highlights: crate::app::io::default_show_block_model_boundary_highlights(),
             downscale_raster_previews: crate::app::io::default_downscale_raster_previews(),
-            frame_counter_enabled: false,
             debug_surface_chunks: false,
             debug_clip_planes: false,
             debug_point_cloud_chunks: false,
@@ -311,8 +309,8 @@ pub(crate) struct SelectionCounts {
     pub(crate) triangulations: usize,
     /// Selected point clouds that are loaded, and so have points to work on.
     pub(crate) point_clouds: usize,
-    /// Selected drill-hole datasets that are loaded, and so have intervals to
-    /// estimate from.
+    /// Loaded drill-hole datasets the selection reaches, whole or by
+    /// individually picked holes, and so with intervals to estimate from.
     pub(crate) drill_holes: usize,
     /// Selected holes, a dataset taken whole standing for every hole in it,
     /// which reference points are placed on.
@@ -1137,12 +1135,6 @@ pub(crate) struct EditorState {
     /// Show every vertex of all visible design objects. These are kept in a
     /// persistent GPU instance cache rather than a decimated UI overlay.
     pub(crate) show_points: bool,
-    /// Draw classified point clouds in their ASPRS class colours. Survey's
-    /// reading of a cloud - what a delivery's ground filter decided - so the
-    /// switch appears there and the renderer honours it there only. On by
-    /// default: a classified cloud arrives to be checked, and a flat one hides
-    /// the vegetation and noise that check is looking for.
-    pub(crate) point_cloud_classification_colors: bool,
     /// The UI language in force, which the status bar's picker changes live.
     /// Read only to tick the running language in that picker - what the strings
     /// themselves come from is the loader in [`crate::i18n`].
@@ -1203,12 +1195,15 @@ pub(crate) struct EditorState {
     pub(crate) show_block_model_boundary_highlights: bool,
     /// Downscale large GeoTIFFs before retaining and uploading their pixel data.
     pub(crate) downscale_raster_previews: bool,
-    pub(crate) frame_counter_enabled: bool,
     pub(crate) measured_fps: Option<f32>,
     /// What the app holds against the machine's memory, refreshed by
     /// `App` every `memory_usage::SAMPLE_PERIOD`. `None` until the first
     /// reading, or where the platform cannot say.
     pub(crate) memory_usage: Option<crate::app::memory_usage::MemoryUsage>,
+    /// Each processor core's load, `0.0..=1.0`, refreshed by `App` every
+    /// `memory_usage::CPU_SAMPLE_PERIOD`. Empty until the first reading, and
+    /// always on the web, where a browser does not say.
+    pub(crate) cpu_usage: Vec<f32>,
     /// Frames and busy seconds counted towards the next `measured_fps`, which
     /// is published once per window rather than every frame. See
     /// `App::record_frame_time`.
@@ -1768,6 +1763,9 @@ pub(crate) struct EditorState {
     pub(crate) optimization: OptimizationState,
     pub(crate) block_model_create_open: bool,
     pub(crate) kriging_drill_hole_id: Option<DrillHoleId>,
+    /// The holes picked in that dataset when the dialog opened, or `None`
+    /// when it was selected whole.
+    pub(crate) kriging_holes: Option<Vec<usize>>,
     pub(crate) kriging_variables: Vec<String>,
     pub(crate) kriging_name_input: String,
     pub(crate) kriging_lower: DVec3,
@@ -2396,7 +2394,6 @@ impl EditorState {
             block_model_interaction_resolution_divisor: self.block_model_interaction_resolution_divisor,
             show_block_model_boundary_highlights: self.show_block_model_boundary_highlights,
             downscale_raster_previews: self.downscale_raster_previews,
-            frame_counter_enabled: self.frame_counter_enabled,
             debug_surface_chunks: self.debug_surface_chunks,
             debug_clip_planes: self.debug_clip_planes,
             debug_point_cloud_chunks: self.debug_point_cloud_chunks,
@@ -2440,7 +2437,6 @@ impl EditorState {
             translucent_handles: HashSet::new(),
             topology_wireframes_enabled: false,
             show_points: false,
-            point_cloud_classification_colors: true,
             language: crate::app::io::default_language(),
             dark_mode: crate::app::io::default_dark_mode(),
             show_console: crate::app::io::default_show_console(),
@@ -2464,9 +2460,9 @@ impl EditorState {
             block_model_interaction_resolution_divisor: crate::app::io::default_block_model_interaction_resolution_divisor(),
             show_block_model_boundary_highlights: crate::app::io::default_show_block_model_boundary_highlights(),
             downscale_raster_previews: crate::app::io::default_downscale_raster_previews(),
-            frame_counter_enabled: false,
             measured_fps: None,
             memory_usage: None,
+            cpu_usage: Vec::new(),
             frame_rate_window: (0, 0.0),
             debug_surface_chunks: false,
             debug_surface_stats: None,
@@ -2760,6 +2756,7 @@ impl EditorState {
             optimization: OptimizationState::default(),
             block_model_create_open: false,
             kriging_drill_hole_id: None,
+            kriging_holes: None,
             kriging_variables: Vec::new(),
             kriging_name_input: tr!("state-kriged-block-model"),
             kriging_lower: DVec3::ZERO,
@@ -3002,7 +2999,7 @@ impl EditorState {
     /// it is also part of `EditorSceneState` - the editor state a cached scene
     /// image is only valid for.
     pub(crate) fn colors_points_by_classification(&self) -> bool {
-        self.active_workspace == Workspace::Survey && self.point_cloud_classification_colors
+        self.active_workspace == Workspace::Survey
     }
 
     /// Whether the active translate tool has anything to move: design
@@ -3074,6 +3071,8 @@ pub(crate) enum ActiveTool {
     DeletePoints,
     MeasureDistance,
     MeasureBatterAngle,
+    /// Click or box over designs to hide them. Show All Hidden brings them back.
+    Hide,
     OffsetElement,
     DrapeToTopology,
     RelimitLine,
@@ -3434,7 +3433,6 @@ pub(crate) enum UiCommand {
     ToggleRotationCentre,
     /// The grid button: the RL grid in a section, the XY grid in plan.
     SetGridShown(bool),
-    SetPointCloudClassificationColors(bool),
     SetTopologyWireframes(bool),
     SetShowPoints(bool),
     /// Presentation shading over the scene pass. Native only.
@@ -3706,6 +3704,8 @@ pub(crate) enum UiCommand {
     OpenCreateBlockModel,
     ExecuteCreateBlockModel {
         drill_hole_id: DrillHoleId,
+        /// Only these holes' intervals, or every hole when `None`.
+        holes: Option<Vec<usize>>,
         variables: Vec<String>,
         name: String,
         lower: DVec3,
@@ -3728,6 +3728,8 @@ pub(crate) enum UiCommand {
     },
     RemoveTriangulation(TriangulationId),
     HideSelection,
+    /// Show every design object hidden on its own, leaving hidden layers and items alone.
+    ShowAllHidden,
     ZoomToExtents,
     /// Dialog "Apply" pressed - begin the canvas side-pick phase.
     BeginOffsetPick {
@@ -4113,11 +4115,10 @@ impl UiCommand {
             Self::FinishPolyClose => report(tr!("common-create-polyline"), tr!("state-finish-closed-polyline")),
             Self::CommitStrokeOpen => report(tr!("common-create-line"), tr!("state-finish-open-polyline")),
             Self::CommitCircleTypedRadius => report(tr!("common-create-circle"), tr!("state-use-typed-radius")),
-            Self::ResetView => report(tr!("common-reset-view"), tr!("state-plan-view-then-fit-extents")),
+            Self::ResetView => report(tr!("common-reset-view"), tr!("state-fit-extents")),
             Self::ToggleRotationCentre => report(tr!("state-centre-rotation"), tr!("state-fix-release-centre-both-views")),
             Self::SetTopologyWireframes(enabled) => report(tr!("state-set-topology-wireframes"), if *enabled { tr!("state-shown") } else { tr!("state-hidden") }),
             Self::SetGridShown(shown) => report(tr!("state-set-grid"), if *shown { tr!("state-shown") } else { tr!("state-hidden") }),
-            Self::SetPointCloudClassificationColors(enabled) => report(tr!("state-colour-points-classification"), if *enabled { tr!("state-on") } else { tr!("state-off") }),
             Self::SetShowPoints(enabled) => report(tr!("state-set-point-visibility"), if *enabled { tr!("state-shown") } else { tr!("state-hidden") }),
             #[cfg(not(target_arch = "wasm32"))]
             Self::SetCinematicEnabled(enabled) => report(tr!("state-set-cinematic-view"), if *enabled { tr!("state-enabled") } else { tr!("state-disabled") }),
@@ -4237,6 +4238,7 @@ impl UiCommand {
             Self::ExportPlotSheet => report(tr!("common-export-engineering-drawing"), tr!("state-choose-destination")),
             Self::RemoveTriangulation(id) => report(tr!("state-remove-triangulation"), format!("{id:?}")),
             Self::HideSelection => report(tr!("common-hide-selection"), tr!("state-selected-scene-elements")),
+            Self::ShowAllHidden => report(tr!("toolbars-show-all-hidden"), tr!("state-individually-hidden-designs")),
             Self::ZoomToExtents => report(tr!("common-zoom-extents"), tr!("state-preserve-view-angle")),
             Self::BeginOffsetPick { object_ids, .. } => report(tr!("common-offset"), tr!("common-count-object-s", count = object_ids.len().to_string())),
             Self::RelimitLineResize { source_id, .. } => report(tr!("common-relimit-line"), format!("{source_id:?}")),
@@ -4398,7 +4400,6 @@ pub(crate) enum ExplorerSection {
     PointClouds,
     BlockModels,
     DrillHoles,
-    Modelling,
 }
 
 impl ExplorerSection {
@@ -4411,7 +4412,6 @@ impl ExplorerSection {
             Self::PointClouds => tr!("common-point-clouds"),
             Self::BlockModels => tr!("common-block-models"),
             Self::DrillHoles => tr!("ws-menubar-drillholes"),
-            Self::Modelling => tr!("common-modelling"),
         }
     }
 
@@ -4425,7 +4425,6 @@ impl ExplorerSection {
             Self::PointClouds => SectionKind::PointClouds,
             Self::BlockModels => SectionKind::BlockModels,
             Self::DrillHoles => SectionKind::DrillHoles,
-            Self::Modelling => SectionKind::Modelling,
         }
     }
 
@@ -4439,7 +4438,6 @@ impl ExplorerSection {
             SectionKind::PointClouds => Self::PointClouds,
             SectionKind::BlockModels => Self::BlockModels,
             SectionKind::DrillHoles => Self::DrillHoles,
-            SectionKind::Modelling => Self::Modelling,
         }
     }
 }
@@ -4544,10 +4542,6 @@ pub(crate) struct UiProjectView {
     pub(crate) point_clouds: Vec<UiPointCloudEntry>,
     pub(crate) raster_textures: Vec<UiRasterTextureEntry>,
     pub(crate) triangulations_membership_dirty: bool,
-    /// Modelling's unsaved work that no Modelling row shows: its folders,
-    /// which triangulations it holds, and the layers tagged with it - a
-    /// deleted layer has no row left to carry a mark.
-    pub(crate) modelling_dirty: bool,
     pub(crate) block_models_membership_dirty: bool,
     pub(crate) drill_holes_membership_dirty: bool,
     pub(crate) point_clouds_membership_dirty: bool,

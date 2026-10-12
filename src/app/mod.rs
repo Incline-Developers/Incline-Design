@@ -8,7 +8,7 @@ pub(crate) mod geophysics_web;
 pub(crate) mod io; /* Handles session serialisation */
 pub(crate) mod jobs; // Reusable background-compute job queue
 pub(crate) mod memory; // Browser address-space budgeting for large allocations
-pub(crate) mod memory_usage; // The bottom toolbar's memory readout
+pub(crate) mod memory_usage; // The status bar's memory and per-core CPU readouts
 pub(crate) mod tie_in; // Drill & Blast's tie-in and initiation point
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web_download;
@@ -344,6 +344,9 @@ pub(crate) struct App<'a> {
     frame_demanded_at: Option<Instant>,
     /// Feeds `EditorState::memory_usage` on its own timer.
     memory_sampler: memory_usage::MemorySampler,
+    /// Feeds `EditorState::cpu_usage` on its own timer.
+    #[cfg(not(target_arch = "wasm32"))]
+    cpu_sampler: memory_usage::CpuSampler,
     surface_retry_pending: bool,
     slice_surface_retry_deadline: Option<Instant>,
     last_scroll_instant: Option<Instant>,
@@ -502,6 +505,8 @@ impl<'a> Default for App<'a> {
             last_frame_end: None,
             frame_demanded_at: None,
             memory_sampler: memory_usage::MemorySampler::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            cpu_sampler: memory_usage::CpuSampler::new(),
             surface_retry_pending: false,
             slice_surface_retry_deadline: None,
             last_scroll_instant: None,
@@ -709,7 +714,6 @@ impl<'a> App<'a> {
         self.editor.block_model_interaction_resolution_divisor = config.block_model_interaction_resolution_divisor.clamp(1, 64);
         self.editor.show_block_model_boundary_highlights = config.show_block_model_boundary_highlights;
         self.editor.downscale_raster_previews = config.downscale_raster_previews;
-        self.editor.frame_counter_enabled = config.frame_counter_enabled;
         self.editor.debug_surface_chunks = config.debug_surface_chunks;
         self.editor.debug_clip_planes = config.debug_clip_planes;
         self.editor.debug_point_cloud_chunks = config.debug_point_cloud_chunks;
@@ -2010,14 +2014,6 @@ impl<'a> App<'a> {
         let triangulation_membership: Vec<(u64, SectionKind)> = self.triangulations.iter().map(|item| (item.id.0, item.state.section)).collect();
         let triangulations_membership_dirty = section_membership_dirty(SectionKind::Triangulations, &triangulation_membership, &self.project_asset_baseline.triangulations)
             || section_folders_dirty(SectionKind::Triangulations);
-        // Modelling's own half of the same question. Its layers belong here
-        // rather than with the rows: a deleted one has no row left to mark.
-        let modelling_dirty = section_membership_dirty(SectionKind::Modelling, &triangulation_membership, &self.project_asset_baseline.triangulations)
-            || section_folders_dirty(SectionKind::Modelling)
-            || self
-                .workspace
-                .active_project()
-                .is_some_and(|project| project.section_layers_dirty(SectionKind::Modelling, &self.project_asset_baseline.folders));
         let block_models_membership_dirty = !same_membership(
             &self.block_models.iter().map(|item| item.id.0).collect::<Vec<_>>(),
             &self.project_asset_baseline.block_models,
@@ -2042,7 +2038,6 @@ impl<'a> App<'a> {
             point_clouds,
             raster_textures,
             triangulations_membership_dirty,
-            modelling_dirty,
             block_models_membership_dirty,
             drill_holes_membership_dirty,
             point_clouds_membership_dirty,

@@ -380,10 +380,9 @@ fn draw_drawing_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &
 /// place against the window's edge whichever tab is open - how the scene is
 /// drawn, then what the camera is asked - and whatever the open workspace adds
 /// is placed to the left of them, parted from them by [`divider`]. Drill &
-/// Blast's reviews of the fired pattern, Geology's borehole inspector and
-/// Survey's reading of a classified cloud are the only such runs so far - see
-/// [`draw_blast_view_tools`], [`draw_geology_view_tools`] and
-/// [`draw_survey_view_tools`]; production adds nothing here, its own tools
+/// Blast's reviews of the fired pattern and Geology's borehole inspector are
+/// the only such runs so far - see [`draw_blast_view_tools`] and
+/// [`draw_geology_view_tools`]; production adds nothing here, its own tools
 /// being the toolbar and the design menus.
 fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>, side: f32) {
     draw_scene_modes(ui, editor, commands, side);
@@ -393,10 +392,6 @@ fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProj
         Workspace::DrillAndBlast => {
             divider(ui, side);
             draw_blast_view_tools(ui, editor, project, side);
-        }
-        Workspace::Survey => {
-            divider(ui, side);
-            draw_survey_view_tools(ui, editor, commands, side);
         }
         Workspace::Geology => {
             divider(ui, side);
@@ -428,33 +423,6 @@ fn draw_geology_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, side: f3
     );
     if inspector.clicked() {
         editor.show_borehole_inspector = !shown;
-    }
-}
-
-/// What Survey asks of a point cloud that has been through a ground filter:
-/// whether to read it by class. Off in every other workspace.
-///
-/// Always available, like the switches in the run beside it: it is a standing
-/// preference for how Survey draws clouds, and greying it out whenever no
-/// classified cloud happens to be loaded would make it flicker in and out as
-/// the explorer changes.
-fn draw_survey_view_tools(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>, side: f32) {
-    let enabled = editor.point_cloud_classification_colors;
-    let classification = ui.add(
-        ToolbarButton::new(
-            egui::Image::new(unthemed_icon!("classification_colors.svg")),
-            if enabled {
-                tr!("viewport-bar-hide-classification")
-            } else {
-                tr!("viewport-bar-show-classification")
-            },
-        )
-        .id_salt("point_cloud_classification_colors")
-        .button_side(side)
-        .selected(enabled),
-    );
-    if classification.clicked() {
-        commands.push(UiCommand::SetPointCloudClassificationColors(!enabled));
     }
 }
 
@@ -521,17 +489,8 @@ fn draw_camera_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
         commands.push(UiCommand::ZoomToExtents);
     }
 
-    // Outside a section Reset takes two clicks: plan where the camera stands,
-    // then everything fitted.
-    let reset_tooltip = if editor.slice_mode_enabled {
-        tr!("common-reset-view")
-    } else if editor.rotation_centre.is_some() {
-        tr!("viewport-bar-reset-view-plan-over-centre")
-    } else {
-        tr!("viewport-bar-reset-view-plan-same-distance")
-    };
     let reset = ui.add(
-        ToolbarButton::new(egui::Image::new(unthemed_icon!("reset_view.svg")), reset_tooltip)
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("reset_view.svg")), tr!("common-reset-view"))
             .id_salt("reset_view")
             .button_side(side),
     );

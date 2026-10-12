@@ -19,6 +19,9 @@ common-set = Set
 
 # Title of the status bar's language menu. The languages themselves are never
 # translated: each names itself in its own script, from `LanguageChoice`.
+status-fps = { $fps } fps
+status-cpu = cpu
+status-memory = memory
 status-language = Language
 
 ## Menu bar — File
@@ -354,6 +357,7 @@ block-model-min-samples-help = Minimum nearby samples required to estimate a blo
 block-model-minimum-samples = Minimum samples
 block-model-no-block-model-selected = No block model selected
 block-model-no-drill-holes-selected = No drill holes selected
+block-model-source-some-holes = { $name } ({ $count } holes)
 block-model-nugget = Nugget
 block-model-numeric-interval-fields-interpolate = Numeric interval fields to interpolate. Each selected field becomes one block-model variable.
 block-model-kriging-help = Ordinary Kriging estimates numeric drill-hole intervals at each block centre using a spherical variogram.
@@ -362,7 +366,7 @@ block-model-range-search-radius = Range / search radius
 block-model-range-help = Samples farther than this distance are excluded; covariance reaches zero at this range.
 block-model-select-all = Select all
 block-model-selected-block-model-whose-blocks = The selected block model, whose blocks are thresholded into a solid. Close the dialog to threshold a different one.
-block-model-source-drill-holes-help = The selected Drill Holes collection, whose numeric intervals are estimated into blocks. Close the dialog to estimate from a different one.
+block-model-source-drill-holes-help = The selected Drill Holes collection, or the holes picked from it in the viewport, whose numeric intervals are estimated into blocks. Close the dialog to estimate from a different one.
 block-model-sill-help = Spatially correlated variance contributed by the spherical model. Together with the nugget, it sets covariance at zero distance.
 block-model-spherical-variogram-search = Spherical variogram and search
 block-model-threshold-at-most = <= threshold
@@ -568,8 +572,11 @@ cmd-file-user-chose-exit-without-saving = User chose to exit without saving
 cmd-file-user-requested-exit-project-export = User requested exit (project export or unsaved-work confirmation required)
 cmd-file-viewport = Viewport
 cmd-file-wait-current-project-save-finish = Wait for the current project save to finish
+cmd-file-wait-browser-project-finish-opening = Wait for the browser project to finish opening
+cmd-file-wait-browser-project-removal-finish = Wait for the browser project removal to finish
 cmd-file-wait-current-project-switch-finish = Wait for the current project switch to finish
 cmd-file-wait-project-operation-finish-before = Wait for the project operation to finish before discarding changes
+cmd-file-wait-project-finish-opening = Wait for the project to finish opening
 cmd-file-wait-project-revert-finish-before = Wait for the project revert to finish before saving
 cmd-folder-collection-named-name-already-exists = A collection named '{ $name }' already exists
 cmd-folder-collection-no-longer-exists = That collection no longer exists
@@ -780,7 +787,6 @@ cmd-view-fixed-centre-rotation-x-y = Fixed the centre of rotation at { $x }, { $
 cmd-view-no-point-under-cursor-fix = No point under the cursor to fix the centre of rotation on
 cmd-view-released-centre-rotation = Released the centre of rotation
 cmd-view-reset-view-fit-extents = Reset view (fit to extents)
-cmd-view-reset-view-plan-same-distance = Reset view (plan at the same distance; click again to fit to extents)
 cmd-view-set-cinematic-view-enabled = Set cinematic view = { $enabled }
 cmd-view-set-topology-wireframes-enabled = Set topology wireframes = { $enabled }
 cmd-view-set-view-points-enabled = Set view points = { $enabled }
@@ -868,7 +874,6 @@ common-m = m
 common-max = Max
 common-merge-shell-into-topology = Merge Shell into Topology
 common-merge-shell-into-topology-ellipsis = Merge Shell into Topology...
-common-modelling = Modelling
 common-move-collar = Move Collar
 common-move-collection = Move to Collection
 common-move-design = Move Design
@@ -1662,9 +1667,6 @@ products-update = Update
 ## Progress strings
 
 progress-percent-done-total = { $percent } ({ $done } of { $total })
-progress-memory-used-total = { $used } / { $total }
-progress-memory-utilisation = Memory Utilisation
-progress-memory-utilisation-web = App Memory
 progress-task-finished = { $task }: Finished
 
 ## Project strings
@@ -1688,7 +1690,6 @@ properties-drillholes = Drillholes
 properties-edit-object = Edit Object...
 properties-field-view = Field of view
 properties-fps = FPS
-properties-frame-counter = Frame counter
 properties-frame-rate-cap = Frame rate cap
 properties-hz = Hz
 properties-interface = Interface
@@ -1776,7 +1777,6 @@ state-click-topology-viewport = Click the topology in the viewport.
 state-close-project = Close Project
 state-colour-drillholes = Colour Drillholes
 state-colour-drillholes-working-section = Colour Drillholes by Working Section
-state-colour-points-classification = Colour Points by Classification
 state-copy-objects-layer = Copy Objects to Layer
 state-count-cloud-s = { $count } cloud(s)
 state-count-file-s = { $count } file(s)
@@ -1818,7 +1818,6 @@ state-export-viewport-image = Export Viewport Image
 state-finish-closed-polyline = Finish closed polyline
 state-finish-open-polyline = Finish open polyline
 state-fit-extents = Fit to extents
-state-plan-view-then-fit-extents = Plan view at the same distance, then fit to extents
 state-fix-release-centre-both-views = Fix or release the centre both views orbit about
 state-folder-section = { $folder } in { $section }
 state-generate-contours = Generate Contours
@@ -1852,8 +1851,6 @@ state-name-z-min-z-max = { $name } · { $z_min } to { $z_max }
 state-new-collection-under-section = New collection under { $section }
 state-next-edit = Next edit
 state-north = North
-state-off = Off
-state-on = On
 state-open-containing-folder = Open the containing folder
 state-open-project = Open Project
 state-preserve-view-angle = Preserve view angle
@@ -1877,6 +1874,7 @@ state-select-layer-objects = Select Layer Objects
 state-selected-objects = Selected objects
 state-selected-polylines = Selected polylines
 state-selected-scene-elements = Selected scene elements
+state-individually-hidden-designs = Individually hidden designs
 state-set-block-model-variable = Set Block Model Variable
 state-set-cinematic-view = Set Cinematic View
 state-set-drillhole-colour-preset = Set Drillhole Colour Preset
@@ -1923,7 +1921,6 @@ state-west = West
 
 status-clip-near-far = Clip near/far/Δ: -- / -- / --
 status-faces-chunks = Faces: -- / -- (--/-- chunks)
-status-frame-rate = Frame rate
 status-points-chunks = Points: -- / -- of -- (--/-- chunks)
 
 ## Text strings
@@ -1965,6 +1962,8 @@ toolbars-measure-distance = Measure Distance
 toolbars-new-layer = New Layer
 toolbars-split-polyline-points = Split Polyline At Points
 toolbars-strike-dip = Strike and Dip
+toolbars-hide = Hide
+toolbars-show-all-hidden = Show All Hidden
 toolbars-tool-not-available-section-view = { $tool } - not available in the section view
 
 ## Tri strings
@@ -2117,6 +2116,7 @@ ui-select-line-relimit = Select line to relimit
 ui-select-next-line-fuse = Select the next line to fuse
 ui-select-opposite-berm-point = Select opposite berm point
 ui-select-point = Select a point
+ui-select-designs-to-hide = Click or drag over designs to hide them
 ui-select-polyline = Select a polyline
 ui-select-polyline-open-line = Select a polyline or open line
 ui-select-polyline-vertex = Select a polyline vertex
@@ -2152,16 +2152,12 @@ viewport-bar-exit-slice-view = Exit Slice View
 viewport-bar-fill = Fill:
 viewport-bar-fix-centre-rotation = Fix Centre of Rotation
 viewport-bar-hide-borehole-inspector = Hide Borehole Inspector
-viewport-bar-hide-classification = Hide Classification
 viewport-bar-hide-points = Hide Points
 viewport-bar-hide-rl-grid = Hide RL Grid
 viewport-bar-hide-wireframes = Hide Wireframes
 viewport-bar-hide-xy-grid = Hide XY Grid
 viewport-bar-release-centre-rotation = Release Centre of Rotation
-viewport-bar-reset-view-plan-over-centre = Reset View: plan over the centre of rotation, click again to fit all
-viewport-bar-reset-view-plan-same-distance = Reset View: plan at the same distance, click again to fit all
 viewport-bar-show-borehole-inspector = Show Borehole Inspector
-viewport-bar-show-classification = Show Classification
 viewport-bar-show-points = Show Points
 viewport-bar-show-rl-grid = Show RL Grid
 viewport-bar-show-wireframes = Show Wireframes
@@ -2171,14 +2167,10 @@ viewport-blank = (blank)
 viewport-choose-active-block-model-variable = Choose the active block model variable
 viewport-choose-variable = Choose a variable
 viewport-click-edit-color-right-click = Click to edit color; right-click to remove
-viewport-click-type-boundary-s-value = Click to type this boundary's value
 viewport-colour-mapping = Colour mapping
 viewport-count-categories = { $count } categories
 viewport-count-category = { $count } category
 viewport-depth-m-hole-end = { $depth } m hole end
-viewport-double-click-add-boundary-here = Double-click to add a boundary here
-viewport-drag-move-middle-click-toggles = Drag to move · Middle-click toggles ≤
-viewport-drag-move-right-click-remove = Drag to move · Right-click to remove · Middle-click toggles ≤
 viewport-drag-spin-view-around-hole = Drag to spin the view around the hole. Double-click to face north.
 viewport-e = E
 viewport-edit-category-colour = Edit this category colour

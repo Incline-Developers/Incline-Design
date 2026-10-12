@@ -202,6 +202,12 @@ pub(crate) fn draw_selection_appearance(
     }
 }
 
+/// Width of the block-model card in the viewport.
+const BLOCK_MODEL_CARD_WIDTH: f32 = 780.0;
+/// Gap between that card and the viewport's bottom edge, the tool panels'
+/// corner and the scale bar.
+const BLOCK_MODEL_CARD_GAP: f32 = 8.0;
+
 pub(crate) fn draw_block_model_controls(ui: &mut egui::Ui, editor: &mut EditorState, models: &[OpenBlockModel], commands: &mut Vec<UiCommand>, canvas: egui::Rect) {
     let selected: Vec<_> = models
         .iter()
@@ -220,14 +226,28 @@ pub(crate) fn draw_block_model_controls(ui: &mut egui::Ui, editor: &mut EditorSt
     let Some(model) = models.iter().find(|model| Some(model.id) == editor.viewport_block_model_id && model.state.loaded) else {
         return;
     };
-    egui::Area::new(egui::Id::new("block_model_viewport_controls"))
-        .anchor(
-            egui::Align2::CENTER_BOTTOM,
-            egui::vec2(
-                canvas.center().x - ui.ctx().content_rect().center().x,
-                canvas.bottom() - ui.ctx().content_rect().bottom() - 8.0,
-            ),
+    // Centred under the window, but never into the bottom-left corner the
+    // tool panels open in: a narrowing viewport pushes the card right from
+    // there, and once it would reach the scale bar it is not drawn at all.
+    let area_id = egui::Id::new("block_model_viewport_controls");
+    let (card_size, scale_bar) = ui.ctx().memory(|memory| {
+        (
+            memory.area_rect(area_id).map_or(egui::vec2(BLOCK_MODEL_CARD_WIDTH, 0.0), |rect| rect.size()),
+            memory.area_rect(egui::Id::new("viewport_scale_bar")).filter(|_| editor.show_scale_bar),
         )
+    });
+    let card_width = card_size.x;
+    let left_bound = canvas.left() + crate::ui::widgets::viewport::DOCK_PANEL_RESERVED_WIDTH + BLOCK_MODEL_CARD_GAP;
+    let right_bound = scale_bar.map_or(canvas.right(), |rect| rect.left()) - BLOCK_MODEL_CARD_GAP;
+    let left = (ui.ctx().content_rect().center().x - card_width / 2.0).max(left_bound);
+    // Always its full height, never scrolled or squeezed: a viewport too
+    // short to hold it hides it, the same as one too narrow.
+    if left + card_width > right_bound || card_size.y > canvas.height() - 2.0 * BLOCK_MODEL_CARD_GAP {
+        return;
+    }
+    egui::Area::new(area_id)
+        .pivot(egui::Align2::LEFT_BOTTOM)
+        .fixed_pos(egui::pos2(left, canvas.bottom() - BLOCK_MODEL_CARD_GAP))
         .order(egui::Order::Middle)
         .show(ui.ctx(), |ui| {
             // The menu-family card, so the panel matches the docked tool panels
@@ -239,7 +259,7 @@ pub(crate) fn draw_block_model_controls(ui: &mut egui::Ui, editor: &mut EditorSt
                 .corner_radius(egui::CornerRadius::same(menu::MENU_CORNER_RADIUS))
                 .show(ui, |ui| {
                     menu::apply_menu_style(ui, surface);
-                    let width = (canvas.width() - 32.0).clamp(240.0, 780.0);
+                    let width = BLOCK_MODEL_CARD_WIDTH;
                     ui.set_width(width);
                     draw_block_model_title_bar(ui, editor, models, model, width, surface);
                     let Some(model) = models.iter().find(|model| Some(model.id) == editor.viewport_block_model_id && model.state.loaded) else {
@@ -253,10 +273,8 @@ pub(crate) fn draw_block_model_controls(ui: &mut egui::Ui, editor: &mut EditorSt
                             bottom: 10,
                         })
                         .show(ui, |ui| {
-                            egui::ScrollArea::both().max_height((canvas.height() * 0.4).max(80.0)).show(ui, |ui| {
-                                ui.push_id(model.id, |ui| {
-                                    BlockModelProperties::new(("block_model_controls", model.id), model).show(ui, editor, commands)
-                                });
+                            ui.push_id(model.id, |ui| {
+                                BlockModelProperties::new(("block_model_controls", model.id), model).show(ui, editor, commands)
                             });
                         });
                 });
@@ -379,7 +397,6 @@ fn reset_interface_defaults(draft: &mut PreferencesDraft) {
 
 fn reset_developer_defaults(draft: &mut PreferencesDraft) {
     let defaults = PreferencesDraft::default();
-    draft.frame_counter_enabled = defaults.frame_counter_enabled;
     draft.debug_surface_chunks = defaults.debug_surface_chunks;
     draft.debug_clip_planes = defaults.debug_clip_planes;
     draft.debug_point_cloud_chunks = defaults.debug_point_cloud_chunks;
@@ -577,7 +594,6 @@ fn draw_developer_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
         &tr!("properties-developer"),
         |ui, draft| {
             let mut changed = false;
-            changed |= committed(&MenuFieldBool::new(tr!("properties-frame-counter"), &mut draft.frame_counter_enabled).show(ui));
             changed |= committed(
                 &MenuFieldBool::new(tr!("properties-camera-clip-planes"), &mut draft.debug_clip_planes)
                     .help_text(tr!("properties-shows-live-near-far-projection"))

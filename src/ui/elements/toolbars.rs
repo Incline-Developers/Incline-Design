@@ -266,13 +266,15 @@ pub(crate) fn draw_left_toolbar(
 /// explorer's rows rather than as whole-scene toolbar actions: see
 /// `ExplorerEntry::toggles`.
 ///
-/// Every workspace shows and edits the same shared cursor mode. The two
-/// measurements are of a pit being designed, so only that run belongs to the
-/// production workspace - see
-/// [`crate::ui::state::Workspace::has_production_tools`].
-pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) -> egui::Rect {
+/// Every workspace shows and edits the same shared cursor mode, and carries
+/// the measuring and hiding run.
+///
+/// Returns the toolbar's rect and the screen x of the cursor-mode run's
+/// middle, which the console's grip lines up with.
+pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) -> (egui::Rect, f32) {
     let claimed = bottom_toolbar_height(ui.ctx());
-    egui::Panel::bottom("bottom_tools_strip")
+    let mut cursor_modes_centre = ui.ctx().content_rect().center().x;
+    let rect = egui::Panel::bottom("bottom_tools_strip")
         .resizable(false)
         .show_separator_line(crate::ui::chrome::show_separator_line(ui))
         .exact_size(claimed)
@@ -304,19 +306,7 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
                     // way of the tools and with room to say what is running -
                     // the status bar had neither.
                     let right = super::cluster(ui, strip, egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        // Right to left: the memory ring takes the end of the
-                        // strip, the task readout grows leftwards from it.
-                        let memory_shown = editor.memory_usage.is_some();
-                        crate::ui::widgets::progress::draw_memory_usage(ui, editor);
-                        crate::ui::widgets::progress::draw_task_progress(
-                            ui,
-                            editor,
-                            if memory_shown {
-                                crate::ui::widgets::progress::READOUT_GAP
-                            } else {
-                                crate::ui::widgets::progress::END_INSET
-                            },
-                        );
+                        crate::ui::widgets::progress::draw_task_progress(ui, editor, crate::ui::widgets::progress::END_INSET);
                     });
 
                     // Held clear of the left cluster first and slid back from
@@ -330,9 +320,10 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
                     let band_right = right.left() - CENTRE_CLEARANCE;
                     let x = (strip.left() + centre_offset - width / 2.0).clamp(band_left, (band_right - width).max(band_left));
                     let run = egui::Rect::from_min_max(egui::pos2(x, strip.top()), egui::pos2(strip.right(), strip.bottom()));
-                    super::cluster(ui, run, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    let modes = super::cluster(ui, run, egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         draw_cursor_modes(ui, editor, commands, side);
                     });
+                    cursor_modes_centre = modes.center().x;
 
                     // The width the strip has to keep: the three clusters, the
                     // centre one with its clearance either side.
@@ -342,16 +333,12 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
             });
         })
         .response
-        .rect
+        .rect;
+    (rect, cursor_modes_centre)
 }
 
-/// The measuring run, which only a workspace designing a pit has anything to
-/// measure in - see [`crate::ui::state::Workspace::has_production_tools`].
+/// The measuring and hiding run, which every workspace carries.
 fn draw_measure_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, side: f32) {
-    if !editor.active_workspace.has_production_tools() {
-        return;
-    }
-
     ui.add_enabled_ui(!editor.fly_mode_enabled, |ui| {
         tool_button(
             ui,
@@ -372,6 +359,27 @@ fn draw_measure_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mu
             ActiveTool::MeasureBatterAngle,
             side,
         );
+
+        tool_button(
+            ui,
+            egui::Image::new(themed_icon!(ui, "hide_items.svg")),
+            tr!("toolbars-hide").as_str(),
+            editor,
+            commands,
+            ActiveTool::Hide,
+            side,
+        );
+
+        if ui
+            .add(
+                ToolbarButton::new(egui::Image::new(themed_icon!(ui, "show_all_hidden.svg")), tr!("toolbars-show-all-hidden"))
+                    .id_salt("show_all_hidden")
+                    .button_side(side),
+            )
+            .clicked()
+        {
+            commands.push(UiCommand::ShowAllHidden);
+        }
     });
 }
 

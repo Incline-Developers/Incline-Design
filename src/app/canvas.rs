@@ -311,6 +311,38 @@ impl<'a> App<'a> {
             return;
         }
 
+        // Hide tool: a click hides the design under the cursor, a box every
+        // design it takes - crossing or window by drag direction, as selection.
+        if self.editor.active_tool == ActiveTool::Hide {
+            let ids: Vec<crate::model::ObjectId> = if dragged {
+                let active_object_ids = self.active_project_object_ids();
+                self.graphics
+                    .as_ref()
+                    .map(|graphics| {
+                        if end.0 > start.0 {
+                            graphics.entities_touching_screen_rect(start, end, &self.editor.frozen_handles)
+                        } else {
+                            graphics.entities_in_screen_rect(start, end, &self.editor.frozen_handles)
+                        }
+                    })
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|handle| match handle {
+                        SceneEntityId::Object(id) if active_object_ids.contains(&id) => Some(id),
+                        _ => None,
+                    })
+                    .collect()
+            } else {
+                match self.pick_under_cursor() {
+                    Some((SceneEntityId::Object(id), _)) if self.activate_project_for_object(id) => vec![id],
+                    _ => Vec::new(),
+                }
+            };
+            self.hide_objects(ids);
+            self.invalidate_overlay();
+            return;
+        }
+
         if !dragged {
             if self.editor.active_tool == ActiveTool::None && self.select_tie_at_cursor() {
                 return;

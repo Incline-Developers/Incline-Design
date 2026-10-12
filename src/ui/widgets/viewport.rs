@@ -15,6 +15,11 @@ use crate::{
     },
 };
 
+/// Room the bottom-left tool panels are given: their usual widest plus the
+/// margin they sit in. Anything else along the viewport's bottom edge keeps
+/// clear of it, so a tool opening never lands on top of it.
+pub(crate) const DOCK_PANEL_RESERVED_WIDTH: f32 = 340.0 + 10.0;
+
 /// A compact tool panel pinned inside the 3D viewport.
 ///
 /// Apears in the bottom left. Used for tool configuration.
@@ -778,9 +783,7 @@ impl<'a> BlockModelProperties<'a> {
             painter.rect_stroke(bar_rect, 0.0, ui.visuals().widgets.noninteractive.bg_stroke, egui::StrokeKind::Outside);
         }
 
-        let bar_response = ui
-            .interact(bar_rect, self.id.with("color_stop_bar"), egui::Sense::click())
-            .on_hover_text(tr!("viewport-double-click-add-boundary-here"));
+        let bar_response = ui.interact(bar_rect, self.id.with("color_stop_bar"), egui::Sense::click());
         // A double-click on either the bar or a handle requests an insert.
         // We record the target `t` and apply it *after* the handle loop so the
         // insertion never shifts indices mid-iteration, and so it lands in
@@ -797,11 +800,7 @@ impl<'a> BlockModelProperties<'a> {
             let x = x_at(ramp.stops[i].t);
             let handle_rect = egui::Rect::from_center_size(egui::pos2(x, handle_center_y), egui::vec2(COLOR_STOP_HANDLE_SIZE, COLOR_STOP_HANDLE_SIZE));
             let handle_id = self.id.with(("color_stop_handle", ramp.stops[i].id));
-            let response = ui.interact(handle_rect, handle_id, egui::Sense::click_and_drag()).on_hover_text(if ramp.stops.len() > 1 {
-                tr!("viewport-drag-move-right-click-remove")
-            } else {
-                tr!("viewport-drag-move-middle-click-toggles")
-            });
+            let response = ui.interact(handle_rect, handle_id, egui::Sense::click_and_drag());
             // Handles sit directly beside the gradient strip, so a
             // double-click aimed at the bar near an existing stop (most
             // often the last one, at the visually prominent top edge)
@@ -894,8 +893,7 @@ impl<'a> BlockModelProperties<'a> {
             } else {
                 let label = ui
                     .interact(value_rect, self.id.with(("color_stop_value_label", ramp.stops[i].id)), egui::Sense::click())
-                    .on_hover_cursor(egui::CursorIcon::Text)
-                    .on_hover_text(tr!("viewport-click-type-boundary-s-value"));
+                    .on_hover_cursor(egui::CursorIcon::Text);
                 value_field_hovered = label.hovered();
                 if label.clicked() {
                     selected = i;

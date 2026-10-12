@@ -284,7 +284,7 @@ fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, wor
     // Drill & Blast's Move Collar is put down on the way out just as the
     // drawing tools are on the way in.
     let survives = match editor.active_tool {
-        ActiveTool::None | ActiveTool::VerticalSlice | ActiveTool::PickRotationCentre => true,
+        ActiveTool::None | ActiveTool::VerticalSlice | ActiveTool::PickRotationCentre | ActiveTool::MeasureDistance | ActiveTool::MeasureBatterAngle | ActiveTool::Hide => true,
         ActiveTool::MoveCollar | ActiveTool::RotateCollar | ActiveTool::TieHoles | ActiveTool::SetInitiationPoint | ActiveTool::ChargeHoles => {
             workspace == Workspace::DrillAndBlast
         }
@@ -603,9 +603,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                     commands.push(UiCommand::OpenCreateBlockModel);
                     ui.close();
                 }
-            });
-
-            MenuBarMenu::new(&tr!("ws-menubar-drillholes")).show(ui, |ui| {
+                context_menu_separator(ui);
                 // Select first, then act: placed on the holes selected at open.
                 let can_build_points = editor.selection_counts.reference_holes > 0;
                 if ContextMenuAction::new(tr!("common-reference-points")).enabled(can_build_points).show(ui).clicked() {

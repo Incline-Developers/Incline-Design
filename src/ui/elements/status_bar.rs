@@ -1,5 +1,5 @@
-//! Bottom status bar: app identity, selected count, cursor coords, FPS counter
-//! and, at the far right, the language picker. Task progress belongs to the
+//! Bottom status bar: app identity, selected count, cursor coords and, at the
+//! far right, the frame rate, memory in use and the language picker. Task progress belongs to the
 //! bottom toolbar - see `widgets::progress`.
 
 use thousands::Separable;
@@ -10,6 +10,7 @@ use crate::{
         EditorState, UiCommand, themed_icon,
         widgets::{
             context_menu::{ContextMenuAction, dropdown_menu},
+            progress,
             toolbar::GROUP_CORNER_RADIUS,
         },
     },
@@ -98,6 +99,91 @@ fn draw_language_picker(ui: &mut egui::Ui, editor: &EditorState, commands: &mut 
     });
 }
 
+/// Diameter of the memory readout's ring: a little over the body text's
+/// height, so it sits in the line rather than standing out of it.
+const MEMORY_RING_SIZE: f32 = 14.0;
+/// Gap between the memory ring and its label.
+const MEMORY_RING_GAP: f32 = 6.0;
+/// Below this share of memory free the ring turns yellow, and below
+/// [`MEMORY_LOW_FREE`] red.
+const MEMORY_TIGHT_FREE: f32 = 0.4;
+const MEMORY_LOW_FREE: f32 = 0.2;
+/// The yellow and red fills, darkened in the light theme the way the green
+/// one is - see `widgets::progress::FILL_LIGHT`.
+const MEMORY_TIGHT_DARK: egui::Color32 = egui::Color32::from_rgb(0xE3, 0xB3, 0x41);
+const MEMORY_TIGHT_LIGHT: egui::Color32 = egui::Color32::from_rgb(0xB0, 0x82, 0x10);
+const MEMORY_LOW_DARK: egui::Color32 = egui::Color32::from_rgb(0xF8, 0x51, 0x49);
+const MEMORY_LOW_LIGHT: egui::Color32 = egui::Color32::from_rgb(0xC9, 0x2A, 0x2A);
+
+/// "memory", then a ring like the task readout's. The ring is filled to the
+/// share in use: green while plenty is free, yellow under 40% free and red
+/// under 20%. Natively the whole machine's memory; in the browser the app's
+/// own heap - see [`crate::app::memory_usage::MemoryUsage`]. Drawn right to
+/// left: the ring first, then the label before it.
+fn draw_memory_usage(ui: &mut egui::Ui, editor: &EditorState) {
+    let Some(usage) = editor.memory_usage else {
+        return;
+    };
+    // Rendering is on demand, so an idle window would otherwise hold the
+    // first reading forever.
+    ui.ctx().request_repaint_after(crate::app::memory_usage::SAMPLE_PERIOD);
+    let fraction = usage.fraction();
+    let free = 1.0 - fraction;
+    let color = load_color(ui.visuals().dark_mode, free);
+    let (ring, _) = ui.allocate_exact_size(egui::Vec2::splat(MEMORY_RING_SIZE), egui::Sense::hover());
+    progress::paint_fraction_ring(ui, ui.painter(), ring.center(), MEMORY_RING_SIZE, fraction, color);
+    ui.add_space((MEMORY_RING_GAP - ui.spacing().item_spacing.x).max(0.0));
+    ui.label(tr!("status-memory"));
+}
+
+/// Width of one core's bar in the CPU readout, and the gap between bars.
+const CPU_BAR_WIDTH: f32 = 3.0;
+const CPU_BAR_GAP: f32 = 1.0;
+/// Height of the bars: the memory ring's, so the two readouts line up.
+const CPU_BAR_HEIGHT: f32 = MEMORY_RING_SIZE;
+/// Least share of its height a core's bar fills, whatever its load.
+const CPU_BAR_MIN_FILL: f32 = 0.05;
+
+/// "cpu", then one bar per core filling from the bottom with that core's
+/// load: green, yellow over 60% and red over 80% - the memory ring's
+/// thresholds, read as load rather than room. Drawn right to left: the bars
+/// first, then the label before them.
+fn draw_cpu_usage(ui: &mut egui::Ui, editor: &EditorState) {
+    // Rendering is on demand, so an idle window would otherwise hold the
+    // first reading forever.
+    ui.ctx().request_repaint_after(crate::app::memory_usage::CPU_SAMPLE_PERIOD);
+    let cores = &editor.cpu_usage;
+    let width = cores.len() as f32 * (CPU_BAR_WIDTH + CPU_BAR_GAP) - CPU_BAR_GAP;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, CPU_BAR_HEIGHT), egui::Sense::hover());
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.visuals();
+        let painter = ui.painter();
+        for (index, load) in cores.iter().enumerate() {
+            let left = rect.left() + index as f32 * (CPU_BAR_WIDTH + CPU_BAR_GAP);
+            let bar = egui::Rect::from_min_size(egui::pos2(left, rect.top()), egui::vec2(CPU_BAR_WIDTH, CPU_BAR_HEIGHT));
+            // Never below a sliver, so an idle core still shows where it is.
+            let shown = load.max(CPU_BAR_MIN_FILL);
+            let filled = egui::Rect::from_min_max(egui::pos2(bar.left(), bar.bottom() - bar.height() * shown), bar.max);
+            painter.rect_filled(filled, 0.0, load_color(visuals.dark_mode, 1.0 - load));
+        }
+    }
+    ui.add_space((MEMORY_RING_GAP - ui.spacing().item_spacing.x).max(0.0));
+    ui.label(tr!("status-cpu"));
+}
+
+/// Green while plenty is `free`, yellow under 40% and red under 20%, in the
+/// theme's shade.
+fn load_color(dark: bool, free: f32) -> egui::Color32 {
+    let (dark_fill, light_fill) = if free < MEMORY_LOW_FREE {
+        (MEMORY_LOW_DARK, MEMORY_LOW_LIGHT)
+    } else if free < MEMORY_TIGHT_FREE {
+        (MEMORY_TIGHT_DARK, MEMORY_TIGHT_LIGHT)
+    } else {
+        (progress::FILL_DARK, progress::FILL_LIGHT)
+    };
+    if dark { dark_fill } else { light_fill }
+}
+
 /// Draw the bottom status bar panel.
 pub(crate) fn draw_status_bar(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) -> egui::Rect {
     // The other bar that spans the window rather than sitting in a region, and
@@ -111,13 +197,6 @@ pub(crate) fn draw_status_bar(ui: &mut egui::Ui, editor: &EditorState, commands:
                 ui.separator();
                 ui.label(tr!("status-selected", count = editor.selected_handles.len()));
                 ui.separator();
-                if editor.frame_counter_enabled {
-                    match editor.measured_fps {
-                        Some(fps) => ui.label(format!("{}: {fps:.0}", tr!("status-frame-rate"))),
-                        None => ui.label(format!("{}: --", tr!("status-frame-rate"))),
-                    };
-                    ui.separator();
-                }
                 if editor.debug_surface_chunks {
                     match editor.debug_surface_stats {
                         Some(stats) => ui.label(tr!(
@@ -173,7 +252,22 @@ pub(crate) fn draw_status_bar(ui: &mut egui::Ui, editor: &EditorState, commands:
                 }
                 // The picker is pinned to the far end of the bar, so it does not
                 // move as the readouts before it come and go.
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| draw_language_picker(ui, editor, commands));
+                // Right to left: the frame rate and memory readouts sit just
+                // before it.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    draw_language_picker(ui, editor, commands);
+                    ui.separator();
+                    let fps = editor.measured_fps.map_or_else(|| "--".to_owned(), |fps| format!("{fps:.0}"));
+                    ui.label(tr!("status-fps", fps = fps));
+                    if editor.memory_usage.is_some() {
+                        ui.separator();
+                        draw_memory_usage(ui, editor);
+                    }
+                    if !editor.cpu_usage.is_empty() {
+                        ui.separator();
+                        draw_cpu_usage(ui, editor);
+                    }
+                });
             });
         })
         .response

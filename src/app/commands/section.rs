@@ -57,8 +57,7 @@ impl<'a> App<'a> {
     }
 
     /// Project items tagged `section`, following each item's own
-    /// [`SectionKind`] tag rather than its kind - a triangulation tagged
-    /// Modelling turns up here under Modelling, not under Triangulations.
+    /// [`SectionKind`] tag rather than its kind.
     /// Empty for the layer sections, since a layer is never an `ItemRef`.
     fn section_items(&self, section: ExplorerSection) -> Vec<ItemRef> {
         let tag = section.kind();
@@ -120,8 +119,7 @@ impl<'a> App<'a> {
                 commands.extend(document.hidden_object_ids().map(|id| Command::SetObjectHidden { id, before: true, after: false }));
             }
         }
-        // A section can hold both layers and items (Modelling), so this half
-        // always runs; it is empty for the layer-only sections.
+        // This half always runs; it is empty for the layer-only sections.
         commands.extend(self.section_items(section).into_iter().filter_map(|item| {
             self.item_style_command(item, |style| {
                 if visible {
