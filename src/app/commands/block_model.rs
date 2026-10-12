@@ -388,9 +388,9 @@ impl<'a> App<'a> {
             .dataset
             .fields
             .iter()
-            .find(|field| matches!(field.kind, DrillFieldKind::Numeric { .. }))
-            .map(|field| vec![field.key.clone()])
-            .unwrap_or_default();
+            .filter(|field| matches!(field.kind, DrillFieldKind::Numeric { .. }))
+            .map(|field| field.key.clone())
+            .collect();
         self.editor.kriging_name_input = format!("{} Block Model", dataset.name);
         self.editor.kriging_cell = DVec3::splat(DEFAULT_KRIGING_BLOCK_SIZE);
         if let Some((lower, upper)) = dataset.dataset.bounds {
