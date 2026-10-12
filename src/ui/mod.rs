@@ -331,9 +331,8 @@ impl Gui {
 }
 
 /// What the video export paints over each frame it renders: the destination
-/// labels, the machine icons and the haul flows' key - the parts of
-/// Animate's picture the viewport draws through egui rather than the scene
-/// renderer. Its own context and renderer, so the window's frame is
+/// labels and the machine icons - the parts of Animate's picture the
+/// viewport draws through egui rather than the scene renderer. Its own context and renderer, so the window's frame is
 /// untouched by it and its font atlas never collides with the window's.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct VideoOverlay {
@@ -378,7 +377,6 @@ impl VideoOverlay {
         let output = self.ctx.run_ui(raw_input, |ui| {
             draw_haul_pin_labels(ui, editor, project, document, rect);
             draw_machine_icons(ui, editor, rect);
-            draw_haul_flows(ui, editor, rect);
         });
         for (id, deltas) in &output.textures_delta.set {
             for delta in deltas {
@@ -2096,11 +2094,5 @@ fn draw_haul_flows(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect)
         painter.rect_filled(rect, widgets::toolbar::GROUP_CORNER_RADIUS, ui.visuals().window_fill());
         painter.galley(rect.min + egui::vec2(6.0, 4.0), galley, ui.visuals().text_color());
     }
-    // A key in the corner: what the flows are, and what the busiest route carries.
-    let legend = tr!("haul-flow-legend", rate = format!("{busiest:.0}"));
-    let galley = painter.layout_no_wrap(legend, egui::FontId::proportional(11.0), ui.visuals().weak_text_color());
-    let rect = egui::Rect::from_min_size(canvas_rect.left_bottom() + egui::vec2(12.0, -galley.size().y - 20.0), galley.size() + egui::vec2(12.0, 8.0));
-    painter.rect_filled(rect, widgets::toolbar::GROUP_CORNER_RADIUS, ui.visuals().window_fill().gamma_multiply(0.9));
-    painter.galley(rect.min + egui::vec2(6.0, 4.0), galley, ui.visuals().weak_text_color());
     ui.ctx().request_repaint();
 }

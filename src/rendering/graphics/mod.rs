@@ -518,6 +518,9 @@ pub(crate) struct Graphics<'a> {
     /// Destination for a one-shot viewport image export; consumed by the next
     /// `render` call (see `screenshot.rs`).
     pub(super) pending_screenshot: Option<screenshot::ScreenshotTarget>,
+    /// The view held while a video records: the camera and the zoom it is
+    /// put back to each frame; see `set_camera_locked`.
+    pub(super) camera_lock: Option<(Camera, f64)>,
     /// The video export's offscreen target and the frames it has in flight;
     /// see `video_capture.rs`.
     #[cfg(not(target_arch = "wasm32"))]

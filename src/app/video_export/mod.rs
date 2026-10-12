@@ -172,6 +172,10 @@ impl<'a> App<'a> {
             restore_time_h: self.editor.schedule_time_h,
         });
         self.editor.video_export_frame = Some((width, height));
+        // The view is what is being recorded: it holds still until the end.
+        if let Some(graphics) = self.graphics.as_mut() {
+            graphics.set_camera_locked(true);
+        }
         self.editor.video_export_dialog = None;
         self.editor.schedule_animation_playing = false;
         self.editor.video_export_progress = Some((0, total));
@@ -251,6 +255,7 @@ impl<'a> App<'a> {
         }
         if let Some(graphics) = self.graphics.as_mut() {
             graphics.release_video_target();
+            graphics.set_camera_locked(false);
         }
         self.editor.video_export_progress = None;
         self.editor.video_export_frame = None;

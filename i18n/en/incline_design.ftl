@@ -938,7 +938,6 @@ haul-blocks-selected =
        *[other] { $count } blocks selected
     }
 haul-flow-hover = Loaded haul flow: { $rate } t/h on this route
-haul-flow-legend = Loaded haul flow · busiest route { $rate } t/h
 haul-role-help = Trucks deliver to a dump point and load from a stockpile's reclaim point. A stockpile with no reclaim point is loaded at its dump point.
 haul-node-on = End of { $road }
 haul-selection = Selection

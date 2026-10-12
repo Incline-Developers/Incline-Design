@@ -895,6 +895,7 @@ impl<'a> Graphics<'a> {
             plot_preview: None,
             plot_preview_key: None,
             pending_screenshot: None,
+            camera_lock: None,
             #[cfg(not(target_arch = "wasm32"))]
             video_target: None,
             slice_preview: None,

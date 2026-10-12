@@ -326,6 +326,9 @@ pub(super) fn eye_offset_from(centre: DVec3, eye: DVec3, basis: (DVec3, DVec3, D
 
 impl<'a> Graphics<'a> {
     pub(crate) fn process_mouse_motion(&mut self, dx: f64, dy: f64) -> bool {
+        if self.camera_lock.is_some() {
+            return false;
+        }
         if self.fly_mode_enabled && self.mouse_pressed == Some(MouseButton::Right) {
             self.fly_camera_controller.process_mouse_motion(dx, dy);
             return true;
@@ -2067,7 +2070,27 @@ impl<'a> Graphics<'a> {
         self.camera.look_to(slice.camera_position(), forward, up, self.projection.zoom.max(1.0));
     }
 
+    /// Hold the view where it is, or let it go: while a video records, the
+    /// camera ignores its input and anything that moved it - a command, a
+    /// transition already under way - is put back each frame.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn set_camera_locked(&mut self, locked: bool) {
+        self.camera_lock = locked.then(|| (self.camera.clone(), self.projection.zoom));
+        if locked {
+            self.mouse_pressed = None;
+            self.camera_controller.end_orbit();
+            self.fly_camera_controller.clear_input();
+            self.orbit_marker = None;
+            self.sync_cursor_grab();
+        }
+    }
+
     pub(crate) fn update(&mut self, dt: Duration, rotation_centre: Option<DVec3>) {
+        if let Some((camera, zoom)) = &self.camera_lock {
+            self.camera = camera.clone();
+            self.projection.zoom = *zoom;
+            return;
+        }
         if self.slice_view.is_some() {
             self.update_slice_camera(dt, rotation_centre);
         } else if self.camera_controller.has_view_transition() {
@@ -2082,6 +2105,19 @@ impl<'a> Graphics<'a> {
     }
 
     pub(crate) fn input(&mut self, event: &WindowEvent) -> bool {
+        // Locked, only a release gets through, so a button held when the
+        // lock began cannot stay down.
+        if self.camera_lock.is_some()
+            && !matches!(
+                event,
+                WindowEvent::MouseInput {
+                    state: ElementState::Released,
+                    ..
+                }
+            )
+        {
+            return false;
+        }
         match event {
             WindowEvent::MouseWheel { delta, .. } => {
                 // Zoom is applied and cleared within a single update tick, so

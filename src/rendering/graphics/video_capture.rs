@@ -4,8 +4,8 @@
 //! exactly the requested size - framing the largest centred part of what the
 //! viewport shows that has the video's shape - then paints the parts of
 //! Animate the viewport draws through egui (destination labels, machine
-//! icons, the flows' key) over it with an egui context of its own. The
-//! window's size, shape and chrome never reach the video.
+//! icons) over it with an egui context of its own. The window's size, shape
+//! and chrome never reach the video.
 //!
 //! Readback does not wait: each frame's copy is mapped in the background and
 //! collected on a later frame, a few in flight at once, so the GPU and the
