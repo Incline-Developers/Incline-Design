@@ -154,7 +154,7 @@ fn draw_separator(ui: &mut egui::Ui) {
 #[derive(Clone)]
 struct WorkspaceTabDrag {
     workspace: Workspace,
-    order: [Workspace; 6],
+    order: [Workspace; 5],
     grab_offset: f32,
 }
 
@@ -539,16 +539,6 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
             return;
         }
 
-        if editor.active_workspace == Workspace::Optimization {
-            MenuBarMenu::new(&tr!("ws-optimization")).show(ui, |ui| {
-                if ContextMenuAction::new(tr!("opt-scenarios-button")).show(ui).clicked() {
-                    commands.push(UiCommand::OpenOptimizationScenarios);
-                    ui.close();
-                }
-            });
-            return;
-        }
-
         if editor.active_workspace == Workspace::Survey {
             MenuBarMenu::new(&tr!("survey-coordinates-menu")).show(ui, |ui| {
                 if ContextMenuAction::new(tr!("survey-definitions-action")).show(ui).clicked() {
@@ -712,6 +702,15 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                 .clicked()
             {
                 commands.push(UiCommand::OpenContourTriangulation);
+                ui.close();
+            }
+        });
+
+        // Pit optimization works over a block model, but it opens on its
+        // scenarios rather than on a selection: each scenario names its own.
+        MenuBarMenu::new(&tr!("ws-menubar-block-model")).show(ui, |ui| {
+            if ContextMenuAction::new(tr!("menu-pit-optimization")).show(ui).clicked() {
+                commands.push(UiCommand::OpenOptimizationScenarios);
                 ui.close();
             }
         });

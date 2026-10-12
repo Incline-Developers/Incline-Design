@@ -43,7 +43,6 @@ ws-production = Производство
 ws-drill-and-blast = БВР
 ws-geology = Геология
 ws-planning = Планирование
-ws-optimization = Оптимизация
 
 ## Menubars
 
@@ -2289,7 +2288,7 @@ omf-element-name-has-count-charge-naming = В элементе «{ $name }» з�
 ## Pit optimization
 
 opt-scenarios-title = Сценарии оптимизации
-opt-scenarios-button = Сценарии
+menu-pit-optimization = Оптимизация карьера...
 opt-scenarios-empty = Сценариев пока нет. Добавьте сценарий, чтобы настроить расчёт оптимизации карьера, или импортируйте их из файла JSON.
 opt-scenario-title = Сценарий оптимизации
 opt-scenario-default-name = Сценарий { $number }
@@ -2332,6 +2331,18 @@ opt-exclude-air = Исключить блоки воздуха
 opt-air-exclusion = Исключение воздуха
 opt-air-use-topography = Использовать топографию
 opt-air-use-rocktype = Использовать значение типа породы
+opt-air-source = Воздух по
+opt-air-topography = Топография
+opt-air-rocktype = Тип породы воздуха
+opt-cost-source = Стоимость из
+opt-cost-field = Поле стоимости
+opt-slope-source = Угол борта из
+opt-slope-angle = Общий угол
+opt-slope-angle-field = Поле угла
+opt-slope-fallback-angle = Угол по умолчанию
+opt-group-directional = Направленные оболочки
+opt-reports-folder = Папка отчётов
+opt-shell-field-name = Поле
 opt-any-rocktype = Любой тип породы
 opt-col-name = Название
 opt-col-type = Тип
@@ -2343,7 +2354,7 @@ opt-col-min-grade = Минимальное содержание
 opt-col-max-grade = Максимальное содержание
 opt-col-threshold = Порог
 opt-col-element = Элемент
-opt-col-recovery = Извлечение (%)
+opt-col-recovery = Извлечение
 opt-col-element-cost = Затраты на элемент
 opt-col-price = Цена
 opt-col-selling-costs = Затраты на реализацию
@@ -2405,9 +2416,6 @@ opt-factor-step = Шаг
 opt-shell-count = Количество оболочек
 opt-factor-range-invalid = Конец диапазона коэффициентов должен быть больше его начала.
 opt-create-reports = Создавать отчёты
-opt-create-shells = Создавать оболочки
-opt-shell-solid = Тело
-opt-shell-surface = Поверхность
 opt-shell-name-prefix = Уникальный префикс имени:
 opt-shell-name-prefix-hint = Оболочки получают имена вида <префикс>_RAF 0.85 в коллекции с именем сценария. У каждого сценария должен быть свой префикс, чтобы его оболочки не совпадали с оболочками другого сценария.
 opt-shell-prefix-taken = Этот префикс уже использует другой сценарий; у оболочек должен быть свой префикс
@@ -2445,8 +2453,6 @@ opt-compass-east = В
 opt-compass-south = Ю
 opt-compass-west = З
 opt-factors-title = Коэффициенты дохода
-opt-menu-expand = Показать названия разделов
-opt-menu-collapse = Только значки
 opt-group-block-model = Блочная модель
 opt-group-mining-cost = Затраты на добычу
 opt-group-methods = Методы переработки
@@ -2467,6 +2473,8 @@ opt-scenarios-import-failed = Не удалось импортировать с�
 
 ## Optimization: units, interpolation, block model checks
 opt-unit-percent = %
+opt-unit-per-tonne = /т
+opt-unit-density = т/м³
 opt-unit-grams-per-tonne = г/т
 opt-unit-ppm = ppm
 opt-unit-ppb = ppb

@@ -166,13 +166,15 @@ impl<'a> BarLineChart<'a> {
         let column_rect = |column: usize| egui::Rect::from_x_y_ranges(plot.left() + width * column as f32..=plot.left() + width * (column + 1) as f32, plot.y_range());
         let pointer = response.hover_pos().filter(|pos| plot.contains(*pos));
         let hovered = pointer.map(|pos| (((pos.x - plot.left()) / width) as usize).min(columns - 1));
+        // The confirm button's accent, as the rest of the optimization windows select with.
+        let accent = super::menu::accent_fill(&visuals);
         for &column in self.selected.iter().filter(|&&column| column < columns) {
             let area = column_rect(column);
-            painter.rect_filled(area, 0.0, visuals.selection.bg_fill.gamma_multiply(0.25));
-            painter.rect_stroke(area.shrink(0.5), 0.0, egui::Stroke::new(1.0, visuals.selection.stroke.color), egui::StrokeKind::Inside);
+            painter.rect_filled(area, 0.0, accent.gamma_multiply(0.25));
+            painter.rect_stroke(area.shrink(0.5), 0.0, egui::Stroke::new(1.0, accent), egui::StrokeKind::Inside);
         }
         if let Some(column) = hovered {
-            painter.rect_filled(column_rect(column), 0.0, visuals.selection.bg_fill.gamma_multiply(0.12));
+            painter.rect_filled(column_rect(column), 0.0, accent.gamma_multiply(0.12));
         }
         for column in 0..columns {
             let bar = column_rect(column).shrink2(egui::vec2(width * (1.0 - BAR_FILL) / 2.0, 0.0));

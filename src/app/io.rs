@@ -231,7 +231,10 @@ pub(crate) struct Config {
     /// same reason.
     #[serde(default)]
     pub(crate) blast_library: crate::model::blast::BlastLibrary,
+    /// Lenient: a tab that no longer exists (the old Optimization workspace)
+    /// is dropped rather than failing the whole file.
     #[serde(default)]
+    #[serde(deserialize_with = "lenient_list")]
     pub(crate) workspace_order: Vec<crate::ui::state::Workspace>,
     #[serde(default)]
     #[serde(deserialize_with = "lenient_list")]

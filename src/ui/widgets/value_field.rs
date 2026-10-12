@@ -20,7 +20,7 @@ use crate::{
     i18n::tr,
     model::optimization::{Constant, ConstantValue, ConstantsRow, FieldValue, ValueKind, ValueType},
     ui::{
-        themed_icon, unthemed_icon,
+        themed_icon,
         widgets::{
             data_grid::group_colour,
             menu::{self, DragableMenu, MenuButton},
@@ -86,12 +86,18 @@ fn take_choice(ctx: &egui::Context, field: egui::Id) -> Option<String> {
 /// A value type's editor: what the field draws while no constant is chosen.
 pub(crate) trait FieldEditor: ValueKind {
     /// Draw the editor in `width`, and report whether the value changed.
-    fn edit(&mut self, ui: &mut egui::Ui, id: egui::Id, width: f32, range: (f64, f64)) -> egui::Response;
+    fn edit(&mut self, ui: &mut egui::Ui, id: egui::Id, width: f32, range: (f64, f64)) -> egui::Response {
+        self.edit_with_suffix(ui, id, width, range, "")
+    }
+
+    /// [`Self::edit`], with a unit after the value while it is not being
+    /// typed in, as `egui::DragValue::suffix` shows one. Only numbers have one.
+    fn edit_with_suffix(&mut self, ui: &mut egui::Ui, id: egui::Id, width: f32, range: (f64, f64), suffix: &str) -> egui::Response;
 }
 
 impl FieldEditor for f64 {
-    fn edit(&mut self, ui: &mut egui::Ui, id: egui::Id, width: f32, range: (f64, f64)) -> egui::Response {
-        let (mut response, parsed) = edit_number(ui, id, self.to_string(), width, range);
+    fn edit_with_suffix(&mut self, ui: &mut egui::Ui, id: egui::Id, width: f32, range: (f64, f64), suffix: &str) -> egui::Response {
+        let (mut response, parsed) = edit_number(ui, id, self.to_string(), width, range, suffix);
         if let Some(parsed) = parsed {
             *self = parsed;
             response.mark_changed();
@@ -101,8 +107,8 @@ impl FieldEditor for f64 {
 }
 
 impl FieldEditor for f32 {
-    fn edit(&mut self, ui: &mut egui::Ui, id: egui::Id, width: f32, range: (f64, f64)) -> egui::Response {
-        let (mut response, parsed) = edit_number(ui, id, self.to_string(), width, range);
+    fn edit_with_suffix(&mut self, ui: &mut egui::Ui, id: egui::Id, width: f32, range: (f64, f64), suffix: &str) -> egui::Response {
+        let (mut response, parsed) = edit_number(ui, id, self.to_string(), width, range, suffix);
         if let Some(parsed) = parsed {
             *self = parsed as f32;
             response.mark_changed();
@@ -112,13 +118,13 @@ impl FieldEditor for f32 {
 }
 
 impl FieldEditor for String {
-    fn edit(&mut self, ui: &mut egui::Ui, id: egui::Id, width: f32, _range: (f64, f64)) -> egui::Response {
+    fn edit_with_suffix(&mut self, ui: &mut egui::Ui, id: egui::Id, width: f32, _range: (f64, f64), _suffix: &str) -> egui::Response {
         ui.add(egui::TextEdit::singleline(self).id(id).desired_width(width))
     }
 }
 
 impl FieldEditor for bool {
-    fn edit(&mut self, ui: &mut egui::Ui, id: egui::Id, width: f32, _range: (f64, f64)) -> egui::Response {
+    fn edit_with_suffix(&mut self, ui: &mut egui::Ui, id: egui::Id, width: f32, _range: (f64, f64), _suffix: &str) -> egui::Response {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(width, ui.spacing().interact_size.y), egui::Sense::hover());
         ui.scope_builder(egui::UiBuilder::new().max_rect(rect).id_salt(id), |ui| ui.checkbox(self, "")).inner
     }
@@ -126,7 +132,7 @@ impl FieldEditor for bool {
 
 /// A text box for a whole number of at least `range.0`, that takes digits only.
 pub(crate) fn edit_count(ui: &mut egui::Ui, id: egui::Id, value: &mut u32, width: f32, range: (u32, u32)) -> egui::Response {
-    let (mut response, parsed) = edit_number(ui, id, value.to_string(), width, (f64::from(range.0), f64::from(range.1)));
+    let (mut response, parsed) = edit_number(ui, id, value.to_string(), width, (f64::from(range.0), f64::from(range.1)), "");
     if let Some(parsed) = parsed.filter(|parsed| parsed.fract() == 0.0) {
         *value = parsed as u32;
         response.mark_changed();
@@ -158,18 +164,21 @@ pub(crate) fn filter_number(text: &str, allow_negative: bool) -> String {
 /// What is typed is kept apart from the value while the box has focus, so a
 /// half-written number ("-", "1.") does not fight the value; the value follows
 /// as soon as the text parses, and is clamped into `range` when focus leaves.
-fn edit_number(ui: &mut egui::Ui, id: egui::Id, shown: String, width: f32, range: (f64, f64)) -> (egui::Response, Option<f64>) {
+/// At rest the box shows `suffix` after the number; typing drops it.
+fn edit_number(ui: &mut egui::Ui, id: egui::Id, shown: String, width: f32, range: (f64, f64), suffix: &str) -> (egui::Response, Option<f64>) {
     let buffer_id = id.with("typed");
     let focused = ui.memory(|memory| memory.has_focus(id));
     let mut text = if focused {
         ui.data_mut(|data| data.get_temp::<String>(buffer_id)).unwrap_or(shown)
     } else {
-        shown
+        format!("{shown}{suffix}")
     };
     let response = ui.add(egui::TextEdit::singleline(&mut text).id(id).desired_width(width).horizontal_align(egui::Align::RIGHT));
+    // A box at rest holds its suffix, which is not something typed in.
+    let typing = response.has_focus() || response.changed();
     let filtered = filter_number(&text, range.0 < 0.0);
     let mut parsed = None;
-    if response.changed() || filtered != text {
+    if typing && (response.changed() || filtered != text) {
         text = filtered;
         parsed = text.parse::<f64>().ok().filter(|number| number.is_finite());
         ui.data_mut(|data| data.insert_temp(buffer_id, text.clone()));
@@ -192,6 +201,7 @@ pub(crate) struct ValueField<'a, T: FieldEditor> {
     id: egui::Id,
     value: &'a mut FieldValue<T>,
     range: (f64, f64),
+    suffix: String,
 }
 
 impl<'a, T: FieldEditor> ValueField<'a, T> {
@@ -200,7 +210,15 @@ impl<'a, T: FieldEditor> ValueField<'a, T> {
             id: egui::Id::new(("opt_value_field", id_salt)),
             value,
             range: (f64::MIN, f64::MAX),
+            suffix: String::new(),
         }
+    }
+
+    /// The unit shown after a typed number, as `egui::DragValue::suffix`
+    /// shows one ("°", " t/m³"). Not shown on a constant, which names itself.
+    pub(crate) fn suffix(mut self, suffix: impl Into<String>) -> Self {
+        self.suffix = suffix.into();
+        self
     }
 
     /// The values a number field accepts. A lower bound at or above zero also
@@ -219,7 +237,7 @@ impl<'a, T: FieldEditor> ValueField<'a, T> {
     }
 
     fn control(self, ui: &mut egui::Ui, width: f32) -> egui::Response {
-        let Self { id, value, range, .. } = self;
+        let Self { id, value, range, suffix } = self;
         let ctx = ui.ctx().clone();
         let mut chosen = false;
         if let Some(name) = take_choice(&ctx, id) {
@@ -245,7 +263,7 @@ impl<'a, T: FieldEditor> ValueField<'a, T> {
                         };
                         finish_locked(response, message)
                     }
-                    None => value.value.edit(ui, id, editor_width, range),
+                    None => value.value.edit_with_suffix(ui, id, editor_width, range, &suffix),
                 };
                 if value.constant.is_some() {
                     if ui
@@ -260,7 +278,7 @@ impl<'a, T: FieldEditor> ValueField<'a, T> {
                     }
                 } else if ui
                     .add(
-                        ToolbarButton::new(egui::Image::new(unthemed_icon!("constant_pick.svg")), tr!("opt-pick-constant"))
+                        ToolbarButton::new(egui::Image::new(themed_icon!(ui, "constant_pick.svg")), tr!("opt-pick-constant"))
                             .id_salt(id.with("pick"))
                             .button_side(BUTTON_SIDE),
                     )
@@ -518,7 +536,7 @@ fn picker_group_row(ui: &mut egui::Ui, name: &str, folded: bool, colour: egui::C
 fn picker_constant_row(ui: &mut egui::Ui, widths: &[f32; 3], constant: &Constant, selected: bool, group: Option<egui::Color32>) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), PICKER_ROW_HEIGHT), egui::Sense::click());
     let fill = if selected {
-        Some(ui.visuals().selection.bg_fill)
+        Some(menu::accent_fill(ui.visuals()))
     } else if response.hovered() {
         Some(ui.visuals().widgets.hovered.weak_bg_fill)
     } else {
@@ -531,7 +549,8 @@ fn picker_constant_row(ui: &mut egui::Ui, widths: &[f32; 3], constant: &Constant
         let bar = egui::Rect::from_min_max(egui::pos2(rect.left() + 5.0, rect.top()), egui::pos2(rect.left() + 9.0, rect.bottom()));
         ui.painter().rect_filled(bar, 1.0, colour);
     }
-    let text = ui.visuals().text_color();
+    // White on the accent, as on a confirm button.
+    let text = if selected { egui::Color32::WHITE } else { ui.visuals().text_color() };
     paint_cells(ui, rect, widths, [constant.name.clone(), constant.value.display(), constant.description.clone()], text);
     response
 }

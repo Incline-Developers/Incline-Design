@@ -1861,7 +1861,7 @@ pub(crate) struct EditorState {
     /// The workspace tab selected in the menu bar.
     pub(crate) active_workspace: Workspace,
     pub(crate) survey: crate::ui::dialogs::survey::SurveyState,
-    pub(crate) workspace_order: [Workspace; 6],
+    pub(crate) workspace_order: [Workspace; 5],
     /// The Drill & Blast workspace's stored products, in the order the palette
     /// lays them out.
     pub(crate) delay_products: Vec<DelayProduct>,
@@ -4640,8 +4640,6 @@ pub(crate) struct ScenarioDraft {
     pub(crate) confirm_close: bool,
     pub(crate) selections: ScenarioGridSelections,
     pub(crate) tab: ScenarioTab,
-    /// The section menu shows names beside its icons.
-    pub(crate) menu_expanded: bool,
 }
 
 impl ScenarioDraft {
@@ -4653,7 +4651,6 @@ impl ScenarioDraft {
             confirm_close: false,
             selections: ScenarioGridSelections::default(),
             tab: ScenarioTab::default(),
-            menu_expanded: false,
         }
     }
 
@@ -4697,7 +4694,7 @@ pub(crate) const MAX_CONCURRENT_RUNS: usize = 2;
 #[cfg(target_arch = "wasm32")]
 pub(crate) const MAX_CONCURRENT_RUNS: usize = 1;
 
-/// What the Optimization workspace holds while the app runs.
+/// What pit optimization holds while the app runs.
 ///
 /// A working copy of the active project's scenarios, read from it the first
 /// time the list is opened and handed back on every change; reset when another
@@ -4876,12 +4873,11 @@ pub(crate) enum Workspace {
     Geology,
     Planning,
     Survey,
-    Optimization,
 }
 
 impl Workspace {
     /// Every workspace, in the default tab order.
-    pub(crate) const ALL: [Self; 6] = [Self::Production, Self::DrillAndBlast, Self::Geology, Self::Planning, Self::Survey, Self::Optimization];
+    pub(crate) const ALL: [Self; 5] = [Self::Production, Self::DrillAndBlast, Self::Geology, Self::Planning, Self::Survey];
 
     pub(crate) fn label(self) -> String {
         match self {
@@ -4890,16 +4886,12 @@ impl Workspace {
             Self::Geology => tr!("ws-geology"),
             Self::Planning => tr!("ws-planning"),
             Self::Survey => tr!("ws-survey"),
-            Self::Optimization => tr!("ws-optimization"),
         }
     }
 
     /// Whether the tab can be selected at all yet.
     pub(crate) fn implemented(self) -> bool {
-        matches!(
-            self,
-            Self::Production | Self::DrillAndBlast | Self::Geology | Self::Planning | Self::Survey | Self::Optimization
-        )
+        matches!(self, Self::Production | Self::DrillAndBlast | Self::Geology | Self::Planning | Self::Survey)
     }
 
     /// Whether this workspace carries the mine production tools.

@@ -48,7 +48,6 @@ ws-production = Production
 ws-drill-and-blast = Drill & Blast
 ws-geology = Geology
 ws-planning = Planning
-ws-optimization = Optimization
 
 ## Menubars
 
@@ -2363,7 +2362,7 @@ omf-element-name-has-count-charge-naming = Element '{ $name }' has { $count } ch
 ## Pit optimization
 
 opt-scenarios-title = Optimization scenarios
-opt-scenarios-button = Scenarios
+menu-pit-optimization = Pit Optimization...
 opt-scenarios-empty = No scenarios yet. Add one to set up a pit optimization run, or import some from a JSON file.
 opt-scenario-title = Optimization scenario
 opt-scenario-default-name = Scenario { $number }
@@ -2407,8 +2406,25 @@ opt-none-selected = None
 opt-block-model-not-loaded = This block model is not in the open project, so its fields cannot be listed.
 opt-exclude-air = Exclude air blocks
 opt-air-exclusion = Air exclusion
-opt-air-use-topography = Use topography
-opt-air-use-rocktype = Use rock type value
+opt-air-use-topography = Topography surface
+opt-air-use-rocktype = Rock type value
+opt-air-source = Air from
+opt-air-topography = Topography
+opt-air-rocktype = Air rock type
+opt-cost-source = Cost from
+opt-cost-field = Cost field
+opt-slope-source = Slope from
+opt-slope-angle = Overall angle
+opt-slope-angle-field = Angle field
+opt-slope-fallback-angle = Fallback angle
+opt-factor-input = Factors from
+opt-group-directional = Directional shells
+opt-reports-folder = Reports folder
+opt-create-shell-solids = Create shell solids
+opt-create-shell-surfaces = Create shell surfaces
+opt-shell-field-value = Value written
+opt-shell-field-target = Write into
+opt-shell-field-name = Field
 opt-any-rocktype = Any rock type
 
 opt-col-name = Name
@@ -2421,7 +2437,7 @@ opt-col-min-grade = Minimum grade
 opt-col-max-grade = Maximum grade
 opt-col-threshold = Threshold
 opt-col-element = Element
-opt-col-recovery = Recovery (%)
+opt-col-recovery = Recovery
 opt-col-element-cost = Element cost
 opt-col-price = Price
 opt-col-selling-costs = Selling costs
@@ -2459,9 +2475,9 @@ opt-select-method = Select a processing method above to edit its elements.
 opt-ga-costs = G&A costs
 opt-group-other-costs = Other costs
 opt-haulage-factor = Haulage cost adjustment factor
-opt-ga-same-for-all = Same for all
+opt-ga-same-for-all = Same G&A for every method
 
-opt-select-mode = Select mode
+opt-select-mode = Shells
 opt-mode-single = Single shell
 opt-mode-multiple = Multiple shells using RAFs
 opt-directional-shells = Use directional shells
@@ -2488,10 +2504,7 @@ opt-factor-step = Step
 opt-shell-count = Number of shells
 opt-factor-range-invalid = The factor range must end above where it starts.
 opt-create-reports = Create reports
-opt-create-shells = Create shells
-opt-shell-solid = Solid
-opt-shell-surface = Surface
-opt-shell-name-prefix = Unique name prefix:
+opt-shell-name-prefix = Shell name prefix
 opt-shell-name-prefix-hint = Shells are named <prefix>_RAF 0.85, inside a collection named after the scenario. Each scenario needs its own prefix, so its shells never clash with another scenario's.
 opt-shell-prefix-taken = Another scenario already uses this prefix; shells must have a prefix of their own
 opt-shell-prefix-empty = Type a prefix for the shells' names
@@ -2516,7 +2529,7 @@ opt-run-field-failed = Could not write field '{ $field }' of block model '{ $mod
 opt-write-shell-field = Write shell value into BM
 
 opt-overall-slope = Overall slope angle
-opt-slope-default-angle = Default angle
+opt-slope-default-angle = One angle all round
 opt-slope-use-rosettes = Use rosettes
 opt-slope-rosettes-hint = An angle for each bearing sector
 opt-col-bearing = Bearing
@@ -2529,8 +2542,6 @@ opt-compass-east = E
 opt-compass-south = S
 opt-compass-west = W
 opt-factors-title = Revenue factors
-opt-menu-expand = Show section names
-opt-menu-collapse = Show icons only
 opt-group-block-model = Block model
 opt-group-mining-cost = Mining cost
 opt-group-methods = Processing methods
@@ -2552,6 +2563,8 @@ opt-scenarios-import-failed = Could not import the optimization scenarios: { $er
 
 ## Optimization: units, interpolation, block model checks
 opt-unit-percent = %
+opt-unit-per-tonne = /t
+opt-unit-density = t/m³
 opt-unit-grams-per-tonne = g/t
 opt-unit-ppm = ppm
 opt-unit-ppb = ppb

@@ -270,8 +270,11 @@ impl DataGrid {
         ui.add_enabled_ui(enabled, |ui| ui.add(button)).inner.clicked()
     }
 
+    /// The column titles on a filled band, as [`super::data_table::DataTable`]
+    /// heads its sheet, rather than over a rule.
     fn draw_header(&self, ui: &mut egui::Ui, widths: &[f32], row_height: f32) {
-        ui.horizontal(|ui| {
+        let band = ui.painter().add(egui::Shape::Noop);
+        let header = ui.horizontal(|ui| {
             ui.allocate_exact_size(egui::vec2(HANDLE_WIDTH + self.gutter(), row_height), egui::Sense::hover());
             for (column, width) in self.columns.iter().zip(widths) {
                 let (rect, _) = ui.allocate_exact_size(egui::vec2(*width, row_height), egui::Sense::hover());
@@ -284,7 +287,10 @@ impl DataGrid {
                 );
             }
         });
-        ui.separator();
+        let rect = egui::Rect::from_min_size(header.response.rect.min, egui::vec2(ui.available_width(), header.response.rect.height()));
+        let fill = ui.visuals().widgets.noninteractive.bg_fill;
+        ui.painter().set(band, egui::Shape::rect_filled(rect, super::toolbar::GROUP_CORNER_RADIUS, fill));
+        ui.add_space(2.0);
     }
 
     /// Draw one plain row and return the rectangle it occupies.
@@ -303,17 +309,21 @@ impl DataGrid {
         let background = ui.painter().add(egui::Shape::Noop);
         let response = ui
             .horizontal(|ui| {
-                if self.buttons.groups {
+                let gutter = self.buttons.groups.then(|| {
                     // The bar down the left edge ties a row to its group.
                     let (gutter, _) = ui.allocate_exact_size(egui::vec2(GROUP_GUTTER, row_height), egui::Sense::hover());
                     if let Some(colour) = group {
-                        let bar = egui::Rect::from_min_max(egui::pos2(gutter.center().x - 2.0, gutter.top()), egui::pos2(gutter.center().x + 2.0, gutter.bottom()));
+                        let bar = egui::Rect::from_min_max(egui::pos2(gutter.left() + 1.0, gutter.top()), egui::pos2(gutter.left() + 4.0, gutter.bottom()));
                         ui.painter().rect_filled(bar, 1.0, colour);
                     }
-                }
+                    gutter
+                });
                 let (handle, handle_response) = ui.allocate_exact_size(egui::vec2(HANDLE_WIDTH, row_height), egui::Sense::drag());
+                // Centred in the whole lead-in, gutter included, so it sits in
+                // the middle of the space before the first cell.
+                let lead_in = gutter.map_or(handle, |gutter| gutter.union(handle));
                 ui.painter().text(
-                    handle.center(),
+                    lead_in.center(),
                     egui::Align2::CENTER_CENTER,
                     "≡",
                     egui::TextStyle::Button.resolve(ui.style()),
@@ -340,7 +350,7 @@ impl DataGrid {
             *selected = Some(index);
         }
         let fill = if *selected == Some(index) {
-            Some(ui.visuals().selection.bg_fill.gamma_multiply(0.35))
+            Some(super::menu::accent_fill(ui.visuals()).gamma_multiply(0.35))
         } else if let Some(colour) = group {
             Some(colour.gamma_multiply(0.16))
         } else if band {
@@ -397,7 +407,7 @@ impl DataGrid {
             *selected = Some(index);
         }
         let fill = if *selected == Some(index) {
-            ui.visuals().selection.bg_fill.gamma_multiply(0.5)
+            super::menu::accent_fill(ui.visuals()).gamma_multiply(0.5)
         } else {
             colour.gamma_multiply(0.5)
         };
@@ -421,7 +431,7 @@ impl DataGrid {
         let after = is_group || pointer.y > rect.center().y;
         let slot = if after { index + 1 } else { index };
         let line_y = if after { rect.bottom() } else { rect.top() };
-        ui.painter().hline(rect.x_range(), line_y, egui::Stroke::new(2.0, ui.visuals().selection.bg_fill));
+        ui.painter().hline(rect.x_range(), line_y, egui::Stroke::new(2.0, super::menu::accent_fill(ui.visuals())));
         if released {
             actions.push(GridAction::Drop { from, slot });
         }

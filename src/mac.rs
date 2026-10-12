@@ -108,7 +108,7 @@ pub(crate) enum MacMenuAction {
     OpenReferencePoints,
     /// The Drillholes menu's row that opens the build surface dialog.
     OpenReferenceSurface,
-    /// The Optimization menu's row that opens the scenarios list.
+    /// The Block Model menu's row that opens the pit optimization scenarios.
     OpenOptimizationScenarios,
     /// One row of File > Open Recent, by its index in the recent list the menu
     /// was last built from.
@@ -127,7 +127,6 @@ const TRIANGULATION_MENU_TAG: isize = -1;
 const BLOCK_MODEL_MENU_TAG: isize = -3;
 const DRILL_HOLES_MENU_TAG: isize = -5;
 const COORDINATES_MENU_TAG: isize = -6;
-const OPTIMIZATION_MENU_TAG: isize = -7;
 
 /// Tags at or above this carry a recent-project index rather than naming a
 /// fixed action, leaving room for the fixed list to grow.
@@ -491,6 +490,9 @@ pub(crate) fn install_menu_bar() {
         &target,
         mtm,
     );
+    // Production's half of the menu; `set_workspace_menus` shows each
+    // workspace only its own row.
+    add_action(&block_model_menu, &tr!("menu-pit-optimization"), "", MacMenuAction::OpenOptimizationScenarios, &target, mtm);
     let block_model_item = add_submenu(&root, &tr!("ws-menubar-block-model"), &block_model_menu, mtm);
     block_model_item.setTag(BLOCK_MODEL_MENU_TAG);
 
@@ -530,12 +532,6 @@ pub(crate) fn install_menu_bar() {
     add_action(&point_cloud_menu, &tr!("common-join"), "", MacMenuAction::OpenPointCloudJoin, &target, mtm);
     add_action(&point_cloud_menu, &tr!("common-classify"), "", MacMenuAction::OpenPointCloudClassify, &target, mtm);
     add_submenu(&root, &tr!("ws-menubar-point-cloud"), &point_cloud_menu, mtm);
-
-    let optimization_menu = menu(&tr!("ws-optimization"), mtm);
-    optimization_menu.setAutoenablesItems(false);
-    add_action(&optimization_menu, &tr!("opt-scenarios-button"), "", MacMenuAction::OpenOptimizationScenarios, &target, mtm);
-    let optimization_item = add_submenu(&root, &tr!("ws-optimization"), &optimization_menu, mtm);
-    optimization_item.setTag(OPTIMIZATION_MENU_TAG);
 
     app.setMainMenu(Some(&root));
     NSMenu::setMenuBarVisible(true, mtm);
@@ -590,12 +586,15 @@ fn set_workspace_menus(root: &NSMenu, workspace: Workspace) {
         item.setHidden(workspace != Workspace::Production);
     }
 
-    if let Some(item) = find_item(root, OPTIMIZATION_MENU_TAG) {
-        item.setHidden(workspace != Workspace::Optimization);
-    }
-
+    // Geology thresholds the block model; Production optimizes a pit over it.
     if let Some(item) = find_item(root, BLOCK_MODEL_MENU_TAG) {
+        item.setHidden(!matches!(workspace, Workspace::Geology | Workspace::Production));
+    }
+    if let Some(item) = find_item(root, MacMenuAction::OpenCreateOreTriangulation.tag()) {
         item.setHidden(workspace != Workspace::Geology);
+    }
+    if let Some(item) = find_item(root, MacMenuAction::OpenOptimizationScenarios.tag()) {
+        item.setHidden(workspace != Workspace::Production);
     }
 
     if let Some(item) = find_item(root, DRILL_HOLES_MENU_TAG) {

@@ -17,6 +17,7 @@ use crate::{
         themed_icon,
         widgets::{
             bar_line_chart::{BarLineChart, BarSeries, LineSeries},
+            context_menu::context_menu_separator,
             data_table::DataTable,
             menu::{self, DragableMenu, MenuButton, menu_note},
             toolbar::ToolbarButton,
@@ -166,10 +167,15 @@ fn draw_controls(
 ) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
-        ui.radio_value(basis, Basis::Cumulative, tr!("opt-results-cumulative"))
-            .on_hover_text(tr!("opt-results-cumulative-hint"));
-        ui.radio_value(basis, Basis::Incremental, tr!("opt-results-incremental"))
-            .on_hover_text(tr!("opt-results-incremental-hint"));
+        // The basis is a pair of buttons, the one in use shown pressed.
+        for (option, label, hint) in [
+            (Basis::Cumulative, tr!("opt-results-cumulative"), tr!("opt-results-cumulative-hint")),
+            (Basis::Incremental, tr!("opt-results-incremental"), tr!("opt-results-incremental-hint")),
+        ] {
+            if ui.add(MenuButton::new(label).selected(*basis == option)).on_hover_text(hint).clicked() {
+                *basis = option;
+            }
+        }
         ui.add_space(16.0);
         ui.label(tr!("opt-results-destination"));
         let label = |destination: Option<usize>| destination.map_or_else(|| tr!("opt-results-all-destinations"), |index| destination_label(report, index));
@@ -199,7 +205,7 @@ fn draw_controls(
                         }
                     }
                 });
-                ui.separator();
+                context_menu_separator(ui);
                 if ui.add(MenuButton::new(tr!("opt-results-columns-default"))).clicked() {
                     *shown = default_columns(columns);
                     changed = true;

@@ -6,7 +6,7 @@ pub(crate) mod folder; // Handles explorer folder create/delete/rename/move comm
 pub(crate) mod layer; // Handles creating layers, deleting layers, etc. commands
 pub(crate) mod object_edit;
 pub(crate) mod omf; // Whole-project Open Mining Format interchange.
-pub(crate) mod optimization; // Handles the Optimization workspace's scenario list, editor and scenarios file. // Handles the "Edit Object" dialog's working-copy writeback.
+pub(crate) mod optimization; // Handles pit optimization's scenario list, editor and scenarios file.
 pub(crate) mod plot; // Handles printable plot sheets
 pub(crate) mod point_cloud; // Handles importing/loading point clouds, etc. commands
 pub(crate) mod products; // Handles the Drill & Blast workspace's stored products.

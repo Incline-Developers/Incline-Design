@@ -1,4 +1,4 @@
-//! The Optimization workspace's windows: the scenarios list, and the editor a
+//! The pit optimization windows (Production's Block Model menu): the scenarios list, and the editor a
 //! scenario opens in. Only one of the two is up at a time - adding or editing
 //! hides the list, closing the editor brings it back.
 //!
@@ -24,8 +24,9 @@ use crate::{
         state::{EditorState, OptimizationState, ScenarioDraft, ScenarioGridSelections, ScenarioStatus, ScenarioTab, UiCommand, UiProjectView},
         themed_icon, unthemed_icon,
         widgets::{
+            collapsible_section::CollapsibleSection,
             data_grid::{DataGrid, GridAction, GridButtons, GridColumn, GridRow, apply_flat, move_to_slot},
-            menu::{self, DragableMenu, MenuButton, menu_note},
+            menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, menu_note},
             rosette_diagram::{HEIGHT as ROSETTE_HEIGHT, draw_rosette},
             toolbar::ToolbarButton,
             value_field::{self, FieldEditor, ValueField, edit_count, mark_invalid},
@@ -41,10 +42,6 @@ const MENU_ICON: f32 = 22.0;
 /// Wide enough for the long names sensitivity studies get.
 const LIST_WIDTH: f32 = 806.0;
 const ICON_SIDE: f32 = 26.0;
-const LABEL_WIDTH: f32 = 270.0;
-/// Width of the starting point and mining direction stacks, label over control.
-const STACK_WIDTH: f32 = (CONTROL_WIDTH - 8.0) / 2.0;
-const CONTROL_WIDTH: f32 = 300.0;
 
 pub(crate) fn draw_optimization_dialogs(ui: &mut egui::Ui, editor: &mut EditorState, block_models: &[OpenBlockModel], project: &UiProjectView, commands: &mut Vec<UiCommand>) {
     // The progress rings move while a run goes, whichever window is up.
@@ -358,9 +355,7 @@ fn draw_scenario_editor(ui: &mut egui::Ui, state: &mut OptimizationState, block_
     let mut save = false;
     let title = format!("{}: {}{}", tr!("opt-scenario-title"), draft.scenario.name, if draft.dirty() { "*" } else { "" });
     let body_height = body_height(&ctx);
-    let menu_expanded = draft.menu_expanded;
-    let side_width = section_menu_width(&ctx, menu_expanded);
-    let mut toggle_menu = false;
+    let side_width = section_menu_width(&ctx);
     DragableMenu::new("optimization_scenario_editor", title)
         .open(&mut open)
         .min_width(EDITOR_WIDTH + SIDE_GAP + side_width)
@@ -369,18 +364,21 @@ fn draw_scenario_editor(ui: &mut egui::Ui, state: &mut OptimizationState, block_
             outline_fields(ui);
             let ready = !draft.scenario.name.trim().is_empty() && (draft.scenario != draft.saved || draft.is_new);
             let ScenarioDraft { scenario, selections, tab, .. } = &mut *draft;
+            // The rows inside keep the dialog's own spacing; only the gap
+            // between the settings and the menu is taken out here.
+            let item_spacing = ui.spacing().item_spacing;
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 // The settings keep one width however the section menu is
                 // sized: the menu grows the window to the right instead.
                 let content = ui.allocate_ui_with_layout(egui::vec2(EDITOR_WIDTH - 16.0, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                    ui.spacing_mut().item_spacing = item_spacing;
                     ui.set_width(EDITOR_WIDTH - 16.0);
-                    // As tall as the menu's first entry, so the rule under it
-                    // lines up with the one under the menu's toggle.
+                    // As tall as a menu entry, so the title sits level with
+                    // the first one.
                     ui.allocate_ui_with_layout(egui::vec2(EDITOR_WIDTH - 16.0, MENU_ITEM_HEIGHT), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         ui.label(egui::RichText::new(tab.label()).size(17.0).strong());
                     });
-                    ui.separator();
                     // One fixed height for every section, so the window does
                     // not change size under the pointer as they are switched.
                     egui::ScrollArea::vertical()
@@ -400,14 +398,8 @@ fn draw_scenario_editor(ui: &mut egui::Ui, state: &mut OptimizationState, block_
                             }
                         });
                 });
-                // A rule between the settings and the menu.
-                ui.add_space(SIDE_GAP / 2.0);
-                let rule = content.response.rect;
-                let x = ui.cursor().left();
-                ui.painter().vline(x, rule.y_range(), ui.visuals().widgets.noninteractive.bg_stroke);
-                ui.add_space(SIDE_GAP / 2.0);
-                let choice = draw_section_menu(ui, content.response.rect.height(), side_width, menu_expanded, tab, ready);
-                toggle_menu = choice.toggle;
+                ui.add_space(SIDE_GAP);
+                let choice = draw_section_menu(ui, content.response.rect.height(), side_width, tab, ready);
                 save = choice.save;
                 close_requested |= choice.close;
             });
@@ -416,9 +408,6 @@ fn draw_scenario_editor(ui: &mut egui::Ui, state: &mut OptimizationState, block_
                 close_requested = true;
             }
         });
-    if toggle_menu {
-        draft.menu_expanded = !draft.menu_expanded;
-    }
     if !open {
         close_requested = true;
     }
@@ -455,99 +444,71 @@ fn outline_fields(ui: &mut egui::Ui) {
 // ── Section menu ──
 
 struct MenuChoice {
-    toggle: bool,
     save: bool,
     close: bool,
 }
 
-fn section_icon(tab: ScenarioTab) -> egui::Image<'static> {
-    egui::Image::new(match tab {
-        ScenarioTab::Inputs => unthemed_icon!("section_inputs.svg"),
-        ScenarioTab::Constants => unthemed_icon!("constant_pick.svg"),
-        ScenarioTab::MiningCosts => unthemed_icon!("section_mining_costs.svg"),
-        ScenarioTab::ProcessingCosts => unthemed_icon!("section_processing_costs.svg"),
-        ScenarioTab::Revenues => unthemed_icon!("section_revenues.svg"),
-        ScenarioTab::Constraints => unthemed_icon!("section_constraints.svg"),
-        ScenarioTab::Outputs => unthemed_icon!("section_outputs.svg"),
-    })
+/// A white line icon, tinted by [`menu_item`] to the entry's text colour in
+/// either theme - which is why it is not the themed (black in light) copy.
+macro_rules! tinted_icon {
+    ($name:literal) => {
+        egui::Image::new(egui::include_image!(concat!("../../../res/ui/icons_dark/", $name)))
+    };
 }
 
-/// How wide the section menu is: icons only, or wide enough for the longest
-/// section name in the current language.
-fn section_menu_width(ctx: &egui::Context, expanded: bool) -> f32 {
-    let narrow = MENU_ITEM_HEIGHT + 4.0;
-    if !expanded {
-        return narrow;
+fn section_icon(tab: ScenarioTab) -> egui::Image<'static> {
+    match tab {
+        ScenarioTab::Inputs => tinted_icon!("section_inputs.svg"),
+        ScenarioTab::Constants => tinted_icon!("constant_pick.svg"),
+        ScenarioTab::MiningCosts => tinted_icon!("section_mining_costs.svg"),
+        ScenarioTab::ProcessingCosts => tinted_icon!("section_processing_costs.svg"),
+        ScenarioTab::Revenues => tinted_icon!("section_revenues.svg"),
+        ScenarioTab::Constraints => tinted_icon!("section_constraints.svg"),
+        ScenarioTab::Outputs => tinted_icon!("section_outputs.svg"),
     }
+}
+
+/// How wide the section menu is: room for the icon and the longest entry in
+/// the current language.
+fn section_menu_width(ctx: &egui::Context) -> f32 {
     let painter = ctx.layer_painter(egui::LayerId::background());
     let font = egui::FontId::proportional(14.0);
     let labels = ScenarioTab::ALL.into_iter().map(ScenarioTab::label).chain([tr!("opt-save-scenario"), tr!("common-close")]);
     let longest = labels
         .map(|label| painter.layout_no_wrap(label, font.clone(), egui::Color32::WHITE).size().x)
         .fold(0.0, f32::max);
-    narrow + longest + 16.0
+    MENU_ITEM_HEIGHT + 4.0 + longest + 16.0
 }
 
-/// The menu beside the settings: a collapse arrow, one entry per section, and
-/// Save and Close pushed to the bottom. `height` is the settings' height.
-fn draw_section_menu(ui: &mut egui::Ui, height: f32, width: f32, expanded: bool, current: &mut ScenarioTab, can_save: bool) -> MenuChoice {
-    let mut choice = MenuChoice {
-        toggle: false,
-        save: false,
-        close: false,
-    };
+/// The menu beside the settings: one entry per section, and Save and Close
+/// pushed to the bottom. `height` is the settings' height.
+fn draw_section_menu(ui: &mut egui::Ui, height: f32, width: f32, current: &mut ScenarioTab, can_save: bool) -> MenuChoice {
+    let mut choice = MenuChoice { save: false, close: false };
     ui.allocate_ui_with_layout(egui::vec2(width, height), egui::Layout::top_down(egui::Align::Min), |ui| {
         ui.set_width(width);
-        let top = ui.cursor().top();
-        let (toggle_icon, toggle_tip) = if expanded {
-            (egui::Image::new(unthemed_icon!("menu_collapse.svg")), tr!("opt-menu-collapse"))
-        } else {
-            (egui::Image::new(unthemed_icon!("menu_expand.svg")), tr!("opt-menu-expand"))
-        };
-        choice.toggle = menu_item(ui, toggle_icon, &toggle_tip, width, expanded, false, true, false);
-        ui.separator();
         ui.spacing_mut().item_spacing.y = 2.0;
+        let top = ui.cursor().top();
         for tab in ScenarioTab::ALL {
-            if menu_item(ui, section_icon(tab), &tab.label(), width, expanded, *current == tab, true, !expanded) {
+            if menu_item(ui, section_icon(tab), &tab.label(), width, *current == tab, true) {
                 *current = tab;
             }
         }
-        let bottom = 2.0 * MENU_ITEM_HEIGHT + 2.0 + ui.spacing().item_spacing.y * 2.0 + 8.0;
+        let bottom = 2.0 * MENU_ITEM_HEIGHT + ui.spacing().item_spacing.y * 2.0;
         ui.add_space((top + height - ui.cursor().top() - bottom).max(4.0));
-        ui.separator();
-        choice.save = menu_item(
-            ui,
-            egui::Image::new(unthemed_icon!("menu_save.svg")),
-            &tr!("opt-save-scenario"),
-            width,
-            expanded,
-            false,
-            can_save,
-            !expanded,
-        );
-        choice.close = menu_item(
-            ui,
-            egui::Image::new(unthemed_icon!("menu_close.svg")),
-            &tr!("common-close"),
-            width,
-            expanded,
-            false,
-            true,
-            !expanded,
-        );
+        choice.save = menu_item(ui, tinted_icon!("save_project.svg"), &tr!("opt-save-scenario"), width, false, can_save);
+        choice.close = menu_item(ui, tinted_icon!("close_project.svg"), &tr!("common-close"), width, false, true);
     });
     choice
 }
 
-/// One entry of the section menu: its icon, and its name when `expanded`
-/// (otherwise the name is the tooltip). Returns whether it was clicked.
-#[allow(clippy::too_many_arguments)]
-fn menu_item(ui: &mut egui::Ui, icon: egui::Image<'static>, label: &str, width: f32, expanded: bool, selected: bool, enabled: bool, tooltip: bool) -> bool {
+/// One entry of the section menu: its icon and its name. Returns whether it
+/// was clicked.
+fn menu_item(ui: &mut egui::Ui, icon: egui::Image<'static>, label: &str, width: f32, selected: bool, enabled: bool) -> bool {
     let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, MENU_ITEM_HEIGHT), sense);
     let visuals = ui.visuals();
     let fill = if selected {
-        Some(visuals.selection.bg_fill)
+        Some(menu::accent_fill(visuals))
     } else if response.hovered() && enabled {
         Some(visuals.widgets.hovered.weak_bg_fill)
     } else {
@@ -556,21 +517,19 @@ fn menu_item(ui: &mut egui::Ui, icon: egui::Image<'static>, label: &str, width: 
     if let Some(fill) = fill {
         ui.painter().rect_filled(rect, crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS, fill);
     }
+    // The current section is filled with the confirm button's accent, and
+    // takes its white ink in either theme.
+    let tint = if selected { egui::Color32::WHITE } else { ui.visuals().text_color() };
+    let tint = if enabled { tint } else { ui.visuals().weak_text_color() };
     let icon_rect = egui::Rect::from_center_size(egui::pos2(rect.left() + (MENU_ITEM_HEIGHT + 4.0) / 2.0, rect.center().y), egui::Vec2::splat(MENU_ICON));
-    icon.tint(egui::Color32::WHITE.gamma_multiply(if enabled { 1.0 } else { 0.35 })).paint_at(ui, icon_rect);
-    if expanded {
-        let colour = if enabled { ui.visuals().text_color() } else { ui.visuals().weak_text_color() };
-        ui.painter().text(
-            egui::pos2(rect.left() + MENU_ITEM_HEIGHT + 4.0, rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            label,
-            egui::FontId::proportional(14.0),
-            colour,
-        );
-    }
-    if tooltip {
-        response.clone().on_hover_text(label);
-    }
+    icon.tint(tint).paint_at(ui, icon_rect);
+    ui.painter().text(
+        egui::pos2(rect.left() + MENU_ITEM_HEIGHT + 4.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(14.0),
+        tint,
+    );
     enabled && response.clicked()
 }
 
@@ -632,91 +591,59 @@ fn draw_confirm_close(ctx: &egui::Context, state: &mut OptimizationState, comman
 
 // ── Form rows ──
 //
-// Every labelled field in the editor is one row of two columns: the label at
-// the left in a column of fixed width, and the control starting right where
-// that column ends, at one fixed width. Radio options take the label column
-// and put what they choose in the control column, so a group of them lines up
-// the same way a column of plain fields does.
+// Every labelled setting is a house field row (`menu::MenuField*`): the label
+// on the left, the control in the column the card's fields share. A setting
+// that can come from more than one place is a "from" drop-down followed by the
+// one row its choice needs, rather than a run of radio buttons.
 
-fn form_row<R>(ui: &mut egui::Ui, label: impl FnOnce(&mut egui::Ui), control: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    let height = ui.spacing().interact_size.y;
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 8.0;
-        ui.allocate_ui_with_layout(egui::vec2(LABEL_WIDTH, height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.set_min_width(LABEL_WIDTH);
-            ui.set_max_width(LABEL_WIDTH);
-            label(ui);
-        });
-        ui.allocate_ui_with_layout(egui::vec2(CONTROL_WIDTH, height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.set_min_width(CONTROL_WIDTH);
-            ui.set_max_width(CONTROL_WIDTH);
-            control(ui)
+/// A field row whose control `control` draws, handed the column's width.
+fn field_row<R>(ui: &mut egui::Ui, label: String, help: Option<String>, control: impl FnOnce(&mut egui::Ui, f32) -> R) -> R {
+    let mut field = MenuField::new(label);
+    if let Some(help) = help {
+        field = field.help_text(help);
+    }
+    field.show(ui, |ui, row_height, width| {
+        ui.allocate_ui_with_layout(egui::vec2(width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.set_width(width);
+            control(ui, width)
         })
         .inner
     })
-    .inner
 }
 
-/// [`form_row`] for a row whose label and control both use the same value,
-/// which two closures capturing it could not: it is handed to each in turn.
-fn form_row_with<S, R>(ui: &mut egui::Ui, state: &mut S, label: impl FnOnce(&mut egui::Ui, &mut S), control: impl FnOnce(&mut egui::Ui, &mut S) -> R) -> R {
-    row_with(ui, state, Some(CONTROL_WIDTH), label, control)
-}
-
-/// A form row whose control is wider than the usual column - several controls
-/// side by side - and takes the rest of the row.
-fn form_row_wide_with<S, R>(ui: &mut egui::Ui, state: &mut S, label: impl FnOnce(&mut egui::Ui, &mut S), control: impl FnOnce(&mut egui::Ui, &mut S) -> R) -> R {
-    row_with(ui, state, None, label, control)
-}
-
-fn row_with<S, R>(ui: &mut egui::Ui, state: &mut S, control_width: Option<f32>, label: impl FnOnce(&mut egui::Ui, &mut S), control: impl FnOnce(&mut egui::Ui, &mut S) -> R) -> R {
-    let height = ui.spacing().interact_size.y;
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 8.0;
-        ui.allocate_ui_with_layout(egui::vec2(LABEL_WIDTH, height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.set_min_width(LABEL_WIDTH);
-            ui.set_max_width(LABEL_WIDTH);
-            label(ui, state);
-        });
-        match control_width {
-            Some(width) => {
-                ui.allocate_ui_with_layout(egui::vec2(width, height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    ui.set_min_width(width);
-                    ui.set_max_width(width);
-                    control(ui, state)
-                })
-                .inner
-            }
-            None => ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| control(ui, state)).inner,
-        }
-    })
-    .inner
-}
-
-fn labeled_row<R>(ui: &mut egui::Ui, label: String, help: Option<String>, control: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    form_row(
-        ui,
-        |ui| {
-            let response = ui.add(egui::Label::new(label).truncate());
-            if let Some(help) = help {
-                response.on_hover_text(help);
-            }
-        },
-        control,
-    )
-}
-
-fn form_checkbox(ui: &mut egui::Ui, label: String, value: &mut bool) -> egui::Response {
-    labeled_row(ui, label, None, |ui| ui.checkbox(value, ""))
+fn form_toggle(ui: &mut egui::Ui, label: String, help: Option<String>, value: &mut bool) -> egui::Response {
+    let mut field = MenuFieldBool::new(label, value);
+    if let Some(help) = help {
+        field = field.help_text(help);
+    }
+    field.show(ui)
 }
 
 /// A drop-down over `names`. Whatever the scenario already holds stays listed,
-/// so a model that is unloaded for the moment does not blank the choice.
+/// so a field that is missing for the moment does not blank the choice.
 fn form_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, label: String, value: &mut String, names: &[String]) -> egui::Response {
-    labeled_row(ui, label, None, |ui| inline_combo(ui, id, value, names, tr!("opt-none-selected"), CONTROL_WIDTH - 8.0))
+    field_row(ui, label, None, |ui, width| inline_combo(ui, id, value, names, tr!("opt-none-selected"), width))
 }
 
-/// An input/constant field in a labelled row.
+/// A drop-down over a fixed set of choices.
+fn form_choice<T: Copy + PartialEq>(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    label: String,
+    help: Option<String>,
+    value: &mut T,
+    all: &[T],
+    name: impl Fn(T) -> String,
+) -> egui::Response {
+    let selected = name(*value);
+    let mut combo = MenuFieldCombo::new(id, label, value, selected, all.iter().map(|option| (*option, name(*option).into())));
+    if let Some(help) = help {
+        combo = combo.help_text(help);
+    }
+    combo.show(ui)
+}
+
+/// An input/constant field in a labelled row, its unit (if any) after the number.
 fn form_value<T: FieldEditor>(
     ui: &mut egui::Ui,
     id: impl std::hash::Hash + std::fmt::Debug,
@@ -724,8 +651,36 @@ fn form_value<T: FieldEditor>(
     help: Option<String>,
     value: &mut FieldValue<T>,
     range: (f64, f64),
+    suffix: String,
 ) -> egui::Response {
-    labeled_row(ui, label, help, |ui| ValueField::new(id, value).range(range.0, range.1).show(ui))
+    field_row(ui, label, help, |ui, _| ValueField::new(id, value).range(range.0, range.1).suffix(suffix).show(ui))
+}
+
+// ── Units ──
+//
+// Shown after a typed number, as the top bar shows "m" after the elevation.
+// Every cost is multiplied by a block's tonnes (`optimization_run::values`),
+// so costs are per tonne; prices are per the element's sales unit.
+
+fn unit_per_tonne() -> String {
+    tr!("opt-unit-per-tonne")
+}
+
+fn unit_density() -> String {
+    format!(" {}", tr!("opt-unit-density"))
+}
+
+fn unit_degrees() -> String {
+    tr!("common-degree-suffix")
+}
+
+fn unit_percent() -> String {
+    tr!("common-percent-suffix")
+}
+
+/// Per one sales unit ("/oz"); nothing for a plain unit, which has no name.
+fn unit_per_sales(unit: SalesUnit) -> String {
+    if unit == SalesUnit::Unit { String::new() } else { format!("/{}", unit.label()) }
 }
 
 fn combo_options(names: &[String], current: &str, empty_label: String) -> Vec<(String, egui::WidgetText)> {
@@ -767,7 +722,7 @@ fn inline_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, v
 /// A drop-down that fills the grid cell it is drawn in. A cell left empty is
 /// outlined in red when `required`.
 fn cell_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, value: &mut String, names: &[String], empty_label: String, required: bool) {
-    let width = (ui.available_width() - 8.0).max(40.0);
+    let width = ui.available_width().max(40.0);
     let response = inline_combo(ui, id, value, names, empty_label, width);
     if required && value.is_empty() {
         mark_invalid(ui, &response);
@@ -776,7 +731,7 @@ fn cell_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, val
 
 /// A drop-down over a fixed list of choices that fills the grid cell it is drawn in.
 fn cell_choice<T: Copy + PartialEq>(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, value: &mut T, all: &[T], label: impl Fn(T) -> String) {
-    let width = (ui.available_width() - 8.0).max(40.0);
+    let width = ui.available_width().max(40.0);
     egui::ComboBox::from_id_salt(id).selected_text(label(*value)).width(width).truncate().show_ui(ui, |ui| {
         for option in all {
             ui.selectable_value(value, *option, label(*option));
@@ -796,13 +751,13 @@ fn plain_rows(count: usize) -> Vec<GridRow> {
     vec![GridRow::Item; count]
 }
 
-/// A framed group of radio options, as the air exclusion and haulage use.
+/// One titled card of related settings. Every group in a section shows at
+/// once, so the card does not fold.
 fn option_group(ui: &mut egui::Ui, title: String, rows: impl FnOnce(&mut egui::Ui)) {
-    ui.add_space(6.0);
-    egui::Frame::group(ui.style()).show(ui, |ui| {
-        ui.label(egui::RichText::new(title).strong());
-        rows(ui);
-    });
+    ui.add_space(4.0);
+    CollapsibleSection::new(egui::Id::new(("optimization_group", title.as_str())), title)
+        .collapsible(false)
+        .show(ui, rows);
 }
 
 // ── Inputs ──
@@ -828,6 +783,7 @@ fn draw_inputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: &
             Some(tr!("opt-default-density-help")),
             &mut scenario.default_density,
             (0.001, f64::MAX),
+            unit_density(),
         );
         if scenario.default_density.resolve(&scenario.constants).is_none_or(|density| density <= 0.0) {
             mark_invalid(ui, &response);
@@ -845,52 +801,42 @@ fn draw_inputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: &
 
     let values = fields.rocktype_values(&scenario.rocktype_field);
     option_group(ui, tr!("opt-air-exclusion"), |ui| {
-        form_checkbox(ui, tr!("opt-exclude-air"), &mut scenario.exclude_air);
+        form_toggle(ui, tr!("opt-exclude-air"), None, &mut scenario.exclude_air);
         if !scenario.exclude_air {
             return;
         }
-        form_row_with(
+        form_choice(
             ui,
-            &mut *scenario,
-            |ui, scenario| {
-                ui.radio_value(&mut scenario.air_mode, AirMode::Topography, tr!("opt-air-use-topography"));
-            },
-            |ui, scenario| {
-                ui.add_enabled_ui(scenario.air_mode == AirMode::Topography, |ui| {
-                    let layers: Vec<String> = project
-                        .triangulations
-                        .iter()
-                        .map(|entry| entry.name.clone())
-                        .chain(project.point_clouds.iter().map(|entry| entry.name.clone()))
-                        .collect();
-                    inline_combo(
-                        ui,
-                        "opt_air_topography",
-                        &mut scenario.air_topography,
-                        &layers,
-                        tr!("opt-none-selected"),
-                        CONTROL_WIDTH - 8.0,
-                    );
-                });
+            "opt_air_mode",
+            tr!("opt-air-source"),
+            None,
+            &mut scenario.air_mode,
+            &[AirMode::Topography, AirMode::Rocktype],
+            |mode| match mode {
+                AirMode::Topography => tr!("opt-air-use-topography"),
+                AirMode::Rocktype => tr!("opt-air-use-rocktype"),
             },
         );
-        form_row_with(
-            ui,
-            &mut *scenario,
-            |ui, scenario| {
-                ui.radio_value(&mut scenario.air_mode, AirMode::Rocktype, tr!("opt-air-use-rocktype"));
-            },
-            |ui, scenario| {
-                ui.add_enabled_ui(scenario.air_mode == AirMode::Rocktype, |ui| {
-                    // Until the rock type field offers its values the value is typed.
-                    if values.is_empty() {
-                        ui.add(egui::TextEdit::singleline(&mut scenario.air_rocktype).desired_width(CONTROL_WIDTH - 8.0));
-                    } else {
-                        inline_combo(ui, "opt_air_rocktype", &mut scenario.air_rocktype, &values, tr!("opt-none-selected"), CONTROL_WIDTH - 8.0);
-                    }
+        match scenario.air_mode {
+            AirMode::Topography => {
+                let layers: Vec<String> = project
+                    .triangulations
+                    .iter()
+                    .map(|entry| entry.name.clone())
+                    .chain(project.point_clouds.iter().map(|entry| entry.name.clone()))
+                    .collect();
+                form_combo(ui, "opt_air_topography", tr!("opt-air-topography"), &mut scenario.air_topography, &layers);
+            }
+            // Until the rock type field offers its values the value is typed.
+            AirMode::Rocktype if values.is_empty() => {
+                field_row(ui, tr!("opt-air-rocktype"), None, |ui, width| {
+                    ui.add(egui::TextEdit::singleline(&mut scenario.air_rocktype).desired_width(width));
                 });
-            },
-        );
+            }
+            AirMode::Rocktype => {
+                form_combo(ui, "opt_air_rocktype", tr!("opt-air-rocktype"), &mut scenario.air_rocktype, &values);
+            }
+        }
     });
 }
 
@@ -935,7 +881,7 @@ fn draw_constants(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, select
                     let mut value_type = constant.value.value_type();
                     egui::ComboBox::from_id_salt(("opt_constant_type", row))
                         .selected_text(value_type.label())
-                        .width((ui.available_width() - 8.0).max(40.0))
+                        .width(ui.available_width().max(40.0))
                         .show_ui(ui, |ui| {
                             for option in ValueType::ALL {
                                 ui.selectable_value(&mut value_type, option, option.label());
@@ -958,7 +904,7 @@ fn draw_constants(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, select
                         ConstantValue::YesNo(flag) => {
                             egui::ComboBox::from_id_salt(id)
                                 .selected_text(if *flag { tr!("opt-yes") } else { tr!("opt-no") })
-                                .width((width - 8.0).max(40.0))
+                                .width(width.max(40.0))
                                 .show_ui(ui, |ui| {
                                     ui.selectable_value(flag, true, tr!("opt-yes"));
                                     ui.selectable_value(flag, false, tr!("opt-no"));
@@ -1022,6 +968,7 @@ fn draw_mining(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: &
             Some(tr!("opt-currency-agnostic")),
             &mut scenario.mining_cost,
             (0.0, f64::MAX),
+            unit_per_tonne(),
         );
 
         let mut field = scenario.cost_field.clone();
@@ -1049,7 +996,10 @@ fn draw_mining(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: &
                             cell_combo(ui, ("opt_cost_rocktype", row), &mut cost.rocktype, &values, tr!("opt-none-selected"), true);
                         }
                     } else {
-                        ValueField::new(("opt_rocktype_cost", row), &mut cost.cost).range(0.0, f64::MAX).show(ui);
+                        ValueField::new(("opt_rocktype_cost", row), &mut cost.cost)
+                            .range(0.0, f64::MAX)
+                            .suffix(unit_per_tonne())
+                            .show(ui);
                     }
                 },
             );
@@ -1077,33 +1027,29 @@ fn draw_mining(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: &
 /// A haulage cost: a typed value (or constant), or a numeric block model field.
 fn draw_haulage(ui: &mut egui::Ui, id: &str, title: String, haulage: &mut HaulageCost, numeric_fields: &[String]) {
     option_group(ui, title, |ui| {
-        form_row_with(
+        form_choice(
             ui,
-            &mut *haulage,
-            |ui, haulage| {
-                ui.radio_value(&mut haulage.mode, HaulageMode::Value, tr!("opt-haulage-value"));
-            },
-            |ui, haulage| {
-                ui.add_enabled_ui(haulage.mode == HaulageMode::Value, |ui| {
-                    ValueField::new((id, "value"), &mut haulage.value).range(0.0, f64::MAX).show(ui);
-                });
+            (id, "mode"),
+            tr!("opt-cost-source"),
+            None,
+            &mut haulage.mode,
+            &[HaulageMode::Value, HaulageMode::Field],
+            |mode| match mode {
+                HaulageMode::Value => tr!("opt-haulage-value"),
+                HaulageMode::Field => tr!("opt-haulage-field"),
             },
         );
-        form_row_with(
-            ui,
-            &mut *haulage,
-            |ui, haulage| {
-                ui.radio_value(&mut haulage.mode, HaulageMode::Field, tr!("opt-haulage-field"));
-            },
-            |ui, haulage| {
-                ui.add_enabled_ui(haulage.mode == HaulageMode::Field, |ui| {
-                    let response = inline_combo(ui, (id, "field"), &mut haulage.field, numeric_fields, tr!("opt-none-selected"), CONTROL_WIDTH - 8.0);
-                    if haulage.mode == HaulageMode::Field && haulage.field.is_empty() {
-                        mark_invalid(ui, &response);
-                    }
-                });
-            },
-        );
+        match haulage.mode {
+            HaulageMode::Value => {
+                form_value(ui, (id, "value"), tr!("opt-col-cost"), None, &mut haulage.value, (0.0, f64::MAX), unit_per_tonne());
+            }
+            HaulageMode::Field => {
+                let response = form_combo(ui, (id, "field"), tr!("opt-cost-field"), &mut haulage.field, numeric_fields);
+                if haulage.field.is_empty() {
+                    mark_invalid(ui, &response);
+                }
+            }
+        }
     });
 }
 
@@ -1157,7 +1103,10 @@ fn draw_processing(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, field
                         ValueField::new(("opt_method_threshold", row), &mut method.threshold).range(0.0, f64::MAX).show(ui);
                     }
                     _ => {
-                        ValueField::new(("opt_method_cost", row), &mut method.processing_cost).range(0.0, f64::MAX).show(ui);
+                        ValueField::new(("opt_method_cost", row), &mut method.processing_cost)
+                            .range(0.0, f64::MAX)
+                            .suffix(unit_per_tonne())
+                            .show(ui);
                     }
                 }
             });
@@ -1214,10 +1163,21 @@ fn draw_processing(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, field
                     match column {
                         0 => cell_combo(ui, ("opt_element", index, row), &mut element.element, &fields.numeric, tr!("opt-none-selected"), true),
                         1 => {
-                            ValueField::new(("opt_recovery", index, row), &mut element.recovery).range(0.0, 100.0).show(ui);
+                            ValueField::new(("opt_recovery", index, row), &mut element.recovery)
+                                .range(0.0, 100.0)
+                                .suffix(unit_percent())
+                                .show(ui);
                         }
                         _ => {
-                            ValueField::new(("opt_element_cost", index, row), &mut element.cost).range(0.0, f64::MAX).show(ui);
+                            // Per the sales unit its Revenues row sells it by.
+                            let unit = revenues
+                                .iter()
+                                .find(|revenue| revenue.element == element.element)
+                                .map(|revenue| unit_per_sales(revenue.sales_unit));
+                            ValueField::new(("opt_element_cost", index, row), &mut element.cost)
+                                .range(0.0, f64::MAX)
+                                .suffix(unit.unwrap_or_default())
+                                .show(ui);
                         }
                     }
                 });
@@ -1256,27 +1216,25 @@ fn draw_processing(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, field
             None,
             &mut methods[index].haulage_factor,
             (0.0, f64::MAX),
+            String::new(),
         );
         let before = methods[index].ga_cost.clone();
-        form_row_wide_with(
+        form_value(
             ui,
-            &mut (&mut *methods, &mut *same_for_all),
-            |ui, _| {
-                ui.label(tr!("opt-ga-costs"));
-            },
-            |ui, (methods, same_for_all)| {
-                ui.allocate_ui(egui::vec2(CONTROL_WIDTH - 130.0, ui.spacing().interact_size.y), |ui| {
-                    ValueField::new(("opt_ga", index), &mut methods[index].ga_cost).range(0.0, f64::MAX).show(ui);
-                });
-                if ui.checkbox(same_for_all, tr!("opt-ga-same-for-all")).changed() && **same_for_all {
-                    // Turning it on makes every method follow this one.
-                    let value = methods[index].ga_cost.clone();
-                    for method in methods.iter_mut() {
-                        method.ga_cost = value.clone();
-                    }
-                }
-            },
+            ("opt_ga", index),
+            tr!("opt-ga-costs"),
+            None,
+            &mut methods[index].ga_cost,
+            (0.0, f64::MAX),
+            unit_per_tonne(),
         );
+        // Turning it on makes every method follow this one.
+        if form_toggle(ui, tr!("opt-ga-same-for-all"), None, same_for_all).changed() && *same_for_all {
+            let value = methods[index].ga_cost.clone();
+            for method in methods.iter_mut() {
+                method.ga_cost = value.clone();
+            }
+        }
         if *same_for_all && methods[index].ga_cost != before {
             let value = methods[index].ga_cost.clone();
             for method in methods.iter_mut() {
@@ -1311,10 +1269,15 @@ fn draw_revenues(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields:
                         1 => cell_choice(ui, ("opt_grade_unit", row), &mut revenue.grade_unit, &GradeUnit::ALL, GradeUnit::label),
                         2 => cell_choice(ui, ("opt_sales_unit", row), &mut revenue.sales_unit, &SalesUnit::ALL, SalesUnit::label),
                         3 => {
-                            ValueField::new(("opt_price", row), &mut revenue.price).range(0.0, f64::MAX).show(ui);
+                            let unit = unit_per_sales(revenue.sales_unit);
+                            ValueField::new(("opt_price", row), &mut revenue.price).range(0.0, f64::MAX).suffix(unit).show(ui);
                         }
                         _ => {
-                            ValueField::new(("opt_selling_cost", row), &mut revenue.selling_cost).range(0.0, f64::MAX).show(ui);
+                            let unit = unit_per_sales(revenue.sales_unit);
+                            ValueField::new(("opt_selling_cost", row), &mut revenue.selling_cost)
+                                .range(0.0, f64::MAX)
+                                .suffix(unit)
+                                .show(ui);
                         }
                     }
                 });
@@ -1337,45 +1300,40 @@ fn draw_constraints(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fiel
     let OptimizationScenario { slope, constants, .. } = scenario;
     let previous = slope.mode;
     option_group(ui, tr!("opt-overall-slope"), |ui| {
-        form_row_with(
+        form_choice(
             ui,
-            &mut *slope,
-            |ui, slope| {
-                ui.radio_value(&mut slope.mode, SlopeMode::Single, tr!("opt-slope-default-angle"));
-            },
-            |ui, slope| {
-                // The default angle is also the field's fallback.
-                ui.add_enabled_ui(slope.mode != SlopeMode::Rosette, |ui| {
-                    ValueField::new("opt_slope_angle", &mut slope.angle).range(1.0, 89.0).show(ui);
-                });
+            "opt_slope_mode",
+            tr!("opt-slope-source"),
+            None,
+            &mut slope.mode,
+            &[SlopeMode::Single, SlopeMode::Rosette, SlopeMode::Field],
+            |mode| match mode {
+                SlopeMode::Single => tr!("opt-slope-default-angle"),
+                SlopeMode::Rosette => tr!("opt-slope-use-rosettes"),
+                SlopeMode::Field => tr!("opt-slope-field"),
             },
         );
-        form_row(
-            ui,
-            |ui| {
-                ui.radio_value(&mut slope.mode, SlopeMode::Rosette, tr!("opt-slope-use-rosettes"));
-            },
-            |ui| {
-                ui.label(egui::RichText::new(tr!("opt-slope-rosettes-hint")).weak());
-            },
-        );
-        form_row_with(
-            ui,
-            &mut *slope,
-            |ui, slope| {
-                ui.radio_value(&mut slope.mode, SlopeMode::Field, tr!("opt-slope-field"));
-            },
-            |ui, slope| {
-                ui.add_enabled_ui(slope.mode == SlopeMode::Field, |ui| {
-                    let response = inline_combo(ui, "opt_slope_field", &mut slope.field, &fields.numeric, tr!("opt-none-selected"), CONTROL_WIDTH - 8.0);
-                    if slope.mode == SlopeMode::Field && slope.field.is_empty() {
-                        mark_invalid(ui, &response);
-                    }
-                });
-            },
-        );
-        if slope.mode == SlopeMode::Field {
-            ui.label(egui::RichText::new(tr!("opt-slope-field-hint")).weak());
+        match slope.mode {
+            SlopeMode::Single => {
+                form_value(ui, "opt_slope_angle", tr!("opt-slope-angle"), None, &mut slope.angle, (1.0, 89.0), unit_degrees());
+            }
+            SlopeMode::Rosette => menu_note(ui, tr!("opt-slope-rosettes-hint")),
+            SlopeMode::Field => {
+                let response = form_combo(ui, "opt_slope_field", tr!("opt-slope-angle-field"), &mut slope.field, &fields.numeric);
+                if slope.field.is_empty() {
+                    mark_invalid(ui, &response);
+                }
+                // The default angle is the field's fallback.
+                form_value(
+                    ui,
+                    "opt_slope_angle",
+                    tr!("opt-slope-fallback-angle"),
+                    Some(tr!("opt-slope-field-hint")),
+                    &mut slope.angle,
+                    (1.0, 89.0),
+                    unit_degrees(),
+                );
+            }
         }
     });
     if slope.mode != SlopeMode::Rosette {
@@ -1411,13 +1369,18 @@ fn draw_constraints(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fiel
                         };
                         if column == 0 {
                             // A plain number: a bearing is not worth a constant.
-                            let response = entry.bearing.edit(ui, egui::Id::new(("opt_rosette_bearing", row)), ui.available_width(), (0.0, 360.0));
+                            let response = entry
+                                .bearing
+                                .edit_with_suffix(ui, egui::Id::new(("opt_rosette_bearing", row)), ui.available_width(), (0.0, 360.0), &unit_degrees());
                             let same = bearings.iter().enumerate().any(|(other, value)| other != row && *value == bearings[row]);
                             if same {
                                 mark_invalid(ui, &response);
                             }
                         } else {
-                            ValueField::new(("opt_rosette_angle", row), &mut entry.angle).range(1.0, 89.0).show(ui);
+                            ValueField::new(("opt_rosette_angle", row), &mut entry.angle)
+                                .range(1.0, 89.0)
+                                .suffix(unit_degrees())
+                                .show(ui);
                         }
                     })
                 })
@@ -1450,23 +1413,15 @@ fn draw_constraints(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fiel
             slope.interpolation = RosetteInterpolation::Step;
         }
         ui.add_space(4.0);
-        form_row(
+        let available: Vec<RosetteInterpolation> = RosetteInterpolation::available(rows).collect();
+        form_choice(
             ui,
-            |ui| {
-                ui.label(tr!("opt-interpolation")).on_hover_text(tr!("opt-interpolation-hint"));
-            },
-            |ui| {
-                egui::ComboBox::from_id_salt("opt_rosette_interpolation")
-                    .selected_text(slope.interpolation.label())
-                    .width(CONTROL_WIDTH - 8.0)
-                    .show_ui(ui, |ui| {
-                        for option in RosetteInterpolation::available(rows) {
-                            ui.selectable_value(&mut slope.interpolation, option, option.label());
-                        }
-                    })
-                    .response
-                    .on_hover_text(tr!("opt-interpolation-hint"));
-            },
+            "opt_rosette_interpolation",
+            tr!("opt-interpolation"),
+            Some(tr!("opt-interpolation-hint")),
+            &mut slope.interpolation,
+            &available,
+            RosetteInterpolation::label,
         );
     });
 }
@@ -1489,274 +1444,222 @@ fn draw_outputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: 
     }
 
     option_group(ui, tr!("opt-group-run-mode"), |ui| {
-        form_row(
+        form_choice(
             ui,
-            |ui| {
-                ui.label(tr!("opt-select-mode"));
-            },
-            |ui| {
-                ui.radio_value(&mut output.mode, ShellMode::Single, tr!("opt-mode-single"));
+            "opt_shell_mode",
+            tr!("opt-select-mode"),
+            None,
+            &mut output.mode,
+            &[ShellMode::Single, ShellMode::Multiple],
+            |mode| match mode {
+                ShellMode::Single => tr!("opt-mode-single"),
+                ShellMode::Multiple => tr!("opt-mode-multiple"),
             },
         );
-        form_row(
-            ui,
-            |_| {},
-            |ui| {
-                ui.radio_value(&mut output.mode, ShellMode::Multiple, tr!("opt-mode-multiple"));
-            },
-        );
-        if output.mode == ShellMode::Multiple {
-            option_group(ui, tr!("opt-factors-title"), |ui| {
-                // Two ways to give the factors: a range, or a list typed out.
-                form_row_with(
-                    ui,
-                    &mut output.factor_input,
-                    |ui, input| {
-                        ui.radio_value(input, FactorInput::Range, tr!("opt-factor-input-range"));
-                    },
-                    |ui, input| {
-                        ui.radio_value(input, FactorInput::List, tr!("opt-factor-input-list"));
-                    },
-                );
-                if output.factor_input == FactorInput::List {
-                    // A plain string, read when run: the list is not worth constants.
-                    let response = labeled_row(ui, tr!("opt-factor-list"), Some(tr!("opt-factor-list-hint")), |ui| {
-                        ui.add(egui::TextEdit::singleline(&mut output.factor_list).desired_width(ui.available_width()))
-                    });
-                    if let Err(issue) = parse_factor_list(&output.factor_list) {
-                        mark_invalid(ui, &response);
-                        menu_note(ui, issue.message());
-                    }
-                    return;
-                }
-                // Plain numbers: a revenue factor range is not worth a constant.
-                let from_changed = labeled_row(ui, tr!("opt-factor-from"), None, |ui| {
-                    output.factor_from.edit(ui, egui::Id::new("opt_factor_from"), ui.available_width(), (0.0, f64::MAX))
-                })
-                .changed();
-                let to_changed = labeled_row(ui, tr!("opt-factor-to"), None, |ui| {
-                    output.factor_to.edit(ui, egui::Id::new("opt_factor_to"), ui.available_width(), (0.0, f64::MAX))
-                })
-                .changed();
-                let (from, to) = (output.factor_from, output.factor_to);
-                // Step and number of shells follow each other: change one and the
-                // other is worked out from it between the two ends.
-                let mut step = output.factor_step;
-                if labeled_row(ui, tr!("opt-factor-step"), None, |ui| {
-                    step.edit(ui, egui::Id::new("opt_factor_step"), ui.available_width(), (0.0001, f64::MAX))
-                })
-                .changed()
-                {
-                    output.factor_step = step;
-                    if let Some(count) = shell_count_for_step(from, to, step) {
-                        output.shell_count = count.max(2);
-                        output.factor_step = shell_step_for_count(from, to, output.shell_count).unwrap_or(step);
-                    }
-                }
-                let mut count = output.shell_count;
-                if labeled_row(ui, tr!("opt-shell-count"), None, |ui| {
-                    edit_count(ui, egui::Id::new("opt_shell_count"), &mut count, ui.available_width(), (2, 1000))
-                })
-                .changed()
-                {
-                    output.shell_count = count;
-                    if let Some(step) = shell_step_for_count(from, to, count) {
-                        output.factor_step = step;
-                    }
-                }
-                if (from_changed || to_changed)
-                    && let Some(step) = shell_step_for_count(from, to, output.shell_count)
-                {
-                    output.factor_step = step;
-                }
-                if to <= from {
-                    menu_note(ui, tr!("opt-factor-range-invalid"));
-                }
-            });
-            let can_pick = !scenario_block_model.is_empty() && !fields.all.is_empty();
-            form_row_wide_with(
-                ui,
-                &mut *output,
-                |ui, output| {
-                    ui.checkbox(&mut output.use_directional_shells, tr!("opt-directional-shells"))
-                        .on_hover_text(tr!("opt-directional-shells-hint"));
-                },
-                |ui, output| {
-                    ui.add_enabled_ui(output.use_directional_shells, |ui| {
-                        // Two stacks side by side, each a label over its control.
-                        ui.horizontal_top(|ui| {
-                            ui.spacing_mut().item_spacing = egui::vec2(8.0, 4.0);
-                            ui.allocate_ui_with_layout(egui::vec2(STACK_WIDTH, 0.0), egui::Layout::top_down(egui::Align::Center), |ui| {
-                                ui.set_width(STACK_WIDTH);
-                                ui.spacing_mut().item_spacing.y = 4.0;
-                                ui.label(tr!("opt-start-point-label"));
-                                // Picked shows the point's whole metres on hover; a click
-                                // picks again, with the old point marked in the model.
-                                let (label, hint) = match output.shell_start {
-                                    Some((x, y)) => (tr!("opt-picked"), tr!("opt-start-point", x = format!("{x:.0}"), y = format!("{y:.0}"))),
-                                    None => (tr!("opt-pick-start"), tr!("opt-pick-start-hint")),
-                                };
-                                let response = ui
-                                    .add_enabled(can_pick, MenuButton::new(label).selected(output.shell_start.is_some()).min_width(STACK_WIDTH))
-                                    .on_hover_text(hint);
-                                if output.shell_start.is_none() {
-                                    mark_invalid(ui, &response);
-                                }
-                                if response.clicked() {
-                                    commands.push(UiCommand::BeginShellStartPick);
-                                }
-                            });
-                            ui.allocate_ui_with_layout(egui::vec2(STACK_WIDTH, 0.0), egui::Layout::top_down(egui::Align::Center), |ui| {
-                                ui.set_width(STACK_WIDTH);
-                                ui.spacing_mut().item_spacing.y = 4.0;
-                                ui.label(tr!("opt-mining-direction"));
-                                egui::ComboBox::from_id_salt("opt_shell_direction")
-                                    .selected_text(output.shell_direction.label())
-                                    .width(STACK_WIDTH)
-                                    .show_ui(ui, |ui| {
-                                        for direction in ShellDirection::ALL {
-                                            ui.selectable_value(&mut output.shell_direction, direction, direction.label());
-                                        }
-                                    });
-                            });
-                        });
-                    });
-                },
-            );
-        }
     });
 
+    if output.mode == ShellMode::Multiple {
+        option_group(ui, tr!("opt-factors-title"), |ui| {
+            // Two ways to give the factors: a range, or a list typed out.
+            form_choice(
+                ui,
+                "opt_factor_input",
+                tr!("opt-factor-input"),
+                None,
+                &mut output.factor_input,
+                &[FactorInput::Range, FactorInput::List],
+                |input| match input {
+                    FactorInput::Range => tr!("opt-factor-input-range"),
+                    FactorInput::List => tr!("opt-factor-input-list"),
+                },
+            );
+            if output.factor_input == FactorInput::List {
+                // A plain string, read when run: the list is not worth constants.
+                let response = field_row(ui, tr!("opt-factor-list"), Some(tr!("opt-factor-list-hint")), |ui, width| {
+                    ui.add(egui::TextEdit::singleline(&mut output.factor_list).desired_width(width))
+                });
+                if let Err(issue) = parse_factor_list(&output.factor_list) {
+                    mark_invalid(ui, &response);
+                    menu_note(ui, issue.message());
+                }
+                return;
+            }
+            // Plain numbers: a revenue factor range is not worth a constant.
+            let from_changed = field_row(ui, tr!("opt-factor-from"), None, |ui, width| {
+                output.factor_from.edit(ui, egui::Id::new("opt_factor_from"), width, (0.0, f64::MAX))
+            })
+            .changed();
+            let to_changed = field_row(ui, tr!("opt-factor-to"), None, |ui, width| {
+                output.factor_to.edit(ui, egui::Id::new("opt_factor_to"), width, (0.0, f64::MAX))
+            })
+            .changed();
+            let (from, to) = (output.factor_from, output.factor_to);
+            // Step and number of shells follow each other: change one and the
+            // other is worked out from it between the two ends.
+            let mut step = output.factor_step;
+            if field_row(ui, tr!("opt-factor-step"), None, |ui, width| {
+                step.edit(ui, egui::Id::new("opt_factor_step"), width, (0.0001, f64::MAX))
+            })
+            .changed()
+            {
+                output.factor_step = step;
+                if let Some(count) = shell_count_for_step(from, to, step) {
+                    output.shell_count = count.max(2);
+                    output.factor_step = shell_step_for_count(from, to, output.shell_count).unwrap_or(step);
+                }
+            }
+            let mut count = output.shell_count;
+            if field_row(ui, tr!("opt-shell-count"), None, |ui, width| {
+                edit_count(ui, egui::Id::new("opt_shell_count"), &mut count, width, (2, 1000))
+            })
+            .changed()
+            {
+                output.shell_count = count;
+                if let Some(step) = shell_step_for_count(from, to, count) {
+                    output.factor_step = step;
+                }
+            }
+            if (from_changed || to_changed)
+                && let Some(step) = shell_step_for_count(from, to, output.shell_count)
+            {
+                output.factor_step = step;
+            }
+            if to <= from {
+                menu_note(ui, tr!("opt-factor-range-invalid"));
+            }
+        });
+
+        option_group(ui, tr!("opt-group-directional"), |ui| {
+            form_toggle(
+                ui,
+                tr!("opt-directional-shells"),
+                Some(tr!("opt-directional-shells-hint")),
+                &mut output.use_directional_shells,
+            );
+            if !output.use_directional_shells {
+                return;
+            }
+            let can_pick = !scenario_block_model.is_empty() && !fields.all.is_empty();
+            // Picked shows the point's whole metres on hover; a click picks
+            // again, with the old point marked in the model.
+            let (label, hint) = match output.shell_start {
+                Some((x, y)) => (tr!("opt-picked"), tr!("opt-start-point", x = format!("{x:.0}"), y = format!("{y:.0}"))),
+                None => (tr!("opt-pick-start"), tr!("opt-pick-start-hint")),
+            };
+            let picked = output.shell_start.is_some();
+            let response = field_row(ui, tr!("opt-start-point-label"), None, |ui, width| {
+                ui.add_enabled(can_pick, MenuButton::new(label).selected(picked).min_width(width)).on_hover_text(hint)
+            });
+            if !picked {
+                mark_invalid(ui, &response);
+            }
+            if response.clicked() {
+                commands.push(UiCommand::BeginShellStartPick);
+            }
+            form_choice(
+                ui,
+                "opt_shell_direction",
+                tr!("opt-mining-direction"),
+                None,
+                &mut output.shell_direction,
+                &ShellDirection::ALL,
+                ShellDirection::label,
+            );
+        });
+    }
+
     option_group(ui, tr!("opt-group-files"), |ui| {
-        // Reports: the box, and where they go. Ticking it with no folder yet asks
-        // for one straight away.
-        form_row_wide_with(
-            ui,
-            &mut (&mut *output, &mut *commands),
-            |ui, (output, commands)| {
-                let ticked = ui
-                    .checkbox(&mut output.create_reports, tr!("opt-create-reports"))
-                    .on_hover_text(tr!("opt-create-reports-hint"))
-                    .changed();
-                // A browser downloads the report instead, so asks for no folder.
-                if ticked && output.create_reports && output.reports_folder.is_empty() && !cfg!(target_arch = "wasm32") {
+        // Reports: the switch, and where they go. Turning it on with no folder
+        // yet asks for one straight away.
+        let switched = form_toggle(ui, tr!("opt-create-reports"), Some(tr!("opt-create-reports-hint")), &mut output.create_reports).changed();
+        // A browser downloads the report instead, so asks for no folder.
+        let wasm = cfg!(target_arch = "wasm32");
+        if switched && output.create_reports && output.reports_folder.is_empty() && !wasm {
+            commands.push(UiCommand::ChooseOptimizationReportsFolder);
+        }
+        if output.create_reports {
+            field_row(ui, tr!("opt-reports-folder"), None, |ui, width| {
+                let browse_width = 80.0;
+                let mut shown = output.reports_folder.clone();
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut shown)
+                        .hint_text(if wasm { tr!("opt-reports-downloaded") } else { tr!("opt-reports-folder-hint") })
+                        .interactive(false)
+                        .desired_width(width - browse_width - ui.spacing().item_spacing.x),
+                );
+                if output.reports_folder.is_empty() && !wasm {
+                    mark_invalid(ui, &response);
+                }
+                // A browser has no folders to write into.
+                if ui.add_enabled(!wasm, MenuButton::new(tr!("opt-browse")).min_width(browse_width)).clicked() {
                     commands.push(UiCommand::ChooseOptimizationReportsFolder);
                 }
-            },
-            |ui, (output, commands)| {
-                ui.add_enabled_ui(output.create_reports, |ui| {
-                    let mut shown = output.reports_folder.clone();
-                    let response = ui.add(
-                        egui::TextEdit::singleline(&mut shown)
-                            .hint_text(if cfg!(target_arch = "wasm32") {
-                                tr!("opt-reports-downloaded")
-                            } else {
-                                tr!("opt-reports-folder-hint")
-                            })
-                            .interactive(false)
-                            .desired_width(CONTROL_WIDTH - 90.0),
-                    );
-                    if output.create_reports && output.reports_folder.is_empty() && !cfg!(target_arch = "wasm32") {
-                        mark_invalid(ui, &response);
-                    }
-                    // A browser has no folders to write into.
-                    let browse = ui.add_enabled(!cfg!(target_arch = "wasm32"), MenuButton::new(tr!("opt-browse")));
-                    if browse.clicked() {
-                        commands.push(UiCommand::ChooseOptimizationReportsFolder);
-                    }
-                });
-            },
-        );
+            });
+        }
 
-        // Shells: solid, surface, both or neither, and the layer they go in.
-        form_row_wide_with(
-            ui,
-            &mut *output,
-            |ui, _| {
-                ui.label(tr!("opt-create-shells"));
-            },
-            |ui, output| {
-                ui.checkbox(&mut output.shell_as_solid, tr!("opt-shell-solid"));
-                ui.checkbox(&mut output.shell_as_surface, tr!("opt-shell-surface"));
-            },
-        );
+        // Shells: solid, surface, both or neither, and the name they share.
+        form_toggle(ui, tr!("opt-create-shell-solids"), None, &mut output.shell_as_solid);
+        form_toggle(ui, tr!("opt-create-shell-surfaces"), None, &mut output.shell_as_surface);
         // The shells' names start with this, so no two scenarios may share it.
-        let shells = output.shell_as_solid || output.shell_as_surface;
-        form_row_with(
-            ui,
-            &mut *output,
-            |ui, _| {
-                ui.add_enabled(shells, egui::Label::new(tr!("opt-shell-name-prefix")))
-                    .on_hover_text(tr!("opt-shell-name-prefix-hint"));
-            },
-            |ui, output| {
-                ui.add_enabled_ui(shells, |ui| {
-                    let response = ui.add(
-                        egui::TextEdit::singleline(&mut output.shell_layer_name)
-                            .hint_text(tr!("opt-layer-name"))
-                            .desired_width(ui.available_width()),
-                    );
-                    let empty = output.shell_layer_name.trim().is_empty();
-                    if shells && (empty || prefix_taken) {
-                        mark_invalid(ui, &response);
-                        response.on_hover_text(if empty { tr!("opt-shell-prefix-empty") } else { tr!("opt-shell-prefix-taken") });
-                    } else {
-                        response.on_hover_text(tr!("opt-shell-name-prefix-hint"));
-                    }
-                });
-            },
-        );
+        if output.shell_as_solid || output.shell_as_surface {
+            field_row(ui, tr!("opt-shell-name-prefix"), Some(tr!("opt-shell-name-prefix-hint")), |ui, width| {
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut output.shell_layer_name)
+                        .hint_text(tr!("opt-layer-name"))
+                        .desired_width(width),
+                );
+                let empty = output.shell_layer_name.trim().is_empty();
+                if empty || prefix_taken {
+                    mark_invalid(ui, &response);
+                    response.on_hover_text(if empty { tr!("opt-shell-prefix-empty") } else { tr!("opt-shell-prefix-taken") });
+                }
+            });
+        }
     });
 
     option_group(ui, tr!("opt-group-write-back"), |ui| {
         // The shell value in the block model - its number or its revenue
         // factor - in an existing field or a new one.
-        form_row_wide_with(
+        form_toggle(ui, tr!("opt-write-shell-field"), Some(tr!("opt-shell-field-value-hint")), &mut output.write_shell_field);
+        if !output.write_shell_field {
+            return;
+        }
+        form_choice(
             ui,
-            &mut *output,
-            |ui, output| {
-                ui.checkbox(&mut output.write_shell_field, tr!("opt-write-shell-field"))
-                    .on_hover_text(tr!("opt-shell-field-value-hint"));
-            },
-            |ui, output| {
-                ui.add_enabled_ui(output.write_shell_field, |ui| {
-                    egui::ComboBox::from_id_salt("opt_shell_field_value")
-                        .selected_text(output.shell_field_value.label())
-                        .width(130.0)
-                        .show_ui(ui, |ui| {
-                            for value in ShellFieldValue::ALL {
-                                ui.selectable_value(&mut output.shell_field_value, value, value.label());
-                            }
-                        })
-                        .response
-                        .on_hover_text(tr!("opt-shell-field-value-hint"));
-                    let label = |mode: ShellFieldMode| match mode {
-                        ShellFieldMode::Existing => tr!("opt-shell-field-existing"),
-                        ShellFieldMode::New => tr!("opt-shell-field-new"),
-                    };
-                    egui::ComboBox::from_id_salt("opt_shell_field_mode")
-                        .selected_text(label(output.shell_field_mode))
-                        .width(130.0)
-                        .show_ui(ui, |ui| {
-                            for mode in [ShellFieldMode::Existing, ShellFieldMode::New] {
-                                ui.selectable_value(&mut output.shell_field_mode, mode, label(mode));
-                            }
-                        });
-                    // A field that exists already is overwritten, so a rerun
-                    // updates the field its first run made.
-                    let response = match output.shell_field_mode {
-                        ShellFieldMode::Existing => inline_combo(ui, "opt_shell_field", &mut output.shell_field, &free, tr!("opt-none-selected"), 150.0),
-                        ShellFieldMode::New => ui.add(
-                            egui::TextEdit::singleline(&mut output.shell_new_field)
-                                .hint_text(tr!("opt-shell-new-field-hint"))
-                                .desired_width(150.0),
-                        ),
-                    };
-                    if let Some(issue) = &shell_field_issue {
-                        mark_invalid(ui, &response);
-                        response.on_hover_text(issue);
-                    }
-                });
+            "opt_shell_field_value",
+            tr!("opt-shell-field-value"),
+            None,
+            &mut output.shell_field_value,
+            &ShellFieldValue::ALL,
+            ShellFieldValue::label,
+        );
+        form_choice(
+            ui,
+            "opt_shell_field_mode",
+            tr!("opt-shell-field-target"),
+            None,
+            &mut output.shell_field_mode,
+            &[ShellFieldMode::Existing, ShellFieldMode::New],
+            |mode| match mode {
+                ShellFieldMode::Existing => tr!("opt-shell-field-existing"),
+                ShellFieldMode::New => tr!("opt-shell-field-new"),
             },
         );
+        // A field that exists already is overwritten, so a rerun updates the
+        // field its first run made.
+        let response = match output.shell_field_mode {
+            ShellFieldMode::Existing => form_combo(ui, "opt_shell_field", tr!("opt-shell-field-name"), &mut output.shell_field, &free),
+            ShellFieldMode::New => field_row(ui, tr!("opt-shell-field-name"), None, |ui, width| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut output.shell_new_field)
+                        .hint_text(tr!("opt-shell-new-field-hint"))
+                        .desired_width(width),
+                )
+            }),
+        };
+        if let Some(issue) = &shell_field_issue {
+            mark_invalid(ui, &response);
+            response.on_hover_text(issue);
+        }
     });
 }
