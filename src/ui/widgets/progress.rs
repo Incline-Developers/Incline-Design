@@ -1,7 +1,7 @@
 //! The readouts that sit at the right end of the bottom toolbar: rings that
 //! fill green around their circumference, each with its text to its left:
-//! the background task and its counts, and at the very end the machine's
-//! memory in use.
+//! the background task and its counts. The status bar's memory readout borrows
+//! the same ring.
 //!
 //! Painted rather than assembled from `egui::ProgressBar`, for two reasons: a
 //! ring is not a shape egui offers at all, and an indeterminate task has to
@@ -52,8 +52,8 @@ const TRACK_SHIFT_LIGHT: i16 = -18;
 
 /// The filled part of the ring. Darkened in the light theme so it holds its
 /// own against a bright surface rather than glowing off it.
-const FILL_DARK: egui::Color32 = egui::Color32::from_rgb(0x50, 0xC8, 0x6E);
-const FILL_LIGHT: egui::Color32 = egui::Color32::from_rgb(0x2E, 0x96, 0x4C);
+pub(crate) const FILL_DARK: egui::Color32 = egui::Color32::from_rgb(0x50, 0xC8, 0x6E);
+pub(crate) const FILL_LIGHT: egui::Color32 = egui::Color32::from_rgb(0x2E, 0x96, 0x4C);
 
 /// Text style beside the ring: the same as the status bar's readouts, which is
 /// what this is.
@@ -195,9 +195,20 @@ fn ring_stroke_width(diameter: f32) -> f32 {
 
 /// Paint the ring itself - its track, then its fill - centred on `center`.
 fn paint_ring(ui: &egui::Ui, painter: &egui::Painter, center: egui::Pos2, diameter: f32, fill: RingFill) {
+    let filled = if ui.visuals().dark_mode { FILL_DARK } else { FILL_LIGHT };
+    paint_ring_in(ui, painter, center, diameter, fill, filled);
+}
+
+/// A ring like the task readout's, filled `fraction` of the way round in
+/// `color` - the status bar's memory readout, which colours by how much is
+/// left.
+pub(crate) fn paint_fraction_ring(ui: &egui::Ui, painter: &egui::Painter, center: egui::Pos2, diameter: f32, fraction: f32, color: egui::Color32) {
+    paint_ring_in(ui, painter, center, diameter, RingFill::Fraction(fraction), color);
+}
+
+fn paint_ring_in(ui: &egui::Ui, painter: &egui::Painter, center: egui::Pos2, diameter: f32, fill: RingFill, filled: egui::Color32) {
     let visuals = ui.visuals();
     let track = shifted(visuals.panel_fill, if visuals.dark_mode { TRACK_SHIFT_DARK } else { TRACK_SHIFT_LIGHT });
-    let filled = if visuals.dark_mode { FILL_DARK } else { FILL_LIGHT };
 
     let radius = diameter / 2.0;
     let width = ring_stroke_width(diameter);

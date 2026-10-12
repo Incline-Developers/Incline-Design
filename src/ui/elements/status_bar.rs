@@ -10,6 +10,7 @@ use crate::{
         EditorState, UiCommand, themed_icon,
         widgets::{
             context_menu::{ContextMenuAction, dropdown_menu},
+            progress,
             toolbar::GROUP_CORNER_RADIUS,
         },
     },
@@ -100,22 +101,27 @@ fn draw_language_picker(ui: &mut egui::Ui, editor: &EditorState, commands: &mut 
 
 /// Space between the frame rate, the memory readout and the language picker.
 const READOUT_GAP: f32 = 24.0;
-/// Diameter of the memory readout's status dot.
-const MEMORY_DOT_SIZE: f32 = 8.0;
-/// Gap between the memory amounts and the dot after them.
-const MEMORY_DOT_GAP: f32 = 6.0;
-/// Below this share of memory free the dot turns yellow, and below
+/// Diameter of the memory readout's ring: a little over the body text's
+/// height, so it sits in the line rather than standing out of it.
+const MEMORY_RING_SIZE: f32 = 14.0;
+/// Gap between the memory amounts and the ring after them.
+const MEMORY_RING_GAP: f32 = 6.0;
+/// Below this share of memory free the ring turns yellow, and below
 /// [`MEMORY_LOW_FREE`] red.
 const MEMORY_TIGHT_FREE: f32 = 0.4;
 const MEMORY_LOW_FREE: f32 = 0.2;
-const MEMORY_OK_COLOR: egui::Color32 = egui::Color32::from_rgb(0x3F, 0xB9, 0x50);
-const MEMORY_TIGHT_COLOR: egui::Color32 = egui::Color32::from_rgb(0xE3, 0xB3, 0x41);
-const MEMORY_LOW_COLOR: egui::Color32 = egui::Color32::from_rgb(0xF8, 0x51, 0x49);
+/// The yellow and red fills, darkened in the light theme the way the green
+/// one is - see `widgets::progress::FILL_LIGHT`.
+const MEMORY_TIGHT_DARK: egui::Color32 = egui::Color32::from_rgb(0xE3, 0xB3, 0x41);
+const MEMORY_TIGHT_LIGHT: egui::Color32 = egui::Color32::from_rgb(0xB0, 0x82, 0x10);
+const MEMORY_LOW_DARK: egui::Color32 = egui::Color32::from_rgb(0xF8, 0x51, 0x49);
+const MEMORY_LOW_LIGHT: egui::Color32 = egui::Color32::from_rgb(0xC9, 0x2A, 0x2A);
 
-/// "x GB / y GB memory" and a dot that is green while plenty is free, yellow
-/// under 40% free and red under 20%. Natively the whole machine's memory; in
-/// the browser the app's own heap - see [`crate::app::memory_usage::MemoryUsage`].
-/// Drawn right to left: the dot first, then the text before it.
+/// "x GB / y GB memory" and a ring, like the task readout's, filled to the
+/// share in use: green while plenty is free, yellow under 40% free and red
+/// under 20%. Natively the whole machine's memory; in the browser the app's
+/// own heap - see [`crate::app::memory_usage::MemoryUsage`]. Drawn right to
+/// left: the ring first, then the text before it.
 fn draw_memory_usage(ui: &mut egui::Ui, editor: &EditorState) {
     let Some(usage) = editor.memory_usage else {
         return;
@@ -123,17 +129,20 @@ fn draw_memory_usage(ui: &mut egui::Ui, editor: &EditorState) {
     // Rendering is on demand, so an idle window would otherwise hold the
     // first reading forever.
     ui.ctx().request_repaint_after(crate::app::memory_usage::SAMPLE_PERIOD);
-    let free = 1.0 - usage.fraction();
-    let color = if free < MEMORY_LOW_FREE {
-        MEMORY_LOW_COLOR
+    let fraction = usage.fraction();
+    let free = 1.0 - fraction;
+    let dark = ui.visuals().dark_mode;
+    let (dark_fill, light_fill) = if free < MEMORY_LOW_FREE {
+        (MEMORY_LOW_DARK, MEMORY_LOW_LIGHT)
     } else if free < MEMORY_TIGHT_FREE {
-        MEMORY_TIGHT_COLOR
+        (MEMORY_TIGHT_DARK, MEMORY_TIGHT_LIGHT)
     } else {
-        MEMORY_OK_COLOR
+        (progress::FILL_DARK, progress::FILL_LIGHT)
     };
-    let (dot, _) = ui.allocate_exact_size(egui::Vec2::splat(MEMORY_DOT_SIZE), egui::Sense::hover());
-    ui.painter().circle_filled(dot.center(), MEMORY_DOT_SIZE / 2.0, color);
-    ui.add_space((MEMORY_DOT_GAP - ui.spacing().item_spacing.x).max(0.0));
+    let color = if dark { dark_fill } else { light_fill };
+    let (ring, _) = ui.allocate_exact_size(egui::Vec2::splat(MEMORY_RING_SIZE), egui::Sense::hover());
+    progress::paint_fraction_ring(ui, ui.painter(), ring.center(), MEMORY_RING_SIZE, fraction, color);
+    ui.add_space((MEMORY_RING_GAP - ui.spacing().item_spacing.x).max(0.0));
     ui.label(tr!(
         "status-memory-used-total",
         used = crate::ui::dialogs::triangulation::format_bytes(usage.used),
