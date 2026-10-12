@@ -8,7 +8,8 @@
 //! its middle. A band solve is exact: what lies in the inner shell is already
 //! mined, and nothing a band block needs can lie outside the outer shell,
 //! which is closed. The bands of one round never share a cell, so they are
-//! solved side by side.
+//! solved side by side. Each solve is itself split into parallel regions; see
+//! [`sweep`].
 
 use std::sync::Arc;
 
@@ -181,7 +182,6 @@ pub(crate) fn slopes(grid: &Grid, spec: &SlopeSpec, block_of_cell: &[u32]) -> Re
 
 /// Solve every shell of `plan`.
 pub(crate) fn solve(plan: &ShellPlan, grid: &Grid, values: &BlockValues, slopes: &Slopes, cancel: &CancelFlag, progress: &Phase) -> Result<Shells> {
-    let precedence = &slopes.precedence;
     let count = plan.count();
     let mut shell_values = ShellValues {
         values,
@@ -189,12 +189,13 @@ pub(crate) fn solve(plan: &ShellPlan, grid: &Grid, values: &BlockValues, slopes:
         distance: Vec::new(),
     };
     let cells = grid.cell_count();
+    let lattice = slopes.lattice(grid);
     let solves = count.max(1);
     let mut solved = 0usize;
 
     // The largest shell, on the whole grid.
     let outer: Vec<f64> = (0..cells).into_par_iter().map(|cell| shell_values.value(count, cell)).collect();
-    let pit = solve_values(precedence, &outer, cancel)?;
+    let pit = sweep(&Domain::grid(cells), &lattice, Some(&slopes.precedence), &outer, cancel)?;
     drop(outer);
     solved += 1;
     progress.set_items(solved as u64, solves as u64);
@@ -238,19 +239,13 @@ pub(crate) fn solve(plan: &ShellPlan, grid: &Grid, values: &BlockValues, slopes:
                     return Ok((middle, Vec::new()));
                 }
                 let band_values: Vec<f64> = band.iter().map(|&cell| shell_values.value(middle, cell as usize)).collect();
-                let band = Arc::new(band);
-                let source = Band {
-                    dims: grid.dims.map(|dim| dim as i64),
-                    offsets: Arc::clone(&slopes.offsets),
-                    keys: slopes.keys.clone(),
-                    cells: Arc::clone(&band),
+                let domain = Domain {
+                    cells: Arc::new(band),
                     local: Arc::clone(&local),
-                    label: Arc::clone(&snapshot),
-                    outer: outer as u16,
+                    band: Some((Arc::clone(&snapshot), outer as u16)),
                 };
-                let precedence = Precedence::from_source(source).map_err(|error| anyhow!("{error}"))?;
-                let pit = solve_values(&precedence, &band_values, cancel)?;
-                let inside = pit.iter().zip(band.iter()).filter(|(inside, _)| **inside).map(|(_, &cell)| cell).collect();
+                let pit = sweep(&domain, &lattice, None, &band_values, cancel)?;
+                let inside = pit.iter().zip(domain.cells.iter()).filter(|(inside, _)| **inside).map(|(_, &cell)| cell).collect();
                 Ok((middle, inside))
             })
             .collect();
@@ -293,17 +288,201 @@ pub(crate) fn solve(plan: &ShellPlan, grid: &Grid, values: &BlockValues, slopes:
     Ok(Shells { label, summaries })
 }
 
-/// The smallest optimal pit for `values` over `precedence`.
-fn solve_values(precedence: &Precedence, values: &[f64], cancel: &CancelFlag) -> Result<Vec<bool>> {
-    let scale = ValueScale::auto(values).map_err(|error| anyhow!("{error}"))?;
-    let encoded = scale.encode(values).map_err(|error| anyhow!("{error}"))?;
-    let mut solver = Solver::new(precedence, &encoded).map_err(|error| anyhow!("{error}"))?;
+/// The smallest optimal pit for values in solver units.
+fn solve_encoded(precedence: &Precedence, encoded: &[i64], cancel: &CancelFlag) -> Result<Vec<bool>> {
+    let mut solver = Solver::new(precedence, encoded).map_err(|error| anyhow!("{error}"))?;
     match solver.solve_with_cancel(|| cancel.is_cancelled()) {
         Ok(_) => {}
         Err(mineflow::Error::Cancelled) => bail!("Cancelled"),
         Err(error) => bail!("{error}"),
     }
     Ok(solver.pit().map_err(|error| anyhow!("{error}"))?.into_vec())
+}
+
+/// Levels per round of a [`sweep`], and the side of its tiles in cells. Tuned
+/// on a 16M cell, ten shell model.
+const SWEEP_LEVELS: usize = 8;
+const SWEEP_TILE: usize = 48;
+/// Once the regions have held as many cells as the domain, a round that
+/// settles fewer cells than this share of the cells its regions held ends the
+/// sweep: what is left is ore too deep or too poor to pay for its own cone,
+/// and cheaper to leave to the final solve.
+const SWEEP_MIN_YIELD: f64 = 0.02;
+
+/// The smallest optimal pit for `values` (one per domain cell) on `domain`.
+/// `whole` is the grid's own precedence, when `domain` is the whole grid.
+///
+/// A region holding every antecedent of its cells is closed, and the smallest
+/// optimal pit `A` of a closed region lies inside the domain's, `B`: `A ∩ B`
+/// is a pit of the region worth `v(A) + v(B) - v(A ∪ B) >= v(A)`, as `B` is
+/// optimal, so it is optimal too and, `A` being the smallest, equal to `A`. So
+/// the domain is swept from the top in bands of levels, each cut into tiles,
+/// and each tile solves the cone of its unsettled positive cells in parallel;
+/// what those pits mine is settled. Settled cells are a closed set already
+/// paid for, so later cones stop at them and stay small, and the argument
+/// holds on the graph that remains. One final solve over the unsettled cells
+/// is exact for the same reason. Every solve uses the one encoding of
+/// `values`, so rounding cannot set them apart.
+///
+/// Small solves are also far kinder to the cache than one large one, so this
+/// is quicker even on a single thread.
+fn sweep(domain: &Domain, lattice: &Lattice, whole: Option<&Precedence>, values: &[f64], cancel: &CancelFlag) -> Result<Vec<bool>> {
+    let scale = ValueScale::auto(values).map_err(|error| anyhow!("{error}"))?;
+    let encoded = scale.encode(values).map_err(|error| anyhow!("{error}"))?;
+    let len = domain.cells.len();
+    let [nx, ny, _] = lattice.dims.map(|dim| dim as usize);
+    // The domain's bounds, so a small band does not scan the whole grid.
+    let (mut lower, mut upper) = ([usize::MAX; 3], [0; 3]);
+    for &cell in domain.cells.iter() {
+        let cell = cell as usize;
+        let at = [cell % nx, (cell / nx) % ny, cell / (nx * ny)];
+        for axis in 0..3 {
+            lower[axis] = lower[axis].min(at[axis]);
+            upper[axis] = upper[axis].max(at[axis] + 1);
+        }
+    }
+    let tiles: Vec<(usize, usize)> = (lower[1]..upper[1])
+        .step_by(SWEEP_TILE)
+        .flat_map(|y| (lower[0]..upper[0]).step_by(SWEEP_TILE).map(move |x| (x, y)))
+        .collect();
+
+    let mut settled = Arc::new(vec![false; len]);
+    let (mut settled_count, mut spent) = (0usize, 0usize);
+    let mut top = upper[2];
+    while top > lower[2] {
+        if cancel.is_cancelled() {
+            bail!("Cancelled");
+        }
+        let bottom = top.saturating_sub(SWEEP_LEVELS).max(lower[2]);
+        let found: Vec<Result<(usize, Vec<u32>)>> = tiles
+            .par_iter()
+            .map_init(
+                || CellSet::new(len),
+                |seen, &(x0, y0)| {
+                    let (x1, y1) = ((x0 + SWEEP_TILE).min(upper[0]), (y0 + SWEEP_TILE).min(upper[1]));
+                    // The tile's unsettled positive cells, then everything they need.
+                    let mut region = Vec::new();
+                    for z in bottom..top {
+                        for y in y0..y1 {
+                            for x in x0..x1 {
+                                if let Some(index) = domain.index(x + nx * (y + ny * z))
+                                    && encoded[index] > 0
+                                    && !settled[index]
+                                    && seen.insert(index)
+                                {
+                                    region.push(index as u32);
+                                }
+                            }
+                        }
+                    }
+                    let mut next = 0;
+                    while next < region.len() {
+                        lattice.antecedents(domain.cells[region[next] as usize] as usize, |cell| {
+                            if let Some(index) = domain.index(cell)
+                                && !settled[index]
+                                && seen.insert(index)
+                            {
+                                region.push(index as u32);
+                            }
+                        });
+                        next += 1;
+                    }
+                    for &index in &region {
+                        seen.remove(index as usize);
+                    }
+                    if region.is_empty() {
+                        return Ok((0, Vec::new()));
+                    }
+                    region.sort_unstable();
+                    let held = region.len();
+                    let region = Region {
+                        lattice: lattice.clone(),
+                        domain: domain.clone(),
+                        cells: Arc::new(region),
+                        dense: None,
+                        settled: Arc::clone(&settled),
+                    };
+                    Ok((held, solve_region(region, &encoded, cancel)?))
+                },
+            )
+            .collect();
+        let settled_now = Arc::get_mut(&mut settled).expect("regions are dropped");
+        let (mut held, mut gained) = (0usize, 0usize);
+        for result in found {
+            let (region, mined) = result?;
+            held += region;
+            for index in mined {
+                gained += usize::from(!std::mem::replace(&mut settled_now[index as usize], true));
+            }
+        }
+        settled_count += gained;
+        spent += held;
+        if spent > len && (gained as f64) < SWEEP_MIN_YIELD * held as f64 {
+            break;
+        }
+        top = bottom;
+    }
+
+    if settled_count == 0
+        && let Some(whole) = whole
+    {
+        return solve_encoded(whole, &encoded, cancel);
+    }
+    let mut dense = vec![u32::MAX; len];
+    let mut rest = Vec::with_capacity(len - settled_count);
+    for (index, &done) in settled.iter().enumerate() {
+        if !done {
+            dense[index] = rest.len() as u32;
+            rest.push(index as u32);
+        }
+    }
+    let region = Region {
+        lattice: lattice.clone(),
+        domain: domain.clone(),
+        cells: Arc::new(rest),
+        dense: Some(Arc::new(dense)),
+        settled: Arc::clone(&settled),
+    };
+    let mined = solve_region(region, &encoded, cancel)?;
+    let mut pit = Arc::try_unwrap(settled).expect("regions are dropped");
+    for index in mined {
+        pit[index as usize] = true;
+    }
+    Ok(pit)
+}
+
+/// The cells `region`'s smallest optimal pit mines, by domain index.
+fn solve_region(region: Region, encoded: &[i64], cancel: &CancelFlag) -> Result<Vec<u32>> {
+    let values: Vec<i64> = region.cells.iter().map(|&index| encoded[index as usize]).collect();
+    if values.iter().all(|&value| value <= 0) {
+        return Ok(Vec::new());
+    }
+    let cells = Arc::clone(&region.cells);
+    let precedence = Precedence::from_source(region).map_err(|error| anyhow!("{error}"))?;
+    let pit = solve_encoded(&precedence, &values, cancel)?;
+    Ok(pit.iter().zip(cells.iter()).filter(|(inside, _)| **inside).map(|(_, &index)| index).collect())
+}
+
+/// A set of domain cells as one bit each, cleared cell by cell so it can be
+/// reused without touching the whole domain.
+struct CellSet(Vec<u64>);
+
+impl CellSet {
+    fn new(cells: usize) -> Self {
+        Self(vec![0; cells.div_ceil(64)])
+    }
+
+    /// Adds `cell`, returning whether it was absent.
+    fn insert(&mut self, cell: usize) -> bool {
+        let (word, bit) = (cell / 64, 1u64 << (cell % 64));
+        let absent = self.0[word] & bit == 0;
+        self.0[word] |= bit;
+        absent
+    }
+
+    fn remove(&mut self, cell: usize) {
+        self.0[cell / 64] &= !(1u64 << (cell % 64));
+    }
 }
 
 /// Each cell's share of the way across the final pit as the front advances
@@ -334,41 +513,109 @@ fn distances(grid: &Grid, label: &[u16], start: DVec2, front: Front) -> Vec<f64>
         .collect()
 }
 
-/// The precedence among one band's cells: the slope pattern on the grid, kept
-/// to cells of the same band.
-struct Band {
+/// The slope patterns laid on the grid.
+#[derive(Clone)]
+struct Lattice {
     dims: [i64; 3],
     offsets: Arc<Vec<Vec<Offset>>>,
     /// Which of `offsets` each grid cell uses; `None` when all use the first.
     keys: Option<Arc<Vec<u16>>>,
-    /// The band's cells, by local index.
-    cells: Arc<Vec<u32>>,
-    /// Local index of every cell of this round's bands.
-    local: Arc<Vec<u32>>,
-    /// The labels when the round began; the band is the cells labelled `outer`.
-    label: Arc<Vec<u16>>,
-    outer: u16,
 }
 
-impl PrecedenceSource for Band {
-    fn num_blocks(&self) -> i64 {
-        self.cells.len() as i64
-    }
-
-    fn antecedents(&self, block: i64, out: &mut Vec<i64>) {
+impl Lattice {
+    /// Calls `visit` with each grid cell `cell` needs mined first.
+    fn antecedents(&self, cell: usize, mut visit: impl FnMut(usize)) {
         let [nx, ny, nz] = self.dims;
-        let cell = i64::from(self.cells[block as usize]);
-        let (x, y, z) = (cell % nx, (cell / nx) % ny, cell / (nx * ny));
-        let pattern = self.keys.as_ref().map_or(0, |keys| keys[cell as usize] as usize);
+        let index = cell as i64;
+        let (x, y, z) = (index % nx, (index / nx) % ny, index / (nx * ny));
+        let pattern = self.keys.as_ref().map_or(0, |keys| keys[cell] as usize);
         for &(dx, dy, dz) in &self.offsets[pattern] {
             let (x, y, z) = (x + dx, y + dy, z + dz);
             if x < 0 || y < 0 || z < 0 || x >= nx || y >= ny || z >= nz {
                 continue;
             }
-            let neighbour = (x + nx * (y + ny * z)) as usize;
-            if self.label[neighbour] == self.outer {
-                out.push(i64::from(self.local[neighbour]));
-            }
+            visit((x + nx * (y + ny * z)) as usize);
         }
+    }
+}
+
+impl Slopes {
+    fn lattice(&self, grid: &Grid) -> Lattice {
+        Lattice {
+            dims: grid.dims.map(|dim| dim as i64),
+            offsets: Arc::clone(&self.offsets),
+            keys: self.keys.clone(),
+        }
+    }
+}
+
+/// The cells one solve covers: the whole grid, or one band of it.
+#[derive(Clone)]
+struct Domain {
+    /// Grid index of each domain cell, ascending.
+    cells: Arc<Vec<u32>>,
+    /// Domain index of every grid cell, or `u32::MAX`. A round's bands share
+    /// one, so it is only meaningful together with `band`.
+    local: Arc<Vec<u32>>,
+    /// For a band: the labels when its round began, and its own label.
+    band: Option<(Arc<Vec<u16>>, u16)>,
+}
+
+impl Domain {
+    fn grid(cells: usize) -> Self {
+        let all = Arc::new((0..cells as u32).collect::<Vec<_>>());
+        Self {
+            cells: Arc::clone(&all),
+            local: all,
+            band: None,
+        }
+    }
+
+    /// The domain index of grid cell `cell`, if the domain holds it. Every
+    /// other cell a domain cell needs is already mined: a band lies inside a
+    /// closed outer shell, around an inner one.
+    fn index(&self, cell: usize) -> Option<usize> {
+        if let Some((label, own)) = &self.band
+            && label[cell] != *own
+        {
+            return None;
+        }
+        let index = self.local[cell];
+        (index != u32::MAX).then_some(index as usize)
+    }
+}
+
+/// The precedence among a closed set of domain cells: the slope pattern on the
+/// grid, less the cells outside the domain or settled, which are mined.
+struct Region {
+    lattice: Lattice,
+    domain: Domain,
+    /// The region's domain indices, ascending; a block's index is its position.
+    cells: Arc<Vec<u32>>,
+    /// The block of every domain index, for a region too large to search.
+    dense: Option<Arc<Vec<u32>>>,
+    settled: Arc<Vec<bool>>,
+}
+
+impl PrecedenceSource for Region {
+    fn num_blocks(&self) -> i64 {
+        self.cells.len() as i64
+    }
+
+    fn antecedents(&self, block: i64, out: &mut Vec<i64>) {
+        let cell = self.domain.cells[self.cells[block as usize] as usize] as usize;
+        self.lattice.antecedents(cell, |cell| {
+            let Some(index) = self.domain.index(cell) else {
+                return;
+            };
+            if self.settled[index] {
+                return;
+            }
+            let block = match &self.dense {
+                Some(dense) => dense[index] as usize,
+                None => self.cells.binary_search(&(index as u32)).expect("a region holds every unsettled antecedent"),
+            };
+            out.push(block as i64);
+        });
     }
 }
