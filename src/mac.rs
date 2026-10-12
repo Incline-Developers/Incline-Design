@@ -108,6 +108,8 @@ pub(crate) enum MacMenuAction {
     OpenReferencePoints,
     /// The Drillholes menu's row that opens the build surface dialog.
     OpenReferenceSurface,
+    /// The Block Model menu's row that opens the pit optimization scenarios.
+    OpenOptimizationScenarios,
     /// One row of File > Open Recent, by its index in the recent list the menu
     /// was last built from.
     OpenRecent(usize),
@@ -178,6 +180,7 @@ impl MacMenuAction {
         Self::ShowProjectInFileManager,
         Self::OpenReferencePoints,
         Self::OpenReferenceSurface,
+        Self::OpenOptimizationScenarios,
     ];
 
     /// The `NSMenuItem` tag this action is carried by.
@@ -487,6 +490,9 @@ pub(crate) fn install_menu_bar() {
         &target,
         mtm,
     );
+    // Production's half of the menu; `set_workspace_menus` shows each
+    // workspace only its own row.
+    add_action(&block_model_menu, &tr!("menu-pit-optimization"), "", MacMenuAction::OpenOptimizationScenarios, &target, mtm);
     let block_model_item = add_submenu(&root, &tr!("ws-menubar-block-model"), &block_model_menu, mtm);
     block_model_item.setTag(BLOCK_MODEL_MENU_TAG);
 
@@ -580,8 +586,15 @@ fn set_workspace_menus(root: &NSMenu, workspace: Workspace) {
         item.setHidden(workspace != Workspace::Production);
     }
 
+    // Geology thresholds the block model; Production optimizes a pit over it.
     if let Some(item) = find_item(root, BLOCK_MODEL_MENU_TAG) {
+        item.setHidden(!matches!(workspace, Workspace::Geology | Workspace::Production));
+    }
+    if let Some(item) = find_item(root, MacMenuAction::OpenCreateOreTriangulation.tag()) {
         item.setHidden(workspace != Workspace::Geology);
+    }
+    if let Some(item) = find_item(root, MacMenuAction::OpenOptimizationScenarios.tag()) {
+        item.setHidden(workspace != Workspace::Production);
     }
 
     if let Some(item) = find_item(root, DRILL_HOLES_MENU_TAG) {

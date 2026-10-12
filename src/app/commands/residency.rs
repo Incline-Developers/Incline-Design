@@ -98,7 +98,7 @@ impl<'a> App<'a> {
         })
     }
 
-    fn restore_pending(&self) -> bool {
+    pub(crate) fn restore_pending(&self) -> bool {
         self.pending_jobs.iter().any(|job| {
             job.keys.iter().any(|key| {
                 matches!(

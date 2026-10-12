@@ -41,7 +41,7 @@ i18n-embed-fl = "0.10.1"
 laz = { version = "0.13.0", features = ["parallel"] }
 log = "0.4.34"
 lyon = "1.0.19"
-#mineflow = { path = "crates/mineflow" } # Crate is ready to be implemented
+mineflow = { path = "crates/mineflow" }
 omf = { path = "crates/omf", default-features = false, features = ["image", "parquet", "zlib-rs"] }
 png = "0.18.1"
 # `crs-definitions` feature omitted: only `from_proj_string` is used, and enabling it

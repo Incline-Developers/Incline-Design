@@ -231,7 +231,10 @@ pub(crate) struct Config {
     /// same reason.
     #[serde(default)]
     pub(crate) blast_library: crate::model::blast::BlastLibrary,
+    /// Lenient: a tab that no longer exists (the old Optimization workspace)
+    /// is dropped rather than failing the whole file.
     #[serde(default)]
+    #[serde(deserialize_with = "lenient_list")]
     pub(crate) workspace_order: Vec<crate::ui::state::Workspace>,
     #[serde(default)]
     #[serde(deserialize_with = "lenient_list")]
@@ -342,6 +345,23 @@ pub(crate) fn load_session() -> io::Result<Session> {
     let session: Session = toml::from_str(&contents).map_err(io::Error::other)?;
 
     Ok(session)
+}
+
+/// Write the scenarios to a file the user chose, to keep or to move to another machine.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn export_optimization_scenarios(path: &std::path::Path, file: &crate::model::optimization::ScenarioFile) -> io::Result<()> {
+    let contents = serde_json::to_string_pretty(file).map_err(io::Error::other)?;
+    write_atomic(path, contents.as_bytes())
+}
+
+/// Refuse a file written by a newer build rather than misread it.
+pub(crate) fn parse_optimization_scenarios(json: &str) -> io::Result<crate::model::optimization::ScenarioFile> {
+    let mut file: crate::model::optimization::ScenarioFile = serde_json::from_str(json).map_err(io::Error::other)?;
+    if file.version > crate::model::optimization::SCENARIO_FILE_VERSION {
+        return Err(io::Error::other(format!("scenarios file version {} is newer than this build reads", file.version)));
+    }
+    file.scenarios.iter_mut().for_each(crate::model::optimization::OptimizationScenario::migrate);
+    Ok(file)
 }
 
 /// Resolve a path inside the editor's data directory: the platform config

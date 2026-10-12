@@ -621,6 +621,7 @@ impl<'a> App<'a> {
             MacMenuAction::OpenCreateBlockModel => Some(UiCommand::OpenCreateBlockModel),
             MacMenuAction::OpenReferencePoints => Some(UiCommand::OpenReferencePoints),
             MacMenuAction::OpenReferenceSurface => Some(UiCommand::OpenReferenceSurface),
+            MacMenuAction::OpenOptimizationScenarios => Some(UiCommand::OpenOptimizationScenarios),
             MacMenuAction::OpenSurveyDefinitions => Some(UiCommand::OpenSurveyDefinitions),
             MacMenuAction::OpenSurveyTransform => Some(UiCommand::OpenSurveyTransform),
             MacMenuAction::OpenCreateOreTriangulation => Some(UiCommand::OpenCreateOreTriangulation),
@@ -1281,6 +1282,9 @@ impl<'a> App<'a> {
         self.next_raster_texture_id = 0;
         self.project_asset_baseline = SaveToken::default();
         self.clear_editor_transient_state();
+        // Scenarios, runs and results belong to the outgoing project; the next
+        // one's scenarios are read from it when the list first opens.
+        self.editor.optimization = Default::default();
         self.scene_document_key = None;
         // Item and object ids restart with the replacement project, so the
         // renderer's id-keyed caches would otherwise keep drawing this
@@ -1448,6 +1452,23 @@ impl<'a> App<'a> {
             .chain(self.point_clouds.iter().filter(|item| item.state.hidden).map(|item| item.entity_id()))
             .chain(self.raster_textures.iter().filter(|item| item.state.hidden).map(|item| SceneEntityId::Raster(item.id)));
         self.editor.hidden_handles.extend(hidden);
+        // One entity shown alone, hidden or not (a pick on it).
+        if let Some(keep) = self.editor.isolated_entity {
+            let everything = self
+                .scene_document
+                .objects()
+                .iter()
+                .map(|object| SceneEntityId::Object(object.id()))
+                .chain(self.triangulations.iter().map(|item| item.entity_id()))
+                .chain(self.block_models.iter().map(|item| item.entity_id()))
+                .chain(self.drill_holes.iter().map(|item| item.entity_id()))
+                .chain(self.point_clouds.iter().map(|item| item.entity_id()))
+                .chain(self.raster_textures.iter().map(|item| SceneEntityId::Raster(item.id)))
+                .filter(|entity| *entity != keep)
+                .collect::<Vec<_>>();
+            self.editor.hidden_handles.extend(everything);
+            self.editor.hidden_handles.remove(&keep);
+        }
     }
 
     fn invalidate_geometry(&mut self) {

@@ -25,6 +25,7 @@ use crate::{
             csv_block_model::{CsvColumnMapping, CsvPreview},
             csv_drill_hole::{CsvDrillFileMapping, CsvDrillPreview},
         },
+        optimization::OptimizationScenario,
         point_cloud::PointCloudId,
         raster::RasterTextureId,
         triangulation::TriangulationId,
@@ -1105,6 +1106,13 @@ pub(crate) struct EditorState {
     pub(crate) borehole_inspector_locked: bool,
     /// Entities removed from view (skipped by the renderer).
     pub(crate) hidden_handles: HashSet<SceneEntityId>,
+    /// While set, the only entity shown, whatever the explorer's eyes say -
+    /// a hidden one too (the optimization's start-point pick). Transient:
+    /// applied by `App::sync_hidden_handles`, so a rebuild keeps it, and
+    /// clearing it brings the saved visibility back.
+    pub(crate) isolated_entity: Option<SceneEntityId>,
+    /// Short messages fading out above the status bar (`widgets::toast`).
+    pub(crate) toasts: crate::ui::widgets::toast::Toasts,
     /// Entities frozen: still visible, but excluded from editing and snapping.
     ///
     /// Derived: the union of [`Self::explicitly_frozen`] and every design
@@ -1757,6 +1765,7 @@ pub(crate) struct EditorState {
     pub(crate) reference_points_dialog: Option<ReferencePointsDraft>,
     /// The build surface dialog's snapshot of its input while it is open.
     pub(crate) reference_surface_dialog: Option<ReferenceSurfaceDraft>,
+    pub(crate) optimization: OptimizationState,
     pub(crate) block_model_create_open: bool,
     pub(crate) kriging_drill_hole_id: Option<DrillHoleId>,
     pub(crate) kriging_variables: Vec<String>,
@@ -2081,7 +2090,11 @@ impl EditorState {
     /// A dialog is parked waiting on a click in the 3D viewport. Escape belongs
     /// to the pick (it returns to the dialog), and Enter means nothing.
     fn viewport_pick_in_progress(&self) -> bool {
-        self.triangulation_pick_target.is_some() || self.drill_pattern_awaiting_shape_pick || self.canvas_context_menu_open || self.text_editing_enabled
+        self.triangulation_pick_target.is_some()
+            || self.optimization.start_pick.is_some()
+            || self.drill_pattern_awaiting_shape_pick
+            || self.canvas_context_menu_open
+            || self.text_editing_enabled
     }
 
     /// The common case: a dialog that confirms on Enter and cancels on Escape.
@@ -2128,6 +2141,7 @@ impl EditorState {
             || self.point_cloud_classify_open
             || self.block_model_create_open
             || self.ore_triangulation_open
+            || self.optimization.dialog_open()
             || {
                 #[cfg(target_arch = "wasm32")]
                 {
@@ -2417,6 +2431,8 @@ impl EditorState {
             inspected_hole: None,
             borehole_inspector_locked: false,
             hidden_handles: HashSet::new(),
+            isolated_entity: None,
+            toasts: Default::default(),
             frozen_handles: HashSet::new(),
             explicitly_frozen: HashSet::new(),
             locked_layers: HashSet::new(),
@@ -2741,6 +2757,7 @@ impl EditorState {
             drill_hole_color_dialog: None,
             reference_points_dialog: None,
             reference_surface_dialog: None,
+            optimization: OptimizationState::default(),
             block_model_create_open: false,
             kriging_drill_hole_id: None,
             kriging_variables: Vec::new(),
@@ -3640,6 +3657,52 @@ pub(crate) enum UiCommand {
     /// Open Create Block Model on the selected drill holes. Like the other
     /// select-first tools it takes its input from the scene selection, so the
     /// command carries nothing.
+    /// Show the Optimization scenarios list.
+    OpenOptimizationScenarios,
+    /// Start a new scenario in the editor, hiding the list.
+    AddOptimizationScenario,
+    /// Open the scenario with this id in the editor, hiding the list.
+    EditOptimizationScenario(u64),
+    /// Keep the edited scenario and hand the scenarios to the project. The editor stays
+    /// open unless `then_close`.
+    SaveOptimizationScenario {
+        scenario: Box<OptimizationScenario>,
+        then_close: bool,
+    },
+    DeleteOptimizationScenario(u64),
+    /// Write every scenario to a JSON file the user chooses.
+    ExportOptimizationScenarios,
+    /// Add the scenarios in a JSON file the user chooses to the list.
+    ImportOptimizationScenarios,
+    /// Choose the folder the reports are written to.
+    ChooseOptimizationReportsFolder,
+    /// Save the report the Results window shows as a CSV file the user chooses.
+    ExportOptimizationReport,
+    /// Read an optimization report CSV into the Results window.
+    OpenOptimizationReport,
+    /// Write the Results table's column choices (with the scenarios).
+    SaveOptimizationReportColumns,
+    /// The answer to "load the unloaded inputs?": load them and go on, or not.
+    ConfirmOptimizationLoad(bool),
+    /// Copy scenario `id` into a new one beside it that runs just these
+    /// revenue factors, typed in (the Results window's filtered shells).
+    CopyScenarioWithShells {
+        id: u64,
+        factors: Vec<f64>,
+    },
+    /// Hide everything but the scenario's block model, show it in plan view
+    /// and wait for a click that sets the directional shells' starting point.
+    BeginShellStartPick,
+    /// Copy a scenario into a new one beside it, with an amended name.
+    DuplicateOptimizationScenario(u64),
+    /// Run the saved scenario with this id (queued if enough are running).
+    RunOptimizationScenario(u64),
+    /// Stop the scenario's run, or take it out of the queue.
+    CancelOptimizationScenario(u64),
+    RenameOptimizationScenario {
+        id: u64,
+        name: String,
+    },
     OpenCreateBlockModel,
     ExecuteCreateBlockModel {
         drill_hole_id: DrillHoleId,
@@ -3893,6 +3956,19 @@ impl UiCommand {
             | Self::CancelCollarRotation
             | Self::CancelTextEdit
             | Self::CloseCanvasContextMenu
+            | Self::OpenOptimizationScenarios
+            | Self::AddOptimizationScenario
+            | Self::EditOptimizationScenario(_)
+            | Self::RenameOptimizationScenario { .. }
+            | Self::ChooseOptimizationReportsFolder
+            | Self::ExportOptimizationReport
+            | Self::OpenOptimizationReport
+            | Self::SaveOptimizationReportColumns
+            | Self::ConfirmOptimizationLoad(_)
+            | Self::CopyScenarioWithShells { .. }
+            | Self::BeginShellStartPick
+            | Self::RunOptimizationScenario(_)
+            | Self::CancelOptimizationScenario(_)
             | Self::OpenCreateBlockModel
             | Self::OpenCreateOreTriangulation
             | Self::OpenOffsetDialog
@@ -4151,6 +4227,11 @@ impl UiCommand {
                     None => tr!("state-points-controls-unclipped", count = points.len().to_string(), controls = controls.len().to_string()),
                 },
             ),
+            Self::SaveOptimizationScenario { scenario, .. } => report(tr!("opt-save-scenario"), scenario.name.clone()),
+            Self::ExportOptimizationScenarios => report(tr!("opt-export-json"), tr!("opt-export-summary")),
+            Self::ImportOptimizationScenarios => report(tr!("opt-import-json"), tr!("opt-import-summary")),
+            Self::DuplicateOptimizationScenario(id) => report(tr!("opt-duplicate-scenario"), id.to_string()),
+            Self::DeleteOptimizationScenario(id) => report(tr!("opt-delete-scenario"), id.to_string()),
             Self::ExecuteCreateBlockModel { name, .. } => report(tr!("common-create-block-model"), name.clone()),
             Self::ExecuteCreateOreTriangulation { name, .. } => report(tr!("common-create-ore-triangulation"), name.clone()),
             Self::ExportPlotSheet => report(tr!("common-export-engineering-drawing"), tr!("state-choose-destination")),
@@ -4494,6 +4575,287 @@ impl UiProjectView {
     /// are ways of leaving it.
     pub(crate) fn recent_projects(&self) -> impl Iterator<Item = &UiTrackedProjectEntry> {
         self.tracked_projects.iter().filter(|entry| !entry.is_active).take(RECENT_PROJECT_LIMIT)
+    }
+}
+
+/// Which row each of the scenario editor's grids has selected.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ScenarioGridSelections {
+    pub(crate) constants: Option<usize>,
+    pub(crate) rocktype_costs: Option<usize>,
+    pub(crate) methods: Option<usize>,
+    pub(crate) elements: Option<usize>,
+    pub(crate) revenues: Option<usize>,
+    pub(crate) rosette: Option<usize>,
+}
+
+/// The scenario editor's tabs, in display order.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ScenarioTab {
+    #[default]
+    Inputs,
+    Constants,
+    MiningCosts,
+    ProcessingCosts,
+    Revenues,
+    Constraints,
+    Outputs,
+}
+
+impl ScenarioTab {
+    pub(crate) const ALL: [Self; 7] = [
+        Self::Inputs,
+        Self::Constants,
+        Self::MiningCosts,
+        Self::ProcessingCosts,
+        Self::Revenues,
+        Self::Constraints,
+        Self::Outputs,
+    ];
+
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::Inputs => tr!("opt-section-inputs"),
+            Self::Constants => tr!("opt-section-constants"),
+            Self::MiningCosts => tr!("opt-section-mining-costs"),
+            Self::ProcessingCosts => tr!("opt-section-processing-costs"),
+            Self::Revenues => tr!("opt-section-revenues"),
+            Self::Constraints => tr!("opt-section-constraints"),
+            Self::Outputs => tr!("opt-section-outputs"),
+        }
+    }
+}
+
+/// The scenario the editor window is working on, apart from the saved copy:
+/// Save keeps it as the new saved copy and the window stays open; closing
+/// without saving leaves the saved one as it was.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScenarioDraft {
+    pub(crate) scenario: OptimizationScenario,
+    /// The scenario as last saved (or as it was when the editor opened).
+    pub(crate) saved: OptimizationScenario,
+    /// Not in the scenarios list yet: the first save adds it.
+    pub(crate) is_new: bool,
+    /// Asking whether to keep unsaved changes before closing.
+    pub(crate) confirm_close: bool,
+    pub(crate) selections: ScenarioGridSelections,
+    pub(crate) tab: ScenarioTab,
+}
+
+impl ScenarioDraft {
+    pub(crate) fn new(scenario: OptimizationScenario, is_new: bool) -> Self {
+        Self {
+            saved: scenario.clone(),
+            scenario,
+            is_new,
+            confirm_close: false,
+            selections: ScenarioGridSelections::default(),
+            tab: ScenarioTab::default(),
+        }
+    }
+
+    /// Whether the editor holds changes that are not saved.
+    pub(crate) fn dirty(&self) -> bool {
+        self.scenario != self.saved
+    }
+}
+
+/// Where a scenario's run stands. A finished run keeps the fingerprint of the
+/// settings it ran with, so a later edit shows as stale.
+#[derive(Clone, Debug)]
+pub(crate) enum RunState {
+    /// Waiting for a running scenario to finish.
+    Queued,
+    Running {
+        progress: crate::model::progress::Progress,
+    },
+    Finished {
+        fingerprint: u64,
+    },
+}
+
+/// What the scenarios list shows beside a scenario.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum ScenarioStatus {
+    NeverRun,
+    /// Run, and unchanged since.
+    UpToDate,
+    /// Run, but changed since: it has to be run again.
+    Stale,
+    Queued,
+    /// Running, with the fraction done.
+    Running(f32),
+}
+
+/// How many scenarios run at once; the rest queue. Memory, not cores, is the
+/// limit: each run holds several values per grid cell and the solver's graph.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) const MAX_CONCURRENT_RUNS: usize = 2;
+#[cfg(target_arch = "wasm32")]
+pub(crate) const MAX_CONCURRENT_RUNS: usize = 1;
+
+/// What pit optimization holds while the app runs.
+///
+/// A working copy of the active project's scenarios, read from it the first
+/// time the list is opened and handed back on every change; reset when another
+/// project opens. Runs are not saved: what a run produced is gone with the
+/// session.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct OptimizationState {
+    pub(crate) scenarios: Vec<OptimizationScenario>,
+    /// The scenarios list window. Hidden while a scenario is being edited.
+    pub(crate) list_open: bool,
+    pub(crate) draft: Option<ScenarioDraft>,
+    pub(crate) next_scenario_id: u64,
+    pub(crate) runs: HashMap<u64, RunState>,
+    /// Runs waiting for their block model or topography to be read back in
+    /// before they start.
+    pub(crate) awaiting_restore: HashSet<u64>,
+    /// What each scenario's last run produced, for stage 3 to read back.
+    pub(crate) results: HashMap<u64, std::sync::Arc<crate::model::optimization_run::RunResult>>,
+    /// The project's scenarios have been read into `scenarios`. They are read
+    /// the first time the list opens.
+    pub(crate) loaded_from_file: bool,
+    /// Set while the user is clicking the starting point of a directional
+    /// shell in the viewport. The editor steps aside meanwhile.
+    pub(crate) start_pick: Option<ShellStartPick>,
+    /// A pick was up on the last frame drawn, so an Escape still pending on the
+    /// first frame without it belongs to the pick, not to the editor.
+    pub(crate) pick_was_active: bool,
+    /// The Results window, when open.
+    pub(crate) results_view: Option<ResultsView>,
+    /// The Results table's columns per report (scenario name), saved with the
+    /// scenarios; a report not in here shows the default columns.
+    pub(crate) report_columns: std::collections::BTreeMap<String, Vec<String>>,
+    /// Asking whether to load the unloaded inputs a run or pick needs.
+    pub(crate) load_prompt: Option<LoadPrompt>,
+}
+
+/// Inputs of an optimization that are unloaded, and what to do once they are
+/// loaded (hidden, and kept loaded for later runs).
+#[derive(Clone, Debug)]
+pub(crate) struct LoadPrompt {
+    /// The block model and topography, with their names.
+    pub(crate) items: Vec<(crate::model::ItemRef, String)>,
+    pub(crate) then: LoadThen,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum LoadThen {
+    /// Run these scenarios.
+    Run(Vec<u64>),
+    /// Pick the directional shells' starting point.
+    Pick,
+}
+
+/// The Results window: a run's report, charted and tabled.
+#[derive(Clone, Debug)]
+pub(crate) struct ResultsView {
+    pub(crate) source: ResultsSource,
+    pub(crate) basis: crate::model::optimization_run::report::Basis,
+    /// One destination, or every one together (`None`).
+    pub(crate) destination: Option<usize>,
+    /// The shell picked in the chart, 0-based.
+    pub(crate) selected: Option<usize>,
+    /// Showing only some shells, or choosing them.
+    pub(crate) filter: ShellFilter,
+}
+
+/// The Results window's shell filter: off, being chosen in the chart, or applied.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) enum ShellFilter {
+    #[default]
+    Off,
+    /// Clicking a column of the chart adds its shell; clicking it again takes
+    /// it out. 0-based shells, in the order clicked.
+    Choosing(Vec<usize>),
+    /// The chart and table show these shells only (0-based, ascending), and an
+    /// increment is measured from the chosen shell before.
+    Applied(Vec<usize>),
+}
+
+impl ResultsView {
+    pub(crate) fn new(source: ResultsSource) -> Self {
+        Self {
+            source,
+            basis: Default::default(),
+            destination: None,
+            selected: None,
+            filter: ShellFilter::Off,
+        }
+    }
+}
+
+/// Where the Results window's report comes from.
+#[derive(Clone, Debug)]
+pub(crate) enum ResultsSource {
+    /// The last run of a scenario this session.
+    Run(u64),
+    /// A report CSV read from a file.
+    File {
+        name: String,
+        report: std::sync::Arc<crate::model::optimization_run::report::OptimizationReport>,
+    },
+}
+
+impl OptimizationState {
+    /// The report the Results window shows, and its title.
+    pub(crate) fn results_report(&self) -> Option<(String, std::sync::Arc<crate::model::optimization_run::report::OptimizationReport>)> {
+        match &self.results_view.as_ref()?.source {
+            ResultsSource::Run(id) => {
+                let report = std::sync::Arc::clone(&self.results.get(id)?.report);
+                let name = self
+                    .scenarios
+                    .iter()
+                    .find(|scenario| scenario.id == *id)
+                    .map_or_else(|| report.scenario.clone(), |scenario| scenario.name.clone());
+                Some((name, report))
+            }
+            ResultsSource::File { name, report } => Some((name.clone(), std::sync::Arc::clone(report))),
+        }
+    }
+}
+
+/// A directional-shell starting point being picked from the viewport.
+#[derive(Clone, Debug)]
+pub(crate) struct ShellStartPick {
+    /// The block model the click must land on; shown alone for the pick
+    /// (`EditorState::isolated_entity`), even when its eye is shut.
+    pub(crate) block_model: crate::model::block_model::BlockModelId,
+    /// Height the old point's marker is drawn at: the top of the model, so it
+    /// stays inside the depth range the camera fits to the model. Never saved.
+    pub(crate) marker_z: f64,
+}
+
+impl OptimizationState {
+    pub(crate) fn dialog_open(&self) -> bool {
+        self.list_open || self.draft.is_some()
+    }
+
+    /// An id no scenario in the list carries.
+    pub(crate) fn fresh_id(&mut self) -> u64 {
+        let id = self.next_scenario_id.max(self.scenarios.iter().map(|scenario| scenario.id + 1).max().unwrap_or(0));
+        self.next_scenario_id = id + 1;
+        id
+    }
+
+    pub(crate) fn status(&self, scenario: &OptimizationScenario) -> ScenarioStatus {
+        match self.runs.get(&scenario.id) {
+            None => ScenarioStatus::NeverRun,
+            Some(RunState::Queued) => ScenarioStatus::Queued,
+            Some(RunState::Running { progress, .. }) => ScenarioStatus::Running(progress.snapshot().map_or(0.0, |snapshot| snapshot.fraction)),
+            Some(RunState::Finished { fingerprint }) if *fingerprint == scenario.fingerprint() => ScenarioStatus::UpToDate,
+            Some(RunState::Finished { .. }) => ScenarioStatus::Stale,
+        }
+    }
+
+    /// Whether a run is going or waiting, so the list keeps repainting.
+    pub(crate) fn any_running(&self) -> bool {
+        self.runs.values().any(|run| matches!(run, RunState::Queued | RunState::Running { .. }))
+    }
+
+    pub(crate) fn running_count(&self) -> usize {
+        self.runs.values().filter(|run| matches!(run, RunState::Running { .. })).count()
     }
 }
 

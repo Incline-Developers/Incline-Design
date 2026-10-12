@@ -92,6 +92,16 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
     }
 
     draw_tie_preview(&mut overlay, editor);
+    // The directional shells' starting point already picked, shown while it is picked again.
+    if let Some(pick) = editor.optimization.start_pick.as_ref()
+        && let Some((x, y)) = editor.optimization.draft.as_ref().and_then(|draft| draft.scenario.output.shell_start)
+    {
+        let point = DVec3::new(x, y, pick.marker_z);
+        // Dark blue rim round a light blue core, the same width all the way
+        // round: the rim is 2 px on every side, tips included.
+        draw_screen_cross(&mut overlay, point, 20.0, 8.0, [0.05, 0.2, 0.65, 1.0]);
+        draw_screen_cross(&mut overlay, point, 18.0, 4.0, [0.45, 0.7, 1.0, 1.0]);
+    }
     if editor.poly_finish_dialog {
         // Dialog is open: draw a dashed closing line from last point to first point.
         // Dash size is fixed in screen pixels so it stays visible at any zoom level.

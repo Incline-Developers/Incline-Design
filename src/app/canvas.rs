@@ -17,6 +17,11 @@ impl<'a> App<'a> {
             return;
         }
 
+        if self.editor.optimization.start_pick.is_some() {
+            self.pick_shell_start_at_cursor();
+            return;
+        }
+
         if let Some(target) = self.editor.triangulation_pick_target {
             let picked = self
                 .graphics

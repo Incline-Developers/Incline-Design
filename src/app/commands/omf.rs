@@ -188,7 +188,14 @@ impl<'a> App<'a> {
             drill_holes: self.drill_holes.iter().filter(|item| selection.drill_holes.includes(item.id)).cloned().collect(),
             point_clouds: self.point_clouds.iter().filter(|item| selection.point_clouds.includes(item.id)).cloned().collect(),
             rasters: self.raster_textures.iter().filter(|item| selection.rasters.includes(item.id)).cloned().collect(),
+            optimization: None,
         };
+        if scope == FolderScope::Whole
+            && let Some(project) = self.workspace.active_project()
+            && !project.project.optimization.scenarios.is_empty()
+        {
+            snapshot.optimization = Some(project.project.optimization.clone());
+        }
         if scope == FolderScope::Referenced {
             let referenced = referenced_folders(&snapshot);
             snapshot.folders = retain_folders(&snapshot.folders, &referenced);
@@ -235,9 +242,11 @@ impl<'a> App<'a> {
             rasters,
             warnings: _,
             folders,
+            optimization,
         } = bundle;
 
         let mut design = project::new_empty(path.clone());
+        design.optimization = optimization.unwrap_or_default();
         if !project_name.trim().is_empty() {
             design.metadata.name = project_name.clone();
         }
@@ -403,6 +412,8 @@ impl<'a> App<'a> {
                 rasters,
                 warnings: _,
                 folders,
+                // A merge brings items, not the source project's scenarios.
+                optimization: _,
             } = bundle;
 
             if let Some(project) = self.workspace.active_project_mut() {
