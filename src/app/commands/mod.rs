@@ -160,6 +160,7 @@ impl<'a> App<'a> {
                 | UiCommand::RunAllScheduleStages
                 | UiCommand::RunHaulageStage(_)
                 | UiCommand::RunAllHaulageStages
+                | UiCommand::SetAutoRun(_)
                 | UiCommand::RunSchedulePeriod
                 | UiCommand::RunAllSchedulePeriods
                 | UiCommand::ImproveSchedule
@@ -583,6 +584,12 @@ impl<'a> App<'a> {
             }
             UiCommand::RunAllHaulageStages => {
                 self.run_all_haulage_steps();
+                Ok(())
+            }
+            UiCommand::SetAutoRun(auto_run) => {
+                if let Some(session) = self.workspace.active_project().map(|project| project.runtime_id) {
+                    self.apply_schedule_edit(session, crate::ui::state::ScheduleEdit::SetAutoRun(auto_run));
+                }
                 Ok(())
             }
             UiCommand::CancelHaulageRun => {

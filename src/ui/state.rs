@@ -124,6 +124,15 @@ impl Default for PreferencesDraft {
 }
 
 impl EditorState {
+    /// The Auto switches as the pages show them, mirrored from the project.
+    pub(crate) fn auto_run(&self) -> crate::model::schedule::AutoRun {
+        crate::model::schedule::AutoRun {
+            solids: self.planning_auto_run,
+            haulage: self.haulage_auto_run,
+            schedule: self.schedule_auto_recalculate,
+        }
+    }
+
     pub(crate) fn planning_subpage(&self) -> PlanningSubpage {
         match self.planning_page {
             PlanningPage::Solids => self.solids_subpage,
@@ -2892,7 +2901,8 @@ pub(crate) struct EditorState {
     /// The Haulage Setup pipeline's steps, mirrored like the Schedule ones.
     pub(crate) haulage_stages: [HaulageStageView; HaulageStep::ALL.len()],
     pub(crate) haulage_run_active: bool,
-    /// Rerun the Haulage steps on their own once edits settle.
+    /// Rerun the Haulage steps on their own once edits settle. Mirrored
+    /// from the project's [`crate::model::schedule::AutoRun`] each frame.
     pub(crate) haulage_auto_run: bool,
     /// Whether a Schedule Setup run is queued or in flight, so the controls
     /// can offer Cancel.
@@ -3048,11 +3058,13 @@ pub(crate) struct EditorState {
     /// finished on its own; `None` to let it run to its limit.
     pub(crate) improve_stop_after_stall_min: Option<u32>,
     /// Whether the schedule recalculates on its own once edits settle. On by
-    /// default: the first schedule takes a fraction of a second.
+    /// default: the first schedule takes a fraction of a second. Mirrored
+    /// from the project's [`crate::model::schedule::AutoRun`] each frame.
     pub(crate) schedule_auto_recalculate: bool,
     /// Whether the Planning steps rerun on their own once edits settle. On
     /// by default, like the schedule's: only the stale steps run, and an
-    /// edit made meanwhile restarts them.
+    /// edit made meanwhile restarts them. Mirrored from the project's
+    /// [`crate::model::schedule::AutoRun`] each frame.
     pub(crate) planning_auto_run: bool,
     /// Whether Blasting names its blasts over the viewport. On by default.
     pub(crate) planning_cut_labels: bool,
@@ -3078,6 +3090,15 @@ pub(crate) struct EditorState {
     /// than the cursor, so the number never claims ground the view is not
     /// showing yet.
     pub(crate) schedule_animation_shown_h: f64,
+    /// Animate's playback: whether the cursor is moving on its own, and how
+    /// fast - `schedule_animation_play_span` of the schedule in
+    /// `schedule_animation_play_seconds` of real time. Session-only.
+    pub(crate) schedule_animation_playing: bool,
+    pub(crate) schedule_animation_play_span: PlaybackSpan,
+    pub(crate) schedule_animation_play_seconds: f64,
+    /// The UI clock at the last frame playback moved the cursor, so the next
+    /// one moves it by the real time between them; `None` until it has.
+    pub(crate) schedule_animation_play_clock: Option<f64>,
     /// How Animate draws each drill and blast blast, by its position in the
     /// run's blasts: the ground its marks lie on.
     pub(crate) schedule_animation_blasts: Vec<crate::model::schedule::animation::AnimatedBlast>,
@@ -4394,6 +4415,10 @@ impl EditorState {
             schedule_animation_hidden: SolidsVisibility::default(),
             schedule_time_h: 0.0,
             schedule_animation_shown_h: 0.0,
+            schedule_animation_playing: false,
+            schedule_animation_play_span: PlaybackSpan::Day,
+            schedule_animation_play_seconds: 15.0,
+            schedule_animation_play_clock: None,
             schedule_animation_blasts: Vec::new(),
             schedule_animation_horizon_h: 0.0,
             schedule_animation_enabled: false,
@@ -5189,6 +5214,8 @@ pub(crate) enum UiCommand {
     /// this one.
     RunHaulageStage(HaulageStep),
     RunAllHaulageStages,
+    /// Turn the Auto switches on or off, in the active project.
+    SetAutoRun(crate::model::schedule::AutoRun),
     CancelHaulageRun,
     /// One edit to a project's loader fleet.
     ///
@@ -5800,6 +5827,7 @@ impl UiCommand {
             | Self::RunHaulageStage(_)
             | Self::RunAllHaulageStages
             | Self::CancelHaulageRun
+            | Self::SetAutoRun(_)
             | Self::RunSchedulePeriod
             | Self::RunAllSchedulePeriods
             | Self::ImproveSchedule
@@ -5950,6 +5978,7 @@ impl UiCommand {
                 | ScheduleEdit::SetTonnageField(_)
                 | ScheduleEdit::SetUnmeasuredAsZero(_)
                 | ScheduleEdit::SetBarHeight(_)
+                | ScheduleEdit::SetAutoRun(_)
                 // Assignment, lane and earliest-start edits are cell edits of
                 // one bar, and dragging one produces a stream of them: the
                 // Gantt shows the result in place, and a console line per
@@ -6623,6 +6652,38 @@ impl HaulageStep {
     }
 }
 
+/// How much of the schedule Animate's playback covers in its set number of
+/// seconds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PlaybackSpan {
+    Minute,
+    Hour,
+    Day,
+    Week,
+}
+
+impl PlaybackSpan {
+    pub(crate) const ALL: [Self; 4] = [Self::Minute, Self::Hour, Self::Day, Self::Week];
+
+    pub(crate) fn hours(self) -> f64 {
+        match self {
+            Self::Minute => 1.0 / 60.0,
+            Self::Hour => 1.0,
+            Self::Day => 24.0,
+            Self::Week => 168.0,
+        }
+    }
+
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::Minute => tr!("animate-span-minute"),
+            Self::Hour => tr!("animate-span-hour"),
+            Self::Day => tr!("animate-span-day"),
+            Self::Week => tr!("animate-span-week"),
+        }
+    }
+}
+
 /// Steps within a Planning page. Schedule remembers its selected step.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum PlanningSubpage {
@@ -7076,6 +7137,8 @@ pub(crate) enum ScheduleEdit {
     SetUnmeasuredAsZero(bool),
     /// Set the logical-point height of dig-sequence bars on the Gantt.
     SetBarHeight(f32),
+    /// Turn the Auto switches on or off; kept with the project.
+    SetAutoRun(crate::model::schedule::AutoRun),
     /// Add an empty Gantt bar to one machine's lane - the row it was asked
     /// for - at the instant it was asked for. Its ground is chosen afterwards.
     AddBar {

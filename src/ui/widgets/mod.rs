@@ -14,6 +14,7 @@ pub(crate) mod preview_navigation;
 pub(crate) mod progress;
 pub(crate) mod toggle;
 pub(crate) mod toolbar;
+pub(crate) mod transport;
 pub(crate) mod viewport;
 
 /// Step a colour by `delta` levels per channel.

@@ -823,6 +823,38 @@ pub(crate) struct SchedulePlan {
     /// [`periods`]. Read by the displays only, never by a calculation.
     #[serde(default)]
     periods: periods::SchedulePeriods,
+    /// Which pipelines rerun on their own once edits settle. Kept with the
+    /// project so a switch turned off stays off when it is opened again.
+    #[serde(default)]
+    auto_run: AutoRun,
+}
+
+/// The Auto switches: Solids Setup, Haulage Setup, and the schedule (its
+/// Setup steps and the calculation the Gantt, Calendar, Charts and Animate
+/// show). All on by default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AutoRun {
+    #[serde(default = "default_true")]
+    pub(crate) solids: bool,
+    #[serde(default = "default_true")]
+    pub(crate) haulage: bool,
+    #[serde(default = "default_true")]
+    pub(crate) schedule: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for AutoRun {
+    fn default() -> Self {
+        Self {
+            solids: true,
+            haulage: true,
+            schedule: true,
+        }
+    }
 }
 
 impl Default for SchedulePlan {
@@ -849,6 +881,7 @@ impl Default for SchedulePlan {
             delays: DelayConfig::default(),
             drill_blast: DrillBlastConfig::default(),
             periods: periods::SchedulePeriods::default(),
+            auto_run: AutoRun::default(),
         }
     }
 }
@@ -902,7 +935,13 @@ impl SchedulePlan {
 
     /// No visible content or retired identities to preserve in a save/import.
     pub(crate) fn is_pristine(&self) -> bool {
-        self.is_empty() && self.next_class_id == 0 && self.next_agent_id == 0 && self.next_bar_id == 0 && self.trucks.is_pristine() && self.cashflow.is_pristine()
+        self.is_empty()
+            && self.next_class_id == 0
+            && self.next_agent_id == 0
+            && self.next_bar_id == 0
+            && self.trucks.is_pristine()
+            && self.cashflow.is_pristine()
+            && self.auto_run == AutoRun::default()
     }
 
     /// Never hand out an id `other` has already issued.
@@ -1346,6 +1385,14 @@ impl SchedulePlan {
 
     pub(crate) fn bar_height(&self) -> f32 {
         self.bar_height
+    }
+
+    pub(crate) fn auto_run(&self) -> AutoRun {
+        self.auto_run
+    }
+
+    pub(crate) fn set_auto_run(&mut self, auto_run: AutoRun) {
+        self.auto_run = auto_run;
     }
 
     pub(crate) fn set_bar_height(&mut self, height: f32) -> ScheduleResult {
@@ -2149,6 +2196,7 @@ impl SchedulePlan {
         self.tonnage_field.hash(hasher);
         self.unmeasured_as_zero.hash(hasher);
         self.bar_height.to_bits().hash(hasher);
+        (self.auto_run.solids, self.auto_run.haulage, self.auto_run.schedule).hash(hasher);
         self.routing.hash_content(hasher);
         self.routing.hash_inventory_names(hasher);
         self.trucks.hash_content(hasher);

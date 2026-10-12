@@ -253,6 +253,7 @@ impl<'a> App<'a> {
                     // in flight is allowed to schedule. Doing this after the
                     // geometry sync would let one frame's work start against a
                     // demand that the same frame's edit had already retired.
+                    self.sync_auto_run();
                     self.sync_planning_pipeline();
                     self.auto_run_planning();
                     self.auto_run_haulage();

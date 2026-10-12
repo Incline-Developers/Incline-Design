@@ -379,12 +379,13 @@ pub(crate) fn draw_solids_run_controls(ui: &mut egui::Ui, editor: &mut EditorSta
     let reported = active.unwrap_or(if editor.is_solids_view() { SolidsStep::LAST } else { step });
     let status = editor.planning_stages[reported.index()].clone();
     let snapshot = editor.planning_snapshot_status.clone();
+    let mut auto = editor.auto_run();
     let action = run_header(
         ui,
         "planning_run",
         editor.planning_run_active,
         !editor.is_solids_view(),
-        Some((&mut editor.planning_auto_run, tr!("planning-auto-note"))),
+        Some((&mut auto.solids, tr!("planning-auto-note"))),
         (completed, SolidsStep::ALL.len()),
         |ui| {
             ui.label(reported.label());
@@ -395,6 +396,9 @@ pub(crate) fn draw_solids_run_controls(ui: &mut egui::Ui, editor: &mut EditorSta
             }
         },
     );
+    if auto != editor.auto_run() {
+        commands.push(UiCommand::SetAutoRun(auto));
+    }
     match action {
         Some(RunAction::Step) => commands.push(UiCommand::RunPlanningStage(step)),
         Some(RunAction::All) => commands.push(UiCommand::RunAllPlanningStages),
@@ -422,12 +426,13 @@ pub(crate) fn draw_schedule_run_controls(ui: &mut egui::Ui, editor: &mut EditorS
     let reported = active.unwrap_or(step);
     let status = editor.schedule_stages[reported.index()].clone();
     let calculation = editor.schedule_calculation_status.clone();
+    let mut auto = editor.auto_run();
     let action = run_header(
         ui,
         "schedule_run",
         editor.schedule_run_active,
         true,
-        Some((&mut editor.schedule_auto_recalculate, tr!("schedule-setup-auto-note"))),
+        Some((&mut auto.schedule, tr!("schedule-setup-auto-note"))),
         (completed, ScheduleStep::ALL.len()),
         |ui| {
             ui.label(reported.label());
@@ -440,6 +445,9 @@ pub(crate) fn draw_schedule_run_controls(ui: &mut egui::Ui, editor: &mut EditorS
             }
         },
     );
+    if auto != editor.auto_run() {
+        commands.push(UiCommand::SetAutoRun(auto));
+    }
     match action {
         Some(RunAction::Step) => commands.push(UiCommand::RunScheduleStage(step)),
         Some(RunAction::All) => commands.push(UiCommand::RunAllScheduleStages),
@@ -457,18 +465,22 @@ pub(crate) fn draw_haulage_run_controls(ui: &mut egui::Ui, editor: &mut EditorSt
     let active = HaulageStep::ALL.into_iter().find(|step| editor.haulage_stages[step.index()].state == StageState::Running);
     let reported = active.unwrap_or(step);
     let status = editor.haulage_stages[reported.index()].clone();
+    let mut auto = editor.auto_run();
     let action = run_header(
         ui,
         "haulage_run",
         editor.haulage_run_active,
         true,
-        Some((&mut editor.haulage_auto_run, tr!("planning-auto-note"))),
+        Some((&mut auto.haulage, tr!("planning-auto-note"))),
         (completed, HaulageStep::ALL.len()),
         |ui| {
             ui.label(reported.label());
             stage_tooltip_parts(ui, status.state, status.blocked_by.map(HaulageStep::label), status.message.as_deref(), &status.diagnostics);
         },
     );
+    if auto != editor.auto_run() {
+        commands.push(UiCommand::SetAutoRun(auto));
+    }
     match action {
         Some(RunAction::Step) => commands.push(UiCommand::RunHaulageStage(step)),
         Some(RunAction::All) => commands.push(UiCommand::RunAllHaulageStages),

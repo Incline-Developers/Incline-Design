@@ -3,7 +3,14 @@
 use crate::{
     i18n::tr,
     model::{Document, schedule::SCHEDULE_PERIOD_H},
-    ui::{EditorState, chrome, widgets::toolbar::GROUP_CORNER_RADIUS},
+    ui::{
+        EditorState, chrome,
+        state::PlaybackSpan,
+        widgets::{
+            toolbar::GROUP_CORNER_RADIUS,
+            transport::{Transport, transport_button},
+        },
+    },
 };
 
 pub(crate) const TIMELINE_PANEL_ID: &str = "schedule_animation_timeline";
@@ -20,8 +27,19 @@ const MIN_RULE_SPACING: f32 = 5.0;
 const MIN_TILE_WIDTH: f32 = 8.0;
 /// The space between two period tiles.
 const TILE_GAP: f32 = 2.0;
-/// The row above the band that carries the cursor's instant.
-const READOUT_ROW_H: f32 = 22.0;
+/// The row above the band that carries the cursor's instant, and the
+/// playback controls to its left.
+const READOUT_ROW_H: f32 = 24.0;
+/// The space between the playback controls and the widest instant the
+/// readout can name.
+const CONTROLS_GAP: f32 = 16.0;
+/// The shortest playback time the speed field takes, so a span is never
+/// played through in no time at all.
+const MIN_PLAY_SECONDS: f64 = 0.1;
+/// The most one frame moves the cursor by, in real seconds: a frame held up
+/// by a stall, or the page left and come back to, moves on by this much of
+/// the schedule rather than by the whole gap.
+const MAX_PLAY_STEP_S: f64 = 0.25;
 const READOUT_SIZE: f32 = 16.0;
 const STATUS_SIZE: f32 = 12.0;
 
@@ -29,10 +47,11 @@ pub(crate) fn draw_timeline(ui: &mut egui::Ui, editor: &mut EditorState, documen
     egui::Panel::bottom(TIMELINE_PANEL_ID)
         .resizable(false)
         .show_separator_line(chrome::show_separator_line(ui))
-        .exact_size(104.0)
+        .exact_size(106.0)
         .frame(chrome::region_frame(ui).inner_margin(egui::Margin::symmetric(14, 8)))
         .show(ui, |ui| {
             let horizon = editor.schedule_animation_horizon_h.max(0.0);
+            advance_playback(ui, editor, horizon);
 
             // The band no longer names its periods, so this line is the only
             // thing that says where the cursor is. It is centred over the
@@ -89,6 +108,9 @@ pub(crate) fn draw_timeline(ui: &mut egui::Ui, editor: &mut EditorState, documen
             } else {
                 paint_centered_line(ui, readout, editor.schedule_animation_status.clone(), STATUS_SIZE, ui.visuals().weak_text_color());
             }
+            if editor.schedule_animation_enabled {
+                draw_playback_controls(ui, editor, readout, horizon);
+            }
 
             let band_height = 20.0;
             let (band, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), band_height), egui::Sense::hover());
@@ -96,15 +118,99 @@ pub(crate) fn draw_timeline(ui: &mut egui::Ui, editor: &mut EditorState, documen
 
             ui.spacing_mut().slider_width = ui.available_width();
             ui.spacing_mut().interact_size.y = 28.0;
-            ui.add_enabled(
+            let slider = ui.add_enabled(
                 editor.schedule_animation_enabled,
                 egui::Slider::new(&mut editor.schedule_time_h, 0.0..=horizon.max(f64::EPSILON))
                     .show_value(false)
                     .clamping(egui::SliderClamping::Edits),
             );
+            // Taking hold of the cursor stops playback, as it does in the
+            // blast review.
+            if slider.dragged() || slider.changed() {
+                editor.schedule_animation_playing = false;
+            }
         })
         .response
         .rect
+}
+
+/// Moves the cursor on by the real time since the last frame, at the set
+/// speed, while playback is on. Stops at the end of the run.
+fn advance_playback(ui: &egui::Ui, editor: &mut EditorState, horizon: f64) {
+    if !editor.schedule_animation_playing || !editor.schedule_animation_enabled {
+        editor.schedule_animation_playing = false;
+        editor.schedule_animation_play_clock = None;
+        return;
+    }
+    let now = ui.input(|input| input.time);
+    let step_s = editor.schedule_animation_play_clock.map_or(0.0, |last| (now - last).clamp(0.0, MAX_PLAY_STEP_S));
+    editor.schedule_animation_play_clock = Some(now);
+    let hours_per_second = editor.schedule_animation_play_span.hours() / editor.schedule_animation_play_seconds.max(MIN_PLAY_SECONDS);
+    editor.schedule_time_h = (editor.schedule_time_h.max(0.0) + step_s * hours_per_second).min(horizon);
+    if editor.schedule_time_h >= horizon {
+        editor.schedule_animation_playing = false;
+        editor.schedule_animation_play_clock = None;
+    } else {
+        ui.ctx().request_repaint();
+    }
+}
+
+/// Play or Pause, Back to the start, and the speed - `[1 day] = [15 s]` -
+/// ending just left of the readout. Placed against the widest instant the
+/// run can name rather than the one shown, so they hold still while the
+/// readout's width changes under playback.
+fn draw_playback_controls(ui: &mut egui::Ui, editor: &mut EditorState, row: egui::Rect, horizon: f64) {
+    let widest = ui
+        .painter()
+        .layout_no_wrap(instant_label(horizon), egui::FontId::proportional(READOUT_SIZE), egui::Color32::WHITE)
+        .size()
+        .x;
+    let right = row.center().x - widest * 0.5 - CONTROLS_GAP;
+    if right <= row.left() {
+        return;
+    }
+    let rect = egui::Rect::from_min_max(row.left_top(), egui::pos2(right, row.bottom()));
+    let mut ui = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::right_to_left(egui::Align::Center)));
+    ui.spacing_mut().interact_size.y = READOUT_ROW_H;
+    ui.spacing_mut().item_spacing.x = 4.0;
+    // Laid out right to left: the speed sits against the readout, and the
+    // transport leads.
+    ui.add(
+        egui::DragValue::new(&mut editor.schedule_animation_play_seconds)
+            .range(MIN_PLAY_SECONDS..=86_400.0)
+            .speed(0.5)
+            .max_decimals(1)
+            .suffix(" s"),
+    )
+    .on_hover_text(tr!("animate-speed-note"));
+    ui.label("=");
+    let span = &mut editor.schedule_animation_play_span;
+    egui::ComboBox::from_id_salt("animate_play_span")
+        .selected_text(span.label())
+        .width(72.0)
+        .show_ui(&mut ui, |ui| {
+            for option in PlaybackSpan::ALL {
+                ui.selectable_value(span, option, option.label());
+            }
+        })
+        .response
+        .on_hover_text(tr!("animate-speed-note"));
+    ui.add_space(8.0);
+    if transport_button(&mut ui, Transport::Rewind, tr!("animate-reset")).clicked() {
+        editor.schedule_time_h = 0.0;
+        editor.schedule_animation_playing = false;
+    }
+    if editor.schedule_animation_playing {
+        if transport_button(&mut ui, Transport::Pause, tr!("animate-pause")).clicked() {
+            editor.schedule_animation_playing = false;
+        }
+    } else if transport_button(&mut ui, Transport::Play, tr!("animate-play")).clicked() {
+        // From the start again once it has played through.
+        if editor.schedule_time_h >= horizon {
+            editor.schedule_time_h = 0.0;
+        }
+        editor.schedule_animation_playing = true;
+    }
 }
 
 /// Paints one line centred in `rect`, shortened with an ellipsis rather than

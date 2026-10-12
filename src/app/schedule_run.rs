@@ -693,6 +693,16 @@ impl crate::app::App<'_> {
         self.redraw_requested = true;
     }
 
+    /// Mirror the active project's Auto switches into the editor, where the
+    /// pages draw them and the auto runs read them. A project switch, an
+    /// undo or a load brings its own; no project leaves them on.
+    pub(crate) fn sync_auto_run(&mut self) {
+        let auto_run = self.workspace.active_document().map(|document| document.schedule().auto_run()).unwrap_or_default();
+        self.editor.planning_auto_run = auto_run.solids;
+        self.editor.haulage_auto_run = auto_run.haulage;
+        self.editor.schedule_auto_recalculate = auto_run.schedule;
+    }
+
     /// Recalculate the schedule on its own once its inputs have settled
     /// after an edit: the first schedule only, over the horizon the held
     /// result covered.

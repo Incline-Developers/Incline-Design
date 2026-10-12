@@ -559,8 +559,10 @@ pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &mut EditorSt
             commands.push(UiCommand::ImproveSchedule);
         }
     }
-    ui.checkbox(&mut editor.schedule_auto_recalculate, tr!("schedule-auto"))
-        .on_hover_text(tr!("schedule-auto-note"));
+    let mut auto = editor.auto_run();
+    if ui.checkbox(&mut auto.schedule, tr!("schedule-auto")).on_hover_text(tr!("schedule-auto-note")).changed() {
+        commands.push(UiCommand::SetAutoRun(auto));
+    }
 }
 
 /// The one status line the run controls carry, with the detail behind it on

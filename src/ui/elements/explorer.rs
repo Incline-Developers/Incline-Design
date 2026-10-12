@@ -618,7 +618,10 @@ pub(crate) fn draw_explorer(
             // ones - a Cancel that stopped whichever run the page had last
             // shown would be a button nobody could predict.
             let setup_page = editor.is_planning_setup().then_some(editor.planning_page);
-            let show_run_controls = solids_view || cut_step || setup_page.is_some();
+            // Animate shows the schedule it plays, so it carries the Gantt's
+            // run controls, in the same place the Setup pages carry theirs.
+            let animate = editor.is_schedule_animation();
+            let show_run_controls = solids_view || cut_step || setup_page.is_some() || animate;
             let run_controls = if show_run_controls {
                 egui::Panel::top("planning_run_controls")
                     .resizable(false)
@@ -626,6 +629,9 @@ pub(crate) fn draw_explorer(
                     .exact_size(super::toolbars::bottom_toolbar_height(ui.ctx()))
                     .frame(crate::ui::chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
                     .show(ui, |ui| match setup_page {
+                        _ if animate => {
+                            ui.horizontal_centered(|ui| super::schedule_gantt::draw_calculation_controls(ui, editor, "animate", commands));
+                        }
                         Some(crate::ui::state::PlanningPage::Schedule) => super::planning_setup::draw_schedule_run_controls(ui, editor, commands),
                         Some(crate::ui::state::PlanningPage::Haulage) => super::planning_setup::draw_haulage_run_controls(ui, editor, commands),
                         _ => super::planning_setup::draw_solids_run_controls(ui, editor, commands),

@@ -87,6 +87,10 @@ impl crate::app::App<'_> {
                 Ok(())
             }),
             ScheduleEdit::SetBarHeight(height) => self.set_bar_height(height),
+            ScheduleEdit::SetAutoRun(auto_run) => self.edit_schedule(|plan| {
+                plan.set_auto_run(auto_run);
+                Ok(())
+            }),
             ScheduleEdit::AddBar {
                 name,
                 agent,
