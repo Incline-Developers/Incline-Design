@@ -129,7 +129,49 @@ fn draw_memory_usage(ui: &mut egui::Ui, editor: &EditorState) {
     ui.ctx().request_repaint_after(crate::app::memory_usage::SAMPLE_PERIOD);
     let fraction = usage.fraction();
     let free = 1.0 - fraction;
-    let dark = ui.visuals().dark_mode;
+    let color = load_color(ui.visuals().dark_mode, free);
+    let (ring, _) = ui.allocate_exact_size(egui::Vec2::splat(MEMORY_RING_SIZE), egui::Sense::hover());
+    progress::paint_fraction_ring(ui, ui.painter(), ring.center(), MEMORY_RING_SIZE, fraction, color);
+    ui.add_space((MEMORY_RING_GAP - ui.spacing().item_spacing.x).max(0.0));
+    ui.label(tr!("status-memory"));
+}
+
+/// Width of one core's bar in the CPU readout, and the gap between bars.
+const CPU_BAR_WIDTH: f32 = 3.0;
+const CPU_BAR_GAP: f32 = 1.0;
+/// Height of the bars: the memory ring's, so the two readouts line up.
+const CPU_BAR_HEIGHT: f32 = MEMORY_RING_SIZE;
+
+/// "cpu", then one bar per core filling from the bottom with that core's
+/// load: green, yellow over 60% and red over 80% - the memory ring's
+/// thresholds, read as load rather than room. Drawn right to left: the bars
+/// first, then the label before them.
+fn draw_cpu_usage(ui: &mut egui::Ui, editor: &EditorState) {
+    // Rendering is on demand, so an idle window would otherwise hold the
+    // first reading forever.
+    ui.ctx().request_repaint_after(crate::app::memory_usage::CPU_SAMPLE_PERIOD);
+    let cores = &editor.cpu_usage;
+    let width = cores.len() as f32 * (CPU_BAR_WIDTH + CPU_BAR_GAP) - CPU_BAR_GAP;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, CPU_BAR_HEIGHT), egui::Sense::hover());
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.visuals();
+        let track = progress::track_color(visuals);
+        let painter = ui.painter();
+        for (index, load) in cores.iter().enumerate() {
+            let left = rect.left() + index as f32 * (CPU_BAR_WIDTH + CPU_BAR_GAP);
+            let bar = egui::Rect::from_min_size(egui::pos2(left, rect.top()), egui::vec2(CPU_BAR_WIDTH, CPU_BAR_HEIGHT));
+            painter.rect_filled(bar, 0.0, track);
+            let filled = egui::Rect::from_min_max(egui::pos2(bar.left(), bar.bottom() - bar.height() * load), bar.max);
+            painter.rect_filled(filled, 0.0, load_color(visuals.dark_mode, 1.0 - load));
+        }
+    }
+    ui.add_space((MEMORY_RING_GAP - ui.spacing().item_spacing.x).max(0.0));
+    ui.label(tr!("status-cpu"));
+}
+
+/// Green while plenty is `free`, yellow under 40% and red under 20%, in the
+/// theme's shade.
+fn load_color(dark: bool, free: f32) -> egui::Color32 {
     let (dark_fill, light_fill) = if free < MEMORY_LOW_FREE {
         (MEMORY_LOW_DARK, MEMORY_LOW_LIGHT)
     } else if free < MEMORY_TIGHT_FREE {
@@ -137,11 +179,7 @@ fn draw_memory_usage(ui: &mut egui::Ui, editor: &EditorState) {
     } else {
         (progress::FILL_DARK, progress::FILL_LIGHT)
     };
-    let color = if dark { dark_fill } else { light_fill };
-    let (ring, _) = ui.allocate_exact_size(egui::Vec2::splat(MEMORY_RING_SIZE), egui::Sense::hover());
-    progress::paint_fraction_ring(ui, ui.painter(), ring.center(), MEMORY_RING_SIZE, fraction, color);
-    ui.add_space((MEMORY_RING_GAP - ui.spacing().item_spacing.x).max(0.0));
-    ui.label(tr!("status-memory"));
+    if dark { dark_fill } else { light_fill }
 }
 
 /// Draw the bottom status bar panel.
@@ -222,6 +260,10 @@ pub(crate) fn draw_status_bar(ui: &mut egui::Ui, editor: &EditorState, commands:
                     if editor.memory_usage.is_some() {
                         ui.separator();
                         draw_memory_usage(ui, editor);
+                    }
+                    if !editor.cpu_usage.is_empty() {
+                        ui.separator();
+                        draw_cpu_usage(ui, editor);
                     }
                 });
             });

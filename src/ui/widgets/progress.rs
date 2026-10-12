@@ -206,9 +206,13 @@ pub(crate) fn paint_fraction_ring(ui: &egui::Ui, painter: &egui::Painter, center
     paint_ring_in(ui, painter, center, diameter, RingFill::Fraction(fraction), color);
 }
 
+/// The unfilled part of a ring, or of the status bar's per-core bars.
+pub(crate) fn track_color(visuals: &egui::Visuals) -> egui::Color32 {
+    shifted(visuals.panel_fill, if visuals.dark_mode { TRACK_SHIFT_DARK } else { TRACK_SHIFT_LIGHT })
+}
+
 fn paint_ring_in(ui: &egui::Ui, painter: &egui::Painter, center: egui::Pos2, diameter: f32, fill: RingFill, filled: egui::Color32) {
-    let visuals = ui.visuals();
-    let track = shifted(visuals.panel_fill, if visuals.dark_mode { TRACK_SHIFT_DARK } else { TRACK_SHIFT_LIGHT });
+    let track = track_color(ui.visuals());
 
     let radius = diameter / 2.0;
     let width = ring_stroke_width(diameter);

@@ -8,7 +8,7 @@ pub(crate) mod geophysics_web;
 pub(crate) mod io; /* Handles session serialisation */
 pub(crate) mod jobs; // Reusable background-compute job queue
 pub(crate) mod memory; // Browser address-space budgeting for large allocations
-pub(crate) mod memory_usage; // The status bar's memory readout
+pub(crate) mod memory_usage; // The status bar's memory and per-core CPU readouts
 pub(crate) mod tie_in; // Drill & Blast's tie-in and initiation point
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web_download;
@@ -344,6 +344,9 @@ pub(crate) struct App<'a> {
     frame_demanded_at: Option<Instant>,
     /// Feeds `EditorState::memory_usage` on its own timer.
     memory_sampler: memory_usage::MemorySampler,
+    /// Feeds `EditorState::cpu_usage` on its own timer.
+    #[cfg(not(target_arch = "wasm32"))]
+    cpu_sampler: memory_usage::CpuSampler,
     surface_retry_pending: bool,
     slice_surface_retry_deadline: Option<Instant>,
     last_scroll_instant: Option<Instant>,
@@ -502,6 +505,8 @@ impl<'a> Default for App<'a> {
             last_frame_end: None,
             frame_demanded_at: None,
             memory_sampler: memory_usage::MemorySampler::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            cpu_sampler: memory_usage::CpuSampler::new(),
             surface_retry_pending: false,
             slice_surface_retry_deadline: None,
             last_scroll_instant: None,

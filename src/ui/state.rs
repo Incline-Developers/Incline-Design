@@ -1200,6 +1200,10 @@ pub(crate) struct EditorState {
     /// `App` every `memory_usage::SAMPLE_PERIOD`. `None` until the first
     /// reading, or where the platform cannot say.
     pub(crate) memory_usage: Option<crate::app::memory_usage::MemoryUsage>,
+    /// Each processor core's load, `0.0..=1.0`, refreshed by `App` every
+    /// `memory_usage::CPU_SAMPLE_PERIOD`. Empty until the first reading, and
+    /// always on the web, where a browser does not say.
+    pub(crate) cpu_usage: Vec<f32>,
     /// Frames and busy seconds counted towards the next `measured_fps`, which
     /// is published once per window rather than every frame. See
     /// `App::record_frame_time`.
@@ -2458,6 +2462,7 @@ impl EditorState {
             downscale_raster_previews: crate::app::io::default_downscale_raster_previews(),
             measured_fps: None,
             memory_usage: None,
+            cpu_usage: Vec::new(),
             frame_rate_window: (0, 0.0),
             debug_surface_chunks: false,
             debug_surface_stats: None,

@@ -209,6 +209,10 @@ impl<'a> App<'a> {
                     if let Some(usage) = self.memory_sampler.poll() {
                         self.editor.memory_usage = Some(usage);
                     }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if let Some(cores) = self.cpu_sampler.poll() {
+                        self.editor.cpu_usage = cores;
+                    }
                     let now = Instant::now();
                     let frame_interval = self.frame_interval();
                     if self.last_render_time.is_some_and(|last_render| now.duration_since(last_render) < frame_interval) {
