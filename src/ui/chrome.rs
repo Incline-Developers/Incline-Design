@@ -271,6 +271,8 @@ pub(crate) struct Grip {
     /// The panel that owns the drag, so the grip can light up from egui's own
     /// interaction state rather than guessing at the pointer.
     panel: egui::Id,
+    /// Where along a top edge the dots sit, when not the middle of the seam.
+    centre_x: Option<f32>,
 }
 
 impl Grip {
@@ -279,7 +281,15 @@ impl Grip {
             claimed,
             edge,
             panel: panel.into(),
+            centre_x: None,
         }
+    }
+
+    /// Put a top-edge grip's dots at `x` - the window's centre, say - kept
+    /// within the seam.
+    pub(crate) fn centred_at_x(mut self, x: f32) -> Self {
+        self.centre_x = Some(x);
+        self
     }
 }
 
@@ -348,7 +358,14 @@ pub(crate) fn paint_grips(ctx: &egui::Context, grips: impl IntoIterator<Item = G
         let (center, along) = match grip.edge {
             Edge::Left => (egui::pos2(grip.claimed.left(), grip.claimed.center().y), egui::vec2(0.0, GRIP_DOT_SPACING)),
             Edge::Right => (egui::pos2(grip.claimed.right(), grip.claimed.center().y), egui::vec2(0.0, GRIP_DOT_SPACING)),
-            Edge::Top => (egui::pos2(grip.claimed.center().x, grip.claimed.top()), egui::vec2(GRIP_DOT_SPACING, 0.0)),
+            Edge::Top => {
+                let reach = GRIP_DOT_SPACING + GRIP_DOT_RADIUS;
+                let x = grip
+                    .centre_x
+                    .filter(|_| grip.claimed.width() > reach * 2.0)
+                    .map_or(grip.claimed.center().x, |x| x.clamp(grip.claimed.left() + reach, grip.claimed.right() - reach));
+                (egui::pos2(x, grip.claimed.top()), egui::vec2(GRIP_DOT_SPACING, 0.0))
+            }
         };
         for step in -1..=1 {
             painter.circle_filled(center + along * step as f32, GRIP_DOT_RADIUS, color);

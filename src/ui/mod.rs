@@ -1155,7 +1155,7 @@ fn draw_ui(
         &ctx,
         [
             chrome::Grip::new(explorer.column, chrome::Edge::Right, elements::explorer::PANEL_ID),
-            chrome::Grip::new(console_claimed, chrome::Edge::Top, elements::console::PANEL_ID),
+            chrome::Grip::new(console_claimed, chrome::Edge::Top, elements::console::PANEL_ID).centred_at_x(ctx.content_rect().center().x),
             chrome::Grip::new(products_claimed, chrome::Edge::Top, elements::products::PANEL_ID),
             chrome::Grip::new(borehole_inspector_claimed, chrome::Edge::Left, elements::borehole_inspector::PANEL_ID),
         ],
