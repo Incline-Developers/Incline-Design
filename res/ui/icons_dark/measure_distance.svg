@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg width="800px" height="800px" fill="none" version="1.1" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
- <g transform="rotate(-45 12 12)" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" style="fill:none;stroke:#ffd100">
+ <g transform="rotate(-45 12 12)" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" style="fill:none;stroke:#db5f58">
   <rect x="1.5" y="8" width="21" height="8" rx="1"/>
   <path d="m5.5 8v3m3.5-3v2m3 -2v3m3-3v2m3.5-2v3"/>
  </g>
