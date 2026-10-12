@@ -263,6 +263,8 @@ impl<'a> App<'a> {
                     self.pick_entry_ground();
                     self.sync_solid_preview();
                     self.sync_schedule_animation();
+                    #[cfg(not(target_arch = "wasm32"))]
+                    self.drive_video_recording();
                     self.sync_reserve_setup_stats();
                     self.sync_blasting_view();
                     self.sync_blasting_bench();
@@ -332,6 +334,8 @@ impl<'a> App<'a> {
                                     self.finish_topology_load();
                                 }
                                 self.set_ui_pointer_gesture_active(ui_output.pointer_gesture_active);
+                                #[cfg(not(target_arch = "wasm32"))]
+                                self.collect_video_frame();
                                 self.handle_ui_commands(ui_output.commands);
                                 self.sync_slice_preview_window(event_loop);
                                 if let Some(graphics) = self.graphics.as_mut() {

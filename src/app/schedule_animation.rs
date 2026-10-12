@@ -525,6 +525,18 @@ impl crate::app::App<'_> {
         self.editor.schedule_time_h.clamp(0.0, self.editor.schedule_animation_horizon_h.max(0.0))
     }
 
+    /// Whether the view on screen is the run at exactly `time_h`: every
+    /// visible block cut for it, nothing in flight, and the machines placed
+    /// for it. What the video export waits for before it takes a frame.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn animation_shows(&self, time_h: f64) -> bool {
+        let animation = &self.schedule_animation;
+        !animation.pending
+            && animation.settled == Some((self.animation_time_h(), animation.hidden_generation))
+            && self.animation_time_h() == time_h
+            && self.editor.schedule_animation_shown_h == time_h
+    }
+
     /// Refresh the animation view without starting either planning pipeline.
     pub(crate) fn sync_schedule_animation(&mut self) {
         let animate = self.editor.is_schedule_animation();

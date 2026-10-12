@@ -161,6 +161,7 @@ impl<'a> App<'a> {
                 | UiCommand::RunHaulageStage(_)
                 | UiCommand::RunAllHaulageStages
                 | UiCommand::SetAutoRun(_)
+                | UiCommand::ExportVideo(_)
                 | UiCommand::RunSchedulePeriod
                 | UiCommand::RunAllSchedulePeriods
                 | UiCommand::ImproveSchedule
@@ -584,6 +585,18 @@ impl<'a> App<'a> {
             }
             UiCommand::RunAllHaulageStages => {
                 self.run_all_haulage_steps();
+                Ok(())
+            }
+            UiCommand::ExportVideo(request) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                self.choose_video_export(request);
+                #[cfg(target_arch = "wasm32")]
+                let _ = request;
+                Ok(())
+            }
+            UiCommand::CancelVideoExport => {
+                #[cfg(not(target_arch = "wasm32"))]
+                self.cancel_video_export();
                 Ok(())
             }
             UiCommand::SetAutoRun(auto_run) => {

@@ -21,6 +21,8 @@ pub(crate) mod scip_blend; // Improve: the SCIP solve of one owned blended model
 pub(crate) mod solver_process; // The schedule solve in a child process, so a native fault ends one run, not the app
 pub(crate) mod step_pipeline; // The run/invalidation core shared by the Schedule and Haulage Setup pipelines
 pub(crate) mod tie_in; // Drill & Blast's tie-in and initiation point
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod video_export; // Animate played through the viewport into a video file
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web_download;
 #[cfg(target_arch = "wasm32")]
@@ -475,6 +477,9 @@ pub(crate) struct App<'a> {
     /// A run in flight on the bounded worker pool. Dropping it and cancelling
     /// its job publishes nothing.
     pub(crate) pending_schedule_run: Option<crate::app::schedule_run::PendingScheduleRun>,
+    /// Animate's video export while it is capturing frames.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) video_recording: Option<video_export::Recording>,
     /// Why the last run published nothing, owned by the semantic inputs it
     /// was made against.
     pub(crate) schedule_run_diagnostics: Option<crate::app::schedule_run::ScheduleAttempt>,
@@ -675,6 +680,8 @@ impl<'a> Default for App<'a> {
             planning_entry_step: None,
             schedule_calculation: None,
             pending_schedule_run: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            video_recording: None,
             schedule_run_diagnostics: None,
             schedule_report_cache: None,
             schedule_plan_revision_cache: std::cell::Cell::new(None),

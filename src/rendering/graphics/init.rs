@@ -209,8 +209,16 @@ impl<'a> Graphics<'a> {
         let scene_format = surface_format.add_srgb_suffix();
         let gui_format = surface_format.remove_srgb_suffix();
         let view_formats = vec![if surface_format.is_srgb() { gui_format } else { scene_format }];
+        // Copying from the surface is how the video export reads back the
+        // finished viewport, labels and all. Asked for only where offered.
+        // Desktop only: the browser build has no video export.
+        let surface_copyable = cfg!(not(target_arch = "wasm32")) && surface_caps.usages.contains(wgpu::TextureUsages::COPY_SRC);
         let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: if surface_copyable {
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC
+            } else {
+                wgpu::TextureUsages::RENDER_ATTACHMENT
+            },
             format: surface_format,
             width: size.width,
             height: size.height,
@@ -895,6 +903,12 @@ impl<'a> Graphics<'a> {
             plot_preview: None,
             plot_preview_key: None,
             pending_screenshot: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            surface_copyable,
+            #[cfg(not(target_arch = "wasm32"))]
+            pending_video_frame: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            video_frame: None,
             slice_preview: None,
             embedded_slice_preview: None,
             embedded_preview_scene_key: None,

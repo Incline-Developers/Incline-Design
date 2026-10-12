@@ -7,6 +7,7 @@ use crate::{
         EditorState, chrome,
         state::PlaybackSpan,
         widgets::{
+            menu::MenuButton,
             toolbar::GROUP_CORNER_RADIUS,
             transport::{Transport, transport_button},
         },
@@ -30,6 +31,8 @@ const TILE_GAP: f32 = 2.0;
 /// The row above the band that carries the cursor's instant, and the
 /// playback controls to its left.
 const READOUT_ROW_H: f32 = 24.0;
+/// Extra room between the readout row and the period band under it.
+const BAND_GAP: f32 = 6.0;
 /// The space between the playback controls and the widest instant the
 /// readout can name.
 const CONTROLS_GAP: f32 = 16.0;
@@ -43,11 +46,17 @@ const MAX_PLAY_STEP_S: f64 = 0.25;
 const READOUT_SIZE: f32 = 16.0;
 const STATUS_SIZE: f32 = 12.0;
 
-pub(crate) fn draw_timeline(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document, plan: &crate::model::schedule::SchedulePlan) -> egui::Rect {
+pub(crate) fn draw_timeline(
+    ui: &mut egui::Ui,
+    editor: &mut EditorState,
+    document: &Document,
+    plan: &crate::model::schedule::SchedulePlan,
+    commands: &mut Vec<crate::ui::state::UiCommand>,
+) -> egui::Rect {
     egui::Panel::bottom(TIMELINE_PANEL_ID)
         .resizable(false)
         .show_separator_line(chrome::show_separator_line(ui))
-        .exact_size(106.0)
+        .exact_size(112.0)
         .frame(chrome::region_frame(ui).inner_margin(egui::Margin::symmetric(14, 8)))
         .show(ui, |ui| {
             let horizon = editor.schedule_animation_horizon_h.max(0.0);
@@ -108,10 +117,13 @@ pub(crate) fn draw_timeline(ui: &mut egui::Ui, editor: &mut EditorState, documen
             } else {
                 paint_centered_line(ui, readout, editor.schedule_animation_status.clone(), STATUS_SIZE, ui.visuals().weak_text_color());
             }
-            if editor.schedule_animation_enabled {
+            if let Some(progress) = editor.video_export_progress {
+                draw_recording_progress(ui, readout, horizon, progress, commands);
+            } else if editor.schedule_animation_enabled {
                 draw_playback_controls(ui, editor, readout, horizon);
             }
 
+            ui.add_space(BAND_GAP);
             let band_height = 20.0;
             let (band, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), band_height), egui::Sense::hover());
             paint_period_band(ui, band, horizon, editor.schedule_time_h, &plan.periods().colors);
@@ -119,7 +131,7 @@ pub(crate) fn draw_timeline(ui: &mut egui::Ui, editor: &mut EditorState, documen
             ui.spacing_mut().slider_width = ui.available_width();
             ui.spacing_mut().interact_size.y = 28.0;
             let slider = ui.add_enabled(
-                editor.schedule_animation_enabled,
+                editor.schedule_animation_enabled && editor.video_export_progress.is_none(),
                 egui::Slider::new(&mut editor.schedule_time_h, 0.0..=horizon.max(f64::EPSILON))
                     .show_value(false)
                     .clamping(egui::SliderClamping::Edits),
@@ -155,51 +167,47 @@ fn advance_playback(ui: &egui::Ui, editor: &mut EditorState, horizon: f64) {
     }
 }
 
-/// Play or Pause, Back to the start, and the speed - `[1 day] = [15 s]` -
-/// ending just left of the readout. Placed against the widest instant the
-/// run can name rather than the one shown, so they hold still while the
-/// readout's width changes under playback.
-fn draw_playback_controls(ui: &mut egui::Ui, editor: &mut EditorState, row: egui::Rect, horizon: f64) {
+/// The left of the readout row while a video records: how far it has got,
+/// and Cancel.
+fn draw_recording_progress(ui: &mut egui::Ui, row: egui::Rect, horizon: f64, (done, total): (usize, usize), commands: &mut Vec<crate::ui::state::UiCommand>) {
+    let Some(rect) = controls_rect(ui, row, horizon) else {
+        return;
+    };
+    let mut ui = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    ui.set_clip_rect(rect);
+    ui.spacing_mut().interact_size.y = READOUT_ROW_H;
+    ui.spacing_mut().item_spacing.x = 8.0;
+    if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() {
+        commands.push(crate::ui::state::UiCommand::CancelVideoExport);
+    }
+    let fraction = done as f32 / total.max(1) as f32;
+    ui.add(egui::ProgressBar::new(fraction).desired_width(160.0).corner_radius(GROUP_CORNER_RADIUS));
+    ui.label(tr!("video-export-recording", done = done.to_string(), total = total.to_string()));
+}
+
+/// The part of the readout row left of the widest instant the run can name.
+fn controls_rect(ui: &egui::Ui, row: egui::Rect, horizon: f64) -> Option<egui::Rect> {
     let widest = ui
         .painter()
         .layout_no_wrap(instant_label(horizon), egui::FontId::proportional(READOUT_SIZE), egui::Color32::WHITE)
         .size()
         .x;
     let right = row.center().x - widest * 0.5 - CONTROLS_GAP;
-    if right <= row.left() {
+    (right > row.left()).then(|| egui::Rect::from_min_max(row.left_top(), egui::pos2(right, row.bottom())))
+}
+
+/// Play or Pause, Back to the start, and the speed - `[1 day] = [15 s]` -
+/// from the row's left edge. Kept clear of the widest instant the run can
+/// name rather than the one shown, so a narrow window never lets the
+/// readout run under them while its width changes under playback.
+fn draw_playback_controls(ui: &mut egui::Ui, editor: &mut EditorState, row: egui::Rect, horizon: f64) {
+    let Some(rect) = controls_rect(ui, row, horizon) else {
         return;
-    }
-    let rect = egui::Rect::from_min_max(row.left_top(), egui::pos2(right, row.bottom()));
-    let mut ui = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::right_to_left(egui::Align::Center)));
+    };
+    let mut ui = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    ui.set_clip_rect(rect);
     ui.spacing_mut().interact_size.y = READOUT_ROW_H;
     ui.spacing_mut().item_spacing.x = 4.0;
-    // Laid out right to left: the speed sits against the readout, and the
-    // transport leads.
-    ui.add(
-        egui::DragValue::new(&mut editor.schedule_animation_play_seconds)
-            .range(MIN_PLAY_SECONDS..=86_400.0)
-            .speed(0.5)
-            .max_decimals(1)
-            .suffix(" s"),
-    )
-    .on_hover_text(tr!("animate-speed-note"));
-    ui.label("=");
-    let span = &mut editor.schedule_animation_play_span;
-    egui::ComboBox::from_id_salt("animate_play_span")
-        .selected_text(span.label())
-        .width(72.0)
-        .show_ui(&mut ui, |ui| {
-            for option in PlaybackSpan::ALL {
-                ui.selectable_value(span, option, option.label());
-            }
-        })
-        .response
-        .on_hover_text(tr!("animate-speed-note"));
-    ui.add_space(8.0);
-    if transport_button(&mut ui, Transport::Rewind, tr!("animate-reset")).clicked() {
-        editor.schedule_time_h = 0.0;
-        editor.schedule_animation_playing = false;
-    }
     if editor.schedule_animation_playing {
         if transport_button(&mut ui, Transport::Pause, tr!("animate-pause")).clicked() {
             editor.schedule_animation_playing = false;
@@ -211,17 +219,54 @@ fn draw_playback_controls(ui: &mut egui::Ui, editor: &mut EditorState, row: egui
         }
         editor.schedule_animation_playing = true;
     }
+    if transport_button(&mut ui, Transport::Rewind, tr!("animate-reset")).clicked() {
+        editor.schedule_time_h = 0.0;
+        editor.schedule_animation_playing = false;
+    }
+    ui.add_space(8.0);
+    let span = &mut editor.schedule_animation_play_span;
+    egui::ComboBox::from_id_salt("animate_play_span")
+        .selected_text(span.label())
+        .width(72.0)
+        .show_ui(&mut ui, |ui| {
+            for option in PlaybackSpan::ALL {
+                ui.selectable_value(span, option, option.label());
+            }
+        })
+        .response
+        .on_hover_text(tr!("animate-speed-note"));
+    ui.label("=");
+    ui.add(
+        egui::DragValue::new(&mut editor.schedule_animation_play_seconds)
+            .range(MIN_PLAY_SECONDS..=86_400.0)
+            .speed(0.5)
+            .max_decimals(1)
+            .suffix(" s"),
+    )
+    .on_hover_text(tr!("animate-speed-note"));
 }
 
 /// Paints one line centred in `rect`, shortened with an ellipsis rather than
 /// spilling past the edges.
+///
+/// Centred on the height of its figures rather than on the font's line box,
+/// which carries room for descenders under them and so sits the text high.
+/// Measured on digits, not on the text itself, so a `y` coming and going
+/// never moves the line.
 fn paint_centered_line(ui: &egui::Ui, rect: egui::Rect, text: String, size: f32, color: egui::Color32) {
-    let mut job = egui::text::LayoutJob::simple_singleline(text, egui::FontId::proportional(size), color);
+    let font = egui::FontId::proportional(size);
+    let figures = ui.painter().layout_no_wrap("0123456789".to_owned(), font.clone(), color).mesh_bounds;
+    let mut job = egui::text::LayoutJob::simple_singleline(text, font, color);
     job.wrap.max_width = rect.width();
     job.wrap.max_rows = 1;
     let galley = ui.painter().layout_job(job);
-    let placed = egui::Rect::from_center_size(rect.center(), galley.size());
-    ui.painter().galley(placed.min, galley, color);
+    let left = rect.center().x - galley.size().x * 0.5;
+    let top = if figures.is_finite() {
+        rect.center().y - figures.center().y
+    } else {
+        rect.center().y - galley.size().y * 0.5
+    };
+    ui.painter().galley(egui::pos2(left, top), galley, color);
 }
 
 /// The band under the readout: the run divided into its periods, with the

@@ -631,6 +631,10 @@ impl<'a> Graphics<'a> {
             [camera_up.x as f32, camera_up.y as f32, camera_up.z as f32],
             world_per_physical_pixel,
         );
+        // The video export's frame: the viewport as just drawn, egui and all,
+        // copied before the canvas rect moves on to next frame's layout.
+        #[cfg(not(target_arch = "wasm32"))]
+        let video_capture = self.encode_video_capture(&mut encoder, &output.texture);
         // Apply this frame's egui layout for next frame's scene pass - the
         // scene renders before egui lays out, so it's always one frame behind
         // (see `apply_canvas_rect`).
@@ -668,6 +672,10 @@ impl<'a> Graphics<'a> {
         self.queue.present(output);
         if let Some(capture) = pending_screenshot {
             self.finish_screenshot_capture(capture);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(capture) = video_capture {
+            self.finish_video_capture(capture);
         }
         self.frame_index = self.frame_index.wrapping_add(1);
         self.release_retired_attachments();

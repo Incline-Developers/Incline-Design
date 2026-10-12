@@ -3099,6 +3099,11 @@ pub(crate) struct EditorState {
     /// The UI clock at the last frame playback moved the cursor, so the next
     /// one moves it by the real time between them; `None` until it has.
     pub(crate) schedule_animation_play_clock: Option<f64>,
+    /// Animate's Record Video dialog, while it is open.
+    pub(crate) video_export_dialog: Option<crate::ui::dialogs::video_export::VideoExportDialog>,
+    /// A recording's frames captured and to capture, mirrored from the app
+    /// while one runs; the timeline shows it in place of playback.
+    pub(crate) video_export_progress: Option<(usize, usize)>,
     /// How Animate draws each drill and blast blast, by its position in the
     /// run's blasts: the ground its marks lie on.
     pub(crate) schedule_animation_blasts: Vec<crate::model::schedule::animation::AnimatedBlast>,
@@ -4419,6 +4424,8 @@ impl EditorState {
             schedule_animation_play_span: PlaybackSpan::Day,
             schedule_animation_play_seconds: 15.0,
             schedule_animation_play_clock: None,
+            video_export_dialog: None,
+            video_export_progress: None,
             schedule_animation_blasts: Vec::new(),
             schedule_animation_horizon_h: 0.0,
             schedule_animation_enabled: false,
@@ -5216,6 +5223,10 @@ pub(crate) enum UiCommand {
     RunAllHaulageStages,
     /// Turn the Auto switches on or off, in the active project.
     SetAutoRun(crate::model::schedule::AutoRun),
+    /// Ask where to save Animate's video, then record it.
+    ExportVideo(VideoExportRequest),
+    /// Stop a video recording and discard what it wrote.
+    CancelVideoExport,
     CancelHaulageRun,
     /// One edit to a project's loader fleet.
     ///
@@ -5828,6 +5839,8 @@ impl UiCommand {
             | Self::RunAllHaulageStages
             | Self::CancelHaulageRun
             | Self::SetAutoRun(_)
+            | Self::ExportVideo(_)
+            | Self::CancelVideoExport
             | Self::RunSchedulePeriod
             | Self::RunAllSchedulePeriods
             | Self::ImproveSchedule
@@ -6649,6 +6662,40 @@ impl HaulageStep {
             Self::Network => tr!("haul-step-network"),
             Self::TruckClasses => tr!("truck-classes"),
         }
+    }
+}
+
+/// What Animate's video export records: stretches of the schedule played
+/// back to back, how fast, and at how many frames a second.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct VideoExportRequest {
+    /// (start, end) in hours from Day 1, 00:00, in order and apart.
+    pub(crate) segments: Vec<(f64, f64)>,
+    /// Hours of schedule per second of video.
+    pub(crate) hours_per_second: f64,
+    pub(crate) fps: f64,
+    /// The video is the viewport shrunk by this whole factor: 1 is full size.
+    pub(crate) scale: u32,
+}
+
+impl VideoExportRequest {
+    /// The schedule instant of each frame: the selected spans played back
+    /// to back at the requested speed, each from its start, the last to its
+    /// end.
+    pub(crate) fn frame_times(&self) -> Vec<f64> {
+        let step = self.hours_per_second / self.fps;
+        let mut times = Vec::new();
+        if !(step.is_finite() && step > 0.0) {
+            return times;
+        }
+        for (index, &(start, end)) in self.segments.iter().enumerate() {
+            let frames = ((end - start) / step).ceil().max(1.0) as usize;
+            times.extend((0..frames).map(|frame| start + frame as f64 * step).filter(|time| *time < end));
+            if index + 1 == self.segments.len() {
+                times.push(end);
+            }
+        }
+        times
     }
 }
 

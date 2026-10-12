@@ -39,7 +39,13 @@ pub(super) struct RgbaReadback {
 impl RgbaReadback {
     /// Record a copy of all of `texture` into a new mappable buffer.
     pub(super) fn record(device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, texture: &wgpu::Texture, label: &str) -> Self {
-        let (width, height) = (texture.width(), texture.height());
+        Self::record_region(device, encoder, texture, (0, 0), (texture.width(), texture.height()), label)
+    }
+
+    /// Record a copy of the `size` region of `texture` at `origin` into a
+    /// new mappable buffer.
+    pub(super) fn record_region(device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, texture: &wgpu::Texture, origin: (u32, u32), size: (u32, u32), label: &str) -> Self {
+        let (width, height) = size;
         let padded_bytes_per_row = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
         // On wasm `wgpu::Buffer` is not Send+Sync; the Arc never crosses threads
         // there, but the native readback path requires Arc over Rc.
@@ -51,7 +57,10 @@ impl RgbaReadback {
             mapped_at_creation: false,
         }));
         encoder.copy_texture_to_buffer(
-            texture.as_image_copy(),
+            wgpu::TexelCopyTextureInfo {
+                origin: wgpu::Origin3d { x: origin.0, y: origin.1, z: 0 },
+                ..texture.as_image_copy()
+            },
             wgpu::TexelCopyBufferInfo {
                 buffer: &buffer,
                 layout: wgpu::TexelCopyBufferLayout {

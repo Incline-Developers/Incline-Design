@@ -182,6 +182,9 @@ pub(crate) enum FileDialogAction {
     /// Export the main viewport to a PNG image.
     #[cfg(not(target_arch = "wasm32"))]
     ExportViewportImage(PathBuf),
+    /// Record Animate into this video file.
+    #[cfg(not(target_arch = "wasm32"))]
+    ExportVideo(PathBuf, crate::ui::state::VideoExportRequest),
     /// Render and write the configured plot sheet.
     #[cfg(not(target_arch = "wasm32"))]
     ExportPlotSheet(PathBuf),
@@ -374,7 +377,7 @@ impl<'a> App<'a> {
 
     /// Register an async file dialog that was created on the main thread. The
     /// app polls completion in `poll_file_dialogs`.
-    pub(super) fn spawn_file_dialog<F>(&mut self, future: F)
+    pub(crate) fn spawn_file_dialog<F>(&mut self, future: F)
     where
         F: Future<Output = Option<FileDialogAction>> + 'static,
     {
@@ -852,6 +855,8 @@ impl<'a> App<'a> {
                 graphics.request_screenshot(path);
                 Ok(())
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            FileDialogAction::ExportVideo(path, request) => self.start_video_export(path, request),
             #[cfg(not(target_arch = "wasm32"))]
             FileDialogAction::ExportPlotSheet(mut path) => {
                 if path.extension().is_none() {

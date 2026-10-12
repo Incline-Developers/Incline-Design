@@ -135,6 +135,9 @@ pub(crate) enum JobKey {
     BrowserProjectSave {
         runtime_id: u32,
     },
+    /// Animate's video export encoding the frames it is sent.
+    #[cfg(not(target_arch = "wasm32"))]
+    VideoExport,
     /// A job not tied to any tracked source (always applied).
     #[allow(dead_code)]
     Anonymous,
@@ -286,6 +289,9 @@ impl<'a> App<'a> {
             JobKey::Geophysics { dataset, generation } => self.well_logs.generation(dataset) == Some(generation),
             JobKey::DrillHoleLoad { runtime_id, .. } => self.workspace.active_project().is_some_and(|project| project.runtime_id == runtime_id),
             JobKey::Raster(id) => self.raster_textures.iter().any(|item| item.id == id),
+            // Its result is a file already written, wanted whatever moved.
+            #[cfg(not(target_arch = "wasm32"))]
+            JobKey::VideoExport => true,
             JobKey::Project { runtime_id, document_revision } => self
                 .workspace
                 .projects

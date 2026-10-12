@@ -43,6 +43,8 @@ enum LeftToolAction {
     HaulDraw,
     /// Send this command; the button holds no state of its own.
     Command(Box<UiCommand>),
+    /// Open or close Animate's Record Video dialog.
+    RecordVideo,
 }
 
 /// One button in the drawing toolbar's run.
@@ -236,6 +238,26 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, edi
     ]
 }
 
+/// Animate's run: recording the schedule as a video. Desktop builds only:
+/// the browser has no way to read frames back for it yet.
+fn animate_tools(ui: &egui::Ui, editor: &EditorState) -> Vec<LeftTool> {
+    if cfg!(target_arch = "wasm32") {
+        return Vec::new();
+    }
+    let recording = editor.video_export_progress.is_some();
+    vec![LeftTool {
+        icon: egui::Image::new(themed_icon!(ui, "record_video.svg")),
+        tooltip: tr!("video-export-tool"),
+        action: LeftToolAction::RecordVideo,
+        enabled: editor.schedule_animation_enabled && !recording,
+        hint: Some(if recording {
+            tr!("video-export-tool-recording")
+        } else {
+            tr!("video-export-tool-needs-schedule")
+        }),
+    }]
+}
+
 /// Draw one cell of the drawing toolbar's run.
 ///
 /// A tool greys out on its own rather than the run being wrapped in a single
@@ -248,6 +270,7 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
         LeftToolAction::DrillPattern => editor.drill_pattern_open,
         LeftToolAction::HaulDraw => editor.haul_draw,
         LeftToolAction::Command(_) => false,
+        LeftToolAction::RecordVideo => editor.video_export_dialog.is_some(),
     };
     let button = ToolbarButton::new(tool.icon.clone(), tool.tooltip.as_str())
         .id_salt(("left_tool", tool.tooltip.as_str()))
@@ -271,6 +294,12 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
         LeftToolAction::DrillPattern => commands.push(UiCommand::ToggleCreateDrillPattern),
         LeftToolAction::HaulDraw => commands.push(if editor.haul_draw { UiCommand::FinishHaulRoad } else { UiCommand::StartHaulRoad }),
         LeftToolAction::Command(ref command) => commands.push(command.as_ref().clone()),
+        LeftToolAction::RecordVideo => {
+            editor.video_export_dialog = match editor.video_export_dialog {
+                Some(_) => None,
+                None => Some(crate::ui::dialogs::video_export::VideoExportDialog::new(editor)),
+            };
+        }
     }
 }
 
@@ -301,6 +330,7 @@ pub(crate) fn draw_left_toolbar(
         // workspace is: everywhere else in Planning the column stands empty.
         _ if editor.is_planning_cut_step() => blasting_tools(ui, editor, editing_enabled),
         _ if editor.is_haulage_page() => haulage_tools(ui, project, editor, project_active),
+        _ if editor.is_schedule_animation() => animate_tools(ui, editor),
         workspace if workspace.has_production_tools() => left_tools(ui, editor, editing_enabled, project_active),
         Workspace::DrillAndBlast => blast_tools(ui, project, editor, editing_enabled, project_active),
         _ => Vec::new(),

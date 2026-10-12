@@ -44,7 +44,15 @@ winresource = "0.1.31"
 #   scip-system   link whatever SCIP the environment provides, through
 #                 russcip's `bindgen` path and $SCIPOPTDIR; the runtime
 #                 library path must then reach that installation.
-default = []
+#
+#   video-av1     on by default: Animate's video export writes AV1 (rav1e,
+#                 pure Rust) into MP4, MOV or WebM. Without it the export
+#                 offers GIF only. Desktop builds only.
+#   video-asm     rav1e's x86-64 assembly, about three times faster to
+#                 encode; needs nasm 2.14.02 or newer on the build machine.
+default = ["video-av1"]
+video-av1 = ["dep:rav1e"]
+video-asm = ["video-av1", "rav1e/asm"]
 highs = ["dep:highs", "dep:highs-sys"]
 scip = ["highs", "dep:russcip", "dep:scip-sys"]
 scip-source = ["scip", "russcip/from-source"]
@@ -97,6 +105,7 @@ winit = "0.30.13"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 dirs = "7.0.0"
 egui-winit = "0.36.2"
+gif = "0.14.2"
 highs = { version = "2.4.0", optional = true }
 highs-sys = { version = "1.15.0", optional = true }
 russcip = { version = "=0.10.0", default-features = false, optional = true }
@@ -106,6 +115,8 @@ scip-sys = { version = "=0.1.28", default-features = false, optional = true }
 i18n-embed = { version = "0.16.0", features = ["desktop-requester"] }
 memmap2 = "0.9.11"
 pollster = "1.0.1"
+# The video export's AV1 encoder; see the `video-av1` feature.
+rav1e = { version = "0.8.1", default-features = false, features = ["threading"], optional = true }
 sys-locale = "0.3.2"
 tempfile = "3.27.0"
 toml = "1.1.6"

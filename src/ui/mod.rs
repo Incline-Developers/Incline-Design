@@ -700,7 +700,7 @@ fn draw_ui(
 
     let bottom_toolbar_rect = elements::toolbars::draw_bottom_toolbar(root_ui, editor, commands);
     let animation_timeline_rect = if editor.is_schedule_animation() {
-        elements::schedule_animation::draw_timeline(root_ui, editor, document, &project.schedule)
+        elements::schedule_animation::draw_timeline(root_ui, editor, document, &project.schedule, commands)
     } else {
         // As above: keep the root auto-id sequence the same whether or not
         // this optional panel is drawn, so leaving Animate does not renumber
@@ -1064,6 +1064,7 @@ fn draw_ui(
         dialogs::editing::draw_select_project_dialog(root_ui, project, commands);
     }
     dialogs::files::draw_vertical_exaggeration_dialog(root_ui, editor, canvas_rect);
+    dialogs::video_export::draw_video_export_dialog(root_ui, editor, canvas_rect, commands);
     dialogs::files::draw_grid_options_dialog(root_ui, editor, canvas_rect);
     dialogs::editing::draw_move_to_layer_dialog(root_ui, editor, project, commands);
     dialogs::editing::draw_move_to_axis_dialog(root_ui, editor, commands);

@@ -78,7 +78,7 @@ pub(crate) fn date_popup(response: &egui::Response, current: Option<NaiveDate>) 
     picked
 }
 
-fn month_name(month: u32) -> String {
+pub(crate) fn month_name(month: u32) -> String {
     match month {
         1 => tr!("date-picker-january"),
         2 => tr!("date-picker-february"),
