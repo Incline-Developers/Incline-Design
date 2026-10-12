@@ -1355,7 +1355,8 @@ impl<'a> App<'a> {
             return Ok(());
         }
         if !self.pending_project_open_paths.is_empty() {
-            anyhow::bail!("Wait for the project to finish opening");
+            userspace_warn!("{}", tr!("cmd-file-wait-project-finish-opening"));
+            return Ok(());
         }
         self.execute_file_dialog_action(FileDialogAction::SwitchProject(path))
     }
@@ -1380,10 +1381,12 @@ impl<'a> App<'a> {
             return Ok(());
         }
         if !self.browser_project_loads_pending.is_empty() {
-            anyhow::bail!("Wait for the browser project to finish opening");
+            userspace_warn!("{}", tr!("cmd-file-wait-browser-project-finish-opening"));
+            return Ok(());
         }
         if self.browser_deletes_pending.contains(&project_id) {
-            anyhow::bail!("Wait for the browser project removal to finish");
+            userspace_warn!("{}", tr!("cmd-file-wait-browser-project-removal-finish"));
+            return Ok(());
         }
         self.execute_file_dialog_action(FileDialogAction::WebStoredProject(project_id))
     }
@@ -1391,7 +1394,8 @@ impl<'a> App<'a> {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn remove_tracked_project(&mut self, path: PathBuf) -> Result<()> {
         if self.pending_project_open_paths.contains(&path) {
-            anyhow::bail!("Wait for the project to finish opening");
+            userspace_warn!("{}", tr!("cmd-file-wait-project-finish-opening"));
+            return Ok(());
         }
         if let Some(runtime_id) = self
             .workspace
@@ -1411,7 +1415,8 @@ impl<'a> App<'a> {
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn remove_tracked_project(&mut self, project_id: crate::model::project::ProjectId) -> Result<()> {
         if self.browser_project_loads_pending.contains(&project_id) {
-            anyhow::bail!("Wait for the browser project to finish opening");
+            userspace_warn!("{}", tr!("cmd-file-wait-browser-project-finish-opening"));
+            return Ok(());
         }
         if let Some(runtime_id) = self.workspace.active_project().filter(|project| project.id == project_id).map(|project| project.runtime_id) {
             self.editor.remove_project_after_close = true;
