@@ -1,5 +1,5 @@
-//! Bottom status bar: app identity, selected count, cursor coords, FPS counter
-//! and, at the far right, the language picker. Task progress belongs to the
+//! Bottom status bar: app identity, selected count, cursor coords and, at the
+//! far right, the frame rate, memory in use and the language picker. Task progress belongs to the
 //! bottom toolbar - see `widgets::progress`.
 
 use thousands::Separable;
@@ -98,6 +98,49 @@ fn draw_language_picker(ui: &mut egui::Ui, editor: &EditorState, commands: &mut 
     });
 }
 
+/// Space between the frame rate, the memory readout and the language picker.
+const READOUT_GAP: f32 = 24.0;
+/// Diameter of the memory readout's status dot.
+const MEMORY_DOT_SIZE: f32 = 8.0;
+/// Gap between the memory amounts and the dot after them.
+const MEMORY_DOT_GAP: f32 = 6.0;
+/// Below this share of memory free the dot turns yellow, and below
+/// [`MEMORY_LOW_FREE`] red.
+const MEMORY_TIGHT_FREE: f32 = 0.4;
+const MEMORY_LOW_FREE: f32 = 0.2;
+const MEMORY_OK_COLOR: egui::Color32 = egui::Color32::from_rgb(0x3F, 0xB9, 0x50);
+const MEMORY_TIGHT_COLOR: egui::Color32 = egui::Color32::from_rgb(0xE3, 0xB3, 0x41);
+const MEMORY_LOW_COLOR: egui::Color32 = egui::Color32::from_rgb(0xF8, 0x51, 0x49);
+
+/// "x GB / y GB memory" and a dot that is green while plenty is free, yellow
+/// under 40% free and red under 20%. Natively the whole machine's memory; in
+/// the browser the app's own heap - see [`crate::app::memory_usage::MemoryUsage`].
+/// Drawn right to left: the dot first, then the text before it.
+fn draw_memory_usage(ui: &mut egui::Ui, editor: &EditorState) {
+    let Some(usage) = editor.memory_usage else {
+        return;
+    };
+    // Rendering is on demand, so an idle window would otherwise hold the
+    // first reading forever.
+    ui.ctx().request_repaint_after(crate::app::memory_usage::SAMPLE_PERIOD);
+    let free = 1.0 - usage.fraction();
+    let color = if free < MEMORY_LOW_FREE {
+        MEMORY_LOW_COLOR
+    } else if free < MEMORY_TIGHT_FREE {
+        MEMORY_TIGHT_COLOR
+    } else {
+        MEMORY_OK_COLOR
+    };
+    let (dot, _) = ui.allocate_exact_size(egui::Vec2::splat(MEMORY_DOT_SIZE), egui::Sense::hover());
+    ui.painter().circle_filled(dot.center(), MEMORY_DOT_SIZE / 2.0, color);
+    ui.add_space((MEMORY_DOT_GAP - ui.spacing().item_spacing.x).max(0.0));
+    ui.label(tr!(
+        "status-memory-used-total",
+        used = crate::ui::dialogs::triangulation::format_bytes(usage.used),
+        total = crate::ui::dialogs::triangulation::format_bytes(usage.total)
+    ));
+}
+
 /// Draw the bottom status bar panel.
 pub(crate) fn draw_status_bar(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) -> egui::Rect {
     // The other bar that spans the window rather than sitting in a region, and
@@ -111,13 +154,6 @@ pub(crate) fn draw_status_bar(ui: &mut egui::Ui, editor: &EditorState, commands:
                 ui.separator();
                 ui.label(tr!("status-selected", count = editor.selected_handles.len()));
                 ui.separator();
-                if editor.frame_counter_enabled {
-                    match editor.measured_fps {
-                        Some(fps) => ui.label(format!("{}: {fps:.0}", tr!("status-frame-rate"))),
-                        None => ui.label(format!("{}: --", tr!("status-frame-rate"))),
-                    };
-                    ui.separator();
-                }
                 if editor.debug_surface_chunks {
                     match editor.debug_surface_stats {
                         Some(stats) => ui.label(tr!(
@@ -173,7 +209,16 @@ pub(crate) fn draw_status_bar(ui: &mut egui::Ui, editor: &EditorState, commands:
                 }
                 // The picker is pinned to the far end of the bar, so it does not
                 // move as the readouts before it come and go.
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| draw_language_picker(ui, editor, commands));
+                // Right to left: the frame rate and memory readouts sit just
+                // before it.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    draw_language_picker(ui, editor, commands);
+                    ui.add_space(READOUT_GAP);
+                    draw_memory_usage(ui, editor);
+                    ui.add_space(READOUT_GAP);
+                    let fps = editor.measured_fps.map_or_else(|| "--".to_owned(), |fps| format!("{fps:.0}"));
+                    ui.label(tr!("status-fps", fps = fps));
+                });
             });
         })
         .response

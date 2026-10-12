@@ -1584,7 +1584,6 @@ properties-drillholes = Sondajes
 properties-edit-object = Editar objeto...
 properties-field-view = Campo de visión
 properties-fps = fotogramas/s
-properties-frame-counter = Contador de cuadros
 properties-frame-rate-cap = Límite de velocidad de cuadros
 properties-hz = Hz
 properties-interface = Interfaz
@@ -1814,7 +1813,6 @@ state-west = Oeste
 
 status-clip-near-far = Clip cerca/lejos/Δ: -- / -- / --
 status-faces-chunks = Caras: -- / -- (--/-- fragmentos)
-status-frame-rate = Frecuencia de fotogramas
 status-points-chunks = Puntos: -- / -- de -- (--/-- fragmentos)
 
 ## Text strings

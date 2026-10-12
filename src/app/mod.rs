@@ -8,7 +8,7 @@ pub(crate) mod geophysics_web;
 pub(crate) mod io; /* Handles session serialisation */
 pub(crate) mod jobs; // Reusable background-compute job queue
 pub(crate) mod memory; // Browser address-space budgeting for large allocations
-pub(crate) mod memory_usage; // The bottom toolbar's memory readout
+pub(crate) mod memory_usage; // The status bar's memory readout
 pub(crate) mod tie_in; // Drill & Blast's tie-in and initiation point
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web_download;
@@ -709,7 +709,6 @@ impl<'a> App<'a> {
         self.editor.block_model_interaction_resolution_divisor = config.block_model_interaction_resolution_divisor.clamp(1, 64);
         self.editor.show_block_model_boundary_highlights = config.show_block_model_boundary_highlights;
         self.editor.downscale_raster_previews = config.downscale_raster_previews;
-        self.editor.frame_counter_enabled = config.frame_counter_enabled;
         self.editor.debug_surface_chunks = config.debug_surface_chunks;
         self.editor.debug_clip_planes = config.debug_clip_planes;
         self.editor.debug_point_cloud_chunks = config.debug_point_cloud_chunks;

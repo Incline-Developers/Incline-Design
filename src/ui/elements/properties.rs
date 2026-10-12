@@ -379,7 +379,6 @@ fn reset_interface_defaults(draft: &mut PreferencesDraft) {
 
 fn reset_developer_defaults(draft: &mut PreferencesDraft) {
     let defaults = PreferencesDraft::default();
-    draft.frame_counter_enabled = defaults.frame_counter_enabled;
     draft.debug_surface_chunks = defaults.debug_surface_chunks;
     draft.debug_clip_planes = defaults.debug_clip_planes;
     draft.debug_point_cloud_chunks = defaults.debug_point_cloud_chunks;
@@ -577,7 +576,6 @@ fn draw_developer_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
         &tr!("properties-developer"),
         |ui, draft| {
             let mut changed = false;
-            changed |= committed(&MenuFieldBool::new(tr!("properties-frame-counter"), &mut draft.frame_counter_enabled).show(ui));
             changed |= committed(
                 &MenuFieldBool::new(tr!("properties-camera-clip-planes"), &mut draft.debug_clip_planes)
                     .help_text(tr!("properties-shows-live-near-far-projection"))

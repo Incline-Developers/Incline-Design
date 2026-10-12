@@ -1586,7 +1586,6 @@ properties-drillholes = گمانه‌ها
 properties-edit-object = ویرایش شیء...
 properties-field-view = میدان دید
 properties-fps = فریم/ثانیه
-properties-frame-counter = شمارنده فریم
 properties-frame-rate-cap = سقف نرخ فریم
 properties-hz = Hz
 properties-interface = رابط کاربری
@@ -1816,7 +1815,6 @@ state-west = غرب
 
 status-clip-near-far = کلیپ نزدیک / دور / Δ: -- / -- / --
 status-faces-chunks = وجه‌ها: -- / -- (--/-- تکه)
-status-frame-rate = نرخ فریم
 status-points-chunks = نقاط: -- / -- از -- (--/-- تکه)
 
 ## Text strings

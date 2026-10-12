@@ -1619,7 +1619,6 @@ properties-drillholes = 시추공
 properties-edit-object = 객체 편집...
 properties-field-view = 시야각
 properties-fps = FPS
-properties-frame-counter = 프레임 카운터
 properties-frame-rate-cap = 프레임 속도 상한
 properties-hz = Hz
 properties-interface = 인터페이스
@@ -1849,7 +1848,6 @@ state-west = 서
 
 status-clip-near-far = 클립 근/원/Δ: -- / -- / --
 status-faces-chunks = 면: -- / -- (청크 --/--)
-status-frame-rate = 프레임 속도
 status-points-chunks = 점: -- / -- (전체 --, 청크 --/--)
 
 ## Text strings

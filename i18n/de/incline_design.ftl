@@ -1627,7 +1627,6 @@ properties-drillholes = Bohrlöcher
 properties-edit-object = Objekt bearbeiten...
 properties-field-view = Sichtfeld
 properties-fps = FPS
-properties-frame-counter = Bildzähler
 properties-frame-rate-cap = Bildratenbegrenzung
 properties-hz = Hz
 properties-interface = Oberfläche
@@ -1857,7 +1856,6 @@ state-west = West
 
 status-clip-near-far = Clip nah/fern/Δ: -- / -- / --
 status-faces-chunks = Flächen: -- / -- (--/-- Chunks)
-status-frame-rate = Bildrate
 status-points-chunks = Punkte: -- / -- von -- (--/-- Chunks)
 
 ## Text strings

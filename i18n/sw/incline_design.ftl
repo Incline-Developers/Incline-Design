@@ -1618,7 +1618,6 @@ properties-drillholes = Mashimo ya Uchimbaji
 properties-edit-object = Hariri Kitu...
 properties-field-view = Uwanja wa mtazamo
 properties-fps = FPS
-properties-frame-counter = Kihesabu fremu
 properties-frame-rate-cap = Kikomo cha kasi ya fremu
 properties-hz = Hz
 properties-interface = Kiolesura
@@ -1848,7 +1847,6 @@ state-west = Magharibi
 
 status-clip-near-far = Kata karibu/mbali/Δ: -- / -- / --
 status-faces-chunks = Nyuso: -- / -- (vipande --/--)
-status-frame-rate = Kasi ya fremu
 status-points-chunks = Vidokezo: -- / -- kati ya -- (vipande --/--)
 
 ## Text strings

@@ -62,7 +62,6 @@ pub(crate) struct PreferencesDraft {
     pub(crate) block_model_interaction_resolution_divisor: u32,
     pub(crate) show_block_model_boundary_highlights: bool,
     pub(crate) downscale_raster_previews: bool,
-    pub(crate) frame_counter_enabled: bool,
     pub(crate) debug_surface_chunks: bool,
     pub(crate) debug_clip_planes: bool,
     pub(crate) debug_point_cloud_chunks: bool,
@@ -105,7 +104,6 @@ impl Default for PreferencesDraft {
             block_model_interaction_resolution_divisor: crate::app::io::default_block_model_interaction_resolution_divisor(),
             show_block_model_boundary_highlights: crate::app::io::default_show_block_model_boundary_highlights(),
             downscale_raster_previews: crate::app::io::default_downscale_raster_previews(),
-            frame_counter_enabled: false,
             debug_surface_chunks: false,
             debug_clip_planes: false,
             debug_point_cloud_chunks: false,
@@ -1203,7 +1201,6 @@ pub(crate) struct EditorState {
     pub(crate) show_block_model_boundary_highlights: bool,
     /// Downscale large GeoTIFFs before retaining and uploading their pixel data.
     pub(crate) downscale_raster_previews: bool,
-    pub(crate) frame_counter_enabled: bool,
     pub(crate) measured_fps: Option<f32>,
     /// What the app holds against the machine's memory, refreshed by
     /// `App` every `memory_usage::SAMPLE_PERIOD`. `None` until the first
@@ -2396,7 +2393,6 @@ impl EditorState {
             block_model_interaction_resolution_divisor: self.block_model_interaction_resolution_divisor,
             show_block_model_boundary_highlights: self.show_block_model_boundary_highlights,
             downscale_raster_previews: self.downscale_raster_previews,
-            frame_counter_enabled: self.frame_counter_enabled,
             debug_surface_chunks: self.debug_surface_chunks,
             debug_clip_planes: self.debug_clip_planes,
             debug_point_cloud_chunks: self.debug_point_cloud_chunks,
@@ -2464,7 +2460,6 @@ impl EditorState {
             block_model_interaction_resolution_divisor: crate::app::io::default_block_model_interaction_resolution_divisor(),
             show_block_model_boundary_highlights: crate::app::io::default_show_block_model_boundary_highlights(),
             downscale_raster_previews: crate::app::io::default_downscale_raster_previews(),
-            frame_counter_enabled: false,
             measured_fps: None,
             memory_usage: None,
             frame_rate_window: (0, 0.0),

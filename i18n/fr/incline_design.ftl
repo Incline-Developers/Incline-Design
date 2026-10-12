@@ -1586,7 +1586,6 @@ properties-drillholes = Sondages
 properties-edit-object = Modifier l'objet...
 properties-field-view = Champ de vue
 properties-fps = images/s
-properties-frame-counter = Compteur d'images
 properties-frame-rate-cap = Limite de fréquence d'images
 properties-hz = Hz
 properties-interface = Interface
@@ -1816,7 +1815,6 @@ state-west = Ouest
 
 status-clip-near-far = Clip près / loin / Δ: -- / -- / --
 status-faces-chunks = Faces : -- / -- (--/-- blocs)
-status-frame-rate = Fréquence d’images
 status-points-chunks = Points : -- / -- sur -- (--/-- blocs)
 
 ## Text strings

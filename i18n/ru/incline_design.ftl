@@ -1640,7 +1640,6 @@ properties-drillholes = Скважины
 properties-edit-object = Изменить объект...
 properties-field-view = Поле зрения
 properties-fps = кадр/с
-properties-frame-counter = Счётчик кадров
 properties-frame-rate-cap = Ограничение частоты кадров
 properties-hz = Hz
 properties-interface = Интерфейс
@@ -1870,7 +1869,6 @@ state-west = Запад
 
 status-clip-near-far = Ближняя/дальняя плоскость/Δ: -- / -- / --
 status-faces-chunks = Грани: -- / -- (фрагментов: --/--)
-status-frame-rate = Частота кадров
 status-points-chunks = Точки: -- / -- из -- (фрагментов: --/--)
 
 ## Text strings

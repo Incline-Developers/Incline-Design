@@ -302,19 +302,7 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
                     // way of the tools and with room to say what is running -
                     // the status bar had neither.
                     let right = super::cluster(ui, strip, egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        // Right to left: the memory ring takes the end of the
-                        // strip, the task readout grows leftwards from it.
-                        let memory_shown = editor.memory_usage.is_some();
-                        crate::ui::widgets::progress::draw_memory_usage(ui, editor);
-                        crate::ui::widgets::progress::draw_task_progress(
-                            ui,
-                            editor,
-                            if memory_shown {
-                                crate::ui::widgets::progress::READOUT_GAP
-                            } else {
-                                crate::ui::widgets::progress::END_INSET
-                            },
-                        );
+                        crate::ui::widgets::progress::draw_task_progress(ui, editor, crate::ui::widgets::progress::END_INSET);
                     });
 
                     // Held clear of the left cluster first and slid back from

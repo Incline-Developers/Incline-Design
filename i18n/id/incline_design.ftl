@@ -1586,7 +1586,6 @@ properties-drillholes = Lubang bor
 properties-edit-object = Edit Objek...
 properties-field-view = Bidang pandang
 properties-fps = FPS
-properties-frame-counter = Penghitung bingkai
 properties-frame-rate-cap = Batas laju bingkai
 properties-hz = Hz
 properties-interface = Antarmuka
@@ -1816,7 +1815,6 @@ state-west = Barat
 
 status-clip-near-far = Klip dekat/jauh/Δ: -- / -- / --
 status-faces-chunks = Sisi: -- / -- (--/-- chunk)
-status-frame-rate = Laju bingkai
 status-points-chunks = Titik: -- / -- dari -- (--/-- chunk)
 
 ## Text strings

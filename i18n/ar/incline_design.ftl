@@ -1586,7 +1586,6 @@ properties-drillholes = ثقوب الحفر
 properties-edit-object = تعديل الكائن...
 properties-field-view = مجال الرؤية
 properties-fps = إطار/ث
-properties-frame-counter = عداد الإطار
 properties-frame-rate-cap = سقف سرعة الإطار
 properties-hz = Hz
 properties-interface = الواجهة
@@ -1816,7 +1815,6 @@ state-west = الغرب
 
 status-clip-near-far = المقطع قريب / بعيد / Δ: -- / -- / --
 status-faces-chunks = الأوجه: -- / -- (--/-- قطعة)
-status-frame-rate = معدل الإطارات
 status-points-chunks = النقاط: -- / -- من -- (--/-- قطعة)
 
 ## Text strings

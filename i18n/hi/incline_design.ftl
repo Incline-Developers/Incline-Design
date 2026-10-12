@@ -1586,7 +1586,6 @@ properties-drillholes = ड्रिल होल
 properties-edit-object = ऑब्जेक्ट संपादित करें...
 properties-field-view = दृश्य क्षेत्र
 properties-fps = फ़्रेम/सेकंड
-properties-frame-counter = फ्रेम काउंटर
 properties-frame-rate-cap = फ्रेम रेट कैप
 properties-hz = Hz
 properties-interface = इंटरफ़ेस
@@ -1816,7 +1815,6 @@ state-west = पश्चिम
 
 status-clip-near-far = क्लिप निकट/दूर/Δ: -- / -- / --
 status-faces-chunks = फ़ेस: -- / -- (--/-- चंक)
-status-frame-rate = फ़्रेम दर
 status-points-chunks = बिंदु: -- / -- (कुल --) (--/-- चंक)
 
 ## Text strings

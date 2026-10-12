@@ -1656,7 +1656,6 @@ properties-drillholes = Otwory wiertnicze
 properties-edit-object = Edytuj obiekt...
 properties-field-view = Pole widzenia
 properties-fps = FPS
-properties-frame-counter = Licznik klatek
 properties-frame-rate-cap = Limit liczby klatek
 properties-hz = Hz
 properties-interface = Interfejs
@@ -1886,7 +1885,6 @@ state-west = Zachód
 
 status-clip-near-far = Bliska/daleka/Δ: -- / -- / --
 status-faces-chunks = Ścianki: -- / -- (--/-- fragmentów)
-status-frame-rate = Liczba klatek
 status-points-chunks = Punkty: -- / -- z -- (--/-- fragmentów)
 
 ## Text strings

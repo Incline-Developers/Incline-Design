@@ -1614,7 +1614,6 @@ properties-drillholes = 削孔データ
 properties-edit-object = オブジェクトを編集...
 properties-field-view = 視野角
 properties-fps = FPS
-properties-frame-counter = フレームカウンター
 properties-frame-rate-cap = フレームレート上限
 properties-hz = Hz
 properties-interface = インターフェース
@@ -1844,7 +1843,6 @@ state-west = 西
 
 status-clip-near-far = クリップ near/far/Δ: -- / -- / --
 status-faces-chunks = 面: -- / --（チャンク --/--）
-status-frame-rate = フレームレート
 status-points-chunks = 点: -- / -- / --（チャンク --/--）
 
 ## Text strings

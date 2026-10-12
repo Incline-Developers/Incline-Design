@@ -1586,7 +1586,6 @@ properties-drillholes = 钻孔
 properties-edit-object = 编辑对象...
 properties-field-view = 视野
 properties-fps = 帧/秒
-properties-frame-counter = 帧计数器
 properties-frame-rate-cap = 帧率上限
 properties-hz = Hz
 properties-interface = 界面
@@ -1816,7 +1815,6 @@ state-west = 西
 
 status-clip-near-far = 裁剪近/远/Δ：-- / -- / --
 status-faces-chunks = 面：-- / --（--/-- 个分块）
-status-frame-rate = 帧率
 status-points-chunks = 点：-- / -- ，共 --（--/-- 个分块）
 
 ## Text strings

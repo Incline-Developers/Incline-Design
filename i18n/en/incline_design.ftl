@@ -19,6 +19,8 @@ common-set = Set
 
 # Title of the status bar's language menu. The languages themselves are never
 # translated: each names itself in its own script, from `LanguageChoice`.
+status-fps = { $fps } fps
+status-memory-used-total = { $used } / { $total } memory
 status-language = Language
 
 ## Menu bar — File
@@ -1660,9 +1662,6 @@ products-update = Update
 ## Progress strings
 
 progress-percent-done-total = { $percent } ({ $done } of { $total })
-progress-memory-used-total = { $used } / { $total }
-progress-memory-utilisation = Memory Utilisation
-progress-memory-utilisation-web = App Memory
 progress-task-finished = { $task }: Finished
 
 ## Project strings
@@ -1686,7 +1685,6 @@ properties-drillholes = Drillholes
 properties-edit-object = Edit Object...
 properties-field-view = Field of view
 properties-fps = FPS
-properties-frame-counter = Frame counter
 properties-frame-rate-cap = Frame rate cap
 properties-hz = Hz
 properties-interface = Interface
@@ -1921,7 +1919,6 @@ state-west = West
 
 status-clip-near-far = Clip near/far/Δ: -- / -- / --
 status-faces-chunks = Faces: -- / -- (--/-- chunks)
-status-frame-rate = Frame rate
 status-points-chunks = Points: -- / -- of -- (--/-- chunks)
 
 ## Text strings

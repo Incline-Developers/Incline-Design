@@ -1637,7 +1637,6 @@ properties-drillholes = Цооногууд
 properties-edit-object = Объект засах...
 properties-field-view = Харах өнцөг
 properties-fps = FPS
-properties-frame-counter = Фрэймийн тоолуур
 properties-frame-rate-cap = Фрэйм хурдны дээд хязгаар
 properties-hz = Гц
 properties-interface = Интерфейс
@@ -1867,7 +1866,6 @@ state-west = Баруун
 
 status-clip-near-far = Огтлолын ойр/хол/Δ: -- / -- / --
 status-faces-chunks = Талууд: -- / -- (--/-- хэсэг)
-status-frame-rate = Фрэйм хурд
 status-points-chunks = Цэгүүд: -- / -- ба -- (--/-- хэсэг)
 
 ## Text strings

@@ -1,5 +1,5 @@
-//! How much of the machine's memory is in use, for the readout at the right
-//! end of the bottom toolbar.
+//! How much of the machine's memory is in use, for the readout in the status
+//! bar.
 //!
 //! Sampled on a timer rather than every frame: reading the system's memory
 //! is a system call (a `/proc` read on Linux), and the readout is something

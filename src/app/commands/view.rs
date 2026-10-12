@@ -189,11 +189,6 @@ impl<'a> App<'a> {
         self.editor.block_model_interaction_resolution_divisor = preferences.block_model_interaction_resolution_divisor;
         self.editor.show_block_model_boundary_highlights = preferences.show_block_model_boundary_highlights;
         self.editor.downscale_raster_previews = preferences.downscale_raster_previews;
-        self.editor.frame_counter_enabled = preferences.frame_counter_enabled;
-        if !preferences.frame_counter_enabled {
-            self.editor.measured_fps = None;
-            self.editor.frame_rate_window = (0, 0.0);
-        }
         self.editor.debug_surface_chunks = preferences.debug_surface_chunks;
         if !preferences.debug_surface_chunks {
             self.editor.debug_surface_stats = None;
@@ -229,11 +224,10 @@ impl<'a> App<'a> {
         // Preferences apply live from the explorer's properties panel, so this
         // runs on every committed edit: too often for the activity console.
         log::debug!(
-            "Applied preferences (dark_mode={}, snap_rate={}, fps_cap={}, frame_counter={}, debug_chunks={})",
+            "Applied preferences (dark_mode={}, snap_rate={}, fps_cap={}, debug_chunks={})",
             preferences.dark_mode,
             preferences.snap_poll_rate,
             preferences.frame_rate_cap,
-            preferences.frame_counter_enabled,
             preferences.debug_surface_chunks
         );
         self.redraw_requested = true;
@@ -359,7 +353,6 @@ pub(crate) fn config_from(
         block_model_interaction_resolution_divisor: preferences.block_model_interaction_resolution_divisor,
         show_block_model_boundary_highlights: preferences.show_block_model_boundary_highlights,
         downscale_raster_previews: preferences.downscale_raster_previews,
-        frame_counter_enabled: preferences.frame_counter_enabled,
         debug_surface_chunks: preferences.debug_surface_chunks,
         debug_clip_planes: preferences.debug_clip_planes,
         debug_point_cloud_chunks: preferences.debug_point_cloud_chunks,

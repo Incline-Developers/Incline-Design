@@ -1628,7 +1628,6 @@ properties-drillholes = Sondaj Delikleri
 properties-edit-object = Nesneyi Düzenle...
 properties-field-view = Görüş açısı
 properties-fps = FPS
-properties-frame-counter = Kare sayacı
 properties-frame-rate-cap = Kare hızı sınırı
 properties-hz = Hz
 properties-interface = Arayüz
@@ -1858,7 +1857,6 @@ state-west = Batı
 
 status-clip-near-far = Kırpma yakın/uzak/Δ: -- / -- / --
 status-faces-chunks = Yüzeyler: -- / -- (--/-- parça)
-status-frame-rate = Kare hızı
 status-points-chunks = Noktalar: -- / -- (toplam --) (--/-- parça)
 
 ## Text strings

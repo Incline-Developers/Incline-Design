@@ -1612,7 +1612,6 @@ properties-drillholes = Lỗ khoan
 properties-edit-object = Sửa đối tượng...
 properties-field-view = Góc nhìn
 properties-fps = FPS
-properties-frame-counter = Bộ đếm khung hình
 properties-frame-rate-cap = Giới hạn tốc độ khung hình
 properties-hz = Hz
 properties-interface = Giao diện
@@ -1842,7 +1841,6 @@ state-west = Tây
 
 status-clip-near-far = Cắt gần/xa/Δ: -- / -- / --
 status-faces-chunks = Mặt: -- / -- (--/-- chunk)
-status-frame-rate = Tốc độ khung hình
 status-points-chunks = Điểm: -- / -- trên -- (--/-- chunk)
 
 ## Text strings

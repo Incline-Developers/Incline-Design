@@ -36,8 +36,6 @@ const TEXT_GAP: f32 = 8.0;
 /// outline is drawn over the inside of its edge, so a ring sitting flush
 /// against it comes back cut down one side.
 pub(crate) const END_INSET: f32 = 6.0;
-/// Gap between the task readout and the memory ring to its right.
-pub(crate) const READOUT_GAP: f32 = 16.0;
 /// Least room the task text is given before it is dropped in favour of the
 /// counts: below this an elided label is all ellipsis and says nothing.
 const TASK_MIN_WIDTH: f32 = 48.0;
@@ -218,34 +216,6 @@ fn paint_ring(ui: &egui::Ui, painter: &egui::Painter, center: egui::Pos2, diamet
         }
     };
     paint_arc(painter, center, radius - width / 2.0, start, sweep, egui::Stroke::new(width, filled));
-}
-
-/// Draw the memory readout: a ring filled to the share of the machine's
-/// memory in use, with "Memory Utilisation" and the used and total amounts to
-/// its left - the same pairing as the task readout, the amounts in the strong
-/// shade nearest the ring.
-///
-/// Sits at the very end of the strip, `END_INSET` from its edge, so the task
-/// readout to its left keeps one place whatever it says.
-pub(crate) fn draw_memory_usage(ui: &mut egui::Ui, editor: &EditorState) {
-    let Some(usage) = editor.memory_usage else {
-        return;
-    };
-    // Rendering is on demand, so an idle window would otherwise hold the
-    // first reading forever.
-    ui.ctx().request_repaint_after(crate::app::memory_usage::SAMPLE_PERIOD);
-    let amounts = tr!(
-        "progress-memory-used-total",
-        used = crate::ui::dialogs::triangulation::format_bytes(usage.used),
-        total = crate::ui::dialogs::triangulation::format_bytes(usage.total)
-    );
-    // A browser does not say what the machine is doing, so the web build
-    // reports its own heap instead - see `MemoryUsage`.
-    #[cfg(not(target_arch = "wasm32"))]
-    let label = tr!("progress-memory-utilisation");
-    #[cfg(target_arch = "wasm32")]
-    let label = tr!("progress-memory-utilisation-web");
-    draw_ring(ui, &amounts, &label, RingFill::Fraction(usage.fraction()), END_INSET);
 }
 
 /// Stroke `sweep` radians of arc, clockwise from `start` radians past twelve

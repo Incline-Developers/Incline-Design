@@ -1633,7 +1633,6 @@ properties-drillholes = Свердловини
 properties-edit-object = Редагувати об'єкт...
 properties-field-view = Поле зору
 properties-fps = кадр/с
-properties-frame-counter = Лічильник кадрів
 properties-frame-rate-cap = Обмеження частоти кадрів
 properties-hz = Гц
 properties-interface = Інтерфейс
@@ -1863,7 +1862,6 @@ state-west = Захід
 
 status-clip-near-far = Ближня/дальня площина/Δ: -- / -- / --
 status-faces-chunks = Грані: -- / -- (фрагментів: --/--)
-status-frame-rate = Частота кадрів
 status-points-chunks = Точки: -- / -- із -- (фрагментів: --/--)
 
 ## Text strings
