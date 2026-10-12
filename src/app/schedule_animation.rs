@@ -306,11 +306,12 @@ pub(crate) struct ScheduleAnimation {
     machines_key: Option<(u64, u64, u64)>,
 }
 
-/// Each machine's work, in time order: a loader's spans, and a dozer's,
+/// Each machine's work, in time order: a loader's spans (start, end and
+/// source), and a dozer's,
 /// drill's or MPU's rows of the run's drill and blast work (by position).
 #[derive(Default)]
 struct MachineWork {
-    loaders: Vec<(crate::model::schedule::LoaderAgentId, Vec<(f64, crate::model::schedule::result::WorkSource)>)>,
+    loaders: Vec<(crate::model::schedule::LoaderAgentId, Vec<(f64, f64, crate::model::schedule::result::WorkSource)>)>,
     drill_blast: Vec<Vec<usize>>,
 }
 
@@ -318,7 +319,7 @@ impl MachineWork {
     fn of(calculation: &crate::model::schedule::result::CalculatedSchedule) -> Self {
         let mut loaders: std::collections::BTreeMap<_, Vec<_>> = std::collections::BTreeMap::new();
         for execution in &calculation.executions {
-            loaders.entry(execution.agent).or_default().push((execution.start_h, execution.source));
+            loaders.entry(execution.agent).or_default().push((execution.start_h, execution.end_h, execution.source));
         }
         let mut drill_blast: std::collections::BTreeMap<_, Vec<usize>> = std::collections::BTreeMap::new();
         if let Some(result) = &calculation.drill_blast {
@@ -699,9 +700,11 @@ impl crate::app::App<'_> {
         // Which job each machine is on: a loader's block by its slot, and a
         // drill and blast machine's blast and step.
         let plan = self.workspace.active_document().map(|document| document.schedule());
-        let mut digging: std::collections::BTreeMap<usize, Vec<MachineModel>> = std::collections::BTreeMap::new();
+        let mut digging: std::collections::BTreeMap<usize, Vec<(MachineModel, bool)>> = std::collections::BTreeMap::new();
         for (agent, spans) in &animation.machine_work.loaders {
-            let Some(&(_, WorkSource::Block(id))) = spans.partition_point(|span| span.0 <= shown_h).checked_sub(1).map(|at| &spans[at]) else {
+            // Its last span, until its next starts: past that span's end it stands
+            // idle where it was.
+            let Some(&(_, end_h, WorkSource::Block(id))) = spans.partition_point(|span| span.0 <= shown_h).checked_sub(1).map(|at| &spans[at]) else {
                 continue;
             };
             let loader_type = plan
@@ -713,15 +716,16 @@ impl crate::app::App<'_> {
                 crate::model::schedule::LoaderType::WheelLoader => MachineModel::WheelLoader,
             };
             if let Some(&slot) = animation.block_slots.get(&id) {
-                digging.entry(slot).or_default().push(model);
+                digging.entry(slot).or_default().push((model, shown_h < end_h));
             }
         }
         let result = self.schedule_calculation.as_ref().and_then(|calculation| calculation.drill_blast.as_ref());
-        let mut blasting: std::collections::BTreeMap<(usize, BlastActivity), usize> = std::collections::BTreeMap::new();
+        let mut blasting: std::collections::BTreeMap<(usize, BlastActivity), Vec<bool>> = std::collections::BTreeMap::new();
         if let Some(result) = result {
             for rows in &animation.machine_work.drill_blast {
                 if let Some(&row) = rows.partition_point(|&row| result.work[row].start_h <= shown_h).checked_sub(1).map(|at| &rows[at]) {
-                    *blasting.entry((result.work[row].blast, result.work[row].activity)).or_default() += 1;
+                    let work = &result.work[row];
+                    blasting.entry((work.blast, work.activity)).or_default().push(shown_h < work.end_h);
                 }
             }
         }
@@ -745,15 +749,17 @@ impl crate::app::App<'_> {
             let Some((from, to)) = across_face(&block.face, block.direction, inside_span(at, low, high)) else {
                 continue;
             };
-            placements.extend(models.iter().enumerate().map(|(share, &model)| MachinePlacement {
+            placements.extend(models.iter().enumerate().map(|(share, &(model, working))| MachinePlacement {
                 model,
                 position: (spread(from, to, share, count) - block.direction * model.reach()).extend(block.floor),
                 heading: block.direction,
                 anchor: block.center,
+                working,
             }));
         }
         if let Some(result) = result {
-            for (&(index, activity), &count) in &blasting {
+            for (&(index, activity), working) in &blasting {
+                let count = working.len();
                 let Some(blast) = result.blasts.get(index) else { continue };
                 if animation
                     .blasts
@@ -784,11 +790,12 @@ impl crate::app::App<'_> {
                             continue;
                         };
                         let model = MachineModel::Dozer;
-                        placements.extend((0..count).map(|share| MachinePlacement {
+                        placements.extend(working.iter().enumerate().map(|(share, &working)| MachinePlacement {
                             model,
                             position: ground(spread(from, to, share, count) - direction * model.reach()),
                             heading: direction,
                             anchor,
+                            working,
                         }));
                     }
                     BlastActivity::Drill | BlastActivity::Charge => {
@@ -803,7 +810,7 @@ impl crate::app::App<'_> {
                         // one another.
                         let spacing = collars.get(next + 1).map_or(model.length(), |after| after.distance(collars[next])).max(0.5);
                         let gap = (model.length() / spacing).ceil().max(1.0) as usize;
-                        for share in 0..count {
+                        for (share, &working) in working.iter().enumerate() {
                             let hole = (next + share * gap).min(collars.len() - 1);
                             let along = match (hole.checked_sub(1), collars.get(hole + 1)) {
                                 (_, Some(after)) => *after - collars[hole],
@@ -815,6 +822,7 @@ impl crate::app::App<'_> {
                                 position: ground(collars[hole]),
                                 heading: along.try_normalize().unwrap_or(glam::DVec2::X),
                                 anchor,
+                                working,
                             });
                         }
                     }

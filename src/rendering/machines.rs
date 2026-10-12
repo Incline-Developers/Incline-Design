@@ -68,6 +68,9 @@ pub(crate) struct MachinePlacement {
     /// Where its icon stands, zoomed out: the middle of the block or blast it
     /// works, which holds still while the machine moves across it.
     pub(crate) anchor: DVec3,
+    /// Whether it is at work at the instant shown, rather than left standing
+    /// where its last job was.
+    pub(crate) working: bool,
 }
 
 /// A machine drawn as an icon, zoomed out.
@@ -76,6 +79,7 @@ pub(crate) struct MachineIcon {
     pub(crate) model: MachineModel,
     /// In window pixels.
     pub(crate) at: (f32, f32),
+    pub(crate) working: bool,
 }
 
 #[repr(C)]

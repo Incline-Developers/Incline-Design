@@ -11,7 +11,7 @@ pub(crate) type ScreenSegmentPx = ((f32, f32), (f32, f32));
 
 /// How long, in points on screen, a machine has to be before Animate draws
 /// its model rather than its icon.
-const MACHINE_MODEL_POINTS: f32 = 48.0;
+const MACHINE_MODEL_POINTS: f32 = 32.0;
 
 fn point_to_screen_segment_distance_sq(point: (f32, f32), segment: ScreenSegmentPx) -> f32 {
     let (a, b) = segment;
@@ -494,7 +494,11 @@ impl<'a> Graphics<'a> {
             if span(glam::DVec3::X).max(span(glam::DVec3::Y)) >= MACHINE_MODEL_POINTS * scale_factor {
                 near.push(*placement);
             } else if let Some(at) = self.world_to_window_px(&view_proj, placement.anchor) {
-                icons.push(crate::rendering::machines::MachineIcon { model: placement.model, at });
+                icons.push(crate::rendering::machines::MachineIcon {
+                    model: placement.model,
+                    at,
+                    working: placement.working,
+                });
             }
         }
         (near, icons)

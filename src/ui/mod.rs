@@ -1798,8 +1798,9 @@ fn theme_visuals(dark_mode: bool, selection_color: egui::Color32) -> egui::Visua
 /// Animate's machines too far off to draw as models: a badge each, on the
 /// block or blast it works. Machines sharing one stand side by side.
 fn draw_machine_icons(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect) {
-    use crate::rendering::machines::MachineModel;
-    const SIZE: f32 = 22.0;
+    use crate::rendering::machines::MachineIcon;
+    const HEIGHT: f32 = 20.0;
+    const PAD: f32 = 3.0;
     const GAP: f32 = 2.0;
     let icons = &editor.animation_machine_icons;
     if icons.is_empty() {
@@ -1807,40 +1808,86 @@ fn draw_machine_icons(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Re
     }
     let scale = ui.ctx().pixels_per_point();
     let painter = ui.painter().with_clip_rect(canvas_rect);
-    let mut groups: Vec<(egui::Pos2, Vec<MachineModel>)> = Vec::new();
+    let mut groups: Vec<(egui::Pos2, Vec<&MachineIcon>)> = Vec::new();
     for icon in icons {
         let at = egui::pos2(icon.at.0 / scale, icon.at.1 / scale);
         match groups.iter_mut().find(|(held, _)| held.distance(at) < 1.0) {
-            Some((_, models)) => models.push(icon.model),
-            None => groups.push((at, vec![icon.model])),
+            Some((_, members)) => members.push(icon),
+            None => groups.push((at, vec![icon])),
         }
     }
-    for (at, mut models) in groups {
-        models.sort();
-        let width = models.len() as f32 * (SIZE + GAP) - GAP;
-        for (position, model) in models.into_iter().enumerate() {
-            let center = egui::pos2(at.x - width / 2.0 + SIZE / 2.0 + position as f32 * (SIZE + GAP), at.y);
-            let rect = egui::Rect::from_center_size(center, egui::vec2(SIZE, SIZE));
+    // Where neighbouring jobs' icons overlap, the ones at work go on top.
+    groups.sort_by_key(|(_, members)| members.iter().any(|icon| icon.working));
+    for (at, mut members) in groups {
+        members.sort_by_key(|icon| (icon.model, !icon.working));
+        let badges: Vec<_> = members
+            .iter()
+            .filter_map(|icon| {
+                let texture = machine_icon_texture(ui.ctx(), icon.model, icon.working)?;
+                let size = texture.size_vec2();
+                Some((icon.working, texture, HEIGHT * size.x / size.y.max(1.0) + 2.0 * PAD))
+            })
+            .collect();
+        let width = badges.iter().map(|badge| badge.2 + GAP).sum::<f32>() - GAP;
+        let mut left = at.x - width / 2.0;
+        for (working, texture, badge_width) in badges {
+            let rect = egui::Rect::from_min_size(egui::pos2(left, at.y - HEIGHT / 2.0 - PAD), egui::vec2(badge_width, HEIGHT + 2.0 * PAD));
+            left += badge_width + GAP;
             if !canvas_rect.intersects(rect) {
                 continue;
             }
-            let (image, tint) = match model {
-                MachineModel::Excavator => (egui::include_image!("../../res/ui/icons/machine_excavator.svg"), egui::Color32::from_rgb(242, 170, 30)),
-                MachineModel::WheelLoader => (egui::include_image!("../../res/ui/icons/machine_wheel_loader.svg"), egui::Color32::from_rgb(242, 170, 30)),
-                MachineModel::Dozer => (egui::include_image!("../../res/ui/icons/machine_dozer.svg"), egui::Color32::from_rgb(242, 170, 30)),
-                MachineModel::DrillRig => (egui::include_image!("../../res/ui/icons/machine_drill.svg"), egui::Color32::from_rgb(242, 170, 30)),
-                MachineModel::Mpu => (egui::include_image!("../../res/ui/icons/machine_mpu.svg"), egui::Color32::from_rgb(235, 235, 228)),
+            // Amber at work; grey where it stands idle at its last job.
+            let (fill, stroke) = if working {
+                (egui::Color32::from_black_alpha(200), egui::Color32::from_rgb(194, 136, 24))
+            } else {
+                (egui::Color32::from_black_alpha(200), egui::Color32::from_gray(110))
             };
-            painter.rect(
-                rect,
-                widgets::toolbar::GROUP_CORNER_RADIUS,
-                egui::Color32::from_black_alpha(200),
-                egui::Stroke::new(1.0, tint.gamma_multiply(0.8)),
-                egui::StrokeKind::Inside,
+            painter.rect(rect, widgets::toolbar::GROUP_CORNER_RADIUS, fill, egui::Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
+            painter.image(
+                texture.id(),
+                rect.shrink(PAD),
+                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
             );
-            egui::Image::new(image).tint(tint).paint_at(ui, rect.shrink(3.0));
         }
     }
+}
+
+/// A machine's icon - its model rendered from the right side - uploaded once,
+/// and in grey for a machine standing idle.
+fn machine_icon_texture(ctx: &egui::Context, model: crate::rendering::machines::MachineModel, working: bool) -> Option<egui::TextureHandle> {
+    use crate::rendering::machines::MachineModel;
+    let id = egui::Id::new(("machine-icon", model, working));
+    if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
+        return Some(texture);
+    }
+    let bytes: &[u8] = match model {
+        MachineModel::Excavator => include_bytes!("../../res/ui/icons/machine_excavator.png"),
+        MachineModel::WheelLoader => include_bytes!("../../res/ui/icons/machine_wheel_loader.png"),
+        MachineModel::Dozer => include_bytes!("../../res/ui/icons/machine_dozer.png"),
+        MachineModel::DrillRig => include_bytes!("../../res/ui/icons/machine_drill.png"),
+        MachineModel::Mpu => include_bytes!("../../res/ui/icons/machine_mpu.png"),
+    };
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::ALPHA | png::Transformations::STRIP_16);
+    let mut reader = decoder.read_info().ok()?;
+    let mut pixels = vec![0; reader.output_buffer_size()?];
+    let info = reader.next_frame(&mut pixels).ok()?;
+    pixels.truncate(info.buffer_size());
+    if info.color_type != png::ColorType::Rgba {
+        return None;
+    }
+    if !working {
+        for pixel in pixels.as_chunks_mut::<4>().0 {
+            let luma = 0.3 * f32::from(pixel[0]) + 0.59 * f32::from(pixel[1]) + 0.11 * f32::from(pixel[2]);
+            let grey = (40.0 + 0.6 * luma) as u8;
+            *pixel = [grey, grey, grey, pixel[3]];
+        }
+    }
+    let image = egui::ColorImage::from_rgba_unmultiplied([info.width as usize, info.height as usize], &pixels);
+    let texture = ctx.load_texture(format!("machine-icon-{model:?}-{working}"), image, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
+    Some(texture)
 }
 
 fn draw_haul_flows(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect) {
