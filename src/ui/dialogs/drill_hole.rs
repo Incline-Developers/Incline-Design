@@ -10,18 +10,6 @@ use crate::{
     },
 };
 
-/// Which surface is hosting [`draw_drill_hole_color_editor`]. The modal
-/// colour dialog keeps a fixed height and scrolls each open section on its
-/// own, so every heading stays in view; the Preferences "Drillholes" page
-/// already scrolls as a whole
-/// (`ScrollArea::both` in `ui/elements/properties.rs`), so nesting another
-/// scroll area inside it fights the outer one under the mouse.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ColorEditorHost {
-    Dialog,
-    Page,
-}
-
 pub(crate) fn draw_drill_hole_color_dialog(ui: &mut egui::Ui, editor: &mut EditorState, datasets: &[OpenDrillHoleDataset], commands: &mut Vec<UiCommand>) {
     let Some(id) = editor.drill_hole_color_dialog else {
         return;
@@ -50,7 +38,7 @@ pub(crate) fn draw_drill_hole_color_dialog(ui: &mut egui::Ui, editor: &mut Edito
             let height = (window * 0.7).max(360.0).min((window - menu::TITLE_BAR_HEIGHT - 48.0).max(120.0));
             ui.set_min_height(height);
             ui.set_max_height(height);
-            draw_drill_hole_color_editor(ui, dataset, commands, ColorEditorHost::Dialog);
+            draw_drill_hole_color_editor(ui, dataset, commands);
         });
     // Colour edits apply live, so there is no confirm step: both keys dismiss.
     // Enter is left alone while a text field - or a slider being typed into,
@@ -66,10 +54,10 @@ pub(crate) fn draw_drill_hole_color_dialog(ui: &mut egui::Ui, editor: &mut Edito
     }
 }
 
-/// The body shared by the colour dialog and the Drillholes preferences page:
+/// The colour dialog's body:
 /// field, width, colour scale, category colours, and working sections for one
 /// dataset.
-pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDrillHoleDataset, commands: &mut Vec<UiCommand>, host: ColorEditorHost) {
+pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDrillHoleDataset, commands: &mut Vec<UiCommand>) {
     let id = dataset.id;
     let active_label = match (dataset.color.active_field.as_deref(), dataset.color.by_working_section) {
         (None, _) => tr!("common-uniform-white"),
@@ -114,7 +102,7 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
         Some(DrillFieldKind::Numeric { .. }) => 2,
         Some(DrillFieldKind::Categorical { .. }) => FOLD_SECTIONS.len(),
     };
-    fold_section(ui, host, &FOLD_SECTIONS[..shown], 0, tr!("drill-hole-width"), |ui| {
+    fold_section(ui, &FOLD_SECTIONS[..shown], 0, tr!("drill-hole-width"), |ui| {
         let mut style = dataset.color.hole_style;
         if MenuFieldCombo::new(
             ("drill_hole_style", id),
@@ -204,7 +192,7 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
         return;
     };
 
-    fold_section(ui, host, &FOLD_SECTIONS[..shown], 1, tr!("drill-hole-colour-scale"), |ui| {
+    fold_section(ui, &FOLD_SECTIONS[..shown], 1, tr!("drill-hole-colour-scale"), |ui| {
         match &field.kind {
             DrillFieldKind::Numeric { min, max } => {
                 let mut preset = dataset.color.preset;
@@ -316,8 +304,7 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
                         }
                     });
                 };
-                // Inline in both hosts: the section scrolls in the dialog and
-                // the page scrolls as a whole, so a list scroll would nest.
+                // Inline: the section already scrolls, so a list scroll would nest.
                 for row in &shown_rows {
                     draw_row(ui, row);
                 }
@@ -342,14 +329,13 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
         }
     });
     if let DrillFieldKind::Categorical { categories } = &field.kind {
-        draw_working_sections(ui, dataset, field, categories, commands, host);
+        draw_working_sections(ui, dataset, field, categories, commands);
     }
 }
 
 /// Draft state for the "add a working section" builder: kept in egui memory,
 /// salted only by dataset, because it is unsent UI text rather than
-/// application state, and the dialog and the Preferences page must show the
-/// same draft when both are open on the same dataset. `field` records which
+/// application state. `field` records which
 /// field the ticked codes belong to, so switching fields can tell a stale
 /// tick set from the name the user is still typing.
 #[derive(Clone, Default)]
@@ -359,18 +345,11 @@ struct WorkingSectionDraft {
     codes: std::collections::BTreeSet<String>,
 }
 
-fn draw_working_sections(
-    ui: &mut egui::Ui,
-    dataset: &OpenDrillHoleDataset,
-    field: &crate::model::drill_hole::DrillField,
-    categories: &[String],
-    commands: &mut Vec<UiCommand>,
-    host: ColorEditorHost,
-) {
+fn draw_working_sections(ui: &mut egui::Ui, dataset: &OpenDrillHoleDataset, field: &crate::model::drill_hole::DrillField, categories: &[String], commands: &mut Vec<UiCommand>) {
     // Every change asked for this frame goes out as one command at the end,
     // so two in one frame neither overwrite each other nor split the undo.
     let mut edits: Vec<SectionEdit> = Vec::new();
-    fold_section(ui, host, &FOLD_SECTIONS, 2, tr!("drill-hole-working-sections"), |ui| {
+    fold_section(ui, &FOLD_SECTIONS, 2, tr!("drill-hole-working-sections"), |ui| {
         ui.label(egui::RichText::new(tr!("drill-hole-working-section-set-seams-plies")).weak());
         ui.add_space(2.0);
 
@@ -387,10 +366,9 @@ fn draw_working_sections(
         }
     });
 
-    fold_section(ui, host, &FOLD_SECTIONS, 3, tr!("drill-hole-new-working-section"), |ui| {
-        // Not `ui.id()`: the dialog and the Preferences page draw from different
-        // widget trees, and the draft must be the same egui memory slot either
-        // way, so both windows show the one section being built.
+    fold_section(ui, &FOLD_SECTIONS, 3, tr!("drill-hole-new-working-section"), |ui| {
+        // Not `ui.id()`: keyed by dataset, so reopening the dialog on the same
+        // dataset finds the section still being built.
         let draft_id = egui::Id::new(("drill_hole_working_section_draft", dataset.id));
         let mut draft = ui.data_mut(|data| data.get_temp::<WorkingSectionDraft>(draft_id)).unwrap_or_default();
         if draft.field != field.key {
@@ -524,31 +502,25 @@ const FOLD_SECTIONS: [&str; 4] = [
 ];
 
 /// Draw `sections[index]` under its folding heading, and `body` when open.
-/// In the dialog an open section scrolls in an even share of the height left
+/// An open section scrolls in an even share of the height left
 /// by the headings below it and the other open sections, so every heading
 /// stays on screen.
-fn fold_section(ui: &mut egui::Ui, host: ColorEditorHost, sections: &[&str], index: usize, heading: String, body: impl FnOnce(&mut egui::Ui)) {
+fn fold_section(ui: &mut egui::Ui, sections: &[&str], index: usize, heading: String, body: impl FnOnce(&mut egui::Ui)) {
     let key = sections[index];
     if !menu::menu_section_folding(ui, key, heading) {
         return;
     }
-    match host {
-        ColorEditorHost::Page => body(ui),
-        ColorEditorHost::Dialog => {
-            let below = &sections[index + 1..];
-            let open_below = below.iter().filter(|key| menu::menu_section_open(ui, **key)).count();
-            let headings = below.len() as f32 * menu::menu_section_folding_height(ui);
-            // No floor: on a short window the sections shrink, not the
-            // headings' room, so none is pushed out of view.
-            let height = ((ui.available_height() - headings) / (open_below + 1) as f32).max(0.0);
-            egui::ScrollArea::vertical().id_salt(key).max_height(height).auto_shrink([false, true]).show(ui, body);
-        }
-    }
+    let below = &sections[index + 1..];
+    let open_below = below.iter().filter(|key| menu::menu_section_open(ui, **key)).count();
+    let headings = below.len() as f32 * menu::menu_section_folding_height(ui);
+    // No floor: on a short window the sections shrink, not the
+    // headings' room, so none is pushed out of view.
+    let height = ((ui.available_height() - headings) / (open_below + 1) as f32).max(0.0);
+    egui::ScrollArea::vertical().id_salt(key).max_height(height).auto_shrink([false, true]).show(ui, body);
 }
 
 /// Where one list's filter text is kept: per dataset and field, not per
-/// window, so the dialog and the Preferences page share it, and a field's
-/// filter does not narrow another's codes.
+/// window, so a field's filter does not narrow another's codes.
 fn code_filter_id(list: &str, dataset: DrillHoleId, field: &str) -> egui::Id {
     egui::Id::new(("drill_hole_code_filter", list, dataset, field))
 }
@@ -562,8 +534,7 @@ fn filter_matches(code: &str, needle: &str) -> bool {
 
 /// A filter row above a long list of codes, with a button to clear it. The
 /// text is unsent UI state kept in egui memory under `id`, salted by dataset
-/// like the section draft, so the dialog and the Preferences page narrow the
-/// same list the same way. Returns the text to match, trimmed and
+/// like the section draft. Returns the text to match, trimmed and
 /// lowercased.
 fn draw_code_filter(ui: &mut egui::Ui, id: egui::Id) -> String {
     let mut text = ui.data_mut(|data| data.get_temp::<String>(id)).unwrap_or_default();
