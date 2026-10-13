@@ -998,6 +998,10 @@ impl<'a> App<'a> {
                 self.arm_carry_on_string();
                 Ok(())
             }
+            UiCommand::ArmRedrawRun => {
+                self.arm_redraw_run();
+                Ok(())
+            }
             UiCommand::ArmDragVertex => {
                 self.arm_drag_vertex();
                 Ok(())

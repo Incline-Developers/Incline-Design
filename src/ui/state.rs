@@ -1001,8 +1001,8 @@ pub(crate) fn copy_along_live(editor: &EditorState) -> Option<&CopyAlong> {
     })
 }
 
-/// Carry On a String, a step inside the Polyline tool: waiting for the
-/// string's end to be picked, then drawing on from it.
+/// Carry On a String or Redraw Between Vertices, a step inside the Polyline
+/// tool: waiting for a string's vertex to be picked, then drawing from it.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum StringRework {
     Picking,
@@ -1014,17 +1014,25 @@ pub(crate) enum StringRework {
         before: Object,
         anchor: DVec3,
     },
+    PickingRun,
+    /// As `From`; a click on another vertex of the string ends the run.
+    Redraw {
+        id: ObjectId,
+        start: usize,
+        before: Object,
+        anchor: DVec3,
+    },
 }
 
-/// The carry on under way, if it still belongs to the Polyline tool and,
-/// once picked, to the stroke that starts at the string's end.
+/// The carry on or redraw under way, if it still belongs to the Polyline
+/// tool and, once picked, to the stroke that starts at the string's vertex.
 pub(crate) fn string_rework_live(editor: &EditorState) -> Option<&StringRework> {
     editor.string_rework.as_ref().filter(|rework| {
         editor.active_tool == ActiveTool::MakePoly
             && editor.active_workspace.has_drawing_aids()
             && match rework {
-                StringRework::Picking => editor.pending_stroke.is_empty(),
-                StringRework::From { anchor, .. } => editor.pending_stroke.first() == Some(anchor),
+                StringRework::Picking | StringRework::PickingRun => editor.pending_stroke.is_empty(),
+                StringRework::From { anchor, .. } | StringRework::Redraw { anchor, .. } => editor.pending_stroke.first() == Some(anchor),
             }
     })
 }
@@ -1052,14 +1060,35 @@ impl EditorState {
         true
     }
 
-    /// Undo or redo ends a carry on, and the stroke drawn from the string's
-    /// end with it: the step may change the string, and the next click
+    /// Redraw string `string` from its vertex `start`: the stroke starts at
+    /// that vertex. Unlike a carry on, a closed string is taken.
+    pub(crate) fn redraw_from(&mut self, string: Object, start: usize) -> bool {
+        let Object::Polyline { id, verts, .. } = &string else {
+            return false;
+        };
+        let (id, Some(anchor)) = (*id, verts.get(start).map(|vertex| vertex.pos)) else {
+            return false;
+        };
+        self.line_chain.clear();
+        self.copy_along = None;
+        self.pending_stroke = vec![anchor];
+        self.string_rework = Some(StringRework::Redraw {
+            id,
+            start,
+            before: string,
+            anchor,
+        });
+        true
+    }
+
+    /// Undo or redo ends a carry on or redraw, and the stroke drawn from the
+    /// string with it: the step may change the string, and the next click
     /// starts afresh. True when there was one to end.
     pub(crate) fn end_string_rework_for_history_step(&mut self) -> bool {
         let Some(rework) = string_rework_live(self) else {
             return false;
         };
-        if matches!(rework, StringRework::From { .. }) {
+        if matches!(rework, StringRework::From { .. } | StringRework::Redraw { .. }) {
             self.pending_stroke.clear();
             self.poly_finish_dialog = false;
             self.poly_finish_dialog_confirm_armed = false;
@@ -4153,6 +4182,8 @@ pub(crate) enum UiCommand {
     ArmCopyAlongString,
     /// Take the next click as the end of a string to draw on from.
     ArmCarryOnString,
+    /// Take the next click as the vertex a string is redrawn from.
+    ArmRedrawRun,
     /// Add this point to the string being drawn.
     AddTypedStrokeVertex(DVec3),
     /// Add the vertex a step from the last: bearing and dip in degrees,
@@ -4790,6 +4821,7 @@ impl UiCommand {
             | Self::NudgeHeldVertex(_)
             | Self::ArmCopyAlongString
             | Self::ArmCarryOnString
+            | Self::ArmRedrawRun
             | Self::AddTypedStrokeVertex(_)
             | Self::AddStrokeVertexAlongBearing { .. }
             | Self::ToggleCreateDrillPattern

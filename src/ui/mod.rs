@@ -375,8 +375,14 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
         };
         return Some(ViewportMessage::text(step).minor(tr!("ui-esc-cancels")));
     }
-    if !editor.poly_finish_dialog && state::string_rework_live(editor) == Some(&state::StringRework::Picking) {
-        return Some(ViewportMessage::text(tr!("ui-click-string-end")).minor(tr!("ui-esc-cancels")));
+    let rework_step = match state::string_rework_live(editor) {
+        Some(state::StringRework::Picking) if !editor.poly_finish_dialog => Some(tr!("ui-click-string-end")),
+        Some(state::StringRework::PickingRun) if !editor.poly_finish_dialog => Some(tr!("ui-click-redraw-first-vertex")),
+        Some(state::StringRework::Redraw { .. }) => Some(tr!("ui-click-redraw-last-vertex")),
+        _ => None,
+    };
+    if let Some(step) = rework_step {
+        return Some(ViewportMessage::text(step).minor(tr!("ui-esc-cancels")));
     }
     if editor.active_tool == ActiveTool::VerticalSlice {
         return Some(ViewportMessage::text(if editor.slice_pending_start.is_none() {

@@ -1,11 +1,12 @@
 //! Drawing aids for a string being drawn: give back the last vertex, add
 //! the next one as typed, or a step from the last by bearing and distance,
-//! or copy a run of an existing string, or carry on one from either end.
+//! or copy a run of an existing string, carry on one from either end, or
+//! redraw one between two of its vertices.
 //! On a section the vertex goes onto the plane, as a click there does.
 
 use glam::{DVec2, DVec3};
 
-use super::bezier::{choose_closed_span, directed_span_points};
+use super::bezier::{choose_closed_span, directed_span_points, replace_polyline_span_with_bezier};
 use crate::{
     app::{App, PICK_THRESHOLD_PX},
     i18n::tr,
@@ -194,6 +195,16 @@ impl<'a> App<'a> {
     /// Start Carry On a String: the next click picks the string, and the
     /// end nearer the click starts the stroke.
     pub(crate) fn arm_carry_on_string(&mut self) {
+        self.arm_string_rework(StringRework::Picking);
+    }
+
+    /// Start Redraw Between Vertices: the next click picks the vertex the
+    /// string is redrawn from.
+    pub(crate) fn arm_redraw_run(&mut self) {
+        self.arm_string_rework(StringRework::PickingRun);
+    }
+
+    fn arm_string_rework(&mut self, picking: StringRework) {
         if self.editor.active_workspace.has_drawing_aids() && self.editor.active_tool != ActiveTool::MakePoly {
             self.set_active_tool_from_toolbar(ActiveTool::MakePoly);
         }
@@ -205,7 +216,7 @@ impl<'a> App<'a> {
             return;
         }
         self.editor.copy_along = None;
-        self.editor.string_rework = Some(StringRework::Picking);
+        self.editor.string_rework = Some(picking);
         self.invalidate_overlay();
     }
 
@@ -218,6 +229,7 @@ impl<'a> App<'a> {
 
     /// The click that picks the string to carry on: its end nearer the
     /// cursor becomes the stroke's first point. A closed string has no end.
+    /// For a redraw, the vertex under the cursor, of any string.
     pub(crate) fn carry_on_pick(&mut self) {
         if !self.editing_ready() {
             return;
@@ -233,6 +245,15 @@ impl<'a> App<'a> {
         let Some(string @ Object::Polyline { verts, closed, .. }) = self.active_document().get_object(id) else {
             return;
         };
+        if string_rework_live(&self.editor) == Some(&StringRework::PickingRun) {
+            let (Some((start, _)), string) = (self.string_vertex_under_cursor(id, None), string.clone()) else {
+                return;
+            };
+            self.editor.redraw_from(string, start);
+            self.sync_next_vertex_panel();
+            self.invalidate_overlay();
+            return;
+        }
         let start = if *closed { Some(0) } else { self.string_end_nearer_cursor(verts) };
         let (Some(start), string) = (start, string.clone()) else {
             return;
@@ -263,20 +284,14 @@ impl<'a> App<'a> {
     /// onto the string, closed or not, as one undo step. False when none is
     /// under way, so the stroke is saved as a string of its own.
     pub(crate) fn finish_carry_on(&mut self, closed: bool) -> bool {
+        if self.redraw_holds_stroke() {
+            return true;
+        }
         let Some(StringRework::From { id, start, before, .. }) = string_rework_live(&self.editor).cloned() else {
             return false;
         };
         let added = self.editor.pending_stroke.split_off(1);
-        self.editor.string_rework = None;
-        self.editor.pending_stroke.clear();
-        self.editor.poly_finish_dialog = false;
-        self.editor.poly_finish_dialog_px = None;
-        self.invalidate_geometry();
-        // Read again, not taken from the pick: a write over a string edited
-        // since would undo that edit.
-        let current = self.active_document().get_object(id);
-        if current != Some(&before) || !self.editor.canvas_edits_object(self.active_document(), id) {
-            userspace_warn!("{}", tr!("cmd-string-rework-changed"));
+        if !self.end_string_rework(id, &before) {
             return true;
         }
         let mut after = before.clone();
@@ -286,6 +301,76 @@ impl<'a> App<'a> {
         }
         if after != before {
             self.execute_edit(Command::Replace { before, after });
+        }
+        true
+    }
+
+    /// A click while redrawing: on another vertex of the string it ends the
+    /// redraw, ahead of any snap; anywhere else it adds a point as usual.
+    pub(crate) fn redraw_click(&mut self) {
+        let Some(&StringRework::Redraw { id, start, .. }) = string_rework_live(&self.editor) else {
+            return;
+        };
+        match self.string_vertex_under_cursor(id, Some(start)) {
+            Some((end, _)) if end != start => self.finish_redraw(end),
+            _ => self.place_stroke_point(),
+        }
+    }
+
+    /// While a redraw is live, Enter, a right click or the finish dialog
+    /// only repeat its prompt: the stroke ends on a vertex of the string.
+    pub(crate) fn redraw_holds_stroke(&mut self) -> bool {
+        if !matches!(string_rework_live(&self.editor), Some(StringRework::Redraw { .. })) {
+            return false;
+        }
+        self.editor.poly_finish_dialog = false;
+        self.editor.poly_finish_dialog_px = None;
+        userspace_log!("{}", tr!("ui-click-redraw-last-vertex"));
+        true
+    }
+
+    /// End a redraw on vertex `end` of its string: the run from the picked
+    /// vertex to `end` gives way to the points drawn, as one undo step.
+    fn finish_redraw(&mut self, end: usize) {
+        let Some(StringRework::Redraw { id, start, before, .. }) = string_rework_live(&self.editor).cloned() else {
+            return;
+        };
+        let drawn = self.editor.pending_stroke.split_off(1);
+        if !self.end_string_rework(id, &before) {
+            return;
+        }
+        let Object::Polyline { verts, closed, .. } = &before else {
+            return;
+        };
+        // Counted against the run drawn as one straight segment.
+        let (Some(new), Some(chord)) = (redrawn(verts, *closed, start, end, &drawn), redrawn(verts, *closed, start, end, &[])) else {
+            return;
+        };
+        let count = new.len() - chord.len();
+        let mut after = before.clone();
+        if let Object::Polyline { verts, .. } = &mut after {
+            *verts = new;
+        }
+        if after != before {
+            self.execute_edit(Command::Replace { before, after });
+            userspace_log!("{}", tr!("cmd-string-rework-redrew", count = count.to_string()));
+        }
+    }
+
+    /// End the carry on or redraw and drop its stroke, then read string `id`
+    /// again: true when it still reads `before` and may be edited.
+    fn end_string_rework(&mut self, id: ObjectId, before: &Object) -> bool {
+        self.editor.string_rework = None;
+        self.editor.pending_stroke.clear();
+        self.editor.poly_finish_dialog = false;
+        self.editor.poly_finish_dialog_px = None;
+        self.invalidate_geometry();
+        // Read again, not taken from the pick: a write over a string edited
+        // since would undo that edit.
+        let current = self.active_document().get_object(id);
+        if current != Some(before) || !self.editor.canvas_edits_object(self.active_document(), id) {
+            userspace_warn!("{}", tr!("cmd-string-rework-changed"));
+            return false;
         }
         true
     }
@@ -439,6 +524,33 @@ pub(crate) fn carried_on(verts: &[PolyVertex], start: usize, added: &[DVec3], cl
         }
     }
     verts
+}
+
+/// String `verts` with its run from vertex `first` to vertex `last` redrawn
+/// through the points `drawn`, in the order drawn from `first`: an open
+/// string loses the vertices between the two, a ring the shorter way round.
+/// The run's arcs go, the rest stay. None when `first` is `last` or either
+/// is out of range.
+pub(crate) fn redrawn(verts: &[PolyVertex], closed: bool, first: usize, last: usize, drawn: &[DVec3]) -> Option<Vec<PolyVertex>> {
+    let (start, end) = match closed {
+        true => choose_closed_span(verts, first, last, false),
+        false => (first.min(last), first.max(last)),
+    };
+    let mut drawn = drawn.to_vec();
+    // A point drawn last on the end vertex, by a copy along, is not doubled.
+    let end_at = verts.get(last)?.pos;
+    while drawn.last().is_some_and(|point| (end_at - *point).length_squared() <= 1.0e-16) {
+        drawn.pop();
+    }
+    if start != first {
+        drawn.reverse();
+    }
+    // One segment of the Bezier span replace is the chord: the run taken out.
+    let mut verts = replace_polyline_span_with_bezier(verts, closed, start, end, DVec3::ZERO, DVec3::ZERO, 1)?;
+    // A ring run across vertex 0 comes back rotated, ending on `start`.
+    let at = if start < end { start + 1 } else { start - end + 1 };
+    verts.splice(at..at, drawn.into_iter().map(PolyVertex::straight));
+    Some(verts)
 }
 
 /// Drop the stroke's last vertex; false when there is none to give back or
