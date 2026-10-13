@@ -972,6 +972,7 @@ drill-hole-drilled-diameter = 钻孔直径的倍数
 drill-hole-every-code-lists-already-another = 它列出的每个代码都已在另一个工作层段中。
 drill-hole-every-interval-value-colour-field = 颜色字段中每个有值的区间都在孔线上绘制为此宽度的圆盘。远距离时圆盘宽度不会小于几个像素。
 drill-hole-field = 字段
+drill-hole-dataset = 数据集
 drill-hole-field-working-section = { $field }（按工作层段）
 drill-hole-floor = 底板
 drill-hole-grayscale = 灰度

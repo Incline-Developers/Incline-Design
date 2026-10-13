@@ -38,6 +38,20 @@ pub(crate) fn draw_drill_hole_color_dialog(ui: &mut egui::Ui, editor: &mut Edito
             let height = (window * 0.7).max(360.0).min((window - menu::TITLE_BAR_HEIGHT - 48.0).max(120.0));
             ui.set_min_height(height);
             ui.set_max_height(height);
+            // Switches the dialog to another loaded set; the body follows this
+            // frame, the title next frame.
+            MenuFieldCombo::new(
+                "drill_hole_colour_dialog_dataset",
+                tr!("drill-hole-dataset"),
+                &mut editor.drill_hole_color_dialog,
+                dataset.name.clone(),
+                datasets
+                    .iter()
+                    .filter(|dataset| dataset.state.loaded)
+                    .map(|dataset| (Some(dataset.id), dataset.name.clone().into())),
+            )
+            .show(ui);
+            let dataset = datasets.iter().find(|dataset| Some(dataset.id) == editor.drill_hole_color_dialog).unwrap_or(dataset);
             draw_drill_hole_color_editor(ui, dataset, commands);
         });
     // Colour edits apply live, so there is no confirm step: both keys dismiss.

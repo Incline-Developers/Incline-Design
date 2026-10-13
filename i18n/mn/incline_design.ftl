@@ -1023,6 +1023,7 @@ drill-hole-drilled-diameter = Өрөмдсөн диаметрийн
 drill-hole-every-code-lists-already-another = Түүний жагсаасан код бүр өөр ажлын үед аль хэдийн байна.
 drill-hole-every-interval-value-colour-field = Өнгөний талбарт утгатай интервал бүрийг шугам дээр энэ өргөнтэй диск болгон зурна. Холдох үед хэдэн пикселээс хэзээ ч нарийсахгүй.
 drill-hole-field = Талбар
+drill-hole-dataset = Өгөгдлийн багц
 drill-hole-field-working-section = { $field } ажлын үеээр
 drill-hole-floor = Шал
 drill-hole-grayscale = Саарал өнгийн масштаб

@@ -1042,6 +1042,7 @@ drill-hole-drilled-diameter = Średnicy wierconej
 drill-hole-every-code-lists-already-another = Każdy wymieniony kod jest już w innym przekroju roboczym.
 drill-hole-every-interval-value-colour-field = Każdy interwał z wartością w polu koloru jest rysowany jako dysk o tej szerokości na linii otworu. Z daleka nigdy nie jest węższy niż kilka pikseli.
 drill-hole-field = Pole
+drill-hole-dataset = Zbiór danych
 drill-hole-field-working-section = { $field } wg przekroju roboczego
 drill-hole-floor = Spąg
 drill-hole-grayscale = Skala szarości

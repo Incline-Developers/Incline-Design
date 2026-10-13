@@ -972,6 +972,7 @@ drill-hole-drilled-diameter = Dari diameter pengeboran
 drill-hole-every-code-lists-already-another = Setiap kode yang tercantum sudah ada di working section lain.
 drill-hole-every-interval-value-colour-field = Setiap interval dengan nilai pada bidang warna digambar sebagai cakram selebar ini pada garis lubang. Dari jauh, lebarnya tidak pernah kurang dari beberapa piksel.
 drill-hole-field = Bidang
+drill-hole-dataset = Set data
 drill-hole-field-working-section = { $field } menurut working section
 drill-hole-floor = Lantai
 drill-hole-grayscale = Skala abu-abu

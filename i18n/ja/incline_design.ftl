@@ -1000,6 +1000,7 @@ drill-hole-drilled-diameter = 削孔径に対して
 drill-hole-every-code-lists-already-another = 記載されているすべてのコードが、既に別の作業セクションに含まれています。
 drill-hole-every-interval-value-colour-field = カラーフィールドに値を持つすべての区間は、ストリング上にこの幅のディスクとして描画されます。遠距離でも数ピクセルより細くなりません。
 drill-hole-field = フィールド
+drill-hole-dataset = データセット
 drill-hole-field-working-section = 作業セクション別の { $field }
 drill-hole-floor = 下盤
 drill-hole-grayscale = グレースケール
