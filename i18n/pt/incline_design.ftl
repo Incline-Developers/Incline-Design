@@ -1238,6 +1238,7 @@ drill-hole-drilled-diameter = Do diâmetro perfurado
 drill-hole-every-code-lists-already-another = Todos os códigos que indica já estão noutra secção de trabalho.
 drill-hole-every-interval-value-colour-field = Cada intervalo com valor no campo de cor é desenhado como um disco com esta largura sobre a linha do furo. À distância nunca é mais estreito do que alguns pixéis.
 drill-hole-field = Campo
+drill-hole-dataset = Conjunto de dados
 drill-hole-field-working-section = { $field } por secção de trabalho
 drill-hole-floor = Muro
 drill-hole-grayscale = Escala de cinzentos

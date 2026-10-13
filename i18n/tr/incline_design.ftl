@@ -1282,6 +1282,7 @@ drill-hole-drilled-diameter = Delinen çapın
 drill-hole-every-code-lists-already-another = Listelediği her kod zaten başka bir çalışma damarında.
 drill-hole-every-interval-value-colour-field = Renk alanında değeri olan her aralık, dizgi üzerinde bu genişlikte bir disk olarak çizilir. Uzakta asla birkaç pikselden dar olmaz.
 drill-hole-field = Alan
+drill-hole-dataset = Veri kümesi
 drill-hole-field-working-section = { $field }, çalışma damarına göre
 drill-hole-floor = Taban
 drill-hole-grayscale = Gri tonlama

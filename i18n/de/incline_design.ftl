@@ -1281,6 +1281,7 @@ drill-hole-drilled-diameter = Vom gebohrten Durchmesser
 drill-hole-every-code-lists-already-another = Jeder aufgeführte Code ist bereits in einem anderen Abbauabschnitt.
 drill-hole-every-interval-value-colour-field = Jedes Intervall mit einem Wert im Farbfeld wird als Scheibe dieser Breite auf dem Linienzug dargestellt. In der Ferne ist sie nie schmaler als wenige Pixel.
 drill-hole-field = Feld
+drill-hole-dataset = Datensatz
 drill-hole-field-working-section = { $field } nach Abbauabschnitt
 drill-hole-floor = Liegendes
 drill-hole-grayscale = Graustufen

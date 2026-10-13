@@ -1273,6 +1273,7 @@ drill-hole-drilled-diameter = 천공 직경 대비
 drill-hole-every-code-lists-already-another = 나열된 모든 코드가 이미 다른 작업 구간에 있습니다.
 drill-hole-every-interval-value-colour-field = 색상 필드에 값이 있는 모든 구간은 시추공 선 위에 이 너비의 디스크로 그려집니다. 멀리서도 몇 픽셀보다 좁아지지 않습니다.
 drill-hole-field = 필드
+drill-hole-dataset = 데이터 세트
 drill-hole-field-working-section = 작업 구간별 { $field }
 drill-hole-floor = 하반
 drill-hole-grayscale = 그레이스케일

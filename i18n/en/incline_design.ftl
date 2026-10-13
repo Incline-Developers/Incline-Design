@@ -1313,6 +1313,7 @@ drill-hole-drilled-diameter = Of drilled diameter
 drill-hole-every-code-lists-already-another = Every code it lists is already in another working section.
 drill-hole-every-interval-value-colour-field = Every interval with a value in the colour field is drawn as a disc this wide on the string. Far away it is never narrower than a few pixels.
 drill-hole-field = Field
+drill-hole-dataset = Dataset
 drill-hole-field-working-section = { $field } by working section
 drill-hole-floor = Floor
 drill-hole-grayscale = Grayscale

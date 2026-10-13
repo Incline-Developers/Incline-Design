@@ -1240,6 +1240,7 @@ drill-hole-drilled-diameter = من القطر المحفور
 drill-hole-every-code-lists-already-another = كل رمز يسرده موجود بالفعل في مقطع عمل آخر.
 drill-hole-every-interval-value-colour-field = كل فاصل له قيمة في حقل اللون يُرسم كقرص بهذا العرض على الخط. وعند البعد لا يكون أضيق من بضع بكسلات.
 drill-hole-field = الحقل
+drill-hole-dataset = مجموعة البيانات
 drill-hole-field-working-section = { $field } حسب مقطع العمل
 drill-hole-floor = القاع
 drill-hole-grayscale = تدرج رمادي

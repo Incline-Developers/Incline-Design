@@ -1293,6 +1293,7 @@ drill-hole-drilled-diameter = От диаметра бурения
 drill-hole-every-code-lists-already-another = Все коды, которые она содержит, уже входят в другую рабочую пачку.
 drill-hole-every-interval-value-colour-field = Каждый интервал со значением в поле цвета рисуется диском такой ширины на линии скважины. Вдали он никогда не становится уже нескольких пикселей.
 drill-hole-field = Поле
+drill-hole-dataset = Набор
 drill-hole-field-working-section = { $field } по рабочим пачкам
 drill-hole-floor = Почва
 drill-hole-grayscale = Оттенки серого
