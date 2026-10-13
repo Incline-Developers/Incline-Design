@@ -421,7 +421,7 @@ pub(super) fn trim_decimal_zeros(mut value: String) -> String {
 
 /// Formats a grade value with a decimal precision that scales down as the
 /// magnitude grows, so labels stay short without losing meaningful digits.
-pub(crate) fn format_grade(value: f64) -> String {
+pub(super) fn format_grade(value: f64) -> String {
     let decimals = if value.abs() >= 1000.0 {
         0
     } else if value.abs() >= 10.0 {
@@ -1102,7 +1102,6 @@ fn contrast_ink(background: [f32; 4]) -> (egui::Color32, egui::Color32) {
 fn overlay_label_font() -> egui::FontId {
     egui::FontId::new(11.0, egui::FontFamily::Name("noto_sans_bold".into()))
 }
-
 /// The outline laid behind overlay text, in its colour.
 #[derive(Clone, Copy)]
 pub(super) enum Outline {

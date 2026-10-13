@@ -2,7 +2,7 @@
 
 use crate::{
     i18n::tr,
-    model::{Document, FillStyle, ObjectColor, ObjectId, SceneEntityId, block_model::OpenBlockModel, drill_hole::OpenDrillHoleDataset, project::ModellingSettings},
+    model::{Document, FillStyle, ObjectColor, ObjectId, SceneEntityId, block_model::OpenBlockModel, project::ModellingSettings},
     rendering::color::{byte_to_linear_rgba, color32_to_rgba, linear_to_srgb_byte, rgba_to_color32},
     ui::{
         UiCommand, UiProjectView,
@@ -16,13 +16,7 @@ use crate::{
     },
 };
 
-pub(crate) fn draw_preferences(
-    ui: &mut egui::Ui,
-    editor: &mut EditorState,
-    drill_holes: &[OpenDrillHoleDataset],
-    modelling: Option<&ModellingSettings>,
-    commands: &mut Vec<UiCommand>,
-) {
+pub(crate) fn draw_preferences(ui: &mut egui::Ui, editor: &mut EditorState, modelling: Option<&ModellingSettings>, commands: &mut Vec<UiCommand>) {
     if !editor.show_preferences {
         return;
     }
@@ -61,7 +55,6 @@ pub(crate) fn draw_preferences(
                     (PropertyTab::Camera, tr!("properties-camera")),
                     (PropertyTab::Performance, tr!("properties-performance")),
                     (PropertyTab::Developer, tr!("properties-developer")),
-                    (PropertyTab::Drillholes, tr!("properties-drillholes")),
                     (PropertyTab::Modelling, tr!("properties-modelling")),
                 ] {
                     let response = crate::ui::widgets::explorer::ExplorerEntry::new(ui.id().with(tab as u8), label)
@@ -83,7 +76,6 @@ pub(crate) fn draw_preferences(
                         PropertyTab::Camera => draw_camera_settings(ui, editor, commands),
                         PropertyTab::Performance => draw_performance_settings(ui, editor, commands),
                         PropertyTab::Developer => draw_developer_settings(ui, editor, commands),
-                        PropertyTab::Drillholes => draw_drillhole_settings(ui, editor, drill_holes, commands),
                         PropertyTab::Modelling => draw_modelling_settings(ui, modelling, commands),
                     });
             });
@@ -621,33 +613,6 @@ fn draw_developer_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
         },
         Some(reset_developer_defaults),
     );
-}
-
-fn draw_drillhole_settings(ui: &mut egui::Ui, editor: &mut EditorState, drill_holes: &[OpenDrillHoleDataset], commands: &mut Vec<UiCommand>) {
-    menu::menu_section(ui, tr!("properties-drillholes"));
-    let loaded: Vec<&OpenDrillHoleDataset> = drill_holes.iter().filter(|dataset| dataset.state.loaded).collect();
-    let Some(current) = loaded
-        .iter()
-        .find(|dataset| Some(dataset.id) == editor.preferences_drill_hole)
-        .or_else(|| loaded.first())
-        .copied()
-    else {
-        ui.label(egui::RichText::new(tr!("properties-no-drillhole-datasets-open")).weak());
-        return;
-    };
-    editor.preferences_drill_hole = Some(current.id);
-    MenuFieldCombo::new(
-        "preferences_drill_hole",
-        tr!("properties-dataset"),
-        &mut editor.preferences_drill_hole,
-        current.name.clone(),
-        loaded.iter().map(|dataset| (Some(dataset.id), dataset.name.clone().into())),
-    )
-    .show(ui);
-    let Some(current) = loaded.iter().find(|dataset| Some(dataset.id) == editor.preferences_drill_hole).copied() else {
-        return;
-    };
-    crate::ui::dialogs::drill_hole::draw_drill_hole_color_editor(ui, current, commands, crate::ui::dialogs::drill_hole::ColorEditorHost::Page);
 }
 
 /// The open project's settings for Build Surface. A number being dragged is
