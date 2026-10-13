@@ -1854,8 +1854,6 @@ pub(crate) struct EditorState {
     pub(crate) bezier_dialog_open: bool,
     /// Selected Preferences section.
     pub(crate) active_property_tab: PropertyTab,
-    /// The drillhole dataset the Drillholes preferences page edits.
-    pub(crate) preferences_drill_hole: Option<DrillHoleId>,
     /// The workspace tab selected in the menu bar.
     pub(crate) active_workspace: Workspace,
     pub(crate) survey: crate::ui::dialogs::survey::SurveyState,
@@ -2809,7 +2807,6 @@ impl EditorState {
             bezier_hover_cp: None,
             bezier_dialog_open: false,
             active_property_tab: PropertyTab::Interface,
-            preferences_drill_hole: None,
             active_workspace: Workspace::Production,
             workspace_order: Workspace::ALL,
             survey: Default::default(),
@@ -5127,7 +5124,6 @@ pub(crate) enum PropertyTab {
     Camera,
     Performance,
     Developer,
-    Drillholes,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
