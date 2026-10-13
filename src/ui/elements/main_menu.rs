@@ -285,7 +285,7 @@ fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, wor
     // Drill & Blast's Move Collar is put down on the way out just as the
     // drawing tools are on the way in.
     let survives = match editor.active_tool {
-        ActiveTool::None | ActiveTool::VerticalSlice | ActiveTool::PickRotationCentre => true,
+        ActiveTool::None | ActiveTool::VerticalSlice | ActiveTool::PickRotationCentre | ActiveTool::MeasureDistance | ActiveTool::MeasureBatterAngle | ActiveTool::Hide => true,
         ActiveTool::MoveCollar | ActiveTool::RotateCollar | ActiveTool::TieHoles | ActiveTool::SetInitiationPoint | ActiveTool::ChargeHoles => {
             workspace == Workspace::DrillAndBlast
         }
@@ -842,14 +842,12 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                     commands.push(UiCommand::OpenCreateBlockModel);
                     ui.close();
                 }
-            });
-
-            MenuBarMenu::new(&tr!("ws-menubar-modelling")).show(ui, |ui| {
+                context_menu_separator(ui);
                 // Select first, then act: placed on the holes selected at open.
                 let can_build_points = editor.selection_counts.reference_holes > 0;
                 if ContextMenuAction::new(tr!("common-reference-points"))
                     .enabled(can_build_points)
-                    .disabled_hover_text(tr!("ws-menubar-modelling-select-holes"))
+                    .disabled_hover_text(tr!("ws-menubar-drillholes-select-holes"))
                     .show(ui)
                     .clicked()
                 {
@@ -863,7 +861,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                 if ContextMenuAction::new(tr!("common-build-surface-ellipsis"))
                     .enabled(can_build_surface)
                     .disabled_hover_text(tr!(
-                        "ws-menubar-modelling-select-points",
+                        "ws-menubar-drillholes-select-points",
                         count = crate::app::commands::triangulation::reference_surface::MINIMUM_POINTS.to_string()
                     ))
                     .show(ui)
@@ -878,7 +876,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                 let can_make_thickness = editor.selection_counts.triangulations == 1;
                 if ContextMenuAction::new(tr!("common-thickness-points-ellipsis"))
                     .enabled(can_make_thickness)
-                    .disabled_hover_text(tr!("ws-menubar-modelling-select-surface"))
+                    .disabled_hover_text(tr!("ws-menubar-drillholes-select-surface"))
                     .show(ui)
                     .clicked()
                 {
@@ -889,7 +887,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                 // thickness points are made.
                 if ContextMenuAction::new(tr!("common-thickness-surfaces-ellipsis"))
                     .enabled(can_make_thickness)
-                    .disabled_hover_text(tr!("ws-menubar-modelling-select-surface"))
+                    .disabled_hover_text(tr!("ws-menubar-drillholes-select-surface"))
                     .show(ui)
                     .clicked()
                 {
@@ -902,7 +900,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                 // the dialog.
                 if ContextMenuAction::new(tr!("common-clip-to-surface-ellipsis"))
                     .enabled(editor.selection_counts.triangulations == 2)
-                    .disabled_hover_text(tr!("ws-menubar-modelling-select-surfaces"))
+                    .disabled_hover_text(tr!("ws-menubar-drillholes-select-surfaces"))
                     .show(ui)
                     .clicked()
                 {
@@ -939,7 +937,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
             }
             if ContextMenuAction::new(tr!("common-clip-to-surface-ellipsis"))
                 .enabled(editor.selection_counts.triangulations == 2)
-                .disabled_hover_text(tr!("ws-menubar-modelling-select-surfaces"))
+                .disabled_hover_text(tr!("ws-menubar-drillholes-select-surfaces"))
                 .show(ui)
                 .clicked()
             {
@@ -962,6 +960,15 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                 .clicked()
             {
                 commands.push(UiCommand::OpenContourTriangulation);
+                ui.close();
+            }
+        });
+
+        // Pit optimization works over a block model, but it opens on its
+        // scenarios rather than on a selection: each scenario names its own.
+        MenuBarMenu::new(&tr!("ws-menubar-block-model")).show(ui, |ui| {
+            if ContextMenuAction::new(tr!("menu-pit-optimization")).show(ui).clicked() {
+                commands.push(UiCommand::OpenOptimizationScenarios);
                 ui.close();
             }
         });

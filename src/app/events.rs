@@ -133,7 +133,8 @@ impl<'a> App<'a> {
         }
 
         if !gui_consumed {
-            let canvas_pick_mode_active = self.editor.triangulation_pick_target.is_some() || self.editor.drill_pattern_awaiting_shape_pick;
+            let canvas_pick_mode_active =
+                self.editor.triangulation_pick_target.is_some() || self.editor.optimization.start_pick.is_some() || self.editor.drill_pattern_awaiting_shape_pick;
             let suppress_view_mode_canvas_click = self.editor.view_mode_owns_canvas_click() && matches!(event, WindowEvent::MouseInput { button: MouseButton::Left, .. });
             if !suppress_view_mode_canvas_click || canvas_pick_mode_active {
                 self.handle_mouse_press(&event);
@@ -203,9 +204,14 @@ impl<'a> App<'a> {
                     self.poll_raster_loads();
                     self.poll_saves();
                     self.poll_jobs();
+                    self.reconcile_optimization_runs();
                     self.refresh_status_message();
                     if let Some(usage) = self.memory_sampler.poll() {
                         self.editor.memory_usage = Some(usage);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if let Some(cores) = self.cpu_sampler.poll() {
+                        self.editor.cpu_usage = cores;
                     }
                     let now = Instant::now();
                     let frame_interval = self.frame_interval();
@@ -557,6 +563,7 @@ impl<'a> App<'a> {
                             || self.editor.relimit_waiting_for_pick
                             || self.editor.relimit_confirming_end
                             || self.editor.triangulation_pick_target.is_some()
+                            || self.editor.optimization.start_pick.is_some()
                             || self.editor.drill_pattern_awaiting_shape_pick);
                     if hover_pick_due {
                         self.last_snap_poll_instant = Some(now);
@@ -664,7 +671,9 @@ impl<'a> App<'a> {
                     if self.editor.active_tool == ActiveTool::ExplodePolyline && hover_pick_due {
                         self.update_explode_hover();
                     }
-                    if (self.editor.triangulation_pick_target.is_some() || self.editor.drill_pattern_awaiting_shape_pick) && hover_pick_due {
+                    if (self.editor.triangulation_pick_target.is_some() || self.editor.optimization.start_pick.is_some() || self.editor.drill_pattern_awaiting_shape_pick)
+                        && hover_pick_due
+                    {
                         self.update_viewport_field_pick_hover();
                     }
                     if !self.editor.pending_stroke.is_empty()
@@ -891,7 +900,7 @@ impl<'a> App<'a> {
             ..
         } = event
         {
-            if self.editor.triangulation_pick_target.is_some() || self.editor.drill_pattern_awaiting_shape_pick {
+            if self.editor.triangulation_pick_target.is_some() || self.editor.optimization.start_pick.is_some() || self.editor.drill_pattern_awaiting_shape_pick {
                 self.editor.canvas_context_menu_open = false;
                 self.begin_select_or_drag();
                 return;
@@ -910,7 +919,7 @@ impl<'a> App<'a> {
                 ActiveTool::EditVertex => self.edit_vertex_at_cursor(),
                 ActiveTool::InsertPoint => self.insert_point_at_cursor(),
                 ActiveTool::VerticalSlice => self.slice_line_click(),
-                ActiveTool::DeletePoints => {
+                ActiveTool::DeletePoints | ActiveTool::Hide => {
                     self.editor.selection_box_start_px = self.editor.cursor_screen_px;
                     self.editor.selection_box_current_px = self.editor.cursor_screen_px;
                 }
@@ -1414,6 +1423,8 @@ impl<'a> App<'a> {
                     self.redraw_requested = true;
                 } else if self.editor.text_editing_enabled {
                     self.cancel_text_edit();
+                } else if self.editor.optimization.start_pick.is_some() {
+                    self.cancel_shell_start_pick();
                 } else if self.editor.triangulation_pick_target.is_some() {
                     self.editor.triangulation_pick_target = None;
                     self.editor.viewport_pick_hover_label = None;

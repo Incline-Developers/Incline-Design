@@ -292,7 +292,7 @@ pub(crate) fn create_scene_pipelines(
     let block_model_vertex_buffers = [Some(wgpu::VertexBufferLayout {
         array_stride: size_of::<BlockInstance>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Instance,
-        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32, 2 => Float32x3],
+        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32, 2 => Float32x3, 3 => Uint32],
     })];
 
     // One instance per stroke primitive; the shader expands six vertices.

@@ -4,8 +4,9 @@ pub(crate) mod drill_hole;
 pub(crate) mod file; // Handles importing, exportings, etc. commands
 pub(crate) mod folder; // Handles explorer folder create/delete/rename/move commands, for every section
 pub(crate) mod layer; // Handles creating layers, deleting layers, etc. commands
-pub(crate) mod object_edit; // Handles the "Edit Object" dialog's working-copy writeback.
+pub(crate) mod object_edit;
 pub(crate) mod omf; // Whole-project Open Mining Format interchange.
+pub(crate) mod optimization; // Handles pit optimization's scenario list, editor and scenarios file.
 pub(crate) mod plot; // Handles printable plot sheets
 pub(crate) mod point_cloud; // Handles importing/loading point clouds, etc. commands
 pub(crate) mod products; // Handles the Drill & Blast workspace's stored products.
@@ -31,7 +32,7 @@ use crate::{
     app::App,
     i18n::tr,
     model::{Command, SceneEntityId},
-    ui::state::{ActiveTool, PropertyTab, TriCreatePhase, TriCutSource, UiCommand},
+    ui::state::{ActiveTool, TriCreatePhase, TriCutSource, UiCommand},
     userspace_error, userspace_log, userspace_warn,
 };
 
@@ -160,7 +161,6 @@ impl<'a> App<'a> {
                 | UiCommand::OpenCutTriangulationToSurface
                 | UiCommand::ExecuteCutTriangulationToSurface { .. }
                 | UiCommand::BuildCollarPoints { .. }
-                | UiCommand::OpenModellingSettings
                 | UiCommand::SetModellingSettings(_)
                 | UiCommand::BuildReferencePoints { .. }
                 | UiCommand::OpenCreateOreTriangulation
@@ -172,6 +172,7 @@ impl<'a> App<'a> {
                 | UiCommand::DeleteRingVertex { .. }
                 | UiCommand::ShowObjectVertex { .. }
                 | UiCommand::ShiftStratColumn { .. }
+                | UiCommand::RunOptimizationScenario(_)
         );
         if requires_project && !self.workspace.has_active_project() {
             anyhow::bail!("Create or open a project before importing, drawing, or generating data");
@@ -379,6 +380,10 @@ impl<'a> App<'a> {
             }
             UiCommand::UnhideAll => {
                 self.unhide_all_objects();
+                Ok(())
+            }
+            UiCommand::ShowAllHidden => {
+                self.show_all_hidden_objects();
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -753,11 +758,6 @@ impl<'a> App<'a> {
                 self.build_collar_points(holes);
                 Ok(())
             }
-            UiCommand::OpenModellingSettings => {
-                self.editor.active_property_tab = PropertyTab::Modelling;
-                self.editor.show_preferences = true;
-                Ok(())
-            }
             UiCommand::SetModellingSettings(settings) => {
                 if let Some(problem) = settings.problem() {
                     anyhow::bail!("{problem}");
@@ -853,19 +853,74 @@ impl<'a> App<'a> {
                 self.set_drill_hole_color_by_working_section(id, field);
                 Ok(())
             }
+            UiCommand::OpenOptimizationScenarios => {
+                self.open_optimization_scenarios();
+                Ok(())
+            }
+            UiCommand::AddOptimizationScenario => {
+                self.add_optimization_scenario();
+                Ok(())
+            }
+            UiCommand::EditOptimizationScenario(id) => {
+                self.edit_optimization_scenario(id);
+                Ok(())
+            }
+            UiCommand::SaveOptimizationScenario { scenario, then_close } => self.save_optimization_scenario(*scenario, then_close),
+            UiCommand::ExportOptimizationScenarios => {
+                self.export_optimization_scenarios();
+                Ok(())
+            }
+            UiCommand::ImportOptimizationScenarios => {
+                self.import_optimization_scenarios();
+                Ok(())
+            }
+            UiCommand::ExportOptimizationReport => {
+                self.export_optimization_report();
+                Ok(())
+            }
+            UiCommand::SaveOptimizationReportColumns => self.save_optimization_report_columns(),
+            UiCommand::CopyScenarioWithShells { id, factors } => self.copy_scenario_with_shells(id, &factors),
+            UiCommand::ConfirmOptimizationLoad(load) => {
+                self.confirm_optimization_load(load);
+                Ok(())
+            }
+            UiCommand::OpenOptimizationReport => {
+                self.open_optimization_report();
+                Ok(())
+            }
+            UiCommand::ChooseOptimizationReportsFolder => {
+                self.choose_optimization_reports_folder();
+                Ok(())
+            }
+            UiCommand::BeginShellStartPick => {
+                self.begin_shell_start_pick();
+                Ok(())
+            }
+            UiCommand::DuplicateOptimizationScenario(id) => self.duplicate_optimization_scenario(id),
+            UiCommand::RenameOptimizationScenario { id, name } => self.rename_optimization_scenario(id, name),
+            UiCommand::DeleteOptimizationScenario(id) => self.delete_optimization_scenario(id),
+            UiCommand::RunOptimizationScenario(id) => {
+                self.run_optimization_scenario(id);
+                Ok(())
+            }
+            UiCommand::CancelOptimizationScenario(id) => {
+                self.cancel_optimization_scenario(id);
+                Ok(())
+            }
             UiCommand::OpenCreateBlockModel => {
                 // One dataset is estimated at a time, so the selection has to
-                // name exactly which one before the dialog opens on it.
-                let selected = self.selected_drill_hole_datasets();
-                let [drill_hole_id] = selected[..] else {
+                // name exactly which one - whole, or some of its holes picked
+                // in the viewport - before the dialog opens on it.
+                let Some((drill_hole_id, holes)) = self.block_model_source() else {
                     userspace_warn!("{}", tr!("cmd-commands-select-one-loaded-drill-hole"));
                     return Ok(());
                 };
-                self.open_create_block_model_dialog(drill_hole_id);
+                self.open_create_block_model_dialog(drill_hole_id, holes);
                 Ok(())
             }
             UiCommand::ExecuteCreateBlockModel {
                 drill_hole_id,
+                holes,
                 variables,
                 name,
                 lower,
@@ -877,7 +932,7 @@ impl<'a> App<'a> {
                 min_samples,
                 max_samples,
             } => {
-                let result = self.create_block_model_ordinary_kriging(drill_hole_id, variables, name, lower, upper, cell, range, sill, nugget, min_samples, max_samples);
+                let result = self.create_block_model_ordinary_kriging(drill_hole_id, holes, variables, name, lower, upper, cell, range, sill, nugget, min_samples, max_samples);
                 if result.is_ok() {
                     self.editor.block_model_create_open = false;
                 }
@@ -986,11 +1041,6 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::SetGridShown(shown) => self.set_grid_shown(shown),
-            UiCommand::SetPointCloudClassificationColors(enabled) => {
-                self.editor.point_cloud_classification_colors = enabled;
-                self.redraw_requested = true;
-                Ok(())
-            }
             UiCommand::SetTopologyWireframes(enabled) => self.set_topology_wireframes(enabled),
             #[cfg(not(target_arch = "wasm32"))]
             UiCommand::SetSlicePreviewDetached(detached) => {
@@ -1716,5 +1766,43 @@ impl<'a> App<'a> {
         } else {
             userspace_log!("{}", tr!("cmd-unhide-all-objects-items-count", objects = objects.to_string(), items = items.to_string()));
         }
+    }
+
+    /// Hide design objects of the active project, as the Hide tool's click or
+    /// box takes them. Already hidden or foreign ids are skipped.
+    pub(crate) fn hide_objects(&mut self, ids: impl IntoIterator<Item = crate::model::ObjectId>) {
+        let Some(document) = self.workspace.active_document() else {
+            return;
+        };
+        let commands: Vec<Command> = ids
+            .into_iter()
+            .filter(|id| document.get_object(*id).is_some() && !document.is_object_hidden(*id))
+            .map(|id| Command::SetObjectHidden { id, before: false, after: true })
+            .collect();
+        if commands.is_empty() {
+            return;
+        }
+        for command in &commands {
+            if let Command::SetObjectHidden { id, .. } = command {
+                self.editor.selected_handles.remove(&crate::model::SceneEntityId::Object(*id));
+            }
+        }
+        self.execute_edit(Command::Batch(commands));
+        self.invalidate_geometry();
+    }
+
+    /// Bring back every design object hidden on its own. Hidden layers and
+    /// project items keep their explorer eye: only what has no row of its own
+    /// to unhide from comes back here.
+    fn show_all_hidden_objects(&mut self) {
+        let Some(document) = self.workspace.active_document() else {
+            return;
+        };
+        let commands: Vec<Command> = document.hidden_object_ids().map(|id| Command::SetObjectHidden { id, before: true, after: false }).collect();
+        if commands.is_empty() {
+            return;
+        }
+        self.execute_edit(Command::Batch(commands));
+        self.invalidate_geometry();
     }
 }

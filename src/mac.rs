@@ -122,15 +122,17 @@ pub(crate) enum MacMenuAction {
     OpenReferencePoints,
     /// The Drillholes menu's row that opens the build surface dialog.
     OpenReferenceSurface,
-    /// The Modelling menu's row that opens the thickness points dialog.
+    /// The Drillholes menu's row that opens the thickness points dialog.
     OpenThicknessPoints,
-    /// The Modelling menu's row that opens the thickness surfaces dialog.
+    /// The Drillholes menu's row that opens the thickness surfaces dialog.
     OpenSeamSurface,
-    /// The Modelling menu's row that opens the clip to surface dialog.
-    OpenModellingClipToSurface,
+    /// The Drillholes menu's row that opens the clip to surface dialog.
+    OpenDrillHolesClipToSurface,
     /// The Triangulation menu's row that opens the same dialog, beside the
     /// other cuts.
     OpenCutTriangulationToSurface,
+    /// The Block Model menu's row that opens the pit optimization scenarios.
+    OpenOptimizationScenarios,
     /// One row of File > Open Recent, by its index in the recent list the menu
     /// was last built from.
     OpenRecent(usize),
@@ -151,7 +153,6 @@ const TRIANGULATION_MENU_TAG: isize = -1;
 const BLOCK_MODEL_MENU_TAG: isize = -3;
 const DRILL_HOLES_MENU_TAG: isize = -5;
 const COORDINATES_MENU_TAG: isize = -6;
-const MODELLING_MENU_TAG: isize = -7;
 const DESIGN_MENU_TAG: isize = -8;
 /// Geology Design's own rows that carry no action of their own - its
 /// headings, separator and submenus - shown in Geology alone.
@@ -215,8 +216,9 @@ impl MacMenuAction {
         Self::OpenReferenceSurface,
         Self::OpenThicknessPoints,
         Self::OpenSeamSurface,
-        Self::OpenModellingClipToSurface,
+        Self::OpenDrillHolesClipToSurface,
         Self::OpenCutTriangulationToSurface,
+        Self::OpenOptimizationScenarios,
     ];
 
     /// The `NSMenuItem` tag this action is carried by.
@@ -568,6 +570,9 @@ pub(crate) fn install_menu_bar() {
         &target,
         mtm,
     );
+    // Production's half of the menu; `set_workspace_menus` shows each
+    // workspace only its own row.
+    add_action(&block_model_menu, &tr!("menu-pit-optimization"), "", MacMenuAction::OpenOptimizationScenarios, &target, mtm);
     let block_model_item = add_submenu(&root, &tr!("ws-menubar-block-model"), &block_model_menu, mtm);
     block_model_item.setTag(BLOCK_MODEL_MENU_TAG);
 
@@ -581,23 +586,19 @@ pub(crate) fn install_menu_bar() {
         &target,
         mtm,
     );
-    let drill_hole_item = add_submenu(&root, &tr!("ws-menubar-drillholes"), &drill_hole_menu, mtm);
-    drill_hole_item.setTag(DRILL_HOLES_MENU_TAG);
-
-    let modelling_menu = menu(&tr!("ws-menubar-modelling"), mtm);
-    modelling_menu.setAutoenablesItems(false);
-    add_action(&modelling_menu, &tr!("common-reference-points"), "", MacMenuAction::OpenReferencePoints, &target, mtm);
+    add_separator(&drill_hole_menu, mtm);
+    add_action(&drill_hole_menu, &tr!("common-reference-points"), "", MacMenuAction::OpenReferencePoints, &target, mtm);
     add_action(
-        &modelling_menu,
+        &drill_hole_menu,
         &tr!("common-build-surface-ellipsis"),
         "",
         MacMenuAction::OpenReferenceSurface,
         &target,
         mtm,
     );
-    add_separator(&modelling_menu, mtm);
+    add_separator(&drill_hole_menu, mtm);
     add_action(
-        &modelling_menu,
+        &drill_hole_menu,
         &tr!("common-thickness-points-ellipsis"),
         "",
         MacMenuAction::OpenThicknessPoints,
@@ -605,24 +606,24 @@ pub(crate) fn install_menu_bar() {
         mtm,
     );
     add_action(
-        &modelling_menu,
+        &drill_hole_menu,
         &tr!("common-thickness-surfaces-ellipsis"),
         "",
         MacMenuAction::OpenSeamSurface,
         &target,
         mtm,
     );
-    add_separator(&modelling_menu, mtm);
+    add_separator(&drill_hole_menu, mtm);
     add_action(
-        &modelling_menu,
+        &drill_hole_menu,
         &tr!("common-clip-to-surface-ellipsis"),
         "",
-        MacMenuAction::OpenModellingClipToSurface,
+        MacMenuAction::OpenDrillHolesClipToSurface,
         &target,
         mtm,
     );
-    let modelling_item = add_submenu(&root, &tr!("ws-menubar-modelling"), &modelling_menu, mtm);
-    modelling_item.setTag(MODELLING_MENU_TAG);
+    let drill_hole_item = add_submenu(&root, &tr!("ws-menubar-drillholes"), &drill_hole_menu, mtm);
+    drill_hole_item.setTag(DRILL_HOLES_MENU_TAG);
 
     let coordinates_menu = menu(&tr!("survey-coordinates-menu"), mtm);
     coordinates_menu.setAutoenablesItems(false);
@@ -705,15 +706,18 @@ fn set_workspace_menus(root: &NSMenu, workspace: Workspace) {
         item.setHidden(workspace != Workspace::Production);
     }
 
+    // Geology thresholds the block model; Production optimizes a pit over it.
     if let Some(item) = find_item(root, BLOCK_MODEL_MENU_TAG) {
+        item.setHidden(!matches!(workspace, Workspace::Geology | Workspace::Production));
+    }
+    if let Some(item) = find_item(root, MacMenuAction::OpenCreateOreTriangulation.tag()) {
         item.setHidden(workspace != Workspace::Geology);
+    }
+    if let Some(item) = find_item(root, MacMenuAction::OpenOptimizationScenarios.tag()) {
+        item.setHidden(workspace != Workspace::Production);
     }
 
     if let Some(item) = find_item(root, DRILL_HOLES_MENU_TAG) {
-        item.setHidden(workspace != Workspace::Geology);
-    }
-
-    if let Some(item) = find_item(root, MODELLING_MENU_TAG) {
         item.setHidden(workspace != Workspace::Geology);
     }
 }
@@ -817,7 +821,7 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     set_enabled(&root, MacMenuAction::OpenReferenceSurface, state.can_build_reference_surface);
     set_enabled(&root, MacMenuAction::OpenThicknessPoints, state.can_make_thickness_points);
     set_enabled(&root, MacMenuAction::OpenSeamSurface, state.can_make_thickness_points);
-    set_enabled(&root, MacMenuAction::OpenModellingClipToSurface, state.can_clip_to_surface);
+    set_enabled(&root, MacMenuAction::OpenDrillHolesClipToSurface, state.can_clip_to_surface);
     set_enabled(&root, MacMenuAction::OpenCutTriangulationToSurface, state.can_clip_to_surface);
     set_enabled(&root, MacMenuAction::OpenCreateOreTriangulation, state.can_create_ore_triangulation);
     for action in [MacMenuAction::OpenCutTriangulationByZ, MacMenuAction::OpenContourTriangulation] {

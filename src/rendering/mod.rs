@@ -43,7 +43,9 @@ pub(crate) struct BlockInstance {
     pub(crate) lower: [f32; 3],
     pub(crate) grade: f32,
     pub(crate) upper: [f32; 3],
-    pub(crate) _pad: f32,
+    /// Faces with no visible neighbour, one bit each in `FACE_OFFSETS`
+    /// order: the ones the shaders outline when the model is selected.
+    pub(crate) faces: u32,
 }
 
 /// One stroke primitive, expanded by `stroke.wgsl` into a screen-space quad:

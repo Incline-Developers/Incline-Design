@@ -36,6 +36,11 @@ struct BlockVolume {
     // when the level-1 LOD is disabled.
     super_dims: vec4<u32>,
     stops: array<ColorStop, 32>,
+    // Outline drawn round the first visible cell each ray meets, as
+    // `block_wire_coverage` draws a cube's: colour, then x = width in pixels
+    // (0 for none).
+    wire_color: vec4<f32>,
+    wire_params: vec4<f32>,
 };
 @group(1) @binding(0)
 var<uniform> volume: BlockVolume;
@@ -520,6 +525,15 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         && (u32(frag_coord.x) & 7u) == (feedback_phase & 7u)
         && (u32(frag_coord.y) & 7u) == (feedback_phase >> 3u);
     var last_feedback_ordinal = EMPTY_BRICK;
+    // The outline goes round the first visible cell the ray meets, the
+    // model's front surface from this pixel: where it was met, its cell, and
+    // how much of it showed through whatever lay in front. Settled at the
+    // first contribution either way; a coarse or not-yet-resident brick has
+    // no cell to outline, so a first hit there leaves none.
+    var wire_pending = volume.wire_params.x > 0.0;
+    var wire_t = -1.0;
+    var wire_cell = vec3<u32>(0u);
+    var wire_front = 0.0;
 
     for (var step = 0u; step < max_steps; step = step + 1u) {
         if (t >= t_exit || (1.0 - transmittance) >= volume.options.z) {
@@ -621,6 +635,16 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
 
             let segment_len = max(min(t_brick_exit, t_exit) - t, 0.0);
             if (aggregate.w > 0.0 && segment_len > 0.0) {
+                if (wire_pending) {
+                    wire_pending = false;
+                    // Only a uniform brick at full detail holds what it
+                    // shows cell for cell; its every cell is visible.
+                    if (brick_uniform && !coarse && region == bs) {
+                        wire_t = t;
+                        wire_cell = vec3<u32>(i, j, k);
+                        wire_front = transmittance;
+                    }
+                }
                 let alpha = clamp(1.0 - exp(-aggregate.w * segment_len / ray_span), 0.0, 1.0);
                 color = color + transmittance * alpha * aggregate.rgb * VOLUME_AMBIENT_INTENSITY;
                 transmittance = transmittance * (1.0 - alpha);
@@ -779,6 +803,12 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
 
         if (segment_len > 0.0 && current_payload != EMPTY_CELL_PAYLOAD
             && current_color.a >= VISIBLE_ALPHA_EPSILON) {
+            if (wire_pending) {
+                wire_pending = false;
+                wire_t = t;
+                wire_cell = vec3<u32>(i, j, k);
+                wire_front = transmittance;
+            }
             let optical_depth = optical_depth_for_alpha(clamp(current_color.a, 0.0, 1.0));
             let alpha = clamp(1.0 - exp(-optical_depth * segment_len / ray_span), 0.0, 1.0);
             let contribution = transmittance * alpha;
@@ -944,6 +974,22 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     // premultiplied colour so many highlighted strata cannot collectively
     // glow more strongly than the volume's actual opacity.
     color = min(color, vec3<f32>(alpha_out));
+    if (wire_t >= 0.0) {
+        // The cell's bounds, cut to the slice the march was. A pixel's
+        // footprint at the hit, foreshortened along each axis by how nearly
+        // the ray runs along it, turns distances on the face into pixels.
+        let hit = local_near + local_dir * wire_t;
+        let lower = max(vec3<f32>(x_plane(wire_cell.x), y_plane(wire_cell.y), z_plane(wire_cell.z)), volume.bounds_min.xyz);
+        let upper = min(vec3<f32>(x_plane(wire_cell.x + 1u), y_plane(wire_cell.y + 1u), z_plane(wire_cell.z + 1u)), volume.bounds_max.xyz);
+        // Measured in the raycaster's own pixels, so while interacting at a
+        // reduced render scale the line stays a pixel of what is drawn.
+        let footprint = max(fp_base + fp_slope * wire_t, 1.0e-9);
+        let pixels_per_unit = sqrt(max(vec3<f32>(1.0) - local_dir * local_dir, vec3<f32>(1.0e-6))) / footprint;
+        let line = block_wire_coverage(hit, lower, upper, pixels_per_unit, volume.wire_params.x, 0x3Fu) * volume.wire_color.a * wire_front;
+        // Laid over the result: unlit, like the cubes' outline.
+        color = mix(color, volume.wire_color.rgb, line);
+        alpha_out = mix(alpha_out, 1.0, line);
+    }
     return vec4<f32>(color, alpha_out);
 }
 

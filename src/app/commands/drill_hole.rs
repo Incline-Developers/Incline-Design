@@ -858,9 +858,7 @@ impl<'a> App<'a> {
             hidden: false,
             elevation: 0.0,
             folder: None,
-            // Derived from the holes, so it is tagged for Modelling rather
-            // than left where a hand-drawn layer lands.
-            section: crate::model::SectionKind::Modelling,
+            section: crate::model::SectionKind::Designs,
         };
         let objects: Vec<crate::model::Object> = picks
             .iter()
@@ -929,7 +927,7 @@ impl<'a> App<'a> {
             hidden: false,
             elevation: 0.0,
             folder: None,
-            section: crate::model::SectionKind::Modelling,
+            section: crate::model::SectionKind::Designs,
         };
         let objects: Vec<crate::model::Object> = collars
             .iter()

@@ -360,6 +360,9 @@ struct UiFrameContext<'a> {
 /// to, the way out, why it is being asked - goes in `minor` rather than being
 /// punctuated onto the end, so the banner can dim it. See [`ViewportMessage`].
 fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
+    if editor.optimization.start_pick.is_some() {
+        return Some(ViewportMessage::text(tr!("opt-pick-prompt")).minor(tr!("ui-esc-cancels")));
+    }
     if editor.drill_pattern_awaiting_shape_pick {
         return Some(ViewportMessage::text(tr!("ui-click-closed-polyline-use-blast")).minor(tr!("ui-esc-cancels")));
     }
@@ -474,6 +477,7 @@ fn tool_prompt(editor: &EditorState) -> Option<ViewportMessage> {
         ActiveTool::DeletePoints => ViewportMessage::text(tr!("ui-select-point")),
         ActiveTool::EditVertex => ViewportMessage::text(tr!("ui-select-polyline-vertex")),
         ActiveTool::InsertPoint => ViewportMessage::text(tr!("ui-click-string-insert-point")).minor(tr!("ui-esc-cancels")),
+        ActiveTool::Hide => ViewportMessage::text(tr!("ui-select-designs-to-hide")),
         _ => return None,
     };
     Some(message)
@@ -647,7 +651,7 @@ fn draw_ui(
         root_ui.skip_ahead_auto_ids(1);
     }
 
-    let bottom_toolbar_rect = elements::toolbars::draw_bottom_toolbar(root_ui, editor, commands);
+    let (bottom_toolbar_rect, cursor_modes_centre) = elements::toolbars::draw_bottom_toolbar(root_ui, editor, commands);
 
     // Down the right edge. Claimed after the two strips below it, so it stops
     // at the bottom toolbar's top and they carry on underneath it, and after
@@ -1216,7 +1220,7 @@ fn draw_ui(
         &ctx,
         [
             chrome::Grip::new(explorer.column, chrome::Edge::Right, elements::explorer::PANEL_ID),
-            chrome::Grip::new(console_claimed, chrome::Edge::Top, elements::console::PANEL_ID),
+            chrome::Grip::new(console_claimed, chrome::Edge::Top, elements::console::PANEL_ID).centred_at_x(cursor_modes_centre),
             chrome::Grip::new(products_claimed, chrome::Edge::Top, elements::products::PANEL_ID),
             chrome::Grip::new(borehole_inspector_claimed, chrome::Edge::Left, elements::borehole_inspector::PANEL_ID),
         ],
@@ -1419,6 +1423,8 @@ fn draw_global_dialogs(
     if editor.block_model_create_open {
         elements::block_model::draw_create_block_model_dialog(root_ui, editor, drill_holes, commands);
     }
+    dialogs::optimization::draw_optimization_dialogs(root_ui, editor, block_models, project, commands);
+    widgets::toast::draw_toasts(root_ui.ctx(), &mut editor.toasts);
     if editor.ore_triangulation_open {
         elements::block_model::draw_ore_triangulation_dialog(root_ui, editor, block_models, commands);
     }

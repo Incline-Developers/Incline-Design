@@ -7,7 +7,7 @@ use wgpu::util::DeviceExt;
 
 use super::{
     block_model_ramp::{VISIBLE_ALPHA_EPSILON, is_hidden_block_appearance, ramp_rgba, volume_optical_depth_for_alpha},
-    gpu_cache::{block_model_color_values, grade_for_block},
+    gpu_cache::{BlockWire, block_model_color_values, grade_for_block},
 };
 use crate::{
     model::block_model::{MAX_GRADIENT_ENTRIES, NormalizedRamp, OpenBlockModel},
@@ -119,6 +119,10 @@ pub(crate) struct BlockVolumeUniform {
     /// 0 to disable the level-1 LOD entirely.
     super_dims: [u32; 4],
     stops: [ColorStopUniform; MAX_GRADIENT_ENTRIES],
+    /// The outline round the first visible cell a ray meets: colour, then
+    /// x = width in pixels, 0 for none. See `BlockWire`.
+    wire_color: [f32; 4],
+    wire_params: [f32; 4],
 }
 
 pub(crate) struct CachedBlockVolumeGpu {
@@ -621,6 +625,7 @@ impl BlockVolumeAsset {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn upload_block_volume_gpu(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -629,6 +634,7 @@ pub(crate) fn upload_block_volume_gpu(
     layout: &wgpu::BindGroupLayout,
     asset: BlockVolumeAsset,
     boundary_highlights: bool,
+    wire: BlockWire,
 ) -> Option<CachedBlockVolumeGpu> {
     let storage_limit = device.limits().max_storage_buffer_binding_size;
     let max_buffer = device.limits().max_buffer_size;
@@ -708,7 +714,7 @@ pub(crate) fn upload_block_volume_gpu(
     streamer.replan(seed_camera);
     let seed = streamer.drain(pool_slots as usize);
 
-    let uniform = block_volume_uniform(block_model, scene_origin, &asset, streamer.feedback_enabled(), boundary_highlights);
+    let uniform = block_volume_uniform(block_model, scene_origin, &asset, streamer.feedback_enabled(), boundary_highlights, wire);
     let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Block Model Volume Uniform"),
         contents: bytemuck::bytes_of(&uniform),
@@ -943,7 +949,14 @@ fn write_info_updates(queue: &wgpu::Queue, buffer: &wgpu::Buffer, mut updates: V
     }
 }
 
-pub(crate) fn update_block_volume_style(queue: &wgpu::Queue, volume: &mut CachedBlockVolumeGpu, scene_origin: DVec3, block_model: &OpenBlockModel, boundary_highlights: bool) {
+pub(crate) fn update_block_volume_style(
+    queue: &wgpu::Queue,
+    volume: &mut CachedBlockVolumeGpu,
+    scene_origin: DVec3,
+    block_model: &OpenBlockModel,
+    boundary_highlights: bool,
+    wire: BlockWire,
+) {
     let style = compute_brick_style_data(&volume.asset, &block_model.normalized_ramp(), block_model.color);
     queue.write_buffer(&volume.brick_aggregate_buffer, 0, bytemuck::cast_slice(&style.aggregates));
     if !style.super_aggregates.is_empty() {
@@ -959,14 +972,21 @@ pub(crate) fn update_block_volume_style(queue: &wgpu::Queue, volume: &mut Cached
     volume.asset.brick_visibility_mixed = style.visibility_mixed_flags.clone();
     volume.streamer.set_style_flags(style.uniform_flags, style.visibility_mixed_flags);
     queue.write_buffer(&volume.brick_info_buffer, 0, bytemuck::cast_slice(&volume.streamer.all_info()));
-    update_block_volume_slice(queue, volume, scene_origin, block_model, boundary_highlights);
+    update_block_volume_slice(queue, volume, scene_origin, block_model, boundary_highlights, wire);
 }
 
-/// Update only clip-dependent state. Unlike a colour restyle this does not
-/// recompute or upload per-brick aggregates, so dragging a slice bound stays
-/// responsive on large models.
-pub(crate) fn update_block_volume_slice(queue: &wgpu::Queue, volume: &mut CachedBlockVolumeGpu, scene_origin: DVec3, block_model: &OpenBlockModel, boundary_highlights: bool) {
-    let uniform = block_volume_uniform(block_model, scene_origin, &volume.asset, volume.streamer.feedback_enabled(), boundary_highlights);
+/// Update only uniform state - the clip, and the outline. Unlike a colour
+/// restyle this does not recompute or upload per-brick aggregates, so
+/// dragging a slice bound stays responsive on large models.
+pub(crate) fn update_block_volume_slice(
+    queue: &wgpu::Queue,
+    volume: &mut CachedBlockVolumeGpu,
+    scene_origin: DVec3,
+    block_model: &OpenBlockModel,
+    boundary_highlights: bool,
+    wire: BlockWire,
+) {
+    let uniform = block_volume_uniform(block_model, scene_origin, &volume.asset, volume.streamer.feedback_enabled(), boundary_highlights, wire);
     queue.write_buffer(&volume.uniform_buffer, 0, bytemuck::bytes_of(&uniform));
     let local_bounds = effective_volume_bounds(block_model, &volume.asset);
     (volume.local_bounds_min, volume.local_bounds_max) = local_bounds;
@@ -1008,7 +1028,14 @@ fn volume_scene_bounds(block_model: &OpenBlockModel, scene_origin: DVec3, (local
     (min.as_vec3(), max.as_vec3())
 }
 
-fn block_volume_uniform(block_model: &OpenBlockModel, scene_origin: DVec3, asset: &BlockVolumeAsset, feedback_enabled: bool, boundary_highlights: bool) -> BlockVolumeUniform {
+fn block_volume_uniform(
+    block_model: &OpenBlockModel,
+    scene_origin: DVec3,
+    asset: &BlockVolumeAsset,
+    feedback_enabled: bool,
+    boundary_highlights: bool,
+    wire: BlockWire,
+) -> BlockVolumeUniform {
     let mut fallback_color = block_model.color;
     fallback_color[3] = fallback_color[3].clamp(0.0, 1.0);
 
@@ -1060,6 +1087,8 @@ fn block_volume_uniform(block_model: &OpenBlockModel, scene_origin: DVec3, asset
             [sx, sy, sz, if enabled { asset.occupied_count as u32 } else { 0 }]
         },
         stops,
+        wire_color: wire.color,
+        wire_params: [wire.width, 0.0, 0.0, 0.0],
     }
 }
 
