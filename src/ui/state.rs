@@ -1001,6 +1001,75 @@ pub(crate) fn copy_along_live(editor: &EditorState) -> Option<&CopyAlong> {
     })
 }
 
+/// Carry On a String, a step inside the Polyline tool: waiting for the
+/// string's end to be picked, then drawing on from it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum StringRework {
+    Picking,
+    /// Drawing on from vertex `start` of string `id`, which read `before`
+    /// when picked; the stroke starts at that vertex, `anchor`.
+    From {
+        id: ObjectId,
+        start: usize,
+        before: Object,
+        anchor: DVec3,
+    },
+}
+
+/// The carry on under way, if it still belongs to the Polyline tool and,
+/// once picked, to the stroke that starts at the string's end.
+pub(crate) fn string_rework_live(editor: &EditorState) -> Option<&StringRework> {
+    editor.string_rework.as_ref().filter(|rework| {
+        editor.active_tool == ActiveTool::MakePoly
+            && editor.active_workspace.has_drawing_aids()
+            && match rework {
+                StringRework::Picking => editor.pending_stroke.is_empty(),
+                StringRework::From { anchor, .. } => editor.pending_stroke.first() == Some(anchor),
+            }
+    })
+}
+
+impl EditorState {
+    /// Draw on from vertex `start` of `string`: the stroke starts at that
+    /// vertex. A closed string has no end: false, and the carry on ends.
+    pub(crate) fn carry_on_from(&mut self, string: Object, start: usize) -> bool {
+        let Object::Polyline { id, verts, closed: false, .. } = &string else {
+            self.string_rework = None;
+            return false;
+        };
+        let (id, Some(anchor)) = (*id, verts.get(start).map(|vertex| vertex.pos)) else {
+            return false;
+        };
+        self.line_chain.clear();
+        self.copy_along = None;
+        self.pending_stroke = vec![anchor];
+        self.string_rework = Some(StringRework::From {
+            id,
+            start,
+            before: string,
+            anchor,
+        });
+        true
+    }
+
+    /// Undo or redo ends a carry on, and the stroke drawn from the string's
+    /// end with it: the step may change the string, and the next click
+    /// starts afresh. True when there was one to end.
+    pub(crate) fn end_string_rework_for_history_step(&mut self) -> bool {
+        let Some(rework) = string_rework_live(self) else {
+            return false;
+        };
+        if matches!(rework, StringRework::From { .. }) {
+            self.pending_stroke.clear();
+            self.poly_finish_dialog = false;
+            self.poly_finish_dialog_confirm_armed = false;
+            self.poly_finish_dialog_px = None;
+        }
+        self.string_rework = None;
+        true
+    }
+}
+
 /// What the Next Vertex panel holds: a point to add as typed, and a step
 /// from the last vertex by bearing, level distance and dip.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -1638,6 +1707,8 @@ pub(crate) struct EditorState {
     pub(crate) next_vertex_panel: Option<NextVertexPanel>,
     /// Copy Along a String, while its picks are being made.
     pub(crate) copy_along: Option<CopyAlong>,
+    /// Carry On a String, from its arming until the string is written.
+    pub(crate) string_rework: Option<StringRework>,
     /// Where each segment the Line tool saved in the run being drawn starts,
     /// newest last, so Backspace can take one back.
     pub(crate) line_chain: Vec<DVec3>,
@@ -2826,6 +2897,7 @@ impl EditorState {
         self.drape_object_ids.clear();
         self.pending_stroke.clear();
         self.copy_along = None;
+        self.string_rework = None;
         self.vertex_edit_run = None;
         self.circle_draft = None;
         self.poly_finish_dialog = false;
@@ -3111,6 +3183,7 @@ impl EditorState {
             circle_draft: None,
             next_vertex_panel: None,
             copy_along: None,
+            string_rework: None,
             line_chain: Vec::new(),
             stroke_leg_broken: false,
             measurement_start: None,
@@ -4078,6 +4151,8 @@ pub(crate) enum UiCommand {
     NudgeHeldVertex(f64),
     /// Take the next two clicks as a run of an existing string to copy.
     ArmCopyAlongString,
+    /// Take the next click as the end of a string to draw on from.
+    ArmCarryOnString,
     /// Add this point to the string being drawn.
     AddTypedStrokeVertex(DVec3),
     /// Add the vertex a step from the last: bearing and dip in degrees,
@@ -4714,6 +4789,7 @@ impl UiCommand {
             | Self::OpenNudgePanel
             | Self::NudgeHeldVertex(_)
             | Self::ArmCopyAlongString
+            | Self::ArmCarryOnString
             | Self::AddTypedStrokeVertex(_)
             | Self::AddStrokeVertexAlongBearing { .. }
             | Self::ToggleCreateDrillPattern

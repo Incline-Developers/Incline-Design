@@ -912,6 +912,10 @@ impl<'a> App<'a> {
                 // Geology's Copy Along a String takes the Polyline tool's
                 // clicks as its picks.
                 ActiveTool::MakePoly if crate::ui::state::copy_along_live(&self.editor).is_some() => self.copy_along_click(),
+                // Carry On a String takes its first click as the pick.
+                ActiveTool::MakePoly if !self.editor.poly_finish_dialog && crate::ui::state::string_rework_live(&self.editor) == Some(&crate::ui::state::StringRework::Picking) => {
+                    self.carry_on_pick()
+                }
                 ActiveTool::MakeLine | ActiveTool::MakePoly if !self.editor.poly_finish_dialog => self.place_stroke_point(),
                 ActiveTool::MakeCircle => self.make_circle_click(),
                 ActiveTool::MeasureDistance => self.measure_distance_click(),
@@ -1439,6 +1443,9 @@ impl<'a> App<'a> {
                     // Copying along a string is a step inside the Polyline
                     // tool: Escape leaves it and drawing goes on.
                     self.cancel_copy_along();
+                } else if crate::ui::state::string_rework_live(&self.editor) == Some(&crate::ui::state::StringRework::Picking) {
+                    // Before its pick, the same: drawing goes on.
+                    self.cancel_carry_on();
                 } else if self.editor.slice_mode_enabled && self.editor.active_tool == ActiveTool::None && self.editor.pending_stroke.is_empty() {
                     // Escape unwinds one step at a time: a tool up or a stroke half drawn falls through to the cancel paths below.
                     self.leave_slice_mode();
@@ -1670,6 +1677,7 @@ impl<'a> App<'a> {
         if self.editor.copy_along.take().is_some() {
             self.invalidate_overlay();
         }
+        self.editor.string_rework = None;
         // Putting Move down, or any tool change, ends a vertex's undo step.
         self.editor.vertex_edit_run = None;
         let previous_tool = self.editor.active_tool;

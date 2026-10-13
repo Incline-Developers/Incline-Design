@@ -1,7 +1,7 @@
 //! Drawing aids for a string being drawn: give back the last vertex, add
 //! the next one as typed, or a step from the last by bearing and distance,
-//! or copy a run of an existing string. On a section the vertex goes onto
-//! the plane, as a click there does.
+//! or copy a run of an existing string, or carry on one from either end.
+//! On a section the vertex goes onto the plane, as a click there does.
 
 use glam::{DVec2, DVec3};
 
@@ -11,8 +11,8 @@ use crate::{
     i18n::tr,
     model::{Command, Object, ObjectId, PolyVertex, SceneEntityId},
     rendering::{camera::SectionSlab, pick},
-    ui::state::{ActiveTool, CopyAlong, EditorState, NextVertexPanel, copy_along_live},
-    userspace_log,
+    ui::state::{ActiveTool, CopyAlong, EditorState, NextVertexPanel, StringRework, copy_along_live, string_rework_live},
+    userspace_log, userspace_warn,
 };
 
 /// How far a typed point may sit off the section before the move onto it is
@@ -24,6 +24,10 @@ impl<'a> App<'a> {
     /// The Line tool saves each segment as it is drawn, so at a segment's
     /// end this takes the saved segment back and draws on from its start.
     pub(crate) fn remove_last_stroke_vertex(&mut self) {
+        // Carrying on a string, Backspace stops at the string's end.
+        if self.editor.pending_stroke.len() == 1 && string_rework_live(&self.editor).is_some() {
+            return;
+        }
         let taken = if self.editor.active_tool == ActiveTool::MakeLine && self.editor.pending_stroke.len() == 1 {
             self.take_back_line_segment() || take_back_stroke_vertex(&mut self.editor)
         } else {
@@ -187,6 +191,105 @@ impl<'a> App<'a> {
         }
     }
 
+    /// Start Carry On a String: the next click picks the string, and the
+    /// end nearer the click starts the stroke.
+    pub(crate) fn arm_carry_on_string(&mut self) {
+        if self.editor.active_workspace.has_drawing_aids() && self.editor.active_tool != ActiveTool::MakePoly {
+            self.set_active_tool_from_toolbar(ActiveTool::MakePoly);
+        }
+        if !self.editor.active_workspace.has_drawing_aids()
+            || self.editor.active_tool != ActiveTool::MakePoly
+            || self.editor.poly_finish_dialog
+            || !self.editor.pending_stroke.is_empty()
+        {
+            return;
+        }
+        self.editor.copy_along = None;
+        self.editor.string_rework = Some(StringRework::Picking);
+        self.invalidate_overlay();
+    }
+
+    /// Leave Carry On a String before its pick and go on drawing.
+    pub(crate) fn cancel_carry_on(&mut self) {
+        if self.editor.string_rework.take().is_some() {
+            self.invalidate_overlay();
+        }
+    }
+
+    /// The click that picks the string to carry on: its end nearer the
+    /// cursor becomes the stroke's first point. A closed string has no end.
+    pub(crate) fn carry_on_pick(&mut self) {
+        if !self.editing_ready() {
+            return;
+        }
+        let Some((SceneEntityId::Object(id), _)) = self.pick_under_cursor() else {
+            return;
+        };
+        // Locked and hidden strings are not picked; the string is read from
+        // its own project.
+        if !self.activate_project_for_object(id) || !self.editor.canvas_edits_object(self.active_document(), id) || self.editor.active_tool != ActiveTool::MakePoly {
+            return;
+        }
+        let Some(string @ Object::Polyline { verts, closed, .. }) = self.active_document().get_object(id) else {
+            return;
+        };
+        let start = if *closed { Some(0) } else { self.string_end_nearer_cursor(verts) };
+        let (Some(start), string) = (start, string.clone()) else {
+            return;
+        };
+        if !self.editor.carry_on_from(string, start) {
+            userspace_warn!("{}", tr!("cmd-string-rework-closed"));
+        }
+        self.sync_next_vertex_panel();
+        self.invalidate_overlay();
+    }
+
+    /// Of an open string's two ends, the index of the one nearer the cursor
+    /// on screen; an end outside the section's slab is not offered.
+    fn string_end_nearer_cursor(&self, verts: &[PolyVertex]) -> Option<usize> {
+        let graphics = self.graphics.as_ref()?;
+        let cursor = graphics.window_to_viewport_px(self.editor.cursor_screen_px?);
+        let cursor = DVec2::new(f64::from(cursor.0), f64::from(cursor.1));
+        let (view_proj, screen, slab) = (graphics.view_proj(), graphics.screen_size_pub(), graphics.section_slab());
+        let last = verts.len().checked_sub(1).filter(|&last| last > 0)?;
+        [0, last]
+            .into_iter()
+            .filter_map(|index| Some((index, pick::slab_screen_point(slab, &view_proj, screen, verts[index].pos)?.distance(cursor))))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(index, _)| index)
+    }
+
+    /// Finish a carry on, when one is live: write the stroke's new vertices
+    /// onto the string, closed or not, as one undo step. False when none is
+    /// under way, so the stroke is saved as a string of its own.
+    pub(crate) fn finish_carry_on(&mut self, closed: bool) -> bool {
+        let Some(StringRework::From { id, start, before, .. }) = string_rework_live(&self.editor).cloned() else {
+            return false;
+        };
+        let added = self.editor.pending_stroke.split_off(1);
+        self.editor.string_rework = None;
+        self.editor.pending_stroke.clear();
+        self.editor.poly_finish_dialog = false;
+        self.editor.poly_finish_dialog_px = None;
+        self.invalidate_geometry();
+        // Read again, not taken from the pick: a write over a string edited
+        // since would undo that edit.
+        let current = self.active_document().get_object(id);
+        if current != Some(&before) || !self.editor.canvas_edits_object(self.active_document(), id) {
+            userspace_warn!("{}", tr!("cmd-string-rework-changed"));
+            return true;
+        }
+        let mut after = before.clone();
+        if let Object::Polyline { verts, closed: after_closed, .. } = &mut after {
+            *verts = carried_on(verts, start, &added, closed);
+            *after_closed = closed && verts.len() >= 3;
+        }
+        if after != before {
+            self.execute_edit(Command::Replace { before, after });
+        }
+        true
+    }
+
     /// The string a copy starts from, picked as any click picks but with
     /// locked strings allowed: the copy only reads it.
     fn pick_copy_source(&self) -> Option<(SceneEntityId, DVec3)> {
@@ -294,6 +397,48 @@ fn ends_stroke(stroke: &[DVec3], point: DVec3) -> bool {
 
 fn draws_strings(tool: ActiveTool) -> bool {
     matches!(tool, ActiveTool::MakeLine | ActiveTool::MakePoly)
+}
+
+/// String `verts` carried on from its vertex `start` (0 or the last) by
+/// the points `added`, in the order drawn: from the start they go in front,
+/// reversed, so the string keeps its direction. Closed, the far end joins
+/// the last point drawn. The old segments keep their arcs; the new ones are
+/// straight.
+pub(crate) fn carried_on(verts: &[PolyVertex], start: usize, added: &[DVec3], closed: bool) -> Vec<PolyVertex> {
+    let added = added.iter().map(|&point| PolyVertex::straight(point));
+    let mut verts: Vec<PolyVertex> = if start == 0 {
+        added.rev().chain(verts.iter().copied()).collect()
+    } else {
+        // The old end's bulge led nowhere; kept, it would bend the first
+        // new segment.
+        let mut verts = verts.to_vec();
+        if let Some(end) = verts.last_mut() {
+            end.bulge = 0.0;
+        }
+        verts.extend(added);
+        verts
+    };
+    if closed {
+        // A last point drawn on the far end closes there, not doubled: that
+        // new point goes, never the old far end and its arc.
+        if verts.len() > 3
+            && verts
+                .first()
+                .zip(verts.last())
+                .is_some_and(|(first, last)| (first.pos - last.pos).length_squared() <= 1.0e-16)
+        {
+            if start == 0 {
+                verts.remove(0);
+            } else {
+                verts.pop();
+            }
+        }
+        // The closing segment is new, so straight.
+        if let Some(end) = verts.last_mut() {
+            end.bulge = 0.0;
+        }
+    }
+    verts
 }
 
 /// Drop the stroke's last vertex; false when there is none to give back or

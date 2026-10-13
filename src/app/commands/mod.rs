@@ -38,6 +38,10 @@ use crate::{
 
 impl<'a> App<'a> {
     pub(crate) fn apply_history_step(&mut self, undo: bool) {
+        // Before the step: a carry on ends even when there is none to take.
+        if self.editor.end_string_rework_for_history_step() {
+            self.invalidate_geometry();
+        }
         if self.restore_history_step(undo) {
             return;
         }
@@ -988,6 +992,10 @@ impl<'a> App<'a> {
             }
             UiCommand::ArmCopyAlongString => {
                 self.arm_copy_along_string();
+                Ok(())
+            }
+            UiCommand::ArmCarryOnString => {
+                self.arm_carry_on_string();
                 Ok(())
             }
             UiCommand::ArmDragVertex => {

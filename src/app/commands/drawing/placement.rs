@@ -104,6 +104,7 @@ impl<'a> App<'a> {
         if self.editor.pending_stroke.is_empty() {
             self.editor.line_chain.clear();
             self.editor.copy_along = None;
+            self.editor.string_rework = None;
         }
         self.editor.pending_stroke.push(world);
         match self.editor.active_tool {
@@ -132,6 +133,12 @@ impl<'a> App<'a> {
                         .first()
                         .zip(self.editor.pending_stroke.last())
                         .is_some_and(|(first, last)| (*first - *last).length_squared() <= 1.0e-16);
+                // Carrying on a string, its end is not a place to close.
+                if is_closing && crate::ui::state::string_rework_live(&self.editor).is_some() {
+                    self.editor.pending_stroke.pop();
+                    self.invalidate_overlay();
+                    return;
+                }
                 if is_closing {
                     self.finish_poly_closed();
                     return;
@@ -207,7 +214,7 @@ impl<'a> App<'a> {
 
     /// Finish an in-progress MakePoly stroke as a closed polyline.
     pub(crate) fn finish_poly_closed(&mut self) {
-        if self.editor.active_tool != ActiveTool::MakePoly {
+        if self.editor.active_tool != ActiveTool::MakePoly || self.finish_carry_on(true) {
             return;
         }
         // Clicking the first vertex to close the preview records that point a
@@ -266,6 +273,9 @@ impl<'a> App<'a> {
 
     /// Commit the current stroke as an open polyline if it has enough vertices.
     pub(crate) fn commit_stroke_open(&mut self) {
+        if self.editor.active_tool == ActiveTool::MakePoly && self.finish_carry_on(false) {
+            return;
+        }
         if self.editor.active_tool == ActiveTool::MakePoly
             && self.editor.pending_stroke.len() >= 2
             && let Some(layer) = self.active_layer()
