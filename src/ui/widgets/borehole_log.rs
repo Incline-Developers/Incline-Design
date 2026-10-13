@@ -771,39 +771,9 @@ impl<'a> BoreholeLog<'a> {
             })
     }
 
-    /// Consecutive intervals reading the same lithology, merged into one
-    /// run, so forty abutting records of the same rock draw as one bed.
+    /// The hole's strat runs between `top` and `bottom`, see [`strat_runs`].
     fn lithology_runs(&self, field: &crate::model::drill_hole::DrillField, top: f64, bottom: f64) -> Vec<(f64, f64, Option<String>)> {
-        let mut runs: Vec<(f64, f64, Option<String>)> = Vec::new();
-        let mut cursor = top;
-        let mut sorted = self
-            .hole
-            .intervals
-            .iter()
-            .filter(|interval| interval.to > top && interval.from < bottom)
-            .collect::<Vec<_>>();
-        sorted.sort_by(|a, b| a.from.total_cmp(&b.from));
-
-        for interval in sorted {
-            let (from, to) = (interval.from.max(top), interval.to.min(bottom));
-            if to <= from {
-                continue;
-            }
-            let value = match interval.values.get(&field.key) {
-                Some(crate::model::drill_hole::DrillValue::Category(value)) if !value.trim().is_empty() => Some(value.trim().to_owned()),
-                Some(crate::model::drill_hole::DrillValue::Numeric(number)) => Some(format!("{number}")),
-                _ => None,
-            };
-            if from > cursor + 1.0e-9 {
-                push_run(&mut runs, cursor, from, None);
-            }
-            push_run(&mut runs, from.max(cursor), to, value);
-            cursor = cursor.max(to);
-        }
-        if cursor < bottom - 1.0e-9 {
-            push_run(&mut runs, cursor, bottom, None);
-        }
-        runs
+        strat_runs(self.hole, field, top, bottom)
     }
 
     fn draw_strat(&self, ui: &egui::Ui, painter: &egui::Painter, strat: egui::Rect, field: &crate::model::drill_hole::DrillField, top: f64, bottom: f64) {
@@ -1598,6 +1568,38 @@ fn draw_azimuth_compass(ui: &egui::Ui, painter: &egui::Painter, rect: egui::Rect
         );
     }
     painter.line_segment([centre, centre + egui::vec2(0.0, -radius + 4.0)], egui::Stroke::new(2.0, visuals.strong_text_color()));
+}
+
+/// Consecutive intervals of `hole` reading the same lithology in `field`,
+/// merged into one run, so forty abutting records of the same rock draw as
+/// one bed; unlogged stretches between `top` and `bottom` are `None` runs.
+/// The Column tab reads the same runs the log draws.
+pub(crate) fn strat_runs(hole: &crate::model::drill_hole::DrillHole, field: &crate::model::drill_hole::DrillField, top: f64, bottom: f64) -> Vec<(f64, f64, Option<String>)> {
+    let mut runs: Vec<(f64, f64, Option<String>)> = Vec::new();
+    let mut cursor = top;
+    let mut sorted = hole.intervals.iter().filter(|interval| interval.to > top && interval.from < bottom).collect::<Vec<_>>();
+    sorted.sort_by(|a, b| a.from.total_cmp(&b.from));
+
+    for interval in sorted {
+        let (from, to) = (interval.from.max(top), interval.to.min(bottom));
+        if to <= from {
+            continue;
+        }
+        let value = match interval.values.get(&field.key) {
+            Some(crate::model::drill_hole::DrillValue::Category(value)) if !value.trim().is_empty() => Some(value.trim().to_owned()),
+            Some(crate::model::drill_hole::DrillValue::Numeric(number)) => Some(format!("{number}")),
+            _ => None,
+        };
+        if from > cursor + 1.0e-9 {
+            push_run(&mut runs, cursor, from, None);
+        }
+        push_run(&mut runs, from.max(cursor), to, value);
+        cursor = cursor.max(to);
+    }
+    if cursor < bottom - 1.0e-9 {
+        push_run(&mut runs, cursor, bottom, None);
+    }
+    runs
 }
 
 /// Extend the last run rather than start a new one when values and depths abut.
