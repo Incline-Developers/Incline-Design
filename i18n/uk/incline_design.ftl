@@ -407,6 +407,7 @@ borehole-inspector-column = Колонка
 borehole-inspector-column-empty-check = Стратиграфічної колонки ще немає. Натисніть «Перевірити», щоб заповнити її порядком, який указує більшість свердловин, або додайте коди нижче й упорядкуйте їх уручну.
 borehole-inspector-data = Дані
 borehole-inspector-display = Відображення
+borehole-inspector-drag-to-reorder = Перетягніть угору або вниз, щоб перемістити цей код у колонці
 borehole-inspector-every-code-placed = Усі коди поля є в колонці.
 borehole-inspector-flag-of-groups = { $kind } (групи)
 borehole-inspector-flag-out-of-place = Не на місці

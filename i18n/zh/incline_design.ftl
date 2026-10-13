@@ -360,6 +360,7 @@ borehole-inspector-column = 地层柱
 borehole-inspector-column-empty-check = 尚无地层柱。点击核对，按多数钻孔给出的顺序填充，或在下方添加代码并手动排序。
 borehole-inspector-data = 数据
 borehole-inspector-display = 显示
+borehole-inspector-drag-to-reorder = 上下拖动以在地层柱中移动此代码
 borehole-inspector-every-code-placed = 该字段的所有代码都已在地层柱中。
 borehole-inspector-flag-of-groups = { $kind }（分组）
 borehole-inspector-flag-out-of-place = 位置错乱

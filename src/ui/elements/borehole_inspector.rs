@@ -421,6 +421,21 @@ const SECTION_LANE_WIDTH: f32 = 96.0;
 const COLUMN_HEADER_HEIGHT: f32 = 16.0;
 /// Share of the row beside the sections that the hole's cell takes.
 const HOLE_CELL_SHARE: f32 = 0.45;
+/// Width of a set row's drag handle, the data grid's.
+const COLUMN_HANDLE_WIDTH: f32 = 18.0;
+
+/// A set row being dragged to a new place in its column.
+struct ColumnRowDrag {
+    id: DrillHoleId,
+    field: String,
+    from: usize,
+}
+
+/// The slot a row dropped at height `y` lands in, counted in rows from `top`:
+/// 0 above the first of `len` rows, `len` below the last.
+fn column_drop_slot(y: f32, top: f32, len: usize) -> usize {
+    ((y - top) / COLUMN_ROW_HEIGHT).round().clamp(0.0, len as f32) as usize
+}
 
 /// The Column tab: the dataset's working sections of `field` beside its strat
 /// column, top to bottom, with `hole`'s seams laid row by row against it,
@@ -483,11 +498,6 @@ fn draw_strat_column(
                 let mut row_ui = ui.new_child(egui::UiBuilder::new().max_rect(row).layout(egui::Layout::right_to_left(egui::Align::Center)));
                 row_ui.push_id(("strat_column_row", place), |ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
-                    let moved = |to: usize| {
-                        let mut codes = column.to_vec();
-                        codes.swap(place, to);
-                        Some(codes)
-                    };
                     if ui
                         .add(MenuButton::new(tr!("common-minus-sign")).min_width(24.0))
                         .on_hover_text(tr!("borehole-inspector-remove-from-column"))
@@ -497,13 +507,21 @@ fn draw_strat_column(
                         codes.remove(place);
                         edited = Some(codes);
                     }
-                    if ui.add(MenuButton::new(tr!("common-down")).min_width(0.0).enabled(place + 1 < column.len())).clicked() {
-                        edited = moved(place + 1);
-                    }
-                    if ui.add(MenuButton::new(tr!("common-up")).min_width(0.0).enabled(place > 0)).clicked() {
-                        edited = moved(place - 1);
-                    }
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        let (handle, handle_response) = ui.allocate_exact_size(egui::vec2(COLUMN_HANDLE_WIDTH, COLUMN_ROW_HEIGHT), egui::Sense::drag());
+                        ui.painter()
+                            .text(handle.center(), egui::Align2::CENTER_CENTER, "≡", egui::TextStyle::Button.resolve(ui.style()), weak);
+                        if handle_response.hovered() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                        }
+                        if handle_response.drag_started() {
+                            handle_response.dnd_set_drag_payload(ColumnRowDrag {
+                                id: dataset.id,
+                                field: field.key.clone(),
+                                from: place,
+                            });
+                        }
+                        handle_response.on_hover_text(tr!("borehole-inspector-drag-to-reorder"));
                         // The colour the log and the scene give this code.
                         let [red, green, blue] = crate::ui::widgets::borehole_log::strat_run_color(&dataset.color, field, code);
                         let (swatch, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
@@ -520,6 +538,29 @@ fn draw_strat_column(
                         }
                     });
                 });
+            }
+            // Where a dragged row would land: a line between rows, and the
+            // move on release.
+            let dragging = egui::DragAndDrop::payload::<ColumnRowDrag>(ui.ctx()).filter(|drag| drag.id == dataset.id && drag.field == field.key);
+            if let Some(drag) = dragging {
+                let half = COLUMN_ROW_HEIGHT / 2.0;
+                let zone = egui::Rect::from_x_y_ranges(set_left..=rows.right(), rows.top() - half..=rows.bottom() + half).intersect(ui.clip_rect());
+                // Not hover_pos: a finger's release clears it in that frame.
+                if let Some(pointer) = ui.input(|input| input.pointer.interact_pos()).filter(|pointer| zone.contains(*pointer)) {
+                    let slot = column_drop_slot(pointer.y, rows.top(), column.len());
+                    // Either edge of the dragged row leaves it where it is.
+                    if slot != drag.from && slot != drag.from + 1 {
+                        let line_y = rows.top() + COLUMN_ROW_HEIGHT * slot as f32;
+                        ui.painter().hline(set_left..=rows.right(), line_y, egui::Stroke::new(2.0, menu::accent_fill(ui.visuals())));
+                        if ui.input(|input| input.pointer.any_released()) {
+                            let mut codes = column.to_vec();
+                            crate::ui::widgets::data_grid::move_to_slot(&mut codes, drag.from, slot);
+                            if codes != column {
+                                edited = Some(codes);
+                            }
+                        }
+                    }
+                }
             }
             if runs.iter().all(|run| run.2.is_none()) {
                 menu::menu_note(ui, tr!("borehole-inspector-hole-no-values", hole = hole.dhid.clone(), field = field.label.clone()));

@@ -360,6 +360,7 @@ borehole-inspector-column = العمود
 borehole-inspector-column-empty-check = لا يوجد عمود طبقات بعد. افحص لملئه بالترتيب الذي تعطيه معظم الثقوب، أو أضف الرموز أدناه ورتّبها يدويًا.
 borehole-inspector-data = البيانات
 borehole-inspector-display = العرض
+borehole-inspector-drag-to-reorder = اسحب لأعلى أو لأسفل لنقل هذا الرمز في العمود
 borehole-inspector-every-code-placed = كل رموز الحقل موجودة في العمود.
 borehole-inspector-flag-of-groups = { $kind } (مجموعات)
 borehole-inspector-flag-out-of-place = في غير موضعه

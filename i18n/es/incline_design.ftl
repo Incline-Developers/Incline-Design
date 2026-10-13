@@ -358,6 +358,7 @@ borehole-inspector-column = Columna
 borehole-inspector-column-empty-check = Aún no hay columna estratigráfica. Compruebe para rellenarla con el orden que dan la mayoría de los sondajes, o añada los códigos de abajo y ordénelos a mano.
 borehole-inspector-data = Datos
 borehole-inspector-display = Visualización
+borehole-inspector-drag-to-reorder = Arrastre hacia arriba o abajo para mover este código en la columna
 borehole-inspector-every-code-placed = Todos los códigos del campo están en la columna.
 borehole-inspector-flag-of-groups = { $kind } (grupos)
 borehole-inspector-flag-out-of-place = Fuera de lugar

@@ -393,6 +393,7 @@ borehole-inspector-column = 층서 열
 borehole-inspector-column-empty-check = 아직 층서 열이 없습니다. 검증을 눌러 대부분의 시추공이 부여한 순서로 채우거나, 아래에서 코드를 추가하고 직접 순서를 정하세요.
 borehole-inspector-data = 데이터
 borehole-inspector-display = 표시
+borehole-inspector-drag-to-reorder = 위나 아래로 끌어 이 코드를 층서 열에서 옮깁니다
 borehole-inspector-every-code-placed = 이 필드의 모든 코드가 층서 열에 들어 있습니다.
 borehole-inspector-flag-of-groups = { $kind }(그룹)
 borehole-inspector-flag-out-of-place = 위치 어긋남

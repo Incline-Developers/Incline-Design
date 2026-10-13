@@ -431,6 +431,7 @@ borehole-inspector-column = Column
 borehole-inspector-column-empty-check = No strat column yet. Check to fill it with the order most holes give, or add the codes below and order them by hand.
 borehole-inspector-data = Data
 borehole-inspector-display = Display
+borehole-inspector-drag-to-reorder = Drag up or down to move this code in the column
 borehole-inspector-every-code-placed = Every code of the field is in the column.
 borehole-inspector-flag-of-groups = { $kind } (groups)
 borehole-inspector-flag-out-of-place = Out of place

@@ -386,6 +386,7 @@ borehole-inspector-column = Cột
 borehole-inspector-column-empty-check = Chưa có cột địa tầng. Hãy Kiểm tra để điền theo thứ tự đa số lỗ khoan gán, hoặc thêm các mã bên dưới rồi sắp thứ tự bằng tay.
 borehole-inspector-data = Dữ liệu
 borehole-inspector-display = Hiển thị
+borehole-inspector-drag-to-reorder = Kéo lên hoặc xuống để di chuyển mã này trong cột
 borehole-inspector-every-code-placed = Mọi mã của trường đều đã có trong cột.
 borehole-inspector-flag-of-groups = { $kind } (nhóm)
 borehole-inspector-flag-out-of-place = Sai vị trí

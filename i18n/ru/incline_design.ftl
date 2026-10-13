@@ -412,6 +412,7 @@ borehole-inspector-column = Колонка
 borehole-inspector-column-empty-check = Стратиграфической колонки пока нет. Нажмите «Проверить», чтобы заполнить её порядком, который указывает большинство скважин, или добавьте коды ниже и упорядочьте их вручную.
 borehole-inspector-data = Данные
 borehole-inspector-display = Отображение
+borehole-inspector-drag-to-reorder = Перетащите вверх или вниз, чтобы переместить этот код в колонке
 borehole-inspector-every-code-placed = Все коды поля есть в колонке.
 borehole-inspector-flag-of-groups = { $kind } (группы)
 borehole-inspector-flag-out-of-place = Не на месте

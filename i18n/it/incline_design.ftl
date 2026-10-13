@@ -402,6 +402,7 @@ borehole-inspector-column = Colonna
 borehole-inspector-column-empty-check = Nessuna colonna stratigrafica per ora. Verifica per riempirla con l'ordine dato dalla maggior parte dei fori, oppure aggiungi i codici qui sotto e ordinali a mano.
 borehole-inspector-data = Dati
 borehole-inspector-display = Visualizzazione
+borehole-inspector-drag-to-reorder = Trascina in alto o in basso per spostare questo codice nella colonna
 borehole-inspector-every-code-placed = Ogni codice del campo è nella colonna.
 borehole-inspector-flag-of-groups = { $kind } (gruppi)
 borehole-inspector-flag-out-of-place = Fuori posto

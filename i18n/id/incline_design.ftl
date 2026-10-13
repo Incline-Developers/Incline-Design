@@ -360,6 +360,7 @@ borehole-inspector-column = Kolom
 borehole-inspector-column-empty-check = Belum ada kolom strat. Periksa untuk mengisinya dengan urutan yang diberikan sebagian besar lubang, atau tambahkan kode di bawah dan urutkan secara manual.
 borehole-inspector-data = Data
 borehole-inspector-display = Tampilan
+borehole-inspector-drag-to-reorder = Seret ke atas atau ke bawah untuk memindahkan kode ini di kolom
 borehole-inspector-every-code-placed = Semua kode pada bidang ini sudah ada di kolom.
 borehole-inspector-flag-of-groups = { $kind } (grup)
 borehole-inspector-flag-out-of-place = Tidak pada tempatnya

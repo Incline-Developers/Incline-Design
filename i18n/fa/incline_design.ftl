@@ -360,6 +360,7 @@ borehole-inspector-column = ستون
 borehole-inspector-column-empty-check = هنوز ستون چینه‌شناسی وجود ندارد. بررسی کنید تا با ترتیبی که بیشتر گمانه‌ها می‌دهند پر شود، یا کدهای زیر را اضافه کنید و دستی مرتب کنید.
 borehole-inspector-data = داده
 borehole-inspector-display = نمایش
+borehole-inspector-drag-to-reorder = برای جابه‌جایی این کد در ستون، آن را به بالا یا پایین بکشید
 borehole-inspector-every-code-placed = همه کدهای فیلد در ستون هستند.
 borehole-inspector-flag-of-groups = { $kind } (گروه‌ها)
 borehole-inspector-flag-out-of-place = خارج از جای خود

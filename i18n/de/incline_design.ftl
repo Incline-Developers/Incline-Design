@@ -401,6 +401,7 @@ borehole-inspector-column = Säule
 borehole-inspector-column-empty-check = Noch keine Strat-Säule. Prüfen Sie, um sie mit der Reihenfolge der meisten Bohrlöcher zu füllen, oder fügen Sie unten die Codes hinzu und ordnen Sie sie von Hand.
 borehole-inspector-data = Daten
 borehole-inspector-display = Anzeige
+borehole-inspector-drag-to-reorder = Nach oben oder unten ziehen, um diesen Code in der Säule zu verschieben
 borehole-inspector-every-code-placed = Jeder Code des Feldes steht in der Säule.
 borehole-inspector-flag-of-groups = { $kind } (Gruppen)
 borehole-inspector-flag-out-of-place = Fehlplatziert

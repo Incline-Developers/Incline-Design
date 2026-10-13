@@ -411,6 +411,7 @@ borehole-inspector-column = Багана
 borehole-inspector-column-empty-check = Страт багана одоохондоо алга. Ихэнх цооногийн өгсөн дарааллаар бөглөхийн тулд Тулгах дарна уу, эсвэл доорх кодуудыг нэмж гараар эрэмбэлнэ үү.
 borehole-inspector-data = Өгөгдөл
 borehole-inspector-display = Дүрслэл
+borehole-inspector-drag-to-reorder = Энэ кодыг баганад зөөхийн тулд дээш эсвэл доош чирнэ үү
 borehole-inspector-every-code-placed = Талбарын бүх код баганад байна.
 borehole-inspector-flag-of-groups = { $kind } (бүлгүүд)
 borehole-inspector-flag-out-of-place = Байрнаас зөрсөн

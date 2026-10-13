@@ -402,6 +402,7 @@ borehole-inspector-column = Sütun
 borehole-inspector-column-empty-check = Henüz stratigrafik sütun yok. Deliklerin çoğunun verdiği sırayla doldurmak için Kontrol Et'i kullanın veya aşağıdaki kodları ekleyip elle sıralayın.
 borehole-inspector-data = Veri
 borehole-inspector-display = Görünüm
+borehole-inspector-drag-to-reorder = Bu kodu sütunda taşımak için yukarı veya aşağı sürükleyin
 borehole-inspector-every-code-placed = Alanın her kodu sütunda.
 borehole-inspector-flag-of-groups = { $kind } (gruplar)
 borehole-inspector-flag-out-of-place = Yerinde değil

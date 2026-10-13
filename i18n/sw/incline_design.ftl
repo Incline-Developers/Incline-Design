@@ -392,6 +392,7 @@ borehole-inspector-column = Safu wima
 borehole-inspector-column-empty-check = Bado hakuna safu wima ya stratigrafia. Kagua ili kuijaza kwa mpangilio ambao mashimo mengi hutoa, au ongeza misimbo hapa chini na uipange kwa mkono.
 borehole-inspector-data = Data
 borehole-inspector-display = Onyesho
+borehole-inspector-drag-to-reorder = Buruta juu au chini ili kuhamisha msimbo huu kwenye safu wima
 borehole-inspector-every-code-placed = Kila msimbo wa sehemu uko kwenye safu wima.
 borehole-inspector-flag-of-groups = { $kind } (vikundi)
 borehole-inspector-flag-out-of-place = Nje ya Nafasi

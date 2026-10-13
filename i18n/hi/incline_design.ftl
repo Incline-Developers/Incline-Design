@@ -360,6 +360,7 @@ borehole-inspector-column = कॉलम
 borehole-inspector-column-empty-check = अभी कोई स्ट्रैट कॉलम नहीं है। ज़्यादातर होल जो क्रम देते हैं उससे भरने के लिए जाँचें, या नीचे के कोड जोड़ें और उन्हें हाथ से क्रम में रखें।
 borehole-inspector-data = डेटा
 borehole-inspector-display = प्रदर्शन
+borehole-inspector-drag-to-reorder = इस कोड को कॉलम में खिसकाने के लिए ऊपर या नीचे खींचें
 borehole-inspector-every-code-placed = फ़ील्ड का हर कोड कॉलम में है।
 borehole-inspector-flag-of-groups = { $kind } (समूह)
 borehole-inspector-flag-out-of-place = अपनी जगह से बाहर

@@ -388,6 +388,7 @@ borehole-inspector-column = 層序列
 borehole-inspector-column-empty-check = 層序列はまだありません。確認を実行すると多くの孔が示す順序で埋められます。または下のコードを追加して手動で並べ替えてください。
 borehole-inspector-data = データ
 borehole-inspector-display = 表示
+borehole-inspector-drag-to-reorder = 上下にドラッグして、このコードを層序列内で移動します
 borehole-inspector-every-code-placed = このフィールドのすべてのコードが層序列に入っています。
 borehole-inspector-flag-of-groups = { $kind }（グループ）
 borehole-inspector-flag-out-of-place = 順序違い
