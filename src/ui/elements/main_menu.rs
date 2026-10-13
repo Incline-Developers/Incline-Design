@@ -842,12 +842,14 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                     commands.push(UiCommand::OpenCreateBlockModel);
                     ui.close();
                 }
-                context_menu_separator(ui);
+            });
+
+            MenuBarMenu::new(&tr!("ws-menubar-modelling")).show(ui, |ui| {
                 // Select first, then act: placed on the holes selected at open.
                 let can_build_points = editor.selection_counts.reference_holes > 0;
                 if ContextMenuAction::new(tr!("common-reference-points"))
                     .enabled(can_build_points)
-                    .disabled_hover_text(tr!("ws-menubar-drillholes-select-holes"))
+                    .disabled_hover_text(tr!("ws-menubar-modelling-select-holes"))
                     .show(ui)
                     .clicked()
                 {
@@ -861,7 +863,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                 if ContextMenuAction::new(tr!("common-build-surface-ellipsis"))
                     .enabled(can_build_surface)
                     .disabled_hover_text(tr!(
-                        "ws-menubar-drillholes-select-points",
+                        "ws-menubar-modelling-select-points",
                         count = crate::app::commands::triangulation::reference_surface::MINIMUM_POINTS.to_string()
                     ))
                     .show(ui)
@@ -876,7 +878,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                 let can_make_thickness = editor.selection_counts.triangulations == 1;
                 if ContextMenuAction::new(tr!("common-thickness-points-ellipsis"))
                     .enabled(can_make_thickness)
-                    .disabled_hover_text(tr!("ws-menubar-drillholes-select-surface"))
+                    .disabled_hover_text(tr!("ws-menubar-modelling-select-surface"))
                     .show(ui)
                     .clicked()
                 {
@@ -887,7 +889,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                 // thickness points are made.
                 if ContextMenuAction::new(tr!("common-thickness-surfaces-ellipsis"))
                     .enabled(can_make_thickness)
-                    .disabled_hover_text(tr!("ws-menubar-drillholes-select-surface"))
+                    .disabled_hover_text(tr!("ws-menubar-modelling-select-surface"))
                     .show(ui)
                     .clicked()
                 {
@@ -900,7 +902,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                 // the dialog.
                 if ContextMenuAction::new(tr!("common-clip-to-surface-ellipsis"))
                     .enabled(editor.selection_counts.triangulations == 2)
-                    .disabled_hover_text(tr!("ws-menubar-drillholes-select-surfaces"))
+                    .disabled_hover_text(tr!("ws-menubar-modelling-select-surfaces"))
                     .show(ui)
                     .clicked()
                 {
@@ -937,7 +939,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
             }
             if ContextMenuAction::new(tr!("common-clip-to-surface-ellipsis"))
                 .enabled(editor.selection_counts.triangulations == 2)
-                .disabled_hover_text(tr!("ws-menubar-drillholes-select-surfaces"))
+                .disabled_hover_text(tr!("ws-menubar-modelling-select-surfaces"))
                 .show(ui)
                 .clicked()
             {

@@ -56,10 +56,11 @@ ws-menubar-raster = Raster
 ws-menubar-point-cloud = Nokta Bulutu
 ws-menubar-block-model = Blok Model
 ws-menubar-drillholes = Sondaj Delikleri
-ws-menubar-drillholes-select-holes = Önce sondaj kuyularını seçin
-ws-menubar-drillholes-select-points = En az { $count } nokta seçin
-ws-menubar-drillholes-select-surface = Bir grid yüzeyi seçin
-ws-menubar-drillholes-select-surfaces = Bir damarın tavanını ve tabanını, iki ızgara yüzeyini seçin
+ws-menubar-modelling = Modelleme
+ws-menubar-modelling-select-holes = Önce sondaj kuyularını seçin
+ws-menubar-modelling-select-points = En az { $count } nokta seçin
+ws-menubar-modelling-select-surface = Bir grid yüzeyi seçin
+ws-menubar-modelling-select-surfaces = Bir damarın tavanını ve tabanını, iki ızgara yüzeyini seçin
 ws-menubar-active-layer = Katman:
 
 ## Menü çubuğu işlevleri

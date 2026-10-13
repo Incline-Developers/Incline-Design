@@ -52,10 +52,11 @@ ws-menubar-raster = Растр
 ws-menubar-point-cloud = Хмари точок
 ws-menubar-block-model = Блочна модель
 ws-menubar-drillholes = Свердловини
-ws-menubar-drillholes-select-holes = Спершу виберіть свердловини
-ws-menubar-drillholes-select-points = Виберіть щонайменше { $count } точки
-ws-menubar-drillholes-select-surface = Виберіть одну сіткову поверхню
-ws-menubar-drillholes-select-surfaces = Виберіть покрівлю й підошву пласта, дві сіткові поверхні
+ws-menubar-modelling = Моделювання
+ws-menubar-modelling-select-holes = Спершу виберіть свердловини
+ws-menubar-modelling-select-points = Виберіть щонайменше { $count } точки
+ws-menubar-modelling-select-surface = Виберіть одну сіткову поверхню
+ws-menubar-modelling-select-surfaces = Виберіть покрівлю й підошву пласта, дві сіткові поверхні
 ws-menubar-active-layer = Шар:
 
 ## Menubars functions

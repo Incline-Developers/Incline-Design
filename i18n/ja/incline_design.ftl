@@ -57,10 +57,11 @@ ws-menubar-raster = ラスター
 ws-menubar-point-cloud = 点群
 ws-menubar-block-model = ブロックモデル
 ws-menubar-drillholes = 削孔データ
-ws-menubar-drillholes-select-holes = 先に孔を選択してください
-ws-menubar-drillholes-select-points = 少なくとも { $count } 点を選択してください
-ws-menubar-drillholes-select-surface = グリッド曲面を1つ選択してください
-ws-menubar-drillholes-select-surfaces = 炭層の上盤と下盤の2つのグリッド曲面を選択してください
+ws-menubar-modelling = モデリング
+ws-menubar-modelling-select-holes = 先に孔を選択してください
+ws-menubar-modelling-select-points = 少なくとも { $count } 点を選択してください
+ws-menubar-modelling-select-surface = グリッド曲面を1つ選択してください
+ws-menubar-modelling-select-surfaces = 炭層の上盤と下盤の2つのグリッド曲面を選択してください
 ws-menubar-active-layer = レイヤー:
 
 ## Menubars functions

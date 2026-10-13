@@ -57,10 +57,11 @@ ws-menubar-raster = Raster
 ws-menubar-point-cloud = Nuvola di punti
 ws-menubar-block-model = Modello a blocchi
 ws-menubar-drillholes = Fori di sondaggio
-ws-menubar-drillholes-select-holes = Seleziona prima i sondaggi
-ws-menubar-drillholes-select-points = Seleziona almeno { $count } punti
-ws-menubar-drillholes-select-surface = Seleziona una superficie a griglia
-ws-menubar-drillholes-select-surfaces = Seleziona il tetto e il letto di uno strato, due superfici a griglia
+ws-menubar-modelling = Modellazione
+ws-menubar-modelling-select-holes = Seleziona prima i sondaggi
+ws-menubar-modelling-select-points = Seleziona almeno { $count } punti
+ws-menubar-modelling-select-surface = Seleziona una superficie a griglia
+ws-menubar-modelling-select-surfaces = Seleziona il tetto e il letto di uno strato, due superfici a griglia
 ws-menubar-active-layer = Livello:
 
 ## Menubars functions

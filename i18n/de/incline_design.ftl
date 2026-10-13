@@ -55,10 +55,11 @@ ws-menubar-raster = Raster
 ws-menubar-point-cloud = Punktwolke
 ws-menubar-block-model = Blockmodell
 ws-menubar-drillholes = Bohrlöcher
-ws-menubar-drillholes-select-holes = Zuerst Bohrlöcher auswählen
-ws-menubar-drillholes-select-points = Mindestens { $count } Punkte auswählen
-ws-menubar-drillholes-select-surface = Eine Rasteroberfläche auswählen
-ws-menubar-drillholes-select-surfaces = Hangendes und Liegendes eines Flözes auswählen, zwei Rasteroberflächen
+ws-menubar-modelling = Modellierung
+ws-menubar-modelling-select-holes = Zuerst Bohrlöcher auswählen
+ws-menubar-modelling-select-points = Mindestens { $count } Punkte auswählen
+ws-menubar-modelling-select-surface = Eine Rasteroberfläche auswählen
+ws-menubar-modelling-select-surfaces = Hangendes und Liegendes eines Flözes auswählen, zwei Rasteroberflächen
 ws-menubar-active-layer = Ebene:
 
 ## Menüleisten-Funktionen

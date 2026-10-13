@@ -52,10 +52,11 @@ ws-menubar-raster = Растер
 ws-menubar-point-cloud = Облака точек
 ws-menubar-block-model = Блочная модель
 ws-menubar-drillholes = Скважины
-ws-menubar-drillholes-select-holes = Сначала выберите скважины
-ws-menubar-drillholes-select-points = Выберите не менее { $count } точек
-ws-menubar-drillholes-select-surface = Выберите одну сеточную поверхность
-ws-menubar-drillholes-select-surfaces = Выберите кровлю и почву пласта, две сеточные поверхности
+ws-menubar-modelling = Моделирование
+ws-menubar-modelling-select-holes = Сначала выберите скважины
+ws-menubar-modelling-select-points = Выберите не менее { $count } точек
+ws-menubar-modelling-select-surface = Выберите одну сеточную поверхность
+ws-menubar-modelling-select-surfaces = Выберите кровлю и почву пласта, две сеточные поверхности
 ws-menubar-active-layer = Слой:
 
 ## Menubars functions

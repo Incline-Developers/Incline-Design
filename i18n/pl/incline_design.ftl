@@ -53,10 +53,11 @@ ws-menubar-raster = Raster
 ws-menubar-point-cloud = Chmura punktów
 ws-menubar-block-model = Model blokowy
 ws-menubar-drillholes = Otwory wiertnicze
-ws-menubar-drillholes-select-holes = Najpierw zaznacz otwory
-ws-menubar-drillholes-select-points = Zaznacz co najmniej { $count } punkty
-ws-menubar-drillholes-select-surface = Zaznacz jedną powierzchnię siatkową
-ws-menubar-drillholes-select-surfaces = Zaznacz strop i spąg pokładu, dwie powierzchnie siatkowe
+ws-menubar-modelling = Modelowanie
+ws-menubar-modelling-select-holes = Najpierw zaznacz otwory
+ws-menubar-modelling-select-points = Zaznacz co najmniej { $count } punkty
+ws-menubar-modelling-select-surface = Zaznacz jedną powierzchnię siatkową
+ws-menubar-modelling-select-surfaces = Zaznacz strop i spąg pokładu, dwie powierzchnie siatkowe
 ws-menubar-active-layer = Warstwa:
 
 ## Funkcje pasków menu

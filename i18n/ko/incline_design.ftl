@@ -54,10 +54,11 @@ ws-menubar-raster = 래스터
 ws-menubar-point-cloud = 포인트 클라우드
 ws-menubar-block-model = 블록 모델
 ws-menubar-drillholes = 시추공
-ws-menubar-drillholes-select-holes = 먼저 시추공을 선택하세요
-ws-menubar-drillholes-select-points = 최소 { $count }개 점을 선택하세요
-ws-menubar-drillholes-select-surface = 격자 표면을 하나 선택하세요
-ws-menubar-drillholes-select-surfaces = 탄층의 상반과 하반, 두 개의 격자 곡면을 선택하십시오
+ws-menubar-modelling = 모델링
+ws-menubar-modelling-select-holes = 먼저 시추공을 선택하세요
+ws-menubar-modelling-select-points = 최소 { $count }개 점을 선택하세요
+ws-menubar-modelling-select-surface = 격자 표면을 하나 선택하세요
+ws-menubar-modelling-select-surfaces = 탄층의 상반과 하반, 두 개의 격자 곡면을 선택하십시오
 ws-menubar-active-layer = 레이어:
 
 ## Menubars functions

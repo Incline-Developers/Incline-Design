@@ -60,10 +60,11 @@ ws-menubar-raster = Raster
 ws-menubar-point-cloud = Point Cloud
 ws-menubar-block-model = Block Model
 ws-menubar-drillholes = Drill Holes
-ws-menubar-drillholes-select-holes = Select drillholes first
-ws-menubar-drillholes-select-points = Select at least { $count } points
-ws-menubar-drillholes-select-surface = Select one grid surface
-ws-menubar-drillholes-select-surfaces = Select a seam's roof and floor, two grid surfaces
+ws-menubar-modelling = Modelling
+ws-menubar-modelling-select-holes = Select drillholes first
+ws-menubar-modelling-select-points = Select at least { $count } points
+ws-menubar-modelling-select-surface = Select one grid surface
+ws-menubar-modelling-select-surfaces = Select a seam's roof and floor, two grid surfaces
 ws-menubar-active-layer = Layer:
 
 ## Menubars functions

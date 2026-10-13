@@ -55,10 +55,11 @@ ws-menubar-raster = Растер
 ws-menubar-point-cloud = Цэгэн үүл
 ws-menubar-block-model = Блокийн загвар
 ws-menubar-drillholes = Цооногууд
-ws-menubar-drillholes-select-holes = Эхлээд цооногуудыг сонгоно уу
-ws-menubar-drillholes-select-points = Дор хаяж { $count } цэг сонгоно уу
-ws-menubar-drillholes-select-surface = Нэг торон гадаргуу сонгоно уу
-ws-menubar-drillholes-select-surfaces = Давхаргын дээврийн хэсэг ба улыг, хоёр торон гадаргууг сонгоно уу
+ws-menubar-modelling = Загварчлал
+ws-menubar-modelling-select-holes = Эхлээд цооногуудыг сонгоно уу
+ws-menubar-modelling-select-points = Дор хаяж { $count } цэг сонгоно уу
+ws-menubar-modelling-select-surface = Нэг торон гадаргуу сонгоно уу
+ws-menubar-modelling-select-surfaces = Давхаргын дээврийн хэсэг ба улыг, хоёр торон гадаргууг сонгоно уу
 ws-menubar-active-layer = Давхарга:
 
 ## Цэсний мөрийн функцууд

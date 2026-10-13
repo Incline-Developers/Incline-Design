@@ -650,7 +650,7 @@ impl<'a> App<'a> {
             MacMenuAction::OpenReferenceSurface => Some(UiCommand::OpenReferenceSurface),
             MacMenuAction::OpenThicknessPoints => Some(UiCommand::OpenThicknessPoints),
             MacMenuAction::OpenSeamSurface => Some(UiCommand::OpenSeamSurface),
-            MacMenuAction::OpenDrillHolesClipToSurface | MacMenuAction::OpenCutTriangulationToSurface => Some(UiCommand::OpenCutTriangulationToSurface),
+            MacMenuAction::OpenModellingClipToSurface | MacMenuAction::OpenCutTriangulationToSurface => Some(UiCommand::OpenCutTriangulationToSurface),
             MacMenuAction::OpenOptimizationScenarios => Some(UiCommand::OpenOptimizationScenarios),
             MacMenuAction::OpenSurveyDefinitions => Some(UiCommand::OpenSurveyDefinitions),
             MacMenuAction::OpenSurveyTransform => Some(UiCommand::OpenSurveyTransform),

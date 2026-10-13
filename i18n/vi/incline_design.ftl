@@ -56,10 +56,11 @@ ws-menubar-raster = Ảnh raster
 ws-menubar-point-cloud = Đám mây điểm
 ws-menubar-block-model = Mô hình khối
 ws-menubar-drillholes = Lỗ khoan
-ws-menubar-drillholes-select-holes = Hãy chọn lỗ khoan trước
-ws-menubar-drillholes-select-points = Chọn ít nhất { $count } điểm
-ws-menubar-drillholes-select-surface = Chọn một bề mặt lưới
-ws-menubar-drillholes-select-surfaces = Chọn vách trên và vách dưới của một vỉa, hai bề mặt lưới
+ws-menubar-modelling = Mô hình hóa
+ws-menubar-modelling-select-holes = Hãy chọn lỗ khoan trước
+ws-menubar-modelling-select-points = Chọn ít nhất { $count } điểm
+ws-menubar-modelling-select-surface = Chọn một bề mặt lưới
+ws-menubar-modelling-select-surfaces = Chọn vách trên và vách dưới của một vỉa, hai bề mặt lưới
 ws-menubar-active-layer = Lớp:
 
 ## Menubars functions

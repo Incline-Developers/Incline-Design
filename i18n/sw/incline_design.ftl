@@ -48,10 +48,11 @@ ws-menubar-raster = Rasta
 ws-menubar-point-cloud = Wingu la Vidokezo
 ws-menubar-block-model = Mfano wa Vitalu
 ws-menubar-drillholes = Mashimo ya Uchimbaji
-ws-menubar-drillholes-select-holes = Chagua mashimo ya kuchimba kwanza
-ws-menubar-drillholes-select-points = Chagua angalau vidokezo { $count }
-ws-menubar-drillholes-select-surface = Chagua uso mmoja wa gridi
-ws-menubar-drillholes-select-surfaces = Chagua paa na sakafu ya tabaka, nyuso mbili za gridi
+ws-menubar-modelling = Uundaji wa Mifano
+ws-menubar-modelling-select-holes = Chagua mashimo ya kuchimba kwanza
+ws-menubar-modelling-select-points = Chagua angalau vidokezo { $count }
+ws-menubar-modelling-select-surface = Chagua uso mmoja wa gridi
+ws-menubar-modelling-select-surfaces = Chagua paa na sakafu ya tabaka, nyuso mbili za gridi
 ws-menubar-active-layer = Tabaka:
 
 ## Menubars functions
