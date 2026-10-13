@@ -6,7 +6,10 @@ use crate::{
     },
     ui::{
         state::{EditorState, UiCommand},
-        widgets::menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldText},
+        widgets::{
+            collapsible_section::CollapsibleSection,
+            menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldText},
+        },
     },
 };
 
@@ -32,13 +35,31 @@ pub(crate) fn draw_drill_hole_color_dialog(ui: &mut egui::Ui, editor: &mut Edito
         .min_width(400.0)
         .max_width(480.0)
         .show(ui.ctx(), |ui| {
-            // A fixed height, so folding a section never resizes the dialog:
-            // most of the window, less the title bar and a gap.
-            let window = ui.ctx().content_rect().height();
-            let height = (window * 0.7).max(360.0).min((window - menu::TITLE_BAR_HEIGHT - 48.0).max(120.0));
-            ui.set_min_height(height);
-            ui.set_max_height(height);
-            draw_drill_hole_color_editor(ui, dataset, commands);
+            // Switches the dialog to another loaded set; the body follows this
+            // frame, the title next frame.
+            MenuFieldCombo::new(
+                "drill_hole_colour_dialog_dataset",
+                tr!("drill-hole-dataset"),
+                &mut editor.drill_hole_color_dialog,
+                dataset.name.clone(),
+                datasets
+                    .iter()
+                    .filter(|dataset| dataset.state.loaded)
+                    .map(|dataset| (Some(dataset.id), dataset.name.clone().into())),
+            )
+            .show(ui);
+            let dataset = datasets.iter().find(|dataset| Some(dataset.id) == editor.drill_hole_color_dialog).unwrap_or(dataset);
+            // Sized to its content; only a long code list, taller than the
+            // window less the title bar, the rows above and a gap, scrolls.
+            // Given its own child: an area's body is otherwise capped at last
+            // frame's size, so the dialog could never grow to fit.
+            let max_height = (ui.ctx().content_rect().height() - menu::TITLE_BAR_HEIGHT - ui.min_rect().height() - 48.0).max(120.0);
+            ui.allocate_ui(egui::vec2(ui.available_width(), max_height), |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(max_height)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| draw_drill_hole_color_editor(ui, dataset, commands));
+            });
         });
     // Colour edits apply live, so there is no confirm step: both keys dismiss.
     // Enter is left alone while a text field - or a slider being typed into,
@@ -97,12 +118,7 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
         }
     }
 
-    let shown = match dataset.color.active_field.as_deref().and_then(|key| dataset.dataset.field(key)).map(|field| &field.kind) {
-        None => 1,
-        Some(DrillFieldKind::Numeric { .. }) => 2,
-        Some(DrillFieldKind::Categorical { .. }) => FOLD_SECTIONS.len(),
-    };
-    fold_section(ui, &FOLD_SECTIONS[..shown], 0, tr!("drill-hole-width"), |ui| {
+    section_card(ui, "drill_hole_width_section", tr!("drill-hole-width"), |ui| {
         let mut style = dataset.color.hole_style;
         if MenuFieldCombo::new(
             ("drill_hole_style", id),
@@ -192,7 +208,7 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
         return;
     };
 
-    fold_section(ui, &FOLD_SECTIONS[..shown], 1, tr!("drill-hole-colour-scale"), |ui| {
+    section_card(ui, "drill_hole_colour_scale_section", tr!("drill-hole-colour-scale"), |ui| {
         match &field.kind {
             DrillFieldKind::Numeric { min, max } => {
                 let mut preset = dataset.color.preset;
@@ -304,7 +320,7 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
                         }
                     });
                 };
-                // Inline: the section already scrolls, so a list scroll would nest.
+                // Inline: the dialog already scrolls, so a list scroll would nest.
                 for row in &shown_rows {
                     draw_row(ui, row);
                 }
@@ -349,7 +365,7 @@ fn draw_working_sections(ui: &mut egui::Ui, dataset: &OpenDrillHoleDataset, fiel
     // Every change asked for this frame goes out as one command at the end,
     // so two in one frame neither overwrite each other nor split the undo.
     let mut edits: Vec<SectionEdit> = Vec::new();
-    fold_section(ui, &FOLD_SECTIONS, 2, tr!("drill-hole-working-sections"), |ui| {
+    section_card(ui, "drill_hole_working_sections_section", tr!("drill-hole-working-sections"), |ui| {
         ui.label(egui::RichText::new(tr!("drill-hole-working-section-set-seams-plies")).weak());
         ui.add_space(2.0);
 
@@ -366,7 +382,7 @@ fn draw_working_sections(ui: &mut egui::Ui, dataset: &OpenDrillHoleDataset, fiel
         }
     });
 
-    fold_section(ui, &FOLD_SECTIONS, 3, tr!("drill-hole-new-working-section"), |ui| {
+    section_card(ui, "drill_hole_new_working_section", tr!("drill-hole-new-working-section"), |ui| {
         // Not `ui.id()`: keyed by dataset, so reopening the dialog on the same
         // dataset finds the section still being built.
         let draft_id = egui::Id::new(("drill_hole_working_section_draft", dataset.id));
@@ -491,32 +507,10 @@ fn reset_row_colors(table: &[DrillCategoryColor], all: &[String], shown: &[&str]
     reset
 }
 
-/// The editor's folding sections, top to bottom. A field shows a prefix of
-/// them: width always, the colour scale with a field, and the working
-/// sections with a categorical one.
-const FOLD_SECTIONS: [&str; 4] = [
-    "drill_hole_width_section",
-    "drill_hole_colour_scale_section",
-    "drill_hole_working_sections_section",
-    "drill_hole_new_working_section",
-];
-
-/// Draw `sections[index]` under its folding heading, and `body` when open.
-/// An open section scrolls in an even share of the height left
-/// by the headings below it and the other open sections, so every heading
-/// stays on screen.
-fn fold_section(ui: &mut egui::Ui, sections: &[&str], index: usize, heading: String, body: impl FnOnce(&mut egui::Ui)) {
-    let key = sections[index];
-    if !menu::menu_section_folding(ui, key, heading) {
-        return;
-    }
-    let below = &sections[index + 1..];
-    let open_below = below.iter().filter(|key| menu::menu_section_open(ui, **key)).count();
-    let headings = below.len() as f32 * menu::menu_section_folding_height(ui);
-    // No floor: on a short window the sections shrink, not the
-    // headings' room, so none is pushed out of view.
-    let height = ((ui.available_height() - headings) / (open_below + 1) as f32).max(0.0);
-    egui::ScrollArea::vertical().id_salt(key).max_height(height).auto_shrink([false, true]).show(ui, body);
+/// One of the editor's groups, as a fixed card: every group always shows.
+fn section_card(ui: &mut egui::Ui, key: &'static str, heading: String, body: impl FnOnce(&mut egui::Ui)) {
+    ui.add_space(4.0);
+    CollapsibleSection::new(key, heading).collapsible(false).show(ui, body);
 }
 
 /// Where one list's filter text is kept: per dataset and field, not per

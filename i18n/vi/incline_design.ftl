@@ -998,6 +998,7 @@ drill-hole-drilled-diameter = Theo đường kính khoan
 drill-hole-every-code-lists-already-another = Mọi mã mà nó liệt kê đều đã nằm trong một phân đoạn làm việc khác.
 drill-hole-every-interval-value-colour-field = Mỗi khoảng có giá trị trong trường màu được vẽ thành một đĩa rộng bằng này trên đường lỗ khoan. Khi ở xa, nó không bao giờ hẹp hơn vài điểm ảnh.
 drill-hole-field = Trường
+drill-hole-dataset = Bộ dữ liệu
 drill-hole-field-working-section = { $field } theo phân đoạn làm việc
 drill-hole-floor = Vách dưới
 drill-hole-grayscale = Thang xám

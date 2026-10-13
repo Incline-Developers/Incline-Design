@@ -972,6 +972,7 @@ drill-hole-drilled-diameter = از قطر حفاری‌شده
 drill-hole-every-code-lists-already-another = هر کدی که فهرست کرده از قبل در بخش کاری دیگری است.
 drill-hole-every-interval-value-colour-field = هر بازه‌ای که در فیلد رنگ مقدار دارد به‌صورت دیسکی با این عرض روی رشته رسم می‌شود. از دور هرگز باریک‌تر از چند پیکسل نمی‌شود.
 drill-hole-field = فیلد
+drill-hole-dataset = مجموعه‌داده
 drill-hole-field-working-section = { $field } بر اساس بخش کاری
 drill-hole-floor = کف
 drill-hole-grayscale = مقیاس خاکستری

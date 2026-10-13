@@ -1004,6 +1004,7 @@ drill-hole-drilled-diameter = Cha kipenyo kilichochimbwa
 drill-hole-every-code-lists-already-another = Kila msimbo inaoorodhesha tayari uko kwenye sehemu nyingine ya kazi.
 drill-hole-every-interval-value-colour-field = Kila kipindi chenye thamani kwenye sehemu ya rangi huchorwa kama diski ya upana huu kwenye mfuatano. Kwa mbali hakiwi chembamba kuliko pikseli chache.
 drill-hole-field = Sehemu
+drill-hole-dataset = Seti ya data
 drill-hole-field-working-section = { $field } kwa sehemu ya kazi
 drill-hole-floor = Sakafu
 drill-hole-grayscale = Kijivu

@@ -972,6 +972,7 @@ drill-hole-drilled-diameter = ड्रिल किए गए व्यास �
 drill-hole-every-code-lists-already-another = इसमें सूचीबद्ध हर कोड पहले से किसी अन्य कार्य खंड में है।
 drill-hole-every-interval-value-colour-field = रंग फ़ील्ड में मान वाला हर अंतराल स्ट्रिंग पर इतनी चौड़ी डिस्क के रूप में खींचा जाता है। दूर से भी यह कुछ पिक्सेल से पतली नहीं होती।
 drill-hole-field = फ़ील्ड
+drill-hole-dataset = डेटासेट
 drill-hole-field-working-section = कार्य खंड के अनुसार { $field }
 drill-hole-floor = फ़्लोर
 drill-hole-grayscale = धूसरमान

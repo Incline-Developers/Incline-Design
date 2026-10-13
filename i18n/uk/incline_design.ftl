@@ -1019,6 +1019,7 @@ drill-hole-drilled-diameter = Від пробуреного діаметра
 drill-hole-every-code-lists-already-another = Кожен код, який він містить, уже входить до іншого робочого пласта.
 drill-hole-every-interval-value-colour-field = Кожен інтервал зі значенням у полі кольору малюється на лінії як диск такої ширини. Здалеку він ніколи не буває вужчим за кілька пікселів.
 drill-hole-field = Поле
+drill-hole-dataset = Набір
 drill-hole-field-working-section = { $field } за робочим пластом
 drill-hole-floor = Підошва
 drill-hole-grayscale = Відтінки сірого
