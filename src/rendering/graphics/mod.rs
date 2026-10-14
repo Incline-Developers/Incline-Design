@@ -869,6 +869,12 @@ impl<'a> Graphics<'a> {
         self.overlay_dirty = true;
     }
 
+    /// Whether a floating egui surface - a tile, card or menu over the canvas -
+    /// covers this window position, in physical pixels.
+    pub(crate) fn overlay_at_physical_position(&self, x: f32, y: f32) -> bool {
+        self.gui.overlay_at_physical_position(x, y)
+    }
+
     pub(crate) fn gui_input(&mut self, event: &WindowEvent) -> egui_winit::EventResponse {
         let mut response = self.gui.handle_event(&self.window, event);
         // egui's generic `consumed` result can be false on a secondary-button

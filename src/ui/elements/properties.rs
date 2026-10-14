@@ -286,7 +286,7 @@ fn draw_block_model_title_bar(ui: &mut egui::Ui, editor: &mut EditorState, model
     ui.spacing_mut().item_spacing.y = 0.0;
     let rect = ui.allocate_exact_size(egui::vec2(width, menu::TITLE_BAR_HEIGHT), egui::Sense::hover()).0;
     ui.spacing_mut().item_spacing.y = spacing;
-    menu::draw_menu_heading(ui, &egui::WidgetText::from(tr!("common-block-model")), rect, surface);
+    menu::draw_menu_heading(ui, &egui::WidgetText::from(tr!("common-block-model")), rect, surface, None);
 
     let loaded: Vec<_> = models.iter().filter(|model| model.state.loaded).collect();
     let picker_width = (rect.width() * 0.4).clamp(120.0, 280.0);
