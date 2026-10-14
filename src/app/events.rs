@@ -1482,6 +1482,7 @@ impl<'a> App<'a> {
                     self.try_finish_tool();
                 }
             }
+            KeyCode::F2 if !self.editor.text_editing_enabled && !self.editor.dialog_owns_confirm_key() => self.begin_rename_from_explorer(),
             // The "Edit Object" dialog has its own row Delete button and no
             // keyboard shortcut for it, and it is opened on a selected object,
             // so without this guard Delete/Backspace raises "delete this object?".

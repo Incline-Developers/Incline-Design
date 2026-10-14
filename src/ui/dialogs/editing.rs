@@ -4,7 +4,7 @@ use crate::{
     i18n::tr,
     model::{Axis, Document},
     ui::{
-        state::{ActiveTool, BatterBermMode, DrapePhase, EditorState, HeightMode, OffsetMeasure, RelimitMode, TrimEnd, UiCommand, UiProjectView},
+        state::{ActiveTool, BatterBermMode, DrapePhase, EditorState, HeightMode, OffsetMeasure, RelimitMode, RenameTarget, TrimEnd, UiCommand, UiProjectView},
         themed_icon,
         widgets::{
             context_menu::{ContextMenu, ContextMenuAction, context_menu_popup, context_menu_separator},
@@ -739,7 +739,9 @@ pub(crate) fn draw_create_layer_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiC
 
 /// Draw the rename floating dialog for whichever explorer item is being renamed.
 pub(crate) fn draw_rename_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState) {
+    let opened_key = egui::Id::new("rename_dialog_opened");
     let Some((target, _)) = editor.renaming_item else {
+        ui.data_mut(|data| data.remove::<RenameTarget>(opened_key));
         return;
     };
     // Work on a local copy of the name buffer to avoid borrow conflicts inside the closure.
@@ -753,10 +755,20 @@ pub(crate) fn draw_rename_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand
         .show(ui.ctx(), |ui| {
             // `menu_field_row` gives the entry its requested width and leaves the
             // rest of the row to the label, so the extra width here is the label's.
-            MenuFieldText::new(tr!("dialog-rename-field"), &mut name_buf)
+            let response = MenuFieldText::new(tr!("dialog-rename-field"), &mut name_buf)
                 .width(260.0)
                 .hint_text(tr!("dialog-rename-field-hint"))
                 .show(ui);
+            // The first frame for a target puts the cursor in the field with the
+            // whole name selected, so typing replaces it as in any file browser.
+            if ui.data(|data| data.get_temp::<RenameTarget>(opened_key)) != Some(target) {
+                ui.data_mut(|data| data.insert_temp(opened_key, target));
+                response.request_focus();
+                let mut state = egui::TextEdit::load_state(ui.ctx(), response.id).unwrap_or_default();
+                let end = egui::text::CCursor::new(name_buf.chars().count());
+                state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), end)));
+                state.store(ui.ctx(), response.id);
+            }
             menu::menu_actions(ui, |ui| {
                 let can_rename = !name_buf.trim().is_empty();
                 let submitted = menu::dialog_confirm_pressed(ui.ctx());
