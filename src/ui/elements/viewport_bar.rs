@@ -697,13 +697,10 @@ fn draw_blast_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, project: &
 
     let contours = ui.add_enabled(
         has_active_dataset,
-        ToolbarButton::new(
-            egui::Image::new(unthemed_icon!("contours_of_equal_time.svg")),
-            tr!("viewport-bar-contours-equal-time"),
-        )
-        .id_salt("contours_of_equal_time")
-        .button_side(side)
-        .selected(review.contours && has_active_dataset),
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("contours_of_equal_time.svg")), tr!("viewport-bar-contours-equal-time"))
+            .id_salt("contours_of_equal_time")
+            .button_side(side)
+            .selected(review.contours && has_active_dataset),
     );
     if contours.clicked() {
         review.contours = !review.contours;
@@ -711,13 +708,10 @@ fn draw_blast_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, project: &
 
     let relief = ui.add_enabled(
         has_active_dataset,
-        ToolbarButton::new(
-            egui::Image::new(unthemed_icon!("burden_relief_heatmap.svg")),
-            tr!("viewport-bar-burden-relief-heatmap"),
-        )
-        .id_salt("burden_relief_heatmap")
-        .button_side(side)
-        .selected(review.relief && has_active_dataset),
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("burden_relief_heatmap.svg")), tr!("viewport-bar-burden-relief-heatmap"))
+            .id_salt("burden_relief_heatmap")
+            .button_side(side)
+            .selected(review.relief && has_active_dataset),
     );
     if relief.clicked() {
         review.relief = !review.relief;
