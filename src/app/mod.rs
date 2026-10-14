@@ -300,6 +300,9 @@ pub(crate) struct App<'a> {
     /// being discarded when there is otherwise no window activity.
     next_ui_repaint_deadline: Option<Instant>,
     window: Option<Arc<Window>>,
+    /// Precision touchpad pan and pinch, which winit does not report on Windows.
+    #[cfg(target_os = "windows")]
+    trackpad: Option<crate::windows_trackpad::Trackpad>,
     graphics: Option<Graphics<'static>>,
     #[cfg(target_arch = "wasm32")]
     web_graphics_state: GraphicsState,
@@ -476,6 +479,8 @@ impl<'a> Default for App<'a> {
             redraw_requested: false,
             next_ui_repaint_deadline: None,
             window: None,
+            #[cfg(target_os = "windows")]
+            trackpad: None,
             graphics: None,
             #[cfg(target_arch = "wasm32")]
             web_graphics_state: GraphicsState::NotStarted,
@@ -1669,10 +1674,32 @@ impl<'a> App<'a> {
             || self.raster_textures.iter().any(|item| item.state.loaded)
     }
 
+    /// Apply what a precision touchpad gesture moved since the last loop
+    /// iteration. Returns whether one is live, so the loop keeps polling.
+    #[cfg(target_os = "windows")]
+    fn poll_trackpad(&mut self) -> bool {
+        let Some(trackpad) = self.trackpad.as_mut() else {
+            return false;
+        };
+        if let Some(motion) = trackpad.poll()
+            && let Some(graphics) = self.graphics.as_mut()
+        {
+            let (dx, dy) = motion.pan;
+            let panned = (dx, dy) != (0.0, 0.0) && graphics.trackpad_pan(dx, dy);
+            let zoomed = motion.magnification != 0.0 && graphics.trackpad_pinch(motion.magnification);
+            self.redraw_requested |= panned || zoomed;
+        }
+        trackpad.active()
+    }
+
     fn teardown_window(&mut self) {
         #[cfg(target_arch = "wasm32")]
         crate::app::web_storage::set_dirty(false);
         self.graphics = None;
+        #[cfg(target_os = "windows")]
+        {
+            self.trackpad = None;
+        }
         self.window = None;
         self.pending_resize = None;
         self.last_render_time = None;
@@ -2135,6 +2162,14 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
         #[cfg(target_os = "macos")]
         crate::mac::install_menu_bar();
 
+        // Without it a touchpad still scrolls, as a wheel: two fingers zoom.
+        #[cfg(target_os = "windows")]
+        {
+            self.trackpad = crate::windows_trackpad::Trackpad::new(&window)
+                .inspect_err(|error| log::warn!("Precision touchpad gestures are unavailable: {error}"))
+                .ok();
+        }
+
         #[cfg(not(target_arch = "wasm32"))]
         match pollster::block_on(Graphics::new(window.clone())) {
             Ok(graphics) => {
@@ -2197,6 +2232,10 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
 
         self.poll_file_dialogs();
         self.sync_geophysics();
+        #[cfg(target_os = "windows")]
+        let trackpad_active = self.poll_trackpad();
+        #[cfg(not(target_os = "windows"))]
+        let trackpad_active = false;
         let now = Instant::now();
         if self.next_ui_repaint_deadline.is_some_and(|deadline| deadline <= now) {
             self.next_ui_repaint_deadline = None;
@@ -2241,7 +2280,14 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
             (None, None) => None,
         };
-        let wake_deadline = wake_deadline.into_iter().chain(self.slice_surface_retry_deadline).chain(resize_settle_deadline).min();
+        // A live touchpad gesture sends the window nothing, so the loop wakes itself to advance it.
+        let trackpad_deadline = trackpad_active.then(|| now + Duration::from_millis(4));
+        let wake_deadline = wake_deadline
+            .into_iter()
+            .chain(self.slice_surface_retry_deadline)
+            .chain(resize_settle_deadline)
+            .chain(trackpad_deadline)
+            .min();
         if let Some(deadline) = wake_deadline {
             event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
         } else {
