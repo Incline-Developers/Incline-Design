@@ -453,7 +453,7 @@ With the filter applied, click **Copy filtered shells into a new optimization sc
 Incline creates a copy of the scenario right below the original, with:
 - Outputs set to **Type factors manually** with the six factors,
 - the name `McLaughlin 0.2 - 1.7 - 61 shells (0.325, 0.425, 0.575, 0.70, 0.85, 1.00)`,
-- its own shell name prefix, `PS-copy`.
+- its own shell name prefix, `SA-copy` (the starting scenario's prefix is `SA`, for sensitivity analysis).
 
 A message confirms it.
 
