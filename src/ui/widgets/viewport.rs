@@ -16,7 +16,10 @@ pub(crate) const DOCK_PANEL_RESERVED_WIDTH: f32 = 340.0 + 10.0;
 
 /// A compact tool panel pinned inside the 3D viewport.
 ///
-/// Apears in the bottom left. Used for tool configuration.
+/// Apears in the bottom left unless [`Self::anchor`] puts it elsewhere. Used
+/// for tool configuration, for the review tiles a workspace lays over the
+/// scene, and for the block-model card. An empty title leaves the heading bar
+/// off; [`Self::show_with_heading`] adds controls to it.
 pub(crate) struct ViewportDockPanel {
     id: egui::Id,
     title: egui::WidgetText,
@@ -24,6 +27,10 @@ pub(crate) struct ViewportDockPanel {
     min_width: f32,
     max_width: f32,
     margin: egui::Vec2,
+    anchor: Option<(egui::Align2, egui::Pos2)>,
+    help_text: Option<egui::WidgetText>,
+    order: egui::Order,
+    inner_margin: egui::Margin,
 }
 
 impl ViewportDockPanel {
@@ -35,7 +42,35 @@ impl ViewportDockPanel {
             min_width: 0.0,
             max_width: 320.0,
             margin: egui::vec2(10.0, 10.0),
+            anchor: None,
+            help_text: None,
+            order: egui::Order::Foreground,
+            inner_margin: egui::Margin::symmetric(10, 8),
         }
+    }
+
+    /// A help marker beside the title, explaining the panel on hover.
+    pub(crate) fn help_text(mut self, text: impl Into<egui::WidgetText>) -> Self {
+        self.help_text = Some(text.into());
+        self
+    }
+
+    /// Pin the panel's `pivot` corner to `pos` in place of the bottom left.
+    pub(crate) fn anchor(mut self, pivot: egui::Align2, pos: egui::Pos2) -> Self {
+        self.anchor = Some((pivot, pos));
+        self
+    }
+
+    /// Where the panel stacks among the other floating cards; in front of
+    /// them unless told otherwise.
+    pub(crate) fn order(mut self, order: egui::Order) -> Self {
+        self.order = order;
+        self
+    }
+
+    pub(crate) fn inner_margin(mut self, inner_margin: egui::Margin) -> Self {
+        self.inner_margin = inner_margin;
+        self
     }
 
     pub(crate) fn min_width(mut self, min_width: f32) -> Self {
@@ -49,37 +84,46 @@ impl ViewportDockPanel {
     }
 
     pub(crate) fn show<R>(self, ctx: &egui::Context, add_contents: impl FnOnce(&mut egui::Ui) -> R) {
-        let pos = egui::pos2(self.viewport_rect.left() + self.margin.x, self.viewport_rect.bottom() - self.margin.y);
-        egui::Area::new(self.id)
-            .order(egui::Order::Foreground)
-            .pivot(egui::Align2::LEFT_BOTTOM)
-            .fixed_pos(pos)
-            .show(ctx, |ui| {
-                // The same card as a floating menu, minus the drag bar's close
-                // button: a docked tool panel is one of the menu family, and
-                // the fields inside it are the menu fields.
-                let surface = menu::menu_surface(ui.visuals());
-                egui::Frame::new()
-                    .fill(surface)
-                    .stroke(menu::menu_border(ui.visuals()))
-                    .corner_radius(egui::CornerRadius::same(menu::MENU_CORNER_RADIUS))
-                    .show(ui, |ui| {
-                        menu::apply_menu_style(ui, surface);
-                        let inner_margin = egui::Margin::symmetric(10, 8);
-                        let measured_width = menu::intrinsic_content_width(ui) + inner_margin.sum().x;
-                        let available_width = (self.viewport_rect.width() - self.margin.x * 2.0).max(1.0);
-                        let adaptive_min_width = self.min_width.max(measured_width).min(available_width);
-                        ui.set_min_width(adaptive_min_width);
-                        ui.set_max_width(self.max_width.max(adaptive_min_width));
-                        let title_rect = ui.allocate_exact_size(egui::vec2(adaptive_min_width, menu::TITLE_BAR_HEIGHT), egui::Sense::hover()).0;
-                        let inner = egui::Frame::NONE.inner_margin(inner_margin).show(ui, add_contents).inner;
-                        let mut title_rect = title_rect;
+        self.show_with_heading(ctx, |_, _, _| {}, add_contents);
+    }
+
+    /// [`Self::show`], with `heading` adding controls to the heading bar once
+    /// it is painted: handed the bar's rect and the card's surface. It runs
+    /// after `add_contents`, which settles the card's width.
+    pub(crate) fn show_with_heading<R>(self, ctx: &egui::Context, heading: impl FnOnce(&mut egui::Ui, egui::Rect, egui::Color32), add_contents: impl FnOnce(&mut egui::Ui) -> R) {
+        let (pivot, pos) = self.anchor.unwrap_or((
+            egui::Align2::LEFT_BOTTOM,
+            egui::pos2(self.viewport_rect.left() + self.margin.x, self.viewport_rect.bottom() - self.margin.y),
+        ));
+        egui::Area::new(self.id).order(self.order).pivot(pivot).fixed_pos(pos).show(ctx, |ui| {
+            // The same card as a floating menu, minus the drag bar's close
+            // button: a docked tool panel is one of the menu family, and
+            // the fields inside it are the menu fields.
+            let surface = menu::menu_surface(ui.visuals());
+            egui::Frame::new()
+                .fill(surface)
+                .stroke(menu::menu_border(ui.visuals()))
+                .corner_radius(egui::CornerRadius::same(menu::MENU_CORNER_RADIUS))
+                .show(ui, |ui| {
+                    menu::apply_menu_style(ui, surface);
+                    let inner_margin = self.inner_margin;
+                    let measured_width = menu::intrinsic_content_width(ui) + inner_margin.sum().x;
+                    let available_width = (self.viewport_rect.width() - self.margin.x * 2.0).max(1.0);
+                    let adaptive_min_width = self.min_width.max(measured_width).min(available_width);
+                    ui.set_min_width(adaptive_min_width);
+                    ui.set_max_width(self.max_width.max(adaptive_min_width));
+                    let has_title = !self.title.is_empty();
+                    let title_rect = has_title.then(|| ui.allocate_exact_size(egui::vec2(adaptive_min_width, menu::TITLE_BAR_HEIGHT), egui::Sense::hover()).0);
+                    let inner = egui::Frame::NONE.inner_margin(inner_margin).show(ui, add_contents).inner;
+                    if let Some(mut title_rect) = title_rect {
                         title_rect.max.x = ui.min_rect().right();
-                        menu::draw_menu_heading(ui, &self.title, title_rect, surface);
-                        inner
-                    })
-                    .inner
-            });
+                        menu::draw_menu_heading(ui, &self.title, title_rect, surface, self.help_text);
+                        heading(ui, title_rect, surface);
+                    }
+                    inner
+                })
+                .inner
+        });
     }
 }
 

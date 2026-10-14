@@ -518,6 +518,12 @@ impl CameraController {
         self.scroll += crate::rendering::graphics::scroll_pixels(delta);
     }
 
+    /// A trackpad pinch, zooming towards the cursor as the wheel does.
+    pub(crate) fn process_pinch(&mut self, magnification: f64) {
+        self.view_transition = None;
+        self.scroll += crate::rendering::graphics::pinch_scroll(magnification, self.zoom_sensitivity);
+    }
+
     pub(crate) fn has_pending_updates(&self) -> bool {
         self.amount_left != 0.0
             || self.amount_right != 0.0

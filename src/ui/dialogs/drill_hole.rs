@@ -340,26 +340,28 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
                 let mut scale = dataset.color.radius_scale;
                 let mut floor = dataset.color.min_pixel_diameter;
                 let mut width_changed = false;
-                MenuField::new(tr!("drill-hole-drilled-diameter")).show(ui, |ui, _, _| {
-                    width_changed |= ui
-                        .add(
-                            egui::Slider::new(&mut scale, crate::model::drill_hole::RADIUS_SCALE_RANGE)
-                                .fixed_decimals(2)
-                                .suffix(tr!("common-x")),
-                        )
-                        .on_hover_text(tr!("drill-hole-drilled-width-help"))
-                        .changed();
-                });
-                MenuField::new(tr!("drill-hole-never-thinner-than")).show(ui, |ui, _, _| {
-                    width_changed |= ui
-                        .add(
-                            egui::Slider::new(&mut floor, crate::model::drill_hole::MIN_PIXEL_DIAMETER_RANGE)
-                                .fixed_decimals(1)
-                                .suffix(format!(" {}", tr!("drill-hole-px"))),
-                        )
-                        .on_hover_text(tr!("drill-hole-however-far-eye-hole-drawn"))
-                        .changed();
-                });
+                MenuField::new(tr!("drill-hole-drilled-diameter"))
+                    .help_text(tr!("drill-hole-drilled-width-help"))
+                    .show(ui, |ui, _, _| {
+                        width_changed |= ui
+                            .add(
+                                egui::Slider::new(&mut scale, crate::model::drill_hole::RADIUS_SCALE_RANGE)
+                                    .fixed_decimals(2)
+                                    .suffix(tr!("common-x")),
+                            )
+                            .changed();
+                    });
+                MenuField::new(tr!("drill-hole-never-thinner-than"))
+                    .help_text(tr!("drill-hole-however-far-eye-hole-drawn"))
+                    .show(ui, |ui, _, _| {
+                        width_changed |= ui
+                            .add(
+                                egui::Slider::new(&mut floor, crate::model::drill_hole::MIN_PIXEL_DIAMETER_RANGE)
+                                    .fixed_decimals(1)
+                                    .suffix(format!(" {}", tr!("drill-hole-px"))),
+                            )
+                            .changed();
+                    });
                 if width_changed {
                     commands.push(UiCommand::SetDrillHoleWidth {
                         id,
@@ -372,27 +374,29 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
                 let mut disc_diameter = dataset.color.disc_diameter;
                 let mut string_pixel_width = dataset.color.string_pixel_width;
                 let mut discs_changed = false;
-                MenuField::new(tr!("drill-hole-disc-diameter")).show(ui, |ui, _, _| {
-                    discs_changed |= ui
-                        .add(
-                            egui::Slider::new(&mut disc_diameter, crate::model::drill_hole::DISC_DIAMETER_RANGE)
-                                .logarithmic(true)
-                                .fixed_decimals(2)
-                                .suffix(format!(" {}", tr!("common-m"))),
-                        )
-                        .on_hover_text(tr!("drill-hole-every-interval-value-colour-field"))
-                        .changed();
-                });
-                MenuField::new(tr!("drill-hole-string-width")).show(ui, |ui, _, _| {
-                    discs_changed |= ui
-                        .add(
-                            egui::Slider::new(&mut string_pixel_width, crate::model::drill_hole::STRING_PIXEL_WIDTH_RANGE)
-                                .fixed_decimals(1)
-                                .suffix(format!(" {}", tr!("drill-hole-px"))),
-                        )
-                        .on_hover_text(tr!("drill-hole-line-width-help"))
-                        .changed();
-                });
+                MenuField::new(tr!("drill-hole-disc-diameter"))
+                    .help_text(tr!("drill-hole-every-interval-value-colour-field"))
+                    .show(ui, |ui, _, _| {
+                        discs_changed |= ui
+                            .add(
+                                egui::Slider::new(&mut disc_diameter, crate::model::drill_hole::DISC_DIAMETER_RANGE)
+                                    .logarithmic(true)
+                                    .fixed_decimals(2)
+                                    .suffix(format!(" {}", tr!("common-m"))),
+                            )
+                            .changed();
+                    });
+                MenuField::new(tr!("drill-hole-string-width"))
+                    .help_text(tr!("drill-hole-line-width-help"))
+                    .show(ui, |ui, _, _| {
+                        discs_changed |= ui
+                            .add(
+                                egui::Slider::new(&mut string_pixel_width, crate::model::drill_hole::STRING_PIXEL_WIDTH_RANGE)
+                                    .fixed_decimals(1)
+                                    .suffix(format!(" {}", tr!("drill-hole-px"))),
+                            )
+                            .changed();
+                    });
                 if discs_changed {
                     commands.push(UiCommand::SetDrillHoleDiscs {
                         id,

@@ -234,7 +234,9 @@ pub(crate) fn apply_menu_style(ui: &mut egui::Ui, surface: egui::Color32) {
 
 /// Paint a docked panel's heading: the drag bar's look without its close
 /// button, so a panel pinned in the viewport reads as the same family of card.
-pub(crate) fn draw_menu_heading(ui: &mut egui::Ui, title: &egui::WidgetText, rect: egui::Rect, surface: egui::Color32) {
+///
+/// A heading with `help_text` carries a help marker just after its title.
+pub(crate) fn draw_menu_heading(ui: &mut egui::Ui, title: &egui::WidgetText, rect: egui::Rect, surface: egui::Color32, help_text: Option<egui::WidgetText>) {
     ui.painter().rect_filled(
         rect,
         egui::CornerRadius {
@@ -245,7 +247,13 @@ pub(crate) fn draw_menu_heading(ui: &mut egui::Ui, title: &egui::WidgetText, rec
         },
         title_bar_fill(surface, ui.visuals().dark_mode),
     );
-    paint_title_text(ui, title, rect, false);
+    let title_width = paint_title_text(ui, title, rect, false);
+    if let Some(help_text) = help_text {
+        let left = (rect.left() + TITLE_BAR_HORIZONTAL_PADDING + title_width + 6.0).min(rect.right() - TITLE_BAR_HORIZONTAL_PADDING - HELP_MARKER_SIZE);
+        let marker = egui::Rect::from_min_size(egui::pos2(left, rect.center().y - HELP_MARKER_SIZE / 2.0), egui::Vec2::splat(HELP_MARKER_SIZE));
+        let response = ui.interact(marker, ui.id().with("menu_heading_help"), egui::Sense::hover());
+        paint_help_marker(ui, marker, response, help_text);
+    }
 }
 
 /// Lay a card's title into its bar, truncated to the room left beside the
@@ -253,7 +261,8 @@ pub(crate) fn draw_menu_heading(ui: &mut egui::Ui, title: &egui::WidgetText, rec
 ///
 /// Laid out as bold rather than taking the text's own style: the title is the
 /// card's heading, and every caller passes plain text for it.
-fn paint_title_text(ui: &mut egui::Ui, title: &egui::WidgetText, rect: egui::Rect, show_close_button: bool) {
+/// Returns the width the title took.
+fn paint_title_text(ui: &mut egui::Ui, title: &egui::WidgetText, rect: egui::Rect, show_close_button: bool) -> f32 {
     let close_slot_width = if show_close_button { TITLE_BAR_HEIGHT } else { TITLE_BAR_HORIZONTAL_PADDING };
     let title_width = (rect.width() - TITLE_BAR_HORIZONTAL_PADDING - close_slot_width).max(0.0);
     let mut job = egui::text::LayoutJob::single_section(
@@ -266,11 +275,13 @@ fn paint_title_text(ui: &mut egui::Ui, title: &egui::WidgetText, rect: egui::Rec
     );
     job.wrap = egui::text::TextWrapping::truncate_at_width(title_width);
     let galley = ui.painter().layout_job(job);
+    let width = galley.size().x;
     ui.painter().galley(
         egui::pos2(rect.left() + TITLE_BAR_HORIZONTAL_PADDING, rect.center().y - galley.size().y / 2.0),
         galley,
         ui.visuals().text_color(),
     );
+    width
 }
 
 /// The accent a primary action is filled with.
@@ -486,7 +497,7 @@ fn draw_menu_title_bar(ui: &mut egui::Ui, title: egui::WidgetText, rect: egui::R
         title_bar_fill(surface, ui.visuals().dark_mode),
     );
 
-    paint_title_text(ui, &title, rect, show_close_button);
+    let _ = paint_title_text(ui, &title, rect, show_close_button);
 
     if show_close_button && title_bar_close_button(ui, rect, surface) {
         *close_clicked = true;
@@ -500,8 +511,7 @@ pub(crate) fn title_bar_close_button(ui: &mut egui::Ui, rect: egui::Rect, surfac
     let close_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - TITLE_BAR_HEIGHT / 2.0, rect.center().y), egui::Vec2::splat(CLOSE_BUTTON_SIZE));
     let response = ui
         .interact(close_rect, ui.id().with("close"), egui::Sense::click())
-        .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text(tr!("survey-close"));
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
     if response.hovered() {
         ui.painter()
             .rect_filled(close_rect, CONTROL_CORNER_RADIUS, shifted(surface, if dark_mode { 26 } else { -26 }));
@@ -952,21 +962,25 @@ pub(crate) fn menu_field_label(ui: &mut egui::Ui, label: egui::WidgetText, help_
 
     if let Some(help_text) = help_text {
         let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(HELP_MARKER_SIZE), egui::Sense::hover());
-        if ui.is_rect_visible(rect) {
-            let color = ui.visuals().weak_text_color();
-            ui.painter().circle_stroke(rect.center(), 5.5, egui::Stroke::new(1.0, color));
-            ui.painter().text(
-                rect.center() + egui::vec2(0.0, -0.25),
-                egui::Align2::CENTER_CENTER,
-                "i",
-                egui::FontId::proportional(10.0),
-                color,
-            );
-        }
-        response
-            //.on_hover_cursor(egui::CursorIcon::Help)
-            .on_hover_text(help_text);
+        paint_help_marker(ui, rect, response, help_text);
     }
+}
+
+/// The round "i" a label carries when it has more to say, explaining itself
+/// on hover. `response` is the marker's own, from wherever it was laid out.
+fn paint_help_marker(ui: &egui::Ui, rect: egui::Rect, response: egui::Response, help_text: egui::WidgetText) {
+    if ui.is_rect_visible(rect) {
+        let color = ui.visuals().weak_text_color();
+        ui.painter().circle_stroke(rect.center(), 5.5, egui::Stroke::new(1.0, color));
+        ui.painter().text(
+            rect.center() + egui::vec2(0.0, -0.25),
+            egui::Align2::CENTER_CENTER,
+            "i",
+            egui::FontId::proportional(10.0),
+            color,
+        );
+    }
+    response.on_hover_text(help_text);
 }
 
 macro_rules! menu_field_float {
@@ -1094,12 +1108,13 @@ impl<'value> MenuFieldBool<'value> {
     }
 }
 
-struct SlidingToggle<'value> {
+/// The switch a [`MenuFieldBool`] shows, for rows that lay out their own label.
+pub(crate) struct SlidingToggle<'value> {
     value: &'value mut bool,
 }
 
 impl<'value> SlidingToggle<'value> {
-    fn new(value: &'value mut bool) -> Self {
+    pub(crate) fn new(value: &'value mut bool) -> Self {
         Self { value }
     }
 }

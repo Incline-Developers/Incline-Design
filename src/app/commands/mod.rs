@@ -473,11 +473,7 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::BeginRenameItem(target) => {
-                if let crate::ui::state::RenameTarget::Layer(layer_id) = target {
-                    self.activate_project_for_layer(layer_id);
-                }
-                let current_name = self.rename_target_name(target).unwrap_or_default();
-                self.editor.renaming_item = Some((target, current_name));
+                self.begin_rename_item(target);
                 Ok(())
             }
             UiCommand::RenameItem { target, new_name } => {

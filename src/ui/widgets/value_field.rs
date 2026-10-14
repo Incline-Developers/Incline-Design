@@ -30,7 +30,7 @@ use crate::{
 };
 
 /// Side of the pick/clear button at the field's right edge.
-const BUTTON_SIDE: f32 = 22.0;
+const BUTTON_SIDE: f32 = crate::ui::widgets::toolbar::TOOL_CELL_SIZE;
 const PICKER_WIDTH: f32 = 520.0;
 const PICKER_LIST_HEIGHT: f32 = 260.0;
 
@@ -171,6 +171,9 @@ fn edit_number(ui: &mut egui::Ui, id: egui::Id, shown: String, width: f32, range
     let mut text = if focused {
         ui.data_mut(|data| data.get_temp::<String>(buffer_id)).unwrap_or(shown)
     } else {
+        // Text typed into a box whose window closed before the focus left
+        // would otherwise come back the next time the box is focused.
+        ui.data_mut(|data| data.remove::<String>(buffer_id));
         format!("{shown}{suffix}")
     };
     let response = ui.add(egui::TextEdit::singleline(&mut text).id(id).desired_width(width).horizontal_align(egui::Align::RIGHT));
@@ -278,7 +281,7 @@ impl<'a, T: FieldEditor> ValueField<'a, T> {
                     }
                 } else if ui
                     .add(
-                        ToolbarButton::new(egui::Image::new(themed_icon!(ui, "constant_pick.svg")), tr!("opt-pick-constant"))
+                        ToolbarButton::new(egui::Image::new(themed_icon!(ui, "constant_pick_tool.svg")), tr!("opt-pick-constant"))
                             .id_salt(id.with("pick"))
                             .button_side(BUTTON_SIDE),
                     )
@@ -457,6 +460,13 @@ pub(crate) fn draw_constant_picker(ctx: &egui::Context) {
         ctx.data_mut(|data| data.insert_temp(choice_key(), PickerChoice { field: request.field, name }));
         close_picker(ctx);
     } else if cancel || !open {
+        close_picker(ctx);
+    }
+}
+
+/// Close the picker, if it is up, without choosing anything.
+pub(crate) fn close_constant_picker(ctx: &egui::Context) {
+    if picker_open(ctx) {
         close_picker(ctx);
     }
 }

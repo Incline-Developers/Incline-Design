@@ -6131,6 +6131,9 @@ pub(crate) struct ProjectedContour {
     pub(crate) major: bool,
     pub(crate) points: Vec<Option<(f32, f32)>>,
     pub(crate) closed: bool,
+    /// A major line's label spots, fixed to the ground: where each stands and
+    /// a point a little further along the line, in window pixels.
+    pub(crate) labels: Vec<((f32, f32), (f32, f32))>,
 }
 
 /// The hole under the pointer and where its collar stands on screen.

@@ -167,7 +167,7 @@ fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
     let save = ui.add_enabled(
         has_unsaved,
         ToolbarButton::new(
-            egui::Image::new(themed_icon!(ui, "save_project.svg")),
+            egui::Image::new(themed_icon!(ui, "save_project_tool.svg")),
             format!("{} ({PRIMARY_MODIFIER}S)", tr!("menu-file-save-project")),
         )
         .id_salt("save_project")
@@ -694,7 +694,7 @@ fn draw_blast_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, project: &
     // run is added in reverse to read left to right on screen.
     let timeline = ui.add_enabled(
         has_active_dataset,
-        ToolbarButton::new(egui::Image::new(unthemed_icon!("blast_timeline.svg")), tr!("viewport-bar-blast-timeline-placeholder"))
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("blast_timeline.svg")), tr!("viewport-bar-blast-timeline"))
             .id_salt("blast_timeline")
             .button_side(side)
             .selected(review.timeline && has_active_dataset),
@@ -708,13 +708,10 @@ fn draw_blast_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, project: &
 
     let contours = ui.add_enabled(
         has_active_dataset,
-        ToolbarButton::new(
-            egui::Image::new(unthemed_icon!("contours_of_equal_time.svg")),
-            tr!("viewport-bar-contours-equal-time-placeholder"),
-        )
-        .id_salt("contours_of_equal_time")
-        .button_side(side)
-        .selected(review.contours && has_active_dataset),
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("contours_of_equal_time.svg")), tr!("viewport-bar-contours-equal-time"))
+            .id_salt("contours_of_equal_time")
+            .button_side(side)
+            .selected(review.contours && has_active_dataset),
     );
     if contours.clicked() {
         review.contours = !review.contours;
@@ -722,13 +719,10 @@ fn draw_blast_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, project: &
 
     let relief = ui.add_enabled(
         has_active_dataset,
-        ToolbarButton::new(
-            egui::Image::new(unthemed_icon!("burden_relief_heatmap.svg")),
-            tr!("viewport-bar-burden-relief-heatmap-placeholder"),
-        )
-        .id_salt("burden_relief_heatmap")
-        .button_side(side)
-        .selected(review.relief && has_active_dataset),
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("burden_relief_heatmap.svg")), tr!("viewport-bar-burden-relief-heatmap"))
+            .id_salt("burden_relief_heatmap")
+            .button_side(side)
+            .selected(review.relief && has_active_dataset),
     );
     if relief.clicked() {
         review.relief = !review.relief;
