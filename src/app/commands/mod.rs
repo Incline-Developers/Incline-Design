@@ -93,8 +93,11 @@ impl<'a> App<'a> {
         // their own.
         self.editor.vertex_edit_run = None;
         // Insert Point's marker sits on the string as it was, as do Fill
-        // Segment's.
-        if matches!(self.editor.active_tool, ActiveTool::InsertPoint | ActiveTool::FillSegment) {
+        // Segment's and the piece Remove Between Crossings shows.
+        if matches!(
+            self.editor.active_tool,
+            ActiveTool::InsertPoint | ActiveTool::FillSegment | ActiveTool::RemoveBetweenCrossings
+        ) {
             self.clear_insert_point_marker();
         }
         self.invalidate_geometry();

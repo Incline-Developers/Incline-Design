@@ -1,4 +1,9 @@
-use super::insert_point::{crossing_cuts, edge_count, insert_parameters};
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+};
+
+use super::insert_point::{CrossingCuts, crossing_cuts, edge_count, insert_parameters};
 use crate::{
     app::{App, PICK_THRESHOLD_PX},
     i18n::tr,
@@ -302,7 +307,7 @@ impl<'a> App<'a> {
             return;
         };
         let slab = self.graphics.as_ref().and_then(|graphics| graphics.section_slab());
-        let (vertices, parameters) = crossing_cuts((verts, closed), (cutter_verts, *cutter_closed), slab);
+        let (vertices, parameters) = crossing_cuts((verts, closed), &[(cutter_verts, *cutter_closed)], slab);
         // Read again, not taken from the pick: a write over a string edited
         // since would undo that edit.
         if !self.activate_project_for_object(id) || self.active_document().get_object(id) != Some(&before) || !self.editor.canvas_edits_object(self.active_document(), id) {
@@ -344,6 +349,135 @@ impl<'a> App<'a> {
         }
         self.invalidate_geometry();
         self.invalidate_overlay();
+    }
+
+    /// Remove Between Crossings: take out the piece of the string under the
+    /// cursor between the crossings either side, one undo. An end piece
+    /// shortens the string, as Relimit does; a middle piece leaves two
+    /// strings with new ids, as Split Polyline At Points does.
+    pub(crate) fn remove_between_crossings_click(&mut self) {
+        if !self.editing_ready() {
+            return;
+        }
+        let Some((SceneEntityId::Object(id), _)) = self.pick_under_cursor() else {
+            return;
+        };
+        // Picking takes a locked string too: it may cut, not be cut. The
+        // string is read again from its own project, not from the scene.
+        if !self.activate_project_for_object(id) || !self.editor.canvas_edits_object(self.active_document(), id) {
+            return;
+        }
+        let Some(before @ Object::Polyline { verts, closed, .. }) = self.active_document().get_object(id) else {
+            return;
+        };
+        if let Some(at) = self.edge_under_cursor(verts, *closed) {
+            self.remove_piece_at(before.clone(), at);
+        }
+    }
+
+    /// Take out the piece of string `before`, as read from the active
+    /// project, around `at` (an edge and the parameter along it).
+    fn remove_piece_at(&mut self, before: Object, at: (usize, f64)) {
+        let Object::Polyline { id, ref verts, closed, .. } = before else {
+            return;
+        };
+        let (vertices, parameters) = self.shown_crossings(id, verts, closed);
+        let Some((_, kept)) = piece_between_crossings(verts, closed, &vertices, &parameters, at) else {
+            userspace_warn!("{}", tr!("cmd-string-split-no-crossing"));
+            return;
+        };
+        let command = match <[_; 1]>::try_from(kept) {
+            Ok([verts]) => {
+                let mut after = before.clone();
+                if let Object::Polyline { verts: kept, closed, .. } = &mut after {
+                    (*kept, *closed) = (verts, false);
+                }
+                Command::Replace { before, after }
+            }
+            Err(kept) => {
+                let Some(project) = self.workspace.active_project_mut() else {
+                    return;
+                };
+                let doc = &mut project.project.document;
+                let mut commands = vec![Command::delete_object(before.clone())];
+                for verts in kept {
+                    let mut piece = before.clone();
+                    if let Object::Polyline { id, verts: kept, closed, .. } = &mut piece {
+                        (*id, *kept, *closed) = (doc.allocate_object_id(), verts, false);
+                    }
+                    commands.push(Command::AddObject(piece));
+                }
+                self.editor.selected_handles.remove(&SceneEntityId::Object(id));
+                Command::Batch(commands)
+            }
+        };
+        self.execute_edit(command);
+        userspace_log!("{}", tr!("cmd-string-trim-removed"));
+        self.clear_insert_point_marker();
+        self.invalidate_geometry();
+    }
+
+    /// The piece a click would remove from the string under the cursor. The
+    /// crossings are kept for the string hovered until the scene, what is
+    /// hidden or the section changes, so moving along it costs no search.
+    pub(crate) fn removable_piece_hit(&mut self) -> Option<Vec<PolyVertex>> {
+        let (SceneEntityId::Object(id), _) = self.pick_under_cursor()? else {
+            return None;
+        };
+        if !self.editor.canvas_edits_object(&self.scene_document, id) {
+            return None;
+        }
+        let key = self.shown_crossings_key(id);
+        let Some(Object::Polyline { verts, closed, .. }) = self.scene_document.get_object(id) else {
+            return None;
+        };
+        if self.removal_crossings.as_ref().is_none_or(|(cached, _)| *cached != key) {
+            let crossings = self.shown_crossings(id, verts, *closed);
+            self.removal_crossings = Some((key, crossings));
+        }
+        let Some(Object::Polyline { verts, closed, .. }) = self.scene_document.get_object(id) else {
+            return None;
+        };
+        let at = self.edge_under_cursor(verts, *closed)?;
+        let (_, (vertices, parameters)) = self.removal_crossings.as_ref()?;
+        piece_between_crossings(verts, *closed, vertices, parameters, at).map(|(piece, _)| piece)
+    }
+
+    /// Where the strings shown cross string `id`: every string drawn but the
+    /// ones hidden, locked strings included.
+    fn shown_crossings(&self, id: ObjectId, verts: &[PolyVertex], closed: bool) -> CrossingCuts {
+        let cutters: Vec<(&[PolyVertex], bool)> = self
+            .scene_document
+            .objects()
+            .iter()
+            .filter_map(|object| match object {
+                Object::Polyline { id: other, verts, closed, .. } if *other != id && !self.editor.hidden_handles.contains(&SceneEntityId::Object(*other)) => {
+                    Some((verts.as_slice(), *closed))
+                }
+                _ => None,
+            })
+            .collect();
+        let slab = self.graphics.as_ref().and_then(|graphics| graphics.section_slab());
+        crossing_cuts((verts, closed), &cutters, slab)
+    }
+
+    /// What [`Self::shown_crossings`] reads beside string `id`: the
+    /// documents, the strings hidden on the canvas and the section.
+    fn shown_crossings_key(&self, id: ObjectId) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        id.hash(&mut hasher);
+        self.workspace.composite_key().hash(&mut hasher);
+        // Order-insensitive, as Insert Points at Crossings keys a selection.
+        let hidden = self.editor.hidden_handles.iter().fold(0_u64, |fold, handle| match handle {
+            SceneEntityId::Object(id) => fold ^ id.0.wrapping_mul(0x9E37_79B9_7F4A_7C15),
+            _ => fold,
+        });
+        (hidden, self.editor.hidden_handles.len()).hash(&mut hasher);
+        if let Some(slab) = self.graphics.as_ref().and_then(|graphics| graphics.section_slab()) {
+            [slab.point, slab.normal].map(|v| v.to_array().map(f64::to_bits)).hash(&mut hasher);
+            slab.half_width.to_bits().hash(&mut hasher);
+        }
+        hasher.finish()
     }
 
     /// Put down the string picked to cut, if any.
@@ -391,6 +525,65 @@ pub(super) fn split_at_crossings(verts: &[PolyVertex], closed: bool, vertices: &
         _ => (0..cuts.len())
             .map(|run| with_straight_closing_edge(ring_slice(&verts, cuts[run], cuts[(run + 1) % cuts.len()])))
             .collect(),
+    }
+}
+
+/// The piece of string `verts` between the crossings either side of `at`
+/// (an edge and the parameter along it), or between a crossing and an end,
+/// and what is left without it: one string, or two when the piece was in
+/// the middle. A ring opens and stays one string. Only the two crossings
+/// that end the piece become vertices. `None` with no piece to take: no
+/// crossing, or a ring crossed once.
+pub(super) fn piece_between_crossings(
+    verts: &[PolyVertex],
+    closed: bool,
+    vertices: &[usize],
+    parameters: &[Vec<f64>],
+    at: (usize, f64),
+) -> Option<(Vec<PolyVertex>, Vec<Vec<PolyVertex>>)> {
+    if at.0 >= parameters.len() {
+        return None;
+    }
+    // Every crossing in order along the string as an edge and parameter, one
+    // on vertex i as (i, 0). An open string's ends are not crossings.
+    let mut crossings = Vec::new();
+    for (edge, edge_parameters) in parameters.iter().enumerate() {
+        if vertices.contains(&edge) && (closed || edge > 0) {
+            crossings.push((edge, 0.0));
+        }
+        let mut sorted = edge_parameters.clone();
+        sorted.sort_by(f64::total_cmp);
+        crossings.extend(sorted.into_iter().map(|t| (edge, t)));
+    }
+    let mut before = crossings.iter().copied().rfind(|&crossing| crossing <= at);
+    let mut after = crossings.iter().copied().find(|&crossing| crossing > at);
+    if closed {
+        if crossings.len() < 2 {
+            return None;
+        }
+        before = before.or(crossings.last().copied());
+        after = after.or(crossings.first().copied());
+    }
+    let mut ends = vec![Vec::new(); parameters.len()];
+    for (edge, t) in before.into_iter().chain(after) {
+        if t > 0.0 {
+            ends[edge].push(t);
+        }
+    }
+    // Where a crossing sits once the two ends are vertices.
+    let index = |(edge, t): (usize, f64)| edge + ends[..edge].iter().map(Vec::len).sum::<usize>() + usize::from(t > 0.0) + ends[edge].iter().filter(|&&end| end < t).count();
+    let (start, end) = (before.map(index), after.map(index));
+    let verts = insert_parameters(verts, closed, ends);
+    if closed {
+        let (start, end) = (start?, end?);
+        return Some((ring_slice(&verts, start, end), vec![with_straight_closing_edge(ring_slice(&verts, end, start))]));
+    }
+    let head = |cut: usize| with_straight_closing_edge(verts[..=cut].to_vec());
+    match (start, end) {
+        (None, None) => None,
+        (None, Some(end)) => Some((verts[..=end].to_vec(), vec![verts[end..].to_vec()])),
+        (Some(start), None) => Some((verts[start..].to_vec(), vec![head(start)])),
+        (Some(start), Some(end)) => Some((verts[start..=end].to_vec(), vec![head(start), verts[end..].to_vec()])),
     }
 }
 

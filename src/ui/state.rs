@@ -1985,6 +1985,8 @@ pub(crate) struct EditorState {
     pub(crate) fill_segment_preview: Vec<DVec3>,
     /// The string Split at Crossings cuts, as it read when picked.
     pub(crate) split_crossings_target: Option<Object>,
+    /// The piece Remove Between Crossings would take out under the cursor.
+    pub(crate) removable_piece: Vec<crate::model::PolyVertex>,
     /// Screen position of the first chamfer corner vertex (raw pixels).
     pub(crate) chamfer_gizmo_corner_px: Option<(f32, f32)>,
     /// Screen direction of the gizmo bisector (used when radius=0 so arrow is still visible).
@@ -2996,6 +2998,7 @@ impl EditorState {
         self.tool_hover_vertex_world = None;
         self.fill_segment_preview.clear();
         self.split_crossings_target = None;
+        self.removable_piece.clear();
         self.chamfer_gizmo_corner_px = None;
         self.chamfer_gizmo_bisector_px = None;
         self.chamfer_gizmo_handle_px = None;
@@ -3333,6 +3336,7 @@ impl EditorState {
             tool_hover_vertex_world: None,
             fill_segment_preview: Vec::new(),
             split_crossings_target: None,
+            removable_piece: Vec::new(),
             chamfer_gizmo_corner_px: None,
             chamfer_gizmo_bisector_px: None,
             chamfer_gizmo_handle_px: None,
@@ -3837,6 +3841,8 @@ pub(crate) enum ActiveTool {
     FillSegment,
     /// Geology's: cut a string wherever a second one crosses it.
     SplitAtCrossings,
+    /// Geology's: take out the piece of a string between two crossings.
+    RemoveBetweenCrossings,
 }
 
 impl ActiveTool {
@@ -3924,6 +3930,7 @@ impl ActiveTool {
                 | Self::InsertPoint
                 | Self::FillSegment
                 | Self::SplitAtCrossings
+                | Self::RemoveBetweenCrossings
         )
     }
 

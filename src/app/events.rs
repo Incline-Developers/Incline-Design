@@ -358,6 +358,7 @@ impl<'a> App<'a> {
                                         | ActiveTool::EditVertex
                                         | ActiveTool::InsertPoint
                                         | ActiveTool::FillSegment
+                                        | ActiveTool::RemoveBetweenCrossings
                                 ) || (self.editor.active_tool == ActiveTool::RelimitLine
                                     && (self.editor.relimit_awaiting_source_pick || self.editor.relimit_waiting_for_pick));
                                 if !hover_highlight_active
@@ -565,7 +566,12 @@ impl<'a> App<'a> {
                     let hover_pick_due = snap_poll_due
                         && (matches!(
                             self.editor.active_tool,
-                            ActiveTool::Move | ActiveTool::DeletePoints | ActiveTool::EditVertex | ActiveTool::InsertPoint | ActiveTool::FillSegment
+                            ActiveTool::Move
+                                | ActiveTool::DeletePoints
+                                | ActiveTool::EditVertex
+                                | ActiveTool::InsertPoint
+                                | ActiveTool::FillSegment
+                                | ActiveTool::RemoveBetweenCrossings
                         ) || self.editor.active_tool == ActiveTool::ExplodePolyline
                             || self.editor.relimit_awaiting_source_pick
                             || self.editor.relimit_waiting_for_pick
@@ -578,13 +584,23 @@ impl<'a> App<'a> {
                     }
                     if matches!(
                         self.editor.active_tool,
-                        ActiveTool::Move | ActiveTool::DeletePoints | ActiveTool::EditVertex | ActiveTool::InsertPoint | ActiveTool::FillSegment
+                        ActiveTool::Move
+                            | ActiveTool::DeletePoints
+                            | ActiveTool::EditVertex
+                            | ActiveTool::InsertPoint
+                            | ActiveTool::FillSegment
+                            | ActiveTool::RemoveBetweenCrossings
                     ) && hover_pick_due
                     {
                         self.update_move_delete_hover();
                     } else if !matches!(
                         self.editor.active_tool,
-                        ActiveTool::Move | ActiveTool::DeletePoints | ActiveTool::EditVertex | ActiveTool::InsertPoint | ActiveTool::FillSegment
+                        ActiveTool::Move
+                            | ActiveTool::DeletePoints
+                            | ActiveTool::EditVertex
+                            | ActiveTool::InsertPoint
+                            | ActiveTool::FillSegment
+                            | ActiveTool::RemoveBetweenCrossings
                     ) && self.editor.tool_hover_vertex_px.is_some()
                     {
                         self.editor.tool_hover_vertex_px = None;
@@ -1022,6 +1038,7 @@ impl<'a> App<'a> {
                 ActiveTool::FuseIntoPolyline => self.fuse_click(),
                 ActiveTool::SplitAtPoints => self.split_at_points_click(),
                 ActiveTool::SplitAtCrossings => self.split_at_crossings_click(),
+                ActiveTool::RemoveBetweenCrossings => self.remove_between_crossings_click(),
                 ActiveTool::RelimitLine => self.relimit_line_click(),
                 ActiveTool::OffsetElement => {
                     if self.editor.offset_awaiting_side_pick {
@@ -1503,7 +1520,10 @@ impl<'a> App<'a> {
                     self.cancel_chamfer();
                 } else if self.editor.active_tool == ActiveTool::Bezier {
                     self.cancel_bezier();
-                } else if matches!(self.editor.active_tool, ActiveTool::InsertPoint | ActiveTool::FillSegment) {
+                } else if matches!(
+                    self.editor.active_tool,
+                    ActiveTool::InsertPoint | ActiveTool::FillSegment | ActiveTool::RemoveBetweenCrossings
+                ) {
                     self.clear_insert_point_marker();
                     self.editor.tool_highlight_id = None;
                     self.editor.active_tool = ActiveTool::None;
@@ -1742,7 +1762,7 @@ impl<'a> App<'a> {
             ActiveTool::SplitAtCrossings if next_tool != previous_tool => {
                 self.clear_split_at_crossings();
             }
-            ActiveTool::InsertPoint | ActiveTool::FillSegment if next_tool != previous_tool => {
+            ActiveTool::InsertPoint | ActiveTool::FillSegment | ActiveTool::RemoveBetweenCrossings if next_tool != previous_tool => {
                 self.clear_insert_point_marker();
             }
             _ => {}

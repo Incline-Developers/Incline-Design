@@ -400,6 +400,9 @@ pub(crate) struct App<'a> {
     /// Selection + composite fingerprint behind `EditorState::selection_has_intersections`,
     /// so the intersection scan only reruns when the selection or the documents change.
     intersection_availability_key: Option<u64>,
+    /// Remove Between Crossings: where the strings shown cross the string
+    /// hovered, behind the key of what they were found from.
+    removal_crossings: Option<(u64, commands::drawing::insert_point::CrossingCuts)>,
     history: crate::model::History,
     /// Whether the pointer was still driving a widget when the last UI frame
     /// ended. Edits that arrive while it is set belong to an unfinished
@@ -552,6 +555,7 @@ impl<'a> Default for App<'a> {
             scene_document_key: None,
             layer_lock_key: None,
             intersection_availability_key: None,
+            removal_crossings: None,
             history: crate::model::History::new(),
             ui_pointer_gesture_active: false,
             reported_during_gesture: Vec::new(),

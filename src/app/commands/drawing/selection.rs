@@ -112,6 +112,13 @@ impl<'a> App<'a> {
                 self.invalidate_overlay();
             }
         }
+        if self.editor.active_tool == ActiveTool::RemoveBetweenCrossings {
+            let piece = self.removable_piece_hit().unwrap_or_default();
+            if self.editor.removable_piece != piece {
+                self.editor.removable_piece = piece;
+                self.invalidate_overlay();
+            }
+        }
         let hover_px = vertex_hit.map(|(_, screen_px, _)| screen_px);
         let hover_world = vertex_hit.map(|(_, _, world)| world);
         // Delete Points only ever acts on point objects, so don't highlight

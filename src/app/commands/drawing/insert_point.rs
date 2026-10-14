@@ -329,13 +329,14 @@ impl<'a> App<'a> {
         Some((id, added))
     }
 
-    /// Take down the point Insert Point shows under the cursor, and the ones
-    /// Fill Segment shows: the overlay they are drawn on repaints only when
-    /// asked.
+    /// Take down the point Insert Point shows under the cursor, the ones
+    /// Fill Segment shows and Remove Between Crossings' piece: the overlay
+    /// they are drawn on repaints only when asked.
     pub(crate) fn clear_insert_point_marker(&mut self) {
-        let shown = self.editor.tool_hover_vertex_px.take().is_some() || !self.editor.fill_segment_preview.is_empty();
+        let shown = self.editor.tool_hover_vertex_px.take().is_some() || !self.editor.fill_segment_preview.is_empty() || !self.editor.removable_piece.is_empty();
         self.editor.tool_hover_vertex_world = None;
         self.editor.fill_segment_preview.clear();
+        self.editor.removable_piece.clear();
         if shown {
             self.invalidate_overlay();
         }
@@ -356,6 +357,16 @@ impl<'a> App<'a> {
         let (_, _, world) = self.edge_point_under_cursor(verts, *closed)?;
         let graphics = self.graphics.as_ref()?;
         Some((id, graphics.world_to_window_px(&graphics.view_proj(), world)?, world))
+    }
+
+    /// The edge of string `verts` under the cursor and the parameter along
+    /// it, vertices included, as a click on the string itself.
+    pub(super) fn edge_under_cursor(&self, verts: &[PolyVertex], closed: bool) -> Option<(usize, f64)> {
+        let graphics = self.graphics.as_ref()?;
+        let cursor = graphics.window_to_viewport_px(self.editor.cursor_screen_px?);
+        let cursor = DVec2::new(f64::from(cursor.0), f64::from(cursor.1));
+        let reach = f64::from(PICK_THRESHOLD_PX * 2.0);
+        nearest_on_edges(verts, closed, cursor, reach, &graphics.view_proj(), graphics.screen_size_pub(), graphics.section_slab()).map(|(edge, t, _)| (edge, t))
     }
 
     fn edge_point_under_cursor(&self, verts: &[PolyVertex], closed: bool) -> Option<(usize, f64, DVec3)> {
@@ -456,24 +467,52 @@ fn insert_at_intersections(polylines: &[(Vec<PolyVertex>, bool)]) -> Vec<Vec<Pol
         .collect()
 }
 
-/// Where `cutter` crosses string `target`: the vertices of `target` it
-/// crosses on, and the parameters inside each edge that
+/// What [`crossing_cuts`] finds: the vertices crossed on, and the
+/// parameters inside each edge.
+pub(crate) type CrossingCuts = (Vec<usize>, Vec<Vec<f64>>);
+
+/// Where `cutters` cross string `target`: the vertices of `target` they
+/// cross on, and the parameters inside each edge that
 /// [`insert_parameters`] takes. In plan, or with a section up, in the
 /// section's plane among the parts its slab draws.
-pub(super) fn crossing_cuts(target: (&[PolyVertex], bool), cutter: (&[PolyVertex], bool), slab: Option<SectionSlab>) -> (Vec<usize>, Vec<Vec<f64>>) {
-    let ((verts, closed), (cutter, cutter_closed)) = (target, cutter);
+pub(super) fn crossing_cuts(target: (&[PolyVertex], bool), cutters: &[(&[PolyVertex], bool)], slab: Option<SectionSlab>) -> CrossingCuts {
+    let (verts, closed) = target;
     let mut vertices = Vec::new();
     let mut parameters = vec![Vec::new(); edge_count(verts, closed)];
     let cutter_runs: Vec<_> = slab
-        .map(|slab| (0..edge_count(cutter, cutter_closed)).flat_map(|edge| slab_runs(cutter, edge, slab)).collect())
+        .map(|slab| {
+            cutters
+                .iter()
+                .flat_map(|&(cutter, cutter_closed)| (0..edge_count(cutter, cutter_closed)).flat_map(move |edge| slab_runs(cutter, edge, slab)))
+                .collect()
+        })
         .unwrap_or_default();
+    // In plan, the edges of the cutters whose box meets the string's, each
+    // with its own box: an edge whose box misses another's cannot cross it.
+    let bounds = plan_bounds(verts, closed);
+    let cutter_edges: Vec<(Curve, (DVec2, DVec2))> = cutters
+        .iter()
+        .filter(|&&(cutter, cutter_closed)| slab.is_none() && bounds.zip(plan_bounds(cutter, cutter_closed)).is_some_and(|(a, b)| bounds_overlap(a, b)))
+        .flat_map(|&(cutter, cutter_closed)| {
+            (0..edge_count(cutter, cutter_closed)).filter_map(move |edge| {
+                let (start, end) = (cutter[edge], cutter[(edge + 1) % cutter.len()]);
+                Some((Curve::from_vertices(start, end), plan_bounds(&[start, end], false)?))
+            })
+        })
+        .collect();
     for edge in 0..parameters.len() {
-        let curve = Curve::from_vertices(verts[edge], verts[(edge + 1) % verts.len()]);
+        let (start, end) = (verts[edge], verts[(edge + 1) % verts.len()]);
+        let curve = Curve::from_vertices(start, end);
         let crossings: Vec<f64> = match slab {
-            None => (0..edge_count(cutter, cutter_closed))
-                .flat_map(|other| curve_intersections(curve, Curve::from_vertices(cutter[other], cutter[(other + 1) % cutter.len()])))
-                .map(|(_, t, _)| t)
-                .collect(),
+            None => {
+                let edge_bounds = plan_bounds(&[start, end], false);
+                cutter_edges
+                    .iter()
+                    .filter(|(_, other)| edge_bounds.is_some_and(|edge_bounds| bounds_overlap(edge_bounds, *other)))
+                    .flat_map(|&(other, _)| curve_intersections(curve, other))
+                    .map(|(_, t, _)| t)
+                    .collect()
+            }
             Some(slab) => slab_runs(verts, edge, slab)
                 .into_iter()
                 .flat_map(|(a, b, from, to)| {
@@ -698,6 +737,19 @@ fn nearest_edge_point(
     screen: Size,
     slab: Option<SectionSlab>,
 ) -> Option<(usize, f64, DVec3)> {
+    let (edge, t, on_screen) = nearest_on_edges(verts, closed, cursor, reach.0, view_proj, screen, slab)?;
+    let next = (edge + 1) % verts.len();
+    let by_vertex = [verts[edge].pos, verts[next].pos]
+        .into_iter()
+        .filter_map(|vertex| pick::slab_screen_point(slab, view_proj, screen, vertex))
+        .any(|vertex| vertex.distance(on_screen) < reach.1);
+    (!by_vertex && t > 0.0 && t < 1.0).then(|| (edge, t, edge_point(verts, edge, t)))
+}
+
+/// The point of string `verts` nearest `cursor` on screen, within `reach`
+/// pixels and inside the section's slab: its edge, the parameter along the
+/// edge and where it is on screen.
+fn nearest_on_edges(verts: &[PolyVertex], closed: bool, cursor: DVec2, reach: f64, view_proj: &DMat4, screen: Size, slab: Option<SectionSlab>) -> Option<(usize, f64, DVec2)> {
     let mut best: Option<(f64, usize, f64, DVec2)> = None;
     for edge in 0..edge_count(verts, closed) {
         let chords = match Curve::from_vertices(verts[edge], verts[(edge + 1) % verts.len()]) {
@@ -716,7 +768,7 @@ fn nearest_edge_point(
             let screen_t = pick::closest_t_on_segment(cursor, screen_a, screen_b);
             let on_screen = screen_a.lerp(screen_b, screen_t);
             let distance = cursor.distance(on_screen);
-            if distance > reach.0 || best.is_some_and(|(nearest, ..)| nearest <= distance) {
+            if distance > reach || best.is_some_and(|(nearest, ..)| nearest <= distance) {
                 continue;
             }
             let world = pick::perspective_correct_segment_point(view_proj, clipped_a, clipped_b, screen_t);
@@ -728,13 +780,7 @@ fn nearest_edge_point(
             best = Some((distance, edge, from + (to - from) * along, on_screen));
         }
     }
-    let (_, edge, t, on_screen) = best?;
-    let next = (edge + 1) % verts.len();
-    let by_vertex = [verts[edge].pos, verts[next].pos]
-        .into_iter()
-        .filter_map(|vertex| pick::slab_screen_point(slab, view_proj, screen, vertex))
-        .any(|vertex| vertex.distance(on_screen) < reach.1);
-    (!by_vertex && t > 0.0 && t < 1.0).then(|| (edge, t, edge_point(verts, edge, t)))
+    best.map(|(_, edge, t, on_screen)| (edge, t, on_screen))
 }
 
 /// The most vertices one Fill Segment click adds; a click needing more is
