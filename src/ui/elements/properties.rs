@@ -2,7 +2,10 @@
 
 use crate::{
     i18n::tr,
-    model::{Document, FillStyle, ObjectColor, ObjectId, SceneEntityId, block_model::OpenBlockModel},
+    model::{
+        Document, FillStyle, ObjectColor, ObjectId, SceneEntityId,
+        block_model::{BlockModelId, OpenBlockModel},
+    },
     rendering::color::{byte_to_linear_rgba, color32_to_rgba, linear_to_srgb_byte, rgba_to_color32},
     ui::{
         UiCommand, UiProjectView,
@@ -11,7 +14,7 @@ use crate::{
             collapsible_section::CollapsibleSection,
             context_menu::{FIELD_WIDTH, context_menu_fields},
             menu::{self, MenuFieldBool, MenuFieldColor32, MenuFieldCombo, MenuFieldF32, MenuFieldF64, MenuFieldU32, committed, menu_field_label},
-            viewport::BlockModelProperties,
+            viewport::{BlockModelProperties, ViewportDockPanel},
         },
     },
 };
@@ -243,51 +246,45 @@ pub(crate) fn draw_block_model_controls(ui: &mut egui::Ui, editor: &mut EditorSt
     if left + card_width > right_bound || card_size.y > canvas.height() - 2.0 * BLOCK_MODEL_CARD_GAP {
         return;
     }
-    egui::Area::new(area_id)
-        .pivot(egui::Align2::LEFT_BOTTOM)
-        .fixed_pos(egui::pos2(left, canvas.bottom() - BLOCK_MODEL_CARD_GAP))
+    // The heading runs after the body, so it works on its own copy of the
+    // shown model and the body keeps the editor.
+    let mut shown = editor.viewport_block_model_id;
+    ViewportDockPanel::new(area_id, tr!("common-block-model"), canvas)
+        .anchor(egui::Align2::LEFT_BOTTOM, egui::pos2(left, canvas.bottom() - BLOCK_MODEL_CARD_GAP))
         .order(egui::Order::Middle)
-        .show(ui.ctx(), |ui| {
-            // The menu-family card, so the panel matches the docked tool panels
-            // rather than egui's stock window.
-            let surface = menu::menu_surface(ui.visuals());
-            egui::Frame::new()
-                .fill(surface)
-                .stroke(menu::menu_border(ui.visuals()))
-                .corner_radius(egui::CornerRadius::same(menu::MENU_CORNER_RADIUS))
-                .show(ui, |ui| {
-                    menu::apply_menu_style(ui, surface);
-                    let width = BLOCK_MODEL_CARD_WIDTH;
-                    ui.set_width(width);
-                    draw_block_model_title_bar(ui, editor, models, model, width, surface);
-                    let Some(model) = models.iter().find(|model| Some(model.id) == editor.viewport_block_model_id && model.state.loaded) else {
-                        return;
-                    };
-                    egui::Frame::NONE
-                        .inner_margin(egui::Margin {
-                            left: 12,
-                            right: 12,
-                            top: 6,
-                            bottom: 10,
-                        })
-                        .show(ui, |ui| {
-                            ui.push_id(model.id, |ui| {
-                                BlockModelProperties::new(("block_model_controls", model.id), model).show(ui, editor, commands)
-                            });
-                        });
+        .min_width(BLOCK_MODEL_CARD_WIDTH)
+        .max_width(BLOCK_MODEL_CARD_WIDTH)
+        // No top margin: the row gap under the heading already gives the
+        // body the room it had when the card drew its own frame.
+        .inner_margin(egui::Margin {
+            left: 12,
+            right: 12,
+            top: 0,
+            bottom: 10,
+        })
+        .show_with_heading(
+            ui.ctx(),
+            |ui, rect, surface| draw_block_model_heading_controls(ui, &mut shown, models, model, rect, surface),
+            |ui| {
+                ui.push_id(model.id, |ui| {
+                    BlockModelProperties::new(("block_model_controls", model.id), model).show(ui, editor, commands)
                 });
-        });
+            },
+        );
+    editor.viewport_block_model_id = shown;
 }
 
-/// The block-model card's heading: its title, the model it is showing, and a
-/// close cross. Closing clears the shown model; selecting one reopens it.
-fn draw_block_model_title_bar(ui: &mut egui::Ui, editor: &mut EditorState, models: &[OpenBlockModel], model: &OpenBlockModel, width: f32, surface: egui::Color32) {
-    let spacing = ui.spacing().item_spacing.y;
-    ui.spacing_mut().item_spacing.y = 0.0;
-    let rect = ui.allocate_exact_size(egui::vec2(width, menu::TITLE_BAR_HEIGHT), egui::Sense::hover()).0;
-    ui.spacing_mut().item_spacing.y = spacing;
-    menu::draw_menu_heading(ui, &egui::WidgetText::from(tr!("common-block-model")), rect, surface, None);
-
+/// The block-model card's heading controls: the model it is showing - a
+/// picker when there is more than one loaded - and a close cross. Closing
+/// clears the shown model; selecting one reopens it.
+fn draw_block_model_heading_controls(
+    ui: &mut egui::Ui,
+    shown: &mut Option<BlockModelId>,
+    models: &[OpenBlockModel],
+    model: &OpenBlockModel,
+    rect: egui::Rect,
+    surface: egui::Color32,
+) {
     let loaded: Vec<_> = models.iter().filter(|model| model.state.loaded).collect();
     let picker_width = (rect.width() * 0.4).clamp(120.0, 280.0);
     let picker_rect = egui::Rect::from_min_size(
@@ -305,7 +302,7 @@ fn draw_block_model_title_bar(ui: &mut egui::Ui, editor: &mut EditorState, model
                     .truncate()
                     .show_ui(ui, |ui| {
                         for option in &loaded {
-                            ui.selectable_value(&mut editor.viewport_block_model_id, Some(option.id), option.name.clone());
+                            ui.selectable_value(shown, Some(option.id), option.name.clone());
                         }
                     })
                     .response
@@ -332,7 +329,7 @@ fn draw_block_model_title_bar(ui: &mut egui::Ui, editor: &mut EditorState, model
     }
 
     if menu::title_bar_close_button(ui, rect, surface) {
-        editor.viewport_block_model_id = None;
+        *shown = None;
     }
 }
 

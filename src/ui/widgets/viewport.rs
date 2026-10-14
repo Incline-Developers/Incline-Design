@@ -17,8 +17,9 @@ pub(crate) const DOCK_PANEL_RESERVED_WIDTH: f32 = 340.0 + 10.0;
 /// A compact tool panel pinned inside the 3D viewport.
 ///
 /// Apears in the bottom left unless [`Self::anchor`] puts it elsewhere. Used
-/// for tool configuration, and for the review tiles a workspace lays over the
-/// scene. An empty title leaves the heading bar off.
+/// for tool configuration, for the review tiles a workspace lays over the
+/// scene, and for the block-model card. An empty title leaves the heading bar
+/// off; [`Self::show_with_heading`] adds controls to it.
 pub(crate) struct ViewportDockPanel {
     id: egui::Id,
     title: egui::WidgetText,
@@ -28,6 +29,8 @@ pub(crate) struct ViewportDockPanel {
     margin: egui::Vec2,
     anchor: Option<(egui::Align2, egui::Pos2)>,
     help_text: Option<egui::WidgetText>,
+    order: egui::Order,
+    inner_margin: egui::Margin,
 }
 
 impl ViewportDockPanel {
@@ -41,6 +44,8 @@ impl ViewportDockPanel {
             margin: egui::vec2(10.0, 10.0),
             anchor: None,
             help_text: None,
+            order: egui::Order::Foreground,
+            inner_margin: egui::Margin::symmetric(10, 8),
         }
     }
 
@@ -56,6 +61,18 @@ impl ViewportDockPanel {
         self
     }
 
+    /// Where the panel stacks among the other floating cards; in front of
+    /// them unless told otherwise.
+    pub(crate) fn order(mut self, order: egui::Order) -> Self {
+        self.order = order;
+        self
+    }
+
+    pub(crate) fn inner_margin(mut self, inner_margin: egui::Margin) -> Self {
+        self.inner_margin = inner_margin;
+        self
+    }
+
     pub(crate) fn min_width(mut self, min_width: f32) -> Self {
         self.min_width = min_width;
         self
@@ -67,11 +84,18 @@ impl ViewportDockPanel {
     }
 
     pub(crate) fn show<R>(self, ctx: &egui::Context, add_contents: impl FnOnce(&mut egui::Ui) -> R) {
+        self.show_with_heading(ctx, |_, _, _| {}, add_contents);
+    }
+
+    /// [`Self::show`], with `heading` adding controls to the heading bar once
+    /// it is painted: handed the bar's rect and the card's surface. It runs
+    /// after `add_contents`, which settles the card's width.
+    pub(crate) fn show_with_heading<R>(self, ctx: &egui::Context, heading: impl FnOnce(&mut egui::Ui, egui::Rect, egui::Color32), add_contents: impl FnOnce(&mut egui::Ui) -> R) {
         let (pivot, pos) = self.anchor.unwrap_or((
             egui::Align2::LEFT_BOTTOM,
             egui::pos2(self.viewport_rect.left() + self.margin.x, self.viewport_rect.bottom() - self.margin.y),
         ));
-        egui::Area::new(self.id).order(egui::Order::Foreground).pivot(pivot).fixed_pos(pos).show(ctx, |ui| {
+        egui::Area::new(self.id).order(self.order).pivot(pivot).fixed_pos(pos).show(ctx, |ui| {
             // The same card as a floating menu, minus the drag bar's close
             // button: a docked tool panel is one of the menu family, and
             // the fields inside it are the menu fields.
@@ -82,7 +106,7 @@ impl ViewportDockPanel {
                 .corner_radius(egui::CornerRadius::same(menu::MENU_CORNER_RADIUS))
                 .show(ui, |ui| {
                     menu::apply_menu_style(ui, surface);
-                    let inner_margin = egui::Margin::symmetric(10, 8);
+                    let inner_margin = self.inner_margin;
                     let measured_width = menu::intrinsic_content_width(ui) + inner_margin.sum().x;
                     let available_width = (self.viewport_rect.width() - self.margin.x * 2.0).max(1.0);
                     let adaptive_min_width = self.min_width.max(measured_width).min(available_width);
@@ -94,6 +118,7 @@ impl ViewportDockPanel {
                     if let Some(mut title_rect) = title_rect {
                         title_rect.max.x = ui.min_rect().right();
                         menu::draw_menu_heading(ui, &self.title, title_rect, surface, self.help_text);
+                        heading(ui, title_rect, surface);
                     }
                     inner
                 })
