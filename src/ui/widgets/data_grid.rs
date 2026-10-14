@@ -259,7 +259,8 @@ impl DataGrid {
                 actions.push(GridAction::FillAll);
             }
             if self.buttons.groups && self.icon_button(ui, "group", egui::Image::new(themed_icon!(ui, "grid_add_group.svg")), tr!("opt-grid-add-group"), true) {
-                ui.data_mut(|data| data.insert_temp(self.id.with("prompt"), String::new()));
+                let pass = ui.ctx().cumulative_pass_nr();
+                ui.data_mut(|data| data.insert_temp(self.id.with("prompt"), GroupPrompt { name: String::new(), pass }));
             }
         });
     }
@@ -438,11 +439,21 @@ impl DataGrid {
     }
 
     /// The small window that asks for a group's name.
+    ///
+    /// It belongs to the grid: once the grid is not drawn - its section left,
+    /// its window closed - the prompt is dropped rather than coming back with
+    /// the grid later.
     fn draw_group_prompt(&self, ui: &mut egui::Ui, actions: &mut Vec<GridAction>) {
         let key = self.id.with("prompt");
-        let Some(mut name) = ui.data(|data| data.get_temp::<String>(key)) else {
+        let Some(prompt) = ui.data(|data| data.get_temp::<GroupPrompt>(key)) else {
             return;
         };
+        let pass = ui.ctx().cumulative_pass_nr();
+        if pass > prompt.pass + 1 {
+            ui.data_mut(|data| data.remove::<GroupPrompt>(key));
+            return;
+        }
+        let mut name = prompt.name;
         let mut open = true;
         let mut cancel = false;
         let mut accept = false;
@@ -464,11 +475,11 @@ impl DataGrid {
             });
         if accept {
             actions.push(GridAction::AddGroup(name.trim().to_owned()));
-            ui.data_mut(|data| data.remove::<String>(key));
+            ui.data_mut(|data| data.remove::<GroupPrompt>(key));
         } else if cancel || !open {
-            ui.data_mut(|data| data.remove::<String>(key));
+            ui.data_mut(|data| data.remove::<GroupPrompt>(key));
         } else {
-            ui.data_mut(|data| data.insert_temp(key, name));
+            ui.data_mut(|data| data.insert_temp(key, GroupPrompt { name, pass }));
         }
     }
 }
@@ -483,6 +494,14 @@ pub(crate) fn move_to_slot<T>(rows: &mut Vec<T>, from: usize, slot: usize) -> us
     let to = if slot > from { slot - 1 } else { slot }.min(rows.len());
     rows.insert(to, row);
     to
+}
+
+/// The group-name prompt while it is up: the name typed so far, and the pass
+/// the grid last drew it on.
+#[derive(Clone, Default)]
+struct GroupPrompt {
+    name: String,
+    pass: u64,
 }
 
 /// Apply the actions every plain list handles the same way - add, delete, move

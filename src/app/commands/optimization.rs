@@ -163,7 +163,8 @@ impl<'a> App<'a> {
         copy.output.factor_list = listed;
         let name = copy.name.clone();
         state.scenarios.insert(position + 1, copy);
-        state.list_open = true;
+        // The toast says it was made; the Results window stays in front, and
+        // the list is left as it was.
         let message = tr!("opt-shells-copied", name = name, count = factors.len().to_string());
         userspace_log!("{message}");
         self.editor.toasts.push(message);
