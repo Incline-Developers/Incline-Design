@@ -389,6 +389,17 @@ impl<'a> Graphics<'a> {
             self.overlay_dirty = true;
         }
 
+        if self.section_surface.refresh(self.scene_origin, scale_factor) {
+            Self::upload_instance_stream(
+                &self.device,
+                &self.queue,
+                &mut self.section_surface_gpu,
+                &mut self.section_surface_capacity,
+                self.section_surface.strokes_mut(),
+                "Section Surface Line Buffer",
+            );
+        }
+
         if self.overlay_dirty {
             let overlay_vp = self.view_proj();
             let overlay_screen = self.screen_size();

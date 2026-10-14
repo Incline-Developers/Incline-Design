@@ -1912,6 +1912,9 @@ pub(crate) struct EditorState {
     pub(crate) slice_half_length: f64,
     /// Whether the section shows the world grid (constant-elevation and easting/northing lines).
     pub(crate) slice_grid_enabled: bool,
+    /// Whether a section in Geology draws where each shown surface cuts it.
+    /// Not persisted with the project.
+    pub(crate) section_surface_lines: bool,
     pub(crate) section_grid_px: Vec<SectionGridLine>,
     /// The section grid's look, from the grid button's right-click dialog.
     pub(crate) section_grid_style: SectionGridStyle,
@@ -3334,6 +3337,7 @@ impl EditorState {
             slice_direction: [1.0, 0.0],
             slice_half_length: 0.0,
             slice_grid_enabled: false,
+            section_surface_lines: false,
             section_grid_px: Vec::new(),
             section_grid_style: SectionGridStyle::default(),
             xy_grid_style: PlanGridStyle::default(),
@@ -4289,6 +4293,8 @@ pub(crate) enum UiCommand {
     ToggleRotationCentre,
     /// The grid button: the RL grid in a section, the XY grid in plan.
     SetGridShown(bool),
+    /// Surface Lines on Section: flip the switch.
+    ToggleSectionSurfaceLines,
     SetTopologyWireframes(bool),
     SetShowPoints(bool),
     /// Presentation shading over the scene pass. Native only.
@@ -4933,6 +4939,7 @@ impl UiCommand {
             | Self::TransformSurveySelection
             | Self::ReorderWorkspace { .. }
             | Self::ToggleViewOption(_)
+            | Self::ToggleSectionSurfaceLines
             | Self::SetInitiation { .. }
             | Self::ChargeSelectedHoles { .. }
             | Self::BeginRenameItem(_)

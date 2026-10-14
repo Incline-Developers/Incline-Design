@@ -263,6 +263,8 @@ impl<'a> App<'a> {
                         self.refresh_slice_cursor();
                         self.redraw_requested = true;
                     }
+                    // After `update`, which walks and turns the section.
+                    self.refresh_section_surface_lines();
                     if let Some(graphics) = self.graphics.as_mut() {
                         self.editor.can_undo = self.history.can_undo();
                         self.editor.can_redo = self.history.can_redo();

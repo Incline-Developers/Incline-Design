@@ -84,6 +84,7 @@ ws-menubar-geology-remove-between-crossings = 交差点間を削除
 ws-menubar-geology-explode-to-points = ポリラインを点に分解
 ws-menubar-geology-drag-vertex = 頂点をドラッグ
 ws-menubar-geology-nudge-rl = 標高を微調整...
+ws-menubar-geology-surface-lines = 断面上のサーフェス線
 ws-menubar-geology-next-vertex = 次の頂点...
 ws-menubar-geology-remove-last-vertex = 最後の頂点を削除
 ws-menubar-geology-surface = サーフェス
@@ -950,6 +951,7 @@ cmd-slice-entered-slice-view-cx-cy = スライスビューに入りました @ {
 cmd-slice-exited-slice-view = スライスビューを終了しました
 cmd-slice-reset-section-view-fit-extents = 断面ビューをリセット（範囲に合わせる）
 cmd-slice-set-section-grid-enabled = 断面グリッド有効 = { $enabled }
+cmd-slice-set-surface-lines = 断面上のサーフェス線有効 = { $enabled }
 cmd-split-created-2-open-polylines = 開いたポリラインを2本作成しました
 cmd-split-line = 線を分割
 cmd-split-points-needs-interior-vertex = 点で分割: 開いた線の内部の頂点を選択してください

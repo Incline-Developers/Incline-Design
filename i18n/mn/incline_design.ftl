@@ -82,6 +82,7 @@ ws-menubar-geology-remove-between-crossings = Огтлолцлын хоорон�
 ws-menubar-geology-explode-to-points = Полилиниаг цэг болгон задлах
 ws-menubar-geology-drag-vertex = Оройг чирэх
 ws-menubar-geology-nudge-rl = Өндрийг шилжүүлэх...
+ws-menubar-geology-surface-lines = Огтлол дээрх гадаргуугийн шугам
 ws-menubar-geology-next-vertex = Дараагийн орой цэг...
 ws-menubar-geology-remove-last-vertex = Сүүлийн орой цэгийг устгах
 ws-menubar-geology-surface = Гадаргуу
@@ -973,6 +974,7 @@ cmd-slice-entered-slice-view-cx-cy = Огтлолын харагдац руу о
 cmd-slice-exited-slice-view = Огтлолын харагдацаас гарлаа
 cmd-slice-reset-section-view-fit-extents = Огтлолын харагдацыг сэргээх (хэмжээнд тааруулах)
 cmd-slice-set-section-grid-enabled = Огтлолын торыг тохируулав = { $enabled }
+cmd-slice-set-surface-lines = Огтлол дээрх гадаргуугийн шугамыг тохируулав = { $enabled }
 cmd-split-created-2-open-polylines = 2 задгай полилиниа үүсгэлээ
 cmd-split-line = Шугамыг хуваах
 cmd-split-points-needs-interior-vertex = Цэгээр хуваах: задгай шугамын дотоод орой цэгийг сонгоно уу

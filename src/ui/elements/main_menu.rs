@@ -582,11 +582,12 @@ pub(crate) enum GeologyRow {
     RedrawRun,
     DragVertex,
     NudgeRl,
+    SurfaceLines,
 }
 
 /// Geology Design's lower half in menu order; [`geology_design_groups`] cuts
 /// it into submenus and the macOS menu tags rows by index into it.
-pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 40] = [
+pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 41] = [
     GeologyRow::Tool(ActiveTool::MakePoint),
     GeologyRow::Tool(ActiveTool::MakeLine),
     GeologyRow::Tool(ActiveTool::MakePoly),
@@ -627,6 +628,7 @@ pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 40] = [
     GeologyRow::CreateTriangulation,
     GeologyRow::Tool(ActiveTool::MeasureBatterAngle),
     GeologyRow::Tool(ActiveTool::MeasureDistance),
+    GeologyRow::SurfaceLines,
 ];
 
 /// Geology Design's submenus: title and run of [`GEOLOGY_DESIGN_ROWS`]. The
@@ -685,6 +687,7 @@ impl GeologyRow {
             Self::RedrawRun => tr!("ws-menubar-geology-redraw-run"),
             Self::DragVertex => tr!("ws-menubar-geology-drag-vertex"),
             Self::NudgeRl => tr!("ws-menubar-geology-nudge-rl"),
+            Self::SurfaceLines => tr!("ws-menubar-geology-surface-lines"),
         }
     }
 
@@ -706,6 +709,7 @@ impl GeologyRow {
             Self::RedrawRun => UiCommand::ArmRedrawRun,
             Self::DragVertex => UiCommand::ArmDragVertex,
             Self::NudgeRl => UiCommand::OpenNudgePanel,
+            Self::SurfaceLines => UiCommand::ToggleSectionSurfaceLines,
         }
     }
 
@@ -733,7 +737,13 @@ impl GeologyRow {
             Self::CarryOnString | Self::RedrawRun => editor.pending_stroke.is_empty() && !editor.poly_finish_dialog,
             // Move works on a section in Geology and needs no layer.
             Self::DragVertex | Self::NudgeRl => !editor.fly_mode_enabled,
+            Self::SurfaceLines => true,
         }
+    }
+
+    /// A switch row's tick; `None` for a row that is not a switch.
+    pub(crate) fn checked(self, editor: &EditorState) -> Option<bool> {
+        (self == Self::SurfaceLines).then_some(editor.section_surface_lines)
     }
 }
 
@@ -742,7 +752,11 @@ impl GeologyRow {
 #[cfg(not(target_os = "macos"))]
 fn draw_geology_design_entries(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
     let row = |ui: &mut egui::Ui, row: GeologyRow, commands: &mut Vec<UiCommand>| {
-        if ContextMenuAction::new(row.label()).enabled(row.enabled(editor)).show(ui).clicked() {
+        let mut action = ContextMenuAction::new(row.label()).enabled(row.enabled(editor));
+        if let Some(checked) = row.checked(editor) {
+            action = action.checked(checked);
+        }
+        if action.show(ui).clicked() {
             commands.push(row.command());
             ui.close();
         }

@@ -70,6 +70,7 @@ ws-menubar-geology-remove-between-crossings = حذف بین تقاطع‌ها
 ws-menubar-geology-explode-to-points = تجزیهٔ چندخطی به نقاط
 ws-menubar-geology-drag-vertex = کشیدن رأس
 ws-menubar-geology-nudge-rl = جابه‌جایی تراز...
+ws-menubar-geology-surface-lines = خطوط سطح روی مقطع
 ws-menubar-geology-next-vertex = رأس بعدی...
 ws-menubar-geology-remove-last-vertex = حذف آخرین رأس
 ws-menubar-geology-surface = سطح
@@ -922,6 +923,7 @@ cmd-slice-entered-slice-view-cx-cy = نمای برش در { $cx }، { $cy }، { 
 cmd-slice-exited-slice-view = از نمای برش خارج شد
 cmd-slice-reset-section-view-fit-extents = بازنشانی نمای مقطع (تطبیق با محدوده)
 cmd-slice-set-section-grid-enabled = شبکه مقطع فعال = { $enabled }
+cmd-slice-set-surface-lines = خطوط سطح روی مقطع فعال = { $enabled }
 cmd-split-created-2-open-polylines = ۲ چندخطی باز ایجاد شد
 cmd-split-line = تقسیم خط
 cmd-split-points-needs-interior-vertex = تقسیم در نقاط: یک رأس داخلی از خط باز انتخاب کنید

@@ -70,6 +70,7 @@ ws-menubar-geology-remove-between-crossings = Hapus di Antara Perpotongan
 ws-menubar-geology-explode-to-points = Uraikan Poligaris menjadi Titik
 ws-menubar-geology-drag-vertex = Seret Verteks
 ws-menubar-geology-nudge-rl = Geser Elevasi...
+ws-menubar-geology-surface-lines = Garis permukaan pada penampang
 ws-menubar-geology-next-vertex = Verteks Berikutnya...
 ws-menubar-geology-remove-last-vertex = Hapus Verteks Terakhir
 ws-menubar-geology-surface = Permukaan
@@ -922,6 +923,7 @@ cmd-slice-entered-slice-view-cx-cy = Tampilan irisan dimasuki pada { $cx }, { $c
 cmd-slice-exited-slice-view = Tampilan irisan ditutup
 cmd-slice-reset-section-view-fit-extents = Setel ulang tampilan penampang (sesuaikan dengan cakupan)
 cmd-slice-set-section-grid-enabled = Grid penampang aktif = { $enabled }
+cmd-slice-set-surface-lines = Garis permukaan pada penampang aktif = { $enabled }
 cmd-split-created-2-open-polylines = 2 poligaris terbuka dibuat
 cmd-split-line = Pisahkan garis
 cmd-split-points-needs-interior-vertex = Pisahkan pada Titik: pilih verteks bagian dalam dari garis terbuka

@@ -69,6 +69,7 @@ ws-menubar-geology-remove-between-crossings = Quitar entre cruces
 ws-menubar-geology-explode-to-points = Explotar polilínea en puntos
 ws-menubar-geology-drag-vertex = Arrastrar un vértice
 ws-menubar-geology-nudge-rl = Ajustar cota...
+ws-menubar-geology-surface-lines = Líneas de superficie en la sección
 ws-menubar-geology-next-vertex = Siguiente vértice...
 ws-menubar-geology-remove-last-vertex = Quitar último vértice
 ws-menubar-geology-surface = Superficie
@@ -920,6 +921,7 @@ cmd-slice-entered-slice-view-cx-cy = Se entró en la vista de sección en { $cx 
 cmd-slice-exited-slice-view = Se salió de la vista de corte
 cmd-slice-reset-section-view-fit-extents = Restablecer la vista de sección (ajustar a la extensión)
 cmd-slice-set-section-grid-enabled = Cuadrícula de sección activada = { $enabled }
+cmd-slice-set-surface-lines = Líneas de superficie en la sección activadas = { $enabled }
 cmd-split-created-2-open-polylines = Se crearon 2 polilíneas abiertas
 cmd-split-line = Dividir línea
 cmd-split-points-needs-interior-vertex = Dividir en puntos: seleccione un vértice interior de la línea abierta

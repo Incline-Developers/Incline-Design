@@ -70,6 +70,7 @@ ws-menubar-geology-remove-between-crossings = प्रतिच्छेदो�
 ws-menubar-geology-explode-to-points = पॉलीलाइन को बिंदुओं में विस्फोटित करें
 ws-menubar-geology-drag-vertex = शीर्ष खींचें
 ws-menubar-geology-nudge-rl = ऊँचाई खिसकाएँ...
+ws-menubar-geology-surface-lines = सेक्शन पर सतह रेखाएँ
 ws-menubar-geology-next-vertex = अगला शीर्ष...
 ws-menubar-geology-remove-last-vertex = अंतिम शीर्ष हटाएँ
 ws-menubar-geology-surface = सतह
@@ -922,6 +923,7 @@ cmd-slice-entered-slice-view-cx-cy = { $cx }, { $cy }, { $cz } पर { $dx }, {
 cmd-slice-exited-slice-view = खंड दृश्य से बाहर निकला गया
 cmd-slice-reset-section-view-fit-extents = सेक्शन दृश्य रीसेट करें (सीमाओं के अनुरूप बनाएँ)
 cmd-slice-set-section-grid-enabled = सेक्शन ग्रिड सक्षम = { $enabled }
+cmd-slice-set-surface-lines = सेक्शन पर सतह रेखाएँ सक्षम = { $enabled }
 cmd-split-created-2-open-polylines = 2 खुली पॉलीलाइन बनाई गईं
 cmd-split-line = रेखा विभाजित करें
 cmd-split-points-needs-interior-vertex = बिंदुओं पर विभाजित करें: खुली रेखा का कोई आंतरिक शीर्ष चुनें

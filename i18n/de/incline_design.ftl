@@ -82,6 +82,7 @@ ws-menubar-geology-remove-between-crossings = Zwischen Kreuzungen entfernen
 ws-menubar-geology-explode-to-points = Polylinie in Punkte auflösen
 ws-menubar-geology-drag-vertex = Eckpunkt ziehen
 ws-menubar-geology-nudge-rl = Höhe verschieben...
+ws-menubar-geology-surface-lines = Oberflächenlinien im Schnitt
 ws-menubar-geology-next-vertex = Nächster Eckpunkt...
 ws-menubar-geology-remove-last-vertex = Letzten Eckpunkt entfernen
 ws-menubar-geology-surface = Oberfläche
@@ -963,6 +964,7 @@ cmd-slice-entered-slice-view-cx-cy = Schnittansicht betreten bei { $cx }, { $cy 
 cmd-slice-exited-slice-view = Schnittansicht verlassen
 cmd-slice-reset-section-view-fit-extents = Schnittansicht zurücksetzen (an Ausdehnung anpassen)
 cmd-slice-set-section-grid-enabled = Schnittraster aktiviert = { $enabled }
+cmd-slice-set-surface-lines = Oberflächenlinien im Schnitt aktiviert = { $enabled }
 cmd-split-created-2-open-polylines = 2 offene Polylinien erstellt
 cmd-split-line = Linie teilen
 cmd-split-points-needs-interior-vertex = An Punkten teilen: Wählen Sie einen inneren Eckpunkt der offenen Linie

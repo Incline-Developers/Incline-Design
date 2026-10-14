@@ -83,6 +83,7 @@ ws-menubar-geology-remove-between-crossings = Kesişimler Arasını Kaldır
 ws-menubar-geology-explode-to-points = Çoklu Çizgiyi Noktalara Ayır
 ws-menubar-geology-drag-vertex = Köşe Noktası Sürükle
 ws-menubar-geology-nudge-rl = Kotu Kaydır...
+ws-menubar-geology-surface-lines = Kesitte yüzey çizgileri
 ws-menubar-geology-next-vertex = Sonraki Köşe...
 ws-menubar-geology-remove-last-vertex = Son Köşeyi Kaldır
 ws-menubar-geology-surface = Yüzey
@@ -964,6 +965,7 @@ cmd-slice-entered-slice-view-cx-cy = Kesit görünümüne girildi @ { $cx }, { $
 cmd-slice-exited-slice-view = Kesit görünümünden çıkıldı
 cmd-slice-reset-section-view-fit-extents = Kesit görünümünü sıfırla (sınırlara sığdır)
 cmd-slice-set-section-grid-enabled = Kesit ızgarası etkin = { $enabled }
+cmd-slice-set-surface-lines = Kesitte yüzey çizgileri etkin = { $enabled }
 cmd-split-created-2-open-polylines = 2 açık çoklu çizgi oluşturuldu
 cmd-split-line = Çizgiyi Böl
 cmd-split-points-needs-interior-vertex = Noktalarda Böl: açık çizginin bir iç köşesini seçin

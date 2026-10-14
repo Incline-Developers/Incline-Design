@@ -361,6 +361,11 @@ pub(crate) struct App<'a> {
     slice_surface_retry_deadline: Option<Instant>,
     last_scroll_instant: Option<Instant>,
     last_snap_poll_instant: Option<Instant>,
+    /// What the section's surface lines were last cut from, `None` while none
+    /// are drawn.
+    section_surface_lines_key: Option<u64>,
+    /// The colours those lines were last drawn in, one per shown surface.
+    section_surface_colors: Vec<[f32; 4]>,
     editor: EditorState,
     workspace: ProjectStore,
     /// Explorer/menu snapshot reused while its allocation-free source
@@ -531,6 +536,8 @@ impl<'a> Default for App<'a> {
             slice_surface_retry_deadline: None,
             last_scroll_instant: None,
             last_snap_poll_instant: None,
+            section_surface_lines_key: None,
+            section_surface_colors: Vec::new(),
             editor: EditorState::new(),
             workspace: ProjectStore::default(),
             ui_project_view_cache: RefCell::new(None),
@@ -1335,12 +1342,17 @@ impl<'a> App<'a> {
         // one's scenarios are read from it when the list first opens.
         self.editor.optimization = Default::default();
         self.scene_document_key = None;
+        self.section_surface_lines_key = None;
+        self.section_surface_colors.clear();
         // Item and object ids restart with the replacement project, so the
         // renderer's id-keyed caches would otherwise keep drawing this
         // project's geometry under the next one's items until something
         // that clears them (a view fit) happened to run.
         if let Some(graphics) = self.graphics.as_mut() {
             graphics.clear_item_caches();
+            // Leaving the section above cut nothing, so the lines go with
+            // the key, or they stay drawn over the next project.
+            graphics.set_section_surface_lines(Vec::new());
         }
         self.redraw_requested = true;
     }
@@ -1718,6 +1730,8 @@ impl<'a> App<'a> {
         #[cfg(target_arch = "wasm32")]
         crate::app::web_storage::set_dirty(false);
         self.graphics = None;
+        // A new renderer starts with no surface lines: cut them again for it.
+        self.section_surface_lines_key = None;
         self.window = None;
         self.pending_resize = None;
         self.last_render_time = None;

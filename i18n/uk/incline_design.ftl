@@ -79,6 +79,7 @@ ws-menubar-geology-remove-between-crossings = Видалити між перет
 ws-menubar-geology-explode-to-points = Розбити полілінію на точки
 ws-menubar-geology-drag-vertex = Перетягнути вершину
 ws-menubar-geology-nudge-rl = Зсув позначки...
+ws-menubar-geology-surface-lines = Лінії поверхонь на перерізі
 ws-menubar-geology-next-vertex = Наступна вершина...
 ws-menubar-geology-remove-last-vertex = Видалити останню вершину
 ws-menubar-geology-surface = Поверхня
@@ -969,6 +970,7 @@ cmd-slice-entered-slice-view-cx-cy = Увімкнено режим перері�
 cmd-slice-exited-slice-view = Режим перерізу закрито
 cmd-slice-reset-section-view-fit-extents = Скинути вигляд перерізу (вписати в межі)
 cmd-slice-set-section-grid-enabled = Сітку перерізу увімкнено = { $enabled }
+cmd-slice-set-surface-lines = Лінії поверхонь на перерізі увімкнено = { $enabled }
 cmd-split-created-2-open-polylines = Створено 2 розімкнені полілінії
 cmd-split-line = Розділити лінію
 cmd-split-points-needs-interior-vertex = Розділення за точками: виберіть внутрішню вершину розімкненої лінії

@@ -75,6 +75,7 @@ ws-menubar-geology-remove-between-crossings = Ondoa Kati ya Makutano
 ws-menubar-geology-explode-to-points = Vunja Mstari wa Pointi Nyingi kuwa Pointi
 ws-menubar-geology-drag-vertex = Buruta Kipeo
 ws-menubar-geology-nudge-rl = Sogeza Mwinuko...
+ws-menubar-geology-surface-lines = Mistari ya uso kwenye sehemu
 ws-menubar-geology-next-vertex = Kipeo Kinachofuata...
 ws-menubar-geology-remove-last-vertex = Ondoa Kipeo cha Mwisho
 ws-menubar-geology-surface = Uso
@@ -954,6 +955,7 @@ cmd-slice-entered-slice-view-cx-cy = Umeingia kwenye mwonekano wa ukataji @ { $c
 cmd-slice-exited-slice-view = Umetoka kwenye mwonekano wa ukataji
 cmd-slice-reset-section-view-fit-extents = Rejesha mwonekano wa sehemu (oanisha na wigo)
 cmd-slice-set-section-grid-enabled = Weka gridi ya sehemu = { $enabled }
+cmd-slice-set-surface-lines = Weka mistari ya uso kwenye sehemu = { $enabled }
 cmd-split-created-2-open-polylines = Mistari 2 ya pointi nyingi iliyo wazi imeundwa
 cmd-split-line = Gawanya Mstari
 cmd-split-points-needs-interior-vertex = Gawanya kwa Vidokezo: chagua kipeo cha ndani cha mstari ulio wazi

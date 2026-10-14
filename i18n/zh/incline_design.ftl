@@ -70,6 +70,7 @@ ws-menubar-geology-remove-between-crossings = 删除交叉之间部分
 ws-menubar-geology-explode-to-points = 将折线分解为点
 ws-menubar-geology-drag-vertex = 拖动顶点
 ws-menubar-geology-nudge-rl = 微调标高...
+ws-menubar-geology-surface-lines = 剖面上的表面线
 ws-menubar-geology-next-vertex = 下一个顶点...
 ws-menubar-geology-remove-last-vertex = 移除最后一个顶点
 ws-menubar-geology-surface = 表面
@@ -922,6 +923,7 @@ cmd-slice-entered-slice-view-cx-cy = 已进入剖面视图：位置 { $cx }, { $
 cmd-slice-exited-slice-view = 已退出剖切视图
 cmd-slice-reset-section-view-fit-extents = 重置剖面视图（适配范围）
 cmd-slice-set-section-grid-enabled = 设置剖面网格 = { $enabled }
+cmd-slice-set-surface-lines = 设置剖面上的表面线 = { $enabled }
 cmd-split-created-2-open-polylines = 已创建 2 条开放折线
 cmd-split-line = 拆分线
 cmd-split-points-needs-interior-vertex = 按点拆分：请选择开放线的内部顶点

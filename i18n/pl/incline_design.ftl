@@ -80,6 +80,7 @@ ws-menubar-geology-remove-between-crossings = Usuń między przecięciami
 ws-menubar-geology-explode-to-points = Rozbij polilinię na punkty
 ws-menubar-geology-drag-vertex = Przeciągnij wierzchołek
 ws-menubar-geology-nudge-rl = Przesuń rzędną...
+ws-menubar-geology-surface-lines = Linie powierzchni na przekroju
 ws-menubar-geology-next-vertex = Następny wierzchołek...
 ws-menubar-geology-remove-last-vertex = Usuń ostatni wierzchołek
 ws-menubar-geology-surface = Powierzchnia
@@ -992,6 +993,7 @@ cmd-slice-entered-slice-view-cx-cy = Wejście do widoku przekroju @ { $cx }, { $
 cmd-slice-exited-slice-view = Zakończono widok przekroju
 cmd-slice-reset-section-view-fit-extents = Zresetuj widok przekroju (dopasuj do zasięgu)
 cmd-slice-set-section-grid-enabled = Siatka przekroju włączona = { $enabled }
+cmd-slice-set-surface-lines = Linie powierzchni na przekroju włączone = { $enabled }
 cmd-split-created-2-open-polylines = Utworzono 2 polilinie otwarte
 cmd-split-line = Podziel linię
 cmd-split-points-needs-interior-vertex = Podział w punktach: wybierz wewnętrzny wierzchołek linii otwartej

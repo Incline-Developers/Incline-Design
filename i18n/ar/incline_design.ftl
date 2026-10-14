@@ -70,6 +70,7 @@ ws-menubar-geology-remove-between-crossings = إزالة ما بين التقا�
 ws-menubar-geology-explode-to-points = تفكيك الخط المتعدد إلى نقاط
 ws-menubar-geology-drag-vertex = سحب رأس
 ws-menubar-geology-nudge-rl = تحريك المنسوب...
+ws-menubar-geology-surface-lines = خطوط السطح على المقطع
 ws-menubar-geology-next-vertex = الرأس التالي...
 ws-menubar-geology-remove-last-vertex = إزالة آخر رأس
 ws-menubar-geology-surface = السطح
@@ -922,6 +923,7 @@ cmd-slice-entered-slice-view-cx-cy = تم دخول عرض الشريحة عند 
 cmd-slice-exited-slice-view = تم الخروج من عرض الشريحة
 cmd-slice-reset-section-view-fit-extents = إعادة تعيين عرض المقطع (ملاءمة للحدود)
 cmd-slice-set-section-grid-enabled = تفعيل شبكة المقطع = { $enabled }
+cmd-slice-set-surface-lines = تفعيل خطوط السطح على المقطع = { $enabled }
 cmd-split-created-2-open-polylines = تم إنشاء خطين متعددين مفتوحين
 cmd-split-line = تقسيم الخط
 cmd-split-points-needs-interior-vertex = التقسيم عند النقاط: اختر رأسًا داخليًا للخط المفتوح

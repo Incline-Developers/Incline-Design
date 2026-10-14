@@ -81,6 +81,7 @@ ws-menubar-geology-remove-between-crossings = 교차점 사이 제거
 ws-menubar-geology-explode-to-points = 폴리라인을 점으로 분해
 ws-menubar-geology-drag-vertex = 꼭짓점 끌기
 ws-menubar-geology-nudge-rl = 표고 미세 조정...
+ws-menubar-geology-surface-lines = 단면의 표면 선
 ws-menubar-geology-next-vertex = 다음 정점...
 ws-menubar-geology-remove-last-vertex = 마지막 정점 제거
 ws-menubar-geology-surface = 표면
@@ -955,6 +956,7 @@ cmd-slice-entered-slice-view-cx-cy = { $cx }, { $cy }, { $cz }에서 { $dx }, { 
 cmd-slice-exited-slice-view = 슬라이스 뷰를 종료했습니다
 cmd-slice-reset-section-view-fit-extents = 슬라이스 뷰 재설정(전체 범위에 맞춤)
 cmd-slice-set-section-grid-enabled = 슬라이스 그리드 설정 = { $enabled }
+cmd-slice-set-surface-lines = 단면의 표면 선 설정 = { $enabled }
 cmd-split-created-2-open-polylines = 열린 폴리라인 2개를 생성했습니다
 cmd-split-line = 선 분할
 cmd-split-points-needs-interior-vertex = 점에서 분할: 열린 선의 내부 정점을 선택하세요

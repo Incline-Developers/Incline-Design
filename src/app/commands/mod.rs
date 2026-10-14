@@ -1064,6 +1064,10 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::SetGridShown(shown) => self.set_grid_shown(shown),
+            UiCommand::ToggleSectionSurfaceLines => {
+                self.toggle_section_surface_lines();
+                Ok(())
+            }
             UiCommand::SetTopologyWireframes(enabled) => self.set_topology_wireframes(enabled),
             #[cfg(not(target_arch = "wasm32"))]
             UiCommand::SetSlicePreviewDetached(detached) => {

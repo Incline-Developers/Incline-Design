@@ -68,6 +68,8 @@ struct MenuState {
     /// Whether each Geology Design row can run, in
     /// [`GEOLOGY_DESIGN_ROWS`] order.
     geology_rows: Vec<bool>,
+    /// Each Geology Design switch row's tick, in the same order.
+    geology_checks: Vec<Option<bool>>,
     /// Whether the active project is a file that can be shown in Finder.
     has_project_file: bool,
     /// The workspace decides which discipline menus are visible and active.
@@ -792,6 +794,7 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         has_selection_intersections: editor.selection_has_intersections,
         can_clean_strings: editor.selection_counts.open_strings > 0,
         geology_rows: GEOLOGY_DESIGN_ROWS.iter().map(|row| row.enabled(editor)).collect(),
+        geology_checks: GEOLOGY_DESIGN_ROWS.iter().map(|row| row.checked(editor)).collect(),
         has_project_file: project.active_path.is_some(),
         active_workspace: editor.active_workspace,
         view_toggles: VIEW_TOGGLES.map(|toggle| toggle.get(editor)),
@@ -847,6 +850,11 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     set_enabled(&root, MacMenuAction::CleanStrings, state.can_clean_strings);
     for (index, enabled) in state.geology_rows.iter().enumerate() {
         set_enabled(&root, MacMenuAction::GeologyRow(index), *enabled);
+    }
+    for (index, checked) in state.geology_checks.iter().enumerate() {
+        if let Some(checked) = checked {
+            set_checked(&root, MacMenuAction::GeologyRow(index), *checked);
+        }
     }
     for (index, checked) in state.view_toggles.iter().enumerate() {
         set_checked(&root, MacMenuAction::ToggleView(index), *checked);

@@ -31,6 +31,7 @@ use crate::{
             bounds::{scene_bounds, visible_object_aabbs},
             build::{DocumentDrawBatch, DocumentObjectRanges, DocumentPrimitive, DocumentRenderStage, PolylineFillCache, TextDrawBatch},
             document_style::{DocumentStyleGpu, DocumentStyleSlots},
+            section_surface_lines::{SectionSurfaceStrokes, SurfaceLines},
         },
         snap::SNAP_THRESHOLD_PX,
         text::TextSystem,
@@ -342,6 +343,7 @@ pub(crate) struct Graphics<'a> {
     pub(super) lyon_index_gpu: wgpu::Buffer,
     pub(super) stroke_gpu: wgpu::Buffer,
     pub(super) overlay_stroke_gpu: wgpu::Buffer,
+    pub(super) section_surface_gpu: wgpu::Buffer,
     pub(super) dynamic_stroke_gpu: wgpu::Buffer,
     pub(super) text_vertex_gpu: wgpu::Buffer,
     pub(super) text_index_gpu: wgpu::Buffer,
@@ -460,6 +462,11 @@ pub(crate) struct Graphics<'a> {
     pub(super) cached_poly_finish_dialog: bool,
     /// Which Thin Strings preview the overlay last drew, if one was open.
     pub(super) cached_thin_preview: Option<u64>,
+    /// Where each shown surface cuts the section, as the App last cut them,
+    /// with its own stroke stream so a cursor-driven overlay rebuild leaves
+    /// it alone.
+    pub(super) section_surface: SectionSurfaceStrokes,
+    pub(super) section_surface_capacity: usize,
     pub(super) pick_records: Vec<PickRecord>,
     pub(super) text_pick_records: Vec<TextPickRecord>,
     pub(super) document_draw_batches: Vec<DocumentDrawBatch>,
@@ -804,6 +811,14 @@ impl<'a> Graphics<'a> {
 
     pub(crate) fn invalidate_overlay(&mut self) {
         self.overlay_dirty = true;
+    }
+
+    pub(crate) fn set_section_surface_lines(&mut self, surfaces: Vec<SurfaceLines>) {
+        self.section_surface.set(surfaces);
+    }
+
+    pub(crate) fn recolor_section_surface_lines(&mut self, colors: impl Iterator<Item = [f32; 4]>) {
+        self.section_surface.recolor(colors);
     }
 
     pub(crate) fn gui_input(&mut self, event: &WindowEvent) -> egui_winit::EventResponse {

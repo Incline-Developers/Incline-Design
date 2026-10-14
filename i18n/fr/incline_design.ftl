@@ -69,6 +69,7 @@ ws-menubar-geology-remove-between-crossings = Supprimer entre les croisements
 ws-menubar-geology-explode-to-points = Décomposer la polyligne en points
 ws-menubar-geology-drag-vertex = Glisser un sommet
 ws-menubar-geology-nudge-rl = Ajuster la cote...
+ws-menubar-geology-surface-lines = Lignes de surface sur la coupe
 ws-menubar-geology-next-vertex = Sommet suivant...
 ws-menubar-geology-remove-last-vertex = Retirer le dernier sommet
 ws-menubar-geology-surface = Surface
@@ -922,6 +923,7 @@ cmd-slice-entered-slice-view-cx-cy = Vue en coupe activée à { $cx }, { $cy }, 
 cmd-slice-exited-slice-view = Vue en coupe quittée
 cmd-slice-reset-section-view-fit-extents = Réinitialiser la vue en coupe (ajuster à l'étendue)
 cmd-slice-set-section-grid-enabled = Grille de coupe activée = { $enabled }
+cmd-slice-set-surface-lines = Lignes de surface sur la coupe activées = { $enabled }
 cmd-split-created-2-open-polylines = 2 polylignes ouvertes créées
 cmd-split-line = Scinder la ligne
 cmd-split-points-needs-interior-vertex = Diviser aux points : choisissez un sommet intérieur de la ligne ouverte

@@ -83,6 +83,7 @@ ws-menubar-geology-remove-between-crossings = Xóa giữa các giao cắt
 ws-menubar-geology-explode-to-points = Phân rã đường đa tuyến thành các điểm
 ws-menubar-geology-drag-vertex = Kéo đỉnh
 ws-menubar-geology-nudge-rl = Dịch cao độ...
+ws-menubar-geology-surface-lines = Đường bề mặt trên mặt cắt
 ws-menubar-geology-next-vertex = Đỉnh tiếp theo...
 ws-menubar-geology-remove-last-vertex = Xóa đỉnh cuối
 ws-menubar-geology-surface = Bề mặt
@@ -948,6 +949,7 @@ cmd-slice-entered-slice-view-cx-cy = Đã vào khung nhìn cắt lát @ { $cx },
 cmd-slice-exited-slice-view = Đã thoát khung nhìn cắt lát
 cmd-slice-reset-section-view-fit-extents = Đặt lại khung nhìn mặt cắt (vừa khít phạm vi)
 cmd-slice-set-section-grid-enabled = Bật lưới mặt cắt = { $enabled }
+cmd-slice-set-surface-lines = Bật đường bề mặt trên mặt cắt = { $enabled }
 cmd-split-created-2-open-polylines = Đã tạo 2 đường đa tuyến hở
 cmd-split-line = Chia tách đường
 cmd-split-points-needs-interior-vertex = Chia tách tại điểm: chọn một đỉnh bên trong của đường hở

@@ -2,7 +2,14 @@
 
 use glam::DVec2;
 
-use crate::{app::App, i18n::tr, ui::state::ActiveTool, userspace_log};
+use crate::{
+    app::App,
+    i18n::tr,
+    model::triangulation::OpenTriangulation,
+    rendering::{camera::SectionSlab, scene::section_surface_lines::SurfaceLines},
+    ui::state::{ActiveTool, EditorState, Workspace},
+    userspace_log,
+};
 
 impl<'a> App<'a> {
     /// Canvas click while the Vertical Slice tool is armed. First click
@@ -150,6 +157,47 @@ impl<'a> App<'a> {
         userspace_log!("{}", tr!("cmd-slice-set-section-grid-enabled", enabled = enabled.to_string()));
     }
 
+    /// Surface Lines on Section: switch the lines on or off. Not persisted
+    /// with the project.
+    pub(crate) fn toggle_section_surface_lines(&mut self) {
+        self.editor.section_surface_lines = !self.editor.section_surface_lines;
+        self.redraw_requested = true;
+        userspace_log!("{}", tr!("cmd-slice-set-surface-lines", enabled = self.editor.section_surface_lines.to_string()));
+    }
+
+    /// Cut the shown surfaces along the section again, only when the plane, a
+    /// surface or the switch changed since the last cut: a still section
+    /// costs a hash a frame, not a pass over every triangle. A colour change
+    /// recolours the cached lines without cutting.
+    pub(crate) fn refresh_section_surface_lines(&mut self) {
+        let Some(graphics) = self.graphics.as_mut() else {
+            return;
+        };
+        let slab = graphics.section_slab();
+        let key = section_surface_lines_key(&self.editor, slab, &self.triangulations);
+        if key != self.section_surface_lines_key {
+            self.section_surface_lines_key = key;
+            let mut surfaces = Vec::new();
+            if let (Some(_), Some(slab)) = (key, slab) {
+                for triangulation in shown_surfaces(&self.editor, &self.triangulations) {
+                    let lines = crate::app::commands::triangulation::section_surface_lines(&triangulation.mesh, &triangulation.spatial, &slab);
+                    surfaces.push(SurfaceLines {
+                        lines,
+                        color: surface_line_color(triangulation),
+                    });
+                }
+            }
+            self.section_surface_colors = surfaces.iter().map(|surface| surface.color).collect();
+            graphics.set_section_surface_lines(surfaces);
+        } else if key.is_some() {
+            let shown = || shown_surfaces(&self.editor, &self.triangulations).map(surface_line_color);
+            if !shown().eq(self.section_surface_colors.iter().copied()) {
+                self.section_surface_colors = shown().collect();
+                graphics.recolor_section_surface_lines(self.section_surface_colors.iter().copied());
+            }
+        }
+    }
+
     /// Re-places the cursor after a camera move with no mouse event behind it.
     /// Walking the section carries its targets past a still mouse, so the snap
     /// is asked again here rather than dropped; off any target the cursor
@@ -175,4 +223,42 @@ impl<'a> App<'a> {
             self.invalidate_overlay();
         }
     }
+}
+
+/// The surfaces a section draws: loaded and not hidden.
+fn shown_surfaces<'t>(editor: &'t EditorState, triangulations: &'t [OpenTriangulation]) -> impl Iterator<Item = &'t OpenTriangulation> {
+    triangulations
+        .iter()
+        .filter(|triangulation| triangulation.state.loaded && !editor.hidden_handles.contains(&triangulation.entity_id()))
+}
+
+/// The colour a surface's line is drawn in.
+fn surface_line_color(triangulation: &OpenTriangulation) -> [f32; 4] {
+    let [red, green, blue, _] = triangulation.color;
+    [red, green, blue, 1.0]
+}
+
+/// What the section's surface lines are cut from: the plane and each shown
+/// surface's mesh, not its colour, which recolours without a cut. `None`
+/// while none are drawn: the switch off, no section up, or a workspace other
+/// than Geology, the only one with the row.
+pub(crate) fn section_surface_lines_key(editor: &EditorState, slab: Option<SectionSlab>, triangulations: &[OpenTriangulation]) -> Option<u64> {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    if !editor.section_surface_lines || editor.active_workspace != Workspace::Geology {
+        return None;
+    }
+    let slab = slab?;
+    let mut hasher = DefaultHasher::new();
+    for value in slab.normal.to_array() {
+        value.to_bits().hash(&mut hasher);
+    }
+    // Where the plane lies, to the micrometre, not where on it the section is
+    // centred: a pan along the plane keeps the lines.
+    ((slab.point.dot(slab.normal) * 1.0e6).round() as i64).hash(&mut hasher);
+    for triangulation in shown_surfaces(editor, triangulations) {
+        triangulation.id.hash(&mut hasher);
+        triangulation.state.revision().hash(&mut hasher);
+        (std::sync::Arc::as_ptr(&triangulation.mesh) as usize).hash(&mut hasher);
+    }
+    Some(hasher.finish())
 }

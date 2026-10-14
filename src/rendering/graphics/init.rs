@@ -756,6 +756,7 @@ impl<'a> Graphics<'a> {
         let lyon_index_gpu = Self::create_stream_buffer(&device, "Lyon Index Buffer", size_of::<u32>(), wgpu::BufferUsages::INDEX);
         let stroke_gpu = Self::create_stream_buffer(&device, "Stroke Instance Buffer", size_of::<StrokeInstance>(), wgpu::BufferUsages::VERTEX);
         let overlay_stroke_gpu = Self::create_stream_buffer(&device, "Editor Overlay Stroke Buffer", size_of::<StrokeInstance>(), wgpu::BufferUsages::VERTEX);
+        let section_surface_gpu = Self::create_stream_buffer(&device, "Section Surface Line Buffer", size_of::<StrokeInstance>(), wgpu::BufferUsages::VERTEX);
         let dynamic_stroke_gpu = Self::create_stream_buffer(&device, "Dynamic Scene Stroke Buffer", size_of::<StrokeInstance>(), wgpu::BufferUsages::VERTEX);
         let text_vertex_gpu = Self::create_stream_buffer(&device, "Document Text Vertex Buffer", size_of::<Vertex>(), wgpu::BufferUsages::VERTEX);
         let text_index_gpu = Self::create_stream_buffer(&device, "Document Text Index Buffer", size_of::<u32>(), wgpu::BufferUsages::INDEX);
@@ -790,6 +791,7 @@ impl<'a> Graphics<'a> {
             lyon_index_gpu,
             stroke_gpu,
             overlay_stroke_gpu,
+            section_surface_gpu,
             dynamic_stroke_gpu,
             text_vertex_gpu,
             text_index_gpu,
@@ -869,6 +871,8 @@ impl<'a> Graphics<'a> {
             cached_measurement_state: (false, None, None, Vec::new(), false),
             cached_poly_finish_dialog: false,
             cached_thin_preview: None,
+            section_surface: Default::default(),
+            section_surface_capacity: 1,
             pick_records: Vec::new(),
             text_pick_records: Vec::new(),
             document_draw_batches: Vec::new(),

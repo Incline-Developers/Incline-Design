@@ -79,6 +79,7 @@ ws-menubar-geology-remove-between-crossings = Удалить между пере
 ws-menubar-geology-explode-to-points = Разбить полилинию на точки
 ws-menubar-geology-drag-vertex = Перетащить вершину
 ws-menubar-geology-nudge-rl = Сдвиг отметки...
+ws-menubar-geology-surface-lines = Линии поверхностей на сечении
 ws-menubar-geology-next-vertex = Следующая вершина...
 ws-menubar-geology-remove-last-vertex = Удалить последнюю вершину
 ws-menubar-geology-surface = Поверхность
@@ -975,6 +976,7 @@ cmd-slice-entered-slice-view-cx-cy = Включён режим сечения в
 cmd-slice-exited-slice-view = Режим сечения закрыт
 cmd-slice-reset-section-view-fit-extents = Сбросить вид сечения (вписать в границы)
 cmd-slice-set-section-grid-enabled = Сетка сечения включена = { $enabled }
+cmd-slice-set-surface-lines = Линии поверхностей на сечении включены = { $enabled }
 cmd-split-created-2-open-polylines = Созданы 2 разомкнутые полилинии
 cmd-split-line = Разделить линию
 cmd-split-points-needs-interior-vertex = Разделение по точкам: выберите внутреннюю вершину разомкнутой линии

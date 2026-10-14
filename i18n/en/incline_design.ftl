@@ -87,6 +87,7 @@ ws-menubar-geology-remove-between-crossings = Remove Between Crossings
 ws-menubar-geology-explode-to-points = Explode Polyline to Points
 ws-menubar-geology-drag-vertex = Drag a Vertex
 ws-menubar-geology-nudge-rl = Nudge RL...
+ws-menubar-geology-surface-lines = Surface Lines on Section
 ws-menubar-geology-next-vertex = Next Vertex...
 ws-menubar-geology-remove-last-vertex = Remove Last Vertex
 ws-menubar-geology-surface = Surface
@@ -994,6 +995,7 @@ cmd-slice-entered-slice-view-cx-cy = Entered slice view @ { $cx }, { $cy }, { $c
 cmd-slice-exited-slice-view = Exited slice view
 cmd-slice-reset-section-view-fit-extents = Reset the section view (fit to extents)
 cmd-slice-set-section-grid-enabled = Set section grid = { $enabled }
+cmd-slice-set-surface-lines = Set surface lines on section = { $enabled }
 cmd-split-created-2-open-polylines = Created 2 open polylines
 cmd-split-line = Split Line
 cmd-split-points-needs-interior-vertex = Split At Points: choose an interior vertex of the open line
