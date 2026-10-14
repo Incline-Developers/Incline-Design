@@ -256,6 +256,10 @@ pub(crate) fn draw_status_bar(ui: &mut egui::Ui, editor: &EditorState, commands:
                 // before it.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     draw_language_picker(ui, editor, commands);
+                    // The picker's padding is part of its hover fill, so give it
+                    // back here; otherwise the separator sits further from the
+                    // name than it does from the plain labels.
+                    ui.add_space(-LANGUAGE_PADDING);
                     ui.separator();
                     let fps = editor.measured_fps.map_or_else(|| "--".to_owned(), |fps| format!("{fps:.0}"));
                     ui.label(tr!("status-fps", fps = fps));

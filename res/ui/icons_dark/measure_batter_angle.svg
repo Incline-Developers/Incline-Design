@@ -1,7 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg width="800px" height="800px" fill="none" version="1.1" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
- <g stroke-linecap="round" stroke-width="1.8" style="fill:none;stroke:#db5f58">
-  <path d="m1.5 4h21"/>
-  <path d="m12 6v16.5" stroke-dasharray="2.4 2.3" stroke-linecap="butt"/>
- </g>
-</svg>
