@@ -403,6 +403,9 @@ impl<'a> App<'a> {
                                 if self.editor.active_tool == ActiveTool::SplitAtPoints && self.editor.split_poly_id.is_none() {
                                     self.split_init_from_selection();
                                 }
+                                if self.editor.active_tool == ActiveTool::SplitAtCrossings && self.editor.split_crossings_target.is_none() {
+                                    self.split_crossings_init_from_selection();
+                                }
                             }
                             Err(error @ (RenderSurfaceError::Lost | RenderSurfaceError::Outdated)) => {
                                 if !self.surface_retry_pending {
@@ -1018,6 +1021,7 @@ impl<'a> App<'a> {
                 ActiveTool::ExplodePolyline => self.explode_at_cursor(),
                 ActiveTool::FuseIntoPolyline => self.fuse_click(),
                 ActiveTool::SplitAtPoints => self.split_at_points_click(),
+                ActiveTool::SplitAtCrossings => self.split_at_crossings_click(),
                 ActiveTool::RelimitLine => self.relimit_line_click(),
                 ActiveTool::OffsetElement => {
                     if self.editor.offset_awaiting_side_pick {
@@ -1486,6 +1490,9 @@ impl<'a> App<'a> {
                     self.editor.active_tool = ActiveTool::None;
                 } else if self.editor.active_tool == ActiveTool::SplitAtPoints {
                     self.cancel_split_at_points();
+                } else if self.editor.active_tool == ActiveTool::SplitAtCrossings {
+                    self.clear_split_at_crossings();
+                    self.editor.active_tool = ActiveTool::None;
                 } else if self.editor.active_tool.translates() || self.editor.active_tool.rotates() {
                     self.gizmo_drag = None;
                     self.editor.gizmo_drag_axis_index = None;
@@ -1632,6 +1639,9 @@ impl<'a> App<'a> {
             self.editor.active_tool = ActiveTool::None;
         } else if self.editor.active_tool == ActiveTool::SplitAtPoints {
             self.cancel_split_at_points();
+        } else if self.editor.active_tool == ActiveTool::SplitAtCrossings {
+            self.clear_split_at_crossings();
+            self.editor.active_tool = ActiveTool::None;
         } else if self.editor.active_tool.translates() || self.editor.active_tool.rotates() {
             self.gizmo_drag = None;
             self.editor.gizmo_drag_axis_index = None;
@@ -1728,6 +1738,9 @@ impl<'a> App<'a> {
             }
             ActiveTool::SplitAtPoints if next_tool != ActiveTool::SplitAtPoints => {
                 self.cancel_split_at_points();
+            }
+            ActiveTool::SplitAtCrossings if next_tool != previous_tool => {
+                self.clear_split_at_crossings();
             }
             ActiveTool::InsertPoint | ActiveTool::FillSegment if next_tool != previous_tool => {
                 self.clear_insert_point_marker();

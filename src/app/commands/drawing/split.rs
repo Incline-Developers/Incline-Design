@@ -1,3 +1,4 @@
+use super::insert_point::{crossing_cuts, edge_count, insert_parameters};
 use crate::{
     app::{App, PICK_THRESHOLD_PX},
     i18n::tr,
@@ -5,7 +6,7 @@ use crate::{
     model::{Command, Object, ObjectId, PolyVertex, SceneEntityId},
     rendering::pick,
     ui::state::ActiveTool,
-    userspace_warn,
+    userspace_log, userspace_warn,
 };
 
 impl<'a> App<'a> {
@@ -224,6 +225,172 @@ impl<'a> App<'a> {
                 Object::Polyline { verts, closed: false, .. } if verts.len() >= 3
             )
         })
+    }
+
+    /// Split at Crossings: the first click picks the string to cut, the
+    /// next the string that crosses it.
+    pub(crate) fn split_at_crossings_click(&mut self) {
+        if !self.editing_ready() {
+            return;
+        }
+        let Some((SceneEntityId::Object(id), _)) = self.pick_under_cursor() else {
+            return;
+        };
+        match self.editor.split_crossings_target.take() {
+            None => self.pick_crossings_target(id),
+            Some(before) => self.split_where_crossed(before, id),
+        }
+    }
+
+    /// As [`Self::split_init_from_selection`]: a selected string the canvas
+    /// may edit is the one to cut.
+    pub(crate) fn split_crossings_init_from_selection(&mut self) {
+        let selected = self.editor.selected_handles.iter().find_map(|handle| match handle {
+            SceneEntityId::Object(id)
+                if matches!(self.scene_document.get_object(*id), Some(Object::Polyline { .. })) && self.editor.canvas_edits_object(&self.scene_document, *id) =>
+            {
+                Some(*id)
+            }
+            _ => None,
+        });
+        if let Some(id) = selected {
+            self.pick_crossings_target(id);
+        }
+    }
+
+    /// Take string `id` as the one to cut, read from its own project. A
+    /// locked string may cut another but is not cut itself.
+    fn pick_crossings_target(&mut self, id: ObjectId) {
+        if !self.activate_project_for_object(id) || !self.editor.canvas_edits_object(self.active_document(), id) {
+            return;
+        }
+        let Some(string @ Object::Polyline { verts, closed, .. }) = self.active_document().get_object(id) else {
+            return;
+        };
+        if edge_count(verts, *closed) == 0 {
+            return;
+        }
+        self.editor.split_crossings_target = Some(string.clone());
+        self.editor.selected_handles.insert(SceneEntityId::Object(id));
+        self.invalidate_geometry();
+        self.invalidate_overlay();
+    }
+
+    /// Cut string `before` at every crossing with string `cutter` into open
+    /// pieces with new ids, as Split Polyline At Points does, one undo.
+    fn split_where_crossed(&mut self, before: Object, cutter: ObjectId) {
+        let Object::Polyline {
+            id,
+            layer,
+            ref verts,
+            closed,
+            color,
+            fill,
+            line_weight,
+        } = before
+        else {
+            return;
+        };
+        // The cutter as drawn, locked or not; the string itself is no cutter.
+        let Some(Object::Polyline {
+            verts: cutter_verts,
+            closed: cutter_closed,
+            ..
+        }) = self.scene_document.get_object(cutter).filter(|_| cutter != id)
+        else {
+            self.editor.split_crossings_target = Some(before);
+            return;
+        };
+        let slab = self.graphics.as_ref().and_then(|graphics| graphics.section_slab());
+        let (vertices, parameters) = crossing_cuts((verts, closed), (cutter_verts, *cutter_closed), slab);
+        // Read again, not taken from the pick: a write over a string edited
+        // since would undo that edit.
+        if !self.activate_project_for_object(id) || self.active_document().get_object(id) != Some(&before) || !self.editor.canvas_edits_object(self.active_document(), id) {
+            userspace_warn!("{}", tr!("cmd-string-rework-changed"));
+            self.editor.selected_handles.remove(&SceneEntityId::Object(id));
+            self.invalidate_geometry();
+            self.invalidate_overlay();
+            return;
+        }
+        let pieces = split_at_crossings(verts, closed, &vertices, parameters);
+        if pieces.is_empty() {
+            userspace_warn!("{}", tr!("cmd-string-split-no-crossing"));
+            self.editor.split_crossings_target = Some(before);
+            return;
+        }
+        let Some(project) = self.workspace.active_project_mut() else {
+            return;
+        };
+        let doc = &mut project.project.document;
+        let count = pieces.len();
+        let mut commands = vec![Command::delete_object(before)];
+        for verts in pieces {
+            commands.push(Command::AddObject(Object::Polyline {
+                id: doc.allocate_object_id(),
+                layer,
+                verts,
+                closed: false,
+                color,
+                fill,
+                line_weight,
+            }));
+        }
+        self.execute_edit(Command::Batch(commands));
+        // The tool stays up for the next string.
+        self.editor.selected_handles.clear();
+        match count {
+            1 => userspace_log!("{}", tr!("cmd-string-split-opened")),
+            _ => userspace_log!("{}", tr!("cmd-string-split-into", count = count.to_string())),
+        }
+        self.invalidate_geometry();
+        self.invalidate_overlay();
+    }
+
+    /// Put down the string picked to cut, if any.
+    pub(crate) fn clear_split_at_crossings(&mut self) {
+        if self.editor.split_crossings_target.take().is_some() {
+            self.invalidate_overlay();
+        }
+    }
+}
+
+/// String `verts` cut into open pieces where [`crossing_cuts`] found
+/// crossings: on `vertices`, and at `parameters` inside its edges. An open
+/// string is not cut at its ends; a ring cut once is opened there. Empty
+/// when there is nothing to cut.
+pub(super) fn split_at_crossings(verts: &[PolyVertex], closed: bool, vertices: &[usize], parameters: Vec<Vec<f64>>) -> Vec<Vec<PolyVertex>> {
+    if edge_count(verts, closed) == 0 {
+        return Vec::new();
+    }
+    // Each cut's place once the crossings are vertices of their own.
+    let mut cuts = Vec::new();
+    let mut index = 0;
+    for (vertex, added) in parameters.iter().map(Vec::len).enumerate() {
+        if vertices.contains(&vertex) {
+            cuts.push(index);
+        }
+        cuts.extend(index + 1..=index + added);
+        index += added + 1;
+    }
+    let verts = insert_parameters(verts, closed, parameters);
+    if !closed {
+        cuts.retain(|&cut| cut > 0 && cut + 1 < verts.len());
+        if cuts.is_empty() {
+            return Vec::new();
+        }
+        let ends: Vec<usize> = std::iter::once(0).chain(cuts).chain(std::iter::once(verts.len() - 1)).collect();
+        return ends.windows(2).map(|run| with_straight_closing_edge(verts[run[0]..=run[1]].to_vec())).collect();
+    }
+    match cuts[..] {
+        [] => Vec::new(),
+        [cut] => {
+            let mut opened = ring_slice(&verts, cut, (cut + verts.len() - 1) % verts.len());
+            opened.push(verts[cut]);
+            vec![with_straight_closing_edge(opened)]
+        }
+        _ => (0..cuts.len())
+            .map(|run| with_straight_closing_edge(ring_slice(&verts, cuts[run], cuts[(run + 1) % cuts.len()])))
+            .collect(),
     }
 }
 

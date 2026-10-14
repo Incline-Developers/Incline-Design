@@ -456,6 +456,75 @@ fn insert_at_intersections(polylines: &[(Vec<PolyVertex>, bool)]) -> Vec<Vec<Pol
         .collect()
 }
 
+/// Where `cutter` crosses string `target`: the vertices of `target` it
+/// crosses on, and the parameters inside each edge that
+/// [`insert_parameters`] takes. In plan, or with a section up, in the
+/// section's plane among the parts its slab draws.
+pub(super) fn crossing_cuts(target: (&[PolyVertex], bool), cutter: (&[PolyVertex], bool), slab: Option<SectionSlab>) -> (Vec<usize>, Vec<Vec<f64>>) {
+    let ((verts, closed), (cutter, cutter_closed)) = (target, cutter);
+    let mut vertices = Vec::new();
+    let mut parameters = vec![Vec::new(); edge_count(verts, closed)];
+    let cutter_runs: Vec<_> = slab
+        .map(|slab| (0..edge_count(cutter, cutter_closed)).flat_map(|edge| slab_runs(cutter, edge, slab)).collect())
+        .unwrap_or_default();
+    for edge in 0..parameters.len() {
+        let curve = Curve::from_vertices(verts[edge], verts[(edge + 1) % verts.len()]);
+        let crossings: Vec<f64> = match slab {
+            None => (0..edge_count(cutter, cutter_closed))
+                .flat_map(|other| curve_intersections(curve, Curve::from_vertices(cutter[other], cutter[(other + 1) % cutter.len()])))
+                .map(|(_, t, _)| t)
+                .collect(),
+            Some(slab) => slab_runs(verts, edge, slab)
+                .into_iter()
+                .flat_map(|(a, b, from, to)| {
+                    cutter_runs.iter().filter_map(move |&(c, d, ..)| match kernel::segment_segment(a, b, c, d) {
+                        SegSeg::Crossing { t, .. } | SegSeg::Touching { t, .. } => Some(from + (to - from) * t),
+                        SegSeg::Disjoint | SegSeg::CollinearOverlap { .. } => None,
+                    })
+                })
+                .collect(),
+        };
+        // Unlike an insert, a crossing on a vertex cuts there too.
+        for t in crossings {
+            if is_interior_parameter(curve, t) {
+                push_interior_parameter(&mut parameters[edge], curve, t);
+            } else {
+                let vertex = if t < 0.5 { edge } else { (edge + 1) % verts.len() };
+                if !vertices.contains(&vertex) {
+                    vertices.push(vertex);
+                }
+            }
+        }
+    }
+    (vertices, parameters)
+}
+
+/// Edge `edge` of `verts` as straight runs in `slab`'s frame, an arc as
+/// Insert Point's pick chords, each run with the edge parameters it spans.
+fn slab_runs(verts: &[PolyVertex], edge: usize, slab: SectionSlab) -> Vec<(DVec2, DVec2, f64, f64)> {
+    let chords = match Curve::from_vertices(verts[edge], verts[(edge + 1) % verts.len()]) {
+        Curve::Line { .. } => 1,
+        Curve::Arc { .. } => ARC_PICK_CHORDS,
+    };
+    (0..chords)
+        .filter_map(|chord| {
+            let (from, to) = (chord as f64 / chords as f64, (chord + 1) as f64 / chords as f64);
+            let (a, b) = (edge_point(verts, edge, from), edge_point(verts, edge, to));
+            let (enter, leave) = slab.clip_segment(a, b)?;
+            let (start, end) = (from + (to - from) * enter, from + (to - from) * leave);
+            Some((slab.frame_point(a.lerp(b, enter)), slab.frame_point(a.lerp(b, leave)), start, end))
+        })
+        .collect()
+}
+
+/// The point at parameter `t` along edge `edge` of `verts`, as
+/// [`insert_parameters`] puts a vertex there.
+fn edge_point(verts: &[PolyVertex], edge: usize, t: f64) -> DVec3 {
+    let (start, end) = (verts[edge], verts[(edge + 1) % verts.len()]);
+    let xy = Curve::from_vertices(start, end).point(t);
+    DVec3::new(xy.x, xy.y, start.pos.z + (end.pos.z - start.pos.z) * t)
+}
+
 fn insert_at_elevation(verts: &[PolyVertex], closed: bool, elevation: f64) -> Vec<PolyVertex> {
     let mut parameters = vec![Vec::new(); edge_count(verts, closed)];
     for edge in 0..parameters.len() {
@@ -476,7 +545,7 @@ fn insert_at_elevation(verts: &[PolyVertex], closed: bool, elevation: f64) -> Ve
     insert_parameters(verts, closed, parameters)
 }
 
-fn edge_count(verts: &[PolyVertex], closed: bool) -> usize {
+pub(super) fn edge_count(verts: &[PolyVertex], closed: bool) -> usize {
     if verts.len() < 2 {
         0
     } else if closed {
@@ -581,7 +650,7 @@ fn bounds_overlap(first: (DVec2, DVec2), second: (DVec2, DVec2)) -> bool {
     a_min.x <= b_max.x && b_min.x <= a_max.x && a_min.y <= b_max.y && b_min.y <= a_max.y
 }
 
-fn insert_parameters(verts: &[PolyVertex], closed: bool, mut parameters: Vec<Vec<f64>>) -> Vec<PolyVertex> {
+pub(super) fn insert_parameters(verts: &[PolyVertex], closed: bool, mut parameters: Vec<Vec<f64>>) -> Vec<PolyVertex> {
     if edge_count(verts, closed) == 0 {
         return verts.to_vec();
     }
@@ -629,11 +698,6 @@ fn nearest_edge_point(
     screen: Size,
     slab: Option<SectionSlab>,
 ) -> Option<(usize, f64, DVec3)> {
-    let edge_point = |edge: usize, t: f64| {
-        let (start, end) = (verts[edge], verts[(edge + 1) % verts.len()]);
-        let xy = Curve::from_vertices(start, end).point(t);
-        DVec3::new(xy.x, xy.y, start.pos.z + (end.pos.z - start.pos.z) * t)
-    };
     let mut best: Option<(f64, usize, f64, DVec2)> = None;
     for edge in 0..edge_count(verts, closed) {
         let chords = match Curve::from_vertices(verts[edge], verts[(edge + 1) % verts.len()]) {
@@ -642,7 +706,7 @@ fn nearest_edge_point(
         };
         for chord in 0..chords {
             let (from, to) = (chord as f64 / chords as f64, (chord + 1) as f64 / chords as f64);
-            let (a, b) = (edge_point(edge, from), edge_point(edge, to));
+            let (a, b) = (edge_point(verts, edge, from), edge_point(verts, edge, to));
             let Some((clipped_a, clipped_b)) = pick::slab_clipped_segment(slab, a, b) else {
                 continue;
             };
@@ -670,7 +734,7 @@ fn nearest_edge_point(
         .into_iter()
         .filter_map(|vertex| pick::slab_screen_point(slab, view_proj, screen, vertex))
         .any(|vertex| vertex.distance(on_screen) < reach.1);
-    (!by_vertex && t > 0.0 && t < 1.0).then(|| (edge, t, edge_point(edge, t)))
+    (!by_vertex && t > 0.0 && t < 1.0).then(|| (edge, t, edge_point(verts, edge, t)))
 }
 
 /// The most vertices one Fill Segment click adds; a click needing more is

@@ -487,6 +487,8 @@ fn tool_prompt(editor: &EditorState) -> Option<ViewportMessage> {
         ActiveTool::EditVertex => ViewportMessage::text(tr!("ui-select-polyline-vertex")),
         ActiveTool::InsertPoint => ViewportMessage::text(tr!("ui-click-string-insert-point")).minor(tr!("ui-esc-cancels")),
         ActiveTool::FillSegment => ViewportMessage::text(tr!("ui-click-segment-fill")).minor(tr!("ui-esc-cancels")),
+        ActiveTool::SplitAtCrossings if editor.split_crossings_target.is_none() => ViewportMessage::text(tr!("ui-click-string-to-split")).minor(tr!("ui-esc-cancels")),
+        ActiveTool::SplitAtCrossings => ViewportMessage::text(tr!("ui-click-crossing-string")).minor(tr!("ui-esc-cancels")),
         ActiveTool::Hide => ViewportMessage::text(tr!("ui-select-designs-to-hide")),
         _ => return None,
     };

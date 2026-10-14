@@ -900,6 +900,13 @@ impl SectionSlab {
         self.signed_distance(world).abs() <= self.half_width
     }
 
+    /// `world` in the section's own frame: metres along the plane, then Z.
+    /// Where it lies across the slab is dropped.
+    pub(crate) fn frame_point(&self, world: DVec3) -> DVec2 {
+        let along = DVec3::new(-self.normal.y, self.normal.x, 0.0);
+        DVec2::new((world - self.point).dot(along), world.z)
+    }
+
     /// Fraction range `(enter, leave)` along segment `a`-`b`, each in `0.0..=1.0`,
     /// that lies inside the slab; `None` if the whole segment is outside.
     pub(crate) fn clip_segment(&self, a: DVec3, b: DVec3) -> Option<(f64, f64)> {

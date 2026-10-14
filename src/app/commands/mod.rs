@@ -87,6 +87,8 @@ impl<'a> App<'a> {
         // A copy's first pick is a vertex number on a string the step may
         // have renumbered or removed.
         self.editor.copy_along = None;
+        // The string picked to split may be another now.
+        self.clear_split_at_crossings();
         // Drags and nudges after an undo or redo start an undo step of
         // their own.
         self.editor.vertex_edit_run = None;

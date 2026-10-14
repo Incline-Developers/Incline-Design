@@ -290,7 +290,7 @@ fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, wor
             workspace == Workspace::DrillAndBlast
         }
         tool if tool.designs_pit() => workspace.has_production_tools(),
-        ActiveTool::InsertPoint | ActiveTool::FillSegment => workspace.has_drawing_aids(),
+        ActiveTool::InsertPoint | ActiveTool::FillSegment | ActiveTool::SplitAtCrossings => workspace.has_drawing_aids(),
         _ => workspace.has_drawing_tools(),
     };
     // A tool one workspace edits with on a section, another may refuse there.
@@ -581,7 +581,7 @@ pub(crate) enum GeologyRow {
 
 /// Geology Design's lower half in menu order; [`geology_design_groups`] cuts
 /// it into submenus and the macOS menu tags rows by index into it.
-pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 36] = [
+pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 37] = [
     GeologyRow::Tool(ActiveTool::MakePoint),
     GeologyRow::Tool(ActiveTool::MakeLine),
     GeologyRow::Tool(ActiveTool::MakePoly),
@@ -604,6 +604,7 @@ pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 36] = [
     GeologyRow::CleanStrings,
     GeologyRow::Tool(ActiveTool::FuseIntoPolyline),
     GeologyRow::Tool(ActiveTool::SplitAtPoints),
+    GeologyRow::Tool(ActiveTool::SplitAtCrossings),
     GeologyRow::Tool(ActiveTool::ExplodePolyline),
     GeologyRow::Tool(ActiveTool::EditVertex),
     GeologyRow::Tool(ActiveTool::InsertPoint),
@@ -626,9 +627,9 @@ pub(crate) fn geology_design_groups() -> [(String, std::ops::Range<usize>); 5] {
     [
         (tr!("ws-menubar-geology-draw"), 0..10),
         (tr!("ws-menubar-geology-edit"), 10..20),
-        (tr!("ws-menubar-geology-join-split"), 20..23),
-        (tr!("ws-menubar-geology-vertices"), 23..32),
-        (tr!("ws-menubar-geology-surface"), 32..35),
+        (tr!("ws-menubar-geology-join-split"), 20..24),
+        (tr!("ws-menubar-geology-vertices"), 24..33),
+        (tr!("ws-menubar-geology-surface"), 33..36),
     ]
 }
 
@@ -649,6 +650,7 @@ impl GeologyRow {
                 ActiveTool::Chamfer => tr!("toolbars-chamfer-polyline-corners"),
                 ActiveTool::FuseIntoPolyline => tr!("toolbars-fuse-polylines"),
                 ActiveTool::SplitAtPoints => tr!("toolbars-split-polyline-points"),
+                ActiveTool::SplitAtCrossings => tr!("ws-menubar-geology-split-at-crossings"),
                 ActiveTool::ExplodePolyline => tr!("toolbars-explode-polyline-lines"),
                 ActiveTool::DeletePoints => tr!("toolbars-delete-points"),
                 ActiveTool::EditVertex => tr!("toolbars-edit-vertex"),
