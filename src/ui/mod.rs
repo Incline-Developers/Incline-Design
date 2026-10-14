@@ -486,6 +486,7 @@ fn tool_prompt(editor: &EditorState) -> Option<ViewportMessage> {
         ActiveTool::DeletePoints => ViewportMessage::text(tr!("ui-select-point")),
         ActiveTool::EditVertex => ViewportMessage::text(tr!("ui-select-polyline-vertex")),
         ActiveTool::InsertPoint => ViewportMessage::text(tr!("ui-click-string-insert-point")).minor(tr!("ui-esc-cancels")),
+        ActiveTool::FillSegment => ViewportMessage::text(tr!("ui-click-segment-fill")).minor(tr!("ui-esc-cancels")),
         ActiveTool::Hide => ViewportMessage::text(tr!("ui-select-designs-to-hide")),
         _ => return None,
     };
@@ -807,6 +808,9 @@ fn draw_ui(
             .map(|position| position.z);
         dialogs::editing::draw_nudge_panel(root_ui, editor, commands, canvas_rect, held_rl);
     }
+
+    let stored_spacing = project.has_active_project.then_some(project.modelling.fill_spacing);
+    dialogs::editing::draw_fill_segment_panel(root_ui, editor, stored_spacing, commands, canvas_rect);
 
     // A string being drawn in Geology: its typed next vertex.
     if editor.next_vertex_panel.is_some() {

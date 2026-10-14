@@ -1402,6 +1402,48 @@ pub(crate) fn draw_nudge_panel(ui: &mut egui::Ui, editor: &mut EditorState, comm
     }
 }
 
+/// Geology's Fill Segment panel while the tool is armed: the spacing a
+/// click cuts the segment by, `stored` with the active project.
+pub(crate) fn draw_fill_segment_panel(ui: &mut egui::Ui, editor: &EditorState, stored: Option<f64>, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect) {
+    if editor.active_tool != ActiveTool::FillSegment || !editor.active_workspace.has_drawing_aids() {
+        return;
+    }
+    ViewportDockPanel::new("fill_segment_panel", tr!("edit-fill-segment"), viewport_rect)
+        .min_width(210.0)
+        .show(ui.ctx(), |ui| {
+            match stored {
+                // Drafted as the Modelling preferences are: sent once, when
+                // the edit ends.
+                Some(stored) => {
+                    let draft_id = ui.id().with("fill_segment_spacing_draft");
+                    let mut spacing = ui.data(|data| data.get_temp::<f64>(draft_id)).unwrap_or(stored);
+                    let response = MenuFieldF64::new(tr!("edit-fill-segment-spacing"), &mut spacing, f64::MIN_POSITIVE..=f64::MAX)
+                        .help_text(tr!("edit-fill-segment-spacing-help"))
+                        .speed(0.1)
+                        .max_decimals(3)
+                        .show(ui);
+                    if response.dragged() {
+                        ui.data_mut(|data| data.insert_temp(draft_id, spacing));
+                    } else {
+                        ui.data_mut(|data| data.remove::<f64>(draft_id));
+                    }
+                    if menu::committed(&response) && spacing != stored {
+                        commands.push(UiCommand::SetFillSegmentSpacing(spacing));
+                    }
+                }
+                None => {
+                    ui.label(egui::RichText::new(tr!("common-no-open-project")).weak());
+                }
+            }
+            ui.add_space(4.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.add(MenuButton::new(tr!("common-close"))).clicked() {
+                    commands.push(UiCommand::SetActiveTool(ActiveTool::None));
+                }
+            });
+        });
+}
+
 /// Draw the Next Vertex panel beside a string being drawn: a point to add as
 /// typed, and a step from the last vertex by bearing, level distance and dip.
 /// Enter in a field adds from that part; it never finishes the string.

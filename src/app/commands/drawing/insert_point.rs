@@ -14,9 +14,11 @@ use crate::{
     model::{
         Command, Object, ObjectId, PolyVertex, SceneEntityId,
         kernel::{self, SegSeg, XY_TOL},
+        project::ModellingSettings,
+        rbf::DEFAULT_SPACING,
     },
     rendering::{camera::SectionSlab, pick},
-    userspace_warn,
+    userspace_log, userspace_warn,
 };
 
 /// How many chords an arc is cut into when a click is tested against it.
@@ -229,11 +231,111 @@ impl<'a> App<'a> {
         self.clear_insert_point_marker();
     }
 
-    /// Take down the point Insert Point shows under the cursor: the overlay
-    /// it is drawn on repaints only when asked.
+    /// Fill Segment: cut the segment under the cursor into equal parts no
+    /// longer than the spacing, a vertex at each cut, one undo per click.
+    pub(crate) fn fill_segment_at_cursor(&mut self) {
+        if !self.editing_ready() {
+            return;
+        }
+        let Some((id, _)) = self.fill_segment_hit() else {
+            return;
+        };
+        // Taken before the pick can switch projects: the spacing previewed.
+        let spacing = self.fill_spacing();
+        // As Insert Point: the string is read again from its own project.
+        if !self.activate_project_for_object(id) || !self.editor.canvas_edits_object(self.active_document(), id) {
+            return;
+        }
+        let Some(Object::Polyline { verts, closed, .. }) = self.active_document().get_object(id) else {
+            return;
+        };
+        let (verts, closed) = (verts.clone(), *closed);
+        let Some((edge, ..)) = self.edge_point_under_cursor(&verts, closed) else {
+            return;
+        };
+        let updated = match fill_segment(&verts, closed, edge, spacing) {
+            SegmentFill::Filled(updated) => updated,
+            SegmentFill::Short => {
+                userspace_warn!("{}", tr!("cmd-string-fill-short"));
+                return;
+            }
+            SegmentFill::TooMany(count) => {
+                userspace_warn!("{}", tr!("cmd-string-fill-too-many", count = count.to_string(), most = FILL_SEGMENT_MOST.to_string()));
+                return;
+            }
+        };
+        // Insert Point's commit, with a message of its own.
+        let Some((commands, added)) = self
+            .inserted_vertex_commands(&[(id, verts, closed)], vec![updated])
+            .filter(|(commands, _)| !commands.is_empty())
+        else {
+            return;
+        };
+        self.execute_edit(Command::Batch(commands));
+        userspace_log!("{}", tr!("cmd-string-fill-added", count = added.to_string()));
+        self.invalidate_geometry();
+        // The spacing used goes with the string's own project too.
+        self.set_fill_segment_spacing(spacing);
+        self.clear_insert_point_marker();
+    }
+
+    /// Fill Segment's spacing: the active project's, the default without one.
+    fn fill_spacing(&self) -> f64 {
+        self.workspace
+            .active_project()
+            .map_or(DEFAULT_SPACING, |project| project.project.metadata.modelling.fill_spacing)
+    }
+
+    /// Keep `spacing` with the active project's modelling settings: the
+    /// project is marked changed, as by Preferences, with no undo step.
+    pub(crate) fn set_fill_segment_spacing(&mut self, spacing: f64) {
+        let changed = self.workspace.active_project_mut().is_some_and(|project| {
+            let modelling = &mut project.project.metadata.modelling;
+            let next = ModellingSettings {
+                fill_spacing: spacing,
+                ..*modelling
+            };
+            let changed = next.problem().is_none() && *modelling != next;
+            if changed {
+                *modelling = next;
+            }
+            changed
+        });
+        if changed {
+            self.touch_active_project_content();
+            // The points shown were cut by the old spacing.
+            self.clear_insert_point_marker();
+        }
+    }
+
+    /// The string under the cursor and the vertices Fill Segment would add
+    /// to the segment hit, none when it is no longer than the spacing or would
+    /// take too many.
+    pub(crate) fn fill_segment_hit(&self) -> Option<(ObjectId, Vec<DVec3>)> {
+        let (SceneEntityId::Object(id), _) = self.pick_under_cursor()? else {
+            return None;
+        };
+        if !self.editor.canvas_edits_object(&self.scene_document, id) {
+            return None;
+        }
+        let Some(Object::Polyline { verts, closed, .. }) = self.scene_document.get_object(id) else {
+            return None;
+        };
+        let (edge, ..) = self.edge_point_under_cursor(verts, *closed)?;
+        let added = match fill_segment(verts, *closed, edge, self.fill_spacing()) {
+            SegmentFill::Filled(updated) => updated[edge + 1..edge + 1 + updated.len() - verts.len()].iter().map(|vertex| vertex.pos).collect(),
+            SegmentFill::Short | SegmentFill::TooMany(_) => Vec::new(),
+        };
+        Some((id, added))
+    }
+
+    /// Take down the point Insert Point shows under the cursor, and the ones
+    /// Fill Segment shows: the overlay they are drawn on repaints only when
+    /// asked.
     pub(crate) fn clear_insert_point_marker(&mut self) {
-        let shown = self.editor.tool_hover_vertex_px.take().is_some();
+        let shown = self.editor.tool_hover_vertex_px.take().is_some() || !self.editor.fill_segment_preview.is_empty();
         self.editor.tool_hover_vertex_world = None;
+        self.editor.fill_segment_preview.clear();
         if shown {
             self.invalidate_overlay();
         }
@@ -276,9 +378,32 @@ impl<'a> App<'a> {
     }
 
     fn commit_inserted_vertices(&mut self, source: &[(ObjectId, Vec<PolyVertex>, bool)], updated: Vec<Vec<PolyVertex>>, operation: &str) {
-        let Some(project) = self.workspace.active_project_mut() else {
+        let Some((commands, inserted)) = self.inserted_vertex_commands(source, updated) else {
             return;
         };
+        if commands.is_empty() {
+            userspace_warn!("{}", tr!("cmd-insert-point-no-new-operation-points-were", operation = operation.to_string()));
+            return;
+        }
+        self.execute_edit(Command::Batch(commands));
+        crate::logging::report_completed_action(
+            CommandReportSpec::new(
+                crate::i18n::tr!("cmd-insert-point-insert-points"),
+                crate::i18n::tr!("cmd-insert-point-count-operation-point-s", count = inserted.to_string(), operation = operation.to_string()),
+            ),
+            crate::i18n::tr!(
+                "cmd-insert-point-inserted-count-operation-point-s",
+                count = inserted.to_string(),
+                operation = operation.to_string()
+            ),
+        );
+        self.invalidate_geometry();
+    }
+
+    /// One `Replace` per string that gained vertices, built from the active
+    /// project, and how many vertices they gained in all.
+    fn inserted_vertex_commands(&mut self, source: &[(ObjectId, Vec<PolyVertex>, bool)], updated: Vec<Vec<PolyVertex>>) -> Option<(Vec<Command>, usize)> {
+        let project = self.workspace.active_project_mut()?;
         let doc = &mut project.project.document;
         let mut inserted = 0usize;
         let commands: Vec<Command> = source
@@ -298,24 +423,7 @@ impl<'a> App<'a> {
                 Some(Command::Replace { before, after })
             })
             .collect();
-
-        if commands.is_empty() {
-            userspace_warn!("{}", tr!("cmd-insert-point-no-new-operation-points-were", operation = operation.to_string()));
-            return;
-        }
-        self.execute_edit(Command::Batch(commands));
-        crate::logging::report_completed_action(
-            CommandReportSpec::new(
-                crate::i18n::tr!("cmd-insert-point-insert-points"),
-                crate::i18n::tr!("cmd-insert-point-count-operation-point-s", count = inserted.to_string(), operation = operation.to_string()),
-            ),
-            crate::i18n::tr!(
-                "cmd-insert-point-inserted-count-operation-point-s",
-                count = inserted.to_string(),
-                operation = operation.to_string()
-            ),
-        );
-        self.invalidate_geometry();
+        Some((commands, inserted))
     }
 }
 
@@ -563,6 +671,47 @@ fn nearest_edge_point(
         .filter_map(|vertex| pick::slab_screen_point(slab, view_proj, screen, vertex))
         .any(|vertex| vertex.distance(on_screen) < reach.1);
     (!by_vertex && t > 0.0 && t < 1.0).then(|| (edge, t, edge_point(edge, t)))
+}
+
+/// The most vertices one Fill Segment click adds; a click needing more is
+/// refused.
+const FILL_SEGMENT_MOST: usize = 1000;
+
+/// What Fill Segment makes of one segment.
+#[derive(Debug)]
+enum SegmentFill {
+    /// The string with the segment cut.
+    Filled(Vec<PolyVertex>),
+    /// No longer than the spacing: nothing to add.
+    Short,
+    /// It would take this many vertices, over [`FILL_SEGMENT_MOST`].
+    TooMany(usize),
+}
+
+/// `verts` with edge `edge` cut into the fewest equal parts no longer than
+/// `spacing`, measured in 3D, the new vertices on the edge as
+/// [`insert_parameters`] puts them.
+fn fill_segment(verts: &[PolyVertex], closed: bool, edge: usize, spacing: f64) -> SegmentFill {
+    if edge >= edge_count(verts, closed) || !spacing.is_finite() || spacing <= 0.0 {
+        return SegmentFill::Short;
+    }
+    let (start, end) = (verts[edge], verts[(edge + 1) % verts.len()]);
+    // Height runs evenly with the parameter, arc or line, so the 3D length
+    // is the plan length and the rise as the sides of a right triangle.
+    let length = Curve::from_vertices(start, end).length().hypot(end.pos.z - start.pos.z);
+    // The hair keeps an exact multiple of the spacing from a part too many.
+    let parts = (length / spacing - 1e-9).ceil();
+    if parts.is_nan() || parts < 2.0 {
+        return SegmentFill::Short;
+    }
+    // Counted before a vertex is made, so a tiny spacing costs nothing.
+    if parts - 1.0 > FILL_SEGMENT_MOST as f64 {
+        return SegmentFill::TooMany((parts - 1.0) as usize);
+    }
+    let parts = parts as usize;
+    let mut parameters = vec![Vec::new(); edge_count(verts, closed)];
+    parameters[edge] = (1..parts).map(|step| step as f64 / parts as f64).collect();
+    SegmentFill::Filled(insert_parameters(verts, closed, parameters))
 }
 
 fn split_bulge(bulge: f64, fraction: f64) -> f64 {

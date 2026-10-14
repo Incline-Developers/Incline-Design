@@ -255,7 +255,10 @@ impl<'a> Graphics<'a> {
             editor.show_points
                 || matches!(
                     editor.active_tool,
-                    crate::ui::state::ActiveTool::DeletePoints | crate::ui::state::ActiveTool::EditVertex | crate::ui::state::ActiveTool::InsertPoint
+                    crate::ui::state::ActiveTool::DeletePoints
+                        | crate::ui::state::ActiveTool::EditVertex
+                        | crate::ui::state::ActiveTool::InsertPoint
+                        | crate::ui::state::ActiveTool::FillSegment
                 ),
             self.geometry_dirty || self.cached_document_revision != document.revision(),
         );

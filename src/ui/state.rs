@@ -1981,6 +1981,8 @@ pub(crate) struct EditorState {
     pub(crate) tool_hover_vertex_px: Option<(f32, f32)>,
     /// Same vertex in world space, so the overlay can draw the shared point marker for it.
     pub(crate) tool_hover_vertex_world: Option<DVec3>,
+    /// The vertices Fill Segment would add to the segment under the cursor.
+    pub(crate) fill_segment_preview: Vec<DVec3>,
     /// Screen position of the first chamfer corner vertex (raw pixels).
     pub(crate) chamfer_gizmo_corner_px: Option<(f32, f32)>,
     /// Screen direction of the gizmo bisector (used when radius=0 so arrow is still visible).
@@ -2990,6 +2992,7 @@ impl EditorState {
         self.chamfer_hover_corner_px = None;
         self.tool_hover_vertex_px = None;
         self.tool_hover_vertex_world = None;
+        self.fill_segment_preview.clear();
         self.chamfer_gizmo_corner_px = None;
         self.chamfer_gizmo_bisector_px = None;
         self.chamfer_gizmo_handle_px = None;
@@ -3325,6 +3328,7 @@ impl EditorState {
             chamfer_hover_corner_px: None,
             tool_hover_vertex_px: None,
             tool_hover_vertex_world: None,
+            fill_segment_preview: Vec::new(),
             chamfer_gizmo_corner_px: None,
             chamfer_gizmo_bisector_px: None,
             chamfer_gizmo_handle_px: None,
@@ -3825,6 +3829,8 @@ pub(crate) enum ActiveTool {
     EditVertex,
     /// Geology's: add a vertex where a click lands on a string's segment.
     InsertPoint,
+    /// Geology's: cut the clicked segment into equal parts with new vertices.
+    FillSegment,
 }
 
 impl ActiveTool {
@@ -3910,6 +3916,7 @@ impl ActiveTool {
                 | Self::FuseIntoPolyline
                 | Self::EditVertex
                 | Self::InsertPoint
+                | Self::FillSegment
         )
     }
 
@@ -4178,6 +4185,8 @@ pub(crate) enum UiCommand {
     OpenNudgePanel,
     /// Raise the vertex Move holds by this many metres; negative lowers it.
     NudgeHeldVertex(f64),
+    /// Fill Segment's spacing in metres, kept with the active project.
+    SetFillSegmentSpacing(f64),
     /// Take the next two clicks as a run of an existing string to copy.
     ArmCopyAlongString,
     /// Take the next click as the end of a string to draw on from.
@@ -4819,6 +4828,7 @@ impl UiCommand {
             | Self::ArmDragVertex
             | Self::OpenNudgePanel
             | Self::NudgeHeldVertex(_)
+            | Self::SetFillSegmentSpacing(_)
             | Self::ArmCopyAlongString
             | Self::ArmCarryOnString
             | Self::ArmRedrawRun

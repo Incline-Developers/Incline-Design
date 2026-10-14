@@ -290,7 +290,7 @@ fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, wor
             workspace == Workspace::DrillAndBlast
         }
         tool if tool.designs_pit() => workspace.has_production_tools(),
-        ActiveTool::InsertPoint => workspace.has_drawing_aids(),
+        ActiveTool::InsertPoint | ActiveTool::FillSegment => workspace.has_drawing_aids(),
         _ => workspace.has_drawing_tools(),
     };
     // A tool one workspace edits with on a section, another may refuse there.
@@ -581,7 +581,7 @@ pub(crate) enum GeologyRow {
 
 /// Geology Design's lower half in menu order; [`geology_design_groups`] cuts
 /// it into submenus and the macOS menu tags rows by index into it.
-pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 35] = [
+pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 36] = [
     GeologyRow::Tool(ActiveTool::MakePoint),
     GeologyRow::Tool(ActiveTool::MakeLine),
     GeologyRow::Tool(ActiveTool::MakePoly),
@@ -607,6 +607,7 @@ pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 35] = [
     GeologyRow::Tool(ActiveTool::ExplodePolyline),
     GeologyRow::Tool(ActiveTool::EditVertex),
     GeologyRow::Tool(ActiveTool::InsertPoint),
+    GeologyRow::Tool(ActiveTool::FillSegment),
     GeologyRow::DragVertex,
     GeologyRow::NudgeRl,
     GeologyRow::Tool(ActiveTool::DeletePoints),
@@ -626,8 +627,8 @@ pub(crate) fn geology_design_groups() -> [(String, std::ops::Range<usize>); 5] {
         (tr!("ws-menubar-geology-draw"), 0..10),
         (tr!("ws-menubar-geology-edit"), 10..20),
         (tr!("ws-menubar-geology-join-split"), 20..23),
-        (tr!("ws-menubar-geology-vertices"), 23..31),
-        (tr!("ws-menubar-geology-surface"), 31..34),
+        (tr!("ws-menubar-geology-vertices"), 23..32),
+        (tr!("ws-menubar-geology-surface"), 32..35),
     ]
 }
 
@@ -652,6 +653,7 @@ impl GeologyRow {
                 ActiveTool::DeletePoints => tr!("toolbars-delete-points"),
                 ActiveTool::EditVertex => tr!("toolbars-edit-vertex"),
                 ActiveTool::InsertPoint => tr!("ws-menubar-geology-insert-point"),
+                ActiveTool::FillSegment => tr!("ws-menubar-geology-fill-segment"),
                 ActiveTool::DrapeToTopology => tr!("common-drape-topology"),
                 _ => tr!("toolbars-strike-dip"),
             },

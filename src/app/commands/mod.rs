@@ -90,8 +90,9 @@ impl<'a> App<'a> {
         // Drags and nudges after an undo or redo start an undo step of
         // their own.
         self.editor.vertex_edit_run = None;
-        // Insert Point's marker sits on the string as it was.
-        if self.editor.active_tool == ActiveTool::InsertPoint {
+        // Insert Point's marker sits on the string as it was, as do Fill
+        // Segment's.
+        if matches!(self.editor.active_tool, ActiveTool::InsertPoint | ActiveTool::FillSegment) {
             self.clear_insert_point_marker();
         }
         self.invalidate_geometry();
@@ -1008,6 +1009,10 @@ impl<'a> App<'a> {
             }
             UiCommand::OpenNudgePanel => {
                 self.open_nudge_panel();
+                Ok(())
+            }
+            UiCommand::SetFillSegmentSpacing(spacing) => {
+                self.set_fill_segment_spacing(spacing);
                 Ok(())
             }
             UiCommand::NudgeHeldVertex(rise) => {

@@ -105,6 +105,13 @@ impl<'a> App<'a> {
             ActiveTool::InsertPoint => self.insert_point_hit(),
             _ => None,
         };
+        if self.editor.active_tool == ActiveTool::FillSegment {
+            let preview = self.fill_segment_hit().map(|(_, added)| added).unwrap_or_default();
+            if self.editor.fill_segment_preview != preview {
+                self.editor.fill_segment_preview = preview;
+                self.invalidate_overlay();
+            }
+        }
         let hover_px = vertex_hit.map(|(_, screen_px, _)| screen_px);
         let hover_world = vertex_hit.map(|(_, _, world)| world);
         // Delete Points only ever acts on point objects, so don't highlight
@@ -125,7 +132,9 @@ impl<'a> App<'a> {
             self.editor.tool_highlight_id = hovered_object;
             self.invalidate_geometry();
             // Insert Point marks the hovered string's vertices on the overlay.
-            if self.editor.active_tool == ActiveTool::InsertPoint || (self.editor.active_tool == ActiveTool::Move && self.editor.active_workspace.has_drawing_aids()) {
+            if matches!(self.editor.active_tool, ActiveTool::InsertPoint | ActiveTool::FillSegment)
+                || (self.editor.active_tool == ActiveTool::Move && self.editor.active_workspace.has_drawing_aids())
+            {
                 self.invalidate_overlay();
             }
         }

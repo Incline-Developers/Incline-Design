@@ -301,6 +301,9 @@ pub(crate) struct ModellingSettings {
     /// above. It differs per deposit, so there is none until one is typed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) cut_depth: Option<f64>,
+    /// The most Fill Segment's new vertices are apart, in metres: the last
+    /// spacing set.
+    pub(crate) fill_spacing: f64,
 }
 
 impl ModellingSettings {
@@ -311,7 +314,7 @@ impl ModellingSettings {
     pub(crate) fn hash_into(&self, hasher: &mut impl std::hash::Hasher) {
         use std::hash::Hash;
         self.surface_method.hash(hasher);
-        for value in [self.steep_distance, self.steep_degrees] {
+        for value in [self.steep_distance, self.steep_degrees, self.fill_spacing] {
             value.to_bits().hash(hasher);
         }
         self.cut_depth.map(f64::to_bits).hash(hasher);
@@ -327,6 +330,9 @@ impl ModellingSettings {
         }
         if self.cut_depth.is_some_and(|depth| !(depth.is_finite() && depth > 0.0)) {
             return Some(tr!("project-cut-depth-positive"));
+        }
+        if !(self.fill_spacing.is_finite() && self.fill_spacing > 0.0) {
+            return Some(tr!("project-fill-spacing-positive"));
         }
         None
     }
@@ -373,6 +379,7 @@ impl Default for ModellingSettings {
             steep_distance: 5.0,
             steep_degrees: 80.0,
             cut_depth: None,
+            fill_spacing: super::rbf::DEFAULT_SPACING,
         }
     }
 }
