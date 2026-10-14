@@ -3843,6 +3843,9 @@ pub(crate) enum ActiveTool {
     SplitAtCrossings,
     /// Geology's: take out the piece of a string between two crossings.
     RemoveBetweenCrossings,
+    /// Geology's sibling of [`Self::ExplodePolyline`]: a point object at each
+    /// vertex of a string, in its place.
+    ExplodePolylineToPoints,
 }
 
 impl ActiveTool {
@@ -3931,6 +3934,7 @@ impl ActiveTool {
                 | Self::FillSegment
                 | Self::SplitAtCrossings
                 | Self::RemoveBetweenCrossings
+                | Self::ExplodePolylineToPoints
         )
     }
 

@@ -353,6 +353,7 @@ impl<'a> App<'a> {
                                 let hover_highlight_active = matches!(
                                     self.editor.active_tool,
                                     ActiveTool::ExplodePolyline
+                                        | ActiveTool::ExplodePolylineToPoints
                                         | ActiveTool::Move
                                         | ActiveTool::DeletePoints
                                         | ActiveTool::EditVertex
@@ -572,7 +573,7 @@ impl<'a> App<'a> {
                                 | ActiveTool::InsertPoint
                                 | ActiveTool::FillSegment
                                 | ActiveTool::RemoveBetweenCrossings
-                        ) || self.editor.active_tool == ActiveTool::ExplodePolyline
+                        ) || matches!(self.editor.active_tool, ActiveTool::ExplodePolyline | ActiveTool::ExplodePolylineToPoints)
                             || self.editor.relimit_awaiting_source_pick
                             || self.editor.relimit_waiting_for_pick
                             || self.editor.relimit_confirming_end
@@ -692,7 +693,7 @@ impl<'a> App<'a> {
                         self.update_relimit_hover_line();
                     }
                     self.update_offset_preview();
-                    if self.editor.active_tool == ActiveTool::ExplodePolyline && hover_pick_due {
+                    if matches!(self.editor.active_tool, ActiveTool::ExplodePolyline | ActiveTool::ExplodePolylineToPoints) && hover_pick_due {
                         self.update_explode_hover();
                     }
                     if (self.editor.triangulation_pick_target.is_some() || self.editor.optimization.start_pick.is_some() || self.editor.drill_pattern_awaiting_shape_pick)
@@ -1034,7 +1035,7 @@ impl<'a> App<'a> {
                 ActiveTool::SetInitiationPoint => self.set_initiation_at_cursor(),
                 ActiveTool::ChargeHoles => self.charge_holes_press(),
                 ActiveTool::PickRotationCentre => self.pick_rotation_centre_at_cursor(),
-                ActiveTool::ExplodePolyline => self.explode_at_cursor(),
+                ActiveTool::ExplodePolyline | ActiveTool::ExplodePolylineToPoints => self.explode_at_cursor(),
                 ActiveTool::FuseIntoPolyline => self.fuse_click(),
                 ActiveTool::SplitAtPoints => self.split_at_points_click(),
                 ActiveTool::SplitAtCrossings => self.split_at_crossings_click(),
@@ -1528,7 +1529,7 @@ impl<'a> App<'a> {
                     self.editor.tool_highlight_id = None;
                     self.editor.active_tool = ActiveTool::None;
                     self.invalidate_geometry();
-                } else if self.editor.active_tool == ActiveTool::ExplodePolyline {
+                } else if matches!(self.editor.active_tool, ActiveTool::ExplodePolyline | ActiveTool::ExplodePolylineToPoints) {
                     self.editor.tool_highlight_id = None;
                     self.editor.active_tool = ActiveTool::None;
                     self.invalidate_geometry();
@@ -1668,7 +1669,7 @@ impl<'a> App<'a> {
             self.editor.gizmo_drag_plane_index = None;
             self.cancel_move_delta();
             self.editor.active_tool = ActiveTool::None;
-        } else if self.editor.active_tool == ActiveTool::ExplodePolyline {
+        } else if matches!(self.editor.active_tool, ActiveTool::ExplodePolyline | ActiveTool::ExplodePolylineToPoints) {
             self.editor.tool_highlight_id = None;
             self.editor.active_tool = ActiveTool::None;
             self.invalidate_geometry();

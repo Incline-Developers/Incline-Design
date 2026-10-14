@@ -481,7 +481,7 @@ fn tool_prompt(editor: &EditorState) -> Option<ViewportMessage> {
         ActiveTool::Bezier if editor.bezier_poly_id.is_none() => ViewportMessage::text(tr!("ui-select-polyline")),
         ActiveTool::Bezier if editor.bezier_selected_verts[0].is_none() => ViewportMessage::text(tr!("ui-click-first-vertex")),
         ActiveTool::Bezier if editor.bezier_selected_verts[1].is_none() => ViewportMessage::text(tr!("ui-click-second-vertex")),
-        ActiveTool::ExplodePolyline => ViewportMessage::text(tr!("ui-select-polyline")),
+        ActiveTool::ExplodePolyline | ActiveTool::ExplodePolylineToPoints => ViewportMessage::text(tr!("ui-select-polyline")),
         ActiveTool::BatterBermOffset if editor.batter_berm_target_id.is_none() => ViewportMessage::text(tr!("ui-select-polyline")),
         ActiveTool::DeletePoints => ViewportMessage::text(tr!("ui-select-point")),
         ActiveTool::EditVertex => ViewportMessage::text(tr!("ui-select-polyline-vertex")),
