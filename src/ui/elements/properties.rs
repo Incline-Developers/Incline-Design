@@ -454,11 +454,11 @@ fn draw_interface_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
             changed |= committed(&MenuFieldBool::new(tr!("properties-panel-chrome"), &mut draft.panel_chrome).show(ui));
             changed |= committed(
                 &MenuFieldF64::new(tr!("preferences-ui-size"), &mut draft.ui_size_percent, 50.0..=200.0)
+                    .help_text(tr!("preferences-ui-size-help"))
                     .suffix("%")
                     .speed(1.0)
                     .max_decimals(0)
-                    .show(ui)
-                    .on_hover_text(tr!("preferences-ui-size-help")),
+                    .show(ui),
             );
             changed |= committed(&MenuFieldBool::new(tr!("properties-world-axis-gizmo"), &mut draft.show_world_axis_gizmo).show(ui));
             changed |= committed(&MenuFieldBool::new(tr!("common-scale-bar"), &mut draft.show_scale_bar).show(ui));
