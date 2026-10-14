@@ -108,18 +108,26 @@ pub(crate) fn draw_blast_overlays(ui: &mut egui::Ui, editor: &mut EditorState, d
     draw_hole_card(ui, editor, analysis.as_deref(), drill_holes, canvas_rect);
 }
 
-/// Contour colours from the round's first line to its last: plasma, yellow
-/// through orange and magenta to violet, so which way the round runs reads
-/// off the colours alone and every stop holds up on the grey ground.
+/// Contour colours from the round's first line to its last: yellow through
+/// orange and pink to lavender, so which way the round runs reads off the
+/// colours alone. Plasma's hues, but kept light to the end - its dark violet
+/// vanished into the dark ground.
 const CONTOUR_RAMP: [egui::Color32; 5] = [
     egui::Color32::from_rgb(0xF0, 0xF9, 0x21),
     egui::Color32::from_rgb(0xFC, 0xA6, 0x36),
-    egui::Color32::from_rgb(0xE1, 0x64, 0x62),
-    egui::Color32::from_rgb(0xB1, 0x2A, 0x90),
-    egui::Color32::from_rgb(0x6A, 0x00, 0xA8),
+    egui::Color32::from_rgb(0xF4, 0x6F, 0x6A),
+    egui::Color32::from_rgb(0xE2, 0x5C, 0xB4),
+    egui::Color32::from_rgb(0xB4, 0x8C, 0xFF),
 ];
-/// Room left along a major line between one label and the next.
-const CONTOUR_LABEL_SPACING_PX: f32 = 280.0;
+/// Widths of a major and a minor line, and of the dark casing laid under a
+/// major so it reads as one line crossing the ties rather than another among
+/// them.
+const CONTOUR_MAJOR_WIDTH: f32 = 3.0;
+const CONTOUR_MINOR_WIDTH: f32 = 1.5;
+const CONTOUR_CASING_WIDTH: f32 = 6.0;
+const CONTOUR_CASING: egui::Color32 = egui::Color32::from_rgba_premultiplied(0x0A, 0x0D, 0x12, 0xC0);
+/// Text on a label filled in its line's colour.
+const CONTOUR_LABEL_TEXT: egui::Color32 = egui::Color32::from_rgb(0x16, 0x18, 0x1C);
 
 fn contour_color(t: f32) -> egui::Color32 {
     let scaled = t.clamp(0.0, 1.0) * (CONTOUR_RAMP.len() - 1) as f32;
@@ -137,8 +145,7 @@ fn draw_contours(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect) {
     let pixels_per_point = ui.ctx().pixels_per_point();
     let painter = ui.painter().with_clip_rect(canvas_rect);
     let latest = editor.blast_contours_px.iter().map(|contour| contour.time_ms).fold(0.0, f64::max).max(1.0);
-    let font = egui::FontId::proportional(11.0);
-    let halo = menu::menu_surface(ui.visuals()).gamma_multiply(0.9);
+    let font = egui::FontId::new(11.5, egui::FontFamily::Name("noto_sans_bold".into()));
     let mut labels: Vec<[egui::Pos2; 4]> = Vec::new();
     let to_pos = |point: (f32, f32)| egui::pos2(point.0 / pixels_per_point, point.1 / pixels_per_point);
 
@@ -148,9 +155,9 @@ fn draw_contours(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect) {
     for contour in order {
         let color = contour_color((contour.time_ms / latest) as f32);
         let stroke = if contour.major {
-            egui::Stroke::new(2.2, color)
+            egui::Stroke::new(CONTOUR_MAJOR_WIDTH, color)
         } else {
-            egui::Stroke::new(1.0, color.gamma_multiply(0.6))
+            egui::Stroke::new(CONTOUR_MINOR_WIDTH, color.gamma_multiply(0.85))
         };
         // Clipped points split a contour into separately drawn pieces.
         let closing = contour.closed.then(|| contour.points.first().copied().flatten()).flatten();
@@ -162,62 +169,45 @@ fn draw_contours(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect) {
             }
         }
         for piece in pieces.iter().filter(|piece| piece.len() >= 2) {
+            if contour.major {
+                painter.add(egui::Shape::line(piece.clone(), egui::Stroke::new(CONTOUR_CASING_WIDTH, CONTOUR_CASING)));
+            }
             painter.add(egui::Shape::line(piece.clone(), stroke));
         }
         if !contour.major {
             continue;
         }
         let text = format!("{:.0}", contour.time_ms);
-        for piece in pieces.iter().filter(|piece| piece.len() >= 2) {
-            let length: f32 = piece.windows(2).map(|pair| pair[0].distance(pair[1])).sum();
-            let count = (length / CONTOUR_LABEL_SPACING_PX).floor() as usize;
-            for slot in 0..count.max(usize::from(length > CONTOUR_LABEL_SPACING_PX * 0.4)) {
-                let at = if count == 0 { length * 0.5 } else { (slot as f32 + 0.5) * length / count as f32 };
-                let Some((anchor, direction)) = point_along(piece, at) else {
-                    continue;
-                };
-                // Turned to the line, but never upside down.
-                let mut angle = direction.y.atan2(direction.x);
-                if angle > std::f32::consts::FRAC_PI_2 {
-                    angle -= std::f32::consts::PI;
-                } else if angle < -std::f32::consts::FRAC_PI_2 {
-                    angle += std::f32::consts::PI;
-                }
-                let galley = painter.layout_no_wrap(text.clone(), font.clone(), color);
-                let half = galley.size() * 0.5 + egui::vec2(4.0, 1.0);
-                let rotation = egui::emath::Rot2::from_angle(angle);
-                let corners = [
-                    egui::vec2(-half.x, -half.y),
-                    egui::vec2(half.x, -half.y),
-                    egui::vec2(half.x, half.y),
-                    egui::vec2(-half.x, half.y),
-                ]
-                .map(|corner| anchor + rotation * corner);
-                let bounds = egui::Rect::from_points(&corners);
-                if !canvas_rect.contains_rect(bounds) || labels.iter().any(|other| egui::Rect::from_points(other).expand(6.0).intersects(bounds)) {
-                    continue;
-                }
-                painter.add(egui::Shape::convex_polygon(corners.to_vec(), halo, egui::Stroke::new(1.0, color.gamma_multiply(0.6))));
-                let origin = anchor - rotation * (galley.size() * 0.5);
-                painter.add(egui::epaint::TextShape::new(origin, galley, color).with_angle(angle));
-                labels.push(corners);
+        for (anchor, ahead) in contour.labels.iter().copied() {
+            let anchor = to_pos(anchor);
+            let direction = (to_pos(ahead) - anchor).normalized();
+            // Turned to the line, but never upside down.
+            let mut angle = direction.y.atan2(direction.x);
+            if angle > std::f32::consts::FRAC_PI_2 {
+                angle -= std::f32::consts::PI;
+            } else if angle < -std::f32::consts::FRAC_PI_2 {
+                angle += std::f32::consts::PI;
             }
+            let galley = painter.layout_no_wrap(text.clone(), font.clone(), CONTOUR_LABEL_TEXT);
+            let half = galley.size() * 0.5 + egui::vec2(5.0, 1.5);
+            let rotation = egui::emath::Rot2::from_angle(angle);
+            let corners = [
+                egui::vec2(-half.x, -half.y),
+                egui::vec2(half.x, -half.y),
+                egui::vec2(half.x, half.y),
+                egui::vec2(-half.x, half.y),
+            ]
+            .map(|corner| anchor + rotation * corner);
+            let bounds = egui::Rect::from_points(&corners);
+            if !canvas_rect.contains_rect(bounds) || labels.iter().any(|other| egui::Rect::from_points(other).expand(6.0).intersects(bounds)) {
+                continue;
+            }
+            painter.add(egui::Shape::convex_polygon(corners.to_vec(), color, egui::Stroke::new(1.5, CONTOUR_CASING)));
+            let origin = anchor - rotation * (galley.size() * 0.5);
+            painter.add(egui::epaint::TextShape::new(origin, galley, CONTOUR_LABEL_TEXT).with_angle(angle));
+            labels.push(corners);
         }
     }
-}
-
-/// The point `distance` along a polyline, and the direction it runs there.
-fn point_along(points: &[egui::Pos2], distance: f32) -> Option<(egui::Pos2, egui::Vec2)> {
-    let mut walked = 0.0;
-    for pair in points.windows(2) {
-        let step = pair[0].distance(pair[1]);
-        if step > 0.0 && walked + step >= distance {
-            let t = (distance - walked) / step;
-            return Some((pair[0].lerp(pair[1], t), (pair[1] - pair[0]) / step));
-        }
-        walked += step;
-    }
-    None
 }
 
 /// The relief heatmap: each hole's relief laid over the triangulated
