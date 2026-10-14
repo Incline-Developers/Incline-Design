@@ -1,0 +1,9 @@
+{
+  "title": "Pit Optimization in Incline Design",
+  "description": "A hands-on tutorial on the McLaughlin gold deposit",
+  "version": "v0.3.3",
+  "order": 1,
+  "downloads": [
+    { "file": "McLaughlin tutorial.omf", "label": "McLaughlin tutorial project" }
+  ]
+}

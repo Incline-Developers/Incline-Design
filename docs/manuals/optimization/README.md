@@ -50,9 +50,7 @@ You will take a gold block model from nothing to a set of pushbacks you can desi
 **What you need**
 
 - Incline Design v0.3.3 or later, desktop (Windows, macOS, Linux) or the web version.
-- The tutorial download, `Incline-Optimization-Tutorial-v1.0.zip`, which holds:
-  - `McLaughlin tutorial.omf`: the block model and a **Starting scenario** with its constants filled in,
-  - this manual as a PDF.
+- The tutorial project, `McLaughlin tutorial.omf`: the block model and a **Starting scenario** with its constants filled in.
 - About 4 GB of free memory. The model has 2.8 million blocks.
 
 Every scenario you build is saved **inside the project file**. Save the project (Ctrl+S) to keep your work.
