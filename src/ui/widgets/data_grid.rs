@@ -34,7 +34,7 @@ const SCROLLBAR_ALLOWANCE: f32 = 14.0;
 const MAX_BODY_HEIGHT: f32 = 280.0;
 /// The least a grid asked to fill a height leaves for its rows.
 const MIN_FILLED_BODY_HEIGHT: f32 = 60.0;
-const BUTTON_SIDE: f32 = 26.0;
+const BUTTON_SIDE: f32 = crate::ui::widgets::toolbar::TOOL_CELL_SIZE;
 /// Room at the left of every row of a grid with groups, where the bar that
 /// marks a row as belonging to its group is drawn.
 const GROUP_GUTTER: f32 = 14.0;

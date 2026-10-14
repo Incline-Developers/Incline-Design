@@ -38,7 +38,7 @@ const WASTE_BARS: egui::Color32 = egui::Color32::from_rgb(150, 152, 160);
 /// Where the grade line sits, as fractions of the chart's height: the middle,
 /// clear of the bars' tops and of the cash flow's ends.
 const GRADE_BAND: (f32, f32) = (0.35, 0.65);
-const ICON_SIDE: f32 = 26.0;
+const ICON_SIDE: f32 = crate::ui::widgets::toolbar::TOOL_CELL_SIZE;
 
 pub(crate) fn draw_results_window(ui: &mut egui::Ui, state: &mut OptimizationState, commands: &mut Vec<UiCommand>) {
     let Some(view) = state.results_view.as_ref() else {

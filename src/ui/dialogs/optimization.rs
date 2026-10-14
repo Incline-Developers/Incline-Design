@@ -41,7 +41,7 @@ const MENU_ITEM_HEIGHT: f32 = 32.0;
 const MENU_ICON: f32 = 22.0;
 /// Wide enough for the long names sensitivity studies get.
 const LIST_WIDTH: f32 = 806.0;
-const ICON_SIDE: f32 = 26.0;
+const ICON_SIDE: f32 = crate::ui::widgets::toolbar::TOOL_CELL_SIZE;
 
 pub(crate) fn draw_optimization_dialogs(ui: &mut egui::Ui, editor: &mut EditorState, block_models: &[OpenBlockModel], project: &UiProjectView, commands: &mut Vec<UiCommand>) {
     // The progress rings move while a run goes, whichever window is up.

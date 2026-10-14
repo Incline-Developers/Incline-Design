@@ -75,7 +75,7 @@ pub(crate) const GROUP_CORNER_RADIUS: u8 = 3;
 /// Visible thickness of every toolbar and side of each button highlight.
 pub(crate) const TOOL_CELL_SIZE: f32 = 30.0;
 /// Side of every toolbar icon.
-pub(crate) const TOOL_ICON_SIZE: f32 = 19.0;
+pub(crate) const TOOL_ICON_SIZE: f32 = 30.0;
 
 /// Corner rounding on the colour and fill swatches in the viewport bar.
 const SWATCH_CORNER_RADIUS: f32 = GROUP_CORNER_RADIUS as f32;

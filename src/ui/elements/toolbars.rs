@@ -72,7 +72,7 @@ fn left_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, projec
     };
     vec![
         LeftTool {
-            icon: egui::Image::new(unthemed_icon!("layer.svg")),
+            icon: egui::Image::new(unthemed_icon!("layer_tool.svg")),
             tooltip: tr!("toolbars-new-layer"),
             action: LeftToolAction::NewLayer,
             enabled: project_active,
@@ -137,7 +137,7 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, edi
             hint: None,
         },
         LeftTool {
-            icon: egui::Image::new(unthemed_icon!("tie_holes.svg")),
+            icon: egui::Image::new(unthemed_icon!("tie_holes_tool.svg")),
             tooltip: tr!("common-tie-holes"),
             action: LeftToolAction::Tool(ActiveTool::TieHoles),
             enabled: editing_enabled && has_active_dataset,
@@ -152,7 +152,7 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, edi
         },
         LeftTool {
             // Loading follows tying: the round is laid out, timed, then filled.
-            icon: egui::Image::new(unthemed_icon!("charge_holes.svg")),
+            icon: egui::Image::new(unthemed_icon!("charge_holes_tool.svg")),
             tooltip: tr!("common-charge-holes"),
             action: LeftToolAction::Tool(ActiveTool::ChargeHoles),
             enabled: editing_enabled && has_active_dataset,
@@ -342,7 +342,7 @@ fn draw_measure_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mu
     ui.add_enabled_ui(!editor.fly_mode_enabled, |ui| {
         tool_button(
             ui,
-            egui::Image::new(themed_icon!(ui, "measure_distance.svg")),
+            egui::Image::new(unthemed_icon!("measure_distance.svg")),
             tr!("toolbars-measure-distance").as_str(),
             editor,
             commands,
@@ -352,7 +352,7 @@ fn draw_measure_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mu
 
         tool_button(
             ui,
-            egui::Image::new(themed_icon!(ui, "measure_batter_angle.svg")),
+            egui::Image::new(unthemed_icon!("measure_batter_angle.svg")),
             tr!("toolbars-strike-dip").as_str(),
             editor,
             commands,

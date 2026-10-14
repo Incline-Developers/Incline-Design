@@ -167,7 +167,7 @@ fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
     let save = ui.add_enabled(
         has_unsaved,
         ToolbarButton::new(
-            egui::Image::new(themed_icon!(ui, "save_project.svg")),
+            egui::Image::new(themed_icon!(ui, "save_project_tool.svg")),
             format!("{} ({PRIMARY_MODIFIER}S)", tr!("menu-file-save-project")),
         )
         .id_salt("save_project")
