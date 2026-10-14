@@ -1929,7 +1929,10 @@ impl<'a> Graphics<'a> {
 
     pub(crate) fn input(&mut self, event: &WindowEvent) -> bool {
         match event {
-            WindowEvent::MouseWheel { delta, .. } => {
+            WindowEvent::MouseWheel { delta, phase, .. } => {
+                if self.scroll_glide.is_glide(*phase) {
+                    return true;
+                }
                 // Zoom is applied and cleared within a single update tick, so
                 // `needs_continuous_redraw` only briefly reflects it and the
                 // low-quality volume path can be missed for a scroll burst.

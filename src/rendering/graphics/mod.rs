@@ -419,6 +419,7 @@ pub(crate) struct Graphics<'a> {
     pub(super) projection: Projection,
     pub(super) mouse_pressed: Option<MouseButton>,
     touch_gesture: touch::TouchGesture,
+    pub(super) scroll_glide: ScrollGlide,
     /// Ctrl is held, so a trackpad's two-finger scroll zooms rather than pans.
     /// Set by the app before each event, as the renderer sees no modifiers.
     pub(super) scroll_zooms: bool,
@@ -726,6 +727,42 @@ pub(crate) fn trackpad_drag(delta: &MouseScrollDelta) -> Option<(f64, f64)> {
     match delta {
         MouseScrollDelta::PixelDelta(position) if cfg!(not(target_arch = "wasm32")) => Some((position.x, position.y)),
         _ => None,
+    }
+}
+
+/// The glide macOS adds once the fingers leave the trackpad, which keeps a
+/// pan or zoom coasting to a stop. The viewport stops with the fingers, as a
+/// middle-drag does, so those scrolls are dropped.
+///
+/// winit reports the glide's start with the same `Started` phase as the
+/// fingers' own, but it always follows their `Ended` at once, which a new
+/// touch cannot. Platforms without a glide never send that pairing.
+#[derive(Default)]
+pub(crate) struct ScrollGlide {
+    gliding: bool,
+    lifted_at: Option<Instant>,
+}
+
+impl ScrollGlide {
+    const FOLLOWS_LIFT: std::time::Duration = std::time::Duration::from_millis(50);
+
+    /// Whether a scroll with this phase belongs to a glide.
+    pub(crate) fn is_glide(&mut self, phase: winit::event::TouchPhase) -> bool {
+        use winit::event::TouchPhase;
+        match phase {
+            TouchPhase::Started => {
+                self.gliding = self.lifted_at.take().is_some_and(|lifted| lifted.elapsed() < Self::FOLLOWS_LIFT);
+                self.gliding
+            }
+            TouchPhase::Moved => self.gliding,
+            TouchPhase::Ended | TouchPhase::Cancelled => {
+                let gliding = std::mem::take(&mut self.gliding);
+                if !gliding {
+                    self.lifted_at = Some(Instant::now());
+                }
+                gliding
+            }
+        }
     }
 }
 
