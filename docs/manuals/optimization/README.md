@@ -2,7 +2,7 @@
 
 *A hands-on tutorial on the McLaughlin gold deposit*
 
-Written for Incline Design **vX.Y**.
+Written for Incline Design **v0.3.3**.
 
 > **Data source.** The block model in this tutorial is the McLaughlin instance from
 > [MineLib](https://mansci-web.uai.cl/minelib/), a public library of open pit mining problems.
@@ -12,6 +12,12 @@ Written for Incline Design **vX.Y**.
 > Espinoza, D., Goycoolea, M., Moreno, E., Newman, A. (2013). *MineLib: a library of open pit mining problems.*
 > Annals of Operations Research 206(1), 93–114. https://doi.org/10.1007/s10479-012-1258-3
 
+> **Solver.** Pit shells are solved with Incline's Rust port of [MineFlow](https://github.com/MineFlowCSM/MineFlow),
+> an open-source ultimate pit solver by Matthew Deutsch (Colorado School of Mines), MIT licence. Please cite:
+>
+> Deutsch, M., Dağdelen, K., Johnson, T. (2022). *An Open-Source Program for Efficiently Computing Ultimate Pit Limits: MineFlow.*
+> Natural Resources Research. https://doi.org/10.1007/s11053-022-10035-w
+
 ## Contents
 
 0. [About this tutorial](#0-about-this-tutorial)
@@ -19,7 +25,7 @@ Written for Incline Design **vX.Y**.
 2. [Open the tutorial project](#2-open-the-tutorial-project)
 3. [The scenarios list](#3-the-scenarios-list)
 4. [Set up the starting scenario](#4-set-up-the-starting-scenario)
-5. [Run 1: a 60-shell sensitivity](#5-run-1-a-60-shell-sensitivity)
+5. [Run 1: a 61-shell sensitivity](#5-run-1-a-61-shell-sensitivity)
 6. [Choose the pushbacks](#6-choose-the-pushbacks)
 7. [Directional shells: radial](#7-directional-shells-radial)
 8. [Directional shells: a straight front](#8-directional-shells-a-straight-front)
@@ -35,7 +41,7 @@ Written for Incline Design **vX.Y**.
 You will take a gold block model from nothing to a set of pushbacks you can design from:
 
 1. Fill in a scenario with the deposit's costs, recoveries, price and slopes.
-2. Run a 60-shell price sensitivity and read it in the Results window.
+2. Run a 61-shell price sensitivity and read it in the Results window.
 3. Pick the shells that make good pushbacks, and turn them into a new scenario in one click.
 4. Build directional shells: rings growing from a starting point, and a straight front.
 5. Write the shells into the block model and look at the pushbacks in plan and section.
@@ -43,8 +49,8 @@ You will take a gold block model from nothing to a set of pushbacks you can desi
 
 **What you need**
 
-- Incline Design vX.Y or later, desktop (Windows, macOS, Linux) or the web version.
-- The tutorial download, `Incline-Optimization-Tutorial-vX.Y.zip`, which holds:
+- Incline Design v0.3.3 or later, desktop (Windows, macOS, Linux) or the web version.
+- The tutorial download, `Incline-Optimization-Tutorial-v1.0.zip`, which holds:
   - `McLaughlin tutorial.omf`: the block model and a **Starting scenario** with its constants filled in,
   - this manual as a PDF.
 - About 4 GB of free memory. The model has 2.8 million blocks.
@@ -67,7 +73,7 @@ This is a **geometric problem with undiscounted money**: *which* blocks, not *wh
 
 ![The ultimate pit problem](images/c01-ultimate-pit.svg)
 
-*Figure C1. A section through a block model. The red line is the most valuable pit with 45° walls: it takes the ore lens and the waste above it, but leaves the deep +14 and +10 blocks, which would not pay for the waste on top of them.*
+*Figure C1. A section through a block model. The red line is the most valuable pit with 45° walls: it takes the ore lens and the waste above it, but leaves the dashed blocks behind. Each would pay for itself, but not for the waste the walls need to reach it. Taking the deep +14 would make the pit worth 31 less, the +10 worth 29 less, and the +4 and +5 below the floor, which need a wider pit with 12 more waste blocks, worth 3 less.*
 
 ### 1.2 Block value
 
@@ -91,15 +97,16 @@ For each block:
 
 These are McLaughlin's numbers from the Starting scenario:
 - price 810 per oz, selling cost (royalty) 64.2 per oz,
-- mining 1.45 per t, waste haulage 1.21 per t, ore haulage 2.10 per t,
-- Mill: 20.9 per t, recovery 84 %, threshold 0.12 g/t, accepts grades from 0.75 g/t,
+- mining 1.45 per t (hard rock), waste haulage 1.21 per t, rehabilitation 0.34 per t of waste, ore haulage 2.10 per t,
+- Mill: 20.9 per t, recovery 84 %, threshold 0.12 g/t, accepts grades from 1.5 g/t,
+- Heap Leach accepts grades from 0.3 to 1.5 g/t, so neither block below is eligible for it,
 - G&A 5.32 per t of ore.
 
 One block weighs 7.62 × 7.62 × 6.096 m × 2.7 t/m³ = **955.7 t**. 1 g/t over a tonne is 0.03215 oz.
 
 | | Block A, 3.0 g/t | Block B, 1.5 g/t |
 |---|---:|---:|
-| As waste: 955.7 × (1.45 + 1.21) | −2,542 | −2,542 |
+| As waste: 955.7 × (1.45 + 1.21 + 0.34) | −2,867 | −2,867 |
 | Recovered gold: 955.7 × (grade − 0.12) × 0.03215 × 0.84 | 74.33 oz | 35.62 oz |
 | Revenue: recovered × (810 − 64.2) | 55,438 | 26,564 |
 | Costs: 955.7 × (1.45 + 20.9 + 5.32 + 2.10) | −28,451 | −28,451 |
@@ -107,7 +114,7 @@ One block weighs 7.62 × 7.62 × 6.096 m × 2.7 t/m³ = **955.7 t**. 1 g/t over 
 | **As Mill ore** | **+26,985** | **−1,888** |
 | Destination | Mill | Mill |
 
-Block B loses money even as ore. But it loses *less* than it would as waste (−1,888 against −2,542). So once the pit has to dig it up anyway, it goes to the mill. This is why the optimizer works with **cash flow** rather than "ore or not".
+Block B loses money even as ore. But it loses *less* than it would as waste (−1,888 against −2,867). So once the pit has to dig it up anyway, it goes to the mill. This is why the optimizer works with **cash flow** rather than "ore or not".
 
 ![Block value, step by step](images/c02-block-value.svg)
 
@@ -139,7 +146,7 @@ Because value only grows as the price rises, the pits **nest**: each one sits in
 
 ### 1.5 From shells to pushbacks
 
-A schedule doesn't mine one shell after another 60 times. It mines a few **pushbacks**, each a usable slice of the pit. Choosing them is about reading the shell-by-shell numbers:
+A schedule doesn't mine dozens of shells one after another. It mines a few **pushbacks**, each a usable slice of the pit. Choosing them is about reading the shell-by-shell numbers:
 
 - **Look for jumps.** Where tonnes leap between two shells, a small price change opens a large area. A pushback boundary there separates two distinct mining zones.
 - **Watch cash flow at base price.** All shells are valued at RAF 1 in the report. The total cash flow usually rises, flattens and then falls; past the peak, extra pit loses money at today's price.
@@ -147,7 +154,7 @@ A schedule doesn't mine one shell after another 60 times. It mines a few **pushb
 
 ![Reading the pit-by-pit chart](images/c05-pit-by-pit.svg)
 
-*Figure C5. A 60-shell sensitivity on the same example (not McLaughlin). Tonnes grow steadily until a new zone opens; the base-price cash flow peaks well before the largest shell. The outlined columns are chosen shells, and the coloured bars below are the pushbacks between them.*
+*Figure C5. A 61-shell sensitivity on the same example (not McLaughlin). Tonnes grow steadily until a new zone opens; the base-price cash flow peaks well before the largest shell. The outlined columns are chosen shells, and the coloured bars below are the pushbacks between them.*
 
 ### 1.6 Radial and directional shells
 
@@ -164,7 +171,7 @@ Ordinary nested shells grow wherever the money is, often in several places at on
 - it follows the shape of the ore,
 - its revenue factor rises too.
 
-So the increments come out **rounded**, and they reach past the straight line where the walls need room. A West run gives pit-shaped increments that move west step by step, not flat strips. Figure C6 shows the ore limits of both fronts; the shells you get follow them, rounded by their walls.
+So the increments come out **rounded**, and they reach past the straight line where the walls need room. A West run gives pit-shaped increments that move west step by step, not flat strips.
 
 The shells are named with their share, for example `PS-W_RAF 0.50 DIR 60%`.
 
@@ -187,7 +194,7 @@ Cells with no block at all are treated as air too.
 
 ### 1.8 The solver
 
-Incline solves each shell **exactly**, with the pseudoflow algorithm (the method behind modern commercial optimizers; Incline uses its own open-source `mineflow` library). The result is not an approximation: it is the most valuable pit for those values and slopes. For many shells, Incline solves the largest one first and then only the bands between shells, so 60 shells take seconds, not minutes.
+Incline solves each shell **exactly**, with the pseudoflow algorithm (the method behind modern commercial optimizers). The solver is `mineflow`, Incline's Rust port of the open-source **MineFlow** library by Matthew Deutsch, Kadri Dağdelen and Thys Johnson (Colorado School of Mines); see [12.4](#124-data-and-citation). The result is not an approximation: it is the most valuable pit for those values and slopes. For many shells, Incline solves the largest one first and then only the bands between shells, so 61 shells take seconds, not minutes.
 
 ### 1.9 What optimization does not do
 
@@ -205,8 +212,9 @@ Incline solves each shell **exactly**, with the pseudoflow algorithm (the method
 ## 2. Open the tutorial project
 
 1. Start Incline and open `McLaughlin tutorial.omf` (**File → Open**).
-2. Switch to the **Optimization** workspace (the workspace tabs at the top).
-3. In the explorer, find the block model `mclaughlin_bm`. Double-click it to load it if it's greyed out.
+2. Make sure you are on the **Production** workspace (the workspace tabs at the top).
+3. On the top menu, select **Block Model → Pit Optimization...**
+4. In the explorer, find the block model `mclaughlin_bm`. Double-click it to load it if it's greyed out.
 
 The block model has four fields:
 
@@ -215,15 +223,11 @@ The block model has four fields:
 | `au` | number | gold grade, g/t |
 | `density` | number | t/m³ |
 | `rocktype` | category | `air` above and around the deposit, and the rock |
-| `hardness` | category | not used in this tutorial |
+| `hardness` | category | `hard` or `soft`; used here to set different mining costs |
 
-4. Colour the model by `au`: choose the field in the viewport's variable picker (*Choose the active block model variable*). The legend appears in the viewport.
+5. Colour the model by `au`: choose the field in the viewport's variable picker (*Choose the active block model variable*). The legend appears in the viewport. Drag its minimum to the right to hide the low-grade blocks and see the ore.
 
 ![The McLaughlin block model coloured by gold](images/01-block-model.png)
-
-> **Figure 1 - to capture (screenshot).** The Optimization workspace with `mclaughlin_bm` coloured by `au`,
-> in an oblique 3D view from the south-west, with air hidden. The explorer is on the left with the block model selected;
-> the `au` legend is visible. Whole window.
 
 ---
 
@@ -231,13 +235,12 @@ The block model has four fields:
 
 A **scenario** is everything you type before a run: inputs, costs, prices, slopes and outputs. A project can hold any number of them.
 
-Open the list with the **Scenarios** button in the left tool column, or **Optimization → Scenarios** in the menu bar.
+To open the list, select **Block Model → Pit Optimization...** on the top menu.
 
 ![The scenarios list](images/02-scenarios-list.png)
 
-> **Figure 2 - to capture (screenshot).** The *Optimization scenarios* window with the Starting scenario
-> and two more scenarios in it, one up to date and one changed since its run. Crop to the window. Number the parts
-> with callouts: 1 name, 2 edit, 3 duplicate, 4 delete, 5 state, 6 results, 7 run, 8 import, 9 export, 10 Add scenario.
+> **An example list.** The picture shows a list with several scenarios. The tutorial project starts with only one,
+> *McLaughlin Starting scenario*.
 
 Each row, left to right:
 
@@ -274,12 +277,10 @@ Select **McLaughlin Starting scenario** and click **Edit**. The editor has one s
 | Density field | `density` |
 | Main quality field | `au` |
 | Rock type field | `rocktype` |
-| Exclude air blocks | ticked |
+| Exclude air blocks | on |
 | Air exclusion | **Use rock type value**: `air` |
 
 ![Inputs](images/03-inputs.png)
-
-> **Figure 3 - to capture (screenshot).** The scenario editor on **Inputs**, filled as in the table. Crop to the editor window.
 
 ### 4.2 Constants
 
@@ -311,29 +312,21 @@ A constant is a **Number**, **Text** or **Yes/No**. A blank or duplicate name is
 
 ![Adding a group](images/04a-constants-add-group.png)
 
-> **Figure 4a - to capture (screenshot).** The editor on **Constants**, with the *Group name* prompt open after
-> clicking **Add group**, `Other` typed in. Crop to the editor window.
-
 ![Constants](images/04-constants.png)
-
-> **Figure 4 - to capture (screenshot).** The editor on **Constants** when finished: the Mining, Process and Other groups
-> expanded, the two new constants filled in under Other. Crop to the editor window.
 
 ### 4.3 Mining costs
 
 | Field | Set to |
 |---|---|
 | Default mining cost | 1.45 |
-| Rehabilitation costs | Value or constant: 0 |
+| Use different costs based on BM field | `hardness`: `soft` 1.17, `hard` 1.45 |
+| Rehabilitation costs | Value or constant: 0.34 |
 | Waste haulage costs | Value or constant: constant *Waste haulage costs* |
 | Ore haulage costs | Value or constant: constant *Base ore haulage costs* |
 
-*Use different costs based on BM field* lets you set the mining cost by the values of a field, for example by rock type. Each haulage and rehabilitation cost can also come from a block model field instead of one value. Costs are plain numbers in any currency; use the same currency everywhere.
+*Use different costs based on BM field* sets the mining cost by the values of a field, here by rock hardness; a value without a row uses the default. Each haulage and rehabilitation cost can also come from a block model field instead of one value. Costs are plain numbers in any currency; use the same currency everywhere.
 
 ![Mining costs](images/05-mining-costs.png)
-
-> **Figure 5 - to capture (screenshot).** The editor on **Mining costs**, filled as in the table,
-> with the constant chips visible on the two haulage fields. Crop to the editor window.
 
 ### 4.4 Processing costs
 
@@ -341,8 +334,8 @@ Two methods. Add the second with **Add** in the methods grid.
 
 | Name | Rock type | Minimum grade | Maximum grade | Threshold | Processing cost |
 |---|---|---:|---:|---:|---|
-| Mill | Any rock type | 0.75 | 1,000,000 | 0.12 | constant *Mill processing costs* |
-| Heap Leach | Any rock type | 0.2 | 0.75 | 0 | constant *Heap leach processing costs* |
+| Heap Leach | Any rock type | 0.3 | 1.5 | 0 | constant *Heap leach processing costs* |
+| Mill | Any rock type | 1.5 | 1,000,000 | 0.12 | constant *Mill processing costs* |
 
 Select a method to edit its **elements** in the grid below:
 
@@ -353,14 +346,11 @@ Select a method to edit its **elements** in the grid below:
 
 Under **Other costs**:
 - **Haulage cost adjustment factor**: 1.0 for Mill and 1.05 for Heap Leach (the leach pad is farther away).
-- **G&A costs**: constant *G&A costs*, with **Same for all** ticked.
+- **G&A costs**: constant *G&A costs*, with **Same for all** on.
 
 The grade windows don't overlap, so every block has at most one ore method. If two methods take the same material, Incline warns and sends each block where it pays better.
 
 ![Processing costs](images/06-processing-costs.png)
-
-> **Figure 6 - to capture (screenshot).** The editor on **Processing costs** with **Mill** selected,
-> showing the methods grid, Mill's elements grid and Other costs. Crop to the editor window.
 
 ### 4.5 Revenues
 
@@ -371,8 +361,6 @@ The grade windows don't overlap, so every block has at most one ore method. If t
 The **grade unit** is how the field is stored. The **sales unit** is what the price, selling cost and element costs are per. Incline converts between them: 1 g/t over one tonne is 0.03215 oz.
 
 ![Revenues](images/07-revenues.png)
-
-> **Figure 7 - to capture (screenshot).** The editor on **Revenues**. Crop to the editor window.
 
 ### 4.6 Constraints
 
@@ -388,48 +376,41 @@ Each row's angle applies from its bearing up to the next row's bearing, so: 48°
 
 ![Constraints](images/08-constraints.png)
 
-> **Figure 8 - to capture (screenshot).** The editor on **Constraints** with the rosette table and diagram. Crop to the editor window.
-
 ### 4.7 Outputs
 
 For the first run:
 
 | Field | Set to |
 |---|---|
-| Run mode | **Multiple shells using RAFs** |
-| Revenue factors | **From, to and step** |
+| Shells | **Multiple shells using RAFs** |
+| Factors from | **From, to and step** |
 | Revenue factor from / to | 0.2 / 1.7 |
-| Step / Number of shells | 0.025 / 60 (each updates the other) |
+| Step / Number of shells | 0.025 / 61 (each updates the other) |
 | Use directional shells | off |
-| Create shells: Solid / Surface | both off: we only want the numbers for now |
-| Unique name prefix | `PS` |
+| Create shell solids / Create shell surfaces | both off: we only want the numbers for now |
 | Write shell value into BM | off |
 | Create reports | off |
 
-Click **Save scenario**, then rename the scenario in the list to **McLaughlin 0.2 - 1.7 - 60 shells**.
+Both ends of the range get a shell, so 0.2 to 1.7 in steps of 0.025 makes 61 shells. If you type the number of shells instead, the step is rounded to three decimals and the number is corrected to what that step makes when you leave the box.
+
+Click **Save scenario** and close the editor.
 
 ![Outputs](images/09-outputs.png)
 
-> **Figure 9 - to capture (screenshot).** The editor on **Outputs**, filled as in the table. Crop to the editor window.
-
 ---
 
-## 5. Run 1: a 60-shell sensitivity
+## 5. Run 1: a 61-shell sensitivity
 
-1. In the scenarios list, click **Run** on *McLaughlin 0.2 - 1.7 - 60 shells*.
-2. The ring fills as it works. The console reports when it finishes, for example *Scenario … finished: 61 shell(s) in 2.2 s*. **[Check: shell count and time on your machine.]**
-3. Click the scenario's **Results** button.
+1. In the scenarios list, rename *McLaughlin Starting scenario* to **McLaughlin 0.2 - 1.7 - 61 shells**.
+2. Click its **Run** button.
+3. The ring fills as it works. The console reports when it finishes: *Scenario … finished: 61 shell(s) in 2.2 s* on our machine.
+4. Click the scenario's **Results** button.
 
 ![A run in progress](images/10-run-progress.png)
-
-> **Figure 10 - to capture (screenshot).** The scenarios list while the 60-shell scenario runs, with the progress ring half full. Crop to the list.
 
 ### 5.1 The Results window
 
 ![Results window](images/11-results-window.png)
-
-> **Figure 11 - to capture (screenshot).** The Results window for the 60-shell scenario: **Cumulative pit**, **All destinations**.
-> Show the whole chart and the first ~10 table rows. Hover the RAF 1.00 column so its tooltip shows. About 1600 px wide.
 
 - **Cumulative pit / Incremental pushback**:
   - *Cumulative* shows each shell's whole pit.
@@ -445,32 +426,25 @@ Click **Save scenario**, then rename the scenario in the list to **McLaughlin 0.
 
 **Every shell is valued at the base price (RAF 1).** The revenue factor only decides each shell's *shape*. The numbers always tell you what that pit is worth at today's price.
 
-**[Fill in: tonnes, ore tonnes and cash flow of the RAF 1.00 shell, and the RAF where cash flow peaks.]**
+You should see the RAF 1.00 shell at about **125.1 Mt**: 79.0 Mt of ore and 46.1 Mt of waste, with an undiscounted cash flow of about **1,341 million**. The cash flow peaks exactly at RAF 1.00. That is no coincidence: the RAF 1 pit is by definition the most valuable pit at the base price. Smaller shells leave money in the ground, and larger shells add material that does not pay for itself at today's price; by RAF 1.70 the cash flow has fallen to about 1,244 million.
 
 ---
 
 ## 6. Choose the pushbacks
 
-Sixty shells are too many to design. You now pick the handful that make good pushbacks.
+Sixty-one shells are too many to design. You now pick the handful that make good pushbacks.
 
 1. In the Results window, click the **funnel** button (*Show chosen shells only*). A bar appears: *Click shells in the chart to choose them*.
 2. Click the columns of the shells you want. Click a chosen one again to take it out. In this tutorial choose:
-   **0.35, 0.55, 0.70, 0.975, 1.30, 1.425**
+   **0.325, 0.425, 0.575, 0.70, 0.85, 1.00**
 3. Click **Apply**. The chart and table now show only those shells.
    - In *Incremental pushback*, each row is now measured from the **previous chosen shell**: these are your pushbacks.
 
 ![Choosing shells](images/12-shell-filter-choosing.png)
 
-> **Figure 12 - to capture (screenshot).** The Results window while choosing: the bar with "6 chosen" and **Apply**,
-> and the six chosen columns tinted and outlined in the chart. Crop to the window.
-
 ![Filtered shells as pushbacks](images/13-shell-filter-applied.png)
 
-> **Figure 13 - to capture (screenshot).** The Results window after **Apply**, on **Incremental pushback**:
-> six columns, with the table showing six pushbacks. Crop to the window.
-
-**Why these shells?** **[Write 2–3 sentences from your own reading: where tonnes jump, where cash flow flattens,
-and why 0.975 and not 1.00, for example.]**
+**Why these shells?** Look at two things in the chart. Where the bars jump between neighbouring shells, a small price change opens a new zone, so a pushback boundary there separates two mining areas. Where the cash flow line goes flat, extra tonnes add little value, so shells close together there would make thin pushbacks that are not worth mining separately. The six shells above sit at those breaks, and they end at RAF 1.00, the most valuable pit.
 
 ### 6.1 Copy the chosen shells into a new scenario
 
@@ -478,25 +452,23 @@ With the filter applied, click **Copy filtered shells into a new optimization sc
 
 Incline creates a copy of the scenario right below the original, with:
 - Outputs set to **Type factors manually** with the six factors,
-- the name `McLaughlin 0.2 - 1.7 - 60 shells (0.35, 0.55, 0.70, 0.975, 1.30, 1.425)`,
+- the name `McLaughlin 0.2 - 1.7 - 61 shells (0.325, 0.425, 0.575, 0.70, 0.85, 1.00)`,
 - its own shell name prefix, `PS-copy`.
 
 A message confirms it.
 
 ![Scenario created from the chosen shells](images/14-copy-filtered-shells.png)
 
-> **Figure 14 - to capture (screenshot).** The scenarios list with the new scenario selected, and the green confirmation
-> message above the status bar. Crop to the list and the message.
+1. Rename the new scenario to **McLaughlin - 6 PBs (0.325, 0.425, 0.575, 0.70, 0.85, 1.00)**.
+2. Edit it: on **Outputs**, turn on **Create shell surfaces** and set **Shell name prefix** to `PS`.
+3. Save and run it.
 
-Open the new scenario, tick **Create shells: Solid**, save it and run it. You get six shell solids in the Triangulations collection `<scenario name> PS-copy`, named `PS-copy_RAF 0.35` … `PS-copy_RAF 1.425`.
+You get six surfaces in the Triangulations collection `McLaughlin - 6 PBs (…) PS surface`, named `PS_RAF 0.325` to `PS_RAF 1.00`.
 
-> Try a second set yourself: **0.275, 0.35, 0.50, 0.70, 1.00, 1.30, 1.425**. Compare the pushbacks of the two sets
-> in *Incremental pushback*.
+> **Try it yourself.** Look at the surfaces in 3D. Some may not make a good pushback once you see them, for example
+> two that are very close on one side. Drop or replace that factor in the list and run again.
 
 ![Pushback shells in 3D](images/15-pushback-solids.png)
-
-> **Figure 15 - to capture (screenshot).** The six pushback solids in 3D, each in its own colour, from the south-west,
-> with the block model hidden. Show the explorer collection expanded.
 
 ---
 
@@ -504,35 +476,33 @@ Open the new scenario, tick **Create shells: Solid**, save it and run it. You ge
 
 Now make the pit grow outwards from a starting point.
 
-1. **Duplicate** the 60-shell scenario and rename the copy **McLaughlin directional - Radial**.
+1. **Duplicate** the 61-shell scenario and rename the copy **McLaughlin directional - Radial**.
 2. Edit it, and on **Outputs**:
 
 | Field | Set to |
 |---|---|
-| Revenue factors | **Type factors manually**: `0.2, 0.35, 0.5, 0.65, 1.0` |
-| Use directional shells | ticked |
+| Factors from | **Type factors manually** |
+| Revenue factors | `0.2, 0.35, 0.5, 0.65, 1.0` |
+| Use directional shells | on |
 | Mining direction | **Radial (out from the point)** |
 | Starting point | click **Pick** (below) |
-| Create shells | **Surface** |
-| Unique name prefix | `PS-R` |
+| Create shell surfaces | on |
+| Shell name prefix | `PS-R` |
 
-3. **Pick the starting point.** Click **Pick**. The editor steps aside, the view goes to plan over the block model, and everything else is hidden. Click the block where mining should start. The starting point now reads `X …, Y …`.
-   Use the outcrop of the high-grade core: **[fill in the X, Y you used, about 413, 991]**.
+3. **Pick the starting point.** Click **Pick**. The editor steps aside, the view goes to plan over the block model, and everything else is hidden. Click the block where mining should start. The button now reads **Picked**; hover it to see the point's X and Y, and click it again to pick another point.
+   Use the outcrop of the high-grade core; this tutorial used **X 413.3, Y 990.6**.
 4. **Save scenario** and **Run**.
 
-You get five surfaces, `PS-R_RAF 0.20 DIR 20% surface` to `PS-R_RAF 1.00 DIR 100% surface`.
+You get five surfaces in the collection `McLaughlin directional - Radial PS-R surface`, named `PS-R_RAF 0.20 DIR 20%` to `PS-R_RAF 1.00 DIR 100%`. (A name ends in ` surface` only when a run makes solids and surfaces both.)
 
 A **surface** is the shell without its cap: the pit floor and walls, open where the pit meets the air. A **solid** is closed.
 
-![Picking the starting point](images/16-pick-start.png)
-
-> **Figure 16 - to capture (screenshot).** Plan view during **Pick**: only the block model visible,
-> the cursor over the chosen block, and the prompt *Select a block of the model* showing.
+<p align="center">
+  <img src="images/16-pick-start-1.png" alt="Picking the starting point on the block model, in plan" height="380">
+  <img src="images/16-pick-start-2.png" alt="Outputs of the Radial scenario after picking" height="380">
+</p>
 
 ![Radial shells](images/17-radial-shells.png)
-
-> **Figure 17 - to capture (screenshot).** The five radial surfaces in plan, in different colours, with the starting point marked.
-> A second shot from the side would also help.
 
 **Rerunning overwrites.** Run the scenario again after a change and its shells are **replaced** in place. They keep their colours, and shells it no longer makes are removed, so a sensitivity study never piles up copies. Each scenario needs its **own prefix**, which the editor enforces, so two scenarios never overwrite each other's shells.
 
@@ -540,27 +510,34 @@ A **surface** is the shell without its cap: the pit floor and walls, open where 
 
 ## 8. Directional shells: a straight front
 
-1. Duplicate *McLaughlin directional - Radial* and rename the copy **McLaughlin directional - West**.
+1. Duplicate *McLaughlin directional - Radial* and rename the copy **McLaughlin directional - East**.
 2. On **Outputs**:
-   - **Mining direction**: **West**.
-   - **Unique name prefix**: `PS-W`.
-   - Pick a starting point on the **east edge** of the deposit, where mining should begin.
+   - **Mining direction**: **East**.
+   - **Shell name prefix**: `PS-E`.
+   - **Pick** a starting point where mining should begin. This tutorial uses the high-grade zone, the same area as the radial start: mining the best grade first is what a good schedule, and later NPV, will reward.
 3. Save and run.
 
-The limit on ore now moves across the deposit from east to west as a straight north–south line. The shells are still pits, so each increment is rounded: a bite out of the east end, then bites that move progressively west (figure C6, right).
+The limit on ore now moves across the deposit from west to east as a straight north–south line. The shells are still pits, so each increment is rounded: a first bite near the starting point, then bites that move progressively east (figure C6 shows the same idea moving west).
 
 Compare the two sets in plan:
 - **Radial** increments spread out from the point in every direction.
-- **West** increments advance one way.
+- **East** increments advance one way.
 
-> **Tip: pick the start at the edge where mining begins.** Everything behind the starting point counts as distance 0.
-> A point in the middle of the deposit opens the whole eastern half to shell 1, which then looks like an ordinary pit,
-> and only the later shells move west.
+> **Good to know.** Everything behind the starting point counts as distance 0. With an East front, ore west of the
+> starting point is open from shell 1, so the first shells can also grow west of the start; the front then advances
+> east. To make every shell move one way only, start at the western edge instead.
 
-![Straight front, west](images/18-west-shells.png)
+<p align="center">
+  <img src="images/18-west-shells-1.png" alt="Picking the East front's starting point, in plan" height="380">
+  <img src="images/18-west-shells-2.png" alt="Outputs of the East scenario" height="380">
+</p>
 
-> **Figure 18 - to capture (screenshot).** The five west-front surfaces in plan, next to the radial ones from figure 17
-> (two shots side by side, or one split view).
+On McLaughlin the direction makes only a small difference, because of the shape of this gold deposit. Another MineLib deposit, Marvin, shows it much more clearly: its shells change a lot as the mining direction changes.
+
+<p align="center">
+  <img src="images/marvin-shells-1.png" alt="Marvin: directional shells for one mining direction, in plan" height="380">
+  <img src="images/marvin-shells-2.png" alt="Marvin: directional shells for another mining direction, in plan" height="380">
+</p>
 
 ---
 
@@ -568,19 +545,16 @@ Compare the two sets in plan:
 
 Shell surfaces show the shape. Writing the shells into the **block model** lets you see which pushback every block belongs to, in plan, section and 3D.
 
-1. Edit the pushback scenario from chapter 6.
-2. On **Outputs**, tick **Write shell value into BM**:
+1. Edit the scenario *McLaughlin directional - East*.
+2. On **Outputs**, turn on **Write shell value into BM**:
    - value: **Sequence number** (1 = the smallest shell) or **RAF value**,
    - field: **New field**, named `pushback`.
-3. Save and run. The console says *Wrote 6 shell(s) into field 'pushback' of block model 'mclaughlin_bm'*.
+3. Save and run. The console says *Wrote 5 shell(s) into field 'pushback' of block model 'mclaughlin_bm'*.
 4. Colour the block model by `pushback`.
 
 The field is a **category** field, so each shell gets its own colour: **the same colour as its shell triangulation**. Each block gets the **smallest** shell it belongs to. Blocks outside every shell, and air, stay blank.
 
 ![Block model coloured by pushback](images/19-bm-pushback-field.png)
-
-> **Figure 19 - to capture (screenshot).** The block model coloured by `pushback`, in 3D from the south-west,
-> blank (empty) values hidden, with the category legend showing each category's share of the blocks. Whole viewport.
 
 **The legend** lists every pushback with its share of blocks.
 - Click a colour swatch (*Edit this category colour*) to recolour a pushback. Your colours are kept when you rerun the scenario.
@@ -592,16 +566,13 @@ The field is a **category** field, so each shell gets its own colour: **the same
 
 ![Pushbacks in section](images/20-bm-pushback-section.png)
 
-> **Figure 20 - to capture (screenshot).** A vertical east–west section through the middle of the deposit, coloured by `pushback`,
-> with the matching shell surfaces drawn as lines. Add the legend.
-
 Rerun with different factors and the same field is **updated**, not duplicated.
 
 ---
 
 ## 10. Reports
 
-To keep the numbers outside Incline, tick **Create reports** on **Outputs** and **Browse…** for a folder. Each run writes:
+To keep the numbers outside Incline, turn on **Create reports** on **Outputs** and **Browse…** for a folder. Each run writes:
 
 ```
 <reports folder>/<scenario name>/optimization_results.csv
@@ -621,11 +592,6 @@ Columns:
 Revenue is net of selling costs; cash flow is undiscounted.
 
 **Open CSV…** in the Results window reads a report back, from any earlier session, with its chart and table.
-
-![A report in a spreadsheet](images/21-report-csv.png)
-
-> **Figure 21 - to capture (screenshot).** `optimization_results.csv` open in a spreadsheet, filtered to `basis = incremental`
-> and `destination = Total`, with a few columns visible.
 
 ---
 
@@ -660,7 +626,7 @@ Revenue is net of selling costs; cash flow is undiscounted.
 | Constraints | Between rows | Step (sectors), Linear, Cosine or Cubic; the last three need 2, 2 and 4 rows. |
 | Outputs | Single shell | One pit at RAF 1. |
 | Outputs | Type factors manually | Numbers above 0, separated by commas or spaces; sorted, repeats dropped. |
-| Outputs | Unique name prefix | Starts every shell name; must differ from every other scenario's. |
+| Outputs | Shell name prefix | Starts every shell name; must differ from every other scenario's. |
 | Outputs | Write shell value into BM | Category field; existing text fields or a new one; overwritten on rerun. |
 
 ### 12.2 Glossary
@@ -679,7 +645,7 @@ Revenue is net of selling costs; cash flow is undiscounted.
 |---|---|
 | *Method …: the maximum grade must be above the minimum* | Fix the method's grade window. |
 | *… costs more to sell than it sells for* | Selling cost is above the price. |
-| *The rock type value that means air is not chosen* | Pick the air value in Inputs, or untick *Exclude air blocks*. |
+| *The rock type value that means air is not chosen* | Pick the air value in Inputs, or turn off *Exclude air blocks*. |
 | *Directional shells need a starting point* | Click **Pick** in Outputs. |
 | *The shell name prefix … is empty or used by another scenario* | Give the scenario its own prefix. |
 | *This block model is sub-blocked …* / *… is rotated* | Not supported yet; regularise the model first. |
@@ -688,28 +654,6 @@ Revenue is net of selling costs; cash flow is undiscounted.
 
 McLaughlin data from MineLib: Espinoza, D., Goycoolea, M., Moreno, E., Newman, A. (2013). *MineLib: a library of open pit mining problems.* Annals of Operations Research 206(1), 93–114. https://doi.org/10.1007/s10479-012-1258-3
 
-<!--
-FIGURE CHECKLIST - delete this block once every image is in images/
+Ultimate pit solver from MineFlow: Deutsch, M., Dağdelen, K., Johnson, T. (2022). *An Open-Source Program for Efficiently Computing Ultimate Pit Limits: MineFlow.* Natural Resources Research. https://doi.org/10.1007/s11053-022-10035-w
 
-Concept diagrams: DONE, generated by figures.py as images/c01..c07 *.svg
-
-Screenshots (to capture):
-  01-block-model.png          2    BM coloured by au
-  02-scenarios-list.png       3    list with callouts
-  03-inputs.png … 09-outputs.png   4.1-4.7 editor sections
-  04a-constants-add-group.png 4.2  Add group prompt with "Other"
-  10-run-progress.png         5    progress ring
-  11-results-window.png       5.1  results, cumulative
-  12-shell-filter-choosing.png 6   choosing shells
-  13-shell-filter-applied.png  6   applied, incremental
-  14-copy-filtered-shells.png  6.1 new scenario + toast
-  15-pushback-solids.png       6.1 pushback solids 3D
-  16-pick-start.png           7    picking the start point
-  17-radial-shells.png        7    radial surfaces
-  18-west-shells.png          8    west-front surfaces
-  19-bm-pushback-field.png    9    BM by pushback + legend
-  20-bm-pushback-section.png  9    section by pushback
-  21-report-csv.png           10   CSV in a spreadsheet
-
-Numbers to fill (search "[Fill" and "[Check"): 5, 5.1, 6, 7.
--->
+Source: [github.com/MineFlowCSM/MineFlow](https://github.com/MineFlowCSM/MineFlow), MIT licence, © 2022 Matthew Deutsch. Incline's Rust port lives in `crates/mineflow` of the Incline repository and keeps the original licence notice.

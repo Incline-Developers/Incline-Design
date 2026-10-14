@@ -138,23 +138,33 @@ def toy_values(grades, rf):
 # ── C1 · The ultimate pit problem ──
 
 
-def c01():
-    v = np.full((9, 20), -1.0)
-    ore = {
-        (2, 8): 3, (2, 9): 4, (2, 10): 3,
-        (3, 7): 2, (3, 8): 6, (3, 9): 9, (3, 10): 7, (3, 11): 2,
-        (4, 8): 5, (4, 9): 12, (4, 10): 10, (4, 11): 4,
-        (5, 9): 8, (5, 10): 9,
-        (6, 9): 4, (6, 10): 5,
-        (7, 3): 14,
-        (8, 16): 10,
-    }
-    for (r, c), x in ore.items():
-        v[r, c] = x
-    depths, total = optimal_pit(v)
-    rows, cols = v.shape
+def forced_loss(values, blocks):
+    """How much less the best pit is worth when it must also take `blocks`."""
+    _, best = optimal_pit(values)
+    forced = values.copy()
+    for block in blocks:
+        forced[block] += 1000.0
+    _, with_blocks = optimal_pit(forced)
+    return best - (with_blocks - 1000.0 * len(blocks))
 
-    fig, ax = plt.subplots(figsize=(10, 5.0))
+
+def c01():
+    rows, cols = 9, 30
+    v = np.full((rows, cols), -1.0)
+    lens = {
+        (2, 15): 3, (2, 16): 4, (2, 17): 3,
+        (3, 14): 2, (3, 15): 6, (3, 16): 9, (3, 17): 7, (3, 18): 2,
+        (4, 15): 5, (4, 16): 12, (4, 17): 10, (4, 18): 4,
+        (5, 16): 8, (5, 17): 9,
+        (6, 16): 4, (6, 17): 5,
+    }
+    deep_west, deep_east, floor = (7, 10), (8, 20), [(6, 16), (6, 17)]
+    for block, x in {**lens, deep_west: 14, deep_east: 10}.items():
+        v[block] = x
+    depths, total = optimal_pit(v)
+    losses = [forced_loss(v, [deep_west]), forced_loss(v, [deep_east]), forced_loss(v, floor)]
+
+    fig, ax = plt.subplots(figsize=(13, 5.0))
     for r in range(rows):
         for c in range(cols):
             mined = r < depths[c]
@@ -162,23 +172,24 @@ def c01():
             face = ORE if val > 0 else WASTE
             alpha = 0.95 if mined else 0.35
             ax.add_patch(Rectangle((c, r), 1, 1, facecolor=face, alpha=alpha, edgecolor="white", lw=1.2))
-            ax.text(c + 0.5, r + 0.52, f"{val:+.0f}", ha="center", va="center", fontsize=8.5,
+            ax.text(c + 0.5, r + 0.52, f"{val:+.0f}", ha="center", va="center", fontsize=8,
                     color=INK if mined else MUTED, weight="bold" if val > 0 else "normal")
     draw_outline(ax, depths, PIT, width=2.8)
-    ax.add_patch(Rectangle((3, 7), 1, 1, fill=False, edgecolor=INK, lw=2.0, ls="--", zorder=6))
-    ax.add_patch(Rectangle((16, 8), 1, 1, fill=False, edgecolor=INK, lw=2.0, ls="--", zorder=6))
-    ax.annotate("+14, but not worth the waste above it", xy=(3.5, 8), xytext=(0.0, rows + 1.1), fontsize=9.5, color=INK,
-                arrowprops=dict(arrowstyle="->", color=INK, lw=1.2), annotation_clip=False)
-    ax.annotate("+10, also left behind", xy=(16.5, 9), xytext=(13.2, rows + 1.1), fontsize=9.5, color=INK,
-                arrowprops=dict(arrowstyle="->", color=INK, lw=1.2), annotation_clip=False)
+    for block in (deep_west, deep_east):
+        ax.add_patch(Rectangle((block[1], block[0]), 1, 1, fill=False, edgecolor=INK, lw=2.0, ls="--", zorder=6))
+    ax.add_patch(Rectangle((16, 6), 2, 1, fill=False, edgecolor=INK, lw=2.0, ls="--", zorder=6))
+    note = dict(fontsize=9.5, color=INK, arrowprops=dict(arrowstyle="->", color=INK, lw=1.2), annotation_clip=False)
+    ax.annotate(f"+14: the pit would be worth {losses[0]:.0f} less", xy=(deep_west[1] + 0.5, rows), xytext=(2.0, rows + 1.4), **note)
+    ax.annotate(f"+4 and +5: {losses[2]:.0f} less", xy=(17, 7), xytext=(13.2, rows + 1.4), **note)
+    ax.annotate(f"+10: {losses[1]:.0f} less", xy=(deep_east[1] + 0.5, rows), xytext=(22.0, rows + 1.4), **note)
     ax.text(cols / 2, -0.55, f"Optimal pit (red): total value {total:+.0f}", ha="center", va="bottom", fontsize=11, color=PIT,
             weight="bold")
     ax.set_xlim(0, cols)
     ax.set_ylim(rows + 2.6, -1.2)
     ax.set_aspect("equal")
     ax.axis("off")
-    ax.text(0, rows + 2.2, "Section through a block model. Numbers are block values; walls may not be steeper than 45°.",
-            fontsize=9, color=MUTED, va="top")
+    ax.text(0, rows + 2.4, "Section through a block model. Numbers are block values; walls may not be steeper than 45°. "
+            "Dashed: ore left behind, with what taking it would cost.", fontsize=9, color=MUTED, va="top")
     save(fig, "c01-ultimate-pit.svg")
 
 
@@ -202,17 +213,17 @@ def c02():
     ax.set_ylim(0, 8.2)
     ax.axis("off")
 
-    box(ax, 3.4, 6.8, 4.2, 1.2, "Block A", ["955.7 t, 3.0 g/t au, rock"], "#F4F4F4", "#9A9A9A")
+    box(ax, 3.4, 6.8, 4.2, 1.2, "Block A", ["955.7 t, 3.0 g/t au, hard rock"], "#F4F4F4", "#9A9A9A")
 
     box(ax, 0.1, 2.55, 3.4, 3.3, "Waste", [
-        "mining        1.45 /t",
+        "mining (hard) 1.45 /t",
         "waste haul    1.21 /t",
-        "rehab         0.00 /t",
+        "rehab         0.34 /t",
         "",
-        "-955.7 x 2.66",
-        "= -2,542",
+        "-955.7 x 3.00",
+        "= -2,867",
     ], "#EEF0F2", "#9AA0A6")
-    box(ax, 3.75, 2.55, 3.5, 3.3, "Mill  (0.75 g/t and up)", [
+    box(ax, 3.75, 2.55, 3.5, 3.3, "Mill  (1.5 g/t and up)", [
         "gold 955.7 x (3.0-0.12)",
         "  x 0.03215 x 84% = 74.3 oz",
         "revenue 74.3 x (810-64.2)",
@@ -221,7 +232,7 @@ def c02():
         "element cost         -1",
         "= +26,985",
     ], "#FFF6E3", ORE)
-    box(ax, 7.5, 2.55, 3.4, 3.3, "Heap leach (0.2-0.75)", [
+    box(ax, 7.5, 2.55, 3.4, 3.3, "Heap leach (0.3 - 1.5)", [
         "grade 3.0 g/t is above",
         "the window: this method",
         "cannot take the block",
@@ -234,7 +245,7 @@ def c02():
         arrow(ax, (5.5, 6.8), (x, 5.88))
 
     box(ax, 2.9, 0.25, 5.2, 1.7, "Highest value wins", [
-        "max(-2,542, +26,985) = +26,985",
+        "max(-2,867, +26,985) = +26,985",
         "destination: Mill",
         "(waste if every method is worse)",
     ], "#E9F6EE", CASH, title_color=CASH)

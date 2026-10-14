@@ -902,6 +902,20 @@ impl FactorListIssue {
     }
 }
 
+impl OutputSettings {
+    /// Set the number of shells to what the (rounded) step really makes.
+    ///
+    /// The step is the one a run uses. A count typed in is turned into a step
+    /// rounded to three decimals, which may make a different number of shells:
+    /// 0.2 to 1.7 in 60 shells is a step of 0.0254, rounded to 0.025, which
+    /// makes 61. The count follows, so what the editor shows is what runs.
+    pub(crate) fn match_count_to_step(&mut self) {
+        if let Some(count) = shell_count_for_step(self.factor_from, self.factor_to, self.factor_step) {
+            self.shell_count = count.max(2);
+        }
+    }
+}
+
 /// How many shells a step makes between two ends, ends included.
 pub(crate) fn shell_count_for_step(from: f64, to: f64, step: f64) -> Option<u32> {
     (step > 0.0 && to > from).then(|| ((to - from) / step).round() as u32 + 1)
@@ -1098,6 +1112,9 @@ impl OptimizationScenario {
         if std::mem::take(&mut self.use_rocktype_costs) && self.cost_field.is_empty() {
             self.cost_field = self.rocktype_field.clone();
         }
+        // Scenarios saved before the count followed the step may show a count
+        // their step does not make.
+        self.output.match_count_to_step();
     }
 
     /// Choose the field the mining cost varies by (empty for none). Rows whose
@@ -1315,7 +1332,14 @@ pub(crate) enum GridIssue {
 impl GridIssue {
     /// The issue `model` has, if any: the optimizer needs one regular,
     /// unrotated grid of equal blocks.
+    ///
+    /// A model that opened unloaded has not had its blocks read, so its grid is
+    /// not known yet rather than irregular: no issue until it is loaded. A run
+    /// loads it first and checks again.
     pub(crate) fn of(model: &OpenBlockModel) -> Option<Self> {
+        if model.uniform_grid.is_none() && !model.state.loaded {
+            return None;
+        }
         Self::of_parts(model.uniform_grid.is_some(), model.model.rotation())
     }
 
@@ -1401,3 +1425,4 @@ impl ScenarioFile {
         }
     }
 }
+

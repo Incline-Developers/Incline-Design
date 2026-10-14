@@ -65,7 +65,13 @@ pub(crate) fn draw_optimization_dialogs(ui: &mut egui::Ui, editor: &mut EditorSt
     // The Results window stands apart from the list and the editor.
     super::optimization_results::draw_results_window(ui, &mut editor.optimization, commands);
     draw_load_prompt(ui, &mut editor.optimization, commands);
-    value_field::draw_constant_picker(ui.ctx());
+    // The picker belongs to the editor: it goes with it, and does not come
+    // back the next time the editor opens.
+    if editor.optimization.draft.is_some() && editor.optimization.start_pick.is_none() {
+        value_field::draw_constant_picker(ui.ctx());
+    } else {
+        value_field::close_constant_picker(ui.ctx());
+    }
 }
 
 /// "These inputs are unloaded: load them?" before a run or a pick.
@@ -775,6 +781,12 @@ fn draw_inputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: &
         }
         if let Some(issue) = fields.grid_issue {
             ui.add(egui::Label::new(egui::RichText::new(issue.message()).color(ui.visuals().warn_fg_color)).wrap());
+        }
+        // An unloaded model's grid is not read yet, so whether it can be
+        // optimised is only known once it is loaded.
+        if block_models.iter().any(|model| model.name == scenario.block_model && !model.state.loaded) {
+            ui.add(egui::Label::new(egui::RichText::new(tr!("opt-block-model-unloaded")).color(ui.visuals().weak_text_color())).wrap())
+                .on_hover_text(tr!("opt-block-model-unloaded-hint"));
         }
         let response = form_value(
             ui,
@@ -1507,6 +1519,7 @@ fn draw_outputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: 
                     output.shell_count = count.max(2);
                     output.factor_step = shell_step_for_count(from, to, output.shell_count).unwrap_or(step);
                 }
+                output.match_count_to_step();
             }
             let mut count = output.shell_count;
             if field_row(ui, tr!("opt-shell-count"), None, |ui, width| {
@@ -1518,11 +1531,15 @@ fn draw_outputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: 
                 if let Some(step) = shell_step_for_count(from, to, count) {
                     output.factor_step = step;
                 }
+                // The step was rounded; the count shown when the box is left is
+                // the one that step makes, which is what a run makes.
+                output.match_count_to_step();
             }
             if (from_changed || to_changed)
                 && let Some(step) = shell_step_for_count(from, to, output.shell_count)
             {
                 output.factor_step = step;
+                output.match_count_to_step();
             }
             if to <= from {
                 menu_note(ui, tr!("opt-factor-range-invalid"));

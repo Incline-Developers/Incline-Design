@@ -2195,6 +2195,15 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     .filter(|attribute| matches!(attribute.data, omf_crate::AttributeData::Number { .. } | omf_crate::AttributeData::Category { .. }))
                     .map(|attribute| BlockVariable {
                         name: attribute.name.clone(),
+                        // The kind the loaded model will give it, from the header
+                        // alone, so the field lists of an unloaded model tell
+                        // numbers from categories without reading any block.
+                        physical_type: match &attribute.data {
+                            omf_crate::AttributeData::Category { names, .. } if names.item_count() <= u64::from(u8::MAX) + 1 => "namedbyte",
+                            omf_crate::AttributeData::Category { .. } => "namedshort",
+                            _ => "double",
+                        }
+                        .to_owned(),
                         ..Default::default()
                     })
                     .collect();
