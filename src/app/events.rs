@@ -103,6 +103,7 @@ impl<'a> App<'a> {
 
         if let Some(graphics) = self.graphics.as_mut() {
             graphics.set_fly_mode_enabled(self.editor.fly_mode_enabled);
+            graphics.set_scroll_zooms(self.modifiers.control_key());
         }
 
         let gui_consumed = gui_response.is_some_and(|response| response.consumed);

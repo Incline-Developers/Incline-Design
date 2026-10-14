@@ -1722,6 +1722,8 @@ dependencies = [
  "web-sys",
  "web-time",
  "wgpu",
+ "windows",
+ "windows-core",
  "winit",
  "winresource",
 ]

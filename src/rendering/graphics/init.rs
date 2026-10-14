@@ -834,6 +834,7 @@ impl<'a> Graphics<'a> {
             projection,
             mouse_pressed: None,
             touch_gesture: Default::default(),
+            scroll_zooms: false,
             fly_mode_enabled: false,
             slice_view: None,
             strokes: Vec::new(),
