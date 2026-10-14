@@ -248,6 +248,12 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
     if editor.active_tool == ActiveTool::RemoveBetweenCrossings && editor.removable_piece.len() >= 2 {
         tessellate_polyline_stroke(&mut overlay, &editor.removable_piece, false, 3.0, ACTIVE_POINT_COLOR);
     }
+    // Measuring: the segment the banner reads, over the string.
+    if editor.reads_segment_hover()
+        && let Some((_, segment)) = &editor.measure_segment_hover
+    {
+        tessellate_polyline_stroke(&mut overlay, segment, false, 3.0, ACTIVE_POINT_COLOR);
+    }
 
     let marker_target_id = editor.move_vertex_target.map(|(id, _)| id);
     if let Some(target_id) = marker_target_id

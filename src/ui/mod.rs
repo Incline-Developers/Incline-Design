@@ -395,7 +395,21 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
     if editor.active_tool == ActiveTool::MeasureDistance
         && let (Some(start), Some(end)) = (editor.measurement_start, editor.measurement_end)
     {
-        return Some(ViewportMessage::text(tr!("ui-distance-meters", distance = format!("{:.3}", start.distance(end)))));
+        let distance = tr!("ui-distance-meters", distance = format!("{:.3}", start.distance(end)));
+        // Geology reads the line's slope as well: plan, rise, bearing, grade.
+        return Some(ViewportMessage::text(
+            match state::segment_readout(start, end, 0.0).filter(|_| editor.active_workspace == state::Workspace::Geology) {
+                Some(readout) => segment_readout_text(&readout, distance),
+                None => distance,
+            },
+        ));
+    }
+    // Nothing measured yet, Geology reads the string segment under the cursor.
+    if editor.reads_segment_hover()
+        && let Some((readout, _)) = editor.measure_segment_hover
+    {
+        let distance = tr!("ui-distance-meters", distance = format!("{:.3}", readout.length));
+        return Some(ViewportMessage::text(segment_readout_text(&readout, distance)));
     }
 
     if editor.active_tool == ActiveTool::MeasureBatterAngle {
@@ -440,6 +454,35 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
     }
 
     tool_prompt(editor)
+}
+
+/// The distance read, then the segment's plan length, rise, bearing and
+/// grade: a reading, so all of it at full strength, as the strike and dip.
+/// The rise and degrees are signed unless they round to zero, the percent
+/// only when falling.
+fn segment_readout_text(readout: &state::SegmentReadout, distance: String) -> String {
+    let signed = |value: f64, places: usize| {
+        let text = format!("{value:+.places$}");
+        if text[1..].bytes().all(|byte| matches!(byte, b'0' | b'.')) {
+            text[1..].to_owned()
+        } else {
+            text
+        }
+    };
+    let rise = signed(readout.rise, 3);
+    let grade = signed(readout.grade_degrees, 2);
+    match (readout.bearing_degrees, readout.grade_percent) {
+        (Some(bearing), Some(percent)) => tr!(
+            "ui-segment-readout",
+            distance = distance,
+            plan = format!("{:.3}", readout.plan),
+            rise = rise,
+            bearing = format!("{bearing:06.2}"),
+            grade = grade,
+            percent = signed(percent, 1).trim_start_matches('+').to_owned()
+        ),
+        _ => tr!("ui-segment-readout-vertical", distance = distance, rise = rise, grade = grade),
+    }
 }
 
 /// The armed tool's next step, when it has one to say.

@@ -1,8 +1,8 @@
 use crate::{
     app::App,
     logging::CommandReportSpec,
-    model::{Command, LayerId, Object, PolyVertex},
-    ui::state::{ActiveTool, CircleDraft},
+    model::{Command, LayerId, Object, PolyVertex, SceneEntityId},
+    ui::state::{ActiveTool, CircleDraft, SegmentReadout, segment_readout},
 };
 
 impl<'a> App<'a> {
@@ -13,6 +13,7 @@ impl<'a> App<'a> {
         let Some(point) = self.editor.cursor_world else {
             return;
         };
+        self.editor.measure_segment_hover = None;
         if let Some(_) = self.editor.measurement_start
             && self.editor.measurement_end.is_none()
         {
@@ -22,6 +23,21 @@ impl<'a> App<'a> {
             self.editor.measurement_end = None;
         }
         self.invalidate_overlay();
+    }
+
+    /// The readout of the string segment under the cursor, in the string's
+    /// own vertex order, and the segment; only what the section draws of it
+    /// is hit.
+    pub(crate) fn measure_segment_hit(&self) -> Option<(SegmentReadout, [PolyVertex; 2])> {
+        let (SceneEntityId::Object(id), _) = self.pick_under_cursor()? else {
+            return None;
+        };
+        let Some(Object::Polyline { verts, closed, .. }) = self.scene_document.get_object(id) else {
+            return None;
+        };
+        let (edge, _) = self.edge_under_cursor(verts, *closed)?;
+        let (start, end) = (verts[edge], verts[(edge + 1) % verts.len()]);
+        Some((segment_readout(start.pos, end.pos, start.bulge)?, [start, end]))
     }
 
     pub(crate) fn measure_batter_angle_click(&mut self) {
@@ -264,6 +280,7 @@ impl<'a> App<'a> {
         self.editor.circle_draft = None;
         self.editor.measurement_start = None;
         self.editor.measurement_end = None;
+        self.editor.measure_segment_hover = None;
         self.editor.batter_angle_points.clear();
         self.editor.poly_finish_dialog = false;
         self.editor.poly_finish_dialog_px = None;

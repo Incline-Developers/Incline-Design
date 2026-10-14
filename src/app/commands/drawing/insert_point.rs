@@ -330,10 +330,13 @@ impl<'a> App<'a> {
     }
 
     /// Take down the point Insert Point shows under the cursor, the ones
-    /// Fill Segment shows and Remove Between Crossings' piece: the overlay
-    /// they are drawn on repaints only when asked.
+    /// Fill Segment shows, Remove Between Crossings' piece and the segment
+    /// Measure Distance reads: the overlay they are drawn on repaints only
+    /// when asked.
     pub(crate) fn clear_insert_point_marker(&mut self) {
-        let shown = self.editor.tool_hover_vertex_px.take().is_some() || !self.editor.fill_segment_preview.is_empty() || !self.editor.removable_piece.is_empty();
+        let marker = self.editor.tool_hover_vertex_px.take().is_some();
+        let segment = self.editor.measure_segment_hover.take().is_some();
+        let shown = marker || segment || !self.editor.fill_segment_preview.is_empty() || !self.editor.removable_piece.is_empty();
         self.editor.tool_hover_vertex_world = None;
         self.editor.fill_segment_preview.clear();
         self.editor.removable_piece.clear();

@@ -93,10 +93,11 @@ impl<'a> App<'a> {
         // their own.
         self.editor.vertex_edit_run = None;
         // Insert Point's marker sits on the string as it was, as do Fill
-        // Segment's and the piece Remove Between Crossings shows.
+        // Segment's, the piece Remove Between Crossings shows and the
+        // segment Measure Distance reads.
         if matches!(
             self.editor.active_tool,
-            ActiveTool::InsertPoint | ActiveTool::FillSegment | ActiveTool::RemoveBetweenCrossings
+            ActiveTool::InsertPoint | ActiveTool::FillSegment | ActiveTool::RemoveBetweenCrossings | ActiveTool::MeasureDistance
         ) {
             self.clear_insert_point_marker();
         }

@@ -574,6 +574,7 @@ impl<'a> App<'a> {
                                 | ActiveTool::FillSegment
                                 | ActiveTool::RemoveBetweenCrossings
                         ) || matches!(self.editor.active_tool, ActiveTool::ExplodePolyline | ActiveTool::ExplodePolylineToPoints)
+                            || self.editor.reads_segment_hover()
                             || self.editor.relimit_awaiting_source_pick
                             || self.editor.relimit_waiting_for_pick
                             || self.editor.relimit_confirming_end
@@ -582,6 +583,13 @@ impl<'a> App<'a> {
                             || self.editor.drill_pattern_awaiting_shape_pick);
                     if hover_pick_due {
                         self.last_snap_poll_instant = Some(now);
+                    }
+                    if hover_pick_due && self.editor.reads_segment_hover() {
+                        let hover = self.measure_segment_hit();
+                        if self.editor.measure_segment_hover != hover {
+                            self.editor.measure_segment_hover = hover;
+                            self.invalidate_overlay();
+                        }
                     }
                     if matches!(
                         self.editor.active_tool,
@@ -1691,6 +1699,14 @@ impl<'a> App<'a> {
             self.editor.circle_draft = None;
             self.editor.active_tool = ActiveTool::None;
             self.invalidate_overlay();
+        } else if matches!(
+            self.editor.active_tool,
+            ActiveTool::InsertPoint | ActiveTool::FillSegment | ActiveTool::RemoveBetweenCrossings | ActiveTool::MeasureDistance
+        ) && self.editor.pending_stroke.is_empty()
+        {
+            // What they light under the cursor goes with them.
+            self.clear_insert_point_marker();
+            self.editor.active_tool = ActiveTool::None;
         } else if !self.editor.pending_stroke.is_empty() {
             self.discard_stroke();
         } else {
@@ -1763,7 +1779,7 @@ impl<'a> App<'a> {
             ActiveTool::SplitAtCrossings if next_tool != previous_tool => {
                 self.clear_split_at_crossings();
             }
-            ActiveTool::InsertPoint | ActiveTool::FillSegment | ActiveTool::RemoveBetweenCrossings if next_tool != previous_tool => {
+            ActiveTool::InsertPoint | ActiveTool::FillSegment | ActiveTool::RemoveBetweenCrossings | ActiveTool::MeasureDistance if next_tool != previous_tool => {
                 self.clear_insert_point_marker();
             }
             _ => {}
@@ -1810,6 +1826,7 @@ impl<'a> App<'a> {
         if matches!(tool, ActiveTool::MeasureDistance | ActiveTool::MeasureBatterAngle) {
             self.editor.measurement_start = None;
             self.editor.measurement_end = None;
+            self.editor.measure_segment_hover = None;
             self.editor.batter_angle_points.clear();
         }
     }

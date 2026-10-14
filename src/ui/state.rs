@@ -978,6 +978,52 @@ pub(crate) fn batter_angle_measurement(points: &[DVec3]) -> Option<BatterAngleMe
     })
 }
 
+/// A segment's figures from its first end to its second: the rise and grade
+/// are positive uphill that way. An arc is measured along itself in plan, as
+/// `polyline_length` does, and end to end for its rise and bearing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SegmentReadout {
+    /// Length in 3D, along an arc.
+    pub(crate) length: f64,
+    pub(crate) plan: f64,
+    pub(crate) rise: f64,
+    /// Degrees clockwise from grid north; `None` for a vertical segment.
+    pub(crate) bearing_degrees: Option<f64>,
+    /// Degrees above level, signed as the rise: 90 when vertical.
+    pub(crate) grade_degrees: f64,
+    /// Rise over plan length in percent; `None` for a vertical segment.
+    pub(crate) grade_percent: Option<f64>,
+}
+
+/// The readout from `start` to `end`, `bulge` making it an arc; `None` for a
+/// segment of no length.
+pub(crate) fn segment_readout(start: DVec3, end: DVec3, bulge: f64) -> Option<SegmentReadout> {
+    let chord = end - start;
+    let plan = match crate::model::geometry::bulge_arc_parameters(start, end, bulge) {
+        Some((_, _, sweep, radius)) => radius * sweep.abs(),
+        None => chord.truncate().length(),
+    };
+    let length = plan.hypot(chord.z);
+    if length <= 1.0e-9 {
+        return None;
+    }
+    // Relative, so a vertical edge far from the origin keeps its form.
+    let vertical = plan <= 1.0e-6 * length.max(1.0);
+    Some(SegmentReadout {
+        length,
+        plan,
+        rise: chord.z,
+        // Clockwise from grid north, as the strike above, at the two places
+        // shown, a hair west of north reading 0 rather than 360.
+        bearing_degrees: (!vertical).then(|| {
+            let bearing = (chord.x.atan2(chord.y).to_degrees().rem_euclid(360.0) * 100.0).round() / 100.0;
+            if bearing >= 360.0 { 0.0 } else { bearing + 0.0 }
+        }),
+        grade_degrees: chord.z.atan2(plan).to_degrees(),
+        grade_percent: (!vertical).then(|| 100.0 * chord.z / plan),
+    })
+}
+
 pub(crate) const CIRCLE_TYPED_RESET_DISTANCE_POINTS: f32 = 8.0;
 
 /// Copy Along a String, a step inside the Polyline tool: the stroke's first
@@ -1747,6 +1793,10 @@ pub(crate) struct EditorState {
     pub(crate) stroke_leg_broken: bool,
     pub(crate) measurement_start: Option<DVec3>,
     pub(crate) measurement_end: Option<DVec3>,
+    /// Geology's readout of the string segment under the cursor while
+    /// Measure Distance waits for its first point, and that segment's two
+    /// vertices for the overlay to light.
+    pub(crate) measure_segment_hover: Option<(SegmentReadout, [crate::model::PolyVertex; 2])>,
     pub(crate) batter_angle_points: Vec<DVec3>,
 
     // Text editing
@@ -2557,6 +2607,12 @@ impl EditorState {
         self.cursor_mode.snaps()
     }
 
+    /// Whether Measure Distance reads the segment under the cursor: in
+    /// Geology, until its first point is set.
+    pub(crate) fn reads_segment_hover(&self) -> bool {
+        self.active_tool == ActiveTool::MeasureDistance && self.measurement_start.is_none() && self.active_workspace == Workspace::Geology
+    }
+
     pub(crate) fn view_mode_owns_canvas_click(&self) -> bool {
         self.fly_mode_enabled || (self.slice_mode_enabled && self.active_tool.section_refuses(self.active_workspace))
     }
@@ -2949,6 +3005,7 @@ impl EditorState {
         self.object_edit_dialog = None;
         self.measurement_start = None;
         self.measurement_end = None;
+        self.measure_segment_hover = None;
         self.batter_angle_points.clear();
         self.text_editing_enabled = false;
         self.editing_labels_id = None;
@@ -3226,6 +3283,7 @@ impl EditorState {
             stroke_leg_broken: false,
             measurement_start: None,
             measurement_end: None,
+            measure_segment_hover: None,
             batter_angle_points: Vec::new(),
             pending_text: String::new(),
             pending_text_height: 15.0,

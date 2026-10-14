@@ -372,6 +372,8 @@ impl<'a> Graphics<'a> {
             editor.measurement_start,
             editor.measurement_end,
             editor.batter_angle_points.clone(),
+            // A workspace switch puts the hovered segment's highlight down.
+            editor.reads_segment_hover(),
         );
         if measurement_state != self.cached_measurement_state {
             self.cached_measurement_state = measurement_state;

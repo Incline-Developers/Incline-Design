@@ -267,6 +267,9 @@ fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, wor
     let previous_workspace = editor.active_workspace;
     editor.active_workspace = workspace;
     editor.vertex_edit_run = None;
+    // Only Geology reads a segment as Measure Distance hovers; the renderer
+    // sees the switch and takes the highlight down.
+    editor.measure_segment_hover = None;
     if workspace != Workspace::DrillAndBlast && editor.drill_pattern_open {
         editor.close_drill_pattern();
     }
@@ -583,7 +586,7 @@ pub(crate) enum GeologyRow {
 
 /// Geology Design's lower half in menu order; [`geology_design_groups`] cuts
 /// it into submenus and the macOS menu tags rows by index into it.
-pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 39] = [
+pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 40] = [
     GeologyRow::Tool(ActiveTool::MakePoint),
     GeologyRow::Tool(ActiveTool::MakeLine),
     GeologyRow::Tool(ActiveTool::MakePoly),
@@ -623,6 +626,7 @@ pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 39] = [
     GeologyRow::DrapeAlongTriangles,
     GeologyRow::CreateTriangulation,
     GeologyRow::Tool(ActiveTool::MeasureBatterAngle),
+    GeologyRow::Tool(ActiveTool::MeasureDistance),
 ];
 
 /// Geology Design's submenus: title and run of [`GEOLOGY_DESIGN_ROWS`]. The
@@ -663,6 +667,7 @@ impl GeologyRow {
                 ActiveTool::InsertPoint => tr!("ws-menubar-geology-insert-point"),
                 ActiveTool::FillSegment => tr!("ws-menubar-geology-fill-segment"),
                 ActiveTool::DrapeToTopology => tr!("common-drape-topology"),
+                ActiveTool::MeasureDistance => tr!("toolbars-measure-distance"),
                 _ => tr!("toolbars-strike-dip"),
             },
             Self::SetAxis(axis) => tr!("common-set") + &format!(" {}...", axis.label()),

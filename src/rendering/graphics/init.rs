@@ -866,7 +866,7 @@ impl<'a> Graphics<'a> {
             cached_object_aabbs: Vec::new(),
             overlay_dirty: true,
             cached_scale_factor: 0.0,
-            cached_measurement_state: (false, None, None, Vec::new()),
+            cached_measurement_state: (false, None, None, Vec::new(), false),
             cached_poly_finish_dialog: false,
             cached_thin_preview: None,
             pick_records: Vec::new(),
