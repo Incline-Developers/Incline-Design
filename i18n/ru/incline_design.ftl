@@ -2217,7 +2217,6 @@ blast-peak-mass-kg-time-ms = Пик { $mass } кг в { $time } мс
 blast-peak-holes-hole-time-ms = Пик: скважин — { $holes } в { $time } мс
 blast-peak-over-limit = , превышение на { $over } кг
 blast-peak-within-limit = , в пределах нормы
-blast-top-surface-signal-lighting-each-downline = Сверху: поверхностный сигнал, запускающий каждую линию. Снизу: детонации. Щёлкните или перетащите, чтобы переместить маркер воспроизведения.
 products-charge-rules = Правила заряжания
 products-new-rule = Новое правило
 products-charge-products = Продукты заряжания

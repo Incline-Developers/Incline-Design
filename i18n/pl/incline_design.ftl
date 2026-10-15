@@ -2233,7 +2233,6 @@ blast-peak-mass-kg-time-ms = Szczyt { $mass } kg o { $time } ms
 blast-peak-holes-hole-time-ms = Szczyt: otwory: { $holes } o { $time } ms
 blast-peak-over-limit = , { $over } kg ponad limit
 blast-peak-within-limit = , w granicach limitu
-blast-top-surface-signal-lighting-each-downline = Góra: sygnał powierzchniowy docierający do kolejnych łączników. Dół: detonacje. Kliknij lub przeciągnij, aby przesunąć znacznik odtwarzania.
 products-charge-rules = Reguły ładowania
 products-new-rule = Nowa reguła
 products-charge-products = Produkty ładunkowe

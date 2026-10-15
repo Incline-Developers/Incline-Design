@@ -2163,7 +2163,6 @@ blast-peak-mass-kg-time-ms = اوج { $mass } kg در { $time } ms
 blast-peak-holes-hole-time-ms = اوج { $holes } چال در { $time } ms
 blast-peak-over-limit = ، { $over } kg بیش از حد
 blast-peak-within-limit = ، در حد مجاز
-blast-top-surface-signal-lighting-each-downline = بالا: سیگنال سطحی که هر دان‌لاین را روشن می‌کند. پایین: انفجارها. برای جابه‌جایی نشانگر پخش کلیک کنید یا بکشید.
 products-charge-rules = قوانین شارژ
 products-new-rule = قانون جدید
 products-charge-products = محصولات شارژ

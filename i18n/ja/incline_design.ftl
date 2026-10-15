@@ -2191,7 +2191,6 @@ blast-peak-mass-kg-time-ms = ピーク { $mass } kg（{ $time } ms）
 blast-peak-holes-hole-time-ms = ピーク { $holes } 孔（{ $time } ms）
 blast-peak-over-limit = 、{ $over } kg 超過
 blast-peak-within-limit = 、上限内
-blast-top-surface-signal-lighting-each-downline = 上段: 各ダウンラインに点火する地表信号。下段: 起爆。クリックまたはドラッグで再生ヘッドを移動します。
 products-charge-rules = 装薬ルール
 products-new-rule = 新しいルール
 products-charge-products = 装薬製品

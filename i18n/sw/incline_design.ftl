@@ -2195,7 +2195,6 @@ blast-peak-mass-kg-time-ms = Kilele kg { $mass } saa ms { $time }
 blast-peak-holes-hole-time-ms = Kilele mashimo { $holes } saa ms { $time }
 blast-peak-over-limit = , kg { $over } juu ya kikomo
 blast-peak-within-limit = , ndani ya kikomo
-blast-top-surface-signal-lighting-each-downline = Juu: ishara ya juu inayowasha kila downline. Chini: milipuko. Bofya au buruta ili kusogeza kichwa cha uchezaji.
 products-charge-rules = Kanuni za Chaji
 products-new-rule = Kanuni Mpya
 products-charge-products = Bidhaa za Chaji

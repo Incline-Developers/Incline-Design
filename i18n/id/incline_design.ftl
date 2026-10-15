@@ -2163,7 +2163,6 @@ blast-peak-mass-kg-time-ms = Puncak { $mass } kg pada { $time } ms
 blast-peak-holes-hole-time-ms = Puncak { $holes } lubang pada { $time } ms
 blast-peak-over-limit = , melebihi { $over } kg
 blast-peak-within-limit = , dalam batas
-blast-top-surface-signal-lighting-each-downline = Atas: sinyal permukaan menyalakan setiap downline. Bawah: detonasi. Klik atau seret untuk menggeser playhead.
 products-charge-rules = Aturan Isian
 products-new-rule = Aturan Baru
 products-charge-products = Produk Isian

@@ -2269,8 +2269,8 @@ blast-powder-factor = Powder factor
 blast-not-loaded = Not loaded
 blast-count-primer-delay-ms-downhole = { $count } primer(s) · { $delay } ms downhole
 blast-set-initiation-point-tie-holes-play = Set an initiation point and tie the holes in to play the round
-blast-pause = Pause
-blast-play = Play
+blast-pause = Pause (Space)
+blast-play = Play (Space)
 blast-back-start = Back to the start
 blast-duration-ms = of { $duration } ms
 blast-real-time = Real time
@@ -2284,7 +2284,6 @@ blast-peak-mass-kg-time-ms = Peak { $mass } kg at { $time } ms
 blast-peak-holes-hole-time-ms = Peak { $holes } hole(s) at { $time } ms
 blast-peak-over-limit = , { $over } kg over
 blast-peak-within-limit = , within limit
-blast-top-surface-signal-lighting-each-downline = Top: the surface signal lighting each downline. Below: detonations. Click or drag to move the playhead.
 
 ## Products palette and charge rules
 

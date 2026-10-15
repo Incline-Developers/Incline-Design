@@ -2163,7 +2163,6 @@ blast-peak-mass-kg-time-ms = الذروة { $mass } kg عند { $time } ms
 blast-peak-holes-hole-time-ms = الذروة { $holes } حفرة عند { $time } ms
 blast-peak-over-limit = ، تتجاوز الحد بمقدار { $over } kg
 blast-peak-within-limit = ، ضمن الحد
-blast-top-surface-signal-lighting-each-downline = الأعلى: إشارة السطح تضيء كل خط هابط. الأسفل: الانفجارات. انقر أو اسحب لتحريك رأس التشغيل.
 products-charge-rules = قواعد الشحن
 products-new-rule = قاعدة جديدة
 products-charge-products = منتجات الشحنة

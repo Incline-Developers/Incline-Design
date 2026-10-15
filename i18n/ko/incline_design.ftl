@@ -2196,7 +2196,6 @@ blast-peak-mass-kg-time-ms = 최대 { $mass } kg, { $time } ms
 blast-peak-holes-hole-time-ms = 최대 발파공 { $holes }개, { $time } ms
 blast-peak-over-limit = , { $over } kg 초과
 blast-peak-within-limit = , 한도 이내
-blast-top-surface-signal-lighting-each-downline = 위: 각 다운라인에 점화되는 지표 신호. 아래: 기폭. 클릭하거나 드래그하여 재생 위치를 이동하세요.
 products-charge-rules = 장약 규칙
 products-new-rule = 새 규칙
 products-charge-products = 장약 제품

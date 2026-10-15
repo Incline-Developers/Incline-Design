@@ -2163,7 +2163,6 @@ blast-peak-mass-kg-time-ms = Pic de { $mass } kg à { $time } ms
 blast-peak-holes-hole-time-ms = Pic de { $holes } trou(s) à { $time } ms
 blast-peak-over-limit = , { $over } kg au-dessus
 blast-peak-within-limit = , dans la limite
-blast-top-surface-signal-lighting-each-downline = Haut : le signal de surface allumant chaque ligne descendante. Bas : les détonations. Cliquez ou faites glisser pour déplacer la tête de lecture.
 products-charge-rules = Règles de chargement
 products-new-rule = Nouvelle règle
 products-charge-products = Produits de chargement
