@@ -965,7 +965,11 @@ fn draw_ui(
     if editor.canvas_context_menu_open
         && let Some((px, py)) = editor.canvas_context_menu_px
     {
-        dialogs::editing::draw_right_click_context(root_ui, editor, project, commands, &mut geometry_dirty, document, px, py);
+        if editor.canvas_context_menu_recent {
+            dialogs::editing::draw_recent_functions_context(root_ui, editor, commands, px, py);
+        } else {
+            dialogs::editing::draw_right_click_context(root_ui, editor, project, commands, &mut geometry_dirty, document, px, py);
+        }
     }
 
     // --- Tool-specific dialogs ---

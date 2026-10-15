@@ -1,7 +1,7 @@
 use crate::{
     app::App,
     i18n::tr,
-    ui::state::{ActiveTool, DelayProduct},
+    ui::state::{ActiveTool, DelayProduct, RECENT_FUNCTION_LIMIT, note_recent},
     userspace_log, userspace_warn,
 };
 
@@ -168,6 +168,7 @@ impl<'a> App<'a> {
             crate::app::io::finite_clamped(preferences.fly_mouse_look_sensitivity, 0.0001, 0.02, crate::app::io::default_fly_mouse_look_sensitivity());
         preferences.fly_near_clip_limit = crate::app::io::finite_clamped(preferences.fly_near_clip_limit, 0.01, 100.0, crate::app::io::default_fly_near_clip_limit());
         preferences.fly_max_clip_span = crate::app::io::finite_clamped(preferences.fly_max_clip_span, 100.0, 1_000_000.0, crate::app::io::default_fly_max_clip_span());
+        preferences.recent_functions_shown = preferences.recent_functions_shown.clamp(1, RECENT_FUNCTION_LIMIT as u32);
 
         // Apply to the editor before attempting to save. A save failure must
         // not leave the editor holding a stale style: a widget whose draft no
@@ -206,6 +207,7 @@ impl<'a> App<'a> {
         self.editor.fly_invert_horizontal_look = preferences.fly_invert_horizontal_look;
         self.editor.fly_near_clip_limit = preferences.fly_near_clip_limit;
         self.editor.fly_max_clip_span = preferences.fly_max_clip_span;
+        self.editor.recent_functions_shown = preferences.recent_functions_shown;
         // Language applies live. Nothing holds a translated string between
         // frames, so installing the bundle and asking for the redraw at the end
         // of this function is the whole switch - no restart, no font reload.
@@ -242,8 +244,27 @@ impl<'a> App<'a> {
             self.editor.blast_library.clone(),
             self.editor.survey.definitions.clone(),
             self.editor.survey.local_system.clone(),
+            self.editor.recent_design_functions.clone(),
         ))?;
 
+        Ok(())
+    }
+
+    /// Remember a menu function as just used and save the list with the rest
+    /// of the config; no project is touched, so nothing turns dirty.
+    pub(crate) fn note_recent_function(&mut self, key: &'static str) -> anyhow::Result<()> {
+        if !self.editor.recent_functions_mut().is_some_and(|list| note_recent(list, key)) {
+            return Ok(());
+        }
+        crate::app::io::save_config(&config_from(
+            &self.editor.current_preferences(),
+            self.editor.workspace_order,
+            self.editor.delay_products.iter().map(DelayProduct::to_stored).collect(),
+            self.editor.blast_library.clone(),
+            self.editor.survey.definitions.clone(),
+            self.editor.survey.local_system.clone(),
+            self.editor.recent_design_functions.clone(),
+        ))?;
         Ok(())
     }
 
@@ -335,6 +356,7 @@ pub(crate) fn config_from(
     blast_library: crate::model::blast::BlastLibrary,
     coordinate_systems: Vec<crate::model::survey::SystemDefinition>,
     mine_coordinate_system: Option<String>,
+    recent_design_functions: Vec<String>,
 ) -> crate::app::io::Config {
     crate::app::io::Config {
         language: preferences.language,
@@ -372,5 +394,7 @@ pub(crate) fn config_from(
         coordinate_systems,
         mine_coordinate_system,
         workspace_order: workspace_order.to_vec(),
+        recent_functions_shown: preferences.recent_functions_shown,
+        recent_design_functions,
     }
 }

@@ -874,6 +874,16 @@ impl<'a> App<'a> {
     }
 
     fn handle_mouse_press(&mut self, event: &WindowEvent) {
+        // An orbit or pan starts on these presses: the canvas menu goes, as on
+        // a left press below. A quick right click reopens it on release.
+        if let WindowEvent::MouseInput {
+            state: ElementState::Pressed,
+            button: MouseButton::Right | MouseButton::Middle,
+            ..
+        } = event
+        {
+            self.editor.canvas_context_menu_open = false;
+        }
         if let WindowEvent::MouseInput {
             state: ElementState::Pressed,
             button: MouseButton::Left,
@@ -1168,6 +1178,14 @@ impl<'a> App<'a> {
                         crate::model::SceneEntityId::Triangulation(id) => Some(id),
                         _ => None,
                     };
+                    self.editor.canvas_context_menu_recent = false;
+                    self.editor.canvas_context_menu_open = true;
+                    self.editor.canvas_context_menu_px = self.editor.cursor_screen_px;
+                    self.redraw_requested = true;
+                } else if self.editor.keeps_recent_functions() {
+                    // Empty space: the recent functions; the selection stays.
+                    self.editor.canvas_context_menu_hole = None;
+                    self.editor.canvas_context_menu_recent = true;
                     self.editor.canvas_context_menu_open = true;
                     self.editor.canvas_context_menu_px = self.editor.cursor_screen_px;
                     self.redraw_requested = true;

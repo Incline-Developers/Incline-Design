@@ -52,6 +52,7 @@ impl App<'_> {
             self.editor.blast_library.clone(),
             definitions,
             local,
+            self.editor.recent_design_functions.clone(),
         );
         Ok(crate::app::io::save_config(&config)?)
     }

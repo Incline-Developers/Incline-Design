@@ -57,16 +57,35 @@ impl ContextMenu {
         self
     }
 
-    pub(crate) fn show<R>(self, ctx: &egui::Context, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<R> {
+    /// Draw the menu, and report whether the user dismissed it this frame:
+    /// Escape, or a primary click outside it once it has been up a frame (the
+    /// click that opened it does not count), as egui's own popups close. A
+    /// click while one of its popups (a combo, a colour picker) is open is
+    /// left to that popup.
+    pub(crate) fn show<R>(self, ctx: &egui::Context, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> (egui::InnerResponse<R>, bool) {
         let Self { id, title, position, width } = self;
-        egui::Area::new(id)
+        let child_popup_open = egui::Popup::is_any_open(ctx);
+        let response = egui::Area::new(id)
             .order(egui::Order::Foreground)
             .movable(false)
             .constrain(true)
             .fade_in(false)
             .pivot(egui::Align2::LEFT_TOP)
             .current_pos(position)
-            .show(ctx, |ui| menu_frame(ui.style()).show(ui, |ui| draw_body(ui, &title, width, add_contents)).inner)
+            .show(ctx, |ui| menu_frame(ui.style()).show(ui, |ui| draw_body(ui, &title, width, add_contents)).inner);
+        // (frame first shown, frame last shown); a gap means it was reopened.
+        let frame = ctx.cumulative_frame_nr();
+        let (opened, _) = ctx.data_mut(|data| {
+            let shown = data.get_temp_mut_or(id, (frame, frame));
+            if shown.1 + 1 < frame {
+                *shown = (frame, frame);
+            }
+            shown.1 = frame;
+            *shown
+        });
+        let clicked_outside = opened < frame && !child_popup_open && ctx.input(|input| input.pointer.primary_clicked()) && response.response.clicked_elsewhere();
+        let dismissed = clicked_outside || ctx.input(|input| input.key_pressed(egui::Key::Escape));
+        (response, dismissed)
     }
 }
 
@@ -211,7 +230,6 @@ impl ContextMenuAction {
         self
     }
 
-    #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub(crate) fn submenu(mut self, submenu: bool) -> Self {
         self.submenu = submenu;
         self
@@ -382,7 +400,6 @@ pub(crate) fn dropdown_menu<R>(
 ///
 /// The nested popup is egui's own [`egui::containers::menu::SubMenu`], so hover
 /// timing and keyboard navigation behave exactly as elsewhere.
-#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub(crate) fn context_submenu<R>(ui: &mut egui::Ui, label: &str, enabled: bool, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> Option<egui::InnerResponse<R>> {
     let response = ContextMenuAction::new(label).enabled(enabled).submenu(true).show(ui);
     if !enabled {

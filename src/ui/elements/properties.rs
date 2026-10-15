@@ -388,6 +388,7 @@ fn reset_interface_defaults(draft: &mut PreferencesDraft) {
     draft.ui_size_percent = defaults.ui_size_percent;
     draft.show_world_axis_gizmo = defaults.show_world_axis_gizmo;
     draft.show_scale_bar = defaults.show_scale_bar;
+    draft.recent_functions_shown = defaults.recent_functions_shown;
 }
 
 fn reset_developer_defaults(draft: &mut PreferencesDraft) {
@@ -459,6 +460,18 @@ fn draw_interface_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
             );
             changed |= committed(&MenuFieldBool::new(tr!("properties-world-axis-gizmo"), &mut draft.show_world_axis_gizmo).show(ui));
             changed |= committed(&MenuFieldBool::new(tr!("common-scale-bar"), &mut draft.show_scale_bar).show(ui));
+            let shown = draft.recent_functions_shown.to_string();
+            let options = [10, 15, 20].map(|count: u32| (count, count.to_string().into()));
+            changed |= committed(
+                &MenuFieldCombo::new(
+                    "preferences_recent_functions_shown",
+                    tr!("preferences-recent-functions-shown"),
+                    &mut draft.recent_functions_shown,
+                    shown,
+                    options,
+                )
+                .show(ui),
+            );
             changed
         },
         Some(reset_interface_defaults),
