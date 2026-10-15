@@ -93,7 +93,7 @@ impl App<'_> {
         // A grid whose parent chain cannot be resolved - a missing parent, or
         // one that leads back here - would fail on every use, so it is caught
         // before it reaches the config rather than after.
-        crate::model::survey::resolve_system(&name, &definitions)?;
+        crate::model::survey::check_parents(&name, &definitions)?;
         let first = definitions.len() == 1;
         definitions.sort_by(|a, b| a.name.cmp(&b.name));
         // A rename carries the mine-system mark with the system it belongs to,

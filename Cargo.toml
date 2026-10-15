@@ -67,6 +67,7 @@ winit = "0.30.13"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 dirs = "7.0.0"
+egui_system_font_provider = "0.37.0"
 egui-winit = "0.37.0"
 i18n-embed = { version = "0.16.0", features = ["desktop-requester"] }
 memmap2 = "0.9.11"
@@ -93,6 +94,7 @@ web-sys = { version = "0.3.105", features = [
     "BeforeUnloadEvent",
     "Blob",
     "BlobPropertyBag",
+    "CanvasRenderingContext2d",
     "Clipboard",
     "Document",
     "Element",
@@ -111,10 +113,13 @@ web-sys = { version = "0.3.105", features = [
     "IdbTransaction",
     "IdbTransactionMode",
     "IdbVersionChangeEvent",
+    "ImageData",
     "MediaQueryList",
     "Navigator",
     "Node",
+    "Response",
     "Storage",
+    "TextMetrics",
     "Url",
     "Window",
 ] }

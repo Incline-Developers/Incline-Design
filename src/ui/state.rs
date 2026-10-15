@@ -1660,6 +1660,8 @@ pub(crate) struct EditorState {
     pub(crate) tri_cut_z_tri_id: Option<TriangulationId>,
     pub(crate) tri_cut_z_min_input: f64,
     pub(crate) tri_cut_z_max_input: f64,
+    /// The source surface's elevation extent, which the range moves within.
+    pub(crate) tri_cut_z_limits: (f64, f64),
     pub(crate) tri_cut_z_name_input: String,
     pub(crate) tri_cut_z_unload_source: bool,
 
@@ -1700,6 +1702,8 @@ pub(crate) struct EditorState {
     pub(crate) tri_contour_use_z_range: bool,
     pub(crate) tri_contour_z_min_input: f64,
     pub(crate) tri_contour_z_max_input: f64,
+    /// The source surface's elevation extent, which the range moves within.
+    pub(crate) tri_contour_z_limits: (f64, f64),
     /// `None` creates a new layer; `Some` appends to an existing active project layer.
     pub(crate) tri_contour_target_layer: Option<LayerId>,
     pub(crate) tri_contour_layer_name_input: String,
@@ -2688,6 +2692,7 @@ impl EditorState {
             tri_cut_z_tri_id: None,
             tri_cut_z_min_input: 0.0,
             tri_cut_z_max_input: 100.0,
+            tri_cut_z_limits: (0.0, 100.0),
             tri_cut_z_name_input: String::new(),
             tri_cut_z_unload_source: true,
             tri_cut_surface_open: false,
@@ -2719,6 +2724,7 @@ impl EditorState {
             tri_contour_use_z_range: false,
             tri_contour_z_min_input: 0.0,
             tri_contour_z_max_input: 100.0,
+            tri_contour_z_limits: (0.0, 100.0),
             tri_contour_target_layer: None,
             tri_contour_layer_name_input: tr!("common-surface-contours"),
             tri_contour_layer_name_auto: true,

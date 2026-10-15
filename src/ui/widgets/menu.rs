@@ -1221,6 +1221,69 @@ impl<'value> MenuFieldU32<'value> {
     }
 }
 
+/// A labelled low-high pair inside known limits: a two-handled rail between
+/// the two numbers, which can also be dragged or typed into.
+pub(crate) struct MenuFieldRange<'value> {
+    label: egui::WidgetText,
+    help_text: Option<egui::WidgetText>,
+    low: &'value mut f64,
+    high: &'value mut f64,
+    limits: std::ops::RangeInclusive<f64>,
+    width: Option<f32>,
+}
+
+impl<'value> MenuFieldRange<'value> {
+    /// `low` and `high` are pulled inside `limits`, and `low` below `high`.
+    pub(crate) fn new(label: impl Into<egui::WidgetText>, low: &'value mut f64, high: &'value mut f64, limits: std::ops::RangeInclusive<f64>) -> Self {
+        Self {
+            label: label.into(),
+            help_text: None,
+            low,
+            high,
+            limits,
+            width: None,
+        }
+    }
+
+    pub(crate) fn width(mut self, width: f32) -> Self {
+        self.width = Some(width);
+        self
+    }
+
+    pub(crate) fn help_text(mut self, text: impl Into<egui::WidgetText>) -> Self {
+        self.help_text = Some(text.into());
+        self
+    }
+
+    pub(crate) fn show(self, ui: &mut egui::Ui) -> egui::Response {
+        let Self {
+            label,
+            help_text,
+            low,
+            high,
+            limits,
+            width,
+        } = self;
+        menu_field_row(ui, label, help_text, |ui, row_height, column_width| {
+            let width = width.unwrap_or(column_width);
+            ui.allocate_ui_with_layout(egui::vec2(width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                // Each number gets a little under a third of the row and the
+                // rail the rest, so the row fills the column like its neighbours.
+                let gap = ui.spacing().item_spacing.x;
+                let number_width = ((width - 2.0 * gap) * RANGE_NUMBER_SHARE).floor();
+                let spacing = ui.spacing_mut();
+                spacing.interact_size.x = number_width;
+                spacing.slider_width = (width - 2.0 * (number_width + gap)).max(0.0);
+                ui.add(egui::RangeSlider::new(low, high, limits).smart_aim(false).max_decimals(2))
+            })
+            .inner
+        })
+    }
+}
+
+/// The share of a [`MenuFieldRange`] row each of its two numbers takes.
+const RANGE_NUMBER_SHARE: f32 = 0.3;
+
 /// A consistently aligned single-line text field for draggable and docked menus.
 pub(crate) struct MenuFieldText<'value> {
     label: egui::WidgetText,
@@ -1266,6 +1329,35 @@ impl<'value> MenuFieldText<'value> {
         } = self;
         menu_field_row(ui, label, help_text, |ui, row_height, column_width| {
             ui.add_sized([width.unwrap_or(column_width), row_height], egui::TextEdit::singleline(value).hint_text(hint))
+        })
+    }
+
+    /// [`Self::show`] with a completion popup under the field: `suggest` is
+    /// asked about the whole text as it changes. Returns the field's response
+    /// and the suggestion the user accepted - with Enter, Tab, or a click -
+    /// which replaces the text with its `insert`.
+    pub(crate) fn show_with_completions(
+        self,
+        ui: &mut egui::Ui,
+        id_salt: impl egui::AsIdSalt,
+        suggest: impl FnOnce(&egui::CompletionQuery<'_>) -> Vec<egui::Suggestion>,
+    ) -> (egui::Response, Option<egui::Suggestion>) {
+        let Self {
+            label,
+            help_text,
+            value,
+            width,
+            hint,
+        } = self;
+        let id = ui.scope_id().with(id_salt);
+        menu_field_row(ui, label, help_text, |ui, row_height, column_width| {
+            let width = width.unwrap_or(column_width);
+            let text_edit = egui::TextEdit::singleline(value)
+                .hint_text(hint)
+                .desired_width(width)
+                .min_size(egui::vec2(width, row_height));
+            let output = egui::CompletionPopup::new(id).word_boundary(|_| false).show(ui, text_edit, suggest);
+            (output.text_edit.response.response, output.accepted)
         })
     }
 }

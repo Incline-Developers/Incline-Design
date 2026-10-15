@@ -3,6 +3,8 @@
 //! The `Gui` struct owns the egui context, winit state, and wgpu renderer.
 //! `render()` processes input, calls `draw_ui()`, and feeds paint jobs back to wgpu.
 
+#[cfg(target_arch = "wasm32")]
+mod canvas_glyphs;
 pub(crate) mod chrome;
 pub(crate) mod dialogs;
 pub(crate) mod elements;
@@ -144,6 +146,12 @@ impl Gui {
 
     pub(crate) fn pointer_over_ui(&self) -> bool {
         self.ctx.is_pointer_over_egui()
+    }
+
+    /// Swap the fetched CJK faces in for the browser-drawn stand-ins.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn reload_fonts(&self) {
+        setup_custom_fonts(&self.ctx);
     }
 
     /// Queue text received from the browser's paste event for the next egui frame.
