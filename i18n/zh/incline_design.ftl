@@ -2163,7 +2163,6 @@ blast-peak-mass-kg-time-ms = 峰值 { $mass } kg，位于 { $time } ms
 blast-peak-holes-hole-time-ms = 峰值 { $holes } 个炮孔，位于 { $time } ms
 blast-peak-over-limit = ，超出 { $over } kg
 blast-peak-within-limit = ，在限值内
-blast-top-surface-signal-lighting-each-downline = 上方：点亮各条下行线的地表信号。下方：起爆。点击或拖动可移动播放头。
 products-charge-rules = 装药规则
 products-new-rule = 新建规则
 products-charge-products = 装药产品

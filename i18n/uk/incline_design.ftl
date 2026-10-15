@@ -2210,7 +2210,6 @@ blast-peak-mass-kg-time-ms = Пік { $mass } кг на { $time } мс
 blast-peak-holes-hole-time-ms = Пік: свердловин — { $holes }, на { $time } мс
 blast-peak-over-limit = , перевищення на { $over } кг
 blast-peak-within-limit = , у межах ліміту
-blast-top-surface-signal-lighting-each-downline = Угорі: поверхневий сигнал, що запалює кожну ударну трубку. Унизу: детонації. Клацніть або перетягніть, щоб перемістити позначку відтворення.
 products-charge-rules = Правила заряджання
 products-new-rule = Нове правило
 products-charge-products = Засоби заряджання

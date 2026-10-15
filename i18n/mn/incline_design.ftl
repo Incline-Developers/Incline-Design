@@ -2214,7 +2214,6 @@ blast-peak-mass-kg-time-ms = Оргил { $mass } kg, { $time } мс-д
 blast-peak-holes-hole-time-ms = Оргил { $holes } цооног, { $time } мс-д
 blast-peak-over-limit = , { $over } kg-аар хэтэрсэн
 blast-peak-within-limit = , хязгаар дотор
-blast-top-surface-signal-lighting-each-downline = Дээд: цооног тус бүрийн доош шугамыг асаах гадаргуугийн дохио. Доод: тэсрэлтүүд. Тоглуулах заагчийг зөөхийн тулд товшино уу эсвэл чирнэ үү.
 products-charge-rules = Цэнэглэх дүрмүүд
 products-new-rule = Шинэ дүрэм
 products-charge-products = Цэнэглэх бүтээгдэхүүнүүд

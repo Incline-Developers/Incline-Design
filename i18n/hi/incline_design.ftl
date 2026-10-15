@@ -2163,7 +2163,6 @@ blast-peak-mass-kg-time-ms = { $time } ms पर शिखर { $mass } kg
 blast-peak-holes-hole-time-ms = { $time } ms पर शिखर { $holes } छेद
 blast-peak-over-limit = , { $over } kg अधिक
 blast-peak-within-limit = , सीमा के भीतर
-blast-top-surface-signal-lighting-each-downline = ऊपर: सतही संकेत जो प्रत्येक डाउनलाइन को प्रज्वलित करता है। नीचे: विस्फोट। प्लेहेड हिलाने के लिए क्लिक करें या खींचें।
 products-charge-rules = चार्ज नियम
 products-new-rule = नया नियम
 products-charge-products = चार्ज उत्पाद

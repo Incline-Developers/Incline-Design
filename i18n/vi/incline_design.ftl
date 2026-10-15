@@ -2189,7 +2189,6 @@ blast-peak-mass-kg-time-ms = Đỉnh { $mass } kg lúc { $time } ms
 blast-peak-holes-hole-time-ms = Đỉnh { $holes } lỗ khoan lúc { $time } ms
 blast-peak-over-limit = , vượt { $over } kg
 blast-peak-within-limit = , trong giới hạn
-blast-top-surface-signal-lighting-each-downline = Trên: tín hiệu bề mặt kích hoạt từng dây dẫn. Dưới: các vụ nổ. Nhấp hoặc kéo để di chuyển đầu phát.
 products-charge-rules = Quy tắc nạp
 products-new-rule = Quy tắc mới
 products-charge-products = Sản phẩm nạp

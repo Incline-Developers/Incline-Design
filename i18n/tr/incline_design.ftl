@@ -2205,7 +2205,6 @@ blast-peak-mass-kg-time-ms = Tepe { $mass } kg, { $time } ms
 blast-peak-holes-hole-time-ms = Tepe { $holes } delik, { $time } ms
 blast-peak-over-limit = , { $over } kg fazla
 blast-peak-within-limit = , sınır içinde
-blast-top-surface-signal-lighting-each-downline = Üstte: her ana hattı ateşleyen yüzey sinyali. Altta: patlamalar. Oynatma kafasını taşımak için tıklayın veya sürükleyin.
 products-charge-rules = Şarj Kuralları
 products-new-rule = Yeni Kural
 products-charge-products = Şarj Ürünleri

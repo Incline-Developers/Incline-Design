@@ -2204,7 +2204,6 @@ blast-peak-mass-kg-time-ms = Spitze { $mass } kg bei { $time } ms
 blast-peak-holes-hole-time-ms = Spitze { $holes } Loch/Löcher bei { $time } ms
 blast-peak-over-limit = , { $over } kg darüber
 blast-peak-within-limit = , innerhalb des Grenzwerts
-blast-top-surface-signal-lighting-each-downline = Oben: das Oberflächensignal, das jede Zündleitung entzündet. Unten: Detonationen. Klicken oder ziehen, um die Abspielposition zu verschieben.
 products-charge-rules = Laderegeln
 products-new-rule = Neue Regel
 products-charge-products = Ladeprodukte
