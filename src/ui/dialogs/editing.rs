@@ -371,7 +371,7 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, project: &UiProjectV
     // orbit the camera instead. It paints nothing: the window behind the
     // splash reads as it always does.
     let screen = ui.ctx().viewport_rect();
-    let backdrop = egui::Area::new(egui::Id::new("select_project_backdrop"))
+    let backdrop = egui::Area::new(egui::Id::unique("select_project_backdrop"))
         .fixed_pos(screen.min)
         .order(egui::Order::Middle)
         .show(ui.ctx(), |ui| ui.allocate_exact_size(screen.size(), egui::Sense::click()).1);
@@ -379,7 +379,7 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, project: &UiProjectV
         commands.push(UiCommand::CloseStartupDialog);
     }
 
-    egui::Area::new(egui::Id::new("select_project_dialog"))
+    egui::Area::new(egui::Id::unique("select_project_dialog"))
         .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
         .order(egui::Order::Foreground)
         .show(ui.ctx(), |ui| {
@@ -534,7 +534,7 @@ fn draw_splash_artwork(ui: &mut egui::Ui, width: f32) {
 fn splash_artwork_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
     const ARTWORK: &[u8] = include_bytes!("../../../res/ui/splash_artwork.png");
 
-    let id = egui::Id::new("splash_artwork_texture");
+    let id = egui::Id::unique("splash_artwork_texture");
     if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
         return Some(texture);
     }
@@ -629,7 +629,13 @@ fn draw_recent_projects(ui: &mut egui::Ui, recent: &[&crate::ui::state::UiTracke
         // list is scrolled - so the bands travel with the rows rather than
         // staying put under them.
         let box_rect = scroll.inner_rect;
-        let bands = crate::ui::widgets::explorer::stripe_bands(box_rect.x_range(), box_rect.top() - scroll.state.offset.y, box_rect.bottom(), row_height, stripe);
+        let bands = crate::ui::widgets::explorer::stripe_bands(
+            box_rect.x_range(),
+            box_rect.top() - scroll.state.unclamped_offset().y,
+            box_rect.bottom(),
+            row_height,
+            stripe,
+        );
         // Clipped to the box: when the list is scrolled the first band starts
         // above the box's top edge.
         ui.painter().with_clip_rect(box_rect).set(stripes_slot, bands);
@@ -739,7 +745,7 @@ pub(crate) fn draw_create_layer_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiC
 
 /// Draw the rename floating dialog for whichever explorer item is being renamed.
 pub(crate) fn draw_rename_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState) {
-    let opened_key = egui::Id::new("rename_dialog_opened");
+    let opened_key = egui::Id::unique("rename_dialog_opened");
     let Some((target, _)) = editor.renaming_item else {
         ui.data_mut(|data| data.remove::<RenameTarget>(opened_key));
         return;

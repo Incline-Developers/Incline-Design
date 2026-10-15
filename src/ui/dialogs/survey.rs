@@ -197,7 +197,7 @@ fn draw_definition_list(ui: &mut egui::Ui, state: &SurveyState, commands: &mut V
     for definition in &state.definitions {
         let name = definition.name.clone();
         let local = state.local_system.as_ref() == Some(&name);
-        let mut entry = ExplorerEntry::new(ui.id().with(("survey_system", &name)), name.clone()).selected(state.editing_name.as_ref() == Some(&name));
+        let mut entry = ExplorerEntry::new(ui.scope_id().with(("survey_system", &name)), name.clone()).selected(state.editing_name.as_ref() == Some(&name));
         // The mine coordinate system is where the project's numbers already
         // are, so it is worth seeing without reading any of the fields.
         if local {

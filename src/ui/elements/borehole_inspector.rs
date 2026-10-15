@@ -116,12 +116,12 @@ fn draw_body(
         BoreholeInspectorTab::Data => {
             // Columns come from the dataset, so every hole shows the same.
             let properties = DrillHoleProperties::new(("borehole_inspector", dataset.id, hole_index), hole, &dataset.dataset.fields);
-            CollapsibleSection::new("borehole_inspector_summary", tr!("borehole-inspector-summary"))
+            CollapsibleSection::new(egui::Id::unique("borehole_inspector_summary"), tr!("borehole-inspector-summary"))
                 .default_open(true)
                 .show(ui, |ui| ui.push_id((dataset.id, hole_index), |ui| properties.show_summary(ui)));
             if !hole.intervals.is_empty() {
                 ui.add_space(4.0);
-                CollapsibleSection::new("borehole_inspector_intervals", tr!("viewport-interval-data"))
+                CollapsibleSection::new(egui::Id::unique("borehole_inspector_intervals"), tr!("viewport-interval-data"))
                     .default_open(true)
                     .show(ui, |ui| {
                         // The table scrolls to fit what the panel has left,
@@ -132,7 +132,7 @@ fn draw_body(
             }
         }
         BoreholeInspectorTab::Log => {
-            CollapsibleSection::new("borehole_inspector_log_display", tr!("borehole-inspector-display"))
+            CollapsibleSection::new(egui::Id::unique("borehole_inspector_log_display"), tr!("borehole-inspector-display"))
                 .default_open(true)
                 .show(ui, |ui| draw_log_field_pickers(ui, editor, dataset, commands));
             ui.add_space(4.0);

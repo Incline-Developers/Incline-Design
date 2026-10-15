@@ -134,7 +134,7 @@ pub(crate) struct DataGrid {
 impl DataGrid {
     pub(crate) fn new(id_salt: impl Hash + std::fmt::Debug, columns: Vec<GridColumn>) -> Self {
         Self {
-            id: egui::Id::new(("data_grid", id_salt)),
+            id: egui::Id::unique(("data_grid", id_salt)),
             columns,
             buttons: GridButtons::default(),
             fill_height: None,

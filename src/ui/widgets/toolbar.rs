@@ -45,7 +45,7 @@ impl ToolbarButton {
     /// Give the clickable response a stable identity when its parent may be
     /// rebuilt in a different order during an egui sizing pass.
     pub(crate) fn id_salt(mut self, id_salt: impl Hash + std::fmt::Debug) -> Self {
-        self.id_salt = Some(egui::Id::new(id_salt));
+        self.id_salt = Some(egui::Id::unique(id_salt));
         self
     }
 }

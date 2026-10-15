@@ -251,7 +251,7 @@ pub(crate) fn draw_menu_heading(ui: &mut egui::Ui, title: &egui::WidgetText, rec
     if let Some(help_text) = help_text {
         let left = (rect.left() + TITLE_BAR_HORIZONTAL_PADDING + title_width + 6.0).min(rect.right() - TITLE_BAR_HORIZONTAL_PADDING - HELP_MARKER_SIZE);
         let marker = egui::Rect::from_min_size(egui::pos2(left, rect.center().y - HELP_MARKER_SIZE / 2.0), egui::Vec2::splat(HELP_MARKER_SIZE));
-        let response = ui.interact(marker, ui.id().with("menu_heading_help"), egui::Sense::hover());
+        let response = ui.interact(marker, ui.scope_id().with("menu_heading_help"), egui::Sense::hover());
         paint_help_marker(ui, marker, response, help_text);
     }
 }
@@ -326,7 +326,7 @@ impl<'open> DragableMenu<'open> {
     pub(crate) fn new(id_source: impl Hash + Debug, title: impl Into<egui::WidgetText>) -> Self {
         let title = title.into().fallback_text_style(egui::TextStyle::Button);
         Self {
-            id: egui::Id::new(("dragable_menu", id_source)),
+            id: egui::Id::unique(("dragable_menu", id_source)),
             title,
             title_bar: true,
             open: None,
@@ -510,7 +510,7 @@ pub(crate) fn title_bar_close_button(ui: &mut egui::Ui, rect: egui::Rect, surfac
     let dark_mode = ui.visuals().dark_mode;
     let close_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - TITLE_BAR_HEIGHT / 2.0, rect.center().y), egui::Vec2::splat(CLOSE_BUTTON_SIZE));
     let response = ui
-        .interact(close_rect, ui.id().with("close"), egui::Sense::click())
+        .interact(close_rect, ui.scope_id().with("close"), egui::Sense::click())
         .on_hover_cursor(egui::CursorIcon::PointingHand);
     if response.hovered() {
         ui.painter()
@@ -616,7 +616,7 @@ impl egui::Widget for MenuButton {
         // A disabled button senses hover only, so it can never report a click.
         let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
         let (rect, response) = ui.allocate_exact_size(egui::vec2(width, BUTTON_HEIGHT), sense);
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, galley.text()));
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, galley.text()));
         let response = if enabled { response.on_hover_cursor(egui::CursorIcon::PointingHand) } else { response };
 
         if ui.is_rect_visible(rect) {
@@ -753,7 +753,7 @@ const MENU_FIELD_MAX_WIDTH: f32 = 260.0;
 /// value, a vector triple) pass theirs through [`label_needs`] so they line up
 /// with the fields around them.
 pub(crate) fn field_column(ui: &egui::Ui, label_needs: f32) -> f32 {
-    let id = ui.id().with("menu_field_column");
+    let id = ui.scope_id().with("menu_field_column");
     let pass = ui.ctx().cumulative_pass_nr();
     let widest_label = ui.ctx().memory_mut(|memory| {
         let (last_pass, running, settled) = memory.data.get_temp::<(u64, f32, f32)>(id).unwrap_or((u64::MAX, 0.0, 0.0));
@@ -1131,7 +1131,7 @@ impl egui::Widget for SlidingToggle<'_> {
             response.mark_changed();
         }
 
-        response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), *self.value, ""));
+        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), *self.value, ""));
 
         if ui.is_rect_visible(rect) {
             let visuals = ui.style().interact_selectable(&response, *self.value);
@@ -1139,7 +1139,7 @@ impl egui::Widget for SlidingToggle<'_> {
             // assigned by allocation order within the enclosing panel, so switching
             // properties tabs lines a toggle up with whatever occupied that same slot
             // in the previous tab and replays a slide from its stale cached value.
-            let value_id = egui::Id::new(self.value as *const bool as usize);
+            let value_id = egui::Id::unique(self.value as *const bool as usize);
             let animation = ui.ctx().animate_bool_responsive(value_id, *self.value);
             let track_rect = egui::Rect::from_center_size(rect.center(), egui::vec2(TOGGLE_WIDTH, TOGGLE_HEIGHT));
             let radius = track_rect.height() / 2.0;
@@ -1339,7 +1339,7 @@ impl<'value, T: PartialEq> MenuFieldCombo<'value, T> {
         options: impl IntoIterator<Item = (T, egui::WidgetText)>,
     ) -> Self {
         Self {
-            id: egui::Id::new(id_source),
+            id: egui::Id::unique(id_source),
             label: label.into(),
             help_text: None,
             value,

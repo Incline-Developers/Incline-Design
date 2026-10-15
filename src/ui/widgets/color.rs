@@ -71,7 +71,7 @@ pub(crate) fn edit_srgba_unmultiplied(ui: &mut Ui, color: &mut [u8; 4]) -> Respo
 
 fn edit_button<T: Copy + PartialEq + Send + Sync + 'static>(ui: &mut Ui, value: &mut T, alpha: Alpha, decode: impl Fn(T) -> Hsva, encode: impl Fn(Hsva) -> T) -> Response {
     let (rect, mut response) = ui.allocate_exact_size(ui.spacing().interact_size, Sense::click());
-    response.widget_info(|| egui::WidgetInfo::new(egui::WidgetType::ColorButton));
+    response.widget_info(|| egui::WidgetInfo::new(egui::Role::ColorWell));
     let state_id = response.id.with("cad_color_state");
     let popup_id = response.id.with("cad_color_popup");
     let was_open = Popup::is_id_open(ui.ctx(), popup_id);
@@ -306,6 +306,6 @@ fn swatch(ui: &mut Ui, index: u8, selected: Option<u8>, size: egui::Vec2) -> Res
         ui.painter().rect_stroke(rect, 0.0, Stroke::new(3.0, Color32::BLACK), StrokeKind::Inside);
         ui.painter().rect_stroke(rect, 0.0, Stroke::new(1.0, Color32::WHITE), StrokeKind::Inside);
     }
-    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), selected == Some(index), index.to_string()));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), selected == Some(index), index.to_string()));
     response.on_hover_text(tr!("color-aci-value", index = index.to_string()))
 }

@@ -160,7 +160,7 @@ struct WorkspaceTabDrag {
 
 /// Draw the run of workspace tabs, sliding neighbours out of the dragged tab's way.
 fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, bar_fill: egui::Color32) {
-    let drag_id = ui.id().with("workspace-tab-drag");
+    let drag_id = ui.scope_id().with("workspace-tab-drag");
     let mut drag = ui.ctx().data_mut(|data| data.get_temp::<WorkspaceTabDrag>(drag_id));
     let font = egui::TextStyle::Button.resolve(ui.style());
     let widths = Workspace::ALL.map(|workspace| ui.painter().layout_no_wrap(workspace.label(), font.clone(), egui::Color32::PLACEHOLDER).size().x + TAB_PADDING * 2.0);
@@ -197,7 +197,7 @@ fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, commands: &m
     let mut x = strip.left();
     let mut tabs = Vec::new();
     for workspace in order {
-        let id = ui.id().with(("workspace-tab", workspace));
+        let id = ui.scope_id().with(("workspace-tab", workspace));
         let animated_x = ui.ctx().animate_value_with_time(id.with("position"), x, 0.12);
         let left = if let Some(drag) = &drag
             && drag.workspace == workspace
@@ -327,7 +327,7 @@ fn draw_workspace_tab(
     // say what state a tab is in; the sense is what stops it being clicked.
     let sense = if enabled { egui::Sense::click_and_drag() } else { egui::Sense::hover() };
     let response = ui.interact(rect, id, sense);
-    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, selected, workspace.label()));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, selected, workspace.label()));
 
     let visuals = ui.visuals();
     ui.painter().rect_filled(rect, GROUP_CORNER_RADIUS, tab_fill(visuals, bar_fill, state, response.hovered()));
