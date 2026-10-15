@@ -91,6 +91,7 @@ impl<'a> App<'a> {
         if !self.editor.slice_mode_enabled {
             return;
         }
+        self.forget_section_picks();
         self.editor.slice_mode_enabled = false;
         self.editor.slice_preview_detached = false;
         self.editor.slice_preview_navigation.reset();
@@ -107,6 +108,33 @@ impl<'a> App<'a> {
         self.clear_rotation_centre();
         self.redraw_requested = true;
         userspace_log!("{}", tr!("cmd-slice-exited-slice-view"));
+    }
+
+    /// Offset, Chamfer and Relimit picks made in a section's plane mean nothing
+    /// in plan, so each tool stays armed one step back: Offset at its dialog,
+    /// Chamfer and Relimit waiting for the corner or target pick.
+    fn forget_section_picks(&mut self) {
+        if self.drawing_section().is_none() {
+            return;
+        }
+        let editor = &mut self.editor;
+        if editor.offset_awaiting_side_pick {
+            editor.offset_awaiting_side_pick = false;
+            editor.offset_dialog_open = true;
+            editor.offset_preview_world.clear();
+            editor.offset_preview_screen_px.clear();
+            editor.offset_preview_ranges.clear();
+        }
+        editor.chamfer_poly_id = None;
+        editor.chamfer_corner_index = None;
+        editor.chamfer_gizmo_drag_start_px = None;
+        if editor.relimit_confirming_end {
+            editor.relimit_confirming_end = false;
+            editor.relimit_waiting_for_pick = true;
+            editor.relimit_second_id = None;
+            editor.relimit_candidates.clear();
+        }
+        self.invalidate_overlay();
     }
 
     /// Reset View while sliced: square the camera to the section plane, then

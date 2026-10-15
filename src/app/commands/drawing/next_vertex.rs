@@ -454,7 +454,7 @@ impl<'a> App<'a> {
     }
 
     /// The section a vertex must go onto: a Geology section, while one is up.
-    fn drawing_section(&self) -> Option<SectionSlab> {
+    pub(crate) fn drawing_section(&self) -> Option<SectionSlab> {
         if !self.editor.slice_mode_enabled || !self.editor.active_workspace.edits_in_slice_view() {
             return None;
         }

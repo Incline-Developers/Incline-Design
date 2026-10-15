@@ -543,7 +543,7 @@ pub(super) fn crossing_cuts(target: (&[PolyVertex], bool), cutters: &[(&[PolyVer
 
 /// Edge `edge` of `verts` as straight runs in `slab`'s frame, an arc as
 /// Insert Point's pick chords, each run with the edge parameters it spans.
-fn slab_runs(verts: &[PolyVertex], edge: usize, slab: SectionSlab) -> Vec<(DVec2, DVec2, f64, f64)> {
+pub(super) fn slab_runs(verts: &[PolyVertex], edge: usize, slab: SectionSlab) -> Vec<(DVec2, DVec2, f64, f64)> {
     let chords = match Curve::from_vertices(verts[edge], verts[(edge + 1) % verts.len()]) {
         Curve::Line { .. } => 1,
         Curve::Arc { .. } => ARC_PICK_CHORDS,

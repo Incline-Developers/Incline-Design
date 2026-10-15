@@ -1943,6 +1943,8 @@ pub(crate) struct EditorState {
     pub(crate) offset_angle_degrees: f64,
     pub(crate) offset_measure: OffsetMeasure,
     pub(crate) offset_value_input: f64,
+    /// The distance typed on a section, kept apart from the plan value.
+    pub(crate) offset_section_distance: f64,
     /// Phase 2: dialog closed, waiting for canvas click to pick side.
     pub(crate) offset_awaiting_side_pick: bool,
     /// Absolute horizontal offset distance (sign determined by cursor position).
@@ -3354,6 +3356,7 @@ impl EditorState {
             offset_angle_degrees: 60.0,
             offset_measure: OffsetMeasure::Distance,
             offset_value_input: 0.0,
+            offset_section_distance: 0.0,
             offset_awaiting_side_pick: false,
             offset_horiz_dist: 0.0,
             offset_z_delta: 0.0,
@@ -3997,6 +4000,9 @@ impl ActiveTool {
                 | Self::SplitAtCrossings
                 | Self::RemoveBetweenCrossings
                 | Self::ExplodePolylineToPoints
+                | Self::OffsetElement
+                | Self::RelimitLine
+                | Self::Chamfer
         )
     }
 

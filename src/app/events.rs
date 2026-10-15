@@ -545,18 +545,15 @@ impl<'a> App<'a> {
                                 crate::app::PICK_THRESHOLD_PX * 2.5,
                                 graphics.section_slab(),
                             );
-                            let hover_px = nearest.and_then(|(oid, _vi, world)| {
-                                let is_closed_polyline = self.scene_document.get_object(oid).is_some_and(|o| {
-                                    matches!(
-                                        o,
-                                        crate::model::Object::Polyline {
-                                            verts,
-                                            closed: true,
-                                            ..
-                                        } if verts.len() >= 3
-                                    )
+                            let on_section = self.drawing_section().is_some();
+                            let hover_px = nearest.and_then(|(oid, point, world)| {
+                                let is_corner = self.scene_document.get_object(oid).is_some_and(|o| match (o, point) {
+                                    (crate::model::Object::Polyline { verts, closed, .. }, crate::model::ObjectPoint::Vertex(vi)) => {
+                                        crate::app::commands::drawing::chamfer::chamfers_corner(verts, *closed, vi, on_section)
+                                    }
+                                    _ => false,
                                 });
-                                if !is_closed_polyline {
+                                if !is_corner {
                                     return None;
                                 }
                                 graphics.world_to_window_px(&vp, world)

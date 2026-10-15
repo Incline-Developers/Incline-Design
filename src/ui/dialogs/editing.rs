@@ -1014,73 +1014,88 @@ pub(crate) fn draw_offset_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand
         return;
     }
 
+    // On a section the offset is square to the string in its plane: slope and
+    // height are plan ideas there.
+    let on_section = editor.slice_mode_enabled && editor.active_workspace.edits_in_slice_view();
     ViewportDockPanel::new("offset_element_panel", tr!("edit-offset-element"), viewport_rect)
         .min_width(350.0)
         .show(ui.ctx(), |ui| {
-            let response = MenuFieldF64::new(tr!("edit-angle"), &mut editor.offset_angle_degrees, -90.0..=90.0)
-                .help_text(tr!("edit-slope-angle-offset-positive-negative"))
-                .width(70.0)
-                .speed(0.5)
-                .suffix(tr!("common-degree-suffix"))
-                .show(ui);
-            if response.changed() {
-                editor.offset_angle_degrees = editor.offset_angle_degrees.clamp(-90.0, 90.0);
-            }
+            if on_section {
+                MenuFieldF64::new(tr!("edit-offset-section-distance"), &mut editor.offset_section_distance, 0.0..=f64::MAX)
+                    .help_text(tr!("edit-offset-section-distance-help"))
+                    .speed(0.1)
+                    .suffix(tr!("common-m"))
+                    .show(ui);
+            } else {
+                let response = MenuFieldF64::new(tr!("edit-angle"), &mut editor.offset_angle_degrees, -90.0..=90.0)
+                    .help_text(tr!("edit-slope-angle-offset-positive-negative"))
+                    .width(70.0)
+                    .speed(0.5)
+                    .suffix(tr!("common-degree-suffix"))
+                    .show(ui);
+                if response.changed() {
+                    editor.offset_angle_degrees = editor.offset_angle_degrees.clamp(-90.0, 90.0);
+                }
 
-            ui.add_space(4.0);
+                ui.add_space(4.0);
 
-            MenuField::new(tr!("edit-measure")).help_text(tr!("edit-measure-help")).show(ui, |ui, _, _| {
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut editor.offset_measure, OffsetMeasure::Distance, tr!("edit-distance"));
-                    ui.selectable_value(&mut editor.offset_measure, OffsetMeasure::Width, tr!("drill-hole-width"));
-                    let height_active = matches!(editor.offset_measure, OffsetMeasure::Height(_));
-                    if ui.add(egui::Button::selectable(height_active, tr!("edit-height"))).clicked() && !height_active {
-                        editor.offset_measure = OffsetMeasure::Height(HeightMode::Relative);
-                    }
-                })
-                .response
-            });
-            if let OffsetMeasure::Height(ref mut mode) = editor.offset_measure {
-                MenuField::new(tr!("edit-height-mode")).help_text(tr!("edit-elevation-mode-help")).show(ui, |ui, _, _| {
+                MenuField::new(tr!("edit-measure")).help_text(tr!("edit-measure-help")).show(ui, |ui, _, _| {
                     ui.horizontal(|ui| {
-                        ui.selectable_value(mode, HeightMode::Relative, tr!("edit-relative"));
-                        ui.selectable_value(mode, HeightMode::AbsoluteRL, tr!("edit-absolute-rl"));
+                        ui.selectable_value(&mut editor.offset_measure, OffsetMeasure::Distance, tr!("edit-distance"));
+                        ui.selectable_value(&mut editor.offset_measure, OffsetMeasure::Width, tr!("drill-hole-width"));
+                        let height_active = matches!(editor.offset_measure, OffsetMeasure::Height(_));
+                        if ui.add(egui::Button::selectable(height_active, tr!("edit-height"))).clicked() && !height_active {
+                            editor.offset_measure = OffsetMeasure::Height(HeightMode::Relative);
+                        }
                     })
                     .response
                 });
+                if let OffsetMeasure::Height(ref mut mode) = editor.offset_measure {
+                    MenuField::new(tr!("edit-height-mode")).help_text(tr!("edit-elevation-mode-help")).show(ui, |ui, _, _| {
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(mode, HeightMode::Relative, tr!("edit-relative"));
+                            ui.selectable_value(mode, HeightMode::AbsoluteRL, tr!("edit-absolute-rl"));
+                        })
+                        .response
+                    });
+                }
+
+                ui.add_space(4.0);
+
+                // Value label adapts to context
+                let value_label = match editor.offset_measure {
+                    OffsetMeasure::Distance => tr!("edit-distance-along-slope"),
+                    OffsetMeasure::Width => tr!("edit-horizontal-distance"),
+                    OffsetMeasure::Height(HeightMode::Relative) => tr!("edit-height-change"),
+                    OffsetMeasure::Height(HeightMode::AbsoluteRL) => tr!("edit-target-rl"),
+                };
+                let value_range = if matches!(editor.offset_measure, OffsetMeasure::Height(_)) {
+                    f64::MIN..=f64::MAX
+                } else {
+                    0.0..=f64::MAX
+                };
+                MenuFieldF64::new(value_label, &mut editor.offset_value_input, value_range)
+                    .help_text(tr!("edit-value-help"))
+                    .speed(0.1)
+                    .suffix(tr!("common-m"))
+                    .show(ui);
             }
-
-            ui.add_space(4.0);
-
-            // Value label adapts to context
-            let value_label = match editor.offset_measure {
-                OffsetMeasure::Distance => tr!("edit-distance-along-slope"),
-                OffsetMeasure::Width => tr!("edit-horizontal-distance"),
-                OffsetMeasure::Height(HeightMode::Relative) => tr!("edit-height-change"),
-                OffsetMeasure::Height(HeightMode::AbsoluteRL) => tr!("edit-target-rl"),
-            };
-            let value_range = if matches!(editor.offset_measure, OffsetMeasure::Height(_)) {
-                f64::MIN..=f64::MAX
-            } else {
-                0.0..=f64::MAX
-            };
-            MenuFieldF64::new(value_label, &mut editor.offset_value_input, value_range)
-                .help_text(tr!("edit-value-help"))
-                .speed(0.1)
-                .suffix(tr!("common-m"))
-                .show(ui);
 
             MenuFieldBool::new(tr!("edit-collide-triangulation"), &mut editor.offset_collide_with_triangulation)
                 .help_text(tr!("edit-stop-generated-offset-where-its"))
                 .show(ui);
 
             ui.add_space(8.0);
-            let can_pick_side = matches!(editor.offset_measure, OffsetMeasure::Height(HeightMode::AbsoluteRL)) || editor.offset_value_input.abs() > 1e-9;
+            let can_pick_side = if on_section {
+                editor.offset_section_distance > 1e-9
+            } else {
+                matches!(editor.offset_measure, OffsetMeasure::Height(HeightMode::AbsoluteRL)) || editor.offset_value_input.abs() > 1e-9
+            };
             let enter_pressed = ui.input(|input| input.key_pressed(egui::Key::Enter));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let pick_side_clicked = ui.add(MenuButton::new(tr!("edit-pick-side")).enabled(can_pick_side)).clicked();
                 if can_pick_side && (pick_side_clicked || enter_pressed) {
-                    queue_begin_offset_pick(commands, editor);
+                    queue_begin_offset_pick(commands, editor, on_section);
                 }
                 if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() {
                     commands.push(UiCommand::CancelOffset);
@@ -1089,10 +1104,11 @@ pub(crate) fn draw_offset_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand
         });
 }
 
-fn queue_begin_offset_pick(commands: &mut Vec<UiCommand>, editor: &EditorState) {
+fn queue_begin_offset_pick(commands: &mut Vec<UiCommand>, editor: &EditorState, on_section: bool) {
     let rad = editor.offset_angle_degrees.to_radians();
     let tan = rad.tan();
     let (horiz_dist, z_delta, project_to_rl) = match editor.offset_measure {
+        _ if on_section => (editor.offset_section_distance, 0.0, None),
         OffsetMeasure::Distance => {
             let h = editor.offset_value_input * rad.sin();
             let horiz = editor.offset_value_input * rad.cos();
@@ -1590,7 +1606,9 @@ pub(crate) fn draw_chamfer_panel(ui: &mut egui::Ui, editor: &mut EditorState, co
     ViewportDockPanel::new("chamfer_panel", tr!("common-chamfer"), viewport_rect)
         .min_width(200.0)
         .show(ui.ctx(), |ui| {
-            if !corner_picked {
+            if !corner_picked && editor.slice_mode_enabled && editor.active_workspace.edits_in_slice_view() {
+                ui.label(tr!("edit-click-corner-section"));
+            } else if !corner_picked {
                 ui.label(tr!("edit-click-corner-closed-polyline"));
             } else {
                 MenuFieldU32::new(tr!("edit-segments"), &mut editor.chamfer_segments, 1..=64)

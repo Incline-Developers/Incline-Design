@@ -800,8 +800,11 @@ impl<'a> Graphics<'a> {
         }
 
         if editor.active_tool == ActiveTool::Chamfer {
-            use crate::app::commands::drawing::chamfer::chamfer_corner;
+            use crate::app::commands::drawing::chamfer::{chamfer_corner_on, chamfers_corner};
             let vp = self.view_proj();
+            let slab = (editor.slice_mode_enabled && editor.active_workspace.edits_in_slice_view())
+                .then(|| self.section_slab())
+                .flatten();
             // Preview + gizmo geometry is a foreground overlay offset from the
             // source corner, so keep it drawable even when a tightly-fitted
             // depth slab would reject the displaced point.
@@ -809,18 +812,18 @@ impl<'a> Graphics<'a> {
 
             let corner_data = editor.chamfer_poly_id.and_then(|oid| {
                 let ci = editor.chamfer_corner_index?;
-                if let Some(Object::Polyline { verts, closed: true, .. }) = document.get_object(oid) {
-                    (verts.len() >= 3 && ci < verts.len()).then(|| (verts.clone(), ci))
+                if let Some(Object::Polyline { verts, closed, .. }) = document.get_object(oid) {
+                    chamfers_corner(verts, *closed, ci, slab.is_some()).then(|| (verts.clone(), ci))
                 } else {
                     None
                 }
             });
 
             if let Some((ref verts, ci)) = corner_data {
-                use crate::app::commands::drawing::chamfer::chamfer_max_radius;
-                editor.chamfer_max_radius = chamfer_max_radius(verts, ci);
+                use crate::app::commands::drawing::chamfer::chamfer_max_radius_on;
+                editor.chamfer_max_radius = chamfer_max_radius_on(verts, ci, slab);
                 editor.chamfer_radius = editor.chamfer_radius.min(editor.chamfer_max_radius);
-                let chamfered = chamfer_corner(verts, ci, editor.chamfer_radius, editor.chamfer_segments);
+                let chamfered = chamfer_corner_on(verts, ci, editor.chamfer_radius, editor.chamfer_segments, slab);
                 editor.chamfer_preview_screen_px = chamfered.iter().map(|v| project(v.pos)).collect();
                 editor.chamfer_hover_corner_px = None;
 
@@ -839,11 +842,14 @@ impl<'a> Graphics<'a> {
                 };
                 editor.chamfer_gizmo_bisector_px = edge_stub_dir;
 
-                let edge_2d = DVec2::new(next.x - corner.x, next.y - corner.y);
+                // The handle runs along the edge, in the radius's plane.
+                let (corner_k, next_k) = slab.map_or((corner, next), |slab| (slab.frame_coords(corner), slab.frame_coords(next)));
+                let edge_2d = DVec2::new(next_k.x - corner_k.x, next_k.y - corner_k.y);
                 let edge_len = edge_2d.length();
                 if edge_len > 1e-10 {
                     let edge_dir = edge_2d / edge_len;
-                    let handle_world = DVec3::new(corner.x + edge_dir.x * editor.chamfer_radius, corner.y + edge_dir.y * editor.chamfer_radius, corner.z);
+                    let handle_k = DVec3::new(corner_k.x + edge_dir.x * editor.chamfer_radius, corner_k.y + edge_dir.y * editor.chamfer_radius, corner_k.z);
+                    let handle_world = slab.map_or(handle_k, |slab| slab.world_from_frame(handle_k));
                     editor.chamfer_gizmo_corner_px = c_px;
                     editor.chamfer_gizmo_handle_px = project(handle_world);
                     if let (Some(cp), Some(np)) = (c_px, n_px) {
