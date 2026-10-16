@@ -1352,12 +1352,8 @@ pub(crate) struct EditorState {
     pub(crate) cursor_screen_px: Option<(f32, f32)>,
 
     // Dialog state (position snapshots)
-    /// When true, show the polyline finish dialog near the cursor.
+    /// When true, show the polyline finish (Open / Closed) menu near the cursor.
     pub(crate) poly_finish_dialog: bool,
-    /// The polyline finish dialog only accepts its Enter shortcut once the
-    /// Enter press that opened it has been released - otherwise a held key
-    /// confirms "Open" the same instant the dialog appears.
-    pub(crate) poly_finish_dialog_confirm_armed: bool,
     /// Screen position (physical px) where the polyline finish dialog was opened.
     /// Snapshotted once so the dialog doesn't follow the cursor.
     pub(crate) poly_finish_dialog_px: Option<(f32, f32)>,
@@ -2054,6 +2050,19 @@ impl OmfExportSelection {
 }
 
 impl EditorState {
+    /// The cursor sits on the first vertex of the polyline being drawn, so a
+    /// click there closes it.
+    pub(crate) fn poly_close_hovered(&self) -> bool {
+        self.active_tool == ActiveTool::MakePoly
+            && !self.poly_finish_dialog
+            && self.pending_stroke.len() >= 2
+            && self
+                .pending_stroke
+                .first()
+                .zip(self.cursor_world)
+                .is_some_and(|(first, cursor)| (*first - cursor).length_squared() <= 1.0e-16)
+    }
+
     pub(crate) fn overlay_follows_cursor(&self) -> bool {
         !self.pending_stroke.is_empty() || self.measurement_start.is_some() || !self.batter_angle_points.is_empty() || self.circle_draft.is_some()
     }
@@ -2094,7 +2103,7 @@ impl EditorState {
         if self.viewport_pick_in_progress() {
             return false;
         }
-        self.object_edit_dialog.is_some() || self.dialog_owns_both_keys()
+        self.object_edit_dialog.is_some() || self.poly_finish_dialog || self.dialog_owns_both_keys()
     }
 
     /// A dialog is parked waiting on a click in the 3D viewport. Escape belongs
@@ -2265,7 +2274,6 @@ impl EditorState {
         self.pending_stroke.clear();
         self.circle_draft = None;
         self.poly_finish_dialog = false;
-        self.poly_finish_dialog_confirm_armed = false;
         self.poly_finish_dialog_px = None;
         self.canvas_context_menu_open = false;
         self.canvas_context_menu_px = None;
@@ -2553,7 +2561,6 @@ impl EditorState {
             z_input: 0.0,
             cursor_screen_px: None,
             poly_finish_dialog: false,
-            poly_finish_dialog_confirm_armed: false,
             poly_finish_dialog_px: None,
             canvas_context_menu_open: false,
             canvas_context_menu_px: None,

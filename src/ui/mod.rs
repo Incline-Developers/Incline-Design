@@ -1107,7 +1107,7 @@ fn draw_ui(
 
     // Polyline finish (MakePoly)
     if editor.poly_finish_dialog {
-        dialogs::editing::draw_finish_polyline_dialog(root_ui, commands, editor, canvas_rect);
+        dialogs::editing::draw_finish_polyline_menu(root_ui, commands, editor);
     }
 
     // --- Canvas overlays ---
