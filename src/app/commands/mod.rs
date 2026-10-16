@@ -1362,6 +1362,17 @@ impl<'a> App<'a> {
                 self.thin_strings(object_ids, tolerance);
                 Ok(())
             }
+            UiCommand::OpenInsertPointAtSpacingDialog => {
+                self.open_insert_point_at_spacing_dialog();
+                Ok(())
+            }
+            UiCommand::InsertPointsAtSpacing { object_ids, spacing } => {
+                let result = self.insert_points_at_spacing(object_ids, spacing);
+                if result.is_ok() {
+                    self.editor.insert_point_at_spacing_dialog = None;
+                }
+                result
+            }
             UiCommand::CommitBatterBerm => {
                 self.commit_batter_berm();
                 Ok(())

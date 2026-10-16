@@ -4,6 +4,7 @@ use std::{
     hash::{Hash, Hasher},
 };
 
+use anyhow::Result;
 use glam::{DMat4, DVec2, DVec3};
 
 use crate::{
@@ -105,13 +106,7 @@ impl<'a> App<'a> {
             return;
         }
 
-        let source: Vec<(ObjectId, Vec<PolyVertex>, bool)> = selected
-            .into_iter()
-            .filter_map(|id| match self.scene_document.get_object(id) {
-                Some(Object::Polyline { verts, closed, .. }) => Some((id, verts.clone(), *closed)),
-                _ => None,
-            })
-            .collect();
+        let source = self.polyline_sources(selected);
         let shapes: Vec<(Vec<PolyVertex>, bool)> = source.iter().map(|(_, verts, closed)| (verts.clone(), *closed)).collect();
         let updated = insert_at_intersections(&shapes);
         self.commit_inserted_vertices(&source, updated, &tr!("cmd-insert-point-intersection"));
@@ -192,13 +187,7 @@ impl<'a> App<'a> {
             userspace_warn!("{}", tr!("cmd-insert-point-elevation-must-be-finite"));
             return;
         }
-        let source: Vec<(ObjectId, Vec<PolyVertex>, bool)> = object_ids
-            .into_iter()
-            .filter_map(|id| match self.scene_document.get_object(id) {
-                Some(Object::Polyline { verts, closed, .. }) => Some((id, verts.clone(), *closed)),
-                _ => None,
-            })
-            .collect();
+        let source = self.polyline_sources(object_ids);
         let updated = source.iter().map(|(_, verts, closed)| insert_at_elevation(verts, *closed, elevation)).collect();
         self.commit_inserted_vertices(&source, updated, &tr!("common-elevation"));
     }
@@ -380,12 +369,61 @@ impl<'a> App<'a> {
         nearest_edge_point(verts, closed, cursor, reach, &graphics.view_proj(), graphics.screen_size_pub(), graphics.section_slab())
     }
 
+    /// Open on every selected string the canvas may edit, as Thin Strings does.
+    pub(crate) fn open_insert_point_at_spacing_dialog(&mut self) {
+        let object_ids: Vec<ObjectId> = self.editable_polyline_sources(self.selected_polylines()).into_iter().map(|(id, _, _)| id).collect();
+        if object_ids.is_empty() {
+            userspace_warn!("{}", tr!("cmd-insert-point-select-one-more-polylines-spacing"));
+            return;
+        }
+        self.editor.insert_point_at_spacing_dialog = Some(crate::ui::dialogs::InsertPointAtSpacingDialog {
+            object_ids,
+            spacing: self.editor.insert_point_spacing,
+        });
+    }
+
+    /// Only an error, a spacing that is not positive or one over the budget,
+    /// keeps the dialog open; a run that adds nothing warns and closes it, as
+    /// Insert Point does. The strings are filtered again here, in case one
+    /// was locked while the dialog was open.
+    pub(crate) fn insert_points_at_spacing(&mut self, object_ids: Vec<ObjectId>, spacing: f64) -> Result<()> {
+        if !(spacing.is_finite() && spacing > 0.0) {
+            anyhow::bail!(tr!("cmd-insert-point-spacing-must-be-positive"));
+        }
+        let source = self.editable_polyline_sources(object_ids);
+        // Counted before a vertex is made, so a tiny spacing costs nothing.
+        let parts: Vec<Vec<usize>> = source.iter().map(|(_, verts, closed)| spacing_parts(verts, *closed, spacing)).collect();
+        let count = parts.iter().flatten().fold(0_usize, |sum, edge_parts| sum.saturating_add(edge_parts - 1));
+        if count > SPACING_MOST {
+            anyhow::bail!(tr!("cmd-insert-point-spacing-too-many", count = count.to_string(), most = SPACING_MOST.to_string()));
+        }
+        let updated = source
+            .iter()
+            .zip(&parts)
+            .map(|((_, verts, closed), parts)| insert_at_spacing(verts, *closed, parts))
+            .collect();
+        self.commit_inserted_vertices(&source, updated, &tr!("cmd-insert-point-spacing"));
+        self.editor.insert_point_spacing = spacing;
+        Ok(())
+    }
+
     pub(crate) fn selected_polylines(&self) -> Vec<ObjectId> {
         self.editor
             .selected_handles
             .iter()
             .filter_map(|handle| match handle {
                 SceneEntityId::Object(id) if matches!(self.scene_document.get_object(*id), Some(Object::Polyline { .. })) => Some(*id),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The vertices and closure of each of `object_ids` that is a polyline.
+    fn polyline_sources(&self, object_ids: Vec<ObjectId>) -> Vec<(ObjectId, Vec<PolyVertex>, bool)> {
+        object_ids
+            .into_iter()
+            .filter_map(|id| match self.scene_document.get_object(id) {
+                Some(Object::Polyline { verts, closed, .. }) => Some((id, verts.clone(), *closed)),
                 _ => None,
             })
             .collect()
@@ -585,6 +623,37 @@ fn insert_at_elevation(verts: &[PolyVertex], closed: bool, elevation: f64) -> Ve
         }
     }
     insert_parameters(verts, closed, parameters)
+}
+
+/// The most vertices one Insert Points at Spacing run adds across its
+/// selection; a spacing needing more is refused.
+const SPACING_MOST: usize = 100_000;
+
+/// Each edge cut into the equal parts [`spacing_parts`] counted for it.
+/// Original vertices all stay.
+fn insert_at_spacing(verts: &[PolyVertex], closed: bool, parts: &[usize]) -> Vec<PolyVertex> {
+    let parameters = parts.iter().map(|&parts| (1..parts).map(|step| step as f64 / parts as f64).collect()).collect();
+    insert_parameters(verts, closed, parameters)
+}
+
+/// [`edge_parts`] for every edge of the string.
+fn spacing_parts(verts: &[PolyVertex], closed: bool, spacing: f64) -> Vec<usize> {
+    (0..edge_count(verts, closed))
+        .map(|edge| edge_parts(verts[edge], verts[(edge + 1) % verts.len()], spacing))
+        .collect()
+}
+
+/// The fewest equal parts no longer than `spacing` that cut the edge from
+/// `start` to `end`, measured in 3D along it, arcs included. Fill Segment and
+/// Insert Points at Spacing both count by it.
+fn edge_parts(start: PolyVertex, end: PolyVertex, spacing: f64) -> usize {
+    // Height runs evenly along an arc or a line, so the 3D length is the
+    // hypotenuse of the plan length and the rise.
+    let length = Curve::from_vertices(start, end).length().hypot(end.pos.z - start.pos.z);
+    // A micrometre of slack keeps an exact multiple of the spacing, once
+    // decimal coordinates round, from a part too many; a part may then run
+    // up to a micrometre over the spacing.
+    ((length - 1e-6) / spacing).ceil().max(1.0) as usize
 }
 
 pub(super) fn edge_count(verts: &[PolyVertex], closed: bool) -> usize {
@@ -808,23 +877,18 @@ fn fill_segment(verts: &[PolyVertex], closed: bool, edge: usize, spacing: f64) -
     if edge >= edge_count(verts, closed) || !spacing.is_finite() || spacing <= 0.0 {
         return SegmentFill::Short;
     }
-    let (start, end) = (verts[edge], verts[(edge + 1) % verts.len()]);
-    // Height runs evenly with the parameter, arc or line, so the 3D length
-    // is the plan length and the rise as the sides of a right triangle.
-    let length = Curve::from_vertices(start, end).length().hypot(end.pos.z - start.pos.z);
-    // The hair keeps an exact multiple of the spacing from a part too many.
-    let parts = (length / spacing - 1e-9).ceil();
-    if parts.is_nan() || parts < 2.0 {
+    let parts = edge_parts(verts[edge], verts[(edge + 1) % verts.len()], spacing);
+    if parts < 2 {
         return SegmentFill::Short;
     }
     // Counted before a vertex is made, so a tiny spacing costs nothing.
-    if parts - 1.0 > FILL_SEGMENT_MOST as f64 {
-        return SegmentFill::TooMany((parts - 1.0) as usize);
+    if parts - 1 > FILL_SEGMENT_MOST {
+        return SegmentFill::TooMany(parts - 1);
     }
-    let parts = parts as usize;
-    let mut parameters = vec![Vec::new(); edge_count(verts, closed)];
-    parameters[edge] = (1..parts).map(|step| step as f64 / parts as f64).collect();
-    SegmentFill::Filled(insert_parameters(verts, closed, parameters))
+    // Every other edge stays one part, so only this edge is cut.
+    let mut parts_by_edge = vec![1; edge_count(verts, closed)];
+    parts_by_edge[edge] = parts;
+    SegmentFill::Filled(insert_at_spacing(verts, closed, &parts_by_edge))
 }
 
 fn split_bulge(bulge: f64, fraction: f64) -> f64 {

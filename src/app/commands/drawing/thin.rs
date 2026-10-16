@@ -19,7 +19,7 @@ pub(crate) const DEFAULT_THIN_TOLERANCE: f64 = 0.1;
 impl<'a> App<'a> {
     /// Open Thin Strings on every selected string the canvas may edit.
     pub(crate) fn open_thin_strings_dialog(&mut self) {
-        let object_ids: Vec<ObjectId> = self.thin_sources(self.selected_polylines()).into_iter().map(|(id, _, _)| id).collect();
+        let object_ids: Vec<ObjectId> = self.editable_polyline_sources(self.selected_polylines()).into_iter().map(|(id, _, _)| id).collect();
         if object_ids.is_empty() {
             userspace_warn!("{}", tr!("cmd-thin-select-strings"));
             return;
@@ -56,7 +56,7 @@ impl<'a> App<'a> {
         let Some(object_ids) = self.editor.thin_strings_dialog.as_ref().map(|dialog| dialog.object_ids.clone()) else {
             return;
         };
-        let sources = self.thin_sources(object_ids);
+        let sources = self.editable_polyline_sources(object_ids);
         let Some(dialog) = self.editor.thin_strings_dialog.as_mut() else {
             return;
         };
@@ -78,7 +78,7 @@ impl<'a> App<'a> {
         if !tolerance.is_finite() || tolerance < 0.0 {
             return;
         }
-        let sources = self.thin_sources(object_ids);
+        let sources = self.editable_polyline_sources(object_ids);
         let Some(document) = self.workspace.active_document() else {
             return;
         };
@@ -119,7 +119,7 @@ impl<'a> App<'a> {
 
     /// The strings among `object_ids` the canvas may edit, from the active
     /// project's document (the composite omits hidden objects).
-    fn thin_sources(&self, object_ids: Vec<ObjectId>) -> Vec<(ObjectId, Vec<PolyVertex>, bool)> {
+    pub(super) fn editable_polyline_sources(&self, object_ids: Vec<ObjectId>) -> Vec<(ObjectId, Vec<PolyVertex>, bool)> {
         let Some(document) = self.workspace.active_document() else {
             return Vec::new();
         };

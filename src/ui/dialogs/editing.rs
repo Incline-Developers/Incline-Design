@@ -476,6 +476,55 @@ pub(crate) fn draw_thin_strings_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
     }
 }
 
+pub(crate) fn draw_insert_point_at_spacing_dialog(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    let Some(dialog) = editor.insert_point_at_spacing_dialog.as_mut() else {
+        return;
+    };
+
+    let object_count = dialog.object_ids.len();
+    let can_apply = dialog.spacing.is_finite() && dialog.spacing > 0.0 && object_count > 0;
+    let mut close = false;
+    let mut apply = false;
+    let mut open = true;
+
+    DragableMenu::new("insert_point_at_spacing_dialog", tr!("edit-insert-point-spacing"))
+        .open(&mut open)
+        .min_width(280.0)
+        .max_width(300.0)
+        .show(ui.ctx(), |ui| {
+            MenuFieldF64::new(tr!("edit-spacing"), &mut dialog.spacing, 0.001..=f64::MAX)
+                .help_text(tr!("edit-spacing-help"))
+                .width(120.0)
+                .speed(0.1)
+                .max_decimals(3)
+                .suffix(tr!("common-m"))
+                .show(ui);
+            ui.add_space(4.0);
+            let submitted = menu::dialog_confirm_pressed(ui.ctx());
+            let cancelled = menu::dialog_cancel_pressed(ui.ctx());
+            menu::menu_actions(ui, |ui| {
+                if (submitted || ui.add(MenuButton::new(tr!("edit-apply")).primary().enabled(can_apply)).clicked()) && can_apply {
+                    apply = true;
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || cancelled {
+                    close = true;
+                }
+            });
+            ui.label(tr!("ui-selected-polylines", count = object_count.to_string()));
+        });
+
+    // The run closes the dialog only when it succeeds, so a refused spacing
+    // can be changed and tried again.
+    if apply {
+        commands.push(UiCommand::InsertPointsAtSpacing {
+            object_ids: dialog.object_ids.clone(),
+            spacing: dialog.spacing,
+        });
+    } else if close || !open {
+        editor.insert_point_at_spacing_dialog = None;
+    }
+}
+
 /// Draw the welcome splash the application starts on.
 ///
 /// A project is already open behind it - startup lands on an empty, never-saved
@@ -1445,7 +1494,7 @@ pub(crate) fn draw_fill_segment_panel(ui: &mut egui::Ui, editor: &EditorState, s
                 Some(stored) => {
                     let draft_id = ui.id().with("fill_segment_spacing_draft");
                     let mut spacing = ui.data(|data| data.get_temp::<f64>(draft_id)).unwrap_or(stored);
-                    let response = MenuFieldF64::new(tr!("edit-fill-segment-spacing"), &mut spacing, f64::MIN_POSITIVE..=f64::MAX)
+                    let response = MenuFieldF64::new(tr!("edit-fill-segment-spacing"), &mut spacing, 0.001..=f64::MAX)
                         .help_text(tr!("edit-fill-segment-spacing-help"))
                         .speed(0.1)
                         .max_decimals(3)

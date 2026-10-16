@@ -570,6 +570,7 @@ pub(crate) enum GeologyRow {
     SetAxis(Axis),
     InsertAtCrossings,
     InsertAtElevation,
+    InsertAtSpacing,
     CleanStrings,
     CreateTriangulation,
     Reverse,
@@ -587,7 +588,7 @@ pub(crate) enum GeologyRow {
 
 /// Geology Design's lower half in menu order; [`geology_design_groups`] cuts
 /// it into submenus and the macOS menu tags rows by index into it.
-pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 41] = [
+pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 42] = [
     GeologyRow::Tool(ActiveTool::MakePoint),
     GeologyRow::Tool(ActiveTool::MakeLine),
     GeologyRow::Tool(ActiveTool::MakePoly),
@@ -617,6 +618,7 @@ pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 41] = [
     GeologyRow::Tool(ActiveTool::EditVertex),
     GeologyRow::Tool(ActiveTool::InsertPoint),
     GeologyRow::Tool(ActiveTool::FillSegment),
+    GeologyRow::InsertAtSpacing,
     GeologyRow::DragVertex,
     GeologyRow::NudgeRl,
     GeologyRow::Tool(ActiveTool::DeletePoints),
@@ -638,8 +640,8 @@ pub(crate) fn geology_design_groups() -> [(String, std::ops::Range<usize>); 5] {
         (tr!("ws-menubar-geology-draw"), 0..10),
         (tr!("ws-menubar-geology-edit"), 10..20),
         (tr!("ws-menubar-geology-join-split"), 20..26),
-        (tr!("ws-menubar-geology-vertices"), 26..35),
-        (tr!("ws-menubar-geology-surface"), 35..38),
+        (tr!("ws-menubar-geology-vertices"), 26..36),
+        (tr!("ws-menubar-geology-surface"), 36..39),
     ]
 }
 
@@ -675,6 +677,7 @@ impl GeologyRow {
             Self::SetAxis(axis) => tr!("common-set") + &format!(" {}...", axis.label()),
             Self::InsertAtCrossings => tr!("toolbars-insert-points-crossings"),
             Self::InsertAtElevation => tr!("ws-menubar-geology-insert-at-elevation"),
+            Self::InsertAtSpacing => tr!("ws-menubar-geology-insert-at-spacing"),
             Self::CleanStrings => tr!("cmd-string-clean-clean-strings"),
             Self::CreateTriangulation => tr!("ws-menubar-design-create-triangulation"),
             Self::Reverse => tr!("toolbars-reverse-strings"),
@@ -697,6 +700,7 @@ impl GeologyRow {
             Self::SetAxis(axis) => UiCommand::OpenMoveToAxisDialog(axis),
             Self::InsertAtCrossings => UiCommand::InsertPointsAtIntersections,
             Self::InsertAtElevation => UiCommand::OpenInsertPointAtElevationDialog,
+            Self::InsertAtSpacing => UiCommand::OpenInsertPointAtSpacingDialog,
             Self::CleanStrings => UiCommand::CleanStrings,
             Self::CreateTriangulation => UiCommand::OpenCreateTriangulation,
             Self::Reverse => UiCommand::ReverseSelectedStrings,
@@ -724,7 +728,7 @@ impl GeologyRow {
             }
             Self::SetAxis(_) => editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_))),
             Self::InsertAtCrossings => editor.selection_has_intersections,
-            Self::InsertAtElevation | Self::Reverse | Self::Thin => editor.selection_has_polylines,
+            Self::InsertAtElevation | Self::InsertAtSpacing | Self::Reverse | Self::Thin => editor.selection_has_polylines,
             Self::CleanStrings => editor.selection_counts.open_strings > 0,
             Self::CreateTriangulation => editor.selection_counts.triangulation_sources > 0,
             Self::DrapeAlongTriangles => true,

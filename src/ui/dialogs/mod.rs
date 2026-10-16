@@ -58,3 +58,9 @@ pub(crate) struct ThinStringsDialog {
     /// Advanced with every new preview, so the overlay redraws only then.
     pub(crate) preview_generation: u64,
 }
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct InsertPointAtSpacingDialog {
+    pub(crate) object_ids: Vec<ObjectId>,
+    pub(crate) spacing: f64,
+}
