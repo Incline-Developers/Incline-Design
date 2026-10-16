@@ -186,8 +186,8 @@ fn paint_header(ui: &mut egui::Ui, title: &str, width: f32) {
     );
 }
 
-/// Dense rows, small text, and the frame metrics egui builds nested submenu
-/// frames from (they are read from the style, not passed in like [`menu_frame`]).
+/// Dense rows, small text, and the frame metrics egui measures a submenu's
+/// offset with; the submenu's own frame comes from [`submenu_style`].
 fn apply_compact_style(ui: &mut egui::Ui) {
     let style = ui.style_mut();
     style.spacing.menu_margin = egui::Margin::ZERO;
@@ -416,7 +416,21 @@ pub(crate) fn context_submenu<R>(ui: &mut egui::Ui, label: &str, enabled: bool, 
         return None;
     }
     let title: egui::WidgetText = label.into();
-    egui::containers::menu::SubMenu::new().show(ui, &response, |ui| draw_body(ui, &title, MENU_WIDTH, add_contents))
+    // egui frames the nested popup from its own style, not the row's, so the
+    // config carries this module's frame metrics along with the parent's
+    // close behaviour.
+    let config = egui::containers::menu::MenuConfig::find(ui).style(submenu_style);
+    egui::containers::menu::SubMenu::new()
+        .config(config)
+        .show(ui, &response, |ui| draw_body(ui, &title, MENU_WIDTH, add_contents))
+}
+
+/// egui's menu style with [`menu_frame`]'s margin and corner radius, which
+/// egui's `Frame::popup` reads when it frames a submenu.
+fn submenu_style(style: &mut egui::Style) {
+    egui::containers::menu::menu_style(style);
+    style.spacing.menu_margin = egui::Margin::ZERO;
+    style.visuals.menu_corner_radius = egui::CornerRadius::same(CORNER_RADIUS);
 }
 
 /// The shared popup frame: flat fill, hairline border, no inner margin so the
