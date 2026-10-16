@@ -657,6 +657,7 @@ pub(crate) enum GeologyRow {
     Reverse,
     DrapeAlongTriangles,
     Thin,
+    Smooth,
     RemoveLastVertex,
     NextVertex,
     CopyAlongString,
@@ -669,7 +670,7 @@ pub(crate) enum GeologyRow {
 
 /// Geology Design's lower half in menu order; [`geology_design_groups`] cuts
 /// it into submenus and the macOS menu tags rows by index into it.
-pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 42] = [
+pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 43] = [
     GeologyRow::Tool(ActiveTool::MakePoint),
     GeologyRow::Tool(ActiveTool::MakeLine),
     GeologyRow::Tool(ActiveTool::MakePoly),
@@ -706,6 +707,7 @@ pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 42] = [
     GeologyRow::InsertAtCrossings,
     GeologyRow::InsertAtElevation,
     GeologyRow::Thin,
+    GeologyRow::Smooth,
     GeologyRow::Tool(ActiveTool::DrapeToTopology),
     GeologyRow::DrapeAlongTriangles,
     GeologyRow::CreateTriangulation,
@@ -721,8 +723,8 @@ pub(crate) fn geology_design_groups() -> [(String, std::ops::Range<usize>); 5] {
         (tr!("ws-menubar-geology-draw"), 0..10),
         (tr!("ws-menubar-geology-edit"), 10..20),
         (tr!("ws-menubar-geology-join-split"), 20..26),
-        (tr!("ws-menubar-geology-vertices"), 26..36),
-        (tr!("ws-menubar-geology-surface"), 36..39),
+        (tr!("ws-menubar-geology-vertices"), 26..37),
+        (tr!("ws-menubar-geology-surface"), 37..40),
     ]
 }
 
@@ -764,6 +766,7 @@ impl GeologyRow {
             Self::Reverse => tr!("toolbars-reverse-strings"),
             Self::DrapeAlongTriangles => tr!("ws-menubar-geology-drape-along-triangles"),
             Self::Thin => tr!("ws-menubar-geology-thin"),
+            Self::Smooth => tr!("ws-menubar-geology-smooth"),
             Self::RemoveLastVertex => tr!("ws-menubar-geology-remove-last-vertex"),
             Self::NextVertex => tr!("ws-menubar-geology-next-vertex"),
             Self::CopyAlongString => tr!("ws-menubar-geology-copy-along-string"),
@@ -787,6 +790,7 @@ impl GeologyRow {
             Self::Reverse => UiCommand::ReverseSelectedStrings,
             Self::DrapeAlongTriangles => UiCommand::ArmDrapeAlongTriangles,
             Self::Thin => UiCommand::OpenThinStringsDialog,
+            Self::Smooth => UiCommand::OpenSmoothStringsDialog,
             Self::RemoveLastVertex => UiCommand::RemoveLastStrokeVertex,
             Self::NextVertex => UiCommand::OpenNextVertexPanel,
             Self::CopyAlongString => UiCommand::ArmCopyAlongString,
@@ -809,7 +813,7 @@ impl GeologyRow {
             }
             Self::SetAxis(_) => editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_))),
             Self::InsertAtCrossings => editor.selection_has_intersections,
-            Self::InsertAtElevation | Self::InsertAtSpacing | Self::Reverse | Self::Thin => editor.selection_has_polylines,
+            Self::InsertAtElevation | Self::InsertAtSpacing | Self::Reverse | Self::Thin | Self::Smooth => editor.selection_has_polylines,
             Self::CleanStrings => editor.selection_counts.open_strings > 0,
             Self::CreateTriangulation => editor.selection_counts.triangulation_sources > 0,
             Self::DrapeAlongTriangles => true,

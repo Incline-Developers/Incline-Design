@@ -442,6 +442,7 @@ impl EditorState {
             // pick is armed.
             || (self.tri_cut_to_open && self.triangulation_pick_target.is_none())
             || self.insert_point_at_spacing_dialog.is_some()
+            || self.smooth_strings_dialog.is_some()
     }
 
     /// Lock or unlock one scene entity by name. Layer locks go through
@@ -1875,6 +1876,10 @@ pub(crate) struct EditorState {
     pub(crate) insert_point_at_spacing_dialog: Option<crate::ui::dialogs::InsertPointAtSpacingDialog>,
     /// Last spacing applied by Insert Points at Spacing, offered on reopening.
     pub(crate) insert_point_spacing: f64,
+    /// Smooth Strings, open on the strings it was opened with.
+    pub(crate) smooth_strings_dialog: Option<crate::ui::dialogs::SmoothStringsDialog>,
+    /// Last tolerance applied by Smooth Strings, offered on reopening.
+    pub(crate) smooth_tolerance: f64,
     /// The "Edit Object" dialog, holding a working copy of one design object
     /// until Apply or OK hands it back to the document.
     pub(crate) object_edit_dialog: Option<crate::ui::dialogs::object_edit::ObjectEditDialog>,
@@ -2719,6 +2724,7 @@ impl EditorState {
             || self.insert_point_at_elevation_dialog.is_some()
             || self.thin_strings_dialog.is_some()
             || self.insert_point_at_spacing_dialog.is_some()
+            || self.smooth_strings_dialog.is_some()
             || self.new_layer_dialog_open
             || self.survey.definitions_open
             || self.survey.transform_open
@@ -3037,6 +3043,7 @@ impl EditorState {
         self.insert_point_at_elevation_dialog = None;
         self.thin_strings_dialog = None;
         self.insert_point_at_spacing_dialog = None;
+        self.smooth_strings_dialog = None;
         self.object_edit_dialog = None;
         self.measurement_start = None;
         self.measurement_end = None;
@@ -3352,6 +3359,8 @@ impl EditorState {
             thin_tolerance: crate::app::commands::drawing::thin::DEFAULT_THIN_TOLERANCE,
             insert_point_at_spacing_dialog: None,
             insert_point_spacing: 10.0,
+            smooth_strings_dialog: None,
+            smooth_tolerance: 0.5,
             object_edit_dialog: None,
             xray_enabled: false,
             cinematic_enabled: false,
@@ -4776,6 +4785,13 @@ pub(crate) enum UiCommand {
         object_ids: Vec<ObjectId>,
         spacing: f64,
     },
+    /// Open the tolerance input for rounding the corners of selected strings.
+    OpenSmoothStringsDialog,
+    /// Round the corners of the strings, each within `tolerance`.
+    SmoothStrings {
+        object_ids: Vec<ObjectId>,
+        tolerance: f64,
+    },
     /// Run CDT on the supplied object list and add the result as a loaded triangulation.
     ExecuteCreateTriangulation {
         name: String,
@@ -5029,6 +5045,7 @@ impl UiCommand {
             | Self::OpenThinStringsDialog
             | Self::SetThinTolerance(_)
             | Self::OpenInsertPointAtSpacingDialog
+            | Self::OpenSmoothStringsDialog
             | Self::OpenObjectEditDialog(_)
             | Self::ShowObjectVertex { .. }
             | Self::ArmDrapeAlongTriangles
@@ -5344,6 +5361,10 @@ impl UiCommand {
             Self::InsertPointsAtSpacing { object_ids, spacing } => report(
                 tr!("state-insert-points-spacing"),
                 tr!("state-count-object-s-spacing", count = object_ids.len().to_string(), spacing = spacing.to_string()),
+            ),
+            Self::SmoothStrings { object_ids, tolerance } => report(
+                tr!("state-smooth-strings"),
+                tr!("state-count-object-s-tolerance", count = object_ids.len().to_string(), tolerance = tolerance.to_string()),
             ),
             Self::ExecuteCreateTriangulation { name, object_ids, .. }
             | Self::ExecuteCreateTriangulationWithWeld { name, object_ids, .. }

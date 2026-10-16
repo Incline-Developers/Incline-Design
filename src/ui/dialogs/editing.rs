@@ -560,6 +560,56 @@ pub(crate) fn draw_insert_point_at_spacing_dialog(ui: &mut egui::Ui, editor: &mu
     }
 }
 
+/// Smooth Strings: a tolerance typed, Apply to round the corners.
+pub(crate) fn draw_smooth_strings_dialog(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    let Some(dialog) = editor.smooth_strings_dialog.as_mut() else {
+        return;
+    };
+
+    let object_count = dialog.object_ids.len();
+    let can_apply = dialog.tolerance.is_finite() && dialog.tolerance > 0.0 && object_count > 0;
+    let mut close = false;
+    let mut apply = false;
+    let mut open = true;
+
+    DragableMenu::new("smooth_strings_dialog", tr!("edit-smooth-strings"))
+        .open(&mut open)
+        .min_width(280.0)
+        .max_width(300.0)
+        .show(ui.ctx(), |ui| {
+            MenuFieldF64::new(tr!("edit-smooth-tolerance"), &mut dialog.tolerance, 0.001..=f64::MAX)
+                .help_text(tr!("edit-smooth-tolerance-help"))
+                .width(120.0)
+                .speed(0.01)
+                .max_decimals(3)
+                .suffix(tr!("common-m"))
+                .show(ui);
+            ui.add_space(4.0);
+            let submitted = menu::dialog_confirm_pressed(ui.ctx());
+            let cancelled = menu::dialog_cancel_pressed(ui.ctx());
+            menu::menu_actions(ui, |ui| {
+                if (submitted || ui.add(MenuButton::new(tr!("edit-apply")).primary().enabled(can_apply)).clicked()) && can_apply {
+                    apply = true;
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || cancelled {
+                    close = true;
+                }
+            });
+            ui.label(tr!("ui-selected-polylines", count = object_count.to_string()));
+        });
+
+    // The run closes the dialog only when it succeeds, so a refused
+    // tolerance can be changed and tried again.
+    if apply {
+        commands.push(UiCommand::SmoothStrings {
+            object_ids: dialog.object_ids.clone(),
+            tolerance: dialog.tolerance,
+        });
+    } else if close || !open {
+        editor.smooth_strings_dialog = None;
+    }
+}
+
 /// Draw the welcome splash the application starts on.
 ///
 /// A project is already open behind it - startup lands on an empty, never-saved

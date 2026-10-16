@@ -1375,6 +1375,17 @@ impl<'a> App<'a> {
                 }
                 result
             }
+            UiCommand::OpenSmoothStringsDialog => {
+                self.open_smooth_strings_dialog();
+                Ok(())
+            }
+            UiCommand::SmoothStrings { object_ids, tolerance } => {
+                let result = self.smooth_strings(object_ids, tolerance);
+                if result.is_ok() {
+                    self.editor.smooth_strings_dialog = None;
+                }
+                result
+            }
             UiCommand::CommitBatterBerm => {
                 self.commit_batter_berm();
                 Ok(())

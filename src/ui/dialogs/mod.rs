@@ -64,3 +64,9 @@ pub(crate) struct InsertPointAtSpacingDialog {
     pub(crate) object_ids: Vec<ObjectId>,
     pub(crate) spacing: f64,
 }
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SmoothStringsDialog {
+    pub(crate) object_ids: Vec<ObjectId>,
+    pub(crate) tolerance: f64,
+}
