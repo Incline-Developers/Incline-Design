@@ -1536,7 +1536,7 @@ pub(crate) fn draw_fill_segment_panel(ui: &mut egui::Ui, editor: &EditorState, s
                 // Drafted as the Modelling preferences are: sent once, when
                 // the edit ends.
                 Some(stored) => {
-                    let draft_id = ui.id().with("fill_segment_spacing_draft");
+                    let draft_id = ui.scope_id().with("fill_segment_spacing_draft");
                     let mut spacing = ui.data(|data| data.get_temp::<f64>(draft_id)).unwrap_or(stored);
                     let response = MenuFieldF64::new(tr!("edit-fill-segment-spacing"), &mut spacing, 0.001..=f64::MAX)
                         .help_text(tr!("edit-fill-segment-spacing-help"))

@@ -185,7 +185,7 @@ fn draw_body(
             }
         }
         BoreholeInspectorTab::Column => {
-            CollapsibleSection::new("borehole_inspector_column_display", tr!("borehole-inspector-display"))
+            CollapsibleSection::new(egui::Id::unique("borehole_inspector_column_display"), tr!("borehole-inspector-display"))
                 .default_open(true)
                 .show(ui, |ui| draw_strat_field_picker(ui, editor, dataset));
             ui.add_space(4.0);
@@ -245,66 +245,68 @@ fn draw_strat_check(ui: &mut egui::Ui, editor: &mut EditorState, dataset: &OpenD
         None => tr!("borehole-inspector-check"),
     };
     let mut comparing: Option<bool> = None;
-    CollapsibleSection::new("borehole_inspector_check", title).default_open(true).show(ui, |ui| {
-        if ui
-            .add(MenuButton::new(tr!("borehole-inspector-check-column")))
-            .on_hover_text(tr!("borehole-inspector-check-column-hint"))
-            .clicked()
-        {
-            commands.push(UiCommand::CheckStratColumn {
-                id: dataset.id,
-                field: field.key.clone(),
-            });
-        }
-        let Some(report) = report else {
-            menu::menu_note(ui, tr!("borehole-inspector-check-not-run"));
-            return;
-        };
-        if !current {
-            menu::menu_note(ui, tr!("borehole-inspector-check-stale"));
-            return;
-        }
-        let Some(order) = &report.order else {
-            menu::menu_note(ui, tr!("borehole-inspector-check-too-many-codes"));
-            return;
-        };
-        let mut summary = match flags {
-            Some(flags) => tr!(
-                "borehole-inspector-check-summary",
-                holes = report.holes.to_string(),
-                flagged = flagged_holes(flags).to_string()
-            ),
-            None => tr!("borehole-inspector-check-column-changed"),
-        };
-        if report.overruled > 0 {
-            summary = format!("{summary} {}", tr!("borehole-inspector-check-overruled", count = report.overruled.to_string()));
-        }
-        menu::menu_note(ui, summary);
-        if column.is_empty() || order.as_slice() == column {
-            return;
-        }
-        if !report.comparing {
-            menu::menu_note(ui, tr!("borehole-inspector-check-order-differs"));
-            if ui.add(MenuButton::new(tr!("borehole-inspector-check-show-differences"))).clicked() {
-                comparing = Some(true);
-            }
-            return;
-        }
-        draw_order_differences(ui, dataset, column, order);
-        ui.horizontal(|ui| {
-            if ui.add(MenuButton::new(tr!("borehole-inspector-check-accept")).primary()).clicked() {
-                commands.push(UiCommand::SetStratColumn {
+    CollapsibleSection::new(egui::Id::unique("borehole_inspector_check"), title)
+        .default_open(true)
+        .show(ui, |ui| {
+            if ui
+                .add(MenuButton::new(tr!("borehole-inspector-check-column")))
+                .on_hover_text(tr!("borehole-inspector-check-column-hint"))
+                .clicked()
+            {
+                commands.push(UiCommand::CheckStratColumn {
                     id: dataset.id,
                     field: field.key.clone(),
-                    codes: order.clone(),
                 });
-                comparing = Some(false);
             }
-            if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() {
-                comparing = Some(false);
+            let Some(report) = report else {
+                menu::menu_note(ui, tr!("borehole-inspector-check-not-run"));
+                return;
+            };
+            if !current {
+                menu::menu_note(ui, tr!("borehole-inspector-check-stale"));
+                return;
             }
+            let Some(order) = &report.order else {
+                menu::menu_note(ui, tr!("borehole-inspector-check-too-many-codes"));
+                return;
+            };
+            let mut summary = match flags {
+                Some(flags) => tr!(
+                    "borehole-inspector-check-summary",
+                    holes = report.holes.to_string(),
+                    flagged = flagged_holes(flags).to_string()
+                ),
+                None => tr!("borehole-inspector-check-column-changed"),
+            };
+            if report.overruled > 0 {
+                summary = format!("{summary} {}", tr!("borehole-inspector-check-overruled", count = report.overruled.to_string()));
+            }
+            menu::menu_note(ui, summary);
+            if column.is_empty() || order.as_slice() == column {
+                return;
+            }
+            if !report.comparing {
+                menu::menu_note(ui, tr!("borehole-inspector-check-order-differs"));
+                if ui.add(MenuButton::new(tr!("borehole-inspector-check-show-differences"))).clicked() {
+                    comparing = Some(true);
+                }
+                return;
+            }
+            draw_order_differences(ui, dataset, column, order);
+            ui.horizontal(|ui| {
+                if ui.add(MenuButton::new(tr!("borehole-inspector-check-accept")).primary()).clicked() {
+                    commands.push(UiCommand::SetStratColumn {
+                        id: dataset.id,
+                        field: field.key.clone(),
+                        codes: order.clone(),
+                    });
+                    comparing = Some(false);
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() {
+                    comparing = Some(false);
+                }
+            });
         });
-    });
     if let Some(open) = comparing
         && let Some(report) = editor.strat_checks.iter_mut().find(|report| report.dataset == dataset.id && report.field == field.key)
     {
@@ -355,7 +357,7 @@ fn draw_strat_flags(ui: &mut egui::Ui, editor: &EditorState, dataset: &OpenDrill
     };
     ui.add_space(4.0);
     CollapsibleSection::new(
-        "borehole_inspector_flagged_holes",
+        egui::Id::unique("borehole_inspector_flagged_holes"),
         tr!("borehole-inspector-flagged-holes", count = flagged_holes(flags).to_string()),
     )
     .default_open(true)
@@ -468,7 +470,7 @@ fn draw_strat_column(
         &flags[flags.partition_point(|flag| flag.hole < hole_index)..flags.partition_point(|flag| flag.hole <= hole_index)]
     });
     let mut edited: Option<Vec<String>> = None;
-    CollapsibleSection::new("borehole_inspector_column", tr!("borehole-inspector-strat-column"))
+    CollapsibleSection::new(egui::Id::unique("borehole_inspector_column"), tr!("borehole-inspector-strat-column"))
         .default_open(true)
         .show(ui, |ui| {
             if column.is_empty() {
@@ -573,7 +575,7 @@ fn draw_strat_column(
     ui.add_space(4.0);
     if !laid.extra.is_empty() {
         CollapsibleSection::new(
-            "borehole_inspector_hole_extras",
+            egui::Id::unique("borehole_inspector_hole_extras"),
             tr!("borehole-inspector-hole-not-in-column", count = laid.extra.len().to_string()),
         )
         .default_open(true)
@@ -597,7 +599,7 @@ fn draw_strat_column(
         .collect::<Vec<_>>();
     missing.sort_by(|a, b| crate::natural_sort::natural_cmp(a, b));
     CollapsibleSection::new(
-        "borehole_inspector_column_missing",
+        egui::Id::unique("borehole_inspector_column_missing"),
         tr!("borehole-inspector-not-in-column", count = missing.len().to_string()),
     )
     .default_open(true)

@@ -67,7 +67,7 @@ pub(crate) fn draw_thickness_points_dialog(ui: &mut egui::Ui, editor: &mut Edito
             ui.small(tr!("thickness-points-side-note"));
             ui.add_space(4.0);
             // Folded away: most runs use the holes alone.
-            CollapsibleSection::new("thickness_points_field_measurements", tr!("thickness-points-field-measurements")).show(ui, |ui| {
+            CollapsibleSection::new(egui::Id::unique("thickness_points_field_measurements"), tr!("thickness-points-field-measurements")).show(ui, |ui| {
                 let pairs = draft.pairs.as_ref().map_or_else(|| tr!("thickness-points-no-pairs"), |file| file.name.clone());
                 selected_source_field(ui, tr!("thickness-points-pairs"), pairs, tr!("thickness-points-pairs-help"), width);
                 ui.horizontal(|ui| {

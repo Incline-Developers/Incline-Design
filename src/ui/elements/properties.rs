@@ -636,7 +636,7 @@ fn draw_modelling_settings(ui: &mut egui::Ui, modelling: Option<&ModellingSettin
         ui.label(egui::RichText::new(tr!("common-no-open-project")).weak());
         return;
     };
-    let draft_id = ui.id().with("modelling_settings_draft");
+    let draft_id = ui.scope_id().with("modelling_settings_draft");
     let mut settings = ui.data(|data| data.get_temp::<ModellingSettings>(draft_id)).unwrap_or(stored);
     let responses = [
         // Every range here is exactly what `ModellingSettings::problem` accepts:

@@ -1142,7 +1142,6 @@ impl EditorState {
         if matches!(rework, StringRework::From { .. } | StringRework::Redraw { .. }) {
             self.pending_stroke.clear();
             self.poly_finish_dialog = false;
-            self.poly_finish_dialog_confirm_armed = false;
             self.poly_finish_dialog_px = None;
         }
         self.string_rework = None;
