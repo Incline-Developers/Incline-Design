@@ -1416,6 +1416,9 @@ pub(crate) struct EditorState {
     pub(crate) slice_preview_navigation: SlicePreviewNavigation,
     /// Slab thickness in metres, live-applied from the slice panel.
     pub(crate) slice_width_input: f64,
+    /// 2D section: surfaces draw as the line they cut through the plane
+    /// rather than as a 3D slab. Live-applied from the slice panel.
+    pub(crate) slice_outlines: bool,
     /// W/S slab movement speed (m/s).
     pub(crate) slice_speed_input: f64,
     /// Q/E rotation rate (degrees per second).
@@ -2587,6 +2590,7 @@ impl EditorState {
             slice_preview_size_px: [440, 440],
             slice_preview_navigation: SlicePreviewNavigation::default(),
             slice_width_input: 25.0,
+            slice_outlines: false,
             slice_speed_input: 50.0,
             slice_rotate_input: 45.0,
             slice_center: [0.0; 3],

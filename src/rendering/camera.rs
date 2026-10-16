@@ -292,13 +292,18 @@ impl CameraUniform {
             Some(slab) => {
                 let point = slab.point - scene_origin;
                 self.section_plane = [point.x as f32, point.y as f32, point.z as f32, slab.half_width as f32];
-                self.section_normal = [slab.normal.x as f32, slab.normal.y as f32, slab.normal.z as f32, 1.0];
+                self.section_normal = [slab.normal.x as f32, slab.normal.y as f32, slab.normal.z as f32, if slab.outlines { 2.0 } else { 1.0 }];
             }
             None => {
                 self.section_plane = [0.0; 4];
                 self.section_normal = [0.0; 4];
             }
         }
+    }
+
+    /// Whether this camera sees a 2D section, where surfaces draw as their cut through the plane.
+    pub(crate) fn section_cuts(&self) -> bool {
+        self.section_normal[3] > 1.5
     }
 
     pub(crate) fn update_view_proj(&mut self, camera: &Camera, projection: &Projection, scene_origin: DVec3, vertical_exaggeration: f64) {
@@ -894,6 +899,9 @@ pub(crate) struct SectionSlab {
     pub(crate) point: DVec3,
     pub(crate) normal: DVec3,
     pub(crate) half_width: f64,
+    /// A 2D section: surfaces draw only where they cross the plane, while
+    /// lines, points and block models keep the slab.
+    pub(crate) outlines: bool,
 }
 
 impl SectionSlab {

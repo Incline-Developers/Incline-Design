@@ -16,6 +16,11 @@ struct SegmentInput {
     // lengthened as one. Zero outside discs.
     @location(5) disc_start: vec3<f32>,
     @location(6) disc_end: vec3<f32>,
+    // The hole's collar: a 2D section keeps the whole hole or none of it by
+    // where this lies.
+    @location(7) collar: vec3<f32>,
+    // Bit 0: this piece starts its run (trace or disc); bit 1: it ends it.
+    @location(8) caps: u32,
 };
 
 struct VertexOutput {
@@ -26,7 +31,31 @@ struct VertexOutput {
     @location(2) section_offset: f32,
     // Model-space position, for the cinematic lighting's shadow lookups.
     @location(3) world: vec3<f32>,
+    // 2D section only, in pixels: x across the ribbon from its centreline,
+    // y along it from the piece's start.
+    @location(4) ribbon: vec2<f32>,
+    // 2D section only: x half the ribbon's width and y the piece's length in
+    // pixels, z the caps, w 1 while selected.
+    @location(5) @interpolate(flat) ribbon_size: vec4<f32>,
 };
+
+// A 2D section draws each hole as a flat ribbon on the plane: a white
+// outline filled with the hole's colour.
+const SECTION_HOLE_MIN_HALF_PIXELS: f32 = 5.0;
+const SECTION_HOLE_OUTLINE_PIXELS: f32 = 1.5;
+const SECTION_HOLE_OUTLINE_COLOR: vec3<f32> = vec3<f32>(1.0, 1.0, 1.0);
+
+fn in_section_2d() -> bool {
+    return camera.section_normal.w > 1.5;
+}
+
+fn onto_section(point: vec3<f32>) -> vec3<f32> {
+    return point - camera.section_normal.xyz * section_plane_offset(point);
+}
+
+fn clip_pixels(clip: vec4<f32>) -> vec2<f32> {
+    return clip.xy / max(abs(clip.w), 1.0e-6) * camera.viewport.xy * 0.5;
+}
 
 // How far toward the eye, in pixels' worth of distance, the thinnest of a
 // hole's lengthened discs is moved. Depth only: the move runs along the
@@ -63,8 +92,75 @@ fn ring_pixels_per_world(point_clip: vec4<f32>, right_clip: vec4<f32>, up_clip: 
     return max(max(pixels_per_world(point_clip, right_clip), pixels_per_world(point_clip, up_clip)), 1.0e-6);
 }
 
+// The hole flattened onto the section plane as a ribbon: six vertices make
+// the quad, the rest of the cylinder's collapse. Every piece of a hole
+// collared inside the corridor is kept, however far the trace runs out of it,
+// and every piece of one collared outside is dropped.
+fn section_ribbon(instance: SegmentInput, vertex_index: u32) -> VertexOutput {
+    var out: VertexOutput;
+    let selected = selection_active(instance.selection_index);
+    out.color = select(instance.color, selection.selection_color.rgb, selected);
+    out.normal = vec3<f32>(0.0, 0.0, 1.0);
+    out.section_offset = 0.0;
+    out.ribbon = vec2<f32>(0.0);
+    out.ribbon_size = vec4<f32>(0.0);
+    if vertex_index >= 6u || abs(section_plane_offset(instance.collar)) > camera.section_plane.w {
+        out.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+        out.world = vec3<f32>(0.0);
+        return out;
+    }
+    let start = onto_section(instance.start_radius.xyz);
+    let end = onto_section(instance.end_pad.xyz);
+    let start_clip = camera.view_proj * vec4<f32>(start, 1.0);
+    let end_clip = camera.view_proj * vec4<f32>(end, 1.0);
+    let start_px = clip_pixels(start_clip);
+    let end_px = clip_pixels(end_clip);
+    let span = end_px - start_px;
+    let length_px = length(span);
+    let direction = select(vec2<f32>(0.0, -1.0), span / max(length_px, 1.0e-6), length_px > 1.0e-4);
+    let across = vec2<f32>(-direction.y, direction.x);
+    // The diameter on the horizontal scale, so vertical exaggeration cannot fatten a hole.
+    let strike = normalize(cross(vec3<f32>(0.0, 0.0, 1.0), camera.section_normal.xyz));
+    let scale = max(pixels_per_world(start_clip, camera.view_proj * vec4<f32>(strike, 0.0)), 1.0e-6);
+    let half_px = max(max(instance.start_radius.w * scale, instance.end_pad.w * 0.5), SECTION_HOLE_MIN_HALF_PIXELS);
+    // Two triangles: start-, start+, end+ and start-, end+, end-.
+    let at_end = vertex_index == 2u || vertex_index == 4u || vertex_index == 5u;
+    let side = select(-1.0, 1.0, vertex_index == 1u || vertex_index == 2u || vertex_index == 4u);
+    // An open end runs on half a width into the next piece so a bend leaves
+    // no notch; a capped end stops square.
+    let capped = select((instance.caps & 1u) != 0u, (instance.caps & 2u) != 0u, at_end);
+    let extend = select(half_px, 0.0, capped);
+    let shift = across * side * half_px + direction * select(-1.0, 1.0, at_end) * extend;
+    var clip = select(start_clip, end_clip, at_end);
+    clip = vec4<f32>(clip.xy + shift / (camera.viewport.xy * 0.5) * clip.w, clip.zw);
+    let pixel = select(start_px, end_px, at_end) + shift;
+    out.position = clip;
+    out.world = select(start, end, at_end);
+    out.ribbon = vec2<f32>(side * half_px, dot(pixel - start_px, direction));
+    out.ribbon_size = vec4<f32>(half_px, length_px, f32(instance.caps), select(0.0, 1.0, selected));
+    return out;
+}
+
+fn section_ribbon_color(input: VertexOutput) -> vec4<f32> {
+    let caps = u32(input.ribbon_size.z + 0.5);
+    var edge = input.ribbon_size.x - abs(input.ribbon.x);
+    if (caps & 1u) != 0u {
+        edge = min(edge, input.ribbon.y);
+    }
+    if (caps & 2u) != 0u {
+        edge = min(edge, input.ribbon_size.y - input.ribbon.y);
+    }
+    if edge < SECTION_HOLE_OUTLINE_PIXELS {
+        return vec4<f32>(select(SECTION_HOLE_OUTLINE_COLOR, input.color, input.ribbon_size.w > 0.5), 1.0);
+    }
+    return vec4<f32>(input.color, 1.0);
+}
+
 @vertex
 fn vs_main(instance: SegmentInput, @builtin(vertex_index) vertex_index: u32) -> VertexOutput {
+    if in_section_2d() {
+        return section_ribbon(instance, vertex_index);
+    }
     let tau = 6.28318530718;
     var radial = vec2<f32>(0.0, 0.0);
     var axial = 0.0;
@@ -162,11 +258,16 @@ fn vs_main(instance: SegmentInput, @builtin(vertex_index) vertex_index: u32) -> 
     out.color = select(instance.color, selection.selection_color.rgb, selection_active(instance.selection_index));
     out.section_offset = section_plane_offset(world);
     out.world = world;
+    out.ribbon = vec2<f32>(0.0);
+    out.ribbon_size = vec4<f32>(0.0);
     return out;
 }
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    if in_section_2d() {
+        return section_ribbon_color(input);
+    }
     if outside_section_slab(input.section_offset) {
         discard;
     }
