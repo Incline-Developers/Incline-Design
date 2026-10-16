@@ -904,6 +904,14 @@ impl<'a> Graphics<'a> {
         response
     }
 
+    /// The CJK faces arrived: lay the UI and document text out again with them.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn reload_cjk_fonts(&mut self) {
+        self.gui.reload_fonts();
+        self.text_system = TextSystem::new();
+        self.cached_document_scene_key = None;
+    }
+
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn queue_browser_paste(&mut self, text: String) {
         self.gui.queue_paste(text);

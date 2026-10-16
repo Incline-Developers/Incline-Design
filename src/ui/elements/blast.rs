@@ -494,7 +494,7 @@ fn draw_hole_card(ui: &egui::Ui, editor: &EditorState, analysis: Option<&BlastAn
         pos.y = (collar.y - 18.0 - card_size.y).max(canvas_rect.top() + TILE_MARGIN);
     }
 
-    egui::Area::new(egui::Id::new("blast_hole_card"))
+    egui::Area::new(egui::Id::unique("blast_hole_card"))
         .order(egui::Order::Tooltip)
         .interactable(false)
         .fixed_pos(pos)
@@ -699,6 +699,7 @@ fn draw_timeline(ui: &egui::Ui, editor: &mut EditorState, analysis: &BlastAnalys
     // being loaded with nothing reached loaded yet - the signal's end.
     let duration = analysis.duration_ms.unwrap_or(end);
     let review = &mut editor.blast_review;
+    timeline_keys(ui.ctx(), review, end);
     if review.playing {
         let dt = f64::from(ui.ctx().input(|input| input.stable_dt).min(0.1));
         review.playhead_ms += dt * 1_000.0 * review.speed;
@@ -830,6 +831,66 @@ fn draw_timeline(ui: &egui::Ui, editor: &mut EditorState, analysis: &BlastAnalys
         });
 }
 
+/// How long an arrow is held before the playhead stops stepping and runs.
+const TIMELINE_SCRUB_HOLD_S: f64 = 0.35;
+
+/// The timeline's keys while it is open: Space plays and pauses, and the
+/// arrows step the playhead a millisecond, running at the playback speed once
+/// held. A field being typed in keeps its keys.
+fn timeline_keys(ctx: &egui::Context, review: &mut crate::ui::state::BlastReview, end: f64) {
+    if ctx.egui_wants_keyboard_input() {
+        return;
+    }
+    let hold_id = egui::Id::unique("blast_timeline_scrub_hold");
+    // Consumed, so a transport button left with focus is not clicked by the
+    // same Space press.
+    let (space, step_back, step_forward, back_down, forward_down, dt) = ctx.input_mut(|input| {
+        (
+            input.consume_key(egui::Modifiers::NONE, egui::Key::Space),
+            input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft),
+            input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight),
+            input.key_down(egui::Key::ArrowLeft),
+            input.key_down(egui::Key::ArrowRight),
+            f64::from(input.stable_dt.min(0.1)),
+        )
+    });
+    if space {
+        if review.playing {
+            review.playing = false;
+        } else {
+            if review.playhead_ms >= end {
+                review.playhead_ms = 0.0;
+            }
+            review.playing = true;
+        }
+    }
+    let direction = match (back_down, forward_down) {
+        (true, false) => -1.0,
+        (false, true) => 1.0,
+        _ => 0.0,
+    };
+    if direction == 0.0 {
+        ctx.data_mut(|data| data.remove::<f64>(hold_id));
+        return;
+    }
+    review.playing = false;
+    let held = ctx.data_mut(|data| {
+        let held = data.get_temp_mut_or_default::<f64>(hold_id);
+        *held += dt;
+        *held
+    });
+    // Repeats from the OS are swallowed by the run, so a held key moves smoothly.
+    if held >= TIMELINE_SCRUB_HOLD_S {
+        review.playhead_ms += direction * dt * 1_000.0 * review.speed;
+    } else if direction < 0.0 && step_back {
+        review.playhead_ms = review.playhead_ms.ceil() - 1.0;
+    } else if direction > 0.0 && step_forward {
+        review.playhead_ms = review.playhead_ms.floor() + 1.0;
+    }
+    review.playhead_ms = review.playhead_ms.clamp(0.0, end);
+    ctx.request_repaint();
+}
+
 /// The strip itself: the surface signal as a thin lane over the detonations,
 /// the time across beneath. Windows over the charge limit are shaded red.
 /// Returns the playhead the user scrubbed to, if they did.
@@ -927,9 +988,7 @@ fn timeline_strip(ui: &mut egui::Ui, analysis: &BlastAnalysis, playhead: f64, en
         tick += step;
     }
 
-    let response = response
-        .on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
-        .on_hover_text(tr!("blast-top-surface-signal-lighting-each-downline"));
+    let response = response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
     if (response.dragged() || response.clicked())
         && let Some(pointer) = response.interact_pointer_pos()
     {

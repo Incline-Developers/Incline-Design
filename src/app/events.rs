@@ -479,7 +479,8 @@ impl<'a> App<'a> {
                     let snap_eligible = self.editor.active_tool.snaps_cursor() && self.editor.snapping_active() && !camera_active && !is_scrolling;
                     let now = Instant::now();
                     let snap_poll_due = self.cursor_poll_due(now);
-                    let snapped = if snap_eligible { self.cursor_snap_point(now) } else { None };
+                    let close_target = if camera_active { None } else { self.poly_close_target() };
+                    let snapped = close_target.or_else(|| if snap_eligible { self.cursor_snap_point(now) } else { None });
                     let was_snapped = self.editor.cursor_snapped;
                     // During a camera drag the mouse steers the view, not the
                     // cursor: keep the last world cursor (and its snapped flag)
@@ -927,6 +928,16 @@ impl<'a> App<'a> {
     }
 
     fn handle_mouse_press(&mut self, event: &WindowEvent) {
+        // An orbit or pan starts on these presses: the canvas menu goes, as on
+        // a left press below. A quick right click reopens it on release.
+        if let WindowEvent::MouseInput {
+            state: ElementState::Pressed,
+            button: MouseButton::Right | MouseButton::Middle,
+            ..
+        } = event
+        {
+            self.editor.canvas_context_menu_open = false;
+        }
         if let WindowEvent::MouseInput {
             state: ElementState::Pressed,
             button: MouseButton::Left,
@@ -1255,6 +1266,14 @@ impl<'a> App<'a> {
                         crate::model::SceneEntityId::Triangulation(id) => Some(id),
                         _ => None,
                     };
+                    self.editor.canvas_context_menu_recent = false;
+                    self.editor.canvas_context_menu_open = true;
+                    self.editor.canvas_context_menu_px = self.editor.cursor_screen_px;
+                    self.redraw_requested = true;
+                } else if self.editor.keeps_recent_functions() {
+                    // Empty space: the recent functions; the selection stays.
+                    self.editor.canvas_context_menu_hole = None;
+                    self.editor.canvas_context_menu_recent = true;
                     self.editor.canvas_context_menu_open = true;
                     self.editor.canvas_context_menu_px = self.editor.cursor_screen_px;
                     self.redraw_requested = true;
@@ -1370,15 +1389,7 @@ impl<'a> App<'a> {
             // A held C or B is one press, so a toggle never chatters on repeat.
             ElementState::Pressed if *repeat && matches!(key, KeyCode::KeyC | KeyCode::KeyB) => {}
             ElementState::Pressed => self.handle_key_code(*key),
-            ElementState::Released => {
-                // Once the Enter that opened the polyline finish dialog is
-                // released, let its Enter shortcut work. Until then a held key
-                // must not skip straight past the Open/Closed choice.
-                if matches!(key, KeyCode::Enter | KeyCode::NumpadEnter) && self.editor.poly_finish_dialog && !self.editor.poly_finish_dialog_confirm_armed {
-                    self.editor.poly_finish_dialog_confirm_armed = true;
-                    self.redraw_requested = true;
-                }
-            }
+            ElementState::Released => {}
         }
     }
 

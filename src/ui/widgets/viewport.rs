@@ -36,7 +36,7 @@ pub(crate) struct ViewportDockPanel {
 impl ViewportDockPanel {
     pub(crate) fn new(id_source: impl Hash + Debug, title: impl Into<egui::WidgetText>, viewport_rect: egui::Rect) -> Self {
         Self {
-            id: egui::Id::new(id_source),
+            id: egui::Id::unique(id_source),
             title: title.into().fallback_text_style(egui::TextStyle::Button),
             viewport_rect,
             min_width: 0.0,
@@ -139,7 +139,7 @@ fn section_header_with_reset(ui: &mut egui::Ui, heading: impl Into<String>, rese
 
     let reset_rect = egui::Rect::from_min_max(egui::pos2(rect.right() - reset.size().x - 16.0, rect.top()), rect.right_bottom());
     let response = ui
-        .interact(reset_rect, ui.id().with(("section_reset", heading.text())), egui::Sense::click())
+        .interact(reset_rect, ui.scope_id().with(("section_reset", heading.text())), egui::Sense::click())
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(reset_tooltip.into());
     // Filled like the card's other buttons at rest, so it reads as one.
@@ -503,7 +503,7 @@ pub(crate) struct BlockModelProperties<'a> {
 impl<'a> BlockModelProperties<'a> {
     pub(crate) fn new(id_source: impl Hash + Debug, model: &'a OpenBlockModel) -> Self {
         Self {
-            id: egui::Id::new(id_source),
+            id: egui::Id::unique(id_source),
             model,
         }
     }
@@ -1188,7 +1188,7 @@ pub(crate) struct ViewportScaleBar {
 impl ViewportScaleBar {
     pub(crate) fn new(id_source: impl Hash + Debug, viewport_rect: egui::Rect) -> Self {
         Self {
-            id: egui::Id::new(id_source),
+            id: egui::Id::unique(id_source),
             viewport_rect,
         }
     }
@@ -1332,7 +1332,7 @@ pub(crate) fn draw_section_grid(ui: &egui::Ui, editor: &EditorState, canvas_rect
             .filter_map(|layer| memory.area_rect(layer.id))
             .collect();
         if editor.show_scale_bar {
-            rects.extend(memory.area_rect(egui::Id::new("viewport_scale_bar")));
+            rects.extend(memory.area_rect(egui::Id::unique("viewport_scale_bar")));
         }
         rects
     });
@@ -1558,7 +1558,7 @@ fn prompt_pip_color(visuals: &egui::Visuals) -> egui::Color32 {
 impl ViewportLabel {
     pub(crate) fn new(id_source: impl Hash + Debug, message: ViewportMessage, viewport_rect: egui::Rect) -> Self {
         Self {
-            id: egui::Id::new(id_source),
+            id: egui::Id::unique(id_source),
             message,
             viewport_rect,
             margin: 12.0,
@@ -1618,7 +1618,7 @@ pub(crate) struct ViewportMiniMap {
 impl ViewportMiniMap {
     pub(crate) fn new(id_source: impl Hash + Debug, viewport_rect: egui::Rect) -> Self {
         Self {
-            id: egui::Id::new(id_source),
+            id: egui::Id::unique(id_source),
             viewport_rect,
             gizmo_block: egui::Rect::NOTHING,
         }

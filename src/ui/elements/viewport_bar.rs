@@ -87,7 +87,7 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
                 // an explicit scope prevents an earlier conditional panel from
                 // shifting the ids of these persistent controls on that rerun.
                 let contents_id = ui.make_persistent_id("viewport_bar_contents");
-                ui.scope_builder(egui::UiBuilder::new().id(contents_id).max_rect(strip), |ui| {
+                ui.scope_builder(egui::UiBuilder::new().scope_id(contents_id).max_rect(strip), |ui| {
                     let side = strip.height();
                     // Deliberately *not* raising `interact_size.y` to match: the
                     // combo box and the number field in the centre take their

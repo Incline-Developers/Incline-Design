@@ -245,7 +245,7 @@ fn body_height(ctx: &egui::Context) -> f32 {
 }
 
 fn name_field_ids(id: u64) -> (egui::Id, egui::Id) {
-    let field_id = egui::Id::new(("opt_scenario_name", id));
+    let field_id = egui::Id::unique(("opt_scenario_name", id));
     (field_id, field_id.with("typed"))
 }
 
@@ -761,7 +761,7 @@ fn plain_rows(count: usize) -> Vec<GridRow> {
 /// once, so the card does not fold.
 fn option_group(ui: &mut egui::Ui, title: String, rows: impl FnOnce(&mut egui::Ui)) {
     ui.add_space(4.0);
-    CollapsibleSection::new(egui::Id::new(("optimization_group", title.as_str())), title)
+    CollapsibleSection::new(egui::Id::unique(("optimization_group", title.as_str())), title)
         .collapsible(false)
         .show(ui, rows);
 }
@@ -905,7 +905,7 @@ fn draw_constants(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, select
                 }
                 2 => {
                     let width = ui.available_width();
-                    let id = egui::Id::new(("opt_constant_value", row));
+                    let id = egui::Id::unique(("opt_constant_value", row));
                     match &mut constant.value {
                         ConstantValue::Number(number) => {
                             number.edit(ui, id, width, (f64::MIN, f64::MAX));
@@ -1383,7 +1383,7 @@ fn draw_constraints(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fiel
                             // A plain number: a bearing is not worth a constant.
                             let response = entry
                                 .bearing
-                                .edit_with_suffix(ui, egui::Id::new(("opt_rosette_bearing", row)), ui.available_width(), (0.0, 360.0), &unit_degrees());
+                                .edit_with_suffix(ui, egui::Id::unique(("opt_rosette_bearing", row)), ui.available_width(), (0.0, 360.0), &unit_degrees());
                             let same = bearings.iter().enumerate().any(|(other, value)| other != row && *value == bearings[row]);
                             if same {
                                 mark_invalid(ui, &response);
@@ -1498,11 +1498,11 @@ fn draw_outputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: 
             }
             // Plain numbers: a revenue factor range is not worth a constant.
             let from_changed = field_row(ui, tr!("opt-factor-from"), None, |ui, width| {
-                output.factor_from.edit(ui, egui::Id::new("opt_factor_from"), width, (0.0, f64::MAX))
+                output.factor_from.edit(ui, egui::Id::unique("opt_factor_from"), width, (0.0, f64::MAX))
             })
             .changed();
             let to_changed = field_row(ui, tr!("opt-factor-to"), None, |ui, width| {
-                output.factor_to.edit(ui, egui::Id::new("opt_factor_to"), width, (0.0, f64::MAX))
+                output.factor_to.edit(ui, egui::Id::unique("opt_factor_to"), width, (0.0, f64::MAX))
             })
             .changed();
             let (from, to) = (output.factor_from, output.factor_to);
@@ -1510,7 +1510,7 @@ fn draw_outputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: 
             // other is worked out from it between the two ends.
             let mut step = output.factor_step;
             if field_row(ui, tr!("opt-factor-step"), None, |ui, width| {
-                step.edit(ui, egui::Id::new("opt_factor_step"), width, (0.0001, f64::MAX))
+                step.edit(ui, egui::Id::unique("opt_factor_step"), width, (0.0001, f64::MAX))
             })
             .changed()
             {
@@ -1523,7 +1523,7 @@ fn draw_outputs(ui: &mut egui::Ui, scenario: &mut OptimizationScenario, fields: 
             }
             let mut count = output.shell_count;
             if field_row(ui, tr!("opt-shell-count"), None, |ui, width| {
-                edit_count(ui, egui::Id::new("opt_shell_count"), &mut count, width, (2, 1000))
+                edit_count(ui, egui::Id::unique("opt_shell_count"), &mut count, width, (2, 1000))
             })
             .changed()
             {

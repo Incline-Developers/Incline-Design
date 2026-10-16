@@ -118,6 +118,7 @@ impl App<'_> {
             self.editor.blast_library.clone(),
             self.editor.survey.definitions.clone(),
             self.editor.survey.local_system.clone(),
+            self.editor.recent_design_functions.clone(),
         )) {
             userspace_warn!("{}", tr!("blast-log-failed-save-charge-library-error", error = error.to_string()));
         }

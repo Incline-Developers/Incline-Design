@@ -33,7 +33,7 @@ pub(crate) struct DrillHoleProperties<'a> {
 impl<'a> DrillHoleProperties<'a> {
     pub(crate) fn new(id_source: impl Hash + Debug, hole: &'a crate::model::drill_hole::DrillHole, fields: &'a [crate::model::drill_hole::DrillField]) -> Self {
         Self {
-            id: egui::Id::new(id_source),
+            id: egui::Id::unique(id_source),
             hole,
             fields,
         }
@@ -285,7 +285,7 @@ struct LogLayout {
 impl<'a> BoreholeLog<'a> {
     pub(crate) fn new(id_source: impl Hash + Debug, hole: &'a crate::model::drill_hole::DrillHole, dataset: &'a crate::model::drill_hole::OpenDrillHoleDataset) -> Self {
         Self {
-            id: egui::Id::new(id_source),
+            id: egui::Id::unique(id_source),
             hole,
             dataset,
             strat_field: None,

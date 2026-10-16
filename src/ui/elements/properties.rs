@@ -61,7 +61,7 @@ pub(crate) fn draw_preferences(ui: &mut egui::Ui, editor: &mut EditorState, mode
                     (PropertyTab::Developer, tr!("properties-developer")),
                     (PropertyTab::Modelling, tr!("properties-modelling")),
                 ] {
-                    let response = crate::ui::widgets::explorer::ExplorerEntry::new(ui.id().with(tab as u8), label)
+                    let response = crate::ui::widgets::explorer::ExplorerEntry::new(ui.scope_id().with(tab as u8), label)
                         .selected(editor.active_property_tab == tab)
                         .show(ui)
                         .response;
@@ -217,7 +217,7 @@ pub(crate) fn draw_block_model_controls(ui: &mut egui::Ui, editor: &mut EditorSt
         .iter()
         .filter(|model| model.state.loaded && editor.selected_handles.contains(&SceneEntityId::BlockModel(model.id)))
         .collect();
-    let selection_id = egui::Id::new("block_model_controls_selection");
+    let selection_id = egui::Id::unique("block_model_controls_selection");
     let selection: Vec<_> = selected.iter().map(|model| model.id).collect();
     let selection_changed = ui.ctx().data_mut(|data| {
         let changed = data.get_temp::<Vec<crate::model::block_model::BlockModelId>>(selection_id).as_ref() != Some(&selection);
@@ -233,11 +233,11 @@ pub(crate) fn draw_block_model_controls(ui: &mut egui::Ui, editor: &mut EditorSt
     // Centred under the window, but never into the bottom-left corner the
     // tool panels open in: a narrowing viewport pushes the card right from
     // there, and once it would reach the scale bar it is not drawn at all.
-    let area_id = egui::Id::new("block_model_viewport_controls");
+    let area_id = egui::Id::unique("block_model_viewport_controls");
     let (card_size, scale_bar) = ui.ctx().memory(|memory| {
         (
             memory.area_rect(area_id).map_or(egui::vec2(BLOCK_MODEL_CARD_WIDTH, 0.0), |rect| rect.size()),
-            memory.area_rect(egui::Id::new("viewport_scale_bar")).filter(|_| editor.show_scale_bar),
+            memory.area_rect(egui::Id::unique("viewport_scale_bar")).filter(|_| editor.show_scale_bar),
         )
     });
     let card_width = card_size.x;
@@ -391,6 +391,7 @@ fn reset_interface_defaults(draft: &mut PreferencesDraft) {
     draft.ui_size_percent = defaults.ui_size_percent;
     draft.show_world_axis_gizmo = defaults.show_world_axis_gizmo;
     draft.show_scale_bar = defaults.show_scale_bar;
+    draft.recent_functions_shown = defaults.recent_functions_shown;
 }
 
 fn reset_developer_defaults(draft: &mut PreferencesDraft) {
@@ -462,6 +463,18 @@ fn draw_interface_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
             );
             changed |= committed(&MenuFieldBool::new(tr!("properties-world-axis-gizmo"), &mut draft.show_world_axis_gizmo).show(ui));
             changed |= committed(&MenuFieldBool::new(tr!("common-scale-bar"), &mut draft.show_scale_bar).show(ui));
+            let shown = draft.recent_functions_shown.to_string();
+            let options = [10, 15, 20].map(|count: u32| (count, count.to_string().into()));
+            changed |= committed(
+                &MenuFieldCombo::new(
+                    "preferences_recent_functions_shown",
+                    tr!("preferences-recent-functions-shown"),
+                    &mut draft.recent_functions_shown,
+                    shown,
+                    options,
+                )
+                .show(ui),
+            );
             changed
         },
         Some(reset_interface_defaults),
@@ -476,26 +489,28 @@ fn draw_camera_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands: &
         &tr!("properties-camera"),
         |ui, draft| {
             let mut changed = false;
-            CollapsibleSection::new("camera_plan_mode", tr!("properties-plan-mode")).default_open(true).show(ui, |ui| {
-                changed |= committed(
-                    &MenuFieldF64::new(tr!("properties-orbit-sensitivity"), &mut draft.plan_orbit_sensitivity, 0.0001..=0.02)
-                        .speed(0.0001)
-                        .max_decimals(4)
-                        .show(ui),
-                );
-                changed |= committed(
-                    &MenuFieldF64::new(tr!("properties-zoom-sensitivity"), &mut draft.plan_zoom_sensitivity, 0.0001..=0.05)
-                        .speed(0.0001)
-                        .max_decimals(4)
-                        .show(ui),
-                );
-                changed |= committed(&MenuFieldBool::new(tr!("properties-invert-vertical"), &mut draft.plan_invert_vertical_look).show(ui));
-                changed |= committed(&MenuFieldBool::new(tr!("properties-invert-horizontal"), &mut draft.plan_invert_horizontal_look).show(ui));
-                changed |= committed(&MenuFieldBool::new(tr!("properties-zoom-cursor"), &mut draft.plan_zoom_towards_cursor).show(ui));
-            });
+            CollapsibleSection::new(egui::Id::unique("camera_plan_mode"), tr!("properties-plan-mode"))
+                .default_open(true)
+                .show(ui, |ui| {
+                    changed |= committed(
+                        &MenuFieldF64::new(tr!("properties-orbit-sensitivity"), &mut draft.plan_orbit_sensitivity, 0.0001..=0.02)
+                            .speed(0.0001)
+                            .max_decimals(4)
+                            .show(ui),
+                    );
+                    changed |= committed(
+                        &MenuFieldF64::new(tr!("properties-zoom-sensitivity"), &mut draft.plan_zoom_sensitivity, 0.0001..=0.05)
+                            .speed(0.0001)
+                            .max_decimals(4)
+                            .show(ui),
+                    );
+                    changed |= committed(&MenuFieldBool::new(tr!("properties-invert-vertical"), &mut draft.plan_invert_vertical_look).show(ui));
+                    changed |= committed(&MenuFieldBool::new(tr!("properties-invert-horizontal"), &mut draft.plan_invert_horizontal_look).show(ui));
+                    changed |= committed(&MenuFieldBool::new(tr!("properties-zoom-cursor"), &mut draft.plan_zoom_towards_cursor).show(ui));
+                });
 
             ui.add_space(4.0);
-            CollapsibleSection::new("camera_fly_mode", tr!("common-fly-mode")).show(ui, |ui| {
+            CollapsibleSection::new(egui::Id::unique("camera_fly_mode"), tr!("common-fly-mode")).show(ui, |ui| {
                 changed |= committed(
                     &MenuFieldF64::new(tr!("properties-field-view"), &mut draft.fly_field_of_view_degrees, 20.0..=120.0)
                         .suffix(tr!("common-degree-suffix"))

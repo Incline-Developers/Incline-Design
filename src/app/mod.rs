@@ -644,14 +644,15 @@ impl<'a> App<'a> {
                 None
             }
             MacMenuAction::RequestExit => Some(UiCommand::RequestExit),
-            MacMenuAction::InsertPointsAtIntersections => Some(UiCommand::InsertPointsAtIntersections),
             MacMenuAction::CleanStrings => Some(UiCommand::CleanStrings),
             MacMenuAction::GeologyRow(index) => crate::ui::elements::main_menu::GEOLOGY_DESIGN_ROWS.get(index).map(|row| row.command()),
-            MacMenuAction::OpenInsertPointAtElevation => Some(UiCommand::OpenInsertPointAtElevationDialog),
-            MacMenuAction::OpenMoveToX => Some(UiCommand::OpenMoveToAxisDialog(crate::model::Axis::X)),
-            MacMenuAction::OpenMoveToY => Some(UiCommand::OpenMoveToAxisDialog(crate::model::Axis::Y)),
-            MacMenuAction::OpenMoveToZ => Some(UiCommand::OpenMoveToAxisDialog(crate::model::Axis::Z)),
-            MacMenuAction::OpenCreateTriangulation => Some(UiCommand::OpenCreateTriangulation),
+            MacMenuAction::DesignRow(index) => match crate::ui::elements::main_menu::DESIGN_ROWS.get(index) {
+                Some(row) => {
+                    self.handle_ui_commands(vec![row.command(), UiCommand::NoteRecentFunction(row.key())]);
+                    return;
+                }
+                None => None,
+            },
             MacMenuAction::OpenCutTriangulationByPolyline => Some(UiCommand::OpenCutTriangulationByPolyline),
             MacMenuAction::OpenCutTriangulationByZ => Some(UiCommand::OpenCutTriangulationByZ),
             MacMenuAction::OpenCutTriangulationBySurface => Some(UiCommand::OpenCutTriangulationBySurface),
@@ -729,7 +730,7 @@ impl<'a> App<'a> {
         let definitions: Vec<_> = config.coordinate_systems.into_iter().filter(|definition| !definition.name.trim().is_empty()).collect();
         self.editor.survey.definitions = definitions
             .iter()
-            .filter(|definition| crate::model::survey::resolve_system(&definition.name, &definitions).is_ok())
+            .filter(|definition| crate::model::survey::check_parents(&definition.name, &definitions).is_ok())
             .cloned()
             .collect();
         self.editor.survey.local_system = config
@@ -775,11 +776,23 @@ impl<'a> App<'a> {
         self.editor.next_delay_product_id = self.editor.delay_products.len() as u64;
         self.editor.active_delay_product = self.editor.delay_products.first().map(|product| product.id);
         self.editor.blast_library = config.blast_library.clone();
+        self.editor.recent_functions_shown = config.recent_functions_shown.clamp(1, crate::ui::state::RECENT_FUNCTION_LIMIT as u32);
+        // A key no row carries any more (a function since removed) is dropped.
+        let mut recent = Vec::new();
+        for key in config
+            .recent_design_functions
+            .iter()
+            .filter(|key| crate::ui::elements::main_menu::DesignRow::from_key(key).is_some())
+        {
+            crate::ui::state::note_recent(&mut recent, key);
+        }
+        self.editor.recent_design_functions = recent;
         self.configure_graphics_camera_preferences();
     }
 
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn web_new(event_loop_proxy: EventLoopProxy<AppEvent>) -> Result<Self> {
+        crate::fonts::install_cjk_font_loader(event_loop_proxy.clone());
         let mut app = App {
             web_event_loop_proxy: Some(event_loop_proxy.clone()),
             ..App::default()
@@ -2534,6 +2547,12 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                     }
                 }
             }
+            AppEvent::CjkFontsLoaded => {
+                if let Some(graphics) = self.graphics.as_mut() {
+                    graphics.reload_cjk_fonts();
+                    self.redraw_requested = true;
+                }
+            }
             AppEvent::BrowserClipboardPasted(text) => {
                 if let Some(graphics) = self.graphics.as_mut() {
                     graphics.queue_browser_paste(text);
@@ -2624,6 +2643,8 @@ pub(crate) enum AppEvent {
         result: std::result::Result<(), String>,
     },
     BrowserClipboardPasted(String),
+    /// The CJK faces finished downloading (`crate::fonts`).
+    CjkFontsLoaded,
     /// Picked geophysics files' identities, computed on the page thread.
     GeophysicsFileIdentified {
         dataset: crate::model::drill_hole::DrillHoleId,

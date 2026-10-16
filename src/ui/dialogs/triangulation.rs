@@ -9,7 +9,9 @@ use crate::{
             ContourOutputLayer, EditorState, TriCreatePhase, TriCutSource, TriLowerCut, TriPolylineClipMode, TriSurfaceCutSide, TriSurfaceType, TriUpperCut,
             TriangulationPickTarget, UiCommand, UiProjectView,
         },
-        widgets::menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32, selected_source_field},
+        widgets::menu::{
+            self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldRange, MenuFieldText, MenuFieldU32, selected_source_field,
+        },
     },
 };
 
@@ -530,32 +532,16 @@ pub(crate) fn draw_cut_z_dialog(ui: &mut egui::Ui, editor: &mut EditorState, pro
 
             ui.add_space(4.0);
 
-            MenuField::new(tr!("tri-axis-range", axis = crate::model::survey::axis_name(2).to_string()))
-                .help_text(tr!("tri-minimum-maximum-elevations-retained"))
-                .show(ui, |ui, row_height, _| {
-                    let width = picker_control_width(ui);
-                    let gap = ui.spacing().item_spacing.x;
-                    let field_width = (width - gap) * 0.5;
-                    ui.allocate_ui_with_layout(egui::vec2(width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        ui.add_sized(
-                            [field_width, row_height],
-                            egui::DragValue::new(&mut editor.tri_cut_z_min_input)
-                                .range(f64::MIN..=f64::MAX)
-                                .speed(0.1)
-                                .prefix(format!("{} ", tr!("tri-min")))
-                                .max_decimals(2),
-                        );
-                        ui.add_sized(
-                            [field_width, row_height],
-                            egui::DragValue::new(&mut editor.tri_cut_z_max_input)
-                                .range(f64::MIN..=f64::MAX)
-                                .speed(0.1)
-                                .prefix(format!("{} ", tr!("common-max")))
-                                .max_decimals(2),
-                        );
-                    })
-                    .response
-                });
+            let (z_low, z_high) = editor.tri_cut_z_limits;
+            MenuFieldRange::new(
+                tr!("tri-axis-range", axis = crate::model::survey::axis_name(2).to_string()),
+                &mut editor.tri_cut_z_min_input,
+                &mut editor.tri_cut_z_max_input,
+                z_low..=z_high,
+            )
+            .help_text(tr!("tri-minimum-maximum-elevations-retained"))
+            .width(width)
+            .show(ui);
 
             ui.add_space(4.0);
 
@@ -1220,37 +1206,20 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
             editor.tri_contour_minor_color = color32_to_rgba(minor_color);
             editor.tri_contour_major_color = color32_to_rgba(major_color);
 
-            MenuField::new(tr!("tri-limit-z-range"))
+            MenuFieldBool::new(tr!("tri-limit-z-range"), &mut editor.tri_contour_use_z_range)
                 .help_text(tr!("tri-when-enabled-generate-contours-only"))
-                .show(ui, |ui, row_height, _| {
-                    let width = control_width;
-                    ui.allocate_ui_with_layout(egui::vec2(width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        ui.add_sized([row_height, row_height], egui::Checkbox::new(&mut editor.tri_contour_use_z_range, ""));
-                        if editor.tri_contour_use_z_range {
-                            let gap = ui.spacing().item_spacing.x;
-                            let value_width = (width - row_height - gap * 2.0) * 0.5;
-                            ui.add_sized(
-                                [value_width, row_height],
-                                egui::DragValue::new(&mut editor.tri_contour_z_min_input)
-                                    .range(f64::MIN..=f64::MAX)
-                                    .speed(0.1)
-                                    .prefix(format!("{} ", tr!("tri-min")))
-                                    .max_decimals(2),
-                            );
-                            ui.add_sized(
-                                [value_width, row_height],
-                                egui::DragValue::new(&mut editor.tri_contour_z_max_input)
-                                    .range(f64::MIN..=f64::MAX)
-                                    .speed(0.1)
-                                    .prefix(format!("{} ", tr!("common-max")))
-                                    .max_decimals(2),
-                            );
-                        } else {
-                            ui.weak(tr!("tri-use-full-surface-elevation-range"));
-                        }
-                    })
-                    .response
-                });
+                .show(ui);
+            if editor.tri_contour_use_z_range {
+                let (z_low, z_high) = editor.tri_contour_z_limits;
+                MenuFieldRange::new(
+                    tr!("tri-axis-range", axis = crate::model::survey::axis_name(2).to_string()),
+                    &mut editor.tri_contour_z_min_input,
+                    &mut editor.tri_contour_z_max_input,
+                    z_low..=z_high,
+                )
+                .width(control_width)
+                .show(ui);
+            }
 
             ui.add_space(4.0);
 

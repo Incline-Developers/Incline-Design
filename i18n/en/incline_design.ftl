@@ -282,7 +282,7 @@ survey-set-local = Set as Mine Coordinate System
 survey-delete-system = Delete Coordinate System
 survey-systems-empty = No coordinate systems
 survey-system-name = Name
-survey-system-origin = Same point — system coordinates
+survey-system-origin = Same point (system coordinates)
 survey-angle-help = Counterclockwise from reference X toward reference Y, viewed from above.
 survey-scale-help = Uniform XYZ scale from the reference frame to this system. Use 1 to preserve dimensions.
 survey-close = Close
@@ -300,12 +300,13 @@ survey-axis-names = Axis names
 survey-kind-registry-short = Registry system
 survey-kind-grid-short = Grid over another system
 survey-registry-search = Search
-survey-registry-hint = Name or EPSG code, e.g. "mga zone 56"
-survey-registry-none = Nothing in the registry matches every word.
+survey-registry-hint = Name or EPSG code
 survey-parent = Defined against
-survey-parent-origin = Known point — parent coordinates
+survey-parent-origin = Known point (parent coordinates)
 survey-pick-registry = Search for the system and choose it from the results.
 survey-pick-parent = Choose the system this grid is defined against.
+survey-choose-system = Choose a system
+survey-no-system = No system chosen
 survey-pick-system = Choose a system
 survey-pick-systems = Choose the system to convert from and the one to convert to.
 survey-no-selection = Choose a coordinate system on the left, or right-click to add one.
@@ -321,6 +322,7 @@ survey-name-exists = A coordinate system with that name already exists. Select i
 
 preferences-ui-size = UI size
 preferences-ui-size-help = Adjusts text and controls relative to your device’s normal display scaling. 100% uses the default size. Screen resolution and window size do not shrink the interface.
+preferences-recent-functions-shown = Recent functions shown
 
 relimit-select-boundary = Select polyline or circle to relimit to
 
@@ -1553,6 +1555,8 @@ edit-project-name = Project name
 edit-properties = Properties
 edit-radius = Radius
 edit-recent = Recent
+edit-recent-functions = Recent functions
+edit-no-recent-functions = No recent functions
 edit-relative = Relative (+/-)
 edit-elevation-mode-help = Relative applies a vertical change to every point. Absolute RL projects every point onto one target elevation.
 edit-remove-from-list = Remove from List
@@ -2310,6 +2314,7 @@ status-points-chunks = Points: -- / -- of -- (--/-- chunks)
 
 ## Text strings
 
+text-cjk-fonts-fetch-failed = Could not download the Chinese, Japanese and Korean fonts, so that text may show as boxes: { $error }
 text-could-not-build-vector-mesh = Could not build vector mesh for font { $font }, glyph { $glyph }: { $error }
 text-document-text-mesh-exceeded-its = Document text mesh exceeded its u32 index range
 
@@ -2467,7 +2472,6 @@ tri-major = Major
 tri-max-edge-length = Max edge length
 tri-merge = Merge
 tri-method = Method
-tri-min = Min
 tri-minimum-maximum-elevations-retained = Minimum and maximum elevations retained in the output surface. The minimum must be below the maximum.
 tri-minor = Minor
 tri-contour-interval-help = Minor controls ordinary contours. Major controls emphasized contours and must use an interval at least as large as Minor.
@@ -2528,7 +2532,6 @@ tri-uniform-grid = Uniform grid
 tri-unload-source-surface = Unload source surface
 tri-unload-source-topology = Unload source topology
 tri-up-target-point-count-points = Up to { $target } of { $point_count } points will become surface vertices ({ $percent }%).
-tri-use-full-surface-elevation-range = Use the full surface elevation range
 tri-vertex-count = Vertex count
 tri-vertices-within-5-cm-xy = Vertices within 5 cm in XY and Z will share one position for this triangulation. This can shift the generated surface locally by up to 5 cm; the source polylines are unchanged.
 tri-weld-retry = Weld & Retry
@@ -2748,8 +2751,8 @@ blast-powder-factor = Powder factor
 blast-not-loaded = Not loaded
 blast-count-primer-delay-ms-downhole = { $count } primer(s) · { $delay } ms downhole
 blast-set-initiation-point-tie-holes-play = Set an initiation point and tie the holes in to play the round
-blast-pause = Pause
-blast-play = Play
+blast-pause = Pause (Space)
+blast-play = Play (Space)
 blast-back-start = Back to the start
 blast-duration-ms = of { $duration } ms
 blast-real-time = Real time
@@ -2763,7 +2766,6 @@ blast-peak-mass-kg-time-ms = Peak { $mass } kg at { $time } ms
 blast-peak-holes-hole-time-ms = Peak { $holes } hole(s) at { $time } ms
 blast-peak-over-limit = , { $over } kg over
 blast-peak-within-limit = , within limit
-blast-top-surface-signal-lighting-each-downline = Top: the surface signal lighting each downline. Below: detonations. Click or drag to move the playhead.
 
 ## Products palette and charge rules
 

@@ -40,7 +40,7 @@ pub(crate) struct ContextMenu {
 impl ContextMenu {
     pub(crate) fn new(id_source: impl Hash + Debug, title: impl Into<egui::WidgetText>) -> Self {
         Self {
-            id: egui::Id::new(("context_menu", id_source)),
+            id: egui::Id::unique(("context_menu", id_source)),
             title: title.into(),
             position: egui::Pos2::ZERO,
             width: MENU_WIDTH,
@@ -57,16 +57,45 @@ impl ContextMenu {
         self
     }
 
-    pub(crate) fn show<R>(self, ctx: &egui::Context, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<R> {
+    /// Draw the menu, and report whether the user dismissed it this frame:
+    /// Escape, or a primary click outside it once it has been up a frame (the
+    /// click that opened it does not count), as egui's own popups close. A
+    /// click while one of its popups (a combo, a colour picker) is open is
+    /// left to that popup, and one while a submenu is open to the submenu,
+    /// which closes the menu when the click lands outside both.
+    pub(crate) fn show<R>(self, ctx: &egui::Context, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> (egui::InnerResponse<R>, bool) {
+        use egui::containers::menu::{MenuConfig, MenuState};
+
         let Self { id, title, position, width } = self;
-        egui::Area::new(id)
+        let child_popup_open = egui::Popup::is_any_open(ctx);
+        let submenu_open = MenuState::from_id(ctx, id, |state| state.open_item.is_some());
+        // A menu root like egui's popup menus, so submenus keep their open
+        // state. Rows close the menu themselves, so a click inside a submenu
+        // does not.
+        let config = MenuConfig::new().close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+        let response = egui::Area::new(id)
             .order(egui::Order::Foreground)
             .movable(false)
             .constrain(true)
             .fade_in(false)
             .pivot(egui::Align2::LEFT_TOP)
             .current_pos(position)
-            .show(ctx, |ui| menu_frame(ui.style()).show(ui, |ui| draw_body(ui, &title, width, add_contents)).inner)
+            .info(egui::UiStackInfo::new(egui::UiKind::Menu).with_tag_value(MenuConfig::MENU_CONFIG_TAG, config))
+            .show(ctx, |ui| menu_frame(ui.style()).show(ui, |ui| draw_body(ui, &title, width, add_contents)).inner);
+        MenuState::mark_shown(ctx, id);
+        // (frame first shown, frame last shown); a gap means it was reopened.
+        let frame = ctx.cumulative_frame_nr();
+        let (opened, _) = ctx.data_mut(|data| {
+            let shown = data.get_temp_mut_or(id, (frame, frame));
+            if shown.1 + 1 < frame {
+                *shown = (frame, frame);
+            }
+            shown.1 = frame;
+            *shown
+        });
+        let clicked_outside = opened < frame && !child_popup_open && !submenu_open && ctx.input(|input| input.pointer.primary_clicked()) && response.response.clicked_elsewhere();
+        let dismissed = clicked_outside || response.response.should_close() || ctx.input(|input| input.key_pressed(egui::Key::Escape));
+        (response, dismissed)
     }
 }
 
@@ -157,8 +186,8 @@ fn paint_header(ui: &mut egui::Ui, title: &str, width: f32) {
     );
 }
 
-/// Dense rows, small text, and the frame metrics egui builds nested submenu
-/// frames from (they are read from the style, not passed in like [`menu_frame`]).
+/// Dense rows, small text, and the frame metrics egui measures a submenu's
+/// offset with; the submenu's own frame comes from [`submenu_style`].
 fn apply_compact_style(ui: &mut egui::Ui) {
     let style = ui.style_mut();
     style.spacing.menu_margin = egui::Margin::ZERO;
@@ -221,7 +250,6 @@ impl ContextMenuAction {
         self
     }
 
-    #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub(crate) fn submenu(mut self, submenu: bool) -> Self {
         self.submenu = submenu;
         self
@@ -252,7 +280,7 @@ impl ContextMenuAction {
             let natural_width = text_left + label_width + shortcut_gap + shortcut_width + right_padding;
             super::menu::record_intrinsic_content_width(ui, natural_width);
             let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_HEIGHT), egui::Sense::click());
-            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label.text()));
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label.text()));
             if ui.is_rect_visible(rect) {
                 let painter = ui.painter().with_clip_rect(rect);
                 let visuals = ui.style().interact(&response);
@@ -405,14 +433,27 @@ pub(crate) fn dropdown_menu<R>(
 ///
 /// The nested popup is egui's own [`egui::containers::menu::SubMenu`], so hover
 /// timing and keyboard navigation behave exactly as elsewhere.
-#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub(crate) fn context_submenu<R>(ui: &mut egui::Ui, label: &str, enabled: bool, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> Option<egui::InnerResponse<R>> {
     let response = ContextMenuAction::new(label).enabled(enabled).submenu(true).show(ui);
     if !enabled {
         return None;
     }
     let title: egui::WidgetText = label.into();
-    egui::containers::menu::SubMenu::new().show(ui, &response, |ui| draw_body(ui, &title, MENU_WIDTH, add_contents))
+    // egui frames the nested popup from its own style, not the row's, so the
+    // config carries this module's frame metrics along with the parent's
+    // close behaviour.
+    let config = egui::containers::menu::MenuConfig::find(ui).style(submenu_style);
+    egui::containers::menu::SubMenu::new()
+        .config(config)
+        .show(ui, &response, |ui| draw_body(ui, &title, MENU_WIDTH, add_contents))
+}
+
+/// egui's menu style with [`menu_frame`]'s margin and corner radius, which
+/// egui's `Frame::popup` reads when it frames a submenu.
+fn submenu_style(style: &mut egui::Style) {
+    egui::containers::menu::menu_style(style);
+    style.spacing.menu_margin = egui::Margin::ZERO;
+    style.visuals.menu_corner_radius = egui::CornerRadius::same(CORNER_RADIUS);
 }
 
 /// The shared popup frame: flat fill, hairline border, no inner margin so the
