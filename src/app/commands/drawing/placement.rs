@@ -181,6 +181,10 @@ impl<'a> App<'a> {
         if self.editor.active_tool != ActiveTool::MakePoly || self.editor.poly_finish_dialog || self.editor.pending_stroke.len() < 2 {
             return None;
         }
+        // Carrying on or redrawing a string, its first vertex is no target.
+        if crate::ui::state::string_rework_live(&self.editor).is_some() {
+            return None;
+        }
         let first = *self.editor.pending_stroke.first()?;
         let graphics = self.graphics.as_ref()?;
         let cursor = self.editor.cursor_screen_px?;

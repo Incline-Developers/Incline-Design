@@ -2620,6 +2620,9 @@ impl EditorState {
         self.active_tool == ActiveTool::MakePoly
             && !self.poly_finish_dialog
             && self.pending_stroke.len() >= 2
+            // Carrying on or redrawing a string, the first vertex is the
+            // string's own, not a place to close.
+            && string_rework_live(self).is_none()
             && self
                 .pending_stroke
                 .first()
