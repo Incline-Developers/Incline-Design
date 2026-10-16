@@ -460,7 +460,8 @@ impl<'a> App<'a> {
                     let snap_eligible = self.editor.active_tool.snaps_cursor() && self.editor.snapping_active() && !camera_active && !is_scrolling;
                     let now = Instant::now();
                     let snap_poll_due = self.cursor_poll_due(now);
-                    let snapped = if snap_eligible { self.cursor_snap_point(now) } else { None };
+                    let close_target = if camera_active { None } else { self.poly_close_target() };
+                    let snapped = close_target.or_else(|| if snap_eligible { self.cursor_snap_point(now) } else { None });
                     let was_snapped = self.editor.cursor_snapped;
                     // During a camera drag the mouse steers the view, not the
                     // cursor: keep the last world cursor (and its snapped flag)
@@ -1295,15 +1296,7 @@ impl<'a> App<'a> {
             // A held C is one press: the toggle must not chatter with the key's auto-repeat.
             ElementState::Pressed if *repeat && *key == KeyCode::KeyC => {}
             ElementState::Pressed => self.handle_key_code(*key),
-            ElementState::Released => {
-                // Once the Enter that opened the polyline finish dialog is
-                // released, let its Enter shortcut work. Until then a held key
-                // must not skip straight past the Open/Closed choice.
-                if matches!(key, KeyCode::Enter | KeyCode::NumpadEnter) && self.editor.poly_finish_dialog && !self.editor.poly_finish_dialog_confirm_armed {
-                    self.editor.poly_finish_dialog_confirm_armed = true;
-                    self.redraw_requested = true;
-                }
-            }
+            ElementState::Released => {}
         }
     }
 

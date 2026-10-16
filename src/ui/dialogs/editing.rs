@@ -893,27 +893,30 @@ pub(crate) fn draw_text_edit_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiComm
     editor.text_edit_position_frames = editor.text_edit_position_frames.saturating_sub(1);
 }
 
-/// Draw the polyline finish dialog (Close / Leave open / Cancel) near the cursor.
-pub(crate) fn draw_finish_polyline_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState, viewport_rect: egui::Rect) {
-    ViewportDockPanel::new("finish_poly_dialog", tr!("edit-finish-polyline"), viewport_rect).show(ui, |ui| {
-        MenuField::new(tr!("common-shape")).show(ui, |ui, _, _| {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // Drain the key from egui's queue every frame so it never leaks
-                // elsewhere, but honour it only once the Enter that opened this
-                // dialog has been released - a key held down to finish the line
-                // would otherwise confirm "Open" the instant the dialog appears.
-                let confirm_key = menu::dialog_confirm_pressed(ui.ctx());
-                if ui.add(MenuButton::new(tr!("common-open")).primary()).clicked() || (confirm_key && editor.poly_finish_dialog_confirm_armed) {
-                    commands.push(UiCommand::CommitStrokeOpen);
-                    editor.poly_finish_dialog = false;
-                }
-                if ui.add(MenuButton::new(tr!("common-closed"))).clicked() {
-                    commands.push(UiCommand::FinishPolyClose);
-                    editor.poly_finish_dialog = false;
-                }
-            });
+/// Ask whether the polyline being drawn finishes open or closed, as a context
+/// menu where the stroke was finished. Escape or a click away keeps it open.
+pub(crate) fn draw_finish_polyline_menu(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState) {
+    let Some((px, py)) = editor.poly_finish_dialog_px else {
+        return;
+    };
+    let ppp = ui.ctx().pixels_per_point();
+    let pos = egui::pos2(px / ppp + 4.0, py / ppp + 4.0);
+    let mut command = None;
+    let (_, dismissed) = ContextMenu::new("finish_poly_menu", tr!("edit-finish-polyline"))
+        .position(pos)
+        .width(160.0)
+        .show(ui.ctx(), |ui| {
+            if ContextMenuAction::new(tr!("common-open")).show(ui).clicked() {
+                command = Some(UiCommand::CommitStrokeOpen);
+            }
+            if ContextMenuAction::new(tr!("common-closed")).show(ui).clicked() {
+                command = Some(UiCommand::FinishPolyClose);
+            }
         });
-    });
+    if let Some(command) = command.or_else(|| dismissed.then_some(UiCommand::CommitStrokeOpen)) {
+        commands.push(command);
+        editor.poly_finish_dialog = false;
+    }
 }
 
 // I dont like this - we need to clean this up later - too many options and sub menus
