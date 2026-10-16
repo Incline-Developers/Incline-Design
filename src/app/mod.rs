@@ -613,12 +613,13 @@ impl<'a> App<'a> {
                 None
             }
             MacMenuAction::RequestExit => Some(UiCommand::RequestExit),
-            MacMenuAction::InsertPointsAtIntersections => Some(UiCommand::InsertPointsAtIntersections),
-            MacMenuAction::OpenInsertPointAtElevation => Some(UiCommand::OpenInsertPointAtElevationDialog),
-            MacMenuAction::OpenMoveToX => Some(UiCommand::OpenMoveToAxisDialog(crate::model::Axis::X)),
-            MacMenuAction::OpenMoveToY => Some(UiCommand::OpenMoveToAxisDialog(crate::model::Axis::Y)),
-            MacMenuAction::OpenMoveToZ => Some(UiCommand::OpenMoveToAxisDialog(crate::model::Axis::Z)),
-            MacMenuAction::OpenCreateTriangulation => Some(UiCommand::OpenCreateTriangulation),
+            MacMenuAction::DesignRow(index) => match crate::ui::elements::main_menu::DESIGN_ROWS.get(index) {
+                Some(row) => {
+                    self.handle_ui_commands(vec![row.command(), UiCommand::NoteRecentFunction(row.key())]);
+                    return;
+                }
+                None => None,
+            },
             MacMenuAction::OpenCutTriangulationByPolyline => Some(UiCommand::OpenCutTriangulationByPolyline),
             MacMenuAction::OpenCutTriangulationByZ => Some(UiCommand::OpenCutTriangulationByZ),
             MacMenuAction::OpenCutTriangulationBySurface => Some(UiCommand::OpenCutTriangulationBySurface),
@@ -739,6 +740,17 @@ impl<'a> App<'a> {
         self.editor.next_delay_product_id = self.editor.delay_products.len() as u64;
         self.editor.active_delay_product = self.editor.delay_products.first().map(|product| product.id);
         self.editor.blast_library = config.blast_library.clone();
+        self.editor.recent_functions_shown = config.recent_functions_shown.clamp(1, crate::ui::state::RECENT_FUNCTION_LIMIT as u32);
+        // A key no row carries any more (a function since removed) is dropped.
+        let mut recent = Vec::new();
+        for key in config
+            .recent_design_functions
+            .iter()
+            .filter(|key| crate::ui::elements::main_menu::DesignRow::from_key(key).is_some())
+        {
+            crate::ui::state::note_recent(&mut recent, key);
+        }
+        self.editor.recent_design_functions = recent;
         self.configure_graphics_camera_preferences();
     }
 

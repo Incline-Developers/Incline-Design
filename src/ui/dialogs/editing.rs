@@ -7,7 +7,7 @@ use crate::{
         state::{ActiveTool, BatterBermMode, DrapePhase, EditorState, HeightMode, OffsetMeasure, RelimitMode, RenameTarget, TrimEnd, UiCommand, UiProjectView},
         themed_icon,
         widgets::{
-            context_menu::{ContextMenu, ContextMenuAction, context_menu_popup, context_menu_separator},
+            context_menu::{ContextMenu, ContextMenuAction, context_menu_popup, context_menu_separator, context_submenu},
             menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldRgba, MenuFieldText, MenuFieldU32},
             viewport::ViewportDockPanel,
         },
@@ -104,7 +104,7 @@ pub(crate) fn draw_right_click_context(
     let ppp = ui.ctx().pixels_per_point();
     let pos = egui::pos2(px / ppp + 4.0, py / ppp + 4.0);
     let title = canvas_context_menu_title(editor, document);
-    ContextMenu::new("canvas_properties", title).position(pos).width(220.0).show(ui.ctx(), |ui| {
+    let (_, dismissed) = ContextMenu::new("canvas_properties", title).position(pos).width(220.0).show(ui.ctx(), |ui| {
         crate::ui::elements::properties::draw_selection_appearance(ui, editor, project, document, commands, geometry_dirty);
         let selected_drill_hole = editor
             .selected_handles
@@ -159,10 +159,45 @@ pub(crate) fn draw_right_click_context(
             context_menu_separator(ui);
         }
 
+        if editor.keeps_recent_functions() {
+            context_submenu(ui, &tr!("edit-recent-functions"), true, |ui| draw_recent_function_rows(ui, editor, commands));
+        }
         if ContextMenuAction::new(tr!("survey-close")).show(ui).clicked() {
             commands.push(UiCommand::CloseCanvasContextMenu);
         }
     });
+    if dismissed {
+        commands.push(UiCommand::CloseCanvasContextMenu);
+    }
+}
+
+/// The recent functions list a right click on empty space opens: the canvas
+/// menu's frame, place and closers, with the list as its only rows.
+pub(crate) fn draw_recent_functions_context(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>, px: f32, py: f32) {
+    let ppp = ui.ctx().pixels_per_point();
+    let pos = egui::pos2(px / ppp + 4.0, py / ppp + 4.0);
+    let (_, dismissed) = ContextMenu::new("canvas_recent_functions", tr!("edit-recent-functions"))
+        .position(pos)
+        .width(220.0)
+        .show(ui.ctx(), |ui| draw_recent_function_rows(ui, editor, commands));
+    if dismissed {
+        commands.push(UiCommand::CloseCanvasContextMenu);
+    }
+}
+
+/// One line per recent function, greyed exactly when its menu bar entry is.
+fn draw_recent_function_rows(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
+    let rows = editor.recent_design_rows().unwrap_or_default();
+    if rows.is_empty() {
+        ContextMenuAction::new(tr!("edit-no-recent-functions")).enabled(false).show(ui);
+    }
+    for row in rows {
+        if ContextMenuAction::new(row.path()).enabled(row.enabled(editor)).show(ui).clicked() {
+            commands.push(row.command());
+            commands.push(UiCommand::NoteRecentFunction(row.key()));
+            commands.push(UiCommand::CloseCanvasContextMenu);
+        }
+    }
 }
 
 pub(crate) fn draw_move_to_layer_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {

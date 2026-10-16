@@ -952,6 +952,7 @@ impl<'a> App<'a> {
                             self.editor.blast_library.clone(),
                             self.editor.survey.definitions.clone(),
                             self.editor.survey.local_system.clone(),
+                            self.editor.recent_design_functions.clone(),
                         );
                         crate::app::io::save_config(&config)?;
                         self.editor.workspace_order = order;
@@ -1015,6 +1016,7 @@ impl<'a> App<'a> {
                 self.editor.canvas_context_menu_open = false;
                 Ok(())
             }
+            UiCommand::NoteRecentFunction(key) => self.note_recent_function(key),
             UiCommand::ZoomToExtents => {
                 // Sliced, the fit happens within the section, which therefore stays up.
                 self.zoom_to_extents();

@@ -30,6 +30,7 @@ use crate::{
         raster::RasterTextureId,
         triangulation::TriangulationId,
     },
+    ui::elements::main_menu::DesignRow,
 };
 
 type OptionalScreenPointPx = Option<(f32, f32)>;
@@ -76,6 +77,8 @@ pub(crate) struct PreferencesDraft {
     pub(crate) fly_invert_horizontal_look: bool,
     pub(crate) fly_near_clip_limit: f64,
     pub(crate) fly_max_clip_span: f64,
+    /// How many lines a recent functions list shows.
+    pub(crate) recent_functions_shown: u32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -118,6 +121,7 @@ impl Default for PreferencesDraft {
             fly_invert_horizontal_look: false,
             fly_near_clip_limit: crate::app::io::default_fly_near_clip_limit(),
             fly_max_clip_span: crate::app::io::default_fly_max_clip_span(),
+            recent_functions_shown: crate::app::io::default_recent_functions_shown(),
         }
     }
 }
@@ -1364,6 +1368,9 @@ pub(crate) struct EditorState {
     /// The drill hole under the cursor when the canvas context menu was
     /// opened; its hole-specific rows act on this hole, not the selection.
     pub(crate) canvas_context_menu_hole: Option<DrillHoleRef>,
+    /// The canvas menu was opened on empty space, so it is the recent
+    /// functions list rather than the menu for what was picked.
+    pub(crate) canvas_context_menu_recent: bool,
     /// Selected polylines and the in-progress line-weight value for the
     /// selection appearance menu. The value must survive across frames while its
     /// `DragValue` is being dragged.
@@ -1862,6 +1869,9 @@ pub(crate) struct EditorState {
     pub(crate) active_workspace: Workspace,
     pub(crate) survey: crate::ui::dialogs::survey::SurveyState,
     pub(crate) workspace_order: [Workspace; 5],
+    /// Production's recent functions by [`DesignRow::key`], newest last.
+    pub(crate) recent_design_functions: Vec<String>,
+    pub(crate) recent_functions_shown: u32,
     /// The Drill & Blast workspace's stored products, in the order the palette
     /// lays them out.
     pub(crate) delay_products: Vec<DelayProduct>,
@@ -2410,6 +2420,7 @@ impl EditorState {
             fly_invert_horizontal_look: self.fly_invert_horizontal_look,
             fly_near_clip_limit: self.fly_near_clip_limit,
             fly_max_clip_span: self.fly_max_clip_span,
+            recent_functions_shown: self.recent_functions_shown,
         }
     }
 
@@ -2547,6 +2558,7 @@ impl EditorState {
             canvas_context_menu_open: false,
             canvas_context_menu_px: None,
             canvas_context_menu_hole: None,
+            canvas_context_menu_recent: false,
             design_line_weight_input: None,
             move_to_layer_dialog: None,
             move_to_axis_dialog: None,
@@ -2815,6 +2827,8 @@ impl EditorState {
             active_property_tab: PropertyTab::Interface,
             active_workspace: Workspace::Production,
             workspace_order: Workspace::ALL,
+            recent_design_functions: Vec::new(),
+            recent_functions_shown: crate::app::io::default_recent_functions_shown(),
             survey: Default::default(),
             delay_products: builtin_delay_products(),
             next_delay_product_id: builtin_delay_products().len() as u64,
@@ -3551,6 +3565,8 @@ pub(crate) enum UiCommand {
     CancelTextEdit,
     SetTriangulationColor(TriangulationId, [f32; 4]),
     CloseCanvasContextMenu,
+    /// Remember a menu function as just used, by its row key.
+    NoteRecentFunction(&'static str),
     LoadTriangulation(TriangulationId),
     LoadBlockModel(BlockModelId),
     CloseBlockModel(BlockModelId),
@@ -3961,6 +3977,7 @@ impl UiCommand {
             | Self::CancelCollarRotation
             | Self::CancelTextEdit
             | Self::CloseCanvasContextMenu
+            | Self::NoteRecentFunction(_)
             | Self::OpenOptimizationScenarios
             | Self::AddOptimizationScenario
             | Self::EditOptimizationScenario(_)
@@ -4562,6 +4579,46 @@ pub(crate) struct UiProjectView {
 /// How many remembered projects a Recent list offers before the file chooser
 /// is the better tool for finding one.
 pub(crate) const RECENT_PROJECT_LIMIT: usize = 10;
+
+/// How many functions a recent list keeps, whatever it is set to show, so
+/// showing fewer and then more again loses nothing.
+pub(crate) const RECENT_FUNCTION_LIMIT: usize = 20;
+
+/// Remember `key` as the newest use in `list` (kept newest last, as the
+/// recent projects are): a repeat moves to the end, the oldest past
+/// [`RECENT_FUNCTION_LIMIT`] drop off. Returns whether the list changed.
+pub(crate) fn note_recent(list: &mut Vec<String>, key: &str) -> bool {
+    if list.last().is_some_and(|last| last == key) {
+        return false;
+    }
+    list.retain(|kept| kept != key);
+    list.push(key.to_owned());
+    let excess = list.len().saturating_sub(RECENT_FUNCTION_LIMIT);
+    list.drain(..excess);
+    true
+}
+
+impl EditorState {
+    /// Only Production keeps a recent functions list.
+    pub(crate) fn keeps_recent_functions(&self) -> bool {
+        self.active_workspace == Workspace::Production
+    }
+
+    /// The active workspace's recent functions, newest first and as many as
+    /// the preference shows; `None` where the workspace keeps no list.
+    pub(crate) fn recent_design_rows(&self) -> Option<Vec<DesignRow>> {
+        self.keeps_recent_functions().then(|| {
+            let rows = self.recent_design_functions.iter().rev().filter_map(|key| DesignRow::from_key(key));
+            rows.take(self.recent_functions_shown as usize).collect()
+        })
+    }
+
+    /// The active workspace's recent function keys; `None` where it keeps no
+    /// list.
+    pub(crate) fn recent_functions_mut(&mut self) -> Option<&mut Vec<String>> {
+        self.keeps_recent_functions().then_some(&mut self.recent_design_functions)
+    }
+}
 
 impl UiProjectView {
     /// The remembered projects a Recent list offers, most recently opened
