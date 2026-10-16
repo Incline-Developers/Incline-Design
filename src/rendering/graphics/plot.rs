@@ -255,10 +255,12 @@ impl<'a> Graphics<'a> {
             self.plot_preview = None;
             self.plot_preview_key = None;
             editor.plot_preview_texture = None;
+            editor.plot_preview_contours = Default::default();
             return;
         };
         let Ok(sheet) = crate::model::plot::layout(&dialog.spec(Vec::new())) else {
             editor.plot_preview_texture = None;
+            editor.plot_preview_contours = Default::default();
             return;
         };
 
@@ -279,8 +281,16 @@ impl<'a> Graphics<'a> {
         let Some(center) = center else {
             // Nothing is loaded, so there is no framing to render.
             editor.plot_preview_texture = None;
+            editor.plot_preview_contours = Default::default();
             return;
         };
+        // The preview places the sheet's contour heights itself, from these.
+        let contours = &mut editor.plot_preview_contours;
+        contours.centre = Some(center.truncate());
+        if contours.generation != Some(self.contour_labels.generation()) {
+            contours.lines = self.contour_labels.sheet_lines();
+            contours.generation = Some(self.contour_labels.generation());
+        }
         let zoom = (sheet.map.height * sheet.world_per_px * 0.5).max(1.0e-4);
 
         let key = {

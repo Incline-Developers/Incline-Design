@@ -37,6 +37,7 @@ impl<'a> App<'a> {
             elevation: 0.0,
             folder: None,
             section: SectionKind::natural_layer(),
+            contour_labels: false,
         };
         self.execute_edit(Command::AddLayerSnapshot { layer, objects: Vec::new() });
 
@@ -113,6 +114,7 @@ impl<'a> App<'a> {
             elevation: source_layer.elevation,
             folder: source_layer.folder,
             section: source_layer.section,
+            contour_labels: source_layer.contour_labels,
         };
         let duplicate_objects: Vec<Object> = source_objects
             .into_iter()
@@ -253,5 +255,27 @@ impl<'a> App<'a> {
         let state = if locked { tr!("cmd-layer-locked") } else { tr!("cmd-layer-unlocked") };
         userspace_log!("{}", tr!("cmd-layer-state-layer-name", state = state.to_string(), name = name.to_string()));
         self.invalidate_geometry();
+    }
+
+    /// Turn contour labels on or off on `layers`, as one undoable edit in
+    /// the project of `clicked`, the layer whose menu was used: that project
+    /// is made active, as every layer edit makes it, and selected layers of
+    /// any other project are left alone. Layers already that way are left out,
+    /// and nothing is changed or activated when no layer would change.
+    pub(crate) fn set_layer_contour_labels(&mut self, clicked: LayerId, layers: &[LayerId], on: bool) {
+        let Some(project) = self.workspace.project_index_for_layer(clicked) else {
+            return;
+        };
+        let document = &self.workspace.projects[project].project.document;
+        let commands: Vec<Command> = layers
+            .iter()
+            .filter(|&&id| document.layer(id).is_some_and(|layer| layer.contour_labels != on))
+            .map(|&id| Command::SetLayerContourLabels { id, before: !on, after: on })
+            .collect();
+        if commands.is_empty() {
+            return;
+        }
+        self.activate_project_for_layer(clicked);
+        self.execute_edit(Command::Batch(commands));
     }
 }

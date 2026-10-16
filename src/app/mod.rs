@@ -384,6 +384,10 @@ pub(crate) struct App<'a> {
     /// `ProjectStore::composite_key()` of the last `scene_document` build;
     /// `None` forces the next invalidation to rebuild.
     scene_document_key: Option<u64>,
+    /// Each labelled polyline's level and what each contour-labelled layer's
+    /// levels say, read from the project documents with hidden lines
+    /// included; refreshed with `scene_document`.
+    contour_levels: crate::model::geometry::ContourLevelCache,
     /// Composite + locked-layer fingerprint of the last expansion of
     /// `EditorState::locked_layers` onto `EditorState::frozen_handles`, so
     /// invalidation only walks the document when one of the two changed.
@@ -537,6 +541,7 @@ impl<'a> Default for App<'a> {
             snap_index: ObjectSnapIndex::default(),
             snap_index_dirty: false,
             scene_document_key: None,
+            contour_levels: Default::default(),
             layer_lock_key: None,
             intersection_availability_key: None,
             history: crate::model::History::new(),
@@ -1494,6 +1499,7 @@ impl<'a> App<'a> {
         if Some(composite_key) != self.scene_document_key {
             self.scene_document = self.workspace.scene_document();
             self.scene_document_key = Some(composite_key);
+            self.contour_levels.update(self.workspace.projects.iter().map(|project| &project.project.document));
             self.populated_layers = self.scene_document.objects().iter().map(crate::model::Object::layer).collect();
             // The snap index rebuild is deferred to the next snap/orbit
             // query: many edits never snap before the next edit, and the
@@ -1852,6 +1858,7 @@ impl<'a> App<'a> {
                             dirty: dirty_layers.contains(&layer.id),
                             folder: layer.folder,
                             section: layer.section,
+                            contour_labels: layer.contour_labels,
                         })
                         .collect(),
                 }

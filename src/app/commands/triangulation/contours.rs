@@ -6,6 +6,8 @@ impl<'a> App<'a> {
     /// Generate contour polylines from a triangulation and store them in a new
     /// or existing layer in the active project. Major contours (multiples
     /// of `major_interval`) use `major_color`; all others use `minor_color`.
+    /// `contour_labels` turns the output layer's height labels on or off;
+    /// `None` leaves an existing layer's alone and a new layer's off.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn generate_contour_triangulation(
         &mut self,
@@ -15,6 +17,7 @@ impl<'a> App<'a> {
         major_color: [f32; 4],
         minor_color: [f32; 4],
         z_range: Option<(f64, f64)>,
+        contour_labels: Option<bool>,
         output_layer: ContourOutputLayer,
     ) -> Result<()> {
         if !minor_interval.is_finite() || !major_interval.is_finite() || minor_interval <= 0.0 || major_interval <= 0.0 {
@@ -153,10 +156,21 @@ impl<'a> App<'a> {
                     elevation: 0.0,
                     folder: None,
                     section: SectionKind::natural_layer(),
+                    contour_labels: contour_labels.unwrap_or(false),
                 };
                 crate::model::Command::AddLayerSnapshot { layer, objects }
             } else {
-                crate::model::Command::Batch(objects.into_iter().map(crate::model::Command::AddObject).collect())
+                let mut commands: Vec<_> = objects.into_iter().map(crate::model::Command::AddObject).collect();
+                if let Some(on) = contour_labels
+                    && project.project.document.layer(layer_id).is_some_and(|layer| layer.contour_labels != on)
+                {
+                    commands.push(crate::model::Command::SetLayerContourLabels {
+                        id: layer_id,
+                        before: !on,
+                        after: on,
+                    });
+                }
+                crate::model::Command::Batch(commands)
             };
             app.execute_edit_for(project_runtime_id, command);
             if project_is_active {

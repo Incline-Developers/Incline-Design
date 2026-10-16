@@ -395,6 +395,7 @@ pub(crate) struct Graphics<'a> {
     pub(super) startup_view_offset: Option<DVec2>,
     pub(super) lyon_buffer: VertexBuffers<Vertex, u32>,
     pub(super) polyline_fill_cache: PolylineFillCache,
+    pub(super) contour_labels: projections::ContourLabelCache,
     pub(super) lyon_vertex_capacity: usize,
     pub(super) lyon_index_capacity: usize,
     /// Document stroke instances outside the static chunks.
