@@ -61,10 +61,18 @@ impl ContextMenu {
     /// Escape, or a primary click outside it once it has been up a frame (the
     /// click that opened it does not count), as egui's own popups close. A
     /// click while one of its popups (a combo, a colour picker) is open is
-    /// left to that popup.
+    /// left to that popup, and one while a submenu is open to the submenu,
+    /// which closes the menu when the click lands outside both.
     pub(crate) fn show<R>(self, ctx: &egui::Context, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> (egui::InnerResponse<R>, bool) {
+        use egui::containers::menu::{MenuConfig, MenuState};
+
         let Self { id, title, position, width } = self;
         let child_popup_open = egui::Popup::is_any_open(ctx);
+        let submenu_open = MenuState::from_id(ctx, id, |state| state.open_item.is_some());
+        // A menu root like egui's popup menus, so submenus keep their open
+        // state. Rows close the menu themselves, so a click inside a submenu
+        // does not.
+        let config = MenuConfig::new().close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
         let response = egui::Area::new(id)
             .order(egui::Order::Foreground)
             .movable(false)
@@ -72,7 +80,9 @@ impl ContextMenu {
             .fade_in(false)
             .pivot(egui::Align2::LEFT_TOP)
             .current_pos(position)
+            .info(egui::UiStackInfo::new(egui::UiKind::Menu).with_tag_value(MenuConfig::MENU_CONFIG_TAG, config))
             .show(ctx, |ui| menu_frame(ui.style()).show(ui, |ui| draw_body(ui, &title, width, add_contents)).inner);
+        MenuState::mark_shown(ctx, id);
         // (frame first shown, frame last shown); a gap means it was reopened.
         let frame = ctx.cumulative_frame_nr();
         let (opened, _) = ctx.data_mut(|data| {
@@ -83,8 +93,8 @@ impl ContextMenu {
             shown.1 = frame;
             *shown
         });
-        let clicked_outside = opened < frame && !child_popup_open && ctx.input(|input| input.pointer.primary_clicked()) && response.response.clicked_elsewhere();
-        let dismissed = clicked_outside || ctx.input(|input| input.key_pressed(egui::Key::Escape));
+        let clicked_outside = opened < frame && !child_popup_open && !submenu_open && ctx.input(|input| input.pointer.primary_clicked()) && response.response.clicked_elsewhere();
+        let dismissed = clicked_outside || response.response.should_close() || ctx.input(|input| input.key_pressed(egui::Key::Escape));
         (response, dismissed)
     }
 }
