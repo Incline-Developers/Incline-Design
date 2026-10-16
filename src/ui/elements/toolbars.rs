@@ -295,7 +295,7 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
             crate::ui::elements::bar_strip(ui, "bottom_toolbar_strip", ui.available_height(), |ui, strip| {
                 let side = strip.height();
                 let contents_id = ui.make_persistent_id("bottom_toolbar_buttons");
-                ui.scope_builder(egui::UiBuilder::new().id(contents_id).max_rect(strip), |ui| {
+                ui.scope_builder(egui::UiBuilder::new().scope_id(contents_id).max_rect(strip), |ui| {
                     // Three clusters placed against the same strip, the way the
                     // viewport bar lays its own out - see [`super::cluster`] - so the
                     // centred run is not pushed along by what is beside it.

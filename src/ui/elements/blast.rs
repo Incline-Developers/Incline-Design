@@ -494,7 +494,7 @@ fn draw_hole_card(ui: &egui::Ui, editor: &EditorState, analysis: Option<&BlastAn
         pos.y = (collar.y - 18.0 - card_size.y).max(canvas_rect.top() + TILE_MARGIN);
     }
 
-    egui::Area::new(egui::Id::new("blast_hole_card"))
+    egui::Area::new(egui::Id::unique("blast_hole_card"))
         .order(egui::Order::Tooltip)
         .interactable(false)
         .fixed_pos(pos)
@@ -841,7 +841,7 @@ fn timeline_keys(ctx: &egui::Context, review: &mut crate::ui::state::BlastReview
     if ctx.egui_wants_keyboard_input() {
         return;
     }
-    let hold_id = egui::Id::new("blast_timeline_scrub_hold");
+    let hold_id = egui::Id::unique("blast_timeline_scrub_hold");
     // Consumed, so a transport button left with focus is not clicked by the
     // same Space press.
     let (space, step_back, step_forward, back_down, forward_down, dt) = ctx.input_mut(|input| {

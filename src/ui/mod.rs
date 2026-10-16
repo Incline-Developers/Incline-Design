@@ -3,6 +3,8 @@
 //! The `Gui` struct owns the egui context, winit state, and wgpu renderer.
 //! `render()` processes input, calls `draw_ui()`, and feeds paint jobs back to wgpu.
 
+#[cfg(target_arch = "wasm32")]
+mod canvas_glyphs;
 pub(crate) mod chrome;
 pub(crate) mod dialogs;
 pub(crate) mod elements;
@@ -83,13 +85,17 @@ impl Gui {
         });
         setup_custom_fonts(&ctx);
         egui_extras::install_image_loaders(&ctx);
-        ctx.global_style_mut(|style| {
+        ctx.all_styles_mut(|style| {
             // Tooltips wait out a deliberate hover rather than firing the moment the pointer
             // crosses a widget, but the grace time keeps them instant while sweeping along a
             // row of toolbar buttons that are already showing one.
             style.interaction.show_tooltips_only_when_still = false;
             style.interaction.tooltip_delay = 0.5;
             style.interaction.tooltip_grace_time = 0.2;
+            // egui 0.37 made stock buttons roomier (8x2 padding, 20pt rows);
+            // the panels are laid out for the tighter 0.36 spacing.
+            style.spacing.button_padding = egui::vec2(4.0, 1.0);
+            style.spacing.interact_size.y = 18.0;
         });
         ctx.set_visuals(theme_visuals(false, SELECTION_COLOR));
 
@@ -140,6 +146,12 @@ impl Gui {
 
     pub(crate) fn pointer_over_ui(&self) -> bool {
         self.ctx.is_pointer_over_egui()
+    }
+
+    /// Swap the fetched CJK faces in for the browser-drawn stand-ins.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn reload_fonts(&self) {
+        setup_custom_fonts(&self.ctx);
     }
 
     /// Queue text received from the browser's paste event for the next egui frame.
@@ -490,7 +502,7 @@ fn draw_circle_radius_input(ui: &mut egui::Ui, editor: &mut EditorState, command
     let mut cancel_center = false;
     let mut commit_typed_radius = false;
 
-    egui::Area::new(egui::Id::new("make_circle_radius_input"))
+    egui::Area::new(egui::Id::unique("make_circle_radius_input"))
         .order(egui::Order::Foreground)
         .fixed_pos(egui::pos2(x, y))
         .show(ui.ctx(), |ui| {
@@ -1151,13 +1163,14 @@ fn draw_ui(
         ],
     );
     // Centre the explorer resize grip on its full-height column.
+    let panel_id = |salt: &str| root_ui.scope_id().with(salt);
     chrome::paint_grips(
         &ctx,
         [
-            chrome::Grip::new(explorer.column, chrome::Edge::Right, elements::explorer::PANEL_ID),
-            chrome::Grip::new(console_claimed, chrome::Edge::Top, elements::console::PANEL_ID).centred_at_x(cursor_modes_centre),
-            chrome::Grip::new(products_claimed, chrome::Edge::Top, elements::products::PANEL_ID),
-            chrome::Grip::new(borehole_inspector_claimed, chrome::Edge::Left, elements::borehole_inspector::PANEL_ID),
+            chrome::Grip::new(explorer.column, chrome::Edge::Right, panel_id(elements::explorer::PANEL_ID)),
+            chrome::Grip::new(console_claimed, chrome::Edge::Top, panel_id(elements::console::PANEL_ID)).centred_at_x(cursor_modes_centre),
+            chrome::Grip::new(products_claimed, chrome::Edge::Top, panel_id(elements::products::PANEL_ID)),
+            chrome::Grip::new(borehole_inspector_claimed, chrome::Edge::Left, panel_id(elements::borehole_inspector::PANEL_ID)),
         ],
     );
 
@@ -1562,5 +1575,19 @@ fn theme_visuals(dark_mode: bool, selection_color: egui::Color32) -> egui::Visua
     // Incline Design's UI is flat: no drop shadows on windows, popups, or menus.
     visuals.window_shadow = egui::epaint::Shadow::NONE;
     visuals.popup_shadow = egui::epaint::Shadow::NONE;
+    // egui 0.37 rounds its stock widgets at 4-6; the window keeps one radius.
+    let stock = &mut visuals.widgets;
+    for state in [&mut stock.noninteractive, &mut stock.inactive, &mut stock.hovered, &mut stock.active, &mut stock.open] {
+        state.corner_radius = egui::CornerRadius::same(widgets::toolbar::GROUP_CORNER_RADIUS);
+    }
+    if dark_mode {
+        // egui 0.37 darkened dark-mode button fills and brightened their text;
+        // keep the earlier greys the house widgets were tuned against.
+        stock.inactive.weak_bg_fill = egui::Color32::from_gray(60);
+        stock.inactive.fg_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(180));
+        stock.hovered.weak_bg_fill = egui::Color32::from_gray(70);
+        stock.hovered.fg_stroke = egui::Stroke::new(1.5, egui::Color32::from_gray(240));
+        stock.active.weak_bg_fill = egui::Color32::from_gray(55);
+    }
     visuals
 }

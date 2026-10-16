@@ -389,7 +389,7 @@ fn draw_working_sections(ui: &mut egui::Ui, dataset: &OpenDrillHoleDataset, fiel
     section_card(ui, "drill_hole_new_working_section", tr!("drill-hole-new-working-section"), |ui| {
         // Not `ui.id()`: keyed by dataset, so reopening the dialog on the same
         // dataset finds the section still being built.
-        let draft_id = egui::Id::new(("drill_hole_working_section_draft", dataset.id));
+        let draft_id = egui::Id::unique(("drill_hole_working_section_draft", dataset.id));
         let mut draft = ui.data_mut(|data| data.get_temp::<WorkingSectionDraft>(draft_id)).unwrap_or_default();
         if draft.field != field.key {
             // A different field's ticks mean nothing here; the typed name might
@@ -514,13 +514,13 @@ fn reset_row_colors(table: &[DrillCategoryColor], all: &[String], shown: &[&str]
 /// One of the editor's groups, as a fixed card: every group always shows.
 fn section_card(ui: &mut egui::Ui, key: &'static str, heading: String, body: impl FnOnce(&mut egui::Ui)) {
     ui.add_space(4.0);
-    CollapsibleSection::new(key, heading).collapsible(false).show(ui, body);
+    CollapsibleSection::new(egui::Id::unique(key), heading).collapsible(false).show(ui, body);
 }
 
 /// Where one list's filter text is kept: per dataset and field, not per
 /// window, so a field's filter does not narrow another's codes.
 fn code_filter_id(list: &str, dataset: DrillHoleId, field: &str) -> egui::Id {
-    egui::Id::new(("drill_hole_code_filter", list, dataset, field))
+    egui::Id::unique(("drill_hole_code_filter", list, dataset, field))
 }
 
 /// Whether `code` shows under a filter already trimmed and lowercased by
@@ -568,8 +568,8 @@ fn draw_code_filter(ui: &mut egui::Ui, id: egui::Id) -> String {
 fn draw_suggested_sections(ui: &mut egui::Ui, dataset: &OpenDrillHoleDataset, field: &crate::model::drill_hole::DrillField, categories: &[String]) -> Option<Vec<WorkingSection>> {
     // Worked out again only when the codes or the sections change, not on
     // every frame the editor is open.
-    let fingerprint = egui::Id::new((field.key.as_str(), categories, &dataset.color.working_sections));
-    let cache_id = egui::Id::new(("drill_hole_suggested_sections", dataset.id, field.key.as_str()));
+    let fingerprint = egui::Id::unique((field.key.as_str(), categories, &dataset.color.working_sections));
+    let cache_id = egui::Id::unique(("drill_hole_suggested_sections", dataset.id, field.key.as_str()));
     let cached = ui.data_mut(|data| data.get_temp::<(egui::Id, std::sync::Arc<Vec<WorkingSection>>)>(cache_id));
     let suggestions = match cached {
         Some((key, suggestions)) if key == fingerprint => suggestions,

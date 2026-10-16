@@ -52,7 +52,7 @@ pub(crate) fn draw_toasts(ctx: &egui::Context, toasts: &mut Toasts) {
         } else {
             (1.0 - (age - HOLD_SECONDS) / FADE_SECONDS).clamp(0.0, 1.0)
         };
-        let area = egui::Area::new(egui::Id::new(("toast", index)))
+        let area = egui::Area::new(egui::Id::unique(("toast", index)))
             .order(egui::Order::Tooltip)
             .interactable(false)
             .pivot(egui::Align2::CENTER_BOTTOM)

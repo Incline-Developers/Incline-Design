@@ -1231,6 +1231,7 @@ impl<'a> App<'a> {
                 self.editor.tri_cut_z_tri_id = Some(tri_id);
                 self.editor.tri_cut_z_min_input = bounds.min.z;
                 self.editor.tri_cut_z_max_input = bounds.max.z;
+                self.editor.tri_cut_z_limits = (bounds.min.z, bounds.max.z);
                 self.editor.tri_cut_z_name_input = name;
                 self.editor.tri_cut_z_unload_source = true;
                 Ok(())
@@ -1332,11 +1333,14 @@ impl<'a> App<'a> {
                     userspace_warn!("{}", tr!("cmd-contours-needs-triangulation"));
                     return Ok(());
                 };
-                let surface_name = self
-                    .triangulations
-                    .iter()
-                    .find(|triangulation| triangulation.id == tri_id)
-                    .map(|triangulation| triangulation.name.clone());
+                let surface = self.triangulations.iter().find(|triangulation| triangulation.id == tri_id);
+                let surface_name = surface.map(|triangulation| triangulation.name.clone());
+                if let Some(surface) = surface {
+                    let bounds = surface.mesh.bounds();
+                    self.editor.tri_contour_z_limits = (bounds.min.z, bounds.max.z);
+                    self.editor.tri_contour_z_min_input = bounds.min.z;
+                    self.editor.tri_contour_z_max_input = bounds.max.z;
+                }
                 self.editor.tri_contour_open = true;
                 self.editor.tri_contour_tri_id = Some(tri_id);
                 self.editor.tri_contour_target_layer = None;

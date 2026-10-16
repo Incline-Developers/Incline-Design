@@ -231,7 +231,7 @@ impl ExplorerEntry {
         } = self;
         let title = if dimmed && !selected { title.color(DIMMED_TEXT_COLOR) } else { title };
         let height = row_height(ui);
-        ui.scope_builder(egui::UiBuilder::new().id(id.with("explorer_entry_scope")), |ui| {
+        ui.scope_builder(egui::UiBuilder::new().scope_id(id.with("explorer_entry_scope")), |ui| {
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
             ui.spacing_mut().item_spacing.x = 0.0;
             ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -394,7 +394,7 @@ impl ExplorerHeader {
             title.push_str(" *");
         }
         let height = row_height(ui);
-        ui.scope_builder(egui::UiBuilder::new().id(id.with("explorer_header_scope")), |ui| {
+        ui.scope_builder(egui::UiBuilder::new().scope_id(id.with("explorer_header_scope")), |ui| {
             let (toggle_response, header_response, body_response) = state
                 .show_header(ui, |ui| {
                     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
