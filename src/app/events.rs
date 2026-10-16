@@ -1270,16 +1270,18 @@ impl<'a> App<'a> {
                     self.editor.canvas_context_menu_open = true;
                     self.editor.canvas_context_menu_px = self.editor.cursor_screen_px;
                     self.redraw_requested = true;
-                } else if self.editor.keeps_recent_functions() {
-                    // Empty space: the recent functions; the selection stays.
-                    self.editor.canvas_context_menu_hole = None;
-                    self.editor.canvas_context_menu_recent = true;
-                    self.editor.canvas_context_menu_open = true;
-                    self.editor.canvas_context_menu_px = self.editor.cursor_screen_px;
-                    self.redraw_requested = true;
                 } else if ring.is_some() {
                     self.editor.canvas_context_menu_hole = None;
                     self.editor.canvas_context_menu_ring = ring;
+                    self.editor.canvas_context_menu_recent = false;
+                    self.editor.canvas_context_menu_open = true;
+                    self.editor.canvas_context_menu_px = self.editor.cursor_screen_px;
+                    self.redraw_requested = true;
+                } else if self.editor.keeps_recent_functions() {
+                    // Empty space: the recent functions; the selection stays.
+                    self.editor.canvas_context_menu_hole = None;
+                    self.editor.canvas_context_menu_ring = None;
+                    self.editor.canvas_context_menu_recent = true;
                     self.editor.canvas_context_menu_open = true;
                     self.editor.canvas_context_menu_px = self.editor.cursor_screen_px;
                     self.redraw_requested = true;
