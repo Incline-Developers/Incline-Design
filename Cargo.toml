@@ -4,11 +4,10 @@ cargo-features = ["profile-rustflags"]
 resolver = "3"
 members = [".", "crates/mineflow", "crates/omf"]
 default-members = ["."]
-exclude = ["vendor/egui-winit"]
 
 [package]
 name = "incline-design"
-version = "0.3.3"
+version = "0.4.0-dev"
 edition = "2024"
 description = "Free Open Source Mine Design"
 repository = "https://github.com/Incline-Developers/Incline"
@@ -30,9 +29,9 @@ chrono = "0.4.45"
 cosmic-text = "0.19.0"
 dxf = "0.6.2"
 earcut = "0.4.11"
-egui = "0.36.2"
-egui-wgpu = "0.36.2"
-egui_extras = { version = "0.36.2", default-features = false, features = ["svg"] }
+egui = "0.37.0"
+egui-wgpu = "0.37.0"
+egui_extras = { version = "0.37.0", default-features = false, features = ["svg"] }
 foldhash = "0.2.0"
 fontmesh = "0.7.0"
 glam = { version = "0.34.1", features = ["serde"] }
@@ -68,7 +67,8 @@ winit = "0.30.13"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 dirs = "7.0.0"
-egui-winit = "0.36.2"
+egui_system_font_provider = "0.37.0"
+egui-winit = "0.37.0"
 i18n-embed = { version = "0.16.0", features = ["desktop-requester"] }
 memmap2 = "0.9.11"
 pollster = "1.0.1"
@@ -84,7 +84,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1.7"
 console_log = "1.1.0"
-egui-winit = { version = "0.36.2", default-features = false, features = ["links"] }
+egui-winit = { version = "0.37.0", default-features = false, features = ["links"] }
 getrandom = { version = "0.4.3", features = ["wasm_js"] }
 js-sys = "0.3.106"
 wasm-bindgen = "0.2.128"
@@ -94,6 +94,7 @@ web-sys = { version = "0.3.105", features = [
     "BeforeUnloadEvent",
     "Blob",
     "BlobPropertyBag",
+    "CanvasRenderingContext2d",
     "Clipboard",
     "Document",
     "Element",
@@ -112,10 +113,13 @@ web-sys = { version = "0.3.105", features = [
     "IdbTransaction",
     "IdbTransactionMode",
     "IdbVersionChangeEvent",
+    "ImageData",
     "MediaQueryList",
     "Navigator",
     "Node",
+    "Response",
     "Storage",
+    "TextMetrics",
     "Url",
     "Window",
 ] }
@@ -178,7 +182,3 @@ window-size = { width = 660, height = 400 }
 app-position = { x = 180, y = 200 }
 application-folder-position = { x = 480, y = 200 }
 
-# looks like they excluded my patch from the 26.2 release, I think it'll be coming in 27.0? whenever that happens.
-[patch.crates-io]
-# egui-winit 0.36.2 unconditionally compiles native file drops on wasm.
-egui-winit = { path = "vendor/egui-winit" }

@@ -41,7 +41,7 @@ const MIN_CELL_WIDTH: f32 = 40.0;
 /// A single stable id keeps the caret alive across frames and lets a freshly
 /// opened cell request focus before the widget that will carry it exists.
 fn active_cell_id() -> egui::Id {
-    egui::Id::new("object_edit_active_cell")
+    egui::Id::unique("object_edit_active_cell")
 }
 
 /// Which sheet of the dialog is showing.
@@ -522,7 +522,7 @@ fn value_cell_width(row_width: f32, columns: usize) -> f32 {
 fn draw_vertex_row(ui: &mut egui::Ui, dialog: &mut ObjectEditDialog, row: usize, columns: &[VertexColumn]) {
     let row_rect = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), ROW_HEIGHT));
     // Sensed before the cells are added, so a click on a cell goes to the cell, not the row.
-    let row_response = ui.interact(row_rect, ui.id().with(("object_edit_row", row)), egui::Sense::click());
+    let row_response = ui.interact(row_rect, ui.scope_id().with(("object_edit_row", row)), egui::Sense::click());
     if dialog.selected_row == Some(row) {
         ui.painter().rect_filled(row_rect, GROUP_CORNER_RADIUS, ui.visuals().selection.bg_fill.gamma_multiply(0.35));
     }

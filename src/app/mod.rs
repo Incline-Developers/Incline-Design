@@ -694,7 +694,7 @@ impl<'a> App<'a> {
         let definitions: Vec<_> = config.coordinate_systems.into_iter().filter(|definition| !definition.name.trim().is_empty()).collect();
         self.editor.survey.definitions = definitions
             .iter()
-            .filter(|definition| crate::model::survey::resolve_system(&definition.name, &definitions).is_ok())
+            .filter(|definition| crate::model::survey::check_parents(&definition.name, &definitions).is_ok())
             .cloned()
             .collect();
         self.editor.survey.local_system = config
@@ -756,6 +756,7 @@ impl<'a> App<'a> {
 
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn web_new(event_loop_proxy: EventLoopProxy<AppEvent>) -> Result<Self> {
+        crate::fonts::install_cjk_font_loader(event_loop_proxy.clone());
         let mut app = App {
             web_event_loop_proxy: Some(event_loop_proxy.clone()),
             ..App::default()
@@ -2481,6 +2482,12 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                     }
                 }
             }
+            AppEvent::CjkFontsLoaded => {
+                if let Some(graphics) = self.graphics.as_mut() {
+                    graphics.reload_cjk_fonts();
+                    self.redraw_requested = true;
+                }
+            }
             AppEvent::BrowserClipboardPasted(text) => {
                 if let Some(graphics) = self.graphics.as_mut() {
                     graphics.queue_browser_paste(text);
@@ -2571,6 +2578,8 @@ pub(crate) enum AppEvent {
         result: std::result::Result<(), String>,
     },
     BrowserClipboardPasted(String),
+    /// The CJK faces finished downloading (`crate::fonts`).
+    CjkFontsLoaded,
     /// Picked geophysics files' identities, computed on the page thread.
     GeophysicsFileIdentified {
         dataset: crate::model::drill_hole::DrillHoleId,

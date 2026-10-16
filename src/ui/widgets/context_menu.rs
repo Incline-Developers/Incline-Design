@@ -40,7 +40,7 @@ pub(crate) struct ContextMenu {
 impl ContextMenu {
     pub(crate) fn new(id_source: impl Hash + Debug, title: impl Into<egui::WidgetText>) -> Self {
         Self {
-            id: egui::Id::new(("context_menu", id_source)),
+            id: egui::Id::unique(("context_menu", id_source)),
             title: title.into(),
             position: egui::Pos2::ZERO,
             width: MENU_WIDTH,
@@ -259,7 +259,7 @@ impl ContextMenuAction {
             let natural_width = text_left + label_width + shortcut_gap + shortcut_width + right_padding;
             super::menu::record_intrinsic_content_width(ui, natural_width);
             let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_HEIGHT), egui::Sense::click());
-            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label.text()));
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label.text()));
             if ui.is_rect_visible(rect) {
                 let painter = ui.painter().with_clip_rect(rect);
                 let visuals = ui.style().interact(&response);
