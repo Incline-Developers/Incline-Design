@@ -233,6 +233,33 @@ fn paint_ring_in(ui: &egui::Ui, painter: &egui::Painter, center: egui::Pos2, dia
     paint_arc(painter, center, radius - width / 2.0, start, sweep, egui::Stroke::new(width, filled));
 }
 
+/// A ring of `diameter` on its own, where the layout puts it: filled to
+/// `fraction` of the way round, or turning while there is none to show.
+pub(crate) fn ring(ui: &mut egui::Ui, diameter: f32, fraction: Option<f32>) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(diameter, diameter), egui::Sense::hover());
+    let visuals = ui.visuals();
+    let track = shifted(visuals.panel_fill, if visuals.dark_mode { TRACK_SHIFT_DARK } else { TRACK_SHIFT_LIGHT });
+    let width = (diameter * RING_STROKE_FRACTION).clamp(*RING_STROKE_RANGE.start(), *RING_STROKE_RANGE.end());
+    let radius = (diameter - width) / 2.0;
+    let painter = ui.painter();
+    painter.circle_stroke(rect.center(), radius, egui::Stroke::new(width, track));
+    let (start, sweep) = match fraction {
+        Some(fraction) => (0.0, fraction.clamp(0.0, 1.0) * std::f32::consts::TAU),
+        None => {
+            ui.ctx().request_repaint();
+            let turns = (ui.input(|i| i.time) / SPIN_PERIOD).rem_euclid(1.0) as f32;
+            (turns * std::f32::consts::TAU, SPIN_FRACTION * std::f32::consts::TAU)
+        }
+    };
+    paint_arc(painter, rect.center(), radius, start, sweep, egui::Stroke::new(width, ring_fill(visuals)));
+    response
+}
+
+/// The green a ring fills with, for a figure drawn beside one to match.
+pub(crate) fn ring_fill(visuals: &egui::Visuals) -> egui::Color32 {
+    if visuals.dark_mode { FILL_DARK } else { FILL_LIGHT }
+}
+
 /// Stroke `sweep` radians of arc, clockwise from `start` radians past twelve
 /// o'clock.
 ///
@@ -258,4 +285,9 @@ fn paint_arc(painter: &egui::Painter, center: egui::Pos2, radius: f32, start: f3
     painter.circle_filled(points[0], stroke.width / 2.0, stroke.color);
     painter.circle_filled(points[steps], stroke.width / 2.0, stroke.color);
     painter.add(egui::Shape::line(points, stroke));
+}
+
+/// Pipeline completion uses the same readout as background tasks.
+pub(crate) fn draw_planning_progress(ui: &mut egui::Ui, label: &str, fraction: f32) {
+    draw_ring(ui, label, "", RingFill::Fraction(fraction), END_INSET);
 }

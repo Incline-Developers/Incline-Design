@@ -171,6 +171,10 @@ fn make_document_shader(device: &wgpu::Device, label: &str, body: &str) -> wgpu:
 pub(crate) struct ScenePipelines {
     pub(crate) surface_render_pipeline: wgpu::RenderPipeline,
     pub(crate) transparent_surface_render_pipeline: wgpu::RenderPipeline,
+    /// Planning slabs are closed, outward-wound solids, so their back faces
+    /// are culled - unlike a triangulation, which is seen from both sides.
+    pub(crate) solid_surface_render_pipeline: wgpu::RenderPipeline,
+    pub(crate) transparent_solid_surface_render_pipeline: wgpu::RenderPipeline,
     pub(crate) grid_render_pipeline: wgpu::RenderPipeline,
     pub(crate) section_grid_render_pipeline: wgpu::RenderPipeline,
     pub(crate) raster_plane_render_pipeline: wgpu::RenderPipeline,
@@ -194,6 +198,9 @@ pub(crate) struct ScenePipelines {
     /// ordinary view's; the cinematic copy exists only so the two sets share
     /// one shape.
     pub(crate) overlay_render_pipeline: wgpu::RenderPipeline,
+    /// Animate's machines, depth-tested against the scene and drawn by the
+    /// editor overlay pass.
+    pub(crate) machine_render_pipeline: wgpu::RenderPipeline,
 }
 
 pub(crate) fn create_scene_pipelines(
@@ -299,7 +306,7 @@ pub(crate) fn create_scene_pipelines(
     let stroke_instance_buffers = [Some(wgpu::VertexBufferLayout {
         array_stride: size_of::<StrokeInstance>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Instance,
-        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32, 2 => Float32x3, 3 => Uint32, 4 => Float32x4],
+        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32, 2 => Float32x3, 3 => Uint32, 4 => Float32x4, 5 => Float32],
     })];
     let edge_instance_buffers = [Some(wgpu::VertexBufferLayout {
         array_stride: size_of::<EdgeInstance>() as wgpu::BufferAddress,
@@ -616,6 +623,57 @@ pub(crate) fn create_scene_pipelines(
     });
     let overlay_render_pipeline = create_stroke_pipeline("Editor Overlay Render Pipeline", Some(overlay_depth));
 
+    let machine_shader = make_shader(device, "../shaders/machine.wgsl", include_str!("../shaders/machine.wgsl"));
+    let machine_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Machine Pipeline Layout"),
+        bind_group_layouts: &[Some(layouts.camera)],
+        immediate_size: 0,
+    });
+    let machine_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Machine Pipeline"),
+        layout: Some(&machine_pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &machine_shader,
+            entry_point: Some("vs_main"),
+            buffers: &[
+                Some(wgpu::VertexBufferLayout {
+                    array_stride: size_of::<crate::rendering::machines::MachineVertex>() as wgpu::BufferAddress,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3],
+                }),
+                Some(wgpu::VertexBufferLayout {
+                    array_stride: size_of::<crate::rendering::machines::MachineInstance>() as wgpu::BufferAddress,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &wgpu::vertex_attr_array![3 => Float32x3, 4 => Float32, 5 => Float32x2],
+                }),
+            ],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &machine_shader,
+            entry_point: Some("fs_main"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            cull_mode: None,
+            ..Default::default()
+        },
+        depth_stencil: Some(Graphics::depth_state(true, 0)),
+        multisample: wgpu::MultisampleState {
+            count: sample_count,
+            mask: !0,
+            alpha_to_coverage_enabled: false,
+        },
+        multiview_mask: None,
+        cache: None,
+    });
+
     let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Render Pipeline"),
         layout: Some(&document_pipeline_layout),
@@ -656,7 +714,7 @@ pub(crate) fn create_scene_pipelines(
 
     // Triangulation surface pipelines use position-only vertices with a per-draw colour
     // uniform.
-    let create_tri_surface_pipeline = |label, write_depth, depth_compare| {
+    let create_tri_surface_pipeline = |label, write_depth, depth_compare, cull_mode| {
         let mut depth = Graphics::depth_state(write_depth, 0);
         depth.depth_compare = Some(depth_compare);
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -682,7 +740,7 @@ pub(crate) fn create_scene_pipelines(
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
+                cull_mode,
                 polygon_mode: wgpu::PolygonMode::Fill,
                 unclipped_depth: false,
                 conservative: false,
@@ -697,8 +755,11 @@ pub(crate) fn create_scene_pipelines(
             cache: None,
         })
     };
-    let surface_render_pipeline = create_tri_surface_pipeline("Opaque Triangulation Surface Pipeline", true, wgpu::CompareFunction::GreaterEqual);
-    let transparent_surface_render_pipeline = create_tri_surface_pipeline("Transparent Triangulation Surface Pipeline", false, wgpu::CompareFunction::GreaterEqual);
+    let surface_render_pipeline = create_tri_surface_pipeline("Opaque Triangulation Surface Pipeline", true, wgpu::CompareFunction::GreaterEqual, None);
+    let transparent_surface_render_pipeline = create_tri_surface_pipeline("Transparent Triangulation Surface Pipeline", false, wgpu::CompareFunction::GreaterEqual, None);
+    let solid_surface_render_pipeline = create_tri_surface_pipeline("Opaque Planning Slab Pipeline", true, wgpu::CompareFunction::GreaterEqual, Some(wgpu::Face::Back));
+    let transparent_solid_surface_render_pipeline =
+        create_tri_surface_pipeline("Transparent Planning Slab Pipeline", false, wgpu::CompareFunction::GreaterEqual, Some(wgpu::Face::Back));
     let grid_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Infinite XY Grid Pipeline"),
         layout: Some(&grid_pipeline_layout),
@@ -1033,6 +1094,8 @@ pub(crate) fn create_scene_pipelines(
     ScenePipelines {
         surface_render_pipeline,
         transparent_surface_render_pipeline,
+        solid_surface_render_pipeline,
+        transparent_solid_surface_render_pipeline,
         grid_render_pipeline,
         section_grid_render_pipeline,
         raster_plane_render_pipeline,
@@ -1053,5 +1116,6 @@ pub(crate) fn create_scene_pipelines(
         xray_drill_collar_render_pipeline,
         design_point_render_pipeline,
         overlay_render_pipeline,
+        machine_render_pipeline,
     }
 }
