@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="800px" height="800px" fill="none" version="1.1" viewBox="-6.9474 -6.9474 37.8947 37.8947" xmlns="http://www.w3.org/2000/svg">
+ <path d="m12 1.6a10.4 10.4 0 0 1 0 20.8" stroke-dasharray="2.4 2.1" stroke-width="1.6" style="fill:#e0338a;fill-opacity:0.2;stroke:#e0338a"/>
+ <path d="m12 1.6a10.4 10.4 0 0 0 0 20.8z" style="fill:#e0338a"/>
+ <path d="m1.6 12a10.4 10.4 0 0 0 10.4 10.4v-2.4a10.4 8 0 0 1-10.4-8z" style="fill:#a81e63"/>
+</svg>

@@ -216,7 +216,7 @@ impl<'a> App<'a> {
             })
             .collect();
         if let Some(project) = self.workspace.active_project() {
-            entries.extend(project.project.document.layers().iter().filter(|layer| layer.loaded).map(|layer| LegendEntry {
+            entries.extend(project.project.document.layers().iter().filter(|layer| layer.is_visible()).map(|layer| LegendEntry {
                 label: layer.name.clone(),
                 color: layer.color,
             }));

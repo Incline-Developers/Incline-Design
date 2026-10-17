@@ -7,8 +7,9 @@ pub(crate) mod file; // Handles importing, exportings, etc. commands
 pub(crate) mod folder; // Handles explorer folder create/delete/rename/move commands, for every section
 pub(crate) mod haulage;
 pub(crate) mod layer; // Handles creating layers, deleting layers, etc. commands
-pub(crate) mod object_edit; // Handles the "Edit Object" dialog's working-copy writeback.
+pub(crate) mod object_edit;
 pub(crate) mod omf; // Whole-project Open Mining Format interchange.
+pub(crate) mod optimization; // Handles pit optimization's scenario list, editor and scenarios file.
 pub(crate) mod plot; // Handles printable plot sheets
 pub(crate) mod point_cloud; // Handles importing/loading point clouds, etc. commands
 pub(crate) mod products; // Handles the Drill & Blast workspace's stored products.
@@ -134,6 +135,7 @@ impl<'a> App<'a> {
                 | UiCommand::CreateLayer { .. }
                 | UiCommand::CreateFolder(_)
                 | UiCommand::DeleteFolder { .. }
+                | UiCommand::DeleteFolderAndContents { .. }
                 | UiCommand::MoveToFolder { .. }
                 | UiCommand::OpenCreateTriangulation
                 | UiCommand::OpenCreateBlockModel
@@ -174,6 +176,7 @@ impl<'a> App<'a> {
                 | UiCommand::NewHaulDestination { .. }
                 | UiCommand::ExportHaulRoads
                 | UiCommand::Schedule { .. }
+                | UiCommand::RunOptimizationScenario(_)
         );
         if requires_project && !self.workspace.has_active_project() {
             anyhow::bail!("Create or open a project before importing, drawing, or generating data");
@@ -384,6 +387,10 @@ impl<'a> App<'a> {
                 self.hide_selected_elements();
                 Ok(())
             }
+            UiCommand::ShowAllHidden => {
+                self.show_all_hidden_objects();
+                Ok(())
+            }
             #[cfg(not(target_arch = "wasm32"))]
             UiCommand::RequestExit => self.request_exit(),
             UiCommand::SaveAndExit => self.save_and_exit(),
@@ -398,6 +405,7 @@ impl<'a> App<'a> {
             UiCommand::CreateLayer { name } => self.create_layer(name),
             UiCommand::CreateFolder(section) => self.create_folder(section),
             UiCommand::DeleteFolder { section, folder } => self.delete_folder(section, folder),
+            UiCommand::DeleteFolderAndContents { section, folder } => self.delete_folder_and_contents(section, folder),
             UiCommand::MoveToFolder { member, section, folder } => {
                 self.move_to_folder(member, section, folder);
                 Ok(())
@@ -653,6 +661,10 @@ impl<'a> App<'a> {
                 self.activate_project_for_layer(layer_id);
                 self.delete_layer(layer_id)
             }
+            UiCommand::RequestDeleteRows(rows) => {
+                self.editor.pending_delete_rows = (!rows.is_empty()).then_some(rows);
+                Ok(())
+            }
             UiCommand::RequestDeleteItem(target) => {
                 let name = self.rename_target_name(target);
                 self.editor.pending_delete_item = name.map(|name| (target, name));
@@ -664,11 +676,7 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::BeginRenameItem(target) => {
-                if let crate::ui::state::RenameTarget::Layer(layer_id) = target {
-                    self.activate_project_for_layer(layer_id);
-                }
-                let current_name = self.rename_target_name(target).unwrap_or_default();
-                self.editor.renaming_item = Some((target, current_name));
+                self.begin_rename_item(target);
                 Ok(())
             }
             UiCommand::RenameItem { target, new_name } => {
@@ -692,6 +700,14 @@ impl<'a> App<'a> {
             }
             UiCommand::UnloadLayer(layer) => {
                 self.unload_layer(layer);
+                Ok(())
+            }
+            UiCommand::SetLayerVisible(layer, visible) => {
+                self.set_layer_visible(layer, visible);
+                Ok(())
+            }
+            UiCommand::SetItemVisible(item, visible) => {
+                self.set_item_visible(item, visible);
                 Ok(())
             }
             UiCommand::ToggleLayerLocked(layer) => {
@@ -959,19 +975,74 @@ impl<'a> App<'a> {
                 self.set_drill_hole_color_by_working_section(id, field);
                 Ok(())
             }
+            UiCommand::OpenOptimizationScenarios => {
+                self.open_optimization_scenarios();
+                Ok(())
+            }
+            UiCommand::AddOptimizationScenario => {
+                self.add_optimization_scenario();
+                Ok(())
+            }
+            UiCommand::EditOptimizationScenario(id) => {
+                self.edit_optimization_scenario(id);
+                Ok(())
+            }
+            UiCommand::SaveOptimizationScenario { scenario, then_close } => self.save_optimization_scenario(*scenario, then_close),
+            UiCommand::ExportOptimizationScenarios => {
+                self.export_optimization_scenarios();
+                Ok(())
+            }
+            UiCommand::ImportOptimizationScenarios => {
+                self.import_optimization_scenarios();
+                Ok(())
+            }
+            UiCommand::ExportOptimizationReport => {
+                self.export_optimization_report();
+                Ok(())
+            }
+            UiCommand::SaveOptimizationReportColumns => self.save_optimization_report_columns(),
+            UiCommand::CopyScenarioWithShells { id, factors } => self.copy_scenario_with_shells(id, &factors),
+            UiCommand::ConfirmOptimizationLoad(load) => {
+                self.confirm_optimization_load(load);
+                Ok(())
+            }
+            UiCommand::OpenOptimizationReport => {
+                self.open_optimization_report();
+                Ok(())
+            }
+            UiCommand::ChooseOptimizationReportsFolder => {
+                self.choose_optimization_reports_folder();
+                Ok(())
+            }
+            UiCommand::BeginShellStartPick => {
+                self.begin_shell_start_pick();
+                Ok(())
+            }
+            UiCommand::DuplicateOptimizationScenario(id) => self.duplicate_optimization_scenario(id),
+            UiCommand::RenameOptimizationScenario { id, name } => self.rename_optimization_scenario(id, name),
+            UiCommand::DeleteOptimizationScenario(id) => self.delete_optimization_scenario(id),
+            UiCommand::RunOptimizationScenario(id) => {
+                self.run_optimization_scenario(id);
+                Ok(())
+            }
+            UiCommand::CancelOptimizationScenario(id) => {
+                self.cancel_optimization_scenario(id);
+                Ok(())
+            }
             UiCommand::OpenCreateBlockModel => {
                 // One dataset is estimated at a time, so the selection has to
-                // name exactly which one before the dialog opens on it.
-                let selected = self.selected_drill_hole_datasets();
-                let [drill_hole_id] = selected[..] else {
+                // name exactly which one - whole, or some of its holes picked
+                // in the viewport - before the dialog opens on it.
+                let Some((drill_hole_id, holes)) = self.block_model_source() else {
                     userspace_warn!("{}", tr!("cmd-commands-select-one-loaded-drill-hole"));
                     return Ok(());
                 };
-                self.open_create_block_model_dialog(drill_hole_id);
+                self.open_create_block_model_dialog(drill_hole_id, holes);
                 Ok(())
             }
             UiCommand::ExecuteCreateBlockModel {
                 drill_hole_id,
+                holes,
                 variables,
                 name,
                 lower,
@@ -983,7 +1054,7 @@ impl<'a> App<'a> {
                 min_samples,
                 max_samples,
             } => {
-                let result = self.create_block_model_ordinary_kriging(drill_hole_id, variables, name, lower, upper, cell, range, sill, nugget, min_samples, max_samples);
+                let result = self.create_block_model_ordinary_kriging(drill_hole_id, holes, variables, name, lower, upper, cell, range, sill, nugget, min_samples, max_samples);
                 if result.is_ok() {
                     self.editor.block_model_create_open = false;
                 }
@@ -1060,11 +1131,6 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::SetGridShown(shown) => self.set_grid_shown(shown),
-            UiCommand::SetPointCloudClassificationColors(enabled) => {
-                self.editor.point_cloud_classification_colors = enabled;
-                self.redraw_requested = true;
-                Ok(())
-            }
             UiCommand::SetTopologyWireframes(enabled) => self.set_topology_wireframes(enabled),
             #[cfg(not(target_arch = "wasm32"))]
             UiCommand::SetSlicePreviewDetached(detached) => {
@@ -1197,6 +1263,7 @@ impl<'a> App<'a> {
                             self.editor.blast_library.clone(),
                             self.editor.survey.definitions.clone(),
                             self.editor.survey.local_system.clone(),
+                            self.editor.recent_design_functions.clone(),
                         );
                         crate::app::io::save_config(&config)?;
                         self.editor.workspace_order = order;
@@ -1260,6 +1327,7 @@ impl<'a> App<'a> {
                 self.editor.canvas_context_menu_open = false;
                 Ok(())
             }
+            UiCommand::NoteRecentFunction(key) => self.note_recent_function(key),
             UiCommand::ZoomToExtents => {
                 // Sliced, the fit happens within the section, which therefore stays up.
                 self.zoom_to_extents();
@@ -1476,6 +1544,7 @@ impl<'a> App<'a> {
                 self.editor.tri_cut_z_tri_id = Some(tri_id);
                 self.editor.tri_cut_z_min_input = bounds.min.z;
                 self.editor.tri_cut_z_max_input = bounds.max.z;
+                self.editor.tri_cut_z_limits = (bounds.min.z, bounds.max.z);
                 self.editor.tri_cut_z_name_input = name;
                 self.editor.tri_cut_z_unload_source = true;
                 Ok(())
@@ -1598,11 +1667,14 @@ impl<'a> App<'a> {
                     userspace_warn!("{}", tr!("cmd-contours-needs-triangulation"));
                     return Ok(());
                 };
-                let surface_name = self
-                    .triangulations
-                    .iter()
-                    .find(|triangulation| triangulation.id == tri_id)
-                    .map(|triangulation| triangulation.name.clone());
+                let surface = self.triangulations.iter().find(|triangulation| triangulation.id == tri_id);
+                let surface_name = surface.map(|triangulation| triangulation.name.clone());
+                if let Some(surface) = surface {
+                    let bounds = surface.mesh.bounds();
+                    self.editor.tri_contour_z_limits = (bounds.min.z, bounds.max.z);
+                    self.editor.tri_contour_z_min_input = bounds.min.z;
+                    self.editor.tri_contour_z_max_input = bounds.max.z;
+                }
                 self.editor.tri_contour_open = true;
                 self.editor.tri_contour_tri_id = Some(tri_id);
                 self.editor.tri_contour_target_layer = None;
@@ -1716,7 +1788,7 @@ impl<'a> App<'a> {
             selected
                 .iter()
                 .filter_map(|handle| crate::model::ItemRef::from_entity(*handle))
-                .filter_map(|item| self.item_style_command(item, |style| style.with_loaded(false))),
+                .filter_map(|item| self.item_style_command(item, |style| if style.loaded() { style.with_hidden(true) } else { style })),
         );
 
         // Persisted visibility now owns ordinary Hide Selection. Remove any
@@ -1724,6 +1796,44 @@ impl<'a> App<'a> {
         // truth for the same action. Transient state is not part of the undo
         // step: undo restores the persisted visibility these override.
         self.editor.hidden_handles.retain(|handle| !selected.contains(handle));
+        if commands.is_empty() {
+            return;
+        }
+        self.execute_edit(Command::Batch(commands));
+        self.invalidate_geometry();
+    }
+
+    /// Hide design objects of the active project, as the Hide tool's click or
+    /// box takes them. Already hidden or foreign ids are skipped.
+    pub(crate) fn hide_objects(&mut self, ids: impl IntoIterator<Item = crate::model::ObjectId>) {
+        let Some(document) = self.workspace.active_document() else {
+            return;
+        };
+        let commands: Vec<Command> = ids
+            .into_iter()
+            .filter(|id| document.get_object(*id).is_some() && !document.is_object_hidden(*id))
+            .map(|id| Command::SetObjectHidden { id, before: false, after: true })
+            .collect();
+        if commands.is_empty() {
+            return;
+        }
+        for command in &commands {
+            if let Command::SetObjectHidden { id, .. } = command {
+                self.editor.selected_handles.remove(&crate::model::SceneEntityId::Object(*id));
+            }
+        }
+        self.execute_edit(Command::Batch(commands));
+        self.invalidate_geometry();
+    }
+
+    /// Bring back every design object hidden on its own. Hidden layers and
+    /// project items keep their explorer eye: only what has no row of its own
+    /// to unhide from comes back here.
+    fn show_all_hidden_objects(&mut self) {
+        let Some(document) = self.workspace.active_document() else {
+            return;
+        };
+        let commands: Vec<Command> = document.hidden_object_ids().map(|id| Command::SetObjectHidden { id, before: true, after: false }).collect();
         if commands.is_empty() {
             return;
         }

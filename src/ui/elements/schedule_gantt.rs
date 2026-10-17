@@ -683,7 +683,7 @@ fn draw_settings(ui: &mut egui::Ui, plan: &SchedulePlan, session: u32, commands:
     );
     checklist_popup(&button, tr!("gantt-settings"), 280.0, |ui| {
         context_menu_fields(ui, |ui| {
-            let id = ui.id().with("gantt_bar_height");
+            let id = ui.scope_id().with("gantt_bar_height");
             let mut height = ui.data(|data| data.get_temp::<f32>(id)).unwrap_or(plan.bar_height());
             let response = MenuFieldF32::new(
                 tr!("schedule-bar-height"),
@@ -784,7 +784,7 @@ impl TimelineFrame {
 pub(super) fn navigate(ui: &mut egui::Ui, rect: egui::Rect, body: egui::Rect, editor: &mut EditorState, salt: &str) -> (bool, f32, egui::Response) {
     // Input is read only while the pointer is over this canvas, so the wheel
     // still scrolls whatever else is on screen and the keyboard is untouched.
-    let response = ui.interact(rect, ui.id().with(salt), egui::Sense::click_and_drag());
+    let response = ui.interact(rect, ui.scope_id().with(salt), egui::Sense::click_and_drag());
     // Read from the pointer rather than the canvas response, because what is
     // drawn on top of it takes the hover for itself: the wheel has to keep
     // zooming and panning while the pointer is over a bar or a chart.
@@ -975,7 +975,7 @@ pub(super) fn draw_time_slider(ui: &mut egui::Ui, ruler: egui::Rect, body: egui:
     }
 
     let ruler_response = ui
-        .interact(ruler, ui.id().with("gantt_ruler"), egui::Sense::click_and_drag())
+        .interact(ruler, ui.scope_id().with("gantt_ruler"), egui::Sense::click_and_drag())
         .on_hover_cursor(egui::CursorIcon::PointingHand);
     // A click is read as well as a press: a quick one can go down and up
     // inside a single frame.
@@ -1011,7 +1011,7 @@ pub(super) fn draw_time_slider(ui: &mut egui::Ui, ruler: egui::Rect, body: egui:
         let min_x = if left_side { ruler.left() + 2.0 } else { ruler.right() - 2.0 - width };
         let pill = egui::Rect::from_min_size(egui::pos2(min_x, label_top), egui::vec2(width, SLIDER_LABEL_H));
         let response = ui
-            .interact(pill, ui.id().with("gantt_slider_away"), egui::Sense::click())
+            .interact(pill, ui.scope_id().with("gantt_slider_away"), egui::Sense::click())
             .on_hover_cursor(egui::CursorIcon::PointingHand)
             .on_hover_text(tr!("gantt-slider-away"));
         if response.clicked() {
@@ -1025,7 +1025,7 @@ pub(super) fn draw_time_slider(ui: &mut egui::Ui, ruler: egui::Rect, body: egui:
 
     let grab = egui::Rect::from_min_max(egui::pos2(x - SLIDER_GRAB_W / 2.0, ruler.bottom()), egui::pos2(x + SLIDER_GRAB_W / 2.0, body.bottom()));
     let response = ui
-        .interact(grab, ui.id().with("gantt_slider"), egui::Sense::drag())
+        .interact(grab, ui.scope_id().with("gantt_slider"), egui::Sense::drag())
         .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
     if response.dragged()
         && let Some(pointer) = response.interact_pointer_pos()
@@ -1363,7 +1363,7 @@ fn draw_rows(ui: &mut egui::Ui, header: egui::Rect, body: egui::Rect, stripe: eg
         }
         let hover = name_cell.intersect(header);
         if hover.is_positive() {
-            ui.interact(hover, ui.id().with(("gantt_row", index)), egui::Sense::hover())
+            ui.interact(hover, ui.scope_id().with(("gantt_row", index)), egui::Sense::hover())
                 .on_hover_text(format!("{}\n{}", row.title, row.subtitle));
         }
     }
@@ -1618,7 +1618,7 @@ fn draw_idle(
         if !target.is_positive() {
             continue;
         }
-        let response = ui.interact(target, ui.id().with(("gantt_idle", agent)), egui::Sense::hover());
+        let response = ui.interact(target, ui.scope_id().with(("gantt_idle", agent)), egui::Sense::hover());
         let Some(pos) = response.hover_pos() else {
             continue;
         };
@@ -2162,7 +2162,7 @@ fn draw_bars(
                     let band = egui::Rect::from_min_max(egui::pos2(left, slot_top + 2.0), egui::pos2(right, slot_top + 2.0 + WORK_BAND));
                     let rect = egui::Rect::from_min_size(egui::pos2(left, slot_top + BAR_TOP), egui::vec2(right - left, plan.bar_height()));
 
-                    let response = ui.interact(rect.intersect(body), ui.id().with(("gantt_bar", bar.id)), egui::Sense::click_and_drag());
+                    let response = ui.interact(rect.intersect(body), ui.scope_id().with(("gantt_bar", bar.id)), egui::Sense::click_and_drag());
                     drawn.push((bar.id, rect.intersect(body)));
                     let is_selected = selected.contains(&bar.id);
                     let ready = report.is_some_and(|report| report.ready);
@@ -2252,7 +2252,7 @@ fn draw_bars(
                         }
                         let target = band.expand2(egui::vec2(0.0, 2.0)).intersect(body);
                         if target.is_positive() {
-                            let hover = ui.interact(target, ui.id().with(("gantt_work", bar.id)), egui::Sense::hover());
+                            let hover = ui.interact(target, ui.scope_id().with(("gantt_work", bar.id)), egui::Sense::hover());
                             if let Some(pos) = hover.hover_pos() {
                                 let at_h = view.seconds_at(pos.x, body.left(), body.width()) / GanttView::HOUR;
                                 // Every span worked at that instant, which in an
@@ -2576,7 +2576,7 @@ fn draw_blast_band(ui: &mut egui::Ui, body: egui::Rect, band: egui::Rect, view: 
     if !target.is_positive() {
         return;
     }
-    let hover = ui.interact(target, ui.id().with(("gantt_blast_work", bar.id)), egui::Sense::hover());
+    let hover = ui.interact(target, ui.scope_id().with(("gantt_blast_work", bar.id)), egui::Sense::hover());
     let Some(pos) = hover.hover_pos() else { return };
     let at_h = view.seconds_at(pos.x, body.left(), body.width()) / GanttView::HOUR;
     let working: Vec<_> = rows.iter().filter(|row| row.start_h <= at_h && at_h < row.end_h).collect();
@@ -2635,7 +2635,7 @@ fn draw_row_menus(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorState,
             if !rect.is_positive() {
                 continue;
             }
-            let id = ui.id().with(("gantt_lane", index, lane));
+            let id = ui.scope_id().with(("gantt_lane", index, lane));
             let response = ui.interact(rect, id, egui::Sense::click());
             if response.clicked() && !ui.input(|input| input.modifiers.command || input.modifiers.shift) {
                 editor.schedule_selected_bars.clear();
@@ -2868,7 +2868,7 @@ fn draw_palette(ui: &mut egui::Ui, corner: egui::Rect, editor: &mut EditorState)
             egui::vec2(widths[index].min(inner.right() - left), height),
         );
         let response = ui
-            .interact(chip, ui.id().with(("gantt_palette", index)), egui::Sense::drag())
+            .interact(chip, ui.scope_id().with(("gantt_palette", index)), egui::Sense::drag())
             .on_hover_text(tr!("gantt-palette-hint", item = palette_label(item)));
         let fill = if response.hovered() || editor.gantt_palette_drag == Some(item) {
             visuals.widgets.hovered.bg_fill
@@ -2943,7 +2943,7 @@ fn draw_palette_drop(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorSta
     if let Some(pos) = pointer {
         // The chip under the pointer, over everything, so it is plain what is
         // being carried even outside the timeline.
-        let layer = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, ui.id().with("gantt_palette_ghost")));
+        let layer = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, ui.scope_id().with("gantt_palette_ghost")));
         let text = match target {
             Some((_, _, start_h)) => format!("{} · {}", palette_label(item), instant_label(start_h * GanttView::HOUR)),
             None => palette_label(item),
@@ -3036,7 +3036,7 @@ fn draw_delay_drop_menu(ui: &mut egui::Ui, editor: &mut EditorState, plan: &Sche
     let mut chosen: Option<Option<crate::model::schedule::DelayTypeId>> = None;
     let mut close = false;
     let mut open_setup = false;
-    let area = egui::Area::new(ui.id().with("gantt_delay_drop"))
+    let area = egui::Area::new(ui.scope_id().with("gantt_delay_drop"))
         .order(egui::Order::Foreground)
         .fixed_pos(drop.pos)
         .show(ui.ctx(), |ui| {
@@ -3113,7 +3113,7 @@ fn draw_follow_drop_menu(ui: &mut egui::Ui, editor: &mut EditorState, plan: &Sch
         return;
     };
     let mut chosen = None;
-    let area = egui::Area::new(ui.id().with("gantt_follow_drop"))
+    let area = egui::Area::new(ui.scope_id().with("gantt_follow_drop"))
         .order(egui::Order::Foreground)
         .fixed_pos(drop.pos)
         .show(ui.ctx(), |ui| {
@@ -3344,14 +3344,14 @@ fn draw_blasting_row(
         return;
     }
     let view = editor.gantt;
-    let response = ui.interact(rect, ui.id().with("blasting_row"), egui::Sense::click());
+    let response = ui.interact(rect, ui.scope_id().with("blasting_row"), egui::Sense::click());
     let at = response
         .interact_pointer_pos()
         .or_else(|| response.hover_pos())
         .map_or(0.0, |pos| view.seconds_at(pos.x, body.left(), body.width()) / GanttView::HOUR);
     // Once the menu is open the pointer is over it, not the row: the time a
     // window is added at is where the row was right-clicked.
-    let clicked_at = ui.id().with("blasting_row_menu_at");
+    let clicked_at = ui.scope_id().with("blasting_row_menu_at");
     if response.secondary_clicked() {
         ui.data_mut(|data| data.insert_temp(clicked_at, at));
     }
@@ -3372,7 +3372,7 @@ fn draw_blasting_row(
         ui.painter_at(rect).rect_filled(span, GROUP_CORNER_RADIUS, BLAST_COLOR.gamma_multiply(0.25));
         ui.painter_at(rect)
             .rect_stroke(span, GROUP_CORNER_RADIUS, egui::Stroke::new(1.0, BLAST_COLOR), egui::StrokeKind::Inside);
-        let hit = ui.interact(span, ui.id().with(("blast_window", window.id, start.to_bits())), egui::Sense::click());
+        let hit = ui.interact(span, ui.scope_id().with(("blast_window", window.id, start.to_bits())), egui::Sense::click());
         on_window |= hit.hovered();
         hit.clone().on_hover_text(format!(
             "{} — {}\n{}",
@@ -3426,7 +3426,7 @@ fn draw_blasting_row(
             .and_then(|schedule| schedule.drill_blast.as_ref())
             .and_then(|result| result.blasts.get(marker.blast))
         {
-            ui.interact(target, ui.id().with(("blast_firing", marker.blast)), egui::Sense::hover())
+            ui.interact(target, ui.scope_id().with(("blast_firing", marker.blast)), egui::Sense::hover())
                 .on_hover_text(tr!("blast-fired-at", at = instant_label(blast.fired_h.unwrap_or(0.0) * GanttView::HOUR)));
         }
     }

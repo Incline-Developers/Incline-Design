@@ -440,6 +440,10 @@ pub(crate) struct Graphics<'a> {
     pub(super) projection: Projection,
     pub(super) mouse_pressed: Option<MouseButton>,
     touch_gesture: touch::TouchGesture,
+    pub(super) scroll_glide: ScrollGlide,
+    /// Ctrl is held, so a trackpad's two-finger scroll zooms rather than pans.
+    /// Set by the app before each event, as the renderer sees no modifiers.
+    pub(super) scroll_zooms: bool,
     pub(super) fly_mode_enabled: bool,
     pub(super) slice_view: Option<SliceViewState>,
     pub(super) frame_index: u64,
@@ -745,6 +749,67 @@ pub(crate) fn scroll_pixels_either_axis(delta: &MouseScrollDelta) -> f64 {
     if y != 0.0 { y } else { x }
 }
 
+/// Whether a scroll is a trackpad's two-finger drag, which pans, rather than a
+/// wheel, which zooms. Only the native platforms that report the two apart -
+/// macOS and Wayland send pixel deltas for a trackpad and line deltas for a
+/// wheel - can tell; Windows and X11 send lines for both, and browsers send
+/// pixels for a wheel too, so there every scroll stays a zoom. Returns the
+/// drag in pixels, signed like a middle-drag so the scene follows the fingers.
+pub(crate) fn trackpad_drag(delta: &MouseScrollDelta) -> Option<(f64, f64)> {
+    match delta {
+        MouseScrollDelta::PixelDelta(position) if cfg!(not(target_arch = "wasm32")) => Some((position.x, position.y)),
+        _ => None,
+    }
+}
+
+/// The glide macOS adds once the fingers leave the trackpad, which keeps a
+/// pan or zoom coasting to a stop. The viewport stops with the fingers, as a
+/// middle-drag does, so those scrolls are dropped.
+///
+/// winit reports the glide's start with the same `Started` phase as the
+/// fingers' own, but it always follows their `Ended` at once, which a new
+/// touch cannot. Platforms without a glide never send that pairing.
+#[derive(Default)]
+pub(crate) struct ScrollGlide {
+    gliding: bool,
+    lifted_at: Option<Instant>,
+}
+
+impl ScrollGlide {
+    const FOLLOWS_LIFT: std::time::Duration = std::time::Duration::from_millis(50);
+
+    /// Whether a scroll with this phase belongs to a glide.
+    pub(crate) fn is_glide(&mut self, phase: winit::event::TouchPhase) -> bool {
+        use winit::event::TouchPhase;
+        match phase {
+            TouchPhase::Started => {
+                self.gliding = self.lifted_at.take().is_some_and(|lifted| lifted.elapsed() < Self::FOLLOWS_LIFT);
+                self.gliding
+            }
+            TouchPhase::Moved => self.gliding,
+            TouchPhase::Ended | TouchPhase::Cancelled => {
+                let gliding = std::mem::take(&mut self.gliding);
+                if !gliding {
+                    self.lifted_at = Some(Instant::now());
+                }
+                gliding
+            }
+        }
+    }
+}
+
+/// A pinch's magnification as the scroll that zooms by the same amount: the
+/// inverse of the zoom curve in `CameraController::update_camera`, so the
+/// view follows the fingers whatever the sensitivity.
+pub(crate) fn pinch_scroll(magnification: f64, sensitivity: f64) -> f64 {
+    let magnification = magnification.max(-0.9);
+    if magnification >= 0.0 {
+        magnification / sensitivity
+    } else {
+        magnification / ((1.0 + magnification) * sensitivity)
+    }
+}
+
 /// View direction for a slice line running along `direction`:
 /// `forward × +Z == direction`, so "strike" reads left-to-right on screen.
 pub(crate) fn slice_view_forward(direction: DVec2) -> DVec3 {
@@ -837,6 +902,12 @@ impl<'a> Graphics<'a> {
         self.overlay_dirty = true;
     }
 
+    /// Whether a floating egui surface - a tile, card or menu over the canvas -
+    /// covers this window position, in physical pixels.
+    pub(crate) fn overlay_at_physical_position(&self, x: f32, y: f32) -> bool {
+        self.gui.overlay_at_physical_position(x, y)
+    }
+
     pub(crate) fn gui_input(&mut self, event: &WindowEvent) -> egui_winit::EventResponse {
         let mut response = self.gui.handle_event(&self.window, event);
         // egui's generic `consumed` result can be false on a secondary-button
@@ -849,9 +920,21 @@ impl<'a> Graphics<'a> {
         response
     }
 
+    /// The CJK faces arrived: lay the UI and document text out again with them.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn reload_cjk_fonts(&mut self) {
+        self.gui.reload_fonts();
+        self.text_system = TextSystem::new();
+        self.cached_document_scene_key = None;
+    }
+
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn queue_browser_paste(&mut self, text: String) {
         self.gui.queue_paste(text);
+    }
+
+    pub(crate) fn set_scroll_zooms(&mut self, held: bool) {
+        self.scroll_zooms = held;
     }
 
     pub(crate) fn set_fly_mode_enabled(&mut self, enabled: bool) {

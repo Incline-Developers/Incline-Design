@@ -268,6 +268,7 @@ impl crate::app::App<'_> {
             color_index: None,
             color: self.editor.tool_line_color,
             loaded: true,
+            hidden: false,
             elevation: band.top as f32,
             folder: None,
             section: crate::model::SectionKind::natural_layer(),

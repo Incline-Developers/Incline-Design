@@ -73,6 +73,8 @@ pub(crate) enum JobKey {
     Triangulation(TriangulationId),
     PointCloud(crate::model::point_cloud::PointCloudId),
     BlockModel(crate::model::block_model::BlockModelId),
+    /// A pit optimization run of the scenario with this id.
+    OptimizationRun(u64),
     DrillHole(crate::model::drill_hole::DrillHoleId),
     /// The Solids Setup page's inspection mesh. Keyed by the solid, so
     /// selecting another one - or changing this one's surfaces - cancels the
@@ -311,6 +313,7 @@ impl<'a> App<'a> {
             }
             #[cfg(target_arch = "wasm32")]
             JobKey::BrowserProjectSave { .. } => true,
+            JobKey::OptimizationRun(_) => true,
             JobKey::Anonymous => true,
         })
     }
@@ -360,10 +363,21 @@ impl<'a> App<'a> {
         C: FnOnce(&CancelFlag, &Progress) -> anyhow::Result<T> + Send + 'static,
         A: FnOnce(&mut App<'a>, anyhow::Result<T>) + 'a,
     {
-        self.spawn_announced_job(Announce::StatusBar, label, keys, compute, apply);
+        self.spawn_job_sharing_progress(label, keys, compute, apply);
     }
 
-    fn spawn_announced_job<T, C, A>(&mut self, announce: Announce, label: impl Into<String>, keys: Vec<JobKey>, compute: C, apply: A)
+    /// As [`App::spawn_job_reporting_progress`], returning the job's
+    /// [`Progress`] so a dialog can show it too.
+    pub(crate) fn spawn_job_sharing_progress<T, C, A>(&mut self, label: impl Into<String>, keys: Vec<JobKey>, compute: C, apply: A) -> Progress
+    where
+        T: Send + 'static,
+        C: FnOnce(&CancelFlag, &Progress) -> anyhow::Result<T> + Send + 'static,
+        A: FnOnce(&mut App<'a>, anyhow::Result<T>) + 'a,
+    {
+        self.spawn_announced_job(Announce::StatusBar, label, keys, compute, apply)
+    }
+
+    fn spawn_announced_job<T, C, A>(&mut self, announce: Announce, label: impl Into<String>, keys: Vec<JobKey>, compute: C, apply: A) -> Progress
     where
         T: Send + 'static,
         C: FnOnce(&CancelFlag, &Progress) -> anyhow::Result<T> + Send + 'static,
@@ -374,6 +388,7 @@ impl<'a> App<'a> {
             Announce::StatusBar => self.begin_reported_task(label.clone()),
             Announce::Quietly => self.begin_quiet_task(),
         };
+        let shared = progress.clone();
         let mut console_report = crate::logging::retain_current_report();
 
         let (tx, rx) = mpsc::channel();
@@ -438,6 +453,7 @@ impl<'a> App<'a> {
         });
 
         self.pending_jobs.push(BackgroundJob { ticket, keys, cancel, poll });
+        shared
     }
 
     /// Called from a job's apply step when it handed the renderer data to

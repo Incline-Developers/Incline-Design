@@ -205,7 +205,7 @@ fn draw_haulage_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mu
                 && status.state == crate::app::planning_pipeline::StageState::Complete
                 && status.last_success.as_ref().is_some_and(|run| run.entities == 0);
             let badge = if empty { StepBadge::NotRun } else { StepBadge::of(status.state, &status.diagnostics) };
-            let entry_response = ExplorerEntry::new(egui::Id::new(("haulage_step", entry as u8)), bold(&entry.label()))
+            let entry_response = ExplorerEntry::new(egui::Id::unique(("haulage_step", entry as u8)), bold(&entry.label()))
                 .leading_icon(badge.icon(), egui::Color32::WHITE)
                 .header_aligned_icon()
                 .selected(step == entry)
@@ -240,7 +240,7 @@ fn draw_solids_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
             let status = &editor.planning_stages[entry.index()];
             ui.horizontal(|ui| {
                 ui.add_space(ui.spacing().indent);
-                let entry_response = ExplorerEntry::new(egui::Id::new(entry.tree_id()), bold(&entry.label()))
+                let entry_response = ExplorerEntry::new(egui::Id::unique(entry.tree_id()), bold(&entry.label()))
                     .leading_icon(StepBadge::of(status.state, &status.diagnostics).icon(), egui::Color32::WHITE)
                     .header_aligned_icon()
                     .selected(step == entry)
@@ -820,7 +820,7 @@ fn draw_block_model_mapping(ui: &mut egui::Ui, rect: egui::Rect, document: &Docu
             }
         });
     };
-    let pane = ui.interact(rect, ui.id().with(("reserve_stats_retry", model.id)), egui::Sense::click());
+    let pane = ui.interact(rect, ui.scope_id().with(("reserve_stats_retry", model.id)), egui::Sense::click());
     stats_menu(&pane, commands);
 
     let columns = [
@@ -1051,7 +1051,7 @@ fn draw_solid_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState
             }
             let body = ui.available_rect_before_wrap();
             if body.is_positive() {
-                let response = ui.interact(body, ui.id().with("new_solid_space"), egui::Sense::click());
+                let response = ui.interact(body, ui.scope_id().with("new_solid_space"), egui::Sense::click());
                 context_menu_popup(&response, tr!("planning-solids"), |ui| {
                     if ContextMenuAction::new(tr!("solids-new-solid")).show(ui).clicked() {
                         editor.new_solid_open = true;
@@ -1192,7 +1192,7 @@ pub(crate) fn draw_solid_render(ui: &mut egui::Ui, rect: egui::Rect, editor: &mu
                 ui.painter().rect_filled(image_rect, 0.0, crate::ui::widgets::tree_row_colors(ui).1);
             }
         }
-        let response = ui.interact(image_rect, ui.id().with("solid_preview_view"), egui::Sense::click_and_drag());
+        let response = ui.interact(image_rect, ui.scope_id().with("solid_preview_view"), egui::Sense::click_and_drag());
 
         let pixels_per_point = ui.ctx().pixels_per_point();
         let size_px = [
@@ -1375,7 +1375,7 @@ pub(crate) fn stacked_lower_share<R>(
         })
         .response
         .rect;
-    (rect, chrome::Grip::new(rect, chrome::Edge::Top, id))
+    (rect, chrome::Grip::new(rect, chrome::Edge::Top, ui.scope_id().with(id)))
 }
 
 /// Whatever is left once the islands have taken their columns, as one pane.

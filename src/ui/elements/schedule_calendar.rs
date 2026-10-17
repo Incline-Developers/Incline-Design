@@ -698,7 +698,7 @@ fn draw_day_scrollbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorSt
         return;
     }
     let track = rect.shrink2(egui::vec2(1.0, 3.0));
-    let response = ui.interact(rect, ui.id().with("schedule_calendar_day_scroll"), egui::Sense::click_and_drag());
+    let response = ui.interact(rect, ui.scope_id().with("schedule_calendar_day_scroll"), egui::Sense::click_and_drag());
     // A thumb narrower than this cannot be grabbed, so a long horizon stops
     // shrinking it and gives up proportionality instead.
     const MIN_THUMB: f32 = 24.0;
@@ -709,7 +709,7 @@ fn draw_day_scrollbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorSt
     {
         // Dragged from wherever it was grabbed, so the thumb does not jump
         // its own half-width under the pointer on the first press.
-        let grab = ui.id().with("schedule_calendar_day_scroll_grab");
+        let grab = ui.scope_id().with("schedule_calendar_day_scroll_grab");
         let offset = if response.drag_started() || response.clicked() {
             let thumb_x = track.left() + travel * (editor.schedule_calendar.scroll_x / max_x);
             let inside = pointer.x - thumb_x;
@@ -811,7 +811,7 @@ fn draw_row(
             // Interacted with rather than laid out as a button: a widget put
             // over the row would centre its text, and the indent is the whole
             // point of the row.
-            let response = ui.interact(row_rect, ui.id().with(("schedule_calendar_group", owner)), egui::Sense::click());
+            let response = ui.interact(row_rect, ui.scope_id().with(("schedule_calendar_group", owner)), egui::Sense::click());
             paint_label(ui, row_rect, label_start + 8.0, &label, LabelStyle::Heading);
             if response.clicked() {
                 if collapsed {
@@ -862,7 +862,7 @@ fn draw_row(
                 let expanded = editor.schedule_calendar.grade_expanded.contains(&key);
                 let label_rect = egui::Rect::from_min_max(egui::pos2(label_start, rect.top()), egui::pos2(hierarchy.right(), rect.bottom()));
                 let response = ui
-                    .interact(label_rect, ui.id().with(("schedule_calendar_grade", destination, field)), egui::Sense::click())
+                    .interact(label_rect, ui.scope_id().with(("schedule_calendar_grade", destination, field)), egui::Sense::click())
                     .on_hover_text(tr!("grade-calendar-expand-help"));
                 paint_label(
                     ui,
@@ -1178,7 +1178,7 @@ fn draw_mode_menu(ui: &mut egui::Ui, rect: egui::Rect, address: CalendarCellAddr
         choices.insert(0, (None, tr!("pile-mode-inherit", mode = operation.default_mode.label())));
     }
     let mut chosen = None;
-    let area = egui::Area::new(ui.id().with(("pile_mode_menu", address.owner, address.cell)))
+    let area = egui::Area::new(ui.scope_id().with(("pile_mode_menu", address.owner, address.cell)))
         .order(egui::Order::Foreground)
         .fixed_pos(rect.left_bottom())
         .show(ui.ctx(), |ui| {
@@ -1489,7 +1489,7 @@ fn crusher_target(address: CalendarCellAddress) -> Option<StandaloneDestinationI
 }
 
 fn cell_id(ui: &egui::Ui, address: CalendarCellAddress) -> egui::Id {
-    ui.id().with(("calendar_cell", address.owner, address.row, address.cell))
+    ui.scope_id().with(("calendar_cell", address.owner, address.row, address.cell))
 }
 
 fn editable(address: CalendarCellAddress) -> bool {

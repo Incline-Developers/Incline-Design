@@ -373,7 +373,7 @@ fn draw_view(ui: &mut egui::Ui, editor: &mut EditorState, draft: &mut SequenceDr
     // discard question is up the pane is display only: no orbit, no zoom, and
     // above all no pick, because a pick edits the draft being asked about.
     let sense = if confirming { egui::Sense::hover() } else { egui::Sense::click_and_drag() };
-    let response = ui.interact(image_rect, ui.id().with("sequence_editor_view"), sense);
+    let response = ui.interact(image_rect, ui.scope_id().with("sequence_editor_view"), sense);
     let pixels_per_point = ui.ctx().pixels_per_point();
     let size_px = [
         (image_rect.width() * pixels_per_point).round().max(1.0) as u32,
@@ -586,7 +586,7 @@ fn draw_order_rows(ui: &mut egui::Ui, editor: &mut EditorState, draft: &Sequence
         );
         // Registered after the row, so the cross is the topmost thing over its
         // own square and a click there removes rather than selects.
-        if menu::close_cross(ui, cross, ui.id().with(("sequence_remove", index)), menu::menu_surface(ui.visuals())).clicked() {
+        if menu::close_cross(ui, cross, ui.scope_id().with(("sequence_remove", index)), menu::menu_surface(ui.visuals())).clicked() {
             edit = Some(ListEdit::Remove(vec![index]));
         }
         if response.drag_started_by(egui::PointerButton::Primary) {
@@ -703,7 +703,7 @@ fn draw_order_rows(ui: &mut egui::Ui, editor: &mut EditorState, draft: &Sequence
 /// scrolling elsewhere to look stays where it was put.
 fn follow_playhead(ui: &mut egui::Ui, draft: &SequenceDraft, rows: &[egui::Rect], playhead: f32, row_height: f32) {
     let Some(first) = rows.first() else { return };
-    let memory = egui::Id::new(("sequence_playhead", draft.edition));
+    let memory = egui::Id::unique(("sequence_playhead", draft.edition));
     let last: Option<(usize, bool)> = ui.data(|data| data.get_temp(memory));
     let around = egui::Rect::from_x_y_ranges(first.x_range(), (playhead - row_height)..=(playhead + row_height));
     let moved = last.is_some_and(|(preview, _)| preview != draft.preview);

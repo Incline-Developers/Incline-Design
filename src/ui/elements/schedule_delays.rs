@@ -405,7 +405,7 @@ fn draw_list(
                 let mut agent = entry.agent;
                 if combo_in(
                     ui,
-                    egui::Id::new(("delay_entry_agent", id.0, index)),
+                    egui::Id::unique(("delay_entry_agent", id.0, index)),
                     cells[0],
                     &mut agent,
                     agent_name(plan, entry.agent),

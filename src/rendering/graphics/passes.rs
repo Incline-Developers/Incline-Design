@@ -708,7 +708,7 @@ impl<'a> Graphics<'a> {
             let draped: std::collections::HashSet<_> = triangulations.iter().filter_map(|triangulation| triangulation.raster_texture).collect();
             let mut pipeline_bound = false;
             for raster in rasters {
-                if draped.contains(&raster.id) || !raster.state.loaded {
+                if draped.contains(&raster.id) || !raster.state.is_visible() {
                     continue;
                 }
                 let Some((bind_group, vertex_buffer)) = self.raster_gpu.plane(raster.id) else {
@@ -1100,23 +1100,6 @@ impl<'a> Graphics<'a> {
                 continue;
             };
             if cached.edge_width <= 0.0 || cached.edge_chunks.is_empty() {
-                continue;
-            }
-            render_pass.set_bind_group(1, &cached.edge_style_bind_group, &[]);
-            for chunk in &cached.edge_chunks {
-                render_pass.set_vertex_buffer(0, chunk.instance_buffer.slice(..));
-                render_pass.draw(0..6, 0..chunk.instance_count);
-            }
-        }
-        for block_model in block_models {
-            let entity = block_model.entity_id();
-            if !block_model.state.loaded || editor.hidden_handles.contains(&entity) || !block_model_intersects_frustum(block_model, self.scene_origin, &frustum) {
-                continue;
-            }
-            let Some(cached) = self.block_model_gpu.get(block_model.id) else {
-                continue;
-            };
-            if cached.edge_chunks.is_empty() {
                 continue;
             }
             render_pass.set_bind_group(1, &cached.edge_style_bind_group, &[]);

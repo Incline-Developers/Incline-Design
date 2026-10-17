@@ -89,7 +89,7 @@ pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: 
         let status = &editor.schedule_stages[entry.index()];
         ui.horizontal(|ui| {
             ui.add_space(ui.spacing().indent);
-            let entry_response = ExplorerEntry::new(egui::Id::new(entry.tree_id()), bold(&entry.label()))
+            let entry_response = ExplorerEntry::new(egui::Id::unique(entry.tree_id()), bold(&entry.label()))
                 .leading_icon(super::planning_setup::StepBadge::of(status.state, &status.diagnostics).icon(), egui::Color32::WHITE)
                 .header_aligned_icon()
                 .selected(step == entry)

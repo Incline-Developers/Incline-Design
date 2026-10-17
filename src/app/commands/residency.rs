@@ -111,7 +111,7 @@ impl<'a> App<'a> {
         })
     }
 
-    fn restore_pending(&self) -> bool {
+    pub(crate) fn restore_pending(&self) -> bool {
         self.pending_jobs.iter().any(|job| {
             job.keys.iter().any(|key| {
                 matches!(
@@ -128,12 +128,28 @@ impl<'a> App<'a> {
         } else if self.item_load_pending(item) {
             return;
         }
+        // Loading always brings an item in visible, whatever its eye said
+        // before it was unloaded.
         if let Some(style) = self.item_style(item) {
-            self.set_item_style(item, style.with_loaded(loaded));
+            let style = if loaded { style.with_loaded(true).with_hidden(false) } else { style.with_loaded(false) };
+            self.set_item_style(item, style);
         }
         if !loaded {
             self.evict_unloaded_items();
             self.evict_unloaded_layers();
+        }
+    }
+
+    /// The explorer's eye on a project item: hiding leaves it loaded, and
+    /// showing one that is unloaded loads it.
+    pub(crate) fn set_item_visible(&mut self, item: ItemRef, visible: bool) {
+        let Some(style) = self.item_style(item) else {
+            return;
+        };
+        if visible && !style.loaded() {
+            self.set_item_loaded(item, true);
+        } else if style.loaded() {
+            self.set_item_style(item, style.with_hidden(!visible));
         }
     }
 

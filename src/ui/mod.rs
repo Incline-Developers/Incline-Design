@@ -3,6 +3,8 @@
 //! The `Gui` struct owns the egui context, winit state, and wgpu renderer.
 //! `render()` processes input, calls `draw_ui()`, and feeds paint jobs back to wgpu.
 
+#[cfg(target_arch = "wasm32")]
+mod canvas_glyphs;
 pub(crate) mod chrome;
 pub(crate) mod dialogs;
 pub(crate) mod elements;
@@ -83,13 +85,17 @@ impl Gui {
         });
         setup_custom_fonts(&ctx);
         egui_extras::install_image_loaders(&ctx);
-        ctx.global_style_mut(|style| {
+        ctx.all_styles_mut(|style| {
             // Tooltips wait out a deliberate hover rather than firing the moment the pointer
             // crosses a widget, but the grace time keeps them instant while sweeping along a
             // row of toolbar buttons that are already showing one.
             style.interaction.show_tooltips_only_when_still = false;
             style.interaction.tooltip_delay = 0.5;
             style.interaction.tooltip_grace_time = 0.2;
+            // egui 0.37 made stock buttons roomier (8x2 padding, 20pt rows);
+            // the panels are laid out for the tighter 0.36 spacing.
+            style.spacing.button_padding = egui::vec2(4.0, 1.0);
+            style.spacing.interact_size.y = 18.0;
         });
         ctx.set_visuals(theme_visuals(false, SELECTION_COLOR));
 
@@ -140,6 +146,12 @@ impl Gui {
 
     pub(crate) fn pointer_over_ui(&self) -> bool {
         self.ctx.is_pointer_over_egui()
+    }
+
+    /// Swap the fetched CJK faces in for the browser-drawn stand-ins.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn reload_fonts(&self) {
+        setup_custom_fonts(&self.ctx);
     }
 
     /// Queue text received from the browser's paste event for the next egui frame.
@@ -467,6 +479,9 @@ struct UiFrameContext<'a> {
 /// to, the way out, why it is being asked - goes in `minor` rather than being
 /// punctuated onto the end, so the banner can dim it. See [`ViewportMessage`].
 fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
+    if editor.optimization.start_pick.is_some() {
+        return Some(ViewportMessage::text(tr!("opt-pick-prompt")).minor(tr!("ui-esc-cancels")));
+    }
     if editor.drill_pattern_awaiting_shape_pick {
         return Some(ViewportMessage::text(tr!("ui-click-closed-polyline-use-blast")).minor(tr!("ui-esc-cancels")));
     }
@@ -551,6 +566,7 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
         ActiveTool::ExplodePolyline => ViewportMessage::text(tr!("ui-select-polyline")),
         ActiveTool::BatterBermOffset if editor.batter_berm_target_id.is_none() => ViewportMessage::text(tr!("ui-select-polyline")),
         ActiveTool::DeletePoints => ViewportMessage::text(tr!("ui-select-point")),
+        ActiveTool::Hide => ViewportMessage::text(tr!("ui-select-designs-to-hide")),
         _ => return None,
     };
     Some(message)
@@ -593,7 +609,7 @@ fn draw_circle_radius_input(ui: &mut egui::Ui, editor: &mut EditorState, command
     let mut cancel_center = false;
     let mut commit_typed_radius = false;
 
-    egui::Area::new(egui::Id::new("make_circle_radius_input"))
+    egui::Area::new(egui::Id::unique("make_circle_radius_input"))
         .order(egui::Order::Foreground)
         .fixed_pos(egui::pos2(x, y))
         .show(ui.ctx(), |ui| {
@@ -743,7 +759,7 @@ fn draw_ui(
             planning_layout.rect
         };
         dialogs::about::draw_about_dialog(root_ui, editor);
-        elements::properties::draw_preferences(root_ui, editor, drill_holes, commands);
+        elements::properties::draw_preferences(root_ui, editor, commands);
         if editor.renaming_item.is_some() {
             dialogs::editing::draw_rename_dialog(root_ui, commands, editor);
         }
@@ -780,7 +796,7 @@ fn draw_ui(
             explorer
                 .grips
                 .into_iter()
-                .chain([chrome::Grip::new(console, chrome::Edge::Top, elements::console::PANEL_ID)]),
+                .chain([chrome::Grip::new(console, chrome::Edge::Top, root_ui.scope_id().with(elements::console::PANEL_ID))]),
         );
         return geometry_dirty;
     }
@@ -803,7 +819,7 @@ fn draw_ui(
         root_ui.skip_ahead_auto_ids(1);
     }
 
-    let bottom_toolbar_rect = elements::toolbars::draw_bottom_toolbar(root_ui, editor, commands);
+    let (bottom_toolbar_rect, cursor_modes_centre) = elements::toolbars::draw_bottom_toolbar(root_ui, editor, commands);
     let animation_timeline_rect = if editor.is_schedule_animation() {
         elements::schedule_animation::draw_timeline(root_ui, editor, document, &project.schedule, commands)
     } else {
@@ -1176,14 +1192,18 @@ fn draw_ui(
     dialogs::editing::draw_insert_point_at_elevation_dialog(root_ui, editor, commands);
     dialogs::object_edit::draw_object_edit_dialog(root_ui, editor, commands);
     dialogs::about::draw_about_dialog(root_ui, editor);
-    elements::properties::draw_preferences(root_ui, editor, drill_holes, commands);
+    elements::properties::draw_preferences(root_ui, editor, commands);
     elements::properties::draw_block_model_controls(root_ui, editor, block_models, commands, canvas_rect);
 
     // --- Canvas right-click context menu ---
     if editor.canvas_context_menu_open
         && let Some((px, py)) = editor.canvas_context_menu_px
     {
-        dialogs::editing::draw_right_click_context(root_ui, editor, project, commands, &mut geometry_dirty, document, px, py);
+        if editor.canvas_context_menu_recent {
+            dialogs::editing::draw_recent_functions_context(root_ui, editor, commands, px, py);
+        } else {
+            dialogs::editing::draw_right_click_context(root_ui, editor, project, commands, &mut geometry_dirty, document, px, py);
+        }
     }
 
     // --- Tool-specific dialogs ---
@@ -1309,7 +1329,7 @@ fn draw_ui(
 
     // Polyline finish (MakePoly)
     if editor.poly_finish_dialog {
-        dialogs::editing::draw_finish_polyline_dialog(root_ui, commands, editor, canvas_rect);
+        dialogs::editing::draw_finish_polyline_menu(root_ui, commands, editor);
     }
 
     if editor.haul_draw
@@ -1379,7 +1399,7 @@ fn draw_ui(
     if editor.show_world_axis_gizmo {
         let gizmo = elements::cursors::draw_orientation_gizmo(
             root_ui,
-            egui::Id::new("world_orientation_gizmo"),
+            egui::Id::unique("world_orientation_gizmo"),
             canvas_rect,
             frame_context.camera_forward,
             frame_context.camera_up,
@@ -1443,14 +1463,15 @@ fn draw_ui(
         .chain(planning_regions),
     );
     // Centre the explorer resize grip on its full-height column.
+    let panel_id = |salt: &str| root_ui.scope_id().with(salt);
     chrome::paint_grips(
         &ctx,
         explorer
             .grips
             .into_iter()
             .chain([
-                chrome::Grip::new(console_claimed, chrome::Edge::Top, elements::console::PANEL_ID),
-                chrome::Grip::new(borehole_inspector_claimed, chrome::Edge::Left, elements::borehole_inspector::PANEL_ID),
+                chrome::Grip::new(console_claimed, chrome::Edge::Top, panel_id(elements::console::PANEL_ID)).centred_at_x(cursor_modes_centre),
+                chrome::Grip::new(borehole_inspector_claimed, chrome::Edge::Left, panel_id(elements::borehole_inspector::PANEL_ID)),
             ])
             // The island names its own seam, so the grip lights up for whichever
             // of the right-edge panels the workspace drew.
@@ -1573,6 +1594,11 @@ fn draw_global_dialogs(
         dialogs::confirmations::draw_delete_item_confirm_dialog(root_ui, commands, editor);
     }
 
+    // Delete several explorer rows at once
+    if editor.pending_delete_rows.is_some() {
+        dialogs::confirmations::draw_delete_rows_confirm_dialog(root_ui, commands, editor);
+    }
+
     // Delete delay product confirmation
     if editor.pending_delete_delay_product.is_some() {
         dialogs::confirmations::draw_delete_delay_product_dialog(root_ui, commands, editor);
@@ -1647,6 +1673,8 @@ fn draw_global_dialogs(
     if editor.block_model_create_open {
         elements::block_model::draw_create_block_model_dialog(root_ui, editor, drill_holes, commands);
     }
+    dialogs::optimization::draw_optimization_dialogs(root_ui, editor, block_models, project, commands);
+    widgets::toast::draw_toasts(root_ui.ctx(), &mut editor.toasts);
     if editor.ore_triangulation_open {
         elements::block_model::draw_ore_triangulation_dialog(root_ui, editor, block_models, commands);
     }
@@ -1859,6 +1887,20 @@ fn theme_visuals(dark_mode: bool, selection_color: egui::Color32) -> egui::Visua
     // Incline Design's UI is flat: no drop shadows on windows, popups, or menus.
     visuals.window_shadow = egui::epaint::Shadow::NONE;
     visuals.popup_shadow = egui::epaint::Shadow::NONE;
+    // egui 0.37 rounds its stock widgets at 4-6; the window keeps one radius.
+    let stock = &mut visuals.widgets;
+    for state in [&mut stock.noninteractive, &mut stock.inactive, &mut stock.hovered, &mut stock.active, &mut stock.open] {
+        state.corner_radius = egui::CornerRadius::same(widgets::toolbar::GROUP_CORNER_RADIUS);
+    }
+    if dark_mode {
+        // egui 0.37 darkened dark-mode button fills and brightened their text;
+        // keep the earlier greys the house widgets were tuned against.
+        stock.inactive.weak_bg_fill = egui::Color32::from_gray(60);
+        stock.inactive.fg_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(180));
+        stock.hovered.weak_bg_fill = egui::Color32::from_gray(70);
+        stock.hovered.fg_stroke = egui::Stroke::new(1.5, egui::Color32::from_gray(240));
+        stock.active.weak_bg_fill = egui::Color32::from_gray(55);
+    }
     visuals
 }
 
@@ -2033,7 +2075,7 @@ fn draw_machine_labels(ui: &egui::Ui, editor: &EditorState, plan: &crate::model:
 /// ringed by a light halo so it reads over dark ground and light alike.
 fn machine_icon_texture(ctx: &egui::Context, model: crate::rendering::machines::MachineModel, working: bool) -> Option<egui::TextureHandle> {
     use crate::rendering::machines::MachineModel;
-    let id = egui::Id::new(("machine-icon", model, working));
+    let id = egui::Id::unique(("machine-icon", model, working));
     if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
         return Some(texture);
     }

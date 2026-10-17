@@ -367,7 +367,7 @@ pub(crate) fn draw_rule_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut E
             }
             let body = ui.available_rect_before_wrap();
             if body.is_positive() {
-                let response = ui.interact(body, ui.id().with("new_trucking_rule_space"), egui::Sense::click());
+                let response = ui.interact(body, ui.scope_id().with("new_trucking_rule_space"), egui::Sense::click());
                 context_menu_popup(&response, tr!("truck-rules"), |ui| {
                     // A rule has to permit at least one class, so there is
                     // nothing to add until there is a class to permit.

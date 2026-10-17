@@ -25,7 +25,7 @@ impl Side {
         }
     }
 
-    fn panel(self, id: impl Into<egui::Id>) -> egui::Panel {
+    fn panel(self, id: &'static str) -> egui::Panel {
         match self {
             Self::Left => egui::Panel::left(id),
             Self::Right => egui::Panel::right(id),
@@ -129,8 +129,8 @@ impl Island {
         // showing: egui stores the width a panel came out at every frame, so a
         // window too narrow to hold the island would otherwise overwrite the
         // choice, and widening it again would leave the island squeezed.
-        let width_id = egui::Id::new(("island_width", self.id));
-        let seam = ui.ctx().read_response(egui::Id::new(self.id).with("__resize"));
+        let width_id = egui::Id::unique(("island_width", self.id));
+        let seam = ui.ctx().read_response(ui.scope_id().with(self.id).with("__resize"));
         let dragging = seam.is_some_and(|seam| seam.dragged());
         if !dragging && let Some(wanted) = ui.data(|data| data.get_temp::<f32>(width_id)) {
             pin_width(ui, self.id, wanted.clamp(min_width, max_width));
@@ -173,7 +173,7 @@ impl Island {
             // A bare column is not a region: the panes inside it are, and the
             // caller rounds those off itself.
             regions: if self.bare { Vec::new() } else { vec![rect] },
-            grip: chrome::Grip::new(rect, self.side.seam(), self.id),
+            grip: chrome::Grip::new(rect, self.side.seam(), ui.scope_id().with(self.id)),
             inner: response.inner,
         }
     }
@@ -185,7 +185,8 @@ impl Island {
 /// that seam the width comes from here, which is what carries a dragged width
 /// back across a spell in a window too narrow to show it.
 fn pin_width(ui: &egui::Ui, id: &'static str, width: f32) {
-    let panel_id = egui::Id::new(id);
+    // egui names a panel after its parent's scope and the salt it was built with.
+    let panel_id = ui.scope_id().with(id);
     let Some(mut state) = egui::containers::panel::PanelState::load(ui.ctx(), panel_id) else {
         return;
     };

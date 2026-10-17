@@ -31,7 +31,7 @@ impl egui::Widget for Toggle<'_> {
             *self.value = !*self.value;
             response.mark_changed();
         }
-        response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), *self.value, galley.text()));
+        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), *self.value, galley.text()));
         if !ui.is_rect_visible(rect) {
             return response;
         }

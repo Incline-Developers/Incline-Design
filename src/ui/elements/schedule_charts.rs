@@ -330,7 +330,7 @@ fn draw_chart(
         ChartKind::Grade(..) => tr!("charts-grade-help"),
         ChartKind::Received => tr!("charts-received-help"),
     };
-    ui.interact(header, ui.id().with("header"), egui::Sense::hover()).on_hover_text(help);
+    ui.interact(header, ui.scope_id().with("header"), egui::Sense::hover()).on_hover_text(help);
 
     let columns = ((plot.width() / COLUMN_W).ceil().max(0.0)) as usize;
     let xs = (0..columns).map(|index| plot.left() + index as f32 * COLUMN_W);
@@ -649,7 +649,7 @@ fn draw_chart(
 
     // Pointing at a chart marks the instant across it; pressing moves the
     // time slider there, as pressing the ruler does.
-    let response = ui.interact(plot, ui.id().with("plot"), egui::Sense::click_and_drag());
+    let response = ui.interact(plot, ui.scope_id().with("plot"), egui::Sense::click_and_drag());
     if (response.is_pointer_button_down_on() || response.clicked())
         && let Some(pos) = response.interact_pointer_pos()
     {
@@ -752,7 +752,7 @@ fn draw_trucks(
             .calendar
             .values_at(CalendarPeriod((hour / SCHEDULE_PERIOD_H).floor().max(0.0) as u32))
             .effective_units();
-        ui.interact(plot, ui.id().with("haul_truck_hover"), egui::Sense::hover()).on_hover_text(tr!(
+        ui.interact(plot, ui.scope_id().with("haul_truck_hover"), egui::Sense::hover()).on_hover_text(tr!(
             "inspector-trucks-in-use",
             busy = format!("{:.1}", schedule.trucks_in_use(id, hour)),
             fleet = format!("{fleet:.1}")

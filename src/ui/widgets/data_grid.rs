@@ -230,7 +230,7 @@ pub(crate) fn grid_choice_row<T: Copy + PartialEq>(
     if !cell.is_positive() {
         return false;
     }
-    let id = egui::Id::new(id);
+    let id = egui::Id::unique(id);
     let selected = option_label(*value);
     ui.scope_builder(egui::UiBuilder::new().id_salt(id).max_rect(cell), |ui| {
         ui.set_clip_rect(ui.clip_rect().intersect(cell));
@@ -261,9 +261,9 @@ pub(crate) fn grid_select_row(ui: &mut egui::Ui, id: impl std::hash::Hash + std:
     let (cell, _) = grid_named_row(ui, label, depth);
     if !cell.is_positive() {
         // Still a response, so the caller can hang its popup off something.
-        return ui.interact(egui::Rect::NOTHING, egui::Id::new(id), egui::Sense::click());
+        return ui.interact(egui::Rect::NOTHING, egui::Id::unique(id), egui::Sense::click());
     }
-    let id = egui::Id::new(id);
+    let id = egui::Id::unique(id);
     ui.scope_builder(egui::UiBuilder::new().id_salt(id).max_rect(cell), |ui| {
         ui.set_clip_rect(ui.clip_rect().intersect(cell));
         ui.spacing_mut().interact_size.y = cell.height();
@@ -415,7 +415,7 @@ pub(crate) fn grid_cell_combo<T: Clone + PartialEq, O: Into<CellOption<T>>>(
     if !cell.is_positive() {
         return false;
     }
-    let id = egui::Id::new(id);
+    let id = egui::Id::unique(id);
     // A child rather than a scope: the row has already claimed this space,
     // and a scope would claim it again, pulling the next row up over this
     // row's bottom rule.
@@ -447,7 +447,7 @@ pub(crate) fn grid_cell_number(ui: &mut egui::Ui, id: impl std::hash::Hash + std
     if !cell.is_positive() {
         return false;
     }
-    let mut child = ui.new_child(egui::UiBuilder::new().id_salt(egui::Id::new(id)).max_rect(cell));
+    let mut child = ui.new_child(egui::UiBuilder::new().id_salt(egui::Id::unique(id)).max_rect(cell));
     child.set_clip_rect(child.clip_rect().intersect(cell));
     let response = child.put(
         cell,
@@ -500,7 +500,7 @@ pub(crate) fn grid_cell_entry_flagged(ui: &mut egui::Ui, id: impl std::hash::Has
     if !text_rect.is_positive() {
         return false;
     }
-    let id = egui::Id::new(id);
+    let id = egui::Id::unique(id);
     let shown = trimmed_number(*value);
     let mut text = ui.data(|data| data.get_temp::<String>(id)).unwrap_or_else(|| shown.clone());
     let mut child = ui.new_child(egui::UiBuilder::new().id_salt(id).max_rect(text_rect));
@@ -510,7 +510,7 @@ pub(crate) fn grid_cell_entry_flagged(ui: &mut egui::Ui, id: impl std::hash::Has
         egui::TextEdit::singleline(&mut text)
             .id(id.with("text"))
             .text_color_opt(note.map(|_| warn))
-            .vertical_align(egui::Align::Center)
+            .align(egui::Align2::LEFT_CENTER)
             .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 1)))
             .desired_width(text_rect.width()),
     );
@@ -541,7 +541,7 @@ pub(crate) fn grid_cell_color(ui: &mut egui::Ui, id: impl std::hash::Hash + std:
     if !cell.is_positive() {
         return false;
     }
-    let mut child = ui.new_child(egui::UiBuilder::new().id_salt(egui::Id::new(id)).max_rect(cell));
+    let mut child = ui.new_child(egui::UiBuilder::new().id_salt(egui::Id::unique(id)).max_rect(cell));
     child.set_clip_rect(child.clip_rect().intersect(cell));
     child.spacing_mut().interact_size.y = cell.height();
     super::color::edit_rgba_premultiplied(&mut child, value).changed()
@@ -556,7 +556,7 @@ pub(crate) fn grid_cell_warning(ui: &mut egui::Ui, id: impl std::hash::Hash + st
     const SIDE: f32 = 14.0;
     let mark = egui::Rect::from_center_size(egui::pos2(cell.right() - CELL_WARNING_WIDTH / 2.0, cell.center().y), egui::Vec2::splat(SIDE));
     egui::Image::new(unthemed_icon!("step_warning.svg")).paint_at(ui, mark);
-    ui.interact(mark, egui::Id::new(id), egui::Sense::hover()).on_hover_text(message);
+    ui.interact(mark, egui::Id::unique(id), egui::Sense::hover()).on_hover_text(message);
 }
 
 /// A collapsible group heading inside a grid. Returns whether the group is
@@ -889,7 +889,7 @@ impl PropertyRows<'_> {
         hint: &str,
         warning: Option<&str>,
     ) -> (egui::Response, Option<String>) {
-        let id = egui::Id::new(id);
+        let id = egui::Id::unique(id);
         let mut text = self.ui.data(|data| data.get_temp::<String>(id)).unwrap_or_else(|| current.to_owned());
         let response = self.value_field(key, &mut text, unit, warning.map(Badge::Warning), false, hint);
         if response.has_focus() {
@@ -917,7 +917,7 @@ impl PropertyRows<'_> {
         let rect = self.begin_table_row(false);
         let cell = egui::Rect::from_min_max(egui::pos2(rect.left() + GUTTER, rect.top()), rect.max);
         paint_cell_text(self.ui, cell, egui::RichText::new(text), self.ui.visuals().weak_text_color());
-        self.ui.interact(cell, self.ui.id().with(("note", text)), egui::Sense::hover()).on_hover_text(text);
+        self.ui.interact(cell, self.ui.scope_id().with(("note", text)), egui::Sense::hover()).on_hover_text(text);
     }
 
     /// A row across both columns, `height` tall, drawn by `add` into the rect
@@ -1049,7 +1049,7 @@ impl PropertyRows<'_> {
             );
             let response = self
                 .ui
-                .interact(value_rect, self.ui.id().with(("calculated", key)), egui::Sense::hover())
+                .interact(value_rect, self.ui.scope_id().with(("calculated", key)), egui::Sense::hover())
                 .on_hover_text(value.as_str());
             self.badge(rect, badge);
             return response;
@@ -1057,7 +1057,7 @@ impl PropertyRows<'_> {
         let response = self.place(
             value_rect,
             egui::TextEdit::singleline(value)
-                .vertical_align(egui::Align::Center)
+                .align(egui::Align2::LEFT_CENTER)
                 .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 1)))
                 // egui 0.35 needs a nonzero text atom to anchor the caret
                 // in an empty field. A hint, blank unless the caller has

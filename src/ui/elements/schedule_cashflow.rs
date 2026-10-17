@@ -70,7 +70,7 @@ pub(crate) fn draw_rule_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut E
             }
             let body = ui.available_rect_before_wrap();
             if body.is_positive() {
-                let response = ui.interact(body, ui.id().with("new_cashflow_rule_space"), egui::Sense::click());
+                let response = ui.interact(body, ui.scope_id().with("new_cashflow_rule_space"), egui::Sense::click());
                 context_menu_popup(&response, tr!("cashflow"), |ui| {
                     if ContextMenuAction::new(tr!("cashflow-new-rule")).show(ui).clicked() {
                         let name = crate::model::schedule::suggested_name(&tr!("cashflow-default-rule-name"), rules.rules.iter().map(|rule| rule.name.clone()));
@@ -448,7 +448,7 @@ pub(crate) fn draw_rule_editor(
             }
             let body = ui.available_rect_before_wrap();
             if body.is_positive() {
-                let response = ui.interact(body, ui.id().with(("new_cashflow_condition_space", rule.id.0)), egui::Sense::click());
+                let response = ui.interact(body, ui.scope_id().with(("new_cashflow_condition_space", rule.id.0)), egui::Sense::click());
                 context_menu_popup(&response, tr!("cashflow-rule-conditions"), |ui| {
                     let spare = document
                         .reserve_fields()

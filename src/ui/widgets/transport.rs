@@ -15,9 +15,24 @@ pub(crate) enum Transport {
 pub(crate) fn transport_button(ui: &mut egui::Ui, kind: Transport, tooltip: String) -> egui::Response {
     let side = ui.spacing().interact_size.y;
     let (rect, response) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::click());
-    let visuals = ui.style().interact(&response);
-    ui.painter().rect(rect, GROUP_CORNER_RADIUS, visuals.bg_fill, visuals.bg_stroke, egui::StrokeKind::Inside);
-    let color = visuals.fg_stroke.color;
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    // Play and pause are the bar's one action, so they take the accent like a
+    // primary button; rewind sits beside them as a secondary one.
+    let (fill, color) = if matches!(kind, Transport::Play | Transport::Pause) {
+        let accent = crate::ui::widgets::menu::accent_fill(ui.visuals());
+        let fill = if response.is_pointer_button_down_on() {
+            crate::ui::widgets::shifted(accent, -16)
+        } else if response.hovered() {
+            crate::ui::widgets::shifted(accent, 16)
+        } else {
+            accent
+        };
+        (fill, egui::Color32::WHITE)
+    } else {
+        let visuals = ui.style().interact(&response);
+        (visuals.bg_fill, visuals.fg_stroke.color)
+    };
+    ui.painter().rect_filled(rect, GROUP_CORNER_RADIUS, fill);
     let c = rect.center();
     let r = side * 0.24;
     match kind {

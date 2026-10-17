@@ -885,7 +885,7 @@ fn route_check(
     question: &RouteQuestion,
     commands: &mut Vec<UiCommand>,
 ) {
-    let id = egui::Id::new(("haul_query", project.active_session));
+    let id = egui::Id::unique(("haul_query", project.active_session));
     let mut fleet = ui.data(|d| d.get_temp::<Fleet>(id)).unwrap_or_default();
     let previous_key = ui.data(|d| d.get_temp::<u64>(id.with("key")));
     if fleet.truck.is_none_or(|id| project.schedule.trucks().class(id).is_none()) {
@@ -1052,7 +1052,7 @@ fn check(network: &HaulNetwork, project: &UiProjectView, question: &RouteQuestio
 /// Elevation (line) and speed (shaded steps) along the loaded haul, with the
 /// figures under the pointer on hover.
 fn profile(ui: &mut egui::Ui, rect: egui::Rect, points: &[[f64; 3]]) {
-    let response = ui.interact(rect, ui.id().with("haul_profile"), egui::Sense::hover());
+    let response = ui.interact(rect, ui.scope_id().with("haul_profile"), egui::Sense::hover());
     let painter = ui.painter_at(rect);
     let visuals = ui.visuals();
     painter.rect_filled(rect, crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS, visuals.extreme_bg_color);

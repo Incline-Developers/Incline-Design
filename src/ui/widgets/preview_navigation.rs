@@ -94,7 +94,7 @@ pub(crate) fn orientation_gizmo(ui: &mut egui::Ui, id: &str, image: egui::Rect, 
     }
     let (_, up) = view.screen_basis();
     let forward = view.forward();
-    let gizmo = crate::ui::elements::cursors::draw_orientation_gizmo(ui, egui::Id::new(id), image, forward.as_vec3().to_array(), up.as_vec3().to_array(), false);
+    let gizmo = crate::ui::elements::cursors::draw_orientation_gizmo(ui, egui::Id::unique(id), image, forward.as_vec3().to_array(), up.as_vec3().to_array(), false);
     let Some(direction) = gizmo.clicked else { return false };
     view.face(direction);
     ui.ctx().request_repaint();

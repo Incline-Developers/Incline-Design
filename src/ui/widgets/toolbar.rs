@@ -45,7 +45,7 @@ impl ToolbarButton {
     /// Give the clickable response a stable identity when its parent may be
     /// rebuilt in a different order during an egui sizing pass.
     pub(crate) fn id_salt(mut self, id_salt: impl Hash + std::fmt::Debug) -> Self {
-        self.id_salt = Some(egui::Id::new(id_salt));
+        self.id_salt = Some(egui::Id::unique(id_salt));
         self
     }
 }
@@ -75,7 +75,7 @@ pub(crate) const GROUP_CORNER_RADIUS: u8 = 3;
 /// Visible thickness of every toolbar and side of each button highlight.
 pub(crate) const TOOL_CELL_SIZE: f32 = 30.0;
 /// Side of every toolbar icon.
-pub(crate) const TOOL_ICON_SIZE: f32 = 19.0;
+pub(crate) const TOOL_ICON_SIZE: f32 = 30.0;
 
 /// Corner rounding on the colour and fill swatches in the viewport bar.
 const SWATCH_CORNER_RADIUS: f32 = GROUP_CORNER_RADIUS as f32;
@@ -310,9 +310,9 @@ pub(crate) fn segmented(ui: &mut Ui, id_salt: impl Hash + std::fmt::Debug, label
     let mut x = rect.left();
     for (index, galley) in galleys.into_iter().enumerate() {
         let segment = egui::Rect::from_min_size(egui::pos2(x, rect.top()), Vec2::new(galley.size().x + PADDING * 2.0, height));
-        let response = ui.interact(segment, ui.id().with((&id_salt, index)), Sense::click());
+        let response = ui.interact(segment, ui.scope_id().with((&id_salt, index)), Sense::click());
         let chosen = index == selected;
-        response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, chosen, galley.text()));
+        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, chosen, galley.text()));
         if chosen {
             ui.painter().rect_filled(segment.shrink(2.0), GROUP_CORNER_RADIUS, visuals.selection.bg_fill);
         } else if response.hovered() {

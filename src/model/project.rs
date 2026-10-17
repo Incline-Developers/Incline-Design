@@ -27,7 +27,13 @@ use crate::{
 pub(crate) struct ProjectItemState {
     pub(crate) source_name: Option<String>,
     pub(crate) source_format: Option<String>,
+    /// Whether the payload is held in memory. A file records whether the
+    /// item was visible - loaded and not hidden - so a project opens with
+    /// only what was being looked at loaded.
     pub(crate) loaded: bool,
+    /// Kept out of the viewport while loaded: the explorer's eye, separate
+    /// from loading. Meaningless while unloaded, and never written.
+    pub(crate) hidden: bool,
     pub(crate) deferred: Option<crate::model::formats::omf::DeferredAsset>,
     /// Where an unchanged payload's encoded arrays can be copied from on save.
     pub(crate) payload_source: Option<crate::model::formats::omf::PayloadSource>,
@@ -68,6 +74,7 @@ impl ProjectItemState {
             source_name,
             source_format,
             loaded: true,
+            hidden: false,
             deferred: None,
             payload_source: None,
             summary: None,
@@ -92,6 +99,11 @@ impl ProjectItemState {
         self
     }
 
+    /// Whether the item draws: loaded, and not hidden.
+    pub(crate) fn is_visible(&self) -> bool {
+        self.loaded && !self.hidden
+    }
+
     pub(crate) fn with_folder(mut self, folder: Option<FolderId>) -> Self {
         self.folder = folder;
         self
@@ -107,6 +119,7 @@ impl ProjectItemState {
     pub(crate) fn hash_row(&self, hasher: &mut impl std::hash::Hasher) {
         use std::hash::Hash;
         self.loaded.hash(hasher);
+        self.hidden.hash(hasher);
         self.revision.hash(hasher);
         self.folder.hash(hasher);
         self.section.hash(hasher);
@@ -277,6 +290,10 @@ pub(crate) struct ProjectFile {
     /// folders from.
     #[serde(default)]
     pub(crate) folders: FolderRegistry,
+    /// The project's pit optimization scenarios and Results column choices,
+    /// saved in the OMF project record so each project keeps its own.
+    #[serde(default)]
+    pub(crate) optimization: crate::model::optimization::ScenarioFile,
 }
 
 #[derive(Clone, Debug)]
@@ -375,6 +392,9 @@ impl OpenProject {
         self.content.epoch().hash(&mut hasher);
         // Folder names, so an empty folder still counts as unsaved work.
         self.project.folders.hash_into(&mut hasher);
+        // Hashed, not epoch-touched: an undo restores the epoch, and must not
+        // hide a scenario edit it did not record.
+        serde_json::to_string(&self.project.optimization).unwrap_or_default().hash(&mut hasher);
         self.project
             .document
             .content_hash(&mut self.content_hash_cache.borrow_mut(), &self.project.folders)
@@ -408,6 +428,13 @@ impl OpenProject {
         self.savepoint_revision = self.savepoint_revision.wrapping_add(1);
         self.dirty_cache = RefCell::new(None);
         self.layer_dirty_cache = RefCell::new(None);
+    }
+
+    /// Replace the project's optimization scenarios; the project reads as
+    /// unsaved until the next save writes them.
+    pub(crate) fn set_optimization(&mut self, optimization: crate::model::optimization::ScenarioFile) {
+        self.project.optimization = optimization;
+        self.dirty_cache = RefCell::new(None);
     }
 
     pub(crate) fn mark_saved(&mut self) {
@@ -605,12 +632,12 @@ impl ProjectStore {
             let document = &project.project.document;
             let mut per_layer: HashMap<LayerId, Vec<usize>> = HashMap::new();
             for (index, object) in document.objects().iter().enumerate() {
-                if project.project.document.layer(object.layer()).is_some_and(|layer| layer.loaded) && !document.is_object_hidden(object.id()) {
+                if project.project.document.layer(object.layer()).is_some_and(Layer::is_visible) && !document.is_object_hidden(object.id()) {
                     per_layer.entry(object.layer()).or_default().push(index);
                 }
             }
             for layer in document.layers() {
-                if !layer.loaded {
+                if !layer.is_visible() {
                     continue;
                 }
                 let indices = per_layer.remove(&layer.id).unwrap_or_default();
@@ -645,6 +672,7 @@ pub(crate) fn new_empty(path: Option<PathBuf>) -> ProjectFile {
             ..Default::default()
         },
         folders: FolderRegistry::default(),
+        optimization: Default::default(),
     }
 }
 

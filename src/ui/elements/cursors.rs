@@ -186,7 +186,7 @@ fn marker_painter(ui: &egui::Ui, x: f32, y: f32, clip_rect: egui::Rect, id: &str
     }
     // A loose layer paints after the areas of its order, so a Foreground
     // marker would cover the dialogs, which are Foreground areas themselves.
-    let mut painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Background, egui::Id::new(id)));
+    let mut painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Background, egui::Id::unique(id)));
     painter.set_clip_rect(clip_rect);
     Some((painter, pos))
 }
@@ -340,7 +340,7 @@ pub(crate) fn draw_tool_cursor(ctx: &egui::Context, editor: &crate::ui::state::E
     }
     ctx.set_cursor_icon(egui::CursorIcon::None);
 
-    let mut painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("tool_cursor")));
+    let mut painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("tool_cursor")));
     painter.set_clip_rect(canvas_rect);
 
     // A snapped cursor is sitting on real geometry rather than on the Z plane,

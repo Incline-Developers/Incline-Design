@@ -2,7 +2,7 @@
 //! the currently inspected hole.
 //!
 //! Has a Data tab (summary and interval table) and a Log tab (strip log);
-//! the Log tab's widget lives in [`crate::ui::widgets::viewport::BoreholeLog`].
+//! the Log tab's widget lives in [`crate::ui::widgets::borehole_log::BoreholeLog`].
 
 use crate::{
     i18n::tr,
@@ -16,9 +16,9 @@ use crate::{
         state::{BoreholeInspectorTab, UiCommand},
         themed_icon, unthemed_icon,
         widgets::{
+            borehole_log::DrillHoleProperties,
             collapsible_section::CollapsibleSection,
             menu::{self, MenuButton, MenuFieldCombo},
-            viewport::DrillHoleProperties,
         },
     },
 };
@@ -116,12 +116,12 @@ fn draw_body(
         BoreholeInspectorTab::Data => {
             // Columns come from the dataset, so every hole shows the same.
             let properties = DrillHoleProperties::new(("borehole_inspector", dataset.id, hole_index), hole, &dataset.dataset.fields);
-            CollapsibleSection::new("borehole_inspector_summary", tr!("borehole-inspector-summary"))
+            CollapsibleSection::new(egui::Id::unique("borehole_inspector_summary"), tr!("borehole-inspector-summary"))
                 .default_open(true)
                 .show(ui, |ui| ui.push_id((dataset.id, hole_index), |ui| properties.show_summary(ui)));
             if !hole.intervals.is_empty() {
                 ui.add_space(4.0);
-                CollapsibleSection::new("borehole_inspector_intervals", tr!("viewport-interval-data"))
+                CollapsibleSection::new(egui::Id::unique("borehole_inspector_intervals"), tr!("viewport-interval-data"))
                     .default_open(true)
                     .show(ui, |ui| {
                         // The table scrolls to fit what the panel has left,
@@ -132,7 +132,7 @@ fn draw_body(
             }
         }
         BoreholeInspectorTab::Log => {
-            CollapsibleSection::new("borehole_inspector_log_display", tr!("borehole-inspector-display"))
+            CollapsibleSection::new(egui::Id::unique("borehole_inspector_log_display"), tr!("borehole-inspector-display"))
                 .default_open(true)
                 .show(ui, |ui| draw_log_field_pickers(ui, editor, dataset, commands));
             ui.add_space(4.0);
@@ -160,7 +160,7 @@ fn draw_body(
             draw_geophysics_note(ui, &view, dataset.id, commands);
             // The log's wheel zooms rather than scrolling an enclosing area,
             // so it takes the rest of the panel instead of sitting in one.
-            let saved = crate::ui::widgets::viewport::BoreholeLog::new(("borehole_log", dataset.id), hole, dataset)
+            let saved = crate::ui::widgets::borehole_log::BoreholeLog::new(("borehole_log", dataset.id), hole, dataset)
                 .strat_field(strat_choice_for(editor, dataset))
                 .well_logs(logs, linked)
                 .reading(reading)

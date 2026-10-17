@@ -5,6 +5,10 @@ use crate::{
     ui::state::{ActiveTool, CircleDraft},
 };
 
+/// Cursor radius, in logical pixels, within which the cursor snaps to the first
+/// vertex of a polyline being drawn, so a click there closes it.
+const CLOSE_POLY_PICK_PT: f32 = 10.0;
+
 impl<'a> App<'a> {
     pub(crate) fn measure_distance_click(&mut self) {
         if self.editor.snapping_active() && !self.editor.cursor_snapped {
@@ -90,6 +94,11 @@ impl<'a> App<'a> {
         let Some(layer) = self.active_layer() else {
             return;
         };
+        // Clicking back on the first vertex of a polyline closes it.
+        if self.editor.poly_close_hovered() {
+            self.finish_poly_closed();
+            return;
+        }
         // A vertex is pinned to the plane showing when it was clicked; the
         // section can move afterwards (W/S walk, Q/E turn), so a line may span planes.
         self.editor.pending_stroke.push(world);
@@ -108,23 +117,23 @@ impl<'a> App<'a> {
                 self.editor.pending_stroke.clear();
                 self.editor.pending_stroke.push(chain_start);
             }
-            ActiveTool::MakePoly => {
-                // If the user clicked the first vertex, auto-close without showing a dialog.
-                let is_closing = self.editor.pending_stroke.len() >= 2
-                    && self
-                        .editor
-                        .pending_stroke
-                        .first()
-                        .zip(self.editor.pending_stroke.last())
-                        .is_some_and(|(first, last)| (*first - *last).length_squared() <= 1.0e-16);
-                if is_closing {
-                    self.finish_poly_closed();
-                    return;
-                }
-            }
             _ => {}
         }
         self.invalidate_geometry();
+    }
+
+    /// The first vertex of the polyline being drawn when the pointer is within
+    /// a few pixels of it and closing there would make a polygon: the cursor
+    /// snaps onto it, whatever the snap mode, so the click lands exactly there.
+    pub(crate) fn poly_close_target(&self) -> Option<glam::DVec3> {
+        if self.editor.active_tool != ActiveTool::MakePoly || self.editor.poly_finish_dialog || self.editor.pending_stroke.len() < 2 {
+            return None;
+        }
+        let first = *self.editor.pending_stroke.first()?;
+        let graphics = self.graphics.as_ref()?;
+        let cursor = self.editor.cursor_screen_px?;
+        let vertex = graphics.world_to_window_px(&graphics.view_proj(), first)?;
+        ((vertex.0 - cursor.0).hypot(vertex.1 - cursor.1) <= self.points_to_px(CLOSE_POLY_PICK_PT)).then_some(first)
     }
 
     pub(crate) fn make_circle_click(&mut self) {
@@ -296,9 +305,6 @@ impl<'a> App<'a> {
             }
             ActiveTool::MakePoly if self.editor.pending_stroke.len() >= 2 => {
                 self.editor.poly_finish_dialog = true;
-                // The Enter that opened this dialog must be released before its
-                // own Enter shortcut can fire, or a held key skips it entirely.
-                self.editor.poly_finish_dialog_confirm_armed = false;
                 self.editor.poly_finish_dialog_px = self.editor.cursor_screen_px;
                 self.redraw_requested = true;
             }

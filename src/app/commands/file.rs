@@ -163,6 +163,22 @@ pub(crate) enum FileDialogAction {
     /// Export the project selected when the chooser opened to DXF.
     #[cfg(not(target_arch = "wasm32"))]
     ExportProjectDxf { project_runtime_id: u32, path: PathBuf },
+    /// Write the Optimization scenarios to the file the user chose.
+    #[cfg(not(target_arch = "wasm32"))]
+    ExportOptimizationScenarios(PathBuf),
+    #[cfg(not(target_arch = "wasm32"))]
+    ImportOptimizationScenarios(PathBuf),
+    #[cfg(target_arch = "wasm32")]
+    WebImportOptimizationScenarios(std::result::Result<crate::model::input::InputFile, String>),
+    /// The folder chosen for the open scenario's reports.
+    #[cfg(not(target_arch = "wasm32"))]
+    OptimizationReportsFolder(PathBuf),
+    #[cfg(not(target_arch = "wasm32"))]
+    ExportOptimizationReport(PathBuf, Vec<u8>),
+    #[cfg(not(target_arch = "wasm32"))]
+    OpenOptimizationReport(PathBuf),
+    #[cfg(target_arch = "wasm32")]
+    WebOpenOptimizationReport(std::result::Result<crate::model::input::InputFile, String>),
     #[cfg(not(target_arch = "wasm32"))]
     ExportHaulRoads { project: Box<crate::model::project::ProjectFile>, path: PathBuf },
     #[cfg(not(target_arch = "wasm32"))]
@@ -847,6 +863,37 @@ impl<'a> App<'a> {
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
+            FileDialogAction::ExportOptimizationScenarios(path) => self.write_optimization_scenarios_export(path),
+            #[cfg(not(target_arch = "wasm32"))]
+            FileDialogAction::ImportOptimizationScenarios(path) => {
+                let text = std::fs::read_to_string(&path).with_context(|| format!("Could not read {}", path.display()))?;
+                self.merge_imported_optimization_scenarios(&text)
+            }
+            #[cfg(target_arch = "wasm32")]
+            FileDialogAction::WebImportOptimizationScenarios(file) => {
+                let file = file.map_err(anyhow::Error::msg)?;
+                let text = String::from_utf8(file.bytes).context("The file is not text")?;
+                self.merge_imported_optimization_scenarios(&text)
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            FileDialogAction::ExportOptimizationReport(path, bytes) => self.write_optimization_report_export(path, bytes),
+            #[cfg(not(target_arch = "wasm32"))]
+            FileDialogAction::OpenOptimizationReport(path) => {
+                let bytes = std::fs::read(&path).with_context(|| format!("Could not read {}", path.display()))?;
+                let name = path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned());
+                self.show_optimization_report_file(name, &bytes)
+            }
+            #[cfg(target_arch = "wasm32")]
+            FileDialogAction::WebOpenOptimizationReport(file) => {
+                let file = file.map_err(anyhow::Error::msg)?;
+                self.show_optimization_report_file(file.source.name.clone(), &file.bytes)
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            FileDialogAction::OptimizationReportsFolder(path) => {
+                self.set_optimization_reports_folder(path);
+                Ok(())
+            }
+            #[cfg(not(target_arch = "wasm32"))]
             FileDialogAction::ExportViewportImage(mut path) => {
                 if path.extension().is_none() {
                     path.set_extension("png");
@@ -1373,7 +1420,8 @@ impl<'a> App<'a> {
             return Ok(());
         }
         if !self.pending_project_open_paths.is_empty() {
-            anyhow::bail!("Wait for the project to finish opening");
+            userspace_warn!("{}", tr!("cmd-file-wait-project-finish-opening"));
+            return Ok(());
         }
         self.execute_file_dialog_action(FileDialogAction::SwitchProject(path))
     }
@@ -1398,10 +1446,12 @@ impl<'a> App<'a> {
             return Ok(());
         }
         if !self.browser_project_loads_pending.is_empty() {
-            anyhow::bail!("Wait for the browser project to finish opening");
+            userspace_warn!("{}", tr!("cmd-file-wait-browser-project-finish-opening"));
+            return Ok(());
         }
         if self.browser_deletes_pending.contains(&project_id) {
-            anyhow::bail!("Wait for the browser project removal to finish");
+            userspace_warn!("{}", tr!("cmd-file-wait-browser-project-removal-finish"));
+            return Ok(());
         }
         self.execute_file_dialog_action(FileDialogAction::WebStoredProject(project_id))
     }
@@ -1409,7 +1459,8 @@ impl<'a> App<'a> {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn remove_tracked_project(&mut self, path: PathBuf) -> Result<()> {
         if self.pending_project_open_paths.contains(&path) {
-            anyhow::bail!("Wait for the project to finish opening");
+            userspace_warn!("{}", tr!("cmd-file-wait-project-finish-opening"));
+            return Ok(());
         }
         if let Some(runtime_id) = self
             .workspace
@@ -1429,7 +1480,8 @@ impl<'a> App<'a> {
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn remove_tracked_project(&mut self, project_id: crate::model::project::ProjectId) -> Result<()> {
         if self.browser_project_loads_pending.contains(&project_id) {
-            anyhow::bail!("Wait for the browser project to finish opening");
+            userspace_warn!("{}", tr!("cmd-file-wait-browser-project-finish-opening"));
+            return Ok(());
         }
         if let Some(runtime_id) = self.workspace.active_project().filter(|project| project.id == project_id).map(|project| project.runtime_id) {
             self.editor.remove_project_after_close = true;
@@ -2711,6 +2763,8 @@ impl<'a> App<'a> {
         // fresh one decoded from the file, or `preserved_layers`' folder ids
         // would dangle.
         let live_folders = portable_current.folders.clone();
+        // Scenarios are not layers: the reload keeps the live ones too.
+        let live_optimization = portable_current.optimization.clone();
         let preserved_deferred = portable_current.document.deferred_layers.clone();
         let preserved_layers: Vec<LayerSnapshot> = portable_current
             .document
@@ -2745,6 +2799,9 @@ impl<'a> App<'a> {
             // a folder deleted since the last save must stay gone even
             // though the file on disk still names it.
             design.folders = live_folders;
+            let scenarios_json = |file: &crate::model::optimization::ScenarioFile| serde_json::to_string(&(&file.scenarios, &file.report_columns)).unwrap_or_default();
+            let optimization_diverges = scenarios_json(&live_optimization) != scenarios_json(&bundle.optimization.unwrap_or_default());
+            design.optimization = live_optimization;
             let folder_map = reloaded_folder_map(&design.folders, &bundle.folders);
             for imported in &bundle.designs {
                 design.document.merge_reserve_fields_from(&imported.document);
@@ -2758,7 +2815,7 @@ impl<'a> App<'a> {
             // `open_project` below is about to mark this registry saved. It is
             // the live one, not the file's, so capture whether the two differ
             // while both are still in hand; `apply` re-dirties after the fact.
-            let folders_diverge = folders_diverge_from_file(&design.folders, &bundle.folders);
+            let folders_diverge = folders_diverge_from_file(&design.folders, &bundle.folders) || optimization_diverges;
             Ok((path, design, folders_diverge))
         };
         let apply = move |app: &mut App, result: Result<(PathBuf, project::ProjectFile, bool)>| {
@@ -2783,8 +2840,8 @@ impl<'a> App<'a> {
                     return;
                 }
             };
-            // `open_project` just marked the live folder registry saved. Put
-            // that folder work back into unsaved state so it is not lost
+            // `open_project` just marked the live folder registry and scenarios
+            // saved. Put that work back into unsaved state so it is not lost
             // silently the next time the project closes.
             if folders_diverge {
                 replacement.touch_content();

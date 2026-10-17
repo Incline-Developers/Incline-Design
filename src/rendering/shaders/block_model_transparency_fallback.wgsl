@@ -12,6 +12,10 @@ struct BlockModelStyle {
     clip_min: vec4<f32>,
     clip_max: vec4<f32>,
     stops: array<ColorStop, 32>,
+    // Outline drawn by `block_wire_coverage`: colour, then x = width in
+    // pixels (0 for none).
+    wire_color: vec4<f32>,
+    wire_params: vec4<f32>,
 };
 @group(1) @binding(0)
 var<uniform> block_style: BlockModelStyle;
@@ -26,6 +30,8 @@ struct InstanceInput {
     @location(0) lower: vec3<f32>,
     @location(1) grade: f32,
     @location(2) upper: vec3<f32>,
+    // Faces with no visible neighbour, as `block_wire_coverage` reads them.
+    @location(3) faces: u32,
 };
 
 struct VertexOutput {
@@ -34,6 +40,12 @@ struct VertexOutput {
     @location(1) local_position: vec3<f32>,
     // Distance from the section plane; affine in position, so interpolation is exact.
     @location(2) section_offset: f32,
+    // The fragment's place in the block's own frame, and the block's bounds
+    // there, clipped to the slice: what the outline is measured against.
+    @location(3) box_position: vec3<f32>,
+    @location(4) @interpolate(flat) box_lower: vec3<f32>,
+    @location(5) @interpolate(flat) box_upper: vec3<f32>,
+    @location(6) @interpolate(flat) faces: u32,
 };
 
 struct TransparencyOutput {
@@ -116,11 +128,18 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, instance: InstanceInput) ->
     out.local_position = position;
     out.clip_position = camera.view_proj * vec4<f32>(position, 1.0);
     out.section_offset = section_plane_offset(position);
+    out.box_position = local;
+    out.box_lower = clipped_lower;
+    out.box_upper = clipped_upper;
+    out.faces = instance.faces;
     return out;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> TransparencyOutput {
+    // Derivatives before anything that can end the invocation.
+    let box_pixels = 1.0 / max(sqrt(dpdx(in.box_position) * dpdx(in.box_position) + dpdy(in.box_position) * dpdy(in.box_position)), vec3<f32>(1.0e-9));
+    let wire = block_wire_coverage(in.box_position, in.box_lower, in.box_upper, box_pixels, block_style.wire_params.x, in.faces);
     if outside_section_slab(in.section_offset) {
         discard;
     }
@@ -149,7 +168,10 @@ fn fs_main(in: VertexOutput) -> TransparencyOutput {
     let fill_light = max(dot(normal, normalize(vec3<f32>(0.45, 0.35, 0.75))), 0.0);
     let view_light = abs(dot(normal, -normalize(camera.cam_forward.xyz)));
     let intensity = 0.28 + 0.18 * view_light + 0.42 * key_light + 0.12 * fill_light;
-    let color = vec4<f32>(rgb * intensity * alpha, alpha);
+    let line = wire * block_style.wire_color.a;
+    let lit = mix(rgb * intensity, block_style.wire_color.rgb, line);
+    let coverage = max(alpha, line);
+    let color = vec4<f32>(lit * coverage, coverage);
 
     var out: TransparencyOutput;
     out.accum = color;

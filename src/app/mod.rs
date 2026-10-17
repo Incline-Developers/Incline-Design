@@ -9,6 +9,7 @@ pub(crate) mod haulage_pipeline; // The Haulage workspace's Setup run/invalidati
 pub(crate) mod io; /* Handles session serialisation */
 pub(crate) mod jobs; // Reusable background-compute job queue
 pub(crate) mod memory; // Browser address-space budgeting for large allocations
+pub(crate) mod memory_usage; // The status bar's memory and per-core CPU readouts
 pub(crate) mod planning_pipeline; // The Solids workspace's six-stage run/invalidation model
 pub(crate) mod schedule_animation; // Schedule Animate's derived, scrubbed geometry
 pub(crate) mod schedule_pipeline; // The Schedule workspace's Setup run/invalidation model
@@ -328,6 +329,9 @@ pub(crate) struct App<'a> {
     /// being discarded when there is otherwise no window activity.
     next_ui_repaint_deadline: Option<Instant>,
     window: Option<Arc<Window>>,
+    /// Precision touchpad pan and pinch, which winit does not report on Windows.
+    #[cfg(target_os = "windows")]
+    trackpad: Option<crate::windows_trackpad::Trackpad>,
     graphics: Option<Graphics<'static>>,
     #[cfg(target_arch = "wasm32")]
     web_graphics_state: GraphicsState,
@@ -370,6 +374,11 @@ pub(crate) struct App<'a> {
     /// wanted after it: the frame counter's clock. See `record_frame_time`.
     last_frame_end: Option<Instant>,
     frame_demanded_at: Option<Instant>,
+    /// Feeds `EditorState::memory_usage` on its own timer.
+    memory_sampler: memory_usage::MemorySampler,
+    /// Feeds `EditorState::cpu_usage` on its own timer.
+    #[cfg(not(target_arch = "wasm32"))]
+    cpu_sampler: memory_usage::CpuSampler,
     surface_retry_pending: bool,
     slice_surface_retry_deadline: Option<Instant>,
     last_scroll_instant: Option<Instant>,
@@ -393,6 +402,10 @@ pub(crate) struct App<'a> {
     next_raster_texture_id: u64,
     empty_document: Document,
     scene_document: Document,
+    /// Layers of `scene_document` with at least one object on them, rebuilt
+    /// with it. An explorer-selected layer with nothing on it has no objects
+    /// to stay selected through - see `prune_selected_layers`.
+    populated_layers: std::collections::HashSet<crate::model::LayerId>,
     snap_index: ObjectSnapIndex,
     /// Set by `invalidate_geometry`; the index rebuilds lazily on the next
     /// snap/orbit query via `refresh_snap_index`.
@@ -602,6 +615,8 @@ impl<'a> Default for App<'a> {
             redraw_requested: false,
             next_ui_repaint_deadline: None,
             window: None,
+            #[cfg(target_os = "windows")]
+            trackpad: None,
             graphics: None,
             #[cfg(target_arch = "wasm32")]
             web_graphics_state: GraphicsState::NotStarted,
@@ -630,6 +645,9 @@ impl<'a> Default for App<'a> {
             last_render_time: None,
             last_frame_end: None,
             frame_demanded_at: None,
+            memory_sampler: memory_usage::MemorySampler::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            cpu_sampler: memory_usage::CpuSampler::new(),
             surface_retry_pending: false,
             slice_surface_retry_deadline: None,
             last_scroll_instant: None,
@@ -651,6 +669,7 @@ impl<'a> Default for App<'a> {
             next_raster_texture_id: 0,
             empty_document: Document::new(),
             scene_document: Document::new(),
+            populated_layers: std::collections::HashSet::new(),
             snap_index: ObjectSnapIndex::default(),
             snap_index_dirty: false,
             scene_document_key: None,
@@ -777,12 +796,13 @@ impl<'a> App<'a> {
                 None
             }
             MacMenuAction::RequestExit => Some(UiCommand::RequestExit),
-            MacMenuAction::InsertPointsAtIntersections => Some(UiCommand::InsertPointsAtIntersections),
-            MacMenuAction::OpenInsertPointAtElevation => Some(UiCommand::OpenInsertPointAtElevationDialog),
-            MacMenuAction::OpenMoveToX => Some(UiCommand::OpenMoveToAxisDialog(crate::model::Axis::X)),
-            MacMenuAction::OpenMoveToY => Some(UiCommand::OpenMoveToAxisDialog(crate::model::Axis::Y)),
-            MacMenuAction::OpenMoveToZ => Some(UiCommand::OpenMoveToAxisDialog(crate::model::Axis::Z)),
-            MacMenuAction::OpenCreateTriangulation => Some(UiCommand::OpenCreateTriangulation),
+            MacMenuAction::DesignRow(index) => match crate::ui::elements::main_menu::DESIGN_ROWS.get(index) {
+                Some(row) => {
+                    self.handle_ui_commands(vec![row.command(), UiCommand::NoteRecentFunction(row.key())]);
+                    return;
+                }
+                None => None,
+            },
             MacMenuAction::OpenCutTriangulationByPolyline => Some(UiCommand::OpenCutTriangulationByPolyline),
             MacMenuAction::OpenCutTriangulationByZ => Some(UiCommand::OpenCutTriangulationByZ),
             MacMenuAction::OpenCutTriangulationBySurface => Some(UiCommand::OpenCutTriangulationBySurface),
@@ -796,6 +816,7 @@ impl<'a> App<'a> {
             MacMenuAction::OpenCreateBlockModel => Some(UiCommand::OpenCreateBlockModel),
             MacMenuAction::OpenReferencePoints => Some(UiCommand::OpenReferencePoints),
             MacMenuAction::OpenReferenceSurface => Some(UiCommand::OpenReferenceSurface),
+            MacMenuAction::OpenOptimizationScenarios => Some(UiCommand::OpenOptimizationScenarios),
             MacMenuAction::OpenSurveyDefinitions => Some(UiCommand::OpenSurveyDefinitions),
             MacMenuAction::OpenSurveyTransform => Some(UiCommand::OpenSurveyTransform),
             MacMenuAction::OpenCreateOreTriangulation => Some(UiCommand::OpenCreateOreTriangulation),
@@ -857,7 +878,7 @@ impl<'a> App<'a> {
         let definitions: Vec<_> = config.coordinate_systems.into_iter().filter(|definition| !definition.name.trim().is_empty()).collect();
         self.editor.survey.definitions = definitions
             .iter()
-            .filter(|definition| crate::model::survey::resolve_system(&definition.name, &definitions).is_ok())
+            .filter(|definition| crate::model::survey::check_parents(&definition.name, &definitions).is_ok())
             .cloned()
             .collect();
         self.editor.survey.local_system = config
@@ -883,7 +904,6 @@ impl<'a> App<'a> {
         self.editor.block_model_interaction_resolution_divisor = config.block_model_interaction_resolution_divisor.clamp(1, 64);
         self.editor.show_block_model_boundary_highlights = config.show_block_model_boundary_highlights;
         self.editor.downscale_raster_previews = config.downscale_raster_previews;
-        self.editor.frame_counter_enabled = config.frame_counter_enabled;
         self.editor.debug_surface_chunks = config.debug_surface_chunks;
         self.editor.debug_clip_planes = config.debug_clip_planes;
         self.editor.debug_point_cloud_chunks = config.debug_point_cloud_chunks;
@@ -904,11 +924,23 @@ impl<'a> App<'a> {
         self.editor.next_delay_product_id = self.editor.delay_products.len() as u64;
         self.editor.active_delay_product = self.editor.delay_products.first().map(|product| product.id);
         self.editor.blast_library = config.blast_library.clone();
+        self.editor.recent_functions_shown = config.recent_functions_shown.clamp(1, crate::ui::state::RECENT_FUNCTION_LIMIT as u32);
+        // A key no row carries any more (a function since removed) is dropped.
+        let mut recent = Vec::new();
+        for key in config
+            .recent_design_functions
+            .iter()
+            .filter(|key| crate::ui::elements::main_menu::DesignRow::from_key(key).is_some())
+        {
+            crate::ui::state::note_recent(&mut recent, key);
+        }
+        self.editor.recent_design_functions = recent;
         self.configure_graphics_camera_preferences();
     }
 
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn web_new(event_loop_proxy: EventLoopProxy<AppEvent>) -> Result<Self> {
+        crate::fonts::install_cjk_font_loader(event_loop_proxy.clone());
         let mut app = App {
             web_event_loop_proxy: Some(event_loop_proxy.clone()),
             ..App::default()
@@ -993,9 +1025,9 @@ impl<'a> App<'a> {
 
     fn active_layer(&self) -> Option<LayerId> {
         self.editor.active_layer.and_then(|layer| {
-            self.workspace
-                .active_project()
-                .and_then(|project| (project.project.document.layer(layer).is_some_and(|layer| layer.loaded) && project.project.document.layer(layer).is_some()).then_some(layer))
+            self.workspace.active_project().and_then(|project| {
+                (project.project.document.layer(layer).is_some_and(crate::model::Layer::is_visible) && project.project.document.layer(layer).is_some()).then_some(layer)
+            })
         })
     }
 
@@ -1295,6 +1327,9 @@ impl<'a> App<'a> {
         self.evict_unloaded_items();
         self.evict_unloaded_layers();
         self.drop_editor_references_to_missing_items();
+        if effects.items_changed {
+            self.sync_hidden_handles();
+        }
         if effects.document_changed {
             self.invalidate_geometry();
         }
@@ -1468,6 +1503,9 @@ impl<'a> App<'a> {
         self.next_raster_texture_id = 0;
         self.project_asset_baseline = SaveToken::default();
         self.clear_editor_transient_state();
+        // Scenarios, runs and results belong to the outgoing project; the next
+        // one's scenarios are read from it when the list first opens.
+        self.editor.optimization = Default::default();
         self.scene_document_key = None;
         // Item and object ids restart with the replacement project, so the
         // renderer's id-keyed caches would otherwise keep drawing this
@@ -1617,14 +1655,48 @@ impl<'a> App<'a> {
         }
     }
 
+    /// Mirror everything persisted as hidden - design objects, and project
+    /// items hidden from the explorer's eye - into the editor's unified scene
+    /// filter, which the renderer, picking and selection all read.
+    fn sync_hidden_handles(&mut self) {
+        self.editor.hidden_handles.clear();
+        if let Some(project) = self.workspace.active_project() {
+            self.editor.hidden_handles.extend(project.project.document.hidden_object_ids().map(SceneEntityId::Object));
+        }
+        let hidden = self
+            .triangulations
+            .iter()
+            .filter(|item| item.state.hidden)
+            .map(|item| item.entity_id())
+            .chain(self.block_models.iter().filter(|item| item.state.hidden).map(|item| item.entity_id()))
+            .chain(self.drill_holes.iter().filter(|item| item.state.hidden).map(|item| item.entity_id()))
+            .chain(self.point_clouds.iter().filter(|item| item.state.hidden).map(|item| item.entity_id()))
+            .chain(self.raster_textures.iter().filter(|item| item.state.hidden).map(|item| SceneEntityId::Raster(item.id)));
+        self.editor.hidden_handles.extend(hidden);
+        // One entity shown alone, hidden or not (a pick on it).
+        if let Some(keep) = self.editor.isolated_entity {
+            let everything = self
+                .scene_document
+                .objects()
+                .iter()
+                .map(|object| SceneEntityId::Object(object.id()))
+                .chain(self.triangulations.iter().map(|item| item.entity_id()))
+                .chain(self.block_models.iter().map(|item| item.entity_id()))
+                .chain(self.drill_holes.iter().map(|item| item.entity_id()))
+                .chain(self.point_clouds.iter().map(|item| item.entity_id()))
+                .chain(self.raster_textures.iter().map(|item| SceneEntityId::Raster(item.id)))
+                .filter(|entity| *entity != keep)
+                .collect::<Vec<_>>();
+            self.editor.hidden_handles.extend(everything);
+            self.editor.hidden_handles.remove(&keep);
+        }
+    }
+
     fn invalidate_geometry(&mut self) {
         // Project-persistent design visibility is mirrored into the editor's
         // unified scene filter so selection tools that query the retained
         // document directly exclude the same objects as the rendered scene.
-        self.editor.hidden_handles.retain(|handle| !matches!(handle, SceneEntityId::Object(_)));
-        if let Some(project) = self.workspace.active_project() {
-            self.editor.hidden_handles.extend(project.project.document.hidden_object_ids().map(SceneEntityId::Object));
-        }
+        self.sync_hidden_handles();
         // Many of the ~90 invalidation sites fire for editor-state reasons
         // (selection, tool changes) with the documents untouched; the
         // composite clone and snap index only need refreshing when the
@@ -1661,6 +1733,7 @@ impl<'a> App<'a> {
                 0.0
             };
             self.scene_document_key = Some(composite_key);
+            self.populated_layers = self.scene_document.objects().iter().map(crate::model::Object::layer).collect();
             // The snap index rebuild is deferred to the next snap/orbit
             // query: many edits never snap before the next edit, and the
             // BVH build is the expensive part.
@@ -1844,7 +1917,7 @@ impl<'a> App<'a> {
                 .document
                 .objects()
                 .iter()
-                .any(|object| project.project.document.layer(object.layer()).is_some_and(|layer| layer.loaded))
+                .any(|object| project.project.document.layer(object.layer()).is_some_and(crate::model::Layer::is_visible))
         }) || self.triangulations.iter().any(|item| item.state.loaded)
             || self.block_models.iter().any(|item| item.state.loaded)
             || self.drill_holes.iter().any(|item| item.state.loaded)
@@ -1852,10 +1925,32 @@ impl<'a> App<'a> {
             || self.raster_textures.iter().any(|item| item.state.loaded)
     }
 
+    /// Apply what a precision touchpad gesture moved since the last loop
+    /// iteration. Returns whether one is live, so the loop keeps polling.
+    #[cfg(target_os = "windows")]
+    fn poll_trackpad(&mut self) -> bool {
+        let Some(trackpad) = self.trackpad.as_mut() else {
+            return false;
+        };
+        if let Some(motion) = trackpad.poll()
+            && let Some(graphics) = self.graphics.as_mut()
+        {
+            let (dx, dy) = motion.pan;
+            let panned = (dx, dy) != (0.0, 0.0) && graphics.trackpad_pan(dx, dy);
+            let zoomed = motion.magnification != 0.0 && graphics.trackpad_pinch(motion.magnification);
+            self.redraw_requested |= panned || zoomed;
+        }
+        trackpad.active()
+    }
+
     fn teardown_window(&mut self) {
         #[cfg(target_arch = "wasm32")]
         crate::app::web_storage::set_dirty(false);
         self.graphics = None;
+        #[cfg(target_os = "windows")]
+        {
+            self.trackpad = None;
+        }
         self.window = None;
         self.pending_resize = None;
         self.last_render_time = None;
@@ -2003,6 +2098,7 @@ impl<'a> App<'a> {
                             id: layer.id,
                             name: layer.name.clone(),
                             is_loaded: layer.loaded,
+                            is_hidden: layer.hidden,
                             dirty: dirty_layers.contains(&layer.id),
                             folder: layer.folder,
                             section: layer.section,
@@ -2067,8 +2163,8 @@ impl<'a> App<'a> {
                 id: tri.id,
                 name: tri.name.clone(),
                 source_name: tri.state.source_name.clone(),
-                is_active: self.active_triangulation == Some(tri.id),
                 is_loaded: tri.state.loaded,
+                is_hidden: tri.state.hidden,
                 dirty: tri.state.is_dirty(),
                 color: tri.color,
                 folder: tri.state.folder,
@@ -2083,6 +2179,7 @@ impl<'a> App<'a> {
                 name: model.name.clone(),
                 source_name: model.state.source_name.clone(),
                 is_loaded: model.state.loaded,
+                is_hidden: model.state.hidden,
                 dirty: model.state.is_dirty(),
                 block_count: model
                     .state
@@ -2104,6 +2201,7 @@ impl<'a> App<'a> {
                 name: dataset.name.clone(),
                 source_name: dataset.state.source_name.clone(),
                 is_loaded: dataset.state.loaded,
+                is_hidden: dataset.state.hidden,
                 dirty: dataset.state.is_dirty(),
                 hole_count: dataset.state.summary.as_ref().map_or_else(|| dataset.dataset.holes.len(), |summary| summary.primary_count),
                 field_count: dataset
@@ -2123,6 +2221,7 @@ impl<'a> App<'a> {
                 name: cloud.name.clone(),
                 source_name: cloud.state.source_name.clone(),
                 is_loaded: cloud.state.loaded,
+                is_hidden: cloud.state.hidden,
                 dirty: cloud.state.is_dirty(),
                 point_count: cloud.state.summary.as_ref().map_or_else(|| cloud.points.len(), |summary| summary.primary_count),
                 folder: cloud.state.folder,
@@ -2139,6 +2238,7 @@ impl<'a> App<'a> {
                 name: raster.name.clone(),
                 source_name: raster.state.source_name.clone(),
                 is_loaded: raster.state.loaded,
+                is_hidden: raster.state.hidden,
                 dirty: raster.state.is_dirty(),
                 is_draped: draped_raster_ids.contains(&raster.id),
                 source_size: raster.source_size,
@@ -2194,14 +2294,6 @@ impl<'a> App<'a> {
         let triangulation_membership: Vec<(u64, SectionKind)> = self.triangulations.iter().map(|item| (item.id.0, item.state.section)).collect();
         let triangulations_membership_dirty = section_membership_dirty(SectionKind::Triangulations, &triangulation_membership, &self.project_asset_baseline.triangulations)
             || section_folders_dirty(SectionKind::Triangulations);
-        // Modelling's own half of the same question. Its layers belong here
-        // rather than with the rows: a deleted one has no row left to mark.
-        let modelling_dirty = section_membership_dirty(SectionKind::Modelling, &triangulation_membership, &self.project_asset_baseline.triangulations)
-            || section_folders_dirty(SectionKind::Modelling)
-            || self
-                .workspace
-                .active_project()
-                .is_some_and(|project| project.section_layers_dirty(SectionKind::Modelling, &self.project_asset_baseline.folders));
         let block_models_membership_dirty = !same_membership(
             &self.block_models.iter().map(|item| item.id.0).collect::<Vec<_>>(),
             &self.project_asset_baseline.block_models,
@@ -2226,7 +2318,6 @@ impl<'a> App<'a> {
             point_clouds,
             raster_textures,
             triangulations_membership_dirty,
-            modelling_dirty,
             block_models_membership_dirty,
             drill_holes_membership_dirty,
             point_clouds_membership_dirty,
@@ -2333,6 +2424,14 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
         #[cfg(target_os = "macos")]
         crate::mac::install_menu_bar();
 
+        // Without it a touchpad still scrolls, as a wheel: two fingers zoom.
+        #[cfg(target_os = "windows")]
+        {
+            self.trackpad = crate::windows_trackpad::Trackpad::new(&window)
+                .inspect_err(|error| log::warn!("Precision touchpad gestures are unavailable: {error}"))
+                .ok();
+        }
+
         #[cfg(not(target_arch = "wasm32"))]
         match pollster::block_on(Graphics::new(window.clone())) {
             Ok(graphics) => {
@@ -2395,6 +2494,10 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
 
         self.poll_file_dialogs();
         self.sync_geophysics();
+        #[cfg(target_os = "windows")]
+        let trackpad_active = self.poll_trackpad();
+        #[cfg(not(target_os = "windows"))]
+        let trackpad_active = false;
         let now = Instant::now();
         if self.next_ui_repaint_deadline.is_some_and(|deadline| deadline <= now) {
             self.next_ui_repaint_deadline = None;
@@ -2454,6 +2557,8 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
             (None, None) => None,
         };
+        // A live touchpad gesture sends the window nothing, so the loop wakes itself to advance it.
+        let trackpad_deadline = trackpad_active.then(|| now + Duration::from_millis(4));
         let wake_deadline = wake_deadline
             .into_iter()
             .chain(self.slice_surface_retry_deadline)
@@ -2461,6 +2566,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             .chain(self.schedule_auto_deadline)
             .chain(self.planning_auto_deadline)
             .chain(self.haulage_auto_deadline)
+            .chain(trackpad_deadline)
             .min();
         if let Some(deadline) = wake_deadline {
             event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
@@ -2646,6 +2752,12 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                     }
                 }
             }
+            AppEvent::CjkFontsLoaded => {
+                if let Some(graphics) = self.graphics.as_mut() {
+                    graphics.reload_cjk_fonts();
+                    self.redraw_requested = true;
+                }
+            }
             AppEvent::BrowserClipboardPasted(text) => {
                 if let Some(graphics) = self.graphics.as_mut() {
                     graphics.queue_browser_paste(text);
@@ -2736,6 +2848,8 @@ pub(crate) enum AppEvent {
         result: std::result::Result<(), String>,
     },
     BrowserClipboardPasted(String),
+    /// The CJK faces finished downloading (`crate::fonts`).
+    CjkFontsLoaded,
     /// Picked geophysics files' identities, computed on the page thread.
     GeophysicsFileIdentified {
         dataset: crate::model::drill_hole::DrillHoleId,

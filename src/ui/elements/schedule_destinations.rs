@@ -759,7 +759,7 @@ pub(crate) fn draw_rule_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut E
             }
             let body = ui.available_rect_before_wrap();
             if body.is_positive() {
-                let response = ui.interact(body, ui.id().with("new_rule_space"), egui::Sense::click());
+                let response = ui.interact(body, ui.scope_id().with("new_rule_space"), egui::Sense::click());
                 context_menu_popup(&response, tr!("destination-destinations"), |ui| {
                     let available = !destinations::available(document.solids(), routing).is_empty();
                     if ContextMenuAction::new(tr!("destination-new-rule")).enabled(available).show(ui).clicked() {
@@ -1025,7 +1025,7 @@ pub(crate) fn draw_rule_editor(
                 None => body,
             };
             if body.is_positive() {
-                let response = ui.interact(body, ui.id().with(("new_condition_space", rule.id.0)), egui::Sense::click());
+                let response = ui.interact(body, ui.scope_id().with(("new_condition_space", rule.id.0)), egui::Sense::click());
                 context_menu_popup(&response, tr!("destination-rule-conditions"), |ui| {
                     let spare = document
                         .reserve_fields()
@@ -1958,7 +1958,7 @@ fn draw_lot_editor(
                         response.on_hover_text(tr!("inventory-field-incompatible-note"));
                     }
                     if cell.is_positive() {
-                        let id = egui::Id::new(("lot_category", portion.id.0, field.0));
+                        let id = egui::Id::unique(("lot_category", portion.id.0, field.0));
                         let selected = label(&chosen);
                         ui.scope_builder(egui::UiBuilder::new().id_salt(id).max_rect(cell), |ui| {
                             ui.set_clip_rect(ui.clip_rect().intersect(cell));
@@ -2040,7 +2040,7 @@ fn draw_lot_editor(
         }
         let body = ui.available_rect_before_wrap();
         if body.is_positive() {
-            let response = ui.interact(body, ui.id().with(("new_portion_space", lot.id.0)), egui::Sense::click());
+            let response = ui.interact(body, ui.scope_id().with(("new_portion_space", lot.id.0)), egui::Sense::click());
             context_menu_popup(&response, tr!("inventory-portions"), |ui| {
                 if ContextMenuAction::new(tr!("inventory-new-portion")).show(ui).clicked() {
                     portion_action = Some(PortionAction::Add);

@@ -4,7 +4,7 @@
    height="800px"
    fill="none"
    version="1.1"
-   viewBox="0 0 24 24"
+   viewBox="-6.9474 -6.9474 37.8947 37.8947"
    id="svg6"
    sodipodi:docname="contours_of_equal_time.svg"
    inkscape:version="1.4.4 (dcaf3e7d9e, 2026-05-05)"
@@ -12,6 +12,8 @@
    xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
    xmlns="http://www.w3.org/2000/svg"
    xmlns:svg="http://www.w3.org/2000/svg">
+ <clipPath id="icon-frame"><rect x="0" y="0" width="24" height="24"/></clipPath>
+ <g clip-path="url(#icon-frame)">
   <defs
      id="defs6" />
   <sodipodi:namedview
@@ -91,4 +93,5 @@
        id="path23"
        sodipodi:nodetypes="cc" />
   </g>
+ </g>
 </svg>

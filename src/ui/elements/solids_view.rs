@@ -87,7 +87,7 @@ pub(crate) fn draw_animation_tree(ui: &mut egui::Ui, editor: &mut EditorState, d
                 continue;
             }
             let kind_visible = solids.iter().any(|solid| !hidden(editor, tree).solids.contains(&solid.id));
-            let (_, visibility_clicked) = animation_parent_row(ui, egui::Id::new(("animation_kind", kind as u8)), kind_label(kind), false, kind_visible, |ui| {
+            let (_, visibility_clicked) = animation_parent_row(ui, egui::Id::unique(("animation_kind", kind as u8)), kind_label(kind), false, kind_visible, |ui| {
                 for solid in &solids {
                     draw_animation_solid(ui, editor, document, solid, tree, commands);
                 }
@@ -162,7 +162,7 @@ fn draw_animation_solid(ui: &mut egui::Ui, editor: &mut EditorState, _document: 
         })
         .collect();
     let title = reach_text(editor, tree, solid.name.clone(), |b| b.solid == solid.id);
-    let (clicked, visibility_clicked) = animation_parent_row(ui, egui::Id::new(("animation_solid", solid.id.0)), title, selected, visible, |ui| {
+    let (clicked, visibility_clicked) = animation_parent_row(ui, egui::Id::unique(("animation_solid", solid.id.0)), title, selected, visible, |ui| {
         if occupied.is_none() {
             explorer_note(ui, tr!("planning-solid-geometry-pending"));
         }
@@ -188,7 +188,7 @@ fn draw_animation_solid(ui: &mut egui::Ui, editor: &mut EditorState, _document: 
             let bench_title = reach_text(editor, tree, format_rl(bench.base), |b| b.solid == solid.id && b.bench.base == bench.base);
             let (bench_clicked, bench_visibility_clicked) = animation_parent_row(
                 ui,
-                egui::Id::new(("animation_bench", solid.id.0, bench.base.to_bits())),
+                egui::Id::unique(("animation_bench", solid.id.0, bench.base.to_bits())),
                 bench_title,
                 bench_selected,
                 bench_visible,
@@ -201,7 +201,7 @@ fn draw_animation_solid(ui: &mut egui::Ui, editor: &mut EditorState, _document: 
                         let blast_title = reach_text(editor, tree, blast.name.clone(), |b| b.blast == Some(blast_ref));
                         let (_, blast_visibility_clicked) = animation_parent_row(
                             ui,
-                            egui::Id::new(("animation_blast", solid.id.0, bench.base.to_bits(), blast_index)),
+                            egui::Id::unique(("animation_blast", solid.id.0, bench.base.to_bits(), blast_index)),
                             blast_title,
                             false,
                             blast_visible,
@@ -215,7 +215,7 @@ fn draw_animation_solid(ui: &mut egui::Ui, editor: &mut EditorState, _document: 
                                     let flitch_title = reach_text(editor, tree, format_rl(flitch.base), |b| b.blast == Some(blast_ref) && b.flitch.base == flitch.base);
                                     let row = animation_leaf_row(
                                         ui,
-                                        egui::Id::new(("animation_flitch", solid.id.0, bench.base.to_bits(), blast_index, flitch.base.to_bits())),
+                                        egui::Id::unique(("animation_flitch", solid.id.0, bench.base.to_bits(), blast_index, flitch.base.to_bits())),
                                         flitch_title,
                                         group_selected(navigation_selection(editor, tree), std::slice::from_ref(&flitch_row)),
                                         flitch_visible,
@@ -454,14 +454,14 @@ pub(crate) fn draw_flitch_tree(ui: &mut egui::Ui, editor: &mut EditorState, docu
             if solids.is_empty() {
                 continue;
             }
-            let kind_id = egui::Id::new(("strip_kind", kind as u8));
+            let kind_id = egui::Id::unique(("strip_kind", kind as u8));
             if reveal && solids.iter().any(|solid| editor.solids_view_selection.iter().any(|row| row.solid == solid.id)) {
                 open_row(ui, kind_id);
             }
             ExplorerHeader::new(kind_id, kind_label(kind)).icon(unthemed_icon!("layer.svg")).show(ui, |ui| {
                 for solid in solids {
                     let occupied = editor.solid_view_bands.get(&solid.id);
-                    let solid_id = egui::Id::new(("strip_solid", solid.id.0));
+                    let solid_id = egui::Id::unique(("strip_solid", solid.id.0));
                     let picked = editor.solids_view_selection.iter().find(|row| row.solid == solid.id).and_then(|row| row.band);
                     if reveal && picked.is_some() {
                         open_row(ui, solid_id);
@@ -484,7 +484,7 @@ pub(crate) fn draw_flitch_tree(ui: &mut egui::Ui, editor: &mut EditorState, docu
                             if flitches.is_empty() {
                                 continue;
                             }
-                            let bench_id = egui::Id::new(("strip_bench", solid.id.0, bench.base.to_bits()));
+                            let bench_id = egui::Id::unique(("strip_bench", solid.id.0, bench.base.to_bits()));
                             if reveal && picked.is_some_and(|band| bench.contains_rl(band.base)) {
                                 open_row(ui, bench_id);
                             }
@@ -502,7 +502,7 @@ pub(crate) fn draw_flitch_tree(ui: &mut egui::Ui, editor: &mut EditorState, docu
                                     };
                                     if leaf_row(
                                         ui,
-                                        egui::Id::new(("strip_flitch", solid.id.0, flitch.base.to_bits())),
+                                        egui::Id::unique(("strip_flitch", solid.id.0, flitch.base.to_bits())),
                                         &format_rl(flitch.base),
                                         editor.solids_view_selection == [row],
                                     ) {
@@ -565,7 +565,7 @@ fn draw_tree_to_depth(ui: &mut egui::Ui, editor: &mut EditorState, document: &Do
                 .iter()
                 .flat_map(|solid| descendants(solid, editor.solid_view_bands.get(&solid.id), show_flitches))
                 .collect();
-            let kind_id = egui::Id::new(("solids_view_kind", kind as u8));
+            let kind_id = egui::Id::unique(("solids_view_kind", kind as u8));
             if reveal && solids.iter().any(|solid| selection.iter().any(|row| row.solid == solid.id)) {
                 open_row(ui, kind_id);
             }
@@ -584,7 +584,7 @@ fn draw_tree_to_depth(ui: &mut egui::Ui, editor: &mut EditorState, document: &Do
                     let solid_rows = descendants(solid, occupied, show_flitches);
                     // `.1` is the heading itself; its `.inner` is the clickable
                     // label, where `.response` is only the row's hover area.
-                    let solid_id = egui::Id::new(("solids_view_solid", solid.id.0));
+                    let solid_id = egui::Id::unique(("solids_view_solid", solid.id.0));
                     if reveal && selection.iter().any(|row| row.solid == solid.id) {
                         open_row(ui, solid_id);
                     }
@@ -642,7 +642,7 @@ fn draw_tree_to_depth(ui: &mut egui::Ui, editor: &mut EditorState, document: &Do
                                     band: Some(band),
                                 })
                                 .collect();
-                            let bench_id = egui::Id::new(("solids_view_bench", solid.id.0, bench.base.to_bits()));
+                            let bench_id = egui::Id::unique(("solids_view_bench", solid.id.0, bench.base.to_bits()));
                             let bench_target = crate::model::ExclusionTarget::Bench(bench.base);
                             let bench_label = exclusion_label(&format_rl(bench.base), solid.exclusions.is_target_excluded(bench_target));
                             let bench_selected = group_selected(selection, &bench_rows);
@@ -699,7 +699,7 @@ fn draw_tree_to_depth(ui: &mut egui::Ui, editor: &mut EditorState, document: &Do
                                                     .map(|(hidden, visible)| visible && !hidden.hides_flitch(shape, flitch.base));
                                                 let (response, visibility_clicked) = leaf_toggle_row(
                                                     ui,
-                                                    egui::Id::new(("solids_view_flitch", solid.id.0, bench.base.to_bits(), blast_index, flitch.base.to_bits())),
+                                                    egui::Id::unique(("solids_view_flitch", solid.id.0, bench.base.to_bits(), blast_index, flitch.base.to_bits())),
                                                     &format_rl(flitch.base),
                                                     group_selected(selection, std::slice::from_ref(&flitch_row))
                                                         && (editor.selected_blast.is_none() || editor.selected_blast == blast_ref),
