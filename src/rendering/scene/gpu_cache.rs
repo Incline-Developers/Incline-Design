@@ -639,8 +639,14 @@ impl BlockModelGpuCache {
     /// Nearest depth-writing block under a ray. The cached opaque instance
     /// stream is the exact subset rendered with depth writes, so this avoids
     /// scanning hidden/transparent blocks from the source model.
-    pub(crate) fn nearest_opaque_hit(&self, ray_origin: DVec3, ray_direction: DVec3, hidden: &HashSet<crate::model::SceneEntityId>) -> Option<DVec3> {
-        self.nearest_hit(ray_origin, ray_direction, hidden, None, false).map(|(_, world)| world)
+    pub(crate) fn nearest_opaque_hit(
+        &self,
+        ray_origin: DVec3,
+        ray_direction: DVec3,
+        hidden: &HashSet<crate::model::SceneEntityId>,
+        slab: Option<crate::rendering::camera::SectionSlab>,
+    ) -> Option<DVec3> {
+        self.nearest_hit(ray_origin, ray_direction, hidden, None, false, slab).map(|(_, world)| world)
     }
 
     /// Nearest visible block under a ray, including translucent surface or
@@ -652,8 +658,9 @@ impl BlockModelGpuCache {
         ray_direction: DVec3,
         hidden: &HashSet<crate::model::SceneEntityId>,
         frozen: &HashSet<crate::model::SceneEntityId>,
+        slab: Option<crate::rendering::camera::SectionSlab>,
     ) -> Option<DVec3> {
-        self.nearest_visible_entity_hit(ray_origin, ray_direction, hidden, frozen).map(|(_, world)| world)
+        self.nearest_visible_entity_hit(ray_origin, ray_direction, hidden, frozen, slab).map(|(_, world)| world)
     }
 
     /// Nearest visible block model plus its stable scene identity.
@@ -663,8 +670,9 @@ impl BlockModelGpuCache {
         ray_direction: DVec3,
         hidden: &HashSet<crate::model::SceneEntityId>,
         frozen: &HashSet<crate::model::SceneEntityId>,
+        slab: Option<crate::rendering::camera::SectionSlab>,
     ) -> Option<(crate::model::SceneEntityId, DVec3)> {
-        self.nearest_hit(ray_origin, ray_direction, hidden, Some(frozen), true)
+        self.nearest_hit(ray_origin, ray_direction, hidden, Some(frozen), true, slab)
     }
 
     fn nearest_hit(
@@ -674,8 +682,20 @@ impl BlockModelGpuCache {
         hidden: &HashSet<crate::model::SceneEntityId>,
         frozen: Option<&HashSet<crate::model::SceneEntityId>>,
         include_transparent: bool,
+        slab: Option<crate::rendering::camera::SectionSlab>,
     ) -> Option<(crate::model::SceneEntityId, DVec3)> {
-        let mut nearest = f64::INFINITY;
+        // Inside a section only the part of the ray the section draws blocks
+        // along can hit one: the ray starts where that part does, and a hit
+        // past its end is no hit. Unclipped, the first block met lies in front
+        // of the slab, where nothing is drawn, and only the model's sides -
+        // where the ray enters it inside the slab - could ever be picked.
+        let (enter, leave) = match slab {
+            Some(slab) => slab.ray_span(ray_origin, ray_direction)?,
+            None => (0.0, f64::INFINITY),
+        };
+        let full_origin = ray_origin;
+        let ray_origin = ray_origin + ray_direction * enter;
+        let mut nearest = leave - enter;
         let mut nearest_entity = None;
         for (&id, cached) in &self.models {
             let entity = crate::model::SceneEntityId::BlockModel(id);
@@ -730,7 +750,7 @@ impl BlockModelGpuCache {
                 }
             }
         }
-        nearest_entity.map(|entity| (entity, ray_origin + ray_direction * nearest))
+        nearest_entity.map(|entity| (entity, full_origin + ray_direction * (enter + nearest)))
     }
 
     #[allow(clippy::too_many_arguments)]

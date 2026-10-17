@@ -914,6 +914,23 @@ impl SectionSlab {
         self.signed_distance(world).abs() <= self.half_width
     }
 
+    /// The stretch `(enter, leave)` of the ray `origin + direction * t`,
+    /// `t >= 0`, along which the section draws filled geometry: between the
+    /// walls, or from the plane on in a 2D section, matching the block
+    /// raycast's `clip_march_to_section_slab`. `None` if the ray misses it.
+    pub(crate) fn ray_span(&self, origin: DVec3, direction: DVec3) -> Option<(f64, f64)> {
+        let from = self.signed_distance(origin);
+        let slope = direction.dot(self.normal);
+        if slope.abs() <= f64::EPSILON {
+            return (from.abs() <= self.half_width).then_some((0.0, f64::INFINITY));
+        }
+        let wall_a = (self.half_width - from) / slope;
+        let wall_b = (-self.half_width - from) / slope;
+        let enter = if self.outlines { -from / slope } else { wall_a.min(wall_b) };
+        let (enter, leave) = (enter.max(0.0), wall_a.max(wall_b));
+        (enter < leave).then_some((enter, leave))
+    }
+
     /// Fraction range `(enter, leave)` along segment `a`-`b`, each in `0.0..=1.0`,
     /// that lies inside the slab; `None` if the whole segment is outside.
     pub(crate) fn clip_segment(&self, a: DVec3, b: DVec3) -> Option<(f64, f64)> {
