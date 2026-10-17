@@ -1460,9 +1460,7 @@ pub(crate) fn draw_slice_panel(ui: &mut egui::Ui, editor: &mut EditorState, comm
         .min_width(210.0)
         .show(ui.ctx(), |ui| {
             let mut view_3d = !editor.slice_outlines;
-            MenuFieldBool::new(tr!("edit-slice-3d"), &mut view_3d)
-                .help_text(tr!("edit-slice-3d-help"))
-                .show(ui);
+            MenuFieldBool::new(tr!("edit-slice-3d"), &mut view_3d).help_text(tr!("edit-slice-3d-help")).show(ui);
             editor.slice_outlines = !view_3d;
             MenuFieldF64::new(tr!("drill-hole-width"), &mut editor.slice_width_input, 0.1..=1.0e6)
                 .help_text(tr!("edit-thickness-visible-slice-slab-centred"))
