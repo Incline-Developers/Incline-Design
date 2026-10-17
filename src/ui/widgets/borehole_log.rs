@@ -7,7 +7,7 @@ use std::{fmt::Debug, hash::Hash};
 use super::viewport::{Outline, format_grade, outlined_galley, trim_decimal_zeros};
 use crate::{
     i18n::tr,
-    model::drill_hole::{ShiftDirection, UNKNOWN_NAME},
+    model::drill_hole::{BoundarySide, ShiftDirection, UNKNOWN_NAME},
     ui::{
         elements::properties::read_only_row,
         widgets::{
@@ -241,6 +241,8 @@ pub(crate) struct BoreholeLog<'a> {
     /// while the hole is read.
     logged: Option<[f64; 2]>,
     well_log_style: WellLogStyle,
+    /// Where to draw the dashed guide, see [`Self::guide_depth`].
+    guide: Option<f64>,
 }
 
 /// The depth window a log keeps from frame to frame and hole to hole.
@@ -294,6 +296,7 @@ impl<'a> BoreholeLog<'a> {
             reading: None,
             logged: None,
             well_log_style: WellLogStyle::default(),
+            guide: None,
         }
     }
 
@@ -319,6 +322,13 @@ impl<'a> BoreholeLog<'a> {
     /// Span the index's geophysics depths while the hole is read.
     pub(crate) fn logged_depths(mut self, depths: Option<[f64; 2]>) -> Self {
         self.logged = depths;
+        self
+    }
+
+    /// A dashed guide across the whole log at `depth`, every column and
+    /// trace included, to line a boundary being moved up with the curves.
+    pub(crate) fn guide_depth(mut self, depth: Option<f64>) -> Self {
+        self.guide = depth;
         self
     }
 
@@ -447,6 +457,16 @@ impl<'a> BoreholeLog<'a> {
                             name: seam.name.clone(),
                             interval: seam.interval,
                             every_hole,
+                        });
+                        ui.close();
+                    }
+                }
+                for (label, side) in [(tr!("viewport-move-roof"), BoundarySide::Roof), (tr!("viewport-move-floor"), BoundarySide::Floor)] {
+                    if ContextMenuAction::new(label).show(ui).clicked() {
+                        output.boundary = Some(BoundaryPick {
+                            field: seam.field.clone(),
+                            interval: seam.interval,
+                            side,
                         });
                         ui.close();
                     }
@@ -599,6 +619,9 @@ impl<'a> BoreholeLog<'a> {
         }
         if let Some(recorded) = self.recorded_depth(hole).filter(|depth| (top..=bottom).contains(depth)) {
             draw_recorded_depth(ui, &painter, plot, view, recorded);
+        }
+        if let Some(depth) = self.guide.filter(|depth| (top..=bottom).contains(depth)) {
+            draw_guide(ui, &painter, body.left()..=plot.right(), plot, view, depth);
         }
         let area = egui::Rect::from_min_max(
             egui::pos2(body.left() + 4.0, plot.bottom() + LOG_AXIS_HEIGHT),
@@ -1375,6 +1398,17 @@ pub(crate) struct LogOutput {
     pub(crate) rename: Option<SeamRename>,
     /// The hole's names the reader chose to slide one run along the hole.
     pub(crate) shift: Option<NameShift>,
+    /// A boundary the reader chose to move.
+    pub(crate) boundary: Option<BoundaryPick>,
+}
+
+/// A boundary picked from the strat column's menu: the field read, the
+/// interval clicked, and whether its roof or its floor moves.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct BoundaryPick {
+    pub(crate) field: String,
+    pub(crate) interval: usize,
+    pub(crate) side: BoundarySide,
 }
 
 /// A shift picked from the strat column's menu: the field read, which way
@@ -1425,6 +1459,18 @@ fn trace_column_at<'t>(pos: egui::Pos2, plot: egui::Rect, lanes: [(Option<Column
     lanes
         .into_iter()
         .find_map(|(traces, lane)| traces.filter(|_| lane.is_some_and(|lane| lane.x_range().contains(pos.x))))
+}
+
+/// The thin dashed guide at `depth`, from `across.start()` to `across.end()`,
+/// drawn over every column so the curves can be read against it.
+fn draw_guide(ui: &egui::Ui, painter: &egui::Painter, across: std::ops::RangeInclusive<f32>, plot: egui::Rect, view: (f64, f64), depth: f64) {
+    let y = BoreholeLog::y_at(plot, view.0, view.1, depth);
+    painter.extend(egui::Shape::dashed_line(
+        &[egui::pos2(*across.start(), y), egui::pos2(*across.end(), y)],
+        egui::Stroke::new(1.0, ui.visuals().weak_text_color()),
+        4.0,
+        3.0,
+    ));
 }
 
 /// A dashed line across the plot where the hole ends, its label on a plate so

@@ -176,6 +176,7 @@ impl<'a> App<'a> {
                 | UiCommand::BuildReferencePoints { .. }
                 | UiCommand::OpenCreateOreTriangulation
                 | UiCommand::RenameSeam { .. }
+                | UiCommand::MoveBoundary { .. }
                 | UiCommand::CleanStrings
                 | UiCommand::CleanString(_)
                 | UiCommand::JoinAllAtHalfway
@@ -831,6 +832,10 @@ impl<'a> App<'a> {
                 reason,
             } => {
                 self.rename_seam(dataset, field, from, to, scope, reason);
+                Ok(())
+            }
+            UiCommand::MoveBoundary { dataset, edit, reason } => {
+                self.move_boundary(dataset, edit, reason);
                 Ok(())
             }
             UiCommand::SetStratColumn { id, field, codes } => {

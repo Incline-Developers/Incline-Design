@@ -137,6 +137,18 @@ impl DrillInterval {
             .as_ref()
             .is_some_and(|logged| logged.from != self.from || logged.to != self.to || logged.values != self.values)
     }
+
+    /// Set the as-logged interval aside, the first time a correction is
+    /// about to part the two.
+    fn keep_logged(&mut self) {
+        if self.logged.is_none() {
+            self.logged = Some(LoggedInterval {
+                from: self.from,
+                to: self.to,
+                values: self.values.clone(),
+            });
+        }
+    }
 }
 
 /// What a correction does to an interval.
@@ -186,6 +198,29 @@ pub(crate) struct Correction {
     pub(crate) decided: Option<String>,
 }
 
+impl Correction {
+    /// A proposed correction to the interval of hole `hole` logged from
+    /// `logged.0` to `logged.1`, as `note` sets it out.
+    pub(crate) fn proposed(hole: &str, logged: (f64, f64), kind: CorrectionKind, field: &str, before: DrillValue, after: DrillValue, note: &CorrectionNote) -> Self {
+        Self {
+            hole: hole.to_owned(),
+            logged_from: logged.0,
+            logged_to: logged.1,
+            kind,
+            field: field.to_owned(),
+            before: Some(before),
+            after: Some(after),
+            author: note.author.clone(),
+            date: note.date.clone(),
+            reason: note.reason.clone(),
+            status: CorrectionStatus::Proposed,
+            approver: None,
+            decision: None,
+            decided: None,
+        }
+    }
+}
+
 /// Which intervals a seam rename reaches.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RenameScope {
@@ -204,6 +239,98 @@ pub(crate) struct CorrectionNote {
     pub(crate) author: String,
     pub(crate) date: String,
     pub(crate) reason: String,
+}
+
+impl CorrectionNote {
+    /// A note dated now giving `reason`. The author stays empty until the
+    /// project names a current author.
+    pub(crate) fn now(reason: String) -> Self {
+        Self {
+            author: String::new(),
+            date: chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
+            reason,
+        }
+    }
+}
+
+/// The field a floor move names: the to of the interval it is keyed on.
+/// Its before and after are depths.
+pub(crate) const FLOOR_FIELD: &str = "to";
+/// The field a roof moved alone names: the from of the interval it is
+/// keyed on.
+pub(crate) const ROOF_FIELD: &str = "from";
+
+/// Which edge of an interval a boundary move takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BoundarySide {
+    Roof,
+    Floor,
+}
+
+/// A roof or floor move asked for in one hole: the hole by index and by
+/// name, the interval and side picked, the boundary's depth when it was
+/// picked, and the depth it moves to.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct BoundaryMove {
+    pub(crate) hole: usize,
+    pub(crate) dhid: String,
+    pub(crate) interval: usize,
+    pub(crate) side: BoundarySide,
+    pub(crate) at: f64,
+    pub(crate) to: f64,
+}
+
+/// Where a correction is written: its hole and the interval its record is
+/// keyed on, by index, and for a boundary move the touching interval below,
+/// whose from follows the moved to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct CorrectionTarget {
+    pub(crate) hole: usize,
+    pub(crate) interval: usize,
+    pub(crate) below: Option<usize>,
+}
+
+impl CorrectionTarget {
+    /// A correction written to one interval alone.
+    pub(crate) fn interval(hole: usize, interval: usize) -> Self {
+        Self { hole, interval, below: None }
+    }
+}
+
+/// Why a boundary cannot be moved to the depth asked.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum BoundaryProblem {
+    /// The interval is not in the hole, or has no depths.
+    Missing,
+    /// The depth is not a number, or is where the boundary already is.
+    Unmoved,
+    /// The depth lies outside 0 to the hole's end.
+    OutsideHole { end: f64 },
+    /// An interval either side would be left with its from at its to.
+    NoThickness { from: f64, to: f64 },
+    /// The depth lies past the far edge of an interval either side.
+    PastEdge { from: f64, to: f64 },
+    /// With no interval touching below, the depth runs into the next one of
+    /// the table, which starts at `from`.
+    Overlap { from: f64 },
+    /// With no interval touching above, the depth runs into the one before
+    /// it in the table, which ends at `to`.
+    OverlapAbove { to: f64 },
+}
+
+impl BoundaryProblem {
+    pub(crate) fn message(&self) -> String {
+        let depth = |depth: &f64| format!("{depth:.2}");
+        match self {
+            Self::Missing => tr!("drill-hole-boundary-interval-missing"),
+            Self::Unmoved => tr!("drill-hole-boundary-unmoved"),
+            Self::OutsideHole { end } => tr!("drill-hole-boundary-outside-hole", end = depth(end)),
+            Self::NoThickness { from, to } => tr!("drill-hole-boundary-no-thickness", from = depth(from), to = depth(to)),
+            Self::PastEdge { from, to } => tr!("drill-hole-boundary-past-edge", from = depth(from), to = depth(to)),
+            Self::Overlap { from } => tr!("drill-hole-boundary-overlap", from = depth(from)),
+            Self::OverlapAbove { to } => tr!("drill-hole-boundary-overlap-above", to = depth(to)),
+        }
+    }
 }
 
 /// One surface connector: the delay laid between two holes.
@@ -659,6 +786,16 @@ impl HolePlacement {
 }
 
 impl DrillHole {
+    /// Where the hole ends: its trace's last depth, or deeper where an
+    /// interval runs on past the trace.
+    pub(crate) fn end_depth(&self) -> f64 {
+        self.intervals
+            .iter()
+            .map(|interval| interval.to)
+            .filter(|to| to.is_finite())
+            .fold(self.trace.last().map_or(0.0, |station| station.depth), f64::max)
+    }
+
     /// Capture where the hole stands, for a preview to rewrite it from.
     pub(crate) fn placement(&self) -> HolePlacement {
         HolePlacement {
@@ -1012,32 +1149,174 @@ impl DrillHoleDataset {
     /// The value corrections renaming `from` to `to` in `field`, one per
     /// interval carrying `from` within `scope`, each paired with its hole and
     /// interval index. Nothing is changed here; the edit is the caller's.
-    pub(crate) fn rename_corrections(&self, field: &str, from: &str, to: &str, scope: RenameScope, note: &CorrectionNote) -> Vec<((usize, usize), Correction)> {
+    pub(crate) fn rename_corrections(&self, field: &str, from: &str, to: &str, scope: RenameScope, note: &CorrectionNote) -> Vec<(CorrectionTarget, Correction)> {
         if from == to {
             return Vec::new();
         }
         self.intervals_named(field, from, scope)
-            .map(|(target, hole, interval)| {
+            .map(|((hole_index, interval_index), hole, interval)| {
                 let (logged_from, logged_to, _) = interval.logged();
-                let record = Correction {
-                    hole: hole.dhid.clone(),
-                    logged_from,
-                    logged_to,
-                    kind: CorrectionKind::Value,
-                    field: field.to_owned(),
-                    before: Some(DrillValue::Category(from.to_owned())),
-                    after: Some(DrillValue::Category(to.to_owned())),
-                    author: note.author.clone(),
-                    date: note.date.clone(),
-                    reason: note.reason.clone(),
-                    status: CorrectionStatus::Proposed,
-                    approver: None,
-                    decision: None,
-                    decided: None,
-                };
-                (target, record)
+                let record = Correction::proposed(
+                    &hole.dhid,
+                    (logged_from, logged_to),
+                    CorrectionKind::Value,
+                    field,
+                    DrillValue::Category(from.to_owned()),
+                    DrillValue::Category(to.to_owned()),
+                    note,
+                );
+                (CorrectionTarget::interval(hole_index, interval_index), record)
             })
             .collect()
+    }
+
+    /// The other intervals of hole `hole` from the interval table of
+    /// interval `interval`, with depths. Two intervals are of one table when
+    /// they share a column, columns an Incline tool derives aside: a header
+    /// two tables share is told apart at import by the table's name, so a
+    /// lithology row and a quality row never share one. A row with every
+    /// cell blank could be of any table, so it counts in each.
+    fn table_neighbours(&self, hole: usize, interval: usize) -> impl Iterator<Item = (usize, &DrillInterval)> + '_ {
+        let intervals = self.holes.get(hole).map_or(&[][..], |hole| &hole.intervals[..]);
+        let own = intervals.get(interval);
+        intervals.iter().enumerate().filter(move |(index, other)| {
+            *index != interval
+                && other.from.is_finite()
+                && other.to.is_finite()
+                && own.is_some_and(|own| other.values.is_empty() || own.values.keys().any(|key| !self.derived_columns.contains(key) && other.values.contains_key(key)))
+        })
+    }
+
+    /// The interval of the same table that starts exactly where interval
+    /// `interval` of hole `hole` ends, by depth, never by index: the one a
+    /// moved floor carries along. A row holding values goes before a blank
+    /// one at the same depth.
+    pub(crate) fn interval_below(&self, hole: usize, interval: usize) -> Option<usize> {
+        let to = self.holes.get(hole)?.intervals.get(interval)?.to;
+        self.table_neighbours(hole, interval)
+            .filter(|(_, other)| other.from == to)
+            .min_by_key(|(_, other)| other.values.is_empty())
+            .map(|(index, _)| index)
+    }
+
+    /// The interval of the same table that ends exactly where interval
+    /// `interval` of hole `hole` starts, as [`Self::interval_below`] picks.
+    pub(crate) fn interval_above(&self, hole: usize, interval: usize) -> Option<usize> {
+        let from = self.holes.get(hole)?.intervals.get(interval)?.from;
+        self.table_neighbours(hole, interval)
+            .filter(|(_, other)| other.to == from)
+            .min_by_key(|(_, other)| other.values.is_empty())
+            .map(|(index, _)| index)
+    }
+
+    /// The boundary correction moving the roof or floor of interval
+    /// `interval` of hole `hole` to `depth`. A boundary two touching
+    /// intervals of one table share is the upper one's floor: one record
+    /// keyed on the upper interval, field [`FLOOR_FIELD`], its target
+    /// carrying the lower one, which follows, so no gap or overlap opens
+    /// and the hole keeps its length. A floor or roof nothing touches moves
+    /// alone, a roof's record keyed on its own interval with field
+    /// [`ROOF_FIELD`]. Refused, with the reason, when the depth is outside
+    /// the hole, at or past the far edge of either interval, or across a
+    /// gap into the next interval of the table. Nothing is changed here; the
+    /// edit is the caller's.
+    pub(crate) fn boundary_corrections(
+        &self,
+        hole: usize,
+        interval: usize,
+        side: BoundarySide,
+        depth: f64,
+        note: &CorrectionNote,
+    ) -> Result<Vec<(CorrectionTarget, Correction)>, BoundaryProblem> {
+        let drilled = self.holes.get(hole).ok_or(BoundaryProblem::Missing)?;
+        // A roof shared with the interval above is that interval's floor,
+        // and the clicked interval is the one that follows it: taken as is,
+        // never looked up again, as a blank row above shares no column to
+        // find it by.
+        let (interval, side, follower) = match side {
+            BoundarySide::Roof => match self.interval_above(hole, interval) {
+                Some(above) => (above, BoundarySide::Floor, Some(interval)),
+                None => (interval, BoundarySide::Roof, None),
+            },
+            BoundarySide::Floor => (interval, BoundarySide::Floor, None),
+        };
+        let moved = drilled
+            .intervals
+            .get(interval)
+            .filter(|moved| moved.from.is_finite() && moved.to.is_finite())
+            .ok_or(BoundaryProblem::Missing)?;
+        let at = if side == BoundarySide::Roof { moved.from } else { moved.to };
+        if !depth.is_finite() || depth == at {
+            return Err(BoundaryProblem::Unmoved);
+        }
+        let end = drilled.end_depth();
+        if !(0.0..=end).contains(&depth) {
+            return Err(BoundaryProblem::OutsideHole { end });
+        }
+        let edge = |from: f64, to: f64, past: bool| {
+            if past {
+                BoundaryProblem::PastEdge { from, to }
+            } else {
+                BoundaryProblem::NoThickness { from, to }
+            }
+        };
+        let neighbours = || self.table_neighbours(hole, interval).map(|(_, other)| other);
+        let below = match side {
+            BoundarySide::Roof => {
+                if depth >= moved.to {
+                    return Err(edge(moved.from, moved.to, depth > moved.to));
+                }
+                let before = neighbours().map(|other| other.to).filter(|to| *to <= moved.from).max_by(f64::total_cmp);
+                if let Some(to) = before.filter(|to| depth < *to) {
+                    return Err(BoundaryProblem::OverlapAbove { to });
+                }
+                None
+            }
+            BoundarySide::Floor => {
+                if depth <= moved.from {
+                    return Err(edge(moved.from, moved.to, depth < moved.from));
+                }
+                let below = follower.or_else(|| self.interval_below(hole, interval));
+                match below.map(|index| &drilled.intervals[index]) {
+                    Some(lower) if depth >= lower.to => return Err(edge(lower.from, lower.to, depth > lower.to)),
+                    Some(_) => {}
+                    None => {
+                        let next = neighbours().map(|other| other.from).filter(|from| *from >= moved.to).min_by(f64::total_cmp);
+                        if let Some(from) = next.filter(|from| depth > *from) {
+                            return Err(BoundaryProblem::Overlap { from });
+                        }
+                    }
+                }
+                below
+            }
+        };
+        let (logged_from, logged_to, _) = moved.logged();
+        let field = if side == BoundarySide::Roof { ROOF_FIELD } else { FLOOR_FIELD };
+        let record = Correction::proposed(
+            &drilled.dhid,
+            (logged_from, logged_to),
+            CorrectionKind::Boundary,
+            field,
+            DrillValue::Numeric(at),
+            DrillValue::Numeric(depth),
+            note,
+        );
+        Ok(vec![(CorrectionTarget { hole, interval, below }, record)])
+    }
+
+    /// The hole `edit` names as it would read once moved, for a preview
+    /// drawn while the move is still being typed. `None` when the move would
+    /// be refused, or the hole at that index is no longer the one named.
+    /// Nothing is changed or recorded here.
+    pub(crate) fn boundary_preview(&self, edit: &BoundaryMove) -> Option<DrillHole> {
+        let drilled = self.holes.get(edit.hole).filter(|hole| hole.dhid == edit.dhid)?;
+        let (target, record) = self
+            .boundary_corrections(edit.hole, edit.interval, edit.side, edit.to, &CorrectionNote::default())
+            .ok()?
+            .into_iter()
+            .next()?;
+        let mut previewed = drilled.clone();
+        write_correction(&mut previewed, target, &record, record.after.as_ref()).then_some(previewed)
     }
 
     /// How many holes renaming `from` to `to` in `field` within `scope` would
@@ -1189,46 +1468,35 @@ impl DrillHoleDataset {
             });
             for &index in members {
                 let (logged_from, logged_to, _) = drilled.intervals[index].logged();
-                let record = Correction {
-                    hole: drilled.dhid.clone(),
-                    logged_from,
-                    logged_to,
-                    kind: CorrectionKind::Value,
-                    field: field.to_owned(),
-                    before: Some(DrillValue::Category((*old).to_owned())),
-                    after: Some(DrillValue::Category(new.to_owned())),
-                    author: note.author.clone(),
-                    date: note.date.clone(),
-                    reason: note.reason.clone(),
-                    status: CorrectionStatus::Proposed,
-                    approver: None,
-                    decision: None,
-                    decided: None,
-                };
-                shift.corrections.push(((hole, index), record));
+                let record = Correction::proposed(
+                    &drilled.dhid,
+                    (logged_from, logged_to),
+                    CorrectionKind::Value,
+                    field,
+                    DrillValue::Category((*old).to_owned()),
+                    DrillValue::Category(new.to_owned()),
+                    note,
+                );
+                shift.corrections.push((CorrectionTarget::interval(hole, index), record));
             }
         }
-        shift.corrections.sort_by_key(|(target, _)| target.1);
+        shift.corrections.sort_by_key(|(target, _)| target.interval);
         shift
     }
 
-    /// Write each value correction's `after` as its interval's interpreted
-    /// value and append its record. The as-logged interval is kept aside the
-    /// first time anything parts the two, and is never written after that.
-    pub(crate) fn apply_corrections(&mut self, targets: &[(usize, usize)], records: &[Correction]) {
-        for (&(hole, interval), record) in targets.iter().zip(records) {
-            let Some(interval) = self.holes.get_mut(hole).and_then(|hole| hole.intervals.get_mut(interval)) else {
+    /// Write each correction's `after` and append its record: a value
+    /// correction's as its interval's interpreted value, a boundary's as its
+    /// interval's from or to and its follower's from. The as-logged interval
+    /// is kept aside the first time anything parts the two, and is never
+    /// written after that.
+    pub(crate) fn apply_corrections(&mut self, targets: &[CorrectionTarget], records: &[Correction]) {
+        for (&target, record) in targets.iter().zip(records) {
+            let Some(hole) = self.holes.get_mut(target.hole) else {
                 continue;
             };
-            if interval.logged.is_none() {
-                interval.logged = Some(LoggedInterval {
-                    from: interval.from,
-                    to: interval.to,
-                    values: interval.values.clone(),
-                });
+            if write_correction(hole, target, record, record.after.as_ref()) {
+                self.corrections.push(record.clone());
             }
-            set_value(&mut interval.values, &record.field, record.after.as_ref());
-            self.corrections.push(record.clone());
         }
         self.fields = collect_fields(&self.holes);
     }
@@ -1255,14 +1523,18 @@ impl DrillHoleDataset {
         self.fields = collect_fields(&self.holes);
     }
 
-    /// Undo [`Self::apply_corrections`]: the `before` values go back and the
-    /// records are withdrawn, latest first.
-    pub(crate) fn withdraw_corrections(&mut self, targets: &[(usize, usize)], records: &[Correction]) {
-        for (&(hole, interval), record) in targets.iter().zip(records).rev() {
-            if let Some(interval) = self.holes.get_mut(hole).and_then(|hole| hole.intervals.get_mut(interval)) {
-                set_value(&mut interval.values, &record.field, record.before.as_ref());
-                if !interval.is_corrected() {
-                    interval.logged = None;
+    /// Undo [`Self::apply_corrections`]: the `before` values and depths go
+    /// back and the records are withdrawn, latest first.
+    pub(crate) fn withdraw_corrections(&mut self, targets: &[CorrectionTarget], records: &[Correction]) {
+        for (&target, record) in targets.iter().zip(records).rev() {
+            if let Some(hole) = self.holes.get_mut(target.hole)
+                && write_correction(hole, target, record, record.before.as_ref())
+            {
+                for index in [Some(target.interval), target.below].into_iter().flatten() {
+                    let interval = &mut hole.intervals[index];
+                    if !interval.is_corrected() {
+                        interval.logged = None;
+                    }
                 }
             }
             if let Some(position) = self.corrections.iter().rposition(|kept| kept == record) {
@@ -1684,7 +1956,7 @@ pub(crate) enum ShiftDirection {
 pub(crate) struct ColumnShift {
     /// One value correction per interval whose name moves, with its hole and
     /// interval index.
-    pub(crate) corrections: Vec<((usize, usize), Correction)>,
+    pub(crate) corrections: Vec<(CorrectionTarget, Correction)>,
     /// Of those, the intervals named [`UNKNOWN_NAME`]: the run a shift
     /// from a horizon opens, or the end run when the column has no name past
     /// the hole's last (or first).
@@ -2507,6 +2779,38 @@ fn project_tangent(origin: DVec3, distance: f64, azimuth_degrees: f64, dip_degre
     let dip = dip_degrees.to_radians();
     let horizontal = distance * dip.cos();
     origin + DVec3::new(horizontal * azimuth.sin(), horizontal * azimuth.cos(), distance * dip.sin())
+}
+
+/// Write one side of a correction to its hole, `value` being the record's
+/// after or its before: a value into the record's field, a roof's depth as
+/// the interval's from, a floor's as its to and its follower's from. False,
+/// with nothing written, when the target is not in the hole.
+fn write_correction(hole: &mut DrillHole, target: CorrectionTarget, record: &Correction, value: Option<&DrillValue>) -> bool {
+    let touched = [Some(target.interval), target.below];
+    if touched.iter().flatten().any(|&index| index >= hole.intervals.len()) {
+        return false;
+    }
+    if record.kind == CorrectionKind::Boundary {
+        let Some(&DrillValue::Numeric(depth)) = value else {
+            return false;
+        };
+        for index in touched.into_iter().flatten() {
+            hole.intervals[index].keep_logged();
+        }
+        if record.field == ROOF_FIELD {
+            hole.intervals[target.interval].from = depth;
+        } else {
+            hole.intervals[target.interval].to = depth;
+        }
+        if let Some(below) = target.below {
+            hole.intervals[below].from = depth;
+        }
+    } else {
+        let interval = &mut hole.intervals[target.interval];
+        interval.keep_logged();
+        set_value(&mut interval.values, &record.field, value);
+    }
+    true
 }
 
 /// Set `key` to `value`, or leave it unrecorded when there is none.

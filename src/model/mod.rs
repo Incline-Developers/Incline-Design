@@ -2016,7 +2016,7 @@ impl EditTarget<'_> {
 
     /// Apply a set of interval corrections, or withdraw them when `apply` is
     /// false. The dataset's revision carries the new values to its colours.
-    fn correct_intervals(&mut self, dataset: drill_hole::DrillHoleId, targets: &[(usize, usize)], records: &[drill_hole::Correction], apply: bool) {
+    fn correct_intervals(&mut self, dataset: drill_hole::DrillHoleId, targets: &[drill_hole::CorrectionTarget], records: &[drill_hole::Correction], apply: bool) {
         let Some(entry) = self.drill_holes.iter_mut().find(|entry| entry.id == dataset) else {
             return;
         };
@@ -2255,8 +2255,9 @@ pub(crate) enum Command {
     /// back and withdraws the record.
     CorrectIntervals {
         dataset: drill_hole::DrillHoleId,
-        /// Hole and interval index of each record's interval, in step.
-        targets: Vec<(usize, usize)>,
+        /// Where each record is written, in step: its hole and interval, and
+        /// for a boundary move the interval below that follows.
+        targets: Vec<drill_hole::CorrectionTarget>,
         records: Vec<drill_hole::Correction>,
     },
     /// Write cells of an interval column a tool derives, such as true
@@ -2368,7 +2369,7 @@ impl Command {
                     .fold(0usize, usize::saturating_add),
                 Command::SetInitiation { .. } => 0,
                 Command::CorrectIntervals { targets, records, .. } => {
-                    targets.len() * size_of::<(usize, usize)>()
+                    targets.len() * size_of::<drill_hole::CorrectionTarget>()
                         + records
                             .iter()
                             .map(|record| {

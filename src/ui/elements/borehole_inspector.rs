@@ -11,7 +11,8 @@ use crate::{
     model::{
         SceneEntityId,
         drill_hole::{
-            CorrectionNote, DrillField, DrillFieldKind, DrillHole, DrillHoleId, DrillHoleRef, OpenDrillHoleDataset, RenameScope, UNKNOWN_NAME, WorkingSection, section_color_key,
+            BoundaryMove, BoundarySide, CorrectionNote, DrillField, DrillFieldKind, DrillHole, DrillHoleId, DrillHoleRef, DrillValue, OpenDrillHoleDataset, RenameScope,
+            UNKNOWN_NAME, WorkingSection, section_color_key,
         },
         geophysics::{HoleView, LinkState},
         strat_order::{FlagKind, FlagLevel, HoleFlag, is_repeat_code},
@@ -19,10 +20,10 @@ use crate::{
     ui::{
         EditorState,
         elements::properties::read_only_row,
-        state::{BoreholeInspectorTab, NameShiftDraft, SeamRenameDraft, StratCheckReport, UiCommand},
+        state::{BoreholeInspectorTab, BoundaryMoveDraft, NameShiftDraft, SeamRenameDraft, StratCheckReport, UiCommand},
         themed_icon, unthemed_icon,
         widgets::{
-            borehole_log::{DrillHoleProperties, NameShift, SeamRename, strat_runs},
+            borehole_log::{BoundaryPick, DrillHoleProperties, NameShift, SeamRename, strat_runs},
             collapsible_section::CollapsibleSection,
             menu::{self, MenuButton, MenuField, MenuFieldCombo},
             toolbar::GROUP_CORNER_RADIUS,
@@ -167,12 +168,21 @@ fn draw_body(
             draw_geophysics_note(ui, &view, dataset.id, commands);
             // The log's wheel zooms rather than scrolling an enclosing area,
             // so it takes the rest of the panel instead of sitting in one.
-            let output = crate::ui::widgets::borehole_log::BoreholeLog::new(("borehole_log", dataset.id), hole, dataset)
+            // While a roof or floor of this hole is being moved, the log
+            // draws the move at the depth typed, and a guide across it there.
+            let moving = editor
+                .boundary_move_dialog
+                .as_ref()
+                .filter(|draft| draft.dataset == dataset.id && draft.revision == dataset.state.revision() && draft.edit.hole == hole_index && draft.edit.dhid == hole.dhid);
+            let preview = moving.and_then(|draft| draft.preview.clone());
+            let guide = moving.map(|draft| draft.edit.to);
+            let output = crate::ui::widgets::borehole_log::BoreholeLog::new(("borehole_log", dataset.id), preview.as_deref().unwrap_or(hole), dataset)
                 .strat_field(strat_choice_for(editor, dataset))
                 .well_logs(logs, linked)
                 .reading(reading)
                 .logged_depths(logged)
                 .well_log_style(editor.well_log_style)
+                .guide_depth(guide)
                 .show(ui);
             if let Some(style) = output.saved {
                 commands.push(UiCommand::SetWellLogStyle(style));
@@ -182,6 +192,9 @@ fn draw_body(
             }
             if let Some(shift) = output.shift {
                 editor.name_shift_dialog = Some(name_shift_draft(dataset, hole_index, shift));
+            }
+            if let Some(pick) = output.boundary {
+                editor.boundary_move_dialog = boundary_move_draft(dataset, hole_index, &pick);
             }
         }
         BoreholeInspectorTab::Column => {
@@ -974,6 +987,45 @@ fn name_shift_draft(dataset: &OpenDrillHoleDataset, hole_index: usize, shift: Na
         untouched: worked.untouched,
         reason: String::new(),
     }
+}
+
+/// The move boundary dialog's opening state for a roof or floor picked in
+/// the log, with the intervals either side of it as they stand.
+fn boundary_move_draft(dataset: &OpenDrillHoleDataset, hole_index: usize, pick: &BoundaryPick) -> Option<BoundaryMoveDraft> {
+    let data = &dataset.dataset;
+    let hole = data.holes.get(hole_index)?;
+    let clicked = hole.intervals.get(pick.interval)?;
+    let (above, below, at) = match pick.side {
+        BoundarySide::Roof => (data.interval_above(hole_index, pick.interval), Some(pick.interval), clicked.from),
+        BoundarySide::Floor => (Some(pick.interval), data.interval_below(hole_index, pick.interval), clicked.to),
+    };
+    // The strat field is categorical, so a name is all it can hold.
+    let describe = |index: usize| {
+        let shown = &hole.intervals[index];
+        let (from, to) = (format!("{:.2}", shown.from), format!("{:.2}", shown.to));
+        match shown.values.get(&pick.field) {
+            Some(DrillValue::Category(name)) if !name.trim().is_empty() => tr!("drill-hole-move-boundary-interval", from = from, to = to, name = name.trim().to_owned()),
+            _ => tr!("drill-hole-move-boundary-interval-unnamed", from = from, to = to),
+        }
+    };
+    Some(BoundaryMoveDraft {
+        dataset: dataset.id,
+        revision: dataset.state.revision(),
+        edit: BoundaryMove {
+            hole: hole_index,
+            dhid: hole.dhid.clone(),
+            interval: pick.interval,
+            side: pick.side,
+            at,
+            to: at,
+        },
+        above: above.map(describe),
+        below: below.map(describe),
+        end: hole.end_depth(),
+        preview: None,
+        previewed: None,
+        reason: String::new(),
+    })
 }
 
 /// The rename dialog's opening state for a seam picked in the log: its

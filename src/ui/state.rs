@@ -2342,6 +2342,8 @@ pub(crate) struct EditorState {
     pub(crate) seam_rename_dialog: Option<SeamRenameDraft>,
     /// The shift names dialog's hole, direction and reason while it is open.
     pub(crate) name_shift_dialog: Option<NameShiftDraft>,
+    /// The move boundary dialog's boundary and entries while it is open.
+    pub(crate) boundary_move_dialog: Option<BoundaryMoveDraft>,
     pub(crate) optimization: OptimizationState,
     pub(crate) block_model_create_open: bool,
     pub(crate) kriging_drill_hole_id: Option<DrillHoleId>,
@@ -2741,6 +2743,7 @@ impl EditorState {
             || self.renaming_item.is_some()
             || self.seam_rename_dialog.is_some()
             || self.name_shift_dialog.is_some()
+            || self.boundary_move_dialog.is_some()
             || self.tri_create_open
             || self.tri_create_failure.is_some()
             || self.tri_cut_poly_open
@@ -3177,6 +3180,7 @@ impl EditorState {
         self.seam_table = None;
         self.seam_rename_dialog = None;
         self.name_shift_dialog = None;
+        self.boundary_move_dialog = None;
     }
 
     pub(crate) fn current_preferences(&self) -> PreferencesDraft {
@@ -3603,6 +3607,7 @@ impl EditorState {
             seam_table: None,
             seam_rename_dialog: None,
             name_shift_dialog: None,
+            boundary_move_dialog: None,
             optimization: OptimizationState::default(),
             block_model_create_open: false,
             kriging_drill_hole_id: None,
@@ -4616,6 +4621,13 @@ pub(crate) enum UiCommand {
         scope: crate::model::drill_hole::RenameScope,
         reason: String,
     },
+    /// Move a roof or floor of one interval of one hole, proposing one
+    /// boundary correction; a touching interval on the other side follows.
+    MoveBoundary {
+        dataset: DrillHoleId,
+        edit: crate::model::drill_hole::BoundaryMove,
+        reason: String,
+    },
     /// Replace one categorical field's strat column, top first, as one undo
     /// step.
     SetStratColumn {
@@ -5310,6 +5322,13 @@ impl UiCommand {
                 report(tr!("state-build-reference-points"), format!("{} {}, {} hole(s)", target.label(), side.label(), holes.len()))
             }
             Self::RenameSeam { from, to, .. } => report(tr!("state-rename-seam"), tr!("state-rename-seam-from-to", from = from.clone(), to = to.clone())),
+            Self::MoveBoundary { edit, .. } => report(
+                match edit.side {
+                    crate::model::drill_hole::BoundarySide::Roof => tr!("state-move-roof"),
+                    crate::model::drill_hole::BoundarySide::Floor => tr!("state-move-floor"),
+                },
+                tr!("state-move-boundary-from-to", from = format!("{:.2}", edit.at), to = format!("{:.2}", edit.to)),
+            ),
             Self::ShiftStratColumn { field, direction, from, .. } => report(
                 tr!("state-shift-names"),
                 match (direction, from) {
@@ -6472,6 +6491,31 @@ pub(crate) struct NameShiftDraft {
     pub(crate) unknown: usize,
     pub(crate) untouched: usize,
     pub(crate) reason: String,
+}
+
+/// What the move boundary dialog holds while open: the boundary, the two
+/// intervals it parts as they stood when it opened, and what has been
+/// typed. The move is judged again when it runs.
+#[derive(Clone, Debug)]
+pub(crate) struct BoundaryMoveDraft {
+    pub(crate) dataset: DrillHoleId,
+    /// The dataset's revision when the dialog opened; any edit to it since
+    /// closes the dialog, as the indices it holds may no longer fit.
+    pub(crate) revision: u64,
+    /// The move asked for; its `to` is the depth typed.
+    pub(crate) edit: crate::model::drill_hole::BoundaryMove,
+    /// The intervals above and below the boundary, as the dialog shows
+    /// them; `None` on a side nothing touches.
+    pub(crate) above: Option<String>,
+    pub(crate) below: Option<String>,
+    /// The hole's end, the deepest a boundary can go.
+    pub(crate) end: f64,
+    pub(crate) reason: String,
+    /// The hole as it would read at the depth typed, while that depth is
+    /// one the move takes, for the log to draw; built again only when the
+    /// depth changes, the depth it was built for beside it.
+    pub(crate) preview: Option<std::sync::Arc<crate::model::drill_hole::DrillHole>>,
+    pub(crate) previewed: Option<f64>,
 }
 
 /// One strat column check: the order most holes agree on, the column as it

@@ -6,9 +6,9 @@ use crate::{
     model::{
         Command, ItemRef, ItemStyle, MemberKind, OpenItem, SceneEntityId,
         drill_hole::{
-            CorrectionNote, DrillColorPreset, DrillColorState, DrillColorStop, DrillFieldKind, DrillHole, DrillHoleDataset, DrillHoleId, DrillHoleRef, DrillHoleSource,
-            DrillHoleStyle, DrillValue, LoadedDrillHoleDataset, MAX_DRILL_COLOR_STOPS, OpenDrillHoleDataset, OrientationSource, RenameScope, ShiftDirection, TraceStation,
-            WIDE_CATEGORY_FIELD_HINT, clamp_disc_diameter, clamp_string_pixel_width,
+            BoundaryMove, BoundarySide, CorrectionNote, DrillColorPreset, DrillColorState, DrillColorStop, DrillFieldKind, DrillHole, DrillHoleDataset, DrillHoleId, DrillHoleRef,
+            DrillHoleSource, DrillHoleStyle, DrillValue, LoadedDrillHoleDataset, MAX_DRILL_COLOR_STOPS, OpenDrillHoleDataset, OrientationSource, RenameScope, ShiftDirection,
+            TraceStation, WIDE_CATEGORY_FIELD_HINT, clamp_disc_diameter, clamp_string_pixel_width,
         },
         formats::{csv_drill_hole, csv_geophysics::StreamControl},
     },
@@ -501,11 +501,7 @@ impl<'a> App<'a> {
             userspace_warn!("{}", tr!("cmd-drill-hole-name-reason", name = section.name.clone(), reason = reason));
             return;
         }
-        let note = CorrectionNote {
-            author: String::new(),
-            date: chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
-            reason,
-        };
+        let note = CorrectionNote::now(reason);
         let (targets, records): (Vec<_>, Vec<_>) = dataset.dataset.rename_corrections(&field, &from, &to, scope, &note).into_iter().unzip();
         if records.is_empty() {
             userspace_warn!("{}", tr!("cmd-drill-hole-no-interval-holds-seam", name = from));
@@ -534,6 +530,48 @@ impl<'a> App<'a> {
         }));
         self.execute_edit(Command::Batch(commands));
         userspace_log!("{}", tr!("cmd-drill-hole-seam-renamed", from = from, to = to, count = count.to_string()));
+    }
+
+    /// Move a roof or floor as `edit` asks, proposing one boundary correction
+    /// as a single undo step; a touching interval on the other side follows.
+    /// A move the depth rules refuse, or one whose hole or boundary is no
+    /// longer where the dialog found it, is reported and changes nothing.
+    pub(crate) fn move_boundary(&mut self, id: DrillHoleId, edit: BoundaryMove, reason: String) {
+        let Some(dataset) = self.drill_holes.iter().find(|item| item.id == id) else {
+            return;
+        };
+        let at = dataset
+            .dataset
+            .holes
+            .get(edit.hole)
+            .filter(|hole| hole.dhid == edit.dhid)
+            .and_then(|hole| hole.intervals.get(edit.interval))
+            .map(|moved| match edit.side {
+                BoundarySide::Roof => moved.from,
+                BoundarySide::Floor => moved.to,
+            });
+        if at != Some(edit.at) {
+            userspace_warn!("{}", tr!("cmd-drill-hole-boundary-changed", hole = edit.dhid));
+            return;
+        }
+        let note = CorrectionNote::now(reason);
+        let (targets, records): (Vec<_>, Vec<_>) = match dataset.dataset.boundary_corrections(edit.hole, edit.interval, edit.side, edit.to, &note) {
+            Ok(corrections) => corrections.into_iter().unzip(),
+            Err(problem) => {
+                userspace_warn!("{}", tr!("cmd-drill-hole-boundary-refused", hole = edit.dhid, reason = problem.message()));
+                return;
+            }
+        };
+        self.execute_edit(Command::CorrectIntervals { dataset: id, targets, records });
+        userspace_log!(
+            "{}",
+            tr!(
+                "cmd-drill-hole-boundary-moved",
+                hole = edit.dhid,
+                from = format!("{:.2}", edit.at),
+                to = format!("{:.2}", edit.to)
+            )
+        );
     }
 
     /// Replace one field's strat column as one undo step, beside the working
@@ -571,11 +609,7 @@ impl<'a> App<'a> {
             userspace_warn!("{}", tr!("cmd-drill-hole-field-has-no-strat-column", field = field));
             return;
         }
-        let note = CorrectionNote {
-            author: String::new(),
-            date: chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
-            reason,
-        };
+        let note = CorrectionNote::now(reason);
         let shift = dataset.dataset.column_shift(hole, &field, column, direction, from, &note);
         let renames = shift.renames();
         if let Some(section) = renames

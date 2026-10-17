@@ -490,6 +490,13 @@ fn transform_item(item: &mut OpenItem, transform: &SurveyTransform, target_syste
             for record in &mut dataset.corrections {
                 record.logged_from *= transform.length_scale();
                 record.logged_to *= transform.length_scale();
+                if record.kind == crate::model::drill_hole::CorrectionKind::Boundary {
+                    for depth in [&mut record.before, &mut record.after] {
+                        if let Some(crate::model::drill_hole::DrillValue::Numeric(depth)) = depth {
+                            *depth *= transform.length_scale();
+                        }
+                    }
+                }
             }
             // Rebuilt rather than reconstructed through `DrillHoleDataset::new`,
             // which sorts the holes: the ties and initiations beside them name

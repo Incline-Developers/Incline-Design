@@ -1,15 +1,15 @@
 use crate::{
     i18n::tr,
     model::drill_hole::{
-        ColorRow, DrillCategoryColor, DrillColorPreset, DrillFieldKind, DrillHoleId, DrillHoleStyle, MAX_DRILL_COLOR_STOPS, OpenDrillHoleDataset, RenameScope, SectionProblem,
-        ShiftDirection, WorkingSection, default_category_colors, suggested_working_sections, working_section_name_problem,
+        BoundaryProblem, BoundarySide, ColorRow, CorrectionNote, DrillCategoryColor, DrillColorPreset, DrillFieldKind, DrillHoleId, DrillHoleStyle, MAX_DRILL_COLOR_STOPS,
+        OpenDrillHoleDataset, RenameScope, SectionProblem, ShiftDirection, WorkingSection, default_category_colors, suggested_working_sections, working_section_name_problem,
     },
     ui::{
         elements::properties::read_only_row,
         state::{EditorState, SeamRenameDraft, UiCommand},
         widgets::{
             collapsible_section::CollapsibleSection,
-            menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldText},
+            menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldText},
         },
     },
 };
@@ -205,6 +205,97 @@ fn draw_out_of_sequence_warning(ui: &mut egui::Ui, editor: &mut EditorState, hol
         editor.seam_rename_dialog = None;
     } else if !open || cancel {
         draft.out_of_sequence = None;
+    }
+}
+
+/// The move roof and move floor dialog: the boundary picked in the borehole
+/// log, the intervals either side of it, its new depth and why. Moving
+/// proposes one boundary correction; a touching interval on the other side
+/// follows and the depths as logged are kept beside them. Any edit to the
+/// dataset while it is open closes it.
+pub(crate) fn draw_boundary_move_dialog(ui: &mut egui::Ui, editor: &mut EditorState, datasets: &[OpenDrillHoleDataset], commands: &mut Vec<UiCommand>) {
+    let Some(draft) = editor.boundary_move_dialog.as_mut() else {
+        return;
+    };
+    let Some(dataset) = datasets
+        .iter()
+        .find(|dataset| dataset.id == draft.dataset && dataset.state.loaded && dataset.state.revision() == draft.revision)
+    else {
+        editor.boundary_move_dialog = None;
+        return;
+    };
+    // As in the colour dialog: Enter in a field only finishes the field, so
+    // the move is never sent on a depth the dialog has not judged yet.
+    let text_field_focused = ui
+        .ctx()
+        .memory(|memory| memory.focused())
+        .is_some_and(|focused_id| egui::TextEdit::load_state(ui.ctx(), focused_id).is_some());
+    let mut open = true;
+    let mut move_it = false;
+    let mut cancel = false;
+    let roof = draft.edit.side == BoundarySide::Roof;
+    let title = if roof { tr!("drill-hole-move-roof-title") } else { tr!("drill-hole-move-floor-title") };
+    DragableMenu::new("boundary_move_dialog", title)
+        .open(&mut open)
+        .min_width(360.0)
+        .max_width(440.0)
+        .show(ui.ctx(), |ui| {
+            let nothing = || tr!("drill-hole-move-boundary-nothing-touches");
+            read_only_row(ui, &tr!("drill-hole-rename-seam-hole"), &draft.edit.dhid);
+            read_only_row(ui, &tr!("drill-hole-move-boundary-above"), &draft.above.clone().unwrap_or_else(nothing));
+            read_only_row(ui, &tr!("drill-hole-move-boundary-below"), &draft.below.clone().unwrap_or_else(nothing));
+            let at = if roof { tr!("drill-hole-move-roof-at") } else { tr!("drill-hole-move-floor-at") };
+            read_only_row(ui, &at, &format!("{:.2} m", draft.edit.at));
+            ui.add_space(4.0);
+            MenuFieldF64::new(tr!("drill-hole-move-boundary-depth"), &mut draft.edit.to, 0.0..=draft.end)
+                .speed(0.01)
+                .max_decimals(3)
+                .suffix(" m")
+                .show(ui);
+            MenuFieldText::new(tr!("drill-hole-rename-seam-reason"), &mut draft.reason)
+                .width(220.0)
+                .hint_text(tr!("drill-hole-move-boundary-reason-hint"))
+                .show(ui);
+            // The log draws the preview a frame behind, so it is asked to
+            // draw again whenever the depth changes.
+            if draft.previewed != Some(draft.edit.to) {
+                draft.preview = dataset.dataset.boundary_preview(&draft.edit).map(std::sync::Arc::new);
+                draft.previewed = Some(draft.edit.to);
+                ui.ctx().request_repaint();
+            }
+            // Judged after the fields, on what they hold this frame.
+            let problem = dataset
+                .dataset
+                .boundary_corrections(draft.edit.hole, draft.edit.interval, draft.edit.side, draft.edit.to, &CorrectionNote::default())
+                .err();
+            let can_move = problem.is_none() && !draft.reason.trim().is_empty();
+            let alone = if roof { draft.above.is_none() } else { draft.below.is_none() };
+            match &problem {
+                Some(problem) if *problem != BoundaryProblem::Unmoved => menu::menu_note(ui, problem.message()),
+                _ if alone && roof => menu::menu_note(ui, tr!("drill-hole-move-roof-moves-alone")),
+                _ if alone => menu::menu_note(ui, tr!("drill-hole-move-floor-moves-alone")),
+                _ => menu::menu_note(ui, tr!("drill-hole-move-boundary-logged-kept")),
+            }
+            menu::menu_actions(ui, |ui| {
+                let confirm = !text_field_focused && menu::dialog_confirm_pressed(ui.ctx());
+                if (ui.add(MenuButton::new(tr!("drill-hole-move-boundary-submit")).primary().enabled(can_move)).clicked() || confirm) && can_move {
+                    move_it = true;
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                    cancel = true;
+                }
+            });
+        });
+    if move_it {
+        commands.push(UiCommand::MoveBoundary {
+            dataset: draft.dataset,
+            edit: draft.edit.clone(),
+            reason: draft.reason.trim().to_owned(),
+        });
+        open = false;
+    }
+    if !open || cancel {
+        editor.boundary_move_dialog = None;
     }
 }
 
