@@ -1,9 +1,9 @@
-//! How much of the machine's memory is in use, for the readout at the right
-//! end of the bottom toolbar.
+//! How much of the machine's memory is in use, and how busy each processor
+//! core is, for the readouts in the status bar.
 //!
-//! Sampled on a timer rather than every frame: reading the system's memory
-//! is a system call (a `/proc` read on Linux), and the readout is something
-//! to glance at, not to watch tick.
+//! Sampled on a timer rather than every frame: reading either is a system
+//! call (a `/proc` read on Linux), and the readouts are something to glance
+//! at, not to watch tick.
 
 use web_time::{Duration, Instant};
 
@@ -84,5 +84,40 @@ impl MemorySampler {
             used: u64::from(used),
             total: ADDRESS_SPACE,
         })
+    }
+}
+
+/// How often the per-core readout is refreshed: quicker than memory, which
+/// creeps, since processor load comes and goes in bursts.
+pub(crate) const CPU_SAMPLE_PERIOD: Duration = Duration::from_secs(1);
+
+/// Takes per-core processor readings no more often than [`CPU_SAMPLE_PERIOD`].
+/// Native only: a browser says how many cores there are, never how busy.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct CpuSampler {
+    system: sysinfo::System,
+    last: Option<Instant>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl CpuSampler {
+    pub(crate) fn new() -> Self {
+        Self {
+            system: sysinfo::System::new(),
+            last: None,
+        }
+    }
+
+    /// Each core's load, `0.0..=1.0`, once the period has run out since the
+    /// last reading; `None` in between. Load is measured between two
+    /// refreshes, so the first reading is all zeros.
+    pub(crate) fn poll(&mut self) -> Option<Vec<f32>> {
+        let now = Instant::now();
+        if self.last.is_some_and(|last| now.duration_since(last) < CPU_SAMPLE_PERIOD) {
+            return None;
+        }
+        self.last = Some(now);
+        self.system.refresh_cpu_usage();
+        Some(self.system.cpus().iter().map(|cpu| (cpu.cpu_usage() / 100.0).clamp(0.0, 1.0)).collect())
     }
 }

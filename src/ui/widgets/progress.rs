@@ -1,7 +1,7 @@
 //! The readouts that sit at the right end of the bottom toolbar: rings that
 //! fill green around their circumference, each with its text to its left:
-//! the background task and its counts, and at the very end the machine's
-//! memory in use.
+//! the background task and its counts. The status bar's memory readout borrows
+//! the same ring.
 //!
 //! Painted rather than assembled from `egui::ProgressBar`, for two reasons: a
 //! ring is not a shape egui offers at all, and an indeterminate task has to
@@ -36,8 +36,6 @@ const TEXT_GAP: f32 = 8.0;
 /// outline is drawn over the inside of its edge, so a ring sitting flush
 /// against it comes back cut down one side.
 pub(crate) const END_INSET: f32 = 6.0;
-/// Gap between the task readout and the memory ring to its right.
-pub(crate) const READOUT_GAP: f32 = 16.0;
 /// Least room the task text is given before it is dropped in favour of the
 /// counts: below this an elided label is all ellipsis and says nothing.
 const TASK_MIN_WIDTH: f32 = 48.0;
@@ -54,8 +52,8 @@ const TRACK_SHIFT_LIGHT: i16 = -18;
 
 /// The filled part of the ring. Darkened in the light theme so it holds its
 /// own against a bright surface rather than glowing off it.
-const FILL_DARK: egui::Color32 = egui::Color32::from_rgb(0x50, 0xC8, 0x6E);
-const FILL_LIGHT: egui::Color32 = egui::Color32::from_rgb(0x2E, 0x96, 0x4C);
+pub(crate) const FILL_DARK: egui::Color32 = egui::Color32::from_rgb(0x50, 0xC8, 0x6E);
+pub(crate) const FILL_LIGHT: egui::Color32 = egui::Color32::from_rgb(0x2E, 0x96, 0x4C);
 
 /// Text style beside the ring: the same as the status bar's readouts, which is
 /// what this is.
@@ -197,9 +195,24 @@ fn ring_stroke_width(diameter: f32) -> f32 {
 
 /// Paint the ring itself - its track, then its fill - centred on `center`.
 fn paint_ring(ui: &egui::Ui, painter: &egui::Painter, center: egui::Pos2, diameter: f32, fill: RingFill) {
-    let visuals = ui.visuals();
-    let track = shifted(visuals.panel_fill, if visuals.dark_mode { TRACK_SHIFT_DARK } else { TRACK_SHIFT_LIGHT });
-    let filled = if visuals.dark_mode { FILL_DARK } else { FILL_LIGHT };
+    let filled = if ui.visuals().dark_mode { FILL_DARK } else { FILL_LIGHT };
+    paint_ring_in(ui, painter, center, diameter, fill, filled);
+}
+
+/// A ring like the task readout's, filled `fraction` of the way round in
+/// `color` - the status bar's memory readout, which colours by how much is
+/// left.
+pub(crate) fn paint_fraction_ring(ui: &egui::Ui, painter: &egui::Painter, center: egui::Pos2, diameter: f32, fraction: f32, color: egui::Color32) {
+    paint_ring_in(ui, painter, center, diameter, RingFill::Fraction(fraction), color);
+}
+
+/// The unfilled part of a ring.
+fn track_color(visuals: &egui::Visuals) -> egui::Color32 {
+    shifted(visuals.panel_fill, if visuals.dark_mode { TRACK_SHIFT_DARK } else { TRACK_SHIFT_LIGHT })
+}
+
+fn paint_ring_in(ui: &egui::Ui, painter: &egui::Painter, center: egui::Pos2, diameter: f32, fill: RingFill, filled: egui::Color32) {
+    let track = track_color(ui.visuals());
 
     let radius = diameter / 2.0;
     let width = ring_stroke_width(diameter);
@@ -218,34 +231,6 @@ fn paint_ring(ui: &egui::Ui, painter: &egui::Painter, center: egui::Pos2, diamet
         }
     };
     paint_arc(painter, center, radius - width / 2.0, start, sweep, egui::Stroke::new(width, filled));
-}
-
-/// Draw the memory readout: a ring filled to the share of the machine's
-/// memory in use, with "Memory Utilisation" and the used and total amounts to
-/// its left - the same pairing as the task readout, the amounts in the strong
-/// shade nearest the ring.
-///
-/// Sits at the very end of the strip, `END_INSET` from its edge, so the task
-/// readout to its left keeps one place whatever it says.
-pub(crate) fn draw_memory_usage(ui: &mut egui::Ui, editor: &EditorState) {
-    let Some(usage) = editor.memory_usage else {
-        return;
-    };
-    // Rendering is on demand, so an idle window would otherwise hold the
-    // first reading forever.
-    ui.ctx().request_repaint_after(crate::app::memory_usage::SAMPLE_PERIOD);
-    let amounts = tr!(
-        "progress-memory-used-total",
-        used = crate::ui::dialogs::triangulation::format_bytes(usage.used),
-        total = crate::ui::dialogs::triangulation::format_bytes(usage.total)
-    );
-    // A browser does not say what the machine is doing, so the web build
-    // reports its own heap instead - see `MemoryUsage`.
-    #[cfg(not(target_arch = "wasm32"))]
-    let label = tr!("progress-memory-utilisation");
-    #[cfg(target_arch = "wasm32")]
-    let label = tr!("progress-memory-utilisation-web");
-    draw_ring(ui, &amounts, &label, RingFill::Fraction(usage.fraction()), END_INSET);
 }
 
 /// Stroke `sweep` radians of arc, clockwise from `start` radians past twelve

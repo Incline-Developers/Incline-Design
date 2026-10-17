@@ -394,7 +394,7 @@ impl<'a> App<'a> {
                 hidden: false,
                 elevation: 0.0,
                 folder: None,
-                section: crate::model::SectionKind::Modelling,
+                section: crate::model::SectionKind::Designs,
             };
             let objects: Vec<crate::model::Object> = run
                 .points
@@ -559,7 +559,6 @@ impl<'a> App<'a> {
             side,
         } = input;
         let surface_name = read.name.clone();
-        let section = crate::model::SectionKind::derived_for(crate::model::MemberKind::Triangulation, [crate::model::SectionKind::Modelling]);
         let name = output.clone();
         let compute = move |cancel: &CancelFlag, progress: &crate::model::progress::Progress| -> Result<(GeneratedTriangulation, SeamGrid, f64)> {
             let fit = GridSurface::read(read.mesh, read.spatial).map_err(|problem| anyhow::anyhow!("{}", not_a_grid(&read.name, problem)))?;
@@ -572,7 +571,7 @@ impl<'a> App<'a> {
         };
         let apply = move |app: &mut App, result: Result<(GeneratedTriangulation, SeamGrid, f64)>| match result {
             Ok((generated, grid, spacing)) => {
-                app.insert_generated_triangulation_in(generated, section);
+                app.insert_generated_triangulation(generated);
                 let made = app.active_triangulation.map(|id| app.triangulation_name(id)).unwrap_or(output);
                 userspace_log!(
                     "{}",

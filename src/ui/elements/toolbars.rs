@@ -12,8 +12,10 @@
 
 use crate::{
     i18n::tr,
+    model::{Axis, SceneEntityId},
     ui::{
         EditorState, UiProjectView,
+        elements::main_menu::RecentRow,
         state::{ActiveTool, CursorMode, UiCommand, Workspace},
         themed_icon, unthemed_icon,
         widgets::toolbar::{TOOL_CELL_SIZE, ToolbarButton},
@@ -39,6 +41,8 @@ enum LeftToolAction {
     Tool(ActiveTool),
     /// Open or close the Drill & Blast pattern builder.
     DrillPattern,
+    /// Push this command, acting on the selection.
+    Command(Box<UiCommand>),
 }
 
 /// One button in the drawing toolbar's run.
@@ -61,7 +65,7 @@ struct LeftTool {
 fn left_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, project_active: bool) -> Vec<LeftTool> {
     let tool = |icon: egui::ImageSource<'static>, tooltip: String, tool: ActiveTool| {
         let layer_ok = !tool.requires_active_layer() || editor.active_layer.is_some();
-        let blocked_by_section = editor.slice_mode_enabled && tool.section_refuses();
+        let blocked_by_section = editor.slice_mode_enabled && tool.section_refuses(editor.active_workspace);
         LeftTool {
             icon: egui::Image::new(icon),
             hint: (blocked_by_section && editing_enabled && layer_ok).then(|| tr!("toolbars-tool-not-available-section-view", tool = tooltip.as_str().to_string())),
@@ -72,7 +76,7 @@ fn left_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, projec
     };
     vec![
         LeftTool {
-            icon: egui::Image::new(unthemed_icon!("layer.svg")),
+            icon: egui::Image::new(unthemed_icon!("layer_tool.svg")),
             tooltip: tr!("toolbars-new-layer"),
             action: LeftToolAction::NewLayer,
             enabled: project_active,
@@ -95,6 +99,60 @@ fn left_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, projec
         tool(unthemed_icon!("explode_polyline.svg"), tr!("toolbars-explode-polyline-lines"), ActiveTool::ExplodePolyline),
         tool(unthemed_icon!("delete_element.svg"), tr!("toolbars-delete-points"), ActiveTool::DeletePoints),
     ]
+}
+
+/// Production's drawing run less the tools that design a pit, then the
+/// string tools a geologist reaches for on a section.
+fn drawing_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, project_active: bool) -> Vec<LeftTool> {
+    let mut tools = left_tools(ui, editor, editing_enabled, project_active);
+    tools.retain(|tool| !matches!(tool.action, LeftToolAction::Tool(active) if active.designs_pit()));
+    let has_object = editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_)));
+    let cell = |icon: egui::ImageSource<'static>, tooltip: String, action: LeftToolAction, enabled: bool| LeftTool {
+        icon: egui::Image::new(icon),
+        tooltip,
+        action,
+        enabled: editing_enabled && enabled,
+        hint: None,
+    };
+    tools.extend([
+        cell(
+            unthemed_icon!("measure_batter_angle.svg"),
+            tr!("toolbars-strike-dip"),
+            LeftToolAction::Tool(ActiveTool::MeasureBatterAngle),
+            true,
+        ),
+        cell(
+            themed_icon!(ui, "edit_vertex.svg"),
+            tr!("toolbars-edit-vertex"),
+            LeftToolAction::Tool(ActiveTool::EditVertex),
+            true,
+        ),
+        cell(
+            themed_icon!(ui, "set_z.svg"),
+            tr!("common-set") + " Z...",
+            LeftToolAction::Command(Box::new(UiCommand::OpenMoveToAxisDialog(Axis::Z))),
+            has_object,
+        ),
+        cell(
+            themed_icon!(ui, "insert_crossings.svg"),
+            tr!("toolbars-insert-points-crossings"),
+            LeftToolAction::Command(Box::new(UiCommand::InsertPointsAtIntersections)),
+            editor.selection_has_intersections,
+        ),
+        cell(
+            themed_icon!(ui, "reverse_string.svg"),
+            tr!("toolbars-reverse-strings"),
+            LeftToolAction::Command(Box::new(UiCommand::ReverseSelectedStrings)),
+            editor.selection_has_polylines,
+        ),
+        cell(
+            themed_icon!(ui, "thin_string.svg"),
+            tr!("toolbars-thin-strings"),
+            LeftToolAction::Command(Box::new(UiCommand::OpenThinStringsDialog)),
+            editor.selection_has_polylines,
+        ),
+    ]);
+    tools
 }
 
 /// The Drill & Blast tools, in the order they are drawn: lay a pattern out,
@@ -137,7 +195,7 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, edi
             hint: None,
         },
         LeftTool {
-            icon: egui::Image::new(unthemed_icon!("tie_holes.svg")),
+            icon: egui::Image::new(unthemed_icon!("tie_holes_tool.svg")),
             tooltip: tr!("common-tie-holes"),
             action: LeftToolAction::Tool(ActiveTool::TieHoles),
             enabled: editing_enabled && has_active_dataset,
@@ -152,7 +210,7 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, edi
         },
         LeftTool {
             // Loading follows tying: the round is laid out, timed, then filled.
-            icon: egui::Image::new(unthemed_icon!("charge_holes.svg")),
+            icon: egui::Image::new(unthemed_icon!("charge_holes_tool.svg")),
             tooltip: tr!("common-charge-holes"),
             action: LeftToolAction::Tool(ActiveTool::ChargeHoles),
             enabled: editing_enabled && has_active_dataset,
@@ -171,6 +229,7 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
         LeftToolAction::NewLayer => editor.new_layer_dialog_open,
         LeftToolAction::Tool(active) => editor.active_tool == active,
         LeftToolAction::DrillPattern => editor.drill_pattern_open,
+        LeftToolAction::Command(_) => false,
     };
     let button = ToolbarButton::new(tool.icon.clone(), tool.tooltip.as_str())
         .id_salt(("left_tool", tool.tooltip.as_str()))
@@ -182,7 +241,7 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
     if !response.clicked() {
         return;
     }
-    match tool.action {
+    match &tool.action {
         LeftToolAction::NewLayer => {
             editor.new_layer_dialog_open = !editor.new_layer_dialog_open;
             if editor.new_layer_dialog_open {
@@ -190,8 +249,20 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
                 commands.push(UiCommand::SetActiveTool(ActiveTool::None));
             }
         }
-        LeftToolAction::Tool(active) => commands.push(UiCommand::SetActiveTool(active)),
+        LeftToolAction::Tool(active) => commands.push(UiCommand::SetActiveTool(*active)),
         LeftToolAction::DrillPattern => commands.push(UiCommand::ToggleCreateDrillPattern),
+        LeftToolAction::Command(command) => commands.push(command.as_ref().clone()),
+    }
+    if let LeftToolAction::Tool(_) | LeftToolAction::Command(_) = tool.action {
+        note_row_use(editor.active_workspace, commands);
+    }
+}
+
+/// A cell running a Design row's function, the last command pushed, is a use
+/// of that row.
+fn note_row_use(workspace: Workspace, commands: &mut Vec<UiCommand>) {
+    if let Some(row) = commands.last().and_then(|command| RecentRow::running(workspace, command)) {
+        commands.push(UiCommand::NoteRecentFunction(row.key()));
     }
 }
 
@@ -218,6 +289,7 @@ pub(crate) fn draw_left_toolbar(
 ) -> egui::Rect {
     let tools = match editor.active_workspace {
         workspace if workspace.has_production_tools() => left_tools(ui, editor, editing_enabled, project_active),
+        workspace if workspace.has_drawing_tools() => drawing_tools(ui, editor, editing_enabled, project_active),
         Workspace::DrillAndBlast => blast_tools(ui, project, editor, editing_enabled, project_active),
         _ => Vec::new(),
     };
@@ -266,13 +338,15 @@ pub(crate) fn draw_left_toolbar(
 /// explorer's rows rather than as whole-scene toolbar actions: see
 /// `ExplorerEntry::toggles`.
 ///
-/// Every workspace shows and edits the same shared cursor mode. The two
-/// measurements are of a pit being designed, so only that run belongs to the
-/// production workspace - see
-/// [`crate::ui::state::Workspace::has_production_tools`].
-pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) -> egui::Rect {
+/// Every workspace shows and edits the same shared cursor mode, and carries
+/// the measuring and hiding run.
+///
+/// Returns the toolbar's rect and the screen x of the cursor-mode run's
+/// middle, which the console's grip lines up with.
+pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) -> (egui::Rect, f32) {
     let claimed = bottom_toolbar_height(ui.ctx());
-    egui::Panel::bottom("bottom_tools_strip")
+    let mut cursor_modes_centre = ui.ctx().content_rect().center().x;
+    let rect = egui::Panel::bottom("bottom_tools_strip")
         .resizable(false)
         .show_separator_line(crate::ui::chrome::show_separator_line(ui))
         .exact_size(claimed)
@@ -293,7 +367,7 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
             crate::ui::elements::bar_strip(ui, "bottom_toolbar_strip", ui.available_height(), |ui, strip| {
                 let side = strip.height();
                 let contents_id = ui.make_persistent_id("bottom_toolbar_buttons");
-                ui.scope_builder(egui::UiBuilder::new().id(contents_id).max_rect(strip), |ui| {
+                ui.scope_builder(egui::UiBuilder::new().scope_id(contents_id).max_rect(strip), |ui| {
                     // Three clusters placed against the same strip, the way the
                     // viewport bar lays its own out - see [`super::cluster`] - so the
                     // centred run is not pushed along by what is beside it.
@@ -304,19 +378,7 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
                     // way of the tools and with room to say what is running -
                     // the status bar had neither.
                     let right = super::cluster(ui, strip, egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        // Right to left: the memory ring takes the end of the
-                        // strip, the task readout grows leftwards from it.
-                        let memory_shown = editor.memory_usage.is_some();
-                        crate::ui::widgets::progress::draw_memory_usage(ui, editor);
-                        crate::ui::widgets::progress::draw_task_progress(
-                            ui,
-                            editor,
-                            if memory_shown {
-                                crate::ui::widgets::progress::READOUT_GAP
-                            } else {
-                                crate::ui::widgets::progress::END_INSET
-                            },
-                        );
+                        crate::ui::widgets::progress::draw_task_progress(ui, editor, crate::ui::widgets::progress::END_INSET);
                     });
 
                     // Held clear of the left cluster first and slid back from
@@ -330,9 +392,10 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
                     let band_right = right.left() - CENTRE_CLEARANCE;
                     let x = (strip.left() + centre_offset - width / 2.0).clamp(band_left, (band_right - width).max(band_left));
                     let run = egui::Rect::from_min_max(egui::pos2(x, strip.top()), egui::pos2(strip.right(), strip.bottom()));
-                    super::cluster(ui, run, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    let modes = super::cluster(ui, run, egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         draw_cursor_modes(ui, editor, commands, side);
                     });
+                    cursor_modes_centre = modes.center().x;
 
                     // The width the strip has to keep: the three clusters, the
                     // centre one with its clearance either side.
@@ -342,20 +405,16 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
             });
         })
         .response
-        .rect
+        .rect;
+    (rect, cursor_modes_centre)
 }
 
-/// The measuring run, which only a workspace designing a pit has anything to
-/// measure in - see [`crate::ui::state::Workspace::has_production_tools`].
+/// The measuring and hiding run, which every workspace carries.
 fn draw_measure_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, side: f32) {
-    if !editor.active_workspace.has_production_tools() {
-        return;
-    }
-
     ui.add_enabled_ui(!editor.fly_mode_enabled, |ui| {
         tool_button(
             ui,
-            egui::Image::new(themed_icon!(ui, "measure_distance.svg")),
+            egui::Image::new(unthemed_icon!("measure_distance.svg")),
             tr!("toolbars-measure-distance").as_str(),
             editor,
             commands,
@@ -365,13 +424,34 @@ fn draw_measure_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mu
 
         tool_button(
             ui,
-            egui::Image::new(themed_icon!(ui, "measure_batter_angle.svg")),
+            egui::Image::new(unthemed_icon!("measure_batter_angle.svg")),
             tr!("toolbars-strike-dip").as_str(),
             editor,
             commands,
             ActiveTool::MeasureBatterAngle,
             side,
         );
+
+        tool_button(
+            ui,
+            egui::Image::new(themed_icon!(ui, "hide_items.svg")),
+            tr!("toolbars-hide").as_str(),
+            editor,
+            commands,
+            ActiveTool::Hide,
+            side,
+        );
+
+        if ui
+            .add(
+                ToolbarButton::new(egui::Image::new(themed_icon!(ui, "show_all_hidden.svg")), tr!("toolbars-show-all-hidden"))
+                    .id_salt("show_all_hidden")
+                    .button_side(side),
+            )
+            .clicked()
+        {
+            commands.push(UiCommand::ShowAllHidden);
+        }
     });
 }
 
@@ -413,6 +493,7 @@ pub(crate) fn tool_button(
 
     if response.clicked() {
         commands.push(UiCommand::SetActiveTool(tool));
+        note_row_use(editor.active_workspace, commands);
     }
 
     response

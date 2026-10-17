@@ -269,7 +269,7 @@ impl<'a> App<'a> {
 
     /// Clip the seam whose roof and floor are `targets` to the limits
     /// given, Keep below first, into a new roof, floor and solid between
-    /// them in the Modelling section, selected when made; the originals stay
+    /// them under Triangulations, selected when made; the originals stay
     /// as they are. A depth below ground is kept with the project, since it
     /// is the deposit's.
     pub(crate) fn cut_triangulation_to_surface(&mut self, targets: Vec<TriangulationId>, upper: Option<TriUpperCut>, lower: Option<TriLowerCut>) -> Result<()> {
@@ -342,7 +342,6 @@ impl<'a> App<'a> {
                 .chain(lower_id.iter())
                 .map(|&id| crate::app::jobs::JobKey::Triangulation(id)),
         );
-        let section = SectionKind::derived_for(MemberKind::Triangulation, [SectionKind::Modelling]);
         let compute = move |cancel: &CancelFlag, progress: &crate::model::progress::Progress| -> Result<ToSurfaceOutcome> {
             let upper_surface = upper_read.map(|(_, mesh, spatial)| CutReader::new(mesh, spatial)).transpose()?;
             let ground = lower_read.map(|(_, mesh, spatial)| CutReader::new(mesh, spatial)).transpose()?;
@@ -407,7 +406,7 @@ impl<'a> App<'a> {
                 ToSurfaceOutcome::Made { seam, generated, cut } => {
                     let mut made = Vec::new();
                     for generated in *generated {
-                        app.insert_generated_triangulation_in(generated, section);
+                        app.insert_generated_triangulation(generated);
                         made.extend(app.active_triangulation);
                     }
                     let name_of = |index: usize| {

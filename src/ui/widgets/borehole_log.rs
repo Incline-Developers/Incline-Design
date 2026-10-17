@@ -1,18 +1,150 @@
-//! The borehole log: one hole drawn down the page against a depth scale,
-//! with its strat column, compass and the trace columns of [`super::log_traces`].
+//! The borehole inspector's widgets: the read-only hole summary and its
+//! interval table, and the log - the hole's ribbon with its strat column and
+//! geophysics traces beside it.
 
 use std::{fmt::Debug, hash::Hash};
 
-use super::viewport::{Outline, outlined_galley, trim_decimal_zeros};
+use super::viewport::{Outline, format_grade, outlined_galley, trim_decimal_zeros};
 use crate::{
     i18n::tr,
     model::drill_hole::{ShiftDirection, UNKNOWN_NAME},
-    ui::widgets::{
-        context_menu::{ContextMenuAction, context_menu_popup, context_menu_popup_with_fields, context_menu_separator},
-        log_traces::{self, ColumnTraces, TraceColumn, WellLogStyle},
-        menu,
+    ui::{
+        elements::properties::read_only_row,
+        widgets::{
+            context_menu::{ContextMenuAction, context_menu_popup, context_menu_popup_with_fields, context_menu_separator},
+            data_table::DataTable,
+            log_traces::{self, ColumnTraces, TraceColumn, WellLogStyle},
+            menu,
+        },
     },
 };
+
+/// Read-only summary of one drill hole: collar, trace extent, orientation,
+/// provenance, and the interval table as a grid. The two halves draw
+/// separately, so the caller can fold each into a section of its own.
+pub(crate) struct DrillHoleProperties<'a> {
+    id: egui::Id,
+    hole: &'a crate::model::drill_hole::DrillHole,
+    /// The dataset's fields, in order, become the columns after From and
+    /// To, so every hole gets the same columns even if it never recorded one.
+    fields: &'a [crate::model::drill_hole::DrillField],
+}
+
+impl<'a> DrillHoleProperties<'a> {
+    pub(crate) fn new(id_source: impl Hash + Debug, hole: &'a crate::model::drill_hole::DrillHole, fields: &'a [crate::model::drill_hole::DrillField]) -> Self {
+        Self {
+            id: egui::Id::unique(id_source),
+            hole,
+            fields,
+        }
+    }
+
+    /// The hole's collar, trace, orientation and interval count, as rows
+    /// lined up with the fields of the panel around them.
+    pub(crate) fn show_summary(&self, ui: &mut egui::Ui) {
+        let hole = self.hole;
+        let collar = hole.collar_position();
+        read_only_row(ui, &tr!("common-easting"), &format!("{:.2}", collar.x));
+        read_only_row(ui, &tr!("common-northing"), &format!("{:.2}", collar.y));
+        read_only_row(ui, &tr!("common-elevation"), &format!("{:.2}", collar.z));
+        let extent = match (hole.trace.first(), hole.trace.last()) {
+            (Some(first), Some(last)) => tr!("viewport-from", from = format!("{:.2}", first.depth), to = format!("{:.2}", last.depth)),
+            _ => tr!("viewport-no-trace"),
+        };
+        read_only_row(ui, &tr!("viewport-trace-extent"), &extent);
+        let orientation = match hole.orientation() {
+            Some(orientation) => tr!(
+                "viewport-azimuth-dip",
+                azimuth = format!("{:.1}", orientation.azimuth),
+                dip = format!("{:.1}", orientation.dip)
+            ),
+            // Not "none": nobody recorded one, the same as its source.
+            None => tr!("common-unknown"),
+        };
+        read_only_row(ui, &tr!("common-orientation"), &orientation);
+        read_only_row(ui, &tr!("viewport-orientation-source"), &hole.orientation_source.label());
+        read_only_row(ui, &tr!("viewport-intervals"), &hole.intervals.len().to_string());
+    }
+
+    /// The interval spreadsheet, scrolling within `max_height`.
+    pub(crate) fn show_intervals(&self, ui: &mut egui::Ui, max_height: f32) {
+        let hole = self.hole;
+        let header = drill_table_header(self.fields);
+        let aligns = drill_table_aligns(self.fields);
+        let shown = |index: usize| hole.intervals.get(index).map(|interval| drill_table_row(interval, self.fields, false)).unwrap_or_default();
+        let copied = |index: usize| hole.intervals.get(index).map(|interval| drill_table_row(interval, self.fields, true)).unwrap_or_default();
+        DataTable::new(self.id.with("intervals"), &header, hole.intervals.len(), &shown)
+            .aligns(&aligns)
+            .copy_cells(&copied)
+            .fingerprint(self.fingerprint())
+            .max_height(max_height)
+            .show(ui);
+    }
+
+    /// What the table's columns were measured from; a change re-measures.
+    fn fingerprint(&self) -> u64 {
+        use std::hash::Hasher;
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.hole
+            .intervals
+            .last()
+            .map(|interval| (interval.from.to_bits(), interval.to.to_bits()))
+            .hash(&mut hasher);
+        hasher.finish()
+    }
+}
+
+/// The table's header row: From, To, then one column per dataset field.
+fn drill_table_header(fields: &[crate::model::drill_hole::DrillField]) -> Vec<String> {
+    let mut header = Vec::with_capacity(fields.len() + 2);
+    header.push(tr!("survey-from"));
+    header.push(tr!("survey-to"));
+    header.extend(fields.iter().map(|field| field.label.clone()));
+    header
+}
+
+/// One interval as text, one cell per header column, `raw` for full
+/// precision instead of display rounding. An unrecorded field is an empty cell.
+///
+/// A corrected cell shows the interpreted value with the logged one in
+/// brackets; raw text, which a copy carries, is the interpreted value alone.
+fn drill_table_row(interval: &crate::model::drill_hole::DrillInterval, fields: &[crate::model::drill_hole::DrillField], raw: bool) -> Vec<String> {
+    let (logged_from, logged_to, logged_values) = interval.logged();
+    let corrected = !raw && interval.is_corrected();
+    let beside = |shown: String, logged: String| if corrected && shown != logged { format!("{shown} ({logged})") } else { shown };
+    let depth = |depth: f64| if raw { depth.to_string() } else { format!("{depth:.2}") };
+    let value = |value: Option<&crate::model::drill_hole::DrillValue>| match value {
+        Some(crate::model::drill_hole::DrillValue::Numeric(number)) => {
+            if raw {
+                number.to_string()
+            } else {
+                format_grade(*number)
+            }
+        }
+        Some(crate::model::drill_hole::DrillValue::Category(category)) => category.clone(),
+        None => String::new(),
+    };
+    let mut row = Vec::with_capacity(fields.len() + 2);
+    row.push(beside(depth(interval.from), depth(logged_from)));
+    row.push(beside(depth(interval.to), depth(logged_to)));
+    row.extend(
+        fields
+            .iter()
+            .map(|field| beside(value(interval.values.get(&field.key)), value(logged_values.get(&field.key)))),
+    );
+    row
+}
+
+/// Which edge a column's cells sit against: numbers right, categories left.
+fn drill_table_aligns(fields: &[crate::model::drill_hole::DrillField]) -> Vec<egui::Align> {
+    let mut aligns = vec![egui::Align::Max, egui::Align::Max];
+    aligns.extend(fields.iter().map(|field| match field.kind {
+        crate::model::drill_hole::DrillFieldKind::Numeric { .. } => egui::Align::Max,
+        crate::model::drill_hole::DrillFieldKind::Categorical { .. } => egui::Align::Min,
+    }));
+    aligns
+}
 
 /// Ink for a strat run's code. A run is filled with whatever its palette and
 /// hatching give, pastel or dark, in either theme: white over a thin dark
@@ -153,7 +285,7 @@ struct LogLayout {
 impl<'a> BoreholeLog<'a> {
     pub(crate) fn new(id_source: impl Hash + Debug, hole: &'a crate::model::drill_hole::DrillHole, dataset: &'a crate::model::drill_hole::OpenDrillHoleDataset) -> Self {
         Self {
-            id: egui::Id::new(id_source),
+            id: egui::Id::unique(id_source),
             hole,
             dataset,
             strat_field: None,
@@ -639,39 +771,9 @@ impl<'a> BoreholeLog<'a> {
             })
     }
 
-    /// Consecutive intervals reading the same lithology, merged into one
-    /// run, so forty abutting records of the same rock draw as one bed.
+    /// The hole's strat runs between `top` and `bottom`, see [`strat_runs`].
     fn lithology_runs(&self, field: &crate::model::drill_hole::DrillField, top: f64, bottom: f64) -> Vec<(f64, f64, Option<String>)> {
-        let mut runs: Vec<(f64, f64, Option<String>)> = Vec::new();
-        let mut cursor = top;
-        let mut sorted = self
-            .hole
-            .intervals
-            .iter()
-            .filter(|interval| interval.to > top && interval.from < bottom)
-            .collect::<Vec<_>>();
-        sorted.sort_by(|a, b| a.from.total_cmp(&b.from));
-
-        for interval in sorted {
-            let (from, to) = (interval.from.max(top), interval.to.min(bottom));
-            if to <= from {
-                continue;
-            }
-            let value = match interval.values.get(&field.key) {
-                Some(crate::model::drill_hole::DrillValue::Category(value)) if !value.trim().is_empty() => Some(value.trim().to_owned()),
-                Some(crate::model::drill_hole::DrillValue::Numeric(number)) => Some(format!("{number}")),
-                _ => None,
-            };
-            if from > cursor + 1.0e-9 {
-                push_run(&mut runs, cursor, from, None);
-            }
-            push_run(&mut runs, from.max(cursor), to, value);
-            cursor = cursor.max(to);
-        }
-        if cursor < bottom - 1.0e-9 {
-            push_run(&mut runs, cursor, bottom, None);
-        }
-        runs
+        strat_runs(self.hole, field, top, bottom)
     }
 
     fn draw_strat(&self, ui: &egui::Ui, painter: &egui::Painter, strat: egui::Rect, field: &crate::model::drill_hole::DrillField, top: f64, bottom: f64) {
@@ -1466,6 +1568,38 @@ fn draw_azimuth_compass(ui: &egui::Ui, painter: &egui::Painter, rect: egui::Rect
         );
     }
     painter.line_segment([centre, centre + egui::vec2(0.0, -radius + 4.0)], egui::Stroke::new(2.0, visuals.strong_text_color()));
+}
+
+/// Consecutive intervals of `hole` reading the same lithology in `field`,
+/// merged into one run, so forty abutting records of the same rock draw as
+/// one bed; unlogged stretches between `top` and `bottom` are `None` runs.
+/// The Column tab reads the same runs the log draws.
+pub(crate) fn strat_runs(hole: &crate::model::drill_hole::DrillHole, field: &crate::model::drill_hole::DrillField, top: f64, bottom: f64) -> Vec<(f64, f64, Option<String>)> {
+    let mut runs: Vec<(f64, f64, Option<String>)> = Vec::new();
+    let mut cursor = top;
+    let mut sorted = hole.intervals.iter().filter(|interval| interval.to > top && interval.from < bottom).collect::<Vec<_>>();
+    sorted.sort_by(|a, b| a.from.total_cmp(&b.from));
+
+    for interval in sorted {
+        let (from, to) = (interval.from.max(top), interval.to.min(bottom));
+        if to <= from {
+            continue;
+        }
+        let value = match interval.values.get(&field.key) {
+            Some(crate::model::drill_hole::DrillValue::Category(value)) if !value.trim().is_empty() => Some(value.trim().to_owned()),
+            Some(crate::model::drill_hole::DrillValue::Numeric(number)) => Some(format!("{number}")),
+            _ => None,
+        };
+        if from > cursor + 1.0e-9 {
+            push_run(&mut runs, cursor, from, None);
+        }
+        push_run(&mut runs, from.max(cursor), to, value);
+        cursor = cursor.max(to);
+    }
+    if cursor < bottom - 1.0e-9 {
+        push_run(&mut runs, cursor, bottom, None);
+    }
+    runs
 }
 
 /// Extend the last run rather than start a new one when values and depths abut.

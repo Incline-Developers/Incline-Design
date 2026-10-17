@@ -103,6 +103,7 @@ impl<'a> App<'a> {
 
         if let Some(graphics) = self.graphics.as_mut() {
             graphics.set_fly_mode_enabled(self.editor.fly_mode_enabled);
+            graphics.set_scroll_zooms(self.modifiers.control_key());
         }
 
         let gui_consumed = gui_response.is_some_and(|response| response.consumed);
@@ -133,7 +134,8 @@ impl<'a> App<'a> {
         }
 
         if !gui_consumed {
-            let canvas_pick_mode_active = self.editor.triangulation_pick_target.is_some() || self.editor.drill_pattern_awaiting_shape_pick;
+            let canvas_pick_mode_active =
+                self.editor.triangulation_pick_target.is_some() || self.editor.optimization.start_pick.is_some() || self.editor.drill_pattern_awaiting_shape_pick;
             let suppress_view_mode_canvas_click = self.editor.view_mode_owns_canvas_click() && matches!(event, WindowEvent::MouseInput { button: MouseButton::Left, .. });
             if !suppress_view_mode_canvas_click || canvas_pick_mode_active {
                 self.handle_mouse_press(&event);
@@ -203,9 +205,14 @@ impl<'a> App<'a> {
                     self.poll_raster_loads();
                     self.poll_saves();
                     self.poll_jobs();
+                    self.reconcile_optimization_runs();
                     self.refresh_status_message();
                     if let Some(usage) = self.memory_sampler.poll() {
                         self.editor.memory_usage = Some(usage);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if let Some(cores) = self.cpu_sampler.poll() {
+                        self.editor.cpu_usage = cores;
                     }
                     let now = Instant::now();
                     let frame_interval = self.frame_interval();
@@ -257,6 +264,8 @@ impl<'a> App<'a> {
                         self.refresh_slice_cursor();
                         self.redraw_requested = true;
                     }
+                    // After `update`, which walks and turns the section.
+                    self.refresh_section_surface_lines();
                     if let Some(graphics) = self.graphics.as_mut() {
                         self.editor.can_undo = self.history.can_undo();
                         self.editor.can_redo = self.history.can_redo();
@@ -344,8 +353,18 @@ impl<'a> App<'a> {
                                     self.editor.move_panel_last_preview = [f64::NAN; 3];
                                     self.cancel_move_delta();
                                 }
-                                let hover_highlight_active = matches!(self.editor.active_tool, ActiveTool::ExplodePolyline | ActiveTool::Move | ActiveTool::DeletePoints)
-                                    || (self.editor.active_tool == ActiveTool::RelimitLine && (self.editor.relimit_awaiting_source_pick || self.editor.relimit_waiting_for_pick));
+                                let hover_highlight_active = matches!(
+                                    self.editor.active_tool,
+                                    ActiveTool::ExplodePolyline
+                                        | ActiveTool::ExplodePolylineToPoints
+                                        | ActiveTool::Move
+                                        | ActiveTool::DeletePoints
+                                        | ActiveTool::EditVertex
+                                        | ActiveTool::InsertPoint
+                                        | ActiveTool::FillSegment
+                                        | ActiveTool::RemoveBetweenCrossings
+                                ) || (self.editor.active_tool == ActiveTool::RelimitLine
+                                    && (self.editor.relimit_awaiting_source_pick || self.editor.relimit_waiting_for_pick));
                                 if !hover_highlight_active
                                     && self.editor.tool_highlight_id.is_some()
                                     && self.editor.offset_target_ids.is_empty()
@@ -389,6 +408,9 @@ impl<'a> App<'a> {
                                 if self.editor.active_tool == ActiveTool::SplitAtPoints && self.editor.split_poly_id.is_none() {
                                     self.split_init_from_selection();
                                 }
+                                if self.editor.active_tool == ActiveTool::SplitAtCrossings && self.editor.split_crossings_target.is_none() {
+                                    self.split_crossings_init_from_selection();
+                                }
                             }
                             Err(error @ (RenderSurfaceError::Lost | RenderSurfaceError::Outdated)) => {
                                 if !self.surface_retry_pending {
@@ -430,6 +452,10 @@ impl<'a> App<'a> {
                 }
                 WindowEvent::CursorMoved { position, .. } => {
                     self.editor.cursor_screen_px = Some((position.x as f32, position.y as f32));
+                    if self.editor.stroke_leg_broken {
+                        self.editor.stroke_leg_broken = false;
+                        self.invalidate_overlay();
+                    }
                     let pixels_per_point = self.points_to_px(1.0);
                     let circle_input_reset = self
                         .editor
@@ -453,7 +479,8 @@ impl<'a> App<'a> {
                     let snap_eligible = self.editor.active_tool.snaps_cursor() && self.editor.snapping_active() && !camera_active && !is_scrolling;
                     let now = Instant::now();
                     let snap_poll_due = self.cursor_poll_due(now);
-                    let snapped = if snap_eligible { self.cursor_snap_point(now) } else { None };
+                    let close_target = if camera_active { None } else { self.poly_close_target() };
+                    let snapped = close_target.or_else(|| if snap_eligible { self.cursor_snap_point(now) } else { None });
                     let was_snapped = self.editor.cursor_snapped;
                     // During a camera drag the mouse steers the view, not the
                     // cursor: keep the last world cursor (and its snapped flag)
@@ -467,6 +494,9 @@ impl<'a> App<'a> {
                         self.redraw_requested = true;
                     }
                     self.drag_to_cursor();
+                    if self.vertex_drag.is_some() {
+                        self.drag_vertex_to_cursor();
+                    }
                     if self.gizmo_drag.is_some() {
                         self.move_gizmo_to_cursor();
                         self.invalidate_overlay();
@@ -516,18 +546,15 @@ impl<'a> App<'a> {
                                 crate::app::PICK_THRESHOLD_PX * 2.5,
                                 graphics.section_slab(),
                             );
-                            let hover_px = nearest.and_then(|(oid, _vi, world)| {
-                                let is_closed_polyline = self.scene_document.get_object(oid).is_some_and(|o| {
-                                    matches!(
-                                        o,
-                                        crate::model::Object::Polyline {
-                                            verts,
-                                            closed: true,
-                                            ..
-                                        } if verts.len() >= 3
-                                    )
+                            let on_section = self.drawing_section().is_some();
+                            let hover_px = nearest.and_then(|(oid, point, world)| {
+                                let is_corner = self.scene_document.get_object(oid).is_some_and(|o| match (o, point) {
+                                    (crate::model::Object::Polyline { verts, closed, .. }, crate::model::ObjectPoint::Vertex(vi)) => {
+                                        crate::app::commands::drawing::chamfer::chamfers_corner(verts, *closed, vi, on_section)
+                                    }
+                                    _ => false,
                                 });
-                                if !is_closed_polyline {
+                                if !is_corner {
                                     return None;
                                 }
                                 graphics.world_to_window_px(&vp, world)
@@ -539,19 +566,53 @@ impl<'a> App<'a> {
                         }
                     }
                     let hover_pick_due = snap_poll_due
-                        && (matches!(self.editor.active_tool, ActiveTool::Move | ActiveTool::DeletePoints)
-                            || self.editor.active_tool == ActiveTool::ExplodePolyline
+                        && (matches!(
+                            self.editor.active_tool,
+                            ActiveTool::Move
+                                | ActiveTool::DeletePoints
+                                | ActiveTool::EditVertex
+                                | ActiveTool::InsertPoint
+                                | ActiveTool::FillSegment
+                                | ActiveTool::RemoveBetweenCrossings
+                        ) || matches!(self.editor.active_tool, ActiveTool::ExplodePolyline | ActiveTool::ExplodePolylineToPoints)
+                            || self.editor.reads_segment_hover()
                             || self.editor.relimit_awaiting_source_pick
                             || self.editor.relimit_waiting_for_pick
                             || self.editor.relimit_confirming_end
                             || self.editor.triangulation_pick_target.is_some()
+                            || self.editor.optimization.start_pick.is_some()
                             || self.editor.drill_pattern_awaiting_shape_pick);
                     if hover_pick_due {
                         self.last_snap_poll_instant = Some(now);
                     }
-                    if matches!(self.editor.active_tool, ActiveTool::Move | ActiveTool::DeletePoints) && hover_pick_due {
+                    if hover_pick_due && self.editor.reads_segment_hover() {
+                        let hover = self.measure_segment_hit();
+                        if self.editor.measure_segment_hover != hover {
+                            self.editor.measure_segment_hover = hover;
+                            self.invalidate_overlay();
+                        }
+                    }
+                    if matches!(
+                        self.editor.active_tool,
+                        ActiveTool::Move
+                            | ActiveTool::DeletePoints
+                            | ActiveTool::EditVertex
+                            | ActiveTool::InsertPoint
+                            | ActiveTool::FillSegment
+                            | ActiveTool::RemoveBetweenCrossings
+                    ) && hover_pick_due
+                    {
                         self.update_move_delete_hover();
-                    } else if !matches!(self.editor.active_tool, ActiveTool::Move | ActiveTool::DeletePoints) && self.editor.tool_hover_vertex_px.is_some() {
+                    } else if !matches!(
+                        self.editor.active_tool,
+                        ActiveTool::Move
+                            | ActiveTool::DeletePoints
+                            | ActiveTool::EditVertex
+                            | ActiveTool::InsertPoint
+                            | ActiveTool::FillSegment
+                            | ActiveTool::RemoveBetweenCrossings
+                    ) && self.editor.tool_hover_vertex_px.is_some()
+                    {
                         self.editor.tool_hover_vertex_px = None;
                         self.editor.tool_hover_vertex_world = None;
                         self.invalidate_overlay();
@@ -641,10 +702,12 @@ impl<'a> App<'a> {
                         self.update_relimit_hover_line();
                     }
                     self.update_offset_preview();
-                    if self.editor.active_tool == ActiveTool::ExplodePolyline && hover_pick_due {
+                    if matches!(self.editor.active_tool, ActiveTool::ExplodePolyline | ActiveTool::ExplodePolylineToPoints) && hover_pick_due {
                         self.update_explode_hover();
                     }
-                    if (self.editor.triangulation_pick_target.is_some() || self.editor.drill_pattern_awaiting_shape_pick) && hover_pick_due {
+                    if (self.editor.triangulation_pick_target.is_some() || self.editor.optimization.start_pick.is_some() || self.editor.drill_pattern_awaiting_shape_pick)
+                        && hover_pick_due
+                    {
                         self.update_viewport_field_pick_hover();
                     }
                     if !self.editor.pending_stroke.is_empty()
@@ -661,6 +724,7 @@ impl<'a> App<'a> {
                         || self.editor.active_tool == ActiveTool::MeasureDistance
                         || self.editor.active_tool == ActiveTool::MeasureBatterAngle
                         || self.editor.active_tool == ActiveTool::DeletePoints
+                        || self.editor.active_tool == ActiveTool::EditVertex
                         || self.editor.active_tool == ActiveTool::Chamfer
                         || self.editor.active_tool == ActiveTool::Bezier
                         || self.editor.slice_pending_start.is_some()
@@ -864,13 +928,23 @@ impl<'a> App<'a> {
     }
 
     fn handle_mouse_press(&mut self, event: &WindowEvent) {
+        // An orbit or pan starts on these presses: the canvas menu goes, as on
+        // a left press below. A quick right click reopens it on release.
+        if let WindowEvent::MouseInput {
+            state: ElementState::Pressed,
+            button: MouseButton::Right | MouseButton::Middle,
+            ..
+        } = event
+        {
+            self.editor.canvas_context_menu_open = false;
+        }
         if let WindowEvent::MouseInput {
             state: ElementState::Pressed,
             button: MouseButton::Left,
             ..
         } = event
         {
-            if self.editor.triangulation_pick_target.is_some() || self.editor.drill_pattern_awaiting_shape_pick {
+            if self.editor.triangulation_pick_target.is_some() || self.editor.optimization.start_pick.is_some() || self.editor.drill_pattern_awaiting_shape_pick {
                 self.editor.canvas_context_menu_open = false;
                 self.begin_select_or_drag();
                 return;
@@ -879,12 +953,34 @@ impl<'a> App<'a> {
             match self.editor.active_tool {
                 ActiveTool::MakePoint => self.place_point_at_cursor(),
                 ActiveTool::MakeText if !self.editor.text_editing_enabled => self.text_tool_click(),
+                // Geology's Copy Along a String takes the Polyline tool's
+                // clicks as its picks.
+                ActiveTool::MakePoly if crate::ui::state::copy_along_live(&self.editor).is_some() => self.copy_along_click(),
+                // Carry On and Redraw take their first click as the pick.
+                ActiveTool::MakePoly
+                    if !self.editor.poly_finish_dialog
+                        && matches!(
+                            crate::ui::state::string_rework_live(&self.editor),
+                            Some(crate::ui::state::StringRework::Picking | crate::ui::state::StringRework::PickingRun)
+                        ) =>
+                {
+                    self.carry_on_pick()
+                }
+                // Redrawing, a click on another vertex of the string ends it.
+                ActiveTool::MakePoly
+                    if !self.editor.poly_finish_dialog && matches!(crate::ui::state::string_rework_live(&self.editor), Some(crate::ui::state::StringRework::Redraw { .. })) =>
+                {
+                    self.redraw_click()
+                }
                 ActiveTool::MakeLine | ActiveTool::MakePoly if !self.editor.poly_finish_dialog => self.place_stroke_point(),
                 ActiveTool::MakeCircle => self.make_circle_click(),
                 ActiveTool::MeasureDistance => self.measure_distance_click(),
                 ActiveTool::MeasureBatterAngle => self.measure_batter_angle_click(),
+                ActiveTool::EditVertex => self.edit_vertex_at_cursor(),
+                ActiveTool::InsertPoint => self.insert_point_at_cursor(),
+                ActiveTool::FillSegment => self.fill_segment_at_cursor(),
                 ActiveTool::VerticalSlice => self.slice_line_click(),
-                ActiveTool::DeletePoints => {
+                ActiveTool::DeletePoints | ActiveTool::Hide => {
                     self.editor.selection_box_start_px = self.editor.cursor_screen_px;
                     self.editor.selection_box_current_px = self.editor.cursor_screen_px;
                 }
@@ -895,7 +991,9 @@ impl<'a> App<'a> {
                             Some(GizmoHandleHit::Plane(plane_idx, axes)) => self.begin_gizmo_plane_drag(plane_idx, axes, cursor_px),
                             Some(GizmoHandleHit::Axis(axis_idx, axis)) => self.begin_gizmo_drag(axis_idx, axis, cursor_px),
                             None => {
-                                if !self.pick_move_vertex_target() {
+                                if self.pick_move_vertex_target() {
+                                    self.begin_vertex_drag();
+                                } else {
                                     self.begin_select_or_drag();
                                 }
                             }
@@ -956,9 +1054,11 @@ impl<'a> App<'a> {
                 ActiveTool::SetInitiationPoint => self.set_initiation_at_cursor(),
                 ActiveTool::ChargeHoles => self.charge_holes_press(),
                 ActiveTool::PickRotationCentre => self.pick_rotation_centre_at_cursor(),
-                ActiveTool::ExplodePolyline => self.explode_at_cursor(),
+                ActiveTool::ExplodePolyline | ActiveTool::ExplodePolylineToPoints => self.explode_at_cursor(),
                 ActiveTool::FuseIntoPolyline => self.fuse_click(),
                 ActiveTool::SplitAtPoints => self.split_at_points_click(),
+                ActiveTool::SplitAtCrossings => self.split_at_crossings_click(),
+                ActiveTool::RemoveBetweenCrossings => self.remove_between_crossings_click(),
                 ActiveTool::RelimitLine => self.relimit_line_click(),
                 ActiveTool::OffsetElement => {
                     if self.editor.offset_awaiting_side_pick {
@@ -985,6 +1085,9 @@ impl<'a> App<'a> {
     fn finish_left_button_interactions(&mut self) {
         self.finish_box_selection();
         self.finish_drag();
+        if self.vertex_drag.is_some() {
+            self.finish_vertex_drag();
+        }
         if self.gizmo_drag.is_some() {
             self.finish_gizmo_drag();
         }
@@ -1163,12 +1266,22 @@ impl<'a> App<'a> {
                         crate::model::SceneEntityId::Triangulation(id) => Some(id),
                         _ => None,
                     };
+                    self.editor.canvas_context_menu_recent = false;
                     self.editor.canvas_context_menu_open = true;
                     self.editor.canvas_context_menu_px = self.editor.cursor_screen_px;
                     self.redraw_requested = true;
                 } else if ring.is_some() {
                     self.editor.canvas_context_menu_hole = None;
                     self.editor.canvas_context_menu_ring = ring;
+                    self.editor.canvas_context_menu_recent = false;
+                    self.editor.canvas_context_menu_open = true;
+                    self.editor.canvas_context_menu_px = self.editor.cursor_screen_px;
+                    self.redraw_requested = true;
+                } else if self.editor.keeps_recent_functions() {
+                    // Empty space: the recent functions; the selection stays.
+                    self.editor.canvas_context_menu_hole = None;
+                    self.editor.canvas_context_menu_ring = None;
+                    self.editor.canvas_context_menu_recent = true;
                     self.editor.canvas_context_menu_open = true;
                     self.editor.canvas_context_menu_px = self.editor.cursor_screen_px;
                     self.redraw_requested = true;
@@ -1278,15 +1391,7 @@ impl<'a> App<'a> {
             // A held C or B is one press, so a toggle never chatters on repeat.
             ElementState::Pressed if *repeat && matches!(key, KeyCode::KeyC | KeyCode::KeyB) => {}
             ElementState::Pressed => self.handle_key_code(*key),
-            ElementState::Released => {
-                // Once the Enter that opened the polyline finish dialog is
-                // released, let its Enter shortcut work. Until then a held key
-                // must not skip straight past the Open/Closed choice.
-                if matches!(key, KeyCode::Enter | KeyCode::NumpadEnter) && self.editor.poly_finish_dialog && !self.editor.poly_finish_dialog_confirm_armed {
-                    self.editor.poly_finish_dialog_confirm_armed = true;
-                    self.redraw_requested = true;
-                }
-            }
+            ElementState::Released => {}
         }
     }
 
@@ -1374,6 +1479,7 @@ impl<'a> App<'a> {
         }
         match &key {
             KeyCode::Escape => {
+                self.editor.vertex_edit_run = None;
                 if self.editor.tie_anchor.is_some() {
                     self.end_tie_chain();
                     self.redraw_requested = true;
@@ -1382,6 +1488,8 @@ impl<'a> App<'a> {
                     self.redraw_requested = true;
                 } else if self.editor.text_editing_enabled {
                     self.cancel_text_edit();
+                } else if self.editor.optimization.start_pick.is_some() {
+                    self.cancel_shell_start_pick();
                 } else if self.editor.triangulation_pick_target.is_some() {
                     self.editor.triangulation_pick_target = None;
                     self.editor.viewport_pick_hover_label = None;
@@ -1392,6 +1500,16 @@ impl<'a> App<'a> {
                     self.editor.viewport_pick_hover_label = None;
                     self.editor.tool_highlight_id = self.editor.drill_pattern_boundary_id;
                     self.invalidate_geometry();
+                } else if crate::ui::state::copy_along_live(&self.editor).is_some() {
+                    // Copying along a string is a step inside the Polyline
+                    // tool: Escape leaves it and drawing goes on.
+                    self.cancel_copy_along();
+                } else if matches!(
+                    crate::ui::state::string_rework_live(&self.editor),
+                    Some(crate::ui::state::StringRework::Picking | crate::ui::state::StringRework::PickingRun)
+                ) {
+                    // Before its pick, the same: drawing goes on.
+                    self.cancel_carry_on();
                 } else if self.editor.slice_mode_enabled && self.editor.active_tool == ActiveTool::None && self.editor.pending_stroke.is_empty() {
                     // Escape unwinds one step at a time: a tool up or a stroke half drawn falls through to the cancel paths below.
                     self.leave_slice_mode();
@@ -1411,6 +1529,9 @@ impl<'a> App<'a> {
                     self.editor.active_tool = ActiveTool::None;
                 } else if self.editor.active_tool == ActiveTool::SplitAtPoints {
                     self.cancel_split_at_points();
+                } else if self.editor.active_tool == ActiveTool::SplitAtCrossings {
+                    self.clear_split_at_crossings();
+                    self.editor.active_tool = ActiveTool::None;
                 } else if self.editor.active_tool.translates() || self.editor.active_tool.rotates() {
                     self.gizmo_drag = None;
                     self.editor.gizmo_drag_axis_index = None;
@@ -1421,7 +1542,15 @@ impl<'a> App<'a> {
                     self.cancel_chamfer();
                 } else if self.editor.active_tool == ActiveTool::Bezier {
                     self.cancel_bezier();
-                } else if self.editor.active_tool == ActiveTool::ExplodePolyline {
+                } else if matches!(
+                    self.editor.active_tool,
+                    ActiveTool::InsertPoint | ActiveTool::FillSegment | ActiveTool::RemoveBetweenCrossings
+                ) {
+                    self.clear_insert_point_marker();
+                    self.editor.tool_highlight_id = None;
+                    self.editor.active_tool = ActiveTool::None;
+                    self.invalidate_geometry();
+                } else if matches!(self.editor.active_tool, ActiveTool::ExplodePolyline | ActiveTool::ExplodePolylineToPoints) {
                     self.editor.tool_highlight_id = None;
                     self.editor.active_tool = ActiveTool::None;
                     self.invalidate_geometry();
@@ -1486,6 +1615,29 @@ impl<'a> App<'a> {
                     self.try_finish_tool();
                 }
             }
+            // Geology's Nudge RL panel: the arrows raise and lower the vertex
+            // Move holds by the panel's step.
+            KeyCode::ArrowUp | KeyCode::ArrowDown
+                if self.editor.nudge_panel_open
+                    && self.editor.active_tool == ActiveTool::Move
+                    && self.editor.active_workspace.has_drawing_aids()
+                    && !self.editor.text_editing_enabled =>
+            {
+                let step = self.editor.nudge_step;
+                self.nudge_held_vertex(if key == KeyCode::ArrowUp { step } else { -step });
+            }
+            // In the middle of a string, Backspace gives back its last vertex
+            // rather than deleting the selection.
+            KeyCode::Backspace
+                if self.editor.active_workspace.has_drawing_tools()
+                    && !self.editor.pending_stroke.is_empty()
+                    && !self.editor.text_editing_enabled
+                    && !self.editor.poly_finish_dialog
+                    && self.editor.object_edit_dialog.is_none() =>
+            {
+                self.remove_last_stroke_vertex();
+            }
+            KeyCode::F2 if !self.editor.text_editing_enabled && !self.editor.dialog_owns_confirm_key() => self.begin_rename_from_explorer(),
             // The "Edit Object" dialog has its own row Delete button and no
             // keyboard shortcut for it, and it is opened on a selected object,
             // so without this guard Delete/Backspace raises "delete this object?".
@@ -1530,13 +1682,16 @@ impl<'a> App<'a> {
             self.editor.active_tool = ActiveTool::None;
         } else if self.editor.active_tool == ActiveTool::SplitAtPoints {
             self.cancel_split_at_points();
+        } else if self.editor.active_tool == ActiveTool::SplitAtCrossings {
+            self.clear_split_at_crossings();
+            self.editor.active_tool = ActiveTool::None;
         } else if self.editor.active_tool.translates() || self.editor.active_tool.rotates() {
             self.gizmo_drag = None;
             self.editor.gizmo_drag_axis_index = None;
             self.editor.gizmo_drag_plane_index = None;
             self.cancel_move_delta();
             self.editor.active_tool = ActiveTool::None;
-        } else if self.editor.active_tool == ActiveTool::ExplodePolyline {
+        } else if matches!(self.editor.active_tool, ActiveTool::ExplodePolyline | ActiveTool::ExplodePolylineToPoints) {
             self.editor.tool_highlight_id = None;
             self.editor.active_tool = ActiveTool::None;
             self.invalidate_geometry();
@@ -1558,6 +1713,14 @@ impl<'a> App<'a> {
             self.editor.circle_draft = None;
             self.editor.active_tool = ActiveTool::None;
             self.invalidate_overlay();
+        } else if matches!(
+            self.editor.active_tool,
+            ActiveTool::InsertPoint | ActiveTool::FillSegment | ActiveTool::RemoveBetweenCrossings | ActiveTool::MeasureDistance
+        ) && self.editor.pending_stroke.is_empty()
+        {
+            // What they light under the cursor goes with them.
+            self.clear_insert_point_marker();
+            self.editor.active_tool = ActiveTool::None;
         } else if !self.editor.pending_stroke.is_empty() {
             self.discard_stroke();
         } else {
@@ -1576,7 +1739,7 @@ impl<'a> App<'a> {
         if self.editor.fly_mode_enabled && tool != ActiveTool::None {
             return;
         }
-        if self.editor.slice_mode_enabled && tool.section_refuses() {
+        if self.editor.slice_mode_enabled && tool.section_refuses(self.editor.active_workspace) {
             userspace_warn!("{}", tr!("events-tool-not-available-section-view"));
             return;
         }
@@ -1591,6 +1754,14 @@ impl<'a> App<'a> {
             return;
         }
 
+        // A copy along a string belongs to the tool that started it; its
+        // first pick is marked on the overlay, which repaints only when asked.
+        if self.editor.copy_along.take().is_some() {
+            self.invalidate_overlay();
+        }
+        self.editor.string_rework = None;
+        // Putting Move down, or any tool change, ends a vertex's undo step.
+        self.editor.vertex_edit_run = None;
         let previous_tool = self.editor.active_tool;
         let next_tool = if previous_tool == tool { ActiveTool::None } else { tool };
 
@@ -1619,6 +1790,12 @@ impl<'a> App<'a> {
             ActiveTool::SplitAtPoints if next_tool != ActiveTool::SplitAtPoints => {
                 self.cancel_split_at_points();
             }
+            ActiveTool::SplitAtCrossings if next_tool != previous_tool => {
+                self.clear_split_at_crossings();
+            }
+            ActiveTool::InsertPoint | ActiveTool::FillSegment | ActiveTool::RemoveBetweenCrossings | ActiveTool::MeasureDistance if next_tool != previous_tool => {
+                self.clear_insert_point_marker();
+            }
             _ => {}
         }
 
@@ -1633,6 +1810,7 @@ impl<'a> App<'a> {
         if next_tool == ActiveTool::DrapeToTopology && previous_tool != ActiveTool::DrapeToTopology {
             self.editor.drape_phase = crate::ui::state::DrapePhase::Designs;
             self.editor.drape_object_ids.clear();
+            self.editor.drape_along_triangles = false;
             self.editor.selected_handles.clear();
             self.invalidate_geometry();
         }
@@ -1662,6 +1840,7 @@ impl<'a> App<'a> {
         if matches!(tool, ActiveTool::MeasureDistance | ActiveTool::MeasureBatterAngle) {
             self.editor.measurement_start = None;
             self.editor.measurement_end = None;
+            self.editor.measure_segment_hover = None;
             self.editor.batter_angle_points.clear();
         }
     }

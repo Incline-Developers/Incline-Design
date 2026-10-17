@@ -90,20 +90,6 @@ impl Camera {
         self.position = center + DVec3::Z * zoom.max(MIN_ORTHO_ZOOM);
     }
 
-    /// Plan view onto `center` from as far away as the camera stands from its
-    /// target now, so the zoom the controller derives stays where it was.
-    pub(crate) fn reset_to_plan_view_keeping_distance(&mut self, center: DVec3) {
-        self.reset_to_plan_view(center, self.position.distance(self.target));
-    }
-
-    pub(crate) fn pose(&self) -> CameraPose {
-        CameraPose {
-            position: self.position,
-            target: self.target,
-            up: self.up,
-        }
-    }
-
     /// Place the camera at `position` looking along `forward` with the given
     /// `up`, keeping the focal point `target_distance` ahead.
     pub(crate) fn look_to(&mut self, position: DVec3, forward: DVec3, up: DVec3, target_distance: f64) {
@@ -127,24 +113,6 @@ impl Camera {
         let forward = self.forward();
         self.target = center;
         self.position = center - forward * zoom.max(MIN_ORTHO_ZOOM);
-    }
-}
-
-/// Where the camera stands, what it looks at and which way is up: enough to
-/// tell whether it has moved between two clicks without watching every input.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct CameraPose {
-    pub(crate) position: DVec3,
-    pub(crate) target: DVec3,
-    pub(crate) up: DVec3,
-}
-
-impl CameraPose {
-    /// The same pose, give or take float noise: a part in a million of the
-    /// eye's distance, so it holds at pit scale and at a hand specimen alike.
-    pub(crate) fn matches(&self, other: &Self) -> bool {
-        let tolerance = 1.0e-6 * self.position.distance(self.target).max(other.position.distance(other.target)).max(1.0);
-        self.position.distance(other.position) <= tolerance && self.target.distance(other.target) <= tolerance && self.up.distance(other.up) <= 1.0e-6
     }
 }
 
@@ -550,6 +518,12 @@ impl CameraController {
         self.scroll += crate::rendering::graphics::scroll_pixels(delta);
     }
 
+    /// A trackpad pinch, zooming towards the cursor as the wheel does.
+    pub(crate) fn process_pinch(&mut self, magnification: f64) {
+        self.view_transition = None;
+        self.scroll += crate::rendering::graphics::pinch_scroll(magnification, self.zoom_sensitivity);
+    }
+
     pub(crate) fn has_pending_updates(&self) -> bool {
         self.amount_left != 0.0
             || self.amount_right != 0.0
@@ -930,6 +904,28 @@ impl SectionSlab {
 
     pub(crate) fn contains(&self, world: DVec3) -> bool {
         self.signed_distance(world).abs() <= self.half_width
+    }
+
+    /// `world` in the section's own frame: metres along the plane, then Z.
+    /// Where it lies across the slab is dropped.
+    pub(crate) fn frame_point(&self, world: DVec3) -> DVec2 {
+        self.frame_coords(world).truncate()
+    }
+
+    /// `world` as metres along the plane, Z, then its distance across, so a
+    /// plan kernel (XY, Z carried through) works in the section's plane.
+    pub(crate) fn frame_coords(&self, world: DVec3) -> DVec3 {
+        DVec3::new((world - self.point).dot(self.along()), world.z, self.signed_distance(world))
+    }
+
+    /// The world point of a [`Self::frame_coords`] point.
+    pub(crate) fn world_from_frame(&self, frame: DVec3) -> DVec3 {
+        let plan = self.point + self.along() * frame.x + self.normal * frame.z;
+        DVec3::new(plan.x, plan.y, frame.y)
+    }
+
+    fn along(&self) -> DVec3 {
+        DVec3::new(-self.normal.y, self.normal.x, 0.0)
     }
 
     /// Fraction range `(enter, leave)` along segment `a`-`b`, each in `0.0..=1.0`,

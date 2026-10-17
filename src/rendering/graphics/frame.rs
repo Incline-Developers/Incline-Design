@@ -231,7 +231,6 @@ impl<'a> Graphics<'a> {
             editor,
             &self.surface_style_bind_group_layout,
             &self.block_model_volume_bind_group_layout,
-            &self.edge_style_bind_group_layout,
         );
         self.drill_hole_gpu.sync(&self.device, &self.queue, self.scene_origin, drill_holes, editor);
         self.point_cloud_gpu.sync(
@@ -253,7 +252,14 @@ impl<'a> Graphics<'a> {
             &editor.hidden_handles,
             self.scene_origin,
             scale_factor,
-            editor.show_points || editor.active_tool == crate::ui::state::ActiveTool::DeletePoints,
+            editor.show_points
+                || matches!(
+                    editor.active_tool,
+                    crate::ui::state::ActiveTool::DeletePoints
+                        | crate::ui::state::ActiveTool::EditVertex
+                        | crate::ui::state::ActiveTool::InsertPoint
+                        | crate::ui::state::ActiveTool::FillSegment
+                ),
             self.geometry_dirty || self.cached_document_revision != document.revision(),
         );
         // Selection, hover and translucency only restyle: the shaders read
@@ -366,6 +372,8 @@ impl<'a> Graphics<'a> {
             editor.measurement_start,
             editor.measurement_end,
             editor.batter_angle_points.clone(),
+            // A workspace switch puts the hovered segment's highlight down.
+            editor.reads_segment_hover(),
         );
         if measurement_state != self.cached_measurement_state {
             self.cached_measurement_state = measurement_state;
@@ -374,6 +382,22 @@ impl<'a> Graphics<'a> {
         if editor.poly_finish_dialog != self.cached_poly_finish_dialog {
             self.cached_poly_finish_dialog = editor.poly_finish_dialog;
             self.overlay_dirty = true;
+        }
+        let thin_preview = editor.thin_strings_dialog.as_ref().map(|dialog| dialog.preview_generation);
+        if thin_preview != self.cached_thin_preview {
+            self.cached_thin_preview = thin_preview;
+            self.overlay_dirty = true;
+        }
+
+        if self.section_surface.refresh(self.scene_origin, scale_factor) {
+            Self::upload_instance_stream(
+                &self.device,
+                &self.queue,
+                &mut self.section_surface_gpu,
+                &mut self.section_surface_capacity,
+                self.section_surface.strokes_mut(),
+                "Section Surface Line Buffer",
+            );
         }
 
         if self.overlay_dirty {

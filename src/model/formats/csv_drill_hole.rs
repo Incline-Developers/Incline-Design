@@ -4,7 +4,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 use std::{
-    collections::{BTreeMap, HashMap, hash_map::Entry},
+    collections::{BTreeMap, HashMap, HashSet, hash_map::Entry},
     fmt,
     path::PathBuf,
 };
@@ -32,6 +32,8 @@ pub(crate) enum CsvDrillFileRole {
     ExplicitSegments,
     /// Downhole geophysics: one row per sample, read as a stream.
     Geophysics,
+    /// Listed with the bundle but never read.
+    Ignore,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -74,6 +76,8 @@ pub(crate) struct CsvDrillFileMapping {
 pub(crate) struct CsvDrillPreview {
     pub(crate) headers: Vec<String>,
     pub(crate) rows: Vec<Vec<String>>,
+    /// What the file's first rows point to; `None` when it has no rows.
+    pub(crate) shape: Option<FileShape>,
 }
 
 #[derive(Debug)]
@@ -128,8 +132,13 @@ pub(crate) fn preview(bytes: &[u8]) -> Result<CsvDrillPreview, CsvDrillError> {
     let (text, _) = decode_text(head)?;
     let mut records = Records::new(&text[..])?;
     let mut rows = Vec::new();
+    let cells = |records: &Records<&[u8]>| (0..records.len()).map(|index| cell_text(records.cell(index)).into_owned()).collect::<Vec<_>>();
     while rows.len() <= PREVIEW_ROWS && records.next()? {
-        rows.push((0..records.len()).map(|index| cell_text(records.cell(index)).into_owned()).collect::<Vec<_>>());
+        rows.push(cells(&records));
+    }
+    // Read on for the sample; a fault past the shown rows ends it.
+    while rows.len() <= SAMPLE_ROWS && matches!(records.next(), Ok(true)) {
+        rows.push(cells(&records));
     }
     let mut rows = rows.into_iter();
     let headers = rows.next().ok_or_else(|| CsvDrillError::Invalid(crate::i18n::tr!("csv-drill-hole-csv-file-empty")))?;
@@ -143,14 +152,33 @@ pub(crate) fn preview(bytes: &[u8]) -> Result<CsvDrillPreview, CsvDrillError> {
             return Err(CsvDrillError::Invalid(crate::i18n::tr!("csv-drill-hole-csv-headers-must-nonblank-unique")));
         }
     }
-    Ok(CsvDrillPreview { headers, rows: rows.collect() })
+    let sample = rows.collect::<Vec<_>>();
+    let mut shape = infer_shape(&headers, &sample);
+    if sample.len() == SAMPLE_ROWS
+        && let Some(shape) = &mut shape
+        && let Some(id) = shape.id_column
+    {
+        let mut holes = sample.iter().map(|row| row.get(id).map_or("", |cell| cell.trim()).to_owned()).collect::<HashSet<_>>();
+        while matches!(records.next(), Ok(true)) {
+            if id < records.len() {
+                holes.insert(cell_text(records.cell(id)).trim().to_owned());
+            }
+        }
+        shape.holes = holes.len();
+    }
+    let rows = sample.into_iter().take(PREVIEW_ROWS).collect();
+    Ok(CsvDrillPreview { headers, rows, shape })
 }
 
-/// A file's mapping before the user touches it: its purpose if the headers
-/// name one, with the columns that purpose recognises.
+/// A file's mapping before the user touches it: the purpose its contents
+/// point to, or ignored when they point to none, with the columns that
+/// purpose recognises. A file with no rows is left to its headers.
 pub(crate) fn initial_mapping(path: PathBuf, preview: &CsvDrillPreview) -> CsvDrillFileMapping {
-    let role = guess_role(&preview.headers);
-    let columns = if role == CsvDrillFileRole::Unassigned {
+    let role = match &preview.shape {
+        Some(shape) => shape.looks_like.unwrap_or(CsvDrillFileRole::Ignore),
+        None => guess_role(&preview.headers),
+    };
+    let columns = if matches!(role, CsvDrillFileRole::Unassigned | CsvDrillFileRole::Ignore) {
         vec![CsvDrillColumnRole::Ignore; preview.headers.len()]
     } else {
         default_columns(role, &preview.headers)
@@ -196,7 +224,7 @@ pub(crate) fn default_columns(role: CsvDrillFileRole, headers: &[String]) -> Vec
 /// A normalised header's role and how specific the name was: tier 0 names
 /// the role outright, tier 1 a generic word used only when nothing better is.
 fn role_alias(role: CsvDrillFileRole, header: &str) -> Option<(CsvDrillColumnRole, u8)> {
-    if role == CsvDrillFileRole::Unassigned {
+    if matches!(role, CsvDrillFileRole::Unassigned | CsvDrillFileRole::Ignore) {
         return None;
     }
     match header {
@@ -205,7 +233,7 @@ fn role_alias(role: CsvDrillFileRole, header: &str) -> Option<(CsvDrillColumnRol
         _ => {}
     }
     match role {
-        CsvDrillFileRole::Unassigned => None,
+        CsvDrillFileRole::Unassigned | CsvDrillFileRole::Ignore => None,
         CsvDrillFileRole::Collar => match header {
             "east" | "easting" | "x" => Some((CsvDrillColumnRole::East, 0)),
             "north" | "northing" | "y" => Some((CsvDrillColumnRole::North, 0)),
@@ -269,6 +297,278 @@ pub(crate) fn guess_role(headers: &[String]) -> CsvDrillFileRole {
         CsvDrillFileRole::Geophysics
     } else {
         CsvDrillFileRole::Unassigned
+    }
+}
+
+/// Data rows read from a file's head to judge what it holds.
+const SAMPLE_ROWS: usize = 2000;
+
+/// A log is read every few centimetres; a depth stepping more than this is
+/// a table's.
+const SWEEP_STEP: f64 = 0.5;
+
+/// A projected easting or northing is at least this far from its origin;
+/// an elevation, depth or angle seldom is.
+const LARGE_COORDINATE: f64 = 1000.0;
+
+/// What a file's first rows point to, judged once when it is picked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FileShape {
+    /// The purpose the rows point to; `None` when they point to none.
+    pub(crate) looks_like: Option<CsvDrillFileRole>,
+    /// Distinct holes in the file's head.
+    pub(crate) holes: usize,
+    /// The column read as the hole id.
+    pub(crate) id_column: Option<usize>,
+}
+
+/// Of several files read as collars, the one with the most holes keeps the
+/// role, the first picked on a tie.
+pub(crate) fn settle_collars(files: &mut [(CsvDrillFileMapping, CsvDrillPreview)]) {
+    let mut keep: Option<(usize, usize)> = None;
+    for (index, (mapping, preview)) in files.iter().enumerate() {
+        let holes = preview.shape.as_ref().map_or(0, |shape| shape.holes);
+        if mapping.role == CsvDrillFileRole::Collar && keep.is_none_or(|(_, most)| holes > most) {
+            keep = Some((index, holes));
+        }
+    }
+    if let Some((keep, _)) = keep {
+        keep_collar(files, keep);
+    }
+}
+
+/// A bundle has one collar file: any other is set to be ignored, which
+/// keeps it listed so the choice can move back.
+pub(crate) fn keep_collar(files: &mut [(CsvDrillFileMapping, CsvDrillPreview)], keep: usize) {
+    for (index, (mapping, preview)) in files.iter_mut().enumerate() {
+        if index != keep && mapping.role == CsvDrillFileRole::Collar {
+            mapping.role = CsvDrillFileRole::Ignore;
+            mapping.columns = default_columns(CsvDrillFileRole::Ignore, &preview.headers);
+        }
+    }
+}
+
+/// The purpose a file's rows point to, from their shape: one row per hole
+/// with coordinates is a collar, hole with from and to an interval, hole
+/// with depth and two angles a survey, hole with a finely stepped depth a
+/// log. A header that names a column is believed before its values.
+fn infer_shape(headers: &[String], rows: &[Vec<String>]) -> Option<FileShape> {
+    use CsvDrillColumnRole as Column;
+    if rows.is_empty() {
+        return None;
+    }
+    let named = named_columns(headers);
+    let columns = (0..headers.len()).map(|index| ColumnScan::new(rows, index)).collect::<Vec<_>>();
+    let Some(id) = named.get(&Column::Dhid).copied().or_else(|| id_column(&columns, rows.len())) else {
+        // A single-hole log may carry no hole column; its headers still say what it is.
+        let looks_like = (guess_role(headers) == CsvDrillFileRole::Geophysics).then_some(CsvDrillFileRole::Geophysics);
+        return Some(FileShape {
+            looks_like,
+            holes: 0,
+            id_column: None,
+        });
+    };
+    let ids = rows.iter().map(|row| row.get(id).map_or("", |cell| cell.trim())).collect::<Vec<_>>();
+    let holes = ids.iter().collect::<HashSet<_>>().len();
+    let sample = Sample { columns, ids, id };
+    let has = |roles: &[Column]| roles.iter().all(|role| named.contains_key(role));
+    let xyz = [Column::East, Column::North, Column::Elevation];
+    let unique = holes == rows.len();
+    let numbers = (0..headers.len()).filter(|&index| sample.is_number(index)).collect::<Vec<_>>();
+    let depth = named
+        .get(&Column::Depth)
+        .copied()
+        .filter(|&index| sample.rising(index))
+        .or_else(|| numbers.iter().copied().find(|&index| sample.rising(index)));
+    let pair = has(&[Column::From, Column::To])
+        .then(|| (named[&Column::From], named[&Column::To]))
+        .or_else(|| sample.interval_pair());
+    let named_survey = has(&[Column::Azimuth]) && (has(&[Column::Dip]) || has(&[Column::Inclination])) || !unique && has(&xyz);
+    let large = numbers.iter().filter(|&&index| sample.columns[index].min >= LARGE_COORDINATE).count();
+    let looks_like = if guess_role(headers) == CsvDrillFileRole::Geophysics {
+        Some(CsvDrillFileRole::Geophysics)
+    } else if has(&[
+        Column::StartEast,
+        Column::StartNorth,
+        Column::StartElevation,
+        Column::EndEast,
+        Column::EndNorth,
+        Column::EndElevation,
+    ]) {
+        Some(CsvDrillFileRole::ExplicitSegments)
+    } else if has(&[Column::From, Column::To]) {
+        Some(CsvDrillFileRole::Interval)
+    } else if unique && (has(&xyz) || large >= 2 && numbers.len() >= 3) {
+        Some(CsvDrillFileRole::Collar)
+    } else if depth.is_some_and(|depth| sample.sweep(depth) && numbers.iter().any(|&index| index != depth)) {
+        Some(CsvDrillFileRole::Geophysics)
+    } else if pair.is_some_and(|pair| sample.ordered(pair).is_some_and(|share| share >= 0.9)) {
+        Some(CsvDrillFileRole::Interval)
+    } else if depth.is_some_and(|depth| named_survey || sample.angles(depth)) {
+        Some(CsvDrillFileRole::Survey)
+    } else if pair.is_some() {
+        Some(CsvDrillFileRole::Interval)
+    } else {
+        None
+    };
+    Some(FileShape {
+        looks_like,
+        holes,
+        id_column: Some(id),
+    })
+}
+
+/// Columns whose header names a role, the most specific name winning.
+fn named_columns(headers: &[String]) -> HashMap<CsvDrillColumnRole, usize> {
+    let mut best: HashMap<CsvDrillColumnRole, (u8, usize)> = HashMap::new();
+    for (index, header) in headers.iter().enumerate() {
+        let header = normalize_header(header);
+        for role in [
+            CsvDrillFileRole::Collar,
+            CsvDrillFileRole::Survey,
+            CsvDrillFileRole::Interval,
+            CsvDrillFileRole::ExplicitSegments,
+            CsvDrillFileRole::Geophysics,
+        ] {
+            if let Some((column, tier)) = role_alias(role, &header) {
+                best.entry(column).and_modify(|entry| *entry = (*entry).min((tier, index))).or_insert((tier, index));
+            }
+        }
+    }
+    best.into_iter().map(|(column, (_, index))| (column, index)).collect()
+}
+
+/// The hole column when no header names one: the first column of text
+/// filled on nearly every row, else a first column of whole numbers.
+fn id_column(columns: &[ColumnScan], rows: usize) -> Option<usize> {
+    columns.iter().position(|column| !column.numeric && column.filled * 10 >= rows * 9).or_else(|| {
+        columns
+            .first()
+            .filter(|column| column.numeric && column.values.iter().all(|value| value.is_some_and(|value| value.fract() == 0.0)))
+            .map(|_| 0)
+    })
+}
+
+/// One column of the sampled rows, read as numbers where its cells are.
+struct ColumnScan {
+    values: Vec<Option<f64>>,
+    filled: usize,
+    numeric: bool,
+    min: f64,
+    max: f64,
+}
+
+impl ColumnScan {
+    fn new(rows: &[Vec<String>], index: usize) -> Self {
+        let cells = rows.iter().map(|row| row.get(index).map_or("", |cell| cell.trim())).collect::<Vec<_>>();
+        let filled = cells.iter().filter(|cell| !cell.is_empty()).count();
+        let values = cells.iter().map(|cell| finite_number(cell)).collect::<Vec<_>>();
+        let count = values.iter().flatten().count();
+        Self {
+            numeric: count > 0 && count * 10 >= filled * 9,
+            min: values.iter().flatten().copied().fold(f64::INFINITY, f64::min),
+            max: values.iter().flatten().copied().fold(f64::NEG_INFINITY, f64::max),
+            values,
+            filled,
+        }
+    }
+
+    fn all(&self, test: fn(f64) -> bool) -> bool {
+        self.numeric && test(self.min) && test(self.max)
+    }
+}
+
+/// The sampled rows by column, with each row's hole.
+struct Sample<'a> {
+    columns: Vec<ColumnScan>,
+    ids: Vec<&'a str>,
+    id: usize,
+}
+
+impl Sample<'_> {
+    fn is_number(&self, index: usize) -> bool {
+        index != self.id && self.columns[index].numeric
+    }
+
+    fn value(&self, index: usize, row: usize) -> Option<f64> {
+        self.columns[index].values[row]
+    }
+
+    /// The share of one hole's consecutive rows that pass `test`, of those
+    /// it can judge; `None` when no hole has two rows.
+    fn share(&self, test: impl Fn(usize, usize) -> Option<bool>) -> Option<f64> {
+        let (mut passed, mut judged) = (0usize, 0usize);
+        for row in 1..self.ids.len() {
+            if self.ids[row] == self.ids[row - 1]
+                && let Some(result) = test(row - 1, row)
+            {
+                judged += 1;
+                passed += usize::from(result);
+            }
+        }
+        (judged > 0).then(|| passed as f64 / judged as f64)
+    }
+
+    /// Never negative and never falling within a hole, as a depth is.
+    fn rising(&self, index: usize) -> bool {
+        self.is_number(index)
+            && self.columns[index].min >= 0.0
+            && self
+                .share(|above, below| Some(self.value(index, below)? >= self.value(index, above)?))
+                .is_none_or(|share| share >= 0.95)
+    }
+
+    /// Adjacent columns read as from and to: never reversed, mostly apart.
+    fn interval_pair(&self) -> Option<(usize, usize)> {
+        (1..self.columns.len()).map(|to| (to - 1, to)).find(|&(from, to)| {
+            if !self.is_number(from) || !self.is_number(to) || self.columns[from].min < 0.0 {
+                return false;
+            }
+            let pairs = (0..self.ids.len())
+                .filter_map(|row| Some((self.value(from, row)?, self.value(to, row)?)))
+                .collect::<Vec<_>>();
+            let apart = pairs.iter().filter(|(from, to)| from < to).count();
+            let reversed = pairs.iter().filter(|(from, to)| from > to).count();
+            !pairs.is_empty() && reversed * 20 <= pairs.len() && apart * 2 >= pairs.len()
+        })
+    }
+
+    /// The share of a hole's intervals that start at or below where the one
+    /// before ended, as logged intervals do and survey columns never would.
+    fn ordered(&self, (from, to): (usize, usize)) -> Option<f64> {
+        self.share(|above, below| Some(self.value(to, above)? <= self.value(from, below)? + 1e-6))
+    }
+
+    /// A depth stepping down each hole at one fine interval, as a log does.
+    fn sweep(&self, depth: usize) -> bool {
+        let mut steps = Vec::new();
+        for row in 1..self.ids.len() {
+            if self.ids[row] == self.ids[row - 1]
+                && let (Some(above), Some(below)) = (self.value(depth, row - 1), self.value(depth, row))
+            {
+                steps.push(below - above);
+            }
+        }
+        if steps.len() < 10 {
+            return false;
+        }
+        steps.sort_by(f64::total_cmp);
+        let median = steps[steps.len() / 2];
+        let even = steps.iter().filter(|step| (*step - median).abs() <= median * 0.01).count();
+        median > 0.0 && median <= SWEEP_STEP && even * 5 >= steps.len() * 4
+    }
+
+    /// Beside the depth, a column of dips and another of azimuths. A
+    /// negative angle can only be a dip, so such a column is taken first.
+    fn angles(&self, depth: usize) -> bool {
+        let candidates = |test: fn(f64) -> bool| (0..self.columns.len()).filter(move |&index| index != depth && self.is_number(index) && self.columns[index].all(test));
+        let Some(tilt) = candidates(is_dip_angle)
+            .find(|&index| self.columns[index].min < 0.0)
+            .or_else(|| candidates(is_dip_angle).next())
+        else {
+            return false;
+        };
+        candidates(is_azimuth).any(|index| index != tilt)
     }
 }
 
@@ -360,7 +660,10 @@ fn check_purposes<'a>(files: impl IntoIterator<Item = &'a CsvDrillFileMapping>) 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn parse_paths(files: &[CsvDrillFileMapping], control: StreamControl<'_>) -> Result<ParsedBundle, CsvDrillError> {
     check_purposes(files)?;
-    let (streams, tables): (Vec<_>, Vec<_>) = files.iter().partition(|mapping| mapping.role == CsvDrillFileRole::Geophysics);
+    let (streams, tables): (Vec<_>, Vec<_>) = files
+        .iter()
+        .filter(|mapping| mapping.role != CsvDrillFileRole::Ignore)
+        .partition(|mapping| mapping.role == CsvDrillFileRole::Geophysics);
     let buffers = tables
         .iter()
         .map(|mapping| std::fs::read(&mapping.path).map_err(CsvDrillError::Io))
@@ -497,7 +800,7 @@ const REPAIR_MARK: char = '\u{FFFD}';
 
 /// The collar, survey, interval and segment tables of a bundle.
 fn parse_tables<'a>(inputs: impl IntoIterator<Item = (&'a CsvDrillFileMapping, &'a [u8])>) -> Result<DrillHoleDataset, CsvDrillError> {
-    let mut inputs = inputs.into_iter().collect::<Vec<_>>();
+    let mut inputs = inputs.into_iter().filter(|(mapping, _)| mapping.role != CsvDrillFileRole::Ignore).collect::<Vec<_>>();
     if inputs.is_empty() {
         return Err(CsvDrillError::Invalid("Select at least one CSV file".into()));
     }
@@ -825,6 +1128,7 @@ fn validate_roles(mapping: &CsvDrillFileMapping) -> Result<(), CsvDrillError> {
         CsvDrillFileRole::Unassigned => {
             return Err(CsvDrillError::Invalid(format!("Choose a file purpose for {}", mapping.path.display())));
         }
+        CsvDrillFileRole::Ignore => return Ok(()),
         CsvDrillFileRole::Collar => {
             require(CsvDrillColumnRole::Dhid, "DHID")?;
             require(CsvDrillColumnRole::East, "east/X")?;

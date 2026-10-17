@@ -9,9 +9,17 @@ use crate::{
     },
 };
 
+/// Room the bottom-left tool panels are given: their usual widest plus the
+/// margin they sit in. Anything else along the viewport's bottom edge keeps
+/// clear of it, so a tool opening never lands on top of it.
+pub(crate) const DOCK_PANEL_RESERVED_WIDTH: f32 = 340.0 + 10.0;
+
 /// A compact tool panel pinned inside the 3D viewport.
 ///
-/// Apears in the bottom left. Used for tool configuration.
+/// Apears in the bottom left unless [`Self::anchor`] puts it elsewhere. Used
+/// for tool configuration, for the review tiles a workspace lays over the
+/// scene, and for the block-model card. An empty title leaves the heading bar
+/// off; [`Self::show_with_heading`] adds controls to it.
 pub(crate) struct ViewportDockPanel {
     id: egui::Id,
     title: egui::WidgetText,
@@ -19,18 +27,50 @@ pub(crate) struct ViewportDockPanel {
     min_width: f32,
     max_width: f32,
     margin: egui::Vec2,
+    anchor: Option<(egui::Align2, egui::Pos2)>,
+    help_text: Option<egui::WidgetText>,
+    order: egui::Order,
+    inner_margin: egui::Margin,
 }
 
 impl ViewportDockPanel {
     pub(crate) fn new(id_source: impl Hash + Debug, title: impl Into<egui::WidgetText>, viewport_rect: egui::Rect) -> Self {
         Self {
-            id: egui::Id::new(id_source),
+            id: egui::Id::unique(id_source),
             title: title.into().fallback_text_style(egui::TextStyle::Button),
             viewport_rect,
             min_width: 0.0,
             max_width: 320.0,
             margin: egui::vec2(10.0, 10.0),
+            anchor: None,
+            help_text: None,
+            order: egui::Order::Foreground,
+            inner_margin: egui::Margin::symmetric(10, 8),
         }
+    }
+
+    /// A help marker beside the title, explaining the panel on hover.
+    pub(crate) fn help_text(mut self, text: impl Into<egui::WidgetText>) -> Self {
+        self.help_text = Some(text.into());
+        self
+    }
+
+    /// Pin the panel's `pivot` corner to `pos` in place of the bottom left.
+    pub(crate) fn anchor(mut self, pivot: egui::Align2, pos: egui::Pos2) -> Self {
+        self.anchor = Some((pivot, pos));
+        self
+    }
+
+    /// Where the panel stacks among the other floating cards; in front of
+    /// them unless told otherwise.
+    pub(crate) fn order(mut self, order: egui::Order) -> Self {
+        self.order = order;
+        self
+    }
+
+    pub(crate) fn inner_margin(mut self, inner_margin: egui::Margin) -> Self {
+        self.inner_margin = inner_margin;
+        self
     }
 
     pub(crate) fn min_width(mut self, min_width: f32) -> Self {
@@ -44,37 +84,46 @@ impl ViewportDockPanel {
     }
 
     pub(crate) fn show<R>(self, ctx: &egui::Context, add_contents: impl FnOnce(&mut egui::Ui) -> R) {
-        let pos = egui::pos2(self.viewport_rect.left() + self.margin.x, self.viewport_rect.bottom() - self.margin.y);
-        egui::Area::new(self.id)
-            .order(egui::Order::Foreground)
-            .pivot(egui::Align2::LEFT_BOTTOM)
-            .fixed_pos(pos)
-            .show(ctx, |ui| {
-                // The same card as a floating menu, minus the drag bar's close
-                // button: a docked tool panel is one of the menu family, and
-                // the fields inside it are the menu fields.
-                let surface = menu::menu_surface(ui.visuals());
-                egui::Frame::new()
-                    .fill(surface)
-                    .stroke(menu::menu_border(ui.visuals()))
-                    .corner_radius(egui::CornerRadius::same(menu::MENU_CORNER_RADIUS))
-                    .show(ui, |ui| {
-                        menu::apply_menu_style(ui, surface);
-                        let inner_margin = egui::Margin::symmetric(10, 8);
-                        let measured_width = menu::intrinsic_content_width(ui) + inner_margin.sum().x;
-                        let available_width = (self.viewport_rect.width() - self.margin.x * 2.0).max(1.0);
-                        let adaptive_min_width = self.min_width.max(measured_width).min(available_width);
-                        ui.set_min_width(adaptive_min_width);
-                        ui.set_max_width(self.max_width.max(adaptive_min_width));
-                        let title_rect = ui.allocate_exact_size(egui::vec2(adaptive_min_width, menu::TITLE_BAR_HEIGHT), egui::Sense::hover()).0;
-                        let inner = egui::Frame::NONE.inner_margin(inner_margin).show(ui, add_contents).inner;
-                        let mut title_rect = title_rect;
+        self.show_with_heading(ctx, |_, _, _| {}, add_contents);
+    }
+
+    /// [`Self::show`], with `heading` adding controls to the heading bar once
+    /// it is painted: handed the bar's rect and the card's surface. It runs
+    /// after `add_contents`, which settles the card's width.
+    pub(crate) fn show_with_heading<R>(self, ctx: &egui::Context, heading: impl FnOnce(&mut egui::Ui, egui::Rect, egui::Color32), add_contents: impl FnOnce(&mut egui::Ui) -> R) {
+        let (pivot, pos) = self.anchor.unwrap_or((
+            egui::Align2::LEFT_BOTTOM,
+            egui::pos2(self.viewport_rect.left() + self.margin.x, self.viewport_rect.bottom() - self.margin.y),
+        ));
+        egui::Area::new(self.id).order(self.order).pivot(pivot).fixed_pos(pos).show(ctx, |ui| {
+            // The same card as a floating menu, minus the drag bar's close
+            // button: a docked tool panel is one of the menu family, and
+            // the fields inside it are the menu fields.
+            let surface = menu::menu_surface(ui.visuals());
+            egui::Frame::new()
+                .fill(surface)
+                .stroke(menu::menu_border(ui.visuals()))
+                .corner_radius(egui::CornerRadius::same(menu::MENU_CORNER_RADIUS))
+                .show(ui, |ui| {
+                    menu::apply_menu_style(ui, surface);
+                    let inner_margin = self.inner_margin;
+                    let measured_width = menu::intrinsic_content_width(ui) + inner_margin.sum().x;
+                    let available_width = (self.viewport_rect.width() - self.margin.x * 2.0).max(1.0);
+                    let adaptive_min_width = self.min_width.max(measured_width).min(available_width);
+                    ui.set_min_width(adaptive_min_width);
+                    ui.set_max_width(self.max_width.max(adaptive_min_width));
+                    let has_title = !self.title.is_empty();
+                    let title_rect = has_title.then(|| ui.allocate_exact_size(egui::vec2(adaptive_min_width, menu::TITLE_BAR_HEIGHT), egui::Sense::hover()).0);
+                    let inner = egui::Frame::NONE.inner_margin(inner_margin).show(ui, add_contents).inner;
+                    if let Some(mut title_rect) = title_rect {
                         title_rect.max.x = ui.min_rect().right();
-                        menu::draw_menu_heading(ui, &self.title, title_rect, surface);
-                        inner
-                    })
-                    .inner
-            });
+                        menu::draw_menu_heading(ui, &self.title, title_rect, surface, self.help_text);
+                        heading(ui, title_rect, surface);
+                    }
+                    inner
+                })
+                .inner
+        });
     }
 }
 
@@ -90,7 +139,7 @@ fn section_header_with_reset(ui: &mut egui::Ui, heading: impl Into<String>, rese
 
     let reset_rect = egui::Rect::from_min_max(egui::pos2(rect.right() - reset.size().x - 16.0, rect.top()), rect.right_bottom());
     let response = ui
-        .interact(reset_rect, ui.id().with(("section_reset", heading.text())), egui::Sense::click())
+        .interact(reset_rect, ui.scope_id().with(("section_reset", heading.text())), egui::Sense::click())
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(reset_tooltip.into());
     // Filled like the card's other buttons at rest, so it reads as one.
@@ -416,7 +465,7 @@ pub(super) fn trim_decimal_zeros(mut value: String) -> String {
 
 /// Formats a grade value with a decimal precision that scales down as the
 /// magnitude grows, so labels stay short without losing meaningful digits.
-pub(crate) fn format_grade(value: f64) -> String {
+pub(super) fn format_grade(value: f64) -> String {
     let decimals = if value.abs() >= 1000.0 {
         0
     } else if value.abs() >= 10.0 {
@@ -454,7 +503,7 @@ pub(crate) struct BlockModelProperties<'a> {
 impl<'a> BlockModelProperties<'a> {
     pub(crate) fn new(id_source: impl Hash + Debug, model: &'a OpenBlockModel) -> Self {
         Self {
-            id: egui::Id::new(id_source),
+            id: egui::Id::unique(id_source),
             model,
         }
     }
@@ -772,9 +821,7 @@ impl<'a> BlockModelProperties<'a> {
             painter.rect_stroke(bar_rect, 0.0, ui.visuals().widgets.noninteractive.bg_stroke, egui::StrokeKind::Outside);
         }
 
-        let bar_response = ui
-            .interact(bar_rect, self.id.with("color_stop_bar"), egui::Sense::click())
-            .on_hover_text(tr!("viewport-double-click-add-boundary-here"));
+        let bar_response = ui.interact(bar_rect, self.id.with("color_stop_bar"), egui::Sense::click());
         // A double-click on either the bar or a handle requests an insert.
         // We record the target `t` and apply it *after* the handle loop so the
         // insertion never shifts indices mid-iteration, and so it lands in
@@ -791,11 +838,7 @@ impl<'a> BlockModelProperties<'a> {
             let x = x_at(ramp.stops[i].t);
             let handle_rect = egui::Rect::from_center_size(egui::pos2(x, handle_center_y), egui::vec2(COLOR_STOP_HANDLE_SIZE, COLOR_STOP_HANDLE_SIZE));
             let handle_id = self.id.with(("color_stop_handle", ramp.stops[i].id));
-            let response = ui.interact(handle_rect, handle_id, egui::Sense::click_and_drag()).on_hover_text(if ramp.stops.len() > 1 {
-                tr!("viewport-drag-move-right-click-remove")
-            } else {
-                tr!("viewport-drag-move-middle-click-toggles")
-            });
+            let response = ui.interact(handle_rect, handle_id, egui::Sense::click_and_drag());
             // Handles sit directly beside the gradient strip, so a
             // double-click aimed at the bar near an existing stop (most
             // often the last one, at the visually prominent top edge)
@@ -888,8 +931,7 @@ impl<'a> BlockModelProperties<'a> {
             } else {
                 let label = ui
                     .interact(value_rect, self.id.with(("color_stop_value_label", ramp.stops[i].id)), egui::Sense::click())
-                    .on_hover_cursor(egui::CursorIcon::Text)
-                    .on_hover_text(tr!("viewport-click-type-boundary-s-value"));
+                    .on_hover_cursor(egui::CursorIcon::Text);
                 value_field_hovered = label.hovered();
                 if label.clicked() {
                     selected = i;
@@ -1104,7 +1146,6 @@ fn contrast_ink(background: [f32; 4]) -> (egui::Color32, egui::Color32) {
 fn overlay_label_font() -> egui::FontId {
     egui::FontId::new(11.0, egui::FontFamily::Name("noto_sans_bold".into()))
 }
-
 /// The outline laid behind overlay text, in its colour.
 #[derive(Clone, Copy)]
 pub(super) enum Outline {
@@ -1147,7 +1188,7 @@ pub(crate) struct ViewportScaleBar {
 impl ViewportScaleBar {
     pub(crate) fn new(id_source: impl Hash + Debug, viewport_rect: egui::Rect) -> Self {
         Self {
-            id: egui::Id::new(id_source),
+            id: egui::Id::unique(id_source),
             viewport_rect,
         }
     }
@@ -1291,7 +1332,7 @@ pub(crate) fn draw_section_grid(ui: &egui::Ui, editor: &EditorState, canvas_rect
             .filter_map(|layer| memory.area_rect(layer.id))
             .collect();
         if editor.show_scale_bar {
-            rects.extend(memory.area_rect(egui::Id::new("viewport_scale_bar")));
+            rects.extend(memory.area_rect(egui::Id::unique("viewport_scale_bar")));
         }
         rects
     });
@@ -1517,7 +1558,7 @@ fn prompt_pip_color(visuals: &egui::Visuals) -> egui::Color32 {
 impl ViewportLabel {
     pub(crate) fn new(id_source: impl Hash + Debug, message: ViewportMessage, viewport_rect: egui::Rect) -> Self {
         Self {
-            id: egui::Id::new(id_source),
+            id: egui::Id::unique(id_source),
             message,
             viewport_rect,
             margin: 12.0,
@@ -1577,7 +1618,7 @@ pub(crate) struct ViewportMiniMap {
 impl ViewportMiniMap {
     pub(crate) fn new(id_source: impl Hash + Debug, viewport_rect: egui::Rect) -> Self {
         Self {
-            id: egui::Id::new(id_source),
+            id: egui::Id::unique(id_source),
             viewport_rect,
             gizmo_block: egui::Rect::NOTHING,
         }

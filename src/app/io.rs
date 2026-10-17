@@ -100,6 +100,10 @@ pub(crate) const fn default_fly_max_clip_span() -> f64 {
     150_000.0
 }
 
+pub(crate) const fn default_recent_functions_shown() -> u32 {
+    10
+}
+
 /// One stored blasting product, as the config file holds it.
 ///
 /// The palette's own ids are handed out per run, so nothing identifying is
@@ -187,8 +191,6 @@ pub(crate) struct Config {
     /// Bound large GeoTIFF previews to reduce CPU/GPU memory use.
     #[serde(default = "default_downscale_raster_previews")]
     pub(crate) downscale_raster_previews: bool,
-    #[serde(default)]
-    pub(crate) frame_counter_enabled: bool,
     #[serde(default = "default_show_world_axis_gizmo")]
     pub(crate) show_world_axis_gizmo: bool,
     /// Show the cartographic distance scale in the viewport.
@@ -231,7 +233,10 @@ pub(crate) struct Config {
     /// same reason.
     #[serde(default)]
     pub(crate) blast_library: crate::model::blast::BlastLibrary,
+    /// Lenient: a tab that no longer exists (the old Optimization workspace)
+    /// is dropped rather than failing the whole file.
     #[serde(default)]
+    #[serde(deserialize_with = "lenient_list")]
     pub(crate) workspace_order: Vec<crate::ui::state::Workspace>,
     #[serde(default)]
     #[serde(deserialize_with = "lenient_list")]
@@ -239,6 +244,17 @@ pub(crate) struct Config {
     /// Which saved system the project's numbers are in.
     #[serde(default)]
     pub(crate) mine_coordinate_system: Option<String>,
+    #[serde(default = "default_recent_functions_shown")]
+    pub(crate) recent_functions_shown: u32,
+    /// Production's recent functions, newest last. A habit, not a project's
+    /// data, so it is kept here and survives every project switch.
+    #[serde(default)]
+    #[serde(deserialize_with = "lenient_list")]
+    pub(crate) recent_design_functions: Vec<String>,
+    /// Geology's, kept apart: its rows are Geology Design's.
+    #[serde(default)]
+    #[serde(deserialize_with = "lenient_list")]
+    pub(crate) recent_geology_functions: Vec<String>,
 }
 
 /// Deserialize a list, dropping entries this build cannot read instead of
@@ -289,7 +305,6 @@ impl Default for Config {
             block_model_interaction_resolution_divisor: default_block_model_interaction_resolution_divisor(),
             show_block_model_boundary_highlights: default_show_block_model_boundary_highlights(),
             downscale_raster_previews: default_downscale_raster_previews(),
-            frame_counter_enabled: false,
             show_world_axis_gizmo: default_show_world_axis_gizmo(),
             show_scale_bar: default_show_scale_bar(),
             debug_surface_chunks: false,
@@ -311,6 +326,9 @@ impl Default for Config {
             workspace_order: crate::ui::state::Workspace::ALL.to_vec(),
             coordinate_systems: Vec::new(),
             mine_coordinate_system: None,
+            recent_functions_shown: default_recent_functions_shown(),
+            recent_design_functions: Vec::new(),
+            recent_geology_functions: Vec::new(),
         }
     }
 }
@@ -342,6 +360,23 @@ pub(crate) fn load_session() -> io::Result<Session> {
     let session: Session = toml::from_str(&contents).map_err(io::Error::other)?;
 
     Ok(session)
+}
+
+/// Write the scenarios to a file the user chose, to keep or to move to another machine.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn export_optimization_scenarios(path: &std::path::Path, file: &crate::model::optimization::ScenarioFile) -> io::Result<()> {
+    let contents = serde_json::to_string_pretty(file).map_err(io::Error::other)?;
+    write_atomic(path, contents.as_bytes())
+}
+
+/// Refuse a file written by a newer build rather than misread it.
+pub(crate) fn parse_optimization_scenarios(json: &str) -> io::Result<crate::model::optimization::ScenarioFile> {
+    let mut file: crate::model::optimization::ScenarioFile = serde_json::from_str(json).map_err(io::Error::other)?;
+    if file.version > crate::model::optimization::SCENARIO_FILE_VERSION {
+        return Err(io::Error::other(format!("scenarios file version {} is newer than this build reads", file.version)));
+    }
+    file.scenarios.iter_mut().for_each(crate::model::optimization::OptimizationScenario::migrate);
+    Ok(file)
 }
 
 /// Resolve a path inside the editor's data directory: the platform config

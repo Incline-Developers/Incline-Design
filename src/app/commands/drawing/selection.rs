@@ -69,6 +69,27 @@ impl<'a> App<'a> {
         self.editor.delete_confirm_open = true;
     }
 
+    /// Edit Vertex: open the vertex sheet of the string under the cursor at
+    /// the vertex nearest it, then put the tool down for the sheet.
+    pub(crate) fn edit_vertex_at_cursor(&mut self) {
+        if !self.editing_ready() {
+            return;
+        }
+        let Some(hit) = self.polyline_vertex_hit(pick::VertexPickFilter::AnyEditable) else {
+            return;
+        };
+        if !self.activate_project_for_object(hit.object_id) || !self.editor.canvas_edits_object(self.active_document(), hit.object_id) {
+            return;
+        }
+        self.show_object_vertex(hit.object_id, hit.vertex_index);
+        self.editor.active_tool = ActiveTool::None;
+        self.editor.tool_hover_vertex_px = None;
+        self.editor.tool_hover_vertex_world = None;
+        self.editor.tool_highlight_id = None;
+        self.invalidate_geometry();
+        self.invalidate_overlay();
+    }
+
     /// Keep canvas hover feedback aligned with the action that a click would
     /// perform. A nearby editable vertex takes priority; otherwise the object
     /// under the cursor is highlighted as a whole.
@@ -78,8 +99,26 @@ impl<'a> App<'a> {
                 self.move_vertex_hit().map(|hit| (hit.object_id, hit.screen_px, hit.world))
             }
             ActiveTool::DeletePoints => self.delete_polyline_vertex_hit().map(|hit| (hit.object_id, hit.screen_px, hit.world)),
+            ActiveTool::EditVertex => self
+                .polyline_vertex_hit(pick::VertexPickFilter::AnyEditable)
+                .map(|hit| (hit.object_id, hit.screen_px, hit.world)),
+            ActiveTool::InsertPoint => self.insert_point_hit(),
             _ => None,
         };
+        if self.editor.active_tool == ActiveTool::FillSegment {
+            let preview = self.fill_segment_hit().map(|(_, added)| added).unwrap_or_default();
+            if self.editor.fill_segment_preview != preview {
+                self.editor.fill_segment_preview = preview;
+                self.invalidate_overlay();
+            }
+        }
+        if self.editor.active_tool == ActiveTool::RemoveBetweenCrossings {
+            let piece = self.removable_piece_hit().unwrap_or_default();
+            if self.editor.removable_piece != piece {
+                self.editor.removable_piece = piece;
+                self.invalidate_overlay();
+            }
+        }
         let hover_px = vertex_hit.map(|(_, screen_px, _)| screen_px);
         let hover_world = vertex_hit.map(|(_, _, world)| world);
         // Delete Points only ever acts on point objects, so don't highlight
@@ -88,6 +127,7 @@ impl<'a> App<'a> {
         let hovered_object = vertex_hit.map(|(object_id, _, _)| object_id).or_else(|| {
             self.pick_hovered_object()
                 .filter(|&id| !point_objects_only || self.scene_document.get_object(id).is_some_and(is_point_object))
+                .filter(|_| self.editor.active_tool != ActiveTool::EditVertex)
         });
 
         if self.editor.tool_hover_vertex_px != hover_px {
@@ -98,6 +138,12 @@ impl<'a> App<'a> {
         if self.editor.tool_highlight_id != hovered_object {
             self.editor.tool_highlight_id = hovered_object;
             self.invalidate_geometry();
+            // Insert Point marks the hovered string's vertices on the overlay.
+            if matches!(self.editor.active_tool, ActiveTool::InsertPoint | ActiveTool::FillSegment)
+                || (self.editor.active_tool == ActiveTool::Move && self.editor.active_workspace.has_drawing_aids())
+            {
+                self.invalidate_overlay();
+            }
         }
     }
 
@@ -152,6 +198,12 @@ impl<'a> App<'a> {
     }
 
     fn delete_polyline_vertex_hit(&mut self) -> Option<DeleteVertexHit> {
+        self.polyline_vertex_hit(pick::VertexPickFilter::DeletablePolyline)
+    }
+
+    /// The polyline vertex nearest the cursor that `filter` allows; Edit
+    /// Vertex takes any, Delete Points only one a string can lose.
+    fn polyline_vertex_hit(&mut self, filter: pick::VertexPickFilter) -> Option<DeleteVertexHit> {
         self.refresh_snap_index();
         let graphics = self.graphics.as_ref()?;
         let cursor_px = self.editor.cursor_screen_px?;
@@ -164,12 +216,15 @@ impl<'a> App<'a> {
             graphics.screen_size_pub(),
             graphics.window_to_viewport_px(cursor_px),
             PICK_THRESHOLD_PX * 2.0,
-            pick::VertexPickFilter::DeletablePolyline,
+            filter,
             graphics.section_slab(),
         )?;
         let ObjectPoint::Vertex(vertex_index) = point else {
             return None;
         };
+        if !matches!(self.scene_document.get_object(object_id), Some(Object::Polyline { .. })) {
+            return None;
+        }
         let screen_px = graphics.world_to_window_px(&graphics.view_proj(), world)?;
         Some(DeleteVertexHit {
             object_id,

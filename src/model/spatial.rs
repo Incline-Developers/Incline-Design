@@ -502,6 +502,45 @@ impl TriangleBvh {
         }
     }
 
+    /// Visit triangle indices whose XY bounds a vertical plane may cross: the
+    /// plane through `point` with horizontal unit `normal`. Pruned node by
+    /// node like the rectangle query above, so a section through a big mesh
+    /// reads only the strip of it the plane passes.
+    pub(crate) fn for_each_vertical_plane_candidate_index(&self, point: DVec3, normal: DVec3, mut visit: impl FnMut(usize)) {
+        if self.nodes.is_empty() {
+            return;
+        }
+        let local = point - self.origin;
+        let tol = crate::model::kernel::XY_TOL;
+        // A box straddles the plane when its centre is no farther from it
+        // than the box reaches along the normal.
+        let crosses = |min: [f32; 2], max: [f32; 2]| {
+            let (min_x, min_y, max_x, max_y) = (f64::from(min[0]), f64::from(min[1]), f64::from(max[0]), f64::from(max[1]));
+            let centre = (0.5 * (min_x + max_x) - local.x) * normal.x + (0.5 * (min_y + max_y) - local.y) * normal.y;
+            let reach = 0.5 * ((max_x - min_x) * normal.x.abs() + (max_y - min_y) * normal.y.abs());
+            centre.abs() <= reach + tol
+        };
+        let mut stack = vec![0];
+        while let Some(index) = stack.pop() {
+            let node = self.nodes[index];
+            if !crosses([node.min[0], node.min[1]], [node.max[0], node.max[1]]) {
+                continue;
+            }
+            if node.count > 0 {
+                let start = node.right_child_or_start as usize;
+                for &triangle_index in &self.order[start..start + node.count as usize] {
+                    let bounds = self.xy_bounds[triangle_index as usize];
+                    if crosses(bounds.min, bounds.max) {
+                        visit(triangle_index as usize);
+                    }
+                }
+            } else {
+                stack.push(node.right_child_or_start as usize);
+                stack.push(index + 1);
+            }
+        }
+    }
+
     fn triangle(&self, mesh: &mesh_data::Triangulation, index: usize) -> [DVec3; 3] {
         mesh.face_vertex_indices(index)
             .unwrap_or_else(|| {

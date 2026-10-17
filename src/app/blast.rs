@@ -118,6 +118,8 @@ impl App<'_> {
             self.editor.blast_library.clone(),
             self.editor.survey.definitions.clone(),
             self.editor.survey.local_system.clone(),
+            self.editor.recent_design_functions.clone(),
+            self.editor.recent_geology_functions.clone(),
         )) {
             userspace_warn!("{}", tr!("blast-log-failed-save-charge-library-error", error = error.to_string()));
         }
@@ -270,12 +272,19 @@ impl App<'_> {
     }
 
     /// Find the hole under the pointer for the hole card. Only while nothing
-    /// else owns the pointer: a tie-in chain or a drag has its own preview.
+    /// else owns the pointer: a tie-in chain or a drag has its own preview,
+    /// and a tile over the canvas hides the holes beneath it.
     pub(crate) fn refresh_blast_hover(&mut self) {
+        let over_overlay = self
+            .editor
+            .cursor_screen_px
+            .zip(self.graphics.as_ref())
+            .is_some_and(|((x, y), graphics)| graphics.overlay_at_physical_position(x, y));
         let wants_card = self.editor.active_workspace == Workspace::DrillAndBlast
             && matches!(self.editor.active_tool, ActiveTool::None | ActiveTool::ChargeHoles | ActiveTool::SetInitiationPoint)
             && self.editor.selection_box_start_px.is_none()
-            && self.editor.initiation_dialog.is_none();
+            && self.editor.initiation_dialog.is_none()
+            && !over_overlay;
         let hover = wants_card
             .then(|| {
                 let hole = self.pick_hole_at_cursor()?;

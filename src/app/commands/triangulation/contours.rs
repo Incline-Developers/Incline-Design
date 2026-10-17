@@ -246,6 +246,34 @@ fn compute_contour_polylines(
     Ok(polylines)
 }
 
+/// Where a surface meets a vertical section plane: a contour of distance from
+/// the plane at zero, chained like the level contours above. `spatial` is the
+/// surface's own tree, so only the faces near the plane are read.
+pub(crate) fn section_surface_lines(
+    mesh: &mesh_data::Triangulation,
+    spatial: &crate::model::spatial::TriangleBvh,
+    slab: &crate::rendering::camera::SectionSlab,
+) -> Vec<Vec<glam::DVec3>> {
+    let vertices = mesh.vertices();
+    let distance_of = |index: usize| {
+        let vertex = vertices[index];
+        slab.signed_distance(glam::DVec3::new(vertex.x, vertex.y, vertex.z))
+    };
+    let mut segments = Vec::new();
+    spatial.for_each_vertical_plane_candidate_index(slab.point, slab.normal, |face_index| {
+        let Some(face) = mesh.face_vertex_indices(face_index) else {
+            return;
+        };
+        let distance = face.map(distance_of);
+        if let Some(segment) = triangle_section_segment(face.map(|index| vertices[index]), distance)
+            && contour_point_key(segment[0]) != contour_point_key(segment[1])
+        {
+            segments.push(segment);
+        }
+    });
+    chain_contour_segments(segments)
+}
+
 struct ContourFace {
     vertices: [mesh_data::Vertex; 3],
     z_min: f64,
@@ -329,6 +357,22 @@ fn chain_contour_segments(segments: Vec<[glam::DVec3; 2]>) -> Vec<Vec<glam::DVec
         }
     }
     chains
+}
+
+/// [`triangle_contour_segment`] against a plane: `distance` is each corner's
+/// signed distance from it. The same half-open test gives an edge lying in
+/// the plane to one of its two triangles only.
+fn triangle_section_segment(v: [mesh_data::Vertex; 3], distance: [f64; 3]) -> Option<[glam::DVec3; 2]> {
+    let mut pts: Vec<glam::DVec3> = Vec::with_capacity(2);
+    for i in 0..3 {
+        let (a, b) = (distance[i], distance[(i + 1) % 3]);
+        if (a <= 0.0 && 0.0 < b) || (b <= 0.0 && 0.0 < a) {
+            let (from, to) = (v[i], v[(i + 1) % 3]);
+            let t = a / (a - b);
+            pts.push(glam::DVec3::new(from.x + t * (to.x - from.x), from.y + t * (to.y - from.y), from.z + t * (to.z - from.z)));
+        }
+    }
+    if pts.len() == 2 { Some([pts[0], pts[1]]) } else { None }
 }
 
 pub(super) fn triangle_contour_segment(v: [mesh_data::Vertex; 3], z_level: f64) -> Option<[mesh_data::Vertex; 2]> {

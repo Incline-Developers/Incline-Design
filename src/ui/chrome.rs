@@ -69,7 +69,7 @@ const GRIP_DOT_SPACING: f32 = 5.0;
 
 /// Where the preference lives between being set and being read.
 fn enabled_id() -> Id {
-    Id::new("chrome_enabled")
+    Id::unique("chrome_enabled")
 }
 
 /// Turn the chrome on or off for the rest of the frame.
@@ -208,10 +208,10 @@ pub(crate) fn claim_gap(ui: &mut egui::Ui, salt: &str, sides: Gap) {
     // reason a gap is with the chrome off.
     let vertical = if sides == Gap::All { width } else { 0.0 };
     let spacer = |size: f32| move |panel: egui::Panel| panel.exact_size(size).resizable(false).show_separator_line(false).frame(egui::Frame::NONE);
-    spacer(vertical)(egui::Panel::top(egui::Id::new((salt, "top")))).show(ui, |_| {});
-    spacer(vertical)(egui::Panel::bottom(egui::Id::new((salt, "bottom")))).show(ui, |_| {});
-    spacer(width)(egui::Panel::left(egui::Id::new((salt, "left")))).show(ui, |_| {});
-    spacer(width)(egui::Panel::right(egui::Id::new((salt, "right")))).show(ui, |_| {});
+    spacer(vertical)(egui::Panel::top(egui::Id::unique((salt, "top")))).show(ui, |_| {});
+    spacer(vertical)(egui::Panel::bottom(egui::Id::unique((salt, "bottom")))).show(ui, |_| {});
+    spacer(width)(egui::Panel::left(egui::Id::unique((salt, "left")))).show(ui, |_| {});
+    spacer(width)(egui::Panel::right(egui::Id::unique((salt, "right")))).show(ui, |_| {});
 }
 
 /// The rect a region's fill occupies, given the rect its panel claimed.
@@ -271,15 +271,27 @@ pub(crate) struct Grip {
     /// The panel that owns the drag, so the grip can light up from egui's own
     /// interaction state rather than guessing at the pointer.
     panel: egui::Id,
+    /// Where along a top edge the dots sit, when not the middle of the seam.
+    centre_x: Option<f32>,
 }
 
 impl Grip {
-    pub(crate) fn new(claimed: Rect, edge: Edge, panel: impl Into<egui::Id>) -> Self {
+    /// `panel` is the panel's own id: `parent_ui.scope_id().with(salt)`, as
+    /// egui derives it from the salt the panel was built with.
+    pub(crate) fn new(claimed: Rect, edge: Edge, panel: egui::Id) -> Self {
         Self {
             claimed,
             edge,
-            panel: panel.into(),
+            panel,
+            centre_x: None,
         }
+    }
+
+    /// Put a top-edge grip's dots at `x` - the window's centre, say - kept
+    /// within the seam.
+    pub(crate) fn centred_at_x(mut self, x: f32) -> Self {
+        self.centre_x = Some(x);
+        self
     }
 }
 
@@ -348,7 +360,14 @@ pub(crate) fn paint_grips(ctx: &egui::Context, grips: impl IntoIterator<Item = G
         let (center, along) = match grip.edge {
             Edge::Left => (egui::pos2(grip.claimed.left(), grip.claimed.center().y), egui::vec2(0.0, GRIP_DOT_SPACING)),
             Edge::Right => (egui::pos2(grip.claimed.right(), grip.claimed.center().y), egui::vec2(0.0, GRIP_DOT_SPACING)),
-            Edge::Top => (egui::pos2(grip.claimed.center().x, grip.claimed.top()), egui::vec2(GRIP_DOT_SPACING, 0.0)),
+            Edge::Top => {
+                let reach = GRIP_DOT_SPACING + GRIP_DOT_RADIUS;
+                let x = grip
+                    .centre_x
+                    .filter(|_| grip.claimed.width() > reach * 2.0)
+                    .map_or(grip.claimed.center().x, |x| x.clamp(grip.claimed.left() + reach, grip.claimed.right() - reach));
+                (egui::pos2(x, grip.claimed.top()), egui::vec2(GRIP_DOT_SPACING, 0.0))
+            }
         };
         for step in -1..=1 {
             painter.circle_filled(center + along * step as f32, GRIP_DOT_RADIUS, color);

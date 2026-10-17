@@ -81,6 +81,46 @@ const ROTATE_RING_FADE_FULL: f32 = 0.28;
 /// view's scale is still the collar's own.
 const CARD_SCALE_PROBE_WORLD: f64 = 1.0;
 
+/// Least room left along a contour between one label and the next, in
+/// points. The spacing on the ground is the power of two that keeps them at
+/// least this far apart on screen.
+const CONTOUR_LABEL_SPACING_POINTS: f64 = 280.0;
+
+/// Where along a contour its labels stand, every `spacing` world units from
+/// its start: each spot, and a point a little further on that gives the
+/// line's direction there. A line too short for one spot gets one at its
+/// middle.
+///
+/// Measured on the ground rather than on screen, so a label stays where it
+/// is as the camera moves. Spacings are powers of two, so zooming out drops
+/// every other label and keeps the rest in place.
+fn contour_label_spots(points: &[DVec3], closed: bool, spacing: f64) -> Vec<(DVec3, DVec3)> {
+    let closing = closed.then(|| points.first().copied()).flatten();
+    let run: Vec<DVec3> = points.iter().copied().chain(closing).collect();
+    let length: f64 = run.windows(2).map(|pair| pair[0].distance(pair[1])).sum();
+    if length <= 0.0 {
+        return Vec::new();
+    }
+    let mut distances: Vec<f64> = (1..).map(|step| step as f64 * spacing).take_while(|distance| *distance < length - spacing * 0.25).collect();
+    if distances.is_empty() && length > spacing * 0.4 {
+        distances.push(length * 0.5);
+    }
+    let mut spots = Vec::with_capacity(distances.len());
+    let mut walked = 0.0;
+    let mut wanted = distances.into_iter().peekable();
+    for pair in run.windows(2) {
+        let step = pair[0].distance(pair[1]);
+        while let Some(distance) = wanted.peek().copied().filter(|distance| step > 0.0 && walked + step >= *distance) {
+            let direction = (pair[1] - pair[0]) / step;
+            let at = pair[0] + direction * (distance - walked);
+            spots.push((at, at + direction * (spacing * 0.05).max(0.01)));
+            wanted.next();
+        }
+        walked += step;
+    }
+    spots
+}
+
 /// Cap on grid lines per axis; `grid_values` coarsens spacing to stay under
 /// it rather than dropping the axis.
 const MAX_GRID_LINES: usize = 64;
@@ -522,25 +562,36 @@ impl<'a> Graphics<'a> {
                         .any(|dataset| dataset.id == id && dataset.state.loaded && !editor.hidden_handles.contains(&dataset.entity_id()))
                 });
             editor.blast_contours_px = match editor.blast_analysis.as_deref().filter(|_| contours_visible) {
-                Some(analysis) => analysis
-                    .contours
-                    .iter()
-                    .map(|contour| crate::ui::state::ProjectedContour {
-                        time_ms: contour.time_ms,
-                        major: contour.major,
-                        points: contour
-                            .points
-                            .iter()
-                            .map(|point| {
-                                if slab.is_some_and(|slab| !slab.contains(*point)) {
-                                    return None;
-                                }
-                                self.world_to_window_px(&view_proj, *point)
-                            })
-                            .collect(),
-                        closed: contour.closed,
-                    })
-                    .collect(),
+                Some(analysis) => {
+                    let spacing = self.contour_label_spacing_world(&analysis.contours, &view_proj, probe_offset);
+                    analysis
+                        .contours
+                        .iter()
+                        .map(|contour| crate::ui::state::ProjectedContour {
+                            time_ms: contour.time_ms,
+                            major: contour.major,
+                            labels: match spacing.filter(|_| contour.major) {
+                                Some(spacing) => contour_label_spots(&contour.points, contour.closed, spacing)
+                                    .into_iter()
+                                    .filter(|(at, _)| !slab.is_some_and(|slab| !slab.contains(*at)))
+                                    .filter_map(|(at, ahead)| Some((self.world_to_window_px(&view_proj, at)?, self.world_to_window_px(&view_proj, ahead)?)))
+                                    .collect(),
+                                None => Vec::new(),
+                            },
+                            points: contour
+                                .points
+                                .iter()
+                                .map(|point| {
+                                    if slab.is_some_and(|slab| !slab.contains(*point)) {
+                                        return None;
+                                    }
+                                    self.world_to_window_px(&view_proj, *point)
+                                })
+                                .collect(),
+                            closed: contour.closed,
+                        })
+                        .collect()
+                }
                 None => Vec::new(),
             };
             // Every collar of the pattern under review, for the timeline's
@@ -749,8 +800,11 @@ impl<'a> Graphics<'a> {
         }
 
         if editor.active_tool == ActiveTool::Chamfer {
-            use crate::app::commands::drawing::chamfer::chamfer_corner;
+            use crate::app::commands::drawing::chamfer::{chamfer_corner_on, chamfers_corner};
             let vp = self.view_proj();
+            let slab = (editor.slice_mode_enabled && editor.active_workspace.edits_in_slice_view())
+                .then(|| self.section_slab())
+                .flatten();
             // Preview + gizmo geometry is a foreground overlay offset from the
             // source corner, so keep it drawable even when a tightly-fitted
             // depth slab would reject the displaced point.
@@ -758,18 +812,18 @@ impl<'a> Graphics<'a> {
 
             let corner_data = editor.chamfer_poly_id.and_then(|oid| {
                 let ci = editor.chamfer_corner_index?;
-                if let Some(Object::Polyline { verts, closed: true, .. }) = document.get_object(oid) {
-                    (verts.len() >= 3 && ci < verts.len()).then(|| (verts.clone(), ci))
+                if let Some(Object::Polyline { verts, closed, .. }) = document.get_object(oid) {
+                    chamfers_corner(verts, *closed, ci, slab.is_some()).then(|| (verts.clone(), ci))
                 } else {
                     None
                 }
             });
 
             if let Some((ref verts, ci)) = corner_data {
-                use crate::app::commands::drawing::chamfer::chamfer_max_radius;
-                editor.chamfer_max_radius = chamfer_max_radius(verts, ci);
+                use crate::app::commands::drawing::chamfer::chamfer_max_radius_on;
+                editor.chamfer_max_radius = chamfer_max_radius_on(verts, ci, slab);
                 editor.chamfer_radius = editor.chamfer_radius.min(editor.chamfer_max_radius);
-                let chamfered = chamfer_corner(verts, ci, editor.chamfer_radius, editor.chamfer_segments);
+                let chamfered = chamfer_corner_on(verts, ci, editor.chamfer_radius, editor.chamfer_segments, slab);
                 editor.chamfer_preview_screen_px = chamfered.iter().map(|v| project(v.pos)).collect();
                 editor.chamfer_hover_corner_px = None;
 
@@ -788,11 +842,14 @@ impl<'a> Graphics<'a> {
                 };
                 editor.chamfer_gizmo_bisector_px = edge_stub_dir;
 
-                let edge_2d = DVec2::new(next.x - corner.x, next.y - corner.y);
+                // The handle runs along the edge, in the radius's plane.
+                let (corner_k, next_k) = slab.map_or((corner, next), |slab| (slab.frame_coords(corner), slab.frame_coords(next)));
+                let edge_2d = DVec2::new(next_k.x - corner_k.x, next_k.y - corner_k.y);
                 let edge_len = edge_2d.length();
                 if edge_len > 1e-10 {
                     let edge_dir = edge_2d / edge_len;
-                    let handle_world = DVec3::new(corner.x + edge_dir.x * editor.chamfer_radius, corner.y + edge_dir.y * editor.chamfer_radius, corner.z);
+                    let handle_k = DVec3::new(corner_k.x + edge_dir.x * editor.chamfer_radius, corner_k.y + edge_dir.y * editor.chamfer_radius, corner_k.z);
+                    let handle_world = slab.map_or(handle_k, |slab| slab.world_from_frame(handle_k));
                     editor.chamfer_gizmo_corner_px = c_px;
                     editor.chamfer_gizmo_handle_px = project(handle_world);
                     if let (Some(cp), Some(np)) = (c_px, n_px) {
@@ -842,7 +899,11 @@ impl<'a> Graphics<'a> {
                     let n = verts.len();
                     editor.bezier_poly_closed = *closed;
 
-                    editor.bezier_poly_verts_screen_px = verts.iter().map(|v| project(v.pos)).collect();
+                    let slab = self.section_slab();
+                    editor.bezier_poly_verts_screen_px = verts
+                        .iter()
+                        .map(|v| slab.is_none_or(|slab| slab.contains(v.pos)).then(|| project(v.pos)).flatten())
+                        .collect();
 
                     if let [Some(vi), Some(vj)] = editor.bezier_selected_verts
                         && vi < n
@@ -897,9 +958,13 @@ impl<'a> Graphics<'a> {
 
         if editor.active_tool == ActiveTool::SplitAtPoints {
             let vp = self.view_proj();
+            let slab = self.section_slab();
             if let Some(oid) = editor.split_poly_id {
                 if let Some(Object::Polyline { verts, .. }) = document.get_object(oid) {
-                    editor.split_poly_verts_screen_px = verts.iter().map(|v| self.world_to_window_px(&vp, v.pos)).collect();
+                    editor.split_poly_verts_screen_px = verts
+                        .iter()
+                        .map(|v| slab.is_none_or(|slab| slab.contains(v.pos)).then(|| self.world_to_window_px(&vp, v.pos)).flatten())
+                        .collect();
                 } else {
                     editor.split_poly_verts_screen_px.clear();
                 }
@@ -952,5 +1017,25 @@ impl<'a> Graphics<'a> {
                 editor.relimit_resize_end_px = None;
             }
         }
+    }
+}
+
+impl Graphics<'_> {
+    /// The ground spacing between contour labels for the view: the least power
+    /// of two that clears [`CONTOUR_LABEL_SPACING_POINTS`] on screen, measured
+    /// at the middle of the contours.
+    fn contour_label_spacing_world(&self, contours: &[crate::model::blast::TimeContour], view_proj: &glam::DMat4, probe_offset: DVec3) -> Option<f64> {
+        let mut points = contours.iter().flat_map(|contour| contour.points.iter().copied());
+        let first = points.next()?;
+        let (min, max) = points.fold((first, first), |(min, max), point| (min.min(point), max.max(point)));
+        let middle = (min + max) * 0.5;
+        let at = self.world_to_window_px(view_proj, middle)?;
+        let probe = self.world_to_window_px(view_proj, middle + probe_offset)?;
+        let px_per_world = f64::from((probe.0 - at.0).hypot(probe.1 - at.1)) / CARD_SCALE_PROBE_WORLD;
+        if px_per_world <= 0.0 || !px_per_world.is_finite() {
+            return None;
+        }
+        let wanted = CONTOUR_LABEL_SPACING_POINTS * self.window.scale_factor() / px_per_world;
+        Some(2f64.powf(wanted.log2().ceil()))
     }
 }

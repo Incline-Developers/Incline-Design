@@ -171,6 +171,23 @@ struct BlockModelStyleUniform {
     clip_min: [f32; 4],
     clip_max: [f32; 4],
     stops: [ColorStopUniform; MAX_GRADIENT_ENTRIES],
+    /// The outline `block_wire_coverage` draws round each block: colour, then
+    /// x = width in pixels, 0 for none.
+    wire_color: [f32; 4],
+    wire_params: [f32; 4],
+}
+
+/// Width of the block outline in logical pixels. It is centred on each edge,
+/// so a model's silhouette shows half of it.
+const BLOCK_WIRE_WIDTH: f32 = 1.0;
+
+/// The outline the block-model shaders draw round each block - selection's,
+/// or the topology wireframe's - in place of separately built edge geometry.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct BlockWire {
+    pub(crate) color: [f32; 4],
+    /// Line width in pixels; 0 draws none.
+    pub(crate) width: f32,
 }
 
 /// Per-triangulation edge style uniform. Updated cheaply when colour/width changes.
@@ -262,11 +279,8 @@ pub(crate) struct CachedBlockModelGpu {
     pub(crate) surface_style_bind_group: wgpu::BindGroup,
     pub(crate) translucent: bool,
     force_translucent: bool,
-    pub(crate) edge_chunks: Vec<CachedEdgeChunk>,
-    pub(crate) edge_style_buffer: wgpu::Buffer,
-    pub(crate) edge_style_bind_group: wgpu::BindGroup,
-    line_color: [f32; 4],
-    edge_width: f32,
+    /// The outline the shaders draw round each block, as last uploaded.
+    wire: BlockWire,
     variable: Option<String>,
     /// The active ramp already resolved against the render range, so a change
     /// to either the stops or the range the grades were normalised with shows
@@ -632,7 +646,6 @@ impl BlockModelGpuCache {
         editor: &EditorState,
         surface_style_layout: &wgpu::BindGroupLayout,
         volume_layout: &wgpu::BindGroupLayout,
-        edge_style_layout: &wgpu::BindGroupLayout,
     ) {
         let loaded: HashSet<_> = block_models.iter().filter(|model| model.state.loaded).map(|model| model.id).collect();
         self.models.retain(|id, _| loaded.contains(id));
@@ -663,11 +676,17 @@ impl BlockModelGpuCache {
             });
             let volume_ready = prepared_volume.is_some();
             let mut line_color = if selected { crate::ui::SELECTION_COLOR_F32 } else { [0.03, 0.05, 0.06, 1.0] };
-            if translucent {
+            // A translucent model fades its wireframe with it, but never the
+            // selection outline: faded, it mixes with the block colours and
+            // stops reading as the selection blue used everywhere else.
+            if translucent && !selected {
                 make_translucent(&mut line_color);
             }
             let show_edges = selected || editor.topology_wireframes_enabled;
-            let edge_width = if show_edges { scale_factor.max(1.0) } else { 0.0 };
+            let wire = BlockWire {
+                color: line_color,
+                width: if show_edges { BLOCK_WIRE_WIDTH * scale_factor.max(1.0) } else { 0.0 },
+            };
             let boundary_highlights = editor.show_block_model_boundary_highlights;
 
             if let Some(cached) = self.models.get_mut(&block_model.id) {
@@ -686,8 +705,7 @@ impl BlockModelGpuCache {
                 // volume->cubes must also keep syncing while its replacement
                 // surface chunks build in the background.
                 let renderer_dirty = !wants_volume && cached.volume.is_some();
-                let edge_geom_dirty = (cached.edge_width == 0.0) != (edge_width == 0.0);
-                let edge_style_dirty = cached.line_color != line_color || cached.edge_width != edge_width;
+                let wire_dirty = cached.wire != wire;
                 // The shader-hidden set (which also determines volume cell
                 // occupancy) is needed by both the volume fast-path decision
                 // and the chunk branches below, and walking it is O(blocks) -
@@ -713,8 +731,7 @@ impl BlockModelGpuCache {
                     && !scene_origin_dirty
                     && !slice_dirty
                     && !renderer_dirty
-                    && !edge_geom_dirty
-                    && !edge_style_dirty
+                    && !wire_dirty
                     && !volume_ready
                     && !surface_stale
                 {
@@ -731,7 +748,7 @@ impl BlockModelGpuCache {
                 if let Some(prepared) = prepared_volume {
                     cached.volume = prepared
                         .asset
-                        .and_then(|asset| upload_block_volume_gpu(device, queue, scene_origin, block_model, volume_layout, asset, boundary_highlights));
+                        .and_then(|asset| upload_block_volume_gpu(device, queue, scene_origin, block_model, volume_layout, asset, boundary_highlights, wire));
                     cached.volume_asset_key = Some(prepared.key);
                     cached.scene_origin = scene_origin;
                     if cached.volume.is_some() {
@@ -752,36 +769,33 @@ impl BlockModelGpuCache {
                     // chunks also build asynchronously now. (Stale-until-
                     // replaced, same as the surface chunks.)
                     if let Some(volume) = cached.volume.as_mut() {
-                        update_block_volume_style(queue, volume, scene_origin, block_model, boundary_highlights);
+                        update_block_volume_style(queue, volume, scene_origin, block_model, boundary_highlights, wire);
                     }
                 } else if style_only && hidden_fingerprint == cached.hidden_fingerprint {
                     if let Some(volume) = cached.volume.as_mut() {
-                        update_block_volume_style(queue, volume, scene_origin, block_model, boundary_highlights);
+                        update_block_volume_style(queue, volume, scene_origin, block_model, boundary_highlights, wire);
                     }
                 } else if scene_origin_dirty {
                     if let Some(volume) = cached.volume.as_mut() {
-                        update_block_volume_style(queue, volume, scene_origin, block_model, boundary_highlights);
+                        update_block_volume_style(queue, volume, scene_origin, block_model, boundary_highlights, wire);
                     }
                     cached.scene_origin = scene_origin;
                 }
                 let volume_present = cached.volume.is_some();
                 if scene_origin_dirty && !geometry_dirty {
-                    // Surface and edge chunks bake in scene-origin-relative
-                    // positions, so an origin change invalidates them along
-                    // with the volume; the surface-key mismatch below
-                    // reschedules the chunks, the edges rebuild here. (Camera
+                    // Surface chunks bake in scene-origin-relative positions,
+                    // so an origin change invalidates them along with the
+                    // volume; the surface-key mismatch below reschedules
+                    // them. (Camera
                     // code currently clears the whole cache on origin
                     // changes, so this path is a backstop.)
                     cached.scene_origin = scene_origin;
-                    if cached.edge_width > 0.0 {
-                        cached.edge_chunks = build_block_model_edge_chunks(device, scene_origin, block_model);
-                    }
                 }
                 if geometry_dirty {
                     // Translucency changes which pipeline/chunking the model
                     // draws with, so the chunks fully rebuild (via the
                     // surface-key mismatch below).
-                    let style = block_model_style(scene_origin, block_model, force_translucent);
+                    let style = block_model_style(scene_origin, block_model, force_translucent, wire);
                     queue.write_buffer(&cached.surface_style_buffer, 0, bytemuck::bytes_of(&style));
                     cached.variable = block_model.active_color_variable.clone();
                     cached.ramp = ramp.clone();
@@ -804,13 +818,10 @@ impl BlockModelGpuCache {
                         // opaque/transparent routing are stale. The chunks
                         // rebuild via the surface-key mismatch below; the
                         // stale ones keep drawing until the build lands.
-                        if cached.edge_width > 0.0 {
-                            cached.edge_chunks = build_block_model_edge_chunks(device, scene_origin, block_model);
-                        }
                         cached.hidden_fingerprint = hidden_fingerprint;
                     }
                     if variable_dirty || style_dirty {
-                        let style = block_model_style(scene_origin, block_model, force_translucent);
+                        let style = block_model_style(scene_origin, block_model, force_translucent, wire);
                         queue.write_buffer(&cached.surface_style_buffer, 0, bytemuck::bytes_of(&style));
                     }
                     cached.variable = block_model.active_color_variable.clone();
@@ -826,60 +837,47 @@ impl BlockModelGpuCache {
                     // update - that is what keeps dragging a gradient stop
                     // smooth on large models.
                     if hidden_fingerprint != cached.hidden_fingerprint {
-                        if cached.edge_width > 0.0 {
-                            cached.edge_chunks = build_block_model_edge_chunks(device, scene_origin, block_model);
-                        }
                         cached.hidden_fingerprint = hidden_fingerprint;
                     }
-                    let style = block_model_style(scene_origin, block_model, force_translucent);
+                    let style = block_model_style(scene_origin, block_model, force_translucent, wire);
                     queue.write_buffer(&cached.surface_style_buffer, 0, bytemuck::bytes_of(&style));
                     cached.ramp = ramp.clone();
                 }
                 if fallback_color_dirty {
-                    let style = block_model_style(scene_origin, block_model, force_translucent);
+                    let style = block_model_style(scene_origin, block_model, force_translucent, wire);
                     queue.write_buffer(&cached.surface_style_buffer, 0, bytemuck::bytes_of(&style));
                     if let Some(volume) = cached.volume.as_mut() {
-                        update_block_volume_style(queue, volume, scene_origin, block_model, boundary_highlights);
+                        update_block_volume_style(queue, volume, scene_origin, block_model, boundary_highlights, wire);
                     }
                     cached.fallback_color = block_model.color;
-                }
-                if edge_geom_dirty {
-                    cached.edge_chunks = if edge_width > 0.0 {
-                        build_block_model_edge_chunks(device, scene_origin, block_model)
-                    } else {
-                        Vec::new()
-                    };
                 }
                 if slice_dirty {
                     // Apply the new clip immediately. The surface-key path
                     // below also refreshes cropped cube occupancy in the
                     // background so opaque cut faces appear and outside
                     // instances disappear once the drag settles.
-                    let style = block_model_style(scene_origin, block_model, force_translucent);
+                    let style = block_model_style(scene_origin, block_model, force_translucent, wire);
                     queue.write_buffer(&cached.surface_style_buffer, 0, bytemuck::bytes_of(&style));
                     if let Some(volume) = cached.volume.as_mut() {
-                        update_block_volume_slice(queue, volume, scene_origin, block_model, boundary_highlights);
-                    }
-                    if edge_width > 0.0 && !edge_geom_dirty {
-                        cached.edge_chunks = build_block_model_edge_chunks(device, scene_origin, block_model);
+                        update_block_volume_slice(queue, volume, scene_origin, block_model, boundary_highlights, wire);
                     }
                     cached.slice = slice;
                 }
                 if boundary_highlights_dirty {
                     if !slice_dirty && let Some(volume) = cached.volume.as_mut() {
-                        update_block_volume_slice(queue, volume, scene_origin, block_model, boundary_highlights);
+                        update_block_volume_slice(queue, volume, scene_origin, block_model, boundary_highlights, wire);
                     }
                     cached.boundary_highlights = boundary_highlights;
                 }
-                if edge_style_dirty || edge_geom_dirty {
-                    let style = EdgeStyleUniform {
-                        color: line_color,
-                        width: edge_width,
-                        _pad: [0.0; 3],
-                    };
-                    queue.write_buffer(&cached.edge_style_buffer, 0, bytemuck::bytes_of(&style));
-                    cached.line_color = line_color;
-                    cached.edge_width = edge_width;
+                if wire_dirty {
+                    // Selection only restyles: the shaders draw the outline,
+                    // so nothing is rebuilt.
+                    let style = block_model_style(scene_origin, block_model, force_translucent, wire);
+                    queue.write_buffer(&cached.surface_style_buffer, 0, bytemuck::bytes_of(&style));
+                    if let Some(volume) = cached.volume.as_mut() {
+                        update_block_volume_slice(queue, volume, scene_origin, block_model, boundary_highlights, wire);
+                    }
+                    cached.wire = wire;
                 }
                 // Surface chunks build asynchronously on the job pool: apply
                 // a finished build, then (re)schedule whenever the cached
@@ -942,7 +940,7 @@ impl BlockModelGpuCache {
                     let key = prepared.key;
                     let volume = prepared
                         .asset
-                        .and_then(|asset| upload_block_volume_gpu(device, queue, scene_origin, block_model, volume_layout, asset, boundary_highlights));
+                        .and_then(|asset| upload_block_volume_gpu(device, queue, scene_origin, block_model, volume_layout, asset, boundary_highlights, wire));
                     (volume, Some(key))
                 });
                 let hidden_fingerprint = hidden_blocks_fingerprint(block_model);
@@ -957,7 +955,7 @@ impl BlockModelGpuCache {
                         surface_chunks_key(scene_origin, block_model, force_translucent, has_partial_alpha_stops, hidden_fingerprint),
                     );
                 }
-                let surface_style = block_model_style(scene_origin, block_model, force_translucent);
+                let surface_style = block_model_style(scene_origin, block_model, force_translucent, wire);
                 let surface_style_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("Block Model Surface Style Uniform"),
                     contents: bytemuck::bytes_of(&surface_style),
@@ -971,29 +969,6 @@ impl BlockModelGpuCache {
                     }],
                     label: Some("Block Model Surface Style Bind Group"),
                 });
-                let edge_chunks = if edge_width > 0.0 {
-                    build_block_model_edge_chunks(device, scene_origin, block_model)
-                } else {
-                    Vec::new()
-                };
-                let edge_style = EdgeStyleUniform {
-                    color: line_color,
-                    width: edge_width,
-                    _pad: [0.0; 3],
-                };
-                let edge_style_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Block Model Edge Style Uniform"),
-                    contents: bytemuck::bytes_of(&edge_style),
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                });
-                let edge_style_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    layout: edge_style_layout,
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: edge_style_buffer.as_entire_binding(),
-                    }],
-                    label: Some("Block Model Edge Style Bind Group"),
-                });
                 self.models.insert(
                     block_model.id,
                     CachedBlockModelGpu {
@@ -1006,11 +981,7 @@ impl BlockModelGpuCache {
                         surface_style_bind_group,
                         translucent,
                         force_translucent,
-                        edge_chunks,
-                        edge_style_buffer,
-                        edge_style_bind_group,
-                        line_color,
-                        edge_width,
+                        wire,
                         variable: block_model.active_color_variable.clone(),
                         ramp: block_model.normalized_ramp(),
                         hide_empty_color_values: block_model.hide_empty_color_values,
@@ -2023,30 +1994,46 @@ fn build_block_model_surface_chunks(
     let model = &block_model.model;
     let slice = block_model.active_slice();
 
-    // One pass over the renderable blocks computes each block's grade and
-    // whether the shader will draw it (not hidden, matches the pass's alpha
-    // selection). Both the occupancy build and the instance loop below read
+    // One pass over the renderable blocks computes each block's grade,
+    // whether the shader will draw it in this pass (not hidden, matches the
+    // pass's alpha selection), and whether it is visible at all (drawn by
+    // either pass). The occupancy builds and the instance loop below read
     // these instead of re-evaluating the predicates per block.
-    let (grades, drawn): (Vec<f32>, Vec<bool>) = renderable
-        .par_map(|block_index| {
-            if cancel.is_cancelled() {
-                return (0.0, false);
-            }
-            let grade = grade_for_block(&color_values, block_index, hide_empty);
-            let intersects_slice = slice.is_none_or(|slice| {
-                blocks
-                    .get(block_index)
-                    .is_some_and(|block| block.lower.cmplt(slice.max).all() && block.upper.cmpgt(slice.min).all())
-            });
-            let block_drawn = intersects_slice && block_is_drawn(grade, color_values.is_some(), &ramp, selection, fallback_alpha);
-            (grade, block_drawn)
-        })
-        .into_iter()
-        .unzip();
+    let classified: Vec<(f32, bool, bool)> = renderable.par_map(|block_index| {
+        if cancel.is_cancelled() {
+            return (0.0, false, false);
+        }
+        let grade = grade_for_block(&color_values, block_index, hide_empty);
+        let intersects_slice = slice.is_none_or(|slice| {
+            blocks
+                .get(block_index)
+                .is_some_and(|block| block.lower.cmplt(slice.max).all() && block.upper.cmpgt(slice.min).all())
+        });
+        let has_grade = color_values.is_some();
+        let block_drawn = intersects_slice && block_is_drawn(grade, has_grade, &ramp, selection, fallback_alpha);
+        let block_visible = intersects_slice && block_is_drawn(grade, has_grade, &ramp, BlockSurfaceSelection::All, fallback_alpha);
+        (grade, block_drawn, block_visible)
+    });
     if cancel.is_cancelled() {
         return Vec::new();
     }
+    let grades: Vec<f32> = classified.iter().map(|&(grade, _, _)| grade).collect();
+    let drawn: Vec<bool> = classified.iter().map(|&(_, drawn, _)| drawn).collect();
+    let visible: Vec<bool> = classified.iter().map(|&(_, _, visible)| visible).collect();
+    drop(classified);
     let occupancy = cull_shared_faces.then(|| build_block_occupancy(block_model, &drawn));
+    // Which faces the outline goes on: those with no visible neighbour in
+    // either pass, so a translucent model shows its skin rather than every
+    // block's cage. The culling occupancy already answers that when every
+    // visible block is one this pass draws.
+    let visible_occupancy;
+    let face_occupancy = match occupancy.as_ref() {
+        Some(occupancy) if visible == drawn => occupancy,
+        _ => {
+            visible_occupancy = build_block_occupancy(block_model, &visible);
+            &visible_occupancy
+        }
+    };
 
     // The shader places blocks with `rotation * local + translation`. Offset
     // local bounds by `local_ref` - the local point that maps to the scene
@@ -2096,11 +2083,16 @@ fn build_block_model_surface_chunks(
                 {
                     continue;
                 }
+                let faces = face_occupancy
+                    .exposed_faces(block)
+                    .iter()
+                    .enumerate()
+                    .fold(0u32, |mask, (face, &exposed)| mask | (u32::from(exposed) << face));
                 instances.push(BlockInstance {
                     lower: (block.lower - local_ref).as_vec3().to_array(),
                     grade,
                     upper: (block.upper - local_ref).as_vec3().to_array(),
-                    _pad: 0.0,
+                    faces,
                 });
                 block_indices.push(block_index);
                 // Chunk bounds are the scene-relative world AABB, so keep
@@ -2122,7 +2114,7 @@ fn build_block_model_surface_chunks(
         .collect()
 }
 
-fn block_model_style(scene_origin: DVec3, block_model: &OpenBlockModel, translucent: bool) -> BlockModelStyleUniform {
+fn block_model_style(scene_origin: DVec3, block_model: &OpenBlockModel, translucent: bool, wire: BlockWire) -> BlockModelStyleUniform {
     let has_grade = block_model_color_values(block_model).is_some();
     let mut fallback_color = block_model.color;
     if translucent {
@@ -2160,6 +2152,8 @@ fn block_model_style(scene_origin: DVec3, block_model: &OpenBlockModel, transluc
         clip_min,
         clip_max,
         stops,
+        wire_color: wire.color,
+        wire_params: [wire.width, 0.0, 0.0, 0.0],
     }
 }
 
@@ -2619,92 +2613,4 @@ fn normalized_grade(value: f64, range: (f64, f64)) -> f32 {
             t as f32
         }
     }
-}
-
-/// The twelve cube edges, each paired with the two faces it borders (indices
-/// into `FACE_OFFSETS`). Corner numbering matches `block_corners`. An edge is
-/// drawn only when one of those faces is exposed, so a block model's
-/// wireframe is the grid on its visible skin instead of every block's full
-/// cage - the interior lattice is invisible behind an opaque model anyway,
-/// and swamps the view once the model is translucent.
-const BLOCK_EDGE_FACES: [([usize; 2], [usize; 2]); 12] = [
-    ([0, 1], [2, 4]),
-    ([1, 2], [1, 4]),
-    ([2, 3], [3, 4]),
-    ([3, 0], [0, 4]),
-    ([4, 5], [2, 5]),
-    ([5, 6], [1, 5]),
-    ([6, 7], [3, 5]),
-    ([7, 4], [0, 5]),
-    ([0, 4], [0, 2]),
-    ([1, 5], [1, 2]),
-    ([2, 6], [1, 3]),
-    ([3, 7], [0, 3]),
-];
-
-fn build_block_model_edge_chunks(device: &wgpu::Device, scene_origin: DVec3, block_model: &OpenBlockModel) -> Vec<CachedEdgeChunk> {
-    const EDGES_PER_CHUNK: usize = 64 * 1024;
-    let color_values = block_model_color_values(block_model);
-    let ramp = block_model.normalized_ramp();
-    let slice = block_model.active_slice();
-    let hide_empty = block_model.hide_empty_color_values;
-    let blocks = &block_model.blocks;
-    // Which blocks the shader draws at all, aligned with
-    // `renderable_block_indices`. Occupancy is built from the same set, so a
-    // hidden or sliced-away neighbour leaves the face - and its edges -
-    // exposed, mirroring `build_block_model_surface_chunks`.
-    let visible = block_model.renderable_block_indices.par_map(|block_index| {
-        let intersects_slice = slice.is_none_or(|slice| {
-            blocks
-                .get(block_index)
-                .is_some_and(|block| block.lower.cmplt(slice.max).all() && block.upper.cmpgt(slice.min).all())
-        });
-        intersects_slice && !block_is_hidden(&color_values, &ramp, block_index, hide_empty)
-    });
-    let occupancy = build_block_occupancy(block_model, &visible);
-    let mut chunks = Vec::new();
-    let mut instances = Vec::new();
-    for (position, block_index) in block_model.renderable_block_indices.iter().enumerate() {
-        if !visible[position] {
-            continue;
-        }
-        let Some(mut block) = blocks.get(block_index) else {
-            continue;
-        };
-        // Probe occupancy with the unclamped bounds the neighbour keys were
-        // built from, before the slice clamp below moves the corners.
-        let exposed = occupancy.exposed_faces(block);
-        if !exposed.iter().any(|&face| face) {
-            continue;
-        }
-        // Match the surface shader: clamp boundary block outlines to the
-        // exact slice planes.
-        if let Some(slice) = slice {
-            block.lower = block.lower.max(slice.min);
-            block.upper = block.upper.min(slice.max);
-            if block.lower.cmpge(block.upper).any() {
-                continue;
-            }
-        }
-        let corners = block_world_corners(&block_model.model, block);
-        for ([a, b], [face_a, face_b]) in BLOCK_EDGE_FACES {
-            if !exposed[face_a] && !exposed[face_b] {
-                continue;
-            }
-            instances.push(EdgeInstance {
-                start: (corners[a] - scene_origin).as_vec3().to_array(),
-                end: (corners[b] - scene_origin).as_vec3().to_array(),
-            });
-            if instances.len() >= EDGES_PER_CHUNK {
-                if let Some(chunk) = upload_edge_chunk(device, &instances) {
-                    chunks.push(chunk);
-                }
-                instances.clear();
-            }
-        }
-    }
-    if let Some(chunk) = upload_edge_chunk(device, &instances) {
-        chunks.push(chunk);
-    }
-    chunks
 }

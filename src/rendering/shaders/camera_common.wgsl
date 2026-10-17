@@ -35,3 +35,40 @@ fn section_plane_offset(world: vec3<f32>) -> f32 {
 fn outside_section_slab(offset: f32) -> bool {
     return camera.section_normal.w > 0.5 && abs(offset) > camera.section_plane.w;
 }
+
+// Coverage of a block's own outline at `p`, for the in-shader block-model
+// wireframe. `lower`/`upper` bound the block (already clipped to any slice) in
+// the same frame as `p`; `pixels_per_unit` converts a distance along each axis
+// to screen pixels. The face `p` lies on is the axis it is relatively nearest
+// a bound of; the outline is that face's border, `width` pixels wide centred
+// on each edge (half falls on the neighbouring face), antialiased over one
+// pixel. `faces` masks which faces draw it - bit 2a for the lower face across
+// axis a, 2a + 1 for the upper - so a face shared with a visible neighbour
+// stays bare and a translucent model shows only its skin.
+fn block_wire_coverage(p: vec3<f32>, lower: vec3<f32>, upper: vec3<f32>, pixels_per_unit: vec3<f32>, width: f32, faces: u32) -> f32 {
+    if (width <= 0.0) {
+        return 0.0;
+    }
+    let to_lower = p - lower;
+    let to_upper = upper - p;
+    let distance = min(to_lower, to_upper);
+    let relative = distance / max(upper - lower, vec3<f32>(1.0e-6));
+    var axis = 0u;
+    if (relative.y < relative.x && relative.y <= relative.z) {
+        axis = 1u;
+    } else if (relative.z < relative.x && relative.z < relative.y) {
+        axis = 2u;
+    }
+    let face_bit = 1u << (axis * 2u + select(1u, 0u, to_lower[axis] <= to_upper[axis]));
+    if ((faces & face_bit) == 0u) {
+        return 0.0;
+    }
+    let pixels = distance * pixels_per_unit;
+    var nearest = 1.0e9;
+    for (var other = 0u; other < 3u; other++) {
+        if (other != axis) {
+            nearest = min(nearest, pixels[other]);
+        }
+    }
+    return 1.0 - smoothstep(width * 0.5 - 0.5, width * 0.5 + 0.5, nearest);
+}

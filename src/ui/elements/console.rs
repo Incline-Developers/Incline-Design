@@ -56,7 +56,7 @@ pub(crate) fn draw_console(ui: &mut egui::Ui, min_height: f32, max_height: f32, 
         .frame(crate::ui::chrome::region_frame(ui).fill(surface_fill).inner_margin(egui::Margin::ZERO))
         .show(ui, |ui| {
             let contents_id = ui.make_persistent_id("console_contents");
-            ui.scope_builder(egui::UiBuilder::new().id(contents_id), |ui| {
+            ui.scope_builder(egui::UiBuilder::new().scope_id(contents_id), |ui| {
                 let state_id = ui.make_persistent_id("console_ui_state");
                 let mut state = ui.ctx().data_mut(|data| data.get_temp::<ConsoleUiState>(state_id).unwrap_or_default());
                 let expanded_this_frame = apply_pending_toggle(&mut state, ui.ctx().cumulative_frame_nr()) == Some(true);
@@ -268,7 +268,7 @@ fn draw_detail_row(
     let text_response = ui
         .scope_builder(
             egui::UiBuilder::new()
-                .id(row_id.with("detail_text"))
+                .scope_id(row_id.with("detail_text"))
                 .max_rect(text_rect)
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
             |ui| {

@@ -285,8 +285,9 @@ pub(crate) enum SurfaceMethod {
     ThinPlateSpline,
 }
 
-/// The Modelling branch's project-level settings for Build Surface. The
-/// defaults build the exact spline; an unknown field is ignored on read.
+/// The project-level settings for Build Surface, under Preferences,
+/// Modelling. The defaults build the exact spline; an unknown field is
+/// ignored on read.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct ModellingSettings {
@@ -300,6 +301,9 @@ pub(crate) struct ModellingSettings {
     /// above. It differs per deposit, so there is none until one is typed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) cut_depth: Option<f64>,
+    /// The most Fill Segment's new vertices are apart, in metres: the last
+    /// spacing set.
+    pub(crate) fill_spacing: f64,
 }
 
 impl ModellingSettings {
@@ -310,7 +314,7 @@ impl ModellingSettings {
     pub(crate) fn hash_into(&self, hasher: &mut impl std::hash::Hasher) {
         use std::hash::Hash;
         self.surface_method.hash(hasher);
-        for value in [self.steep_distance, self.steep_degrees] {
+        for value in [self.steep_distance, self.steep_degrees, self.fill_spacing] {
             value.to_bits().hash(hasher);
         }
         self.cut_depth.map(f64::to_bits).hash(hasher);
@@ -326,6 +330,9 @@ impl ModellingSettings {
         }
         if self.cut_depth.is_some_and(|depth| !(depth.is_finite() && depth > 0.0)) {
             return Some(tr!("project-cut-depth-positive"));
+        }
+        if !(self.fill_spacing.is_finite() && self.fill_spacing > 0.0) {
+            return Some(tr!("project-fill-spacing-positive"));
         }
         None
     }
@@ -372,6 +379,7 @@ impl Default for ModellingSettings {
             steep_distance: 5.0,
             steep_degrees: 80.0,
             cut_depth: None,
+            fill_spacing: super::rbf::DEFAULT_SPACING,
         }
     }
 }
@@ -389,6 +397,10 @@ pub(crate) struct ProjectFile {
     /// folders from.
     #[serde(default)]
     pub(crate) folders: FolderRegistry,
+    /// The project's pit optimization scenarios and Results column choices,
+    /// saved in the OMF project record so each project keeps its own.
+    #[serde(default)]
+    pub(crate) optimization: crate::model::optimization::ScenarioFile,
 }
 
 #[derive(Clone, Debug)]
@@ -486,6 +498,9 @@ impl OpenProject {
         self.content.epoch().hash(&mut hasher);
         // Folder names, so an empty folder still counts as unsaved work.
         self.project.folders.hash_into(&mut hasher);
+        // Hashed, not epoch-touched: an undo restores the epoch, and must not
+        // hide a scenario edit it did not record.
+        serde_json::to_string(&self.project.optimization).unwrap_or_default().hash(&mut hasher);
         self.project
             .document
             .content_hash(&mut self.content_hash_cache.borrow_mut(), &self.project.folders)
@@ -519,6 +534,13 @@ impl OpenProject {
         self.savepoint_revision = self.savepoint_revision.wrapping_add(1);
         self.dirty_cache = RefCell::new(None);
         self.layer_dirty_cache = RefCell::new(None);
+    }
+
+    /// Replace the project's optimization scenarios; the project reads as
+    /// unsaved until the next save writes them.
+    pub(crate) fn set_optimization(&mut self, optimization: crate::model::optimization::ScenarioFile) {
+        self.project.optimization = optimization;
+        self.dirty_cache = RefCell::new(None);
     }
 
     pub(crate) fn mark_saved(&mut self) {
@@ -742,6 +764,7 @@ pub(crate) fn new_empty(path: Option<PathBuf>) -> ProjectFile {
             ..Default::default()
         },
         folders: FolderRegistry::default(),
+        optimization: Default::default(),
     }
 }
 

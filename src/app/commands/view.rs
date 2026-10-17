@@ -1,8 +1,10 @@
 use crate::{
     app::App,
     i18n::tr,
-    rendering::camera::CameraPose,
-    ui::state::{ActiveTool, DelayProduct, Workspace},
+    ui::{
+        elements::main_menu::RecentRow,
+        state::{ActiveTool, DelayProduct, RECENT_FUNCTION_LIMIT, Workspace, note_recent},
+    },
     userspace_log, userspace_warn,
 };
 
@@ -178,6 +180,7 @@ impl<'a> App<'a> {
             crate::app::io::finite_clamped(preferences.fly_mouse_look_sensitivity, 0.0001, 0.02, crate::app::io::default_fly_mouse_look_sensitivity());
         preferences.fly_near_clip_limit = crate::app::io::finite_clamped(preferences.fly_near_clip_limit, 0.01, 100.0, crate::app::io::default_fly_near_clip_limit());
         preferences.fly_max_clip_span = crate::app::io::finite_clamped(preferences.fly_max_clip_span, 100.0, 1_000_000.0, crate::app::io::default_fly_max_clip_span());
+        preferences.recent_functions_shown = preferences.recent_functions_shown.clamp(1, RECENT_FUNCTION_LIMIT as u32);
 
         // Apply to the editor before attempting to save. A save failure must
         // not leave the editor holding a stale style: a widget whose draft no
@@ -199,11 +202,6 @@ impl<'a> App<'a> {
         self.editor.block_model_interaction_resolution_divisor = preferences.block_model_interaction_resolution_divisor;
         self.editor.show_block_model_boundary_highlights = preferences.show_block_model_boundary_highlights;
         self.editor.downscale_raster_previews = preferences.downscale_raster_previews;
-        self.editor.frame_counter_enabled = preferences.frame_counter_enabled;
-        if !preferences.frame_counter_enabled {
-            self.editor.measured_fps = None;
-            self.editor.frame_rate_window = (0, 0.0);
-        }
         self.editor.debug_surface_chunks = preferences.debug_surface_chunks;
         if !preferences.debug_surface_chunks {
             self.editor.debug_surface_stats = None;
@@ -221,6 +219,7 @@ impl<'a> App<'a> {
         self.editor.fly_invert_horizontal_look = preferences.fly_invert_horizontal_look;
         self.editor.fly_near_clip_limit = preferences.fly_near_clip_limit;
         self.editor.fly_max_clip_span = preferences.fly_max_clip_span;
+        self.editor.recent_functions_shown = preferences.recent_functions_shown;
         // Language applies live. Nothing holds a translated string between
         // frames, so installing the bundle and asking for the redraw at the end
         // of this function is the whole switch - no restart, no font reload.
@@ -239,11 +238,10 @@ impl<'a> App<'a> {
         // Preferences apply live from the explorer's properties panel, so this
         // runs on every committed edit: too often for the activity console.
         log::debug!(
-            "Applied preferences (dark_mode={}, snap_rate={}, fps_cap={}, frame_counter={}, debug_chunks={})",
+            "Applied preferences (dark_mode={}, snap_rate={}, fps_cap={}, debug_chunks={})",
             preferences.dark_mode,
             preferences.snap_poll_rate,
             preferences.frame_rate_cap,
-            preferences.frame_counter_enabled,
             preferences.debug_surface_chunks
         );
         self.redraw_requested = true;
@@ -258,8 +256,31 @@ impl<'a> App<'a> {
             self.editor.blast_library.clone(),
             self.editor.survey.definitions.clone(),
             self.editor.survey.local_system.clone(),
+            self.editor.recent_design_functions.clone(),
+            self.editor.recent_geology_functions.clone(),
         ))?;
 
+        Ok(())
+    }
+
+    /// Remember a menu function as just used and save the list with the rest
+    /// of the config; no project is touched, so nothing turns dirty.
+    pub(crate) fn note_recent_function(&mut self, key: &'static str) -> anyhow::Result<()> {
+        // Asked after the row's own command ran, which decided a tool's toggle.
+        let used = RecentRow::from_key(self.editor.active_workspace, key).is_some_and(|row| row.was_used(&self.editor));
+        if !used || !self.editor.recent_functions_mut().is_some_and(|list| note_recent(list, key)) {
+            return Ok(());
+        }
+        crate::app::io::save_config(&config_from(
+            &self.editor.current_preferences(),
+            self.editor.workspace_order,
+            self.editor.delay_products.iter().map(DelayProduct::to_stored).collect(),
+            self.editor.blast_library.clone(),
+            self.editor.survey.definitions.clone(),
+            self.editor.survey.local_system.clone(),
+            self.editor.recent_design_functions.clone(),
+            self.editor.recent_geology_functions.clone(),
+        ))?;
         Ok(())
     }
 
@@ -301,40 +322,20 @@ impl<'a> App<'a> {
         }
     }
 
-    /// Reset in two stages: plan view where the camera stands, then, clicked
-    /// again with the camera unmoved, plan view fitted to all visible content.
+    /// Reset the camera to a plan view that fits all visible content.
     pub(crate) fn reset_view(&mut self) {
-        let Some(graphics) = self.graphics.as_mut() else {
-            return;
-        };
-        let rotation_centre = self.editor.rotation_centre;
-        let stage = next_reset_stage(graphics.camera_pose(), graphics.plan_pose_keeping_distance(rotation_centre));
-        match stage {
-            ResetStage::PlanKeepingDistance => {
-                graphics.plan_view_keeping_distance(
-                    rotation_centre,
-                    &self.scene_document,
-                    &self.triangulations,
-                    &self.block_models,
-                    &self.drill_holes,
-                    &self.point_clouds,
-                    &self.editor.hidden_handles,
-                );
-                userspace_log!("{}", tr!("cmd-view-reset-view-plan-same-distance"));
-            }
-            ResetStage::FitAll => {
-                graphics.fit_to_extents(
-                    &self.scene_document,
-                    &self.triangulations,
-                    &self.block_models,
-                    &self.drill_holes,
-                    &self.point_clouds,
-                    &self.editor.hidden_handles,
-                );
-                userspace_log!("{}", tr!("cmd-view-reset-view-fit-extents"));
-            }
+        if let Some(graphics) = self.graphics.as_mut() {
+            graphics.fit_to_extents(
+                &self.scene_document,
+                &self.triangulations,
+                &self.block_models,
+                &self.drill_holes,
+                &self.point_clouds,
+                &self.editor.hidden_handles,
+            );
+            self.redraw_requested = true;
         }
-        self.redraw_requested = true;
+        userspace_log!("{}", tr!("cmd-view-reset-view-fit-extents"));
     }
 
     /// Fit all visible content while preserving the current orbit angle.
@@ -364,6 +365,7 @@ impl<'a> App<'a> {
 /// palette owns them. The workspace order is passed separately for the same
 /// reason, so saving preferences or products preserves the tab arrangement.
 /// Mine-grid definitions are also carried through every config write.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn config_from(
     preferences: &crate::ui::state::PreferencesDraft,
     workspace_order: [crate::ui::state::Workspace; 5],
@@ -371,6 +373,8 @@ pub(crate) fn config_from(
     blast_library: crate::model::blast::BlastLibrary,
     coordinate_systems: Vec<crate::model::survey::SystemDefinition>,
     mine_coordinate_system: Option<String>,
+    recent_design_functions: Vec<String>,
+    recent_geology_functions: Vec<String>,
 ) -> crate::app::io::Config {
     crate::app::io::Config {
         language: preferences.language,
@@ -389,7 +393,6 @@ pub(crate) fn config_from(
         block_model_interaction_resolution_divisor: preferences.block_model_interaction_resolution_divisor,
         show_block_model_boundary_highlights: preferences.show_block_model_boundary_highlights,
         downscale_raster_previews: preferences.downscale_raster_previews,
-        frame_counter_enabled: preferences.frame_counter_enabled,
         debug_surface_chunks: preferences.debug_surface_chunks,
         debug_clip_planes: preferences.debug_clip_planes,
         debug_point_cloud_chunks: preferences.debug_point_cloud_chunks,
@@ -409,24 +412,8 @@ pub(crate) fn config_from(
         coordinate_systems,
         mine_coordinate_system,
         workspace_order: workspace_order.to_vec(),
-    }
-}
-
-/// What a click on Reset does.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ResetStage {
-    /// Look straight down from where the camera stands.
-    PlanKeepingDistance,
-    /// Plan view fitted to all visible content.
-    FitAll,
-}
-
-/// Square the view up to plan, unless the camera already stands in that plan,
-/// as the first click leaves it: then the click fits everything instead.
-pub(crate) fn next_reset_stage(current: CameraPose, plan_from_here: CameraPose) -> ResetStage {
-    if plan_from_here.matches(&current) {
-        ResetStage::FitAll
-    } else {
-        ResetStage::PlanKeepingDistance
+        recent_functions_shown: preferences.recent_functions_shown,
+        recent_design_functions,
+        recent_geology_functions,
     }
 }
