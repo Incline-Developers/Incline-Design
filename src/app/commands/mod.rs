@@ -1153,6 +1153,7 @@ impl<'a> App<'a> {
                             self.editor.survey.definitions.clone(),
                             self.editor.survey.local_system.clone(),
                             self.editor.recent_design_functions.clone(),
+                            self.editor.recent_geology_functions.clone(),
                         );
                         crate::app::io::save_config(&config)?;
                         self.editor.workspace_order = order;

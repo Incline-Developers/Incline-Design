@@ -61,7 +61,6 @@ struct MenuState {
     can_undrape_rasters: bool,
     /// Whether each Design row can run, in [`DESIGN_ROWS`] order.
     design_rows: [bool; DESIGN_ROWS.len()],
-    can_clean_strings: bool,
     /// Whether each Geology Design row can run, in
     /// [`GEOLOGY_DESIGN_ROWS`] order.
     geology_rows: Vec<bool>,
@@ -93,7 +92,6 @@ pub(crate) enum MacMenuAction {
     ExportViewportImage,
     OpenPlotDialog,
     RequestExit,
-    CleanStrings,
     OpenCutTriangulationByPolyline,
     OpenCutTriangulationByZ,
     OpenCutTriangulationBySurface,
@@ -168,6 +166,8 @@ const _: () = assert!(DESIGN_ROWS.len() as isize <= DESIGN_ROW_TAG_END - DESIGN_
 /// Tags at or above this, and below [`VIEW_TAG_BASE`], carry a Geology
 /// Design row by its index in [`GEOLOGY_DESIGN_ROWS`].
 const GEOLOGY_ROW_TAG_BASE: isize = 400;
+const _: () = assert!(GEOLOGY_DESIGN_ROWS.len() as isize <= VIEW_TAG_BASE - GEOLOGY_ROW_TAG_BASE);
+const _: () = assert!(DESIGN_ROW_TAG_END <= GEOLOGY_ROW_TAG_BASE);
 /// Tag of the Open Recent item itself. It opens a submenu rather than
 /// performing anything, so [`MacMenuAction::from_tag`] rejects it: no fixed
 /// action sits this far up the range.
@@ -189,7 +189,6 @@ impl MacMenuAction {
         Self::ExportViewportImage,
         Self::OpenPlotDialog,
         Self::RequestExit,
-        Self::CleanStrings,
         Self::OpenCutTriangulationByPolyline,
         Self::OpenCutTriangulationByZ,
         Self::OpenCutTriangulationBySurface,
@@ -415,8 +414,8 @@ pub(crate) fn install_menu_bar() {
     let design_menu = menu(&tr!("ws-menubar-design"), mtm);
     design_menu.setAutoenablesItems(false);
     add_heading(&design_menu, &tr!("ws-menubar-production-design"), mtm);
-    for (group, (title, run)) in design_groups().into_iter().enumerate() {
-        if group > 0 {
+    for (title, run, separated) in design_groups() {
+        if separated {
             add_separator(&design_menu, mtm);
         }
         let submenu = title.as_ref().map(|title| menu(title, mtm));
@@ -429,9 +428,6 @@ pub(crate) fn install_menu_bar() {
         }
         if let (Some(title), Some(submenu)) = (&title, &submenu) {
             add_submenu(&design_menu, title, submenu, mtm);
-        }
-        if group == 0 {
-            add_action(&design_menu, &tr!("cmd-string-clean-clean-strings"), "", MacMenuAction::CleanStrings, &target, mtm);
         }
     }
     // Geology Design below the line, the same rows the egui menu draws; see
@@ -748,7 +744,6 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         can_create_ore_triangulation: editor.selection_counts.block_models == 1,
         can_undrape_rasters: project.raster_textures.iter().any(|raster| raster.is_draped),
         design_rows: DESIGN_ROWS.map(|row| row.enabled(editor)),
-        can_clean_strings: editor.selection_counts.open_strings > 0,
         geology_rows: GEOLOGY_DESIGN_ROWS.iter().map(|row| row.enabled(editor)).collect(),
         geology_checks: GEOLOGY_DESIGN_ROWS.iter().map(|row| row.checked(editor)).collect(),
         has_project_file: project.active_path.is_some(),
@@ -799,7 +794,6 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     for (index, enabled) in state.design_rows.iter().enumerate() {
         set_enabled(&root, MacMenuAction::DesignRow(index), *enabled);
     }
-    set_enabled(&root, MacMenuAction::CleanStrings, state.can_clean_strings);
     for (index, enabled) in state.geology_rows.iter().enumerate() {
         set_enabled(&root, MacMenuAction::GeologyRow(index), *enabled);
     }

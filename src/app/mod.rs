@@ -644,8 +644,13 @@ impl<'a> App<'a> {
                 None
             }
             MacMenuAction::RequestExit => Some(UiCommand::RequestExit),
-            MacMenuAction::CleanStrings => Some(UiCommand::CleanStrings),
-            MacMenuAction::GeologyRow(index) => crate::ui::elements::main_menu::GEOLOGY_DESIGN_ROWS.get(index).map(|row| row.command()),
+            MacMenuAction::GeologyRow(index) => match crate::ui::elements::main_menu::GEOLOGY_DESIGN_ROWS.get(index) {
+                Some(row) => {
+                    self.handle_ui_commands(vec![row.command(), UiCommand::NoteRecentFunction(row.key())]);
+                    return;
+                }
+                None => None,
+            },
             MacMenuAction::DesignRow(index) => match crate::ui::elements::main_menu::DESIGN_ROWS.get(index) {
                 Some(row) => {
                     self.handle_ui_commands(vec![row.command(), UiCommand::NoteRecentFunction(row.key())]);
@@ -778,15 +783,15 @@ impl<'a> App<'a> {
         self.editor.blast_library = config.blast_library.clone();
         self.editor.recent_functions_shown = config.recent_functions_shown.clamp(1, crate::ui::state::RECENT_FUNCTION_LIMIT as u32);
         // A key no row carries any more (a function since removed) is dropped.
-        let mut recent = Vec::new();
-        for key in config
-            .recent_design_functions
-            .iter()
-            .filter(|key| crate::ui::elements::main_menu::DesignRow::from_key(key).is_some())
-        {
-            crate::ui::state::note_recent(&mut recent, key);
-        }
-        self.editor.recent_design_functions = recent;
+        let known = |workspace, keys: &[String]| {
+            let mut recent = Vec::new();
+            for key in keys.iter().filter(|key| crate::ui::elements::main_menu::RecentRow::from_key(workspace, key).is_some()) {
+                crate::ui::state::note_recent(&mut recent, key);
+            }
+            recent
+        };
+        self.editor.recent_design_functions = known(crate::ui::state::Workspace::Production, &config.recent_design_functions);
+        self.editor.recent_geology_functions = known(crate::ui::state::Workspace::Geology, &config.recent_geology_functions);
         self.configure_graphics_camera_preferences();
     }
 

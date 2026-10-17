@@ -15,6 +15,7 @@ use crate::{
     model::{Axis, SceneEntityId},
     ui::{
         EditorState, UiProjectView,
+        elements::main_menu::RecentRow,
         state::{ActiveTool, CursorMode, UiCommand, Workspace},
         themed_icon, unthemed_icon,
         widgets::toolbar::{TOOL_CELL_SIZE, ToolbarButton},
@@ -252,6 +253,17 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
         LeftToolAction::DrillPattern => commands.push(UiCommand::ToggleCreateDrillPattern),
         LeftToolAction::Command(command) => commands.push(command.as_ref().clone()),
     }
+    if let LeftToolAction::Tool(_) | LeftToolAction::Command(_) = tool.action {
+        note_row_use(editor.active_workspace, commands);
+    }
+}
+
+/// A cell running a Design row's function, the last command pushed, is a use
+/// of that row.
+fn note_row_use(workspace: Workspace, commands: &mut Vec<UiCommand>) {
+    if let Some(row) = commands.last().and_then(|command| RecentRow::running(workspace, command)) {
+        commands.push(UiCommand::NoteRecentFunction(row.key()));
+    }
 }
 
 /// Draw the drawing tools down a docked column between the explorer and the
@@ -481,6 +493,7 @@ pub(crate) fn tool_button(
 
     if response.clicked() {
         commands.push(UiCommand::SetActiveTool(tool));
+        note_row_use(editor.active_workspace, commands);
     }
 
     response

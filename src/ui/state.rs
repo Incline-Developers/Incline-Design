@@ -30,7 +30,7 @@ use crate::{
         raster::RasterTextureId,
         triangulation::TriangulationId,
     },
-    ui::elements::main_menu::DesignRow,
+    ui::elements::main_menu::RecentRow,
 };
 
 type OptionalScreenPointPx = Option<(f32, f32)>;
@@ -2436,6 +2436,8 @@ pub(crate) struct EditorState {
     pub(crate) workspace_order: [Workspace; 5],
     /// Production's recent functions by [`DesignRow::key`], newest last.
     pub(crate) recent_design_functions: Vec<String>,
+    /// Geology's, by [`GeologyRow::key`](crate::ui::elements::main_menu::GeologyRow::key).
+    pub(crate) recent_geology_functions: Vec<String>,
     pub(crate) recent_functions_shown: u32,
     /// The Drill & Blast workspace's stored products, in the order the palette
     /// lays them out.
@@ -3654,6 +3656,7 @@ impl EditorState {
             active_workspace: Workspace::Production,
             workspace_order: Workspace::ALL,
             recent_design_functions: Vec::new(),
+            recent_geology_functions: Vec::new(),
             recent_functions_shown: crate::app::io::default_recent_functions_shown(),
             survey: Default::default(),
             delay_products: builtin_delay_products(),
@@ -5703,24 +5706,31 @@ pub(crate) fn note_recent(list: &mut Vec<String>, key: &str) -> bool {
 }
 
 impl EditorState {
-    /// Only Production keeps a recent functions list.
+    /// Production and Geology keep a recent functions list each.
     pub(crate) fn keeps_recent_functions(&self) -> bool {
-        self.active_workspace == Workspace::Production
+        matches!(self.active_workspace, Workspace::Production | Workspace::Geology)
     }
 
     /// The active workspace's recent functions, newest first and as many as
     /// the preference shows; `None` where the workspace keeps no list.
-    pub(crate) fn recent_design_rows(&self) -> Option<Vec<DesignRow>> {
-        self.keeps_recent_functions().then(|| {
-            let rows = self.recent_design_functions.iter().rev().filter_map(|key| DesignRow::from_key(key));
-            rows.take(self.recent_functions_shown as usize).collect()
-        })
+    pub(crate) fn recent_rows(&self) -> Option<Vec<RecentRow>> {
+        let keys = match self.active_workspace {
+            Workspace::Production => &self.recent_design_functions,
+            Workspace::Geology => &self.recent_geology_functions,
+            _ => return None,
+        };
+        let rows = keys.iter().rev().filter_map(|key| RecentRow::from_key(self.active_workspace, key));
+        Some(rows.take(self.recent_functions_shown as usize).collect())
     }
 
     /// The active workspace's recent function keys; `None` where it keeps no
     /// list.
     pub(crate) fn recent_functions_mut(&mut self) -> Option<&mut Vec<String>> {
-        self.keeps_recent_functions().then_some(&mut self.recent_design_functions)
+        match self.active_workspace {
+            Workspace::Production => Some(&mut self.recent_design_functions),
+            Workspace::Geology => Some(&mut self.recent_geology_functions),
+            _ => None,
+        }
     }
 }
 

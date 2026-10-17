@@ -205,6 +205,7 @@ pub(crate) fn draw_right_click_context(
         let join_offered = (0..editor.string_rings.len()).any(|index| editor.string_ring_joinable(index));
         if open_string_selected && ContextMenuAction::new(tr!("cmd-string-clean-clean-strings")).show(ui).clicked() {
             commands.push(UiCommand::CleanStrings);
+            commands.push(UiCommand::NoteRecentFunction(crate::ui::elements::main_menu::DesignRow::CleanStrings.key()));
             commands.push(UiCommand::CloseCanvasContextMenu);
         }
         if join_offered && ContextMenuAction::new(tr!("cmd-string-clean-join-all-at-halfway")).show(ui).clicked() {
@@ -248,12 +249,16 @@ pub(crate) fn draw_recent_functions_context(ui: &mut egui::Ui, editor: &EditorSt
 
 /// One line per recent function, greyed exactly when its menu bar entry is.
 fn draw_recent_function_rows(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
-    let rows = editor.recent_design_rows().unwrap_or_default();
+    let rows = editor.recent_rows().unwrap_or_default();
     if rows.is_empty() {
         ContextMenuAction::new(tr!("edit-no-recent-functions")).enabled(false).show(ui);
     }
     for row in rows {
-        if ContextMenuAction::new(row.path()).enabled(row.enabled(editor)).show(ui).clicked() {
+        let mut action = ContextMenuAction::new(row.path()).enabled(row.enabled(editor));
+        if let Some(checked) = row.checked(editor) {
+            action = action.checked(checked);
+        }
+        if action.show(ui).clicked() {
             commands.push(row.command());
             commands.push(UiCommand::NoteRecentFunction(row.key()));
             commands.push(UiCommand::CloseCanvasContextMenu);

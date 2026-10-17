@@ -53,6 +53,7 @@ impl App<'_> {
             definitions,
             local,
             self.editor.recent_design_functions.clone(),
+            self.editor.recent_geology_functions.clone(),
         );
         Ok(crate::app::io::save_config(&config)?)
     }
