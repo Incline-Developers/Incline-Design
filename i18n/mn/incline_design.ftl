@@ -84,6 +84,7 @@ ws-menubar-geology-explode-to-points = Полилиниаг цэг болгон 
 ws-menubar-geology-drag-vertex = Оройг чирэх
 ws-menubar-geology-nudge-rl = Өндрийг шилжүүлэх...
 ws-menubar-geology-surface-lines = Огтлол дээрх гадаргуугийн шугам
+ws-menubar-geology-save-surface-lines = Гадаргуугийн шугамыг стринг болгон хадгалах
 ws-menubar-geology-next-vertex = Дараагийн орой цэг...
 ws-menubar-geology-remove-last-vertex = Сүүлийн орой цэгийг устгах
 ws-menubar-geology-surface = Гадаргуу
@@ -981,7 +982,12 @@ cmd-session-triangulation-failed = Триангуляцын үйлдэл амж�
 cmd-session-unloaded-triangulation-name = '{ $name }' триангуляцыг буулгалаа
 cmd-slice-entered-slice-view-cx-cy = Огтлолын харагдац руу орлоо @ { $cx }, { $cy }, { $cz }, чиглэл { $dx }, { $dy } ({ $length }м шугам)
 cmd-slice-exited-slice-view = Огтлолын харагдацаас гарлаа
+cmd-slice-no-surface-crosses-section = Харагдаж буй ямар ч гадаргуу огтлолыг огтолдоггүй; юу ч хадгалсангүй
+cmd-slice-open-project-save-surface-lines = Гадаргуугийн шугамыг хадгалахын өмнө төсөл нээнэ үү
 cmd-slice-reset-section-view-fit-extents = Огтлолын харагдацыг сэргээх (хэмжээнд тааруулах)
+cmd-slice-save-surface-lines-off = Хадгалахын өмнө огтлол нээлттэй байхад огтлол дээрх гадаргуугийн шугамыг идэвхжүүлнэ үү
+cmd-slice-saved-surface-lines = { $surfaces } гадаргуугаас { $count } шугамыг { $layer } руу хадгаллаа
+cmd-slice-section-lines-layer = Огтлолын шугам
 cmd-slice-set-section-grid-enabled = Огтлолын торыг тохируулав = { $enabled }
 cmd-slice-set-surface-lines = Огтлол дээрх гадаргуугийн шугамыг тохируулав = { $enabled }
 cmd-smooth-count-corners = { $count } шугамын { $corners } булан

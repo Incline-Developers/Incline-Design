@@ -86,6 +86,7 @@ ws-menubar-geology-explode-to-points = ポリラインを点に分解
 ws-menubar-geology-drag-vertex = 頂点をドラッグ
 ws-menubar-geology-nudge-rl = 標高を微調整...
 ws-menubar-geology-surface-lines = 断面上のサーフェス線
+ws-menubar-geology-save-surface-lines = サーフェス線をストリングとして保存
 ws-menubar-geology-next-vertex = 次の頂点...
 ws-menubar-geology-remove-last-vertex = 最後の頂点を削除
 ws-menubar-geology-surface = サーフェス
@@ -958,7 +959,12 @@ cmd-session-triangulation-failed = 三角網の操作に失敗しました: { $m
 cmd-session-unloaded-triangulation-name = 三角網「{ $name }」をアンロードしました
 cmd-slice-entered-slice-view-cx-cy = スライスビューに入りました @ { $cx }, { $cy }, { $cz }（方向 { $dx }, { $dy }、長さ { $length }m）
 cmd-slice-exited-slice-view = スライスビューを終了しました
+cmd-slice-no-surface-crosses-section = 表示中のサーフェスに断面と交差するものがないため、何も保存されませんでした
+cmd-slice-open-project-save-surface-lines = サーフェス線を保存する前にプロジェクトを開いてください
 cmd-slice-reset-section-view-fit-extents = 断面ビューをリセット（範囲に合わせる）
+cmd-slice-save-surface-lines-off = 保存する前に、断面を表示した状態で断面上のサーフェス線をオンにしてください
+cmd-slice-saved-surface-lines = { $surfaces } 個のサーフェスから { $count } 本のストリングを { $layer } に保存しました
+cmd-slice-section-lines-layer = 断面線
 cmd-slice-set-section-grid-enabled = 断面グリッド有効 = { $enabled }
 cmd-slice-set-surface-lines = 断面上のサーフェス線有効 = { $enabled }
 cmd-smooth-count-corners = { $count } 本の線に { $corners } 個の角

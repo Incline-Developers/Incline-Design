@@ -72,6 +72,7 @@ ws-menubar-geology-explode-to-points = Uraikan Poligaris menjadi Titik
 ws-menubar-geology-drag-vertex = Seret Verteks
 ws-menubar-geology-nudge-rl = Geser Elevasi...
 ws-menubar-geology-surface-lines = Garis permukaan pada penampang
+ws-menubar-geology-save-surface-lines = Simpan Garis Permukaan sebagai Garis
 ws-menubar-geology-next-vertex = Verteks Berikutnya...
 ws-menubar-geology-remove-last-vertex = Hapus Verteks Terakhir
 ws-menubar-geology-surface = Permukaan
@@ -930,7 +931,12 @@ cmd-session-triangulation-failed = Operasi triangulasi gagal: { $message }
 cmd-session-unloaded-triangulation-name = Triangulasi '{ $name }' dibongkar
 cmd-slice-entered-slice-view-cx-cy = Tampilan irisan dimasuki pada { $cx }, { $cy }, { $cz } sepanjang { $dx }, { $dy } (garis { $length } m)
 cmd-slice-exited-slice-view = Tampilan irisan ditutup
+cmd-slice-no-surface-crosses-section = Tidak ada permukaan yang ditampilkan memotong penampang; tidak ada yang disimpan
+cmd-slice-open-project-save-surface-lines = Buka proyek sebelum menyimpan garis permukaan
 cmd-slice-reset-section-view-fit-extents = Setel ulang tampilan penampang (sesuaikan dengan cakupan)
+cmd-slice-save-surface-lines-off = Aktifkan Garis permukaan pada penampang dengan penampang terbuka sebelum menyimpannya
+cmd-slice-saved-surface-lines = { $count } garis dari { $surfaces } permukaan disimpan ke { $layer }
+cmd-slice-section-lines-layer = Garis Penampang
 cmd-slice-set-section-grid-enabled = Grid penampang aktif = { $enabled }
 cmd-slice-set-surface-lines = Garis permukaan pada penampang aktif = { $enabled }
 cmd-smooth-count-corners = { $corners } sudut pada { $count } garis

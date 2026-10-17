@@ -85,6 +85,7 @@ ws-menubar-geology-explode-to-points = Çoklu Çizgiyi Noktalara Ayır
 ws-menubar-geology-drag-vertex = Köşe Noktası Sürükle
 ws-menubar-geology-nudge-rl = Kotu Kaydır...
 ws-menubar-geology-surface-lines = Kesitte yüzey çizgileri
+ws-menubar-geology-save-surface-lines = Yüzey Çizgilerini Çizgi Olarak Kaydet
 ws-menubar-geology-next-vertex = Sonraki Köşe...
 ws-menubar-geology-remove-last-vertex = Son Köşeyi Kaldır
 ws-menubar-geology-surface = Yüzey
@@ -972,7 +973,12 @@ cmd-session-triangulation-failed = Üçgenleme işlemi başarısız oldu: { $mes
 cmd-session-unloaded-triangulation-name = '{ $name }' üçgenlemesi kaldırıldı
 cmd-slice-entered-slice-view-cx-cy = Kesit görünümüne girildi @ { $cx }, { $cy }, { $cz }, { $dx }, { $dy } boyunca ({ $length }m çizgi)
 cmd-slice-exited-slice-view = Kesit görünümünden çıkıldı
+cmd-slice-no-surface-crosses-section = Gösterilen hiçbir yüzey kesiti kesmiyor; hiçbir şey kaydedilmedi
+cmd-slice-open-project-save-surface-lines = Yüzey çizgilerini kaydetmeden önce bir proje açın
 cmd-slice-reset-section-view-fit-extents = Kesit görünümünü sıfırla (sınırlara sığdır)
+cmd-slice-save-surface-lines-off = Kaydetmeden önce bir kesit açıkken Kesitte yüzey çizgilerini etkinleştirin
+cmd-slice-saved-surface-lines = { $surfaces } yüzeyden { $count } çizgi { $layer } katmanına kaydedildi
+cmd-slice-section-lines-layer = Kesit Çizgileri
 cmd-slice-set-section-grid-enabled = Kesit ızgarası etkin = { $enabled }
 cmd-slice-set-surface-lines = Kesitte yüzey çizgileri etkin = { $enabled }
 cmd-smooth-count-corners = { $count } çizgide { $corners } köşe

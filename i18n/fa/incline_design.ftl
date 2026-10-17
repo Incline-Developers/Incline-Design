@@ -72,6 +72,7 @@ ws-menubar-geology-explode-to-points = تجزیهٔ چندخطی به نقاط
 ws-menubar-geology-drag-vertex = کشیدن رأس
 ws-menubar-geology-nudge-rl = جابه‌جایی تراز...
 ws-menubar-geology-surface-lines = خطوط سطح روی مقطع
+ws-menubar-geology-save-surface-lines = ذخیره خطوط سطح به‌صورت خطوط
 ws-menubar-geology-next-vertex = رأس بعدی...
 ws-menubar-geology-remove-last-vertex = حذف آخرین رأس
 ws-menubar-geology-surface = سطح
@@ -930,7 +931,12 @@ cmd-session-triangulation-failed = عملیات مثلث‌بندی ناموفق
 cmd-session-unloaded-triangulation-name = مثلث‌بندی «{ $name }» از بار خارج شد
 cmd-slice-entered-slice-view-cx-cy = نمای برش در { $cx }، { $cy }، { $cz } در امتداد { $dx }، { $dy } فعال شد (خط { $length } متر)
 cmd-slice-exited-slice-view = از نمای برش خارج شد
+cmd-slice-no-surface-crosses-section = هیچ سطح نمایش‌داده‌شده‌ای مقطع را قطع نمی‌کند؛ چیزی ذخیره نشد
+cmd-slice-open-project-save-surface-lines = پیش از ذخیره خطوط سطح، یک پروژه باز کنید
 cmd-slice-reset-section-view-fit-extents = بازنشانی نمای مقطع (تطبیق با محدوده)
+cmd-slice-save-surface-lines-off = پیش از ذخیره خطوط سطح، آن‌ها را با باز بودن یک مقطع روی مقطع فعال کنید
+cmd-slice-saved-surface-lines = { $count } خط از { $surfaces } سطح در { $layer } ذخیره شد
+cmd-slice-section-lines-layer = خطوط مقطع
 cmd-slice-set-section-grid-enabled = شبکه مقطع فعال = { $enabled }
 cmd-slice-set-surface-lines = خطوط سطح روی مقطع فعال = { $enabled }
 cmd-smooth-count-corners = { $corners } گوشه در { $count } خط

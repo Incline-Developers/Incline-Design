@@ -83,6 +83,7 @@ ws-menubar-geology-explode-to-points = 폴리라인을 점으로 분해
 ws-menubar-geology-drag-vertex = 꼭짓점 끌기
 ws-menubar-geology-nudge-rl = 표고 미세 조정...
 ws-menubar-geology-surface-lines = 단면의 표면 선
+ws-menubar-geology-save-surface-lines = 표면 선을 스트링으로 저장
 ws-menubar-geology-next-vertex = 다음 정점...
 ws-menubar-geology-remove-last-vertex = 마지막 정점 제거
 ws-menubar-geology-surface = 표면
@@ -963,7 +964,12 @@ cmd-session-triangulation-failed = 삼각망 작업 실패: { $message }
 cmd-session-unloaded-triangulation-name = 삼각망 '{ $name }'을(를) 언로드했습니다
 cmd-slice-entered-slice-view-cx-cy = { $cx }, { $cy }, { $cz }에서 { $dx }, { $dy } 방향으로 슬라이스 뷰에 진입했습니다(선 길이 { $length }m)
 cmd-slice-exited-slice-view = 슬라이스 뷰를 종료했습니다
+cmd-slice-no-surface-crosses-section = 표시된 표면 중 단면과 교차하는 것이 없어 저장된 항목이 없습니다
+cmd-slice-open-project-save-surface-lines = 표면 선을 저장하기 전에 프로젝트를 여세요
 cmd-slice-reset-section-view-fit-extents = 슬라이스 뷰 재설정(전체 범위에 맞춤)
+cmd-slice-save-surface-lines-off = 저장하기 전에 단면을 연 상태에서 단면의 표면 선을 켜세요
+cmd-slice-saved-surface-lines = 표면 { $surfaces }개에서 스트링 { $count }개를 { $layer }에 저장했습니다
+cmd-slice-section-lines-layer = 단면 선
 cmd-slice-set-section-grid-enabled = 슬라이스 그리드 설정 = { $enabled }
 cmd-slice-set-surface-lines = 단면의 표면 선 설정 = { $enabled }
 cmd-smooth-count-corners = 선 { $count }개에 모서리 { $corners }개

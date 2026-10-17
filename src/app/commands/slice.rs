@@ -1,14 +1,14 @@
 //! Vertical slice view: two-click line placement and mode enter/exit.
 
-use glam::DVec2;
+use glam::{DVec2, DVec3};
 
 use crate::{
     app::App,
     i18n::tr,
-    model::triangulation::OpenTriangulation,
+    model::{Command, Document, FillStyle, Layer, Object, ObjectColor, PolyVertex, SectionKind, kernel::XY_TOL, project::unique_item_name, triangulation::OpenTriangulation},
     rendering::{camera::SectionSlab, scene::section_surface_lines::SurfaceLines},
-    ui::state::{ActiveTool, EditorState, Workspace},
-    userspace_log,
+    ui::state::{ActiveTool, EditorState},
+    userspace_log, userspace_warn,
 };
 
 impl<'a> App<'a> {
@@ -193,6 +193,41 @@ impl<'a> App<'a> {
         userspace_log!("{}", tr!("cmd-slice-set-surface-lines", enabled = self.editor.section_surface_lines.to_string()));
     }
 
+    /// Save Surface Lines as Strings: the lines the section draws, written
+    /// to a new layer as ordinary strings, one per line in its surface's
+    /// colour, so they can be edited and plotted. One undo step.
+    pub(crate) fn save_section_surface_lines(&mut self) {
+        let section_up = self.graphics.as_ref().is_some_and(|graphics| graphics.section_slab().is_some());
+        if !section_up || !self.editor.section_surface_lines_on() {
+            userspace_warn!("{}", tr!("cmd-slice-save-surface-lines-off"));
+            return;
+        }
+        // What is saved is what is drawn: bring the drawn lines up to date,
+        // which cuts only if the plane or a surface changed, then save them.
+        self.refresh_section_surface_lines();
+        let Some(graphics) = self.graphics.as_ref() else {
+            return;
+        };
+        let surfaces = graphics.section_surface_lines();
+        let Some(project) = self.workspace.active_project_mut() else {
+            userspace_warn!("{}", tr!("cmd-slice-open-project-save-surface-lines"));
+            return;
+        };
+        let Some((layer, objects)) = section_lines_layer(&mut project.project.document, surfaces) else {
+            userspace_warn!("{}", tr!("cmd-slice-no-surface-crosses-section"));
+            return;
+        };
+        let crossing = surfaces.iter().filter(|surface| !surface.lines.is_empty()).count();
+        let (layer_id, name, count) = (layer.id, layer.name.clone(), objects.len());
+        self.execute_edit(Command::AddLayerSnapshot { layer, objects });
+        self.editor.active_layer = Some(layer_id);
+        userspace_log!(
+            "{}",
+            tr!("cmd-slice-saved-surface-lines", count = count.to_string(), surfaces = crossing.to_string(), layer = name)
+        );
+        self.invalidate_geometry();
+    }
+
     /// Cut the shown surfaces along the section again, only when the plane, a
     /// surface or the switch changed since the last cut: a still section
     /// costs a hash a frame, not a pass over every triangle. A colour change
@@ -268,13 +303,60 @@ fn surface_line_color(triangulation: &OpenTriangulation) -> [f32; 4] {
     [red, green, blue, 1.0]
 }
 
+/// The layer Save Surface Lines as Strings adds, made as the contour command
+/// makes its own, and one string per cut line on it; `None` when no surface
+/// crosses the section.
+fn section_lines_layer(document: &mut Document, surfaces: &[SurfaceLines]) -> Option<(Layer, Vec<Object>)> {
+    if surfaces.iter().all(|surface| surface.lines.is_empty()) {
+        return None;
+    }
+    let layer_id = document.allocate_layer_id();
+    let layer = Layer {
+        id: layer_id,
+        name: unique_item_name(tr!("cmd-slice-section-lines-layer"), document.layers().iter().map(|layer| layer.name.as_str())),
+        color_index: None,
+        color: [1.0, 1.0, 1.0, 1.0],
+        loaded: true,
+        hidden: false,
+        elevation: 0.0,
+        folder: None,
+        section: SectionKind::natural_layer(),
+    };
+    let objects = surfaces
+        .iter()
+        .flat_map(|surface| surface.lines.iter().map(move |line| (line, surface.color)))
+        .map(|(line, color)| {
+            let (verts, closed) = section_line_string(line);
+            Object::Polyline {
+                id: document.allocate_object_id(),
+                layer: layer_id,
+                verts,
+                closed,
+                color: ObjectColor::Fixed(color),
+                fill: FillStyle::Clear,
+                line_weight: 1.0,
+            }
+        })
+        .collect();
+    Some((layer, objects))
+}
+
+/// One cut line as a string's vertices, each where the surface meets the
+/// plane. A line that comes back to its start is a ring: saved closed,
+/// without the repeated point.
+fn section_line_string(line: &[DVec3]) -> (Vec<PolyVertex>, bool) {
+    let closed = line.len() >= 4 && line.first().zip(line.last()).is_some_and(|(first, last)| (*first - *last).abs().max_element() < XY_TOL);
+    let points = if closed { &line[..line.len() - 1] } else { line };
+    (points.iter().copied().map(PolyVertex::straight).collect(), closed)
+}
+
 /// What the section's surface lines are cut from: the plane and each shown
 /// surface's mesh, not its colour, which recolours without a cut. `None`
 /// while none are drawn: the switch off, no section up, or a workspace other
 /// than Geology, the only one with the row.
 pub(crate) fn section_surface_lines_key(editor: &EditorState, slab: Option<SectionSlab>, triangulations: &[OpenTriangulation]) -> Option<u64> {
     use std::hash::{DefaultHasher, Hash, Hasher};
-    if !editor.section_surface_lines || editor.active_workspace != Workspace::Geology {
+    if !editor.section_surface_lines_on() {
         return None;
     }
     let slab = slab?;

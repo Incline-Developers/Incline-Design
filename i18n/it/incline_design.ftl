@@ -86,6 +86,7 @@ ws-menubar-geology-explode-to-points = Esplodi polilinea in punti
 ws-menubar-geology-drag-vertex = Trascina un vertice
 ws-menubar-geology-nudge-rl = Sposta la quota...
 ws-menubar-geology-surface-lines = Linee di superficie sulla sezione
+ws-menubar-geology-save-surface-lines = Salva le linee di superficie come stringhe
 ws-menubar-geology-next-vertex = Vertice successivo...
 ws-menubar-geology-remove-last-vertex = Rimuovi ultimo vertice
 ws-menubar-geology-surface = Superficie
@@ -972,7 +973,12 @@ cmd-session-triangulation-failed = Operazione sulla triangolazione non riuscita:
 cmd-session-unloaded-triangulation-name = Scaricata la triangolazione '{ $name }'
 cmd-slice-entered-slice-view-cx-cy = Vista sezione avviata @ { $cx }, { $cy }, { $cz } lungo { $dx }, { $dy } (linea di { $length } m)
 cmd-slice-exited-slice-view = Vista sezione chiusa
+cmd-slice-no-surface-crosses-section = Nessuna superficie mostrata attraversa la sezione; nulla salvato
+cmd-slice-open-project-save-surface-lines = Apri un progetto prima di salvare le linee di superficie
 cmd-slice-reset-section-view-fit-extents = Reimposta la vista in sezione (adatta all'estensione)
+cmd-slice-save-surface-lines-off = Attiva Linee di superficie sulla sezione con una sezione aperta prima di salvarle
+cmd-slice-saved-surface-lines = Salvate { $count } stringa/e da { $surfaces } superficie in { $layer }
+cmd-slice-section-lines-layer = Linee di sezione
 cmd-slice-set-section-grid-enabled = Griglia della sezione attiva = { $enabled }
 cmd-slice-set-surface-lines = Linee di superficie sulla sezione attive = { $enabled }
 cmd-smooth-count-corners = { $corners } angolo/i su { $count } stringa/e

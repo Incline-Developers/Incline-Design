@@ -84,6 +84,7 @@ ws-menubar-geology-explode-to-points = Polylinie in Punkte auflösen
 ws-menubar-geology-drag-vertex = Eckpunkt ziehen
 ws-menubar-geology-nudge-rl = Höhe verschieben...
 ws-menubar-geology-surface-lines = Oberflächenlinien im Schnitt
+ws-menubar-geology-save-surface-lines = Oberflächenlinien als Linien speichern
 ws-menubar-geology-next-vertex = Nächster Eckpunkt...
 ws-menubar-geology-remove-last-vertex = Letzten Eckpunkt entfernen
 ws-menubar-geology-surface = Oberfläche
@@ -971,7 +972,12 @@ cmd-session-triangulation-failed = Triangulationsvorgang fehlgeschlagen: { $mess
 cmd-session-unloaded-triangulation-name = Triangulation '{ $name }' entladen
 cmd-slice-entered-slice-view-cx-cy = Schnittansicht betreten bei { $cx }, { $cy }, { $cz } entlang { $dx }, { $dy } ({ $length } m Linie)
 cmd-slice-exited-slice-view = Schnittansicht verlassen
+cmd-slice-no-surface-crosses-section = Keine angezeigte Oberfläche schneidet den Schnitt; nichts gespeichert
+cmd-slice-open-project-save-surface-lines = Öffnen Sie ein Projekt, bevor Sie Oberflächenlinien speichern
 cmd-slice-reset-section-view-fit-extents = Schnittansicht zurücksetzen (an Ausdehnung anpassen)
+cmd-slice-save-surface-lines-off = Aktivieren Sie Oberflächenlinien im Schnitt bei geöffnetem Schnitt, bevor Sie sie speichern
+cmd-slice-saved-surface-lines = { $count } Linie(n) aus { $surfaces } Oberfläche(n) in { $layer } gespeichert
+cmd-slice-section-lines-layer = Schnittlinien
 cmd-slice-set-section-grid-enabled = Schnittraster aktiviert = { $enabled }
 cmd-slice-set-surface-lines = Oberflächenlinien im Schnitt aktiviert = { $enabled }
 cmd-smooth-count-corners = { $corners } Ecke(n) in { $count } Linie(n)

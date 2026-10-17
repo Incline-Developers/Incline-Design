@@ -64,6 +64,10 @@ impl SectionSurfaceStrokes {
         true
     }
 
+    pub(crate) fn surfaces(&self) -> &[SurfaceLines] {
+        &self.surfaces
+    }
+
     pub(crate) fn strokes(&self) -> &[StrokeInstance] {
         &self.strokes
     }

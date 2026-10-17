@@ -661,11 +661,12 @@ pub(crate) enum GeologyRow {
     DragVertex,
     NudgeRl,
     SurfaceLines,
+    SaveSurfaceLines,
 }
 
 /// Geology Design's lower half in menu order; [`geology_design_groups`] cuts
 /// it into submenus and the macOS menu tags rows by index into it.
-pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 43] = [
+pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 44] = [
     GeologyRow::Tool(ActiveTool::MakePoint),
     GeologyRow::Tool(ActiveTool::MakeLine),
     GeologyRow::Tool(ActiveTool::MakePoly),
@@ -709,6 +710,7 @@ pub(crate) const GEOLOGY_DESIGN_ROWS: [GeologyRow; 43] = [
     GeologyRow::Tool(ActiveTool::MeasureBatterAngle),
     GeologyRow::Tool(ActiveTool::MeasureDistance),
     GeologyRow::SurfaceLines,
+    GeologyRow::SaveSurfaceLines,
 ];
 
 /// Geology Design's submenus: title and run of [`GEOLOGY_DESIGN_ROWS`]. The
@@ -768,6 +770,7 @@ impl GeologyRow {
             Self::DragVertex => tr!("ws-menubar-geology-drag-vertex"),
             Self::NudgeRl => tr!("ws-menubar-geology-nudge-rl"),
             Self::SurfaceLines => tr!("ws-menubar-geology-surface-lines"),
+            Self::SaveSurfaceLines => tr!("ws-menubar-geology-save-surface-lines"),
         }
     }
 
@@ -788,6 +791,7 @@ impl GeologyRow {
             Self::DragVertex => UiCommand::ArmDragVertex,
             Self::NudgeRl => UiCommand::OpenNudgePanel,
             Self::SurfaceLines => UiCommand::ToggleSectionSurfaceLines,
+            Self::SaveSurfaceLines => UiCommand::SaveSectionSurfaceLines,
         }
     }
 
@@ -813,6 +817,8 @@ impl GeologyRow {
             // Move works on a section in Geology and needs no layer.
             Self::DragVertex | Self::NudgeRl => !editor.fly_mode_enabled,
             Self::SurfaceLines => true,
+            // Saved only while drawn: the switch on and a section up.
+            Self::SaveSurfaceLines => editor.slice_mode_enabled && editor.section_surface_lines_on(),
         }
     }
 
@@ -877,6 +883,7 @@ impl GeologyRow {
             Self::DragVertex => "ws-menubar-geology-drag-vertex",
             Self::NudgeRl => "ws-menubar-geology-nudge-rl",
             Self::SurfaceLines => "ws-menubar-geology-surface-lines",
+            Self::SaveSurfaceLines => "ws-menubar-geology-save-surface-lines",
         }
     }
 

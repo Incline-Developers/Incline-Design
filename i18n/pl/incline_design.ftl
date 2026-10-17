@@ -82,6 +82,7 @@ ws-menubar-geology-explode-to-points = Rozbij polilinię na punkty
 ws-menubar-geology-drag-vertex = Przeciągnij wierzchołek
 ws-menubar-geology-nudge-rl = Przesuń rzędną...
 ws-menubar-geology-surface-lines = Linie powierzchni na przekroju
+ws-menubar-geology-save-surface-lines = Zapisz linie powierzchni jako ciągi
 ws-menubar-geology-next-vertex = Następny wierzchołek...
 ws-menubar-geology-remove-last-vertex = Usuń ostatni wierzchołek
 ws-menubar-geology-surface = Powierzchnia
@@ -1000,7 +1001,12 @@ cmd-session-triangulation-failed = Operacja triangulacji nie powiodła się: { $
 cmd-session-unloaded-triangulation-name = Wyładowano triangulację „{ $name }”
 cmd-slice-entered-slice-view-cx-cy = Wejście do widoku przekroju @ { $cx }, { $cy }, { $cz } wzdłuż { $dx }, { $dy } (linia { $length } m)
 cmd-slice-exited-slice-view = Zakończono widok przekroju
+cmd-slice-no-surface-crosses-section = Żadna wyświetlana powierzchnia nie przecina przekroju; nic nie zapisano
+cmd-slice-open-project-save-surface-lines = Otwórz projekt przed zapisaniem linii powierzchni
 cmd-slice-reset-section-view-fit-extents = Zresetuj widok przekroju (dopasuj do zasięgu)
+cmd-slice-save-surface-lines-off = Włącz Linie powierzchni na przekroju przy otwartym przekroju przed ich zapisaniem
+cmd-slice-saved-surface-lines = Zapisano ciągi: { $count } z powierzchni: { $surfaces } w { $layer }
+cmd-slice-section-lines-layer = Linie przekroju
 cmd-slice-set-section-grid-enabled = Siatka przekroju włączona = { $enabled }
 cmd-slice-set-surface-lines = Linie powierzchni na przekroju włączone = { $enabled }
 cmd-smooth-count-corners = Narożniki: { $corners } w liniach: { $count }

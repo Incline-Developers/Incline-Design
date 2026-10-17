@@ -81,6 +81,7 @@ ws-menubar-geology-explode-to-points = Розбити полілінію на т
 ws-menubar-geology-drag-vertex = Перетягнути вершину
 ws-menubar-geology-nudge-rl = Зсув позначки...
 ws-menubar-geology-surface-lines = Лінії поверхонь на перерізі
+ws-menubar-geology-save-surface-lines = Зберегти лінії поверхонь як лінії
 ws-menubar-geology-next-vertex = Наступна вершина...
 ws-menubar-geology-remove-last-vertex = Видалити останню вершину
 ws-menubar-geology-surface = Поверхня
@@ -977,7 +978,12 @@ cmd-session-triangulation-failed = Помилка операції з тріан
 cmd-session-unloaded-triangulation-name = Тріангуляцію «{ $name }» вивантажено
 cmd-slice-entered-slice-view-cx-cy = Увімкнено режим перерізу в точці { $cx }, { $cy }, { $cz } уздовж { $dx }, { $dy } (довжина лінії { $length } м)
 cmd-slice-exited-slice-view = Режим перерізу закрито
+cmd-slice-no-surface-crosses-section = Жодна показана поверхня не перетинає переріз; нічого не збережено
+cmd-slice-open-project-save-surface-lines = Відкрийте проєкт перед збереженням ліній поверхонь
 cmd-slice-reset-section-view-fit-extents = Скинути вигляд перерізу (вписати в межі)
+cmd-slice-save-surface-lines-off = Перед збереженням увімкніть лінії поверхонь на перерізі при відкритому перерізі
+cmd-slice-saved-surface-lines = Збережено ліній: { $count } з поверхонь: { $surfaces } у { $layer }
+cmd-slice-section-lines-layer = Лінії перерізу
 cmd-slice-set-section-grid-enabled = Сітку перерізу увімкнено = { $enabled }
 cmd-slice-set-surface-lines = Лінії поверхонь на перерізі увімкнено = { $enabled }
 cmd-smooth-count-corners = Кутів: { $corners } у лініях: { $count }

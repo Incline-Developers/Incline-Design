@@ -89,6 +89,7 @@ ws-menubar-geology-explode-to-points = Explode Polyline to Points
 ws-menubar-geology-drag-vertex = Drag a Vertex
 ws-menubar-geology-nudge-rl = Nudge RL...
 ws-menubar-geology-surface-lines = Surface Lines on Section
+ws-menubar-geology-save-surface-lines = Save Surface Lines as Strings
 ws-menubar-geology-next-vertex = Next Vertex...
 ws-menubar-geology-remove-last-vertex = Remove Last Vertex
 ws-menubar-geology-surface = Surface
@@ -1004,7 +1005,12 @@ cmd-session-triangulation-failed = Triangulation operation failed: { $message }
 cmd-session-unloaded-triangulation-name = Unloaded triangulation '{ $name }'
 cmd-slice-entered-slice-view-cx-cy = Entered slice view @ { $cx }, { $cy }, { $cz } along { $dx }, { $dy } ({ $length }m line)
 cmd-slice-exited-slice-view = Exited slice view
+cmd-slice-no-surface-crosses-section = No shown surface crosses the section; nothing saved
+cmd-slice-open-project-save-surface-lines = Open a project before saving surface lines
 cmd-slice-reset-section-view-fit-extents = Reset the section view (fit to extents)
+cmd-slice-save-surface-lines-off = Turn on Surface Lines on Section with a section up before saving them
+cmd-slice-saved-surface-lines = Saved { $count } string(s) from { $surfaces } surface(s) to { $layer }
+cmd-slice-section-lines-layer = Section Lines
 cmd-slice-set-section-grid-enabled = Set section grid = { $enabled }
 cmd-slice-set-surface-lines = Set surface lines on section = { $enabled }
 cmd-smooth-count-corners = { $corners } corner(s) on { $count } string(s)

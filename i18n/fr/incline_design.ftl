@@ -71,6 +71,7 @@ ws-menubar-geology-explode-to-points = Décomposer la polyligne en points
 ws-menubar-geology-drag-vertex = Glisser un sommet
 ws-menubar-geology-nudge-rl = Ajuster la cote...
 ws-menubar-geology-surface-lines = Lignes de surface sur la coupe
+ws-menubar-geology-save-surface-lines = Enregistrer les lignes de surface en polylignes
 ws-menubar-geology-next-vertex = Sommet suivant...
 ws-menubar-geology-remove-last-vertex = Retirer le dernier sommet
 ws-menubar-geology-surface = Surface
@@ -930,7 +931,12 @@ cmd-session-triangulation-failed = Échec de l’opération de triangulation : {
 cmd-session-unloaded-triangulation-name = Triangulation « { $name } » déchargée
 cmd-slice-entered-slice-view-cx-cy = Vue en coupe activée à { $cx }, { $cy }, { $cz } selon { $dx }, { $dy } (ligne de { $length } m)
 cmd-slice-exited-slice-view = Vue en coupe quittée
+cmd-slice-no-surface-crosses-section = Aucune surface affichée ne croise la coupe ; rien n'a été enregistré
+cmd-slice-open-project-save-surface-lines = Ouvrez un projet avant d'enregistrer les lignes de surface
 cmd-slice-reset-section-view-fit-extents = Réinitialiser la vue en coupe (ajuster à l'étendue)
+cmd-slice-save-surface-lines-off = Activez les lignes de surface sur la coupe avec une coupe ouverte avant de les enregistrer
+cmd-slice-saved-surface-lines = { $count } polyligne(s) de { $surfaces } surface(s) enregistrée(s) dans { $layer }
+cmd-slice-section-lines-layer = Lignes de coupe
 cmd-slice-set-section-grid-enabled = Grille de coupe activée = { $enabled }
 cmd-slice-set-surface-lines = Lignes de surface sur la coupe activées = { $enabled }
 cmd-smooth-count-corners = { $corners } angle(s) sur { $count } polyligne(s)

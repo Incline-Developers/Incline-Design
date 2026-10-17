@@ -81,6 +81,7 @@ ws-menubar-geology-explode-to-points = Разбить полилинию на т
 ws-menubar-geology-drag-vertex = Перетащить вершину
 ws-menubar-geology-nudge-rl = Сдвиг отметки...
 ws-menubar-geology-surface-lines = Линии поверхностей на сечении
+ws-menubar-geology-save-surface-lines = Сохранить линии поверхностей как линии
 ws-menubar-geology-next-vertex = Следующая вершина...
 ws-menubar-geology-remove-last-vertex = Удалить последнюю вершину
 ws-menubar-geology-surface = Поверхность
@@ -983,7 +984,12 @@ cmd-session-triangulation-failed = Ошибка операции с трианг
 cmd-session-unloaded-triangulation-name = Триангуляция «{ $name }» выгружена
 cmd-slice-entered-slice-view-cx-cy = Включён режим сечения в точке { $cx }, { $cy }, { $cz } вдоль { $dx }, { $dy } (длина линии { $length } м)
 cmd-slice-exited-slice-view = Режим сечения закрыт
+cmd-slice-no-surface-crosses-section = Ни одна показанная поверхность не пересекает сечение; ничего не сохранено
+cmd-slice-open-project-save-surface-lines = Откройте проект перед сохранением линий поверхностей
 cmd-slice-reset-section-view-fit-extents = Сбросить вид сечения (вписать в границы)
+cmd-slice-save-surface-lines-off = Перед сохранением включите линии поверхностей на сечении при открытом сечении
+cmd-slice-saved-surface-lines = Сохранено линий: { $count } из поверхностей: { $surfaces } в { $layer }
+cmd-slice-section-lines-layer = Линии сечения
 cmd-slice-set-section-grid-enabled = Сетка сечения включена = { $enabled }
 cmd-slice-set-surface-lines = Линии поверхностей на сечении включены = { $enabled }
 cmd-smooth-count-corners = Углов: { $corners } в линиях: { $count }

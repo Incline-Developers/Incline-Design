@@ -72,6 +72,7 @@ ws-menubar-geology-explode-to-points = 将折线分解为点
 ws-menubar-geology-drag-vertex = 拖动顶点
 ws-menubar-geology-nudge-rl = 微调标高...
 ws-menubar-geology-surface-lines = 剖面上的表面线
+ws-menubar-geology-save-surface-lines = 将表面线保存为线
 ws-menubar-geology-next-vertex = 下一个顶点...
 ws-menubar-geology-remove-last-vertex = 移除最后一个顶点
 ws-menubar-geology-surface = 表面
@@ -930,7 +931,12 @@ cmd-session-triangulation-failed = 三角网操作失败：{ $message }
 cmd-session-unloaded-triangulation-name = 已卸载三角网“{ $name }”
 cmd-slice-entered-slice-view-cx-cy = 已进入剖面视图：位置 { $cx }, { $cy }, { $cz }，方向 { $dx }, { $dy }（线长 { $length } 米）
 cmd-slice-exited-slice-view = 已退出剖切视图
+cmd-slice-no-surface-crosses-section = 显示的表面均未穿过剖面；未保存任何内容
+cmd-slice-open-project-save-surface-lines = 保存表面线之前请先打开项目
 cmd-slice-reset-section-view-fit-extents = 重置剖面视图（适配范围）
+cmd-slice-save-surface-lines-off = 保存之前，请在打开剖面的状态下启用剖面上的表面线
+cmd-slice-saved-surface-lines = 已将 { $surfaces } 个表面的 { $count } 条线保存到 { $layer }
+cmd-slice-section-lines-layer = 剖面线
 cmd-slice-set-section-grid-enabled = 设置剖面网格 = { $enabled }
 cmd-slice-set-surface-lines = 设置剖面上的表面线 = { $enabled }
 cmd-smooth-count-corners = { $count } 条线上有 { $corners } 个拐角

@@ -85,6 +85,7 @@ ws-menubar-geology-explode-to-points = Phân rã đường đa tuyến thành c�
 ws-menubar-geology-drag-vertex = Kéo đỉnh
 ws-menubar-geology-nudge-rl = Dịch cao độ...
 ws-menubar-geology-surface-lines = Đường bề mặt trên mặt cắt
+ws-menubar-geology-save-surface-lines = Lưu đường bề mặt thành đường
 ws-menubar-geology-next-vertex = Đỉnh tiếp theo...
 ws-menubar-geology-remove-last-vertex = Xóa đỉnh cuối
 ws-menubar-geology-surface = Bề mặt
@@ -956,7 +957,12 @@ cmd-session-triangulation-failed = Thao tác lưới tam giác thất bại: { $
 cmd-session-unloaded-triangulation-name = Đã gỡ tải lưới tam giác '{ $name }'
 cmd-slice-entered-slice-view-cx-cy = Đã vào khung nhìn cắt lát @ { $cx }, { $cy }, { $cz } theo hướng { $dx }, { $dy } (đường { $length }m)
 cmd-slice-exited-slice-view = Đã thoát khung nhìn cắt lát
+cmd-slice-no-surface-crosses-section = Không có bề mặt nào đang hiển thị cắt qua mặt cắt; chưa lưu gì
+cmd-slice-open-project-save-surface-lines = Hãy mở một dự án trước khi lưu đường bề mặt
 cmd-slice-reset-section-view-fit-extents = Đặt lại khung nhìn mặt cắt (vừa khít phạm vi)
+cmd-slice-save-surface-lines-off = Hãy bật Đường bề mặt trên mặt cắt khi đang mở một mặt cắt trước khi lưu
+cmd-slice-saved-surface-lines = Đã lưu { $count } đường từ { $surfaces } bề mặt vào { $layer }
+cmd-slice-section-lines-layer = Đường mặt cắt
 cmd-slice-set-section-grid-enabled = Bật lưới mặt cắt = { $enabled }
 cmd-slice-set-surface-lines = Bật đường bề mặt trên mặt cắt = { $enabled }
 cmd-smooth-count-corners = { $corners } góc trên { $count } đường

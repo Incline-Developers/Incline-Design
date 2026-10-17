@@ -77,6 +77,7 @@ ws-menubar-geology-explode-to-points = Vunja Mstari wa Pointi Nyingi kuwa Pointi
 ws-menubar-geology-drag-vertex = Buruta Kipeo
 ws-menubar-geology-nudge-rl = Sogeza Mwinuko...
 ws-menubar-geology-surface-lines = Mistari ya uso kwenye sehemu
+ws-menubar-geology-save-surface-lines = Hifadhi Mistari ya Uso kama Mistari
 ws-menubar-geology-next-vertex = Kipeo Kinachofuata...
 ws-menubar-geology-remove-last-vertex = Ondoa Kipeo cha Mwisho
 ws-menubar-geology-surface = Uso
@@ -962,7 +963,12 @@ cmd-session-triangulation-failed = Operesheni ya utatuzi imeshindwa: { $message 
 cmd-session-unloaded-triangulation-name = Utatuzi '{ $name }' umeondolewa
 cmd-slice-entered-slice-view-cx-cy = Umeingia kwenye mwonekano wa ukataji @ { $cx }, { $cy }, { $cz } kando ya { $dx }, { $dy } (mstari wa m{ $length })
 cmd-slice-exited-slice-view = Umetoka kwenye mwonekano wa ukataji
+cmd-slice-no-surface-crosses-section = Hakuna uso unaoonyeshwa unaovuka sehemu; hakuna kilichohifadhiwa
+cmd-slice-open-project-save-surface-lines = Fungua mradi kabla ya kuhifadhi mistari ya uso
 cmd-slice-reset-section-view-fit-extents = Rejesha mwonekano wa sehemu (oanisha na wigo)
+cmd-slice-save-surface-lines-off = Washa mistari ya uso kwenye sehemu ukiwa na sehemu imefunguliwa kabla ya kuihifadhi
+cmd-slice-saved-surface-lines = Imehifadhi mistari { $count } kutoka nyuso { $surfaces } hadi { $layer }
+cmd-slice-section-lines-layer = Mistari ya Sehemu
 cmd-slice-set-section-grid-enabled = Weka gridi ya sehemu = { $enabled }
 cmd-slice-set-surface-lines = Weka mistari ya uso kwenye sehemu = { $enabled }
 cmd-smooth-count-corners = Pembe { $corners } kwenye mistari { $count }

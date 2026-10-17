@@ -416,6 +416,12 @@ impl EditorState {
         }
     }
 
+    /// Surface Lines on Section is on where it has a row, in Geology: the
+    /// lines are drawn, and can be saved, whenever a section is up.
+    pub(crate) fn section_surface_lines_on(&self) -> bool {
+        self.section_surface_lines && self.active_workspace == Workspace::Geology
+    }
+
     /// Whether a tool that runs on the selection is open on a snapshot of it.
     ///
     /// These tools take their inputs when they open and cannot be re-pointed
@@ -4350,6 +4356,8 @@ pub(crate) enum UiCommand {
     SetGridShown(bool),
     /// Surface Lines on Section: flip the switch.
     ToggleSectionSurfaceLines,
+    /// Save Surface Lines as Strings: the drawn lines to a new layer.
+    SaveSectionSurfaceLines,
     SetTopologyWireframes(bool),
     SetShowPoints(bool),
     /// Presentation shading over the scene pass. Native only.
@@ -5011,6 +5019,7 @@ impl UiCommand {
             | Self::ReorderWorkspace { .. }
             | Self::ToggleViewOption(_)
             | Self::ToggleSectionSurfaceLines
+            | Self::SaveSectionSurfaceLines
             | Self::SetInitiation { .. }
             | Self::ChargeSelectedHoles { .. }
             | Self::BeginRenameItem(_)

@@ -1064,6 +1064,10 @@ impl<'a> App<'a> {
                 self.toggle_section_surface_lines();
                 Ok(())
             }
+            UiCommand::SaveSectionSurfaceLines => {
+                self.save_section_surface_lines();
+                Ok(())
+            }
             UiCommand::SetTopologyWireframes(enabled) => self.set_topology_wireframes(enabled),
             #[cfg(not(target_arch = "wasm32"))]
             UiCommand::SetSlicePreviewDetached(detached) => {

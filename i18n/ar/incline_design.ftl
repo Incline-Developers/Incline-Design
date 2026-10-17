@@ -72,6 +72,7 @@ ws-menubar-geology-explode-to-points = تفكيك الخط المتعدد إلى
 ws-menubar-geology-drag-vertex = سحب رأس
 ws-menubar-geology-nudge-rl = تحريك المنسوب...
 ws-menubar-geology-surface-lines = خطوط السطح على المقطع
+ws-menubar-geology-save-surface-lines = حفظ خطوط السطح كخطوط
 ws-menubar-geology-next-vertex = الرأس التالي...
 ws-menubar-geology-remove-last-vertex = إزالة آخر رأس
 ws-menubar-geology-surface = السطح
@@ -930,7 +931,12 @@ cmd-session-triangulation-failed = فشلت عملية التثليث: { $messag
 cmd-session-unloaded-triangulation-name = تم إلغاء تحميل التثليث «{ $name }»
 cmd-slice-entered-slice-view-cx-cy = تم دخول عرض الشريحة عند { $cx }، { $cy }، { $cz } باتجاه { $dx }، { $dy } (خط بطول { $length } م)
 cmd-slice-exited-slice-view = تم الخروج من عرض الشريحة
+cmd-slice-no-surface-crosses-section = لا يقطع أي سطح معروض المقطع؛ لم يُحفظ شيء
+cmd-slice-open-project-save-surface-lines = افتح مشروعًا قبل حفظ خطوط السطح
 cmd-slice-reset-section-view-fit-extents = إعادة تعيين عرض المقطع (ملاءمة للحدود)
+cmd-slice-save-surface-lines-off = فعّل خطوط السطح على المقطع مع عرض مقطع قبل حفظها
+cmd-slice-saved-surface-lines = تم حفظ { $count } خط من { $surfaces } سطح في { $layer }
+cmd-slice-section-lines-layer = خطوط المقطع
 cmd-slice-set-section-grid-enabled = تفعيل شبكة المقطع = { $enabled }
 cmd-slice-set-surface-lines = تفعيل خطوط السطح على المقطع = { $enabled }
 cmd-smooth-count-corners = { $corners } زاوية في { $count } خط

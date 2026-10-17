@@ -72,6 +72,7 @@ ws-menubar-geology-explode-to-points = पॉलीलाइन को बिं
 ws-menubar-geology-drag-vertex = शीर्ष खींचें
 ws-menubar-geology-nudge-rl = ऊँचाई खिसकाएँ...
 ws-menubar-geology-surface-lines = सेक्शन पर सतह रेखाएँ
+ws-menubar-geology-save-surface-lines = सतह रेखाएँ रेखाओं के रूप में सहेजें
 ws-menubar-geology-next-vertex = अगला शीर्ष...
 ws-menubar-geology-remove-last-vertex = अंतिम शीर्ष हटाएँ
 ws-menubar-geology-surface = सतह
@@ -930,7 +931,12 @@ cmd-session-triangulation-failed = त्रिकोणन क्रिया �
 cmd-session-unloaded-triangulation-name = त्रिकोणन '{ $name }' अनलोड किया गया
 cmd-slice-entered-slice-view-cx-cy = { $cx }, { $cy }, { $cz } पर { $dx }, { $dy } दिशा में खंड दृश्य खोला गया ({ $length } मीटर लाइन)
 cmd-slice-exited-slice-view = खंड दृश्य से बाहर निकला गया
+cmd-slice-no-surface-crosses-section = दिखाई गई कोई सतह सेक्शन को नहीं काटती; कुछ सहेजा नहीं गया
+cmd-slice-open-project-save-surface-lines = सतह रेखाएँ सहेजने से पहले कोई प्रोजेक्ट खोलें
 cmd-slice-reset-section-view-fit-extents = सेक्शन दृश्य रीसेट करें (सीमाओं के अनुरूप बनाएँ)
+cmd-slice-save-surface-lines-off = सहेजने से पहले सेक्शन खोलकर सेक्शन पर सतह रेखाएँ चालू करें
+cmd-slice-saved-surface-lines = { $surfaces } सतह से { $count } रेखा(एँ) { $layer } में सहेजी गईं
+cmd-slice-section-lines-layer = सेक्शन रेखाएँ
 cmd-slice-set-section-grid-enabled = सेक्शन ग्रिड सक्षम = { $enabled }
 cmd-slice-set-surface-lines = सेक्शन पर सतह रेखाएँ सक्षम = { $enabled }
 cmd-smooth-count-corners = { $count } रेखा(ओं) में { $corners } कोने

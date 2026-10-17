@@ -886,6 +886,11 @@ impl<'a> Graphics<'a> {
         self.section_surface.recolor(colors);
     }
 
+    /// The surface lines the section draws, in their colours.
+    pub(crate) fn section_surface_lines(&self) -> &[SurfaceLines] {
+        self.section_surface.surfaces()
+    }
+
     /// Whether a floating egui surface - a tile, card or menu over the canvas -
     /// covers this window position, in physical pixels.
     pub(crate) fn overlay_at_physical_position(&self, x: f32, y: f32) -> bool {
