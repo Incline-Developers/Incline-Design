@@ -145,6 +145,7 @@ impl<'a> Graphics<'a> {
             slice.width = editor.slice_width_input.clamp(0.1, 1.0e6);
             slice.move_speed = editor.slice_speed_input.clamp(0.0, 1.0e6);
             slice.rotate_speed = editor.slice_rotate_input.clamp(1.0, 720.0).to_radians();
+            slice.set_outlines(editor.slice_outlines);
             // Camera's own depth range, not the slab (fragment shaders clip to that directly) - kept wide enough a tilted or overhead view won't clip away geometry the slab would show.
             let forward = self.camera.forward();
             let strike = DVec3::new(slice.direction.x, slice.direction.y, 0.0);
@@ -228,6 +229,9 @@ impl<'a> Graphics<'a> {
             &self.surface_chunk_bind_group_layout,
             &self.edge_style_bind_group_layout,
         );
+        let section_cuts = self.section_slab().is_some_and(|slab| slab.outlines);
+        self.triangulation_gpu
+            .sync_section_cuts(&self.device, &mut encoder, section_cuts, &self.section_cut_bind_group_layout);
         self.block_model_gpu.sync(
             &self.device,
             &self.queue,
