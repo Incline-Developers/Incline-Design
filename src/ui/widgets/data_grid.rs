@@ -302,7 +302,7 @@ pub(crate) fn add_button(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt:
     let side = row_height(ui);
     let tint = ui.visuals().text_color();
     ui.add(
-        super::toolbar::ToolbarButton::new(egui::Image::new(unthemed_icon!("add.svg")).tint(tint), tooltip)
+        super::toolbar::ToolbarButton::new(egui::Image::new(unthemed_icon!("add_tool.svg")).tint(tint), tooltip)
             .button_side(side)
             .id_salt(id),
     )
@@ -643,7 +643,7 @@ pub(crate) fn grid_add_row(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fm
     let button = egui::Rect::from_min_size(egui::pos2(rect.right() - height, rect.top()), egui::vec2(height, height));
     ui.put(
         button,
-        super::toolbar::ToolbarButton::new(egui::Image::new(unthemed_icon!("add.svg")).tint(text), tooltip)
+        super::toolbar::ToolbarButton::new(egui::Image::new(unthemed_icon!("add_tool.svg")).tint(text), tooltip)
             .button_side(height)
             .id_salt(id),
     )
