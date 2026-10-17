@@ -40,9 +40,11 @@ struct VertexOutput {
 };
 
 // A 2D section draws each hole as a flat ribbon on the plane: a white
-// outline filled with the hole's colour.
-const SECTION_HOLE_MIN_HALF_PIXELS: f32 = 5.0;
+// outline filled with the hole's colour. A ribbon narrower than
+// `SECTION_HOLE_OUTLINED_HALF_PIXELS` is all fill: its outline would leave no
+// colour.
 const SECTION_HOLE_OUTLINE_PIXELS: f32 = 1.5;
+const SECTION_HOLE_OUTLINED_HALF_PIXELS: f32 = 3.0;
 const SECTION_HOLE_OUTLINE_COLOR: vec3<f32> = vec3<f32>(1.0, 1.0, 1.0);
 
 fn in_section_2d() -> bool {
@@ -76,12 +78,17 @@ fn ring_frame(axis: vec3<f32>) -> RingFrame {
     return RingFrame(right, cross(axis, right));
 }
 
-// Screen pixels one world unit along a direction covers at a point, both
-// already in clip space (the direction with w = 0).
-fn pixels_per_world(point_clip: vec4<f32>, direction_clip: vec4<f32>) -> f32 {
+// The screen offset, in pixels, of one world unit along a direction at a
+// point, both already in clip space (the direction with w = 0).
+fn pixel_offset(point_clip: vec4<f32>, direction_clip: vec4<f32>) -> vec2<f32> {
     let safe_w = max(abs(point_clip.w), 1.0e-6);
     let ndc_per_world = (direction_clip.xy * point_clip.w - point_clip.xy * direction_clip.w) / (safe_w * safe_w);
-    return length(ndc_per_world * camera.viewport.xy * 0.5);
+    return ndc_per_world * camera.viewport.xy * 0.5;
+}
+
+// Screen pixels one world unit along a direction covers at a point.
+fn pixels_per_world(point_clip: vec4<f32>, direction_clip: vec4<f32>) -> f32 {
+    return length(pixel_offset(point_clip, direction_clip));
 }
 
 // One projected scale for a whole ring. A radial direction can point into
@@ -119,10 +126,15 @@ fn section_ribbon(instance: SegmentInput, vertex_index: u32) -> VertexOutput {
     let length_px = length(span);
     let direction = select(vec2<f32>(0.0, -1.0), span / max(length_px, 1.0e-6), length_px > 1.0e-4);
     let across = vec2<f32>(-direction.y, direction.x);
-    // The diameter on the horizontal scale, so vertical exaggeration cannot fatten a hole.
-    let strike = normalize(cross(vec3<f32>(0.0, 0.0, 1.0), camera.section_normal.xyz));
-    let scale = max(pixels_per_world(start_clip, camera.view_proj * vec4<f32>(strike, 0.0)), 1.0e-6);
-    let half_px = max(max(instance.start_radius.w * scale, instance.end_pad.w * 0.5), SECTION_HOLE_MIN_HALF_PIXELS);
+    // As wide as the 3D cylinder's silhouette: the reach of its ring, laid
+    // out around the unflattened trace, across the ribbon on screen, with
+    // the same pixel floor.
+    let frame = ring_frame(normalize(instance.end_pad.xyz - instance.start_radius.xyz));
+    let ring_across = vec2<f32>(
+        dot(pixel_offset(start_clip, camera.view_proj * vec4<f32>(frame.right, 0.0)), across),
+        dot(pixel_offset(start_clip, camera.view_proj * vec4<f32>(frame.up, 0.0)), across),
+    );
+    let half_px = max(instance.start_radius.w * length(ring_across), instance.end_pad.w * 0.5);
     // Two triangles: start-, start+, end+ and start-, end+, end-.
     let at_end = vertex_index == 2u || vertex_index == 4u || vertex_index == 5u;
     let side = select(-1.0, 1.0, vertex_index == 1u || vertex_index == 2u || vertex_index == 4u);
@@ -150,7 +162,7 @@ fn section_ribbon_color(input: VertexOutput) -> vec4<f32> {
     if (caps & 2u) != 0u {
         edge = min(edge, input.ribbon_size.y - input.ribbon.y);
     }
-    if edge < SECTION_HOLE_OUTLINE_PIXELS {
+    if edge < SECTION_HOLE_OUTLINE_PIXELS && input.ribbon_size.x >= SECTION_HOLE_OUTLINED_HALF_PIXELS {
         return vec4<f32>(select(SECTION_HOLE_OUTLINE_COLOR, input.color, input.ribbon_size.w > 0.5), 1.0);
     }
     return vec4<f32>(input.color, 1.0);
