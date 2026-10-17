@@ -21,7 +21,7 @@ use glam::{DMat4, DQuat, DVec3, DVec4};
 use crate::{
     model::{
         Document, LayerId, Object, ObjectColor, PolyVertex,
-        geometry::{Transform, normalize_or_z, point_to_dvec3, vector_to_dvec3},
+        geometry::{ContourLabelSource, Transform, normalize_or_z, place_contour_labels, point_to_dvec3, vector_to_dvec3},
         project::ProjectFile,
     },
     rendering::color::{COLOR_TABLE, aci_to_linear_rgba, linear_to_srgb_byte},
@@ -147,21 +147,94 @@ fn export_drawing(project: &ProjectFile, only_layer: Option<LayerId>) -> Result<
         });
     }
 
+    let labelled = |object: &Object| matches!(object, Object::Polyline { .. }) && project.document.layer(object.layer()).is_some_and(|layer| layer.contour_labels);
+    let mut contours: Vec<&Object> = Vec::new();
     for object in project.document.objects() {
         if only_layer.is_some_and(|id| id != object.layer()) {
             continue;
         }
         add_object_to_drawing(&project.document, object, &mut drawing);
+        if labelled(object) {
+            contours.push(object);
+        }
     }
+    let mut stored_contours = Vec::new();
     for (&layer, stored) in &project.document.deferred_layers {
         if only_layer.is_some_and(|id| id != layer) {
             continue;
         }
         for (object, _) in stored.read(layer)?.objects {
             add_object_to_drawing(&project.document, &object, &mut drawing);
+            if labelled(&object) {
+                stored_contours.push(object);
+            }
         }
     }
+    contours.extend(&stored_contours);
+    add_contour_labels(&project.document, &contours, &mut drawing);
     Ok(drawing)
+}
+
+/// Labels a contour line's height as text this many times smaller than the
+/// labelled lines' plan extent, and a line every this many text heights.
+const CONTOUR_LABEL_EXTENT_PER_HEIGHT: f64 = 150.0;
+const CONTOUR_LABEL_HEIGHTS_APART: f64 = 24.0;
+
+/// Write the heights of the contour-labelled `contours` as text, made here
+/// for the file and never kept in the document, on a layer of their own
+/// beside each contour layer. A file has no zoom, so text is sized from the
+/// lines' extent (a round 1-2-5 size at any decade) and spaced as the screen
+/// spaces it.
+fn add_contour_labels(document: &Document, contours: &[&Object], drawing: &mut Drawing) {
+    let points = contours.iter().flat_map(|object| match object {
+        Object::Polyline { verts, .. } => verts.as_slice(),
+        _ => &[],
+    });
+    let Some((min, max)) = points.fold(None, |bounds: Option<(DVec3, DVec3)>, vert| {
+        Some(bounds.map_or((vert.pos, vert.pos), |(min, max)| (min.min(vert.pos), max.max(vert.pos))))
+    }) else {
+        return;
+    };
+    let Some(height) = crate::model::blast::nice_step_any((max.x - min.x).max(max.y - min.y) / CONTOUR_LABEL_EXTENT_PER_HEIGHT) else {
+        return;
+    };
+    let spacing = 2f64.powf((height * CONTOUR_LABEL_HEIGHTS_APART).log2().ceil());
+    let sources: Vec<_> = contours.iter().map(|object| ContourLabelSource { object, shown: true }).collect();
+    let text_box = |text: &str, height: f64| crate::model::geometry::label_box(crate::model::geometry::estimated_text_width(text, height), height, height);
+    // Every layer the file declares so far; a heights layer is declared once,
+    // by its name, whatever the export left out.
+    // DXF layer names match whatever their case: the text goes on a layer by
+    // the spelling it was first declared with.
+    let mut declared: std::collections::HashMap<String, String> = drawing.layers().map(|layer| (layer.name.to_lowercase(), layer.name.clone())).collect();
+    let mut names: std::collections::HashMap<LayerId, String> = std::collections::HashMap::new();
+    for label in place_contour_labels(&sources, spacing, height, |_, _| true, text_box) {
+        let source = sources[label.source].object;
+        let Some(layer) = document.layer(source.layer()) else {
+            continue;
+        };
+        // Their own layer, so a re-import brings them in apart from the lines.
+        let layer_name = names
+            .entry(layer.id)
+            .or_insert_with(|| {
+                let name = crate::i18n::tr!("io-dxf-contour-labels-layer", layer = layer.name.clone());
+                if let Some(spelling) = declared.get(&name.to_lowercase()) {
+                    return spelling.clone();
+                }
+                declared.insert(name.to_lowercase(), name.clone());
+                drawing.add_layer(dxf::tables::Layer {
+                    name: name.clone(),
+                    color: Color::from_index(layer.color_index.unwrap_or(7).clamp(1, 255)),
+                    is_layer_on: layer.loaded,
+                    ..Default::default()
+                });
+                name
+            })
+            .clone();
+        // Text stands on its top-left corner: put its middle on the spot.
+        let corners = crate::model::geometry::text_bounds_corners(DVec3::ZERO, &label.text, label.height, label.rotation);
+        let pos = label.centre - (corners[0] + corners[2]) * 0.5;
+        add_text_to_drawing(layer_name, source.color(), pos, label.text, label.height, label.rotation, drawing);
+    }
 }
 
 fn add_object_to_drawing(document: &Document, object: &Object, drawing: &mut Drawing) {
@@ -234,20 +307,23 @@ fn add_object_to_drawing(document: &Document, object: &Object, drawing: &mut Dra
         }
         Object::Text {
             pos, content, height, rotation, ..
-        } => {
-            let location = crate::model::geometry::text_anchor_top_to_bottom(*pos, *height, *rotation);
-            let mut entity = Entity::new(EntityType::Text(DxfText {
-                location: point_from_vec3(location),
-                text_height: *height,
-                value: content.clone(),
-                rotation: rotation.to_degrees(),
-                ..Default::default()
-            }));
-            entity.common.layer = layer_name;
-            apply_object_color(&mut entity.common, object_color);
-            drawing.add_entity(entity);
-        }
+        } => add_text_to_drawing(layer_name, object_color, *pos, content.clone(), *height, *rotation, drawing),
     }
+}
+
+/// A TEXT entity for text standing on its top-left corner at `pos`.
+fn add_text_to_drawing(layer_name: String, color: ObjectColor, pos: DVec3, content: String, height: f64, rotation: f64, drawing: &mut Drawing) {
+    let location = crate::model::geometry::text_anchor_top_to_bottom(pos, height, rotation);
+    let mut entity = Entity::new(EntityType::Text(DxfText {
+        location: point_from_vec3(location),
+        text_height: height,
+        value: content,
+        rotation: rotation.to_degrees(),
+        ..Default::default()
+    }));
+    entity.common.layer = layer_name;
+    apply_object_color(&mut entity.common, color);
+    drawing.add_entity(entity);
 }
 
 fn lw_vertex_from_poly_vertex(vertex: &PolyVertex) -> LwPolylineVertex {

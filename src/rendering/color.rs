@@ -301,6 +301,17 @@ pub(crate) fn relative_luminance(rgba: [f32; 4]) -> f32 {
     0.2126 * rgba[0] + 0.7152 * rgba[1] + 0.0722 * rgba[2]
 }
 
+/// A contour label's fill: `rgba` as opaque sRGB bytes, whatever its alpha.
+pub(crate) fn opaque_srgb(rgba: [f32; 4]) -> [u8; 4] {
+    [linear_to_srgb_byte(rgba[0]), linear_to_srgb_byte(rgba[1]), linear_to_srgb_byte(rgba[2]), 255]
+}
+
+/// Whether a colour reads as light, above 0.45 Rec. 709 luminance: the split
+/// overlay text and labels take black or white ink by.
+pub(crate) fn is_light(rgba: [f32; 4]) -> bool {
+    relative_luminance(rgba) > 0.45
+}
+
 pub(crate) fn rgba_to_color32(rgba: [f32; 4]) -> egui::Color32 {
     egui::Color32::from_rgba_unmultiplied(
         linear_to_srgb_byte(rgba[0]),

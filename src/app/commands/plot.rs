@@ -99,7 +99,8 @@ impl<'a> App<'a> {
     /// Render the map, compose the sheet and deliver the PNG.
     pub(crate) fn write_plot_sheet(&mut self, target: PlotTarget) -> Result<()> {
         let dialog = self.editor.plot_dialog.clone().context("The engineering drawing dialog is not open")?;
-        let spec = dialog.spec(self.plot_legend_entries());
+        let mut spec = dialog.spec(self.plot_legend_entries());
+        spec.contour_lines = self.graphics.as_ref().map(|graphics| graphics.contour_sheet_lines()).unwrap_or_default();
         let layout = plot::layout(&spec).map_err(|error| anyhow::anyhow!("{error}"))?;
 
         let centre = self.plot_centre(&dialog)?;

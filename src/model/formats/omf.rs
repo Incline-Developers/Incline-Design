@@ -68,6 +68,9 @@ const META_FOLDER: &str = "incline:folder";
 /// file whose items are all where their kind puts them is byte for byte what
 /// it was before.
 const META_SECTION: &str = "incline:section";
+/// A design layer whose lines are labelled with their height, written only
+/// when on.
+const META_CONTOUR_LABELS: &str = "incline:contour_labels";
 const META_SOURCE: &str = "incline:source";
 const META_STYLE: &str = "incline:style";
 const META_ID: &str = "incline:id";
@@ -625,6 +628,7 @@ fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
         // blob denies unknown fields.
         portable_layer.folder = None;
         portable_layer.section = SectionKind::natural_layer();
+        portable_layer.contour_labels = false;
         // The file records visibility: a hidden layer opens unloaded.
         portable_layer.loaded = layer.is_visible();
         portable_layer.hidden = false;
@@ -633,6 +637,9 @@ fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
             put(&mut element, META_FOLDER, folder);
         }
         tag_section(&mut element, MemberKind::Layer, layer.section);
+        if layer.contour_labels {
+            put(&mut element, META_CONTOUR_LABELS, true);
+        }
         layers.push(element);
     }
     // The layers still sit inside this "Designs" composite element regardless
@@ -2264,6 +2271,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             META_FOLDERS,
             META_FOLDER,
             META_SECTION,
+            META_CONTOUR_LABELS,
             META_SOURCE,
             META_STYLE,
             META_ID,
@@ -2385,6 +2393,9 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 && let Some(folder) = self.bundle.folders.ensure(section, folder)
             {
                 document.set_layer_folder(layer_id, Some(folder));
+            }
+            if layer_element.metadata.get(META_CONTOUR_LABELS).and_then(Value::as_bool) == Some(true) {
+                document.set_layer_contour_labels(layer_id, true);
             }
             let children = match &layer_element.geometry {
                 omf_crate::Geometry::Composite(layer) => layer.elements.as_slice(),

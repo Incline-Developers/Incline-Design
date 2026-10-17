@@ -115,6 +115,10 @@ pub(crate) struct Layer {
     /// Explorer section this layer is shown under.
     #[serde(default = "SectionKind::natural_layer", skip_serializing_if = "SectionKind::is_natural_layer")]
     pub(crate) section: SectionKind,
+    /// Write each line's height along it: live on screen, and as text in
+    /// DXF exports and plots. A line not at one height gets no label.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) contour_labels: bool,
 }
 
 impl Layer {
@@ -132,6 +136,7 @@ impl Layer {
         self.hidden.hash(hasher);
         self.folder.hash(hasher);
         self.section.hash(hasher);
+        self.contour_labels.hash(hasher);
     }
 }
 
@@ -792,6 +797,7 @@ impl Document {
             elevation,
             folder: None,
             section: SectionKind::natural_layer(),
+            contour_labels: false,
         });
         self.touch();
         id
@@ -1014,6 +1020,15 @@ impl Document {
             && layer.elevation != elevation
         {
             layer.elevation = elevation;
+            self.touch();
+        }
+    }
+
+    pub(crate) fn set_layer_contour_labels(&mut self, id: LayerId, on: bool) {
+        if let Some(layer) = self.layers.iter_mut().find(|layer| layer.id == id)
+            && layer.contour_labels != on
+        {
+            layer.contour_labels = on;
             self.touch();
         }
     }
@@ -1271,6 +1286,7 @@ impl Document {
                 }
                 layer.loaded.hash(&mut hasher);
                 layer.elevation.to_bits().hash(&mut hasher);
+                layer.contour_labels.hash(&mut hasher);
                 layer.section.hash(&mut hasher);
                 layer.folder.and_then(|id| folders.name(layer.section, id)).hash(&mut hasher);
                 payloads.get(&layer.id).hash(&mut hasher);
@@ -2256,6 +2272,12 @@ pub(crate) enum Command {
         before: f32,
         after: f32,
     },
+    /// Turn a design layer's contour labels on or off.
+    SetLayerContourLabels {
+        id: LayerId,
+        before: bool,
+        after: bool,
+    },
     /// Delete a project item. The item itself is moved into the command when
     /// it is applied and moved back out when it is reverted, so a deletion
     /// sitting in the undo stack never holds a second copy of a mesh.
@@ -2301,7 +2323,8 @@ impl Command {
                 | Command::SetLayerHidden { .. }
                 | Command::SetObjectHidden { .. }
                 | Command::Archived { .. }
-                | Command::SetLayerElevation { .. } => 0,
+                | Command::SetLayerElevation { .. }
+                | Command::SetLayerContourLabels { .. } => 0,
                 Command::AddFolder { folder, .. } => folder.name.len(),
                 Command::DeleteFolder { folder, layers, items, .. } => folder
                     .name
@@ -2487,6 +2510,7 @@ impl Command {
             | Command::SetLayerLoaded { .. }
             | Command::SetLayerHidden { .. }
             | Command::SetLayerElevation { .. }
+            | Command::SetLayerContourLabels { .. }
             | Command::SetObjectHidden { .. }
             | Command::AddFolder { .. }
             | Command::RenameFolder { .. }
@@ -2643,6 +2667,10 @@ impl Command {
                 target.document.set_layer_elevation(*id, *after);
                 target.effects.document_changed = true;
             }
+            Command::SetLayerContourLabels { id, after, .. } => {
+                target.document.set_layer_contour_labels(*id, *after);
+                target.effects.document_changed = true;
+            }
         }
     }
 
@@ -2793,6 +2821,10 @@ impl Command {
             Command::ReplaceItem { item, other } => Self::swap_item(*item, other, target),
             Command::SetLayerElevation { id, before, .. } => {
                 target.document.set_layer_elevation(*id, *before);
+                target.effects.document_changed = true;
+            }
+            Command::SetLayerContourLabels { id, before, .. } => {
+                target.document.set_layer_contour_labels(*id, *before);
                 target.effects.document_changed = true;
             }
         }

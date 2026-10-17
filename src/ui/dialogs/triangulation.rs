@@ -1067,6 +1067,21 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
             if editor.tri_contour_target_layer.is_none() && new_layer_name_conflicts {
                 ui.colored_label(egui::Color32::LIGHT_RED, tr!("tri-layer-already-exists-select-above"));
             }
+            // Until it is changed here, the tick shows the output layer's own
+            // labels, and Generate leaves them as they are.
+            if !editor.tri_contour_labels_touched {
+                editor.tri_contour_labels = editor
+                    .tri_contour_target_layer
+                    .and_then(|id| active_layers.iter().find(|layer| layer.id == id))
+                    .is_some_and(|layer| layer.contour_labels);
+            }
+            if MenuFieldBool::new(tr!("tri-contour-labels"), &mut editor.tri_contour_labels)
+                .help_text(tr!("tri-contour-labels-help"))
+                .show(ui)
+                .changed()
+            {
+                editor.tri_contour_labels_touched = true;
+            }
 
             ui.add_space(6.0);
             ui.separator();
@@ -1098,6 +1113,7 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
                         major_color: editor.tri_contour_major_color,
                         minor_color: editor.tri_contour_minor_color,
                         z_range,
+                        contour_labels: editor.tri_contour_labels_touched.then_some(editor.tri_contour_labels),
                         output_layer,
                     });
                 }

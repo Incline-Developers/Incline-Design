@@ -1710,6 +1710,10 @@ pub(crate) struct EditorState {
     pub(crate) tri_contour_z_max_input: f64,
     /// The source surface's elevation extent, which the range moves within.
     pub(crate) tri_contour_z_limits: (f64, f64),
+    pub(crate) tri_contour_labels: bool,
+    /// The labels tick was changed in the dialog; until then it shows the
+    /// output layer's own state and Generate leaves that state alone.
+    pub(crate) tri_contour_labels_touched: bool,
     /// `None` creates a new layer; `Some` appends to an existing active project layer.
     pub(crate) tri_contour_target_layer: Option<LayerId>,
     pub(crate) tri_contour_layer_name_input: String,
@@ -1799,6 +1803,8 @@ pub(crate) struct EditorState {
     /// Live map render shown inside the export dialog's sheet preview, kept up
     /// to date by the renderer while the dialog is open.
     pub(crate) plot_preview_texture: Option<egui::TextureId>,
+    /// The contour heights the plot preview shows, as the sheet places them.
+    pub(crate) plot_preview_contours: crate::ui::dialogs::plot::PreviewContours,
 
     // Batter Berm tool
     pub(crate) batter_berm_dialog_open: bool,
@@ -1923,6 +1929,9 @@ pub(crate) struct EditorState {
     /// Contours of equal time projected to the window, refreshed each frame
     /// while they are showing.
     pub(crate) blast_contours_px: Vec<ProjectedContour>,
+    /// The contour-labelled lines in view and their label spots in window
+    /// pixels, refreshed each frame.
+    pub(crate) contour_labels_px: Vec<ProjectedLineLabels>,
     /// The hole under the pointer, for the hole card.
     pub(crate) blast_hover: Option<BlastHover>,
     /// Every collar of the active dataset in window pixels, refreshed each
@@ -2748,6 +2757,8 @@ impl EditorState {
             tri_contour_z_min_input: 0.0,
             tri_contour_z_max_input: 100.0,
             tri_contour_z_limits: (0.0, 100.0),
+            tri_contour_labels: false,
+            tri_contour_labels_touched: false,
             tri_contour_target_layer: None,
             tri_contour_layer_name_input: tr!("common-surface-contours"),
             tri_contour_layer_name_auto: true,
@@ -2803,6 +2814,7 @@ impl EditorState {
             ore_name_input: String::new(),
             plot_dialog: None,
             plot_preview_texture: None,
+            plot_preview_contours: Default::default(),
             batter_berm_dialog_open: false,
             batter_berm_target_id: None,
             batter_berm_width: 8.0,
@@ -2863,6 +2875,7 @@ impl EditorState {
             blast_contours_px: Vec::new(),
             blast_hover: None,
             blast_collars_px: Vec::new(),
+            contour_labels_px: Vec::new(),
             blast_px_per_world: 0.0,
             new_delay_product_open: false,
             new_delay_product_delay_ms: 0,
@@ -3546,6 +3559,13 @@ pub(crate) enum UiCommand {
     /// The explorer's eye on a layer: hide it while leaving it loaded, or
     /// show it, loading it first when it is unloaded.
     SetLayerVisible(LayerId, bool),
+    /// Turn height labels on or off on the listed layers that share the
+    /// clicked layer's project.
+    SetLayerContourLabels {
+        clicked: LayerId,
+        layers: Vec<LayerId>,
+        on: bool,
+    },
     /// The same for a project item.
     SetItemVisible(crate::model::ItemRef, bool),
     /// Ask before deleting several explorer rows at once; carries the
@@ -3918,6 +3938,9 @@ pub(crate) enum UiCommand {
         minor_color: [f32; 4],
         /// Optional `(min, max)` RL band to contour instead of the full mesh.
         z_range: Option<(f64, f64)>,
+        /// Turn the output layer's height labels on or off; `None` leaves an
+        /// existing layer's as they are, and a new layer's off.
+        contour_labels: Option<bool>,
         output_layer: ContourOutputLayer,
     },
 
@@ -4188,6 +4211,10 @@ impl UiCommand {
                 format!("{item:?}: {}", if *visible { tr!("state-shown") } else { tr!("state-hidden") }),
             ),
             Self::ToggleLayerLocked(id) => report(tr!("state-set-layer-lock"), format!("{id:?}")),
+            Self::SetLayerContourLabels { layers, on, .. } => report(
+                tr!("state-contour-labels-on-off"),
+                format!("{layers:?}: {}", if *on { tr!("state-enabled") } else { tr!("state-disabled") }),
+            ),
             Self::ToggleEntityLocked(handle) => report(tr!("state-set-entity-lock"), format!("{handle:?}")),
             Self::SetSectionVisible(section, visible) => report(
                 if *visible { tr!("common-reveal-all") } else { tr!("common-hide-all") },
@@ -4368,6 +4395,7 @@ pub(crate) struct UiLayerEntry {
     pub(crate) folder: Option<FolderId>,
     /// Explorer section this item is shown under.
     pub(crate) section: SectionKind,
+    pub(crate) contour_labels: bool,
 }
 
 /// The one open project shown in the explorer tree.
@@ -5144,6 +5172,17 @@ pub(crate) struct ProjectedContour {
     /// A major line's label spots, fixed to the ground: where each stands and
     /// a point a little further along the line, in window pixels.
     pub(crate) labels: Vec<((f32, f32), (f32, f32))>,
+}
+
+/// One contour-labelled line's height text and colour, and where its labels
+/// stand: each spot and a point a little further along, in window pixels.
+#[derive(Clone, Debug)]
+pub(crate) struct ProjectedLineLabels {
+    pub(crate) text: std::sync::Arc<str>,
+    pub(crate) color: [f32; 4],
+    /// Drawn smaller: the level is off the layer's round heights.
+    pub(crate) quiet: bool,
+    pub(crate) spots: Vec<((f32, f32), (f32, f32))>,
 }
 
 /// The hole under the pointer and where its collar stands on screen.

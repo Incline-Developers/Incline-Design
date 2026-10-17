@@ -679,10 +679,15 @@ fn draw_ui(
 
     // Draw first so later overlays paint above it.
     widgets::viewport::draw_section_grid(root_ui, editor, canvas_rect);
+    // Contour heights paint here, under the blast overlays, but are placed
+    // after the blast labels so those win the space.
+    let contour_labels_slot = root_ui.painter().with_clip_rect(canvas_rect).add(egui::Shape::Noop);
 
     // The reviews' fields and lines first, so the initiation cards - the
     // points the whole round is read from - stay on top of them.
-    elements::blast::draw_blast_overlays(root_ui, editor, drill_holes, canvas_rect);
+    let mut placed_labels = widgets::line_labels::PlacedLabels::default();
+    elements::blast::draw_blast_overlays(root_ui, editor, drill_holes, canvas_rect, &mut placed_labels);
+    widgets::viewport::draw_contour_labels(root_ui, editor, canvas_rect, &mut placed_labels, contour_labels_slot);
     draw_initiation_cards(root_ui, editor, canvas_rect);
 
     if let (Some(start), Some(end)) = (editor.selection_box_start_px, editor.selection_box_current_px) {

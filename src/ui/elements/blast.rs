@@ -17,7 +17,7 @@ use crate::{
     ui::{
         EditorState,
         state::Workspace,
-        widgets::{menu, toolbar::GROUP_CORNER_RADIUS, viewport::ViewportDockPanel},
+        widgets::{line_labels, menu, toolbar::GROUP_CORNER_RADIUS, viewport::ViewportDockPanel},
     },
 };
 
@@ -81,7 +81,13 @@ fn tile_frame(visuals: &egui::Visuals) -> egui::Frame {
 }
 
 /// Draw every blast review that is showing over the canvas.
-pub(crate) fn draw_blast_overlays(ui: &mut egui::Ui, editor: &mut EditorState, drill_holes: &[OpenDrillHoleDataset], canvas_rect: egui::Rect) {
+pub(crate) fn draw_blast_overlays(
+    ui: &mut egui::Ui,
+    editor: &mut EditorState,
+    drill_holes: &[OpenDrillHoleDataset],
+    canvas_rect: egui::Rect,
+    labels: &mut line_labels::PlacedLabels,
+) {
     if editor.active_workspace != Workspace::DrillAndBlast {
         return;
     }
@@ -90,7 +96,7 @@ pub(crate) fn draw_blast_overlays(ui: &mut egui::Ui, editor: &mut EditorState, d
     if let Some(analysis) = analysis.as_deref().filter(|_| editor.blast_review.relief) {
         draw_relief_surface(ui, editor, analysis, canvas_rect);
     }
-    draw_contours(ui, editor, canvas_rect);
+    draw_contours(ui, editor, canvas_rect, labels);
     let active_visible = editor
         .active_drill_hole
         .is_some_and(|id| drill_holes.iter().any(|dataset| dataset.id == id && dataset.state.loaded));
@@ -138,15 +144,13 @@ fn contour_color(t: f32) -> egui::Color32 {
 /// Lines of equal firing time, the way a topographic map draws height: a
 /// faint minor line between heavier majors, and the majors labelled along
 /// their length with the label turned to run with the line.
-fn draw_contours(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect) {
+fn draw_contours(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect, labels: &mut line_labels::PlacedLabels) {
     if editor.blast_contours_px.is_empty() {
         return;
     }
     let pixels_per_point = ui.ctx().pixels_per_point();
     let painter = ui.painter().with_clip_rect(canvas_rect);
     let latest = editor.blast_contours_px.iter().map(|contour| contour.time_ms).fold(0.0, f64::max).max(1.0);
-    let font = egui::FontId::new(11.5, egui::FontFamily::Name("noto_sans_bold".into()));
-    let mut labels: Vec<[egui::Pos2; 4]> = Vec::new();
     let to_pos = |point: (f32, f32)| egui::pos2(point.0 / pixels_per_point, point.1 / pixels_per_point);
 
     // Minors first so the majors draw over them where they run close.
@@ -177,36 +181,15 @@ fn draw_contours(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect) {
         if !contour.major {
             continue;
         }
-        let text = format!("{:.0}", contour.time_ms);
-        for (anchor, ahead) in contour.labels.iter().copied() {
-            let anchor = to_pos(anchor);
-            let direction = (to_pos(ahead) - anchor).normalized();
-            // Turned to the line, but never upside down.
-            let mut angle = direction.y.atan2(direction.x);
-            if angle > std::f32::consts::FRAC_PI_2 {
-                angle -= std::f32::consts::PI;
-            } else if angle < -std::f32::consts::FRAC_PI_2 {
-                angle += std::f32::consts::PI;
-            }
-            let galley = painter.layout_no_wrap(text.clone(), font.clone(), CONTOUR_LABEL_TEXT);
-            let half = galley.size() * 0.5 + egui::vec2(5.0, 1.5);
-            let rotation = egui::emath::Rot2::from_angle(angle);
-            let corners = [
-                egui::vec2(-half.x, -half.y),
-                egui::vec2(half.x, -half.y),
-                egui::vec2(half.x, half.y),
-                egui::vec2(-half.x, half.y),
-            ]
-            .map(|corner| anchor + rotation * corner);
-            let bounds = egui::Rect::from_points(&corners);
-            if !canvas_rect.contains_rect(bounds) || labels.iter().any(|other| egui::Rect::from_points(other).expand(6.0).intersects(bounds)) {
-                continue;
-            }
-            painter.add(egui::Shape::convex_polygon(corners.to_vec(), color, egui::Stroke::new(1.5, CONTOUR_CASING)));
-            let origin = anchor - rotation * (galley.size() * 0.5);
-            painter.add(egui::epaint::TextShape::new(origin, galley, CONTOUR_LABEL_TEXT).with_angle(angle));
-            labels.push(corners);
-        }
+        let style = line_labels::LabelStyle {
+            fill: color,
+            casing: CONTOUR_CASING,
+            ink: CONTOUR_LABEL_TEXT,
+            scale: 1.0,
+            gap: line_labels::LabelGap::Points(6.0),
+        };
+        let spots = contour.labels.iter().map(|&(anchor, ahead)| (to_pos(anchor), to_pos(ahead)));
+        line_labels::draw_line_labels(&painter, canvas_rect, labels, &format!("{:.0}", contour.time_ms), style, spots);
     }
 }
 

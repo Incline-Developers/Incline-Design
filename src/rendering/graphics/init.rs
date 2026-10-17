@@ -859,6 +859,7 @@ impl<'a> Graphics<'a> {
             last_interaction: None,
             geometry_dirty: true,
             polyline_fill_cache: Default::default(),
+            contour_labels: Default::default(),
             cached_document_revision: u64::MAX,
             cached_render_style_key: None,
             cached_document_scene_key: None,

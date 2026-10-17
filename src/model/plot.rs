@@ -19,6 +19,27 @@ const INK: [u8; 4] = [0, 0, 0, 255];
 const PAPER: [u8; 4] = [255, 255, 255, 255];
 const FAINT_INK: [u8; 4] = [110, 110, 110, 255];
 
+/// A height as a contour label: `decimals` places, no thousands separators,
+/// and never "-0".
+pub(crate) fn format_level(value: f64, decimals: usize) -> String {
+    let text = format!("{value:.decimals$}");
+    match text.strip_prefix('-') {
+        Some(unsigned) if unsigned.chars().all(|c| c == '0' || c == '.') => unsigned.to_owned(),
+        _ => text,
+    }
+}
+
+/// The fewest decimals, at most 3, that write every level exactly: a layer
+/// contoured every 2.5 m needs 1, every 10 m none.
+pub(crate) fn level_decimals(levels: impl Iterator<Item = f64> + Clone) -> usize {
+    (0..3)
+        .find(|&decimals| {
+            let scale = 10f64.powi(decimals as i32);
+            levels.clone().all(|level| (level * scale - (level * scale).round()).abs() <= 1e-6 * scale)
+        })
+        .unwrap_or(3)
+}
+
 /// Format a magnitude with thousands separators and a fixed number of decimals,
 /// for sheet labels (grid coordinates, scale-bar ticks, the title block).
 pub(crate) fn format_quantity(value: f64, decimals: usize) -> String {
@@ -124,6 +145,20 @@ pub(crate) struct PlotSpec {
     pub(crate) show_scale_bar: bool,
     pub(crate) show_north_arrow: bool,
     pub(crate) legend: Vec<LegendEntry>,
+    /// The polylines of the contour-labelled layers, for their heights.
+    pub(crate) contour_lines: Vec<SheetContourLine>,
+}
+
+/// A contour line drawn on the map, handed to the sheet as the screen labels
+/// it: the line (shared, not copied), its text, how round its level is,
+/// whether its label is quiet, and its colour.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SheetContourLine {
+    pub(crate) line: std::sync::Arc<crate::model::geometry::ContourLabelLine>,
+    pub(crate) text: std::sync::Arc<str>,
+    pub(crate) rank: usize,
+    pub(crate) quiet: bool,
+    pub(crate) color: [f32; 4],
 }
 
 /// A rectangle in sheet pixels.
@@ -290,6 +325,9 @@ pub(crate) mod furniture {
     pub(crate) const LEGEND_LABEL_MM: f64 = 3.0;
     pub(crate) const LEGEND_TITLE_MM: f64 = 3.4;
     pub(crate) const LEGEND_ROW_MM: f64 = 4.0;
+    /// Contour height text, and the least paper between two labels.
+    pub(crate) const CONTOUR_LABEL_MM: f64 = 2.0;
+    pub(crate) const CONTOUR_LABEL_SPACING_MM: f64 = 80.0;
 }
 
 /// Where each piece of sheet furniture sits, in sheet pixels. A field is
@@ -641,10 +679,74 @@ impl TextPainter {
         }
     }
 
+    /// Draw `text` centred on (`x`, `y`) and turned `angle` radians, clockwise
+    /// on the sheet whose y grows down, for a label that runs along a line.
+    /// The glyphs are laid out level, then sampled turned.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn draw_rotated(&mut self, canvas: &mut Canvas, text: &str, x: f64, y: f64, size_px: f64, angle: f64, color: [u8; 4]) {
+        if text.is_empty() {
+            return;
+        }
+        let mut buffer = self.shape(text, size_px);
+        let width = buffer.layout_runs().map(|run| f64::from(run.line_w)).fold(0.0, f64::max);
+        let height = self.line_height(size_px);
+        let columns = width.ceil() as usize + 1;
+        let rows = height.ceil() as usize + 1;
+        let mut coverage = vec![0.0f64; columns * rows];
+        let font_color = cosmic_text::Color::rgba(color[0], color[1], color[2], color[3]);
+        buffer.draw(&mut self.font_system, &mut self.cache, font_color, |glyph_x, glyph_y, span_width, span_height, pixel| {
+            for row in glyph_y..glyph_y + span_height as i32 {
+                for column in glyph_x..glyph_x + span_width as i32 {
+                    if let (Ok(column), Ok(row)) = (usize::try_from(column), usize::try_from(row))
+                        && column < columns
+                        && row < rows
+                    {
+                        let cell = &mut coverage[row * columns + column];
+                        *cell = cell.max(f64::from(pixel.a()) / 255.0);
+                    }
+                }
+            }
+        });
+        let sample = |column: f64, row: f64| {
+            let (left, top) = (column.floor(), row.floor());
+            let (across, down) = (column - left, row - top);
+            let at = |column: f64, row: f64| {
+                if column < 0.0 || row < 0.0 || column >= columns as f64 || row >= rows as f64 {
+                    0.0
+                } else {
+                    coverage[row as usize * columns + column as usize]
+                }
+            };
+            let upper = at(left, top) * (1.0 - across) + at(left + 1.0, top) * across;
+            let lower = at(left, top + 1.0) * (1.0 - across) + at(left + 1.0, top + 1.0) * across;
+            upper * (1.0 - down) + lower * down
+        };
+        let (sin, cos) = angle.sin_cos();
+        let (half_width, half_height) = (width * 0.5, height * 0.5);
+        let reach_x = half_width * cos.abs() + half_height * sin.abs();
+        let reach_y = half_width * sin.abs() + half_height * cos.abs();
+        for pixel_y in (y - reach_y).floor() as i64..=(y + reach_y).ceil() as i64 {
+            for pixel_x in (x - reach_x).floor() as i64..=(x + reach_x).ceil() as i64 {
+                let (dx, dy) = (pixel_x as f64 + 0.5 - x, pixel_y as f64 + 0.5 - y);
+                let column = cos * dx + sin * dy + half_width;
+                let row = -sin * dx + cos * dy + half_height;
+                let coverage = sample(column - 0.5, row - 0.5);
+                if coverage > 0.0 {
+                    canvas.blend(pixel_x, pixel_y, [color[0], color[1], color[2], 255], coverage);
+                }
+            }
+        }
+    }
+
     /// Height of one line of text at `size_px`, matching [`Self::shape`].
     pub(crate) fn line_height(&self, size_px: f64) -> f64 {
-        size_px.max(1.0) * 1.25
+        text_line_height(size_px)
     }
+}
+
+/// Height of one line of text at `size_px`, as [`TextPainter`] lays it out.
+pub(crate) fn text_line_height(size_px: f64) -> f64 {
+    size_px.max(1.0) * 1.25
 }
 
 impl Default for TextPainter {
@@ -691,6 +793,10 @@ pub(crate) fn compose_sheet(input: SheetInput<'_>, painter: &mut TextPainter) ->
     if let Some(interval) = placement.grid_interval {
         draw_grid(&mut canvas, painter, &layout, &frame, interval, millimetre);
     }
+    let mut measure = |text: &str, size_px: f64| (painter.measure(text, size_px), painter.line_height(size_px));
+    for label in place_sheet_contour_labels(&mut measure, &layout, &frame, &placement, &spec.contour_lines) {
+        draw_contour_label(&mut canvas, painter, &label, millimetre);
+    }
     if spec.show_frame {
         canvas.stroke_rect(layout.map, (0.4 * millimetre).max(1.0), INK);
     }
@@ -709,12 +815,187 @@ pub(crate) fn compose_sheet(input: SheetInput<'_>, painter: &mut TextPainter) ->
     canvas
 }
 
+/// A contour label on the sheet: its text, middle and turn (clockwise, as the
+/// sheet's y grows down), text size and box in pixels, and its line's colour.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SheetContourLabel {
+    pub(crate) text: String,
+    pub(crate) x: f64,
+    pub(crate) y: f64,
+    pub(crate) angle: f64,
+    pub(crate) size_px: f64,
+    pub(crate) width: f64,
+    pub(crate) height: f64,
+    pub(crate) color: [f32; 4],
+}
+
+/// Contour heights for the map at the plot's scale, placed as the screen
+/// places them: [`furniture::CONTOUR_LABEL_MM`] text (quiet ones smaller),
+/// a label every power of two of ground at least
+/// [`furniture::CONTOUR_LABEL_SPACING_MM`] apart on paper, roundest first,
+/// clear of each other, wholly inside the map and off every `avoid` rect.
+/// `measure` gives a text's width and line height in pixels at a size.
+pub(crate) fn sheet_contour_labels(
+    mut measure: impl FnMut(&str, f64) -> (f64, f64),
+    layout: &PlotLayout,
+    frame: &MapFrame,
+    lines: &[SheetContourLine],
+    millimetre: f64,
+    avoid: &[RectPx],
+) -> Vec<SheetContourLabel> {
+    if lines.is_empty() {
+        return Vec::new();
+    }
+    let world_per_px = frame.world_per_px;
+    let world_per_mm = world_per_px * millimetre;
+    let height = furniture::CONTOUR_LABEL_MM * world_per_mm;
+    let spacing = 2f64.powf((furniture::CONTOUR_LABEL_SPACING_MM * world_per_mm).log2().ceil());
+    let (world_width, world_height) = layout.map_world_size();
+    let east_min = frame.center_east - world_width * 0.5;
+    let north_min = frame.center_north - world_height * 0.5;
+    let to_sheet = |east: f64, north: f64| (layout.map.x + (east - east_min) / world_per_px, layout.map.bottom() - (north - north_min) / world_per_px);
+    let keep = |at: glam::DVec3, half: glam::DVec2| {
+        let inside = at.x - half.x >= east_min && at.x + half.x <= east_min + world_width && at.y - half.y >= north_min && at.y + half.y <= north_min + world_height;
+        let (left, top) = to_sheet(at.x - half.x, at.y + half.y);
+        let (right, bottom) = to_sheet(at.x + half.x, at.y - half.y);
+        inside && avoid.iter().all(|rect| right < rect.x || left > rect.right() || bottom < rect.y || top > rect.bottom())
+    };
+    let size = |text: &str, height: f64| {
+        let size_px = height / world_per_px;
+        let (width, line_height) = measure(text, size_px);
+        crate::model::geometry::label_box(width, line_height, size_px) * world_per_px
+    };
+    let ranked = lines
+        .iter()
+        .enumerate()
+        .map(|(index, line)| crate::model::geometry::RankedLine {
+            index,
+            line: &line.line,
+            text: &line.text,
+            rank: line.rank,
+            quiet: line.quiet,
+        })
+        .collect();
+    let area = (glam::DVec2::new(east_min, north_min), glam::DVec2::new(east_min + world_width, north_min + world_height));
+    crate::model::geometry::place_ranked_labels(ranked, spacing, height, Some(area), keep, size)
+        .into_iter()
+        .map(|label| {
+            let (x, y) = to_sheet(label.centre.x, label.centre.y);
+            SheetContourLabel {
+                x,
+                y,
+                // Sheet Y grows downwards, so the turn reverses.
+                angle: -label.rotation,
+                size_px: label.height / world_per_px,
+                width: label.size.x / world_per_px,
+                height: label.size.y / world_per_px,
+                color: lines[label.source].color,
+                text: label.text,
+            }
+        })
+        .collect()
+}
+
+/// Where [`draw_grid`] puts northing labels inside the map, because the left
+/// margin cannot hold them: a band down the map's left edge, or `None`.
+/// `measure` gives a text's width and line height in pixels at a size.
+fn grid_label_band(measure: &mut impl FnMut(&str, f64) -> (f64, f64), layout: &PlotLayout, frame: &MapFrame, interval: f64, millimetre: f64) -> Option<RectPx> {
+    if grid_too_dense(layout, interval) {
+        return None;
+    }
+    let (_, world_height) = layout.map_world_size();
+    let north_min = frame.center_north - world_height * 0.5;
+    let label_size = 2.4 * millimetre;
+    let tick = 2.0 * millimetre;
+    let margin_available = layout.map.x - tick - millimetre;
+    let mut widest = 0.0f64;
+    let mut northing = (north_min / interval).ceil() * interval;
+    while northing <= north_min + world_height {
+        let (width, _) = measure(&format_coordinate(northing), label_size);
+        if width > margin_available {
+            widest = widest.max(width);
+        }
+        northing += interval;
+    }
+    (widest > 0.0).then_some(RectPx {
+        x: layout.map.x,
+        y: layout.map.y,
+        width: tick + widest,
+        height: layout.map.height,
+    })
+}
+
+/// The contour heights a sheet carries, placed clear of its furniture and of
+/// grid coordinates inside the map: what the export draws and the dialog's
+/// preview shows, from the same rule. `measure` gives a text's width and
+/// line height in pixels at a size.
+pub(crate) fn place_sheet_contour_labels(
+    measure: &mut impl FnMut(&str, f64) -> (f64, f64),
+    layout: &PlotLayout,
+    frame: &MapFrame,
+    placement: &SheetFurniture,
+    lines: &[SheetContourLine],
+) -> Vec<SheetContourLabel> {
+    if lines.is_empty() {
+        return Vec::new();
+    }
+    let millimetre = layout.px_per_mm;
+    let mut avoid: Vec<RectPx> = [placement.north_arrow, placement.scale_bar, placement.legend, placement.title_block]
+        .into_iter()
+        .flatten()
+        .collect();
+    avoid.extend(placement.grid_interval.and_then(|interval| grid_label_band(measure, layout, frame, interval, millimetre)));
+    sheet_contour_labels(measure, layout, frame, lines, millimetre, &avoid)
+}
+
+impl SheetContourLabel {
+    /// The label box's corners on the sheet, turned with the label.
+    pub(crate) fn corners(&self) -> [(f64, f64); 4] {
+        let (sin, cos) = self.angle.sin_cos();
+        let corner = |across: f64, down: f64| {
+            let (dx, dy) = (across * self.width * 0.5, down * self.height * 0.5);
+            (self.x + cos * dx - sin * dy, self.y + sin * dx + cos * dy)
+        };
+        [corner(-1.0, -1.0), corner(1.0, -1.0), corner(1.0, 1.0), corner(-1.0, 1.0)]
+    }
+}
+
+/// A contour label as the screen draws one: a box filled in its line's
+/// colour (turned to sRGB as the map's lines are) and edged in ink, with
+/// text in black or white by the same split the screen uses.
+fn draw_contour_label(canvas: &mut Canvas, painter: &mut TextPainter, label: &SheetContourLabel, millimetre: f64) {
+    let corners = label.corners();
+    let fill = contour_label_fill(label.color);
+    canvas.fill_triangle([corners[0], corners[1], corners[2]], fill);
+    canvas.fill_triangle([corners[0], corners[2], corners[3]], fill);
+    let thickness = (0.15 * millimetre).max(0.75);
+    for (start, end) in corners.iter().zip(corners.iter().cycle().skip(1)) {
+        canvas.draw_line(*start, *end, thickness, INK);
+    }
+    let ink = if crate::rendering::color::is_light(label.color) { INK } else { PAPER };
+    painter.draw_rotated(canvas, &label.text, label.x, label.y, label.size_px, label.angle, ink);
+}
+
+/// A label's fill: its line's linear colour as sheet bytes, opaque.
+fn contour_label_fill(color: [f32; 4]) -> [u8; 4] {
+    crate::rendering::color::opaque_srgb(color)
+}
+
 /// Grid spacing that lands close to 50 mm on paper, rounded to a conventional
 /// interval.
 fn grid_interval_for(layout: &PlotLayout, millimetre: f64, requested: Option<f64>) -> f64 {
     requested
         .filter(|interval| interval.is_finite() && *interval > 0.0)
         .unwrap_or_else(|| round_up_to_series(50.0 * millimetre * layout.world_per_px, &DRAWING_SCALE_STEPS))
+}
+
+/// Whether a grid every `interval` would need more lines than [`draw_grid`]
+/// draws. A pathological interval could ask for millions of lines; the guard
+/// keeps a mistyped value from hanging the composition.
+fn grid_too_dense(layout: &PlotLayout, interval: f64) -> bool {
+    const MAX_GRID_LINES: f64 = 400.0;
+    let (world_width, world_height) = layout.map_world_size();
+    (world_width / interval) + (world_height / interval) > MAX_GRID_LINES
 }
 
 fn draw_grid(canvas: &mut Canvas, painter: &mut TextPainter, layout: &PlotLayout, frame: &MapFrame, interval: f64, millimetre: f64) {
@@ -724,10 +1005,7 @@ fn draw_grid(canvas: &mut Canvas, painter: &mut TextPainter, layout: &PlotLayout
     let north_min = frame.center_north - world_height * 0.5;
     let north_max = frame.center_north + world_height * 0.5;
 
-    // A pathological interval could ask for millions of lines; the guard keeps
-    // a mistyped value from hanging the composition.
-    const MAX_GRID_LINES: f64 = 400.0;
-    if (world_width / interval) + (world_height / interval) > MAX_GRID_LINES {
+    if grid_too_dense(layout, interval) {
         return;
     }
 
