@@ -1797,6 +1797,21 @@ io-unmapped = Холбогдоогүй
 io-wavefront-obj = Wavefront OBJ (.obj)
 io-writes-three-files-beside-name = Таны сонгосон нэрийн хажууд гурван файл бичнэ: амсар, судалгаа, интервал, энэ цонхны импортлодог баганаар.
 
+## Corrections worksheet export
+
+io-corrections-worksheet-csv = Залруулгын хүснэгт (.csv)
+io-export-corrections-worksheet = Залруулгын хүснэгт экспортлох
+io-worksheet-records = Залруулга
+io-worksheet-lines = Хүснэгтийн мөр
+io-worksheet-holes = Хамрагдсан цооног
+io-worksheet-no-corrections = Энэ багцад хянах залруулга алга.
+io-worksheet-preview-first = { $count } мөрийн эхний { $shown }.
+io-worksheet-writes-two-files = Таны сонгосон нэрээр хүснэгтийг бичнэ, хянуулах ижил залруулгын бүлэг бүрт нэг мөр, хажууд нь залруулгын файл: бүртгэл бүр өөрийн мөрөнд, харьяалагдах хүснэгтийн мөрийн хамт.
+cmd-file-exported-worksheet-path = Залруулгын хүснэгтийг { $path } руу, хажууд нь залруулгыг { $records } руу экспортоллоо
+cmd-file-worksheet-export-failed-error = Залруулгын хүснэгтийн экспорт амжилтгүй боллоо: { $error }
+cmd-file-worksheet-no-corrections = { $name }-д экспортлох залруулга алга
+state-export-corrections-worksheet = Залруулгын хүснэгт экспортлох
+
 ## Jobs strings
 
 jobs-background-task-poll-label-ended = '{ $poll_label }' далд ажил үр дүнгүй дуусав

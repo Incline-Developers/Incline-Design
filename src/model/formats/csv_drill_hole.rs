@@ -16,7 +16,8 @@ use super::csv_geophysics::{Records, StreamControl, cell_text};
 use crate::{
     model::{
         drill_hole::{
-            DrillHole, DrillHoleDataset, DrillInterval, DrillValue, HoleOrientation, OrientationSource, SurveyObservation, TraceStation, direction_orientation, resolve_trace,
+            Correction, CorrectionKind, CorrectionStatus, DrillHole, DrillHoleDataset, DrillInterval, DrillValue, HoleOrientation, OrientationSource, SurveyObservation,
+            TraceStation, direction_orientation, resolve_trace,
         },
         formats::csv_records::{for_each_record, owned_fields},
     },
@@ -1760,16 +1761,217 @@ pub(crate) fn write_bundle(dataset: &DrillHoleDataset) -> CsvDrillBundle {
 
         for interval in &hole.intervals {
             let mut row = vec![hole.dhid.clone(), interval.from.to_string(), interval.to.to_string()];
-            row.extend(dataset.fields.iter().map(|field| match interval.values.get(&field.key) {
-                Some(DrillValue::Numeric(number)) => number.to_string(),
-                Some(DrillValue::Category(code)) => code.clone(),
-                None => String::new(),
-            }));
+            row.extend(dataset.fields.iter().map(|field| drill_value_text(interval.values.get(&field.key))));
             intervals.push_str(&csv_row(row));
         }
     }
 
     CsvDrillBundle { collars, survey, intervals }
+}
+
+/// The corrections worksheet's columns, in the order they are written.
+pub(crate) const WORKSHEET_HEADER: [&str; 14] = [
+    "LINE", "KIND", "FIELD", "BEFORE", "AFTER", "COUNT", "HOLES", "FROM", "TO", "AUTHOR", "DATE", "REASON", "STATUS", "DECISION",
+];
+
+/// Columns of the corrections file: the worksheet line a record falls on,
+/// then every field of the record.
+const CORRECTIONS_HEADER: [&str; 15] = [
+    "LINE",
+    "HOLEID",
+    "LOGGED_FROM",
+    "LOGGED_TO",
+    "KIND",
+    "FIELD",
+    "BEFORE",
+    "AFTER",
+    "AUTHOR",
+    "DATE",
+    "REASON",
+    "STATUS",
+    "APPROVER",
+    "DECISION",
+    "DECIDED",
+];
+
+/// Hole ids a worksheet line names before it only counts the rest.
+const WORKSHEET_HOLES_LISTED: usize = 50;
+
+/// A set's corrections as two tables: the worksheet a senior decides on, and
+/// every record on a line of its own.
+pub(crate) struct CsvWorksheet {
+    pub(crate) worksheet: String,
+    pub(crate) corrections: String,
+}
+
+fn correction_kind_text(kind: CorrectionKind) -> &'static str {
+    match kind {
+        CorrectionKind::Value => "value",
+        CorrectionKind::Boundary => "boundary",
+        CorrectionKind::Insertion => "insertion",
+    }
+}
+
+fn correction_status_text(status: CorrectionStatus) -> &'static str {
+    match status {
+        CorrectionStatus::Proposed => "proposed",
+        CorrectionStatus::Approved => "approved",
+        CorrectionStatus::Denied => "denied",
+        CorrectionStatus::Sent => "sent",
+        CorrectionStatus::Confirmed => "confirmed",
+        CorrectionStatus::Flagged => "flagged",
+    }
+}
+
+/// One value as a cell: numbers at full precision, codes as they are.
+fn drill_value_text(value: Option<&DrillValue>) -> String {
+    match value {
+        Some(DrillValue::Numeric(number)) => number.to_string(),
+        Some(DrillValue::Category(code)) => code.clone(),
+        None => String::new(),
+    }
+}
+
+/// Distinct entries of `values` in the order first met.
+fn first_seen<'a>(values: impl IntoIterator<Item = &'a str>) -> Vec<&'a str> {
+    let mut seen = HashSet::new();
+    values.into_iter().filter(|value| seen.insert(*value)).collect()
+}
+
+/// A record's date as an instant, so dates written under different UTC
+/// offsets still order by time. Text that is not RFC 3339 orders as text,
+/// after every date that is.
+fn correction_instant(date: &str) -> (bool, Option<chrono::DateTime<chrono::Utc>>, &str) {
+    let instant = chrono::DateTime::parse_from_rfc3339(date).ok().map(|date| date.with_timezone(&chrono::Utc));
+    (instant.is_none(), instant, date)
+}
+
+/// How many holes `corrections` reach.
+pub(crate) fn corrections_hole_count(corrections: &[Correction]) -> usize {
+    corrections.iter().map(|record| record.hole.as_str()).collect::<HashSet<_>>().len()
+}
+
+/// The records of each worksheet line, by index into `corrections`. Records
+/// sharing kind, field, before, after and reason make one line, in the order
+/// each group was first proposed.
+fn worksheet_groups(corrections: &[Correction]) -> Vec<Vec<usize>> {
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    let mut index: HashMap<_, usize> = HashMap::new();
+    for (position, record) in corrections.iter().enumerate() {
+        let key = (
+            correction_kind_text(record.kind),
+            record.field.as_str(),
+            drill_value_text(record.before.as_ref()),
+            drill_value_text(record.after.as_ref()),
+            record.reason.as_str(),
+        );
+        match index.entry(key) {
+            Entry::Occupied(entry) => groups[*entry.get()].push(position),
+            Entry::Vacant(entry) => {
+                entry.insert(groups.len());
+                groups.push(vec![position]);
+            }
+        }
+    }
+    groups
+}
+
+/// One worksheet line, numbered `line`, for the records at `members`.
+///
+/// The words this adds to a cell ("and N more", "A to B") are English
+/// whatever the interface language, so the file reads the same wherever it
+/// was written.
+fn worksheet_row(corrections: &[Correction], line: usize, members: &[usize]) -> Vec<String> {
+    let records = members.iter().map(|&position| &corrections[position]).collect::<Vec<_>>();
+    let first = records[0];
+    let holes = first_seen(records.iter().map(|record| record.hole.as_str()));
+    let mut listed = holes.iter().take(WORKSHEET_HOLES_LISTED).map(|hole| (*hole).to_owned()).collect::<Vec<_>>();
+    if holes.len() > WORKSHEET_HOLES_LISTED {
+        listed.push(format!("and {} more", holes.len() - WORKSHEET_HOLES_LISTED));
+    }
+    // Only one record has an interval to name.
+    let (from, to) = if records.len() == 1 {
+        (first.logged_from.to_string(), first.logged_to.to_string())
+    } else {
+        (String::new(), String::new())
+    };
+    let earliest = records
+        .iter()
+        .map(|record| record.date.as_str())
+        .min_by_key(|date| correction_instant(date))
+        .unwrap_or_default();
+    let latest = records
+        .iter()
+        .map(|record| record.date.as_str())
+        .max_by_key(|date| correction_instant(date))
+        .unwrap_or_default();
+    let date = if earliest == latest { earliest.to_owned() } else { format!("{earliest} to {latest}") };
+    let status = first_seen(records.iter().map(|record| correction_status_text(record.status))).join("; ");
+    let author = first_seen(records.iter().map(|record| record.author.as_str()).filter(|author| !author.is_empty())).join("; ");
+    vec![
+        line.to_string(),
+        correction_kind_text(first.kind).to_owned(),
+        first.field.clone(),
+        drill_value_text(first.before.as_ref()),
+        drill_value_text(first.after.as_ref()),
+        records.len().to_string(),
+        listed.join("; "),
+        from,
+        to,
+        author,
+        date,
+        first.reason.clone(),
+        status,
+        // Left for the senior to fill in.
+        String::new(),
+    ]
+}
+
+/// The worksheet's lines, header left out, one cell per [`WORKSHEET_HEADER`]
+/// column; the records themselves are untouched.
+pub(crate) fn worksheet_rows(corrections: &[Correction]) -> Vec<Vec<String>> {
+    worksheet_groups(corrections)
+        .iter()
+        .enumerate()
+        .map(|(index, members)| worksheet_row(corrections, index + 1, members))
+        .collect()
+}
+
+/// One dataset's corrections as the worksheet and the corrections file, each
+/// record carrying the worksheet line it falls on. Numbers are written at
+/// full precision, as the bundle writes them.
+pub(crate) fn write_worksheet(dataset: &DrillHoleDataset) -> CsvWorksheet {
+    let corrections = &dataset.corrections;
+    let groups = worksheet_groups(corrections);
+    let mut line_of = vec![0; corrections.len()];
+    let mut worksheet = csv_row(WORKSHEET_HEADER.map(str::to_owned));
+    for (index, members) in groups.iter().enumerate() {
+        for &position in members {
+            line_of[position] = index + 1;
+        }
+        worksheet.push_str(&csv_row(worksheet_row(corrections, index + 1, members)));
+    }
+    let mut records = csv_row(CORRECTIONS_HEADER.map(str::to_owned));
+    for (record, line) in corrections.iter().zip(line_of) {
+        records.push_str(&csv_row([
+            line.to_string(),
+            record.hole.clone(),
+            record.logged_from.to_string(),
+            record.logged_to.to_string(),
+            correction_kind_text(record.kind).to_owned(),
+            record.field.clone(),
+            drill_value_text(record.before.as_ref()),
+            drill_value_text(record.after.as_ref()),
+            record.author.clone(),
+            record.date.clone(),
+            record.reason.clone(),
+            correction_status_text(record.status).to_owned(),
+            record.approver.clone().unwrap_or_default(),
+            record.decision.clone().unwrap_or_default(),
+            record.decided.clone().unwrap_or_default(),
+        ]));
+    }
+    CsvWorksheet { worksheet, corrections: records }
 }
 
 /// What a hole with no downhole survey is taken to do.

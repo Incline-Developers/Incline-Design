@@ -1779,6 +1779,21 @@ io-unmapped = 매핑되지 않음
 io-wavefront-obj = Wavefront OBJ (.obj)
 io-writes-three-files-beside-name = 선택한 이름 옆에 파일 3개를 기록합니다: 이 대화상자에서 가져오는 열 형식의 공구, 측량, 구간 파일입니다.
 
+## Corrections worksheet export
+
+io-corrections-worksheet-csv = 정정 워크시트 (.csv)
+io-export-corrections-worksheet = 정정 워크시트 내보내기
+io-worksheet-records = 정정
+io-worksheet-lines = 워크시트 행
+io-worksheet-holes = 해당 시추공
+io-worksheet-no-corrections = 이 세트에는 검토할 정정이 없습니다.
+io-worksheet-preview-first = { $count }개 행 중 처음 { $shown }개.
+io-worksheet-writes-two-files = 선택한 이름으로 워크시트를 기록합니다. 일치하는 정정 묶음마다 검토용 한 행이며, 그 옆에 정정 파일을 기록합니다. 각 기록은 자기 행에 있으며, 속한 워크시트 행을 함께 적습니다.
+cmd-file-exported-worksheet-path = 정정 워크시트를 { $path }(으)로, 그 옆의 정정을 { $records }(으)로 내보냈습니다
+cmd-file-worksheet-export-failed-error = 정정 워크시트 내보내기 실패: { $error }
+cmd-file-worksheet-no-corrections = { $name }에 내보낼 정정이 없습니다
+state-export-corrections-worksheet = 정정 워크시트 내보내기
+
 ## Jobs strings
 
 jobs-background-task-poll-label-ended = 백그라운드 작업 '{ $poll_label }'이(가) 결과 없이 종료되었습니다

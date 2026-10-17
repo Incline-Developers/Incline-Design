@@ -1744,6 +1744,21 @@ io-unmapped = Sin asignar
 io-wavefront-obj = Wavefront OBJ (.obj)
 io-writes-three-files-beside-name = Escribe tres archivos junto al nombre que elija: brocales, levantamiento e intervalos, en las columnas que importa este diálogo.
 
+## Corrections worksheet export
+
+io-corrections-worksheet-csv = Hoja de correcciones (.csv)
+io-export-corrections-worksheet = Exportar hoja de correcciones
+io-worksheet-records = Correcciones
+io-worksheet-lines = Líneas de la hoja
+io-worksheet-holes = Sondajes afectados
+io-worksheet-no-corrections = Este conjunto no tiene correcciones que revisar.
+io-worksheet-preview-first = Las primeras { $shown } de { $count } líneas.
+io-worksheet-writes-two-files = Escribe la hoja con el nombre que elija, una línea por grupo de correcciones coincidentes para revisión, y a su lado el archivo de correcciones: cada registro en su propia línea, con la línea de la hoja a la que pertenece.
+cmd-file-exported-worksheet-path = Se exportó la hoja de correcciones a { $path } y las correcciones a su lado a { $records }
+cmd-file-worksheet-export-failed-error = La exportación de la hoja de correcciones falló: { $error }
+cmd-file-worksheet-no-corrections = { $name } no tiene correcciones que exportar
+state-export-corrections-worksheet = Exportar hoja de correcciones
+
 ## Jobs strings
 
 jobs-background-task-poll-label-ended = La tarea en segundo plano «{ $poll_label }» terminó sin resultado

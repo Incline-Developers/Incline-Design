@@ -1787,6 +1787,21 @@ io-unmapped = Nicht zugeordnet
 io-wavefront-obj = Wavefront OBJ (.obj)
 io-writes-three-files-beside-name = Schreibt drei Dateien neben den gewählten Namen: Ansatzpunkte, Vermessung und Intervalle, in den Spalten, die dieser Dialog importiert.
 
+## Corrections worksheet export
+
+io-corrections-worksheet-csv = Korrektur-Arbeitsblatt (.csv)
+io-export-corrections-worksheet = Korrektur-Arbeitsblatt exportieren
+io-worksheet-records = Korrekturen
+io-worksheet-lines = Arbeitsblattzeilen
+io-worksheet-holes = Betroffene Bohrlöcher
+io-worksheet-no-corrections = Dieser Datensatz hat keine Korrekturen zu prüfen.
+io-worksheet-preview-first = Die ersten { $shown } von { $count } Zeilen.
+io-worksheet-writes-two-files = Schreibt das Arbeitsblatt unter dem gewählten Namen, eine Zeile je Gruppe übereinstimmender Korrekturen zur Prüfung, und daneben die Korrekturdatei: jeder Eintrag in einer eigenen Zeile, mit der Arbeitsblattzeile, zu der er gehört.
+cmd-file-exported-worksheet-path = Korrektur-Arbeitsblatt nach { $path } exportiert und die Korrekturen daneben nach { $records }
+cmd-file-worksheet-export-failed-error = Export des Korrektur-Arbeitsblatts fehlgeschlagen: { $error }
+cmd-file-worksheet-no-corrections = { $name } hat keine Korrekturen zum Exportieren
+state-export-corrections-worksheet = Korrektur-Arbeitsblatt exportieren
+
 ## Jobs strings
 
 jobs-background-task-poll-label-ended = Hintergrundaufgabe '{ $poll_label }' endete ohne Ergebnis

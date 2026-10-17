@@ -1778,6 +1778,21 @@ io-unmapped = Haijaoanishwa
 io-wavefront-obj = Wavefront OBJ (.obj)
 io-writes-three-files-beside-name = Huandika faili tatu kando ya jina unalochagua: kola, uchunguzi na vipindi, katika safu wima ambazo dirisha hili huingiza.
 
+## Corrections worksheet export
+
+io-corrections-worksheet-csv = Karatasi ya masahihisho (.csv)
+io-export-corrections-worksheet = Hamisha Karatasi ya Masahihisho
+io-worksheet-records = Masahihisho
+io-worksheet-lines = Mistari ya karatasi
+io-worksheet-holes = Mashimo yaliyoguswa
+io-worksheet-no-corrections = Seti hii haina masahihisho ya kukagua.
+io-worksheet-preview-first = Mistari { $shown } ya kwanza kati ya { $count }.
+io-worksheet-writes-two-files = Huandika karatasi kwa jina unalochagua, mstari mmoja kwa kila kundi la masahihisho yanayolingana kwa ukaguzi, na kando yake faili ya masahihisho: kila rekodi kwenye mstari wake, pamoja na mstari wa karatasi inaoangukia.
+cmd-file-exported-worksheet-path = Karatasi ya masahihisho imehamishwa kwenda { $path } na masahihisho kando yake kwenda { $records }
+cmd-file-worksheet-export-failed-error = Kuhamisha karatasi ya masahihisho kumeshindwa: { $error }
+cmd-file-worksheet-no-corrections = { $name } haina masahihisho ya kuhamisha
+state-export-corrections-worksheet = Hamisha Karatasi ya Masahihisho
+
 ## Jobs strings
 
 jobs-background-task-poll-label-ended = Kazi ya nyuma '{ $poll_label }' imeisha bila matokeo

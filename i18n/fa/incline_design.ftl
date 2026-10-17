@@ -1746,6 +1746,21 @@ io-unmapped = نگاشت‌نشده
 io-wavefront-obj = Wavefront OBJ (.obj)
 io-writes-three-files-beside-name = سه فایل کنار نامی که انتخاب می‌کنید می‌نویسد: یقه‌ها، بررسی و بازه‌ها، با ستون‌هایی که این پنجره وارد می‌کند.
 
+## Corrections worksheet export
+
+io-corrections-worksheet-csv = برگهٔ تصحیحات (.csv)
+io-export-corrections-worksheet = صادر کردن برگهٔ تصحیحات
+io-worksheet-records = تصحیحات
+io-worksheet-lines = سطرهای برگه
+io-worksheet-holes = گمانه‌های درگیر
+io-worksheet-no-corrections = این مجموعه تصحیحی برای بازبینی ندارد.
+io-worksheet-preview-first = { $shown } سطر نخست از { $count } سطر.
+io-worksheet-writes-two-files = برگه را با نامی که انتخاب می‌کنید می‌نویسد، یک سطر برای هر گروه از تصحیحات یکسان برای بازبینی، و کنار آن فایل تصحیحات را: هر رکورد در سطری جداگانه، همراه با سطر برگه‌ای که به آن تعلق دارد.
+cmd-file-exported-worksheet-path = برگهٔ تصحیحات به { $path } و تصحیحات کنار آن به { $records } صادر شد
+cmd-file-worksheet-export-failed-error = صادر کردن برگهٔ تصحیحات ناموفق بود: { $error }
+cmd-file-worksheet-no-corrections = { $name } تصحیحی برای صادر کردن ندارد
+state-export-corrections-worksheet = صادر کردن برگهٔ تصحیحات
+
 ## Jobs strings
 
 jobs-background-task-poll-label-ended = وظیفه پس‌زمینه «{ $poll_label }» بدون نتیجه پایان یافت

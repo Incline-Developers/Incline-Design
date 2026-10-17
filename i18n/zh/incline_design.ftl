@@ -1746,6 +1746,21 @@ io-unmapped = 未映射
 io-wavefront-obj = Wavefront OBJ (.obj)
 io-writes-three-files-beside-name = 在所选名称旁写入三个文件：孔口、测斜和区间，列与此对话框导入的一致。
 
+## Corrections worksheet export
+
+io-corrections-worksheet-csv = 订正工作表 (.csv)
+io-export-corrections-worksheet = 导出订正工作表
+io-worksheet-records = 订正
+io-worksheet-lines = 工作表行
+io-worksheet-holes = 涉及钻孔
+io-worksheet-no-corrections = 此数据集没有待审核的订正。
+io-worksheet-preview-first = 共 { $count } 行中的前 { $shown } 行。
+io-worksheet-writes-two-files = 以所选名称写入工作表，每组相同的订正一行，供审核；并在旁边写入订正文件：每条记录单独一行，并注明其所属的工作表行。
+cmd-file-exported-worksheet-path = 已将订正工作表导出到 { $path }，并将旁边的订正导出到 { $records }
+cmd-file-worksheet-export-failed-error = 订正工作表导出失败：{ $error }
+cmd-file-worksheet-no-corrections = { $name } 没有可导出的订正
+state-export-corrections-worksheet = 导出订正工作表
+
 ## Jobs strings
 
 jobs-background-task-poll-label-ended = 后台任务“{ $poll_label }”已结束，但未返回结果

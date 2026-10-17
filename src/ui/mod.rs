@@ -1514,7 +1514,7 @@ fn draw_global_dialogs(
 
     // import export menus
     dialogs::import_export::draw_import_menu(root_ui, editor, project, commands);
-    dialogs::import_export::draw_export_menu(root_ui, editor, project, commands);
+    dialogs::import_export::draw_export_menu(root_ui, editor, project, drill_holes, commands);
 
     geometry_dirty
 }

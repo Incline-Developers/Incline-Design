@@ -1746,6 +1746,21 @@ io-unmapped = غير معيّن
 io-wavefront-obj = Wavefront OBJ (.obj)
 io-writes-three-files-beside-name = يكتب ثلاثة ملفات بجانب الاسم الذي تختاره: الأطواق والمسح والفواصل، بالأعمدة التي يستوردها هذا الحوار.
 
+## Corrections worksheet export
+
+io-corrections-worksheet-csv = ورقة التصحيحات (.csv)
+io-export-corrections-worksheet = تصدير ورقة التصحيحات
+io-worksheet-records = التصحيحات
+io-worksheet-lines = أسطر الورقة
+io-worksheet-holes = الثقوب المعنية
+io-worksheet-no-corrections = لا توجد في هذه المجموعة تصحيحات للمراجعة.
+io-worksheet-preview-first = أول { $shown } من { $count } سطراً.
+io-worksheet-writes-two-files = يكتب الورقة بالاسم الذي تختاره، سطراً لكل مجموعة من التصحيحات المتطابقة للمراجعة، وبجانبها ملف التصحيحات: كل سجل في سطر خاص به، مع سطر الورقة الذي ينتمي إليه.
+cmd-file-exported-worksheet-path = تم تصدير ورقة التصحيحات إلى { $path } والتصحيحات بجانبها إلى { $records }
+cmd-file-worksheet-export-failed-error = فشل تصدير ورقة التصحيحات: { $error }
+cmd-file-worksheet-no-corrections = لا توجد في { $name } تصحيحات للتصدير
+state-export-corrections-worksheet = تصدير ورقة التصحيحات
+
 ## Jobs strings
 
 jobs-background-task-poll-label-ended = انتهت مهمة الخلفية «{ $poll_label }» دون نتيجة

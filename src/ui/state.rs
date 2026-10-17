@@ -4254,6 +4254,9 @@ pub(crate) enum UiCommand {
     ExportBlockModelCsv(BlockModelId),
     /// One drillhole dataset out as the three tables it was read from.
     ExportDrillHoleCsv(DrillHoleId),
+    /// One drillhole dataset's corrections out as a worksheet for a senior
+    /// to decide on, and the records beside it.
+    ExportCorrectionsWorksheet(DrillHoleId),
     #[cfg(not(target_arch = "wasm32"))]
     RequestExit,
     SaveAndExit,
@@ -5166,6 +5169,7 @@ impl UiCommand {
             Self::ExportTriangulationAs(id, format) => report(tr!("state-export-triangulation"), format!("{id:?} · {format:?}")),
             Self::ExportBlockModelCsv(id) => report(tr!("state-export-block-model-csv"), format!("{id:?}")),
             Self::ExportDrillHoleCsv(id) => report(tr!("state-export-drillhole-csv"), format!("{id:?}")),
+            Self::ExportCorrectionsWorksheet(id) => report(tr!("state-export-corrections-worksheet"), format!("{id:?}")),
             #[cfg(not(target_arch = "wasm32"))]
             Self::RequestExit => report(tr!("state-exit-incline-design"), tr!("state-checking-unsaved-work")),
             Self::SaveAndExit => report(tr!("common-save-exit"), tr!("state-saving-current-project")),
@@ -6364,6 +6368,8 @@ pub(crate) enum DataMenu {
     Pcd,
     CsvBlockModel,
     CsvDrillHole,
+    /// The corrections worksheet: export only.
+    CorrectionsWorksheet,
     Geotiff,
 }
 

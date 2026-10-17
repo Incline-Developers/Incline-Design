@@ -386,6 +386,10 @@ impl<'a> App<'a> {
                 self.choose_export_drill_hole_csv(id);
                 Ok(())
             }
+            UiCommand::ExportCorrectionsWorksheet(id) => {
+                self.choose_export_corrections_worksheet(id);
+                Ok(())
+            }
             UiCommand::HideSelection => {
                 self.hide_selected_elements();
                 Ok(())

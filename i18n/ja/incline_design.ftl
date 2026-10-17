@@ -1774,6 +1774,21 @@ io-unmapped = 未マッピング
 io-wavefront-obj = Wavefront OBJ (.obj)
 io-writes-three-files-beside-name = 選択した名前の隣に3つのファイルを書き出します: 孔口、測量、区間。このダイアログがインポートする列と同じ形式です。
 
+## Corrections worksheet export
+
+io-corrections-worksheet-csv = 訂正ワークシート (.csv)
+io-export-corrections-worksheet = 訂正ワークシートをエクスポート
+io-worksheet-records = 訂正
+io-worksheet-lines = ワークシートの行
+io-worksheet-holes = 対象の孔
+io-worksheet-no-corrections = このセットにはレビューする訂正がありません。
+io-worksheet-preview-first = { $count } 行のうち最初の { $shown } 行。
+io-worksheet-writes-two-files = 選択した名前でワークシートを書き出します。一致する訂正のグループごとに 1 行で、レビュー用です。その隣に訂正ファイルを書き出し、各記録を 1 行ずつ、属するワークシートの行とともに記載します。
+cmd-file-exported-worksheet-path = 訂正ワークシートを { $path } に、その隣の訂正を { $records } にエクスポートしました
+cmd-file-worksheet-export-failed-error = 訂正ワークシートのエクスポートに失敗しました: { $error }
+cmd-file-worksheet-no-corrections = { $name } にはエクスポートする訂正がありません
+state-export-corrections-worksheet = 訂正ワークシートをエクスポート
+
 ## Jobs strings
 
 jobs-background-task-poll-label-ended = バックグラウンドタスク「{ $poll_label }」が結果を返さずに終了しました

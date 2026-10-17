@@ -1746,6 +1746,21 @@ io-unmapped = Tidak dipetakan
 io-wavefront-obj = Wavefront OBJ (.obj)
 io-writes-three-files-beside-name = Menulis tiga file di samping nama yang Anda pilih: kerah, survei, dan interval, dalam kolom yang diimpor dialog ini.
 
+## Corrections worksheet export
+
+io-corrections-worksheet-csv = Lembar koreksi (.csv)
+io-export-corrections-worksheet = Ekspor Lembar Koreksi
+io-worksheet-records = Koreksi
+io-worksheet-lines = Baris lembar
+io-worksheet-holes = Lubang yang terdampak
+io-worksheet-no-corrections = Set ini tidak memiliki koreksi untuk ditinjau.
+io-worksheet-preview-first = { $shown } baris pertama dari { $count }.
+io-worksheet-writes-two-files = Menulis lembar dengan nama yang Anda pilih, satu baris per kelompok koreksi yang sama untuk ditinjau, dan di sampingnya file koreksi: setiap catatan pada barisnya sendiri, dengan baris lembar tempat catatan itu berada.
+cmd-file-exported-worksheet-path = Lembar koreksi diekspor ke { $path } dan koreksi di sampingnya ke { $records }
+cmd-file-worksheet-export-failed-error = Ekspor lembar koreksi gagal: { $error }
+cmd-file-worksheet-no-corrections = { $name } tidak memiliki koreksi untuk diekspor
+state-export-corrections-worksheet = Ekspor Lembar Koreksi
+
 ## Jobs strings
 
 jobs-background-task-poll-label-ended = Tugas latar belakang '{ $poll_label }' berakhir tanpa hasil

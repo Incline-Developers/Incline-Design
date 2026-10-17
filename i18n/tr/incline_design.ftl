@@ -1788,6 +1788,21 @@ io-unmapped = Eşlenmemiş
 io-wavefront-obj = Wavefront OBJ (.obj)
 io-writes-three-files-beside-name = Seçtiğiniz adın yanına üç dosya yazar: bu iletişim kutusunun içe aktardığı sütunlarda ağızlar, ölçüm ve aralıklar.
 
+## Corrections worksheet export
+
+io-corrections-worksheet-csv = Düzeltme çizelgesi (.csv)
+io-export-corrections-worksheet = Düzeltme Çizelgesini Dışa Aktar
+io-worksheet-records = Düzeltmeler
+io-worksheet-lines = Çizelge satırları
+io-worksheet-holes = Etkilenen delikler
+io-worksheet-no-corrections = Bu kümede incelenecek düzeltme yok.
+io-worksheet-preview-first = { $count } satırın ilk { $shown } satırı.
+io-worksheet-writes-two-files = Çizelgeyi seçtiğiniz adla yazar, inceleme için eşleşen düzeltmelerin her grubuna bir satır, yanına da düzeltme dosyasını: her kayıt kendi satırında, ait olduğu çizelge satırıyla birlikte.
+cmd-file-exported-worksheet-path = Düzeltme çizelgesi { $path } konumuna, yanındaki düzeltmeler { $records } konumuna dışa aktarıldı
+cmd-file-worksheet-export-failed-error = Düzeltme çizelgesi dışa aktarımı başarısız oldu: { $error }
+cmd-file-worksheet-no-corrections = { $name } içinde dışa aktarılacak düzeltme yok
+state-export-corrections-worksheet = Düzeltme Çizelgesini Dışa Aktar
+
 ## Jobs strings
 
 jobs-background-task-poll-label-ended = '{ $poll_label }' arka plan görevi sonuç döndürmeden sona erdi

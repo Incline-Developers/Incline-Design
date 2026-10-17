@@ -1746,6 +1746,21 @@ io-unmapped = मानचित्रित नहीं
 io-wavefront-obj = Wavefront OBJ (.obj)
 io-writes-three-files-beside-name = आपके चुने नाम के पास तीन फ़ाइलें लिखता है: कॉलर, सर्वे और अंतराल, उन्हीं कॉलम में जिन्हें यह संवाद आयात करता है।
 
+## Corrections worksheet export
+
+io-corrections-worksheet-csv = सुधार वर्कशीट (.csv)
+io-export-corrections-worksheet = सुधार वर्कशीट निर्यात करें
+io-worksheet-records = सुधार
+io-worksheet-lines = वर्कशीट पंक्तियाँ
+io-worksheet-holes = प्रभावित होल
+io-worksheet-no-corrections = इस सेट में समीक्षा के लिए कोई सुधार नहीं है।
+io-worksheet-preview-first = { $count } में से पहली { $shown } पंक्तियाँ।
+io-worksheet-writes-two-files = आपके चुने नाम से वर्कशीट लिखता है, समीक्षा के लिए मेल खाते सुधारों के हर समूह की एक पंक्ति, और उसके पास सुधार फ़ाइल: हर रिकॉर्ड अपनी अलग पंक्ति में, उस वर्कशीट पंक्ति के साथ जिसमें वह आता है।
+cmd-file-exported-worksheet-path = सुधार वर्कशीट { $path } में और उसके पास सुधार { $records } में निर्यात किए गए
+cmd-file-worksheet-export-failed-error = सुधार वर्कशीट निर्यात विफल रहा: { $error }
+cmd-file-worksheet-no-corrections = { $name } में निर्यात के लिए कोई सुधार नहीं है
+state-export-corrections-worksheet = सुधार वर्कशीट निर्यात करें
+
 ## Jobs strings
 
 jobs-background-task-poll-label-ended = पृष्ठभूमि कार्य '{ $poll_label }' बिना परिणाम के समाप्त हुआ

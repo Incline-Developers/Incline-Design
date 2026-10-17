@@ -1793,6 +1793,21 @@ io-unmapped = Не зіставлено
 io-wavefront-obj = Wavefront OBJ (.obj)
 io-writes-three-files-beside-name = Записує три файли поруч із вибраною назвою: устя, інклінометрію та інтервали, у стовпцях, які імпортує цей діалог.
 
+## Corrections worksheet export
+
+io-corrections-worksheet-csv = Відомість виправлень (.csv)
+io-export-corrections-worksheet = Експорт відомості виправлень
+io-worksheet-records = Виправлення
+io-worksheet-lines = Рядки відомості
+io-worksheet-holes = Зачеплено свердловин
+io-worksheet-no-corrections = У цьому наборі немає виправлень для перевірки.
+io-worksheet-preview-first = Перші { $shown } з { $count } рядків.
+io-worksheet-writes-two-files = Записує відомість під вибраною назвою, по рядку на кожну групу однакових виправлень для перевірки, а поруч файл виправлень: кожен запис в окремому рядку, з номером рядка відомості, до якого він належить.
+cmd-file-exported-worksheet-path = Відомість виправлень експортовано в { $path }, а виправлення поруч із нею в { $records }
+cmd-file-worksheet-export-failed-error = Помилка експорту відомості виправлень: { $error }
+cmd-file-worksheet-no-corrections = У { $name } немає виправлень для експорту
+state-export-corrections-worksheet = Експорт відомості виправлень
+
 ## Jobs strings
 
 jobs-background-task-poll-label-ended = Фонове завдання «{ $poll_label }» завершилося без результату

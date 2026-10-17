@@ -1772,6 +1772,21 @@ io-unmapped = Chưa ánh xạ
 io-wavefront-obj = Wavefront OBJ (.obj)
 io-writes-three-files-beside-name = Ghi ba tệp bên cạnh tên bạn chọn: miệng lỗ, khảo sát và các khoảng, theo các cột mà hộp thoại này nhập.
 
+## Corrections worksheet export
+
+io-corrections-worksheet-csv = Bảng hiệu chỉnh (.csv)
+io-export-corrections-worksheet = Xuất bảng hiệu chỉnh
+io-worksheet-records = Hiệu chỉnh
+io-worksheet-lines = Dòng của bảng
+io-worksheet-holes = Lỗ khoan liên quan
+io-worksheet-no-corrections = Bộ này không có hiệu chỉnh nào cần xem xét.
+io-worksheet-preview-first = { $shown } dòng đầu trong { $count } dòng.
+io-worksheet-writes-two-files = Ghi bảng theo tên bạn chọn, mỗi nhóm hiệu chỉnh trùng khớp một dòng để xem xét, và bên cạnh là tệp hiệu chỉnh: mỗi bản ghi trên một dòng riêng, kèm dòng của bảng mà nó thuộc về.
+cmd-file-exported-worksheet-path = Đã xuất bảng hiệu chỉnh sang { $path } và các hiệu chỉnh bên cạnh sang { $records }
+cmd-file-worksheet-export-failed-error = Xuất bảng hiệu chỉnh thất bại: { $error }
+cmd-file-worksheet-no-corrections = { $name } không có hiệu chỉnh nào để xuất
+state-export-corrections-worksheet = Xuất bảng hiệu chỉnh
+
 ## Jobs strings
 
 jobs-background-task-poll-label-ended = Tác vụ nền '{ $poll_label }' đã kết thúc mà không có kết quả

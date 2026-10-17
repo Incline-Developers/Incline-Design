@@ -1835,6 +1835,21 @@ io-unmapped = Unmapped
 io-wavefront-obj = Wavefront OBJ (.obj)
 io-writes-three-files-beside-name = Writes three files beside the name you choose: collars, survey and intervals, in the columns this dialog imports.
 
+## Corrections worksheet export
+
+io-corrections-worksheet-csv = Corrections worksheet (.csv)
+io-export-corrections-worksheet = Export Corrections Worksheet
+io-worksheet-records = Corrections
+io-worksheet-lines = Worksheet lines
+io-worksheet-holes = Holes touched
+io-worksheet-no-corrections = This set has no corrections to review.
+io-worksheet-preview-first = The first { $shown } of { $count } lines.
+io-worksheet-writes-two-files = Writes the worksheet under the name you choose, one line per group of matching corrections for review, and beside it the corrections file: every record on a line of its own, with the worksheet line it falls on.
+cmd-file-exported-worksheet-path = Exported the corrections worksheet to { $path } and the corrections beside it to { $records }
+cmd-file-worksheet-export-failed-error = Corrections worksheet export failed: { $error }
+cmd-file-worksheet-no-corrections = { $name } has no corrections to export
+state-export-corrections-worksheet = Export Corrections Worksheet
+
 ## Jobs strings
 
 jobs-background-task-poll-label-ended = Background task '{ $poll_label }' ended without a result

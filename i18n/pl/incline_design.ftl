@@ -1816,6 +1816,21 @@ io-unmapped = Niezmapowane
 io-wavefront-obj = Wavefront OBJ (.obj)
 io-writes-three-files-beside-name = Zapisuje trzy pliki obok wybranej nazwy: wyloty, pomiary inklinometryczne i interwały, w kolumnach importowanych przez to okno.
 
+## Corrections worksheet export
+
+io-corrections-worksheet-csv = Arkusz poprawek (.csv)
+io-export-corrections-worksheet = Eksportuj arkusz poprawek
+io-worksheet-records = Poprawki
+io-worksheet-lines = Wiersze arkusza
+io-worksheet-holes = Objęte otwory
+io-worksheet-no-corrections = Ten zbiór nie ma poprawek do przejrzenia.
+io-worksheet-preview-first = Pierwsze { $shown } z { $count } wierszy.
+io-worksheet-writes-two-files = Zapisuje arkusz pod wybraną nazwą, jeden wiersz na grupę zgodnych poprawek do przejrzenia, a obok plik poprawek: każdy rekord w osobnym wierszu, z numerem wiersza arkusza, do którego należy.
+cmd-file-exported-worksheet-path = Wyeksportowano arkusz poprawek do { $path }, a poprawki obok do { $records }
+cmd-file-worksheet-export-failed-error = Eksport arkusza poprawek nie powiódł się: { $error }
+cmd-file-worksheet-no-corrections = { $name } nie ma poprawek do wyeksportowania
+state-export-corrections-worksheet = Eksportuj arkusz poprawek
+
 ## Jobs strings
 
 jobs-background-task-poll-label-ended = Zadanie w tle „{ $poll_label }” zakończyło się bez wyniku

@@ -1788,6 +1788,21 @@ io-unmapped = Non mappato
 io-wavefront-obj = Wavefront OBJ (.obj)
 io-writes-three-files-beside-name = Scrive tre file accanto al nome scelto: bocche foro, rilievo e intervalli, nelle colonne che questa finestra importa.
 
+## Corrections worksheet export
+
+io-corrections-worksheet-csv = Foglio delle correzioni (.csv)
+io-export-corrections-worksheet = Esporta foglio delle correzioni
+io-worksheet-records = Correzioni
+io-worksheet-lines = Righe del foglio
+io-worksheet-holes = Fori interessati
+io-worksheet-no-corrections = Questo insieme non ha correzioni da esaminare.
+io-worksheet-preview-first = Le prime { $shown } di { $count } righe.
+io-worksheet-writes-two-files = Scrive il foglio con il nome scelto, una riga per gruppo di correzioni uguali da esaminare, e accanto il file delle correzioni: ogni record su una riga propria, con la riga del foglio a cui appartiene.
+cmd-file-exported-worksheet-path = Foglio delle correzioni esportato in { $path } e le correzioni accanto in { $records }
+cmd-file-worksheet-export-failed-error = Esportazione del foglio delle correzioni non riuscita: { $error }
+cmd-file-worksheet-no-corrections = { $name } non ha correzioni da esportare
+state-export-corrections-worksheet = Esporta foglio delle correzioni
+
 ## Jobs strings
 
 jobs-background-task-poll-label-ended = L'attività in background '{ $poll_label }' è terminata senza risultato

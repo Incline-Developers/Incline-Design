@@ -5,18 +5,20 @@ use crate::{
     model::{
         LayerId,
         block_model::BlockModelId,
-        drill_hole::DrillHoleId,
+        drill_hole::{DrillHoleId, OpenDrillHoleDataset},
         formats::{
             MeshFormat,
             csv_block_model::{CsvColumnRole, validate_mapping},
-            csv_drill_hole::{CsvDrillColumnRole, CsvDrillFileMapping, CsvDrillFileRole, CsvDrillPreview, FileShape, bundle_anchor},
+            csv_drill_hole::{CsvDrillColumnRole, CsvDrillFileMapping, CsvDrillFileRole, CsvDrillPreview, FileShape, WORKSHEET_HEADER, bundle_anchor},
         },
         triangulation::TriangulationId,
     },
     ui::{
+        elements::properties::read_only_row,
         fonts::bold,
         state::{DataMenu, EditorState, OmfExportSection, UiCommand, UiProjectView},
         widgets::{
+            data_table::DataTable,
             explorer::{ExplorerEntry, ExplorerHeader, explorer_note, row_height, stripe_bands},
             menu::{self, DragableMenu, MenuButton, MenuFieldBool, MenuFieldCombo, MenuFieldFilePicker},
             toolbar::GROUP_CORNER_RADIUS,
@@ -160,7 +162,7 @@ pub(crate) fn draw_import_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
     editor.show_import = show_import;
 }
 
-pub(crate) fn draw_export_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+pub(crate) fn draw_export_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, drill_holes: &[OpenDrillHoleDataset], commands: &mut Vec<UiCommand>) {
     if !editor.show_export {
         return;
     }
@@ -182,13 +184,13 @@ pub(crate) fn draw_export_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
                 ui.allocate_ui(egui::Vec2::new(DETAILS_WIDTH, MENU_HEIGHT - 25.0), |ui| {
                     ui.set_width(DETAILS_WIDTH);
                     ui.set_height(MENU_HEIGHT - 25.);
-                    draw_export_details(ui, editor, project);
+                    draw_export_details(ui, editor, project, drill_holes);
                 });
                 ui.allocate_ui_with_layout(
                     egui::Vec2::new(DETAILS_WIDTH, ui.spacing().interact_size.y),
                     egui::Layout::right_to_left(egui::Align::Center),
                     |ui| {
-                        let command = export_command(editor);
+                        let command = export_command(editor, drill_holes);
                         let confirm = menu::dialog_confirm_pressed(ui.ctx());
                         cancelled = menu::dialog_cancel_pressed(ui.ctx());
                         if (ui.add(MenuButton::new(tr!("io-export")).primary().enabled(command.is_some())).clicked() || confirm)
@@ -280,6 +282,7 @@ fn draw_export_explorer(ui: &mut egui::Ui, editor: &mut EditorState) {
         });
         ExplorerHeader::new(egui::Id::unique("export_drill_holes_section"), tr!("ws-menubar-drillholes")).show(ui, |ui| {
             draw_entry(ui, editor, &tr!("io-mapped-csv-bundle-csv"), DataMenu::CsvDrillHole);
+            draw_entry(ui, editor, &tr!("io-corrections-worksheet-csv"), DataMenu::CorrectionsWorksheet);
         });
     });
 }
@@ -302,11 +305,11 @@ fn draw_import_details(ui: &mut egui::Ui, editor: &mut EditorState, commands: &m
         DataMenu::CsvBlockModel => draw_import_csv_block_model(ui, editor, commands),
         DataMenu::Geotiff => draw_import_mesh(ui, editor, commands, &tr!("io-import-geotiff")),
         DataMenu::CsvDrillHole => draw_import_csv_drill_holes(ui, editor, commands),
-        DataMenu::None => {}
+        DataMenu::CorrectionsWorksheet | DataMenu::None => {}
     });
 }
 
-fn draw_export_details(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView) {
+fn draw_export_details(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, drill_holes: &[OpenDrillHoleDataset]) {
     ui.push_id(editor.data_menu, |ui| match editor.data_menu {
         DataMenu::Omf => draw_export_omf(ui, editor, project),
         DataMenu::Dxf => draw_export_dxf(ui, editor, project),
@@ -315,6 +318,7 @@ fn draw_export_details(ui: &mut egui::Ui, editor: &mut EditorState, project: &Ui
         DataMenu::Ply => draw_export_mesh(ui, editor, project, &tr!("io-export-ply")),
         DataMenu::CsvBlockModel => draw_export_csv_block_model(ui, editor, project),
         DataMenu::CsvDrillHole => draw_export_csv_drill_holes(ui, editor, project),
+        DataMenu::CorrectionsWorksheet => draw_export_corrections_worksheet(ui, editor, project, drill_holes),
         _ => {}
     });
 }
@@ -737,6 +741,74 @@ fn draw_export_csv_drill_holes(ui: &mut egui::Ui, editor: &mut EditorState, proj
     ui.small(tr!("io-writes-three-files-beside-name"));
 }
 
+/// Worksheet lines the export shows before the file is written.
+const WORKSHEET_PREVIEW_LINES: usize = 20;
+
+/// What the worksheet export reports about one set, grouped once per
+/// revision of it rather than every frame.
+#[derive(Clone)]
+struct WorksheetPreview {
+    key: (u64, usize),
+    records: usize,
+    holes: usize,
+    lines: usize,
+    rows: std::sync::Arc<Vec<Vec<String>>>,
+}
+
+fn worksheet_preview(ui: &egui::Ui, dataset: &OpenDrillHoleDataset) -> WorksheetPreview {
+    let id = egui::Id::unique(("corrections_worksheet_preview", dataset.id));
+    let corrections = &dataset.dataset.corrections;
+    let key = (dataset.state.revision(), corrections.len());
+    if let Some(cached) = ui.data(|data| data.get_temp::<WorksheetPreview>(id)).filter(|cached| cached.key == key) {
+        return cached;
+    }
+    let mut rows = crate::model::formats::csv_drill_hole::worksheet_rows(corrections);
+    let lines = rows.len();
+    rows.truncate(WORKSHEET_PREVIEW_LINES);
+    let preview = WorksheetPreview {
+        key,
+        records: corrections.len(),
+        holes: crate::model::formats::csv_drill_hole::corrections_hole_count(corrections),
+        lines,
+        rows: std::sync::Arc::new(rows),
+    };
+    ui.data_mut(|data| data.insert_temp(id, preview.clone()));
+    preview
+}
+
+/// The corrections worksheet: the set picker, what the files will hold, and
+/// the first lines as the senior will read them.
+fn draw_export_corrections_worksheet(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, drill_holes: &[OpenDrillHoleDataset]) {
+    ui.heading(tr!("io-export-corrections-worksheet"));
+    ensure_export_drill_hole(editor, project);
+    drill_hole_combo(ui, "corrections_worksheet_drill_hole", &tr!("io-dataset"), project, &mut editor.export_drill_hole);
+    let Some(dataset) = editor
+        .export_drill_hole
+        .and_then(|id| drill_holes.iter().find(|dataset| dataset.id == id && dataset.state.loaded))
+    else {
+        return;
+    };
+    let preview = worksheet_preview(ui, dataset);
+    read_only_row(ui, &tr!("io-worksheet-records"), &preview.records.to_string());
+    read_only_row(ui, &tr!("io-worksheet-lines"), &preview.lines.to_string());
+    read_only_row(ui, &tr!("io-worksheet-holes"), &preview.holes.to_string());
+    if preview.records == 0 {
+        menu::menu_note(ui, tr!("io-worksheet-no-corrections"));
+        return;
+    }
+    ui.small(tr!("io-worksheet-writes-two-files"));
+    if preview.lines > preview.rows.len() {
+        ui.small(tr!("io-worksheet-preview-first", shown = preview.rows.len().to_string(), count = preview.lines.to_string()));
+    }
+    // The file's own column names, as written, so the preview matches the file.
+    let header = WORKSHEET_HEADER.map(str::to_owned);
+    let rows = &preview.rows;
+    let cells = |row: usize| rows.get(row).cloned().unwrap_or_default();
+    DataTable::new(("corrections_worksheet_table", dataset.id), &header, rows.len(), &cells)
+        .fingerprint(preview.key.0)
+        .show(ui);
+}
+
 fn layer_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, field_label: &str, project: &UiProjectView, selected: &mut Option<LayerId>) {
     let active_entry = project.projects.iter().find(|entry| entry.is_active);
     let selected_label =
@@ -831,7 +903,7 @@ fn reset_export_defaults(editor: &mut EditorState, project: &UiProjectView) {
         DataMenu::CsvBlockModel => {
             editor.export_block_model = first_loaded_block_model(project);
         }
-        DataMenu::CsvDrillHole => {
+        DataMenu::CsvDrillHole | DataMenu::CorrectionsWorksheet => {
             editor.export_drill_hole = first_loaded_drill_hole(project);
         }
         _ => {}
@@ -945,11 +1017,11 @@ fn import_command(editor: &EditorState) -> Option<UiCommand> {
                 browser_path: None,
             }))
         }
-        DataMenu::CsvDrillHole | DataMenu::None => None,
+        DataMenu::CsvDrillHole | DataMenu::CorrectionsWorksheet | DataMenu::None => None,
     }
 }
 
-fn export_command(editor: &EditorState) -> Option<UiCommand> {
+fn export_command(editor: &EditorState, drill_holes: &[OpenDrillHoleDataset]) -> Option<UiCommand> {
     match editor.data_menu {
         DataMenu::Omf if editor.export_omf.is_empty() => None,
         DataMenu::Omf => Some(UiCommand::ExportOmf(Box::new(editor.export_omf.clone()))),
@@ -961,6 +1033,10 @@ fn export_command(editor: &EditorState) -> Option<UiCommand> {
         }
         DataMenu::CsvBlockModel => editor.export_block_model.map(UiCommand::ExportBlockModelCsv),
         DataMenu::CsvDrillHole => editor.export_drill_hole.map(UiCommand::ExportDrillHoleCsv),
+        DataMenu::CorrectionsWorksheet => editor
+            .export_drill_hole
+            .filter(|id| drill_holes.iter().any(|dataset| dataset.id == *id && !dataset.dataset.corrections.is_empty()))
+            .map(UiCommand::ExportCorrectionsWorksheet),
         _ => None,
     }
 }
@@ -994,7 +1070,7 @@ fn is_import_menu(data_menu: DataMenu) -> bool {
 fn is_export_menu(data_menu: DataMenu) -> bool {
     matches!(
         data_menu,
-        DataMenu::Omf | DataMenu::Dxf | DataMenu::Obj | DataMenu::Stl | DataMenu::Ply | DataMenu::CsvBlockModel | DataMenu::CsvDrillHole
+        DataMenu::Omf | DataMenu::Dxf | DataMenu::Obj | DataMenu::Stl | DataMenu::Ply | DataMenu::CsvBlockModel | DataMenu::CsvDrillHole | DataMenu::CorrectionsWorksheet
     )
 }
 

@@ -1746,6 +1746,21 @@ io-unmapped = Non cartographié
 io-wavefront-obj = Wavefront OBJ (.obj)
 io-writes-three-files-beside-name = Écrit trois fichiers à côté du nom choisi : collets, levé et intervalles, dans les colonnes que cette boîte de dialogue importe.
 
+## Corrections worksheet export
+
+io-corrections-worksheet-csv = Feuille de corrections (.csv)
+io-export-corrections-worksheet = Exporter la feuille de corrections
+io-worksheet-records = Corrections
+io-worksheet-lines = Lignes de la feuille
+io-worksheet-holes = Sondages concernés
+io-worksheet-no-corrections = Ce jeu n'a aucune correction à examiner.
+io-worksheet-preview-first = Les { $shown } premières lignes sur { $count }.
+io-worksheet-writes-two-files = Écrit la feuille sous le nom choisi, une ligne par groupe de corrections identiques à examiner, et à côté le fichier des corrections : chaque enregistrement sur sa propre ligne, avec la ligne de la feuille dont il relève.
+cmd-file-exported-worksheet-path = Feuille de corrections exportée vers { $path } et les corrections à côté vers { $records }
+cmd-file-worksheet-export-failed-error = Échec de l’exportation de la feuille de corrections : { $error }
+cmd-file-worksheet-no-corrections = { $name } n'a aucune correction à exporter
+state-export-corrections-worksheet = Exporter la feuille de corrections
+
 ## Jobs strings
 
 jobs-background-task-poll-label-ended = La tâche en arrière-plan « { $poll_label } » s’est terminée sans résultat
