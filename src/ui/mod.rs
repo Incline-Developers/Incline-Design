@@ -1384,6 +1384,8 @@ fn draw_global_dialogs(
     dialogs::drill_hole::draw_seam_rename_dialog(root_ui, editor, drill_holes, commands);
     dialogs::drill_hole::draw_name_shift_dialog(root_ui, editor, drill_holes, commands);
     dialogs::drill_hole::draw_boundary_move_dialog(root_ui, editor, drill_holes, commands);
+    dialogs::drill_hole::draw_interval_insert_dialog(root_ui, editor, drill_holes, commands);
+    dialogs::drill_hole::draw_interval_delete_dialog(root_ui, editor, drill_holes, commands);
     dialogs::reference_points::draw_reference_points_dialog(root_ui, editor, drill_holes, commands);
     dialogs::reference_surface::draw_reference_surface_dialog(root_ui, editor, project, commands);
     dialogs::thickness_points::draw_thickness_points_dialog(root_ui, editor, drill_holes, commands);

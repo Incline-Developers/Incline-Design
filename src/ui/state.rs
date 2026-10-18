@@ -2344,6 +2344,10 @@ pub(crate) struct EditorState {
     pub(crate) name_shift_dialog: Option<NameShiftDraft>,
     /// The move boundary dialog's boundary and entries while it is open.
     pub(crate) boundary_move_dialog: Option<BoundaryMoveDraft>,
+    /// The insert interval dialog's interval and entries while it is open.
+    pub(crate) interval_insert_dialog: Option<IntervalInsertDraft>,
+    /// The delete interval dialog's interval and reason while it is open.
+    pub(crate) interval_delete_dialog: Option<IntervalDeleteDraft>,
     pub(crate) optimization: OptimizationState,
     pub(crate) block_model_create_open: bool,
     pub(crate) kriging_drill_hole_id: Option<DrillHoleId>,
@@ -2704,6 +2708,17 @@ impl EditorState {
             || self.text_editing_enabled
     }
 
+    /// Whether a drill hole correction dialog is open: rename, shift names,
+    /// move a boundary, insert or delete. While one is, the log offers no
+    /// other, as each takes Enter and Escape and an edit by one closes the rest.
+    pub(crate) fn correction_dialog_open(&self) -> bool {
+        self.seam_rename_dialog.is_some()
+            || self.name_shift_dialog.is_some()
+            || self.boundary_move_dialog.is_some()
+            || self.interval_insert_dialog.is_some()
+            || self.interval_delete_dialog.is_some()
+    }
+
     /// The common case: a dialog that confirms on Enter and cancels on Escape.
     fn dialog_owns_both_keys(&self) -> bool {
         self.grid_dialog.is_some()
@@ -2744,6 +2759,8 @@ impl EditorState {
             || self.seam_rename_dialog.is_some()
             || self.name_shift_dialog.is_some()
             || self.boundary_move_dialog.is_some()
+            || self.interval_insert_dialog.is_some()
+            || self.interval_delete_dialog.is_some()
             || self.tri_create_open
             || self.tri_create_failure.is_some()
             || self.tri_cut_poly_open
@@ -3181,6 +3198,8 @@ impl EditorState {
         self.seam_rename_dialog = None;
         self.name_shift_dialog = None;
         self.boundary_move_dialog = None;
+        self.interval_insert_dialog = None;
+        self.interval_delete_dialog = None;
     }
 
     pub(crate) fn current_preferences(&self) -> PreferencesDraft {
@@ -3608,6 +3627,8 @@ impl EditorState {
             seam_rename_dialog: None,
             name_shift_dialog: None,
             boundary_move_dialog: None,
+            interval_insert_dialog: None,
+            interval_delete_dialog: None,
             optimization: OptimizationState::default(),
             block_model_create_open: false,
             kriging_drill_hole_id: None,
@@ -4631,6 +4652,20 @@ pub(crate) enum UiCommand {
         edit: crate::model::drill_hole::BoundaryMove,
         reason: String,
     },
+    /// Insert an interval into one hole, proposing its insertion and the
+    /// trims and split it makes as one undo step.
+    InsertInterval {
+        dataset: DrillHoleId,
+        edit: crate::model::drill_hole::IntervalInsert,
+        reason: String,
+    },
+    /// Take one interval of one hole out of the interpreted data, every field
+    /// it holds with it, proposing one deletion correction as one undo step.
+    DeleteInterval {
+        dataset: DrillHoleId,
+        edit: crate::model::drill_hole::IntervalDelete,
+        reason: String,
+    },
     /// Replace one categorical field's strat column, top first, as one undo
     /// step.
     SetStratColumn {
@@ -5332,6 +5367,19 @@ impl UiCommand {
                     crate::model::drill_hole::BoundarySide::Floor => tr!("state-move-floor"),
                 },
                 tr!("state-move-boundary-from-to", from = format!("{:.2}", edit.at), to = format!("{:.2}", edit.to)),
+            ),
+            Self::InsertInterval { edit, .. } => report(
+                tr!("state-insert-interval"),
+                tr!(
+                    "state-insert-interval-at",
+                    code = edit.code.trim().to_owned(),
+                    from = format!("{:.2}", edit.from),
+                    to = format!("{:.2}", edit.to)
+                ),
+            ),
+            Self::DeleteInterval { edit, .. } => report(
+                tr!("state-delete-interval"),
+                tr!("state-move-boundary-from-to", from = format!("{:.2}", edit.row.from), to = format!("{:.2}", edit.row.to)),
             ),
             Self::ShiftStratColumn { field, direction, from, .. } => report(
                 tr!("state-shift-names"),
@@ -6465,6 +6513,9 @@ pub(crate) struct ThicknessTable {
 #[derive(Clone, Debug)]
 pub(crate) struct SeamRenameDraft {
     pub(crate) dataset: DrillHoleId,
+    /// The dataset's revision when the dialog opened; any edit to it since
+    /// closes a rename in one horizon, as the interval it holds may have moved.
+    pub(crate) revision: u64,
     pub(crate) scope: crate::model::drill_hole::RenameScope,
     pub(crate) field: String,
     pub(crate) from: String,
@@ -6485,6 +6536,9 @@ pub(crate) struct SeamRenameDraft {
 #[derive(Clone, Debug)]
 pub(crate) struct NameShiftDraft {
     pub(crate) dataset: DrillHoleId,
+    /// The dataset's revision when the dialog opened; any edit to it since
+    /// closes the dialog, as the indices it holds may no longer fit.
+    pub(crate) revision: u64,
     pub(crate) hole: usize,
     /// The hole's name, for the dialog to show.
     pub(crate) dhid: String,
@@ -6522,6 +6576,164 @@ pub(crate) struct BoundaryMoveDraft {
     /// depth changes, the depth it was built for beside it.
     pub(crate) preview: Option<std::sync::Arc<crate::model::drill_hole::DrillHole>>,
     pub(crate) previewed: Option<f64>,
+}
+
+/// What the delete interval dialog holds while open: the interval picked in
+/// the log, as the dialog shows it, and the reason typed. The deletion is
+/// judged again when it runs.
+#[derive(Clone, Debug)]
+pub(crate) struct IntervalDeleteDraft {
+    pub(crate) dataset: DrillHoleId,
+    /// The dataset's revision when the dialog opened; any edit to it since
+    /// closes the dialog, as the index it holds may no longer fit.
+    pub(crate) revision: u64,
+    pub(crate) hole: usize,
+    pub(crate) dhid: String,
+    pub(crate) interval: usize,
+    /// The field the interval was picked in, which its record names.
+    pub(crate) field: String,
+    /// The interval as the dialog lists it.
+    pub(crate) description: String,
+    /// The row as it was picked: a delete goes ahead only while the row at
+    /// `interval` is still this one.
+    pub(crate) row: crate::model::drill_hole::DrillInterval,
+    pub(crate) reason: String,
+}
+
+/// What the insert interval dialog holds while open: the hole, the depths,
+/// the field picked and the other code fields of its table, and what has
+/// been typed. The insertion is judged again when it runs.
+#[derive(Clone, Debug)]
+pub(crate) struct IntervalInsertDraft {
+    pub(crate) dataset: DrillHoleId,
+    /// The dataset's revision when the dialog opened; any edit to it since
+    /// closes the dialog, as the indices it holds may no longer fit.
+    pub(crate) revision: u64,
+    pub(crate) hole: usize,
+    pub(crate) dhid: String,
+    /// The depths: empty from a seam, the stretch's own from a gap.
+    pub(crate) from: DepthField,
+    pub(crate) to: DepthField,
+    /// The field picked, whose code is required.
+    pub(crate) picked: InsertCodeField,
+    /// The table's other code fields, each blank or filled from the interval
+    /// the insertion splits until typed in.
+    pub(crate) siblings: Vec<InsertSiblingField>,
+    pub(crate) reason: String,
+    /// While the out of sequence warning is up, the codes it names.
+    pub(crate) out_of_sequence: Option<String>,
+}
+
+impl IntervalInsertDraft {
+    /// Both depths, once each holds a depth, in a hole ending at `end`;
+    /// `None` while either is empty or not a depth, when the dialog judges
+    /// nothing about depths yet.
+    pub(crate) fn depths(&self, end: f64) -> Option<(f64, f64)> {
+        match (self.from.depth(None), self.to.depth(Some(end))) {
+            (TypedDepth::Depth(from), TypedDepth::Depth(to)) => Some((from, to)),
+            _ => None,
+        }
+    }
+
+    /// The insertion as typed in a hole ending at `end`, codes trimmed;
+    /// depths not yet given read as NaN, which the judgement refuses.
+    pub(crate) fn edit(&self, end: f64) -> crate::model::drill_hole::IntervalInsert {
+        let depths = self.depths(end);
+        crate::model::drill_hole::IntervalInsert {
+            hole: self.hole,
+            dhid: self.dhid.clone(),
+            field: self.picked.key.clone(),
+            from: depths.map_or(f64::NAN, |(from, _)| from),
+            to: depths.map_or(f64::NAN, |(_, to)| to),
+            code: self.picked.value.trim().to_owned(),
+            siblings: self
+                .siblings
+                .iter()
+                .map(|sibling| (sibling.field.key.clone(), sibling.field.value.trim().to_owned()))
+                .collect(),
+        }
+    }
+}
+
+/// One depth field of the insert dialog: the text in it, and the exact depth
+/// it was filled in with, beside the text it was shown as. A shown depth is
+/// rounded; while its text is unchanged it stands for the exact depth, so a
+/// prefill taken as it is leaves no sliver.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct DepthField {
+    pub(crate) text: String,
+    pub(crate) prefilled: Option<(f64, String)>,
+}
+
+impl DepthField {
+    /// A field filled in with `depth`, shown at most to the millimetre.
+    pub(crate) fn prefilled(depth: f64) -> Self {
+        let shown = crate::model::drill_hole::shown_depth(depth);
+        Self {
+            text: shown.clone(),
+            prefilled: Some((depth, shown)),
+        }
+    }
+
+    /// The depth the field holds: the exact prefill while what is typed is
+    /// the same number as it was shown as; for the To field, given the hole's
+    /// `end`, the end exactly while what is typed is the same number as the
+    /// hint shows; else the depth typed.
+    pub(crate) fn depth(&self, end: Option<f64>) -> TypedDepth {
+        let typed = typed_depth(&self.text);
+        let TypedDepth::Depth(number) = typed else {
+            return typed;
+        };
+        let same = |shown: &str| typed_depth(shown) == TypedDepth::Depth(number);
+        match (&self.prefilled, end) {
+            (Some((exact, shown)), _) if same(shown) => TypedDepth::Depth(*exact),
+            (_, Some(end)) if end.is_finite() && same(&crate::model::drill_hole::shown_depth(end)) => TypedDepth::Depth(end),
+            _ => typed,
+        }
+    }
+}
+
+/// A depth as typed in the insert dialog.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum TypedDepth {
+    Empty,
+    Depth(f64),
+    /// Something typed that is not a depth, a comma decimal included, which
+    /// could as well be a thousands mark.
+    NotADepth,
+}
+
+/// What `text` says as a depth in metres: a number, a point its decimal mark,
+/// with or without a trailing "m".
+pub(crate) fn typed_depth(text: &str) -> TypedDepth {
+    let text = text.trim();
+    if text.is_empty() {
+        return TypedDepth::Empty;
+    }
+    let number = text.strip_suffix('m').map_or(text, str::trim_end);
+    match number.parse::<f64>() {
+        Ok(depth) if depth.is_finite() => TypedDepth::Depth(depth),
+        _ => TypedDepth::NotADepth,
+    }
+}
+
+/// One code field of the insert interval dialog: the field, its label, the
+/// codes it offers ([`crate::model::drill_hole::offered_codes`]) when the
+/// dialog opened, and the code typed.
+#[derive(Clone, Debug)]
+pub(crate) struct InsertCodeField {
+    pub(crate) key: String,
+    pub(crate) label: String,
+    pub(crate) codes: Vec<String>,
+    pub(crate) value: String,
+}
+
+/// A code field other than the one picked, and whether it still takes the
+/// value of the interval the insertion splits, which it does until typed in.
+#[derive(Clone, Debug)]
+pub(crate) struct InsertSiblingField {
+    pub(crate) field: InsertCodeField,
+    pub(crate) follows_split: bool,
 }
 
 /// One strat column check: the order most holes agree on, the column as it

@@ -7,7 +7,7 @@ use std::{fmt::Debug, hash::Hash};
 use super::viewport::{Outline, format_grade, outlined_galley, trim_decimal_zeros};
 use crate::{
     i18n::tr,
-    model::drill_hole::{BoundarySide, ShiftDirection, UNKNOWN_NAME},
+    model::drill_hole::{BoundarySide, ShiftDirection, UNKNOWN_NAME, holds_value, value_name},
     ui::{
         elements::properties::read_only_row,
         widgets::{
@@ -28,6 +28,9 @@ pub(crate) struct DrillHoleProperties<'a> {
     /// The dataset's fields, in order, become the columns after From and
     /// To, so every hole gets the same columns even if it never recorded one.
     fields: &'a [crate::model::drill_hole::DrillField],
+    /// Logged rows a deletion took out, listed after the hole's own as
+    /// logged, so the as-logged side still shows them.
+    deleted: Vec<&'a crate::model::drill_hole::DrillInterval>,
 }
 
 impl<'a> DrillHoleProperties<'a> {
@@ -36,7 +39,19 @@ impl<'a> DrillHoleProperties<'a> {
             id: egui::Id::unique(id_source),
             hole,
             fields,
+            deleted: Vec::new(),
         }
+    }
+
+    /// Logged rows deletions took out of the hole, to list after its own.
+    pub(crate) fn deleted_rows(mut self, rows: Vec<&'a crate::model::drill_hole::DrillInterval>) -> Self {
+        self.deleted = rows;
+        self
+    }
+
+    /// Whether there is any row to list, the hole's own or one deleted.
+    pub(crate) fn has_rows(&self) -> bool {
+        !self.hole.intervals.is_empty() || !self.deleted.is_empty()
     }
 
     /// The hole's collar, trace, orientation and interval count, as rows
@@ -71,9 +86,14 @@ impl<'a> DrillHoleProperties<'a> {
         let hole = self.hole;
         let header = drill_table_header(self.fields);
         let aligns = drill_table_aligns(self.fields);
-        let shown = |index: usize| hole.intervals.get(index).map(|interval| drill_table_row(interval, self.fields, false)).unwrap_or_default();
-        let copied = |index: usize| hole.intervals.get(index).map(|interval| drill_table_row(interval, self.fields, true)).unwrap_or_default();
-        DataTable::new(self.id.with("intervals"), &header, hole.intervals.len(), &shown)
+        let own = hole.intervals.len();
+        let row = |index: usize, raw: bool| match hole.intervals.get(index) {
+            Some(interval) => drill_table_row(interval, self.fields, raw),
+            None => self.deleted.get(index - own).map(|row| deleted_table_row(row, self.fields, raw)).unwrap_or_default(),
+        };
+        let shown = |index: usize| row(index, false);
+        let copied = |index: usize| row(index, true);
+        DataTable::new(self.id.with("intervals"), &header, own + self.deleted.len(), &shown)
             .aligns(&aligns)
             .copy_cells(&copied)
             .fingerprint(self.fingerprint())
@@ -91,8 +111,27 @@ impl<'a> DrillHoleProperties<'a> {
             .last()
             .map(|interval| (interval.from.to_bits(), interval.to.to_bits()))
             .hash(&mut hasher);
+        self.deleted.len().hash(&mut hasher);
         hasher.finish()
     }
+}
+
+/// A logged row a deletion took out, as the table lists it: as it was
+/// logged, marked deleted after its from, in a copy too, so a pasted row
+/// cannot pass for one still there.
+fn deleted_table_row(interval: &crate::model::drill_hole::DrillInterval, fields: &[crate::model::drill_hole::DrillField], raw: bool) -> Vec<String> {
+    let (from, to, values) = interval.logged();
+    let logged = crate::model::drill_hole::DrillInterval {
+        from,
+        to,
+        values: values.clone(),
+        logged: None,
+    };
+    let mut row = drill_table_row(&logged, fields, raw);
+    if let Some(first) = row.first_mut() {
+        *first = format!("{first} ({})", tr!("drill-hole-interval-deleted"));
+    }
+    row
 }
 
 /// The table's header row: From, To, then one column per dataset field.
@@ -108,11 +147,15 @@ fn drill_table_header(fields: &[crate::model::drill_hole::DrillField]) -> Vec<St
 /// precision instead of display rounding. An unrecorded field is an empty cell.
 ///
 /// A corrected cell shows the interpreted value with the logged one in
-/// brackets; raw text, which a copy carries, is the interpreted value alone.
+/// brackets. An interval the site never logged says so after its from, and
+/// brackets the depths it was inserted at once they have moved, as they key
+/// its records; it has no logged values to show. Raw text, which a copy
+/// carries, is the interpreted value alone.
 fn drill_table_row(interval: &crate::model::drill_hole::DrillInterval, fields: &[crate::model::drill_hole::DrillField], raw: bool) -> Vec<String> {
     let (logged_from, logged_to, logged_values) = interval.logged();
+    let never_logged = !raw && interval.is_never_logged();
     let corrected = !raw && interval.is_corrected();
-    let beside = |shown: String, logged: String| if corrected && shown != logged { format!("{shown} ({logged})") } else { shown };
+    let beside = |corrected: bool, shown: String, logged: String| if corrected && shown != logged { format!("{shown} ({logged})") } else { shown };
     let depth = |depth: f64| if raw { depth.to_string() } else { format!("{depth:.2}") };
     let value = |value: Option<&crate::model::drill_hole::DrillValue>| match value {
         Some(crate::model::drill_hole::DrillValue::Numeric(number)) => {
@@ -126,12 +169,17 @@ fn drill_table_row(interval: &crate::model::drill_hole::DrillInterval, fields: &
         None => String::new(),
     };
     let mut row = Vec::with_capacity(fields.len() + 2);
-    row.push(beside(depth(interval.from), depth(logged_from)));
-    row.push(beside(depth(interval.to), depth(logged_to)));
+    let from = beside(corrected, depth(interval.from), depth(logged_from));
+    row.push(if never_logged {
+        format!("{from} ({})", tr!("drill-hole-interval-not-logged"))
+    } else {
+        from
+    });
+    row.push(beside(corrected, depth(interval.to), depth(logged_to)));
     row.extend(
         fields
             .iter()
-            .map(|field| beside(value(interval.values.get(&field.key)), value(logged_values.get(&field.key)))),
+            .map(|field| beside(corrected && !never_logged, value(interval.values.get(&field.key)), value(logged_values.get(&field.key)))),
     );
     row
 }
@@ -243,6 +291,8 @@ pub(crate) struct BoreholeLog<'a> {
     well_log_style: WellLogStyle,
     /// Where to draw the dashed guide, see [`Self::guide_depth`].
     guide: Option<f64>,
+    /// See [`Self::corrections_locked`].
+    corrections_locked: bool,
 }
 
 /// The depth window a log keeps from frame to frame and hole to hole.
@@ -297,6 +347,7 @@ impl<'a> BoreholeLog<'a> {
             logged: None,
             well_log_style: WellLogStyle::default(),
             guide: None,
+            corrections_locked: false,
         }
     }
 
@@ -322,6 +373,13 @@ impl<'a> BoreholeLog<'a> {
     /// Span the index's geophysics depths while the hole is read.
     pub(crate) fn logged_depths(mut self, depths: Option<[f64; 2]>) -> Self {
         self.logged = depths;
+        self
+    }
+
+    /// Whether the strat column offers no correction menu, while one is
+    /// being made and the log may be drawing its preview.
+    pub(crate) fn corrections_locked(mut self, locked: bool) -> Self {
+        self.corrections_locked = locked;
         self
     }
 
@@ -352,6 +410,7 @@ impl<'a> BoreholeLog<'a> {
         let squeeze_id = self.id.with("squeeze");
         let menu_id = self.id.with("trace_menu");
         let seam_menu_id = self.id.with("seam_menu");
+        let gap_menu_id = self.id.with("gap_menu");
         let mut azimuth = ui.data(|data| data.get_temp::<f32>(azimuth_id)).unwrap_or(0.0);
         let mut squeeze = ui.data(|data| data.get_temp::<LogSqueeze>(squeeze_id)).unwrap_or_default();
         // Re-clamped rather than trusted: the panel keeps its id while the
@@ -416,23 +475,35 @@ impl<'a> BoreholeLog<'a> {
         }
 
         // A right-click over a seam in the strat column opens the seam's
-        // menu, over a trace column that column's own, anywhere else the
-        // squeeze menu. Which one is settled at the click and held while the
-        // menu stays open, with the style being edited.
+        // menu, over a stretch of it where nothing is logged the stretch's,
+        // over a trace column that column's own, anywhere else the squeeze
+        // menu. Which one is settled at the click and held while the menu
+        // stays open, with the style being edited.
         if handle.secondary_clicked() {
             let pointer = handle.interact_pointer_pos();
-            let seam = pointer
+            let strat_pointer = pointer
                 .zip(lanes.strat.zip(strat_field))
                 .filter(|(pointer, (strat, _))| strat.contains(*pointer))
-                .and_then(|(pointer, (_, field))| {
-                    self.seam_at(field, depth_at(plot, view, pointer.y)).map(|(interval, name)| SeamMenu {
+                .filter(|_| !self.corrections_locked)
+                .map(|(pointer, (_, field))| (field, depth_at(plot, view, pointer.y)));
+            let seam = strat_pointer.and_then(|(field, depth)| {
+                self.seam_at(field, depth).map(|(interval, name)| SeamMenu {
+                    field: field.key.clone(),
+                    name,
+                    interval,
+                    row: self.hole.intervals[interval].clone(),
+                })
+            });
+            let gap = strat_pointer.filter(|_| seam.is_none()).and_then(|(field, depth)| {
+                self.hole
+                    .unlogged_stretch(&field.key, depth, &self.dataset.dataset.derived_columns, self.dataset.dataset.end_of(self.hole))
+                    .map(|depths| InsertPick {
                         field: field.key.clone(),
-                        name,
-                        interval,
+                        depths: Some(depths),
                     })
-                });
+            });
             let menu = pointer
-                .filter(|_| seam.is_none())
+                .filter(|_| seam.is_none() && gap.is_none())
                 .and_then(|pointer| trace_column_at(pointer, plot, trace_lanes))
                 .map(|traces| TraceMenu {
                     column: traces.column,
@@ -442,12 +513,14 @@ impl<'a> BoreholeLog<'a> {
             ui.data_mut(|data| {
                 data.insert_temp(menu_id, menu);
                 data.insert_temp(seam_menu_id, seam);
+                data.insert_temp(gap_menu_id, gap);
             });
         }
         let mut output = LogOutput::default();
         let stored = ui.data(|data| data.get_temp::<Option<TraceMenu>>(menu_id)).flatten();
         let open = stored.and_then(|menu| column_traces(menu.column, density, gamma).map(|traces| (menu, traces)));
         let seam = ui.data(|data| data.get_temp::<Option<SeamMenu>>(seam_menu_id)).flatten();
+        let gap = ui.data(|data| data.get_temp::<Option<InsertPick>>(gap_menu_id)).flatten();
         let menu = if let Some(seam) = seam {
             context_menu_popup(&handle, seam.name.clone(), |ui| {
                 for (label, every_hole) in [(tr!("viewport-rename-seam-in-this-hole"), false), (tr!("viewport-rename-seam-in-every-hole"), true)] {
@@ -470,6 +543,18 @@ impl<'a> BoreholeLog<'a> {
                         });
                         ui.close();
                     }
+                }
+                if ContextMenuAction::new(tr!("viewport-insert-interval")).show(ui).clicked() {
+                    // Only while the clicked seam is still in the hole.
+                    output.insert = self.hole.intervals.get(seam.interval).map(|_| InsertPick {
+                        field: seam.field.clone(),
+                        depths: None,
+                    });
+                    ui.close();
+                }
+                if ContextMenuAction::new(tr!("viewport-delete-interval")).show(ui).clicked() {
+                    output.delete = Some((seam.field.clone(), seam.interval, seam.row.clone()));
+                    ui.close();
                 }
                 // The hole's names slide one run, all of them or from the
                 // clicked horizon; with no column there is nothing to slide
@@ -500,6 +585,14 @@ impl<'a> BoreholeLog<'a> {
                     }
                 }
                 context_menu_separator(ui);
+            });
+            None
+        } else if let Some(gap) = gap {
+            context_menu_popup(&handle, tr!("viewport-not-logged"), |ui| {
+                if ContextMenuAction::new(tr!("viewport-insert-interval")).show(ui).clicked() {
+                    output.insert = Some(gap.clone());
+                    ui.close();
+                }
             });
             None
         } else if let Some((mut menu, traces)) = open {
@@ -779,18 +872,19 @@ impl<'a> BoreholeLog<'a> {
     }
 
     /// The seam name the strat column shows at `depth`, exactly as the
-    /// interval holds it: the first interval down the hole covering the
-    /// depth, as [`Self::lithology_runs`] draws it.
+    /// interval holds it: the first interval down the hole holding a value
+    /// of the field and covering the depth, as [`Self::lithology_runs`]
+    /// draws it. `None` exactly where the column is blank.
     fn seam_at(&self, field: &crate::model::drill_hole::DrillField, depth: f64) -> Option<(usize, String)> {
         self.hole
             .intervals
             .iter()
             .enumerate()
-            .filter(|(_, interval)| interval.from <= depth && depth < interval.to)
+            .filter(|(_, interval)| holds_value(interval, &field.key) && interval.from <= depth && depth < interval.to)
             .min_by(|a, b| a.1.from.total_cmp(&b.1.from))
-            .and_then(|(index, interval)| match interval.values.get(&field.key) {
-                Some(crate::model::drill_hole::DrillValue::Category(name)) if !name.trim().is_empty() => Some((index, name.clone())),
-                _ => None,
+            .map(|(index, interval)| match interval.values.get(&field.key) {
+                Some(crate::model::drill_hole::DrillValue::Category(name)) => (index, name.clone()),
+                value => (index, value_name(value)),
             })
     }
 
@@ -1400,6 +1494,21 @@ pub(crate) struct LogOutput {
     pub(crate) shift: Option<NameShift>,
     /// A boundary the reader chose to move.
     pub(crate) boundary: Option<BoundaryPick>,
+    /// An interval the reader chose to insert.
+    pub(crate) insert: Option<InsertPick>,
+    /// An interval the reader chose to delete: the field read, the interval
+    /// clicked by index in the hole, and the row as it stood at the click.
+    pub(crate) delete: Option<(String, usize, crate::model::drill_hole::DrillInterval)>,
+}
+
+/// An interval picked to insert from the strat column's menu: the field
+/// read, and the depths the dialog opens with: those of the stretch nothing
+/// is logged in, or none from a seam, whose own depths would only be
+/// refused, so the geologist types them.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct InsertPick {
+    pub(crate) field: String,
+    pub(crate) depths: Option<(f64, f64)>,
 }
 
 /// A boundary picked from the strat column's menu: the field read, the
@@ -1439,6 +1548,9 @@ struct SeamMenu {
     name: String,
     /// The interval clicked, by index in the hole.
     interval: usize,
+    /// The row clicked, as it stood at the click, for a deletion to check
+    /// it is still the one there.
+    row: crate::model::drill_hole::DrillInterval,
 }
 
 /// A trace column's right-click menu while it is open: the column, the
@@ -1623,7 +1735,13 @@ fn draw_azimuth_compass(ui: &egui::Ui, painter: &egui::Painter, rect: egui::Rect
 pub(crate) fn strat_runs(hole: &crate::model::drill_hole::DrillHole, field: &crate::model::drill_hole::DrillField, top: f64, bottom: f64) -> Vec<(f64, f64, Option<String>)> {
     let mut runs: Vec<(f64, f64, Option<String>)> = Vec::new();
     let mut cursor = top;
-    let mut sorted = hole.intervals.iter().filter(|interval| interval.to > top && interval.from < bottom).collect::<Vec<_>>();
+    // Only rows holding the field: a row of another table drawn here would
+    // blank a stretch the field does log.
+    let mut sorted = hole
+        .intervals
+        .iter()
+        .filter(|interval| holds_value(interval, &field.key) && interval.to > top && interval.from < bottom)
+        .collect::<Vec<_>>();
     sorted.sort_by(|a, b| a.from.total_cmp(&b.from));
 
     for interval in sorted {
@@ -1631,11 +1749,7 @@ pub(crate) fn strat_runs(hole: &crate::model::drill_hole::DrillHole, field: &cra
         if to <= from {
             continue;
         }
-        let value = match interval.values.get(&field.key) {
-            Some(crate::model::drill_hole::DrillValue::Category(value)) if !value.trim().is_empty() => Some(value.trim().to_owned()),
-            Some(crate::model::drill_hole::DrillValue::Numeric(number)) => Some(format!("{number}")),
-            _ => None,
-        };
+        let value = Some(value_name(interval.values.get(&field.key)));
         if from > cursor + 1.0e-9 {
             push_run(&mut runs, cursor, from, None);
         }

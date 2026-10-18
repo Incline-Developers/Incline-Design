@@ -497,6 +497,15 @@ fn transform_item(item: &mut OpenItem, transform: &SurveyTransform, target_syste
                         }
                     }
                 }
+                // A deleted row goes back as it was, so it moves with the rest.
+                if let Some(removed) = &mut record.removed {
+                    removed.from *= transform.length_scale();
+                    removed.to *= transform.length_scale();
+                    if let Some(logged) = &mut removed.logged {
+                        logged.from *= transform.length_scale();
+                        logged.to *= transform.length_scale();
+                    }
+                }
             }
             // Rebuilt rather than reconstructed through `DrillHoleDataset::new`,
             // which sorts the holes: the ties and initiations beside them name

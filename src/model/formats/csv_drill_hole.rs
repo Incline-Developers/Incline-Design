@@ -1775,8 +1775,9 @@ pub(crate) const WORKSHEET_HEADER: [&str; 14] = [
 ];
 
 /// Columns of the corrections file: the worksheet line a record falls on,
-/// then every field of the record.
-const CORRECTIONS_HEADER: [&str; 15] = [
+/// then every field of the record, VALUES last: the row an insertion put
+/// in, or the row a deletion took out as it was logged, as a JSON object.
+const CORRECTIONS_HEADER: [&str; 16] = [
     "LINE",
     "HOLEID",
     "LOGGED_FROM",
@@ -1792,6 +1793,7 @@ const CORRECTIONS_HEADER: [&str; 15] = [
     "APPROVER",
     "DECISION",
     "DECIDED",
+    "VALUES",
 ];
 
 /// Hole ids a worksheet line names before it only counts the rest.
@@ -1809,6 +1811,7 @@ fn correction_kind_text(kind: CorrectionKind) -> &'static str {
         CorrectionKind::Value => "value",
         CorrectionKind::Boundary => "boundary",
         CorrectionKind::Insertion => "insertion",
+        CorrectionKind::Deletion => "deletion",
     }
 }
 
@@ -1832,6 +1835,41 @@ fn drill_value_text(value: Option<&DrillValue>) -> String {
     }
 }
 
+/// The row a record's VALUES column holds: an insertion's row as it put it
+/// in, a deletion's as the site logged it, its `derived` columns left out.
+fn record_values(record: &Correction, derived: &std::collections::BTreeSet<String>) -> Option<std::collections::BTreeMap<String, DrillValue>> {
+    if let Some(row) = &record.row {
+        return Some(row.clone());
+    }
+    let (_, _, logged) = record.removed.as_ref()?.logged();
+    let kept: std::collections::BTreeMap<String, DrillValue> = logged
+        .iter()
+        .filter(|(key, _)| !derived.contains(*key))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    (!kept.is_empty()).then_some(kept)
+}
+
+/// A record's row as a compact JSON object of its values, each named by
+/// its field's label as the interval table's header writes it, codes as
+/// strings and numbers as numbers, so any text a code holds stays readable.
+fn row_json(row: &std::collections::BTreeMap<String, DrillValue>, fields: &[crate::model::drill_hole::DrillField]) -> String {
+    let label = |key: &String| fields.iter().find(|field| &field.key == key).map_or_else(|| key.clone(), |field| field.label.clone());
+    let values = row
+        .iter()
+        .map(|(key, value)| {
+            let value = match value {
+                DrillValue::Category(code) => serde_json::Value::String(code.clone()),
+                // A number JSON cannot hold, NaN or infinite, as its text, as the
+                // other cells write it.
+                DrillValue::Numeric(number) => serde_json::Number::from_f64(*number).map_or_else(|| serde_json::Value::String(number.to_string()), serde_json::Value::Number),
+            };
+            (label(key), value)
+        })
+        .collect::<serde_json::Map<_, _>>();
+    serde_json::Value::Object(values).to_string()
+}
+
 /// Distinct entries of `values` in the order first met.
 fn first_seen<'a>(values: impl IntoIterator<Item = &'a str>) -> Vec<&'a str> {
     let mut seen = HashSet::new();
@@ -1853,11 +1891,18 @@ pub(crate) fn corrections_hole_count(corrections: &[Correction]) -> usize {
 
 /// The records of each worksheet line, by index into `corrections`. Records
 /// sharing kind, field, before, after and reason make one line, in the order
-/// each group was first proposed.
+/// each group was first proposed. Only value records group; a boundary, an
+/// insertion or a deletion is always a line of its own.
 fn worksheet_groups(corrections: &[Correction]) -> Vec<Vec<usize>> {
     let mut groups: Vec<Vec<usize>> = Vec::new();
     let mut index: HashMap<_, usize> = HashMap::new();
     for (position, record) in corrections.iter().enumerate() {
+        // A boundary, an insertion or a deletion is about depths in one hole:
+        // always a line of its own, with them.
+        if record.kind != CorrectionKind::Value {
+            groups.push(vec![position]);
+            continue;
+        }
         let key = (
             correction_kind_text(record.kind),
             record.field.as_str(),
@@ -1969,6 +2014,9 @@ pub(crate) fn write_worksheet(dataset: &DrillHoleDataset) -> CsvWorksheet {
             record.approver.clone().unwrap_or_default(),
             record.decision.clone().unwrap_or_default(),
             record.decided.clone().unwrap_or_default(),
+            record_values(record, &dataset.derived_columns)
+                .map(|row| row_json(&row, &dataset.fields))
+                .unwrap_or_default(),
         ]));
     }
     CsvWorksheet { worksheet, corrections: records }

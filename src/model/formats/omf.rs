@@ -3273,12 +3273,22 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             return Ok(None);
         }
         let mut dataset = DrillHoleDataset::new(holes);
-        if let Some(corrections) = element
-            .metadata
-            .get(META_CORRECTIONS)
-            .and_then(|value| Vec::<crate::model::drill_hole::Correction>::deserialize(value).ok())
-        {
-            dataset.corrections = corrections;
+        // Read record by record: one that cannot be read is left out and
+        // counted, never the whole list with it.
+        match element.metadata.get(META_CORRECTIONS).map(Value::as_array) {
+            Some(Some(stored)) => {
+                let read: Vec<_> = stored.iter().map(crate::model::drill_hole::Correction::deserialize).collect();
+                let dropped = read.iter().filter(|record| record.is_err()).count();
+                dataset.corrections = read.into_iter().filter_map(Result::ok).collect();
+                if dropped > 0 {
+                    self.bundle
+                        .warnings
+                        .push(crate::i18n::tr!("omf-correction-records-dropped", count = dropped.to_string(), name = element.name.clone()));
+                }
+            }
+            // Corrections that are not a list cannot be counted: all are lost.
+            Some(None) => self.bundle.warnings.push(crate::i18n::tr!("omf-corrections-unreadable", name = element.name.clone())),
+            None => {}
         }
         // Only columns the file still holds: a name with no column behind it
         // would let a later import of that name be written over.

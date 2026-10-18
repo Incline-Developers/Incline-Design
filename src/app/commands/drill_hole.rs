@@ -7,8 +7,8 @@ use crate::{
         Command, ItemRef, ItemStyle, MemberKind, OpenItem, SceneEntityId,
         drill_hole::{
             BoundaryMove, BoundarySide, CorrectionNote, DrillColorPreset, DrillColorState, DrillColorStop, DrillFieldKind, DrillHole, DrillHoleDataset, DrillHoleId, DrillHoleRef,
-            DrillHoleSource, DrillHoleStyle, DrillValue, LoadedDrillHoleDataset, MAX_DRILL_COLOR_STOPS, OpenDrillHoleDataset, OrientationSource, RenameScope, ShiftDirection,
-            TraceStation, WIDE_CATEGORY_FIELD_HINT, clamp_disc_diameter, clamp_string_pixel_width,
+            DrillHoleSource, DrillHoleStyle, DrillValue, IntervalDelete, IntervalInsert, LoadedDrillHoleDataset, MAX_DRILL_COLOR_STOPS, OpenDrillHoleDataset, OrientationSource,
+            RenameScope, ShiftDirection, TraceStation, WIDE_CATEGORY_FIELD_HINT, clamp_disc_diameter, clamp_string_pixel_width, name_is_code_message,
         },
         formats::{csv_drill_hole, csv_geophysics::StreamControl},
     },
@@ -497,8 +497,17 @@ impl<'a> App<'a> {
             return;
         };
         if let Some(section) = crate::model::drill_hole::section_named_apart(&dataset.color.working_sections, &field, &to) {
-            let reason = crate::model::drill_hole::SectionProblem::NameIsCode.message();
-            userspace_warn!("{}", tr!("cmd-drill-hole-name-reason", name = section.name.clone(), reason = reason));
+            let message = name_is_code_message(section, &to);
+            match scope {
+                RenameScope::Horizon { hole, .. } => {
+                    let Some(dhid) = dataset.dataset.holes.get(hole).map(|drilled| drilled.dhid.clone()) else {
+                        userspace_warn!("{}", message);
+                        return;
+                    };
+                    userspace_warn!("{}", tr!("cmd-drill-hole-name-reason", name = dhid, reason = message));
+                }
+                RenameScope::Set => userspace_warn!("{}", message),
+            }
             return;
         }
         let note = CorrectionNote::now(reason);
@@ -574,6 +583,75 @@ impl<'a> App<'a> {
         );
     }
 
+    /// Insert the interval `edit` asks for, proposing its insertion and the
+    /// trims and split it makes as a single undo step. One the depth rules
+    /// refuse, whose hole is no longer where the dialog found it, or with a
+    /// code named like a working section that does not hold it, as a rename
+    /// is guarded, is reported and changes nothing.
+    pub(crate) fn insert_interval(&mut self, id: DrillHoleId, edit: IntervalInsert, reason: String) {
+        let Some(dataset) = self.drill_holes.iter().find(|item| item.id == id) else {
+            return;
+        };
+        if let Some((section, code)) = crate::model::drill_hole::insertion_named_apart(&dataset.color.working_sections, &edit) {
+            userspace_warn!(
+                "{}",
+                tr!("cmd-drill-hole-name-reason", name = edit.dhid.clone(), reason = name_is_code_message(section, code))
+            );
+            return;
+        }
+        let note = CorrectionNote::now(reason);
+        let (targets, records): (Vec<_>, Vec<_>) = match dataset.dataset.insertion_corrections(&edit, &note) {
+            Ok(plan) => plan.corrections.into_iter().unzip(),
+            Err(problem) => {
+                userspace_warn!("{}", tr!("cmd-drill-hole-insertion-refused", hole = edit.dhid, reason = problem.message()));
+                return;
+            }
+        };
+        let count = records.len();
+        self.execute_edit(Command::CorrectIntervals { dataset: id, targets, records });
+        userspace_log!(
+            "{}",
+            tr!(
+                "cmd-drill-hole-interval-inserted",
+                code = edit.code.trim().to_owned(),
+                from = format!("{:.2}", edit.from),
+                to = format!("{:.2}", edit.to),
+                hole = edit.dhid,
+                count = count.to_string()
+            )
+        );
+    }
+
+    /// Take interval `interval` of hole `hole` out of the interpreted data,
+    /// every field it holds with it, proposing one deletion correction as a
+    /// single undo step. One whose hole or row is no longer what the dialog
+    /// picked is reported and changes nothing: no record, no undo step.
+    pub(crate) fn delete_interval(&mut self, id: DrillHoleId, edit: &IntervalDelete, reason: String) {
+        let Some(dataset) = self.drill_holes.iter().find(|item| item.id == id) else {
+            return;
+        };
+        let note = CorrectionNote::now(reason);
+        let Some((target, record)) = dataset.dataset.deletion_corrections(edit.hole, &edit.dhid, edit.interval, &edit.field, &edit.row, &note) else {
+            userspace_warn!("{}", tr!("cmd-drill-hole-deletion-hole-changed", hole = edit.dhid.clone()));
+            return;
+        };
+        let (from, to) = record.removed.as_ref().map_or((record.logged_from, record.logged_to), |row| (row.from, row.to));
+        self.execute_edit(Command::CorrectIntervals {
+            dataset: id,
+            targets: vec![target],
+            records: vec![record],
+        });
+        userspace_log!(
+            "{}",
+            tr!(
+                "cmd-drill-hole-interval-deleted",
+                from = format!("{from:.2}"),
+                to = format!("{to:.2}"),
+                hole = edit.dhid.clone()
+            )
+        );
+    }
+
     /// Replace one field's strat column as one undo step, beside the working
     /// sections it serves. Blanks, UNK and duplicates are left out; an
     /// unchanged column is no step.
@@ -612,12 +690,11 @@ impl<'a> App<'a> {
         let note = CorrectionNote::now(reason);
         let shift = dataset.dataset.column_shift(hole, &field, column, direction, from, &note);
         let renames = shift.renames();
-        if let Some(section) = renames
+        if let Some((section, to)) = renames
             .iter()
-            .find_map(|(_, to)| crate::model::drill_hole::section_named_apart(&dataset.color.working_sections, &field, to))
+            .find_map(|(_, to)| crate::model::drill_hole::section_named_apart(&dataset.color.working_sections, &field, to).map(|section| (section, to)))
         {
-            let reason = crate::model::drill_hole::SectionProblem::NameIsCode.message();
-            userspace_warn!("{}", tr!("cmd-drill-hole-name-reason", name = section.name.clone(), reason = reason));
+            userspace_warn!("{}", tr!("cmd-drill-hole-name-reason", name = dhid, reason = name_is_code_message(section, to)));
             return;
         }
         if shift.corrections.is_empty() {

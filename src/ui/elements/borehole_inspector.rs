@@ -11,8 +11,8 @@ use crate::{
     model::{
         SceneEntityId,
         drill_hole::{
-            BoundaryMove, BoundarySide, CorrectionNote, DrillField, DrillFieldKind, DrillHole, DrillHoleId, DrillHoleRef, DrillValue, OpenDrillHoleDataset, RenameScope,
-            UNKNOWN_NAME, WorkingSection, section_color_key,
+            BoundaryMove, BoundarySide, CorrectionNote, DrillField, DrillFieldKind, DrillHole, DrillHoleId, DrillHoleRef, OpenDrillHoleDataset, RenameScope, UNKNOWN_NAME,
+            WorkingSection, field_codes, offered_codes, section_color_key,
         },
         geophysics::{HoleView, LinkState},
         strat_order::{FlagKind, FlagLevel, HoleFlag, is_repeat_code},
@@ -20,10 +20,13 @@ use crate::{
     ui::{
         EditorState,
         elements::properties::read_only_row,
-        state::{BoreholeInspectorTab, BoundaryMoveDraft, NameShiftDraft, SeamRenameDraft, StratCheckReport, UiCommand},
+        state::{
+            BoreholeInspectorTab, BoundaryMoveDraft, DepthField, InsertCodeField, InsertSiblingField, IntervalDeleteDraft, IntervalInsertDraft, NameShiftDraft, SeamRenameDraft,
+            StratCheckReport, UiCommand,
+        },
         themed_icon, unthemed_icon,
         widgets::{
-            borehole_log::{BoundaryPick, DrillHoleProperties, NameShift, SeamRename, strat_runs},
+            borehole_log::{BoundaryPick, DrillHoleProperties, InsertPick, NameShift, SeamRename, strat_runs},
             collapsible_section::CollapsibleSection,
             menu::{self, MenuButton, MenuField, MenuFieldCombo},
             toolbar::GROUP_CORNER_RADIUS,
@@ -123,11 +126,12 @@ fn draw_body(
     match editor.borehole_inspector_tab {
         BoreholeInspectorTab::Data => {
             // Columns come from the dataset, so every hole shows the same.
-            let properties = DrillHoleProperties::new(("borehole_inspector", dataset.id, hole_index), hole, &dataset.dataset.fields);
+            let properties = DrillHoleProperties::new(("borehole_inspector", dataset.id, hole_index), hole, &dataset.dataset.fields)
+                .deleted_rows(dataset.dataset.deleted_logged_rows(hole_index));
             CollapsibleSection::new(egui::Id::unique("borehole_inspector_summary"), tr!("borehole-inspector-summary"))
                 .default_open(true)
                 .show(ui, |ui| ui.push_id((dataset.id, hole_index), |ui| properties.show_summary(ui)));
-            if !hole.intervals.is_empty() {
+            if properties.has_rows() {
                 ui.add_space(4.0);
                 CollapsibleSection::new(egui::Id::unique("borehole_inspector_intervals"), tr!("viewport-interval-data"))
                     .default_open(true)
@@ -169,7 +173,8 @@ fn draw_body(
             // The log's wheel zooms rather than scrolling an enclosing area,
             // so it takes the rest of the panel instead of sitting in one.
             // While a roof or floor of this hole is being moved, the log
-            // draws the move at the depth typed, and a guide across it there.
+            // draws the move at the depth typed, and a guide across it there;
+            // while any correction dialog is open, it offers no other.
             let moving = editor
                 .boundary_move_dialog
                 .as_ref()
@@ -183,6 +188,7 @@ fn draw_body(
                 .logged_depths(logged)
                 .well_log_style(editor.well_log_style)
                 .guide_depth(guide)
+                .corrections_locked(editor.correction_dialog_open())
                 .show(ui);
             if let Some(style) = output.saved {
                 commands.push(UiCommand::SetWellLogStyle(style));
@@ -195,6 +201,24 @@ fn draw_body(
             }
             if let Some(pick) = output.boundary {
                 editor.boundary_move_dialog = boundary_move_draft(dataset, hole_index, &pick);
+            }
+            if let Some(pick) = output.insert {
+                editor.interval_insert_dialog = interval_insert_draft(dataset, hole_index, pick);
+            }
+            // Built from the row as it stood at the right click, which the
+            // dialog then checks is still the one there.
+            if let Some((field, interval, row)) = output.delete {
+                editor.interval_delete_dialog = Some(IntervalDeleteDraft {
+                    dataset: dataset.id,
+                    revision: dataset.state.revision(),
+                    hole: hole_index,
+                    dhid: hole.dhid.clone(),
+                    interval,
+                    description: crate::ui::dialogs::drill_hole::interval_description(&row, &field),
+                    row,
+                    field,
+                    reason: String::new(),
+                });
             }
         }
         BoreholeInspectorTab::Column => {
@@ -977,6 +1001,7 @@ fn name_shift_draft(dataset: &OpenDrillHoleDataset, hole_index: usize, shift: Na
         .column_shift(hole_index, &shift.field, column, shift.direction, shift.from, &CorrectionNote::default());
     NameShiftDraft {
         dataset: dataset.id,
+        revision: dataset.state.revision(),
         hole: hole_index,
         dhid: dataset.dataset.holes.get(hole_index).map(|hole| hole.dhid.clone()).unwrap_or_default(),
         field: shift.field,
@@ -999,15 +1024,7 @@ fn boundary_move_draft(dataset: &OpenDrillHoleDataset, hole_index: usize, pick: 
         BoundarySide::Roof => (data.interval_above(hole_index, pick.interval), Some(pick.interval), clicked.from),
         BoundarySide::Floor => (Some(pick.interval), data.interval_below(hole_index, pick.interval), clicked.to),
     };
-    // The strat field is categorical, so a name is all it can hold.
-    let describe = |index: usize| {
-        let shown = &hole.intervals[index];
-        let (from, to) = (format!("{:.2}", shown.from), format!("{:.2}", shown.to));
-        match shown.values.get(&pick.field) {
-            Some(DrillValue::Category(name)) if !name.trim().is_empty() => tr!("drill-hole-move-boundary-interval", from = from, to = to, name = name.trim().to_owned()),
-            _ => tr!("drill-hole-move-boundary-interval-unnamed", from = from, to = to),
-        }
-    };
+    let describe = |index: usize| crate::ui::dialogs::drill_hole::interval_description(&hole.intervals[index], &pick.field);
     Some(BoundaryMoveDraft {
         dataset: dataset.id,
         revision: dataset.state.revision(),
@@ -1025,6 +1042,45 @@ fn boundary_move_draft(dataset: &OpenDrillHoleDataset, hole_index: usize, pick: 
         preview: None,
         previewed: None,
         reason: String::new(),
+    })
+}
+
+/// The insert interval dialog's opening state for an interval picked in the
+/// log: the field picked and every other code field of its table, each with
+/// its codes to choose from, all blank until typed or, for the others, filled
+/// from an interval the insertion splits.
+fn interval_insert_draft(dataset: &OpenDrillHoleDataset, hole_index: usize, pick: InsertPick) -> Option<IntervalInsertDraft> {
+    let hole = dataset.dataset.holes.get(hole_index)?;
+    let data = &dataset.dataset;
+    let code_field = |key: &str, label: &str| InsertCodeField {
+        key: key.to_owned(),
+        label: label.to_owned(),
+        codes: offered_codes(dataset.color.strat_column(key), field_codes(&data.fields, key)),
+        value: String::new(),
+    };
+    let label = data
+        .fields
+        .iter()
+        .find(|field| field.key == pick.field)
+        .map_or(pick.field.as_str(), |field| field.label.as_str());
+    Some(IntervalInsertDraft {
+        dataset: dataset.id,
+        revision: dataset.state.revision(),
+        hole: hole_index,
+        dhid: hole.dhid.clone(),
+        from: pick.depths.map_or_else(DepthField::default, |(from, _)| DepthField::prefilled(from)),
+        to: pick.depths.map_or_else(DepthField::default, |(_, to)| DepthField::prefilled(to)),
+        picked: code_field(&pick.field, label),
+        siblings: data
+            .table_fields(hole_index, &pick.field)
+            .into_iter()
+            .map(|field| InsertSiblingField {
+                field: code_field(&field.key, &field.label),
+                follows_split: true,
+            })
+            .collect(),
+        reason: String::new(),
+        out_of_sequence: None,
     })
 }
 
@@ -1052,6 +1108,7 @@ fn seam_rename_draft(dataset: &OpenDrillHoleDataset, hole_index: usize, rename: 
     };
     SeamRenameDraft {
         dataset: dataset.id,
+        revision: dataset.state.revision(),
         scope,
         field: rename.field,
         to: rename.name.clone(),

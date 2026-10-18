@@ -177,6 +177,8 @@ impl<'a> App<'a> {
                 | UiCommand::OpenCreateOreTriangulation
                 | UiCommand::RenameSeam { .. }
                 | UiCommand::MoveBoundary { .. }
+                | UiCommand::InsertInterval { .. }
+                | UiCommand::DeleteInterval { .. }
                 | UiCommand::CleanStrings
                 | UiCommand::CleanString(_)
                 | UiCommand::JoinAllAtHalfway
@@ -840,6 +842,14 @@ impl<'a> App<'a> {
             }
             UiCommand::MoveBoundary { dataset, edit, reason } => {
                 self.move_boundary(dataset, edit, reason);
+                Ok(())
+            }
+            UiCommand::InsertInterval { dataset, edit, reason } => {
+                self.insert_interval(dataset, edit, reason);
+                Ok(())
+            }
+            UiCommand::DeleteInterval { dataset, edit, reason } => {
+                self.delete_interval(dataset, &edit, reason);
                 Ok(())
             }
             UiCommand::SetStratColumn { id, field, codes } => {

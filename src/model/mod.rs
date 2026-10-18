@@ -2369,13 +2369,7 @@ impl Command {
                     .fold(0usize, usize::saturating_add),
                 Command::SetInitiation { .. } => 0,
                 Command::CorrectIntervals { targets, records, .. } => {
-                    targets.len() * size_of::<drill_hole::CorrectionTarget>()
-                        + records
-                            .iter()
-                            .map(|record| {
-                                size_of::<drill_hole::Correction>() + record.hole.len() + record.field.len() + record.author.len() + record.date.len() + record.reason.len()
-                            })
-                            .fold(0usize, usize::saturating_add)
+                    targets.len() * size_of::<drill_hole::CorrectionTarget>() + records.iter().map(drill_hole::Correction::estimated_bytes).fold(0usize, usize::saturating_add)
                 }
                 Command::WriteIntervalColumn { column, before, after, .. } => {
                     column.len() + (before.len() + after.len()) * size_of::<(usize, usize, Option<drill_hole::DrillValue>)>()
