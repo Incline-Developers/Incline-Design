@@ -1,0 +1,13 @@
+[package]
+name = "solver"
+version = "0.1.0"
+edition = "2024"
+description = "A Rust port of the HiGHS linear optimisation solver"
+license = "MIT"
+repository = "https://github.com/Incline-Developers/Incline-Design"
+
+[dependencies]
+web-time = "1.1.0"
+
+[dev-dependencies]
+highs-sys = "1.15.0"

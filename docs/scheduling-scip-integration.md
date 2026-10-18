@@ -4,8 +4,9 @@ Run Period and Run All Periods use one path: owned project capture → hourly
 dispatch → independent physical/grade/value replay → immutable calculated
 schedule. Gantt, Calendar and animation consume that same result. Every build
 calculates that first schedule, the browser included: the dispatch's
-per-hour linear programs go to microlp, a pure-Rust solver, or to HiGHS in a
-native build with the `highs` feature (`src/model/schedule/optimisation/blended/lp.rs`).
+per-hour linear programs go to the `solver` crate, HiGHS's LP solver ported to Rust
+(`crates/solver`, called from `src/model/schedule/optimisation/blended/lp.rs`).
+No build links HiGHS itself.
 
 Improve, the whole-horizon SCIP solve this document describes, exists only in
 a native build with the `scip` feature (`scip-source` or `scip-system`). Without it the Improve button is not shown. With it, Improve
@@ -628,7 +629,7 @@ Fixing both brought it to 5,700. A started solve can stop at its gap target
 required `Optimal` now accepts either, and still requires an optimal
 termination.
 
-## Relaxation bound from HiGHS
+## Relaxation bound from an interior-point method
 
 SCIP's own bound on a long horizon arrives late, because its first LP is
 slow: SoPlex has only simplex methods. SCIP cannot be pointed at HiGHS's
@@ -637,7 +638,7 @@ answers a barrier request with dual simplex, so building SCIP against HiGHS
 would swap one simplex for another and change packaging on every platform.
 
 Instead, a run solved day by day also solves the model's linear relaxation
-with HiGHS's interior-point method, on its own thread, from the start of the
+with the `solver` crate's port of HiGHS's interior-point method, on its own thread, from the start of the
 run (`blended/relaxation.rs`, `RelaxationJob` in `app/scip_blend.rs`). The
 relaxation is the model `formulate` builds with three changes. Each one only
 enlarges the feasible set, so the optimum is an upper bound on every schedule
@@ -650,13 +651,13 @@ the model allows:
   reclaim's grade is held to the pile's grade ceilings, but not to its blend.
 
 The last change makes the bound weaker on models whose value depends on the
-blend, not wrong. HiGHS's optimum is loosened by `max(1e-4, 1e-6 x |value|)`
+blend, not wrong. The relaxation's optimum is loosened by `max(1e-4, 1e-6 x |value|)`
 to cover its solve tolerances before it is used. A replayed schedule worth
 more than the loosened bound would mean the relaxation is wrong. The bound is
 then logged and dropped, and the schedule, which was replayed on its own, is
 kept. The run never waits for the relaxation: it is polled when the
 day-by-day schedule is ready and when the run ends. Cancelling the run, or
-the run finishing, stops it at HiGHS's next interior-point iteration.
+the run finishing, stops it at the next interior-point iteration.
 
 The bound is used in three places:
 
@@ -814,7 +815,7 @@ same input always gives the same schedule.
 What a run does now:
 1. The hourly dispatch schedule is built and replayed against the whole
    horizon, then shown at once.
-2. The HiGHS relaxation bound starts beside it.
+2. The relaxation bound starts beside it.
 3. The dispatch schedule is completed into a seed and the whole-horizon SCIP
    solve starts from it.
 4. The watcher stops SCIP once the relaxation bound proves the schedule.
@@ -850,7 +851,7 @@ look-ahead fallback.
 
 The dispatcher now schedules chunked piles too, so every input gets the
 hourly dispatch schedule first. SCIP's day-by-day windows only run when the
-dispatcher fails: HiGHS failing on an interval, or the replay refusing its
+dispatcher fails: an interval's LP failing, or the replay refusing its
 schedule.
 
 The chunk rules are the formulation's:
@@ -945,8 +946,9 @@ It is built from two models at two resolutions:
   finished, which the next block waits on, and each material's split between
   its destinations. Crusher days, room, fleet hours and grade targets are
   linear in those tonnes. It is about a three-hundredth of the hourly
-  model's size and is solved by HiGHS, which on it found plans and bounds
-  where SCIP did not.
+  model's size and is solved by the `solver` crate's port of HiGHS's MIP solver
+  (`solver::solve_mip`, matching HiGHS 1.15.0 with one thread node for node);
+  HiGHS on it found plans and bounds where SCIP did not.
 - **The hourly dispatch following the plan's targets**
   (`blended::plan::PlanTargets`, `greedy::dispatch_following`): per loader,
   destination and day, paced through the day, as objective weights only. The
@@ -1150,7 +1152,7 @@ Limitations:
 
 ## Solver process
 
-SCIP, SoPlex, Ipopt, MUMPS and HiGHS are native code. A fault in one of them,
+SCIP, SoPlex, Ipopt and MUMPS are native code. A fault in one of them,
 such as the METIS heap corruption above, is not a panic the job queue can
 catch. Inside the app it took the whole app down, unsaved edits included. So
 a build with the `scip` feature solves every run in a second copy of the app's

@@ -43,11 +43,11 @@ jobs:
             target: x86_64-unknown-linux-gnu
             cargo-targets: --all-targets
 
-          # The native solvers are off by default; keep their code building.
+          # The native solver is off by default; keep its code building.
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             cargo-targets: --all-targets
-            features: scip-source,highs
+            features: scip-source
 
           - os: windows-latest
             target: x86_64-pc-windows-msvc

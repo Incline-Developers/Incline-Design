@@ -2,7 +2,7 @@ cargo-features = ["profile-rustflags"]
 
 [workspace]
 resolver = "3"
-members = [".", "crates/mineflow", "crates/omf"]
+members = [".", "crates/mineflow", "crates/omf", "crates/solver"]
 default-members = ["."]
 
 [package]
@@ -10,7 +10,7 @@ name = "incline-design"
 version = "0.4.0-dev"
 edition = "2024"
 description = "Free Open Source Mine Design"
-repository = "https://github.com/Incline-Developers/Incline"
+repository = "https://github.com/Incline-Developers/Incline-Design"
 license = "MIT"
 keywords = ["mining", "cad", "design"]
 categories = ["graphics", "science"]
@@ -25,17 +25,14 @@ winresource = "0.1.34"
 [features]
 # The default build is pure Rust on every platform, the browser included:
 # the first schedule's hourly dispatch solves its linear programs with
-# microlp. Native builds can add:
+# the solver crate (crates/solver, HiGHS's LP and MIP solvers ported to Rust). Native
+# builds can add:
 #
-#   highs         solve the dispatch with HiGHS instead (built from source by
-#                 highs-sys, so it needs cmake and a C++ compiler).
 #   scip          Improve: the whole-horizon SCIP solve, the day-by-day
-#                 fallback and the HiGHS relaxation bound, run in a solver
-#                 process. It turns `highs` on too: the build links HiGHS
-#                 for the bound anyway, and Improve's search runs the
-#                 dispatch over and over, which HiGHS solves in about half
-#                 microlp's time. Enable it through one of the two linking
-#                 features:
+#                 fallback and the search's daily plans, run in a solver
+#                 process. The plans, their relaxations, the bounds and the
+#                 dispatch are the solver crate's. Enable it through one of the two
+#                 linking features:
 #
 #   scip-source   build SCIP 10.0.2 and SoPlex 8.0.2 from source (cmake, a
 #                 C++ compiler and libclang) and link them statically, without
@@ -52,8 +49,7 @@ winresource = "0.1.34"
 default = ["video-av1"]
 video-av1 = ["dep:rav1e"]
 video-asm = ["video-av1", "rav1e/asm"]
-highs = ["dep:highs", "dep:highs-sys"]
-scip = ["highs", "dep:russcip", "dep:scip-sys"]
+scip = ["dep:russcip", "dep:scip-sys"]
 scip-source = ["scip", "russcip/from-source"]
 scip-system = ["scip", "russcip/bindgen"]
 
@@ -75,8 +71,8 @@ i18n-embed-fl = "0.10.1"
 laz = { version = "0.13.0", features = ["parallel"] }
 log = "0.4.34"
 lyon = "1.0.19"
-microlp = "0.6.0"
 mineflow = { path = "crates/mineflow" }
+solver = { path = "crates/solver" }
 omf = { path = "crates/omf", default-features = false, features = ["image", "parquet", "zlib-rs"] }
 png = "0.18.1"
 # `crs-definitions` feature omitted: only `from_proj_string` is used, and enabling it
@@ -106,8 +102,6 @@ dirs = "7.0.0"
 egui_system_font_provider = "0.37.0"
 egui-winit = "0.37.0"
 gif = "0.14.2"
-highs = { version = "2.4.0", optional = true }
-highs-sys = { version = "1.15.0", optional = true }
 russcip = { version = "=0.10.0", default-features = false, optional = true }
 # Not called directly: declared so its `links = "scip"` metadata reaches
 # build.rs, which puts SCIP's library directory on the binary's runtime path.

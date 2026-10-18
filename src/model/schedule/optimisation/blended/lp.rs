@@ -64,10 +64,37 @@ impl LinearProgram {
     /// The column values at a maximum of the objective, or why there are none.
     pub(crate) fn maximise(&self) -> Result<Vec<f64>, String> {
         let tidy = self.tidied()?;
-        #[cfg(feature = "highs")]
-        return tidy.maximise_highs();
-        #[cfg(not(feature = "highs"))]
-        return tidy.maximise_microlp();
+        #[cfg(not(target_arch = "wasm32"))]
+        tidy.dump();
+        tidy.maximise_solver()
+    }
+
+    /// This program as a [`solver::Problem`].
+    fn to_solver(&self) -> solver::Problem {
+        let mut problem = solver::Problem::new(solver::Sense::Maximise);
+        for (&weight, &(lower, upper)) in self.objective.iter().zip(&self.column_bounds) {
+            problem.add_col(weight, lower, upper);
+        }
+        for row in &self.rows {
+            problem.add_row(row.lower, row.upper, row.terms.iter().map(|&(col, coefficient)| (col.0, coefficient)));
+        }
+        problem
+    }
+
+    /// With `INCLINE_LP_DUMP` set to a directory, write this program there
+    /// as MPS, for benchmarking solvers on the programs real schedules make.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn dump(&self) {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let Some(dir) = std::env::var_os("INCLINE_LP_DUMP") else {
+            return;
+        };
+        let number = NEXT.fetch_add(1, Ordering::Relaxed);
+        let path = std::path::Path::new(&dir).join(format!("dispatch-{}-{number:06}.mps", std::process::id()));
+        if let Err(error) = std::fs::write(&path, solver::mps::write(&self.to_solver())) {
+            log::warn!("could not write {}: {error}", path.display());
+        }
     }
 
     /// The same program with what a simplex basis chokes on taken out: a
@@ -77,7 +104,7 @@ impl LinearProgram {
     /// pin and its block's total - are one row with the tighter bounds.
     ///
     /// Two parallel rows are the classic way to a basis that is singular
-    /// apart from rounding, which is what microlp reports as a singular matrix.
+    /// apart from rounding.
     fn tidied(&self) -> Result<Self, String> {
         let mut rows: Vec<Row> = Vec::with_capacity(self.rows.len());
         let mut seen: std::collections::HashMap<Vec<(usize, u64)>, usize> = std::collections::HashMap::new();
@@ -133,155 +160,18 @@ impl LinearProgram {
         })
     }
 
-    /// This program scaled so every row's and then every column's largest
-    /// coefficient is near one, with the factor each column was scaled by.
-    ///
-    /// microlp takes a pivot under an absolute 1e-10 for zero. Tonnes in the
-    /// thousands beside truck hours per tonne and grade differences of a
-    /// ten-thousandth make that a different test in every row; scaled, it is
-    /// the same test everywhere. Powers of two, so scaling rounds nothing.
-    #[cfg_attr(feature = "highs", allow(dead_code, reason = "HiGHS scales its own problems"))]
-    fn equilibrated(&self) -> (Self, Vec<f64>) {
-        let power_of_two = |magnitude: f64| {
-            if magnitude > 0.0 && magnitude.is_finite() {
-                2f64.powi(-magnitude.log2().round() as i32)
-            } else {
-                1.0
-            }
-        };
-        let row_scale: Vec<f64> = self
-            .rows
-            .iter()
-            .map(|row| power_of_two(row.terms.iter().map(|(_, c)| c.abs()).fold(0.0, f64::max)))
-            .collect();
-        let mut column_max = vec![0.0f64; self.objective.len()];
-        for (row, scale) in self.rows.iter().zip(&row_scale) {
-            for (col, coefficient) in &row.terms {
-                column_max[col.0] = column_max[col.0].max((coefficient * scale).abs());
-            }
+    /// Solve with the `solver` crate, HiGHS's presolve and dual simplex method in Rust,
+    /// which takes the same steps HiGHS does.
+    fn maximise_solver(&self) -> Result<Vec<f64>, String> {
+        let solution = solver::solve(&self.to_solver(), &solver::Options::default());
+        if solution.status != solver::Status::Optimal {
+            return Err(format!("solver ended {:?}", solution.status));
         }
-        let column_scale: Vec<f64> = column_max.iter().map(|max| power_of_two(*max)).collect();
-        let rows = self
-            .rows
-            .iter()
-            .zip(&row_scale)
-            .map(|(row, scale)| Row {
-                lower: row.lower * scale,
-                upper: row.upper * scale,
-                terms: row.terms.iter().map(|(col, coefficient)| (*col, coefficient * scale * column_scale[col.0])).collect(),
-            })
-            .collect();
-        let scaled = Self {
-            objective: self.objective.iter().zip(&column_scale).map(|(weight, scale)| weight * scale).collect(),
-            column_bounds: self
-                .column_bounds
-                .iter()
-                .zip(&column_scale)
-                .map(|((lower, upper), scale)| (lower / scale, upper / scale))
-                .collect(),
-            rows,
-        };
-        (scaled, column_scale)
-    }
-
-    #[cfg(feature = "highs")]
-    fn maximise_highs(&self) -> Result<Vec<f64>, String> {
-        use highs::{HighsModelStatus, RowProblem, Sense};
-        let mut problem = RowProblem::default();
-        let cols: Vec<_> = self
-            .objective
-            .iter()
-            .zip(&self.column_bounds)
-            .map(|(&weight, &(lower, upper))| problem.add_column(weight, lower..=upper))
-            .collect();
-        // HiGHS drops a coefficient this small from the matrix, and warns
-        // that it has for every program: thousands a dispatch, each one a
-        // line in the log. Dropped here, it solves the same program quietly.
-        for row in &self.rows {
-            problem.add_row(
-                row.lower..=row.upper,
-                row.terms
-                    .iter()
-                    .filter(|(_, coefficient)| coefficient.abs() > HIGHS_SMALL_MATRIX_VALUE)
-                    .map(|&(col, coefficient)| (cols[col.0], coefficient)),
-            );
-        }
-        let mut model = problem.optimise(Sense::Maximise);
-        model.make_quiet();
-        // One thread, so the same input always gives the same schedule.
-        model.set_option("threads", 1);
-        let solved = model.try_solve().map_err(|status| format!("HiGHS failed: {status:?}"))?;
-        if solved.status() != HighsModelStatus::Optimal {
-            return Err(format!("HiGHS ended {:?}", solved.status()));
-        }
-        Ok(solved.get_solution().columns().to_vec())
-    }
-
-    /// Solve with microlp, scaled; and should the scaled basis still come
-    /// out singular, once more as given before saying so.
-    #[cfg_attr(feature = "highs", allow(dead_code, reason = "HiGHS solves the dispatch in this build"))]
-    fn maximise_microlp(&self) -> Result<Vec<f64>, String> {
-        let (scaled, column_scale) = self.equilibrated();
-        let unscale = |solution: Vec<f64>| solution.iter().zip(&column_scale).map(|(value, scale)| value * scale).collect();
-        let scaled_error = match scaled.maximise_microlp_as_given() {
-            Ok(solution) => return Ok(unscale(solution)),
-            Err(error) => error,
-        };
-        if let Ok(solution) = self.maximise_microlp_as_given() {
-            return Ok(solution);
-        }
-        // A degenerate program can lead the simplex into a basis that is
-        // singular apart from rounding. Nudging each objective weight by a
-        // millionth or less sends it down another path without moving what
-        // is feasible: the answer is still a vertex of the same region, worth
-        // what the replay says it is.
-        for round in 1..=3_u64 {
-            let mut nudged = scaled.clone();
-            for (index, weight) in nudged.objective.iter_mut().enumerate() {
-                let jitter = ((index as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_mul(round) >> 11) as f64 / (1u64 << 53) as f64;
-                *weight *= 1.0 + 1e-6 * (jitter - 0.5);
-            }
-            if let Ok(solution) = nudged.maximise_microlp_as_given() {
-                return Ok(unscale(solution));
-            }
-        }
-        Err(scaled_error)
-    }
-
-    #[cfg_attr(feature = "highs", allow(dead_code, reason = "HiGHS solves the dispatch in this build"))]
-    fn maximise_microlp_as_given(&self) -> Result<Vec<f64>, String> {
-        use microlp::{ComparisonOp, OptimizationDirection, Problem};
-        let mut problem = Problem::new(OptimizationDirection::Maximize);
-        let vars: Vec<_> = self
-            .objective
-            .iter()
-            .zip(&self.column_bounds)
-            .map(|(&weight, &bounds)| problem.add_var(weight, bounds))
-            .collect();
-        for row in &self.rows {
-            let terms: Vec<_> = row.terms.iter().map(|&(col, coefficient)| (vars[col.0], coefficient)).collect();
-            if row.lower == row.upper {
-                problem.add_constraint(terms.as_slice(), ComparisonOp::Eq, row.upper);
-                continue;
-            }
-            if row.upper.is_finite() {
-                problem.add_constraint(terms.as_slice(), ComparisonOp::Le, row.upper);
-            }
-            if row.lower.is_finite() {
-                problem.add_constraint(terms.as_slice(), ComparisonOp::Ge, row.lower);
-            }
-        }
-        let outcome = problem.solve().map_err(|error| format!("microlp: {error}"))?;
-        let solution = outcome.solution().ok_or("microlp was interrupted")?;
-        Ok(vars.iter().map(|&var| solution[var]).collect())
+        Ok(solution.col_value)
     }
 }
 
 /// The solver the hourly dispatch uses in this build, for the run's report.
 pub(crate) fn backend_name() -> &'static str {
-    if cfg!(feature = "highs") { "HiGHS" } else { "microlp 0.6.0" }
+    "solver"
 }
-
-/// HiGHS's `small_matrix_value`: matrix entries no larger are dropped.
-#[cfg(feature = "highs")]
-const HIGHS_SMALL_MATRIX_VALUE: f64 = 1e-9;

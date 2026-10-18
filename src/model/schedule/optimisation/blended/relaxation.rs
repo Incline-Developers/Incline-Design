@@ -1,5 +1,5 @@
 //! A proven upper bound on the blended model's value: its linear relaxation,
-//! solved by HiGHS's interior-point method.
+//! solved by HiGHS's interior-point method (IPX, as ported to the `solver` crate).
 //!
 //! SCIP's first LP on a long horizon is slow, because its bundled LP solver,
 //! SoPlex, has only simplex methods; a week of hourly intervals needed
@@ -21,12 +21,7 @@
 //!
 //! The last makes the bound weaker on models that blend, not wrong.
 
-use std::{
-    ffi::{c_char, c_int, c_void},
-    time::{Duration, Instant},
-};
-
-use highs_sys::{HighsCallbackDataIn, HighsCallbackDataOut, HighsInt};
+use std::time::{Duration, Instant};
 
 use super::{
     formulation::{BlendColumns, BlendSizes, Rows, formulate},
@@ -48,54 +43,41 @@ pub(crate) struct RelaxationBound {
 
 /// `stop` is polled while the model is built and between interior-point
 /// iterations; once it returns true the solve ends without a bound.
-pub(crate) fn relaxation_bound(input: &BlendInput, limit: Option<Duration>, stop: &(dyn Fn() -> bool + Sync)) -> Result<RelaxationBound, String> {
+pub(crate) fn relaxation_bound(input: &BlendInput, limit: Option<Duration>, stop: solver::Interrupt) -> Result<RelaxationBound, String> {
     let started = Instant::now();
     let mut rows = LpRows {
         columns: BlendColumns::new(),
         sizes: BlendSizes::default(),
-        stop,
-        cost: Vec::new(),
-        upper: Vec::new(),
-        row_lower: Vec::new(),
-        row_upper: Vec::new(),
-        starts: Vec::new(),
-        index: Vec::new(),
-        value: Vec::new(),
+        stop: &*stop,
+        problem: solver::Problem::new(solver::Sense::Maximise),
         dropped_mixing: 0,
         merge: Vec::new(),
     };
     formulate(&mut rows, input).map_err(|_| "stopped while building the relaxation".to_owned())?;
-    let value = solve(&rows, limit, stop)?;
+    let (problem, dropped_mixing) = (rows.problem, rows.dropped_mixing);
+    let value = solve(&problem, limit, stop)?;
     Ok(RelaxationBound {
         value,
         elapsed: started.elapsed(),
-        dropped_mixing: rows.dropped_mixing,
+        dropped_mixing,
     })
 }
 
-/// Rows kept in HiGHS's row-wise sparse form, ready for one `Highs_passLp`.
+/// The relaxation, built straight into a [`solver::Problem`].
 struct LpRows<'a> {
     columns: BlendColumns<usize>,
     sizes: BlendSizes,
-    stop: &'a (dyn Fn() -> bool + Sync),
-    cost: Vec<f64>,
-    upper: Vec<f64>,
-    row_lower: Vec<f64>,
-    row_upper: Vec<f64>,
-    starts: Vec<usize>,
-    index: Vec<usize>,
-    value: Vec<f64>,
+    stop: &'a (dyn Fn() -> bool + Send + Sync),
+    problem: solver::Problem,
     dropped_mixing: usize,
-    /// Scratch for merging a row's repeated columns, which HiGHS rejects.
+    /// Scratch for merging a row's repeated columns into one entry.
     merge: Vec<(usize, f64)>,
 }
 
 impl LpRows<'_> {
     fn column(&mut self, upper: f64, value: f64) -> usize {
         self.sizes.variables += 1;
-        self.cost.push(value);
-        self.upper.push(if upper.is_finite() { upper } else { f64::INFINITY });
-        self.cost.len() - 1
+        self.problem.add_col(value, 0.0, if upper.is_finite() { upper } else { f64::INFINITY })
     }
 }
 
@@ -128,19 +110,15 @@ impl Rows for LpRows<'_> {
         self.merge.clear();
         self.merge.extend(terms.into_iter().filter(|(_, coefficient)| *coefficient != 0.0));
         self.merge.sort_unstable_by_key(|(column, _)| *column);
-        self.starts.push(self.index.len());
-        let first = self.index.len();
-        for &(column, coefficient) in &self.merge {
-            if self.index.len() > first && self.index.last() == Some(&column) {
-                *self.value.last_mut().expect("an entry was pushed") += coefficient;
-            } else {
-                self.index.push(column);
-                self.value.push(coefficient);
+        self.merge.dedup_by(|(column, coefficient), (kept, total)| {
+            let repeated = column == kept;
+            if repeated {
+                *total += *coefficient;
             }
-        }
-        self.sizes.linear_coefficient_entries += self.index.len() - first;
-        self.row_lower.push(lhs);
-        self.row_upper.push(rhs);
+            repeated
+        });
+        self.sizes.linear_coefficient_entries += self.merge.len();
+        self.problem.add_row(lhs, rhs, self.merge.iter().copied());
     }
 
     /// Left out; see the module docs.
@@ -149,91 +127,25 @@ impl Rows for LpRows<'_> {
     }
 }
 
-/// Frees the HiGHS instance on every path out of [`solve`].
-struct Instance(*mut c_void);
-
-impl Drop for Instance {
-    fn drop(&mut self) {
-        // SAFETY: created by `Highs_create` and destroyed once, here.
-        unsafe { highs_sys::Highs_destroy(self.0) };
-    }
-}
-
-fn solve(rows: &LpRows, limit: Option<Duration>, stop: &(dyn Fn() -> bool + Sync)) -> Result<f64, String> {
-    let fits = |count: usize| HighsInt::try_from(count).map_err(|_| format!("the relaxation has {count} entries, more than HiGHS can index"));
-    let columns = fits(rows.cost.len())?;
-    let row_count = fits(rows.row_lower.len())?;
-    let entries = fits(rows.index.len())?;
-    let starts = rows.starts.iter().map(|&start| fits(start)).collect::<Result<Vec<_>, _>>()?;
-    let index = rows.index.iter().map(|&column| fits(column)).collect::<Result<Vec<_>, _>>()?;
-    let lower = vec![0.0; rows.cost.len()];
-
-    // SAFETY: a single-threaded use of one HiGHS instance, freed by
-    // `Instance`. Every array passed has the length its count says, and
-    // `stop` outlives the run that calls back into it.
-    unsafe {
-        let highs = Instance(highs_sys::Highs_create());
-        let ok = |code: HighsInt, what: &str| {
-            if code == highs_sys::STATUS_ERROR {
-                Err(format!("HiGHS rejected {what}"))
-            } else {
-                Ok(())
-            }
-        };
-        ok(highs_sys::Highs_setBoolOptionValue(highs.0, c"output_flag".as_ptr(), 0), "output_flag")?;
-        ok(highs_sys::Highs_setStringOptionValue(highs.0, c"solver".as_ptr(), c"ipm".as_ptr()), "the ipm solver")?;
-        if let Some(limit) = limit {
-            ok(
-                highs_sys::Highs_setDoubleOptionValue(highs.0, c"time_limit".as_ptr(), limit.as_secs_f64()),
-                "the time limit",
-            )?;
-        }
-        ok(
-            highs_sys::Highs_passLp(
-                highs.0,
-                columns,
-                row_count,
-                entries,
-                highs_sys::MATRIX_FORMAT_ROW_WISE,
-                highs_sys::OBJECTIVE_SENSE_MAXIMIZE,
-                0.0,
-                rows.cost.as_ptr(),
-                lower.as_ptr(),
-                rows.upper.as_ptr(),
-                rows.row_lower.as_ptr(),
-                rows.row_upper.as_ptr(),
-                starts.as_ptr(),
-                index.as_ptr(),
-                rows.value.as_ptr(),
-            ),
-            "the relaxation",
-        )?;
-        let data = &stop as *const &(dyn Fn() -> bool + Sync) as *mut c_void;
-        ok(highs_sys::Highs_setCallback(highs.0, Some(interrupt), data), "the interrupt callback")?;
-        for kind in [highs_sys::kHighsCallbackIpmInterrupt, highs_sys::kHighsCallbackSimplexInterrupt] {
-            ok(highs_sys::Highs_startCallback(highs.0, kind), "the interrupt callback")?;
-        }
-        ok(highs_sys::Highs_run(highs.0), "the relaxation solve")?;
-        let status = highs_sys::Highs_getModelStatus(highs.0);
-        if status != highs_sys::MODEL_STATUS_OPTIMAL {
-            return Err(format!("HiGHS ended with model status {status}"));
-        }
-        let value = highs_sys::Highs_getObjectiveValue(highs.0);
-        if !value.is_finite() {
-            return Err(format!("HiGHS reported a non-finite optimum {value}"));
-        }
-        Ok(value)
-    }
-}
-
-/// HiGHS's interrupt callback: `data` is the `stop` closure `solve` passed.
-unsafe extern "C" fn interrupt(_kind: c_int, _message: *const c_char, _out: *const HighsCallbackDataOut, input: *mut HighsCallbackDataIn, data: *mut c_void) {
-    // SAFETY: `data` points at `solve`'s `stop` reference, alive for the
-    // whole `Highs_run`; `input` is HiGHS's own and may be written.
-    unsafe {
-        let stop = &*(data as *const &(dyn Fn() -> bool + Sync));
-        if !input.is_null() && stop() {
-            (*input).user_interrupt = 1;
+fn solve(problem: &solver::Problem, limit: Option<Duration>, stop: solver::Interrupt) -> Result<f64, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(dir) = std::env::var_os("INCLINE_LP_DUMP") {
+        let path = std::path::Path::new(&dir).join(format!("relaxation-{}.mps", std::process::id()));
+        if let Err(error) = std::fs::write(&path, solver::mps::write(problem)) {
+            log::warn!("could not write {}: {error}", path.display());
         }
     }
+    let options = solver::Options {
+        solver: solver::Solver::Ipm,
+        time_limit: limit.map_or(f64::INFINITY, |limit| limit.as_secs_f64()),
+        ..solver::Options::default()
+    };
+    let solution = solver::solve_from(problem, &options, None, Some(stop));
+    if solution.status != solver::Status::Optimal {
+        return Err(format!("the relaxation solve ended {:?}", solution.status));
+    }
+    if !solution.objective.is_finite() {
+        return Err(format!("the relaxation reported a non-finite optimum {}", solution.objective));
+    }
+    Ok(solution.objective)
 }

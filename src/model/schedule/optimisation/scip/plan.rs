@@ -26,17 +26,17 @@
 //! more, so the bound stands. Its answer is only targets; see
 //! [`super::super::blended::plan`].
 //!
-//! Solved by HiGHS, which on these models found plans and bounds where SCIP
-//! did not.
+//! Solved by the `solver` crate's port of HiGHS's MIP solver; HiGHS found plans and
+//! bounds on these models where SCIP did not.
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
-    ffi::{c_char, c_int, c_void},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
-
-use highs_sys::{HighsCallbackDataIn, HighsCallbackDataOut, HighsInt};
 
 use super::super::blended::{
     input::{BlendInput, attribute_reclaim, authored_tasks, grade_ceilings, interval_rate, task_active},
@@ -141,7 +141,7 @@ pub(crate) struct PlanSolve {
     pub(crate) status: String,
 }
 
-/// The plan's columns and rows, kept row-wise for HiGHS.
+/// The plan's columns and rows, kept row-wise.
 #[derive(Default)]
 struct Builder {
     names: Vec<String>,
@@ -202,124 +202,88 @@ struct Answer {
     status: String,
 }
 
-fn solve_highs(builder: &Builder, seed: Option<&[f64]>, time_limit: Duration, relative_gap: f64, relax: bool, stop: &AtomicBool) -> Result<Answer, String> {
-    let fits = |count: usize| HighsInt::try_from(count).map_err(|_| format!("the plan has {count} entries, more than HiGHS can index"));
-    let columns = builder.cost.len();
-    let starts = builder.starts.iter().map(|&start| fits(start)).collect::<Result<Vec<_>, _>>()?;
-    let index = builder.index.iter().map(|&column| fits(column)).collect::<Result<Vec<_>, _>>()?;
-    let integrality: Vec<HighsInt> = builder.integer.iter().map(|&integer| HighsInt::from(integer && !relax)).collect();
-    let lower = vec![0.0; columns];
-    let upper: Vec<f64> = builder.upper.iter().map(|&upper| if upper.is_finite() { upper } else { f64::INFINITY }).collect();
-    struct Instance(*mut c_void);
-    impl Drop for Instance {
-        fn drop(&mut self) {
-            // SAFETY: created by `Highs_create` and destroyed once, here.
-            unsafe { highs_sys::Highs_destroy(self.0) };
-        }
+/// The plan's linear relaxation, by the `solver` crate's interior point method: a bound,
+/// and no seed to start from.
+fn solve_relaxation(builder: &Builder, time_limit: Duration, stop: &Arc<AtomicBool>) -> Result<Answer, String> {
+    let problem = plan_problem(builder, true);
+    let options = solver::Options {
+        solver: solver::Solver::Ipm,
+        time_limit: time_limit.as_secs_f64(),
+        ..solver::Options::default()
+    };
+    let stop = Arc::clone(stop);
+    let solution = solver::solve_from(&problem, &options, None, Some(Arc::new(move || stop.load(Ordering::Relaxed))));
+    if !solution.objective.is_finite() {
+        return Err(format!("no plan found: solver status {:?}", solution.status));
     }
-    // SAFETY: one HiGHS instance on this thread, freed by `Instance`; every
-    // array has the length its count says.
-    unsafe {
-        let highs = Instance(highs_sys::Highs_create());
-        let ok = |code: HighsInt, what: &str| {
-            if code == highs_sys::STATUS_ERROR {
-                Err(format!("HiGHS rejected {what}"))
-            } else {
-                Ok(())
-            }
-        };
-        ok(highs_sys::Highs_setBoolOptionValue(highs.0, c"output_flag".as_ptr(), 0), "output_flag")?;
-        ok(
-            highs_sys::Highs_setDoubleOptionValue(highs.0, c"time_limit".as_ptr(), time_limit.as_secs_f64()),
-            "the time limit",
-        )?;
-        ok(highs_sys::Highs_setDoubleOptionValue(highs.0, c"mip_rel_gap".as_ptr(), relative_gap), "the gap")?;
-        if relax {
-            ok(highs_sys::Highs_setStringOptionValue(highs.0, c"solver".as_ptr(), c"ipm".as_ptr()), "the ipm solver")?;
-        }
-        ok(
-            highs_sys::Highs_passMip(
-                highs.0,
-                fits(columns)?,
-                fits(builder.row_lower.len())?,
-                fits(builder.index.len())?,
-                highs_sys::MATRIX_FORMAT_ROW_WISE,
-                highs_sys::OBJECTIVE_SENSE_MAXIMIZE,
-                0.0,
-                builder.cost.as_ptr(),
-                lower.as_ptr(),
-                upper.as_ptr(),
-                builder.row_lower.as_ptr(),
-                builder.row_upper.as_ptr(),
-                starts.as_ptr(),
-                index.as_ptr(),
-                builder.value.as_ptr(),
-                integrality.as_ptr(),
-            ),
-            "the plan",
-        )?;
-        if let Some(seed) = seed {
-            ok(
-                highs_sys::Highs_setSolution(highs.0, seed.as_ptr(), std::ptr::null(), std::ptr::null(), std::ptr::null()),
-                "the seed",
-            )?;
-        }
-        let data = stop as *const AtomicBool as *mut c_void;
-        ok(highs_sys::Highs_setCallback(highs.0, Some(interrupt), data), "the interrupt callback")?;
-        for kind in [
-            highs_sys::kHighsCallbackMipInterrupt,
-            highs_sys::kHighsCallbackIpmInterrupt,
-            highs_sys::kHighsCallbackSimplexInterrupt,
-        ] {
-            ok(highs_sys::Highs_startCallback(highs.0, kind), "the interrupt callback")?;
-        }
-        ok(highs_sys::Highs_run(highs.0), "the plan solve")?;
-        let status = highs_sys::Highs_getModelStatus(highs.0);
-        let mut values = vec![0.0; columns];
-        let mut duals = vec![0.0; columns];
-        let mut row_values = vec![0.0; builder.row_lower.len()];
-        let mut row_duals = vec![0.0; builder.row_lower.len()];
-        ok(
-            highs_sys::Highs_getSolution(highs.0, values.as_mut_ptr(), duals.as_mut_ptr(), row_values.as_mut_ptr(), row_duals.as_mut_ptr()),
-            "reading the plan",
-        )?;
-        let objective = highs_sys::Highs_getObjectiveValue(highs.0);
-        let mut bound = 0.0;
-        let found = highs_sys::Highs_getDoubleInfoValue(highs.0, c"mip_dual_bound".as_ptr(), &mut bound);
-        let mut nodes: i64 = 0;
-        highs_sys::Highs_getInt64InfoValue(highs.0, c"mip_node_count".as_ptr(), &mut nodes);
-        if !objective.is_finite() {
-            return Err(format!("no plan found: HiGHS model status {status}"));
-        }
-        // A relaxation interrupted before its optimum bounds nothing. Nor,
-        // usefully, does a mixed-integer solve stopped inside its first
-        // relaxation: its dual bound is then only what each column's own
-        // bounds allow, valid but many times any schedule's value.
-        let bound = if relax {
-            (status == highs_sys::MODEL_STATUS_OPTIMAL).then_some(objective)
-        } else {
-            (found != highs_sys::STATUS_ERROR && bound.is_finite() && (status == highs_sys::MODEL_STATUS_OPTIMAL || nodes > 0)).then_some(bound)
-        };
-        Ok(Answer {
-            values,
-            objective,
-            bound,
-            status: format!("HiGHS status {status}, {nodes} nodes"),
-        })
-    }
+    // A relaxation interrupted before its optimum bounds nothing.
+    Ok(Answer {
+        bound: (solution.status == solver::Status::Optimal).then_some(solution.objective),
+        objective: solution.objective,
+        status: format!("solver status {:?}", solution.status),
+        values: solution.col_value,
+    })
 }
 
-/// HiGHS's interrupt callback: `data` is the `stop` flag [`solve_highs`]
-/// passed.
-unsafe extern "C" fn interrupt(_kind: c_int, _message: *const c_char, _out: *const HighsCallbackDataOut, input: *mut HighsCallbackDataIn, data: *mut c_void) {
-    // SAFETY: `data` points at `solve_highs`' `stop`, alive for the whole
-    // `Highs_run`; `input` is HiGHS's own and may be written.
-    unsafe {
-        let stop = &*(data as *const AtomicBool);
-        if !input.is_null() && stop.load(Ordering::Relaxed) {
-            (*input).user_interrupt = 1;
+/// The plan's linear relaxation or rows as `builder` has them in one
+/// [`solver::Problem`], integer columns marked unless `relax`.
+fn plan_problem(builder: &Builder, relax: bool) -> solver::Problem {
+    let mut problem = solver::Problem::new(solver::Sense::Maximise);
+    for (&cost, &upper) in builder.cost.iter().zip(&builder.upper) {
+        problem.add_col(cost, 0.0, if upper.is_finite() { upper } else { f64::INFINITY });
+    }
+    for row in 0..builder.row_lower.len() {
+        let range = builder.starts[row]..builder.starts.get(row + 1).copied().unwrap_or(builder.index.len());
+        let entries = builder.index[range.clone()].iter().copied().zip(builder.value[range].iter().copied());
+        problem.add_row(builder.row_lower[row], builder.row_upper[row], entries);
+    }
+    if !relax {
+        problem.integrality = builder.integer.clone();
+    }
+    problem
+}
+
+fn solve_plan(builder: &Builder, seed: Option<&[f64]>, time_limit: Duration, relative_gap: f64, relax: bool, stop: &Arc<AtomicBool>) -> Result<Answer, String> {
+    if relax {
+        return solve_relaxation(builder, time_limit, stop);
+    }
+    let problem = plan_problem(builder, false);
+    // With `INCLINE_LP_DUMP` set to a directory, write each plan there, with
+    // its seed beside it (a value per line).
+    if let Some(dir) = std::env::var_os("INCLINE_LP_DUMP") {
+        static DUMPED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let name = format!("plan-{}-{:03}", std::process::id(), DUMPED.fetch_add(1, Ordering::Relaxed));
+        let path = std::path::Path::new(&dir).join(format!("{name}.mps"));
+        if let Err(error) = std::fs::write(&path, solver::mps::write(&problem)) {
+            log::warn!("could not write {}: {error}", path.display());
+        }
+        if let Some(seed) = seed {
+            let path = std::path::Path::new(&dir).join(format!("{name}.seed"));
+            if let Err(error) = std::fs::write(&path, seed.iter().map(|value| format!("{value:e}\n")).collect::<String>()) {
+                log::warn!("could not write {}: {error}", path.display());
+            }
         }
     }
+    let settings = solver::MipSettings {
+        time_limit: time_limit.as_secs_f64(),
+        mip_rel_gap: relative_gap,
+        ..solver::MipSettings::default()
+    };
+    let stop = Arc::clone(stop);
+    let solution = solver::solve_mip(&problem, &settings, seed, Some(Arc::new(move || stop.load(Ordering::Relaxed))));
+    if !solution.objective.is_finite() {
+        return Err(format!("no plan found: solver status {:?}", solution.status));
+    }
+    // A mixed-integer solve stopped inside its first relaxation bounds
+    // nothing useful: its dual bound is then only what each column's own
+    // bounds allow, valid but many times any schedule's value.
+    let bound = (solution.dual_bound.is_finite() && (solution.status == solver::MipStatus::Optimal || solution.nodes > 0)).then_some(solution.dual_bound);
+    Ok(Answer {
+        status: format!("solver status {:?}, {} nodes", solution.status, solution.nodes),
+        objective: solution.objective,
+        bound,
+        values: solution.col_value,
+    })
 }
 
 /// One destination a block's material can go to, on its best candidate.
@@ -722,7 +686,7 @@ impl<'a> Prepared<'a> {
 
 /// The plan for `input`, started from `seed` (the hourly dispatch's schedule)
 /// when there is one, so it is never worse than the schedule it improves.
-pub(crate) fn solve(input: &BlendInput, seed: Option<&BlendSolution>, window: Option<&Window>, settings: Settings, stop: &AtomicBool) -> Result<PlanSolve, String> {
+pub(crate) fn solve(input: &BlendInput, seed: Option<&BlendSolution>, window: Option<&Window>, settings: Settings, stop: &Arc<AtomicBool>) -> Result<PlanSolve, String> {
     solve_periods(input, seed, window, settings, 1, stop)
 }
 
@@ -739,7 +703,7 @@ pub(crate) fn solve(input: &BlendInput, seed: Option<&BlendSolution>, window: Op
 /// days' blends do apart; any other is left off, and so costs nothing. So
 /// the plan over periods allows every plan by day, and its optimum is no
 /// less - for a model a fraction of the size, which a long horizon needs.
-pub(crate) fn relaxation_bound(input: &BlendInput, period_days: u32, time_limit: Duration, stop: &AtomicBool) -> Result<PlanSolve, String> {
+pub(crate) fn relaxation_bound(input: &BlendInput, period_days: u32, time_limit: Duration, stop: &Arc<AtomicBool>) -> Result<PlanSolve, String> {
     let settings = Settings {
         time_limit,
         relative_gap: 0.0,
@@ -748,7 +712,14 @@ pub(crate) fn relaxation_bound(input: &BlendInput, period_days: u32, time_limit:
     solve_periods(input, None, None, settings, period_days, stop)
 }
 
-fn solve_periods(input: &BlendInput, seed: Option<&BlendSolution>, window: Option<&Window>, settings: Settings, period_days: u32, stop: &AtomicBool) -> Result<PlanSolve, String> {
+fn solve_periods(
+    input: &BlendInput,
+    seed: Option<&BlendSolution>,
+    window: Option<&Window>,
+    settings: Settings,
+    period_days: u32,
+    stop: &Arc<AtomicBool>,
+) -> Result<PlanSolve, String> {
     let started = Instant::now();
     let prepared = Prepared::new(input, window, period_days);
     let joined = prepared.period_days.iter().any(|days| days.len() > 1);
@@ -1321,7 +1292,7 @@ fn solve_periods(input: &BlendInput, seed: Option<&BlendSolution>, window: Optio
     let build_s = started.elapsed().as_secs_f64();
     let (variables, binaries, rows) = (builder.cost.len(), builder.binaries, builder.row_lower.len());
     let solving = Instant::now();
-    let answer = solve_highs(&builder, seed_values.as_deref(), settings.time_limit, settings.relative_gap, settings.relax, stop)?;
+    let answer = solve_plan(&builder, seed_values.as_deref(), settings.time_limit, settings.relative_gap, settings.relax, stop)?;
     let solve_s = solving.elapsed().as_secs_f64();
 
     // ---- read back ----------------------------------------------------------

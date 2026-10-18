@@ -720,6 +720,10 @@ fn plan_within(a: &crate::model::arrangement::Face, b: &crate::model::arrangemen
 /// two outlines drawn along the same line meet, not ground over the blast.
 const SHARED_GROUND_M2: f64 = 1.0;
 
+/// The smallest part of a dig block one of its material shares can be: the
+/// dispatch's solvers treat a matrix entry of 1e-9 or less as zero.
+const NEGLIGIBLE_SHARE: f64 = 1e-9;
+
 /// Whether a dig block is ground the planner has taken out of mining.
 fn excluded(block: &crate::app::commands::solids_view::DigBlockRecord, exclusions: &[(crate::model::SolidId, crate::model::MiningExclusions)]) -> bool {
     exclusions.iter().any(|(solid, exclusions)| {
@@ -1150,15 +1154,22 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         };
         let id = GroundId(ground.len() as u32);
         let mut shares: Vec<MaterialShare> = Vec::new();
-        let mut block_tonnes = 0.0;
+        let portion_tonnes = |portion: &crate::model::solid_reserves::MaterialPortion| {
+            let tonnes = portion.values[tonnage_position] * portion.fraction;
+            if tonnes.is_finite() && tonnes > 0.0 { tonnes } else { 0.0 }
+        };
+        // The block's tonnes, all of them, though a model block that only
+        // grazes it (a sliver from clipping, often rounding residue of
+        // 1e-17 of the block) is left out of its shares below.
+        let block_tonnes: f64 = held.portions().iter().map(portion_tonnes).sum();
+        let mut share_tonnes = 0.0;
         let mut sound = true;
         for (index, portion) in held.portions().iter().enumerate() {
-            let value = portion.values[tonnage_position];
-            if !value.is_finite() {
-                continue;
-            }
-            let tonnes = value * portion.fraction;
-            if !tonnes.is_finite() || tonnes <= 0.0 {
+            let tonnes = portion_tonnes(portion);
+            // A share this small is below what the dispatch's solver keeps
+            // in its matrix: it would be dropped there, and its tonnes
+            // replayed as never dug.
+            if tonnes <= NEGLIGIBLE_SHARE * block_tonnes {
                 continue;
             }
             let mut row = Vec::with_capacity(grades);
@@ -1199,7 +1210,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             // `fraction` is filled in once the block total is known, because
             // a share is a proportion of the whole block.
             shares.push(MaterialShare { material, fraction: tonnes });
-            block_tonnes += tonnes;
+            share_tonnes += tonnes;
             context.insert(
                 (id, material),
                 GroundContext {
@@ -1239,8 +1250,9 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             );
             continue;
         }
+        // The shares kept are the whole block.
         for share in &mut shares {
-            share.fraction /= block_tonnes;
+            share.fraction /= share_tonnes;
         }
         if shares.len() > 1 {
             mixed_blocks += 1;

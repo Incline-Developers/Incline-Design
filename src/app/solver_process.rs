@@ -377,6 +377,13 @@ pub(crate) fn run_solver() -> i32 {
         eprintln!("the solver process could not read its request: {error}");
         return 2;
     }
+    // With `INCLINE_SOLVE_REQUEST_DUMP` set to a file, keep the request,
+    // so the same solve can be run again with `--schedule-solver < file`.
+    if let Some(path) = std::env::var_os("INCLINE_SOLVE_REQUEST_DUMP")
+        && let Err(error) = std::fs::write(&path, &line)
+    {
+        eprintln!("could not write the request to {}: {error}", std::path::Path::new(&path).display());
+    }
     let request: Request<BlendInput> = match serde_json::from_str(&line) {
         Ok(request) => request,
         Err(error) => {

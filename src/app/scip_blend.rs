@@ -791,7 +791,7 @@ impl RelaxationJob {
         let (input, cancel, stopped) = (Arc::clone(input), cancel.signal(), Arc::clone(&stop));
         let spawned = std::thread::Builder::new()
             .name("schedule-relaxation".into())
-            .spawn(move || relaxation_bound(&input, limit, &|| stopped.load(Ordering::Acquire) || cancel.load(Ordering::Acquire)));
+            .spawn(move || relaxation_bound(&input, limit, Arc::new(move || stopped.load(Ordering::Acquire) || cancel.load(Ordering::Acquire))));
         match spawned {
             Ok(handle) => Some(Self {
                 run_id,

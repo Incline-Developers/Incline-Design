@@ -1,7 +1,8 @@
 # Bundled solver provenance and notices
 
-The default build bundles no native solver. This document covers the ones a
-build can opt into.
+The default build bundles no native solver. This document covers the one a
+build can opt into, and the notices every build carries for the `solver` crate, its Rust
+port of HiGHS.
 
 ## SCIP
 
@@ -46,22 +47,22 @@ exception. CppAD is under the Eclipse Public License 1.0: a distribution must
 keep its notice and say where its source can be obtained (the SCIP source
 release above). Windows and macOS builds of `scip-source` are unverified.
 
-## HiGHS
+## HiGHS (the solver crate)
 
-The relaxation bound, and with the `highs` feature the hourly dispatch LP,
-use HiGHS **1.15.0**, built from the source vendored in the `highs-sys` 1.15.0
-crate and linked statically into the Incline binary of a native build with
-the `highs` or `scip` feature. The default build has no HiGHS. Of its `extern/`
-components only pdqsort is compiled in (header-only); the build sets
-`ZLIB=OFF` and `HIPO` is off, so zstr, AMD, METIS, RCM and the BLAS shim are
-not linked. Texts under `docs/licenses/highs/` are copied without
-modification from that crate:
+No build links HiGHS. Every build, the browser included, carries the `solver`
+crate (`crates/solver`), a Rust port of HiGHS **1.15.0**'s LP and MIP solvers made
+from the source vendored in the `highs-sys` 1.15.0 crate, and with it a port
+of that source's pdqsort. As derived works they keep both licences. The crate's
+comparison examples, which are not part of the app, link HiGHS itself through
+`highs-sys` as a development dependency. Texts under `docs/licenses/highs/`
+are copied without modification from that crate:
 
 | Component | Version/source | Local notice |
 | --- | --- | --- |
 | HiGHS | highs-sys 1.15.0 HiGHS/LICENSE.txt (MIT) | HiGHS.txt |
 | pdqsort | highs-sys 1.15.0 HiGHS/extern/pdqsort/license.txt (zlib) | pdqsort.txt |
 
-MIT requires the HiGHS copyright and permission notice in every copy, so a
-distribution must ship `HiGHS.txt` alongside the binary. pdqsort's zlib
-licence asks for no notice in binary form.
+MIT requires the HiGHS copyright and permission notice in every copy,
+including substantial portions such as the solver crate's port, so a distribution of any
+build must ship `HiGHS.txt` alongside the binary. pdqsort's zlib licence asks
+for no notice in binary form, and for altered source to be marked as such.

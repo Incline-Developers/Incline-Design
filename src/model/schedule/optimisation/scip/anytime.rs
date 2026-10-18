@@ -443,7 +443,7 @@ pub(crate) fn run(
     start: (BlendSolution, ReplayReport),
     settings: AnytimeSettings,
     polisher: Option<Polisher>,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
     mut report: impl FnMut(&Progress),
 ) -> Found {
     let started = Instant::now();
