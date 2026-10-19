@@ -38,11 +38,17 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::super::blended::{
-    input::{BlendInput, attribute_reclaim, authored_tasks, grade_ceilings, interval_rate, task_active},
-    replay::{BlendSolution, ReplayReport},
+use super::{
+    super::blended::{
+        input::{BlendInput, attribute_reclaim, authored_tasks, grade_ceilings, interval_rate, task_active},
+        replay::{BlendSolution, ReplayReport},
+    },
+    blasts::BlastModel,
 };
-use crate::model::schedule::optimisation::{Activity, DestinationId, DestinationKind, GroundId, Interval, MaterialId, SourceId, StockpileId, TaskKind};
+use crate::model::schedule::{
+    BlastActivity,
+    optimisation::{Activity, DestinationId, DestinationKind, GroundId, Interval, MaterialId, SourceId, StockpileId, TaskKind},
+};
 
 /// Where a plan starts: the first day it plans, how many days, and the
 /// state the schedule it improves left as that day opens.
@@ -352,6 +358,8 @@ pub(super) struct Prepared<'a> {
     pub(super) capacity: Vec<Vec<f64>>,
     pub(super) allowed: BTreeMap<(usize, GroundId), Vec<usize>>,
     pub(super) reclaims: Vec<ReclaimSource>,
+    /// The drill and blast chain, when the plan bounds and there is one.
+    pub(super) blasts: Option<BlastModel>,
 }
 
 /// One reclaim bar's draw from one pile.
@@ -536,6 +544,13 @@ impl<'a> Prepared<'a> {
                 diggers.entry(ground).or_default().insert(loader_index);
             }
         }
+        // A plan that bounds every schedule also says when each blast could
+        // clear and fire, and holds its ground back until then.
+        let blasts = input.drill_blast.as_ref().filter(|_| bounding).map(|chain| {
+            let periods: Vec<&[Interval]> = days.iter().map(|day| day_intervals[day].as_slice()).collect();
+            let dug: BTreeSet<GroundId> = diggers.keys().copied().collect();
+            BlastModel::new(chain, &periods, &tonnes, &dug)
+        });
         let mut holding: BTreeMap<(usize, GroundId), Vec<usize>> = BTreeMap::new();
         if bounding {
             for loader_index in 0..input.loaders.len() {
@@ -685,6 +700,7 @@ impl<'a> Prepared<'a> {
             capacity,
             allowed,
             reclaims,
+            blasts,
         }
     }
 
@@ -770,6 +786,178 @@ impl<'a> Prepared<'a> {
     }
 }
 
+/// A flag of the blast rows: a column, or settled as the plan opens.
+#[derive(Clone, Copy)]
+enum Flag {
+    Column(usize),
+    Fixed(f64),
+}
+
+impl Builder {
+    /// A row over flags: those settled go into its bounds, and one with
+    /// nothing left to decide is left out.
+    fn flag_row(&mut self, terms: &[(Flag, f64)], lhs: f64, rhs: f64, name: &str) {
+        let settled: f64 = terms
+            .iter()
+            .map(|(flag, coefficient)| if let Flag::Fixed(value) = flag { value * coefficient } else { 0.0 })
+            .sum();
+        let columns: Vec<(usize, f64)> = terms
+            .iter()
+            .filter_map(|(flag, coefficient)| if let Flag::Column(column) = flag { Some((*column, *coefficient)) } else { None })
+            .collect();
+        self.row(&columns, lhs - settled, rhs - settled, name);
+    }
+}
+
+/// The drill and blast chain's rows (see `docs/scheduling-blast-aware-plan-design.md`):
+/// each machine's work within what it could do on each blast and in all,
+/// each step done only once its work is and the step before it is, a blast
+/// clear only once the ground above it is dug, firing only once charged
+/// and in a period a firing window ends in, and the ground it releases dug
+/// only once it has fired. The work is in fractions of each step's work
+/// left. Flags are continuous: the rows only bound.
+fn blast_rows(builder: &mut Builder, model: &BlastModel, block_so_far: &BTreeMap<(GroundId, usize), usize>, tonnes: &BTreeMap<GroundId, f64>, periods: usize) {
+    let flag = |builder: &mut Builder, name: String| Flag::Column(builder.cont(1.0, 0.0, &name));
+    // Clear flags first, for every blast, so a blast whose ground above
+    // holds another's can lean on it: once the larger is clear, so is the
+    // smaller, and the larger's row needs only the ground the smaller
+    // lacks. The sets nest deeply on a bench (each blast holds those behind
+    // it), and their full sums are dense, nearly parallel rows.
+    let mut clears: Vec<Vec<Flag>> = Vec::with_capacity(model.blasts.len());
+    for planned in &model.blasts {
+        let b = planned.index;
+        clears.push(if planned.opening.cleared {
+            vec![Flag::Fixed(1.0); periods]
+        } else if planned.never_clear {
+            vec![Flag::Fixed(0.0); periods]
+        } else {
+            let flags: Vec<Flag> = (0..periods).map(|p| flag(builder, format!("bclr_{b}_{p}"))).collect();
+            for (p, pair) in flags.windows(2).enumerate() {
+                builder.flag_row(&[(pair[0], 1.0), (pair[1], -1.0)], f64::NEG_INFINITY, 0.0, &format!("bclrm_{b}_{}", p + 1));
+            }
+            flags
+        });
+    }
+    let deciding: Vec<usize> = (0..model.blasts.len()).filter(|&i| matches!(clears[i][0], Flag::Column(_))).collect();
+    let above: Vec<BTreeSet<GroundId>> = model.blasts.iter().map(|planned| planned.above.iter().copied().collect()).collect();
+    for &i in &deciding {
+        let b = model.blasts[i].index;
+        // The largest set inside this one; of equal sets, the first.
+        let inner = deciding
+            .iter()
+            .copied()
+            .filter(|&j| j != i && above[j].is_subset(&above[i]) && (above[j].len() < above[i].len() || j < i))
+            .max_by_key(|&j| (above[j].len(), std::cmp::Reverse(j)));
+        let rest: Vec<GroundId> = match inner {
+            Some(j) => above[i].difference(&above[j]).copied().collect(),
+            None => above[i].iter().copied().collect(),
+        };
+        let standing: f64 = rest.iter().filter_map(|ground| tonnes.get(ground)).sum();
+        for p in 0..periods {
+            if let Some(j) = inner {
+                builder.flag_row(&[(clears[i][p], 1.0), (clears[j][p], -1.0)], f64::NEG_INFINITY, 0.0, &format!("bnest_{b}_{p}"));
+            }
+            if standing > 1e-9 {
+                let mut terms: Vec<(Flag, f64)> = rest
+                    .iter()
+                    .filter_map(|ground| block_so_far.get(&(*ground, p)).map(|column| (Flag::Column(*column), 1.0 / standing)))
+                    .collect();
+                terms.push((clears[i][p], -1.0));
+                builder.flag_row(&terms, 0.0, f64::INFINITY, &format!("bclear_{b}_{p}"));
+            }
+        }
+    }
+    // Each machine's work on each blast per period, for its capacity rows.
+    let mut work: BTreeMap<(usize, usize), Vec<(usize, f64)>> = BTreeMap::new();
+    for (i, planned) in model.blasts.iter().enumerate() {
+        let b = planned.index;
+        let opening = &planned.opening;
+        let monotone = |builder: &mut Builder, flags: &[Flag], name: &str| {
+            for (p, pair) in flags.windows(2).enumerate() {
+                builder.flag_row(&[(pair[0], 1.0), (pair[1], -1.0)], f64::NEG_INFINITY, 0.0, &format!("{name}_{}", p + 1));
+            }
+        };
+        let clear = clears[i].clone();
+        // Each step: its work so far, and done.
+        let mut before = clear;
+        let mut done_flags: Vec<Vec<Flag>> = Vec::new();
+        for activity in BlastActivity::ALL {
+            let step = activity as usize;
+            let done: Vec<Flag> = if opening.done[step] {
+                vec![Flag::Fixed(1.0); periods]
+            } else {
+                let flags: Vec<Flag> = (0..periods).map(|p| flag(builder, format!("bdone_{b}_{step}_{p}"))).collect();
+                monotone(builder, &flags, &format!("bdonem_{b}_{step}"));
+                flags
+            };
+            // Done only once the step before it is, whatever work is left.
+            for p in 0..periods {
+                builder.flag_row(&[(done[p], 1.0), (before[p], -1.0)], f64::NEG_INFINITY, 0.0, &format!("bafter_{b}_{step}_{p}"));
+            }
+            if !opening.done[step] && opening.left[step] > 0.0 {
+                let mut so_far: Option<usize> = None;
+                for p in 0..periods {
+                    let column = builder.cont(1.0, 0.0, &format!("bw_{b}_{step}_{p}"));
+                    let mut terms = vec![(column, 1.0)];
+                    if let Some(previous) = so_far {
+                        terms.push((previous, -1.0));
+                    }
+                    for (agent, available) in planned.machines.iter().filter(|(agent, _)| model.activity(*agent) == activity) {
+                        if available[p] <= 0.0 {
+                            continue;
+                        }
+                        let share = builder.cont((available[p] / opening.left[step]).min(1.0), 0.0, &format!("bm_{agent}_{b}_{p}"));
+                        terms.push((share, -1.0));
+                        work.entry((*agent, p)).or_default().push((share, opening.left[step]));
+                    }
+                    builder.row(&terms, 0.0, 0.0, &format!("bwsum_{b}_{step}_{p}"));
+                    // Worked only once the step before it is done, and done
+                    // only once all its work is.
+                    builder.flag_row(&[(Flag::Column(column), 1.0), (before[p], -1.0)], f64::NEG_INFINITY, 0.0, &format!("bready_{b}_{step}_{p}"));
+                    builder.flag_row(&[(Flag::Column(column), 1.0), (done[p], -1.0)], 0.0, f64::INFINITY, &format!("bfinish_{b}_{step}_{p}"));
+                    so_far = Some(column);
+                }
+            }
+            before = done.clone();
+            done_flags.push(done);
+        }
+        // Fired: once charged, in a period a firing window ends in, or as
+        // the plan opened scheduled.
+        let fire: Vec<Flag> = match planned.fires_in {
+            Some(from) => (0..periods).map(|p| Flag::Fixed(if p >= from { 1.0 } else { 0.0 })).collect(),
+            None => {
+                let flags: Vec<Flag> = (0..periods).map(|p| flag(builder, format!("bfire_{b}_{p}"))).collect();
+                monotone(builder, &flags, &format!("bfirem_{b}"));
+                for p in 0..periods {
+                    builder.flag_row(&[(flags[p], 1.0), (done_flags[2][p], -1.0)], f64::NEG_INFINITY, 0.0, &format!("bcharged_{b}_{p}"));
+                    if !model.fires[p] {
+                        let previous = if p == 0 { Flag::Fixed(0.0) } else { flags[p - 1] };
+                        builder.flag_row(&[(flags[p], 1.0), (previous, -1.0)], f64::NEG_INFINITY, 0.0, &format!("bwindow_{b}_{p}"));
+                    }
+                }
+                flags
+            }
+        };
+        // Its ground, all of it together, dug only once it has fired.
+        for ground in &planned.releases {
+            let Some(&left) = tonnes.get(ground) else { continue };
+            for (p, fired) in fire.iter().enumerate() {
+                if let Some(&dug) = block_so_far.get(&(*ground, p)) {
+                    builder.flag_row(&[(Flag::Column(dug), 1.0), (*fired, -left)], f64::NEG_INFINITY, 0.0, &format!("brelease_{}_{p}", ground.0));
+                }
+            }
+        }
+    }
+    // Each machine within what it could do in each period.
+    for ((agent, p), terms) in work {
+        let capacity = model.capacity[agent][p];
+        if capacity > 0.0 {
+            let scaled: Vec<(usize, f64)> = terms.into_iter().map(|(column, quantity)| (column, quantity / capacity)).collect();
+            builder.row(&scaled, f64::NEG_INFINITY, 1.0, &format!("bcap_{agent}_{p}"));
+        }
+    }
+}
+
 /// The plan for `input`, started from `seed` (the hourly dispatch's schedule)
 /// when there is one, so it is never worse than the schedule it improves.
 pub(crate) fn solve(input: &BlendInput, seed: Option<&BlendSolution>, window: Option<&Window>, settings: Settings, stop: &Arc<AtomicBool>) -> Result<PlanSolve, String> {
@@ -808,10 +996,9 @@ fn solve_periods(
 ) -> Result<PlanSolve, String> {
     let started = Instant::now();
     let prepared = Prepared::new(input, window, period_days, settings.relax);
-    let joined = prepared.period_days.iter().any(|days| days.len() > 1);
-    // Days joined, the seed would have to be mapped onto periods; nothing
-    // seeds a relaxation.
-    let seed = seed.filter(|_| !joined);
+    // Nothing seeds a relaxation: its blast columns have no values in a
+    // schedule, and joined days none per period.
+    let seed = seed.filter(|_| !settings.relax);
     let Prepared {
         days,
         period_days: covered,
@@ -907,6 +1094,12 @@ fn solve_periods(
             block_so_far.insert((*ground, p), column);
         }
     }
+    // ---- drill and blast: when each blast clears, finishes its steps and
+    // fires, and the ground it holds back until then.
+    if let Some(model) = &prepared.blasts {
+        blast_rows(&mut builder, model, &block_so_far, tonnes, periods);
+    }
+
     let mut chain_so_far: BTreeMap<(usize, usize), usize> = BTreeMap::new();
     for loader_index in 0..chains.len() {
         let mut previous: Option<usize> = None;
