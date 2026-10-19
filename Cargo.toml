@@ -8,7 +8,7 @@ exclude = ["vendor/egui-winit"]
 
 [package]
 name = "incline-design"
-version = "0.3.3"
+version = "0.3.4"
 edition = "2024"
 description = "Free Open Source Mine Design"
 repository = "https://github.com/Incline-Developers/Incline"
