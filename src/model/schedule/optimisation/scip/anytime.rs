@@ -74,7 +74,7 @@ use super::{
     super::{
         background::{self, Background},
         blended::{
-            drill_blast::{Chain, ChainState, DrillBlastTimeline},
+            drill_blast::{Chain, ChainState, DrillBlastTimeline, NEVER},
             greedy,
             input::BlendInput,
             plan::PlanTargets,
@@ -266,9 +266,9 @@ fn chain_at(input: &BlendInput, best: &Best, first: usize) -> Option<ChainState>
     Some(chain.state())
 }
 
-/// [`redispatch`] with the chain live from `first`: resumed as `best`'s hours
-/// before it leave it, so the tail may move blasts.
-fn redispatch_live(input: &BlendInput, live: &BlendInput, best: &Best, first: usize, targets: &PlanTargets, cancel: &AtomicBool) -> Option<Best> {
+/// [`redispatch`] with the chain live from `first`: resumed from `state`,
+/// as `best`'s hours before it leave it, so the tail may move blasts.
+fn redispatch_live(input: &BlendInput, live: &BlendInput, best: &Best, first: usize, state: Option<&ChainState>, targets: &PlanTargets, cancel: &AtomicBool) -> Option<Best> {
     if first == 0 {
         let found = greedy::dispatch_following(live, Some(targets), cancel).ok()??;
         return found.replay.is_valid().then_some(Best {
@@ -276,7 +276,7 @@ fn redispatch_live(input: &BlendInput, live: &BlendInput, best: &Best, first: us
             replay: found.replay,
         });
     }
-    let state = chain_at(input, best, first)?;
+    let state = state?.clone();
     let count = input.intervals.len();
     let mut tail = carried(input, best, first).window_input(input, whole(first, count));
     if let Some(chain) = tail.drill_blast.as_mut() {
@@ -286,6 +286,28 @@ fn redispatch_live(input: &BlendInput, live: &BlendInput, best: &Best, first: us
     let found = greedy::dispatch_unreplayed(&tail, Some(&targets.rebased(&tail)), cancel).ok()??;
     let timeline = found.drill_blast.clone();
     stitch_on(input, best, first, &[(whole(first, count), &found)], timeline, cancel)
+}
+
+/// How `moved` fires the blasts against `held`: how many sooner, how many
+/// later, and the days they moved by in all.
+fn moved_blasts(held: Option<&DrillBlastTimeline>, moved: &DrillBlastTimeline) -> String {
+    let (mut sooner, mut later, mut days) = (0, 0, 0.0);
+    for (index, events) in moved.blasts.iter().enumerate() {
+        let before = held.and_then(|held| held.blasts.get(index)).and_then(|events| events.fired_h).unwrap_or(NEVER);
+        let after = events.fired_h.unwrap_or(NEVER);
+        if (after - before).abs() < 1e-6 {
+            continue;
+        }
+        if after < before {
+            sooner += 1
+        } else {
+            later += 1
+        }
+        if after < NEVER && before < NEVER {
+            days += (after - before).abs() / 24.0;
+        }
+    }
+    format!("{sooner} fire sooner, {later} later, {days:.1} days moved")
 }
 
 /// `best`'s rows in intervals `first..end`, renumbered from `first`.
@@ -767,6 +789,20 @@ pub(crate) fn run(
             let input: &BlendInput = held.as_deref().unwrap_or(original);
             let first_day = days[start];
             let window = Window::opening(input, &best.solution, Some(&best.replay), first_day, length);
+            let from = input.intervals.iter().position(|interval| interval.day() >= first_day).unwrap_or(0);
+            // The chain as the kept hours before the window leave it, once for
+            // every weighting: on the timeline the best schedule was replayed
+            // on, which its digging keeps to. Simulated afresh, the chain can
+            // differ: a blast cleared sooner can take a machine from another,
+            // which then fires after ground the schedule digs.
+            let opening = match input
+                .drill_blast
+                .as_ref()
+                .and_then(|chain| Some((chain, best.solution.drill_blast.as_ref().or(chain.fixed.as_ref())?)))
+            {
+                Some((chain, timeline)) => Some(timeline.state_at(chain, input.intervals[from].start_h)),
+                None => chain_at(input, &best, from),
+            };
             let solve = Settings {
                 time_limit: limit.min(left),
                 relative_gap: 1e-3,
@@ -779,9 +815,8 @@ pub(crate) fn run(
                     continue;
                 }
             };
-            promised.extend(planned.day_values.iter().map(|(day, earned)| (*day, *earned)));
             let covered: BTreeSet<u32> = (first_day..first_day + length).collect();
-            let from = input.intervals.iter().position(|interval| interval.day() >= first_day).unwrap_or(0);
+            promised.extend(planned.day_values.iter().map(|(day, earned)| (*day, *earned)));
             // Each weight is dispatched at once, side by side; the first of the
             // best is chosen, as it would be one after another. A round is
             // the tails after the best schedule's hours on the timeline the
@@ -795,7 +830,7 @@ pub(crate) fn run(
                             .map(|&(follow, overrun)| {
                                 let candidate = targets.replacing(&covered, &planned.routes, follow * spread, overrun * spread);
                                 let found = if live_round {
-                                    redispatch_live(input, live.as_ref()?, &best, from, &candidate, cancel)
+                                    redispatch_live(input, live.as_ref()?, &best, from, opening.as_ref(), &candidate, cancel)
                                 } else {
                                     redispatch(input, &best, from, &candidate, cancel)
                                 };
@@ -825,7 +860,7 @@ pub(crate) fn run(
                         chain.fixed = Some(timeline.clone());
                     }
                     adopted = Some(Arc::new(moved));
-                    record(value, bound, "blasts moved".into());
+                    record(value, bound, format!("blasts moved: {}", moved_blasts(chain.fixed.as_ref(), timeline)));
                 }
                 value = found.value();
                 best = found;
