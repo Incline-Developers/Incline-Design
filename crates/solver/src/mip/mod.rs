@@ -13,7 +13,7 @@ pub(crate) mod change_log;
 pub(crate) mod clique_table;
 pub(crate) mod conflict_pool;
 pub(crate) mod data;
-pub use data::MipStatus;
+pub use data::{MIP_FEASIBILITY_TOLERANCE, MipStatus};
 pub(crate) mod cut_generation;
 pub(crate) mod cut_pool;
 pub(crate) mod domain;

@@ -557,7 +557,7 @@ impl MipSolver {
             return true;
         }
         if self.data.submip || self.data.incumbent.is_empty() {
-            let solvals = self.lp.lp_solver().col_value().expect("an LP solution").to_vec();
+            let solvals = self.lp_solution();
             self.heuristics.randomized_rounding(&mut self.data, &solvals);
             if self.data.options.mip_heuristic_run_shifting {
                 self.heuristics.shifting(&self.lp, &mut self.data, &solvals);
@@ -571,8 +571,11 @@ impl MipSolver {
         false
     }
 
+    /// The LP's column values, empty when it stopped without any (cut off
+    /// by the time limit or a stop inside presolve): the heuristics then
+    /// pass over it, as HiGHS's do a solution of the wrong size.
     fn lp_solution(&self) -> Vec<f64> {
-        self.lp.lp_solver().col_value().expect("an LP solution").to_vec()
+        self.lp.lp_solver().col_value().map(<[f64]>::to_vec).unwrap_or_default()
     }
 
     /// HiGHS's `evaluateRootNode`: the root LP, separation rounds while
@@ -724,6 +727,11 @@ impl MipSolver {
                 }
 
                 let solvals = self.lp_solution();
+                // A first root LP stopped without values leaves the
+                // direction to measure progress along from this one.
+                if self.data.firstlpsol.len() != num_col {
+                    self.data.firstlpsol = solvals.clone();
+                }
                 let firstlpsol = &self.data.firstlpsol;
                 let mut sqrnorm = CDouble::new(0.0);
                 for i in 0..num_col {

@@ -44,7 +44,7 @@ mod util;
 
 pub use lp_solver::{LpSolver, NONE};
 #[doc(hidden)]
-pub use mip::{MipSettings, MipSolution, MipStatus, solve_mip};
+pub use mip::{MIP_FEASIBILITY_TOLERANCE, MipSettings, MipSolution, MipStatus, solve_mip};
 pub use problem::{Problem, Sense};
 pub use simplex::{
     Infeasibilities, ModelStatus as Status,
