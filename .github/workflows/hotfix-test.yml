@@ -1,0 +1,54 @@
+name: Hotfix test build
+
+# Build a downloadable candidate without creating a tag or GitHub release.
+on:
+  push:
+    branches: [release/0.3.4]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hotfix-test-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: Build Windows 0.3.4 candidate
+    runs-on: windows-latest
+    steps:
+      - name: Preserve LF line endings
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install repository toolchain
+        run: rustup show
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out staged
+          name="Incline-Design-0.3.4-windows-x86_64"
+          cp target/release/incline-design.exe "staged/$name.exe"
+          7z a "out/$name.zip" "./staged/$name.exe"
+          cp docs/releases/0.3.4.md out/RELEASE-NOTES.md
+          sha256sum "out/$name.zip" > out/SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Incline-Design-0.3.4-windows-x86_64-test
+          path: out/*
+          if-no-files-found: error
+          retention-days: 30

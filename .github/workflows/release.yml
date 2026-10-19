@@ -156,7 +156,12 @@ jobs:
           set -euo pipefail
           # The tag does not exist — the version job would have stopped the run
           # otherwise — so this creates it at the commit that was built.
+          notes=(--generate-notes)
+          notes_file="docs/releases/${{ needs.version.outputs.version }}.md"
+          if [ -f "$notes_file" ]; then
+            notes=(--notes-file "$notes_file")
+          fi
           gh release create "${{ needs.version.outputs.tag }}" artifacts/* \
             --target "$GITHUB_SHA" \
             --title "Incline Design ${{ needs.version.outputs.version }}" \
-            --generate-notes
+            "${notes[@]}"
