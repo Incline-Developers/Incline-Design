@@ -2,7 +2,7 @@
 //! solver they go to.
 //!
 //! The dispatch only builds a [`LinearProgram`]: columns with an objective
-//! weight and bounds, rows with bounds over a few columns. [`LinearProgram::maximise`]
+//! weight and bounds, rows with bounds over a few columns. [`LinearProgram::maximise_from`]
 //! hands it to whichever backend the build has, so the same schedule logic
 //! runs natively and in the browser.
 
@@ -61,12 +61,29 @@ impl LinearProgram {
         self.objective.iter().zip(solution).map(|(weight, value)| weight * value).sum()
     }
 
-    /// The column values at a maximum of the objective, or why there are none.
-    pub(crate) fn maximise(&self) -> Result<Vec<f64>, String> {
+    /// The column values at a maximum of the objective, or why there are
+    /// none, starting from the basis the last program of the same shape in
+    /// `warm` ended on, and leaving this one's there.
+    pub(crate) fn maximise_from(&self, warm: &mut WarmStarts) -> Result<Vec<f64>, String> {
         let tidy = self.tidied()?;
         #[cfg(not(target_arch = "wasm32"))]
         tidy.dump();
-        tidy.maximise_solver()
+        tidy.maximise_solver(warm)
+    }
+
+    /// What a basis carries over between programs: their columns, and each
+    /// row's columns. Bounds, weights and coefficients may differ.
+    fn shape(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::hash::DefaultHasher::new();
+        self.objective.len().hash(&mut hasher);
+        for row in &self.rows {
+            row.terms.len().hash(&mut hasher);
+            for (col, _) in &row.terms {
+                col.0.hash(&mut hasher);
+            }
+        }
+        hasher.finish()
     }
 
     /// This program as a [`solver::Problem`].
@@ -118,11 +135,16 @@ impl LinearProgram {
                     _ => terms.push((col, coefficient)),
                 }
             }
-            terms.retain(|(_, coefficient)| *coefficient != 0.0 && coefficient.is_finite());
+            if let Some((col, coefficient)) = terms.iter().find(|(_, coefficient)| !coefficient.is_finite()) {
+                return Err(format!("a constraint has coefficient {coefficient} on column {}", col.0));
+            }
+            terms.retain(|(_, coefficient)| *coefficient != 0.0);
             if terms.is_empty() {
-                // 0 has to lie within the row's bounds, or nothing can.
-                let slack = 1e-9 * row.lower.abs().max(row.upper.abs()).max(1.0);
-                if row.lower > slack || row.upper < -slack {
+                // 0 has to lie within the row's bounds, or nothing can. Each
+                // side is held to its own tolerance: a distant bound on one
+                // side says nothing about how close the other must be.
+                let tolerance = |bound: f64| 1e-9 * bound.abs().max(1.0);
+                if row.lower.is_nan() || row.upper.is_nan() || row.lower > tolerance(row.lower) || row.upper < -tolerance(row.upper) {
                     return Err(format!("a constraint with no terms needs {}..{}", row.lower, row.upper));
                 }
                 continue;
@@ -162,12 +184,57 @@ impl LinearProgram {
 
     /// Solve with the `solver` crate, HiGHS's presolve and dual simplex method in Rust,
     /// which takes the same steps HiGHS does.
-    fn maximise_solver(&self) -> Result<Vec<f64>, String> {
-        let solution = solver::solve(&self.to_solver(), &solver::Options::default());
+    fn maximise_solver(&self, warm: &mut WarmStarts) -> Result<Vec<f64>, String> {
+        let shape = self.shape();
+        let problem = self.to_solver();
+        let options = solver::Options::default();
+        let mut solution = match warm.take(shape) {
+            Some(basis) => {
+                let found = solver::solve_from(&problem, &options, Some(&basis), None);
+                // A basis that does not suit this program is no reason to
+                // fail it: solve afresh.
+                if found.status == solver::Status::Optimal {
+                    found
+                } else {
+                    solver::solve(&problem, &options)
+                }
+            }
+            None => solver::solve(&problem, &options),
+        };
         if solution.status != solver::Status::Optimal {
             return Err(format!("solver ended {:?}", solution.status));
         }
+        if let Some(basis) = solution.basis.take() {
+            warm.keep(shape, basis);
+        }
         Ok(solution.col_value)
+    }
+}
+
+/// The bases the last few programs of each shape ended on, most recent
+/// first, for [`LinearProgram::maximise_from`]. The hourly dispatch solves
+/// much the same program interval after interval, with new bounds: started
+/// from the last one's basis, the solve skips presolve and takes a few
+/// iterations instead of tens.
+#[derive(Default)]
+pub(crate) struct WarmStarts {
+    bases: Vec<(u64, solver::Basis)>,
+}
+
+impl WarmStarts {
+    /// How many shapes are held: the interval's first program and the few
+    /// an interval tries with more segments.
+    const HELD: usize = 4;
+
+    fn take(&mut self, shape: u64) -> Option<solver::Basis> {
+        let at = self.bases.iter().position(|(held, _)| *held == shape)?;
+        Some(self.bases.remove(at).1)
+    }
+
+    fn keep(&mut self, shape: u64, basis: solver::Basis) {
+        self.bases.retain(|(held, _)| *held != shape);
+        self.bases.insert(0, (shape, basis));
+        self.bases.truncate(Self::HELD);
     }
 }
 

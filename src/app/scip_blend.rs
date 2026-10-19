@@ -152,13 +152,19 @@ pub(crate) fn improve(
     } else if !options.first_schedule_only && fits {
         relaxation = RelaxationJob::start(&out.input, options.time_limit, cancel, out.identity.run_id);
     }
+    // The exact model and its relaxation hold the first schedule's blast
+    // timeline. Where blasts can still move, which the search may do, their
+    // bounds hold only for schedules on that timeline: they may stop the
+    // whole-horizon solve on it, but only the search's bound, which allows
+    // each blast its earliest release, is published or ends the run.
+    let conditional = out.input.drill_blast.as_ref().is_some_and(|chain| chain.fixed.is_some() && chain.movable());
     match attempt {
         DayByDay::Seed(found) if options.first_schedule_only => {
             adopt_seed(&mut out, *found, None, None, DayByDayRole::Only);
             return out;
         }
         DayByDay::Seed(found) => {
-            let proved = relaxation.as_mut().and_then(RelaxationJob::ready);
+            let proved = global_bound(relaxation.as_mut().and_then(RelaxationJob::ready), None, conditional);
             let mut shown = ScheduleCompletion::new(out.identity, options, Arc::clone(&out.input));
             shown.sizes = out.sizes;
             shown.timings = out.timings;
@@ -235,7 +241,21 @@ pub(crate) fn improve(
         }
         searched_bound = searched.bound;
         let mut solution = searched.solution;
-        solution.drill_blast = drill_blast;
+        // A search that moved the blasts hands the run its timeline: every
+        // later solve keeps that one, as it kept the first schedule's.
+        if let Some(timeline) = searched.drill_blast {
+            let mut input = (*out.input).clone();
+            if let Some(chain) = input.drill_blast.as_mut() {
+                chain.fixed = Some(timeline.clone());
+            }
+            out.input = Arc::new(input);
+            solution.drill_blast = Some(timeline);
+            // The exact model's relaxation held the first schedule's
+            // timeline, which the whole-horizon solve no longer keeps.
+            relaxation = None;
+        } else {
+            solution.drill_blast = drill_blast;
+        }
         let value = searched.replay.replayed_objective;
         log::info!(
             "schedule run {}: the search kept {} improvements in {:.2?}, worth {value:.2}",
@@ -255,7 +275,7 @@ pub(crate) fn improve(
                 failure: None,
             },
         };
-        let proved = tighter(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound);
+        let proved = global_bound(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound, conditional);
         if activity.finishing() {
             log::info!("schedule run {}: finished early; keeping the search's schedule", out.identity.run_id);
             adopt_seed(&mut out, found, None, proved, DayByDayRole::Stopped);
@@ -282,7 +302,7 @@ pub(crate) fn improve(
     let remaining = options.time_limit.map(|limit| limit.saturating_sub(budget_started.elapsed()));
     if let Some(found) = seed.take_if(|_| remaining.is_some_and(|left| left < WHOLE_HORIZON_MINIMUM)) {
         log::info!("schedule run {}: no time left for a whole-horizon solve; keeping the first schedule", out.identity.run_id);
-        let proved = tighter(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound);
+        let proved = global_bound(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound, conditional);
         adopt_seed(&mut out, found, None, proved, DayByDayRole::Kept);
         return out;
     }
@@ -308,7 +328,7 @@ pub(crate) fn improve(
     }
     let remaining = options.time_limit.map(|limit| limit.saturating_sub(budget_started.elapsed()));
     if let Some(found) = seed.take_if(|_| remaining.is_some_and(|left| left < WHOLE_HORIZON_MINIMUM)) {
-        let proved = tighter(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound);
+        let proved = global_bound(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound, conditional);
         adopt_seed(&mut out, found, None, proved, DayByDayRole::Kept);
         return out;
     }
@@ -346,13 +366,13 @@ pub(crate) fn improve(
             "schedule run {}: finished early before the whole-horizon solve; keeping the search's schedule",
             out.identity.run_id
         );
-        let proved = tighter(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound);
+        let proved = global_bound(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound, conditional);
         adopt_seed(&mut out, found, None, proved, DayByDayRole::Stopped);
         return out;
     }
     if let Some(found) = seed.take_if(|_| remaining.is_some_and(|left| left < WHOLE_HORIZON_MINIMUM)) {
         log::info!("schedule run {}: no time left after building the model; keeping the first schedule", out.identity.run_id);
-        let proved = tighter(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound);
+        let proved = global_bound(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound, conditional);
         adopt_seed(&mut out, found, None, proved, DayByDayRole::Kept);
         return out;
     }
@@ -426,8 +446,10 @@ pub(crate) fn improve(
             "schedule run {}: the relaxation bound proves the first schedule within the gap target; whole-horizon solve stopped after {solve_time:.2?}",
             out.identity.run_id
         );
-        let proved = tighter(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound);
-        adopt_seed(&mut out, found, None, proved, DayByDayRole::Proven);
+        let proved = global_bound(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound, conditional);
+        // Proven on its timeline only, while blasts could move.
+        let role = if conditional { DayByDayRole::Kept } else { DayByDayRole::Proven };
+        adopt_seed(&mut out, found, None, proved, role);
         return out;
     }
     if let Some(limit) = remaining.or(options.time_limit) {
@@ -460,8 +482,9 @@ pub(crate) fn improve(
     }
     let Some(mut solution) = extracted.expect("checked extraction result") else {
         if let Some(found) = seed {
-            // A dual bound needs no incumbent, so it still bounds the seed.
-            let (bound, proved) = (out.primary_bound, tighter(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound));
+            // A dual bound needs no incumbent, so it still bounds the seed,
+            // on the timeline they share.
+            let (bound, proved) = (out.primary_bound.filter(|_| !conditional), global_bound(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound, conditional));
             adopt_seed(&mut out, found, bound, proved, DayByDayRole::Kept);
             return out;
         }
@@ -491,7 +514,7 @@ pub(crate) fn improve(
         for issue in checked.issues.iter().chain(&checked.grade_issues).take(5) {
             log::warn!("schedule run {}: whole-horizon incumbent rejected by replay: {issue}", out.identity.run_id);
         }
-        let proved = tighter(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound);
+        let proved = global_bound(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound, conditional);
         adopt_seed(&mut out, found, None, proved, DayByDayRole::Kept);
         return out;
     }
@@ -512,8 +535,17 @@ pub(crate) fn improve(
             return out;
         }
     }
-    let proved = tighter(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound);
+    let proved = global_bound(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound, conditional);
     let mut termination = classify_status(report.status, true);
+    if conditional {
+        // SCIP's bound checked its incumbent on the timeline they share; it
+        // says nothing of schedules that move blasts.
+        out.primary_bound = None;
+        out.primary_gap = None;
+        if termination == SolveTermination::Optimal {
+            termination = SolveTermination::FeasibleLimit;
+        }
+    }
     {
         let slack = out.replay.as_ref().map_or(0.0, |report| report.boundary_value_slack);
         let published = out.published_objective.expect("replayed objective") - slack;
@@ -984,6 +1016,13 @@ fn whole_horizon_columns(input: &BlendInput) -> usize {
 }
 
 /// The tighter of two upper bounds.
+/// The bound a run may publish: the search's, and the exact model's
+/// relaxation's only while that holds for every schedule (see `conditional`
+/// in [`improve`]).
+fn global_bound(relaxed: Option<f64>, searched: Option<f64>, conditional: bool) -> Option<f64> {
+    if conditional { searched } else { tighter(relaxed, searched) }
+}
+
 fn tighter(left: Option<f64>, right: Option<f64>) -> Option<f64> {
     match (left, right) {
         (Some(left), Some(right)) => Some(left.min(right)),

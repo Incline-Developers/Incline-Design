@@ -34,17 +34,26 @@
 //! pile having received and given up what the best schedule's did, so the
 //! piles the days after open with hold the same tonnes.
 //!
+//! Schedules are ranked as the exact solve ranks them: cashflow and the
+//! utilisation incentive. The plan values cashflow alone, so each of its
+//! bounds has the most the incentive could pay added.
+//!
 //! The gap is measured against the plan's linear relaxation over the whole
 //! horizon, which is an upper bound on any schedule's value while every
 //! simplification of the plan is optimistic: free order within a day, each
-//! route at its best candidate, the fleet pooled, a reclaim's grade the one
-//! that suits each use of it best. Once a window is the whole horizon, and
-//! nothing is reclaimed, the plan's own dual bound is one as well, and the
-//! tighter of the two is kept. The relaxation is solved in the background
-//! from the start, beside the search rather than ahead of it: on a long
-//! horizon it can take longer than the budget. So is the whole horizon's
-//! plan as a mixed-integer program, for its dual bound and for one more set
-//! of targets when it finishes.
+//! route at its best value and least haul, the fleet pooled, a loader's
+//! bars free of one another, each blast at its earliest release, a
+//! reclaim's grade the one that suits each use of it best. Only the
+//! relaxation is read that way; every other plan sets targets and bounds
+//! nothing. The relaxation is solved in the background from the start,
+//! beside the search rather than ahead of it: on a long horizon it can take
+//! longer than the budget. So is the whole horizon's plan as a
+//! mixed-integer program, for one more set of targets when it finishes.
+//!
+//! When no tail on the timeline the search holds improves on a window, the
+//! tails are dispatched again with the drill and blast chain live, resumed
+//! as the best schedule's hours leave it, so blasts move with the digging.
+//! One that wins gives the search its timeline from then on.
 //!
 //! Cancelling the run, or its time running out, stops every solve the search
 //! has under way and leaves it with the best schedule it has.
@@ -65,16 +74,18 @@ use super::{
     super::{
         background::{self, Background},
         blended::{
+            drill_blast::{Chain, ChainState, DrillBlastTimeline},
             greedy,
             input::BlendInput,
             plan::PlanTargets,
-            replay::{BlendSolution, ChunkRow, MovementRow, ReplayReport, replay_cancellable},
+            replay::{BlendSolution, ChunkRow, MovementRow, ReplayReport, replay_as_published},
             rolling::{self, Carry, Stitched},
+            utilisation,
         },
     },
     plan::{self, PlanSolve, Settings, Window},
 };
-use crate::model::schedule::optimisation::{DestinationKind, SourceId, StockpileId, TaskKind};
+use crate::model::schedule::optimisation::{Activity, DestinationKind, GroundId, SourceId, StockpileId};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct AnytimeSettings {
@@ -90,7 +101,7 @@ pub(crate) struct AnytimeSettings {
     /// Windows whose exact model would have more movement columns than this
     /// are not polished.
     pub(crate) polish_columns: usize,
-    /// Solve the whole horizon's plan in the background for a bound.
+    /// Solve the whole horizon's plan in the background, for its targets.
     pub(crate) background_bound: bool,
     /// A gap to the bound at or below which there is nothing left worth
     /// searching for.
@@ -139,6 +150,9 @@ pub(crate) struct Found {
     pub(crate) replay: ReplayReport,
     pub(crate) bound: Option<f64>,
     pub(crate) kept: usize,
+    /// The drill and blast timeline the schedule keeps, when the search
+    /// moved blasts off the first schedule's.
+    pub(crate) drill_blast: Option<DrillBlastTimeline>,
 }
 
 /// The best schedule so far and the replay's report on it.
@@ -148,8 +162,10 @@ struct Best {
 }
 
 impl Best {
+    /// What the search ranks schedules by: the replay's cashflow and the
+    /// utilisation incentive, as the exact solve and the dispatch rank them.
     fn value(&self) -> f64 {
-        self.replay.replayed_objective
+        self.replay.ranked_objective()
     }
 }
 
@@ -173,6 +189,18 @@ fn whole(first: usize, end: usize) -> rolling::Window {
 /// `best`'s intervals before `first`, then `pieces` (each in its own
 /// numbering), replayed against the whole horizon: `None` unless valid.
 fn stitch(input: &BlendInput, best: &Best, first: usize, pieces: &[(rolling::Window, &BlendSolution)], cancel: &AtomicBool) -> Option<Best> {
+    stitch_on(input, best, first, pieces, None, cancel)
+}
+
+/// [`stitch`], the whole on `timeline` when the pieces moved the blasts.
+fn stitch_on(
+    input: &BlendInput,
+    best: &Best,
+    first: usize,
+    pieces: &[(rolling::Window, &BlendSolution)],
+    timeline: Option<DrillBlastTimeline>,
+    cancel: &AtomicBool,
+) -> Option<Best> {
     let mut stitched = Stitched::new();
     if first > 0 {
         stitched.keep(input, whole(0, first), &best.solution, 0.0);
@@ -181,12 +209,13 @@ fn stitch(input: &BlendInput, best: &Best, first: usize, pieces: &[(rolling::Win
         stitched.keep(input, *window, solution, 0.0);
     }
     let mut solution = stitched.finish(input);
+    // Each candidate carries the timeline it is replayed on: its own, or
+    // the one the search holds.
+    solution.drill_blast = timeline.or_else(|| input.drill_blast.as_ref().and_then(|chain| chain.fixed.clone()));
     // The pieces' own objectives do not add up to the whole's: grade
     // targets are priced by day over all of them. The replay's figure is
     // the one reported.
-    let first_look = replay_cancellable(input, &solution, cancel)?;
-    solution.reported_objective = first_look.ranked_objective();
-    let replay = replay_cancellable(input, &solution, cancel)?;
+    let replay = replay_as_published(input, &mut solution, cancel)?;
     replay.is_valid().then_some(Best { solution, replay })
 }
 
@@ -202,8 +231,61 @@ fn redispatch(input: &BlendInput, best: &Best, first: usize, targets: &PlanTarge
     }
     let count = input.intervals.len();
     let tail = carried(input, best, first).window_input(input, whole(first, count));
-    let found = greedy::dispatch_following(&tail, Some(&targets.rebased(&tail)), cancel).ok()??;
-    stitch(input, best, first, &[(whole(first, count), &found.solution)], cancel)
+    // Stitching replays the whole horizon, the tail with it.
+    let found = greedy::dispatch_unreplayed(&tail, Some(&targets.rebased(&tail)), cancel).ok()??;
+    stitch(input, best, first, &[(whole(first, count), &found)], cancel)
+}
+
+/// The drill and blast chain as `best`'s hours before interval `first` leave
+/// it, simulated afresh on what they dig, as the dispatch walks it.
+fn chain_at(input: &BlendInput, best: &Best, first: usize) -> Option<ChainState> {
+    /// Ground below this stands no more, as the dispatch reads it.
+    const STANDING_T: f64 = 1e-9;
+    let mut free = input.drill_blast.clone()?;
+    free.fixed = None;
+    free.resume = None;
+    let mut dug: Vec<Vec<(GroundId, f64)>> = vec![Vec::new(); first];
+    for row in best.solution.movements.iter().filter(|row| row.interval < first) {
+        if let Some(candidate) = input.movements.get(row.candidate)
+            && candidate.activity == Activity::Dig
+            && let SourceId::Ground(ground) = candidate.source
+        {
+            dug[row.interval].push((ground, row.tonnes_t));
+        }
+    }
+    let mut left: BTreeMap<GroundId, f64> = input.ground.iter().map(|source| (source.id, source.tonnes_t)).collect();
+    let mut chain = Chain::new(&free);
+    for (interval, rows) in input.intervals[..first].iter().zip(&dug) {
+        chain.advance(*interval, |ground| left.get(&ground).is_some_and(|tonnes| *tonnes > STANDING_T));
+        for (ground, tonnes) in rows {
+            if let Some(slot) = left.get_mut(ground) {
+                *slot -= tonnes;
+            }
+        }
+    }
+    Some(chain.state())
+}
+
+/// [`redispatch`] with the chain live from `first`: resumed as `best`'s hours
+/// before it leave it, so the tail may move blasts.
+fn redispatch_live(input: &BlendInput, live: &BlendInput, best: &Best, first: usize, targets: &PlanTargets, cancel: &AtomicBool) -> Option<Best> {
+    if first == 0 {
+        let found = greedy::dispatch_following(live, Some(targets), cancel).ok()??;
+        return found.replay.is_valid().then_some(Best {
+            solution: found.solution,
+            replay: found.replay,
+        });
+    }
+    let state = chain_at(input, best, first)?;
+    let count = input.intervals.len();
+    let mut tail = carried(input, best, first).window_input(input, whole(first, count));
+    if let Some(chain) = tail.drill_blast.as_mut() {
+        chain.fixed = None;
+        chain.resume = Some(state);
+    }
+    let found = greedy::dispatch_unreplayed(&tail, Some(&targets.rebased(&tail)), cancel).ok()??;
+    let timeline = found.drill_blast.clone();
+    stitch_on(input, best, first, &[(whole(first, count), &found)], timeline, cancel)
 }
 
 /// `best`'s rows in intervals `first..end`, renumbered from `first`.
@@ -314,11 +396,7 @@ fn polish(
     // The window's own objective prices its grade targets on its days
     // alone; the replay's figure is the one reported, as when stitching.
     let mut polished = polished;
-    let Some(first_look) = replay_cancellable(&local, &polished, cancel) else {
-        return Ok(None);
-    };
-    polished.reported_objective = first_look.ranked_objective();
-    let Some(checked) = replay_cancellable(&local, &polished, cancel) else {
+    let Some(checked) = replay_as_published(&local, &mut polished, cancel) else {
         return Ok(None);
     };
     if !checked.is_valid() {
@@ -331,8 +409,8 @@ fn polish(
     let kept_after = stitch(input, best, first, &[(window, &polished), (whole(end, count), &slice(best, end, count))], cancel);
     carry.advance(input, window, &polished, &checked);
     let tail = carry.window_input(input, whole(end, count));
-    let dispatched_after = greedy::dispatch_following(&tail, Some(&targets.rebased(&tail)), cancel)?
-        .and_then(|found| stitch(input, best, first, &[(window, &polished), (whole(end, count), &found.solution)], cancel));
+    let dispatched_after = greedy::dispatch_unreplayed(&tail, Some(&targets.rebased(&tail)), cancel)?
+        .and_then(|found| stitch(input, best, first, &[(window, &polished), (whole(end, count), &found)], cancel));
     Ok([kept_after, dispatched_after].into_iter().flatten().max_by(|a, b| a.value().total_cmp(&b.value())))
 }
 
@@ -384,6 +462,8 @@ fn finished(background: &mut Option<Background<Result<PlanSolve, String>>>, wait
 struct Relaxations {
     worker: Background<()>,
     proved: std::sync::mpsc::Receiver<(u32, Result<PlanSolve, String>)>,
+    /// [`utilisation::ceiling`]: the plan values cashflow alone.
+    incentive: f64,
 }
 
 impl Relaxations {
@@ -392,6 +472,7 @@ impl Relaxations {
     /// bound in seconds on any horizon, and each finer one that finishes in
     /// time tightens it.
     fn start(input: &BlendInput, horizon_days: u32, limit: Duration, ending: &Arc<AtomicBool>) -> Option<Self> {
+        let incentive = utilisation::ceiling(input);
         let (input, ending) = (input.clone(), Arc::clone(ending));
         let (sender, proved) = std::sync::mpsc::channel();
         let worker = background::spawn("schedule-relaxations", move || {
@@ -408,7 +489,7 @@ impl Relaxations {
             }
         });
         match worker {
-            Ok(worker) => Some(Self { worker, proved }),
+            Ok(worker) => Some(Self { worker, proved, incentive }),
             Err(error) => {
                 log::warn!("the search's relaxation bound was not started: {error}");
                 None
@@ -424,7 +505,7 @@ impl Relaxations {
             .try_iter()
             .map(|(period, solved)| match solved {
                 Ok(relaxed) => {
-                    if let Some(proved) = relaxed.bound {
+                    if let Some(proved) = relaxed.bound.map(|cashflow| cashflow + self.incentive) {
                         *bound = Some(bound.map_or(proved, |held: f64| held.min(proved)));
                     }
                     format!("relaxation bound over {period}-day periods in {:.0}s, {}", relaxed.solve_s, relaxed.status)
@@ -439,7 +520,7 @@ impl Relaxations {
 /// The period lengths the relaxation is solved over, coarsest first; see
 /// [`plan::relaxation_bound`]. Over periods of a week, Centralia's 52 days
 /// take 14 s, by the day they take more than five minutes.
-const PERIOD_DAYS: [u32; 4] = [7, 4, 2, 1];
+const PERIOD_DAYS: [u32; 5] = [14, 7, 4, 2, 1];
 
 fn relaxed(relaxations: &Option<Relaxations>, bound: &mut Option<f64>) -> Option<String> {
     relaxations.as_ref()?.take(bound)
@@ -448,18 +529,30 @@ fn relaxed(relaxations: &Option<Relaxations>, bound: &mut Option<f64>) -> Option
 /// Search from `start`, a schedule of `input` the replay accepted, until the
 /// budget is spent, `cancel` is set or there is nothing left to find.
 pub(crate) fn run(
-    input: &BlendInput,
+    original: &BlendInput,
     start: (BlendSolution, ReplayReport),
     settings: AnytimeSettings,
     polisher: Option<Polisher>,
     cancel: &Arc<AtomicBool>,
     mut report: impl FnMut(&Progress),
 ) -> Found {
+    let input = original;
     let started = Instant::now();
     let mut best = Best {
         solution: start.0,
         replay: start.1,
     };
+    // When no tail on the timeline the search holds improves, tails with the
+    // drill and blast chain simulated afresh are tried, so blasts move with
+    // the digging; one that wins gives the search its timeline from then on.
+    let live = input.drill_blast.is_some().then(|| {
+        let mut live = input.clone();
+        if let Some(chain) = live.drill_blast.as_mut() {
+            chain.fixed = None;
+        }
+        live
+    });
+    let mut adopted: Option<Arc<BlendInput>> = None;
     let mut value = best.value();
     let mut kept = 0;
     let mut record = |value: f64, bound: Option<f64>, note: String| {
@@ -472,10 +565,6 @@ pub(crate) fn run(
     };
     record(value, None, "first schedule".into());
 
-    // A window plan prices reclaim at the blend the best schedule leaves, so
-    // only a plan of the whole horizon from scratch bounds a schedule that
-    // reclaims; see `plan`.
-    let reclaims = input.tasks.iter().any(|task| matches!(task.kind, TaskKind::Reclaim { .. }));
     let mut bound = None;
     // Raised when the search ends, so the background plans stop with it.
     let ending = Arc::new(AtomicBool::new(false));
@@ -518,18 +607,18 @@ pub(crate) fn run(
     let mut limit = settings.window_limit;
     let mut offset = 0;
     let mut quiet_passes = 0;
+
     // Whether the days have been polished since a plan window was last kept.
     let mut polished_since = false;
     'passes: loop {
+        let held = adopted.clone();
+        let input: &BlendInput = held.as_deref().unwrap_or(original);
         if let Some(note) = relaxed(&relaxation, &mut bound) {
             record(value, bound, note);
         }
         if let Some(outcome) = finished(&mut background, false) {
             match outcome {
                 Ok(whole_plan) => {
-                    if let Some(proved) = whole_plan.bound {
-                        bound = Some(bound.map_or(proved, |held: f64| held.min(proved)));
-                    }
                     record(
                         value,
                         bound,
@@ -593,6 +682,8 @@ pub(crate) fn run(
                 })
                 .collect();
             for (short, day) in order {
+                let held = adopted.clone();
+                let input: &BlendInput = held.as_deref().unwrap_or(original);
                 let left = settings.budget.saturating_sub(started.elapsed());
                 if left.is_zero() || cancel.load(Ordering::Relaxed) {
                     break 'passes;
@@ -670,6 +761,10 @@ pub(crate) fn run(
             if left.is_zero() || cancel.load(Ordering::Relaxed) {
                 break 'passes;
             }
+            // A window kept earlier in this pass may have moved the blasts:
+            // every window plans and replays on the timeline `best` holds.
+            let held = adopted.clone();
+            let input: &BlendInput = held.as_deref().unwrap_or(original);
             let first_day = days[start];
             let window = Window::opening(input, &best.solution, Some(&best.replay), first_day, length);
             let solve = Settings {
@@ -684,37 +779,54 @@ pub(crate) fn run(
                     continue;
                 }
             };
-            // The whole horizon from its first day is the plan itself, whose
-            // dual bound bounds every schedule.
-            if length == horizon
-                && start == 0
-                && !reclaims
-                && let Some(proved) = planned.bound
-            {
-                bound = Some(bound.map_or(proved, |held: f64| held.min(proved)));
-            }
             promised.extend(planned.day_values.iter().map(|(day, earned)| (*day, *earned)));
             let covered: BTreeSet<u32> = (first_day..first_day + length).collect();
             let from = input.intervals.iter().position(|interval| interval.day() >= first_day).unwrap_or(0);
             // Each weight is dispatched at once, side by side; the first of the
-            // best is chosen, as it would be one after another.
-            let chosen = (started.elapsed() < settings.budget && !cancel.load(Ordering::Relaxed))
-                .then(|| {
-                    WEIGHTS
-                        .par_iter()
-                        .map(|&(follow, overrun)| {
-                            let candidate = targets.replacing(&covered, &planned.routes, follow * spread, overrun * spread);
-                            redispatch(input, &best, from, &candidate, cancel).map(|found| (found, candidate))
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .into_iter()
-                .flatten()
-                .flatten()
-                .reduce(|kept, next| if next.0.value() > kept.0.value() { next } else { kept });
+            // best is chosen, as it would be one after another. A round is
+            // the tails after the best schedule's hours on the timeline the
+            // search holds, or, when none of those improves, the tails with
+            // the chain live.
+            let evaluate = |live_round: bool| {
+                (started.elapsed() < settings.budget && !cancel.load(Ordering::Relaxed))
+                    .then(|| {
+                        WEIGHTS
+                            .par_iter()
+                            .map(|&(follow, overrun)| {
+                                let candidate = targets.replacing(&covered, &planned.routes, follow * spread, overrun * spread);
+                                let found = if live_round {
+                                    redispatch_live(input, live.as_ref()?, &best, from, &candidate, cancel)
+                                } else {
+                                    redispatch(input, &best, from, &candidate, cancel)
+                                };
+                                found.map(|found| (found, candidate))
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .reduce(|kept, next| if next.0.value() > kept.0.value() { next } else { kept })
+            };
+            let better = |found: &Option<(Best, PlanTargets)>| found.as_ref().is_some_and(|(found, _)| found.value() > value + 1e-7 * value.abs().max(1.0));
+            let mut chosen = evaluate(false);
+            if live.is_some() && !better(&chosen) {
+                chosen = evaluate(true);
+            }
             if let Some((found, candidate)) = chosen
                 && found.value() > value + 1e-7 * value.abs().max(1.0)
             {
+                // A schedule with a timeline of its own moves the search onto it.
+                if let (Some(timeline), Some(chain)) = (found.solution.drill_blast.as_ref(), input.drill_blast.as_ref())
+                    && chain.fixed.as_ref() != Some(timeline)
+                {
+                    let mut moved = input.clone();
+                    if let Some(chain) = moved.drill_blast.as_mut() {
+                        chain.fixed = Some(timeline.clone());
+                    }
+                    adopted = Some(Arc::new(moved));
+                    record(value, bound, "blasts moved".into());
+                }
                 value = found.value();
                 best = found;
                 targets = candidate;
@@ -765,13 +877,9 @@ pub(crate) fn run(
         background::pause(Duration::from_millis(20));
     }
     relaxed(&relaxation, &mut bound);
-    if let Some(Ok(whole_plan)) = finished(&mut background, false)
-        && let Some(proved) = whole_plan.bound
-    {
-        bound = Some(bound.map_or(proved, |held: f64| held.min(proved)));
-    }
     record(value, bound, "done".into());
     Found {
+        drill_blast: adopted.as_ref().and_then(|input| input.drill_blast.as_ref()).and_then(|chain| chain.fixed.clone()),
         solution: best.solution,
         replay: best.replay,
         bound,

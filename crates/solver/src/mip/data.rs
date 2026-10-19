@@ -743,6 +743,7 @@ impl MipData {
                     orig.a_value.clone(),
                     lp_options,
                 );
+                repair.set_interrupt(self.interrupt.clone());
                 repair.run();
                 self.total_repair_lp_iterations += repair.iterations() as i64;
                 let primal_feasible = repair.primal_feasible();

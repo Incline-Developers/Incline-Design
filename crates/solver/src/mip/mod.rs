@@ -367,7 +367,7 @@ fn mip_models(problem: &crate::Problem) -> (MipModel, MipModel, f64) {
 /// A MIP solve's limits: HiGHS's options of the same names.
 #[derive(Clone, Debug)]
 pub struct MipSettings {
-    /// Seconds, for the solve and separately for completing a seed.
+    /// Seconds, for the whole solve: completing a seed comes out of it.
     pub time_limit: f64,
     pub mip_rel_gap: f64,
     pub mip_detect_symmetry: bool,
@@ -404,7 +404,8 @@ pub struct MipSolution {
 /// starting from `seed` (a value per column) if there is one, and stopping
 /// with [`MipStatus::Interrupt`] once `interrupt` says so.
 pub fn solve_mip(problem: &crate::Problem, settings: &MipSettings, seed: Option<&[f64]>, interrupt: Option<crate::Interrupt>) -> MipSolution {
-    let options = data::MipOptions {
+    let started = web_time::Instant::now();
+    let mut options = data::MipOptions {
         time_limit: settings.time_limit,
         mip_rel_gap: settings.mip_rel_gap,
         mip_detect_symmetry: settings.mip_detect_symmetry,
@@ -423,6 +424,9 @@ pub fn solve_mip(problem: &crate::Problem, settings: &MipSettings, seed: Option<
     let is_mip = orig.integrality.iter().any(|&t| t != VarType::Continuous);
     if is_mip && let Some((col_value, row_value)) = start.take() {
         start = complete_solution_from_discrete_assignment(problem, &orig, &options, col_value, row_value, interrupt.clone());
+        // One deadline for the whole call: what completing the seed took
+        // comes out of the main solve's time.
+        options.time_limit = (options.time_limit - started.elapsed().as_secs_f64()).max(0.0);
     }
     if num_col == 0 {
         // HiGHS's `kModelEmpty`: nothing to choose, the offset to pay.
