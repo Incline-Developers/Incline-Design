@@ -290,19 +290,20 @@ impl<'a> Checker<'a> {
         self.cancel.is_some_and(|flag| flag.load(Ordering::Acquire))
     }
     /// Record a conservation residual and complain when it exceeds tolerance.
-    fn residual(&mut self, label: &str, actual: f64, expected: f64) {
+    /// `label` is only written out for an issue: most checks pass.
+    fn residual(&mut self, label: impl FnOnce() -> String, actual: f64, expected: f64) {
         let absolute = (actual - expected).abs();
         let scale = expected.abs().max(1.0);
         self.report.max_absolute_residual_t = self.report.max_absolute_residual_t.max(absolute);
         self.report.max_relative_residual = self.report.max_relative_residual.max(absolute / scale);
         if absolute > REPLAY_TOLERANCE_T {
-            self.report.issues.push(format!("{label}: replayed {actual:.6} against {expected:.6}"));
+            self.report.issues.push(format!("{}: replayed {actual:.6} against {expected:.6}", label()));
         }
     }
 
-    fn breach(&mut self, label: &str, used: f64, limit: f64) {
+    fn breach(&mut self, label: impl FnOnce() -> String, used: f64, limit: f64) {
         if used > limit + REPLAY_TOLERANCE_T {
-            self.report.issues.push(format!("{label}: {used:.6} exceeds {limit:.6}"));
+            self.report.issues.push(format!("{}: {used:.6} exceeds {limit:.6}", label()));
         }
     }
 }
@@ -390,7 +391,7 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
         for row in dug_rows.get(&source.id).into_iter().flatten() {
             dug += row.tonnes_t;
         }
-        checker.breach(&format!("ground {} depleted twice", source.id.0), dug, source.tonnes_t);
+        checker.breach(|| format!("ground {} depleted twice", source.id.0), dug, source.tonnes_t);
     }
 
     // ---- proportional extraction of a mixed block ---------------------------
@@ -418,10 +419,12 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
             for share in &source.material {
                 let moved = by_material.get(&share.material.0).copied().unwrap_or(0.0);
                 checker.residual(
-                    &format!(
-                        "ground {} material {} was not dug in proportion in interval {interval} segment {segment}",
-                        source.id.0, share.material.0
-                    ),
+                    || {
+                        format!(
+                            "ground {} material {} was not dug in proportion in interval {interval} segment {segment}",
+                            source.id.0, share.material.0
+                        )
+                    },
                     moved,
                     share.fraction * extracted,
                 );
@@ -458,7 +461,7 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
                         .map(|row| row.tonnes_t)
                         .sum();
                     checker.breach(
-                        &format!("loader {} {activity:?} rate in interval {} segment {segment}", loader.id.0, interval.index),
+                        || format!("loader {} {activity:?} rate in interval {} segment {segment}", loader.id.0, interval.index),
                         moved,
                         tph * duration,
                     );
@@ -503,7 +506,7 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
                     .sum();
                 let available = hours / interval.duration_h() * duration;
                 checker.breach(
-                    &format!("truck class {} hours in interval {} segment {segment}", truck.id.0, interval.index),
+                    || format!("truck class {} hours in interval {} segment {segment}", truck.id.0, interval.index),
                     used,
                     available,
                 );
@@ -514,35 +517,38 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
         let clock: f64 = (0..segments)
             .map(|segment| solution.durations.get(&(interval.index, segment)).copied().unwrap_or(0.0))
             .sum();
-        checker.residual(&format!("event clock for interval {}", interval.index), clock, interval.duration_h());
+        checker.residual(|| format!("event clock for interval {}", interval.index), clock, interval.duration_h());
     }
 
     // ---- destination and crusher limits -------------------------------------
+    // What each destination received, in all and by day, in one pass over
+    // the rows (in their order, so each sum is the same as a scan of its own).
+    let mut received: BTreeMap<DestinationId, (f64, BTreeMap<usize, f64>)> = BTreeMap::new();
+    for row in &solution.movements {
+        let Some(candidate) = input.movements.get(row.candidate) else { continue };
+        let (total, by_day) = received.entry(candidate.destination).or_default();
+        *total += row.tonnes_t;
+        if let Some(interval) = input.intervals.get(row.interval) {
+            *by_day.entry(interval.day() as usize).or_default() += row.tonnes_t;
+        }
+    }
     for destination in &input.destinations {
         if checker.cancelled() {
             return None;
         }
-        let delivered = |filter: &dyn Fn(usize) -> bool| -> f64 {
-            solution
-                .movements
-                .iter()
-                .filter(|row| input.movements.get(row.candidate).is_some_and(|candidate| candidate.destination == destination.id) && filter(row.interval))
-                .map(|row| row.tonnes_t)
-                .sum()
-        };
+        let (total, by_day) = received.get(&destination.id).map_or((0.0, None), |(total, by_day)| (*total, Some(by_day)));
         match destination.kind {
             DestinationKind::Crusher => {
                 for (day, budget) in destination.crusher_daily_t.iter().enumerate() {
                     let Some(budget) = budget else { continue };
                     // Direct mining and reclaim share this budget.
-                    let used = delivered(&|interval| input.intervals.get(interval).is_some_and(|entry| entry.day() as usize == day));
-                    checker.breach(&format!("crusher {} budget on day {day}", destination.id.0), used, *budget);
+                    let used = by_day.and_then(|by_day| by_day.get(&day)).copied().unwrap_or(0.0);
+                    checker.breach(|| format!("crusher {} budget on day {day}", destination.id.0), used, *budget);
                 }
             }
             DestinationKind::Dump => {
                 let Some(capacity) = destination.capacity_t else { continue };
-                let used = delivered(&|_| true);
-                checker.breach(&format!("destination {} capacity", destination.id.0), used, capacity);
+                checker.breach(|| format!("destination {} capacity", destination.id.0), total, capacity);
             }
             // Independently reconstructed segment occupancy in replay_pile
             // checks storage capacity, including opening stock and reclaim.
@@ -572,7 +578,7 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
             return None;
         }
         let TaskKind::Reclaim { maximum_t: Some(maximum), .. } = &task.kind else { continue };
-        checker.breach(&format!("reclaim cap on task {}", task.id.0), reclaimed.get(&index).copied().unwrap_or(0.0), *maximum);
+        checker.breach(|| format!("reclaim cap on task {}", task.id.0), reclaimed.get(&index).copied().unwrap_or(0.0), *maximum);
     }
 
     // ---- exact authored bar windows -----------------------------------------
@@ -1210,7 +1216,7 @@ fn replay_pile(
         }
 
         if resting {
-            checker.breach(&format!("pile {} reclaim before its rest, interval {k}", pile.id.0), reclaimed_t, 0.0);
+            checker.breach(|| format!("pile {} reclaim before its rest, interval {k}", pile.id.0), reclaimed_t, 0.0);
         }
         if pile.exclusive && received_t > REPLAY_TOLERANCE_T && reclaimed_t > REPLAY_TOLERANCE_T {
             checker.report.issues.push(format!(
@@ -1224,15 +1230,15 @@ fn replay_pile(
 
         // The authored mode of the interval's day.
         if !pile.builds(*interval) {
-            checker.breach(&format!("pile {} receipts on a day it is not building, interval {k}", pile.id.0), received_t, 0.0);
+            checker.breach(|| format!("pile {} receipts on a day it is not building, interval {k}", pile.id.0), received_t, 0.0);
         }
         if !pile.reclaims(*interval) {
-            checker.breach(&format!("pile {} reclaim on a day it is not reclaiming, interval {k}", pile.id.0), reclaimed_t, 0.0);
+            checker.breach(|| format!("pile {} reclaim on a day it is not reclaiming, interval {k}", pile.id.0), reclaimed_t, 0.0);
         }
 
         // Inventory release timing: a reclaim in interval k may only draw on
         // the released opening blend, never on material received during k.
-        checker.breach(&format!("pile {} reclaim against released opening in interval {k}", pile.id.0), reclaimed_t, open_t);
+        checker.breach(|| format!("pile {} reclaim against released opening in interval {k}", pile.id.0), reclaimed_t, open_t);
 
         // Physical occupancy throughout the interval (§3), recomputed from
         // the rows: receipts occupy on arrival, reclaim frees space as it
@@ -1252,13 +1258,13 @@ fn replay_pile(
                 .any(|&(cell, loader)| cell == segment && blocks_dug.get(&(segment, loader)).is_some_and(|blocks| blocks.len() > 1));
             if uneven && per_segment_reclaim[segment] > REPLAY_TOLERANCE_T {
                 checker.breach(
-                    &format!("pile {} capacity while blocks were worked back to back in interval {k} segment {segment}", pile.id.0),
+                    || format!("pile {} capacity while blocks were worked back to back in interval {k} segment {segment}", pile.id.0),
                     occupied + per_segment_receipts[segment],
                     pile.capacity_t,
                 );
             }
             occupied += per_segment_receipts[segment] - per_segment_reclaim[segment];
-            checker.breach(&format!("pile {} capacity in interval {k} segment {segment}", pile.id.0), occupied, pile.capacity_t);
+            checker.breach(|| format!("pile {} capacity in interval {k} segment {segment}", pile.id.0), occupied, pile.capacity_t);
             if occupied < -REPLAY_TOLERANCE_T {
                 checker
                     .report
@@ -1305,7 +1311,7 @@ fn replay_pile(
                     })
                     .collect();
                 checker.residual(
-                    &format!("pile {} chunk draws against its reclaim movements in interval {k}", pile.id.0),
+                    || format!("pile {} chunk draws against its reclaim movements in interval {k}", pile.id.0),
                     *chunk_t,
                     reclaimed_t,
                 );
@@ -1581,7 +1587,7 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> ChunkDra
                     continue;
                 };
                 checker.residual(
-                    &format!("pile {} chunk {chunk} opening tonnes in interval {interval}", pile.id.0),
+                    || format!("pile {} chunk {chunk} opening tonnes in interval {interval}", pile.id.0),
                     state.open_t,
                     held_t[chunk],
                 );
@@ -1687,14 +1693,14 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> ChunkDra
 
                 // Capacity is authored per cell.
                 checker.breach(
-                    &format!("pile {} chunk {chunk} capacity in interval {interval}", pile.id.0),
+                    || format!("pile {} chunk {chunk} capacity in interval {interval}", pile.id.0),
                     state.open_t,
                     pile.chunks[chunk],
                 );
                 // It receives no more than its room as the interval opens:
                 // what it draws in the interval does not make room in it.
                 checker.breach(
-                    &format!("pile {} chunk {chunk} room in interval {interval}", pile.id.0),
+                    || format!("pile {} chunk {chunk} room in interval {interval}", pile.id.0),
                     state.open_t + state.received_t,
                     pile.chunks[chunk],
                 );

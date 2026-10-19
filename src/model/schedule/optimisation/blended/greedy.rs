@@ -98,14 +98,14 @@ use std::{
 use super::{
     drill_blast::Chain,
     input::{
-        BlendInput, BlendPile, DIG_ROOM_T, GRADE_CUSHION_T, GRADE_MARGIN, GradeQualification, OutletIndex, REST_RECEIPT_T, attribute_reclaim, authored_tasks, interval_rate,
-        task_active, task_authorises,
+        BlendGradeTarget, BlendInput, BlendPile, DIG_ROOM_T, GRADE_CUSHION_T, GRADE_MARGIN, GradeQualification, OutletIndex, REST_RECEIPT_T, attribute_reclaim, authored_tasks,
+        interval_rate, task_active, task_authorises,
     },
     lp::{Col, LinearProgram, WarmStarts},
     plan::PlanTargets,
     replay::{BlendSolution, ChunkRow, ExtractionAdjustments, MovementRow, ReplayReport, replay_cancellable},
 };
-use crate::model::schedule::optimisation::{Activity, DestinationId, DestinationKind, GroundId, Interval, LoaderId, SourceId, StockpileId, TaskKind, TruckClassId};
+use crate::model::schedule::optimisation::{Activity, DestinationId, DestinationKind, GroundId, Interval, LoaderId, MaterialId, SourceId, StockpileId, TaskKind, TruckClassId};
 
 /// Remaining tonnes at or below which a block counts as finished.
 const FINISHED_T: f64 = 1e-9;
@@ -928,7 +928,7 @@ impl<'a> State<'a> {
                     TaskKind::Dig { .. } => {
                         for (position, &block) in bar.blocks.iter().enumerate() {
                             let left = self.ground.get(&block).copied().unwrap_or(0.0);
-                            let Some(source) = input.ground.iter().find(|source| source.id == block) else {
+                            let Some(source) = self.outlets.source(input, block) else {
                                 continue;
                             };
                             if position + 1 < bar.blocks.len() {
@@ -1242,12 +1242,7 @@ impl<'a> State<'a> {
             }
         }
         for ((loader, block, material, segment), entries) in portions {
-            let fraction = input
-                .ground
-                .iter()
-                .find(|source| source.id == block)
-                .and_then(|source| source.material.iter().find(|share| share.material.0 == material))
-                .map_or(0.0, |share| share.fraction);
+            let fraction = self.outlets.share(block, MaterialId(material));
             let target = fraction * extracted.get(&(loader, block, segment)).copied().unwrap_or(0.0);
             let total: f64 = entries.iter().map(|(_, tonnes)| tonnes).sum();
             if target <= 0.0 || total <= 0.0 {
@@ -1336,6 +1331,8 @@ impl<'a> State<'a> {
                 }
             }
         }
+        // The grade targets on this interval's day, once rather than per row.
+        let targets: Vec<(usize, &BlendGradeTarget)> = input.grade_targets.iter().enumerate().filter(|(_, t)| t.applies(interval.start_h)).collect();
         for (index, segment, tonnes) in rows {
             let candidate = &input.movements[index];
             *self.rows.entry((index, k, segment)).or_default() += tonnes;
@@ -1351,12 +1348,7 @@ impl<'a> State<'a> {
                 }
                 _ => (0..grades).map(|grade| input.grades.fraction(candidate.material, grade).unwrap_or(0.0)).collect(),
             };
-            for (i, target) in input
-                .grade_targets
-                .iter()
-                .enumerate()
-                .filter(|(_, t)| t.destination == candidate.destination && t.applies(interval.start_h))
-            {
+            for &(i, target) in targets.iter().filter(|(_, t)| t.destination == candidate.destination) {
                 let entry = self
                     .target_totals
                     .entry((i, crate::model::schedule::grade_targets::target_day(interval.start_h)))
