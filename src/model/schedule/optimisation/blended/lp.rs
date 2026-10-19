@@ -74,8 +74,8 @@ impl LinearProgram {
     /// What a basis carries over between programs: their columns, and each
     /// row's columns. Bounds, weights and coefficients may differ.
     fn shape(&self) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::hash::DefaultHasher::new();
+        use std::hash::{BuildHasher, Hash, Hasher};
+        let mut hasher = foldhash::fast::FixedState::default().build_hasher();
         self.objective.len().hash(&mut hasher);
         for row in &self.rows {
             row.terms.len().hash(&mut hasher);
@@ -104,7 +104,9 @@ impl LinearProgram {
     fn dump(&self) {
         use std::sync::atomic::{AtomicU64, Ordering};
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let Some(dir) = std::env::var_os("INCLINE_LP_DUMP") else {
+        // Read once: the dispatch solves thousands of programs.
+        static DIR: std::sync::OnceLock<Option<std::ffi::OsString>> = std::sync::OnceLock::new();
+        let Some(dir) = DIR.get_or_init(|| std::env::var_os("INCLINE_LP_DUMP")) else {
             return;
         };
         let number = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -124,7 +126,7 @@ impl LinearProgram {
     /// apart from rounding.
     fn tidied(&self) -> Result<Self, String> {
         let mut rows: Vec<Row> = Vec::with_capacity(self.rows.len());
-        let mut seen: std::collections::HashMap<Vec<(usize, u64)>, usize> = std::collections::HashMap::new();
+        let mut seen: std::collections::HashMap<Vec<(usize, u64)>, usize, foldhash::fast::FixedState> = std::collections::HashMap::default();
         for row in &self.rows {
             let mut terms: Vec<(Col, f64)> = Vec::with_capacity(row.terms.len());
             let mut sorted = row.terms.clone();

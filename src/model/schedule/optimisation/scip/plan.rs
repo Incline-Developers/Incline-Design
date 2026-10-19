@@ -536,12 +536,21 @@ impl<'a> Prepared<'a> {
                 diggers.entry(ground).or_default().insert(loader_index);
             }
         }
-        let bars_holding = |loader_index: usize, ground: GroundId| -> Vec<usize> {
-            authored_tasks(input, loader_index)
-                .into_iter()
-                .filter(|&task| matches!(&input.tasks[task].kind, TaskKind::Dig { sequence } if sequence.contains(&ground)))
-                .collect()
-        };
+        let mut holding: BTreeMap<(usize, GroundId), Vec<usize>> = BTreeMap::new();
+        if bounding {
+            for loader_index in 0..input.loaders.len() {
+                for task in authored_tasks(input, loader_index) {
+                    let TaskKind::Dig { sequence } = &input.tasks[task].kind else { continue };
+                    for &ground in sequence {
+                        let bars = holding.entry((loader_index, ground)).or_default();
+                        if bars.last() != Some(&task) {
+                            bars.push(task);
+                        }
+                    }
+                }
+            }
+        }
+        let bars_holding = |loader_index: usize, ground: GroundId| -> Vec<usize> { holding.get(&(loader_index, ground)).cloned().unwrap_or_default() };
         // Days each (loader, block) may be dug: one of its bars active and
         // the loader able to dig, not before the loader could have reached it
         // at full rate, and not before its blast is released. To bound, reach

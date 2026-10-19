@@ -764,6 +764,8 @@ pub(crate) struct OutletIndex {
     /// mostly goes to a handful of the same places, and readiness asks this
     /// of every bar in every cell.
     needs: BTreeMap<(LoaderId, GroundId), Vec<Vec<DestinationId>>>,
+    /// Each block's share of each material it holds, the first listed.
+    shares: BTreeMap<(GroundId, MaterialId), f64>,
 }
 
 impl OutletIndex {
@@ -797,7 +799,24 @@ impl OutletIndex {
             sets.dedup();
             needs.insert((loader, block), sets);
         }
-        Self { digs, ground, needs }
+        let mut shares = BTreeMap::new();
+        for source in &input.ground {
+            for share in &source.material {
+                shares.entry((source.id, share.material)).or_insert(share.fraction);
+            }
+        }
+        Self { digs, ground, needs, shares }
+    }
+
+    /// The block `ground`, as [`BlendInput::ground`] holds it.
+    pub(crate) fn source<'a>(&self, input: &'a BlendInput, ground: GroundId) -> Option<&'a GroundSource> {
+        self.ground.get(&ground).map(|&index| &input.ground[index])
+    }
+
+    /// The share of `material` in the block `ground`: none for a material
+    /// it does not hold.
+    pub(crate) fn share(&self, ground: GroundId, material: MaterialId) -> f64 {
+        self.shares.get(&(ground, material)).copied().unwrap_or(0.0)
     }
 
     pub(crate) fn of(&self, input: &BlendInput, task: &Task, ground: GroundId) -> Vec<Vec<DestinationId>> {

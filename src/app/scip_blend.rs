@@ -606,7 +606,10 @@ pub(crate) fn improve(
         if let Some(found) = seed {
             // A dual bound needs no incumbent, so it still bounds the seed,
             // on the timeline they share.
-            let (bound, proved) = (out.primary_bound.filter(|_| !conditional), global_bound(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound, conditional));
+            let (bound, proved) = (
+                out.primary_bound.filter(|_| !conditional),
+                global_bound(relaxation.as_mut().and_then(RelaxationJob::ready), searched_bound, conditional),
+            );
             adopt_seed(&mut out, found, bound, proved, DayByDayRole::Kept);
             return out;
         }
