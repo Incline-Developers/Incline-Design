@@ -22,8 +22,8 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use super::input::{BlendInput, BlendPile, GradeLimit, WINDOW_TOLERANCE_H, attribute_reclaim, authored_tasks, dig_authority, task_authorises};
-use crate::model::schedule::optimisation::{Activity, Destination, DestinationId, DestinationKind, GroundId, LoaderId, SourceId, StockpileId, TaskKind};
+use super::input::{BlendInput, BlendPile, GradeLimit, WINDOW_TOLERANCE_H, attribute_reclaim, authored_tasks, dig_authority};
+use crate::model::schedule::optimisation::{Activity, Destination, DestinationId, DestinationKind, GroundId, GroundSource, LoaderId, SourceId, StockpileId, TaskKind};
 
 /// One published movement: how much material a candidate moved in a cell.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -327,10 +327,22 @@ impl<'a> Checker<'a> {
 }
 
 pub(crate) fn replay_cancellable(input: &BlendInput, solution: &BlendSolution, cancel: &AtomicBool) -> Option<ReplayReport> {
-    replay_inner(input, solution, Some(cancel))
+    replay_inner(input, solution, Some(cancel), true)
 }
 
-fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Option<&'a AtomicBool>) -> Option<ReplayReport> {
+/// [`replay_cancellable`] for a schedule no solver valued - one stitched
+/// from pieces, or a window's rows - whose value is by definition the
+/// replay's: its reported objective is set to the replay's ranked one, and
+/// there is nothing to reconcile it with. One replay, where reporting the
+/// value and checking it against itself took two.
+#[cfg_attr(not(feature = "scip"), allow(dead_code, reason = "used by Improve"))]
+pub(crate) fn replay_as_published(input: &BlendInput, solution: &mut BlendSolution, cancel: &AtomicBool) -> Option<ReplayReport> {
+    let report = replay_inner(input, solution, Some(cancel), false)?;
+    solution.reported_objective = report.ranked_objective();
+    Some(report)
+}
+
+fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Option<&'a AtomicBool>, reconcile: bool) -> Option<ReplayReport> {
     let grades = input.grades.count();
     let segments = input.segments_per_interval.max(1);
     let mut checker = Checker {
@@ -447,7 +459,7 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
             let rows = by_cell.get(&(interval.index, segment)).cloned().unwrap_or_default();
 
             for loader in &input.loaders {
-                let Some(rate) = loader.rates.iter().find(|entry| entry.interval == interval.index) else {
+                let Some(rate) = super::input::interval_rate(loader, interval.index) else {
                     continue;
                 };
                 for activity in [Activity::Dig, Activity::Reclaim] {
@@ -584,6 +596,7 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
     }
 
     // ---- exact authored bar windows -----------------------------------------
+    let authority = super::input::Authority::new(input);
     // A movement may only occur inside the window a planner authored, and the
     // convention is *containment*, matching the accepted backend: a bar that
     // covers only part of a calendar interval is not worked in that interval.
@@ -596,7 +609,7 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
         }
         let Some(candidate) = input.movements.get(row.candidate) else { continue };
         let Some(interval) = input.intervals.get(row.interval) else { continue };
-        let authorised = input.tasks.iter().any(|task| covers(task, *interval) && task_authorises(task, candidate));
+        let authorised = (0..input.tasks.len()).any(|task| covers(&input.tasks[task], *interval) && authority.authorises(input, task, candidate));
         if !authorised {
             checker
                 .report
@@ -618,20 +631,17 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
             if timeline.blasts.len() != chain.blasts.len() {
                 checker.report.issues.push("drill and blast timeline has the wrong number of blasts".to_owned());
             }
+            let sources: BTreeMap<GroundId, &GroundSource> = input.ground.iter().map(|source| (source.id, source)).collect();
             for (ground, deadline) in chain.clearance_deadlines(timeline) {
-                let Some(source) = input.ground.iter().find(|source| source.id == ground) else {
+                let Some(source) = sources.get(&ground) else {
                     continue;
                 };
-                let dug: f64 = solution
-                    .movements
-                    .iter()
-                    .filter(|row| {
-                        input.intervals.get(row.interval).is_some_and(|interval| interval.end_h <= deadline + 1e-9)
-                            && input
-                                .movements
-                                .get(row.candidate)
-                                .is_some_and(|candidate| candidate.activity == Activity::Dig && candidate.source == SourceId::Ground(ground))
-                    })
+                // The block's own dig rows, not every row for every block.
+                let dug: f64 = dug_rows
+                    .get(&ground)
+                    .into_iter()
+                    .flatten()
+                    .filter(|row| input.intervals.get(row.interval).is_some_and(|interval| interval.end_h <= deadline + 1e-9))
                     .map(|row| row.tonnes_t)
                     .sum();
                 if source.tonnes_t - dug > indicator_leak(source.tonnes_t).max(REPLAY_TOLERANCE_T) {
@@ -782,7 +792,8 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
                 return None;
             }
             for segment in 0..segments {
-                let before = remaining.clone();
+                // What each block this cell digs held as the cell opened.
+                let mut before: BTreeMap<GroundId, f64> = BTreeMap::new();
                 // Tonnes each (loader, block) dug in this cell.
                 let mut dug: BTreeMap<_, f64> = BTreeMap::new();
                 for row in by_cell.get(&(interval.index, segment)).map(Vec::as_slice).unwrap_or_default() {
@@ -793,6 +804,7 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
                     }
                     *dug.entry((candidate.loader, ground)).or_default() += row.tonnes_t;
                     if let Some(slot) = remaining.get_mut(&ground) {
+                        before.entry(ground).or_insert(*slot);
                         *slot -= row.tonnes_t;
                     }
                 }
@@ -816,7 +828,7 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
                         let shared = dug
                             .iter()
                             .any(|(&(other, ground), &tonnes)| other != task.loader && ground == *earlier && tonnes > REPLAY_TOLERANCE_T);
-                        let left = if shared { before.get(earlier).copied().unwrap_or(0.0) } else { left };
+                        let left = if shared { before.get(earlier).copied().unwrap_or(left) } else { left };
                         if left > tolerance(*earlier) {
                             checker.report.issues.push(format!(
                                 "authored order broken: loader {} dug block {} in interval {} segment {segment} while block {} still held {left:.6} t",
@@ -837,27 +849,32 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
     // introduces a linear feasibility residual. Price those physical residuals
     // at their authored slopes instead of relaxing reconciliation by a dollar
     // constant or a fraction of the entire objective.
+    // Reclaim cells by (destination, target day), gathered once rather
+    // than for every target day.
+    let mut reclaim_cells = BTreeMap::<(DestinationId, u32), BTreeSet<_>>::new();
+    if !checker.report.target_totals.is_empty() {
+        for row in &solution.movements {
+            let (Some(movement), Some(interval)) = (input.movements.get(row.candidate), input.intervals.get(row.interval)) else {
+                continue;
+            };
+            if movement.activity == Activity::Reclaim {
+                reclaim_cells
+                    .entry((movement.destination, crate::model::schedule::grade_targets::target_day(interval.start_h)))
+                    .or_default()
+                    .insert((row.candidate, row.interval, row.segment));
+            }
+        }
+    }
     for &(index, period) in checker.report.target_totals.keys() {
         let target = &input.grade_targets[index];
-        let cells: BTreeSet<_> = solution
-            .movements
-            .iter()
-            .filter(|row| {
-                input
-                    .movements
-                    .get(row.candidate)
-                    .is_some_and(|movement| movement.destination == target.destination && movement.activity == Activity::Reclaim)
-                    && input
-                        .intervals
-                        .get(row.interval)
-                        .is_some_and(|interval| crate::model::schedule::grade_targets::target_day(interval.start_h) == period)
-            })
-            .map(|row| (row.candidate, row.interval, row.segment))
-            .collect();
+        let cells = reclaim_cells.get(&(target.destination, period)).map_or(0, BTreeSet::len);
         let slopes: f64 = target.specification.hinges().iter().map(|&(_, _, slope)| slope).sum();
-        checker.report.target_value_tolerance += REPLAY_TOLERANCE_T * slopes * (1.0 + cells.len() as f64);
+        checker.report.target_value_tolerance += REPLAY_TOLERANCE_T * slopes * (1.0 + cells as f64);
     }
     checker.report.boundary_value_slack += checker.report.target_value_tolerance;
+    if !reconcile {
+        return Some(checker.report);
+    }
     // A solver's objective carries the incentive beside the money.
     checker.report.objective_difference = checker.report.ranked_objective() - solution.reported_objective;
     let ceilings = super::input::grade_ceilings(input);
@@ -988,6 +1005,7 @@ fn check_bar_priority(
     }
     let empty = Vec::new();
     let outlets = super::input::OutletIndex::new(input);
+    let authority = super::input::Authority::new(input);
     // Each loader's highest-priority ready bar, by cell.
     let mut worked_bars = BTreeMap::new();
 
@@ -1014,6 +1032,9 @@ fn check_bar_priority(
         // Physical state walked forward, cell by cell.
         let mut remaining: BTreeMap<_, f64> = input.ground.iter().map(|source| (source.id, source.tonnes_t)).collect();
         let mut spent: BTreeMap<usize, f64> = bars.iter().map(|bar| (*bar, 0.0)).collect();
+        // Each dig bar's current block: the first of its sequence still
+        // standing. Ground only goes down, so it only moves forward.
+        let mut current: BTreeMap<usize, usize> = BTreeMap::new();
 
         for interval in &input.intervals {
             if checker.cancelled() {
@@ -1023,9 +1044,17 @@ fn check_bar_priority(
                 .loaders
                 .iter()
                 .find(|entry| entry.id == loader)
-                .and_then(|entry| entry.rates.iter().find(|entry| entry.interval == interval.index));
+                .and_then(|entry| super::input::interval_rate(entry, interval.index));
             for segment in 0..segments {
-                let ready = |bar: usize, remaining: &BTreeMap<_, f64>, spent: &BTreeMap<usize, f64>| -> bool {
+                for &bar in &bars {
+                    if let TaskKind::Dig { sequence } = &input.tasks[bar].kind {
+                        let at = current.entry(bar).or_default();
+                        while sequence.get(*at).is_some_and(|source| remaining.get(source).copied().unwrap_or(0.0) <= REPLAY_TOLERANCE_T) {
+                            *at += 1;
+                        }
+                    }
+                }
+                let ready = |bar: usize, spent: &BTreeMap<usize, f64>| -> bool {
                     let task = &input.tasks[bar];
                     if !covers(task, *interval) {
                         return false;
@@ -1037,13 +1066,10 @@ fn check_bar_priority(
                         // opened.
                         TaskKind::Dig { sequence } => {
                             rate.dig_tph > 0.0
-                                && sequence
-                                    .iter()
-                                    .find(|source| remaining.get(*source).copied().unwrap_or(0.0) > REPLAY_TOLERANCE_T)
-                                    .is_some_and(|current| {
-                                        releases.get(current).is_none_or(|released| *released <= interval.start_h + 1e-9)
-                                            && super::input::block_diggable(&outlets.of(input, task, *current), |destination| room.contains(&(destination, interval.index)))
-                                    })
+                                && current.get(&bar).and_then(|&at| sequence.get(at)).is_some_and(|current| {
+                                    releases.get(current).is_none_or(|released| *released <= interval.start_h + 1e-9)
+                                        && outlets.diggable(input, task, *current, |destination| room.contains(&(destination, interval.index)))
+                                })
                         }
                         TaskKind::Reclaim { approved_sources, maximum_t } => {
                             if rate.reclaim_tph <= 0.0 {
@@ -1063,7 +1089,7 @@ fn check_bar_priority(
                     }
                 };
 
-                let highest = bars.iter().copied().find(|bar| ready(*bar, &remaining, &spent));
+                let highest = bars.iter().copied().find(|bar| ready(*bar, &spent));
                 if let Some(bar) = highest {
                     worked_bars.insert((loader, interval.index, segment), bar);
                 }
@@ -1079,7 +1105,7 @@ fn check_bar_priority(
                     let worked: Vec<usize> = bars
                         .iter()
                         .copied()
-                        .filter(|bar| covers(&input.tasks[*bar], *interval) && task_authorises(&input.tasks[*bar], candidate))
+                        .filter(|bar| covers(&input.tasks[*bar], *interval) && authority.authorises(input, *bar, candidate))
                         .collect();
                     // The bar the row was worked under: the highest-priority
                     // ready one when it authorises the row, and otherwise the
@@ -1461,7 +1487,7 @@ fn check_grade_limits(
                     .loaders
                     .iter()
                     .find(|loader| loader.id == candidate.loader)
-                    .and_then(|loader| loader.rates.iter().find(|entry| entry.interval == interval))
+                    .and_then(|loader| super::input::interval_rate(loader, interval))
                     .map(|entry| entry.reclaim_tph)
                     .unwrap_or(0.0);
                 let duration = checker.input.intervals.get(interval).map(|entry| entry.duration_h()).unwrap_or(0.0);
@@ -1766,16 +1792,22 @@ pub(crate) fn accumulate_target_receipts<'a>(
     for row in movements {
         *tonnes.entry((row.candidate, row.interval)).or_default() += row.tonnes_t;
     }
+    // Each destination's targets, in order, so a receipt reads its own.
+    let mut by_destination: BTreeMap<DestinationId, Vec<usize>> = BTreeMap::new();
+    for (index, target) in input.grade_targets.iter().enumerate() {
+        by_destination.entry(target.destination).or_default().push(index);
+    }
     for ((candidate, local_interval), t) in tonnes {
         let Some(movement) = input.movements.get(candidate) else { continue };
         let Some(interval) = input.intervals.get(interval_offset + local_interval) else {
             continue;
         };
-        for (index, target) in input
-            .grade_targets
-            .iter()
-            .enumerate()
-            .filter(|(_, target)| target.destination == movement.destination && target.applies(interval.start_h))
+        for (index, target) in by_destination
+            .get(&movement.destination)
+            .into_iter()
+            .flatten()
+            .map(|&index| (index, &input.grade_targets[index]))
+            .filter(|(_, target)| target.applies(interval.start_h))
         {
             let entry = totals.entry((index, crate::model::schedule::grade_targets::target_day(interval.start_h))).or_default();
             entry.0 += t;

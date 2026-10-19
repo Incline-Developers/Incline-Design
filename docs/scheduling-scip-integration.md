@@ -595,11 +595,11 @@ Bars that end inside an interval:
 - The captured segment budget is never exceeded. Each reclaim bar counts
   one segment per pile it can draw, so successive capped bars on one pile
   each get their own.
-- Whenever segments are available, the schedule of one bar per loader per
-  interval is worked alongside, and both are replayed. The one worth more
-  is kept, as is the single-bar one when the replay rejects the other.
-  Moving on early can take ground a later bar would have been worth more
-  from, which no single interval sees.
+- Moving on early can take ground a later bar would have been worth more
+  from, which no single interval sees. A schedule of one bar per loader per
+  interval used to be worked alongside and kept when worth more; it was
+  removed on 2026-10-19 because it only won by luck downstream (on 1 of 15
+  test worlds, by 0.6%), not by planning better.
 
 DreamLand, from the app's captured request, 60 s limit:
 
@@ -966,24 +966,50 @@ left free, a day solved a day ahead sent the trucks to paying ore and undid
 a stripping plan the days after paid for. Windows then double in length up
 to the whole horizon.
 
-The bound is the plan's: its linear relaxation over the whole horizon, and
-its mixed-integer dual bound from a solve that runs in the background
-throughout. Every simplification of the plan is optimistic (free order
-within a day, each route at its best candidate, the fleet pooled, a
-reclaim's grade the one that suits each use of it best), so either bounds
-any schedule. The relaxation is solved beside the search, first over
-periods of a week, then four days, two and one, each within what is left of
-the budget, the tightest that finishes kept (`plan::relaxation_bound`):
+A window's tails are dispatched on the drill and blast timeline the search
+holds, which starts as the first schedule's. A tail that digs the ground
+over a blast later than that timeline cleared it is rejected by the replay
+("still standing at blast clearance hour"), which is how a fleet-limited
+world found almost nothing. When no tail on the held timeline improves a
+window, the tails are dispatched again with the chain live, resumed as the
+best schedule's hours leave it (`anytime::redispatch_live`,
+`drill_blast::ChainState`), and one that wins gives the search its
+timeline. Each candidate is replayed once, over the whole horizon
+(`replay_as_published`). Measured on 2026-10-19 at 60 s: trucks at 60%
+went from +0.18% to +2.67% over the first schedule, other worlds were
+unchanged or slightly better. See
+`../incline-test-data/schedule-worlds/REPORT-2026-10-19.md`.
+
+The bound is the plan's linear relaxation over the whole horizon. The
+relaxation alone reads the plan optimistically (free order within a day,
+each route at its best value and least haul, the fleet pooled, a loader's
+bars free of one another, each blast released as soon as its own work
+allows with every machine that could take it working it alone and at once
+(`DrillBlastInput::earliest_releases`; simulating the machines' contention
+is no bound, as clearing one blast early can take a machine from another),
+a reclaim's
+grade the one that suits each use of it best), so it bounds any schedule,
+the ones that move blasts included; the utilisation incentive's most is
+added, as the plan values cashflow alone. Window plans and the background
+whole-horizon plan keep the tighter reading the dispatch follows, so they
+set targets and bound nothing. The exact model's relaxation and SCIP's
+dual bound keep one blast timeline, so while any blast can still move
+(`DrillBlastInput::movable`) they hold only for schedules on it: they may
+stop the whole-horizon solve on that timeline and check its incumbent, but
+the published gap, and whether the run is proven, take the search's bound
+alone (`scip_blend::global_bound`). The relaxation is solved beside the search,
+first over periods of a fortnight, then a week, four days, two and one,
+each within what is left of the budget, the tightest that finishes kept
+(`plan::relaxation_bound`):
 joining days only loosens the plan, so each is a bound, and the coarse ones
-are small enough for long horizons - Centralia's 52 days by the week in
-14 s, where by the day they take more than five minutes. Over the whole
+are small enough for long horizons - Centralia's 52 days by the fortnight
+in 13 s and by the week in about two minutes. Over the whole
 horizon a reclaim's blend is free, but each pile's metal of every targeted
 grade is balanced: a pile gives up no more than it was given and keeps no
 more than its stock holds at the grade's ceiling. On a 21-day world whose
-crusher is fed from stockpiles that took the gap from 18.9% to 4.2%. A
-mixed-integer dual bound is taken only once its solve is past its first
-relaxation; before then it is the trivial one each column's own bounds
-allow. A schedule the
+crusher is fed from stockpiles that took the gap from 18.9% to 4.2%. Until 2026-10-19 the background mixed-integer plan's dual bound counted
+too; it does not now, as that plan keeps the tighter reading for its
+targets. A schedule the
 bound proves within the run's gap target is published as proven and the
 whole-horizon solve is skipped; a horizon too large for that solve
 publishes the search's schedule.

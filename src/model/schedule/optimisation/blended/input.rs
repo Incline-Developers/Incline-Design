@@ -78,7 +78,7 @@
 //! rather than something the solver has to discover, and they tighten the
 //! bilinear relaxation considerably.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::grade::GradeTable;
 use crate::model::schedule::optimisation::{
@@ -652,7 +652,16 @@ pub(crate) fn flat_cell(interval: usize, segment: usize, segments: usize) -> usi
 }
 
 pub(crate) fn interval_rate(loader: &Loader, interval: usize) -> Option<&IntervalRate> {
-    loader.rates.iter().find(|rate| rate.interval == interval)
+    // Rates are captured one per interval in order, so the slot or a binary
+    // search finds one at once; the scan is for rates in any other order.
+    let rates = &loader.rates;
+    if let Some(rate) = rates.get(interval).filter(|rate| rate.interval == interval) {
+        return Some(rate);
+    }
+    if let Some(rate) = rates.get(rates.partition_point(|rate| rate.interval < interval)).filter(|rate| rate.interval == interval) {
+        return Some(rate);
+    }
+    rates.iter().find(|rate| rate.interval == interval)
 }
 
 pub(crate) fn loader_rate(input: &BlendInput, candidate: &MovementCandidate, interval: usize) -> Option<f64> {
@@ -736,7 +745,7 @@ pub(crate) const DIG_ROOM_T: f64 = 1.0;
 /// A dig bar's work is its current block - the first of its sequence with
 /// ground left - and a block is dug whole, its materials in proportion. So
 /// the bar has work only while every one of those materials has somewhere
-/// with room ([`block_diggable`]). Otherwise the machine works its next bar
+/// with room ([`OutletIndex::diggable`]). Otherwise the machine works its next bar
 /// with work, and comes back as soon as there is room again. The hourly
 /// dispatch, the formulation and the replay all judge it so, on room as the
 /// interval opens: a stockpile building that day and more than
@@ -748,6 +757,13 @@ pub(crate) struct OutletIndex {
     /// Indexed once: walking every candidate for every readiness check is the
     /// candidate count times the horizon.
     digs: BTreeMap<(LoaderId, GroundId, MaterialId), Vec<DestinationId>>,
+    /// Each block's position in [`BlendInput::ground`].
+    ground: BTreeMap<GroundId, usize>,
+    /// The distinct destination lists a loader's digs of a block need room
+    /// in, one per material in all but name: a block of a hundred materials
+    /// mostly goes to a handful of the same places, and readiness asks this
+    /// of every bar in every cell.
+    needs: BTreeMap<(LoaderId, GroundId), Vec<Vec<DestinationId>>>,
 }
 
 impl OutletIndex {
@@ -764,11 +780,28 @@ impl OutletIndex {
             outlets.sort_unstable();
             outlets.dedup();
         }
-        Self { digs }
+        let ground: BTreeMap<GroundId, usize> = input.ground.iter().enumerate().map(|(index, source)| (source.id, index)).collect();
+        let loaders: BTreeSet<(LoaderId, GroundId)> = digs.keys().map(|&(loader, ground, _)| (loader, ground)).collect();
+        let mut needs: BTreeMap<(LoaderId, GroundId), Vec<Vec<DestinationId>>> = BTreeMap::new();
+        for &(loader, block) in &loaders {
+            let Some(source) = ground.get(&block).map(|&index| &input.ground[index]) else {
+                continue;
+            };
+            let mut sets: Vec<Vec<DestinationId>> = source
+                .material
+                .iter()
+                .filter(|share| share.fraction > 0.0)
+                .map(|share| digs.get(&(loader, block, share.material)).cloned().unwrap_or_default())
+                .collect();
+            sets.sort_unstable();
+            sets.dedup();
+            needs.insert((loader, block), sets);
+        }
+        Self { digs, ground, needs }
     }
 
     pub(crate) fn of(&self, input: &BlendInput, task: &Task, ground: GroundId) -> Vec<Vec<DestinationId>> {
-        let Some(source) = input.ground.iter().find(|source| source.id == ground) else {
+        let Some(source) = self.ground.get(&ground).map(|&index| &input.ground[index]) else {
             return Vec::new();
         };
         let authorised = matches!(&task.kind, TaskKind::Dig { sequence } if sequence.contains(&ground));
@@ -786,9 +819,34 @@ impl OutletIndex {
     }
 }
 
-/// Whether every material of a block has a destination with room.
-pub(crate) fn block_diggable(outlets: &[Vec<DestinationId>], has_room: impl Fn(DestinationId) -> bool) -> bool {
-    outlets.iter().all(|destinations| destinations.iter().any(|destination| has_room(*destination)))
+impl OutletIndex {
+    /// Whether every material of `ground`, a block of `task`'s own sequence,
+    /// has a destination with room for `task`: [`Self::of`] without building
+    /// it.
+    pub(crate) fn diggable(&self, input: &BlendInput, task: &Task, ground: GroundId, has_room: impl Fn(DestinationId) -> bool) -> bool {
+        let Some(source) = self.ground.get(&ground).map(|&index| &input.ground[index]) else {
+            return true;
+        };
+        // Callers ask of a bar's current block, so the bar authorises it;
+        // checking costs a walk of the sequence on every readiness test.
+        debug_assert!(matches!(&task.kind, TaskKind::Dig { sequence } if sequence.contains(&ground)));
+        let quick = match self.needs.get(&(task.loader, ground)) {
+            Some(sets) => sets.iter().all(|destinations| destinations.iter().any(|destination| has_room(*destination))),
+            // No dig of it by this loader at all: only a block of no
+            // material can be dug.
+            None => !source.material.iter().any(|share| share.fraction > 0.0),
+        };
+        if !cfg!(debug_assertions) {
+            return quick;
+        }
+        let full = source.material.iter().filter(|share| share.fraction > 0.0).all(|share| {
+            self.digs
+                .get(&(task.loader, ground, share.material))
+                .is_some_and(|destinations| destinations.iter().any(|destination| has_room(*destination)))
+        });
+        debug_assert_eq!(quick, full, "outlet sets disagree for block {}", ground.0);
+        full
+    }
 }
 
 /// Whether an authored bar permits this movement's source.
@@ -800,6 +858,37 @@ pub(crate) fn task_authorises(task: &Task, candidate: &MovementCandidate) -> boo
         (TaskKind::Dig { sequence }, SourceId::Ground(ground)) => candidate.activity == Activity::Dig && sequence.contains(&ground),
         (TaskKind::Reclaim { approved_sources, .. }, SourceId::Stockpile(pile)) => candidate.activity == Activity::Reclaim && approved_sources.contains(&pile),
         _ => false,
+    }
+}
+
+/// Each dig bar's blocks, so whether a bar authorises a movement is a lookup
+/// rather than a walk of its sequence; see [`task_authorises`].
+pub(crate) struct Authority {
+    blocks: BTreeSet<(usize, GroundId)>,
+}
+
+impl Authority {
+    pub(crate) fn new(input: &BlendInput) -> Self {
+        let blocks = input
+            .tasks
+            .iter()
+            .enumerate()
+            .filter_map(|(index, task)| match &task.kind {
+                TaskKind::Dig { sequence } => Some(sequence.iter().map(move |ground| (index, *ground))),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        Self { blocks }
+    }
+
+    /// [`task_authorises`] for `input.tasks[task]`.
+    pub(crate) fn authorises(&self, input: &BlendInput, task: usize, candidate: &MovementCandidate) -> bool {
+        let bar = &input.tasks[task];
+        match (&bar.kind, candidate.source) {
+            (TaskKind::Dig { .. }, SourceId::Ground(ground)) => bar.loader == candidate.loader && candidate.activity == Activity::Dig && self.blocks.contains(&(task, ground)),
+            _ => task_authorises(bar, candidate),
+        }
     }
 }
 

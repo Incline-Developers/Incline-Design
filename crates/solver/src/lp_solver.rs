@@ -798,6 +798,17 @@ impl LpSolver {
         let num_col = self.lp.num_col;
         let num_row = self.lp.num_row;
         if num_col == 0 {
+            // Every row's activity is zero: a row that cannot hold it makes
+            // the LP infeasible, as `solve_mip` says of the same problem.
+            let tolerance = self.options.primal_feasibility_tolerance;
+            if (0..num_row).any(|row| self.lp.row_lower[row] > tolerance || self.lp.row_upper[row] < -tolerance) {
+                self.status = ModelStatus::Infeasible;
+                self.invalidate_basis();
+                self.value_valid = false;
+                self.dual_valid = false;
+                self.infeasibilities = None;
+                return;
+            }
             self.status = ModelStatus::Optimal;
             self.objective = self.lp.offset;
             self.col_value.clear();

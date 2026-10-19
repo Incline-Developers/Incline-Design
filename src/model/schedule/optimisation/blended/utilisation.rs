@@ -83,6 +83,14 @@ pub(crate) fn loader_days(input: &BlendInput) -> Vec<LoaderDay> {
     days
 }
 
+/// The most any schedule can earn under the incentive: every loader-day's
+/// bands filled up to its target. A bound on cashflow alone becomes one on
+/// the ranked objective, cashflow plus incentive, with this added.
+#[cfg_attr(not(feature = "scip"), allow(dead_code, reason = "used by Improve"))]
+pub(crate) fn ceiling(input: &BlendInput) -> f64 {
+    loader_days(input).iter().flat_map(|day| &day.bands).map(|&(hours, per_hour)| hours * per_hour).sum()
+}
+
 /// What a schedule's dug tonnes earn under the incentive, each loader-day's
 /// dug hours filling its bands from the bottom.
 pub(crate) fn value(input: &BlendInput, movements: &[MovementRow]) -> f64 {

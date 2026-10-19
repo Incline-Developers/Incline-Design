@@ -201,6 +201,7 @@ impl LpRelaxation {
     /// options and basis, with fresh statistics.
     pub fn copy(&self, data: &MipData) -> Self {
         let mut lpsolver = self.lpsolver.copy_model(self.lpsolver.options.clone());
+        lpsolver.set_interrupt(data.interrupt.clone());
         if let Some(basis) = self.lpsolver.basis() {
             lpsolver.set_basis(basis);
         }
@@ -250,6 +251,9 @@ impl LpRelaxation {
             model.a_value.clone(),
             options,
         );
+        // The run's interrupt reaches every node LP, not only the search
+        // loop between them; an interrupted LP leaves its node open.
+        self.lpsolver.set_interrupt(data.interrupt.clone());
         self.col_lb_buffer.resize(model.num_col, 0.0);
         self.col_ub_buffer.resize(model.num_col, 0.0);
     }
@@ -1182,15 +1186,20 @@ impl LpRelaxation {
                 }
             }
             ModelStatus::IterationLimit => {
-                if resolve_on_error {
+                // What is left of the MIP's own deadline: recovery is no
+                // excuse to run past it.
+                let time_left = data.options.time_limit - data.elapsed();
+                if resolve_on_error && time_left > 0.0 {
                     let options = Options {
                         presolve: !data.options.mip_root_presolve_only,
                         solver: Solver::Ipm,
                         ipm_iteration_limit: 200,
                         simplex_iteration_limit: self.lpsolver.iterations(),
+                        time_limit: time_left,
                         ..Options::default()
                     };
                     let mut ipm = self.lpsolver.copy_model(options);
+                    ipm.set_interrupt(data.interrupt.clone());
                     ipm.run();
                     if let Some(basis) = ipm.basis() {
                         self.lpsolver.set_basis(basis);

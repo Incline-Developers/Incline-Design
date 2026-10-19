@@ -65,11 +65,6 @@
 //! interval: receipts are reclaimable only from the next one, and take room
 //! on top of what earlier segments reclaimed.
 //!
-//! Moving to the next bar early can still take ground a later bar would
-//! have been worth more from, which no interval sees. So whenever segments
-//! were used, the schedule of one bar per loader per interval is worked too,
-//! both are replayed, and the one worth more is kept.
-//!
 //! A reclaim goes where a grade decides admission - a route
 //! qualification or a minimum grade - only when the pile's released blend
 //! clears the boundary by the formulation's own margin. A grade-conditional
@@ -95,6 +90,7 @@
 //! face rather than digging in behind it.
 
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     sync::atomic::{AtomicBool, Ordering},
 };
@@ -102,10 +98,10 @@ use std::{
 use super::{
     drill_blast::Chain,
     input::{
-        BlendInput, BlendPile, DIG_ROOM_T, GRADE_CUSHION_T, GRADE_MARGIN, GradeQualification, OutletIndex, REST_RECEIPT_T, attribute_reclaim, authored_tasks, block_diggable,
-        interval_rate, task_active, task_authorises,
+        BlendInput, BlendPile, DIG_ROOM_T, GRADE_CUSHION_T, GRADE_MARGIN, GradeQualification, OutletIndex, REST_RECEIPT_T, attribute_reclaim, authored_tasks, interval_rate,
+        task_active, task_authorises,
     },
-    lp::{Col, LinearProgram},
+    lp::{Col, LinearProgram, WarmStarts},
     plan::PlanTargets,
     replay::{BlendSolution, ChunkRow, ExtractionAdjustments, MovementRow, ReplayReport, replay_cancellable},
 };
@@ -145,52 +141,32 @@ pub(crate) struct Dispatched {
 }
 
 /// A dispatch schedule for `input`, replayed, or why there is none, polling
-/// `cancel` within each interval's work: `Ok(None)` once it is set.
-///
-/// With segments to use, the schedule of one bar per loader per interval is
-/// worked beside the one that moves loaders on within an interval, and of the
-/// two the replay accepts, the one it values more is kept. The replay is
-/// returned with it, so the caller need not run it again.
+/// `cancel` within each interval's work: `Ok(None)` once it is set. The
+/// replay is returned with it, so the caller need not run it again.
 pub(crate) fn dispatch_cancellable(input: &BlendInput, cancel: &AtomicBool) -> Result<Option<Dispatched>, String> {
     dispatch_following(input, None, cancel)
+}
+
+/// [`dispatch_following`]'s schedule without its replay, for a caller that
+/// replays what it makes of it anyway - a tail stitched onto the rest of a
+/// horizon.
+#[cfg_attr(not(feature = "scip"), allow(dead_code, reason = "used by Improve"))]
+pub(crate) fn dispatch_unreplayed(input: &BlendInput, plan: Option<&PlanTargets>, cancel: &AtomicBool) -> Result<Option<BlendSolution>, String> {
+    dispatch(input, plan, cancel)
 }
 
 /// [`dispatch_cancellable`], steered towards a whole-horizon plan's targets
 /// when there is one; see [`super::plan`].
 pub(crate) fn dispatch_following(input: &BlendInput, plan: Option<&PlanTargets>, cancel: &AtomicBool) -> Result<Option<Dispatched>, String> {
-    let checked = |found: Result<Option<BlendSolution>, String>| -> Result<Option<Dispatched>, String> {
-        let Some(solution) = found? else { return Ok(None) };
-        let Some(replay) = replay_cancellable(input, &solution, cancel) else { return Ok(None) };
-        Ok(Some(Dispatched { solution, replay }))
-    };
-    if input.segments_per_interval <= 1 {
-        return checked(dispatch(input, plan, cancel, false));
-    }
-    let (segmented, single) = rayon::join(|| checked(dispatch(input, plan, cancel, true)), || checked(dispatch(input, plan, cancel, false)));
-    let (segmented, single) = match (segmented, single) {
-        (Ok(Some(segmented)), Ok(Some(single))) => (segmented, single),
-        (Ok(None), _) | (_, Ok(None)) => return Ok(None),
-        (Ok(Some(found)), Err(_)) | (Err(_), Ok(Some(found))) => return Ok(Some(found)),
-        (Err(reason), Err(_)) => return Err(reason),
-    };
-    if !segmented.replay.is_valid() {
-        let issue = segmented.replay.issues.iter().chain(&segmented.replay.grade_issues).next().cloned().unwrap_or_default();
-        log::warn!("hourly dispatch: bar changes within an interval were rejected by the replay ({issue}); one bar per interval instead");
-        return Ok(Some(single));
-    }
-    let (worth, baseline) = (segmented.replay.ranked_objective(), single.replay.ranked_objective());
-    if single.replay.is_valid() && baseline > worth + MONEY_SLACK * worth.abs().max(1.0) {
-        log::info!("hourly dispatch: one bar per interval is worth {baseline:.2} against {worth:.2} with bar changes within an interval; keeping it");
-        return Ok(Some(single));
-    }
-    Ok(Some(segmented))
+    let Some(solution) = dispatch(input, plan, cancel)? else { return Ok(None) };
+    let Some(replay) = replay_cancellable(input, &solution, cancel) else { return Ok(None) };
+    Ok(Some(Dispatched { solution, replay }))
 }
 
-/// The dispatch schedule, with loaders moving to their next bar inside an
-/// interval when `segmented`.
-fn dispatch(input: &BlendInput, plan: Option<&PlanTargets>, cancel: &AtomicBool, segmented: bool) -> Result<Option<BlendSolution>, String> {
+/// The dispatch schedule, loaders moving to their next bar inside an
+/// interval as the captured segments allow.
+fn dispatch(input: &BlendInput, plan: Option<&PlanTargets>, cancel: &AtomicBool) -> Result<Option<BlendSolution>, String> {
     let mut state = State::new(input, cancel);
-    state.segmented = segmented;
     state.plan = plan;
     for interval in &input.intervals {
         if state.cancelled() {
@@ -259,12 +235,15 @@ struct State<'a> {
     chain: Option<Chain<'a>>,
     /// Start of the interval being worked, for the chain's releases.
     now_h: f64,
-    /// Whether a loader may move to its next bar inside an interval.
-    segmented: bool,
     /// Targets to follow, and the dug tonnes each (loader, destination, day)
     /// has delivered so far.
     plan: Option<&'a PlanTargets>,
     followed: BTreeMap<(usize, DestinationId, u32), f64>,
+    /// Where the interval programs start from; see [`WarmStarts`].
+    warm: RefCell<WarmStarts>,
+    /// Each dig bar's current block, by position in its sequence, as the
+    /// latest interval opened: ground only goes down, so it only moves on.
+    cursor: RefCell<BTreeMap<usize, usize>>,
     cancel: &'a AtomicBool,
 }
 
@@ -455,9 +434,10 @@ impl<'a> State<'a> {
             durations: BTreeMap::new(),
             chain: input.drill_blast.as_ref().map(Chain::new),
             now_h: 0.0,
-            segmented: true,
             plan: None,
             followed: BTreeMap::new(),
+            warm: RefCell::default(),
+            cursor: RefCell::default(),
             cancel,
         }
     }
@@ -507,7 +487,7 @@ impl<'a> State<'a> {
         // the whole interval again. The answer before stays feasible with
         // the new segment empty, so one is only kept when it is worth more,
         // to the program and in money.
-        let budget = if self.segmented { input.segments_per_interval.max(1) } else { 1 };
+        let budget = input.segments_per_interval.max(1);
         let mut tried: BTreeSet<(usize, usize, usize)> = BTreeSet::new();
         while topology.segments.len() < budget && !self.cancelled() {
             let Some(mut trial) = self.transition(interval, &topology, &plan, &opening_ground, &mut tried) else {
@@ -811,7 +791,10 @@ impl<'a> State<'a> {
                 if dig_tph <= 0.0 {
                     return Some(false);
                 }
-                let left: Vec<GroundId> = sequence
+                // Blocks before the bar's current one as the interval opened
+                // are gone already.
+                let start = self.cursor.borrow().get(&task).copied().unwrap_or(0).min(sequence.len());
+                let left: Vec<GroundId> = sequence[start..]
                     .iter()
                     .copied()
                     .filter(|block| !gone.contains(block) && self.ground.get(block).is_some_and(|left| *left > FINISHED_T))
@@ -958,12 +941,13 @@ impl<'a> State<'a> {
                             block_total.entry(block).or_default().push((extract, 1.0));
                             for share in &source.material {
                                 let mut portion = vec![(extract, -share.fraction)];
+                                // A bar's blocks come from its own sequence, so it
+                                // authorises every dig of them by its loader.
                                 for &index in self.digs.get(&(bar.loader, block, share.material.0)).into_iter().flatten() {
-                                    if task_authorises(task, &input.movements[index]) {
-                                        let col = problem.add_column(self.weight[index], 0.0..);
-                                        columns.push((index, segment, col));
-                                        portion.push((col, 1.0));
-                                    }
+                                    debug_assert!(task_authorises(task, &input.movements[index]));
+                                    let col = problem.add_column(self.weight[index], 0.0..);
+                                    columns.push((index, segment, col));
+                                    portion.push((col, 1.0));
                                 }
                                 problem.add_row(0.0..=0.0, portion);
                             }
@@ -1178,7 +1162,9 @@ impl<'a> State<'a> {
                 problem.add_row(..=-direction * (opening_q - boundary * opening_t), terms);
             }
         }
-        let solution = problem.maximise().map_err(|reason| format!("interval {}: {reason}", interval.index))?;
+        let solution = problem
+            .maximise_from(&mut self.warm.borrow_mut())
+            .map_err(|reason| format!("interval {}: {reason}", interval.index))?;
         let rows: Vec<(usize, usize, f64)> = columns.into_iter().map(|(index, segment, col)| (index, segment, solution[col.index()].max(0.0))).collect();
         let objective = problem.value(&solution);
         let steered: f64 = incentive.iter().map(|(col, per_hour)| per_hour * solution[col.index()].max(0.0)).sum();
@@ -1510,11 +1496,17 @@ impl<'a> State<'a> {
             // of it. One still waiting on its blast leaves the loader to its
             // next bar until it fires.
             TaskKind::Dig { sequence } => {
-                dig_tph > 0.0
-                    && sequence
-                        .iter()
-                        .find(|block| opening_ground.get(block).is_some_and(|left| *left > FINISHED_T))
-                        .is_some_and(|current| self.blasted(*current) && self.diggable(task, *current, interval))
+                if dig_tph <= 0.0 {
+                    return false;
+                }
+                let mut cursor = self.cursor.borrow_mut();
+                let at = cursor.entry(bar).or_default();
+                while sequence.get(*at).is_some_and(|block| !opening_ground.get(block).is_some_and(|left| *left > FINISHED_T)) {
+                    *at += 1;
+                }
+                let current = sequence.get(*at).copied();
+                drop(cursor);
+                current.is_some_and(|current| self.blasted(current) && self.diggable(task, current, interval))
             }
             TaskKind::Reclaim { approved_sources, maximum_t } => {
                 reclaim_tph > 0.0
@@ -1541,9 +1533,9 @@ impl<'a> State<'a> {
     }
 
     /// Whether `task` could dig `block` as `interval` opens: every material
-    /// of it has a destination with room; see [`OutletIndex::of`].
+    /// of it has a destination with room; see [`OutletIndex::diggable`].
     fn diggable(&self, task: &super::super::Task, block: GroundId, interval: Interval) -> bool {
-        block_diggable(&self.outlets.of(self.input, task, block), |destination| self.room_at_opening(destination, interval))
+        self.outlets.diggable(self.input, task, block, |destination| self.room_at_opening(destination, interval))
     }
 
     /// Whether `destination` has room as `interval` opens, for a dig bar's
