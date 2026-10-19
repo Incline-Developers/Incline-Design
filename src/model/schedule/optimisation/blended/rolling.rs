@@ -64,7 +64,7 @@ pub(crate) const LOOKAHEAD_H: f64 = 48.0;
 /// Remaining tonnes at or below which a block counts as finished. This is the
 /// replay's own readiness tolerance: a block the replay no longer counts as
 /// holding work leaves the next window rather than being carried as dust.
-const FINISHED_T: f64 = 1e-5;
+pub(crate) const FINISHED_T: f64 = 1e-5;
 
 /// One window, as indices into the whole horizon's intervals.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
