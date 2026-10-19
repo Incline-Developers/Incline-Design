@@ -58,10 +58,14 @@ pub(crate) struct MipOptions {
     pub restart_presolve_reduction_limit: i64,
 }
 
+/// HiGHS's default `mip_feasibility_tolerance`: how far a row or bound may
+/// be broken, and a value lie off a whole number, in a feasible solution.
+pub const MIP_FEASIBILITY_TOLERANCE: f64 = 1e-6;
+
 impl Default for MipOptions {
     fn default() -> Self {
         Self {
-            mip_feasibility_tolerance: 1e-6,
+            mip_feasibility_tolerance: MIP_FEASIBILITY_TOLERANCE,
             small_matrix_value: 1e-9,
             random_seed: 0,
             objective_bound: INF,
