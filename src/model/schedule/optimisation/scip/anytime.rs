@@ -190,10 +190,53 @@ fn whole(first: usize, end: usize) -> rolling::Window {
 /// dispatched or replayed at all.
 type Tried = Result<Best, Option<String>>;
 
+/// Time the tails spend dispatching and replaying, summed over the threads
+/// that run them side by side.
+#[derive(Default)]
+struct Timing {
+    dispatch_ns: std::sync::atomic::AtomicU64,
+    replay_ns: std::sync::atomic::AtomicU64,
+}
+
+impl Timing {
+    fn add(counter: &std::sync::atomic::AtomicU64, since: Instant) {
+        counter.fetch_add(since.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    }
+}
+
+/// A hash of what a tail is dispatched to follow.
+fn targets_fingerprint(targets: &PlanTargets) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for (&(loader, destination, day), tonnes) in &targets.routes {
+        (loader, destination.0, day, tonnes.to_bits()).hash(&mut hasher);
+    }
+    (targets.follow.to_bits(), targets.overrun.to_bits()).hash(&mut hasher);
+    targets.planned.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// A hash of a schedule: its movements, durations and drill and blast
+/// timeline.
+fn schedule_fingerprint(solution: &BlendSolution) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for row in &solution.movements {
+        (row.candidate, row.interval, row.segment, row.tonnes_t.to_bits()).hash(&mut hasher);
+    }
+    for (key, duration) in &solution.durations {
+        (key, duration.to_bits()).hash(&mut hasher);
+    }
+    if let Some(timeline) = &solution.drill_blast {
+        serde_json::to_string(timeline).unwrap_or_default().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 /// `best`'s intervals before `first`, then `pieces` (each in its own
 /// numbering), replayed against the whole horizon: `None` unless valid.
 fn stitch(input: &BlendInput, best: &Best, first: usize, pieces: &[(rolling::Window, &BlendSolution)], cancel: &AtomicBool) -> Option<Best> {
-    stitch_on(input, best, first, pieces, None, cancel).ok()
+    stitch_on(input, best, first, pieces, None, &Timing::default(), cancel).ok()
 }
 
 /// What `replay` rejects a schedule for, its numbers left out so that alike
@@ -224,7 +267,16 @@ fn accepted(solution: BlendSolution, replay: ReplayReport) -> Tried {
 }
 
 /// [`stitch`], the whole on `timeline` when the pieces moved the blasts.
-fn stitch_on(input: &BlendInput, best: &Best, first: usize, pieces: &[(rolling::Window, &BlendSolution)], timeline: Option<DrillBlastTimeline>, cancel: &AtomicBool) -> Tried {
+fn stitch_on(
+    input: &BlendInput,
+    best: &Best,
+    first: usize,
+    pieces: &[(rolling::Window, &BlendSolution)],
+    timeline: Option<DrillBlastTimeline>,
+    timing: &Timing,
+    cancel: &AtomicBool,
+) -> Tried {
+    let replaying = Instant::now();
     let mut stitched = Stitched::new();
     if first > 0 {
         stitched.keep(input, whole(0, first), &best.solution, 0.0);
@@ -239,22 +291,29 @@ fn stitch_on(input: &BlendInput, best: &Best, first: usize, pieces: &[(rolling::
     // The pieces' own objectives do not add up to the whole's: grade
     // targets are priced by day over all of them. The replay's figure is
     // the one reported.
-    let replay = replay_as_published(input, &mut solution, cancel).ok_or(None)?;
-    accepted(solution, replay)
+    let replay = replay_as_published(input, &mut solution, cancel);
+    Timing::add(&timing.replay_ns, replaying);
+    accepted(solution, replay.ok_or(None)?)
 }
 
 /// The dispatch from interval `first` to the end, following `targets`, after
 /// `best`'s intervals before it.
-fn redispatch(input: &BlendInput, best: &Best, first: usize, targets: &PlanTargets, cancel: &AtomicBool) -> Tried {
+fn redispatch(input: &BlendInput, best: &Best, first: usize, targets: &PlanTargets, timing: &Timing, cancel: &AtomicBool) -> Tried {
+    let dispatching = Instant::now();
     if first == 0 {
-        let found = greedy::dispatch_following(input, Some(targets), cancel).ok().flatten().ok_or(None)?;
+        // Dispatched and replayed in one: counted as dispatch.
+        let found = greedy::dispatch_following(input, Some(targets), cancel);
+        Timing::add(&timing.dispatch_ns, dispatching);
+        let found = found.ok().flatten().ok_or(None)?;
         return accepted(found.solution, found.replay);
     }
     let count = input.intervals.len();
     let tail = carried(input, best, first).window_input(input, whole(first, count));
     // Stitching replays the whole horizon, the tail with it.
-    let found = greedy::dispatch_unreplayed(&tail, Some(&targets.rebased(&tail)), cancel).ok().flatten().ok_or(None)?;
-    stitch_on(input, best, first, &[(whole(first, count), &found)], None, cancel)
+    let found = greedy::dispatch_unreplayed(&tail, Some(&targets.rebased(&tail)), cancel);
+    Timing::add(&timing.dispatch_ns, dispatching);
+    let found = found.ok().flatten().ok_or(None)?;
+    stitch_on(input, best, first, &[(whole(first, count), &found)], None, timing, cancel)
 }
 
 /// The drill and blast chain as `best`'s hours before interval `first` leave
@@ -289,9 +348,23 @@ fn chain_at(input: &BlendInput, best: &Best, first: usize) -> Option<ChainState>
 
 /// [`redispatch`] with the chain live from `first`: resumed from `state`,
 /// as `best`'s hours before it leave it, so the tail may move blasts.
-fn redispatch_live(input: &BlendInput, live: &BlendInput, best: &Best, first: usize, state: Option<&ChainState>, targets: &PlanTargets, cancel: &AtomicBool) -> Tried {
+#[allow(clippy::too_many_arguments)]
+fn redispatch_live(
+    input: &BlendInput,
+    live: &BlendInput,
+    best: &Best,
+    first: usize,
+    state: Option<&ChainState>,
+    targets: &PlanTargets,
+    timing: &Timing,
+    cancel: &AtomicBool,
+) -> Tried {
+    let dispatching = Instant::now();
     if first == 0 {
-        let found = greedy::dispatch_following(live, Some(targets), cancel).ok().flatten().ok_or(None)?;
+        // Dispatched and replayed in one: counted as dispatch.
+        let found = greedy::dispatch_following(live, Some(targets), cancel);
+        Timing::add(&timing.dispatch_ns, dispatching);
+        let found = found.ok().flatten().ok_or(None)?;
         return accepted(found.solution, found.replay);
     }
     let state = state.ok_or(None)?.clone();
@@ -301,9 +374,11 @@ fn redispatch_live(input: &BlendInput, live: &BlendInput, best: &Best, first: us
         chain.fixed = None;
         chain.resume = Some(state);
     }
-    let found = greedy::dispatch_unreplayed(&tail, Some(&targets.rebased(&tail)), cancel).ok().flatten().ok_or(None)?;
+    let found = greedy::dispatch_unreplayed(&tail, Some(&targets.rebased(&tail)), cancel);
+    Timing::add(&timing.dispatch_ns, dispatching);
+    let found = found.ok().flatten().ok_or(None)?;
     let timeline = found.drill_blast.clone();
-    stitch_on(input, best, first, &[(whole(first, count), &found)], timeline, cancel)
+    stitch_on(input, best, first, &[(whole(first, count), &found)], timeline, timing, cancel)
 }
 
 /// How `moved` fires the blasts against `held`: how many sooner, how many
@@ -487,12 +562,26 @@ struct Tally {
     columns: usize,
     rows: usize,
     solve_s: f64,
-    /// Tails dispatched, those the replay accepted, why it rejected the
-    /// others, and the time spent dispatching and replaying them.
+    /// Tails dispatched, those the replay accepted, and why it rejected
+    /// the others.
     dispatched: usize,
     valid: usize,
     rejected: BTreeMap<String, usize>,
+    /// Wall time the tails took, run side by side; and the CPU time their
+    /// dispatches and replays took, summed over the threads.
     tails_s: f64,
+    timing: Timing,
+    /// Tails dispatched to follow targets already followed from the same
+    /// schedule and interval, so bound to decode the same; valid tails that
+    /// decode to the schedule they started from, or to one another tail
+    /// from it decoded already.
+    repeated: usize,
+    unchanged: usize,
+    duplicates: usize,
+    /// Distinct valid tails worth the same as the schedule they started
+    /// from, to the search's own tolerance, and those worth less.
+    ties: usize,
+    worse: usize,
     kept: usize,
     /// Over each window's best candidate: dug tonnes the plan set, the
     /// candidate dug, and dug in the same loader's bar as the plan set.
@@ -547,7 +636,8 @@ impl Tally {
         let rejected: Vec<String> = rejected.iter().take(3).map(|(kind, count)| format!("{count} × {kind}")).collect();
         format!(
             "windows: {} plans ({} failed, {} timed out, {} with a broken seed), {} columns and {} rows each on average, {:.1}s solving; \
-             {} tails dispatched in {:.1}s, {} valid, {} kept; rejected for: {}; dug by bar: {:.0} kt planned, {:.0} kt dug, {:.0} kt as planned",
+             {} tails dispatched in {:.1}s wall ({:.1}s dispatching and {:.1}s replaying, CPU summed over threads), {} valid, {} kept; \
+             {} repeating targets, {} unchanged, {} duplicates, {} ties, {} worse; rejected for: {}; dug by bar: {:.0} kt planned, {:.0} kt dug, {:.0} kt as planned",
             self.plans,
             self.failed,
             self.timed_out,
@@ -557,8 +647,15 @@ impl Tally {
             self.solve_s,
             self.dispatched,
             self.tails_s,
+            self.timing.dispatch_ns.load(Ordering::Relaxed) as f64 / 1e9,
+            self.timing.replay_ns.load(Ordering::Relaxed) as f64 / 1e9,
             self.valid,
             self.kept,
+            self.repeated,
+            self.unchanged,
+            self.duplicates,
+            self.ties,
+            self.worse,
             if rejected.is_empty() { "nothing".to_owned() } else { rejected.join(", ") },
             self.planned_t / 1e3,
             self.executed_t / 1e3,
@@ -688,6 +785,11 @@ pub(crate) fn run(
     let mut value = best.value();
     let mut kept = 0;
     let mut tally = Tally::default();
+    // What tails have been dispatched to follow, from which schedule and
+    // interval, and what they decoded to: (schedule, interval, live, targets)
+    // and (schedule, decoded).
+    let mut proposals: BTreeSet<(u64, usize, bool, u64)> = BTreeSet::new();
+    let mut decoded_from: BTreeSet<(u64, u64)> = BTreeSet::new();
     // Each (loader, block)'s first bar, to compare plans and tails by bar.
     let mut bar: BTreeMap<(usize, GroundId), usize> = BTreeMap::new();
     for loader_index in 0..input.loaders.len() {
@@ -776,7 +878,7 @@ pub(crate) fn run(
                     let all: BTreeSet<u32> = days.iter().copied().collect();
                     for (follow, overrun) in WEIGHTS {
                         let candidate = targets.replacing(&all, &whole_plan.routes, follow * spread, overrun * spread);
-                        if let Ok(found) = redispatch(input, &best, 0, &candidate, cancel)
+                        if let Ok(found) = redispatch(input, &best, 0, &candidate, &Timing::default(), cancel)
                             && found.value() > value + 1e-7 * value.abs().max(1.0)
                         {
                             value = found.value();
@@ -947,25 +1049,49 @@ pub(crate) fn run(
             // the tails after the best schedule's hours on the timeline the
             // search holds, or, when none of those improves, the tails with
             // the chain live.
-            let evaluate = |live_round: bool, tally: &mut Tally| {
+            let incumbent = schedule_fingerprint(&best.solution);
+            let mut evaluate = |live_round: bool, tally: &mut Tally| {
                 if started.elapsed() >= settings.budget || cancel.load(Ordering::Relaxed) || (live_round && live.is_none()) {
                     return None;
                 }
                 let dispatching = Instant::now();
+                let timing = &tally.timing;
                 let found: Vec<_> = WEIGHTS
                     .par_iter()
                     .map(|&(follow, overrun)| {
                         let candidate = targets.replacing(&covered, &planned.routes, follow * spread, overrun * spread);
                         let found = if live_round {
-                            redispatch_live(input, live.as_ref()?, &best, from, opening.as_ref(), &candidate, cancel)
+                            redispatch_live(input, live.as_ref()?, &best, from, opening.as_ref(), &candidate, timing, cancel)
                         } else {
-                            redispatch(input, &best, from, &candidate, cancel)
+                            redispatch(input, &best, from, &candidate, timing, cancel)
                         };
-                        Some(found.map(|found| (found, candidate)))
+                        let proposal = targets_fingerprint(&candidate);
+                        Some((found.map(|found| (found, candidate)), proposal))
                     })
                     .collect();
                 tally.tails_s += dispatching.elapsed().as_secs_f64();
-                let found: Vec<_> = found.into_iter().flatten().collect();
+                let found: Vec<_> = found
+                    .into_iter()
+                    .flatten()
+                    .map(|(found, proposal)| {
+                        if !proposals.insert((incumbent, from, live_round, proposal)) {
+                            tally.repeated += 1;
+                        }
+                        if let Ok((tail, _)) = &found {
+                            let decoded = schedule_fingerprint(&tail.solution);
+                            if decoded == incumbent {
+                                tally.unchanged += 1;
+                            } else if !decoded_from.insert((incumbent, decoded)) {
+                                tally.duplicates += 1;
+                            } else if (tail.value() - value).abs() <= 1e-7 * value.abs().max(1.0) {
+                                tally.ties += 1;
+                            } else if tail.value() < value {
+                                tally.worse += 1;
+                            }
+                        }
+                        found
+                    })
+                    .collect();
                 tally.dispatched += found.len();
                 tally.valid += found.iter().filter(|tried| tried.is_ok()).count();
                 for reason in found.iter().filter_map(|tried| tried.as_ref().err().cloned().flatten()) {
