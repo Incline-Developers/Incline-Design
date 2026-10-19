@@ -76,7 +76,7 @@ use super::{
         blended::{
             drill_blast::{Chain, ChainState, DrillBlastTimeline, NEVER},
             greedy,
-            input::BlendInput,
+            input::{BlendInput, authored_tasks},
             plan::PlanTargets,
             replay::{BlendSolution, ChunkRow, MovementRow, ReplayReport, replay_as_published},
             rolling::{self, Carry, Stitched},
@@ -85,7 +85,7 @@ use super::{
     },
     plan::{self, PlanSolve, Settings, Window},
 };
-use crate::model::schedule::optimisation::{Activity, DestinationKind, GroundId, SourceId, StockpileId};
+use crate::model::schedule::optimisation::{Activity, DestinationKind, GroundId, SourceId, StockpileId, TaskKind};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct AnytimeSettings {
@@ -186,21 +186,45 @@ fn whole(first: usize, end: usize) -> rolling::Window {
     }
 }
 
+/// A tail tried: the schedule, or why it is none, `None` when it was not
+/// dispatched or replayed at all.
+type Tried = Result<Best, Option<String>>;
+
 /// `best`'s intervals before `first`, then `pieces` (each in its own
 /// numbering), replayed against the whole horizon: `None` unless valid.
 fn stitch(input: &BlendInput, best: &Best, first: usize, pieces: &[(rolling::Window, &BlendSolution)], cancel: &AtomicBool) -> Option<Best> {
-    stitch_on(input, best, first, pieces, None, cancel)
+    stitch_on(input, best, first, pieces, None, cancel).ok()
+}
+
+/// What `replay` rejects a schedule for, its numbers left out so that alike
+/// reasons count together: the first physical rule it breaks, or else the
+/// first grade condition.
+fn rejection(replay: &ReplayReport) -> String {
+    let issue = replay.issues.first().or(replay.grade_issues.first()).map_or("", String::as_str);
+    let mut kind = String::new();
+    for c in issue.chars() {
+        if c.is_ascii_digit() || c == '.' || c == '-' {
+            if !kind.ends_with('#') {
+                kind.push('#');
+            }
+        } else {
+            kind.push(c);
+        }
+    }
+    kind
+}
+
+/// A replayed schedule, or why the replay rejects it.
+fn accepted(solution: BlendSolution, replay: ReplayReport) -> Tried {
+    if replay.is_valid() {
+        Ok(Best { solution, replay })
+    } else {
+        Err(Some(rejection(&replay)))
+    }
 }
 
 /// [`stitch`], the whole on `timeline` when the pieces moved the blasts.
-fn stitch_on(
-    input: &BlendInput,
-    best: &Best,
-    first: usize,
-    pieces: &[(rolling::Window, &BlendSolution)],
-    timeline: Option<DrillBlastTimeline>,
-    cancel: &AtomicBool,
-) -> Option<Best> {
+fn stitch_on(input: &BlendInput, best: &Best, first: usize, pieces: &[(rolling::Window, &BlendSolution)], timeline: Option<DrillBlastTimeline>, cancel: &AtomicBool) -> Tried {
     let mut stitched = Stitched::new();
     if first > 0 {
         stitched.keep(input, whole(0, first), &best.solution, 0.0);
@@ -215,25 +239,22 @@ fn stitch_on(
     // The pieces' own objectives do not add up to the whole's: grade
     // targets are priced by day over all of them. The replay's figure is
     // the one reported.
-    let replay = replay_as_published(input, &mut solution, cancel)?;
-    replay.is_valid().then_some(Best { solution, replay })
+    let replay = replay_as_published(input, &mut solution, cancel).ok_or(None)?;
+    accepted(solution, replay)
 }
 
 /// The dispatch from interval `first` to the end, following `targets`, after
 /// `best`'s intervals before it.
-fn redispatch(input: &BlendInput, best: &Best, first: usize, targets: &PlanTargets, cancel: &AtomicBool) -> Option<Best> {
+fn redispatch(input: &BlendInput, best: &Best, first: usize, targets: &PlanTargets, cancel: &AtomicBool) -> Tried {
     if first == 0 {
-        let found = greedy::dispatch_following(input, Some(targets), cancel).ok()??;
-        return found.replay.is_valid().then_some(Best {
-            solution: found.solution,
-            replay: found.replay,
-        });
+        let found = greedy::dispatch_following(input, Some(targets), cancel).ok().flatten().ok_or(None)?;
+        return accepted(found.solution, found.replay);
     }
     let count = input.intervals.len();
     let tail = carried(input, best, first).window_input(input, whole(first, count));
     // Stitching replays the whole horizon, the tail with it.
-    let found = greedy::dispatch_unreplayed(&tail, Some(&targets.rebased(&tail)), cancel).ok()??;
-    stitch(input, best, first, &[(whole(first, count), &found)], cancel)
+    let found = greedy::dispatch_unreplayed(&tail, Some(&targets.rebased(&tail)), cancel).ok().flatten().ok_or(None)?;
+    stitch_on(input, best, first, &[(whole(first, count), &found)], None, cancel)
 }
 
 /// The drill and blast chain as `best`'s hours before interval `first` leave
@@ -268,22 +289,19 @@ fn chain_at(input: &BlendInput, best: &Best, first: usize) -> Option<ChainState>
 
 /// [`redispatch`] with the chain live from `first`: resumed from `state`,
 /// as `best`'s hours before it leave it, so the tail may move blasts.
-fn redispatch_live(input: &BlendInput, live: &BlendInput, best: &Best, first: usize, state: Option<&ChainState>, targets: &PlanTargets, cancel: &AtomicBool) -> Option<Best> {
+fn redispatch_live(input: &BlendInput, live: &BlendInput, best: &Best, first: usize, state: Option<&ChainState>, targets: &PlanTargets, cancel: &AtomicBool) -> Tried {
     if first == 0 {
-        let found = greedy::dispatch_following(live, Some(targets), cancel).ok()??;
-        return found.replay.is_valid().then_some(Best {
-            solution: found.solution,
-            replay: found.replay,
-        });
+        let found = greedy::dispatch_following(live, Some(targets), cancel).ok().flatten().ok_or(None)?;
+        return accepted(found.solution, found.replay);
     }
-    let state = state?.clone();
+    let state = state.ok_or(None)?.clone();
     let count = input.intervals.len();
     let mut tail = carried(input, best, first).window_input(input, whole(first, count));
     if let Some(chain) = tail.drill_blast.as_mut() {
         chain.fixed = None;
         chain.resume = Some(state);
     }
-    let found = greedy::dispatch_unreplayed(&tail, Some(&targets.rebased(&tail)), cancel).ok()??;
+    let found = greedy::dispatch_unreplayed(&tail, Some(&targets.rebased(&tail)), cancel).ok().flatten().ok_or(None)?;
     let timeline = found.drill_blast.clone();
     stitch_on(input, best, first, &[(whole(first, count), &found)], timeline, cancel)
 }
@@ -457,6 +475,98 @@ const WEIGHTS: [(f64, f64); 3] = [(1.0, 0.0), (1.0, 1.0), (2.0, 2.0)];
 /// How long the search waits for its background plan to stop.
 const BACKGROUND_GRACE: Duration = Duration::from_secs(2);
 
+/// What the plan windows have tried, reported when the search ends: whether
+/// it found few candidates or poor ones.
+#[derive(Default)]
+struct Tally {
+    plans: usize,
+    failed: usize,
+    timed_out: usize,
+    /// Plans whose seed broke a row or bound of the window's model.
+    seeds_broken: usize,
+    columns: usize,
+    rows: usize,
+    solve_s: f64,
+    /// Tails dispatched, those the replay accepted, why it rejected the
+    /// others, and the time spent dispatching and replaying them.
+    dispatched: usize,
+    valid: usize,
+    rejected: BTreeMap<String, usize>,
+    tails_s: f64,
+    kept: usize,
+    /// Over each window's best candidate: dug tonnes the plan set, the
+    /// candidate dug, and dug in the same loader's bar as the plan set.
+    planned_t: f64,
+    executed_t: f64,
+    matched_t: f64,
+}
+
+impl Tally {
+    fn plan(&mut self, planned: &PlanSolve) {
+        self.plans += 1;
+        self.timed_out += usize::from(planned.status.contains("TimeLimit"));
+        self.seeds_broken += usize::from(planned.seed_violations.is_some_and(|broken| broken > 0));
+        self.columns += planned.variables;
+        self.rows += planned.rows;
+        self.solve_s += planned.solve_s;
+    }
+
+    /// Compare what `planned` set each loader's bars over `covered` with
+    /// what `found` dug there; `bar` is each (loader, block)'s first bar.
+    fn follow(&mut self, input: &BlendInput, bar: &BTreeMap<(usize, GroundId), usize>, planned: &PlanSolve, found: &BlendSolution, covered: &BTreeSet<u32>) {
+        let loaders: BTreeMap<_, usize> = input.loaders.iter().enumerate().map(|(index, loader)| (loader.id, index)).collect();
+        let mut set: BTreeMap<(usize, usize), f64> = BTreeMap::new();
+        for (&(loader_index, ground), tonnes) in &planned.dug {
+            if let Some(&task) = bar.get(&(loader_index, ground)) {
+                *set.entry((loader_index, task)).or_default() += tonnes;
+            }
+        }
+        let mut dug: BTreeMap<(usize, usize), f64> = BTreeMap::new();
+        for row in &found.movements {
+            let candidate = &input.movements[row.candidate];
+            let (Activity::Dig, SourceId::Ground(ground)) = (candidate.activity, candidate.source) else {
+                continue;
+            };
+            if !input.intervals.get(row.interval).is_some_and(|interval| covered.contains(&interval.day())) {
+                continue;
+            }
+            let Some(&loader_index) = loaders.get(&candidate.loader) else { continue };
+            if let Some(&task) = bar.get(&(loader_index, ground)) {
+                *dug.entry((loader_index, task)).or_default() += row.tonnes_t;
+            }
+        }
+        self.planned_t += set.values().sum::<f64>();
+        self.executed_t += dug.values().sum::<f64>();
+        self.matched_t += set.iter().map(|(key, tonnes)| tonnes.min(dug.get(key).copied().unwrap_or(0.0))).sum::<f64>();
+    }
+
+    fn summary(&self) -> String {
+        let per = |total: usize| total.checked_div(self.plans).unwrap_or(0);
+        let mut rejected: Vec<(&String, &usize)> = self.rejected.iter().collect();
+        rejected.sort_by(|a, b| b.1.cmp(a.1));
+        let rejected: Vec<String> = rejected.iter().take(3).map(|(kind, count)| format!("{count} × {kind}")).collect();
+        format!(
+            "windows: {} plans ({} failed, {} timed out, {} with a broken seed), {} columns and {} rows each on average, {:.1}s solving; \
+             {} tails dispatched in {:.1}s, {} valid, {} kept; rejected for: {}; dug by bar: {:.0} kt planned, {:.0} kt dug, {:.0} kt as planned",
+            self.plans,
+            self.failed,
+            self.timed_out,
+            self.seeds_broken,
+            per(self.columns),
+            per(self.rows),
+            self.solve_s,
+            self.dispatched,
+            self.tails_s,
+            self.valid,
+            self.kept,
+            if rejected.is_empty() { "nothing".to_owned() } else { rejected.join(", ") },
+            self.planned_t / 1e3,
+            self.executed_t / 1e3,
+            self.matched_t / 1e3,
+        )
+    }
+}
+
 /// [`AnytimeSettings::closed_gap`] for a run with no gap target.
 const DEFAULT_CLOSED_GAP: f64 = 1e-4;
 
@@ -577,6 +687,18 @@ pub(crate) fn run(
     let mut adopted: Option<Arc<BlendInput>> = None;
     let mut value = best.value();
     let mut kept = 0;
+    let mut tally = Tally::default();
+    // Each (loader, block)'s first bar, to compare plans and tails by bar.
+    let mut bar: BTreeMap<(usize, GroundId), usize> = BTreeMap::new();
+    for loader_index in 0..input.loaders.len() {
+        for task in authored_tasks(input, loader_index) {
+            if let TaskKind::Dig { sequence } = &input.tasks[task].kind {
+                for &ground in sequence {
+                    bar.entry((loader_index, ground)).or_insert(task);
+                }
+            }
+        }
+    }
     let mut record = |value: f64, bound: Option<f64>, note: String| {
         report(&Progress {
             elapsed_s: started.elapsed().as_secs_f64(),
@@ -654,7 +776,7 @@ pub(crate) fn run(
                     let all: BTreeSet<u32> = days.iter().copied().collect();
                     for (follow, overrun) in WEIGHTS {
                         let candidate = targets.replacing(&all, &whole_plan.routes, follow * spread, overrun * spread);
-                        if let Some(found) = redispatch(input, &best, 0, &candidate, cancel)
+                        if let Ok(found) = redispatch(input, &best, 0, &candidate, cancel)
                             && found.value() > value + 1e-7 * value.abs().max(1.0)
                         {
                             value = found.value();
@@ -811,10 +933,13 @@ pub(crate) fn run(
             let planned = match plan::solve(input, Some(&best.solution), Some(&window), solve, cancel) {
                 Ok(planned) => planned,
                 Err(reason) => {
+                    tally.plans += 1;
+                    tally.failed += 1;
                     record(value, bound, format!("days {first_day}+: no plan ({reason})"));
                     continue;
                 }
             };
+            tally.plan(&planned);
             let covered: BTreeSet<u32> = (first_day..first_day + length).collect();
             promised.extend(planned.day_values.iter().map(|(day, earned)| (*day, *earned)));
             // Each weight is dispatched at once, side by side; the first of the
@@ -822,31 +947,40 @@ pub(crate) fn run(
             // the tails after the best schedule's hours on the timeline the
             // search holds, or, when none of those improves, the tails with
             // the chain live.
-            let evaluate = |live_round: bool| {
-                (started.elapsed() < settings.budget && !cancel.load(Ordering::Relaxed))
-                    .then(|| {
-                        WEIGHTS
-                            .par_iter()
-                            .map(|&(follow, overrun)| {
-                                let candidate = targets.replacing(&covered, &planned.routes, follow * spread, overrun * spread);
-                                let found = if live_round {
-                                    redispatch_live(input, live.as_ref()?, &best, from, opening.as_ref(), &candidate, cancel)
-                                } else {
-                                    redispatch(input, &best, from, &candidate, cancel)
-                                };
-                                found.map(|found| (found, candidate))
-                            })
-                            .collect::<Vec<_>>()
+            let evaluate = |live_round: bool, tally: &mut Tally| {
+                if started.elapsed() >= settings.budget || cancel.load(Ordering::Relaxed) || (live_round && live.is_none()) {
+                    return None;
+                }
+                let dispatching = Instant::now();
+                let found: Vec<_> = WEIGHTS
+                    .par_iter()
+                    .map(|&(follow, overrun)| {
+                        let candidate = targets.replacing(&covered, &planned.routes, follow * spread, overrun * spread);
+                        let found = if live_round {
+                            redispatch_live(input, live.as_ref()?, &best, from, opening.as_ref(), &candidate, cancel)
+                        } else {
+                            redispatch(input, &best, from, &candidate, cancel)
+                        };
+                        Some(found.map(|found| (found, candidate)))
                     })
-                    .into_iter()
-                    .flatten()
-                    .flatten()
-                    .reduce(|kept, next| if next.0.value() > kept.0.value() { next } else { kept })
+                    .collect();
+                tally.tails_s += dispatching.elapsed().as_secs_f64();
+                let found: Vec<_> = found.into_iter().flatten().collect();
+                tally.dispatched += found.len();
+                tally.valid += found.iter().filter(|tried| tried.is_ok()).count();
+                for reason in found.iter().filter_map(|tried| tried.as_ref().err().cloned().flatten()) {
+                    *tally.rejected.entry(reason).or_default() += 1;
+                }
+                let chosen = found.into_iter().flatten().reduce(|kept, next| if next.0.value() > kept.0.value() { next } else { kept });
+                if let Some((found, _)) = &chosen {
+                    tally.follow(input, &bar, &planned, &found.solution, &covered);
+                }
+                chosen
             };
             let better = |found: &Option<(Best, PlanTargets)>| found.as_ref().is_some_and(|(found, _)| found.value() > value + 1e-7 * value.abs().max(1.0));
-            let mut chosen = evaluate(false);
+            let mut chosen = evaluate(false, &mut tally);
             if live.is_some() && !better(&chosen) {
-                chosen = evaluate(true);
+                chosen = evaluate(true, &mut tally);
             }
             if let Some((found, candidate)) = chosen
                 && found.value() > value + 1e-7 * value.abs().max(1.0)
@@ -867,6 +1001,7 @@ pub(crate) fn run(
                 targets = candidate;
                 improved = true;
                 kept += 1;
+                tally.kept += 1;
                 polished_since = false;
                 record(
                     value,
@@ -912,6 +1047,7 @@ pub(crate) fn run(
         background::pause(Duration::from_millis(20));
     }
     relaxed(&relaxation, &mut bound);
+    record(value, bound, tally.summary());
     record(value, bound, "done".into());
     Found {
         drill_blast: adopted.as_ref().and_then(|input| input.drill_blast.as_ref()).and_then(|chain| chain.fixed.clone()),

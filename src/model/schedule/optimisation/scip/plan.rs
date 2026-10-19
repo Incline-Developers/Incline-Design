@@ -44,6 +44,7 @@ use super::{
     super::blended::{
         input::{BlendInput, attribute_reclaim, authored_tasks, grade_ceilings, interval_rate, task_active},
         replay::{BlendSolution, ReplayReport},
+        rolling::FINISHED_T,
     },
     blasts::BlastModel,
 };
@@ -96,7 +97,9 @@ impl Window {
             }
             *received.entry(candidate.destination).or_default() += row.tonnes_t;
         }
-        remaining.retain(|_, left| *left > 1e-6);
+        // Dust the replay counts as dug is gone: left in, a block with
+        // nowhere to be dug in the window would hold back the next.
+        remaining.retain(|_, left| *left > FINISHED_T);
         let grades = input.grades.count();
         let first = input.intervals.iter().position(|interval| interval.day() >= first_day).unwrap_or(0);
         let piles = input
@@ -144,6 +147,10 @@ pub(crate) struct PlanSolve {
     pub(crate) solve_s: f64,
     /// What the plan valued its seed at, when it had one.
     pub(crate) seeded: Option<f64>,
+    /// How many rows and bounds the seed breaks, when it had one.
+    pub(crate) seed_violations: Option<usize>,
+    /// Planned dug tonnes per (loader index, block) over the plan.
+    pub(crate) dug: BTreeMap<(usize, GroundId), f64>,
     /// What the plan's movements earn on each day it plans.
     pub(crate) day_values: BTreeMap<u32, f64>,
     pub(crate) status: String,
@@ -199,6 +206,24 @@ impl Builder {
         }
         self.row_lower.push(lhs);
         self.row_upper.push(rhs);
+    }
+
+    /// How many rows and column bounds `values` breaks, by the solver's
+    /// tolerance.
+    fn violations(&self, values: &[f64]) -> usize {
+        const TOLERANCE: f64 = solver::MIP_FEASIBILITY_TOLERANCE;
+        let rows = (0..self.row_lower.len())
+            .filter(|&row| {
+                let end = self.starts.get(row + 1).copied().unwrap_or(self.index.len());
+                let activity: f64 = (self.starts[row]..end).map(|entry| self.value[entry] * values[self.index[entry]]).sum();
+                activity < self.row_lower[row] - TOLERANCE || activity > self.row_upper[row] + TOLERANCE
+            })
+            .count();
+        rows + values
+            .iter()
+            .zip(&self.upper)
+            .filter(|(value, upper)| **value < -TOLERANCE || **value > **upper + TOLERANCE)
+            .count()
     }
 }
 
@@ -1571,7 +1596,10 @@ fn solve_periods(
             let mut cumulative = 0.0;
             for p in 0..periods {
                 cumulative += done.get(&(ground, p)).copied().unwrap_or(0.0);
-                if cumulative >= tonnes[&ground] - 1e-4 {
+                // Finished once its `done_` row holds with the flag set, as the
+                // solver reads that row: any looser and a block with a sliver
+                // left finishes before the day that digs it.
+                if cumulative - tonnes[&ground] >= -solver::MIP_FEASIBILITY_TOLERANCE {
                     values.insert(format!("fin_{}_{p}", ground.0), 1.0);
                 }
             }
@@ -1588,6 +1616,7 @@ fn solve_periods(
         seed_values = Some(builder.names.iter().map(|name| values.get(name).copied().unwrap_or(0.0)).collect::<Vec<f64>>());
         seeded = Some(worth);
     }
+    let seed_violations = seed_values.as_deref().map(|values| builder.violations(values));
 
     let build_s = started.elapsed().as_secs_f64();
     let (variables, binaries, rows) = (builder.cost.len(), builder.binaries, builder.row_lower.len());
@@ -1597,10 +1626,12 @@ fn solve_periods(
 
     // ---- read back ----------------------------------------------------------
     let mut dug: BTreeMap<(GroundId, usize), Vec<(usize, f64)>> = BTreeMap::new();
+    let mut by_loader_block: BTreeMap<(usize, GroundId), f64> = BTreeMap::new();
     for (&(loader_index, ground, p), column) in &dig {
         let value = answer.values[*column].max(0.0) * UNIT;
         if value > 1e-6 {
             dug.entry((ground, p)).or_default().push((loader_index, value));
+            *by_loader_block.entry((loader_index, ground)).or_default() += value;
         }
     }
     let mut routes: BTreeMap<(usize, DestinationId, u32), f64> = BTreeMap::new();
@@ -1649,6 +1680,8 @@ fn solve_periods(
         build_s,
         solve_s,
         seeded,
+        seed_violations,
+        dug: by_loader_block,
         status: answer.status,
     })
 }
