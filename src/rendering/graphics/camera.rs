@@ -683,7 +683,9 @@ impl<'a> Graphics<'a> {
             world,
             hole: Some(hole),
         });
-        let block_model = self.block_model_gpu.nearest_visible_entity_hit(ray_origin, ray_direction, hidden, frozen);
+        let block_model = self
+            .block_model_gpu
+            .nearest_visible_entity_hit(ray_origin, ray_direction, hidden, frozen, self.section_slab());
         let point_cloud = self.point_cloud_gpu.nearest_visible_entity_at_screen(
             &view_proj,
             screen,
@@ -734,7 +736,7 @@ impl<'a> Graphics<'a> {
         }
         let candidate_depth = clip.z / clip.w;
         let block_depth = crate::rendering::query::ray_through_world_point(view_proj, candidate)
-            .and_then(|(origin, direction)| self.block_model_gpu.nearest_opaque_hit(origin, direction, hidden))
+            .and_then(|(origin, direction)| self.block_model_gpu.nearest_opaque_hit(origin, direction, hidden, self.section_slab()))
             .filter(|point| self.slab_contains(*point))
             .and_then(|point| {
                 let clip = *view_proj * point.extend(1.0);
@@ -1007,7 +1009,7 @@ impl<'a> Graphics<'a> {
                 None,
             )
             .map(|(_, world)| world);
-            let block_model_hit = self.block_model_gpu.nearest_visible_hit(ray_origin, direction, hidden, frozen);
+            let block_model_hit = self.block_model_gpu.nearest_visible_hit(ray_origin, direction, hidden, frozen, self.section_slab());
             // A point cloud has no ray-castable surface, so pivot on the nearest
             // splat under the cursor instead - otherwise orbiting over a selected
             // cloud spins about a stale camera-target depth.

@@ -116,8 +116,11 @@ impl Graphics<'_> {
             Gesture::Orbit(delta) => {
                 self.mark_interaction();
                 if let Some(slice) = self.slice_view.as_mut() {
-                    slice.orbit += delta;
-                    self.update_slice_touch_camera();
+                    // A 2D section stays square-on.
+                    if !slice.outlines {
+                        slice.orbit += delta;
+                        self.update_slice_touch_camera();
+                    }
                 } else {
                     self.camera_controller.process_mouse(Some(MouseButton::Right), delta.x, delta.y);
                     self.camera_controller

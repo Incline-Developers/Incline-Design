@@ -82,7 +82,7 @@ pub(super) const POINT_MARKER_COLOR: [f32; 4] = [0.007, 0.007, 0.007, 1.0];
 pub(super) const ACTIVE_POINT_COLOR: [f32; 4] = [1.0, 0.7157, 0.0319, 1.0];
 /// Logical em size used by cosmic-text layout; vector outlines are normalized
 /// and the document text height scales this into world units.
-pub(super) const DOC_TEXT_FONT_SIZE: f32 = 64.0;
+pub(crate) const DOC_TEXT_FONT_SIZE: f32 = 64.0;
 pub(super) const TEXT_EDIT_INDICATOR_COLOR: [f32; 4] = [0.15, 0.75, 1.0, 1.0];
 
 /// Liang-Barsky segment-vs-AABB test in 2-D screen space.
@@ -338,6 +338,8 @@ pub(crate) struct Graphics<'a> {
     pub(super) cinematic_targets: Option<cinematic::CinematicTargets>,
     pub(super) raster_surface_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) edge_style_bind_group_layout: wgpu::BindGroupLayout,
+    /// Group 3 of the section cut pipeline: a surface chunk's vertices as a texture.
+    pub(super) section_cut_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) point_cloud_style_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) lyon_vertex_gpu: wgpu::Buffer,
     pub(super) lyon_index_gpu: wgpu::Buffer,
@@ -547,6 +549,8 @@ pub(crate) struct SliceViewState {
     pub(super) direction: DVec2,
     /// Slab thickness in metres.
     pub(super) width: f64,
+    /// 2D section: surfaces draw as their cut through the plane, not the slab.
+    pub(super) outlines: bool,
     /// W/S slab movement speed (m/s).
     pub(super) move_speed: f64,
     /// Q/E rotation rate (radians per second).
@@ -629,11 +633,29 @@ impl SliceViewState {
         Some((step, start_yaw * (1.0 - eased), start_pitch * (1.0 - eased)))
     }
 
+    /// Takes the 2D setting from the panel. A 2D section is only ever seen
+    /// square-on, so an orbited view eases back square as it is switched on,
+    /// the way a standard view is turned to; held here every frame, so input
+    /// that interrupts the turn only delays it.
+    pub(super) fn set_outlines(&mut self, outlines: bool) {
+        self.outlines = outlines;
+        if outlines && self.turn_to.is_none() && (self.yaw != 0.0 || self.pitch != 0.0) {
+            self.turn_to = Some(SliceTurn {
+                angle: 0.0,
+                turned: 0.0,
+                start_yaw: self.yaw,
+                start_pitch: self.pitch,
+                elapsed: Duration::ZERO,
+            });
+        }
+    }
+
     pub(super) fn slab(&self) -> SectionSlab {
         SectionSlab {
             point: self.center,
             normal: self.normal(),
             half_width: self.width * 0.5,
+            outlines: self.outlines,
         }
     }
 
@@ -1125,6 +1147,7 @@ impl<'a> Graphics<'a> {
             center,
             direction: direction.normalize_or(DVec2::X),
             width,
+            outlines: false,
             move_speed,
             rotate_speed,
             input: SliceInputState::default(),
@@ -1164,7 +1187,8 @@ impl<'a> Graphics<'a> {
     }
 
     pub(crate) fn begin_slice_orbit_drag(&mut self, initial: DVec2) -> bool {
-        let Some(slice) = self.slice_view.as_mut() else {
+        // A 2D section stays square-on; the drag is simply not an orbit.
+        let Some(slice) = self.slice_view.as_mut().filter(|slice| !slice.outlines) else {
             return false;
         };
         slice.orbit_dragging = true;

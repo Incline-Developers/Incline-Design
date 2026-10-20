@@ -1917,6 +1917,9 @@ pub(crate) struct EditorState {
     pub(crate) slice_preview_navigation: SlicePreviewNavigation,
     /// Slab thickness in metres, live-applied from the slice panel.
     pub(crate) slice_width_input: f64,
+    /// 2D section: surfaces draw as the line they cut through the plane
+    /// rather than as a 3D slab. Live-applied from the slice panel.
+    pub(crate) slice_outlines: bool,
     /// W/S slab movement speed (m/s).
     pub(crate) slice_speed_input: f64,
     /// Q/E rotation rate (degrees per second).
@@ -2271,6 +2274,7 @@ pub(crate) struct EditorState {
     pub(crate) tri_contour_target_layer: Option<LayerId>,
     pub(crate) tri_contour_layer_name_input: String,
     pub(crate) tri_contour_layer_name_auto: bool,
+    pub(crate) tri_contour_labels: bool,
     pub(crate) point_cloud_tin_open: bool,
     pub(crate) point_cloud_tin_cloud_id: Option<PointCloudId>,
     pub(crate) point_cloud_tin_name_input: String,
@@ -3405,8 +3409,9 @@ impl EditorState {
             slice_preview_texture: None,
             slice_preview_size_px: [440, 440],
             slice_preview_navigation: SlicePreviewNavigation::default(),
-            slice_width_input: 25.0,
-            slice_speed_input: 50.0,
+            slice_width_input: 3.0,
+            slice_outlines: true,
+            slice_speed_input: 20.0,
             slice_rotate_input: 45.0,
             slice_center: [0.0; 3],
             slice_direction: [1.0, 0.0],
@@ -3590,6 +3595,7 @@ impl EditorState {
             tri_contour_target_layer: None,
             tri_contour_layer_name_input: tr!("common-surface-contours"),
             tri_contour_layer_name_auto: true,
+            tri_contour_labels: false,
             point_cloud_tin_open: false,
             point_cloud_tin_cloud_id: None,
             point_cloud_tin_name_input: tr!("tri-type-open-surface"),
@@ -4975,6 +4981,8 @@ pub(crate) enum UiCommand {
         minor_color: [f32; 4],
         /// Optional `(min, max)` RL band to contour instead of the full mesh.
         z_range: Option<(f64, f64)>,
+        /// Write each major line's height on it as text.
+        contour_labels: bool,
         output_layer: ContourOutputLayer,
     },
 

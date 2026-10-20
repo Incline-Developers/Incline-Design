@@ -53,8 +53,18 @@ impl<'a> Graphics<'a> {
         // non-zero placeholder until the first real resize arrives.
         let size = winit::dpi::PhysicalSize::new(window_size.width.max(1), window_size.height.max(1));
 
+        // Intel's Vulkan shader compiler can crash during startup on Windows.
+        // Start with DX12 only so Vulkan is not initialized unless requested.
+        #[cfg(target_os = "windows")]
+        let backends = wgpu::Backends::DX12;
+        #[cfg(not(target_os = "windows"))]
+        let backends = wgpu::Backends::PRIMARY;
+        // Allow native builds to opt into another backend for troubleshooting.
+        #[cfg(not(target_arch = "wasm32"))]
+        let backends = backends.with_env();
+
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::PRIMARY,
+            backends,
             flags: wgpu::InstanceFlags::default(),
             memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
             backend_options: wgpu::BackendOptions::default(),
@@ -563,6 +573,7 @@ impl<'a> Graphics<'a> {
             entries: &[style_bind_group_layout_entry],
             label: Some("edge_style_bind_group_layout"),
         });
+        let section_cut_bind_group_layout = crate::rendering::scene::gpu_cache::section_cut_bind_group_layout(&device);
         // A cloud's style, plus one per-chunk draw uniform selected by dynamic
         // offset as each chunk is drawn (see `PointChunkDrawUniform`).
         let point_cloud_style_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -605,6 +616,7 @@ impl<'a> Graphics<'a> {
                 surface_chunk: &surface_chunk_bind_group_layout,
                 raster_surface: &raster_surface_bind_group_layout,
                 edge_style: &edge_style_bind_group_layout,
+                section_cut: &section_cut_bind_group_layout,
                 point_cloud_style: &point_cloud_style_bind_group_layout,
                 block_model_transparency_composite: &block_model_transparency_composite_bind_group_layout,
                 block_model_volume_upscale: &block_model_volume_upscale_bind_group_layout,
@@ -786,6 +798,7 @@ impl<'a> Graphics<'a> {
             surface_chunk_bind_group_layout,
             raster_surface_bind_group_layout,
             edge_style_bind_group_layout,
+            section_cut_bind_group_layout,
             point_cloud_style_bind_group_layout,
             lyon_vertex_gpu,
             lyon_index_gpu,
