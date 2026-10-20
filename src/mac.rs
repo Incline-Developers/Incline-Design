@@ -17,8 +17,10 @@ use objc2_foundation::{NSObject, NSObjectProtocol, NSString};
 
 use crate::{
     i18n::tr,
-    model::{Axis, SceneEntityId},
-    ui::state::{EditorState, UiProjectView, ViewToggle, Workspace},
+    ui::{
+        elements::main_menu::{DESIGN_ROWS, design_groups},
+        state::{EditorState, UiProjectView, ViewToggle, Workspace},
+    },
 };
 
 static PENDING_ACTIONS: Mutex<Vec<MacMenuAction>> = Mutex::new(Vec::new());
@@ -33,7 +35,6 @@ struct MenuState {
     can_create_terrain_tin: bool,
     can_join_point_clouds: bool,
     can_classify_point_clouds: bool,
-    can_create_triangulation: bool,
     /// Whether exactly one loaded surface is selected, which is what the
     /// single-surface triangulation tools run on.
     one_surface_selected: bool,
@@ -52,9 +53,8 @@ struct MenuState {
     /// thresholding runs on.
     can_create_ore_triangulation: bool,
     can_undrape_rasters: bool,
-    has_design_selection: bool,
-    has_polyline_selection: bool,
-    has_selection_intersections: bool,
+    /// Whether each Design row can run, in [`DESIGN_ROWS`] order.
+    design_rows: [bool; DESIGN_ROWS.len()],
     /// Whether the active project is a file that can be shown in Finder.
     has_project_file: bool,
     /// The workspace decides which discipline menus are visible and active.
@@ -81,12 +81,6 @@ pub(crate) enum MacMenuAction {
     ExportViewportImage,
     OpenPlotDialog,
     RequestExit,
-    InsertPointsAtIntersections,
-    OpenInsertPointAtElevation,
-    OpenMoveToX,
-    OpenMoveToY,
-    OpenMoveToZ,
-    OpenCreateTriangulation,
     OpenCutTriangulationByPolyline,
     OpenCutTriangulationByZ,
     OpenCutTriangulationBySurface,
@@ -115,6 +109,8 @@ pub(crate) enum MacMenuAction {
     OpenRecent(usize),
     /// One View menu switch, by its position in [`VIEW_TOGGLES`].
     ToggleView(usize),
+    /// One Design menu row, by its index in [`DESIGN_ROWS`].
+    DesignRow(usize),
 }
 
 /// The View menu's rows, in the order they are drawn. The egui menu bar draws
@@ -134,6 +130,11 @@ const RECENT_TAG_BASE: isize = 1000;
 /// Tags at or above this, and below [`RECENT_SUBMENU_TAG`], carry a View menu
 /// switch by its index in [`VIEW_TOGGLES`].
 const VIEW_TAG_BASE: isize = 500;
+/// Tags at or above this, and below [`DESIGN_ROW_TAG_END`], carry a Design
+/// row by its index in [`DESIGN_ROWS`].
+const DESIGN_ROW_TAG_BASE: isize = 300;
+const DESIGN_ROW_TAG_END: isize = 400;
+const _: () = assert!(DESIGN_ROWS.len() as isize <= DESIGN_ROW_TAG_END - DESIGN_ROW_TAG_BASE);
 /// Tag of the Open Recent item itself. It opens a submenu rather than
 /// performing anything, so [`MacMenuAction::from_tag`] rejects it: no fixed
 /// action sits this far up the range.
@@ -155,12 +156,6 @@ impl MacMenuAction {
         Self::ExportViewportImage,
         Self::OpenPlotDialog,
         Self::RequestExit,
-        Self::InsertPointsAtIntersections,
-        Self::OpenInsertPointAtElevation,
-        Self::OpenMoveToX,
-        Self::OpenMoveToY,
-        Self::OpenMoveToZ,
-        Self::OpenCreateTriangulation,
         Self::OpenCutTriangulationByPolyline,
         Self::OpenCutTriangulationByZ,
         Self::OpenCutTriangulationBySurface,
@@ -188,6 +183,7 @@ impl MacMenuAction {
         match self {
             Self::OpenRecent(index) => RECENT_TAG_BASE + index as isize,
             Self::ToggleView(index) => VIEW_TAG_BASE + index as isize,
+            Self::DesignRow(index) => DESIGN_ROW_TAG_BASE + index as isize,
             action => Self::FIXED.iter().position(|fixed| *fixed == action).map_or(0, |index| index as isize + 1),
         }
     }
@@ -199,6 +195,10 @@ impl MacMenuAction {
         if (VIEW_TAG_BASE..RECENT_SUBMENU_TAG).contains(&tag) {
             let index = usize::try_from(tag - VIEW_TAG_BASE).ok()?;
             return (index < VIEW_TOGGLES.len()).then_some(Self::ToggleView(index));
+        }
+        if (DESIGN_ROW_TAG_BASE..DESIGN_ROW_TAG_END).contains(&tag) {
+            let index = usize::try_from(tag - DESIGN_ROW_TAG_BASE).ok()?;
+            return (index < DESIGN_ROWS.len()).then_some(Self::DesignRow(index));
         }
         Self::FIXED.get(usize::try_from(tag - 1).ok()?).copied()
     }
@@ -362,62 +362,22 @@ pub(crate) fn install_menu_bar() {
 
     let design_menu = menu(&tr!("ws-menubar-design"), mtm);
     design_menu.setAutoenablesItems(false);
-    let insert_point_menu = menu(&tr!("ws-menubar-design-insert-point"), mtm);
-    insert_point_menu.setAutoenablesItems(false);
-    add_action(
-        &insert_point_menu,
-        &tr!("ws-menubar-design-insert-point-at-intersection"),
-        "",
-        MacMenuAction::InsertPointsAtIntersections,
-        &target,
-        mtm,
-    );
-    add_action(
-        &insert_point_menu,
-        &tr!("ws-menubar-design-insert-point-at-elevation"),
-        "",
-        MacMenuAction::OpenInsertPointAtElevation,
-        &target,
-        mtm,
-    );
-    add_submenu(&design_menu, &tr!("ws-menubar-design-insert-point"), &insert_point_menu, mtm);
-    add_separator(&design_menu, mtm);
-    let move_to_menu = menu(&tr!("ws-menubar-design-move-to"), mtm);
-    move_to_menu.setAutoenablesItems(false);
-    add_action(
-        &move_to_menu,
-        &format!("{} {}...", tr!("common-set"), Axis::X.label()),
-        "",
-        MacMenuAction::OpenMoveToX,
-        &target,
-        mtm,
-    );
-    add_action(
-        &move_to_menu,
-        &format!("{} {}...", tr!("common-set"), Axis::Y.label()),
-        "",
-        MacMenuAction::OpenMoveToY,
-        &target,
-        mtm,
-    );
-    add_action(
-        &move_to_menu,
-        &format!("{} {}...", tr!("common-set"), Axis::Z.label()),
-        "",
-        MacMenuAction::OpenMoveToZ,
-        &target,
-        mtm,
-    );
-    add_submenu(&design_menu, &tr!("ws-menubar-design-move-to"), &move_to_menu, mtm);
-    add_separator(&design_menu, mtm);
-    add_action(
-        &design_menu,
-        &tr!("ws-menubar-design-create-triangulation"),
-        "",
-        MacMenuAction::OpenCreateTriangulation,
-        &target,
-        mtm,
-    );
+    for (group, (title, run)) in design_groups().into_iter().enumerate() {
+        if group > 0 {
+            add_separator(&design_menu, mtm);
+        }
+        let submenu = title.as_ref().map(|title| menu(title, mtm));
+        if let Some(submenu) = &submenu {
+            submenu.setAutoenablesItems(false);
+        }
+        for index in run {
+            let action = MacMenuAction::DesignRow(index);
+            add_action(submenu.as_deref().unwrap_or(&*design_menu), &DESIGN_ROWS[index].label(), "", action, &target, mtm);
+        }
+        if let (Some(title), Some(submenu)) = (&title, &submenu) {
+            add_submenu(&design_menu, title, submenu, mtm);
+        }
+    }
     add_submenu(&root, &tr!("ws-menubar-design"), &design_menu, mtm);
 
     let triangulation_menu = menu(&tr!("ws-menubar-triangulation"), mtm);
@@ -648,7 +608,6 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         can_create_terrain_tin: editor.selection_counts.point_clouds == 1,
         can_join_point_clouds: editor.selection_counts.point_clouds >= 2,
         can_classify_point_clouds: editor.selection_counts.point_clouds >= 1,
-        can_create_triangulation: editor.selection_counts.triangulation_sources > 0,
         one_surface_selected: editor.selection_counts.triangulations == 1,
         can_clip_by_polyline: editor.selection_counts.triangulations == 1 && editor.selection_counts.clip_boundaries == 1,
         can_create_block_model: editor.selection_counts.drill_holes == 1,
@@ -656,9 +615,7 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         can_build_reference_surface: editor.selection_counts.surface_points >= crate::app::commands::triangulation::reference_surface::MINIMUM_POINTS,
         can_create_ore_triangulation: editor.selection_counts.block_models == 1,
         can_undrape_rasters: project.raster_textures.iter().any(|raster| raster.is_draped),
-        has_design_selection: editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_))),
-        has_polyline_selection: editor.selection_has_polylines,
-        has_selection_intersections: editor.selection_has_intersections,
+        design_rows: DESIGN_ROWS.map(|row| row.enabled(editor)),
         has_project_file: project.active_path.is_some(),
         active_workspace: editor.active_workspace,
         view_toggles: VIEW_TOGGLES.map(|toggle| toggle.get(editor)),
@@ -691,7 +648,6 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     set_enabled(&root, MacMenuAction::OpenSurveyTransform, state.has_project);
     // Select first, then act: these run on the scene selection they were
     // opened with rather than on a pick list filled inside their dialog.
-    set_enabled(&root, MacMenuAction::OpenCreateTriangulation, state.can_create_triangulation);
     set_enabled(&root, MacMenuAction::OpenCreateBlockModel, state.can_create_block_model);
     set_enabled(&root, MacMenuAction::OpenReferencePoints, state.can_build_reference_points);
     set_enabled(&root, MacMenuAction::OpenReferenceSurface, state.can_build_reference_surface);
@@ -701,12 +657,9 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     }
     set_enabled(&root, MacMenuAction::OpenCutTriangulationByPolyline, state.can_clip_by_polyline);
     // The Design menu only acts on selected design objects.
-    for action in [MacMenuAction::OpenMoveToX, MacMenuAction::OpenMoveToY, MacMenuAction::OpenMoveToZ] {
-        set_enabled(&root, action, state.has_design_selection);
+    for (index, enabled) in state.design_rows.iter().enumerate() {
+        set_enabled(&root, MacMenuAction::DesignRow(index), *enabled);
     }
-    // Inserting at intersections additionally needs two polylines that cross.
-    set_enabled(&root, MacMenuAction::OpenInsertPointAtElevation, state.has_polyline_selection);
-    set_enabled(&root, MacMenuAction::InsertPointsAtIntersections, state.has_selection_intersections);
     for (index, checked) in state.view_toggles.iter().enumerate() {
         set_checked(&root, MacMenuAction::ToggleView(index), *checked);
     }

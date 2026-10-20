@@ -293,6 +293,7 @@ survey-name-exists = A coordinate system with that name already exists. Select i
 
 preferences-ui-size = UI size
 preferences-ui-size-help = Adjusts text and controls relative to your device’s normal display scaling. 100% uses the default size. Screen resolution and window size do not shrink the interface.
+preferences-recent-functions-shown = Recent functions shown
 
 relimit-select-boundary = Select polyline or circle to relimit to
 
@@ -1218,6 +1219,8 @@ edit-project-name = Project name
 edit-properties = Properties
 edit-radius = Radius
 edit-recent = Recent
+edit-recent-functions = Recent functions
+edit-no-recent-functions = No recent functions
 edit-relative = Relative (+/-)
 edit-elevation-mode-help = Relative applies a vertical change to every point. Absolute RL projects every point onto one target elevation.
 edit-remove-from-list = Remove from List
@@ -1233,6 +1236,8 @@ edit-selected-start-end-point-moves = The selected start or end point moves alon
 edit-set-axis = Set { $axis }
 edit-shortest = Shortest
 edit-slice-view = Slice View
+edit-slice-3d = 3D view
+edit-slice-3d-help = Draw surfaces as a 3D slab instead of the line where they cross the section plane, and allow orbiting. Drill holes, strings, points and block models show within the slab width either way.
 edit-slope-angle-each-batter-face = Slope angle of each batter face, measured from horizontal.
 edit-slope-angle-offset-positive-negative = Slope angle of the offset. Positive and negative angles move the copy above or below the source as it moves sideways.
 edit-speed = Speed

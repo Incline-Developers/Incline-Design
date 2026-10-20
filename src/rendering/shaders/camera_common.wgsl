@@ -18,7 +18,9 @@ struct CameraUniform {
     // in metres.
     section_plane: vec4<f32>,
     // xyz: the section plane's unit normal, horizontal by construction;
-    // w: 1 while the section slab clips the scene, 0 in every other view.
+    // w: 1 while the section slab clips the scene, 2 when it is a 2D section
+    // (the slab still clips; surfaces draw as their cut instead), 0 in every
+    // other view.
     section_normal: vec4<f32>,
 };
 @group(0) @binding(0)
@@ -34,6 +36,12 @@ fn section_plane_offset(world: vec3<f32>) -> f32 {
 // plane. Outside a section the slab is off and this discards nothing.
 fn outside_section_slab(offset: f32) -> bool {
     return camera.section_normal.w > 0.5 && abs(offset) > camera.section_plane.w;
+}
+
+// In a 2D section, whether a point at this offset lies on the viewer's side
+// of the plane: filled geometry there would hide the lines drawn on it.
+fn in_front_of_section_2d(offset: f32) -> bool {
+    return camera.section_normal.w > 1.5 && offset * dot(camera.section_normal.xyz, camera.cam_forward.xyz) < 0.0;
 }
 
 // Coverage of a block's own outline at `p`, for the in-shader block-model

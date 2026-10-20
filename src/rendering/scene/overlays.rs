@@ -102,8 +102,9 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
         draw_screen_cross(&mut overlay, point, 20.0, 8.0, [0.05, 0.2, 0.65, 1.0]);
         draw_screen_cross(&mut overlay, point, 18.0, 4.0, [0.45, 0.7, 1.0, 1.0]);
     }
-    if editor.poly_finish_dialog {
-        // Dialog is open: draw a dashed closing line from last point to first point.
+    if editor.poly_finish_dialog || editor.poly_close_hovered() {
+        // The Open / Closed menu is up, or the cursor is on the first vertex:
+        // dash the segment that would close the polyline.
         // Dash size is fixed in screen pixels so it stays visible at any zoom level.
         if let (Some(&first), Some(&last)) = (stroke_preview.first(), stroke_preview.last()) {
             let total_world = (first - last).length();

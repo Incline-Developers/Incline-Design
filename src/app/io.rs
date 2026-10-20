@@ -100,6 +100,10 @@ pub(crate) const fn default_fly_max_clip_span() -> f64 {
     150_000.0
 }
 
+pub(crate) const fn default_recent_functions_shown() -> u32 {
+    10
+}
+
 /// One stored blasting product, as the config file holds it.
 ///
 /// The palette's own ids are handed out per run, so nothing identifying is
@@ -240,6 +244,13 @@ pub(crate) struct Config {
     /// Which saved system the project's numbers are in.
     #[serde(default)]
     pub(crate) mine_coordinate_system: Option<String>,
+    #[serde(default = "default_recent_functions_shown")]
+    pub(crate) recent_functions_shown: u32,
+    /// Production's recent functions, newest last. A habit, not a project's
+    /// data, so it is kept here and survives every project switch.
+    #[serde(default)]
+    #[serde(deserialize_with = "lenient_list")]
+    pub(crate) recent_design_functions: Vec<String>,
 }
 
 /// Deserialize a list, dropping entries this build cannot read instead of
@@ -311,6 +322,8 @@ impl Default for Config {
             workspace_order: crate::ui::state::Workspace::ALL.to_vec(),
             coordinate_systems: Vec::new(),
             mine_coordinate_system: None,
+            recent_functions_shown: default_recent_functions_shown(),
+            recent_design_functions: Vec::new(),
         }
     }
 }

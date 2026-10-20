@@ -199,23 +199,26 @@ fn document_primitive_order(primitive: DocumentPrimitive) -> u8 {
 /// cells always cover its whole buffer (see `CachedDrillHoles::cells`), so
 /// this only happens when a caller deliberately asks for zero cells, such as
 /// the empty half of `draw_drill_holes`'s string/disc split.
-fn draw_drill_cells(render_pass: &mut wgpu::RenderPass<'_>, cells: &[DrillCell], frustum: &Frustum) {
+/// In a 2D section a segment is a six-vertex ribbon flattened onto the plane,
+/// so its cell's box no longer says where it lands and is not culled by.
+fn draw_drill_cells(render_pass: &mut wgpu::RenderPass<'_>, cells: &[DrillCell], frustum: &Frustum, section_2d: bool) {
+    let vertices = if section_2d { 0..6 } else { 0..144 };
     let mut run: Option<std::ops::Range<u32>> = None;
     for cell in cells {
-        if !frustum.intersects_aabb(cell.min, cell.max) {
+        if !section_2d && !frustum.intersects_aabb(cell.min, cell.max) {
             continue;
         }
         match run.as_mut() {
             Some(range) if range.end == cell.start => range.end = cell.end,
             Some(range) => {
-                render_pass.draw(0..144, range.clone());
+                render_pass.draw(vertices.clone(), range.clone());
                 *range = cell.start..cell.end;
             }
             None => run = Some(cell.start..cell.end),
         }
     }
     if let Some(range) = run {
-        render_pass.draw(0..144, range);
+        render_pass.draw(vertices, range);
     }
 }
 
@@ -235,6 +238,7 @@ impl<'a> Graphics<'a> {
         if self.drill_hole_gpu.is_empty() {
             return;
         }
+        let section_2d = self.camera_uniform.section_cuts();
         render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
         let pipes = self.pipes();
         let hole_pipeline = if xray_enabled {
@@ -269,7 +273,7 @@ impl<'a> Graphics<'a> {
                     render_pass.set_bind_group(1, &cached.selection_bind_group, &[]);
                     render_pass.set_vertex_buffer(0, buffer.slice(..));
                     let split = cached.disc_cells_from.min(cached.cells.len());
-                    draw_drill_cells(render_pass, &cached.cells[..split], frustum);
+                    draw_drill_cells(render_pass, &cached.cells[..split], frustum, section_2d);
                 }
             }
             for dataset in drill_holes {
@@ -283,7 +287,7 @@ impl<'a> Graphics<'a> {
                     render_pass.set_bind_group(1, &cached.selection_bind_group, &[]);
                     render_pass.set_vertex_buffer(0, buffer.slice(..));
                     let split = cached.disc_cells_from.min(cached.cells.len());
-                    draw_drill_cells(render_pass, &cached.cells[split..], frustum);
+                    draw_drill_cells(render_pass, &cached.cells[split..], frustum, section_2d);
                 }
             }
             if draw_preview
@@ -697,6 +701,8 @@ impl<'a> Graphics<'a> {
         // Developer chunk-debug view: colour each surface chunk distinctly and
         // report how many chunks and faces survive frustum culling.
         let debug_chunks = editor.debug_surface_chunks;
+        // A 2D section draws surfaces only as their cut through the plane.
+        let section_cuts = self.camera_uniform.section_cuts();
         let mut surface_stats = crate::rendering::scene::gpu_cache::SurfaceRenderStats::default();
         let mut point_stats = crate::rendering::scene::point_cloud_cache::PointRenderStats::default();
 
@@ -854,7 +860,7 @@ impl<'a> Graphics<'a> {
             render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
             for triangulation in triangulations {
                 let entity = triangulation.entity_id();
-                if !triangulation.state.loaded || editor.hidden_handles.contains(&entity) {
+                if section_cuts || !triangulation.state.loaded || editor.hidden_handles.contains(&entity) {
                     continue;
                 }
                 let Some(cached) = self.triangulation_gpu.get(triangulation.id) else {
@@ -938,6 +944,10 @@ impl<'a> Graphics<'a> {
             }
         }
 
+        if section_cuts {
+            self.draw_section_cuts(&mut render_pass, triangulations, editor, &frustum, &mut surface_stats);
+        }
+
         // The section's grid on its plane, after the opaque geometry and with
         // depth on, so whatever sits in front of the plane hides it and
         // whatever sits behind shows it. Its labels stay with egui.
@@ -948,7 +958,7 @@ impl<'a> Graphics<'a> {
             render_pass.draw(0..3, 0..1);
         }
 
-        if !self.triangulation_gpu.is_empty() {
+        if !self.triangulation_gpu.is_empty() && !section_cuts {
             let mut transparent: Vec<_> = triangulations
                 .iter()
                 .filter(|triangulation| {
@@ -1087,7 +1097,7 @@ impl<'a> Graphics<'a> {
             let Some(cached) = self.triangulation_gpu.get(triangulation.id) else {
                 continue;
             };
-            if cached.edge_width <= 0.0 || cached.edge_chunks.is_empty() {
+            if section_cuts || cached.edge_width <= 0.0 || cached.edge_chunks.is_empty() {
                 continue;
             }
             render_pass.set_bind_group(1, &cached.edge_style_bind_group, &[]);
@@ -1099,6 +1109,52 @@ impl<'a> Graphics<'a> {
 
         if draw_documents {
             self.draw_design_points_and_labels(&mut render_pass, editor, include_editor_overlays);
+        }
+    }
+
+    /// Every visible surface as the line it cuts through the section plane, in
+    /// its own colour (the selection colour while selected), translucent ones
+    /// included: one instance per triangle, read straight from the chunk's
+    /// index buffer, and only for chunks that reach the plane at all.
+    fn draw_section_cuts<'pass>(
+        &'pass self,
+        render_pass: &mut wgpu::RenderPass<'pass>,
+        triangulations: &[OpenTriangulation],
+        editor: &EditorState,
+        frustum: &Frustum,
+        surface_stats: &mut crate::rendering::scene::gpu_cache::SurfaceRenderStats,
+    ) {
+        let Some(slab) = self.section_slab() else {
+            return;
+        };
+        let plane_point = (slab.point - self.scene_origin).as_vec3();
+        let plane_normal = slab.normal.as_vec3();
+        render_pass.set_pipeline(&self.pipes().section_cut_render_pipeline);
+        render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
+        for triangulation in triangulations {
+            if !triangulation.state.loaded || editor.hidden_handles.contains(&triangulation.entity_id()) {
+                continue;
+            }
+            let Some(cached) = self.triangulation_gpu.get(triangulation.id) else {
+                continue;
+            };
+            surface_stats.total_chunks += cached.surface_chunks.len() as u32;
+            surface_stats.total_faces += cached.surface_chunks.iter().map(|chunk| u64::from(chunk.index_count / 3)).sum::<u64>();
+            render_pass.set_bind_group(1, &cached.surface_style_bind_group, &[]);
+            for chunk in &cached.surface_chunks {
+                let Some((_, cut_bind_group)) = chunk.section_cut.as_ref() else {
+                    continue;
+                };
+                if !chunk.bounds.straddles_plane(plane_point, plane_normal) || !frustum.intersects_obb(&chunk.bounds) {
+                    continue;
+                }
+                render_pass.set_bind_group(2, &chunk.chunk_bind_group, &[]);
+                render_pass.set_bind_group(3, cut_bind_group, &[]);
+                surface_stats.drawn_chunks += 1;
+                surface_stats.drawn_faces += u64::from(chunk.index_count / 3);
+                render_pass.set_vertex_buffer(0, chunk.index_buffer.slice(..));
+                render_pass.draw(0..4, 0..chunk.index_count / 3);
+            }
         }
     }
 

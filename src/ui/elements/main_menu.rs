@@ -6,21 +6,21 @@
 //! this bar carries only what is true whichever workspace is open, the way
 //! Blender's topbar does.
 
-use crate::ui::{
-    EditorState, UiCommand, UiProjectView,
-    state::{ActiveTool, Workspace},
-    themed_icon,
-    widgets::toolbar::GROUP_CORNER_RADIUS,
-};
 // The dropdowns below are all in the system menu bar on macOS (`mac.rs`), and
 // nothing this module still draws there needs any of this.
 #[cfg(not(target_os = "macos"))]
+use crate::ui::{
+    state::{UiProjectEntry, ViewToggle},
+    widgets::context_menu::{ContextMenuAction, MenuBarMenu, context_menu_separator, context_submenu},
+};
 use crate::{
     i18n::tr,
     model::{Axis, SceneEntityId},
     ui::{
-        state::{UiProjectEntry, ViewToggle},
-        widgets::context_menu::{ContextMenuAction, MenuBarMenu, context_menu_separator, context_submenu},
+        EditorState, UiCommand, UiProjectView,
+        state::{ActiveTool, Workspace},
+        themed_icon,
+        widgets::toolbar::GROUP_CORNER_RADIUS,
     },
 };
 
@@ -266,6 +266,10 @@ fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, wor
     }
     let previous_workspace = editor.active_workspace;
     editor.active_workspace = workspace;
+    // The recent functions list is the workspace's own.
+    if editor.canvas_context_menu_recent {
+        editor.canvas_context_menu_open = false;
+    }
     if workspace != Workspace::DrillAndBlast && editor.drill_pattern_open {
         editor.close_drill_pattern();
     }
@@ -501,6 +505,99 @@ fn draw_open_recent(ui: &mut egui::Ui, project: &UiProjectView, commands: &mut V
     });
 }
 
+/// One entry of the Production Design menu. The egui menu, the macOS menu and
+/// the recent functions list all read [`DESIGN_ROWS`], so they cannot drift.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DesignRow {
+    InsertAtIntersection,
+    InsertAtElevation,
+    SetAxis(Axis),
+    CreateTriangulation,
+}
+
+/// The Design menu's entries in menu order; [`design_groups`] cuts it up.
+pub(crate) const DESIGN_ROWS: [DesignRow; 6] = [
+    DesignRow::InsertAtIntersection,
+    DesignRow::InsertAtElevation,
+    DesignRow::SetAxis(Axis::X),
+    DesignRow::SetAxis(Axis::Y),
+    DesignRow::SetAxis(Axis::Z),
+    DesignRow::CreateTriangulation,
+];
+
+/// The Design menu's runs of [`DESIGN_ROWS`], parted by separators: a submenu
+/// title, or `None` for rows standing on the menu itself.
+pub(crate) fn design_groups() -> [(Option<String>, std::ops::Range<usize>); 3] {
+    [
+        (Some(tr!("ws-menubar-design-insert-point")), 0..2),
+        (Some(tr!("ws-menubar-design-move-to")), 2..5),
+        (None, 5..6),
+    ]
+}
+
+impl DesignRow {
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::InsertAtIntersection => tr!("ws-menubar-design-insert-point-at-intersection"),
+            Self::InsertAtElevation => tr!("ws-menubar-design-insert-point-at-elevation"),
+            Self::SetAxis(axis) => tr!("common-set") + &format!(" {}...", axis.label()),
+            Self::CreateTriangulation => tr!("ws-menubar-design-create-triangulation"),
+        }
+    }
+
+    pub(crate) fn command(self) -> UiCommand {
+        match self {
+            Self::InsertAtIntersection => UiCommand::InsertPointsAtIntersections,
+            Self::InsertAtElevation => UiCommand::OpenInsertPointAtElevationDialog,
+            Self::SetAxis(axis) => UiCommand::OpenMoveToAxisDialog(axis),
+            Self::CreateTriangulation => UiCommand::OpenCreateTriangulation,
+        }
+    }
+
+    pub(crate) fn enabled(self, editor: &EditorState) -> bool {
+        // Every entry here acts on the current design selection.
+        match self {
+            // Needs two or more crossing polylines to insert anything.
+            Self::InsertAtIntersection => editor.selection_has_intersections,
+            Self::InsertAtElevation => editor.selection_has_polylines,
+            Self::SetAxis(_) => editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_))),
+            // Only objects that can contribute an edge count towards it.
+            Self::CreateTriangulation => editor.selection_counts.triangulation_sources > 0,
+        }
+    }
+
+    /// The row's name in a saved recent list, made from its menu words'
+    /// translation ids (plus the axis for Set X/Y/Z) rather than their text,
+    /// so a language switch relabels the list without losing it. Not itself
+    /// a translation id.
+    pub(crate) fn key(self) -> &'static str {
+        match self {
+            Self::InsertAtIntersection => "ws-menubar-design-insert-point-at-intersection",
+            Self::InsertAtElevation => "ws-menubar-design-insert-point-at-elevation",
+            Self::SetAxis(Axis::X) => "ws-menubar-design-move-to-x",
+            Self::SetAxis(Axis::Y) => "ws-menubar-design-move-to-y",
+            Self::SetAxis(Axis::Z) => "ws-menubar-design-move-to-z",
+            Self::CreateTriangulation => "ws-menubar-design-create-triangulation",
+        }
+    }
+
+    /// `None` for a key no row carries any more.
+    pub(crate) fn from_key(key: &str) -> Option<Self> {
+        DESIGN_ROWS.into_iter().find(|row| row.key() == key)
+    }
+
+    /// The way to the row through the menu bar, as the recent list shows it:
+    /// "Design / Insert Point / At intersection".
+    pub(crate) fn path(self) -> String {
+        let index = DESIGN_ROWS.iter().position(|row| *row == self).unwrap_or_default();
+        let submenu = design_groups().into_iter().find(|(_, run)| run.contains(&index)).and_then(|(title, _)| title);
+        let mut parts = vec![tr!("ws-menubar-design")];
+        parts.extend(submenu);
+        parts.push(self.label());
+        parts.join(" / ")
+    }
+}
+
 /// Draw the menus belonging to the active workspace, for the viewport bar to
 /// place at the head of its own row.
 ///
@@ -623,42 +720,25 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
         }
 
         MenuBarMenu::new(&tr!("ws-menubar-design")).show(ui, |ui| {
-            // Every entry here acts on the current design selection.
-            let has_selection = editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_)));
-            context_submenu(ui, &tr!("ws-menubar-design-insert-point"), editor.selection_has_polylines, |ui| {
-                // Needs two or more crossing polylines to insert anything.
-                if ContextMenuAction::new(tr!("ws-menubar-design-insert-point-at-intersection"))
-                    .enabled(editor.selection_has_intersections)
-                    .show(ui)
-                    .clicked()
-                {
-                    commands.push(UiCommand::InsertPointsAtIntersections);
+            let draw_row = |ui: &mut egui::Ui, row: DesignRow, commands: &mut Vec<UiCommand>| {
+                if ContextMenuAction::new(row.label()).enabled(row.enabled(editor)).show(ui).clicked() {
+                    commands.push(row.command());
+                    commands.push(UiCommand::NoteRecentFunction(row.key()));
                     ui.close();
                 }
-                if ContextMenuAction::new(tr!("ws-menubar-design-insert-point-at-elevation")).show(ui).clicked() {
-                    commands.push(UiCommand::OpenInsertPointAtElevationDialog);
-                    ui.close();
+            };
+            for (index, (title, run)) in design_groups().into_iter().enumerate() {
+                if index > 0 {
+                    context_menu_separator(ui);
                 }
-            });
-            context_menu_separator(ui);
-            context_submenu(ui, &tr!("ws-menubar-design-move-to"), has_selection, |ui| {
-                for axis in [Axis::X, Axis::Y, Axis::Z] {
-                    if ContextMenuAction::new(tr!("common-set") + &format!(" {}...", axis.label())).show(ui).clicked() {
-                        commands.push(UiCommand::OpenMoveToAxisDialog(axis));
-                        ui.close();
+                let rows = &DESIGN_ROWS[run];
+                match title {
+                    Some(title) => {
+                        let enabled = rows.iter().any(|entry| entry.enabled(editor));
+                        context_submenu(ui, &title, enabled, |ui| rows.iter().for_each(|row| draw_row(ui, *row, commands)));
                     }
+                    None => rows.iter().for_each(|row| draw_row(ui, *row, commands)),
                 }
-            });
-            context_menu_separator(ui);
-            // Like the entries above, this runs on the selection: only objects
-            // that can contribute an edge count towards it.
-            if ContextMenuAction::new(tr!("ws-menubar-design-create-triangulation"))
-                .enabled(editor.selection_counts.triangulation_sources > 0)
-                .show(ui)
-                .clicked()
-            {
-                commands.push(UiCommand::OpenCreateTriangulation);
-                ui.close();
             }
         });
 
