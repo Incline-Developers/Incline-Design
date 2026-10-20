@@ -51,10 +51,12 @@ its position, taking them off the view to uncover the bench below, and a
 click inserts at that position. Selected blasts are highlighted; the list on
 the right allows reordering and removal. Apply saves the sequence, and Cancel
 discards it.
-Edit blasts… on the bar reopens the same window. A machine works the first
-blast in its highest-priority open bar that still needs it, and waits there
-if that blast is not ready. Machines with the same blast in their bars work
-it together, their rates adding. A dig or reclaim bar cannot be put on a
+Edit blasts… on the bar reopens the same window. A machine works its bars
+by priority as a loader works its dig bars: a bar's current blast is the
+first that still needs the machine, and while that blast is not ready (not
+yet clear, or its step before unfinished) the bar has no work and the
+machine works its next bar, coming back as soon as it is. Machines with the
+same blast in their bars work it together, their rates adding. A dig or reclaim bar cannot be put on a
 drill and blast machine, nor a blast bar on a loader.
 
 A **Follow** bar (the Follow chip, then choose the machine) has no blasts of

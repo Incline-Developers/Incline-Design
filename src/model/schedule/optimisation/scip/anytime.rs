@@ -676,10 +676,11 @@ fn earned(input: &BlendInput, solution: &BlendSolution) -> BTreeMap<u32, f64> {
     earned
 }
 
-/// The period lengths of the long-term plans solved beside the search,
-/// coarsest first: a week's solves in seconds on any horizon, four days'
-/// sets finer targets where it finishes.
-const LONG_TERM_DAYS: [u32; 2] = [7, 4];
+/// The period length of the long-term plan solved beside the search. A
+/// second plan over four days, after it, took 20-40 s on the worlds with
+/// blasts and was kept on none of them; the core it took was worth more to
+/// the search.
+const LONG_TERM_DAYS: u32 = 7;
 
 /// The gap a long-term plan stops at. Its answer is only targets, and
 /// proving it took 40% of its solve: on Centralia the optimum was found at
@@ -702,20 +703,16 @@ impl LongTerm {
         let worker = std::thread::spawn(move || {
             let started = Instant::now();
             let (parcelled, _) = super::parcels::parcels(&input);
-            for period in LONG_TERM_DAYS {
-                let left = limit.saturating_sub(started.elapsed());
-                if left.is_zero() || ending.load(Ordering::Relaxed) {
-                    return;
-                }
-                let settings = Settings {
-                    time_limit: left,
-                    relative_gap: LONG_TERM_GAP,
-                    relax: false,
-                };
-                if sender.send((period, plan::long_term(&parcelled, None, period, settings, &ending))).is_err() {
-                    return;
-                }
+            let left = limit.saturating_sub(started.elapsed());
+            if left.is_zero() || ending.load(Ordering::Relaxed) {
+                return;
             }
+            let settings = Settings {
+                time_limit: left,
+                relative_gap: LONG_TERM_GAP,
+                relax: false,
+            };
+            let _ = sender.send((LONG_TERM_DAYS, plan::long_term(&parcelled, None, LONG_TERM_DAYS, settings, &ending)));
         });
         Self {
             worker,

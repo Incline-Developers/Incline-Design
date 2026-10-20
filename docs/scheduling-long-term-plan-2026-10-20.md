@@ -322,3 +322,56 @@ The plans' solve time is now the limit: trucks 60% gets no long-term plan
 within 60 s and the long world's takes 28 s. Next: start the long-term plan
 from the first schedule (no incumbent for its first 12 s on Centralia), then
 blast timing decided in the plan.
+
+## Plan speed after the fix
+
+- **Starting the long-term plan from the first schedule** (mapped to
+  parcels, its on-time flags read from its digging): no faster. Completed,
+  it lies about 4% below the plan's bound, outside the 2% gap, so the search
+  runs on to the same sub-MIP solution (Centralia's 4-day plan 24.7 s either
+  way). From the LP relaxation's answer: no faster either. Only a start
+  near the optimum helps (3.3 s). Not kept.
+- **Trucks 60%:** the bound settles in 9 s, but good plans need a tree:
+  native HiGHS on two cores reaches a 2% gap at 65 s (its first plan, at
+  15 s, is worth less than the first schedule). No plan arrives within
+  Improve's 60 s; its windows still reach +2.62%.
+- **One 7-day plan instead of 7- then 4-day:** Centralia +1.49% → +1.51%,
+  grades +0.94% → +0.97%, the rest identical. Kept.
+
+## Blast timing decided in the plan, parcel targets and pace caps (removed)
+
+- **Blasts decided by the long-term plan:** binary clear, step and fire
+  flags per period; each machine's bars held to dig priority (a lower bar
+  gets work only if every higher one ran out of ready work all period); a
+  machine with work works at full capacity; a blast charged by a period's
+  start fires in it; a minimum clear-to-fire lag from its machines' summed
+  rates. The first schedule, with its blast history, breaks none of these
+  rows on any blast world. But the plan fired most blasts later than the
+  first schedule (its loaders' pace, not its blast rows), dispatches to it
+  were worse (Centralia +1.18% → +1.10%, trucks 60% +0.66% → −2.60%) and
+  identical with blasts held or live, and it solved up to five times slower
+  (long world: no plan in 300 s).
+- **Why:** with authored priority enforced, a loader digs only its
+  highest-priority ready bar's current block, so the ground order is fixed
+  by the bars; the dispatch chooses only pace, routing, stockpiles and work
+  under blocked bars. Blast timing follows from pace.
+- **Parcel targets** (per loader, parcel and day) in the dispatch: within
+  ±0.01 points, worse on trucks 60%. **A weekly cap per loader at the plan's
+  pace:** neutral where it does not bind, much worse where it does (trucks
+  60% −3.3%, no blasts −1.5%, long world −2.5%): the plan's slower weeks are
+  artefacts of pooling a week's trucks and crusher.
+
+## Period length of the long-term plan (one dispatch to its targets)
+
+| World | 7-day | 4-day | 2-day |
+|---|---|---|---|
+| Centralia | +1.18% (14 s) | +1.27% (28 s) | +1.22% (111 s) |
+| 14 days | +2.45% | +1.67% | +1.70% (1-day +2.05%) |
+| Trucks 60% | +0.66% (75 s) | −0.06% (72 s) | +0.63% (900 s limit) |
+| Grades | −0.28% (9 s) | −0.07% (23 s) | +0.34% (351 s) |
+| No blasts | +1.39% | +1.10% | +1.04% (1-day +1.25%) |
+| Long world | +0.35% (26 s) | +0.15% (153 s) | +0.09% (363 s) |
+
+Halving the period doubles to quadruples the solve on blast worlds; finer
+plans promise less (Centralia +3.9% → +3.1%) but are not better guides.
+Seven days stays.
