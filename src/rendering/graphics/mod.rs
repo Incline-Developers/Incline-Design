@@ -81,7 +81,7 @@ pub(super) const POINT_MARKER_COLOR: [f32; 4] = [0.007, 0.007, 0.007, 1.0];
 pub(super) const ACTIVE_POINT_COLOR: [f32; 4] = [1.0, 0.7157, 0.0319, 1.0];
 /// Logical em size used by cosmic-text layout; vector outlines are normalized
 /// and the document text height scales this into world units.
-pub(super) const DOC_TEXT_FONT_SIZE: f32 = 64.0;
+pub(crate) const DOC_TEXT_FONT_SIZE: f32 = 64.0;
 pub(super) const TEXT_EDIT_INDICATOR_COLOR: [f32; 4] = [0.15, 0.75, 1.0, 1.0];
 
 /// Liang-Barsky segment-vs-AABB test in 2-D screen space.

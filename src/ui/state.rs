@@ -1714,6 +1714,7 @@ pub(crate) struct EditorState {
     pub(crate) tri_contour_target_layer: Option<LayerId>,
     pub(crate) tri_contour_layer_name_input: String,
     pub(crate) tri_contour_layer_name_auto: bool,
+    pub(crate) tri_contour_labels: bool,
     pub(crate) point_cloud_tin_open: bool,
     pub(crate) point_cloud_tin_cloud_id: Option<PointCloudId>,
     pub(crate) point_cloud_tin_name_input: String,
@@ -2751,6 +2752,7 @@ impl EditorState {
             tri_contour_target_layer: None,
             tri_contour_layer_name_input: tr!("common-surface-contours"),
             tri_contour_layer_name_auto: true,
+            tri_contour_labels: false,
             point_cloud_tin_open: false,
             point_cloud_tin_cloud_id: None,
             point_cloud_tin_name_input: tr!("tri-type-open-surface"),
@@ -3918,6 +3920,8 @@ pub(crate) enum UiCommand {
         minor_color: [f32; 4],
         /// Optional `(min, max)` RL band to contour instead of the full mesh.
         z_range: Option<(f64, f64)>,
+        /// Write each major line's height on it as text.
+        contour_labels: bool,
         output_layer: ContourOutputLayer,
     },
 

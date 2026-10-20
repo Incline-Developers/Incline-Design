@@ -1361,9 +1361,10 @@ impl<'a> App<'a> {
                 major_color,
                 minor_color,
                 z_range,
+                contour_labels,
                 output_layer,
             } => {
-                let result = self.generate_contour_triangulation(tri_id, major_interval, minor_interval, major_color, minor_color, z_range, output_layer);
+                let result = self.generate_contour_triangulation(tri_id, major_interval, minor_interval, major_color, minor_color, z_range, contour_labels, output_layer);
                 if result.is_ok() {
                     self.editor.tri_contour_open = false;
                 }
