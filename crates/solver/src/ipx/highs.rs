@@ -41,6 +41,13 @@ pub(crate) fn solve_lp(lp: &SimplexLp, options: &Options, interrupt: Option<Inte
 /// with centring steps (`run_centring`), at most 200 iterations. Returns
 /// HiGHS's model status and, when IPX gave one, the interior point's
 /// column values.
+///
+/// The status is the one `Highs::optimizeLp` reports, after
+/// `callLpKktCheck` has judged the interior point: IPX can call a centre
+/// optimal whose optimality conditions are far off, and HiGHS then reports
+/// it unknown, so the MIP solver fixes nothing from it. Without that check
+/// a centre still short of the region's interior put columns at a bound
+/// that feasible points leave it, and fixing them cut off the optimum.
 pub(crate) fn analytic_centre(lp: &SimplexLp, options: &Options, interrupt: Option<Interrupt>) -> (ModelStatus, Option<Vec<f64>>) {
     let parameters = Parameters {
         dualize: -1,
@@ -87,9 +94,7 @@ pub(crate) fn analytic_centre(lp: &SimplexLp, options: &Options, interrupt: Opti
     if error_status(info.status_ipm) || error_status(info.status_crossover) {
         return (ModelStatus::SolveError, None);
     }
-    // `getHighsNonVertexSolution`: the columns' values are IPX's x.
-    let col_value = lps.interior_solution(&model).map(|(x, ..)| x[..lp.num_col].to_vec());
-    let status = if solve_status == IPX_STATUS_STOPPED {
+    let mut status = if solve_status == IPX_STATUS_STOPPED {
         match info.status_ipm {
             IPX_STATUS_USER_INTERRUPT => ModelStatus::Interrupt,
             IPX_STATUS_TIME_LIMIT => ModelStatus::TimeLimit,
@@ -108,7 +113,73 @@ pub(crate) fn analytic_centre(lp: &SimplexLp, options: &Options, interrupt: Opti
     } else {
         ModelStatus::Optimal
     };
-    (status, col_value)
+    // `getHighsNonVertexSolution`, then `callLpKktCheck`.
+    let Some((x, _, _, slack, y, zl, zu)) = lps.interior_solution(&model) else {
+        return (status, None);
+    };
+    let [col_value, row_value, col_dual, row_dual] = interior_solution_to_highs(lp, &data, &x, &slack, &y, &zl, &zu);
+    let kkt_lp = crate::kkt::KktLp {
+        sense: lp.sense,
+        offset: lp.offset,
+        col_cost: &lp.col_cost,
+        col_lower: &lp.col_lower,
+        col_upper: &lp.col_upper,
+        row_lower: &lp.row_lower,
+        row_upper: &lp.row_upper,
+        start: &lp.a.start,
+        index: &lp.a.index,
+        value: &lp.a.value,
+    };
+    let solution = crate::kkt::KktSolution {
+        col_value: &col_value,
+        row_value: &row_value,
+        col_dual: &col_dual,
+        row_dual: &row_dual,
+        dual_valid: true,
+    };
+    let tolerances = crate::kkt::KktTolerances::new(options.primal_feasibility_tolerance, options.dual_feasibility_tolerance);
+    crate::kkt::lp_kkt_check(&kkt_lp, &solution, false, tolerances, &mut status);
+    (status, Some(col_value))
+}
+
+/// HiGHS's `ipxSolutionToHighsSolution`: an IPX interior point as column
+/// and row values and duals, `[col_value, row_value, col_dual, row_dual]`.
+/// A boxed row's value and dual are its slack column's; a free row, which
+/// IPX does not have, takes its activity.
+fn interior_solution_to_highs(lp: &SimplexLp, data: &IpxData, x: &[f64], slack: &[f64], y: &[f64], zl: &[f64], zu: &[f64]) -> [Vec<f64>; 4] {
+    let col_value = x[..lp.num_col].to_vec();
+    let mut col_dual: Vec<f64> = (0..lp.num_col).map(|col| zl[col] - zu[col]).collect();
+    let mut activity = vec![0.0; lp.num_row];
+    if u(data.num_row) < lp.num_row {
+        for col in 0..lp.num_col {
+            for el in lp.a.start[col]..lp.a.start[col + 1] {
+                activity[lp.a.index[el]] += col_value[col] * lp.a.value[el];
+            }
+        }
+    }
+    let mut row_value = vec![0.0; lp.num_row];
+    let mut row_dual = vec![0.0; lp.num_row];
+    let (mut ipx_row, mut ipx_slack) = (0, lp.num_col);
+    for row in 0..lp.num_row {
+        let (lower, upper) = (lp.row_lower[row], lp.row_upper[row]);
+        if lower <= -INF && upper >= INF {
+            row_value[row] = activity[row];
+            continue;
+        }
+        if lower > -INF && upper < INF && lower < upper {
+            row_value[row] = x[ipx_slack];
+            row_dual[row] = zl[ipx_slack] - zu[ipx_slack];
+            ipx_slack += 1;
+        } else {
+            row_value[row] = data.rhs[ipx_row] - slack[ipx_row];
+            row_dual[row] = y[ipx_row];
+        }
+        ipx_row += 1;
+    }
+    if lp.sense < 0.0 {
+        col_dual.iter_mut().chain(row_dual.iter_mut()).for_each(|dual| *dual = -*dual);
+    }
+    [col_value, row_value, col_dual, row_dual]
 }
 
 struct IpxResult {
