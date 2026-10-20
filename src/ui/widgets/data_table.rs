@@ -76,7 +76,7 @@ impl<'a> DataTable<'a> {
     /// `cells` gives the text shown for a row, one cell per header column.
     pub(crate) fn new(id_source: impl Hash + Debug, header: &'a [String], row_count: usize, cells: RowCells<'a>) -> Self {
         Self {
-            id: egui::Id::new(id_source),
+            id: egui::Id::unique(id_source),
             header,
             aligns: &[],
             row_count,
@@ -239,7 +239,7 @@ impl<'a> DataTable<'a> {
         // Tracks the columns horizontally but ignores them vertically, so
         // it still names the right one however far the reader has scrolled.
         let header_row = egui::Rect::from_min_size(
-            egui::pos2(header_rect.left() - output.state.offset.x, header_rect.top()),
+            egui::pos2(header_rect.left() - output.state.unclamped_offset().x, header_rect.top()),
             egui::vec2(total_width, row_height),
         );
         let header_clip = header_rect.intersect(ui.clip_rect());

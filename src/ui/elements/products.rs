@@ -90,7 +90,7 @@ pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState, c
                     // Reserved before any row is laid out and filled once the
                     // list's height is known: see `paint_fixed_stripes`.
                     let (stripes_slot, stripes_top) = reserve_fixed_stripes(ui);
-                    let (toggle, header, _) = ExplorerHeader::new(egui::Id::new("delay_palette_collapse"), tr!("products-delay-palette"))
+                    let (toggle, header, _) = ExplorerHeader::new(egui::Id::unique("delay_palette_collapse"), tr!("products-delay-palette"))
                         .icon(unthemed_icon!("tie_holes.svg"))
                         .color(HEADER_DELAY_PALETTE)
                         .show(ui, |ui| draw_delay_palette(ui, editor));
@@ -105,7 +105,7 @@ pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState, c
                         }
                     });
 
-                    let (toggle, header, _) = ExplorerHeader::new(egui::Id::new("charge_rules_collapse"), tr!("products-charge-rules"))
+                    let (toggle, header, _) = ExplorerHeader::new(egui::Id::unique("charge_rules_collapse"), tr!("products-charge-rules"))
                         .icon(unthemed_icon!("charge_holes.svg"))
                         .color(HEADER_CHARGE)
                         .show(ui, |ui| draw_charge_rules(ui, editor, commands));
@@ -116,7 +116,7 @@ pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState, c
                         }
                     });
 
-                    let (toggle, header, _) = ExplorerHeader::new(egui::Id::new("charge_products_collapse"), tr!("products-charge-products"))
+                    let (toggle, header, _) = ExplorerHeader::new(egui::Id::unique("charge_products_collapse"), tr!("products-charge-products"))
                         .icon(unthemed_icon!("charge_products.svg"))
                         .color(HEADER_CHARGE)
                         .default_open(false)
@@ -172,7 +172,7 @@ fn draw_delay_palette(ui: &mut egui::Ui, editor: &mut EditorState) {
         // product's own colour - the colour a tie-in laid with it is drawn
         // in. The gutter is reserved on every row, so the dot marks one
         // without shifting the others.
-        let mut entry = ExplorerEntry::new(egui::Id::new(("delay_product", product.id)), product_label(ui, product)).selected(chosen);
+        let mut entry = ExplorerEntry::new(egui::Id::unique(("delay_product", product.id)), product_label(ui, product)).selected(chosen);
         if chosen {
             entry = entry.leading_icon(unthemed_icon!("product_active.svg"), product.color);
         }
@@ -285,7 +285,7 @@ fn draw_charge_rules(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
     for rule in &editor.blast_library.rules {
         let chosen = active.as_deref() == Some(rule.name.as_str());
         let problem = rule.problem(&editor.blast_library.products);
-        let mut entry = ExplorerEntry::new(egui::Id::new(("charge_rule", rule.name.as_str())), rule_label(ui, rule, problem.is_some()))
+        let mut entry = ExplorerEntry::new(egui::Id::unique(("charge_rule", rule.name.as_str())), rule_label(ui, rule, problem.is_some()))
             .selected(chosen)
             .trailing(RULE_BAR_WIDTH + RULE_BAR_INSET);
         if chosen {
@@ -437,7 +437,7 @@ fn draw_charge_products(ui: &mut egui::Ui, editor: &mut EditorState) {
                 },
             );
         }
-        let response = ExplorerEntry::new(egui::Id::new(("charge_product", product.name.as_str())), job)
+        let response = ExplorerEntry::new(egui::Id::unique(("charge_product", product.name.as_str())), job)
             .leading_icon(unthemed_icon!("charge_swatch.svg"), color)
             .show(ui)
             .response;

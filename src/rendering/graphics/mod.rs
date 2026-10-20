@@ -81,7 +81,7 @@ pub(super) const POINT_MARKER_COLOR: [f32; 4] = [0.007, 0.007, 0.007, 1.0];
 pub(super) const ACTIVE_POINT_COLOR: [f32; 4] = [1.0, 0.7157, 0.0319, 1.0];
 /// Logical em size used by cosmic-text layout; vector outlines are normalized
 /// and the document text height scales this into world units.
-pub(super) const DOC_TEXT_FONT_SIZE: f32 = 64.0;
+pub(crate) const DOC_TEXT_FONT_SIZE: f32 = 64.0;
 pub(super) const TEXT_EDIT_INDICATOR_COLOR: [f32; 4] = [0.15, 0.75, 1.0, 1.0];
 
 /// Liang-Barsky segment-vs-AABB test in 2-D screen space.
@@ -337,6 +337,8 @@ pub(crate) struct Graphics<'a> {
     pub(super) cinematic_targets: Option<cinematic::CinematicTargets>,
     pub(super) raster_surface_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) edge_style_bind_group_layout: wgpu::BindGroupLayout,
+    /// Group 3 of the section cut pipeline: a surface chunk's vertices as a texture.
+    pub(super) section_cut_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) point_cloud_style_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) lyon_vertex_gpu: wgpu::Buffer,
     pub(super) lyon_index_gpu: wgpu::Buffer,
@@ -419,6 +421,10 @@ pub(crate) struct Graphics<'a> {
     pub(super) projection: Projection,
     pub(super) mouse_pressed: Option<MouseButton>,
     touch_gesture: touch::TouchGesture,
+    pub(super) scroll_glide: ScrollGlide,
+    /// Ctrl is held, so a trackpad's two-finger scroll zooms rather than pans.
+    /// Set by the app before each event, as the renderer sees no modifiers.
+    pub(super) scroll_zooms: bool,
     pub(super) fly_mode_enabled: bool,
     pub(super) slice_view: Option<SliceViewState>,
     pub(super) frame_index: u64,
@@ -534,6 +540,8 @@ pub(crate) struct SliceViewState {
     pub(super) direction: DVec2,
     /// Slab thickness in metres.
     pub(super) width: f64,
+    /// 2D section: surfaces draw as their cut through the plane, not the slab.
+    pub(super) outlines: bool,
     /// W/S slab movement speed (m/s).
     pub(super) move_speed: f64,
     /// Q/E rotation rate (radians per second).
@@ -616,11 +624,29 @@ impl SliceViewState {
         Some((step, start_yaw * (1.0 - eased), start_pitch * (1.0 - eased)))
     }
 
+    /// Takes the 2D setting from the panel. A 2D section is only ever seen
+    /// square-on, so an orbited view eases back square as it is switched on,
+    /// the way a standard view is turned to; held here every frame, so input
+    /// that interrupts the turn only delays it.
+    pub(super) fn set_outlines(&mut self, outlines: bool) {
+        self.outlines = outlines;
+        if outlines && self.turn_to.is_none() && (self.yaw != 0.0 || self.pitch != 0.0) {
+            self.turn_to = Some(SliceTurn {
+                angle: 0.0,
+                turned: 0.0,
+                start_yaw: self.yaw,
+                start_pitch: self.pitch,
+                elapsed: Duration::ZERO,
+            });
+        }
+    }
+
     pub(super) fn slab(&self) -> SectionSlab {
         SectionSlab {
             point: self.center,
             normal: self.normal(),
             half_width: self.width * 0.5,
+            outlines: self.outlines,
         }
     }
 
@@ -711,6 +737,67 @@ pub(crate) fn scroll_pixels(delta: &MouseScrollDelta) -> f64 {
 pub(crate) fn scroll_pixels_either_axis(delta: &MouseScrollDelta) -> f64 {
     let (x, y) = axis_pixels(delta);
     if y != 0.0 { y } else { x }
+}
+
+/// Whether a scroll is a trackpad's two-finger drag, which pans, rather than a
+/// wheel, which zooms. Only the native platforms that report the two apart -
+/// macOS and Wayland send pixel deltas for a trackpad and line deltas for a
+/// wheel - can tell; Windows and X11 send lines for both, and browsers send
+/// pixels for a wheel too, so there every scroll stays a zoom. Returns the
+/// drag in pixels, signed like a middle-drag so the scene follows the fingers.
+pub(crate) fn trackpad_drag(delta: &MouseScrollDelta) -> Option<(f64, f64)> {
+    match delta {
+        MouseScrollDelta::PixelDelta(position) if cfg!(not(target_arch = "wasm32")) => Some((position.x, position.y)),
+        _ => None,
+    }
+}
+
+/// The glide macOS adds once the fingers leave the trackpad, which keeps a
+/// pan or zoom coasting to a stop. The viewport stops with the fingers, as a
+/// middle-drag does, so those scrolls are dropped.
+///
+/// winit reports the glide's start with the same `Started` phase as the
+/// fingers' own, but it always follows their `Ended` at once, which a new
+/// touch cannot. Platforms without a glide never send that pairing.
+#[derive(Default)]
+pub(crate) struct ScrollGlide {
+    gliding: bool,
+    lifted_at: Option<Instant>,
+}
+
+impl ScrollGlide {
+    const FOLLOWS_LIFT: std::time::Duration = std::time::Duration::from_millis(50);
+
+    /// Whether a scroll with this phase belongs to a glide.
+    pub(crate) fn is_glide(&mut self, phase: winit::event::TouchPhase) -> bool {
+        use winit::event::TouchPhase;
+        match phase {
+            TouchPhase::Started => {
+                self.gliding = self.lifted_at.take().is_some_and(|lifted| lifted.elapsed() < Self::FOLLOWS_LIFT);
+                self.gliding
+            }
+            TouchPhase::Moved => self.gliding,
+            TouchPhase::Ended | TouchPhase::Cancelled => {
+                let gliding = std::mem::take(&mut self.gliding);
+                if !gliding {
+                    self.lifted_at = Some(Instant::now());
+                }
+                gliding
+            }
+        }
+    }
+}
+
+/// A pinch's magnification as the scroll that zooms by the same amount: the
+/// inverse of the zoom curve in `CameraController::update_camera`, so the
+/// view follows the fingers whatever the sensitivity.
+pub(crate) fn pinch_scroll(magnification: f64, sensitivity: f64) -> f64 {
+    let magnification = magnification.max(-0.9);
+    if magnification >= 0.0 {
+        magnification / sensitivity
+    } else {
+        magnification / ((1.0 + magnification) * sensitivity)
+    }
 }
 
 /// View direction for a slice line running along `direction`:
@@ -804,6 +891,12 @@ impl<'a> Graphics<'a> {
         self.overlay_dirty = true;
     }
 
+    /// Whether a floating egui surface - a tile, card or menu over the canvas -
+    /// covers this window position, in physical pixels.
+    pub(crate) fn overlay_at_physical_position(&self, x: f32, y: f32) -> bool {
+        self.gui.overlay_at_physical_position(x, y)
+    }
+
     pub(crate) fn gui_input(&mut self, event: &WindowEvent) -> egui_winit::EventResponse {
         let mut response = self.gui.handle_event(&self.window, event);
         // egui's generic `consumed` result can be false on a secondary-button
@@ -816,9 +909,21 @@ impl<'a> Graphics<'a> {
         response
     }
 
+    /// The CJK faces arrived: lay the UI and document text out again with them.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn reload_cjk_fonts(&mut self) {
+        self.gui.reload_fonts();
+        self.text_system = TextSystem::new();
+        self.cached_document_scene_key = None;
+    }
+
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn queue_browser_paste(&mut self, text: String) {
         self.gui.queue_paste(text);
+    }
+
+    pub(crate) fn set_scroll_zooms(&mut self, held: bool) {
+        self.scroll_zooms = held;
     }
 
     pub(crate) fn set_fly_mode_enabled(&mut self, enabled: bool) {
@@ -1020,6 +1125,7 @@ impl<'a> Graphics<'a> {
             center,
             direction: direction.normalize_or(DVec2::X),
             width,
+            outlines: false,
             move_speed,
             rotate_speed,
             input: SliceInputState::default(),
@@ -1059,7 +1165,8 @@ impl<'a> Graphics<'a> {
     }
 
     pub(crate) fn begin_slice_orbit_drag(&mut self, initial: DVec2) -> bool {
-        let Some(slice) = self.slice_view.as_mut() else {
+        // A 2D section stays square-on; the drag is simply not an orbit.
+        let Some(slice) = self.slice_view.as_mut().filter(|slice| !slice.outlines) else {
             return false;
         };
         slice.orbit_dragging = true;

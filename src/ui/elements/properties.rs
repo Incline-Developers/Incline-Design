@@ -2,7 +2,11 @@
 
 use crate::{
     i18n::tr,
-    model::{Document, FillStyle, ObjectColor, ObjectId, SceneEntityId, block_model::OpenBlockModel, drill_hole::OpenDrillHoleDataset, project::ModellingSettings},
+    model::{
+        Document, FillStyle, ObjectColor, ObjectId, SceneEntityId,
+        block_model::{BlockModelId, OpenBlockModel},
+        project::ModellingSettings,
+    },
     rendering::color::{byte_to_linear_rgba, color32_to_rgba, linear_to_srgb_byte, rgba_to_color32},
     ui::{
         UiCommand, UiProjectView,
@@ -11,18 +15,12 @@ use crate::{
             collapsible_section::CollapsibleSection,
             context_menu::{FIELD_WIDTH, context_menu_fields},
             menu::{self, MenuFieldBool, MenuFieldColor32, MenuFieldCombo, MenuFieldF32, MenuFieldF64, MenuFieldU32, committed, menu_field_label},
-            viewport::BlockModelProperties,
+            viewport::{BlockModelProperties, ViewportDockPanel},
         },
     },
 };
 
-pub(crate) fn draw_preferences(
-    ui: &mut egui::Ui,
-    editor: &mut EditorState,
-    drill_holes: &[OpenDrillHoleDataset],
-    modelling: Option<&ModellingSettings>,
-    commands: &mut Vec<UiCommand>,
-) {
+pub(crate) fn draw_preferences(ui: &mut egui::Ui, editor: &mut EditorState, modelling: Option<&ModellingSettings>, commands: &mut Vec<UiCommand>) {
     if !editor.show_preferences {
         return;
     }
@@ -61,10 +59,9 @@ pub(crate) fn draw_preferences(
                     (PropertyTab::Camera, tr!("properties-camera")),
                     (PropertyTab::Performance, tr!("properties-performance")),
                     (PropertyTab::Developer, tr!("properties-developer")),
-                    (PropertyTab::Drillholes, tr!("properties-drillholes")),
                     (PropertyTab::Modelling, tr!("properties-modelling")),
                 ] {
-                    let response = crate::ui::widgets::explorer::ExplorerEntry::new(ui.id().with(tab as u8), label)
+                    let response = crate::ui::widgets::explorer::ExplorerEntry::new(ui.scope_id().with(tab as u8), label)
                         .selected(editor.active_property_tab == tab)
                         .show(ui)
                         .response;
@@ -83,7 +80,6 @@ pub(crate) fn draw_preferences(
                         PropertyTab::Camera => draw_camera_settings(ui, editor, commands),
                         PropertyTab::Performance => draw_performance_settings(ui, editor, commands),
                         PropertyTab::Developer => draw_developer_settings(ui, editor, commands),
-                        PropertyTab::Drillholes => draw_drillhole_settings(ui, editor, drill_holes, commands),
                         PropertyTab::Modelling => draw_modelling_settings(ui, modelling, commands),
                     });
             });
@@ -210,12 +206,18 @@ pub(crate) fn draw_selection_appearance(
     }
 }
 
+/// Width of the block-model card in the viewport.
+const BLOCK_MODEL_CARD_WIDTH: f32 = 780.0;
+/// Gap between that card and the viewport's bottom edge, the tool panels'
+/// corner and the scale bar.
+const BLOCK_MODEL_CARD_GAP: f32 = 8.0;
+
 pub(crate) fn draw_block_model_controls(ui: &mut egui::Ui, editor: &mut EditorState, models: &[OpenBlockModel], commands: &mut Vec<UiCommand>, canvas: egui::Rect) {
     let selected: Vec<_> = models
         .iter()
         .filter(|model| model.state.loaded && editor.selected_handles.contains(&SceneEntityId::BlockModel(model.id)))
         .collect();
-    let selection_id = egui::Id::new("block_model_controls_selection");
+    let selection_id = egui::Id::unique("block_model_controls_selection");
     let selection: Vec<_> = selected.iter().map(|model| model.id).collect();
     let selection_changed = ui.ctx().data_mut(|data| {
         let changed = data.get_temp::<Vec<crate::model::block_model::BlockModelId>>(selection_id).as_ref() != Some(&selection);
@@ -228,58 +230,64 @@ pub(crate) fn draw_block_model_controls(ui: &mut egui::Ui, editor: &mut EditorSt
     let Some(model) = models.iter().find(|model| Some(model.id) == editor.viewport_block_model_id && model.state.loaded) else {
         return;
     };
-    egui::Area::new(egui::Id::new("block_model_viewport_controls"))
-        .anchor(
-            egui::Align2::CENTER_BOTTOM,
-            egui::vec2(
-                canvas.center().x - ui.ctx().content_rect().center().x,
-                canvas.bottom() - ui.ctx().content_rect().bottom() - 8.0,
-            ),
+    // Centred under the window, but never into the bottom-left corner the
+    // tool panels open in: a narrowing viewport pushes the card right from
+    // there, and once it would reach the scale bar it is not drawn at all.
+    let area_id = egui::Id::unique("block_model_viewport_controls");
+    let (card_size, scale_bar) = ui.ctx().memory(|memory| {
+        (
+            memory.area_rect(area_id).map_or(egui::vec2(BLOCK_MODEL_CARD_WIDTH, 0.0), |rect| rect.size()),
+            memory.area_rect(egui::Id::unique("viewport_scale_bar")).filter(|_| editor.show_scale_bar),
         )
+    });
+    let card_width = card_size.x;
+    let left_bound = canvas.left() + crate::ui::widgets::viewport::DOCK_PANEL_RESERVED_WIDTH + BLOCK_MODEL_CARD_GAP;
+    let right_bound = scale_bar.map_or(canvas.right(), |rect| rect.left()) - BLOCK_MODEL_CARD_GAP;
+    let left = (ui.ctx().content_rect().center().x - card_width / 2.0).max(left_bound);
+    // Always its full height, never scrolled or squeezed: a viewport too
+    // short to hold it hides it, the same as one too narrow.
+    if left + card_width > right_bound || card_size.y > canvas.height() - 2.0 * BLOCK_MODEL_CARD_GAP {
+        return;
+    }
+    // The heading runs after the body, so it works on its own copy of the
+    // shown model and the body keeps the editor.
+    let mut shown = editor.viewport_block_model_id;
+    ViewportDockPanel::new(area_id, tr!("common-block-model"), canvas)
+        .anchor(egui::Align2::LEFT_BOTTOM, egui::pos2(left, canvas.bottom() - BLOCK_MODEL_CARD_GAP))
         .order(egui::Order::Middle)
-        .show(ui.ctx(), |ui| {
-            // The menu-family card, so the panel matches the docked tool panels
-            // rather than egui's stock window.
-            let surface = menu::menu_surface(ui.visuals());
-            egui::Frame::new()
-                .fill(surface)
-                .stroke(menu::menu_border(ui.visuals()))
-                .corner_radius(egui::CornerRadius::same(menu::MENU_CORNER_RADIUS))
-                .show(ui, |ui| {
-                    menu::apply_menu_style(ui, surface);
-                    let width = (canvas.width() - 32.0).clamp(240.0, 780.0);
-                    ui.set_width(width);
-                    draw_block_model_title_bar(ui, editor, models, model, width, surface);
-                    let Some(model) = models.iter().find(|model| Some(model.id) == editor.viewport_block_model_id && model.state.loaded) else {
-                        return;
-                    };
-                    egui::Frame::NONE
-                        .inner_margin(egui::Margin {
-                            left: 12,
-                            right: 12,
-                            top: 6,
-                            bottom: 10,
-                        })
-                        .show(ui, |ui| {
-                            egui::ScrollArea::both().max_height((canvas.height() * 0.4).max(80.0)).show(ui, |ui| {
-                                ui.push_id(model.id, |ui| {
-                                    BlockModelProperties::new(("block_model_controls", model.id), model).show(ui, editor, commands)
-                                });
-                            });
-                        });
+        .min_width(BLOCK_MODEL_CARD_WIDTH)
+        .max_width(BLOCK_MODEL_CARD_WIDTH)
+        // No top margin: the row gap under the heading already gives the
+        // body the room it had when the card drew its own frame.
+        .inner_margin(egui::Margin {
+            left: 12,
+            right: 12,
+            top: 0,
+            bottom: 10,
+        })
+        .show_with_heading(
+            ui.ctx(),
+            |ui, rect, surface| draw_block_model_heading_controls(ui, &mut shown, models, model, rect, surface),
+            |ui| {
+                ui.push_id(model.id, |ui| {
+                    BlockModelProperties::new(("block_model_controls", model.id), model).show(ui, editor, commands)
                 });
-        });
+            },
+        );
+    editor.viewport_block_model_id = shown;
 }
 
-/// The block-model card's heading: its title, the model it is showing, and a
-/// close cross. Closing clears the shown model; selecting one reopens it.
-fn draw_block_model_title_bar(ui: &mut egui::Ui, editor: &mut EditorState, models: &[OpenBlockModel], model: &OpenBlockModel, width: f32, surface: egui::Color32) {
-    let spacing = ui.spacing().item_spacing.y;
-    ui.spacing_mut().item_spacing.y = 0.0;
-    let rect = ui.allocate_exact_size(egui::vec2(width, menu::TITLE_BAR_HEIGHT), egui::Sense::hover()).0;
-    ui.spacing_mut().item_spacing.y = spacing;
-    menu::draw_menu_heading(ui, &egui::WidgetText::from(tr!("common-block-model")), rect, surface);
-
+/// The block-model card's heading controls: the model it is showing - a
+/// picker when there is more than one loaded - and a close cross. Closing
+/// clears the shown model; selecting one reopens it.
+fn draw_block_model_heading_controls(
+    ui: &mut egui::Ui,
+    shown: &mut Option<BlockModelId>,
+    models: &[OpenBlockModel],
+    model: &OpenBlockModel,
+    rect: egui::Rect,
+    surface: egui::Color32,
+) {
     let loaded: Vec<_> = models.iter().filter(|model| model.state.loaded).collect();
     let picker_width = (rect.width() * 0.4).clamp(120.0, 280.0);
     let picker_rect = egui::Rect::from_min_size(
@@ -297,7 +305,7 @@ fn draw_block_model_title_bar(ui: &mut egui::Ui, editor: &mut EditorState, model
                     .truncate()
                     .show_ui(ui, |ui| {
                         for option in &loaded {
-                            ui.selectable_value(&mut editor.viewport_block_model_id, Some(option.id), option.name.clone());
+                            ui.selectable_value(shown, Some(option.id), option.name.clone());
                         }
                     })
                     .response
@@ -324,7 +332,7 @@ fn draw_block_model_title_bar(ui: &mut egui::Ui, editor: &mut EditorState, model
     }
 
     if menu::title_bar_close_button(ui, rect, surface) {
-        editor.viewport_block_model_id = None;
+        *shown = None;
     }
 }
 
@@ -383,11 +391,11 @@ fn reset_interface_defaults(draft: &mut PreferencesDraft) {
     draft.ui_size_percent = defaults.ui_size_percent;
     draft.show_world_axis_gizmo = defaults.show_world_axis_gizmo;
     draft.show_scale_bar = defaults.show_scale_bar;
+    draft.recent_functions_shown = defaults.recent_functions_shown;
 }
 
 fn reset_developer_defaults(draft: &mut PreferencesDraft) {
     let defaults = PreferencesDraft::default();
-    draft.frame_counter_enabled = defaults.frame_counter_enabled;
     draft.debug_surface_chunks = defaults.debug_surface_chunks;
     draft.debug_clip_planes = defaults.debug_clip_planes;
     draft.debug_point_cloud_chunks = defaults.debug_point_cloud_chunks;
@@ -447,14 +455,26 @@ fn draw_interface_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
             changed |= committed(&MenuFieldBool::new(tr!("properties-panel-chrome"), &mut draft.panel_chrome).show(ui));
             changed |= committed(
                 &MenuFieldF64::new(tr!("preferences-ui-size"), &mut draft.ui_size_percent, 50.0..=200.0)
+                    .help_text(tr!("preferences-ui-size-help"))
                     .suffix("%")
                     .speed(1.0)
                     .max_decimals(0)
-                    .show(ui)
-                    .on_hover_text(tr!("preferences-ui-size-help")),
+                    .show(ui),
             );
             changed |= committed(&MenuFieldBool::new(tr!("properties-world-axis-gizmo"), &mut draft.show_world_axis_gizmo).show(ui));
             changed |= committed(&MenuFieldBool::new(tr!("common-scale-bar"), &mut draft.show_scale_bar).show(ui));
+            let shown = draft.recent_functions_shown.to_string();
+            let options = [10, 15, 20].map(|count: u32| (count, count.to_string().into()));
+            changed |= committed(
+                &MenuFieldCombo::new(
+                    "preferences_recent_functions_shown",
+                    tr!("preferences-recent-functions-shown"),
+                    &mut draft.recent_functions_shown,
+                    shown,
+                    options,
+                )
+                .show(ui),
+            );
             changed
         },
         Some(reset_interface_defaults),
@@ -469,26 +489,28 @@ fn draw_camera_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands: &
         &tr!("properties-camera"),
         |ui, draft| {
             let mut changed = false;
-            CollapsibleSection::new("camera_plan_mode", tr!("properties-plan-mode")).default_open(true).show(ui, |ui| {
-                changed |= committed(
-                    &MenuFieldF64::new(tr!("properties-orbit-sensitivity"), &mut draft.plan_orbit_sensitivity, 0.0001..=0.02)
-                        .speed(0.0001)
-                        .max_decimals(4)
-                        .show(ui),
-                );
-                changed |= committed(
-                    &MenuFieldF64::new(tr!("properties-zoom-sensitivity"), &mut draft.plan_zoom_sensitivity, 0.0001..=0.05)
-                        .speed(0.0001)
-                        .max_decimals(4)
-                        .show(ui),
-                );
-                changed |= committed(&MenuFieldBool::new(tr!("properties-invert-vertical"), &mut draft.plan_invert_vertical_look).show(ui));
-                changed |= committed(&MenuFieldBool::new(tr!("properties-invert-horizontal"), &mut draft.plan_invert_horizontal_look).show(ui));
-                changed |= committed(&MenuFieldBool::new(tr!("properties-zoom-cursor"), &mut draft.plan_zoom_towards_cursor).show(ui));
-            });
+            CollapsibleSection::new(egui::Id::unique("camera_plan_mode"), tr!("properties-plan-mode"))
+                .default_open(true)
+                .show(ui, |ui| {
+                    changed |= committed(
+                        &MenuFieldF64::new(tr!("properties-orbit-sensitivity"), &mut draft.plan_orbit_sensitivity, 0.0001..=0.02)
+                            .speed(0.0001)
+                            .max_decimals(4)
+                            .show(ui),
+                    );
+                    changed |= committed(
+                        &MenuFieldF64::new(tr!("properties-zoom-sensitivity"), &mut draft.plan_zoom_sensitivity, 0.0001..=0.05)
+                            .speed(0.0001)
+                            .max_decimals(4)
+                            .show(ui),
+                    );
+                    changed |= committed(&MenuFieldBool::new(tr!("properties-invert-vertical"), &mut draft.plan_invert_vertical_look).show(ui));
+                    changed |= committed(&MenuFieldBool::new(tr!("properties-invert-horizontal"), &mut draft.plan_invert_horizontal_look).show(ui));
+                    changed |= committed(&MenuFieldBool::new(tr!("properties-zoom-cursor"), &mut draft.plan_zoom_towards_cursor).show(ui));
+                });
 
             ui.add_space(4.0);
-            CollapsibleSection::new("camera_fly_mode", tr!("common-fly-mode")).show(ui, |ui| {
+            CollapsibleSection::new(egui::Id::unique("camera_fly_mode"), tr!("common-fly-mode")).show(ui, |ui| {
                 changed |= committed(
                     &MenuFieldF64::new(tr!("properties-field-view"), &mut draft.fly_field_of_view_degrees, 20.0..=120.0)
                         .suffix(tr!("common-degree-suffix"))
@@ -585,7 +607,6 @@ fn draw_developer_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
         &tr!("properties-developer"),
         |ui, draft| {
             let mut changed = false;
-            changed |= committed(&MenuFieldBool::new(tr!("properties-frame-counter"), &mut draft.frame_counter_enabled).show(ui));
             changed |= committed(
                 &MenuFieldBool::new(tr!("properties-camera-clip-planes"), &mut draft.debug_clip_planes)
                     .help_text(tr!("properties-shows-live-near-far-projection"))
@@ -607,33 +628,6 @@ fn draw_developer_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
     );
 }
 
-fn draw_drillhole_settings(ui: &mut egui::Ui, editor: &mut EditorState, drill_holes: &[OpenDrillHoleDataset], commands: &mut Vec<UiCommand>) {
-    menu::menu_section(ui, tr!("properties-drillholes"));
-    let loaded: Vec<&OpenDrillHoleDataset> = drill_holes.iter().filter(|dataset| dataset.state.loaded).collect();
-    let Some(current) = loaded
-        .iter()
-        .find(|dataset| Some(dataset.id) == editor.preferences_drill_hole)
-        .or_else(|| loaded.first())
-        .copied()
-    else {
-        ui.label(egui::RichText::new(tr!("properties-no-drillhole-datasets-open")).weak());
-        return;
-    };
-    editor.preferences_drill_hole = Some(current.id);
-    MenuFieldCombo::new(
-        "preferences_drill_hole",
-        tr!("properties-dataset"),
-        &mut editor.preferences_drill_hole,
-        current.name.clone(),
-        loaded.iter().map(|dataset| (Some(dataset.id), dataset.name.clone().into())),
-    )
-    .show(ui);
-    let Some(current) = loaded.iter().find(|dataset| Some(dataset.id) == editor.preferences_drill_hole).copied() else {
-        return;
-    };
-    crate::ui::dialogs::drill_hole::draw_drill_hole_color_editor(ui, current, commands, crate::ui::dialogs::drill_hole::ColorEditorHost::Page);
-}
-
 /// The open project's settings for Build Surface. A number being dragged is
 /// held in the window's memory and sent once, when the drag ends.
 fn draw_modelling_settings(ui: &mut egui::Ui, modelling: Option<&ModellingSettings>, commands: &mut Vec<UiCommand>) {
@@ -642,7 +636,7 @@ fn draw_modelling_settings(ui: &mut egui::Ui, modelling: Option<&ModellingSettin
         ui.label(egui::RichText::new(tr!("common-no-open-project")).weak());
         return;
     };
-    let draft_id = ui.id().with("modelling_settings_draft");
+    let draft_id = ui.scope_id().with("modelling_settings_draft");
     let mut settings = ui.data(|data| data.get_temp::<ModellingSettings>(draft_id)).unwrap_or(stored);
     let responses = [
         // Every range here is exactly what `ModellingSettings::problem` accepts:

@@ -103,6 +103,7 @@ impl<'a> App<'a> {
 
         if let Some(graphics) = self.graphics.as_mut() {
             graphics.set_fly_mode_enabled(self.editor.fly_mode_enabled);
+            graphics.set_scroll_zooms(self.modifiers.control_key());
         }
 
         let gui_consumed = gui_response.is_some_and(|response| response.consumed);
@@ -133,7 +134,8 @@ impl<'a> App<'a> {
         }
 
         if !gui_consumed {
-            let canvas_pick_mode_active = self.editor.triangulation_pick_target.is_some() || self.editor.drill_pattern_awaiting_shape_pick;
+            let canvas_pick_mode_active =
+                self.editor.triangulation_pick_target.is_some() || self.editor.optimization.start_pick.is_some() || self.editor.drill_pattern_awaiting_shape_pick;
             let suppress_view_mode_canvas_click = self.editor.view_mode_owns_canvas_click() && matches!(event, WindowEvent::MouseInput { button: MouseButton::Left, .. });
             if !suppress_view_mode_canvas_click || canvas_pick_mode_active {
                 self.handle_mouse_press(&event);
@@ -203,9 +205,14 @@ impl<'a> App<'a> {
                     self.poll_raster_loads();
                     self.poll_saves();
                     self.poll_jobs();
+                    self.reconcile_optimization_runs();
                     self.refresh_status_message();
                     if let Some(usage) = self.memory_sampler.poll() {
                         self.editor.memory_usage = Some(usage);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if let Some(cores) = self.cpu_sampler.poll() {
+                        self.editor.cpu_usage = cores;
                     }
                     let now = Instant::now();
                     let frame_interval = self.frame_interval();
@@ -453,7 +460,8 @@ impl<'a> App<'a> {
                     let snap_eligible = self.editor.active_tool.snaps_cursor() && self.editor.snapping_active() && !camera_active && !is_scrolling;
                     let now = Instant::now();
                     let snap_poll_due = self.cursor_poll_due(now);
-                    let snapped = if snap_eligible { self.cursor_snap_point(now) } else { None };
+                    let close_target = if camera_active { None } else { self.poly_close_target() };
+                    let snapped = close_target.or_else(|| if snap_eligible { self.cursor_snap_point(now) } else { None });
                     let was_snapped = self.editor.cursor_snapped;
                     // During a camera drag the mouse steers the view, not the
                     // cursor: keep the last world cursor (and its snapped flag)
@@ -545,6 +553,7 @@ impl<'a> App<'a> {
                             || self.editor.relimit_waiting_for_pick
                             || self.editor.relimit_confirming_end
                             || self.editor.triangulation_pick_target.is_some()
+                            || self.editor.optimization.start_pick.is_some()
                             || self.editor.drill_pattern_awaiting_shape_pick);
                     if hover_pick_due {
                         self.last_snap_poll_instant = Some(now);
@@ -644,7 +653,9 @@ impl<'a> App<'a> {
                     if self.editor.active_tool == ActiveTool::ExplodePolyline && hover_pick_due {
                         self.update_explode_hover();
                     }
-                    if (self.editor.triangulation_pick_target.is_some() || self.editor.drill_pattern_awaiting_shape_pick) && hover_pick_due {
+                    if (self.editor.triangulation_pick_target.is_some() || self.editor.optimization.start_pick.is_some() || self.editor.drill_pattern_awaiting_shape_pick)
+                        && hover_pick_due
+                    {
                         self.update_viewport_field_pick_hover();
                     }
                     if !self.editor.pending_stroke.is_empty()
@@ -864,13 +875,23 @@ impl<'a> App<'a> {
     }
 
     fn handle_mouse_press(&mut self, event: &WindowEvent) {
+        // An orbit or pan starts on these presses: the canvas menu goes, as on
+        // a left press below. A quick right click reopens it on release.
+        if let WindowEvent::MouseInput {
+            state: ElementState::Pressed,
+            button: MouseButton::Right | MouseButton::Middle,
+            ..
+        } = event
+        {
+            self.editor.canvas_context_menu_open = false;
+        }
         if let WindowEvent::MouseInput {
             state: ElementState::Pressed,
             button: MouseButton::Left,
             ..
         } = event
         {
-            if self.editor.triangulation_pick_target.is_some() || self.editor.drill_pattern_awaiting_shape_pick {
+            if self.editor.triangulation_pick_target.is_some() || self.editor.optimization.start_pick.is_some() || self.editor.drill_pattern_awaiting_shape_pick {
                 self.editor.canvas_context_menu_open = false;
                 self.begin_select_or_drag();
                 return;
@@ -884,7 +905,7 @@ impl<'a> App<'a> {
                 ActiveTool::MeasureDistance => self.measure_distance_click(),
                 ActiveTool::MeasureBatterAngle => self.measure_batter_angle_click(),
                 ActiveTool::VerticalSlice => self.slice_line_click(),
-                ActiveTool::DeletePoints => {
+                ActiveTool::DeletePoints | ActiveTool::Hide => {
                     self.editor.selection_box_start_px = self.editor.cursor_screen_px;
                     self.editor.selection_box_current_px = self.editor.cursor_screen_px;
                 }
@@ -1163,12 +1184,22 @@ impl<'a> App<'a> {
                         crate::model::SceneEntityId::Triangulation(id) => Some(id),
                         _ => None,
                     };
+                    self.editor.canvas_context_menu_recent = false;
                     self.editor.canvas_context_menu_open = true;
                     self.editor.canvas_context_menu_px = self.editor.cursor_screen_px;
                     self.redraw_requested = true;
                 } else if ring.is_some() {
                     self.editor.canvas_context_menu_hole = None;
                     self.editor.canvas_context_menu_ring = ring;
+                    self.editor.canvas_context_menu_recent = false;
+                    self.editor.canvas_context_menu_open = true;
+                    self.editor.canvas_context_menu_px = self.editor.cursor_screen_px;
+                    self.redraw_requested = true;
+                } else if self.editor.keeps_recent_functions() {
+                    // Empty space: the recent functions; the selection stays.
+                    self.editor.canvas_context_menu_hole = None;
+                    self.editor.canvas_context_menu_ring = None;
+                    self.editor.canvas_context_menu_recent = true;
                     self.editor.canvas_context_menu_open = true;
                     self.editor.canvas_context_menu_px = self.editor.cursor_screen_px;
                     self.redraw_requested = true;
@@ -1278,15 +1309,7 @@ impl<'a> App<'a> {
             // A held C or B is one press, so a toggle never chatters on repeat.
             ElementState::Pressed if *repeat && matches!(key, KeyCode::KeyC | KeyCode::KeyB) => {}
             ElementState::Pressed => self.handle_key_code(*key),
-            ElementState::Released => {
-                // Once the Enter that opened the polyline finish dialog is
-                // released, let its Enter shortcut work. Until then a held key
-                // must not skip straight past the Open/Closed choice.
-                if matches!(key, KeyCode::Enter | KeyCode::NumpadEnter) && self.editor.poly_finish_dialog && !self.editor.poly_finish_dialog_confirm_armed {
-                    self.editor.poly_finish_dialog_confirm_armed = true;
-                    self.redraw_requested = true;
-                }
-            }
+            ElementState::Released => {}
         }
     }
 
@@ -1382,6 +1405,8 @@ impl<'a> App<'a> {
                     self.redraw_requested = true;
                 } else if self.editor.text_editing_enabled {
                     self.cancel_text_edit();
+                } else if self.editor.optimization.start_pick.is_some() {
+                    self.cancel_shell_start_pick();
                 } else if self.editor.triangulation_pick_target.is_some() {
                     self.editor.triangulation_pick_target = None;
                     self.editor.viewport_pick_hover_label = None;
@@ -1486,6 +1511,7 @@ impl<'a> App<'a> {
                     self.try_finish_tool();
                 }
             }
+            KeyCode::F2 if !self.editor.text_editing_enabled && !self.editor.dialog_owns_confirm_key() => self.begin_rename_from_explorer(),
             // The "Edit Object" dialog has its own row Delete button and no
             // keyboard shortcut for it, and it is opened on a selected object,
             // so without this guard Delete/Backspace raises "delete this object?".

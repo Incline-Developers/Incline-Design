@@ -11,6 +11,8 @@ authors:
     given-names: Lucas
   - family-names: Heckscher
     given-names: Norman
+  - family-names: Mikulich
+    given-names: Denis
 license: MIT
 url: "https://inclinedesign.net/"
 repository-code: "https://github.com/Incline-Developers/Incline-Design"

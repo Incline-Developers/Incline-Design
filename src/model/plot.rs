@@ -585,6 +585,7 @@ impl TextPainter {
     }
 
     fn shape(&mut self, text: &str, size_px: f64) -> Buffer {
+        crate::fonts::request_cjk_fonts_for(text);
         let size = size_px.max(1.0) as f32;
         let mut buffer = Buffer::new(&mut self.font_system, Metrics::new(size, size * 1.25));
         buffer.set_size(None, None);

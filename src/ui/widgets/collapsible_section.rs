@@ -8,10 +8,14 @@ use super::{shifted, toolbar::GROUP_CORNER_RADIUS};
 /// use it where a group is a self-contained mode or concept that benefits
 /// from being folded away. Lightweight runs of fields should keep using
 /// [`crate::ui::widgets::menu::menu_section`].
+///
+/// With [`Self::collapsible`] off it is the same card with a plain title: a
+/// fixed group of options in a dialog that always shows all of them.
 pub(crate) struct CollapsibleSection {
     id: egui::Id,
     title: egui::WidgetText,
     default_open: bool,
+    collapsible: bool,
 }
 
 impl CollapsibleSection {
@@ -20,7 +24,15 @@ impl CollapsibleSection {
             id: id.into(),
             title: title.into(),
             default_open: false,
+            collapsible: true,
         }
+    }
+
+    /// Whether the header folds the body away. Off, the body always shows and
+    /// the header carries no arrow.
+    pub(crate) fn collapsible(mut self, collapsible: bool) -> Self {
+        self.collapsible = collapsible;
+        self
     }
 
     /// Whether a section with no stored state starts expanded.
@@ -29,7 +41,8 @@ impl CollapsibleSection {
         self
     }
 
-    pub(crate) fn show<R>(self, ui: &mut egui::Ui, add_body: impl FnOnce(&mut egui::Ui) -> R) -> egui::CollapsingResponse<R> {
+    /// Draw the card; returns what the body returned, when it was drawn.
+    pub(crate) fn show<R>(self, ui: &mut egui::Ui, add_body: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
         let dark = ui.visuals().dark_mode;
         let panel = ui.visuals().panel_fill;
         let card_fill = shifted(panel, if dark { 5 } else { -4 });
@@ -45,6 +58,21 @@ impl CollapsibleSection {
             .inner_margin(egui::Margin::ZERO)
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
+                let body_frame = egui::Frame::NONE.inner_margin(egui::Margin {
+                    left: 8,
+                    right: 8,
+                    top: 4,
+                    bottom: 8,
+                });
+                if !self.collapsible {
+                    // The header row the collapsing one draws, without the
+                    // arrow or the hover: the title is not a control here.
+                    egui::Frame::NONE.inner_margin(egui::Margin::symmetric(8, 4)).show(ui, |ui| {
+                        ui.set_min_width(ui.available_width());
+                        ui.add(egui::Label::new(self.title).selectable(false));
+                    });
+                    return Some(body_frame.show(ui, add_body).inner);
+                }
                 ui.scope(|ui| {
                     ui.spacing_mut().button_padding = egui::vec2(7.0, 4.0);
                     ui.visuals_mut().collapsing_header_frame = true;
@@ -56,16 +84,9 @@ impl CollapsibleSection {
                         .default_open(self.default_open)
                         .show_unindented(ui, |ui| {
                             ui.set_style(body_style);
-                            egui::Frame::NONE
-                                .inner_margin(egui::Margin {
-                                    left: 8,
-                                    right: 8,
-                                    top: 4,
-                                    bottom: 8,
-                                })
-                                .show(ui, add_body)
-                                .inner
+                            body_frame.show(ui, add_body).inner
                         })
+                        .body_returned
                 })
                 .inner
             })

@@ -25,10 +25,12 @@ use crate::{
             csv_block_model::{CsvColumnMapping, CsvPreview},
             csv_drill_hole::{CsvDrillFileMapping, CsvDrillPreview},
         },
+        optimization::OptimizationScenario,
         point_cloud::PointCloudId,
         raster::RasterTextureId,
         triangulation::TriangulationId,
     },
+    ui::elements::main_menu::DesignRow,
 };
 
 type OptionalScreenPointPx = Option<(f32, f32)>;
@@ -307,7 +309,6 @@ pub(crate) struct PreferencesDraft {
     pub(crate) block_model_interaction_resolution_divisor: u32,
     pub(crate) show_block_model_boundary_highlights: bool,
     pub(crate) downscale_raster_previews: bool,
-    pub(crate) frame_counter_enabled: bool,
     pub(crate) debug_surface_chunks: bool,
     pub(crate) debug_clip_planes: bool,
     pub(crate) debug_point_cloud_chunks: bool,
@@ -322,6 +323,8 @@ pub(crate) struct PreferencesDraft {
     pub(crate) fly_invert_horizontal_look: bool,
     pub(crate) fly_near_clip_limit: f64,
     pub(crate) fly_max_clip_span: f64,
+    /// How many lines a recent functions list shows.
+    pub(crate) recent_functions_shown: u32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -350,7 +353,6 @@ impl Default for PreferencesDraft {
             block_model_interaction_resolution_divisor: crate::app::io::default_block_model_interaction_resolution_divisor(),
             show_block_model_boundary_highlights: crate::app::io::default_show_block_model_boundary_highlights(),
             downscale_raster_previews: crate::app::io::default_downscale_raster_previews(),
-            frame_counter_enabled: false,
             debug_surface_chunks: false,
             debug_clip_planes: false,
             debug_point_cloud_chunks: false,
@@ -365,6 +367,7 @@ impl Default for PreferencesDraft {
             fly_invert_horizontal_look: false,
             fly_near_clip_limit: crate::app::io::default_fly_near_clip_limit(),
             fly_max_clip_span: crate::app::io::default_fly_max_clip_span(),
+            recent_functions_shown: crate::app::io::default_recent_functions_shown(),
         }
     }
 }
@@ -590,8 +593,8 @@ pub(crate) struct SelectionCounts {
     pub(crate) triangulations: usize,
     /// Selected point clouds that are loaded, and so have points to work on.
     pub(crate) point_clouds: usize,
-    /// Selected drill-hole datasets that are loaded, and so have intervals to
-    /// estimate from.
+    /// Loaded drill-hole datasets the selection reaches, whole or by
+    /// individually picked holes, and so with intervals to estimate from.
     pub(crate) drill_holes: usize,
     /// Selected holes, a dataset taken whole standing for every hole in it,
     /// which reference points are placed on.
@@ -1390,6 +1393,13 @@ pub(crate) struct EditorState {
     pub(crate) borehole_inspector_locked: bool,
     /// Entities removed from view (skipped by the renderer).
     pub(crate) hidden_handles: HashSet<SceneEntityId>,
+    /// While set, the only entity shown, whatever the explorer's eyes say -
+    /// a hidden one too (the optimization's start-point pick). Transient:
+    /// applied by `App::sync_hidden_handles`, so a rebuild keeps it, and
+    /// clearing it brings the saved visibility back.
+    pub(crate) isolated_entity: Option<SceneEntityId>,
+    /// Short messages fading out above the status bar (`widgets::toast`).
+    pub(crate) toasts: crate::ui::widgets::toast::Toasts,
     /// Entities frozen: still visible, but excluded from editing and snapping.
     ///
     /// Derived: the union of [`Self::explicitly_frozen`] and every design
@@ -1414,12 +1424,6 @@ pub(crate) struct EditorState {
     /// Show every vertex of all visible design objects. These are kept in a
     /// persistent GPU instance cache rather than a decimated UI overlay.
     pub(crate) show_points: bool,
-    /// Draw classified point clouds in their ASPRS class colours. Survey's
-    /// reading of a cloud - what a delivery's ground filter decided - so the
-    /// switch appears there and the renderer honours it there only. On by
-    /// default: a classified cloud arrives to be checked, and a flat one hides
-    /// the vegetation and noise that check is looking for.
-    pub(crate) point_cloud_classification_colors: bool,
     /// The UI language in force, which the status bar's picker changes live.
     /// Read only to tick the running language in that picker - what the strings
     /// themselves come from is the loader in [`crate::i18n`].
@@ -1484,12 +1488,15 @@ pub(crate) struct EditorState {
     pub(crate) show_block_model_boundary_highlights: bool,
     /// Downscale large GeoTIFFs before retaining and uploading their pixel data.
     pub(crate) downscale_raster_previews: bool,
-    pub(crate) frame_counter_enabled: bool,
     pub(crate) measured_fps: Option<f32>,
     /// What the app holds against the machine's memory, refreshed by
     /// `App` every `memory_usage::SAMPLE_PERIOD`. `None` until the first
     /// reading, or where the platform cannot say.
     pub(crate) memory_usage: Option<crate::app::memory_usage::MemoryUsage>,
+    /// Each processor core's load, `0.0..=1.0`, refreshed by `App` every
+    /// `memory_usage::CPU_SAMPLE_PERIOD`. Empty until the first reading, and
+    /// always on the web, where a browser does not say.
+    pub(crate) cpu_usage: Vec<f32>,
     /// Frames and busy seconds counted towards the next `measured_fps`, which
     /// is published once per window rather than every frame. See
     /// `App::record_frame_time`.
@@ -1634,12 +1641,8 @@ pub(crate) struct EditorState {
     pub(crate) cursor_screen_px: Option<(f32, f32)>,
 
     // Dialog state (position snapshots)
-    /// When true, show the polyline finish dialog near the cursor.
+    /// When true, show the polyline finish (Open / Closed) menu near the cursor.
     pub(crate) poly_finish_dialog: bool,
-    /// The polyline finish dialog only accepts its Enter shortcut once the
-    /// Enter press that opened it has been released - otherwise a held key
-    /// confirms "Open" the same instant the dialog appears.
-    pub(crate) poly_finish_dialog_confirm_armed: bool,
     /// Screen position (physical px) where the polyline finish dialog was opened.
     /// Snapshotted once so the dialog doesn't follow the cursor.
     pub(crate) poly_finish_dialog_px: Option<(f32, f32)>,
@@ -1650,6 +1653,9 @@ pub(crate) struct EditorState {
     /// The drill hole under the cursor when the canvas context menu was
     /// opened; its hole-specific rows act on this hole, not the selection.
     pub(crate) canvas_context_menu_hole: Option<DrillHoleRef>,
+    /// The canvas menu was opened on empty space, so it is the recent
+    /// functions list rather than the menu for what was picked.
+    pub(crate) canvas_context_menu_recent: bool,
     /// Selected polylines and the in-progress line-weight value for the
     /// selection appearance menu. The value must survive across frames while its
     /// `DragValue` is being dragged.
@@ -1699,6 +1705,9 @@ pub(crate) struct EditorState {
     pub(crate) slice_preview_navigation: SlicePreviewNavigation,
     /// Slab thickness in metres, live-applied from the slice panel.
     pub(crate) slice_width_input: f64,
+    /// 2D section: surfaces draw as the line they cut through the plane
+    /// rather than as a 3D slab. Live-applied from the slice panel.
+    pub(crate) slice_outlines: bool,
     /// W/S slab movement speed (m/s).
     pub(crate) slice_speed_input: f64,
     /// Q/E rotation rate (degrees per second).
@@ -1966,6 +1975,8 @@ pub(crate) struct EditorState {
     pub(crate) tri_cut_z_tri_id: Option<TriangulationId>,
     pub(crate) tri_cut_z_min_input: f64,
     pub(crate) tri_cut_z_max_input: f64,
+    /// The source surface's elevation extent, which the range moves within.
+    pub(crate) tri_cut_z_limits: (f64, f64),
     pub(crate) tri_cut_z_name_input: String,
     pub(crate) tri_cut_z_unload_source: bool,
 
@@ -2020,10 +2031,13 @@ pub(crate) struct EditorState {
     pub(crate) tri_contour_use_z_range: bool,
     pub(crate) tri_contour_z_min_input: f64,
     pub(crate) tri_contour_z_max_input: f64,
+    /// The source surface's elevation extent, which the range moves within.
+    pub(crate) tri_contour_z_limits: (f64, f64),
     /// `None` creates a new layer; `Some` appends to an existing active project layer.
     pub(crate) tri_contour_target_layer: Option<LayerId>,
     pub(crate) tri_contour_layer_name_input: String,
     pub(crate) tri_contour_layer_name_auto: bool,
+    pub(crate) tri_contour_labels: bool,
     pub(crate) point_cloud_tin_open: bool,
     pub(crate) point_cloud_tin_cloud_id: Option<PointCloudId>,
     pub(crate) point_cloud_tin_name_input: String,
@@ -2095,8 +2109,12 @@ pub(crate) struct EditorState {
     pub(crate) seam_rename_dialog: Option<SeamRenameDraft>,
     /// The shift names dialog's hole, direction and reason while it is open.
     pub(crate) name_shift_dialog: Option<NameShiftDraft>,
+    pub(crate) optimization: OptimizationState,
     pub(crate) block_model_create_open: bool,
     pub(crate) kriging_drill_hole_id: Option<DrillHoleId>,
+    /// The holes picked in that dataset when the dialog opened, or `None`
+    /// when it was selected whole.
+    pub(crate) kriging_holes: Option<Vec<usize>>,
     pub(crate) kriging_variables: Vec<String>,
     pub(crate) kriging_name_input: String,
     pub(crate) kriging_lower: DVec3,
@@ -2185,12 +2203,13 @@ pub(crate) struct EditorState {
     pub(crate) bezier_dialog_open: bool,
     /// Selected Preferences section.
     pub(crate) active_property_tab: PropertyTab,
-    /// The drillhole dataset the Drillholes preferences page edits.
-    pub(crate) preferences_drill_hole: Option<DrillHoleId>,
     /// The workspace tab selected in the menu bar.
     pub(crate) active_workspace: Workspace,
     pub(crate) survey: crate::ui::dialogs::survey::SurveyState,
     pub(crate) workspace_order: [Workspace; 5],
+    /// Production's recent functions by [`DesignRow::key`], newest last.
+    pub(crate) recent_design_functions: Vec<String>,
+    pub(crate) recent_functions_shown: u32,
     /// The Drill & Blast workspace's stored products, in the order the palette
     /// lays them out.
     pub(crate) delay_products: Vec<DelayProduct>,
@@ -2373,6 +2392,19 @@ impl OmfExportSelection {
 }
 
 impl EditorState {
+    /// The cursor sits on the first vertex of the polyline being drawn, so a
+    /// click there closes it.
+    pub(crate) fn poly_close_hovered(&self) -> bool {
+        self.active_tool == ActiveTool::MakePoly
+            && !self.poly_finish_dialog
+            && self.pending_stroke.len() >= 2
+            && self
+                .pending_stroke
+                .first()
+                .zip(self.cursor_world)
+                .is_some_and(|(first, cursor)| (*first - cursor).length_squared() <= 1.0e-16)
+    }
+
     pub(crate) fn overlay_follows_cursor(&self) -> bool {
         !self.pending_stroke.is_empty() || self.measurement_start.is_some() || !self.batter_angle_points.is_empty() || self.circle_draft.is_some()
     }
@@ -2413,13 +2445,17 @@ impl EditorState {
         if self.viewport_pick_in_progress() {
             return false;
         }
-        self.object_edit_dialog.is_some() || self.dialog_owns_both_keys()
+        self.object_edit_dialog.is_some() || self.poly_finish_dialog || self.dialog_owns_both_keys()
     }
 
     /// A dialog is parked waiting on a click in the 3D viewport. Escape belongs
     /// to the pick (it returns to the dialog), and Enter means nothing.
     fn viewport_pick_in_progress(&self) -> bool {
-        self.triangulation_pick_target.is_some() || self.drill_pattern_awaiting_shape_pick || self.canvas_context_menu_open || self.text_editing_enabled
+        self.triangulation_pick_target.is_some()
+            || self.optimization.start_pick.is_some()
+            || self.drill_pattern_awaiting_shape_pick
+            || self.canvas_context_menu_open
+            || self.text_editing_enabled
     }
 
     /// The common case: a dialog that confirms on Enter and cancels on Escape.
@@ -2471,6 +2507,7 @@ impl EditorState {
             || self.point_cloud_classify_open
             || self.block_model_create_open
             || self.ore_triangulation_open
+            || self.optimization.dialog_open()
             || {
                 #[cfg(target_arch = "wasm32")]
                 {
@@ -2754,7 +2791,6 @@ impl EditorState {
         self.pending_stroke.clear();
         self.circle_draft = None;
         self.poly_finish_dialog = false;
-        self.poly_finish_dialog_confirm_armed = false;
         self.poly_finish_dialog_px = None;
         self.canvas_context_menu_open = false;
         self.canvas_context_menu_px = None;
@@ -2904,7 +2940,6 @@ impl EditorState {
             block_model_interaction_resolution_divisor: self.block_model_interaction_resolution_divisor,
             show_block_model_boundary_highlights: self.show_block_model_boundary_highlights,
             downscale_raster_previews: self.downscale_raster_previews,
-            frame_counter_enabled: self.frame_counter_enabled,
             debug_surface_chunks: self.debug_surface_chunks,
             debug_clip_planes: self.debug_clip_planes,
             debug_point_cloud_chunks: self.debug_point_cloud_chunks,
@@ -2919,6 +2954,7 @@ impl EditorState {
             fly_invert_horizontal_look: self.fly_invert_horizontal_look,
             fly_near_clip_limit: self.fly_near_clip_limit,
             fly_max_clip_span: self.fly_max_clip_span,
+            recent_functions_shown: self.recent_functions_shown,
         }
     }
 
@@ -2939,6 +2975,8 @@ impl EditorState {
             inspected_hole: None,
             borehole_inspector_locked: false,
             hidden_handles: HashSet::new(),
+            isolated_entity: None,
+            toasts: Default::default(),
             frozen_handles: HashSet::new(),
             explicitly_frozen: HashSet::new(),
             locked_layers: HashSet::new(),
@@ -2946,7 +2984,6 @@ impl EditorState {
             translucent_handles: HashSet::new(),
             topology_wireframes_enabled: false,
             show_points: false,
-            point_cloud_classification_colors: true,
             language: crate::app::io::default_language(),
             dark_mode: crate::app::io::default_dark_mode(),
             show_console: crate::app::io::default_show_console(),
@@ -2971,9 +3008,9 @@ impl EditorState {
             block_model_interaction_resolution_divisor: crate::app::io::default_block_model_interaction_resolution_divisor(),
             show_block_model_boundary_highlights: crate::app::io::default_show_block_model_boundary_highlights(),
             downscale_raster_previews: crate::app::io::default_downscale_raster_previews(),
-            frame_counter_enabled: false,
             measured_fps: None,
             memory_usage: None,
+            cpu_usage: Vec::new(),
             frame_rate_window: (0, 0.0),
             debug_surface_chunks: false,
             debug_surface_stats: None,
@@ -3051,11 +3088,11 @@ impl EditorState {
             z_input: 0.0,
             cursor_screen_px: None,
             poly_finish_dialog: false,
-            poly_finish_dialog_confirm_armed: false,
             poly_finish_dialog_px: None,
             canvas_context_menu_open: false,
             canvas_context_menu_px: None,
             canvas_context_menu_hole: None,
+            canvas_context_menu_recent: false,
             design_line_weight_input: None,
             move_to_layer_dialog: None,
             move_to_axis_dialog: None,
@@ -3076,8 +3113,9 @@ impl EditorState {
             slice_preview_texture: None,
             slice_preview_size_px: [440, 440],
             slice_preview_navigation: SlicePreviewNavigation::default(),
-            slice_width_input: 25.0,
-            slice_speed_input: 50.0,
+            slice_width_input: 3.0,
+            slice_outlines: true,
+            slice_speed_input: 20.0,
             slice_rotate_input: 45.0,
             slice_center: [0.0; 3],
             slice_direction: [1.0, 0.0],
@@ -3206,6 +3244,7 @@ impl EditorState {
             tri_cut_z_tri_id: None,
             tri_cut_z_min_input: 0.0,
             tri_cut_z_max_input: 100.0,
+            tri_cut_z_limits: (0.0, 100.0),
             tri_cut_z_name_input: String::new(),
             tri_cut_z_unload_source: true,
             tri_cut_surface_open: false,
@@ -3246,9 +3285,11 @@ impl EditorState {
             tri_contour_use_z_range: false,
             tri_contour_z_min_input: 0.0,
             tri_contour_z_max_input: 100.0,
+            tri_contour_z_limits: (0.0, 100.0),
             tri_contour_target_layer: None,
             tri_contour_layer_name_input: tr!("common-surface-contours"),
             tri_contour_layer_name_auto: true,
+            tri_contour_labels: false,
             point_cloud_tin_open: false,
             point_cloud_tin_cloud_id: None,
             point_cloud_tin_name_input: tr!("tri-type-open-surface"),
@@ -3285,8 +3326,10 @@ impl EditorState {
             seam_table: None,
             seam_rename_dialog: None,
             name_shift_dialog: None,
+            optimization: OptimizationState::default(),
             block_model_create_open: false,
             kriging_drill_hole_id: None,
+            kriging_holes: None,
             kriging_variables: Vec::new(),
             kriging_name_input: tr!("state-kriged-block-model"),
             kriging_lower: DVec3::ZERO,
@@ -3339,9 +3382,10 @@ impl EditorState {
             bezier_hover_cp: None,
             bezier_dialog_open: false,
             active_property_tab: PropertyTab::Interface,
-            preferences_drill_hole: None,
             active_workspace: Workspace::Production,
             workspace_order: Workspace::ALL,
+            recent_design_functions: Vec::new(),
+            recent_functions_shown: crate::app::io::default_recent_functions_shown(),
             survey: Default::default(),
             delay_products: builtin_delay_products(),
             next_delay_product_id: builtin_delay_products().len() as u64,
@@ -3529,7 +3573,7 @@ impl EditorState {
     /// it is also part of `EditorSceneState` - the editor state a cached scene
     /// image is only valid for.
     pub(crate) fn colors_points_by_classification(&self) -> bool {
-        self.active_workspace == Workspace::Survey && self.point_cloud_classification_colors
+        self.active_workspace == Workspace::Survey
     }
 
     /// Whether the active translate tool has anything to move: design
@@ -3601,6 +3645,8 @@ pub(crate) enum ActiveTool {
     DeletePoints,
     MeasureDistance,
     MeasureBatterAngle,
+    /// Click or box over designs to hide them. Show All Hidden brings them back.
+    Hide,
     OffsetElement,
     DrapeToTopology,
     RelimitLine,
@@ -3963,7 +4009,6 @@ pub(crate) enum UiCommand {
     ToggleRotationCentre,
     /// The grid button: the RL grid in a section, the XY grid in plan.
     SetGridShown(bool),
-    SetPointCloudClassificationColors(bool),
     SetTopologyWireframes(bool),
     SetShowPoints(bool),
     /// Presentation shading over the scene pass. Native only.
@@ -4079,6 +4124,8 @@ pub(crate) enum UiCommand {
     CancelTextEdit,
     SetTriangulationColor(TriangulationId, [f32; 4]),
     CloseCanvasContextMenu,
+    /// Remember a menu function as just used, by its row key.
+    NoteRecentFunction(&'static str),
     LoadTriangulation(TriangulationId),
     LoadBlockModel(BlockModelId),
     CloseBlockModel(BlockModelId),
@@ -4157,8 +4204,6 @@ pub(crate) enum UiCommand {
     /// Show again the thickness grid behind a surface Thickness Surfaces
     /// made this session.
     ShowSeamTable(TriangulationId),
-    /// The Preferences window, open on its Modelling tab.
-    OpenModellingSettings,
     /// The project's modelling settings, whole, sent only when valid.
     SetModellingSettings(crate::model::project::ModellingSettings),
     /// One point per hole at the chosen boundary of a working section, as a
@@ -4259,9 +4304,57 @@ pub(crate) enum UiCommand {
     /// Open Create Block Model on the selected drill holes. Like the other
     /// select-first tools it takes its input from the scene selection, so the
     /// command carries nothing.
+    /// Show the Optimization scenarios list.
+    OpenOptimizationScenarios,
+    /// Start a new scenario in the editor, hiding the list.
+    AddOptimizationScenario,
+    /// Open the scenario with this id in the editor, hiding the list.
+    EditOptimizationScenario(u64),
+    /// Keep the edited scenario and hand the scenarios to the project. The editor stays
+    /// open unless `then_close`.
+    SaveOptimizationScenario {
+        scenario: Box<OptimizationScenario>,
+        then_close: bool,
+    },
+    DeleteOptimizationScenario(u64),
+    /// Write every scenario to a JSON file the user chooses.
+    ExportOptimizationScenarios,
+    /// Add the scenarios in a JSON file the user chooses to the list.
+    ImportOptimizationScenarios,
+    /// Choose the folder the reports are written to.
+    ChooseOptimizationReportsFolder,
+    /// Save the report the Results window shows as a CSV file the user chooses.
+    ExportOptimizationReport,
+    /// Read an optimization report CSV into the Results window.
+    OpenOptimizationReport,
+    /// Write the Results table's column choices (with the scenarios).
+    SaveOptimizationReportColumns,
+    /// The answer to "load the unloaded inputs?": load them and go on, or not.
+    ConfirmOptimizationLoad(bool),
+    /// Copy scenario `id` into a new one beside it that runs just these
+    /// revenue factors, typed in (the Results window's filtered shells).
+    CopyScenarioWithShells {
+        id: u64,
+        factors: Vec<f64>,
+    },
+    /// Hide everything but the scenario's block model, show it in plan view
+    /// and wait for a click that sets the directional shells' starting point.
+    BeginShellStartPick,
+    /// Copy a scenario into a new one beside it, with an amended name.
+    DuplicateOptimizationScenario(u64),
+    /// Run the saved scenario with this id (queued if enough are running).
+    RunOptimizationScenario(u64),
+    /// Stop the scenario's run, or take it out of the queue.
+    CancelOptimizationScenario(u64),
+    RenameOptimizationScenario {
+        id: u64,
+        name: String,
+    },
     OpenCreateBlockModel,
     ExecuteCreateBlockModel {
         drill_hole_id: DrillHoleId,
+        /// Only these holes' intervals, or every hole when `None`.
+        holes: Option<Vec<usize>>,
         variables: Vec<String>,
         name: String,
         lower: DVec3,
@@ -4287,6 +4380,8 @@ pub(crate) enum UiCommand {
     /// Show again every object of the active project hidden from the canvas,
     /// whichever layer holds it, as one undo step.
     UnhideAll,
+    /// Show every design object hidden on its own, leaving hidden layers and items alone.
+    ShowAllHidden,
     ZoomToExtents,
     /// Dialog "Apply" pressed - begin the canvas side-pick phase.
     BeginOffsetPick {
@@ -4454,6 +4549,8 @@ pub(crate) enum UiCommand {
         minor_color: [f32; 4],
         /// Optional `(min, max)` RL band to contour instead of the full mesh.
         z_range: Option<(f64, f64)>,
+        /// Write each major line's height on it as text.
+        contour_labels: bool,
         output_layer: ContourOutputLayer,
     },
 
@@ -4547,6 +4644,20 @@ impl UiCommand {
             | Self::CancelCollarRotation
             | Self::CancelTextEdit
             | Self::CloseCanvasContextMenu
+            | Self::NoteRecentFunction(_)
+            | Self::OpenOptimizationScenarios
+            | Self::AddOptimizationScenario
+            | Self::EditOptimizationScenario(_)
+            | Self::RenameOptimizationScenario { .. }
+            | Self::ChooseOptimizationReportsFolder
+            | Self::ExportOptimizationReport
+            | Self::OpenOptimizationReport
+            | Self::SaveOptimizationReportColumns
+            | Self::ConfirmOptimizationLoad(_)
+            | Self::CopyScenarioWithShells { .. }
+            | Self::BeginShellStartPick
+            | Self::RunOptimizationScenario(_)
+            | Self::CancelOptimizationScenario(_)
             | Self::OpenCreateBlockModel
             | Self::OpenCreateOreTriangulation
             | Self::OpenOffsetDialog
@@ -4587,7 +4698,6 @@ impl UiCommand {
             | Self::OpenCutTriangulationToSurface
             | Self::ShowThicknessTable { .. }
             | Self::ShowSeamTable(_)
-            | Self::OpenModellingSettings
             | Self::InspectDrillHole(_)
             | Self::SetBlockModelSlice { .. }
             | Self::ChooseImportSourceFiles(_)
@@ -4701,11 +4811,10 @@ impl UiCommand {
             Self::FinishPolyClose => report(tr!("common-create-polyline"), tr!("state-finish-closed-polyline")),
             Self::CommitStrokeOpen => report(tr!("common-create-line"), tr!("state-finish-open-polyline")),
             Self::CommitCircleTypedRadius => report(tr!("common-create-circle"), tr!("state-use-typed-radius")),
-            Self::ResetView => report(tr!("common-reset-view"), tr!("state-plan-view-then-fit-extents")),
+            Self::ResetView => report(tr!("common-reset-view"), tr!("state-fit-extents")),
             Self::ToggleRotationCentre => report(tr!("state-centre-rotation"), tr!("state-fix-release-centre-both-views")),
             Self::SetTopologyWireframes(enabled) => report(tr!("state-set-topology-wireframes"), if *enabled { tr!("state-shown") } else { tr!("state-hidden") }),
             Self::SetGridShown(shown) => report(tr!("state-set-grid"), if *shown { tr!("state-shown") } else { tr!("state-hidden") }),
-            Self::SetPointCloudClassificationColors(enabled) => report(tr!("state-colour-points-classification"), if *enabled { tr!("state-on") } else { tr!("state-off") }),
             Self::SetShowPoints(enabled) => report(tr!("state-set-point-visibility"), if *enabled { tr!("state-shown") } else { tr!("state-hidden") }),
             #[cfg(not(target_arch = "wasm32"))]
             Self::SetCinematicEnabled(enabled) => report(tr!("state-set-cinematic-view"), if *enabled { tr!("state-enabled") } else { tr!("state-disabled") }),
@@ -4836,12 +4945,18 @@ impl UiCommand {
                 },
             ),
             Self::SetModellingSettings(settings) => report(tr!("state-set-modelling-settings"), settings.summary()),
+            Self::SaveOptimizationScenario { scenario, .. } => report(tr!("opt-save-scenario"), scenario.name.clone()),
+            Self::ExportOptimizationScenarios => report(tr!("opt-export-json"), tr!("opt-export-summary")),
+            Self::ImportOptimizationScenarios => report(tr!("opt-import-json"), tr!("opt-import-summary")),
+            Self::DuplicateOptimizationScenario(id) => report(tr!("opt-duplicate-scenario"), id.to_string()),
+            Self::DeleteOptimizationScenario(id) => report(tr!("opt-delete-scenario"), id.to_string()),
             Self::ExecuteCreateBlockModel { name, .. } => report(tr!("common-create-block-model"), name.clone()),
             Self::ExecuteCreateOreTriangulation { name, .. } => report(tr!("common-create-ore-triangulation"), name.clone()),
             Self::ExportPlotSheet => report(tr!("common-export-engineering-drawing"), tr!("state-choose-destination")),
             Self::RemoveTriangulation(id) => report(tr!("state-remove-triangulation"), format!("{id:?}")),
             Self::HideSelection => report(tr!("common-hide-selection"), tr!("state-selected-scene-elements")),
             Self::UnhideAll => report(tr!("common-unhide-all"), tr!("state-hidden-objects")),
+            Self::ShowAllHidden => report(tr!("toolbars-show-all-hidden"), tr!("state-individually-hidden-designs")),
             Self::ZoomToExtents => report(tr!("common-zoom-extents"), tr!("state-preserve-view-angle")),
             Self::BeginOffsetPick { object_ids, .. } => report(tr!("common-offset"), tr!("common-count-object-s", count = object_ids.len().to_string())),
             Self::RelimitLineResize { source_id, .. } => report(tr!("common-relimit-line"), format!("{source_id:?}")),
@@ -5009,7 +5124,6 @@ pub(crate) enum ExplorerSection {
     PointClouds,
     BlockModels,
     DrillHoles,
-    Modelling,
 }
 
 impl ExplorerSection {
@@ -5022,7 +5136,6 @@ impl ExplorerSection {
             Self::PointClouds => tr!("common-point-clouds"),
             Self::BlockModels => tr!("common-block-models"),
             Self::DrillHoles => tr!("ws-menubar-drillholes"),
-            Self::Modelling => tr!("common-modelling"),
         }
     }
 
@@ -5036,7 +5149,6 @@ impl ExplorerSection {
             Self::PointClouds => SectionKind::PointClouds,
             Self::BlockModels => SectionKind::BlockModels,
             Self::DrillHoles => SectionKind::DrillHoles,
-            Self::Modelling => SectionKind::Modelling,
         }
     }
 
@@ -5050,7 +5162,6 @@ impl ExplorerSection {
             SectionKind::PointClouds => Self::PointClouds,
             SectionKind::BlockModels => Self::BlockModels,
             SectionKind::DrillHoles => Self::DrillHoles,
-            SectionKind::Modelling => Self::Modelling,
         }
     }
 }
@@ -5155,10 +5266,6 @@ pub(crate) struct UiProjectView {
     pub(crate) point_clouds: Vec<UiPointCloudEntry>,
     pub(crate) raster_textures: Vec<UiRasterTextureEntry>,
     pub(crate) triangulations_membership_dirty: bool,
-    /// Modelling's unsaved work that no Modelling row shows: its folders,
-    /// which triangulations it holds, and the layers tagged with it - a
-    /// deleted layer has no row left to carry a mark.
-    pub(crate) modelling_dirty: bool,
     pub(crate) block_models_membership_dirty: bool,
     pub(crate) drill_holes_membership_dirty: bool,
     pub(crate) point_clouds_membership_dirty: bool,
@@ -5184,6 +5291,46 @@ pub(crate) struct UiProjectView {
 /// is the better tool for finding one.
 pub(crate) const RECENT_PROJECT_LIMIT: usize = 10;
 
+/// How many functions a recent list keeps, whatever it is set to show, so
+/// showing fewer and then more again loses nothing.
+pub(crate) const RECENT_FUNCTION_LIMIT: usize = 20;
+
+/// Remember `key` as the newest use in `list` (kept newest last, as the
+/// recent projects are): a repeat moves to the end, the oldest past
+/// [`RECENT_FUNCTION_LIMIT`] drop off. Returns whether the list changed.
+pub(crate) fn note_recent(list: &mut Vec<String>, key: &str) -> bool {
+    if list.last().is_some_and(|last| last == key) {
+        return false;
+    }
+    list.retain(|kept| kept != key);
+    list.push(key.to_owned());
+    let excess = list.len().saturating_sub(RECENT_FUNCTION_LIMIT);
+    list.drain(..excess);
+    true
+}
+
+impl EditorState {
+    /// Only Production keeps a recent functions list.
+    pub(crate) fn keeps_recent_functions(&self) -> bool {
+        self.active_workspace == Workspace::Production
+    }
+
+    /// The active workspace's recent functions, newest first and as many as
+    /// the preference shows; `None` where the workspace keeps no list.
+    pub(crate) fn recent_design_rows(&self) -> Option<Vec<DesignRow>> {
+        self.keeps_recent_functions().then(|| {
+            let rows = self.recent_design_functions.iter().rev().filter_map(|key| DesignRow::from_key(key));
+            rows.take(self.recent_functions_shown as usize).collect()
+        })
+    }
+
+    /// The active workspace's recent function keys; `None` where it keeps no
+    /// list.
+    pub(crate) fn recent_functions_mut(&mut self) -> Option<&mut Vec<String>> {
+        self.keeps_recent_functions().then_some(&mut self.recent_design_functions)
+    }
+}
+
 impl UiProjectView {
     /// The remembered projects a Recent list offers, most recently opened
     /// first.
@@ -5193,6 +5340,287 @@ impl UiProjectView {
     /// are ways of leaving it.
     pub(crate) fn recent_projects(&self) -> impl Iterator<Item = &UiTrackedProjectEntry> {
         self.tracked_projects.iter().filter(|entry| !entry.is_active).take(RECENT_PROJECT_LIMIT)
+    }
+}
+
+/// Which row each of the scenario editor's grids has selected.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ScenarioGridSelections {
+    pub(crate) constants: Option<usize>,
+    pub(crate) rocktype_costs: Option<usize>,
+    pub(crate) methods: Option<usize>,
+    pub(crate) elements: Option<usize>,
+    pub(crate) revenues: Option<usize>,
+    pub(crate) rosette: Option<usize>,
+}
+
+/// The scenario editor's tabs, in display order.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ScenarioTab {
+    #[default]
+    Inputs,
+    Constants,
+    MiningCosts,
+    ProcessingCosts,
+    Revenues,
+    Constraints,
+    Outputs,
+}
+
+impl ScenarioTab {
+    pub(crate) const ALL: [Self; 7] = [
+        Self::Inputs,
+        Self::Constants,
+        Self::MiningCosts,
+        Self::ProcessingCosts,
+        Self::Revenues,
+        Self::Constraints,
+        Self::Outputs,
+    ];
+
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::Inputs => tr!("opt-section-inputs"),
+            Self::Constants => tr!("opt-section-constants"),
+            Self::MiningCosts => tr!("opt-section-mining-costs"),
+            Self::ProcessingCosts => tr!("opt-section-processing-costs"),
+            Self::Revenues => tr!("opt-section-revenues"),
+            Self::Constraints => tr!("opt-section-constraints"),
+            Self::Outputs => tr!("opt-section-outputs"),
+        }
+    }
+}
+
+/// The scenario the editor window is working on, apart from the saved copy:
+/// Save keeps it as the new saved copy and the window stays open; closing
+/// without saving leaves the saved one as it was.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScenarioDraft {
+    pub(crate) scenario: OptimizationScenario,
+    /// The scenario as last saved (or as it was when the editor opened).
+    pub(crate) saved: OptimizationScenario,
+    /// Not in the scenarios list yet: the first save adds it.
+    pub(crate) is_new: bool,
+    /// Asking whether to keep unsaved changes before closing.
+    pub(crate) confirm_close: bool,
+    pub(crate) selections: ScenarioGridSelections,
+    pub(crate) tab: ScenarioTab,
+}
+
+impl ScenarioDraft {
+    pub(crate) fn new(scenario: OptimizationScenario, is_new: bool) -> Self {
+        Self {
+            saved: scenario.clone(),
+            scenario,
+            is_new,
+            confirm_close: false,
+            selections: ScenarioGridSelections::default(),
+            tab: ScenarioTab::default(),
+        }
+    }
+
+    /// Whether the editor holds changes that are not saved.
+    pub(crate) fn dirty(&self) -> bool {
+        self.scenario != self.saved
+    }
+}
+
+/// Where a scenario's run stands. A finished run keeps the fingerprint of the
+/// settings it ran with, so a later edit shows as stale.
+#[derive(Clone, Debug)]
+pub(crate) enum RunState {
+    /// Waiting for a running scenario to finish.
+    Queued,
+    Running {
+        progress: crate::model::progress::Progress,
+    },
+    Finished {
+        fingerprint: u64,
+    },
+}
+
+/// What the scenarios list shows beside a scenario.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum ScenarioStatus {
+    NeverRun,
+    /// Run, and unchanged since.
+    UpToDate,
+    /// Run, but changed since: it has to be run again.
+    Stale,
+    Queued,
+    /// Running, with the fraction done.
+    Running(f32),
+}
+
+/// How many scenarios run at once; the rest queue. Memory, not cores, is the
+/// limit: each run holds several values per grid cell and the solver's graph.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) const MAX_CONCURRENT_RUNS: usize = 2;
+#[cfg(target_arch = "wasm32")]
+pub(crate) const MAX_CONCURRENT_RUNS: usize = 1;
+
+/// What pit optimization holds while the app runs.
+///
+/// A working copy of the active project's scenarios, read from it the first
+/// time the list is opened and handed back on every change; reset when another
+/// project opens. Runs are not saved: what a run produced is gone with the
+/// session.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct OptimizationState {
+    pub(crate) scenarios: Vec<OptimizationScenario>,
+    /// The scenarios list window. Hidden while a scenario is being edited.
+    pub(crate) list_open: bool,
+    pub(crate) draft: Option<ScenarioDraft>,
+    pub(crate) next_scenario_id: u64,
+    pub(crate) runs: HashMap<u64, RunState>,
+    /// Runs waiting for their block model or topography to be read back in
+    /// before they start.
+    pub(crate) awaiting_restore: HashSet<u64>,
+    /// What each scenario's last run produced, for stage 3 to read back.
+    pub(crate) results: HashMap<u64, std::sync::Arc<crate::model::optimization_run::RunResult>>,
+    /// The project's scenarios have been read into `scenarios`. They are read
+    /// the first time the list opens.
+    pub(crate) loaded_from_file: bool,
+    /// Set while the user is clicking the starting point of a directional
+    /// shell in the viewport. The editor steps aside meanwhile.
+    pub(crate) start_pick: Option<ShellStartPick>,
+    /// A pick was up on the last frame drawn, so an Escape still pending on the
+    /// first frame without it belongs to the pick, not to the editor.
+    pub(crate) pick_was_active: bool,
+    /// The Results window, when open.
+    pub(crate) results_view: Option<ResultsView>,
+    /// The Results table's columns per report (scenario name), saved with the
+    /// scenarios; a report not in here shows the default columns.
+    pub(crate) report_columns: std::collections::BTreeMap<String, Vec<String>>,
+    /// Asking whether to load the unloaded inputs a run or pick needs.
+    pub(crate) load_prompt: Option<LoadPrompt>,
+}
+
+/// Inputs of an optimization that are unloaded, and what to do once they are
+/// loaded (hidden, and kept loaded for later runs).
+#[derive(Clone, Debug)]
+pub(crate) struct LoadPrompt {
+    /// The block model and topography, with their names.
+    pub(crate) items: Vec<(crate::model::ItemRef, String)>,
+    pub(crate) then: LoadThen,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum LoadThen {
+    /// Run these scenarios.
+    Run(Vec<u64>),
+    /// Pick the directional shells' starting point.
+    Pick,
+}
+
+/// The Results window: a run's report, charted and tabled.
+#[derive(Clone, Debug)]
+pub(crate) struct ResultsView {
+    pub(crate) source: ResultsSource,
+    pub(crate) basis: crate::model::optimization_run::report::Basis,
+    /// One destination, or every one together (`None`).
+    pub(crate) destination: Option<usize>,
+    /// The shell picked in the chart, 0-based.
+    pub(crate) selected: Option<usize>,
+    /// Showing only some shells, or choosing them.
+    pub(crate) filter: ShellFilter,
+}
+
+/// The Results window's shell filter: off, being chosen in the chart, or applied.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) enum ShellFilter {
+    #[default]
+    Off,
+    /// Clicking a column of the chart adds its shell; clicking it again takes
+    /// it out. 0-based shells, in the order clicked.
+    Choosing(Vec<usize>),
+    /// The chart and table show these shells only (0-based, ascending), and an
+    /// increment is measured from the chosen shell before.
+    Applied(Vec<usize>),
+}
+
+impl ResultsView {
+    pub(crate) fn new(source: ResultsSource) -> Self {
+        Self {
+            source,
+            basis: Default::default(),
+            destination: None,
+            selected: None,
+            filter: ShellFilter::Off,
+        }
+    }
+}
+
+/// Where the Results window's report comes from.
+#[derive(Clone, Debug)]
+pub(crate) enum ResultsSource {
+    /// The last run of a scenario this session.
+    Run(u64),
+    /// A report CSV read from a file.
+    File {
+        name: String,
+        report: std::sync::Arc<crate::model::optimization_run::report::OptimizationReport>,
+    },
+}
+
+impl OptimizationState {
+    /// The report the Results window shows, and its title.
+    pub(crate) fn results_report(&self) -> Option<(String, std::sync::Arc<crate::model::optimization_run::report::OptimizationReport>)> {
+        match &self.results_view.as_ref()?.source {
+            ResultsSource::Run(id) => {
+                let report = std::sync::Arc::clone(&self.results.get(id)?.report);
+                let name = self
+                    .scenarios
+                    .iter()
+                    .find(|scenario| scenario.id == *id)
+                    .map_or_else(|| report.scenario.clone(), |scenario| scenario.name.clone());
+                Some((name, report))
+            }
+            ResultsSource::File { name, report } => Some((name.clone(), std::sync::Arc::clone(report))),
+        }
+    }
+}
+
+/// A directional-shell starting point being picked from the viewport.
+#[derive(Clone, Debug)]
+pub(crate) struct ShellStartPick {
+    /// The block model the click must land on; shown alone for the pick
+    /// (`EditorState::isolated_entity`), even when its eye is shut.
+    pub(crate) block_model: crate::model::block_model::BlockModelId,
+    /// Height the old point's marker is drawn at: the top of the model, so it
+    /// stays inside the depth range the camera fits to the model. Never saved.
+    pub(crate) marker_z: f64,
+}
+
+impl OptimizationState {
+    pub(crate) fn dialog_open(&self) -> bool {
+        self.list_open || self.draft.is_some()
+    }
+
+    /// An id no scenario in the list carries.
+    pub(crate) fn fresh_id(&mut self) -> u64 {
+        let id = self.next_scenario_id.max(self.scenarios.iter().map(|scenario| scenario.id + 1).max().unwrap_or(0));
+        self.next_scenario_id = id + 1;
+        id
+    }
+
+    pub(crate) fn status(&self, scenario: &OptimizationScenario) -> ScenarioStatus {
+        match self.runs.get(&scenario.id) {
+            None => ScenarioStatus::NeverRun,
+            Some(RunState::Queued) => ScenarioStatus::Queued,
+            Some(RunState::Running { progress, .. }) => ScenarioStatus::Running(progress.snapshot().map_or(0.0, |snapshot| snapshot.fraction)),
+            Some(RunState::Finished { fingerprint }) if *fingerprint == scenario.fingerprint() => ScenarioStatus::UpToDate,
+            Some(RunState::Finished { .. }) => ScenarioStatus::Stale,
+        }
+    }
+
+    /// Whether a run is going or waiting, so the list keeps repainting.
+    pub(crate) fn any_running(&self) -> bool {
+        self.runs.values().any(|run| matches!(run, RunState::Queued | RunState::Running { .. }))
+    }
+
+    pub(crate) fn running_count(&self) -> usize {
+        self.runs.values().filter(|run| matches!(run, RunState::Running { .. })).count()
     }
 }
 
@@ -5413,6 +5841,9 @@ pub(crate) struct ProjectedContour {
     pub(crate) major: bool,
     pub(crate) points: Vec<Option<(f32, f32)>>,
     pub(crate) closed: bool,
+    /// A major line's label spots, fixed to the ground: where each stands and
+    /// a point a little further along the line, in window pixels.
+    pub(crate) labels: Vec<((f32, f32), (f32, f32))>,
 }
 
 /// The hole under the pointer and where its collar stands on screen.
@@ -5470,7 +5901,6 @@ pub(crate) enum PropertyTab {
     Camera,
     Performance,
     Developer,
-    Drillholes,
     Modelling,
 }
 

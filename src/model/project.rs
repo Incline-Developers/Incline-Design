@@ -285,8 +285,9 @@ pub(crate) enum SurfaceMethod {
     ThinPlateSpline,
 }
 
-/// The Modelling branch's project-level settings for Build Surface. The
-/// defaults build the exact spline; an unknown field is ignored on read.
+/// The project-level settings for Build Surface, under Preferences,
+/// Modelling. The defaults build the exact spline; an unknown field is
+/// ignored on read.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct ModellingSettings {
@@ -389,6 +390,10 @@ pub(crate) struct ProjectFile {
     /// folders from.
     #[serde(default)]
     pub(crate) folders: FolderRegistry,
+    /// The project's pit optimization scenarios and Results column choices,
+    /// saved in the OMF project record so each project keeps its own.
+    #[serde(default)]
+    pub(crate) optimization: crate::model::optimization::ScenarioFile,
 }
 
 #[derive(Clone, Debug)]
@@ -486,6 +491,9 @@ impl OpenProject {
         self.content.epoch().hash(&mut hasher);
         // Folder names, so an empty folder still counts as unsaved work.
         self.project.folders.hash_into(&mut hasher);
+        // Hashed, not epoch-touched: an undo restores the epoch, and must not
+        // hide a scenario edit it did not record.
+        serde_json::to_string(&self.project.optimization).unwrap_or_default().hash(&mut hasher);
         self.project
             .document
             .content_hash(&mut self.content_hash_cache.borrow_mut(), &self.project.folders)
@@ -519,6 +527,13 @@ impl OpenProject {
         self.savepoint_revision = self.savepoint_revision.wrapping_add(1);
         self.dirty_cache = RefCell::new(None);
         self.layer_dirty_cache = RefCell::new(None);
+    }
+
+    /// Replace the project's optimization scenarios; the project reads as
+    /// unsaved until the next save writes them.
+    pub(crate) fn set_optimization(&mut self, optimization: crate::model::optimization::ScenarioFile) {
+        self.project.optimization = optimization;
+        self.dirty_cache = RefCell::new(None);
     }
 
     pub(crate) fn mark_saved(&mut self) {
@@ -742,6 +757,7 @@ pub(crate) fn new_empty(path: Option<PathBuf>) -> ProjectFile {
             ..Default::default()
         },
         folders: FolderRegistry::default(),
+        optimization: Default::default(),
     }
 }
 

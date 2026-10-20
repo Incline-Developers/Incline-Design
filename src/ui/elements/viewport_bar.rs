@@ -87,7 +87,7 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
                 // an explicit scope prevents an earlier conditional panel from
                 // shifting the ids of these persistent controls on that rerun.
                 let contents_id = ui.make_persistent_id("viewport_bar_contents");
-                ui.scope_builder(egui::UiBuilder::new().id(contents_id).max_rect(strip), |ui| {
+                ui.scope_builder(egui::UiBuilder::new().scope_id(contents_id).max_rect(strip), |ui| {
                     let side = strip.height();
                     // Deliberately *not* raising `interact_size.y` to match: the
                     // combo box and the number field in the centre take their
@@ -167,7 +167,7 @@ fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
     let save = ui.add_enabled(
         has_unsaved,
         ToolbarButton::new(
-            egui::Image::new(themed_icon!(ui, "save_project.svg")),
+            egui::Image::new(themed_icon!(ui, "save_project_tool.svg")),
             format!("{} ({PRIMARY_MODIFIER}S)", tr!("menu-file-save-project")),
         )
         .id_salt("save_project")
@@ -380,10 +380,9 @@ fn draw_drawing_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &
 /// place against the window's edge whichever tab is open - how the scene is
 /// drawn, then what the camera is asked - and whatever the open workspace adds
 /// is placed to the left of them, parted from them by [`divider`]. Drill &
-/// Blast's reviews of the fired pattern, Geology's borehole inspector and
-/// Survey's reading of a classified cloud are the only such runs so far - see
-/// [`draw_blast_view_tools`], [`draw_geology_view_tools`] and
-/// [`draw_survey_view_tools`]; production adds nothing here, its own tools
+/// Blast's reviews of the fired pattern and Geology's borehole inspector are
+/// the only such runs so far - see [`draw_blast_view_tools`] and
+/// [`draw_geology_view_tools`]; production adds nothing here, its own tools
 /// being the toolbar and the design menus.
 fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>, side: f32) {
     draw_scene_modes(ui, editor, commands, side);
@@ -393,10 +392,6 @@ fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProj
         Workspace::DrillAndBlast => {
             divider(ui, side);
             draw_blast_view_tools(ui, editor, project, side);
-        }
-        Workspace::Survey => {
-            divider(ui, side);
-            draw_survey_view_tools(ui, editor, commands, side);
         }
         Workspace::Geology => {
             divider(ui, side);
@@ -428,33 +423,6 @@ fn draw_geology_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, side: f3
     );
     if inspector.clicked() {
         editor.show_borehole_inspector = !shown;
-    }
-}
-
-/// What Survey asks of a point cloud that has been through a ground filter:
-/// whether to read it by class. Off in every other workspace.
-///
-/// Always available, like the switches in the run beside it: it is a standing
-/// preference for how Survey draws clouds, and greying it out whenever no
-/// classified cloud happens to be loaded would make it flicker in and out as
-/// the explorer changes.
-fn draw_survey_view_tools(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>, side: f32) {
-    let enabled = editor.point_cloud_classification_colors;
-    let classification = ui.add(
-        ToolbarButton::new(
-            egui::Image::new(unthemed_icon!("classification_colors.svg")),
-            if enabled {
-                tr!("viewport-bar-hide-classification")
-            } else {
-                tr!("viewport-bar-show-classification")
-            },
-        )
-        .id_salt("point_cloud_classification_colors")
-        .button_side(side)
-        .selected(enabled),
-    );
-    if classification.clicked() {
-        commands.push(UiCommand::SetPointCloudClassificationColors(!enabled));
     }
 }
 
@@ -521,17 +489,8 @@ fn draw_camera_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
         commands.push(UiCommand::ZoomToExtents);
     }
 
-    // Outside a section Reset takes two clicks: plan where the camera stands,
-    // then everything fitted.
-    let reset_tooltip = if editor.slice_mode_enabled {
-        tr!("common-reset-view")
-    } else if editor.rotation_centre.is_some() {
-        tr!("viewport-bar-reset-view-plan-over-centre")
-    } else {
-        tr!("viewport-bar-reset-view-plan-same-distance")
-    };
     let reset = ui.add(
-        ToolbarButton::new(egui::Image::new(unthemed_icon!("reset_view.svg")), reset_tooltip)
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("reset_view.svg")), tr!("common-reset-view"))
             .id_salt("reset_view")
             .button_side(side),
     );
@@ -735,7 +694,7 @@ fn draw_blast_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, project: &
     // run is added in reverse to read left to right on screen.
     let timeline = ui.add_enabled(
         has_active_dataset,
-        ToolbarButton::new(egui::Image::new(unthemed_icon!("blast_timeline.svg")), tr!("viewport-bar-blast-timeline-placeholder"))
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("blast_timeline.svg")), tr!("viewport-bar-blast-timeline"))
             .id_salt("blast_timeline")
             .button_side(side)
             .selected(review.timeline && has_active_dataset),
@@ -749,13 +708,10 @@ fn draw_blast_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, project: &
 
     let contours = ui.add_enabled(
         has_active_dataset,
-        ToolbarButton::new(
-            egui::Image::new(unthemed_icon!("contours_of_equal_time.svg")),
-            tr!("viewport-bar-contours-equal-time-placeholder"),
-        )
-        .id_salt("contours_of_equal_time")
-        .button_side(side)
-        .selected(review.contours && has_active_dataset),
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("contours_of_equal_time.svg")), tr!("viewport-bar-contours-equal-time"))
+            .id_salt("contours_of_equal_time")
+            .button_side(side)
+            .selected(review.contours && has_active_dataset),
     );
     if contours.clicked() {
         review.contours = !review.contours;
@@ -763,13 +719,10 @@ fn draw_blast_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, project: &
 
     let relief = ui.add_enabled(
         has_active_dataset,
-        ToolbarButton::new(
-            egui::Image::new(unthemed_icon!("burden_relief_heatmap.svg")),
-            tr!("viewport-bar-burden-relief-heatmap-placeholder"),
-        )
-        .id_salt("burden_relief_heatmap")
-        .button_side(side)
-        .selected(review.relief && has_active_dataset),
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("burden_relief_heatmap.svg")), tr!("viewport-bar-burden-relief-heatmap"))
+            .id_salt("burden_relief_heatmap")
+            .button_side(side)
+            .selected(review.relief && has_active_dataset),
     );
     if relief.clicked() {
         review.relief = !review.relief;

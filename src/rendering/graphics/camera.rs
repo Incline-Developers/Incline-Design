@@ -4,10 +4,7 @@ use winit::keyboard::PhysicalKey;
 
 use super::{frustum::Frustum, *};
 use crate::{
-    rendering::{
-        camera::CameraPose,
-        pick::{clamped_range, local_vertex_world, slab_clipped_screen_segment, slab_clipped_segment, slab_screen_point},
-    },
+    rendering::pick::{clamped_range, local_vertex_world, slab_clipped_screen_segment, slab_clipped_segment, slab_screen_point},
     ui::state::ActiveTool,
 };
 
@@ -308,6 +305,9 @@ pub(super) fn eye_offset_from(centre: DVec3, eye: DVec3, basis: (DVec3, DVec3, D
     (to_centre.dot(right), to_centre.dot(up), to_centre.dot(forward))
 }
 
+/// Matches the zoom feel of the main `CameraController` (see init.rs).
+const SLICE_ZOOM_SENSITIVITY: f64 = 0.005;
+
 impl<'a> Graphics<'a> {
     pub(crate) fn process_mouse_motion(&mut self, dx: f64, dy: f64) -> bool {
         if self.fly_mode_enabled && self.mouse_pressed == Some(MouseButton::Right) {
@@ -333,6 +333,27 @@ impl<'a> Graphics<'a> {
             return true;
         }
         self.camera_controller.process_mouse(Some(MouseButton::Middle), dx, dy)
+    }
+
+    /// A trackpad's two-finger drag, in physical pixels: a pan, as a middle-drag is.
+    pub(crate) fn trackpad_pan(&mut self, dx: f64, dy: f64) -> bool {
+        self.mark_interaction();
+        self.pan_by(dx, dy)
+    }
+
+    /// A trackpad pinch, `magnification` relative (`0.1` a tenth larger): a
+    /// zoom towards the cursor, as the wheel's is.
+    pub(crate) fn trackpad_pinch(&mut self, magnification: f64) -> bool {
+        if self.fly_mode_enabled {
+            return false;
+        }
+        self.mark_interaction();
+        if let Some(slice) = self.slice_view.as_mut() {
+            slice.scroll += super::pinch_scroll(magnification, SLICE_ZOOM_SENSITIVITY);
+        } else {
+            self.camera_controller.process_pinch(magnification);
+        }
+        true
     }
 
     /// On the web every cursor move reaches the camera, even one egui claims,
@@ -662,7 +683,9 @@ impl<'a> Graphics<'a> {
             world,
             hole: Some(hole),
         });
-        let block_model = self.block_model_gpu.nearest_visible_entity_hit(ray_origin, ray_direction, hidden, frozen);
+        let block_model = self
+            .block_model_gpu
+            .nearest_visible_entity_hit(ray_origin, ray_direction, hidden, frozen, self.section_slab());
         let point_cloud = self.point_cloud_gpu.nearest_visible_entity_at_screen(
             &view_proj,
             screen,
@@ -713,7 +736,7 @@ impl<'a> Graphics<'a> {
         }
         let candidate_depth = clip.z / clip.w;
         let block_depth = crate::rendering::query::ray_through_world_point(view_proj, candidate)
-            .and_then(|(origin, direction)| self.block_model_gpu.nearest_opaque_hit(origin, direction, hidden))
+            .and_then(|(origin, direction)| self.block_model_gpu.nearest_opaque_hit(origin, direction, hidden, self.section_slab()))
             .filter(|point| self.slab_contains(*point))
             .and_then(|point| {
                 let clip = *view_proj * point.extend(1.0);
@@ -986,7 +1009,7 @@ impl<'a> Graphics<'a> {
                 None,
             )
             .map(|(_, world)| world);
-            let block_model_hit = self.block_model_gpu.nearest_visible_hit(ray_origin, direction, hidden, frozen);
+            let block_model_hit = self.block_model_gpu.nearest_visible_hit(ray_origin, direction, hidden, frozen, self.section_slab());
             // A point cloud has no ray-castable surface, so pivot on the nearest
             // splat under the cursor instead - otherwise orbiting over a selected
             // cloud spins about a stale camera-target depth.
@@ -1333,46 +1356,6 @@ impl<'a> Graphics<'a> {
         self.rebase_scene_origin(center);
         // Update znear/zfar immediately so snap/pick work before the first render.
         self.fit_depth_to_scene(document, triangulations, block_models, drill_holes, point_clouds, hidden);
-    }
-
-    /// Square the view up to plan where it stands: looking straight down on
-    /// the fixed centre of rotation (world space) when one is set, else on the
-    /// camera's own target, from the same distance, so the zoom holds.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn plan_view_keeping_distance(
-        &mut self,
-        rotation_centre: Option<DVec3>,
-        document: &Document,
-        triangulations: &[OpenTriangulation],
-        block_models: &[OpenBlockModel],
-        drill_holes: &[OpenDrillHoleDataset],
-        point_clouds: &[OpenPointCloud],
-        hidden: &HashSet<SceneEntityId>,
-    ) {
-        self.camera_controller.cancel_view_transition();
-        self.camera_controller.cancel_orbit();
-        self.orbit_marker = None;
-        self.camera = self.plan_camera_keeping_distance(rotation_centre);
-        // Update znear/zfar immediately so snap/pick work before the first render.
-        self.fit_depth_to_scene(document, triangulations, block_models, drill_holes, point_clouds, hidden);
-    }
-
-    /// Where [`Self::plan_view_keeping_distance`] would put the camera,
-    /// without moving it.
-    pub(crate) fn plan_pose_keeping_distance(&self, rotation_centre: Option<DVec3>) -> CameraPose {
-        self.plan_camera_keeping_distance(rotation_centre).pose()
-    }
-
-    pub(crate) fn camera_pose(&self) -> CameraPose {
-        self.camera.pose()
-    }
-
-    fn plan_camera_keeping_distance(&self, rotation_centre: Option<DVec3>) -> Camera {
-        // The camera works in exaggerated space; the centre is a world point.
-        let centre = rotation_centre.map_or(self.camera.target(), |centre| self.exaggerate_point(centre));
-        let mut camera = self.camera.clone();
-        camera.reset_to_plan_view_keeping_distance(centre);
-        camera
     }
 
     /// Move the floating origin to the framed centre. Vertical exaggeration
@@ -1807,8 +1790,6 @@ impl<'a> Graphics<'a> {
             return;
         };
         let pending = slice.has_pending_updates();
-        // Matches the zoom feel of the main `CameraController` (see init.rs).
-        const SLICE_ZOOM_SENSITIVITY: f64 = 0.005;
         const SLICE_WALK_SECONDS_PER_NOTCH: f64 = 0.25;
         const WHEEL_NOTCH_PIXELS: f64 = 100.0;
         let step = dt.as_secs_f64().min(0.1);
@@ -1918,13 +1899,24 @@ impl<'a> Graphics<'a> {
 
     pub(crate) fn input(&mut self, event: &WindowEvent) -> bool {
         match event {
-            WindowEvent::MouseWheel { delta, .. } => {
+            WindowEvent::MouseWheel { delta, phase, .. } => {
+                if self.scroll_glide.is_glide(*phase) {
+                    return true;
+                }
                 // Zoom is applied and cleared within a single update tick, so
                 // `needs_continuous_redraw` only briefly reflects it and the
                 // low-quality volume path can be missed for a scroll burst.
                 // Mark interaction directly so the cooldown covers the whole
                 // burst (and 150 ms after), like camera drags and resizes.
                 self.mark_interaction();
+                // A trackpad pans with two fingers and zooms with a pinch;
+                // Ctrl turns its scroll back into a zoom where no pinch arrives.
+                if !self.fly_mode_enabled
+                    && !self.scroll_zooms
+                    && let Some((dx, dy)) = super::trackpad_drag(delta)
+                {
+                    return self.trackpad_pan(dx, dy);
+                }
                 if let Some(slice) = self.slice_view.as_mut() {
                     slice.scroll += super::scroll_pixels(delta);
                 } else if self.fly_mode_enabled {
@@ -1934,6 +1926,7 @@ impl<'a> Graphics<'a> {
                 }
                 true
             }
+            WindowEvent::PinchGesture { delta, .. } => self.trackpad_pinch(*delta),
             WindowEvent::MouseInput { button, state, .. } => {
                 let pressing = *state == ElementState::Pressed;
                 let camera_button = matches!(button, MouseButton::Left | MouseButton::Middle | MouseButton::Right);

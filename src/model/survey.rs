@@ -237,8 +237,8 @@ pub(crate) struct SystemDefinition {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum SystemKind {
-    /// An entry in the coordinate system registry.
-    Registry { code: u16 },
+    /// An entry in the coordinate system registry, or `None` until one is chosen.
+    Registry { code: Option<u16> },
     /// A grid defined by its relationship to another saved system.
     Grid { parent: String, transform: MineGridTransform },
 }
@@ -247,10 +247,29 @@ impl SystemDefinition {
     /// A one-line description of what the system is, for a list row.
     pub(crate) fn summary(&self) -> String {
         match &self.kind {
-            SystemKind::Registry { code } => crate::model::crs::registry_name(*code).map_or_else(|| format!("EPSG:{code}"), |name| format!("{name} (EPSG:{code})")),
+            SystemKind::Registry { code: Some(code) } => crate::model::crs::registry_name(*code).map_or_else(|| format!("EPSG:{code}"), |name| format!("{name} (EPSG:{code})")),
+            SystemKind::Registry { code: None } => crate::i18n::tr!("survey-no-system"),
             SystemKind::Grid { parent, .. } => crate::i18n::tr!("survey-kind-grid", parent = parent.clone()),
         }
     }
+}
+
+/// Check that `name` and every grid parent under it exist, with no grid its own
+/// ancestor. A registry entry with no system chosen yet passes: the list can
+/// hold it, and it only fails once something tries to use it.
+pub(crate) fn check_parents(name: &str, definitions: &[SystemDefinition]) -> anyhow::Result<()> {
+    let mut current = name;
+    for _ in 0..=definitions.len() {
+        let definition = definitions
+            .iter()
+            .find(|definition| definition.name == current)
+            .ok_or_else(|| anyhow::anyhow!("{}", crate::i18n::tr!("survey-system-missing")))?;
+        match &definition.kind {
+            SystemKind::Registry { .. } => return Ok(()),
+            SystemKind::Grid { parent, .. } => current = parent,
+        }
+    }
+    anyhow::bail!("{}", crate::i18n::tr!("survey-system-cycle", name = name.to_owned()))
 }
 
 /// Build the coordinate system `name` refers to, following its parents down.
@@ -267,7 +286,8 @@ pub(crate) fn resolve_system(name: &str, definitions: &[SystemDefinition]) -> an
             .find(|definition| definition.name == name)
             .ok_or_else(|| anyhow::anyhow!("{}", crate::i18n::tr!("survey-system-missing")))?;
         Ok(match &definition.kind {
-            SystemKind::Registry { code } => CoordinateSystem::Epsg(*code),
+            SystemKind::Registry { code: Some(code) } => CoordinateSystem::Epsg(*code),
+            SystemKind::Registry { code: None } => anyhow::bail!("{}", crate::i18n::tr!("survey-pick-registry")),
             SystemKind::Grid { parent, transform } => CoordinateSystem::MineGrid {
                 name: definition.name.clone(),
                 parent: Box::new(resolve(parent, definitions, depth + 1)?),

@@ -6,9 +6,7 @@ use crate::{
     ui::{
         EditorState, UiCommand, UiProjectView,
         fonts::bold,
-        state::{
-            ExplorerRow, ExplorerSection, PropertyTab, RenameTarget, UiBlockModelEntry, UiDrillHoleEntry, UiLayerEntry, UiPointCloudEntry, UiProjectEntry, UiRasterTextureEntry,
-        },
+        state::{ExplorerRow, ExplorerSection, RenameTarget, UiBlockModelEntry, UiDrillHoleEntry, UiLayerEntry, UiPointCloudEntry, UiProjectEntry, UiRasterTextureEntry},
         unthemed_icon,
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup, context_menu_separator, context_submenu},
@@ -33,7 +31,6 @@ const HEADER_RASTERS: egui::Color32 = egui::Color32::from_rgb(0x2F, 0x91, 0x99);
 const HEADER_POINT_CLOUDS: egui::Color32 = egui::Color32::from_rgb(0xC9, 0x3B, 0x2C);
 const HEADER_BLOCK_MODELS: egui::Color32 = egui::Color32::from_rgb(0x69, 0x8F, 0x3F);
 const HEADER_DRILL_HOLES: egui::Color32 = egui::Color32::from_rgb(0xDB, 0x5F, 0x58);
-const HEADER_MODELLING: egui::Color32 = egui::Color32::from_rgb(0xD9, 0x8E, 0x2B);
 
 /// What every dragged explorer row has in common: the folder member it
 /// stands for, tag and all.
@@ -228,7 +225,7 @@ fn tagged_count<T: SectionEntry>(items: &[T], section: SectionKind) -> usize {
 fn folder_group<Z: DropZone>(ui: &mut egui::Ui, section: SectionKind, folder: &Folder, commands: &mut Vec<UiCommand>, body: impl FnOnce(&mut egui::Ui, &mut Vec<UiCommand>)) {
     // Keyed by section and id, not by name, so renaming a folder leaves it as
     // open or as shut as the user left it.
-    let (toggle, heading, _) = ExplorerHeader::new(egui::Id::new((section.key(), folder.id)), folder.name.as_str()).show(ui, |ui| body(ui, commands));
+    let (toggle, heading, _) = ExplorerHeader::new(egui::Id::unique((section.key(), folder.id)), folder.name.as_str()).show(ui, |ui| body(ui, commands));
     let row = toggle.union(heading.inner);
     if let Some(member) = Z::dropped(&row, section) {
         // `section` is this zone's own section, not necessarily where
@@ -471,7 +468,7 @@ fn row_menu_delete(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, row: RowSta
 }
 
 /// Everything a layer row reads besides the layer itself, bundled so the
-/// row builder Designs and Modelling share takes it as one argument.
+/// row builder takes it as one argument.
 struct LayerRowContext<'a> {
     /// The project the layer belongs to; the discard row reads its path.
     entry: &'a UiProjectEntry,
@@ -491,9 +488,9 @@ struct LayerRowContext<'a> {
     selected_layers: &'a std::collections::HashSet<LayerId>,
 }
 
-/// One layer row: eye, padlock, drag payload and right-click menu. The same
-/// row under Designs and under Modelling - which section it belongs to is
-/// read off the layer, and the drag payload is always [`LayerDrag`].
+/// One layer row: eye, padlock, drag payload and right-click menu. Which
+/// section it belongs to is read off the layer, and the drag payload is
+/// always [`LayerDrag`].
 fn layer_row(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, layer: &UiLayerEntry, rows: &mut Vec<ExplorerRow>, cx: &LayerRowContext<'_>) {
     // Only the discard row reads the project entry, and it is native-only.
     #[cfg(target_arch = "wasm32")]
@@ -505,7 +502,7 @@ fn layer_row(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, layer: &UiLayerEn
     let layer_label = entry_label(&layer_name, layer.is_loaded);
     // Named `row` rather than `entry`: `entry` is the enclosing project this
     // layer belongs to.
-    let row = ExplorerEntry::new(egui::Id::new(("explorer_layer", layer_id)), layer_label)
+    let row = ExplorerEntry::new(egui::Id::unique(("explorer_layer", layer_id)), layer_label)
         .dimmed(!layer.is_loaded)
         .selected(cx.selected_layers.contains(&layer_id))
         .draggable(cx.draggable)
@@ -607,7 +604,7 @@ impl<T: SectionEntry, F: FnMut(&mut egui::Ui, &mut Vec<UiCommand>, &mut Vec<Expl
 
 /// Draw one section's rows: a group per folder, then whatever sits at the
 /// section root. `sources` is one [`RowSource`] per kind the section admits,
-/// so a section holding two kinds (Modelling) draws both under the one
+/// so a section holding several kinds draws them all under the one
 /// heading and the one collection, in one pass.
 fn draw_section_body<Z: DropZone>(
     ui: &mut egui::Ui,
@@ -819,7 +816,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                         let rows_draggable = !ui.ctx().input(|input| input.any_touches());
 
                         let designs_dirty = project.projects.first().is_some_and(|entry| entry.designs_dirty);
-                        let (designs_header_toggle, designs_header, _) = ExplorerHeader::new(egui::Id::new("designs_collapse"), tr!("common-designs"))
+                        let (designs_header_toggle, designs_header, _) = ExplorerHeader::new(egui::Id::unique("designs_collapse"), tr!("common-designs"))
                             .icon(unthemed_icon!("layer.svg"))
                             .color(HEADER_DESIGNS)
                             .dirty(designs_dirty)
@@ -861,10 +858,8 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                             commands,
                         );
 
-                        // Hoisted above Triangulations and Modelling, which draw
-                        // the same row. `mut` so the two `.show()` calls below can
-                        // each borrow it as `&mut`; they run one after the other,
-                        // so the borrows never overlap.
+                        // Hoisted above Triangulations, which draws it. `mut` so the
+                        // `.show()` call below can borrow it as `&mut`.
                         let mut render_tri_entry = |ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, rows: &mut Vec<ExplorerRow>, tri: &crate::ui::UiTriangulationEntry| {
                             rows.push(ExplorerRow::Entity(SceneEntityId::Triangulation(tri.id)));
                             let source_suffix = tri
@@ -881,7 +876,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
 
                             let tri_handle = SceneEntityId::Triangulation(tri_id);
                             let tri_locked = frozen_handles.contains(&tri_handle);
-                            let row = ExplorerEntry::new(egui::Id::new(("explorer_triangulation", tri.id)), label)
+                            let row = ExplorerEntry::new(egui::Id::unique(("explorer_triangulation", tri.id)), label)
                                 .dimmed(!tri.is_loaded)
                                 .selected(selected_handles.contains(&SceneEntityId::Triangulation(tri_id)))
                                 .draggable(rows_draggable)
@@ -962,28 +957,29 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
 
                         let triangulations_dirty =
                             project.triangulations_membership_dirty || project.triangulations.iter().any(|item| item.section == SectionKind::Triangulations && item.dirty);
-                        let (triangulations_header_toggle, triangulations_header, _) = ExplorerHeader::new(egui::Id::new("triangulations_collapse"), tr!("common-triangulations"))
-                            .icon(unthemed_icon!("triangulation.svg"))
-                            .color(HEADER_TRIANGULATIONS)
-                            .dirty(triangulations_dirty)
-                            .show(ui, |ui| {
-                                let triangulation_folders = project.folders.folders(SectionKind::Triangulations);
-                                if tagged_count(&project.triangulations, SectionKind::Triangulations) == 0 && triangulation_folders.is_empty() {
-                                    explorer_note(ui, tr!("common-no-triangulations"));
-                                }
-                                let mut triangulations_source = Rows {
-                                    items: &project.triangulations,
-                                    draw: &mut render_tri_entry,
-                                };
-                                draw_section_body::<(TriangulationDrag,)>(
-                                    ui,
-                                    SectionKind::Triangulations,
-                                    triangulation_folders,
-                                    commands,
-                                    &mut rows,
-                                    &mut [&mut triangulations_source],
-                                );
-                            });
+                        let (triangulations_header_toggle, triangulations_header, _) =
+                            ExplorerHeader::new(egui::Id::unique("triangulations_collapse"), tr!("common-triangulations"))
+                                .icon(unthemed_icon!("triangulation.svg"))
+                                .color(HEADER_TRIANGULATIONS)
+                                .dirty(triangulations_dirty)
+                                .show(ui, |ui| {
+                                    let triangulation_folders = project.folders.folders(SectionKind::Triangulations);
+                                    if tagged_count(&project.triangulations, SectionKind::Triangulations) == 0 && triangulation_folders.is_empty() {
+                                        explorer_note(ui, tr!("common-no-triangulations"));
+                                    }
+                                    let mut triangulations_source = Rows {
+                                        items: &project.triangulations,
+                                        draw: &mut render_tri_entry,
+                                    };
+                                    draw_section_body::<(TriangulationDrag,)>(
+                                        ui,
+                                        SectionKind::Triangulations,
+                                        triangulation_folders,
+                                        commands,
+                                        &mut rows,
+                                        &mut [&mut triangulations_source],
+                                    );
+                                });
                         let triangulations_row = triangulations_header_toggle.union(triangulations_header.inner);
                         attach_header_drop::<(TriangulationDrag,)>(ui, &triangulations_row, SectionKind::Triangulations, commands);
                         section_heading_menu(
@@ -994,7 +990,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                         );
 
                         let rasters_dirty = project.rasters_membership_dirty || project.raster_textures.iter().any(|item| item.dirty);
-                        let (rasters_header_toggle, rasters_header, _) = ExplorerHeader::new("rasters_collapse".into(), tr!("common-rasters"))
+                        let (rasters_header_toggle, rasters_header, _) = ExplorerHeader::new(egui::Id::unique("rasters_collapse"), tr!("common-rasters"))
                             .icon(unthemed_icon!("raster.svg"))
                             .color(HEADER_RASTERS)
                             .dirty(rasters_dirty)
@@ -1028,7 +1024,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                     let raster_handle = SceneEntityId::Raster(raster.id);
                                     rows.push(ExplorerRow::Entity(raster_handle));
                                     let raster_locked = locked_rasters.contains(&raster.id);
-                                    let row = ExplorerEntry::new(egui::Id::new(("explorer_raster", raster.id)), label)
+                                    let row = ExplorerEntry::new(egui::Id::unique(("explorer_raster", raster.id)), label)
                                         .dimmed(!raster.is_loaded)
                                         .selected(selected_handles.contains(&raster_handle))
                                         .draggable(rows_draggable)
@@ -1113,7 +1109,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                         );
 
                         let point_clouds_dirty = project.point_clouds_membership_dirty || project.point_clouds.iter().any(|item| item.dirty);
-                        let (point_clouds_header_toggle, point_clouds_header, _) = ExplorerHeader::new(egui::Id::new("point_clouds_collapse"), tr!("common-point-clouds"))
+                        let (point_clouds_header_toggle, point_clouds_header, _) = ExplorerHeader::new(egui::Id::unique("point_clouds_collapse"), tr!("common-point-clouds"))
                             .icon(unthemed_icon!("section_point_clouds.svg"))
                             .color(HEADER_POINT_CLOUDS)
                             .dirty(point_clouds_dirty)
@@ -1140,7 +1136,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                     let cloud_locked = frozen_handles.contains(&SceneEntityId::PointCloud(point_cloud.id));
                                     let cloud_handle = SceneEntityId::PointCloud(point_cloud.id);
                                     rows.push(ExplorerRow::Entity(cloud_handle));
-                                    let row = ExplorerEntry::new(egui::Id::new(("explorer_point_cloud", point_cloud.id)), label)
+                                    let row = ExplorerEntry::new(egui::Id::unique(("explorer_point_cloud", point_cloud.id)), label)
                                         .draggable(rows_draggable)
                                         .dimmed(!point_cloud.is_loaded)
                                         .selected(selected_handles.contains(&cloud_handle))
@@ -1217,7 +1213,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                         );
 
                         let block_models_dirty = project.block_models_membership_dirty || project.block_models.iter().any(|item| item.dirty);
-                        let (block_models_header_toggle, block_models_header, _) = ExplorerHeader::new(egui::Id::new("block_models_collapse"), tr!("common-block-models"))
+                        let (block_models_header_toggle, block_models_header, _) = ExplorerHeader::new(egui::Id::unique("block_models_collapse"), tr!("common-block-models"))
                             .icon(unthemed_icon!("section_block_models.svg"))
                             .color(HEADER_BLOCK_MODELS)
                             .dirty(block_models_dirty)
@@ -1234,7 +1230,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                     let label_text = format!("{}{dirty_marker}", block_model.name);
                                     let label = entry_label(&label_text, block_model.is_loaded);
                                     let model_locked = frozen_handles.contains(&SceneEntityId::BlockModel(block_model.id));
-                                    let row = ExplorerEntry::new(egui::Id::new(("explorer_block_model", block_model.id)), label)
+                                    let row = ExplorerEntry::new(egui::Id::unique(("explorer_block_model", block_model.id)), label)
                                         .dimmed(!block_model.is_loaded)
                                         .selected(is_selected)
                                         .draggable(rows_draggable)
@@ -1320,7 +1316,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                         );
 
                         let drill_holes_dirty = project.drill_holes_membership_dirty || project.drill_holes.iter().any(|item| item.dirty);
-                        let (drill_holes_header_toggle, drill_holes_header, _) = ExplorerHeader::new(egui::Id::new("drill_holes_collapse"), tr!("ws-menubar-drillholes"))
+                        let (drill_holes_header_toggle, drill_holes_header, _) = ExplorerHeader::new(egui::Id::unique("drill_holes_collapse"), tr!("ws-menubar-drillholes"))
                             .icon(unthemed_icon!("drill_hole.svg"))
                             .color(HEADER_DRILL_HOLES)
                             .dirty(drill_holes_dirty)
@@ -1347,7 +1343,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                     let dataset_handle = SceneEntityId::DrillHole(dataset.id);
                                     rows.push(ExplorerRow::Entity(dataset_handle));
                                     let dataset_locked = frozen_handles.contains(&dataset_handle);
-                                    let row = ExplorerEntry::new(egui::Id::new(("explorer_drill_hole", dataset.id)), label)
+                                    let row = ExplorerEntry::new(egui::Id::unique(("explorer_drill_hole", dataset.id)), label)
                                         .draggable(rows_draggable)
                                         .dimmed(!dataset.is_loaded)
                                         .selected(selected_handles.contains(&dataset_handle))
@@ -1423,84 +1419,6 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                             &drill_holes_row,
                             ExplorerSection::DrillHoles,
                             tagged_count(&project.drill_holes, SectionKind::DrillHoles),
-                            commands,
-                        );
-
-                        // Modelling holds what the project derives from its data,
-                        // such as reference points and the surfaces built from
-                        // them. Its settings leaf, always there whether or not a
-                        // project is, opens Preferences on the Modelling tab. It
-                        // admits layers and triangulations because
-                        // `SectionKind::admitted` says so; nothing here special-
-                        // cases Modelling.
-                        let modelling_dirty = project.modelling_dirty || project.triangulations.iter().any(|item| item.section == SectionKind::Modelling && item.dirty);
-                        let modelling_folders = project.folders.folders(SectionKind::Modelling);
-                        let (modelling_header_toggle, modelling_header, _) = ExplorerHeader::new(egui::Id::new("modelling_collapse"), tr!("common-modelling"))
-                            .icon(unthemed_icon!("modelling.svg"))
-                            .color(HEADER_MODELLING)
-                            .dirty(modelling_dirty)
-                            .show(ui, |ui| {
-                                let settings = ExplorerEntry::new(egui::Id::new("explorer_modelling_settings"), tr!("explorer-settings"))
-                                    .selected(editor.show_preferences && editor.active_property_tab == PropertyTab::Modelling)
-                                    .show(ui);
-                                if settings.response.clicked() {
-                                    commands.push(UiCommand::OpenModellingSettings);
-                                }
-                                // Triangulations live on `App` directly, not inside a
-                                // design project, so they draw here whether or not a
-                                // project is open - the same as under Triangulations.
-                                let mut triangulations_source = Rows {
-                                    items: &project.triangulations,
-                                    draw: &mut render_tri_entry,
-                                };
-                                match project.projects.first() {
-                                    Some(entry) => {
-                                        // The same row Designs draws, from the same
-                                        // builder: what puts a layer here is its tag,
-                                        // not anything about the layer itself.
-                                        let modelling_row_context = LayerRowContext {
-                                            entry,
-                                            locked_layers,
-                                            draggable: rows_draggable,
-                                            folders: &project.folders,
-                                            thickness_tables,
-                                            selection: &selection,
-                                            selected_layers,
-                                        };
-                                        let mut layers_source = Rows {
-                                            items: &entry.layers,
-                                            draw: |ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, rows: &mut Vec<ExplorerRow>, layer: &UiLayerEntry| {
-                                                layer_row(ui, commands, layer, rows, &modelling_row_context)
-                                            },
-                                        };
-                                        draw_section_body::<(LayerDrag, TriangulationDrag)>(
-                                            ui,
-                                            SectionKind::Modelling,
-                                            modelling_folders,
-                                            commands,
-                                            &mut rows,
-                                            &mut [&mut layers_source, &mut triangulations_source],
-                                        );
-                                    }
-                                    None => {
-                                        draw_section_body::<(LayerDrag, TriangulationDrag)>(
-                                            ui,
-                                            SectionKind::Modelling,
-                                            modelling_folders,
-                                            commands,
-                                            &mut rows,
-                                            &mut [&mut triangulations_source],
-                                        );
-                                    }
-                                }
-                            });
-                        let modelling_row = modelling_header_toggle.union(modelling_header.inner);
-                        attach_header_drop::<(LayerDrag, TriangulationDrag)>(ui, &modelling_row, SectionKind::Modelling, commands);
-                        section_heading_menu(
-                            &modelling_row,
-                            ExplorerSection::Modelling,
-                            project.projects.first().map_or(0, |entry| tagged_count(&entry.layers, SectionKind::Modelling))
-                                + tagged_count(&project.triangulations, SectionKind::Modelling),
                             commands,
                         );
 

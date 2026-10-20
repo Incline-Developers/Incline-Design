@@ -26,6 +26,8 @@ use crate::{
 };
 
 const DEFAULT_BLOCK_MODEL_COLOR: [f32; 4] = [0.2, 0.65, 0.95, 1.0];
+/// Edge length new kriged blocks start at in Create Block Model.
+const DEFAULT_KRIGING_BLOCK_SIZE: f64 = 4.0;
 
 impl<'a> App<'a> {
     fn clear_block_model_entity_state(&mut self, handle: SceneEntityId) {
@@ -376,28 +378,45 @@ impl<'a> App<'a> {
 
     /// Open Create Block Model on one selected drill-hole dataset, seeding the
     /// grid and variogram from what that dataset holds.
-    pub(crate) fn open_create_block_model_dialog(&mut self, drill_hole_id: DrillHoleId) {
+    /// Open Create Block Model on `drill_hole_id`, or only on `holes` of it
+    /// when some were picked in the viewport. Every numeric field starts
+    /// selected, the extents fit the holes used, and blocks start 4 x 4 x 4.
+    pub(crate) fn open_create_block_model_dialog(&mut self, drill_hole_id: DrillHoleId, holes: Option<Vec<usize>>) {
         self.editor.block_model_create_open = true;
         self.editor.kriging_drill_hole_id = Some(drill_hole_id);
         let Some(dataset) = self.drill_holes.iter().find(|dataset| dataset.id == drill_hole_id) else {
+            self.editor.kriging_holes = None;
             return;
         };
         self.editor.kriging_variables = dataset
             .dataset
             .fields
             .iter()
-            .find(|field| matches!(field.kind, DrillFieldKind::Numeric { .. }))
-            .map(|field| vec![field.key.clone()])
-            .unwrap_or_default();
+            .filter(|field| matches!(field.kind, DrillFieldKind::Numeric { .. }))
+            .map(|field| field.key.clone())
+            .collect();
         self.editor.kriging_name_input = format!("{} Block Model", dataset.name);
-        if let Some((lower, upper)) = dataset.dataset.bounds {
+        let bounds = match &holes {
+            None => dataset.dataset.bounds,
+            Some(holes) => holes
+                .iter()
+                .filter_map(|index| dataset.dataset.holes.get(*index))
+                .flat_map(|hole| hole.trace.iter().map(|station| station.position))
+                .filter(|position| position.is_finite())
+                .fold(None, |bounds: Option<(DVec3, DVec3)>, position| match bounds {
+                    Some((lower, upper)) => Some((lower.min(position), upper.max(position))),
+                    None => Some((position, position)),
+                }),
+        };
+        self.editor.kriging_cell = DVec3::splat(DEFAULT_KRIGING_BLOCK_SIZE);
+        if let Some((lower, upper)) = bounds {
             let characteristic = (upper - lower).max_element().max(1.0);
             let padding = DVec3::splat(characteristic * 0.025);
             self.editor.kriging_lower = lower - padding;
             self.editor.kriging_upper = upper + padding;
-            self.editor.kriging_cell = DVec3::splat((characteristic / 25.0).max(0.001));
             self.editor.kriging_range = (characteristic / 3.0).max(self.editor.kriging_cell.max_element());
         }
+        self.editor.kriging_holes = holes;
         if let Some(DrillFieldKind::Numeric { min, max }) = self
             .editor
             .kriging_variables
@@ -414,6 +433,7 @@ impl<'a> App<'a> {
     pub(crate) fn create_block_model_ordinary_kriging(
         &mut self,
         drill_hole_id: DrillHoleId,
+        holes: Option<Vec<usize>>,
         variables: Vec<String>,
         name: String,
         lower: DVec3,
@@ -449,7 +469,7 @@ impl<'a> App<'a> {
             let mut grid_result = None;
             let variable_count = variables.len();
             for (index, variable) in variables.iter().enumerate() {
-                let samples = collect_kriging_samples(&dataset, variable);
+                let samples = collect_kriging_samples(&dataset, holes.as_deref(), variable);
                 if samples.len() < min_samples as usize {
                     anyhow::bail!(
                         "Variable '{variable}' has only {} usable interval samples; at least {min_samples} are required",
@@ -611,11 +631,14 @@ impl<'a> App<'a> {
     }
 }
 
-fn collect_kriging_samples(dataset: &DrillHoleDataset, variable: &str) -> Vec<KrigingSample> {
+/// Every usable interval sample of `variable`, from `holes` only when given.
+fn collect_kriging_samples(dataset: &DrillHoleDataset, holes: Option<&[usize]>, variable: &str) -> Vec<KrigingSample> {
     dataset
         .holes
         .iter()
-        .flat_map(|hole| {
+        .enumerate()
+        .filter(|(index, _)| holes.is_none_or(|holes| holes.binary_search(index).is_ok()))
+        .flat_map(|(_, hole)| {
             hole.intervals.iter().filter_map(move |interval| {
                 let DrillValue::Numeric(value) = interval.values.get(variable)? else {
                     return None;
