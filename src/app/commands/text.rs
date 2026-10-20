@@ -5,9 +5,9 @@ use crate::{
     userspace_log,
 };
 
-const DEFAULT_TEXT_HEIGHT: f64 = 15.0;
+pub(crate) const DEFAULT_TEXT_HEIGHT: f64 = 15.0;
 /// Fraction of the viewport half-height used as the default text height when placing new text.
-const ZOOM_TEXT_SCALE: f64 = 0.04;
+pub(crate) const ZOOM_TEXT_SCALE: f64 = 0.04;
 
 impl<'a> App<'a> {
     /// Handle a canvas click while the text tool is active. Existing text opens

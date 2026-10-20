@@ -93,6 +93,17 @@ impl<'a> App<'a> {
         // contours still have a home when the job completes.
         let project_runtime_id = active_project.runtime_id;
 
+        // Labels stand as tall as new text placed in this view.
+        let label_height = self
+            .graphics
+            .as_ref()
+            .map(|g| g.zoom() * crate::app::commands::text::ZOOM_TEXT_SCALE)
+            .filter(|height| height.is_finite() && *height > 0.0)
+            .unwrap_or(crate::app::commands::text::DEFAULT_TEXT_HEIGHT);
+        userspace_log!(
+            "contour labels: height {label_height} from {}",
+            if self.graphics.is_some() { "view zoom" } else { "default" }
+        ); // R177 diag
         let apply_tri_name = tri_name.clone();
         type ContourLines = Vec<(Vec<glam::DVec3>, crate::model::ObjectColor)>;
         let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> Result<(ContourLines, Vec<ContourLabel>)> {
@@ -100,7 +111,7 @@ impl<'a> App<'a> {
             // The generator reports on the whole bar, so the labels then
             // count their lines on it afresh.
             let labels = if contour_labels {
-                contour_height_labels(&mesh, &spatial, &polylines, major_interval, cancel, progress)?
+                contour_height_labels(&mesh, &spatial, &polylines, major_interval, label_height, cancel, progress)?
             } else {
                 userspace_log!("contour labels: off"); // R177 diag
                 Vec::new()
@@ -368,15 +379,6 @@ pub(super) fn triangle_contour_segment(v: [mesh_data::Vertex; 3], z_level: f64) 
     if pts.len() == 2 { Some([pts[0], pts[1]]) } else { None }
 }
 
-/// Label height as a share of the plan spacing between neighbouring major
-/// lines: centred on its line, a label then clears the next minor line at
-/// the usual five minors to a major.
-const CONTOUR_LABEL_SPACING_SHARE: f64 = 0.3;
-
-/// The steepest ground, as rise over run (1:1, 45 degrees), whose spacing
-/// sets the label height: walls and faces would shrink it to nothing.
-const CONTOUR_LABEL_STEEPEST_SLOPE: f64 = 1.0;
-
 /// A major line's height as text on it, anchored top-left as `Object::Text`.
 #[derive(Debug)]
 struct ContourLabel {
@@ -386,16 +388,15 @@ struct ContourLabel {
     rotation: f64,
 }
 
-/// One label per major line on the exposed straight stretch nearest its
-/// middle, read along the line with its top uphill; a line shorter than
-/// twice its label gets none. All share one height, a round share of the
-/// typical plan spacing between major lines on gentle ground, capped by the
-/// mesh's extent.
+/// One label `height` tall per major line, on the exposed straight stretch
+/// nearest its middle, read along the line with its top uphill; a line
+/// shorter than twice its label gets none.
 fn contour_height_labels(
     mesh: &mesh_data::Triangulation,
     spatial: &crate::model::spatial::TriangleBvh,
     polylines: &[(Vec<glam::DVec3>, crate::model::ObjectColor)],
     major_interval: f64,
+    height: f64,
     cancel: &crate::app::jobs::CancelFlag,
     progress: &crate::model::progress::Progress,
 ) -> Result<Vec<ContourLabel>> {
@@ -405,29 +406,9 @@ fn contour_height_labels(
         .filter(|verts| verts.len() >= 2 && is_major_contour(verts[0].z, major_interval))
         .map(|line| (line, plan_stations(line)))
         .collect();
-    let bounds = mesh.bounds();
-    let extent = (bounds.max.x - bounds.min.x).max(bounds.max.y - bounds.min.y);
+    let bounds = mesh.bounds(); // R177 diag
+    let extent = (bounds.max.x - bounds.min.x).max(bounds.max.y - bounds.min.y); // R177 diag
     let mut stack = Vec::new();
-    // The spacing of major lines is the interval over the slope across them,
-    // read on gentle ground when there is any.
-    let mut slopes: Vec<f64> = majors
-        .iter()
-        .filter_map(|(line, stations)| {
-            let (middle, _) = point_along(line, stations, stations[stations.len() - 1] * 0.5);
-            surface_slope_at(mesh, spatial, &mut stack, middle.truncate(), middle.z).filter(|&slope| slope > 1e-9)
-        })
-        .collect();
-    if slopes.iter().any(|&slope| slope <= CONTOUR_LABEL_STEEPEST_SLOPE) {
-        slopes.retain(|&slope| slope <= CONTOUR_LABEL_STEEPEST_SLOPE);
-    }
-    slopes.sort_by(f64::total_cmp);
-    let raw_height = slopes
-        .get(slopes.len() / 2)
-        .map_or(extent / 100.0, |slope| major_interval / slope * CONTOUR_LABEL_SPACING_SHARE);
-    let Some(height) = round_down_1_2_5(raw_height.min(extent / 40.0)) else {
-        userspace_log!("contour labels: majors {}, no height (raw {raw_height}, extent {extent})", majors.len()); // R177 diag
-        return Ok(Vec::new());
-    };
     let decimals = contour_label_decimals(major_interval);
     let mut text_system = crate::rendering::text::TextSystem::new();
 
@@ -605,25 +586,6 @@ fn surface_z_near(mesh: &mesh_data::Triangulation, spatial: &crate::model::spati
     nearest
 }
 
-/// The steepness, rise over run, of the triangle under `point` on the sheet
-/// nearest `level`; a vertical one has none.
-fn surface_slope_at(mesh: &mesh_data::Triangulation, spatial: &crate::model::spatial::TriangleBvh, stack: &mut Vec<usize>, point: glam::DVec2, level: f64) -> Option<f64> {
-    let vertices = mesh.vertices();
-    let mut nearest: Option<(f64, f64)> = None;
-    spatial.for_each_xy_bounds_candidate_index_with_stack(point, point, stack, |index| {
-        if let Some(face) = mesh.face_vertex_indices(index)
-            && let triangle = [vertices[face[0]], vertices[face[1]], vertices[face[2]]]
-            && let Some(z) = point_in_triangle_bary_z(point.x, point.y, triangle)
-            && nearest.is_none_or(|(best, _)| (z - level).abs() < (best - level).abs())
-        {
-            let [a, b, c] = triangle.map(|vertex| glam::DVec3::new(vertex.x, vertex.y, vertex.z));
-            let normal = (b - a).cross(c - a);
-            nearest = Some((z, normal.truncate().length() / normal.z.abs()));
-        }
-    });
-    nearest.map(|(_, slope)| slope).filter(|slope| slope.is_finite())
-}
-
 /// Whether another sheet of the mesh lies more than `clearance` above
 /// `level` at `point`: a roof over a floor line, or an overhang.
 fn is_covered(mesh: &mesh_data::Triangulation, spatial: &crate::model::spatial::TriangleBvh, stack: &mut Vec<usize>, point: glam::DVec2, level: f64, clearance: f64) -> bool {
@@ -638,15 +600,6 @@ fn is_covered(mesh: &mesh_data::Triangulation, spatial: &crate::model::spatial::
         }
     });
     covered
-}
-
-/// The largest 1, 2 or 5 step at or below `value`.
-fn round_down_1_2_5(value: f64) -> Option<f64> {
-    if !value.is_finite() || value <= 0.0 {
-        return None;
-    }
-    let magnitude = 10f64.powf(value.log10().floor());
-    [5.0, 2.0, 1.0].into_iter().map(|step| step * magnitude).find(|&step| step <= value * (1.0 + 1e-9))
 }
 
 /// The fewest decimals that write every multiple of `interval` apart: none
