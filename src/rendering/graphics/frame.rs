@@ -96,10 +96,6 @@ fn scene_cache_needs_render(cached_key: Option<u64>, next_key: u64, content_chan
 pub(crate) struct RenderInput<'frame> {
     pub(crate) editor: &'frame mut EditorState,
     pub(crate) document: &'frame mut Document,
-    /// The workspace key `document` was composed at.
-    pub(crate) composite_key: Option<u64>,
-    /// What each contour-labelled layer's levels say.
-    pub(crate) contour_levels: &'frame crate::model::geometry::ContourLevelCache,
     pub(crate) triangulations: &'frame [OpenTriangulation],
     pub(crate) block_models: &'frame [OpenBlockModel],
     pub(crate) drill_holes: &'frame [OpenDrillHoleDataset],
@@ -115,8 +111,6 @@ impl<'a> Graphics<'a> {
         let RenderInput {
             editor,
             document,
-            composite_key,
-            contour_levels,
             triangulations,
             block_models,
             drill_holes,
@@ -495,10 +489,6 @@ impl<'a> Graphics<'a> {
         // pass as the main and detached viewports. The egui panel samples this
         // offscreen texture below.
         self.render_embedded_slice_preview(document, triangulations, block_models, drill_holes, point_clouds, rasters, editor);
-
-        // Contour labels first: the plot preview below places its heights
-        // from the same lines.
-        self.update_contour_label_projections(editor, document, composite_key, contour_levels);
 
         // Keep the engineering-drawing dialog's map preview current.
         self.refresh_plot_preview(editor, document, triangulations, block_models, drill_holes, point_clouds, rasters);

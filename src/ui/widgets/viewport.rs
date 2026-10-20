@@ -1131,43 +1131,11 @@ fn variable_field(ui: &mut egui::Ui, width: f32, open: bool, name: &str, detail:
     response
 }
 
-/// The heights of the contour-labelled lines in view, along each line in a
-/// box of its own colour, placed roundest first into the labels already on
-/// screen and painted into `slot`, kept for them lower in the stack.
-pub(crate) fn draw_contour_labels(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect, placed: &mut super::line_labels::PlacedLabels, slot: egui::layers::ShapeIdx) {
-    if editor.contour_labels_px.is_empty() {
-        return;
-    }
-    let pixels_per_point = ui.ctx().pixels_per_point();
-    let painter = ui.painter().with_clip_rect(canvas_rect);
-    let to_pos = |point: (f32, f32)| egui::pos2(point.0 / pixels_per_point, point.1 / pixels_per_point);
-    let mut shapes = Vec::new();
-    for line in &editor.contour_labels_px {
-        let style = contour_label_style(line.color, editor.renderer_background_color, line.quiet);
-        let spots = line.spots.iter().map(|&(anchor, ahead)| (to_pos(anchor), to_pos(ahead)));
-        super::line_labels::line_label_shapes(&painter, canvas_rect, placed, &line.text, style, spots, &mut shapes);
-    }
-    painter.set(slot, egui::Shape::Vec(shapes));
-}
-
-/// A contour label's look: filled solid in its line's colour, edged to stand
-/// out from the scene `background`, with text that stands out from the fill,
-/// smaller when `quiet`, and a label's width of clear space around it.
-fn contour_label_style(color: [f32; 4], background: [f32; 4], quiet: bool) -> super::line_labels::LabelStyle {
-    let [red, green, blue, _] = crate::rendering::color::opaque_srgb(color);
-    super::line_labels::LabelStyle {
-        fill: egui::Color32::from_rgb(red, green, blue),
-        casing: contrast_ink(background).0,
-        ink: contrast_ink(color).0,
-        scale: if quiet { crate::model::geometry::QUIET_LABEL_SCALE as f32 } else { 1.0 },
-        gap: super::line_labels::LabelGap::Widths(1.0),
-    }
-}
-
 /// Ink/outline pair for overlay text: black-on-white over a light background,
 /// white-on-black over a dark one, split at 0.45 Rec. 709 luminance.
 fn contrast_ink(background: [f32; 4]) -> (egui::Color32, egui::Color32) {
-    if crate::rendering::color::is_light(background) {
+    let luminance = crate::rendering::color::relative_luminance(background);
+    if luminance > 0.45 {
         (egui::Color32::BLACK, egui::Color32::WHITE)
     } else {
         (egui::Color32::WHITE, egui::Color32::BLACK)

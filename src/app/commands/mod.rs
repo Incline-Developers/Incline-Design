@@ -447,10 +447,6 @@ impl<'a> App<'a> {
                 self.toggle_layer_locked(layer);
                 Ok(())
             }
-            UiCommand::SetLayerContourLabels { clicked, layers, on } => {
-                self.set_layer_contour_labels(clicked, &layers, on);
-                Ok(())
-            }
             UiCommand::SetSectionVisible(section, visible) => {
                 self.set_section_visible(section, visible);
                 Ok(())
@@ -1348,7 +1344,6 @@ impl<'a> App<'a> {
                 self.editor.tri_contour_open = true;
                 self.editor.tri_contour_tri_id = Some(tri_id);
                 self.editor.tri_contour_target_layer = None;
-                self.editor.tri_contour_labels_touched = false;
                 self.editor.tri_contour_layer_name_auto = true;
                 if let Some(surface_name) = surface_name {
                     self.editor.update_contour_layer_name_from_surface(&surface_name);

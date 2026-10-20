@@ -558,29 +558,6 @@ fn layer_row(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, layer: &UiLayerEn
             commands.push(UiCommand::DuplicateLayer(layer_id));
             ui.close();
         }
-        // Ticks from the clicked layer, and sets every selected one to match.
-        let rows = menu_rows(row_state, cx.selection).unwrap_or(std::slice::from_ref(&row_state));
-        let layers: Vec<LayerId> = rows
-            .iter()
-            .filter(|row| !row.locked)
-            .filter_map(|row| match row.target {
-                RowTarget::Layer(id) => Some(id),
-                _ => None,
-            })
-            .collect();
-        if ContextMenuAction::new(tr!("explorer-contour-labels"))
-            .checked(layer.contour_labels)
-            .enabled(!layers.is_empty())
-            .show(ui)
-            .clicked()
-        {
-            commands.push(UiCommand::SetLayerContourLabels {
-                clicked: layer_id,
-                layers,
-                on: !layer.contour_labels,
-            });
-            ui.close();
-        }
         move_to_folder_submenu(ui, cx.folders, layer.folder, FolderMember::layer(layer.section, layer_id), commands);
         #[cfg(not(target_arch = "wasm32"))]
         if layer.dirty && cx.entry.path.is_some() && ContextMenuAction::new(tr!("explorer-discard-changes")).enabled(!layer_locked).show(ui).clicked() {

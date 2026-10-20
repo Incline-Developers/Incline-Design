@@ -3,7 +3,6 @@
 use super::*;
 use crate::{
     app::commands::drawing::rotate_collar::{ring_axis, ring_basis},
-    model::geometry::{ContourLabelLine, ContourLevelCache, ContourLevels, contour_label_spots, contour_label_spots_along, label_middle},
     rendering::section_grid,
     ui::state::{MoveGizmoScreen, ROTATE_GIZMO_AZIMUTH_RING, ROTATE_GIZMO_DIP_RING, RotateGizmoScreen, SectionGridAxis, SectionGridLine, SectionGridLineKind},
 };
@@ -86,6 +85,41 @@ const CARD_SCALE_PROBE_WORLD: f64 = 1.0;
 /// points. The spacing on the ground is the power of two that keeps them at
 /// least this far apart on screen.
 const CONTOUR_LABEL_SPACING_POINTS: f64 = 280.0;
+
+/// Where along a contour its labels stand, every `spacing` world units from
+/// its start: each spot, and a point a little further on that gives the
+/// line's direction there. A line too short for one spot gets one at its
+/// middle.
+///
+/// Measured on the ground rather than on screen, so a label stays where it
+/// is as the camera moves. Spacings are powers of two, so zooming out drops
+/// every other label and keeps the rest in place.
+fn contour_label_spots(points: &[DVec3], closed: bool, spacing: f64) -> Vec<(DVec3, DVec3)> {
+    let closing = closed.then(|| points.first().copied()).flatten();
+    let run: Vec<DVec3> = points.iter().copied().chain(closing).collect();
+    let length: f64 = run.windows(2).map(|pair| pair[0].distance(pair[1])).sum();
+    if length <= 0.0 {
+        return Vec::new();
+    }
+    let mut distances: Vec<f64> = (1..).map(|step| step as f64 * spacing).take_while(|distance| *distance < length - spacing * 0.25).collect();
+    if distances.is_empty() && length > spacing * 0.4 {
+        distances.push(length * 0.5);
+    }
+    let mut spots = Vec::with_capacity(distances.len());
+    let mut walked = 0.0;
+    let mut wanted = distances.into_iter().peekable();
+    for pair in run.windows(2) {
+        let step = pair[0].distance(pair[1]);
+        while let Some(distance) = wanted.peek().copied().filter(|distance| step > 0.0 && walked + step >= *distance) {
+            let direction = (pair[1] - pair[0]) / step;
+            let at = pair[0] + direction * (distance - walked);
+            spots.push((at, at + direction * (spacing * 0.05).max(0.01)));
+            wanted.next();
+        }
+        walked += step;
+    }
+    spots
+}
 
 /// Cap on grid lines per axis; `grid_values` coarsens spacing to stay under
 /// it rather than dropping the axis.
@@ -529,8 +563,7 @@ impl<'a> Graphics<'a> {
                 });
             editor.blast_contours_px = match editor.blast_analysis.as_deref().filter(|_| contours_visible) {
                 Some(analysis) => {
-                    let spacing = points_middle(analysis.contours.iter().flat_map(|contour| contour.points.iter().copied()))
-                        .and_then(|middle| self.contour_label_spacing_world(middle, probe_offset, |point| self.world_to_window_px(&view_proj, point)));
+                    let spacing = self.contour_label_spacing_world(&analysis.contours, &view_proj, probe_offset);
                     analysis
                         .contours
                         .iter()
@@ -943,458 +976,19 @@ impl<'a> Graphics<'a> {
 impl Graphics<'_> {
     /// The ground spacing between contour labels for the view: the least power
     /// of two that clears [`CONTOUR_LABEL_SPACING_POINTS`] on screen, measured
-    /// at `middle`, the middle of the contours, through `project` (to window
-    /// pixels).
-    fn contour_label_spacing_world(&self, middle: DVec3, probe_offset: DVec3, project: impl Fn(DVec3) -> Option<(f32, f32)>) -> Option<f64> {
-        let at = project(middle)?;
-        let probe = project(middle + probe_offset)?;
-        label_spacing(f64::from((probe.0 - at.0).hypot(probe.1 - at.1)) / CARD_SCALE_PROBE_WORLD, self.window.scale_factor())
-    }
-
-    /// The contour-labelled lines as last drawn, for a plot sheet.
-    pub(crate) fn contour_sheet_lines(&self) -> Vec<crate::model::plot::SheetContourLine> {
-        self.contour_labels.sheet_lines()
-    }
-
-    /// Where the labels of the contour-labelled layers stand on screen, in
-    /// placing order: roundest heights first. `composite_key` is the
-    /// workspace key `document` was composed at, and `levels` what each
-    /// labelled layer's levels say. Only the stretches of line in view are
-    /// walked, each spaced for its own size on screen.
-    pub(super) fn update_contour_label_projections(&mut self, editor: &mut EditorState, document: &Document, composite_key: Option<u64>, levels: &ContourLevelCache) {
-        editor.contour_labels_px.clear();
-        let Some(composite_key) = composite_key.filter(|_| document.layers().iter().any(|layer| layer.contour_labels)) else {
-            self.contour_labels.clear();
-            return;
-        };
-        let mut cache = std::mem::take(&mut self.contour_labels);
-        cache.refresh(composite_key, document, editor, levels);
-        let view_proj = self.view_proj();
-        let probe_offset = self.camera.forward().cross(self.camera.up()).normalize_or_zero() * CARD_SCALE_PROBE_WORLD;
-        // Past the far plane still measures; behind or too near the eye not.
-        let project = |point: DVec3| in_front(&view_proj, point).then(|| self.world_to_window_px_unclipped_depth(&view_proj, point)).flatten();
-        let spacing_at = |at: DVec3| self.contour_label_spacing_world(at, probe_offset, project);
-        let slab = self.section_slab();
-        let frustum = super::frustum::Frustum::from_view_proj(glam::Mat4::from_cols_array_2d(&self.camera_uniform.view_proj));
-        let mut spots = Vec::new();
-        for index in 0..cache.order.len() {
-            spots.clear();
-            let id = cache.order[index];
-            cache.visible_spots(id, &view_proj, &frustum, self.scene_origin, spacing_at, &mut spots);
-            let projected: Vec<_> = spots
-                .iter()
-                .filter(|(at, _)| !slab.is_some_and(|slab| !slab.contains(*at)))
-                .filter_map(|&(at, ahead)| Some((self.world_to_window_px(&view_proj, at)?, self.world_to_window_px(&view_proj, ahead)?)))
-                .collect();
-            if !projected.is_empty() {
-                let line = &cache.lines[&id];
-                editor.contour_labels_px.push(crate::ui::state::ProjectedLineLabels {
-                    text: line.text.clone(),
-                    color: line.color,
-                    quiet: line.quiet,
-                    spots: projected,
-                });
-            }
-        }
-        self.contour_labels = cache;
-    }
-}
-
-/// Whether `point` stands in front of the near plane of `view_proj`, where
-/// a measure of its size on screen means anything.
-fn in_front(view_proj: &glam::DMat4, point: DVec3) -> bool {
-    let clip = *view_proj * point.extend(1.0);
-    clip.w > 0.0 && clip.z <= clip.w
-}
-
-/// Most labels one chunk's visible part may get, whatever its spacing.
-const MOST_CHUNK_SPOTS: f64 = 16.0;
-
-/// The least spacing that keeps `seen` metres of line to
-/// [`MOST_CHUNK_SPOTS`], a power of two like every label spacing.
-fn least_spacing(seen: f64) -> f64 {
-    if seen > 0.0 { 2f64.powf((seen / MOST_CHUNK_SPOTS).log2().ceil()) } else { 0.0 }
-}
-
-/// The parts of `run`'s segments that `spans` keeps, one span per segment of
-/// some length, in order (as [`contour_label_spots_along`] asks for them).
-fn visible_pieces<'a>(run: &'a [DVec3], spans: impl Iterator<Item = Option<(f64, f64)>> + 'a) -> impl Iterator<Item = (DVec3, DVec3)> + 'a {
-    run.windows(2)
-        .filter(|pair| pair[0].distance(pair[1]) > 0.0)
-        .zip(spans)
-        .filter_map(|(pair, span)| span.map(|(from, to)| (pair[0].lerp(pair[1], from), pair[0].lerp(pair[1], to))))
-}
-
-/// The point `distance` along `pieces`.
-fn point_along(pieces: impl Iterator<Item = (DVec3, DVec3)>, distance: f64) -> Option<DVec3> {
-    let mut left = distance;
-    for (a, b) in pieces {
-        let piece = a.distance(b);
-        if piece >= left && piece > 0.0 {
-            return Some(a.lerp(b, left / piece));
-        }
-        left -= piece;
-    }
-    None
-}
-
-/// The point halfway along the part of `run` that `spans` keeps, and that
-/// part's length, or `None` when none of it is kept.
-fn visible_middle(run: &[DVec3], spans: impl Iterator<Item = Option<(f64, f64)>> + Clone) -> Option<(DVec3, f64)> {
-    let seen: f64 = visible_pieces(run, spans.clone()).map(|(a, b)| a.distance(b)).sum();
-    if seen <= 0.0 {
-        return None;
-    }
-    point_along(visible_pieces(run, spans), seen * 0.5).map(|middle| (middle, seen))
-}
-
-/// The least power of two, in world units, that keeps labels
-/// [`CONTOUR_LABEL_SPACING_POINTS`] apart at `px_per_world` pixels per world
-/// unit.
-fn label_spacing(px_per_world: f64, scale_factor: f64) -> Option<f64> {
-    if px_per_world <= 0.0 || !px_per_world.is_finite() {
-        return None;
-    }
-    let wanted = CONTOUR_LABEL_SPACING_POINTS * scale_factor / px_per_world;
-    Some(2f64.powf(wanted.log2().ceil()))
-}
-
-/// The part of segment `a`-`b` inside the view of `view_proj`, as a range of
-/// 0 to 1 along it.
-fn visible_span(view_proj: &glam::DMat4, a: DVec3, b: DVec3) -> Option<(f64, f64)> {
-    let sides = |point: DVec3| {
-        let clip = *view_proj * point.extend(1.0);
-        [clip.w + clip.x, clip.w - clip.x, clip.w + clip.y, clip.w - clip.y, clip.z, clip.w - clip.z]
-    };
-    let (mut from, mut to) = (0.0f64, 1.0f64);
-    for (side_a, side_b) in sides(a).into_iter().zip(sides(b)) {
-        if side_a < 0.0 && side_b < 0.0 {
+    /// at the middle of the contours.
+    fn contour_label_spacing_world(&self, contours: &[crate::model::blast::TimeContour], view_proj: &glam::DMat4, probe_offset: DVec3) -> Option<f64> {
+        let mut points = contours.iter().flat_map(|contour| contour.points.iter().copied());
+        let first = points.next()?;
+        let (min, max) = points.fold((first, first), |(min, max), point| (min.min(point), max.max(point)));
+        let middle = (min + max) * 0.5;
+        let at = self.world_to_window_px(view_proj, middle)?;
+        let probe = self.world_to_window_px(view_proj, middle + probe_offset)?;
+        let px_per_world = f64::from((probe.0 - at.0).hypot(probe.1 - at.1)) / CARD_SCALE_PROBE_WORLD;
+        if px_per_world <= 0.0 || !px_per_world.is_finite() {
             return None;
         }
-        if side_a < 0.0 {
-            from = from.max(side_a / (side_a - side_b));
-        } else if side_b < 0.0 {
-            to = to.min(side_a / (side_a - side_b));
-        }
-    }
-    (from <= to).then_some((from, to))
-}
-
-/// Whether the box `min`-`max` lies wholly inside the view of `view_proj`.
-fn box_in_view(view_proj: &glam::DMat4, min: DVec3, max: DVec3) -> bool {
-    (0..8).all(|corner| {
-        let point = DVec3::new(
-            if corner & 1 == 0 { min.x } else { max.x },
-            if corner & 2 == 0 { min.y } else { max.y },
-            if corner & 4 == 0 { min.z } else { max.z },
-        );
-        let clip = *view_proj * point.extend(1.0);
-        clip.x.abs() <= clip.w && clip.y.abs() <= clip.w && clip.z >= 0.0 && clip.z <= clip.w
-    })
-}
-
-/// Middle of the box around `points`.
-fn points_middle(mut points: impl Iterator<Item = DVec3>) -> Option<DVec3> {
-    let first = points.next()?;
-    let (min, max) = points.fold((first, first), |(min, max), point| (min.min(point), max.max(point)));
-    Some((min + max) * 0.5)
-}
-
-/// What a layer's levels say before its summary arrives: nothing round.
-static UNKNOWN_LEVELS: ContourLevels = ContourLevels { decimals: 0, steps: Vec::new() };
-
-/// Segments per chunk a labelled line is cut into for culling and spacing.
-const LABEL_CHUNK_SEGMENTS: usize = 32;
-
-/// A run of a labelled line's segments: its first and last point, how far
-/// along the line it starts, its length and the point halfway along it, its
-/// bounds, and its spots once walked whole.
-struct LabelChunk {
-    first: usize,
-    last: usize,
-    start: f64,
-    length: f64,
-    middle: DVec3,
-    min: DVec3,
-    max: DVec3,
-    spots: Option<WalkedSpots>,
-}
-
-/// Spots walked at a spacing and the line's middle mode, kept with both.
-struct WalkedSpots {
-    spacing: f64,
-    middle: Option<f64>,
-    spots: Vec<(DVec3, DVec3)>,
-}
-
-/// One labelled line as drawn: the polyline revision it was built from, its
-/// layer and colour, its text and how round its level is, and its chunks.
-struct LabelledLine {
-    revision: u64,
-    layer: crate::model::LayerId,
-    line: std::sync::Arc<ContourLabelLine>,
-    color: [f32; 4],
-    decimals: usize,
-    text: std::sync::Arc<str>,
-    rank: usize,
-    quiet: bool,
-    length: f64,
-    chunks: Vec<LabelChunk>,
-}
-
-impl LabelledLine {
-    fn new(line: ContourLabelLine, revision: u64, layer: crate::model::LayerId) -> Self {
-        let mut chunks = Vec::new();
-        let mut walked = 0.0;
-        for first in (0..line.points.len() - 1).step_by(LABEL_CHUNK_SEGMENTS) {
-            let last = (first + LABEL_CHUNK_SEGMENTS).min(line.points.len() - 1);
-            let points = &line.points[first..=last];
-            let (min, max) = points.iter().fold((points[0], points[0]), |(min, max), point| (min.min(*point), max.max(*point)));
-            let start = walked;
-            for pair in points.windows(2) {
-                walked += pair[0].distance(pair[1]);
-            }
-            let (middle, length) = visible_middle(points, std::iter::repeat(Some((0.0, 1.0)))).unwrap_or((points[0], 0.0));
-            chunks.push(LabelChunk {
-                first,
-                last,
-                start,
-                length,
-                middle,
-                min,
-                max,
-                spots: None,
-            });
-        }
-        Self {
-            revision,
-            layer,
-            line: std::sync::Arc::new(line),
-            color: [1.0; 4],
-            decimals: usize::MAX,
-            text: std::sync::Arc::from(""),
-            rank: 0,
-            quiet: false,
-            length: walked,
-            chunks,
-        }
-    }
-
-    /// Take the layer's colour and what its levels say; the text is written
-    /// again only when the decimals change.
-    fn restyle(&mut self, color: [f32; 4], levels: &ContourLevels) {
-        self.color = color;
-        if self.decimals != levels.decimals {
-            self.decimals = levels.decimals;
-            self.text = crate::model::plot::format_level(self.line.level, levels.decimals).into();
-        }
-        self.rank = levels.roundness(self.line.level);
-        self.quiet = levels.quiet(self.line.level);
-    }
-}
-
-/// The contour-labelled lines of the drawn document, kept between frames in
-/// placing order. A line is rebuilt only when its polyline's revision
-/// changes; a chunk's spots are walked once it is wholly in view and again
-/// only when its spacing or middle label changes. Chunks at the edge of the
-/// view are walked each frame, but only where seen.
-#[derive(Default)]
-pub(crate) struct ContourLabelCache {
-    /// The workspace key, the hidden set's size and the isolated entity at
-    /// the last refresh: cheap to compare every frame.
-    gate: Option<(u64, usize, Option<SceneEntityId>)>,
-    /// Moves on every rebuild, so a copy of the lines can tell it is stale.
-    generation: u64,
-    lines: std::collections::HashMap<crate::model::ObjectId, LabelledLine>,
-    /// Roundest level first, the document's order within a rank.
-    order: Vec<crate::model::ObjectId>,
-    /// Reused each frame: the chunks of a line in view, and the clipped spans
-    /// of its chunks at the edge of the view.
-    in_view: Vec<ChunkInView>,
-    spans: Vec<Option<(f64, f64)>>,
-}
-
-/// A chunk of a line in view: the spacing asked for at its middle, the
-/// least its part in view allows, how much of it is seen, and, for a chunk
-/// at the edge, where its clipped spans sit in the cache's `spans`.
-struct ChunkInView {
-    index: usize,
-    asked: f64,
-    least: f64,
-    seen: f64,
-    edge: Option<std::ops::Range<usize>>,
-}
-
-impl ContourLabelCache {
-    /// Drop every line. The generation still moves on, so nothing that
-    /// copied the lines before mistakes them for current.
-    fn clear(&mut self) {
-        if self.gate.is_some() || !self.lines.is_empty() {
-            *self = Self {
-                generation: self.generation.wrapping_add(1),
-                ..Self::default()
-            };
-        }
-    }
-
-    /// Which rebuild the lines are at.
-    pub(crate) fn generation(&self) -> u64 {
-        self.generation
-    }
-
-    /// The labelled lines as drawn, roundest first, for a plot sheet to
-    /// label as the screen does: shared, not copied.
-    pub(crate) fn sheet_lines(&self) -> Vec<crate::model::plot::SheetContourLine> {
-        self.order
-            .iter()
-            .map(|id| {
-                let labelled = &self.lines[id];
-                crate::model::plot::SheetContourLine {
-                    line: std::sync::Arc::clone(&labelled.line),
-                    text: std::sync::Arc::clone(&labelled.text),
-                    rank: labelled.rank,
-                    quiet: labelled.quiet,
-                    color: labelled.color,
-                }
-            })
-            .collect()
-    }
-
-    /// Bring the lines up to date with `document` when the gate moves:
-    /// lines whose polyline is unchanged are kept as they are.
-    fn refresh(&mut self, composite_key: u64, document: &Document, editor: &EditorState, levels: &ContourLevelCache) {
-        let gate = (composite_key, editor.hidden_handles.len(), editor.isolated_entity);
-        if self.gate == Some(gate) {
-            return;
-        }
-        self.gate = Some(gate);
-        self.generation = self.generation.wrapping_add(1);
-        let labelled: std::collections::HashSet<_> = document.layers().iter().filter(|layer| layer.contour_labels).map(|layer| layer.id).collect();
-        let mut previous = std::mem::take(&mut self.lines);
-        self.order.clear();
-        for object in document.objects() {
-            let Object::Polyline { verts, closed, layer, .. } = object else {
-                continue;
-            };
-            if !labelled.contains(layer) || editor.hidden_handles.contains(&SceneEntityId::Object(object.id())) {
-                continue;
-            }
-            let revision = document.object_revision(object.id());
-            let Some(level) = levels.level(object.id(), revision) else {
-                continue;
-            };
-            let mut line = match previous.remove(&object.id()) {
-                Some(line) if line.revision == revision && line.layer == *layer => line,
-                _ => match ContourLabelLine::new(level, verts, *closed) {
-                    Some(line) => LabelledLine::new(line, revision, *layer),
-                    None => continue,
-                },
-            };
-            line.restyle(document.object_rgba(object), levels.layer(*layer).unwrap_or(&UNKNOWN_LEVELS));
-            self.order.push(object.id());
-            self.lines.insert(object.id(), line);
-        }
-        let lines = &self.lines;
-        self.order.sort_by_key(|id| std::cmp::Reverse(lines[id].rank));
-    }
-
-    /// Line `id`'s spots in view. Each chunk is spaced by `spacing_at` the
-    /// middle of its part in view, and never so tightly that the part gets
-    /// more than [`MOST_CHUNK_SPOTS`]. Whether the line gets one middle label,
-    /// and whether a short line is spaced as one, is decided from the
-    /// spacing at the middle of the line's whole part in view, so panning a
-    /// plan view never changes it. Chunks wholly inside are cached, chunks at
-    /// the edge walked only where seen, each clipped once, and a chunk with
-    /// no spacing, as one behind the eye, gets none.
-    fn visible_spots(
-        &mut self,
-        id: crate::model::ObjectId,
-        view_proj: &glam::DMat4,
-        frustum: &super::frustum::Frustum,
-        scene_origin: DVec3,
-        spacing_at: impl Fn(DVec3) -> Option<f64>,
-        spots: &mut Vec<(DVec3, DVec3)>,
-    ) {
-        let Self { lines, in_view, spans, .. } = self;
-        let Some(labelled) = lines.get_mut(&id) else {
-            return;
-        };
-        let line = &labelled.line;
-        if !frustum.intersects_aabb((line.min - scene_origin).as_vec3(), (line.max - scene_origin).as_vec3()) {
-            return;
-        }
-        let line_inside = box_in_view(view_proj, line.min, line.max);
-        in_view.clear();
-        spans.clear();
-        for (index, chunk) in labelled.chunks.iter().enumerate() {
-            if !line_inside && !frustum.intersects_aabb((chunk.min - scene_origin).as_vec3(), (chunk.max - scene_origin).as_vec3()) {
-                continue;
-            }
-            let run = &line.points[chunk.first..=chunk.last];
-            let (measured, edge) = if line_inside || box_in_view(view_proj, chunk.min, chunk.max) {
-                (Some((chunk.middle, chunk.length)), None)
-            } else {
-                let from = spans.len();
-                spans.extend(
-                    run.windows(2)
-                        .filter(|pair| pair[0].distance(pair[1]) > 0.0)
-                        .map(|pair| visible_span(view_proj, pair[0], pair[1])),
-                );
-                (visible_middle(run, spans[from..].iter().copied()), Some(from..spans.len()))
-            };
-            if let Some((at, seen)) = measured
-                && let Some(asked) = spacing_at(at)
-            {
-                in_view.push(ChunkInView {
-                    index,
-                    asked,
-                    least: least_spacing(seen),
-                    seen,
-                    edge,
-                });
-            }
-        }
-        // The middle of the line's whole part in view.
-        let mut left = in_view.iter().map(|chunk| chunk.seen).sum::<f64>() * 0.5;
-        let mut line_middle = None;
-        for chunk in in_view.iter() {
-            if chunk.seen >= left {
-                let run = &line.points[labelled.chunks[chunk.index].first..=labelled.chunks[chunk.index].last];
-                line_middle = match &chunk.edge {
-                    Some(range) => point_along(visible_pieces(run, spans[range.clone()].iter().copied()), left),
-                    None => point_along(visible_pieces(run, std::iter::repeat(Some((0.0, 1.0)))), left),
-                };
-                break;
-            }
-            left -= chunk.seen;
-        }
-        let Some(line_spacing) = line_middle.and_then(&spacing_at) else {
-            return;
-        };
-        let length = labelled.length;
-        let middle = label_middle(length, line_spacing);
-        // A line no longer than two of its spacings is spaced as one, so its
-        // few labels cannot fall between its chunks, but never tighter than
-        // any of its chunks allows.
-        let uniform = (length <= line_spacing * 2.0).then(|| in_view.iter().fold(line_spacing, |spacing, chunk| spacing.max(chunk.least)));
-        for chunk_in_view in in_view.iter() {
-            let spacing = uniform.unwrap_or(chunk_in_view.asked.max(chunk_in_view.least));
-            let chunk = &mut labelled.chunks[chunk_in_view.index];
-            let run = &labelled.line.points[chunk.first..=chunk.last];
-            match &chunk_in_view.edge {
-                None => {
-                    if chunk.spots.as_ref().is_none_or(|walked| walked.spacing != spacing || walked.middle != middle) {
-                        let mut walked = Vec::new();
-                        contour_label_spots_along(run, chunk.start, length, spacing, middle, |_, _| Some((0.0, 1.0)), &mut walked);
-                        chunk.spots = Some(WalkedSpots { spacing, middle, spots: walked });
-                    }
-                    spots.extend_from_slice(chunk.spots.as_ref().map_or(&[][..], |walked| &walked.spots));
-                }
-                Some(range) => {
-                    let mut clipped = spans[range.clone()].iter().copied();
-                    contour_label_spots_along(run, chunk.start, length, spacing, middle, |_, _| clipped.next().flatten(), spots);
-                }
-            }
-        }
+        let wanted = CONTOUR_LABEL_SPACING_POINTS * self.window.scale_factor() / px_per_world;
+        Some(2f64.powf(wanted.log2().ceil()))
     }
 }

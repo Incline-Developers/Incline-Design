@@ -270,8 +270,6 @@ impl<'a> App<'a> {
                         match graphics.render(crate::rendering::graphics::frame::RenderInput {
                             editor: &mut self.editor,
                             document: &mut self.scene_document,
-                            composite_key: self.scene_document_key,
-                            contour_levels: &self.contour_levels,
                             triangulations: &self.triangulations,
                             block_models: &self.block_models,
                             drill_holes: &self.drill_holes,

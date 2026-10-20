@@ -5,10 +5,7 @@ use strum::IntoEnumIterator;
 
 use crate::{
     i18n::tr,
-    model::plot::{
-        LegendEntry, MapFrame, Orientation, PaperSize, PlotLayout, PlotSpec, RectPx, SheetContourLabel, SheetContourLine, SheetFurniture, TitleBlock, furniture, layout,
-        max_dpi_for, sheet_furniture,
-    },
+    model::plot::{LegendEntry, Orientation, PaperSize, PlotLayout, PlotSpec, RectPx, SheetFurniture, TitleBlock, furniture, layout, max_dpi_for, sheet_furniture},
     ui::{
         state::{EditorState, UiCommand, UiProjectView},
         widgets::menu::{self, DragableMenu, MenuButton, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32},
@@ -126,7 +123,6 @@ impl PlotDialog {
             show_scale_bar: self.show_scale_bar,
             show_north_arrow: self.show_north_arrow,
             legend: if self.show_legend { legend } else { Vec::new() },
-            contour_lines: Vec::new(),
         }
     }
 }
@@ -138,7 +134,7 @@ impl PlotDialog {
 /// paper. The furniture around it is drawn to its true position and size, but
 /// its text is suggested with rules rather than typeset, because at thumbnail
 /// size real labels would be one or two pixels tall and only add noise.
-fn draw_sheet_preview(ui: &mut egui::Ui, dialog: &PlotDialog, legend_entries: &[LegendEntry], map_texture: Option<egui::TextureId>, contours: &mut PreviewContours) {
+fn draw_sheet_preview(ui: &mut egui::Ui, dialog: &PlotDialog, legend_entries: &[LegendEntry], map_texture: Option<egui::TextureId>) {
     let spec = dialog.spec(legend_entries.to_vec());
     let sheet = match layout(&spec) {
         Ok(sheet) => sheet,
@@ -198,7 +194,6 @@ fn draw_sheet_preview(ui: &mut egui::Ui, dialog: &PlotDialog, legend_entries: &[
     if spec.show_frame {
         painter.rect_stroke(map, 0.0, egui::Stroke::new(1.0, PREVIEW_INK), egui::StrokeKind::Inside);
     }
-    draw_preview_contour_labels(&painter, &paper, scale, contours.labels(&sheet, &placement));
     draw_preview_furniture(&painter, &placement, legend_entries.len(), to_preview);
 
     ui.add_space(6.0);
@@ -224,69 +219,6 @@ fn draw_sheet_preview(ui: &mut egui::Ui, dialog: &PlotDialog, legend_entries: &[
         height = crate::model::plot::format_quantity(world_height, 0).to_string()
     ));
     ui.weak(tr!("plot-preview-pixels", width = sheet.sheet_width_px, height = sheet.sheet_height_px, dpi = dialog.dpi));
-}
-
-/// The sheet's contour heights on the thumbnail: each label's box in its
-/// line's colour, its text suggested with a rule, as the furniture's is.
-fn draw_preview_contour_labels(painter: &egui::Painter, paper: &egui::Rect, scale: f64, labels: &[SheetContourLabel]) {
-    let to_preview = |(x, y): (f64, f64)| paper.min + egui::vec2((x * scale) as f32, (y * scale) as f32);
-    for label in labels {
-        let corners = label.corners();
-        let [red, green, blue, _] = crate::rendering::color::opaque_srgb(label.color);
-        let fill = egui::Color32::from_rgb(red, green, blue);
-        painter.add(egui::Shape::convex_polygon(
-            corners.iter().map(|&corner| to_preview(corner)).collect(),
-            fill,
-            egui::Stroke::new(0.5, PREVIEW_INK),
-        ));
-        let ink = if crate::rendering::color::is_light(label.color) {
-            egui::Color32::BLACK
-        } else {
-            egui::Color32::WHITE
-        };
-        let middle = |a: (f64, f64), b: (f64, f64)| ((a.0 + b.0) * 0.5, (a.1 + b.1) * 0.5);
-        let (left, right) = (middle(corners[0], corners[3]), middle(corners[1], corners[2]));
-        let inset = |from: (f64, f64), to: (f64, f64)| (from.0 + (to.0 - from.0) * 0.2, from.1 + (to.1 - from.1) * 0.2);
-        painter.line_segment([to_preview(inset(left, right)), to_preview(inset(right, left))], egui::Stroke::new(0.75, ink));
-    }
-}
-
-/// What the sheet preview needs to show the contour heights the export will
-/// draw: the map's centre and the drawn lines, which the renderer hands over
-/// with a generation that moves when the lines change, and the labels placed
-/// from them, kept until the sheet, the centre or the lines change.
-#[derive(Default)]
-pub(crate) struct PreviewContours {
-    pub(crate) centre: Option<glam::DVec2>,
-    pub(crate) lines: Vec<SheetContourLine>,
-    pub(crate) generation: Option<u64>,
-    placed_for: Option<(PlotLayout, SheetFurniture, glam::DVec2, Option<u64>)>,
-    labels: Vec<SheetContourLabel>,
-}
-
-impl PreviewContours {
-    /// The labels on the `sheet` with its furniture at `placement`, placed by
-    /// the export's own rule with text widths estimated, again only when the
-    /// sheet, its furniture, the centre or the lines changed (not, say, the
-    /// title block's words).
-    pub(crate) fn labels(&mut self, sheet: &PlotLayout, placement: &SheetFurniture) -> &[SheetContourLabel] {
-        let Some(centre) = self.centre else {
-            return &[];
-        };
-        let key = (*sheet, *placement, centre, self.generation);
-        let placed = self.placed_for == Some(key);
-        if !placed {
-            let frame = MapFrame {
-                center_east: centre.x,
-                center_north: centre.y,
-                world_per_px: sheet.world_per_px,
-            };
-            let mut estimate = |text: &str, size_px: f64| (crate::model::geometry::estimated_text_width(text, size_px), crate::model::plot::text_line_height(size_px));
-            self.labels = crate::model::plot::place_sheet_contour_labels(&mut estimate, sheet, &frame, placement, &self.lines);
-            self.placed_for = Some(key);
-        }
-        &self.labels
-    }
 }
 
 /// Rough rendered width of a string, used only where a shaped measurement
@@ -439,7 +371,7 @@ pub(crate) fn draw_plot_dialog(ui: &mut egui::Ui, editor: &mut EditorState, proj
             ui.horizontal_top(|ui| {
                 ui.vertical(|ui| {
                     ui.set_width(PLOT_PREVIEW_WIDTH);
-                    draw_sheet_preview(ui, &dialog, &legend_entries, editor.plot_preview_texture, &mut editor.plot_preview_contours);
+                    draw_sheet_preview(ui, &dialog, &legend_entries, editor.plot_preview_texture);
                 });
                 ui.separator();
                 ui.vertical(|ui| {

@@ -681,7 +681,6 @@ impl<'a> App<'a> {
             elevation: 0.0,
             folder: None,
             section: crate::model::SectionKind::Designs,
-            contour_labels: false,
         };
         let objects: Vec<crate::model::Object> = picks
             .iter()

@@ -732,14 +732,8 @@ fn window_peaks(order: &[usize], times: &[Option<f64>], mass: &[f64]) -> (Window
 
 /// A round 1-2-5 step near `raw`.
 pub(crate) fn nice_step(raw: f64) -> f64 {
-    nice_step_any(raw).map_or(1.0, |step| step.max(1.0))
-}
-
-/// [`nice_step`] at any decade, below one too, or `None` when `raw` is not a
-/// positive number.
-pub(crate) fn nice_step_any(raw: f64) -> Option<f64> {
     if !raw.is_finite() || raw <= 0.0 {
-        return None;
+        return 1.0;
     }
     let magnitude = 10f64.powf(raw.log10().floor());
     let normalized = raw / magnitude;
@@ -752,7 +746,7 @@ pub(crate) fn nice_step_any(raw: f64) -> Option<f64> {
     } else {
         10.0
     };
-    Some(step * magnitude)
+    (step * magnitude).max(1.0)
 }
 
 #[derive(Clone, Copy)]
