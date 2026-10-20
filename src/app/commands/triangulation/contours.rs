@@ -373,6 +373,10 @@ pub(super) fn triangle_contour_segment(v: [mesh_data::Vertex; 3], z_level: f64) 
 /// the usual five minors to a major.
 const CONTOUR_LABEL_SPACING_SHARE: f64 = 0.3;
 
+/// The steepest ground, as rise over run (1:1, 45 degrees), whose spacing
+/// sets the label height: walls and faces would shrink it to nothing.
+const CONTOUR_LABEL_STEEPEST_SLOPE: f64 = 1.0;
+
 /// A major line's height as text on it, anchored top-left as `Object::Text`.
 #[derive(Debug)]
 struct ContourLabel {
@@ -382,10 +386,11 @@ struct ContourLabel {
     rotation: f64,
 }
 
-/// One label per major line on the straight stretch nearest its middle,
-/// read along the line with its top uphill; a line shorter than twice its
-/// label gets none. All share one height, a round share of the typical plan
-/// spacing between major lines, capped by the mesh's extent.
+/// One label per major line on the exposed straight stretch nearest its
+/// middle, read along the line with its top uphill; a line shorter than
+/// twice its label gets none. All share one height, a round share of the
+/// typical plan spacing between major lines on gentle ground, capped by the
+/// mesh's extent.
 fn contour_height_labels(
     mesh: &mesh_data::Triangulation,
     spatial: &crate::model::spatial::TriangleBvh,
@@ -403,18 +408,22 @@ fn contour_height_labels(
     let bounds = mesh.bounds();
     let extent = (bounds.max.x - bounds.min.x).max(bounds.max.y - bounds.min.y);
     let mut stack = Vec::new();
-    // The spacing of major lines is the interval over the slope across them.
-    let mut spacings: Vec<f64> = majors
+    // The spacing of major lines is the interval over the slope across them,
+    // read on gentle ground when there is any.
+    let mut slopes: Vec<f64> = majors
         .iter()
         .filter_map(|(line, stations)| {
-            let (middle, segment) = point_along(line, stations, stations[stations.len() - 1] * 0.5);
-            let across = (line[segment + 1] - line[segment]).truncate().try_normalize()?.perp();
-            let slope = surface_rise_across(mesh, spatial, &mut stack, middle, across, segment_reach(line, segment, 0.0))?.abs();
-            (slope > 1e-9).then(|| major_interval / slope)
+            let (middle, _) = point_along(line, stations, stations[stations.len() - 1] * 0.5);
+            surface_slope_at(mesh, spatial, &mut stack, middle.truncate(), middle.z).filter(|&slope| slope > 1e-9)
         })
         .collect();
-    spacings.sort_by(f64::total_cmp);
-    let raw_height = spacings.get(spacings.len() / 2).map_or(extent / 100.0, |spacing| spacing * CONTOUR_LABEL_SPACING_SHARE);
+    if slopes.iter().any(|&slope| slope <= CONTOUR_LABEL_STEEPEST_SLOPE) {
+        slopes.retain(|&slope| slope <= CONTOUR_LABEL_STEEPEST_SLOPE);
+    }
+    slopes.sort_by(f64::total_cmp);
+    let raw_height = slopes
+        .get(slopes.len() / 2)
+        .map_or(extent / 100.0, |slope| major_interval / slope * CONTOUR_LABEL_SPACING_SHARE);
     let Some(height) = round_down_1_2_5(raw_height.min(extent / 40.0)) else {
         userspace_log!("contour labels: majors {}, no height (raw {raw_height}, extent {extent})", majors.len()); // R177 diag
         return Ok(Vec::new());
@@ -442,7 +451,17 @@ fn contour_height_labels(
         }
         let window = 1.2 * box_width;
         let middle = length * 0.5;
-        let (start, end) = straight_window_near(line, stations, middle, window, 0.25 * height).unwrap_or((middle - window * 0.5, middle + window * 0.5));
+        // Exposed ground first: a stretch under another sheet of the mesh (a
+        // floor line under its roof, or under an overhang) is hidden.
+        let mut exposed = |start: f64, end: f64| {
+            let (centre, _) = point_along(line, stations, (start + end) * 0.5);
+            !is_covered(mesh, spatial, &mut stack, centre.truncate(), level, 0.01 * height)
+        };
+        let (start, end) = window_near(length, middle, window, |start, end| {
+            is_straight(line, stations, start, end, 0.25 * height) && exposed(start, end)
+        })
+        .or_else(|| window_near(length, middle, window, &mut exposed))
+        .unwrap_or((middle - window * 0.5, middle + window * 0.5));
         let (from, _) = point_along(line, stations, start);
         let (to, _) = point_along(line, stations, end);
         let (centre, segment) = point_along(line, stations, (start + end) * 0.5);
@@ -513,14 +532,13 @@ fn segment_reach(line: &[glam::DVec3], segment: usize, height: f64) -> f64 {
     (0.25 * line[segment].truncate().distance(line[segment + 1].truncate())).max(0.01 * height).max(1e-6)
 }
 
-/// Start and end stations of the `window` long stretch nearest `middle`
-/// whose points all lie within `tolerance` of its chord.
-fn straight_window_near(line: &[glam::DVec3], stations: &[f64], middle: f64, window: f64, tolerance: f64) -> Option<(f64, f64)> {
-    let length = stations[stations.len() - 1];
+/// Start and end stations of the `window` long stretch of a `length` long
+/// line nearest `middle` that `accept` takes.
+fn window_near(length: f64, middle: f64, window: f64, mut accept: impl FnMut(f64, f64) -> bool) -> Option<(f64, f64)> {
     let half = window * 0.5;
-    let fits = |centre: f64| {
+    let mut fits = |centre: f64| {
         let (start, end) = (centre - half, centre + half);
-        (start >= 0.0 && end <= length && is_straight(line, stations, start, end, tolerance)).then_some((start, end))
+        (start >= 0.0 && end <= length && accept(start, end)).then_some((start, end))
     };
     if let Some(found) = fits(middle) {
         return Some(found);
@@ -535,6 +553,8 @@ fn straight_window_near(line: &[glam::DVec3], stations: &[f64], middle: f64, win
     None
 }
 
+/// Whether every point of `line` from `start` to `end` lies within
+/// `tolerance` of the chord between them.
 fn is_straight(line: &[glam::DVec3], stations: &[f64], start: f64, end: f64, tolerance: f64) -> bool {
     let (from, first) = point_along(line, stations, start);
     let (to, last) = point_along(line, stations, end);
@@ -581,6 +601,41 @@ fn surface_z_near(mesh: &mesh_data::Triangulation, spatial: &crate::model::spati
         }
     });
     nearest
+}
+
+/// The steepness, rise over run, of the triangle under `point` on the sheet
+/// nearest `level`; a vertical one has none.
+fn surface_slope_at(mesh: &mesh_data::Triangulation, spatial: &crate::model::spatial::TriangleBvh, stack: &mut Vec<usize>, point: glam::DVec2, level: f64) -> Option<f64> {
+    let vertices = mesh.vertices();
+    let mut nearest: Option<(f64, f64)> = None;
+    spatial.for_each_xy_bounds_candidate_index_with_stack(point, point, stack, |index| {
+        if let Some(face) = mesh.face_vertex_indices(index)
+            && let triangle = [vertices[face[0]], vertices[face[1]], vertices[face[2]]]
+            && let Some(z) = point_in_triangle_bary_z(point.x, point.y, triangle)
+            && nearest.is_none_or(|(best, _)| (z - level).abs() < (best - level).abs())
+        {
+            let [a, b, c] = triangle.map(|vertex| glam::DVec3::new(vertex.x, vertex.y, vertex.z));
+            let normal = (b - a).cross(c - a);
+            nearest = Some((z, normal.truncate().length() / normal.z.abs()));
+        }
+    });
+    nearest.map(|(_, slope)| slope).filter(|slope| slope.is_finite())
+}
+
+/// Whether another sheet of the mesh lies more than `clearance` above
+/// `level` at `point`: a roof over a floor line, or an overhang.
+fn is_covered(mesh: &mesh_data::Triangulation, spatial: &crate::model::spatial::TriangleBvh, stack: &mut Vec<usize>, point: glam::DVec2, level: f64, clearance: f64) -> bool {
+    let vertices = mesh.vertices();
+    let mut covered = false;
+    spatial.for_each_xy_bounds_candidate_index_with_stack(point, point, stack, |index| {
+        if !covered
+            && let Some(face) = mesh.face_vertex_indices(index)
+            && let Some(z) = point_in_triangle_bary_z(point.x, point.y, [vertices[face[0]], vertices[face[1]], vertices[face[2]]])
+        {
+            covered = z > level + clearance;
+        }
+    });
+    covered
 }
 
 /// The largest 1, 2 or 5 step at or below `value`.
