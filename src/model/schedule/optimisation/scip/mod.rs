@@ -31,4 +31,5 @@ pub(crate) mod anytime;
 pub(crate) mod blasts;
 pub(crate) mod blend;
 pub(crate) mod experiments;
+pub(crate) mod parcels;
 pub(crate) mod plan;

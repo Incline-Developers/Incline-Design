@@ -85,7 +85,7 @@ use super::{
     },
     plan::{self, PlanSolve, Settings, Window},
 };
-use crate::model::schedule::optimisation::{Activity, DestinationKind, GroundId, SourceId, StockpileId, TaskKind};
+use crate::model::schedule::optimisation::{Activity, DestinationId, DestinationKind, GroundId, SourceId, StockpileId, TaskKind};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct AnytimeSettings {
@@ -101,7 +101,8 @@ pub(crate) struct AnytimeSettings {
     /// Windows whose exact model would have more movement columns than this
     /// are not polished.
     pub(crate) polish_columns: usize,
-    /// Solve the whole horizon's plan in the background, for its targets.
+    /// Solve long-term plans over the whole horizon in the background, for
+    /// their targets.
     pub(crate) background_bound: bool,
     /// A gap to the bound at or below which there is nothing left worth
     /// searching for.
@@ -678,12 +679,79 @@ fn earned(input: &BlendInput, solution: &BlendSolution) -> BTreeMap<u32, f64> {
     earned
 }
 
-/// The background plan, once it has finished; waited for when `wait`.
-fn finished(background: &mut Option<Background<Result<PlanSolve, String>>>, wait: bool) -> Option<Result<PlanSolve, String>> {
-    if background.as_ref().is_some_and(|handle| wait || handle.is_finished()) {
-        return background.take().map(|handle| handle.join().unwrap_or_else(|| Err("the background plan panicked".into())));
+/// The period lengths of the long-term plans solved beside the search,
+/// coarsest first: a week's solves in seconds on any horizon, four days'
+/// sets finer targets where it finishes.
+const LONG_TERM_DAYS: [u32; 2] = [7, 4];
+
+/// The gap a long-term plan stops at. Its answer is only targets, and
+/// proving it took 40% of its solve: on Centralia the optimum was found at
+/// 12 s and proved at 20 s.
+const LONG_TERM_GAP: f64 = 2e-2;
+
+/// The long-term plans solved beside the search (see [`plan::long_term`]),
+/// over the schedule's ground in parcels, which a long horizon needs.
+struct LongTerm {
+    worker: Background<()>,
+    planned: std::sync::mpsc::Receiver<(u32, Result<PlanSolve, String>)>,
+    /// Plans received and not yet tried.
+    pending: Vec<(u32, Result<PlanSolve, String>)>,
+}
+
+impl LongTerm {
+    fn start(input: &BlendInput, limit: Duration, ending: &Arc<AtomicBool>) -> Option<Self> {
+        let (input, ending) = (input.clone(), Arc::clone(ending));
+        let (sender, planned) = std::sync::mpsc::channel();
+        let worker = background::spawn("schedule-long-term", move || {
+            let started = Instant::now();
+            let (parcelled, _) = super::parcels::parcels(&input);
+            for period in LONG_TERM_DAYS {
+                let left = limit.saturating_sub(started.elapsed());
+                if left.is_zero() || ending.load(Ordering::Relaxed) {
+                    return;
+                }
+                let settings = Settings {
+                    time_limit: left,
+                    relative_gap: LONG_TERM_GAP,
+                    relax: false,
+                };
+                if sender.send((period, plan::long_term(&parcelled, None, period, settings, &ending))).is_err() {
+                    return;
+                }
+            }
+        });
+        match worker {
+            Ok(worker) => Some(Self {
+                worker,
+                planned,
+                pending: Vec::new(),
+            }),
+            Err(error) => {
+                log::warn!("the search's long-term plan was not started: {error}");
+                None
+            }
+        }
     }
-    None
+
+    /// Whether a plan has arrived that the search has not tried.
+    fn ready(&mut self) -> bool {
+        self.pending.extend(self.planned.try_iter());
+        !self.pending.is_empty()
+    }
+}
+
+/// A period plan's routes as daily targets, each period's tonnes spread
+/// evenly over its days.
+fn daily_routes(input: &BlendInput, routes: &BTreeMap<(usize, DestinationId, u32), f64>, period: u32) -> BTreeMap<(usize, DestinationId, u32), f64> {
+    let days: BTreeSet<u32> = input.intervals.iter().map(|interval| interval.day()).collect();
+    let mut daily = BTreeMap::new();
+    for (&(loader, destination, label), &tonnes) in routes {
+        let span: Vec<u32> = days.iter().copied().filter(|day| day / period * period == label).collect();
+        for day in &span {
+            *daily.entry((loader, destination, *day)).or_default() += tonnes / span.len() as f64;
+        }
+    }
+    daily
 }
 
 /// The relaxations solved beside the search, coarsest first, and what each
@@ -821,25 +889,8 @@ pub(crate) fn run(
     let relaxation = (!cancel.load(Ordering::Relaxed))
         .then(|| Relaxations::start(input, horizon_days, settings.budget, &ending))
         .flatten();
-    let mut background = (settings.background_bound && !cancel.load(Ordering::Relaxed))
-        .then(|| {
-            let (input, seed, ending) = (input.clone(), best.solution.clone(), Arc::clone(&ending));
-            let limit = settings.budget.saturating_sub(started.elapsed());
-            background::spawn("schedule-whole-plan", move || {
-                plan::solve(
-                    &input,
-                    Some(&seed),
-                    None,
-                    Settings {
-                        time_limit: limit,
-                        relative_gap: 1e-4,
-                        relax: false,
-                    },
-                    &ending,
-                )
-            })
-            .ok()
-        })
+    let mut long_term = (settings.background_bound && !cancel.load(Ordering::Relaxed))
+        .then(|| LongTerm::start(input, settings.budget.saturating_sub(started.elapsed()), &ending))
         .flatten();
     // What the latest plan of each day promised from its movements.
     let mut promised: BTreeMap<u32, f64> = BTreeMap::new();
@@ -853,6 +904,8 @@ pub(crate) fn run(
     let mut limit = settings.window_limit;
     let mut offset = 0;
     let mut quiet_passes = 0;
+    // Where a pass a long-term plan interrupted carries on.
+    let mut resume: Option<usize> = None;
 
     // Whether the days have been polished since a plan window was last kept.
     let mut polished_since = false;
@@ -862,35 +915,76 @@ pub(crate) fn run(
         if let Some(note) = relaxed(&relaxation, &mut bound) {
             record(value, bound, note);
         }
-        if let Some(outcome) = finished(&mut background, false) {
-            match outcome {
-                Ok(whole_plan) => {
-                    record(
-                        value,
-                        bound,
-                        format!(
-                            "whole-horizon plan {:.0} in {:.0}s, {}",
-                            whole_plan.objective.unwrap_or(f64::NAN),
-                            whole_plan.solve_s,
-                            whole_plan.status
-                        ),
-                    );
-                    let all: BTreeSet<u32> = days.iter().copied().collect();
+        // Each long-term plan's targets for the whole horizon, dispatched on
+        // the timeline the search holds and, when none of those improves,
+        // with the chain live.
+        let arrived = long_term.as_mut().map(|long_term| {
+            long_term.ready();
+            std::mem::take(&mut long_term.pending)
+        });
+        if let Some(arrived) = arrived.filter(|arrived| !arrived.is_empty()) {
+            let all: BTreeSet<u32> = days.iter().copied().collect();
+            for (period, outcome) in arrived {
+                let planned = match outcome {
+                    Ok(planned) => planned,
+                    Err(reason) => {
+                        record(value, bound, format!("long-term plan over {period}-day periods: {reason}"));
+                        continue;
+                    }
+                };
+                record(
+                    value,
+                    bound,
+                    format!(
+                        "long-term plan over {period}-day periods {:.0} in {:.1}s, {}",
+                        planned.objective.unwrap_or(f64::NAN),
+                        planned.solve_s,
+                        planned.status
+                    ),
+                );
+                let routes = daily_routes(input, &planned.routes, period);
+                let mut followed = false;
+                for live_round in [false, true] {
+                    let Some(live) = live.as_ref().filter(|_| live_round).or((!live_round).then_some(input)) else {
+                        break;
+                    };
+                    if followed {
+                        break;
+                    }
                     for (follow, overrun) in WEIGHTS {
-                        let candidate = targets.replacing(&all, &whole_plan.routes, follow * spread, overrun * spread);
-                        if let Ok(found) = redispatch(input, &best, 0, &candidate, &Timing::default(), cancel)
-                            && found.value() > value + 1e-7 * value.abs().max(1.0)
-                        {
-                            value = found.value();
-                            best = found;
-                            targets = candidate;
-                            polished_since = false;
-                            kept += 1;
-                            record(value, bound, "whole-horizon plan's targets: kept".into());
+                        let candidate = targets.replacing(&all, &routes, follow * spread, overrun * spread);
+                        let tried = if live_round {
+                            redispatch_live(input, live, &best, 0, None, &candidate, &Timing::default(), cancel)
+                        } else {
+                            redispatch(input, &best, 0, &candidate, &Timing::default(), cancel)
+                        };
+                        let Ok(found) = tried else { continue };
+                        if found.value() <= value + 1e-7 * value.abs().max(1.0) {
+                            continue;
                         }
+                        if let (Some(timeline), Some(chain)) = (found.solution.drill_blast.as_ref(), input.drill_blast.as_ref())
+                            && chain.fixed.as_ref() != Some(timeline)
+                        {
+                            let mut moved = input.clone();
+                            if let Some(chain) = moved.drill_blast.as_mut() {
+                                chain.fixed = Some(timeline.clone());
+                            }
+                            adopted = Some(Arc::new(moved));
+                            record(value, bound, format!("blasts moved: {}", moved_blasts(chain.fixed.as_ref(), timeline)));
+                        }
+                        value = found.value();
+                        best = found;
+                        targets = candidate;
+                        polished_since = false;
+                        followed = true;
+                        kept += 1;
+                        record(
+                            value,
+                            bound,
+                            format!("long-term plan's targets over {period}-day periods: kept{}", if live_round { ", chain live" } else { "" }),
+                        );
                     }
                 }
-                Err(reason) => record(value, bound, format!("whole-horizon plan: {reason}")),
             }
         }
         let closed = Progress {
@@ -980,9 +1074,8 @@ pub(crate) fn run(
                 if let Some(note) = relaxed(&relaxation, &mut bound) {
                     record(value, bound, note);
                 }
-                if let Some(outcome) = finished(&mut background, false) {
-                    // Picked up at the top of the next pass.
-                    background = Some(Background::done(outcome));
+                if long_term.as_mut().is_some_and(|long_term| long_term.ready()) {
+                    // Tried at the top of the next pass.
                     break;
                 }
             }
@@ -1001,11 +1094,23 @@ pub(crate) fn run(
             record(value, bound, format!("windows of {length} days, {:.0}s each", limit.as_secs_f64()));
         }
         let mut improved = false;
-        let starts: Vec<usize> = if length == horizon { vec![0] } else { (offset..days.len()).step_by(step).collect() };
+        let starts: Vec<usize> = if length == horizon {
+            vec![0]
+        } else {
+            (resume.take().unwrap_or(offset)..days.len()).step_by(step).collect()
+        };
+        let mut interrupted = false;
         for start in starts {
             let left = settings.budget.saturating_sub(started.elapsed());
             if left.is_zero() || cancel.load(Ordering::Relaxed) {
                 break 'passes;
+            }
+            // A long-term plan that has arrived is tried at the top of the
+            // next pass, which carries on from this window.
+            if long_term.as_mut().is_some_and(|long_term| long_term.ready()) {
+                resume = Some(start);
+                interrupted = true;
+                break;
             }
             // A window kept earlier in this pass may have moved the blasts:
             // every window plans and replays on the timeline `best` holds.
@@ -1150,6 +1255,9 @@ pub(crate) fn run(
                 record(value, bound, note);
             }
         }
+        if interrupted {
+            continue;
+        }
         quiet_passes = if improved { 0 } else { quiet_passes + 1 };
         offset = (offset + 1) % step;
         if length == horizon {
@@ -1167,7 +1275,7 @@ pub(crate) fn run(
     // its own time limit, which is the search's, and its bound goes unused.
     ending.store(true, Ordering::Release);
     let waiting = Instant::now();
-    while (background.as_ref().is_some_and(|handle| !handle.is_finished()) || relaxation.as_ref().is_some_and(|relaxations| !relaxations.worker.is_finished()))
+    while (long_term.as_ref().is_some_and(|long_term| !long_term.worker.is_finished()) || relaxation.as_ref().is_some_and(|relaxations| !relaxations.worker.is_finished()))
         && waiting.elapsed() < BACKGROUND_GRACE
     {
         background::pause(Duration::from_millis(20));
