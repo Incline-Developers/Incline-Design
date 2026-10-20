@@ -490,9 +490,11 @@ fn contour_height_labels(
     }
     // R177 diag
     userspace_log!(
-        "contour labels: majors {}, height {height}, too short {too_short}, placed {}, first text width {first_width:?}",
+        "contour labels: majors {}, height {height}, too short {too_short}, placed {}, first text width {first_width:?}, plan extent {extent:.0}, first label {:?} at {:?}",
         majors.len(),
-        labels.len()
+        labels.len(),
+        labels.first().map(|label| label.content.as_str()),
+        labels.first().map(|label| label.pos.to_array().map(|value| value.round()))
     );
     Ok(labels)
 }
