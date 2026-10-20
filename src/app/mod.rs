@@ -8,7 +8,7 @@ pub(crate) mod geophysics_web;
 pub(crate) mod io; /* Handles session serialisation */
 pub(crate) mod jobs; // Reusable background-compute job queue
 pub(crate) mod memory; // Browser address-space budgeting for large allocations
-pub(crate) mod memory_usage; // The bottom toolbar's memory readout
+pub(crate) mod memory_usage; // The status bar's memory and per-core CPU readouts
 pub(crate) mod tie_in; // Drill & Blast's tie-in and initiation point
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web_download;
@@ -300,6 +300,9 @@ pub(crate) struct App<'a> {
     /// being discarded when there is otherwise no window activity.
     next_ui_repaint_deadline: Option<Instant>,
     window: Option<Arc<Window>>,
+    /// Precision touchpad pan and pinch, which winit does not report on Windows.
+    #[cfg(target_os = "windows")]
+    trackpad: Option<crate::windows_trackpad::Trackpad>,
     graphics: Option<Graphics<'static>>,
     #[cfg(target_arch = "wasm32")]
     web_graphics_state: GraphicsState,
@@ -344,6 +347,9 @@ pub(crate) struct App<'a> {
     frame_demanded_at: Option<Instant>,
     /// Feeds `EditorState::memory_usage` on its own timer.
     memory_sampler: memory_usage::MemorySampler,
+    /// Feeds `EditorState::cpu_usage` on its own timer.
+    #[cfg(not(target_arch = "wasm32"))]
+    cpu_sampler: memory_usage::CpuSampler,
     surface_retry_pending: bool,
     slice_surface_retry_deadline: Option<Instant>,
     last_scroll_instant: Option<Instant>,
@@ -475,6 +481,8 @@ impl<'a> Default for App<'a> {
             redraw_requested: false,
             next_ui_repaint_deadline: None,
             window: None,
+            #[cfg(target_os = "windows")]
+            trackpad: None,
             graphics: None,
             #[cfg(target_arch = "wasm32")]
             web_graphics_state: GraphicsState::NotStarted,
@@ -504,6 +512,8 @@ impl<'a> Default for App<'a> {
             last_frame_end: None,
             frame_demanded_at: None,
             memory_sampler: memory_usage::MemorySampler::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            cpu_sampler: memory_usage::CpuSampler::new(),
             surface_retry_pending: false,
             slice_surface_retry_deadline: None,
             last_scroll_instant: None,
@@ -606,13 +616,14 @@ impl<'a> App<'a> {
                 None
             }
             MacMenuAction::RequestExit => Some(UiCommand::RequestExit),
-            MacMenuAction::InsertPointsAtIntersections => Some(UiCommand::InsertPointsAtIntersections),
             MacMenuAction::CleanStrings => Some(UiCommand::CleanStrings),
-            MacMenuAction::OpenInsertPointAtElevation => Some(UiCommand::OpenInsertPointAtElevationDialog),
-            MacMenuAction::OpenMoveToX => Some(UiCommand::OpenMoveToAxisDialog(crate::model::Axis::X)),
-            MacMenuAction::OpenMoveToY => Some(UiCommand::OpenMoveToAxisDialog(crate::model::Axis::Y)),
-            MacMenuAction::OpenMoveToZ => Some(UiCommand::OpenMoveToAxisDialog(crate::model::Axis::Z)),
-            MacMenuAction::OpenCreateTriangulation => Some(UiCommand::OpenCreateTriangulation),
+            MacMenuAction::DesignRow(index) => match crate::ui::elements::main_menu::DESIGN_ROWS.get(index) {
+                Some(row) => {
+                    self.handle_ui_commands(vec![row.command(), UiCommand::NoteRecentFunction(row.key())]);
+                    return;
+                }
+                None => None,
+            },
             MacMenuAction::OpenCutTriangulationByPolyline => Some(UiCommand::OpenCutTriangulationByPolyline),
             MacMenuAction::OpenCutTriangulationByZ => Some(UiCommand::OpenCutTriangulationByZ),
             MacMenuAction::OpenCutTriangulationBySurface => Some(UiCommand::OpenCutTriangulationBySurface),
@@ -628,6 +639,7 @@ impl<'a> App<'a> {
             MacMenuAction::OpenThicknessPoints => Some(UiCommand::OpenThicknessPoints),
             MacMenuAction::OpenSeamSurface => Some(UiCommand::OpenSeamSurface),
             MacMenuAction::OpenModellingClipToSurface | MacMenuAction::OpenCutTriangulationToSurface => Some(UiCommand::OpenCutTriangulationToSurface),
+            MacMenuAction::OpenOptimizationScenarios => Some(UiCommand::OpenOptimizationScenarios),
             MacMenuAction::OpenSurveyDefinitions => Some(UiCommand::OpenSurveyDefinitions),
             MacMenuAction::OpenSurveyTransform => Some(UiCommand::OpenSurveyTransform),
             MacMenuAction::OpenCreateOreTriangulation => Some(UiCommand::OpenCreateOreTriangulation),
@@ -689,7 +701,7 @@ impl<'a> App<'a> {
         let definitions: Vec<_> = config.coordinate_systems.into_iter().filter(|definition| !definition.name.trim().is_empty()).collect();
         self.editor.survey.definitions = definitions
             .iter()
-            .filter(|definition| crate::model::survey::resolve_system(&definition.name, &definitions).is_ok())
+            .filter(|definition| crate::model::survey::check_parents(&definition.name, &definitions).is_ok())
             .cloned()
             .collect();
         self.editor.survey.local_system = config
@@ -715,7 +727,6 @@ impl<'a> App<'a> {
         self.editor.block_model_interaction_resolution_divisor = config.block_model_interaction_resolution_divisor.clamp(1, 64);
         self.editor.show_block_model_boundary_highlights = config.show_block_model_boundary_highlights;
         self.editor.downscale_raster_previews = config.downscale_raster_previews;
-        self.editor.frame_counter_enabled = config.frame_counter_enabled;
         self.editor.debug_surface_chunks = config.debug_surface_chunks;
         self.editor.debug_clip_planes = config.debug_clip_planes;
         self.editor.debug_point_cloud_chunks = config.debug_point_cloud_chunks;
@@ -736,11 +747,23 @@ impl<'a> App<'a> {
         self.editor.next_delay_product_id = self.editor.delay_products.len() as u64;
         self.editor.active_delay_product = self.editor.delay_products.first().map(|product| product.id);
         self.editor.blast_library = config.blast_library.clone();
+        self.editor.recent_functions_shown = config.recent_functions_shown.clamp(1, crate::ui::state::RECENT_FUNCTION_LIMIT as u32);
+        // A key no row carries any more (a function since removed) is dropped.
+        let mut recent = Vec::new();
+        for key in config
+            .recent_design_functions
+            .iter()
+            .filter(|key| crate::ui::elements::main_menu::DesignRow::from_key(key).is_some())
+        {
+            crate::ui::state::note_recent(&mut recent, key);
+        }
+        self.editor.recent_design_functions = recent;
         self.configure_graphics_camera_preferences();
     }
 
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn web_new(event_loop_proxy: EventLoopProxy<AppEvent>) -> Result<Self> {
+        crate::fonts::install_cjk_font_loader(event_loop_proxy.clone());
         let mut app = App {
             web_event_loop_proxy: Some(event_loop_proxy.clone()),
             ..App::default()
@@ -1299,6 +1322,9 @@ impl<'a> App<'a> {
         self.next_raster_texture_id = 0;
         self.project_asset_baseline = SaveToken::default();
         self.clear_editor_transient_state();
+        // Scenarios, runs and results belong to the outgoing project; the next
+        // one's scenarios are read from it when the list first opens.
+        self.editor.optimization = Default::default();
         self.scene_document_key = None;
         // Item and object ids restart with the replacement project, so the
         // renderer's id-keyed caches would otherwise keep drawing this
@@ -1466,6 +1492,23 @@ impl<'a> App<'a> {
             .chain(self.point_clouds.iter().filter(|item| item.state.hidden).map(|item| item.entity_id()))
             .chain(self.raster_textures.iter().filter(|item| item.state.hidden).map(|item| SceneEntityId::Raster(item.id)));
         self.editor.hidden_handles.extend(hidden);
+        // One entity shown alone, hidden or not (a pick on it).
+        if let Some(keep) = self.editor.isolated_entity {
+            let everything = self
+                .scene_document
+                .objects()
+                .iter()
+                .map(|object| SceneEntityId::Object(object.id()))
+                .chain(self.triangulations.iter().map(|item| item.entity_id()))
+                .chain(self.block_models.iter().map(|item| item.entity_id()))
+                .chain(self.drill_holes.iter().map(|item| item.entity_id()))
+                .chain(self.point_clouds.iter().map(|item| item.entity_id()))
+                .chain(self.raster_textures.iter().map(|item| SceneEntityId::Raster(item.id)))
+                .filter(|entity| *entity != keep)
+                .collect::<Vec<_>>();
+            self.editor.hidden_handles.extend(everything);
+            self.editor.hidden_handles.remove(&keep);
+        }
     }
 
     fn invalidate_geometry(&mut self) {
@@ -1662,10 +1705,32 @@ impl<'a> App<'a> {
             || self.raster_textures.iter().any(|item| item.state.loaded)
     }
 
+    /// Apply what a precision touchpad gesture moved since the last loop
+    /// iteration. Returns whether one is live, so the loop keeps polling.
+    #[cfg(target_os = "windows")]
+    fn poll_trackpad(&mut self) -> bool {
+        let Some(trackpad) = self.trackpad.as_mut() else {
+            return false;
+        };
+        if let Some(motion) = trackpad.poll()
+            && let Some(graphics) = self.graphics.as_mut()
+        {
+            let (dx, dy) = motion.pan;
+            let panned = (dx, dy) != (0.0, 0.0) && graphics.trackpad_pan(dx, dy);
+            let zoomed = motion.magnification != 0.0 && graphics.trackpad_pinch(motion.magnification);
+            self.redraw_requested |= panned || zoomed;
+        }
+        trackpad.active()
+    }
+
     fn teardown_window(&mut self) {
         #[cfg(target_arch = "wasm32")]
         crate::app::web_storage::set_dirty(false);
         self.graphics = None;
+        #[cfg(target_os = "windows")]
+        {
+            self.trackpad = None;
+        }
         self.window = None;
         self.pending_resize = None;
         self.last_render_time = None;
@@ -2010,14 +2075,6 @@ impl<'a> App<'a> {
         let triangulation_membership: Vec<(u64, SectionKind)> = self.triangulations.iter().map(|item| (item.id.0, item.state.section)).collect();
         let triangulations_membership_dirty = section_membership_dirty(SectionKind::Triangulations, &triangulation_membership, &self.project_asset_baseline.triangulations)
             || section_folders_dirty(SectionKind::Triangulations);
-        // Modelling's own half of the same question. Its layers belong here
-        // rather than with the rows: a deleted one has no row left to mark.
-        let modelling_dirty = section_membership_dirty(SectionKind::Modelling, &triangulation_membership, &self.project_asset_baseline.triangulations)
-            || section_folders_dirty(SectionKind::Modelling)
-            || self
-                .workspace
-                .active_project()
-                .is_some_and(|project| project.section_layers_dirty(SectionKind::Modelling, &self.project_asset_baseline.folders));
         let block_models_membership_dirty = !same_membership(
             &self.block_models.iter().map(|item| item.id.0).collect::<Vec<_>>(),
             &self.project_asset_baseline.block_models,
@@ -2042,7 +2099,6 @@ impl<'a> App<'a> {
             point_clouds,
             raster_textures,
             triangulations_membership_dirty,
-            modelling_dirty,
             block_models_membership_dirty,
             drill_holes_membership_dirty,
             point_clouds_membership_dirty,
@@ -2143,6 +2199,14 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
         #[cfg(target_os = "macos")]
         crate::mac::install_menu_bar();
 
+        // Without it a touchpad still scrolls, as a wheel: two fingers zoom.
+        #[cfg(target_os = "windows")]
+        {
+            self.trackpad = crate::windows_trackpad::Trackpad::new(&window)
+                .inspect_err(|error| log::warn!("Precision touchpad gestures are unavailable: {error}"))
+                .ok();
+        }
+
         #[cfg(not(target_arch = "wasm32"))]
         match pollster::block_on(Graphics::new(window.clone())) {
             Ok(graphics) => {
@@ -2205,6 +2269,10 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
 
         self.poll_file_dialogs();
         self.sync_geophysics();
+        #[cfg(target_os = "windows")]
+        let trackpad_active = self.poll_trackpad();
+        #[cfg(not(target_os = "windows"))]
+        let trackpad_active = false;
         let now = Instant::now();
         if self.next_ui_repaint_deadline.is_some_and(|deadline| deadline <= now) {
             self.next_ui_repaint_deadline = None;
@@ -2249,7 +2317,14 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
             (None, None) => None,
         };
-        let wake_deadline = wake_deadline.into_iter().chain(self.slice_surface_retry_deadline).chain(resize_settle_deadline).min();
+        // A live touchpad gesture sends the window nothing, so the loop wakes itself to advance it.
+        let trackpad_deadline = trackpad_active.then(|| now + Duration::from_millis(4));
+        let wake_deadline = wake_deadline
+            .into_iter()
+            .chain(self.slice_surface_retry_deadline)
+            .chain(resize_settle_deadline)
+            .chain(trackpad_deadline)
+            .min();
         if let Some(deadline) = wake_deadline {
             event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
         } else {
@@ -2431,6 +2506,12 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                     }
                 }
             }
+            AppEvent::CjkFontsLoaded => {
+                if let Some(graphics) = self.graphics.as_mut() {
+                    graphics.reload_cjk_fonts();
+                    self.redraw_requested = true;
+                }
+            }
             AppEvent::BrowserClipboardPasted(text) => {
                 if let Some(graphics) = self.graphics.as_mut() {
                     graphics.queue_browser_paste(text);
@@ -2521,6 +2602,8 @@ pub(crate) enum AppEvent {
         result: std::result::Result<(), String>,
     },
     BrowserClipboardPasted(String),
+    /// The CJK faces finished downloading (`crate::fonts`).
+    CjkFontsLoaded,
     /// Picked geophysics files' identities, computed on the page thread.
     GeophysicsFileIdentified {
         dataset: crate::model::drill_hole::DrillHoleId,

@@ -30,7 +30,13 @@ pub(crate) fn draw_create_block_model_dialog(ui: &mut egui::Ui, editor: &mut Edi
             selected_source_field(
                 ui,
                 tr!("ws-menubar-drillholes"),
-                selected_dataset.map_or_else(|| tr!("block-model-no-drill-holes-selected"), |dataset| dataset.name.clone()),
+                selected_dataset.map_or_else(
+                    || tr!("block-model-no-drill-holes-selected"),
+                    |dataset| match &editor.kriging_holes {
+                        Some(holes) => tr!("block-model-source-some-holes", name = dataset.name.clone(), count = holes.len().to_string()),
+                        None => dataset.name.clone(),
+                    },
+                ),
                 tr!("block-model-source-drill-holes-help"),
                 220.0,
             );
@@ -176,6 +182,7 @@ pub(crate) fn draw_create_block_model_dialog(ui: &mut egui::Ui, editor: &mut Edi
                 if ui.add(MenuButton::new(tr!("common-create")).primary().enabled(ready)).clicked() || (confirm && ready) {
                     commands.push(UiCommand::ExecuteCreateBlockModel {
                         drill_hole_id: editor.kriging_drill_hole_id.unwrap(),
+                        holes: editor.kriging_holes.clone(),
                         variables: editor.kriging_variables.clone(),
                         name: editor.kriging_name_input.trim().to_owned(),
                         lower: editor.kriging_lower,

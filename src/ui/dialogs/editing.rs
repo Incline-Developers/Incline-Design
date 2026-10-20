@@ -4,10 +4,10 @@ use crate::{
     i18n::tr,
     model::{Axis, Document},
     ui::{
-        state::{ActiveTool, BatterBermMode, DrapePhase, EditorState, HeightMode, OffsetMeasure, RelimitMode, TrimEnd, UiCommand, UiProjectView},
+        state::{ActiveTool, BatterBermMode, DrapePhase, EditorState, HeightMode, OffsetMeasure, RelimitMode, RenameTarget, TrimEnd, UiCommand, UiProjectView},
         themed_icon,
         widgets::{
-            context_menu::{ContextMenu, ContextMenuAction, context_menu_popup, context_menu_separator},
+            context_menu::{ContextMenu, ContextMenuAction, context_menu_popup, context_menu_separator, context_submenu},
             menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldRgba, MenuFieldText, MenuFieldU32},
             viewport::ViewportDockPanel,
         },
@@ -111,7 +111,7 @@ pub(crate) fn draw_right_click_context(
         .and_then(|index| editor.string_rings.get(index))
         .and_then(|ring| ring.title.clone())
         .unwrap_or_else(|| canvas_context_menu_title(editor, document));
-    ContextMenu::new("canvas_properties", title).position(pos).width(220.0).show(ui.ctx(), |ui| {
+    let (_, dismissed) = ContextMenu::new("canvas_properties", title).position(pos).width(220.0).show(ui.ctx(), |ui| {
         // Opened on a ring: its rows first, vertices numbered from one as the
         // Vertices table numbers them.
         // A ring on a hidden string offers nothing; one on a locked string
@@ -220,10 +220,45 @@ pub(crate) fn draw_right_click_context(
             context_menu_separator(ui);
         }
 
+        if editor.keeps_recent_functions() {
+            context_submenu(ui, &tr!("edit-recent-functions"), true, |ui| draw_recent_function_rows(ui, editor, commands));
+        }
         if ContextMenuAction::new(tr!("survey-close")).show(ui).clicked() {
             commands.push(UiCommand::CloseCanvasContextMenu);
         }
     });
+    if dismissed {
+        commands.push(UiCommand::CloseCanvasContextMenu);
+    }
+}
+
+/// The recent functions list a right click on empty space opens: the canvas
+/// menu's frame, place and closers, with the list as its only rows.
+pub(crate) fn draw_recent_functions_context(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>, px: f32, py: f32) {
+    let ppp = ui.ctx().pixels_per_point();
+    let pos = egui::pos2(px / ppp + 4.0, py / ppp + 4.0);
+    let (_, dismissed) = ContextMenu::new("canvas_recent_functions", tr!("edit-recent-functions"))
+        .position(pos)
+        .width(220.0)
+        .show(ui.ctx(), |ui| draw_recent_function_rows(ui, editor, commands));
+    if dismissed {
+        commands.push(UiCommand::CloseCanvasContextMenu);
+    }
+}
+
+/// One line per recent function, greyed exactly when its menu bar entry is.
+fn draw_recent_function_rows(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
+    let rows = editor.recent_design_rows().unwrap_or_default();
+    if rows.is_empty() {
+        ContextMenuAction::new(tr!("edit-no-recent-functions")).enabled(false).show(ui);
+    }
+    for row in rows {
+        if ContextMenuAction::new(row.path()).enabled(row.enabled(editor)).show(ui).clicked() {
+            commands.push(row.command());
+            commands.push(UiCommand::NoteRecentFunction(row.key()));
+            commands.push(UiCommand::CloseCanvasContextMenu);
+        }
+    }
 }
 
 pub(crate) fn draw_move_to_layer_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
@@ -432,7 +467,7 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, project: &UiProjectV
     // orbit the camera instead. It paints nothing: the window behind the
     // splash reads as it always does.
     let screen = ui.ctx().viewport_rect();
-    let backdrop = egui::Area::new(egui::Id::new("select_project_backdrop"))
+    let backdrop = egui::Area::new(egui::Id::unique("select_project_backdrop"))
         .fixed_pos(screen.min)
         .order(egui::Order::Middle)
         .show(ui.ctx(), |ui| ui.allocate_exact_size(screen.size(), egui::Sense::click()).1);
@@ -440,7 +475,7 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, project: &UiProjectV
         commands.push(UiCommand::CloseStartupDialog);
     }
 
-    egui::Area::new(egui::Id::new("select_project_dialog"))
+    egui::Area::new(egui::Id::unique("select_project_dialog"))
         .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
         .order(egui::Order::Foreground)
         .show(ui.ctx(), |ui| {
@@ -595,7 +630,7 @@ fn draw_splash_artwork(ui: &mut egui::Ui, width: f32) {
 fn splash_artwork_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
     const ARTWORK: &[u8] = include_bytes!("../../../res/ui/splash_artwork.png");
 
-    let id = egui::Id::new("splash_artwork_texture");
+    let id = egui::Id::unique("splash_artwork_texture");
     if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
         return Some(texture);
     }
@@ -690,7 +725,13 @@ fn draw_recent_projects(ui: &mut egui::Ui, recent: &[&crate::ui::state::UiTracke
         // list is scrolled - so the bands travel with the rows rather than
         // staying put under them.
         let box_rect = scroll.inner_rect;
-        let bands = crate::ui::widgets::explorer::stripe_bands(box_rect.x_range(), box_rect.top() - scroll.state.offset.y, box_rect.bottom(), row_height, stripe);
+        let bands = crate::ui::widgets::explorer::stripe_bands(
+            box_rect.x_range(),
+            box_rect.top() - scroll.state.unclamped_offset().y,
+            box_rect.bottom(),
+            row_height,
+            stripe,
+        );
         // Clipped to the box: when the list is scrolled the first band starts
         // above the box's top edge.
         ui.painter().with_clip_rect(box_rect).set(stripes_slot, bands);
@@ -800,7 +841,9 @@ pub(crate) fn draw_create_layer_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiC
 
 /// Draw the rename floating dialog for whichever explorer item is being renamed.
 pub(crate) fn draw_rename_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState) {
+    let opened_key = egui::Id::unique("rename_dialog_opened");
     let Some((target, _)) = editor.renaming_item else {
+        ui.data_mut(|data| data.remove::<RenameTarget>(opened_key));
         return;
     };
     // Work on a local copy of the name buffer to avoid borrow conflicts inside the closure.
@@ -814,10 +857,20 @@ pub(crate) fn draw_rename_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand
         .show(ui.ctx(), |ui| {
             // `menu_field_row` gives the entry its requested width and leaves the
             // rest of the row to the label, so the extra width here is the label's.
-            MenuFieldText::new(tr!("dialog-rename-field"), &mut name_buf)
+            let response = MenuFieldText::new(tr!("dialog-rename-field"), &mut name_buf)
                 .width(260.0)
                 .hint_text(tr!("dialog-rename-field-hint"))
                 .show(ui);
+            // The first frame for a target puts the cursor in the field with the
+            // whole name selected, so typing replaces it as in any file browser.
+            if ui.data(|data| data.get_temp::<RenameTarget>(opened_key)) != Some(target) {
+                ui.data_mut(|data| data.insert_temp(opened_key, target));
+                response.request_focus();
+                let mut state = egui::TextEdit::load_state(ui.ctx(), response.id).unwrap_or_default();
+                let end = egui::text::CCursor::new(name_buf.chars().count());
+                state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), end)));
+                state.store(ui.ctx(), response.id);
+            }
             menu::menu_actions(ui, |ui| {
                 let can_rename = !name_buf.trim().is_empty();
                 let submitted = menu::dialog_confirm_pressed(ui.ctx());
@@ -901,27 +954,30 @@ pub(crate) fn draw_text_edit_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiComm
     editor.text_edit_position_frames = editor.text_edit_position_frames.saturating_sub(1);
 }
 
-/// Draw the polyline finish dialog (Close / Leave open / Cancel) near the cursor.
-pub(crate) fn draw_finish_polyline_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState, viewport_rect: egui::Rect) {
-    ViewportDockPanel::new("finish_poly_dialog", tr!("edit-finish-polyline"), viewport_rect).show(ui, |ui| {
-        MenuField::new(tr!("common-shape")).show(ui, |ui, _, _| {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // Drain the key from egui's queue every frame so it never leaks
-                // elsewhere, but honour it only once the Enter that opened this
-                // dialog has been released - a key held down to finish the line
-                // would otherwise confirm "Open" the instant the dialog appears.
-                let confirm_key = menu::dialog_confirm_pressed(ui.ctx());
-                if ui.add(MenuButton::new(tr!("common-open")).primary()).clicked() || (confirm_key && editor.poly_finish_dialog_confirm_armed) {
-                    commands.push(UiCommand::CommitStrokeOpen);
-                    editor.poly_finish_dialog = false;
-                }
-                if ui.add(MenuButton::new(tr!("common-closed"))).clicked() {
-                    commands.push(UiCommand::FinishPolyClose);
-                    editor.poly_finish_dialog = false;
-                }
-            });
+/// Ask whether the polyline being drawn finishes open or closed, as a context
+/// menu where the stroke was finished. Escape or a click away keeps it open.
+pub(crate) fn draw_finish_polyline_menu(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState) {
+    let Some((px, py)) = editor.poly_finish_dialog_px else {
+        return;
+    };
+    let ppp = ui.ctx().pixels_per_point();
+    let pos = egui::pos2(px / ppp + 4.0, py / ppp + 4.0);
+    let mut command = None;
+    let (_, dismissed) = ContextMenu::new("finish_poly_menu", tr!("edit-finish-polyline"))
+        .position(pos)
+        .width(160.0)
+        .show(ui.ctx(), |ui| {
+            if ContextMenuAction::new(tr!("common-open")).show(ui).clicked() {
+                command = Some(UiCommand::CommitStrokeOpen);
+            }
+            if ContextMenuAction::new(tr!("common-closed")).show(ui).clicked() {
+                command = Some(UiCommand::FinishPolyClose);
+            }
         });
-    });
+    if let Some(command) = command.or_else(|| dismissed.then_some(UiCommand::CommitStrokeOpen)) {
+        commands.push(command);
+        editor.poly_finish_dialog = false;
+    }
 }
 
 // I dont like this - we need to clean this up later - too many options and sub menus
@@ -1459,11 +1515,14 @@ pub(crate) fn draw_bezier_panel(ui: &mut egui::Ui, editor: &mut EditorState, com
         });
 }
 
-/// Slice view dock: slab width, movement speed, Q/E rotate rate, reset, and exit.
+/// Slice view dock: 2D/3D, slab width, movement speed, Q/E rotate rate, reset, and exit.
 pub(crate) fn draw_slice_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect) {
     ViewportDockPanel::new("slice_panel", tr!("edit-slice-view"), viewport_rect)
         .min_width(210.0)
         .show(ui.ctx(), |ui| {
+            let mut view_3d = !editor.slice_outlines;
+            MenuFieldBool::new(tr!("edit-slice-3d"), &mut view_3d).help_text(tr!("edit-slice-3d-help")).show(ui);
+            editor.slice_outlines = !view_3d;
             MenuFieldF64::new(tr!("drill-hole-width"), &mut editor.slice_width_input, 0.1..=1.0e6)
                 .help_text(tr!("edit-thickness-visible-slice-slab-centred"))
                 .speed(0.5)

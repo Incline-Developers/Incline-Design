@@ -55,4 +55,5 @@ Incline Design is licensed under the [MIT License](LICENSE.md).
 
 ## Committers
 
+- **Denis Mikulich**, **GitHub** [@denismikulich91](https://github.com/denismikulich91).
 - **Norman Heckscher**, **GitHub:** [@normanheckscher](https://github.com/normanheckscher).

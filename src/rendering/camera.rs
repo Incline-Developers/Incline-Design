@@ -90,20 +90,6 @@ impl Camera {
         self.position = center + DVec3::Z * zoom.max(MIN_ORTHO_ZOOM);
     }
 
-    /// Plan view onto `center` from as far away as the camera stands from its
-    /// target now, so the zoom the controller derives stays where it was.
-    pub(crate) fn reset_to_plan_view_keeping_distance(&mut self, center: DVec3) {
-        self.reset_to_plan_view(center, self.position.distance(self.target));
-    }
-
-    pub(crate) fn pose(&self) -> CameraPose {
-        CameraPose {
-            position: self.position,
-            target: self.target,
-            up: self.up,
-        }
-    }
-
     /// Place the camera at `position` looking along `forward` with the given
     /// `up`, keeping the focal point `target_distance` ahead.
     pub(crate) fn look_to(&mut self, position: DVec3, forward: DVec3, up: DVec3, target_distance: f64) {
@@ -127,24 +113,6 @@ impl Camera {
         let forward = self.forward();
         self.target = center;
         self.position = center - forward * zoom.max(MIN_ORTHO_ZOOM);
-    }
-}
-
-/// Where the camera stands, what it looks at and which way is up: enough to
-/// tell whether it has moved between two clicks without watching every input.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct CameraPose {
-    pub(crate) position: DVec3,
-    pub(crate) target: DVec3,
-    pub(crate) up: DVec3,
-}
-
-impl CameraPose {
-    /// The same pose, give or take float noise: a part in a million of the
-    /// eye's distance, so it holds at pit scale and at a hand specimen alike.
-    pub(crate) fn matches(&self, other: &Self) -> bool {
-        let tolerance = 1.0e-6 * self.position.distance(self.target).max(other.position.distance(other.target)).max(1.0);
-        self.position.distance(other.position) <= tolerance && self.target.distance(other.target) <= tolerance && self.up.distance(other.up) <= 1.0e-6
     }
 }
 
@@ -324,13 +292,18 @@ impl CameraUniform {
             Some(slab) => {
                 let point = slab.point - scene_origin;
                 self.section_plane = [point.x as f32, point.y as f32, point.z as f32, slab.half_width as f32];
-                self.section_normal = [slab.normal.x as f32, slab.normal.y as f32, slab.normal.z as f32, 1.0];
+                self.section_normal = [slab.normal.x as f32, slab.normal.y as f32, slab.normal.z as f32, if slab.outlines { 2.0 } else { 1.0 }];
             }
             None => {
                 self.section_plane = [0.0; 4];
                 self.section_normal = [0.0; 4];
             }
         }
+    }
+
+    /// Whether this camera sees a 2D section, where surfaces draw as their cut through the plane.
+    pub(crate) fn section_cuts(&self) -> bool {
+        self.section_normal[3] > 1.5
     }
 
     pub(crate) fn update_view_proj(&mut self, camera: &Camera, projection: &Projection, scene_origin: DVec3, vertical_exaggeration: f64) {
@@ -548,6 +521,12 @@ impl CameraController {
     pub(crate) fn process_scroll(&mut self, delta: &MouseScrollDelta) {
         self.view_transition = None;
         self.scroll += crate::rendering::graphics::scroll_pixels(delta);
+    }
+
+    /// A trackpad pinch, zooming towards the cursor as the wheel does.
+    pub(crate) fn process_pinch(&mut self, magnification: f64) {
+        self.view_transition = None;
+        self.scroll += crate::rendering::graphics::pinch_scroll(magnification, self.zoom_sensitivity);
     }
 
     pub(crate) fn has_pending_updates(&self) -> bool {
@@ -920,6 +899,9 @@ pub(crate) struct SectionSlab {
     pub(crate) point: DVec3,
     pub(crate) normal: DVec3,
     pub(crate) half_width: f64,
+    /// A 2D section: surfaces draw only where they cross the plane, while
+    /// lines, points and block models keep the slab.
+    pub(crate) outlines: bool,
 }
 
 impl SectionSlab {
@@ -930,6 +912,23 @@ impl SectionSlab {
 
     pub(crate) fn contains(&self, world: DVec3) -> bool {
         self.signed_distance(world).abs() <= self.half_width
+    }
+
+    /// The stretch `(enter, leave)` of the ray `origin + direction * t`,
+    /// `t >= 0`, along which the section draws filled geometry: between the
+    /// walls, or from the plane on in a 2D section, matching the block
+    /// raycast's `clip_march_to_section_slab`. `None` if the ray misses it.
+    pub(crate) fn ray_span(&self, origin: DVec3, direction: DVec3) -> Option<(f64, f64)> {
+        let from = self.signed_distance(origin);
+        let slope = direction.dot(self.normal);
+        if slope.abs() <= f64::EPSILON {
+            return (from.abs() <= self.half_width).then_some((0.0, f64::INFINITY));
+        }
+        let wall_a = (self.half_width - from) / slope;
+        let wall_b = (-self.half_width - from) / slope;
+        let enter = if self.outlines { -from / slope } else { wall_a.min(wall_b) };
+        let (enter, leave) = (enter.max(0.0), wall_a.max(wall_b));
+        (enter < leave).then_some((enter, leave))
     }
 
     /// Fraction range `(enter, leave)` along segment `a`-`b`, each in `0.0..=1.0`,

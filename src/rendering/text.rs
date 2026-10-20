@@ -81,6 +81,7 @@ impl TextCache {
                 let mut line_str = String::new();
                 let mut attrs_list = AttrsList::new(&Attrs::new());
                 for section in line {
+                    crate::fonts::request_cjk_fonts_for(section.content);
                     let start = line_str.len();
                     line_str.push_str(section.content);
                     let end = line_str.len();

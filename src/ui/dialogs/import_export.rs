@@ -35,7 +35,7 @@ const MENU_WIDTH: f32 = EXPLORER_WIDTH + 4.0 + DETAILS_WIDTH;
 
 /// One format, as a row of the dialog's type tree.
 fn draw_entry(ui: &mut egui::Ui, editor: &mut EditorState, title: &str, data_menu: DataMenu) -> egui::Response {
-    let response = ExplorerEntry::new(ui.id().with(("data_menu", data_menu)), bold(title))
+    let response = ExplorerEntry::new(ui.scope_id().with(("data_menu", data_menu)), bold(title))
         .selected(editor.data_menu == data_menu)
         .show(ui)
         .response;
@@ -98,7 +98,7 @@ fn striped_box(ui: &mut egui::Ui, id_salt: &str, size: egui::Vec2, contents: imp
                         contents(ui);
                     });
                 let box_rect = scroll.inner_rect;
-                let bands = stripe_bands(box_rect.x_range(), box_rect.top() - scroll.state.offset.y, box_rect.bottom(), row, stripe);
+                let bands = stripe_bands(box_rect.x_range(), box_rect.top() - scroll.state.unclamped_offset().y, box_rect.bottom(), row, stripe);
                 ui.painter().with_clip_rect(box_rect).set(stripes_slot, bands);
             }
         });
@@ -216,7 +216,7 @@ fn draw_import_explorer(ui: &mut egui::Ui, editor: &mut EditorState) {
         // OMF carries a whole project rather than one kind of data, so it gets
         // a section of its own above the rest - open, because it is also the
         // dialog's default selection.
-        ExplorerHeader::new(egui::Id::new("import_projects_section"), tr!("io-projects"))
+        ExplorerHeader::new(egui::Id::unique("import_projects_section"), tr!("io-projects"))
             .default_open(true)
             .show(ui, |ui| {
                 draw_entry(ui, editor, &tr!("io-open-mining-format-2-omf"), DataMenu::Omf);
@@ -225,36 +225,36 @@ fn draw_import_explorer(ui: &mut egui::Ui, editor: &mut EditorState) {
         // comes in here lands in the section of the same name over there. They
         // carry neither the explorer's icons nor its tints - here the heading
         // names a group of file formats, not the data itself.
-        ExplorerHeader::new(egui::Id::new("import_designs_section"), tr!("common-designs"))
+        ExplorerHeader::new(egui::Id::unique("import_designs_section"), tr!("common-designs"))
             .default_open(false)
             .show(ui, |ui| {
                 draw_entry(ui, editor, &tr!("io-drawing-exchange-format-dxf"), DataMenu::Dxf);
             });
-        ExplorerHeader::new(egui::Id::new("import_triangulations_section"), tr!("common-triangulations"))
+        ExplorerHeader::new(egui::Id::unique("import_triangulations_section"), tr!("common-triangulations"))
             .default_open(false)
             .show(ui, |ui| {
                 draw_entry(ui, editor, &tr!("io-wavefront-obj"), DataMenu::Obj);
                 draw_entry(ui, editor, &tr!("io-stl"), DataMenu::Stl);
                 draw_entry(ui, editor, &tr!("io-ply"), DataMenu::Ply);
             });
-        ExplorerHeader::new(egui::Id::new("import_rasters_section"), tr!("common-rasters"))
+        ExplorerHeader::new(egui::Id::unique("import_rasters_section"), tr!("common-rasters"))
             .default_open(false)
             .show(ui, |ui| {
                 draw_entry(ui, editor, &tr!("io-geotiff-tif-tiff"), DataMenu::Geotiff);
             });
-        ExplorerHeader::new(egui::Id::new("import_point_clouds_section"), tr!("common-point-clouds"))
+        ExplorerHeader::new(egui::Id::unique("import_point_clouds_section"), tr!("common-point-clouds"))
             .default_open(false)
             .show(ui, |ui| {
                 draw_entry(ui, editor, &tr!("io-las-laz-las-laz"), DataMenu::Las);
                 draw_entry(ui, editor, &tr!("io-ascii-points-xyz-pts"), DataMenu::Xyz);
                 draw_entry(ui, editor, &tr!("io-point-cloud-data-pcd"), DataMenu::Pcd);
             });
-        ExplorerHeader::new(egui::Id::new("import_block_models_section"), tr!("common-block-models"))
+        ExplorerHeader::new(egui::Id::unique("import_block_models_section"), tr!("common-block-models"))
             .default_open(false)
             .show(ui, |ui| {
                 draw_entry(ui, editor, &tr!("io-comma-separated-values-csv"), DataMenu::CsvBlockModel);
             });
-        ExplorerHeader::new(egui::Id::new("import_drill_holes_section"), tr!("ws-menubar-drillholes"))
+        ExplorerHeader::new(egui::Id::unique("import_drill_holes_section"), tr!("ws-menubar-drillholes"))
             .default_open(false)
             .show(ui, |ui| {
                 draw_entry(ui, editor, &tr!("io-mapped-csv-bundle-csv"), DataMenu::CsvDrillHole);
@@ -264,21 +264,21 @@ fn draw_import_explorer(ui: &mut egui::Ui, editor: &mut EditorState) {
 
 fn draw_export_explorer(ui: &mut egui::Ui, editor: &mut EditorState) {
     draw_type_explorer(ui, "export_type_tree", |ui| {
-        ExplorerHeader::new(egui::Id::new("export_projects_section"), tr!("io-projects")).show(ui, |ui| {
+        ExplorerHeader::new(egui::Id::unique("export_projects_section"), tr!("io-projects")).show(ui, |ui| {
             draw_entry(ui, editor, &tr!("io-open-mining-format-2-omf"), DataMenu::Omf);
         });
-        ExplorerHeader::new(egui::Id::new("export_designs_section"), tr!("common-designs")).show(ui, |ui| {
+        ExplorerHeader::new(egui::Id::unique("export_designs_section"), tr!("common-designs")).show(ui, |ui| {
             draw_entry(ui, editor, &tr!("io-drawing-exchange-format-dxf"), DataMenu::Dxf);
         });
-        ExplorerHeader::new(egui::Id::new("export_triangulations_section"), tr!("common-triangulations")).show(ui, |ui| {
+        ExplorerHeader::new(egui::Id::unique("export_triangulations_section"), tr!("common-triangulations")).show(ui, |ui| {
             draw_entry(ui, editor, &tr!("io-wavefront-obj"), DataMenu::Obj);
             draw_entry(ui, editor, &tr!("io-stl"), DataMenu::Stl);
             draw_entry(ui, editor, &tr!("io-ply"), DataMenu::Ply);
         });
-        ExplorerHeader::new(egui::Id::new("export_block_models_section"), tr!("common-block-models")).show(ui, |ui| {
+        ExplorerHeader::new(egui::Id::unique("export_block_models_section"), tr!("common-block-models")).show(ui, |ui| {
             draw_entry(ui, editor, &tr!("io-comma-separated-values-csv"), DataMenu::CsvBlockModel);
         });
-        ExplorerHeader::new(egui::Id::new("export_drill_holes_section"), tr!("ws-menubar-drillholes")).show(ui, |ui| {
+        ExplorerHeader::new(egui::Id::unique("export_drill_holes_section"), tr!("ws-menubar-drillholes")).show(ui, |ui| {
             draw_entry(ui, editor, &tr!("io-mapped-csv-bundle-csv"), DataMenu::CsvDrillHole);
         });
     });
@@ -399,7 +399,7 @@ fn checklist_section<Id: Copy + Eq + std::hash::Hash>(
     empty_note: &str,
 ) {
     let height = row_height(ui);
-    let id = egui::Id::new(id_salt);
+    let id = egui::Id::unique(id_salt);
     let state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true);
     // Read out of the heading's closure rather than acted on inside it: the
     // closure cannot hold the section while the body's closure needs it too.

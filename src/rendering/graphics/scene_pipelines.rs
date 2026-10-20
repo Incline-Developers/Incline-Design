@@ -35,8 +35,8 @@ pub(super) const GROUND_INTENSITY: f32 = 0.12;
 /// design strings.
 pub(super) const SCENE_EXPOSURE: f32 = 0.8;
 
-const DRILL_SEGMENT_ATTRIBUTES: [wgpu::VertexAttribute; 7] =
-    wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x3, 3 => Uint32, 4 => Float32x2, 5 => Float32x3, 6 => Float32x3];
+const DRILL_SEGMENT_ATTRIBUTES: [wgpu::VertexAttribute; 9] =
+    wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x3, 3 => Uint32, 4 => Float32x2, 5 => Float32x3, 6 => Float32x3, 7 => Float32x3, 8 => Uint32];
 const DRILL_COLLAR_ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Uint32, 4 => Float32];
 
 /// The bind group layouts the scene pipelines are laid out against. Everything
@@ -52,6 +52,8 @@ pub(crate) struct ScenePipelineLayouts<'a> {
     pub(crate) surface_chunk: &'a wgpu::BindGroupLayout,
     pub(crate) raster_surface: &'a wgpu::BindGroupLayout,
     pub(crate) edge_style: &'a wgpu::BindGroupLayout,
+    /// Group 3 of the section cut pipeline.
+    pub(crate) section_cut: &'a wgpu::BindGroupLayout,
     pub(crate) point_cloud_style: &'a wgpu::BindGroupLayout,
     pub(crate) block_model_transparency_composite: &'a wgpu::BindGroupLayout,
     pub(crate) block_model_volume_upscale: &'a wgpu::BindGroupLayout,
@@ -183,6 +185,8 @@ pub(crate) struct ScenePipelines {
     pub(crate) opaque_stroke_render_pipeline: wgpu::RenderPipeline,
     pub(crate) stroke_render_pipeline: wgpu::RenderPipeline,
     pub(crate) edge_render_pipeline: wgpu::RenderPipeline,
+    /// Surfaces as their cut through the section plane, in a 2D section.
+    pub(crate) section_cut_render_pipeline: wgpu::RenderPipeline,
     pub(crate) point_cloud_colored_render_pipeline: wgpu::RenderPipeline,
     pub(crate) point_cloud_uncolored_render_pipeline: wgpu::RenderPipeline,
     pub(crate) drill_hole_render_pipeline: wgpu::RenderPipeline,
@@ -212,6 +216,7 @@ pub(crate) fn create_scene_pipelines(
     let block_model_volume_upscale_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/block_model_volume_upscale.wgsl"));
     let stroke_shader = make_document_shader(device, "../shaders/stroke.wgsl", include_str!("../shaders/stroke.wgsl"));
     let edge_shader = make_shader(device, "../shaders/edge.wgsl", include_str!("../shaders/edge.wgsl"));
+    let section_cut_shader = make_shader(device, "../shaders/section_cut.wgsl", include_str!("../shaders/section_cut.wgsl"));
     let point_cloud_shader = shading.lit_shader(
         device,
         "../shaders/point_cloud.wgsl",
@@ -271,6 +276,11 @@ pub(crate) fn create_scene_pipelines(
         bind_group_layouts: &[Some(layouts.camera), Some(layouts.edge_style)],
         immediate_size: 0,
     });
+    let section_cut_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Section Cut Pipeline Layout"),
+        bind_group_layouts: &[Some(layouts.camera), Some(layouts.surface_style), Some(layouts.surface_chunk), Some(layouts.section_cut)],
+        immediate_size: 0,
+    });
     let point_cloud_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Point Cloud Pipeline Layout"),
         bind_group_layouts: &[Some(layouts.camera), Some(layouts.point_cloud_style)],
@@ -292,7 +302,7 @@ pub(crate) fn create_scene_pipelines(
     let block_model_vertex_buffers = [Some(wgpu::VertexBufferLayout {
         array_stride: size_of::<BlockInstance>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Instance,
-        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32, 2 => Float32x3],
+        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32, 2 => Float32x3, 3 => Uint32],
     })];
 
     // One instance per stroke primitive; the shader expands six vertices.
@@ -398,6 +408,50 @@ pub(crate) fn create_scene_pipelines(
             conservative: false,
         },
         depth_stencil: Some(Graphics::depth_state(false, -1)),
+        multisample: wgpu::MultisampleState {
+            count: sample_count,
+            mask: !0,
+            alpha_to_coverage_enabled: false,
+        },
+        multiview_mask: None,
+        cache: None,
+    });
+    // A surface chunk's index buffer read as instances, one triangle each: the
+    // shader fetches the three vertices and draws where they cross the plane.
+    let section_cut_instance_buffers = [Some(wgpu::VertexBufferLayout {
+        array_stride: (3 * size_of::<u32>()) as wgpu::BufferAddress,
+        step_mode: wgpu::VertexStepMode::Instance,
+        attributes: &wgpu::vertex_attr_array![0 => Uint32x3],
+    })];
+    let section_cut_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Section Cut Pipeline"),
+        layout: Some(&section_cut_pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &section_cut_shader,
+            entry_point: Some("vs_main"),
+            buffers: &section_cut_instance_buffers,
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &section_cut_shader,
+            entry_point: Some("fs_main"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: shading.blend(wgpu::BlendState::ALPHA_BLENDING, true),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            unclipped_depth: false,
+            conservative: false,
+        },
+        depth_stencil: Some(Graphics::depth_state(true, 0)),
         multisample: wgpu::MultisampleState {
             count: sample_count,
             mask: !0,
@@ -1045,6 +1099,7 @@ pub(crate) fn create_scene_pipelines(
         opaque_stroke_render_pipeline,
         stroke_render_pipeline,
         edge_render_pipeline,
+        section_cut_render_pipeline,
         point_cloud_colored_render_pipeline,
         point_cloud_uncolored_render_pipeline,
         drill_hole_render_pipeline,

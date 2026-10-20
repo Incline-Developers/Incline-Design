@@ -56,6 +56,31 @@ pub(crate) struct DrillSegmentInstance {
     /// The disc's whole span's other end - see [`Self::disc_start`]. Zero
     /// for anything that is not a disc.
     pub(crate) disc_end: [f32; 3],
+    /// Scene-relative collar of the hole this piece belongs to (a tie's first
+    /// hole). A 2D section shows a hole whole when its collar lies inside the
+    /// corridor and not at all otherwise, wherever the trace runs.
+    pub(crate) collar: [f32; 3],
+    /// [`CAP_START`] / [`CAP_END`]: this piece begins or ends its run (a
+    /// hole's trace, a disc), so a 2D section closes the outline there.
+    pub(crate) caps: u32,
+}
+
+pub(crate) const CAP_START: u32 = 1;
+pub(crate) const CAP_END: u32 = 2;
+
+/// Stamps one run of pieces - a hole's trace or one disc - with its hole's
+/// collar and caps the run's two ends, for the 2D section.
+fn finish_run(run: &mut [DrillSegmentInstance], collar: DVec3, scene_origin: DVec3) {
+    let collar = (collar - scene_origin).as_vec3().to_array();
+    for instance in run.iter_mut() {
+        instance.collar = collar;
+    }
+    if let Some(first) = run.first_mut() {
+        first.caps |= CAP_START;
+    }
+    if let Some(last) = run.last_mut() {
+        last.caps |= CAP_END;
+    }
 }
 
 /// One spatial bucket of a dataset's segment instances: a contiguous range
@@ -603,6 +628,8 @@ impl DrillHoleGpuCache {
                 depth_rank: 0.0,
                 disc_start: [0.0; 3],
                 disc_end: [0.0; 3],
+                collar: (collar - scene_origin).as_vec3().to_array(),
+                caps: CAP_START | CAP_END,
             })
             .collect();
         let collars: Vec<_> = editor
@@ -1002,6 +1029,7 @@ fn build_true_diameter_instances(dataset: &OpenDrillHoleDataset, scene_origin: D
         }
 
         before_merge += raw_segments.len();
+        let run_from = instances.len();
         instances.extend(merge_raw_segments(raw_segments, cos_threshold).into_iter().map(|segment| DrillSegmentInstance {
             start: (segment.start - scene_origin).as_vec3().to_array(),
             radius: segment.radius,
@@ -1013,7 +1041,10 @@ fn build_true_diameter_instances(dataset: &OpenDrillHoleDataset, scene_origin: D
             depth_rank: 0.0,
             disc_start: [0.0; 3],
             disc_end: [0.0; 3],
+            collar: [0.0; 3],
+            caps: 0,
         }));
+        finish_run(&mut instances[run_from..], hole.collar_position(), scene_origin);
     }
     let (instances, cells) = bucket_instances(instances);
     let disc_cells_from = cells.len();
@@ -1080,6 +1111,7 @@ fn build_string_and_disc_instances(dataset: &OpenDrillHoleDataset, scene_origin:
                 })
                 .collect();
             before_merge += raw_segments.len();
+            let run_from = strings.len();
             strings.extend(merge_raw_segments(raw_segments, cos_threshold).into_iter().map(|segment| DrillSegmentInstance {
                 start: (segment.start - scene_origin).as_vec3().to_array(),
                 radius: 0.0,
@@ -1091,7 +1123,10 @@ fn build_string_and_disc_instances(dataset: &OpenDrillHoleDataset, scene_origin:
                 depth_rank: 0.0,
                 disc_start: [0.0; 3],
                 disc_end: [0.0; 3],
+                collar: [0.0; 3],
+                caps: 0,
             }));
+            finish_run(&mut strings[run_from..], hole.collar_position(), scene_origin);
         }
 
         let Some(field) = field else { continue };
@@ -1143,6 +1178,7 @@ fn build_string_and_disc_instances(dataset: &OpenDrillHoleDataset, scene_origin:
             before_merge += raw_segments.len();
             // Merged on its own, never joined with a neighbouring disc's
             // segments: each disc must keep its own extent and rank.
+            let run_from = discs.len();
             discs.extend(merge_raw_segments(raw_segments, cos_threshold).into_iter().map(|segment| DrillSegmentInstance {
                 start: (segment.start - scene_origin).as_vec3().to_array(),
                 radius: segment.radius,
@@ -1154,7 +1190,10 @@ fn build_string_and_disc_instances(dataset: &OpenDrillHoleDataset, scene_origin:
                 depth_rank: segment.depth_rank,
                 disc_start,
                 disc_end,
+                collar: [0.0; 3],
+                caps: 0,
             }));
+            finish_run(&mut discs[run_from..], hole.collar_position(), scene_origin);
         }
     }
 
@@ -1315,6 +1354,8 @@ fn build_tie_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, blas
                 depth_rank: 0.0,
                 disc_start: [0.0; 3],
                 disc_end: [0.0; 3],
+                collar: (start - scene_origin).as_vec3().to_array(),
+                caps: CAP_START | CAP_END,
             });
         };
         let along = (end - start) / length;

@@ -13,6 +13,8 @@ mod model;
 mod natural_sort;
 mod rendering;
 mod ui;
+#[cfg(target_os = "windows")]
+mod windows_trackpad;
 
 #[cfg(not(target_arch = "wasm32"))]
 use anyhow::Result;
