@@ -100,10 +100,6 @@ impl<'a> App<'a> {
             .map(|g| g.zoom() * crate::app::commands::text::ZOOM_TEXT_SCALE)
             .filter(|height| height.is_finite() && *height > 0.0)
             .unwrap_or(crate::app::commands::text::DEFAULT_TEXT_HEIGHT);
-        userspace_log!(
-            "contour labels: height {label_height} from {}",
-            if self.graphics.is_some() { "view zoom" } else { "default" }
-        ); // R177 diag
         let apply_tri_name = tri_name.clone();
         type ContourLines = Vec<(Vec<glam::DVec3>, crate::model::ObjectColor)>;
         let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> Result<(ContourLines, Vec<ContourLabel>)> {
@@ -113,7 +109,6 @@ impl<'a> App<'a> {
             let labels = if contour_labels {
                 contour_height_labels(&mesh, &spatial, &polylines, major_interval, label_height, cancel, progress)?
             } else {
-                userspace_log!("contour labels: off"); // R177 diag
                 Vec::new()
             };
             Ok((polylines, labels))
@@ -177,7 +172,6 @@ impl<'a> App<'a> {
                 rotation: label.rotation,
                 color: crate::model::ObjectColor::Fixed(major_color),
             }));
-            userspace_log!("contour labels: adding {} text objects to {layer_name}", objects.len() - line_count); // R177 diag
             let command = if create_layer {
                 let layer = Layer {
                     id: layer_id,
@@ -406,14 +400,11 @@ fn contour_height_labels(
         .filter(|verts| verts.len() >= 2 && is_major_contour(verts[0].z, major_interval))
         .map(|line| (line, plan_stations(line)))
         .collect();
-    let bounds = mesh.bounds(); // R177 diag
-    let extent = (bounds.max.x - bounds.min.x).max(bounds.max.y - bounds.min.y); // R177 diag
     let mut stack = Vec::new();
     let decimals = contour_label_decimals(major_interval);
     let mut text_system = crate::rendering::text::TextSystem::new();
 
     let mut labels = Vec::new();
-    let (mut too_short, mut first_width) = (0usize, None); // R177 diag
     for (done, (line, stations)) in majors.iter().enumerate() {
         if cancel.is_cancelled() {
             anyhow::bail!("Cancelled");
@@ -422,12 +413,10 @@ fn contour_height_labels(
         let level = line[0].z;
         let content = contour_label_text(level, decimals);
         let layout_width = shaped_text_width(&mut text_system, &content, height);
-        first_width.get_or_insert(layout_width); // R177 diag
         let level_box = crate::model::geometry::text_bounds_corners_with_layout_width(glam::DVec3::ZERO, &content, height, 0.0, layout_width);
         let box_width = level_box[1].x - level_box[0].x;
         let length = stations[stations.len() - 1];
         if length < 2.0 * box_width {
-            too_short += 1; // R177 diag
             continue;
         }
         let window = 1.2 * box_width;
@@ -469,14 +458,6 @@ fn contour_height_labels(
         pos.z = clear + 0.01 * height;
         labels.push(ContourLabel { pos, content, height, rotation });
     }
-    // R177 diag
-    userspace_log!(
-        "contour labels: majors {}, height {height}, too short {too_short}, placed {}, first text width {first_width:?}, plan extent {extent:.0}, first label {:?} at {:?}",
-        majors.len(),
-        labels.len(),
-        labels.first().map(|label| label.content.as_str()),
-        labels.first().map(|label| label.pos.to_array().map(|value| value.round()))
-    );
     Ok(labels)
 }
 
