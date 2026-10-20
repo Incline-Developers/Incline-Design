@@ -5,6 +5,9 @@ use super::{
     *,
 };
 
+/// Standard text height in world units, independent of the viewport zoom.
+const CONTOUR_LABEL_HEIGHT: f64 = 15.0;
+
 impl<'a> App<'a> {
     /// Generate contour polylines from a triangulation and store them in a new
     /// or existing layer in the active project. Major contours (multiples
@@ -93,13 +96,6 @@ impl<'a> App<'a> {
         // contours still have a home when the job completes.
         let project_runtime_id = active_project.runtime_id;
 
-        // Labels stand as tall as new text placed in this view.
-        let label_height = self
-            .graphics
-            .as_ref()
-            .map(|g| g.zoom() * crate::app::commands::text::ZOOM_TEXT_SCALE)
-            .filter(|height| height.is_finite() && *height > 0.0)
-            .unwrap_or(crate::app::commands::text::DEFAULT_TEXT_HEIGHT);
         let apply_tri_name = tri_name.clone();
         type ContourLines = Vec<(Vec<glam::DVec3>, crate::model::ObjectColor)>;
         let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> Result<(ContourLines, Vec<ContourLabel>)> {
@@ -107,7 +103,7 @@ impl<'a> App<'a> {
             // The generator reports on the whole bar, so the labels then
             // count their lines on it afresh.
             let labels = if contour_labels {
-                contour_height_labels(&mesh, &spatial, &polylines, major_interval, label_height, cancel, progress)?
+                contour_height_labels(&mesh, &spatial, &polylines, major_interval, CONTOUR_LABEL_HEIGHT, cancel, progress)?
             } else {
                 Vec::new()
             };
@@ -382,9 +378,9 @@ struct ContourLabel {
     rotation: f64,
 }
 
-/// One label `height` tall per major line, on the exposed straight stretch
-/// nearest its middle, read along the line with its top uphill; a line
-/// shorter than twice its label gets none.
+/// Place labels on the east side of closed contours and near the middle of
+/// open contours, with their tops uphill. Move nearby to leave space between
+/// labels; omit a label if no exposed, straight, uncrowded stretch fits.
 fn contour_height_labels(
     mesh: &mesh_data::Triangulation,
     spatial: &crate::model::spatial::TriangleBvh,
@@ -394,17 +390,24 @@ fn contour_height_labels(
     cancel: &crate::app::jobs::CancelFlag,
     progress: &crate::model::progress::Progress,
 ) -> Result<Vec<ContourLabel>> {
-    let majors: Vec<(&[glam::DVec3], Vec<f64>)> = polylines
+    let mut majors: Vec<(Vec<glam::DVec3>, Vec<f64>)> = polylines
         .iter()
         .map(|(verts, _)| verts.as_slice())
         .filter(|verts| verts.len() >= 2 && is_major_contour(verts[0].z, major_interval))
-        .map(|line| (line, plan_stations(line)))
+        .map(|line| {
+            let line = canonical_label_line(line);
+            let stations = plan_stations(&line);
+            (line, stations)
+        })
         .collect();
+    // Stable priority when several strings compete for the same space.
+    majors.sort_by(|(a, _), (b, _)| a[0].z.total_cmp(&b[0].z).then_with(|| compare_plan_points(a[0], b[0])));
     let mut stack = Vec::new();
     let decimals = contour_label_decimals(major_interval);
     let mut text_system = crate::rendering::text::TextSystem::new();
 
     let mut labels = Vec::new();
+    let mut occupied = Vec::new();
     for (done, (line, stations)) in majors.iter().enumerate() {
         if cancel.is_cancelled() {
             anyhow::bail!("Cancelled");
@@ -415,23 +418,35 @@ fn contour_height_labels(
         let layout_width = shaped_text_width(&mut text_system, &content, height);
         let level_box = crate::model::geometry::text_bounds_corners_with_layout_width(glam::DVec3::ZERO, &content, height, 0.0, layout_width);
         let box_width = level_box[1].x - level_box[0].x;
+        let box_height = level_box[0].y - level_box[3].y;
         let length = stations[stations.len() - 1];
         if length < 2.0 * box_width {
             continue;
         }
         let window = 1.2 * box_width;
-        let middle = length * 0.5;
-        // Exposed ground first: a stretch under another sheet of the mesh (a
-        // floor line under its roof, or under an overhang) is hidden.
-        let mut exposed = |start: f64, end: f64| {
+        let closed = contour_point_key(line[0]) == contour_point_key(line[line.len() - 1]);
+        let preferred = preferred_label_station(line, stations);
+        // Keep closed contours' labels on the same side, even when crowded.
+        let max_shift = if closed { length * 0.125 } else { length * 0.5 };
+        let Some((start, end)) = window_near(length, preferred, window, max_shift, |start, end| {
+            if cancel.is_cancelled() || !is_straight(line, stations, start, end, 0.25 * height) {
+                return false;
+            }
             let (centre, _) = point_along(line, stations, (start + end) * 0.5);
+            let (from, _) = point_along(line, stations, start);
+            let (to, _) = point_along(line, stations, end);
+            let Some(along) = (to - from).truncate().try_normalize() else {
+                return false;
+            };
+            let footprint = label_footprint(centre.truncate(), along, box_width, box_height, 0.25 * height);
+            if occupied.iter().any(|other| label_boxes_overlap(&footprint, other)) {
+                return false;
+            }
+            // A stretch under another sheet of the mesh is hidden.
             !is_covered(mesh, spatial, &mut stack, centre.truncate(), level, 0.01 * height)
+        }) else {
+            continue;
         };
-        let (start, end) = window_near(length, middle, window, |start, end| {
-            is_straight(line, stations, start, end, 0.25 * height) && exposed(start, end)
-        })
-        .or_else(|| window_near(length, middle, window, &mut exposed))
-        .unwrap_or((middle - window * 0.5, middle + window * 0.5));
         let (from, _) = point_along(line, stations, start);
         let (to, _) = point_along(line, stations, end);
         let (centre, segment) = point_along(line, stations, (start + end) * 0.5);
@@ -456,9 +471,91 @@ fn contour_height_labels(
         }
         let clear = ground.map_or_else(|| level + rise.map_or(0.0, f64::abs) * half_up.length(), |ground| ground.max(level));
         pos.z = clear + 0.01 * height;
+        occupied.push(label_footprint(centre.truncate(), along, box_width, box_height, 0.25 * height));
         labels.push(ContourLabel { pos, content, height, rotation });
     }
     Ok(labels)
+}
+
+fn compare_plan_points(a: glam::DVec3, b: glam::DVec3) -> std::cmp::Ordering {
+    a.x.total_cmp(&b.x).then_with(|| a.y.total_cmp(&b.y))
+}
+
+/// Give closed strings a stable seam on their west side, so the east-side
+/// label window can cross the original seam. Normalize traversal as well.
+fn canonical_label_line(line: &[glam::DVec3]) -> Vec<glam::DVec3> {
+    let mut line = line.to_vec();
+    if line.len() > 2 && contour_point_key(line[0]) == contour_point_key(line[line.len() - 1]) {
+        line.pop();
+        let first = (0..line.len()).min_by(|&a, &b| compare_plan_points(line[a], line[b])).unwrap();
+        line.rotate_left(first);
+        if compare_plan_points(line[1], line[line.len() - 1]).is_gt() {
+            line[1..].reverse();
+        }
+        line.push(line[0]);
+    } else if compare_plan_points(line[0], line[line.len() - 1]).is_gt() {
+        line.reverse();
+    }
+    line
+}
+
+/// The eastmost crossing of a closed string's horizontal centreline. This
+/// keeps neighbouring pit strings' labels together regardless of their seams.
+fn preferred_label_station(line: &[glam::DVec3], stations: &[f64]) -> f64 {
+    let length = stations[stations.len() - 1];
+    if contour_point_key(line[0]) != contour_point_key(line[line.len() - 1]) {
+        return length * 0.5;
+    }
+    let min_y = line.iter().map(|point| point.y).fold(f64::INFINITY, f64::min);
+    let max_y = line.iter().map(|point| point.y).fold(f64::NEG_INFINITY, f64::max);
+    let y = min_y + (max_y - min_y) * 0.5;
+    let mut east = f64::NEG_INFINITY;
+    let mut preferred = length * 0.5;
+    for (i, pair) in line.windows(2).enumerate() {
+        let [a, b] = [pair[0], pair[1]];
+        if y < a.y.min(b.y) || y > a.y.max(b.y) {
+            continue;
+        }
+        let t = if a.y != b.y {
+            (y - a.y) / (b.y - a.y)
+        } else if b.x > a.x {
+            1.0
+        } else {
+            0.0
+        };
+        let x = a.x + (b.x - a.x) * t;
+        if x > east {
+            east = x;
+            preferred = stations[i] + (stations[i + 1] - stations[i]) * t;
+        }
+    }
+    preferred
+}
+
+/// Plan-view text bounds with an extra gap around each label.
+fn label_footprint(centre: glam::DVec2, along: glam::DVec2, width: f64, height: f64, gap: f64) -> [glam::DVec2; 4] {
+    let right = along * (width * 0.5 + gap);
+    let up = along.perp() * (height * 0.5 + gap);
+    [centre - right + up, centre + right + up, centre + right - up, centre - right - up]
+}
+
+/// Separating-axis test for rotated text boxes, ignoring elevation so labels
+/// on different benches still leave room for each other in plan view.
+fn label_boxes_overlap(a: &[glam::DVec2; 4], b: &[glam::DVec2; 4]) -> bool {
+    for axis in [a[1] - a[0], a[3] - a[0], b[1] - b[0], b[3] - b[0]] {
+        let project = |corners: &[glam::DVec2; 4]| {
+            corners
+                .iter()
+                .map(|point| (*point - a[0]).dot(axis))
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), at| (min.min(at), max.max(at)))
+        };
+        let (a_min, a_max) = project(a);
+        let (b_min, b_max) = project(b);
+        if a_max < b_min || b_max < a_min {
+            return false;
+        }
+    }
+    true
 }
 
 /// The width the renderer shapes `content` to as document text at `height`,
@@ -496,9 +593,9 @@ fn segment_reach(line: &[glam::DVec3], segment: usize, height: f64) -> f64 {
     (0.25 * line[segment].truncate().distance(line[segment + 1].truncate())).max(0.01 * height).max(1e-6)
 }
 
-/// Start and end stations of the `window` long stretch of a `length` long
-/// line nearest `middle` that `accept` takes.
-fn window_near(length: f64, middle: f64, window: f64, mut accept: impl FnMut(f64, f64) -> bool) -> Option<(f64, f64)> {
+/// Start and end stations of the accepted stretch nearest `middle`, searching
+/// at most `max_shift` along the line in either direction.
+fn window_near(length: f64, middle: f64, window: f64, max_shift: f64, mut accept: impl FnMut(f64, f64) -> bool) -> Option<(f64, f64)> {
     let half = window * 0.5;
     let mut fits = |centre: f64| {
         let (start, end) = (centre - half, centre + half);
@@ -507,12 +604,14 @@ fn window_near(length: f64, middle: f64, window: f64, mut accept: impl FnMut(f64
     if let Some(found) = fits(middle) {
         return Some(found);
     }
-    let mut offset = window * 0.1;
-    while middle - offset - half >= 0.0 || middle + offset + half <= length {
+    // Bound candidate count for long strings and very small text sizes.
+    let step = (window * 0.1).max(max_shift / 128.0);
+    let mut offset = step;
+    while offset <= max_shift && (middle - offset - half >= 0.0 || middle + offset + half <= length) {
         if let Some(found) = fits(middle + offset).or_else(|| fits(middle - offset)) {
             return Some(found);
         }
-        offset += window * 0.1;
+        offset += step;
     }
     None
 }
