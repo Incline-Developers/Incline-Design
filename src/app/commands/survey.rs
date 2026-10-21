@@ -473,6 +473,12 @@ fn transform_item(item: &mut OpenItem, transform: &SurveyTransform, target_syste
                     *diameter *= transform.length_scale();
                     ensure!(diameter.is_finite(), "{}", tr!("survey-invalid-transform"));
                 }
+                if let Some(depth) = hole.total_depth {
+                    let depth = depth * transform.length_scale();
+                    ensure!(depth.is_finite(), "{}", tr!("survey-invalid-transform"));
+                    // As a reopen would read it: a no-data value is none.
+                    hole.total_depth = crate::model::drill_hole::recorded_total_depth(depth);
+                }
                 for (from, to) in &mut hole.render_ranges {
                     *from *= transform.length_scale();
                     *to *= transform.length_scale();

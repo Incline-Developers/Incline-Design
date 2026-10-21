@@ -127,7 +127,8 @@ fn draw_body(
         BoreholeInspectorTab::Data => {
             // Columns come from the dataset, so every hole shows the same.
             let properties = DrillHoleProperties::new(("borehole_inspector", dataset.id, hole_index), hole, &dataset.dataset.fields)
-                .deleted_rows(dataset.dataset.deleted_logged_rows(hole_index));
+                .deleted_rows(dataset.dataset.deleted_logged_rows(hole_index))
+                .total_depth_row(dataset.dataset.records_total_depth());
             CollapsibleSection::new(egui::Id::unique("borehole_inspector_summary"), tr!("borehole-inspector-summary"))
                 .default_open(true)
                 .show(ui, |ui| ui.push_id((dataset.id, hole_index), |ui| properties.show_summary(ui)));

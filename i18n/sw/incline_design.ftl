@@ -1257,6 +1257,22 @@ csv-drill-hole-row-attribute-not-number = { $file } safu { $row } ina '{ $value 
 csv-drill-hole-row-repeats-dhid = { $file } safu { $row } inarudia DHID '{ $dhid }'
 csv-drill-hole-most-rows-unreadable = { $file }: safu { $skipped } kati ya { $count } hazikuweza kusomwa; sababu ziko kwenye konsoli
 csv-drill-hole-file-maps-dip-column-twice = { $file } inapanga safu wima ya mteremko au mwinamo mara mbili
+csv-drill-hole-file-has-more-than-one-total-depth = { $file } inapanga safu wima ya kina cha jumla mara mbili
+csv-drill-hole-total-depths-left-out =
+    { $count ->
+        [one] { $file }: kina cha jumla { $count } kilikuwa tupu, sifuri, hasi, thamani ya kukosa data au si namba; mdomo huo unahifadhiwa bila kina cha jumla
+       *[other] { $file }: vina vya jumla { $count } vilikuwa tupu, sifuri, hasi, thamani za kukosa data au si namba; midomo hiyo inahifadhiwa bila kina cha jumla
+    }
+csv-drill-hole-logged-below-total-depth =
+    { $count ->
+        [one] { $file }: shimo { $count } lina vipindi chini ya kina chake cha jumla
+       *[other] { $file }: mashimo { $count } yana vipindi chini ya kina chao cha jumla
+    }
+csv-drill-hole-surveyed-below-total-depth =
+    { $count ->
+        [one] { $file }: shimo { $count } limepimwa chini ya kina chake cha jumla
+       *[other] { $file }: mashimo { $count } yamepimwa chini ya kina chao cha jumla
+    }
 csv-drill-hole-row-has-no-geometry = { $file } safu { $row } haina jiometri kamili ya XYZ au azimuth/mteremko
 csv-drill-hole-row-invalid-interval = { $file } safu { $row } ina kipindi batili { $from }..{ $to } kwa DHID '{ $dhid }'
 csv-drill-hole-row-zero-length-segment = { $file } safu { $row } ina sehemu yenye urefu sifuri kwenye { $depth } kwa DHID '{ $dhid }'
@@ -1831,6 +1847,7 @@ io-start-x = Mwanzo X
 io-start-y = Mwanzo Y
 io-start-z = Mwanzo Z
 io-stl = STL (.stl)
+io-total-depth = Kina cha jumla
 io-triangulation = Utatuzi:
 io-unmapped = Haijaoanishwa
 io-wavefront-obj = Wavefront OBJ (.obj)
@@ -2737,6 +2754,7 @@ viewport-no-matches = Hakuna vinavyolingana
 viewport-no-trace = Hakuna njia
 viewport-no-usable-range = (hakuna wigo unaotumika)
 viewport-not-logged = Haijarekodiwa
+viewport-not-recorded = Haijaandikwa
 viewport-orientation-source = Chanzo cha mwelekeo
 viewport-rebuild-variable-s-colours-from = Jenga upya rangi za kigezo hiki kutoka kwa data yake
 viewport-rename-seam-in-every-hole = Badilisha jina kwenye kila shimo
@@ -2747,6 +2765,7 @@ viewport-roll-wheel-over-log-zoom = Zungusha gurudumu juu ya logi ili kukuza msh
 viewport-s = S
 viewport-sideways-scale = Kipimo cha pembeni
 viewport-squeeze-sideways-just-enough-keep = Bana pembeni kwa kiasi tu cha kuweka shimo kwenye mwonekano. Hainyooshi kamwe.
+viewport-total-depth = Kina cha jumla
 viewport-trace-extent = Wigo wa njia
 viewport-w = W
 viewport-widen-panel-show-curve = Panua paneli ili kuonyesha { $curve }

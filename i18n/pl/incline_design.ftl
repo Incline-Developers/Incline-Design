@@ -1295,6 +1295,22 @@ csv-drill-hole-row-attribute-not-number = { $file } wiersz { $row } ma '{ $value
 csv-drill-hole-row-repeats-dhid = { $file } wiersz { $row } powtarza DHID '{ $dhid }'
 csv-drill-hole-most-rows-unreadable = { $file }: nie udało się odczytać { $skipped } z { $count } wierszy; przyczyny są w konsoli
 csv-drill-hole-file-maps-dip-column-twice = { $file } mapuje kolumnę upadu lub nachylenia dwukrotnie
+csv-drill-hole-file-has-more-than-one-total-depth = { $file } mapuje kolumnę głębokości końcowej dwukrotnie
+csv-drill-hole-total-depths-left-out =
+    { $count ->
+        [one] { $file }: { $count } głębokość końcowa była pusta, zerowa, ujemna, była wartością braku danych lub nie była liczbą; ten wylot zachowano bez niej
+       *[other] { $file }: głębokości końcowe puste, zerowe, ujemne, równe wartości braku danych lub niebędące liczbą: { $count }; te wyloty zachowano bez nich
+    }
+csv-drill-hole-logged-below-total-depth =
+    { $count ->
+        [one] { $file }: { $count } otwór ma interwały poniżej swojej głębokości końcowej
+       *[other] { $file }: otwory z interwałami poniżej głębokości końcowej: { $count }
+    }
+csv-drill-hole-surveyed-below-total-depth =
+    { $count ->
+        [one] { $file }: { $count } otwór ma pomiary trajektorii poniżej swojej głębokości końcowej
+       *[other] { $file }: otwory z pomiarami trajektorii poniżej głębokości końcowej: { $count }
+    }
 csv-drill-hole-row-has-no-geometry = { $file } wiersz { $row } nie ma pełnej geometrii XYZ ani azymutu/upadu
 csv-drill-hole-row-invalid-interval = { $file } wiersz { $row } ma nieprawidłowy interwał { $from }..{ $to } dla DHID '{ $dhid }'
 csv-drill-hole-row-zero-length-segment = { $file } wiersz { $row } ma odcinek o zerowej długości na { $depth } dla DHID '{ $dhid }'
@@ -1869,6 +1885,7 @@ io-start-x = X początku
 io-start-y = Y początku
 io-start-z = Z początku
 io-stl = STL (.stl)
+io-total-depth = Głębokość końcowa
 io-triangulation = Triangulacja:
 io-unmapped = Niezmapowane
 io-wavefront-obj = Wavefront OBJ (.obj)
@@ -2775,6 +2792,7 @@ viewport-no-matches = Brak dopasowań
 viewport-no-trace = Brak toru
 viewport-no-usable-range = (brak użytecznego zakresu)
 viewport-not-logged = Nie opisano
+viewport-not-recorded = Nie podano
 viewport-orientation-source = Źródło orientacji
 viewport-rebuild-variable-s-colours-from = Przebuduj kolory tej zmiennej na podstawie jej danych
 viewport-rename-seam-in-every-hole = Zmień nazwę w każdym otworze
@@ -2785,6 +2803,7 @@ viewport-roll-wheel-over-log-zoom = Obróć kółko nad profilem, aby przybliży
 viewport-s = S
 viewport-sideways-scale = Skala boczna
 viewport-squeeze-sideways-just-enough-keep = Zwęża na boki tylko tyle, aby otwór pozostał w widoku. Nigdy nie rozciąga.
+viewport-total-depth = Głębokość końcowa
 viewport-trace-extent = Zasięg toru
 viewport-w = W
 viewport-widen-panel-show-curve = Poszerz panel, aby pokazać profil { $curve }

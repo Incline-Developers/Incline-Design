@@ -1225,6 +1225,22 @@ csv-drill-hole-row-attribute-not-number = { $file } पंक्ति { $row } 
 csv-drill-hole-row-repeats-dhid = { $file } पंक्ति { $row } में DHID '{ $dhid }' दोहराया गया है
 csv-drill-hole-most-rows-unreadable = { $file }: { $count } में से { $skipped } पंक्तियाँ पढ़ी नहीं जा सकीं; कारण कंसोल में हैं
 csv-drill-hole-file-maps-dip-column-twice = { $file } डिप या झुकाव कॉलम को दो बार मैप करता है
+csv-drill-hole-file-has-more-than-one-total-depth = { $file } कुल गहराई कॉलम को दो बार मैप करता है
+csv-drill-hole-total-depths-left-out =
+    { $count ->
+        [one] { $file }: { $count } कुल गहराई खाली, शून्य, ऋणात्मक, नो-डेटा मान या गैर-संख्या थी; वह कॉलर बिना कुल गहराई के रखा गया है
+       *[other] { $file }: { $count } कुल गहराइयाँ खाली, शून्य, ऋणात्मक, नो-डेटा मान या गैर-संख्या थीं; वे कॉलर बिना कुल गहराई के रखे गए हैं
+    }
+csv-drill-hole-logged-below-total-depth =
+    { $count ->
+        [one] { $file }: { $count } होल में उसकी कुल गहराई के नीचे अंतराल हैं
+       *[other] { $file }: { $count } होलों में उनकी कुल गहराई के नीचे अंतराल हैं
+    }
+csv-drill-hole-surveyed-below-total-depth =
+    { $count ->
+        [one] { $file }: { $count } होल का सर्वे उसकी कुल गहराई के नीचे तक है
+       *[other] { $file }: { $count } होलों का सर्वे उनकी कुल गहराई के नीचे तक है
+    }
 csv-drill-hole-row-has-no-geometry = { $file } पंक्ति { $row } में पूरी XYZ या अज़ीमुथ/डिप ज्यामिति नहीं है
 csv-drill-hole-row-invalid-interval = { $file } पंक्ति { $row } में DHID '{ $dhid }' के लिए अमान्य अंतराल { $from }..{ $to } है
 csv-drill-hole-row-zero-length-segment = { $file } पंक्ति { $row } में DHID '{ $dhid }' के लिए { $depth } पर शून्य लंबाई का खंड है
@@ -1799,6 +1815,7 @@ io-start-x = आरंभ X
 io-start-y = आरंभ Y
 io-start-z = आरंभ Z
 io-stl = STL (.stl)
+io-total-depth = कुल गहराई
 io-triangulation = त्रिकोणन:
 io-unmapped = मानचित्रित नहीं
 io-wavefront-obj = Wavefront OBJ (.obj)
@@ -2705,6 +2722,7 @@ viewport-no-matches = कोई मिलान नहीं
 viewport-no-trace = कोई ट्रेस नहीं
 viewport-no-usable-range = (कोई उपयोग योग्य सीमा नहीं)
 viewport-not-logged = दर्ज नहीं
+viewport-not-recorded = रिकॉर्ड नहीं किया गया
 viewport-orientation-source = अभिविन्यास स्रोत
 viewport-rebuild-variable-s-colours-from = इस चर के रंग उसके डेटा से फिर बनाएँ
 viewport-rename-seam-in-every-hole = हर होल में नाम बदलें
@@ -2715,6 +2733,7 @@ viewport-roll-wheel-over-log-zoom = सीम पर ज़ूम करने �
 viewport-s = द
 viewport-sideways-scale = पार्श्व स्केल
 viewport-squeeze-sideways-just-enough-keep = होल को दृश्य में रखने के लिए केवल आवश्यक मात्रा में किनारों से दबाएँ। कभी खींचता नहीं।
+viewport-total-depth = कुल गहराई
 viewport-trace-extent = ट्रेस विस्तार
 viewport-w = प
 viewport-widen-panel-show-curve = { $curve } दिखाने के लिए पैनल चौड़ा करें

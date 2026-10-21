@@ -1272,6 +1272,22 @@ csv-drill-hole-row-attribute-not-number = { $file }, рядок { $row }: '{ $va
 csv-drill-hole-row-repeats-dhid = { $file }, рядок { $row }: повтор DHID '{ $dhid }'
 csv-drill-hole-most-rows-unreadable = { $file }: не вдалося прочитати { $skipped } з { $count } рядків; причини наведено в консолі
 csv-drill-hole-file-maps-dip-column-twice = { $file } двічі зіставляє стовпець падіння або нахилу
+csv-drill-hole-file-has-more-than-one-total-depth = { $file } двічі зіставляє стовпець кінцевої глибини
+csv-drill-hole-total-depths-left-out =
+    { $count ->
+        [1] { $file }: одна кінцева глибина порожня, нульова, від'ємна, дорівнює значенню відсутності даних або не є числом; це гирло збережено без неї
+       *[other] { $file }: порожні, нульові, від'ємні, нечислові або рівні значенню відсутності даних кінцеві глибини: { $count }; ці гирла збережено без них
+    }
+csv-drill-hole-logged-below-total-depth =
+    { $count ->
+        [1] { $file }: одна свердловина має інтервали нижче своєї кінцевої глибини
+       *[other] { $file }: свердловини з інтервалами нижче кінцевої глибини: { $count }
+    }
+csv-drill-hole-surveyed-below-total-depth =
+    { $count ->
+        [1] { $file }: одна свердловина має заміри інклінометрії нижче своєї кінцевої глибини
+       *[other] { $file }: свердловини із замірами інклінометрії нижче кінцевої глибини: { $count }
+    }
 csv-drill-hole-row-has-no-geometry = { $file }, рядок { $row }: немає повної геометрії XYZ або азимута/падіння
 csv-drill-hole-row-invalid-interval = { $file }, рядок { $row }: недійсний інтервал { $from }..{ $to } для DHID '{ $dhid }'
 csv-drill-hole-row-zero-length-segment = { $file }, рядок { $row }: сегмент нульової довжини на { $depth } для DHID '{ $dhid }'
@@ -1846,6 +1862,7 @@ io-start-x = Початкова X
 io-start-y = Початкова Y
 io-start-z = Початкова Z
 io-stl = STL (.stl)
+io-total-depth = Кінцева глибина
 io-triangulation = Тріангуляція:
 io-unmapped = Не зіставлено
 io-wavefront-obj = Wavefront OBJ (.obj)
@@ -2752,6 +2769,7 @@ viewport-no-matches = Немає збігів
 viewport-no-trace = Немає траєкторії
 viewport-no-usable-range = (немає придатного діапазону)
 viewport-not-logged = Не каротовано
+viewport-not-recorded = Не вказано
 viewport-orientation-source = Джерело орієнтації
 viewport-rebuild-variable-s-colours-from = Перебудувати кольори цієї змінної за її даними
 viewport-rename-seam-in-every-hole = Перейменувати в усіх свердловинах
@@ -2762,6 +2780,7 @@ viewport-roll-wheel-over-log-zoom = Прокрутіть колесо над к�
 viewport-s = Пд
 viewport-sideways-scale = Бічний масштаб
 viewport-squeeze-sideways-just-enough-keep = Стискає вбік рівно настільки, щоб свердловина залишалася у видимості. Ніколи не розтягує.
+viewport-total-depth = Кінцева глибина
 viewport-trace-extent = Протяжність траєкторії
 viewport-w = Зх
 viewport-widen-panel-show-curve = Розширте панель, щоб показати каротаж { $curve }

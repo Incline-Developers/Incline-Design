@@ -85,6 +85,7 @@ fn planned_dataset(id: DrillHoleId, name: String, collars: Vec<glam::DVec3>, dep
             render_ranges: Vec::new(),
             intervals: Vec::new(),
             orientation_source: OrientationSource::Assumed,
+            total_depth: None,
         })
         .collect();
     OpenDrillHoleDataset {

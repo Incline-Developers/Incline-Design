@@ -702,6 +702,10 @@ pub(crate) struct DrillHole {
     /// Defaults to `Unknown` for a project saved before this field existed.
     #[serde(default)]
     pub(crate) orientation_source: OrientationSource,
+    /// The driller's depth from the collar file, stored as recorded: the
+    /// logs may stop short of it, or run past it.
+    #[serde(default)]
+    pub(crate) total_depth: Option<f64>,
 }
 
 /// Row arrangement used when filling a blast boundary with collars.
@@ -1025,13 +1029,26 @@ impl HolePlacement {
     }
 }
 
+/// The values exports write for a total depth not recorded. Exact values,
+/// not a range, so a deep hole in feet is still a depth; -99 and -999, the
+/// other usual ones, are below zero and out already.
+const TOTAL_DEPTH_NO_DATA: [f64; 2] = [9_999.0, 99_999.0];
+
+/// A total depth as recorded, if it is one: positive, finite and not a
+/// no-data value. Anything else is not recorded.
+pub(crate) fn recorded_total_depth(depth: f64) -> Option<f64> {
+    let no_data = TOTAL_DEPTH_NO_DATA.iter().any(|sentinel| (depth - sentinel).abs() < 1.0e-9);
+    (depth.is_finite() && depth > 0.0 && !no_data).then_some(depth)
+}
+
 impl DrillHole {
     /// Where the hole ends: its trace's last depth, or deeper where an
-    /// interval runs on past the trace.
+    /// interval or its total depth runs on past the trace.
     pub(crate) fn end_depth(&self) -> f64 {
         self.intervals
             .iter()
             .map(|interval| interval.to)
+            .chain(self.total_depth)
             .filter(|to| to.is_finite())
             .fold(self.trace.last().map_or(0.0, |station| station.depth), f64::max)
     }
@@ -1846,6 +1863,12 @@ impl DrillHoleDataset {
             ..Correction::proposed(dhid, (logged_from, logged_to), CorrectionKind::Deletion, named, blank.clone(), blank, note)
         };
         Some((CorrectionTarget::interval(hole, interval), record))
+    }
+
+    /// Whether any hole of the set has a total depth: only then does a hole
+    /// without one say so. A blast pattern, typed to a design depth, has none.
+    pub(crate) fn records_total_depth(&self) -> bool {
+        self.holes.iter().any(|hole| hole.total_depth.is_some())
     }
 
     /// Where `drilled` ends for a correction: its own end, or deeper where a

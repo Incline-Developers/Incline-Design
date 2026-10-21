@@ -1278,6 +1278,22 @@ csv-drill-hole-row-attribute-not-number = { $file }, строка { $row }: '{ $
 csv-drill-hole-row-repeats-dhid = { $file }, строка { $row }: повтор DHID '{ $dhid }'
 csv-drill-hole-most-rows-unreadable = { $file }: не удалось прочитать { $skipped } из { $count } строк; причины указаны в консоли
 csv-drill-hole-file-maps-dip-column-twice = { $file } дважды сопоставляет столбец падения или наклона
+csv-drill-hole-file-has-more-than-one-total-depth = { $file } дважды сопоставляет столбец конечной глубины
+csv-drill-hole-total-depths-left-out =
+    { $count ->
+        [1] { $file }: одна конечная глубина пуста, равна нулю, отрицательна, равна значению отсутствия данных или не является числом; это устье сохранено без неё
+       *[other] { $file }: пустые, нулевые, отрицательные, нечисловые или равные значению отсутствия данных конечные глубины: { $count }; эти устья сохранены без них
+    }
+csv-drill-hole-logged-below-total-depth =
+    { $count ->
+        [1] { $file }: у одной скважины есть интервалы ниже её конечной глубины
+       *[other] { $file }: скважины с интервалами ниже конечной глубины: { $count }
+    }
+csv-drill-hole-surveyed-below-total-depth =
+    { $count ->
+        [1] { $file }: у одной скважины есть замеры инклинометрии ниже её конечной глубины
+       *[other] { $file }: скважины с замерами инклинометрии ниже конечной глубины: { $count }
+    }
 csv-drill-hole-row-has-no-geometry = { $file }, строка { $row }: нет полной геометрии XYZ или азимута/падения
 csv-drill-hole-row-invalid-interval = { $file }, строка { $row }: недопустимый интервал { $from }..{ $to } для DHID '{ $dhid }'
 csv-drill-hole-row-zero-length-segment = { $file }, строка { $row }: сегмент нулевой длины на глубине { $depth } для DHID '{ $dhid }'
@@ -1852,6 +1868,7 @@ io-start-x = Начальная X
 io-start-y = Начальная Y
 io-start-z = Начальная Z
 io-stl = STL (.stl)
+io-total-depth = Конечная глубина
 io-triangulation = Триангуляция:
 io-unmapped = Не сопоставлено
 io-wavefront-obj = Wavefront OBJ (.obj)
@@ -2759,6 +2776,7 @@ viewport-no-matches = Совпадений нет
 viewport-no-trace = Нет трассы
 viewport-no-usable-range = (нет пригодного диапазона)
 viewport-not-logged = Не задокументировано
+viewport-not-recorded = Не указано
 viewport-orientation-source = Источник ориентации
 viewport-rebuild-variable-s-colours-from = Перестроить цвета этой переменной по её данным
 viewport-rename-seam-in-every-hole = Переименовать во всех скважинах
@@ -2769,6 +2787,7 @@ viewport-roll-wheel-over-log-zoom = Прокрутите колесо над д�
 viewport-s = Ю
 viewport-sideways-scale = Масштаб по ширине
 viewport-squeeze-sideways-just-enough-keep = Сжимает по ширине ровно настолько, чтобы скважина оставалась в поле зрения. Никогда не растягивает.
+viewport-total-depth = Конечная глубина
 viewport-trace-extent = Протяжённость трассы
 viewport-w = З
 viewport-widen-panel-show-curve = Расширьте панель, чтобы показать каротаж { $curve }

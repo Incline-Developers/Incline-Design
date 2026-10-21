@@ -647,6 +647,7 @@ fn column_role_label(role: &CsvDrillColumnRole) -> String {
         CsvDrillColumnRole::EndNorth => tr!("io-end-y"),
         CsvDrillColumnRole::EndElevation => tr!("io-end-z"),
         CsvDrillColumnRole::Diameter => tr!("io-diameter"),
+        CsvDrillColumnRole::TotalDepth => tr!("io-total-depth"),
         CsvDrillColumnRole::Gamma => tr!("io-gamma-api"),
         CsvDrillColumnRole::LongDensity => tr!("io-long-spaced-density-g-cc"),
         CsvDrillColumnRole::ShortDensity => tr!("io-short-spaced-density-g-cc"),
@@ -676,6 +677,7 @@ fn available_column_roles(role: CsvDrillFileRole, header: &str) -> Vec<CsvDrillC
             CsvDrillColumnRole::North,
             CsvDrillColumnRole::Elevation,
             CsvDrillColumnRole::Diameter,
+            CsvDrillColumnRole::TotalDepth,
         ]),
         CsvDrillFileRole::Survey => roles.extend([
             CsvDrillColumnRole::Depth,

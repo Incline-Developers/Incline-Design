@@ -1258,6 +1258,22 @@ csv-drill-hole-row-attribute-not-number = { $file } { $row }행: 숫자 열에 '
 csv-drill-hole-row-repeats-dhid = { $file } { $row }행: DHID '{ $dhid }'가 반복됩니다
 csv-drill-hole-most-rows-unreadable = { $file }: { $count }행 중 { $skipped }행을 읽을 수 없습니다. 원인은 콘솔에 있습니다
 csv-drill-hole-file-maps-dip-column-twice = { $file }가 경사 또는 경사각 열을 두 번 지정합니다
+csv-drill-hole-file-has-more-than-one-total-depth = { $file }가 총 심도 열을 두 번 지정합니다
+csv-drill-hole-total-depths-left-out =
+    { $count ->
+        [1] { $file }: 총 심도 { $count }개가 비어 있거나 0, 음수, 데이터 없음 값 또는 숫자가 아니었습니다. 해당 공구는 총 심도 없이 유지됩니다
+       *[other] { $file }: 총 심도 { $count }개가 비어 있거나 0, 음수, 데이터 없음 값 또는 숫자가 아니었습니다. 해당 공구들은 총 심도 없이 유지됩니다
+    }
+csv-drill-hole-logged-below-total-depth =
+    { $count ->
+        [1] { $file }: 시추공 { $count }개에 총 심도보다 깊은 구간이 있습니다
+       *[other] { $file }: 시추공 { $count }개에 총 심도보다 깊은 구간이 있습니다
+    }
+csv-drill-hole-surveyed-below-total-depth =
+    { $count ->
+        [1] { $file }: 시추공 { $count }개가 총 심도보다 깊게 측량되었습니다
+       *[other] { $file }: 시추공 { $count }개가 총 심도보다 깊게 측량되었습니다
+    }
 csv-drill-hole-row-has-no-geometry = { $file } { $row }행: 완전한 XYZ 또는 방위각/경사 지오메트리가 없습니다
 csv-drill-hole-row-invalid-interval = { $file } { $row }행: DHID '{ $dhid }'의 구간 { $from }..{ $to }이(가) 잘못되었습니다
 csv-drill-hole-row-zero-length-segment = { $file } { $row }행: DHID '{ $dhid }'의 { $depth } 위치에 길이가 0인 구간이 있습니다
@@ -1832,6 +1848,7 @@ io-start-x = 시작 X
 io-start-y = 시작 Y
 io-start-z = 시작 Z
 io-stl = STL (.stl)
+io-total-depth = 총 심도
 io-triangulation = 삼각망:
 io-unmapped = 매핑되지 않음
 io-wavefront-obj = Wavefront OBJ (.obj)
@@ -2738,6 +2755,7 @@ viewport-no-matches = 일치하는 항목 없음
 viewport-no-trace = 궤적 없음
 viewport-no-usable-range = (사용 가능한 범위 없음)
 viewport-not-logged = 기록되지 않음
+viewport-not-recorded = 기록 없음
 viewport-orientation-source = 방향 출처
 viewport-rebuild-variable-s-colours-from = 데이터를 기반으로 이 변수의 색상 다시 생성
 viewport-rename-seam-in-every-hole = 모든 시추공에서 이름 바꾸기
@@ -2748,6 +2766,7 @@ viewport-roll-wheel-over-log-zoom = 검층 위에서 휠을 굴려 탄층을 확
 viewport-s = S
 viewport-sideways-scale = 가로 축척
 viewport-squeeze-sideways-just-enough-keep = 시추공이 보이도록 필요한 만큼만 가로로 압축합니다. 늘리지는 않습니다.
+viewport-total-depth = 총 심도
 viewport-trace-extent = 궤적 범위
 viewport-w = W
 viewport-widen-panel-show-curve = { $curve } 곡선을 표시하려면 패널을 넓히세요

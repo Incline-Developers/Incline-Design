@@ -1267,6 +1267,22 @@ csv-drill-hole-row-attribute-not-number = { $file } riga { $row } contiene '{ $v
 csv-drill-hole-row-repeats-dhid = { $file } riga { $row } ripete il DHID '{ $dhid }'
 csv-drill-hole-most-rows-unreadable = { $file }: { $skipped } righe su { $count } non sono leggibili; i motivi sono nella console
 csv-drill-hole-file-maps-dip-column-twice = { $file } assegna due volte una colonna di immersione o inclinazione
+csv-drill-hole-file-has-more-than-one-total-depth = { $file } assegna due volte una colonna di profondità totale
+csv-drill-hole-total-depths-left-out =
+    { $count ->
+        [one] { $file }: { $count } profondità totale era vuota, zero, negativa, un valore senza dati o non numerica; quel boccaforo è mantenuto senza profondità totale
+       *[other] { $file }: { $count } profondità totali erano vuote, zero, negative, valori senza dati o non numeriche; quei boccafori sono mantenuti senza profondità totale
+    }
+csv-drill-hole-logged-below-total-depth =
+    { $count ->
+        [one] { $file }: { $count } foro ha intervalli sotto la sua profondità totale
+       *[other] { $file }: { $count } fori hanno intervalli sotto la loro profondità totale
+    }
+csv-drill-hole-surveyed-below-total-depth =
+    { $count ->
+        [one] { $file }: { $count } foro ha misure di deviazione sotto la sua profondità totale
+       *[other] { $file }: { $count } fori hanno misure di deviazione sotto la loro profondità totale
+    }
 csv-drill-hole-row-has-no-geometry = { $file } riga { $row } non ha una geometria XYZ o azimut/immersione completa
 csv-drill-hole-row-invalid-interval = { $file } riga { $row } ha un intervallo non valido { $from }..{ $to } per il DHID '{ $dhid }'
 csv-drill-hole-row-zero-length-segment = { $file } riga { $row } ha un segmento di lunghezza zero a { $depth } per il DHID '{ $dhid }'
@@ -1841,6 +1857,7 @@ io-start-x = X iniziale
 io-start-y = Y iniziale
 io-start-z = Z iniziale
 io-stl = STL (.stl)
+io-total-depth = Profondità totale
 io-triangulation = Triangolazione:
 io-unmapped = Non mappato
 io-wavefront-obj = Wavefront OBJ (.obj)
@@ -2747,6 +2764,7 @@ viewport-no-matches = Nessuna corrispondenza
 viewport-no-trace = Nessuna traccia
 viewport-no-usable-range = (nessun intervallo utilizzabile)
 viewport-not-logged = Non registrato
+viewport-not-recorded = Non indicato
 viewport-orientation-source = Sorgente dell'orientamento
 viewport-rebuild-variable-s-colours-from = Ricostruisci i colori di questa variabile dai suoi dati
 viewport-rename-seam-in-every-hole = Rinomina in ogni foro
@@ -2757,6 +2775,7 @@ viewport-roll-wheel-over-log-zoom = Ruota la rotella sul log per ingrandire uno 
 viewport-s = S
 viewport-sideways-scale = Scala laterale
 viewport-squeeze-sideways-just-enough-keep = Comprime lateralmente quanto basta per mantenere il foro in vista. Non allunga mai.
+viewport-total-depth = Profondità totale
 viewport-trace-extent = Estensione della traccia
 viewport-w = O
 viewport-widen-panel-show-curve = Allarga il pannello per mostrare { $curve }

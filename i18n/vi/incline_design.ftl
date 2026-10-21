@@ -1251,6 +1251,22 @@ csv-drill-hole-row-attribute-not-number = { $file } dòng { $row } có '{ $value
 csv-drill-hole-row-repeats-dhid = { $file } dòng { $row } lặp lại DHID '{ $dhid }'
 csv-drill-hole-most-rows-unreadable = { $file }: không đọc được { $skipped } trên { $count } dòng; lý do nằm trong bảng điều khiển
 csv-drill-hole-file-maps-dip-column-twice = { $file } ánh xạ cột góc dốc hoặc độ nghiêng hai lần
+csv-drill-hole-file-has-more-than-one-total-depth = { $file } ánh xạ cột tổng độ sâu hai lần
+csv-drill-hole-total-depths-left-out =
+    { $count ->
+        [1] { $file }: { $count } tổng độ sâu bị trống, bằng không, âm, là giá trị không có dữ liệu hoặc không phải số; miệng lỗ đó được giữ lại mà không có tổng độ sâu
+       *[other] { $file }: { $count } tổng độ sâu bị trống, bằng không, âm, là giá trị không có dữ liệu hoặc không phải số; các miệng lỗ đó được giữ lại mà không có tổng độ sâu
+    }
+csv-drill-hole-logged-below-total-depth =
+    { $count ->
+        [1] { $file }: { $count } lỗ khoan có khoảng nằm dưới tổng độ sâu của nó
+       *[other] { $file }: { $count } lỗ khoan có khoảng nằm dưới tổng độ sâu của chúng
+    }
+csv-drill-hole-surveyed-below-total-depth =
+    { $count ->
+        [1] { $file }: { $count } lỗ khoan được khảo sát dưới tổng độ sâu của nó
+       *[other] { $file }: { $count } lỗ khoan được khảo sát dưới tổng độ sâu của chúng
+    }
 csv-drill-hole-row-has-no-geometry = { $file } dòng { $row } không có hình học XYZ hoặc phương vị/góc dốc đầy đủ
 csv-drill-hole-row-invalid-interval = { $file } dòng { $row } có khoảng không hợp lệ { $from }..{ $to } cho DHID '{ $dhid }'
 csv-drill-hole-row-zero-length-segment = { $file } dòng { $row } có đoạn dài bằng không tại { $depth } cho DHID '{ $dhid }'
@@ -1825,6 +1841,7 @@ io-start-x = X đầu
 io-start-y = Y đầu
 io-start-z = Z đầu
 io-stl = STL (.stl)
+io-total-depth = Tổng độ sâu
 io-triangulation = Lưới tam giác:
 io-unmapped = Chưa ánh xạ
 io-wavefront-obj = Wavefront OBJ (.obj)
@@ -2731,6 +2748,7 @@ viewport-no-matches = Không có kết quả trùng khớp
 viewport-no-trace = Không có đường quỹ đạo
 viewport-no-usable-range = (không có khoảng sử dụng được)
 viewport-not-logged = Chưa ghi nhật ký
+viewport-not-recorded = Không ghi nhận
 viewport-orientation-source = Nguồn định hướng
 viewport-rebuild-variable-s-colours-from = Xây dựng lại màu của biến này từ dữ liệu của nó
 viewport-rename-seam-in-every-hole = Đổi tên trong mọi lỗ khoan
@@ -2741,6 +2759,7 @@ viewport-roll-wheel-over-log-zoom = Lăn chuột trên nhật ký để phóng t
 viewport-s = N
 viewport-sideways-scale = Tỷ lệ ngang
 viewport-squeeze-sideways-just-enough-keep = Nén theo chiều ngang vừa đủ để giữ lỗ khoan trong khung nhìn. Không bao giờ kéo giãn.
+viewport-total-depth = Tổng độ sâu
 viewport-trace-extent = Phạm vi quỹ đạo
 viewport-w = T
 viewport-widen-panel-show-curve = Mở rộng bảng để hiển thị { $curve }

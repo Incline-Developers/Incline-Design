@@ -1253,6 +1253,22 @@ csv-drill-hole-row-attribute-not-number = { $file } の { $row } 行目: 数値�
 csv-drill-hole-row-repeats-dhid = { $file } の { $row } 行目: DHID '{ $dhid }' が重複しています
 csv-drill-hole-most-rows-unreadable = { $file }: { $count } 行中 { $skipped } 行を読み取れませんでした。理由はコンソールにあります
 csv-drill-hole-file-maps-dip-column-twice = { $file } は傾斜または伏角の列を 2 回割り当てています
+csv-drill-hole-file-has-more-than-one-total-depth = { $file } は総深度の列を 2 回割り当てています
+csv-drill-hole-total-depths-left-out =
+    { $count ->
+        [1] { $file }: 総深度 { $count } 件が空欄、ゼロ、負、データなし値、または数値ではありませんでした。その孔口は総深度なしで保持されます
+       *[other] { $file }: 総深度 { $count } 件が空欄、ゼロ、負、データなし値、または数値ではありませんでした。それらの孔口は総深度なしで保持されます
+    }
+csv-drill-hole-logged-below-total-depth =
+    { $count ->
+        [1] { $file }: { $count } 孔に総深度より深い区間があります
+       *[other] { $file }: { $count } 孔に総深度より深い区間があります
+    }
+csv-drill-hole-surveyed-below-total-depth =
+    { $count ->
+        [1] { $file }: { $count } 孔が総深度より深くまで測量されています
+       *[other] { $file }: { $count } 孔が総深度より深くまで測量されています
+    }
 csv-drill-hole-row-has-no-geometry = { $file } の { $row } 行目: XYZ または方位角/傾斜の完全なジオメトリがありません
 csv-drill-hole-row-invalid-interval = { $file } の { $row } 行目: DHID '{ $dhid }' の区間 { $from }..{ $to } が無効です
 csv-drill-hole-row-zero-length-segment = { $file } の { $row } 行目: DHID '{ $dhid }' の { $depth } に長さゼロの区間があります
@@ -1827,6 +1843,7 @@ io-start-x = 始点X
 io-start-y = 始点Y
 io-start-z = 始点Z
 io-stl = STL (.stl)
+io-total-depth = 総深度
 io-triangulation = 三角網:
 io-unmapped = 未マッピング
 io-wavefront-obj = Wavefront OBJ (.obj)
@@ -2733,6 +2750,7 @@ viewport-no-matches = 一致なし
 viewport-no-trace = トレースなし
 viewport-no-usable-range = （使用可能な範囲なし）
 viewport-not-logged = 未記録
+viewport-not-recorded = 記録なし
 viewport-orientation-source = 向きのソース
 viewport-rebuild-variable-s-colours-from = このデータからこの変数の色を再構築
 viewport-rename-seam-in-every-hole = すべての孔で名前を変更
@@ -2743,6 +2761,7 @@ viewport-roll-wheel-over-log-zoom = ログ上でホイールを回すと炭層�
 viewport-s = S
 viewport-sideways-scale = 横方向スケール
 viewport-squeeze-sideways-just-enough-keep = 孔が見える範囲で横方向に圧縮します。引き伸ばしは行いません。
+viewport-total-depth = 総深度
 viewport-trace-extent = トレース範囲
 viewport-w = W
 viewport-widen-panel-show-curve = { $curve }を表示するにはパネルを広げてください

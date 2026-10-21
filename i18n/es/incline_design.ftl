@@ -1223,6 +1223,22 @@ csv-drill-hole-row-attribute-not-number = { $file } fila { $row } tiene '{ $valu
 csv-drill-hole-row-repeats-dhid = { $file } fila { $row } repite el DHID '{ $dhid }'
 csv-drill-hole-most-rows-unreadable = { $file }: no se pudieron leer { $skipped } de { $count } filas; los motivos están en la consola
 csv-drill-hole-file-maps-dip-column-twice = { $file } asigna dos veces una columna de buzamiento o inclinación
+csv-drill-hole-file-has-more-than-one-total-depth = { $file } asigna dos veces una columna de profundidad total
+csv-drill-hole-total-depths-left-out =
+    { $count ->
+        [one] { $file }: { $count } profundidad total estaba vacía, era cero, negativa, un valor sin datos o no era un número; ese collar se conserva sin ella
+       *[other] { $file }: { $count } profundidades totales estaban vacías, eran cero, negativas, valores sin datos o no eran números; esos collares se conservan sin ella
+    }
+csv-drill-hole-logged-below-total-depth =
+    { $count ->
+        [one] { $file }: { $count } sondaje tiene intervalos por debajo de su profundidad total
+       *[other] { $file }: { $count } sondajes tienen intervalos por debajo de su profundidad total
+    }
+csv-drill-hole-surveyed-below-total-depth =
+    { $count ->
+        [one] { $file }: { $count } sondaje tiene mediciones de trayectoria por debajo de su profundidad total
+       *[other] { $file }: { $count } sondajes tienen mediciones de trayectoria por debajo de su profundidad total
+    }
 csv-drill-hole-row-has-no-geometry = { $file } fila { $row } no tiene geometría XYZ o de azimut/buzamiento completa
 csv-drill-hole-row-invalid-interval = { $file } fila { $row } tiene un intervalo no válido { $from }..{ $to } para el DHID '{ $dhid }'
 csv-drill-hole-row-zero-length-segment = { $file } fila { $row } tiene un segmento de longitud cero en { $depth } para el DHID '{ $dhid }'
@@ -1797,6 +1813,7 @@ io-start-x = X inicial
 io-start-y = Y inicial
 io-start-z = Z inicial
 io-stl = STL (.stl)
+io-total-depth = Profundidad total
 io-triangulation = Triangulación:
 io-unmapped = Sin asignar
 io-wavefront-obj = Wavefront OBJ (.obj)
@@ -2703,6 +2720,7 @@ viewport-no-matches = No hay coincidencias
 viewport-no-trace = Sin traza
 viewport-no-usable-range = (sin intervalo utilizable)
 viewport-not-logged = Sin registrar
+viewport-not-recorded = No consta
 viewport-orientation-source = Origen de la orientación
 viewport-rebuild-variable-s-colours-from = Regenerar los colores de esta variable a partir de sus datos
 viewport-rename-seam-in-every-hole = Cambiar nombre en todos los sondajes
@@ -2713,6 +2731,7 @@ viewport-roll-wheel-over-log-zoom = Gire la rueda sobre el registro para acercar
 viewport-s = S
 viewport-sideways-scale = Escala lateral
 viewport-squeeze-sideways-just-enough-keep = Comprime lateralmente lo justo para mantener el sondaje a la vista. Nunca estira.
+viewport-total-depth = Profundidad total
 viewport-trace-extent = Extensión de la traza
 viewport-w = O
 viewport-widen-panel-show-curve = Ensanche el panel para mostrar { $curve }

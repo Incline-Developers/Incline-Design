@@ -1267,6 +1267,22 @@ csv-drill-hole-row-attribute-not-number = { $file } satır { $row }: sayısal bi
 csv-drill-hole-row-repeats-dhid = { $file } satır { $row }: DHID '{ $dhid }' tekrar ediyor
 csv-drill-hole-most-rows-unreadable = { $file }: { $count } satırın { $skipped } tanesi okunamadı; nedenler konsolda
 csv-drill-hole-file-maps-dip-column-twice = { $file } bir eğim veya dalım sütununu iki kez eşliyor
+csv-drill-hole-file-has-more-than-one-total-depth = { $file } bir toplam derinlik sütununu iki kez eşliyor
+csv-drill-hole-total-depths-left-out =
+    { $count ->
+        [one] { $file }: { $count } toplam derinlik boş, sıfır, negatif, veri yok değeri veya sayı değildi; o kuyu ağzı toplam derinliksiz tutuluyor
+       *[other] { $file }: { $count } toplam derinlik boş, sıfır, negatif, veri yok değeri veya sayı değildi; o kuyu ağızları toplam derinliksiz tutuluyor
+    }
+csv-drill-hole-logged-below-total-depth =
+    { $count ->
+        [one] { $file }: { $count } kuyunun toplam derinliğinin altında aralıkları var
+       *[other] { $file }: { $count } kuyunun toplam derinliklerinin altında aralıkları var
+    }
+csv-drill-hole-surveyed-below-total-depth =
+    { $count ->
+        [one] { $file }: { $count } kuyu toplam derinliğinin altında ölçülmüş
+       *[other] { $file }: { $count } kuyu toplam derinliklerinin altında ölçülmüş
+    }
 csv-drill-hole-row-has-no-geometry = { $file } satır { $row }: eksiksiz XYZ veya azimut/eğim geometrisi yok
 csv-drill-hole-row-invalid-interval = { $file } satır { $row }: DHID '{ $dhid }' için geçersiz aralık { $from }..{ $to }
 csv-drill-hole-row-zero-length-segment = { $file } satır { $row }: DHID '{ $dhid }' için { $depth } konumunda sıfır uzunlukta bir parça var
@@ -1841,6 +1857,7 @@ io-start-x = Başlangıç X
 io-start-y = Başlangıç Y
 io-start-z = Başlangıç Z
 io-stl = STL (.stl)
+io-total-depth = Toplam derinlik
 io-triangulation = Üçgenleme:
 io-unmapped = Eşlenmemiş
 io-wavefront-obj = Wavefront OBJ (.obj)
@@ -2747,6 +2764,7 @@ viewport-no-matches = Eşleşme yok
 viewport-no-trace = İz yok
 viewport-no-usable-range = (kullanılabilir aralık yok)
 viewport-not-logged = Loglanmadı
+viewport-not-recorded = Kaydedilmemiş
 viewport-orientation-source = Yönlendirme kaynağı
 viewport-rebuild-variable-s-colours-from = Bu değişkenin renklerini verilerinden yeniden oluştur
 viewport-rename-seam-in-every-hole = Her delikte yeniden adlandır
@@ -2757,6 +2775,7 @@ viewport-roll-wheel-over-log-zoom = Bir damara yakınlaşmak için tekerleği lo
 viewport-s = G
 viewport-sideways-scale = Yan ölçek
 viewport-squeeze-sideways-just-enough-keep = Deliği görünümde tutmaya yetecek kadar yanlara sıkıştırır. Asla germez.
+viewport-total-depth = Toplam derinlik
 viewport-trace-extent = İz kapsamı
 viewport-w = B
 viewport-widen-panel-show-curve = { $curve } eğrisini göstermek için paneli genişletin

@@ -1225,6 +1225,22 @@ csv-drill-hole-row-attribute-not-number = { $file } الصف { $row } يحتوي
 csv-drill-hole-row-repeats-dhid = { $file } الصف { $row } يكرر DHID '{ $dhid }'
 csv-drill-hole-most-rows-unreadable = { $file }: تعذرت قراءة { $skipped } من { $count } صفوف؛ الأسباب في وحدة التحكم
 csv-drill-hole-file-maps-dip-column-twice = { $file } يربط عمود الميل أو الانحدار مرتين
+csv-drill-hole-file-has-more-than-one-total-depth = { $file } يربط عمود العمق الكلي مرتين
+csv-drill-hole-total-depths-left-out =
+    { $count ->
+        [one] { $file }: عمق كلي واحد كان فارغًا أو صفرًا أو سالبًا أو قيمة انعدام بيانات أو ليس رقمًا؛ تُبقى تلك الفوهة بلا عمق كلي
+       *[other] { $file }: الأعماق الكلية الفارغة أو الصفرية أو السالبة أو ذات قيمة انعدام البيانات أو غير الرقمية: { $count }؛ تُبقى تلك الفوهات بلا عمق كلي
+    }
+csv-drill-hole-logged-below-total-depth =
+    { $count ->
+        [one] { $file }: ثقب واحد له فترات أسفل عمقه الكلي
+       *[other] { $file }: الثقوب التي لها فترات أسفل عمقها الكلي: { $count }
+    }
+csv-drill-hole-surveyed-below-total-depth =
+    { $count ->
+        [one] { $file }: ثقب واحد مُسِح أسفل عمقه الكلي
+       *[other] { $file }: الثقوب الممسوحة أسفل عمقها الكلي: { $count }
+    }
 csv-drill-hole-row-has-no-geometry = { $file } الصف { $row } لا يحتوي على هندسة XYZ أو سمت/ميل كاملة
 csv-drill-hole-row-invalid-interval = { $file } الصف { $row } فيه فترة غير صالحة { $from }..{ $to } لـ DHID '{ $dhid }'
 csv-drill-hole-row-zero-length-segment = { $file } الصف { $row } فيه مقطع طوله صفر عند { $depth } لـ DHID '{ $dhid }'
@@ -1799,6 +1815,7 @@ io-start-x = بداية X
 io-start-y = بداية Y
 io-start-z = بداية Z
 io-stl = STL (.stl)
+io-total-depth = العمق الكلي
 io-triangulation = التثليث:
 io-unmapped = غير معيّن
 io-wavefront-obj = Wavefront OBJ (.obj)
@@ -2705,6 +2722,7 @@ viewport-no-matches = لا تطابق
 viewport-no-trace = لا يوجد مسار
 viewport-no-usable-range = (لا يوجد نطاق قابل للاستخدام)
 viewport-not-logged = غير مسجل
+viewport-not-recorded = غير مُدوَّن
 viewport-orientation-source = مصدر الاتجاه
 viewport-rebuild-variable-s-colours-from = إعادة بناء ألوان هذا المتغير من بياناته
 viewport-rename-seam-in-every-hole = إعادة التسمية في كل ثقب
@@ -2715,6 +2733,7 @@ viewport-roll-wheel-over-log-zoom = حرّك العجلة فوق السجل لل
 viewport-s = S
 viewport-sideways-scale = المقياس الجانبي
 viewport-squeeze-sideways-just-enough-keep = يضغط جانبيًا بالقدر اللازم فقط لإبقاء الثقب في العرض. لا يمدّه أبدًا.
+viewport-total-depth = العمق الكلي
 viewport-trace-extent = امتداد المسار
 viewport-w = W
 viewport-widen-panel-show-curve = وسّع اللوحة لعرض { $curve }

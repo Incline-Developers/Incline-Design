@@ -1225,6 +1225,22 @@ csv-drill-hole-row-attribute-not-number = { $file } baris { $row } berisi '{ $va
 csv-drill-hole-row-repeats-dhid = { $file } baris { $row } mengulang DHID '{ $dhid }'
 csv-drill-hole-most-rows-unreadable = { $file }: { $skipped } dari { $count } baris tidak dapat dibaca; alasannya ada di konsol
 csv-drill-hole-file-maps-dip-column-twice = { $file } memetakan kolom dip atau inklinasi dua kali
+csv-drill-hole-file-has-more-than-one-total-depth = { $file } memetakan kolom kedalaman total dua kali
+csv-drill-hole-total-depths-left-out =
+    { $count ->
+        [1] { $file }: { $count } kedalaman total kosong, nol, negatif, nilai tanpa data, atau bukan angka; collar itu tetap disimpan tanpa kedalaman total
+       *[other] { $file }: { $count } kedalaman total kosong, nol, negatif, nilai tanpa data, atau bukan angka; collar-collar itu tetap disimpan tanpa kedalaman total
+    }
+csv-drill-hole-logged-below-total-depth =
+    { $count ->
+        [1] { $file }: { $count } lubang memiliki interval di bawah kedalaman totalnya
+       *[other] { $file }: { $count } lubang memiliki interval di bawah kedalaman totalnya
+    }
+csv-drill-hole-surveyed-below-total-depth =
+    { $count ->
+        [1] { $file }: { $count } lubang disurvei di bawah kedalaman totalnya
+       *[other] { $file }: { $count } lubang disurvei di bawah kedalaman totalnya
+    }
 csv-drill-hole-row-has-no-geometry = { $file } baris { $row } tidak memiliki geometri XYZ atau azimut/dip yang lengkap
 csv-drill-hole-row-invalid-interval = { $file } baris { $row } memiliki interval tidak valid { $from }..{ $to } untuk DHID '{ $dhid }'
 csv-drill-hole-row-zero-length-segment = { $file } baris { $row } memiliki segmen sepanjang nol pada { $depth } untuk DHID '{ $dhid }'
@@ -1799,6 +1815,7 @@ io-start-x = X awal
 io-start-y = Y awal
 io-start-z = Z awal
 io-stl = STL (.stl)
+io-total-depth = Kedalaman total
 io-triangulation = Triangulasi:
 io-unmapped = Tidak dipetakan
 io-wavefront-obj = Wavefront OBJ (.obj)
@@ -2705,6 +2722,7 @@ viewport-no-matches = Tidak ada yang cocok
 viewport-no-trace = Tanpa jejak
 viewport-no-usable-range = (tidak ada rentang yang dapat digunakan)
 viewport-not-logged = Tidak dicatat
+viewport-not-recorded = Tidak tercatat
 viewport-orientation-source = Sumber orientasi
 viewport-rebuild-variable-s-colours-from = Bangun ulang warna variabel ini dari datanya
 viewport-rename-seam-in-every-hole = Ubah nama di setiap lubang
@@ -2715,6 +2733,7 @@ viewport-roll-wheel-over-log-zoom = Putar roda di atas log untuk memperbesar sea
 viewport-s = S
 viewport-sideways-scale = Skala lateral
 viewport-squeeze-sideways-just-enough-keep = Dimampatkan ke samping secukupnya agar lubang tetap terlihat. Tidak pernah meregang.
+viewport-total-depth = Kedalaman total
 viewport-trace-extent = Cakupan jejak
 viewport-w = B
 viewport-widen-panel-show-curve = Lebarkan panel untuk menampilkan { $curve }

@@ -1266,6 +1266,22 @@ csv-drill-hole-row-attribute-not-number = { $file } Zeile { $row } enthält '{ $
 csv-drill-hole-row-repeats-dhid = { $file } Zeile { $row } wiederholt DHID '{ $dhid }'
 csv-drill-hole-most-rows-unreadable = { $file }: { $skipped } von { $count } Zeilen konnten nicht gelesen werden; die Gründe stehen in der Konsole
 csv-drill-hole-file-maps-dip-column-twice = { $file } ordnet eine Fallen- oder Neigungsspalte doppelt zu
+csv-drill-hole-file-has-more-than-one-total-depth = { $file } ordnet eine Endteufenspalte doppelt zu
+csv-drill-hole-total-depths-left-out =
+    { $count ->
+        [one] { $file }: { $count } Endteufe war leer, null, negativ, ein Fehlwert oder keine Zahl; dieser Ansatzpunkt bleibt ohne Endteufe erhalten
+       *[other] { $file }: { $count } Endteufen waren leer, null, negativ, ein Fehlwert oder keine Zahl; diese Ansatzpunkte bleiben ohne Endteufe erhalten
+    }
+csv-drill-hole-logged-below-total-depth =
+    { $count ->
+        [one] { $file }: { $count } Bohrloch hat Intervalle unterhalb seiner Endteufe
+       *[other] { $file }: { $count } Bohrlöcher haben Intervalle unterhalb ihrer Endteufe
+    }
+csv-drill-hole-surveyed-below-total-depth =
+    { $count ->
+        [one] { $file }: { $count } Bohrloch ist unterhalb seiner Endteufe vermessen
+       *[other] { $file }: { $count } Bohrlöcher sind unterhalb ihrer Endteufe vermessen
+    }
 csv-drill-hole-row-has-no-geometry = { $file } Zeile { $row } hat keine vollständige XYZ- oder Azimut/Fallen-Geometrie
 csv-drill-hole-row-invalid-interval = { $file } Zeile { $row } hat ein ungültiges Intervall { $from }..{ $to } für DHID '{ $dhid }'
 csv-drill-hole-row-zero-length-segment = { $file } Zeile { $row } hat ein Segment der Länge null bei { $depth } für DHID '{ $dhid }'
@@ -1840,6 +1856,7 @@ io-start-x = Start X
 io-start-y = Start Y
 io-start-z = Start Z
 io-stl = STL (.stl)
+io-total-depth = Endteufe
 io-triangulation = Triangulation:
 io-unmapped = Nicht zugeordnet
 io-wavefront-obj = Wavefront OBJ (.obj)
@@ -2746,6 +2763,7 @@ viewport-no-matches = Keine Treffer
 viewport-no-trace = Keine Spur
 viewport-no-usable-range = (kein nutzbarer Bereich)
 viewport-not-logged = Nicht erfasst
+viewport-not-recorded = Nicht angegeben
 viewport-orientation-source = Orientierungsquelle
 viewport-rebuild-variable-s-colours-from = Farben dieser Variablen aus ihren Daten neu erstellen
 viewport-rename-seam-in-every-hole = In jedem Bohrloch umbenennen
@@ -2756,6 +2774,7 @@ viewport-roll-wheel-over-log-zoom = Das Rad über dem Log drehen, um auf ein Fl�
 viewport-s = S
 viewport-sideways-scale = Seitlicher Maßstab
 viewport-squeeze-sideways-just-enough-keep = Seitlich nur so weit stauchen, dass das Bohrloch im Blick bleibt. Streckt nie.
+viewport-total-depth = Endteufe
 viewport-trace-extent = Spurausdehnung
 viewport-w = W
 viewport-widen-panel-show-curve = Bereich verbreitern, um { $curve } anzuzeigen

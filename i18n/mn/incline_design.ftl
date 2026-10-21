@@ -1276,6 +1276,22 @@ csv-drill-hole-row-attribute-not-number = { $file } мөр { $row }: тоон б
 csv-drill-hole-row-repeats-dhid = { $file } мөр { $row }: DHID '{ $dhid }' давтагдсан
 csv-drill-hole-most-rows-unreadable = { $file }: { $count } мөрөөс { $skipped }-г уншиж чадсангүй; шалтгааныг консолоос харна уу
 csv-drill-hole-file-maps-dip-column-twice = { $file } уналт эсвэл налуугийн баганыг хоёр удаа оноосон
+csv-drill-hole-file-has-more-than-one-total-depth = { $file } нийт гүний баганыг хоёр удаа оноосон
+csv-drill-hole-total-depths-left-out =
+    { $count ->
+        [one] { $file }: { $count } нийт гүн хоосон, тэг, сөрөг, өгөгдөлгүй утга эсвэл тоо биш байсан; тэр амсрыг нийт гүнгүйгээр хадгална
+       *[other] { $file }: { $count } нийт гүн хоосон, тэг, сөрөг, өгөгдөлгүй утга эсвэл тоо биш байсан; тэдгээр амсрыг нийт гүнгүйгээр хадгална
+    }
+csv-drill-hole-logged-below-total-depth =
+    { $count ->
+        [one] { $file }: { $count } цооног нийт гүнээсээ доош интервалтай
+       *[other] { $file }: { $count } цооног нийт гүнээсээ доош интервалтай
+    }
+csv-drill-hole-surveyed-below-total-depth =
+    { $count ->
+        [one] { $file }: { $count } цооногийг нийт гүнээс нь доош хэмжсэн
+       *[other] { $file }: { $count } цооногийг нийт гүнээс нь доош хэмжсэн
+    }
 csv-drill-hole-row-has-no-geometry = { $file } мөр { $row }: бүрэн XYZ эсвэл азимут/уналтын геометр байхгүй
 csv-drill-hole-row-invalid-interval = { $file } мөр { $row }: DHID '{ $dhid }'-д { $from }..{ $to } интервал буруу
 csv-drill-hole-row-zero-length-segment = { $file } мөр { $row }: DHID '{ $dhid }'-д { $depth }-д тэг урттай хэсэг байна
@@ -1850,6 +1866,7 @@ io-start-x = Эхлэл X
 io-start-y = Эхлэл Y
 io-start-z = Эхлэл Z
 io-stl = STL (.stl)
+io-total-depth = Нийт гүн
 io-triangulation = Триангуляц:
 io-unmapped = Холбогдоогүй
 io-wavefront-obj = Wavefront OBJ (.obj)
@@ -2756,6 +2773,7 @@ viewport-no-matches = Тохирол алга
 viewport-no-trace = Мөр алга
 viewport-no-usable-range = (ашиглах боломжтой муж алга)
 viewport-not-logged = Бүртгээгүй
+viewport-not-recorded = Тэмдэглээгүй
 viewport-orientation-source = Чиглэлийн эх үүсвэр
 viewport-rebuild-variable-s-colours-from = Энэ хувьсагчийн өнгийг өгөгдлөөс нь дахин байгуулах
 viewport-rename-seam-in-every-hole = Бүх цооногт нэрийг өөрчлөх
@@ -2766,6 +2784,7 @@ viewport-roll-wheel-over-log-zoom = Давхаргыг томруулахын т
 viewport-s = Х
 viewport-sideways-scale = Хажуугийн масштаб
 viewport-squeeze-sideways-just-enough-keep = Цооногийг харагдуулахад хүрэлцэхүйц хэмжээгээр хажуу тийш шахна. Хэзээ ч сунгахгүй.
+viewport-total-depth = Нийт гүн
 viewport-trace-extent = Мөрийн хэмжээ
 viewport-w = З
 viewport-widen-panel-show-curve = { $curve } каротажийг харуулахын тулд самбарыг өргөсгөнө үү

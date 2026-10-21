@@ -1225,6 +1225,22 @@ csv-drill-hole-row-attribute-not-number = { $file } ligne { $row } contient '{ $
 csv-drill-hole-row-repeats-dhid = { $file } ligne { $row } répète le DHID '{ $dhid }'
 csv-drill-hole-most-rows-unreadable = { $file } : { $skipped } lignes sur { $count } n'ont pas pu être lues ; les raisons sont dans la console
 csv-drill-hole-file-maps-dip-column-twice = { $file } associe deux fois une colonne de pendage ou d'inclinaison
+csv-drill-hole-file-has-more-than-one-total-depth = { $file } associe deux fois une colonne de profondeur totale
+csv-drill-hole-total-depths-left-out =
+    { $count ->
+        [one] { $file } : { $count } profondeur totale était vide, nulle, négative, une valeur sans donnée ou non numérique ; cette tête est conservée sans profondeur totale
+       *[other] { $file } : { $count } profondeurs totales étaient vides, nulles, négatives, des valeurs sans donnée ou non numériques ; ces têtes sont conservées sans profondeur totale
+    }
+csv-drill-hole-logged-below-total-depth =
+    { $count ->
+        [one] { $file } : { $count } sondage a des intervalles sous sa profondeur totale
+       *[other] { $file } : { $count } sondages ont des intervalles sous leur profondeur totale
+    }
+csv-drill-hole-surveyed-below-total-depth =
+    { $count ->
+        [one] { $file } : { $count } sondage a des mesures de déviation sous sa profondeur totale
+       *[other] { $file } : { $count } sondages ont des mesures de déviation sous leur profondeur totale
+    }
 csv-drill-hole-row-has-no-geometry = { $file } ligne { $row } n'a pas de géométrie XYZ ou azimut/pendage complète
 csv-drill-hole-row-invalid-interval = { $file } ligne { $row } a un intervalle invalide { $from }..{ $to } pour le DHID '{ $dhid }'
 csv-drill-hole-row-zero-length-segment = { $file } ligne { $row } a un segment de longueur nulle à { $depth } pour le DHID '{ $dhid }'
@@ -1799,6 +1815,7 @@ io-start-x = X initial
 io-start-y = Y initial
 io-start-z = Z initial
 io-stl = STL (.stl)
+io-total-depth = Profondeur totale
 io-triangulation = Triangulation :
 io-unmapped = Non cartographié
 io-wavefront-obj = Wavefront OBJ (.obj)
@@ -2705,6 +2722,7 @@ viewport-no-matches = Aucune correspondance
 viewport-no-trace = Aucune trajectoire
 viewport-no-usable-range = (aucune plage exploitable)
 viewport-not-logged = Non consigné
+viewport-not-recorded = Non renseigné
 viewport-orientation-source = Source d’orientation
 viewport-rebuild-variable-s-colours-from = Reconstruire les couleurs de cette variable à partir de ses données
 viewport-rename-seam-in-every-hole = Renommer dans chaque trou
@@ -2715,6 +2733,7 @@ viewport-roll-wheel-over-log-zoom = Faites rouler la molette sur la diagraphie p
 viewport-s = S
 viewport-sideways-scale = Échelle latérale
 viewport-squeeze-sideways-just-enough-keep = Comprime latéralement juste assez pour garder le trou visible. N’étire jamais.
+viewport-total-depth = Profondeur totale
 viewport-trace-extent = Étendue de la trajectoire
 viewport-w = O
 viewport-widen-panel-show-curve = Élargissez le panneau pour afficher { $curve }

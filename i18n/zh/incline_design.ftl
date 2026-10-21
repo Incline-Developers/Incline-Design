@@ -1225,6 +1225,22 @@ csv-drill-hole-row-attribute-not-number = { $file } 第 { $row } 行：数值列
 csv-drill-hole-row-repeats-dhid = { $file } 第 { $row } 行：DHID '{ $dhid }' 重复
 csv-drill-hole-most-rows-unreadable = { $file }：{ $count } 行中有 { $skipped } 行无法读取；原因见控制台
 csv-drill-hole-file-maps-dip-column-twice = { $file } 将倾角或倾斜列映射了两次
+csv-drill-hole-file-has-more-than-one-total-depth = { $file } 将总深度列映射了两次
+csv-drill-hole-total-depths-left-out =
+    { $count ->
+        [1] { $file }：{ $count } 个总深度为空、为零、为负、为无数据值或不是数字；该孔口保留，但没有总深度
+       *[other] { $file }：{ $count } 个总深度为空、为零、为负、为无数据值或不是数字；这些孔口保留，但没有总深度
+    }
+csv-drill-hole-logged-below-total-depth =
+    { $count ->
+        [1] { $file }：{ $count } 个钻孔有低于其总深度的区间
+       *[other] { $file }：{ $count } 个钻孔有低于其总深度的区间
+    }
+csv-drill-hole-surveyed-below-total-depth =
+    { $count ->
+        [1] { $file }：{ $count } 个钻孔的测斜深度超过其总深度
+       *[other] { $file }：{ $count } 个钻孔的测斜深度超过其总深度
+    }
 csv-drill-hole-row-has-no-geometry = { $file } 第 { $row } 行：缺少完整的 XYZ 或方位角/倾角几何
 csv-drill-hole-row-invalid-interval = { $file } 第 { $row } 行：DHID '{ $dhid }' 的区间 { $from }..{ $to } 无效
 csv-drill-hole-row-zero-length-segment = { $file } 第 { $row } 行：DHID '{ $dhid }' 在 { $depth } 处有零长度段
@@ -1799,6 +1815,7 @@ io-start-x = 起点 X
 io-start-y = 起点 Y
 io-start-z = 起点 Z
 io-stl = STL (.stl)
+io-total-depth = 总深度
 io-triangulation = 三角网：
 io-unmapped = 未映射
 io-wavefront-obj = Wavefront OBJ (.obj)
@@ -2705,6 +2722,7 @@ viewport-no-matches = 没有匹配
 viewport-no-trace = 无轨迹
 viewport-no-usable-range = （无可用范围）
 viewport-not-logged = 未记录
+viewport-not-recorded = 无记录
 viewport-orientation-source = 方向来源
 viewport-rebuild-variable-s-colours-from = 根据此变量的数据重新生成颜色
 viewport-rename-seam-in-every-hole = 在所有钻孔中重命名
@@ -2715,6 +2733,7 @@ viewport-roll-wheel-over-log-zoom = 在测井上滚动滚轮可放大煤层。�
 viewport-s = 南
 viewport-sideways-scale = 横向比例
 viewport-squeeze-sideways-just-enough-keep = 仅在横向压缩到足以使钻孔保持在视野内。绝不拉伸。
+viewport-total-depth = 总深度
 viewport-trace-extent = 轨迹范围
 viewport-w = 西
 viewport-widen-panel-show-curve = 加宽面板以显示{ $curve }

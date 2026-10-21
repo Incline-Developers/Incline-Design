@@ -1299,6 +1299,22 @@ csv-drill-hole-row-attribute-not-number = { $file } row { $row } has '{ $value }
 csv-drill-hole-row-repeats-dhid = { $file } row { $row } repeats DHID '{ $dhid }'
 csv-drill-hole-most-rows-unreadable = { $file }: { $skipped } of { $count } rows could not be read; the reasons are in the console
 csv-drill-hole-file-maps-dip-column-twice = { $file } maps a dip or inclination column twice
+csv-drill-hole-file-has-more-than-one-total-depth = { $file } maps a total depth column twice
+csv-drill-hole-total-depths-left-out =
+    { $count ->
+        [one] { $file }: { $count } total depth was blank, zero, negative, a no-data value or not a number; that collar is kept without one
+       *[other] { $file }: { $count } total depths were blank, zero, negative, a no-data value or not a number; those collars are kept without one
+    }
+csv-drill-hole-logged-below-total-depth =
+    { $count ->
+        [one] { $file }: { $count } hole has intervals below its total depth
+       *[other] { $file }: { $count } holes have intervals below their total depth
+    }
+csv-drill-hole-surveyed-below-total-depth =
+    { $count ->
+        [one] { $file }: { $count } hole is surveyed below its total depth
+       *[other] { $file }: { $count } holes are surveyed below their total depth
+    }
 csv-drill-hole-row-has-no-geometry = { $file } row { $row } has no complete XYZ or azimuth/dip geometry
 csv-drill-hole-row-invalid-interval = { $file } row { $row } has invalid interval { $from }..{ $to } for DHID '{ $dhid }'
 csv-drill-hole-row-zero-length-segment = { $file } row { $row } has a zero-length segment at { $depth } for DHID '{ $dhid }'
@@ -1890,6 +1906,7 @@ io-start-x = Start X
 io-start-y = Start Y
 io-start-z = Start Z
 io-stl = STL (.stl)
+io-total-depth = Total depth
 io-triangulation = Triangulation:
 io-unmapped = Unmapped
 io-wavefront-obj = Wavefront OBJ (.obj)
@@ -2813,6 +2830,7 @@ viewport-no-matches = No matches
 viewport-no-trace = No trace
 viewport-no-usable-range = (no usable range)
 viewport-not-logged = Not logged
+viewport-not-recorded = Not recorded
 viewport-orientation-source = Orientation source
 viewport-rebuild-variable-s-colours-from = Rebuild this variable's colours from its data
 viewport-rename-seam-in-every-hole = Rename in every hole
@@ -2823,6 +2841,7 @@ viewport-roll-wheel-over-log-zoom = Roll the wheel over the log to zoom in on a 
 viewport-s = S
 viewport-sideways-scale = Sideways scale
 viewport-squeeze-sideways-just-enough-keep = Squeeze sideways just enough to keep the hole in view. Never stretches.
+viewport-total-depth = Total depth
 viewport-trace-extent = Trace extent
 viewport-w = W
 viewport-widen-panel-show-curve = Widen the panel to show { $curve }

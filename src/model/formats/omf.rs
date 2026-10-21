@@ -1203,6 +1203,14 @@ fn write_drill_holes<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
         Location::Vertices,
         writer.array_numbers(holes.iter().map(|hole| hole.diameter.filter(|diameter| diameter.is_finite())))?,
     ));
+    // Only where a hole has one: blast patterns and bare sets carry none.
+    if holes.iter().any(|hole| hole.total_depth.is_some()) {
+        collars.attributes.push(Attribute::from_numbers(
+            "Total depth",
+            Location::Vertices,
+            writer.array_numbers(holes.iter().map(|hole| hole.total_depth.filter(|depth| depth.is_finite())))?,
+        ));
+    }
     put(&mut collars, META_KIND, "drillhole_collars");
 
     let mut segments = Vec::new();
@@ -3156,6 +3164,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         let positions = self.read_vertices(&collar_points.vertices).with_context(|| context("collars"))?;
         let (collar_holes, names) = self.read_drill_hole_category(collars).with_context(|| context("collars"))?;
         let diameters = self.read_drill_numbers(collars, "Diameter")?.unwrap_or_default();
+        let total_depths = self.read_drill_numbers(collars, "Total depth")?.unwrap_or_default();
         let mut holes = positions
             .iter()
             .enumerate()
@@ -3172,6 +3181,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 render_ranges: Vec::new(),
                 intervals: Vec::new(),
                 orientation_source: OrientationSource::Unknown,
+                total_depth: total_depths.get(index).copied().flatten().and_then(crate::model::drill_hole::recorded_total_depth),
             })
             .collect::<Vec<_>>();
 

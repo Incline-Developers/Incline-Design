@@ -31,6 +31,8 @@ pub(crate) struct DrillHoleProperties<'a> {
     /// Logged rows a deletion took out, listed after the hole's own as
     /// logged, so the as-logged side still shows them.
     deleted: Vec<&'a crate::model::drill_hole::DrillInterval>,
+    /// See [`Self::total_depth_row`].
+    total_depth_row: bool,
 }
 
 impl<'a> DrillHoleProperties<'a> {
@@ -40,12 +42,20 @@ impl<'a> DrillHoleProperties<'a> {
             hole,
             fields,
             deleted: Vec::new(),
+            total_depth_row: false,
         }
     }
 
     /// Logged rows deletions took out of the hole, to list after its own.
     pub(crate) fn deleted_rows(mut self, rows: Vec<&'a crate::model::drill_hole::DrillInterval>) -> Self {
         self.deleted = rows;
+        self
+    }
+
+    /// Whether the summary has a total depth row, "Not recorded" for a hole
+    /// without one: for a set that records total depths at all.
+    pub(crate) fn total_depth_row(mut self, shown: bool) -> Self {
+        self.total_depth_row = shown;
         self
     }
 
@@ -67,6 +77,10 @@ impl<'a> DrillHoleProperties<'a> {
             _ => tr!("viewport-no-trace"),
         };
         read_only_row(ui, &tr!("viewport-trace-extent"), &extent);
+        if self.total_depth_row {
+            let total_depth = hole.total_depth.map_or_else(|| tr!("viewport-not-recorded"), |depth| format!("{depth:.2}"));
+            read_only_row(ui, &tr!("viewport-total-depth"), &total_depth);
+        }
         let orientation = match hole.orientation() {
             Some(orientation) => tr!(
                 "viewport-azimuth-dip",
@@ -910,14 +924,13 @@ impl<'a> BoreholeLog<'a> {
         reset
     }
 
-    /// The depths the log spans, widened to cover any interval or well log
-    /// past the trace: the index's depths while the hole is read, the
+    /// The depths the log spans: the hole to its end depth, widened to cover
+    /// any well log past it: the index's depths while the hole is read, the
     /// traces' once they are shown. The index holds only the drawn curves'
     /// depths, so a chosen curve running past them widens the log as it
     /// lands.
     fn depth_range(&self) -> Option<(f64, f64)> {
         let first = self.hole.trace.first()?.depth;
-        let last = self.hole.trace.last()?.depth;
         let logs = || {
             self.well_logs.into_iter().flat_map(|logs| {
                 let drawn = crate::model::geophysics::LogKind::ALL.into_iter().filter_map(|kind| logs.trace(kind));
@@ -935,13 +948,16 @@ impl<'a> BoreholeLog<'a> {
             ]
         });
         let first = first.min(shallowest);
-        let deepest = self.hole.intervals.iter().map(|interval| interval.to).fold(last, f64::max).max(deepest);
+        let deepest = self.hole.end_depth().max(deepest);
         (deepest > first).then_some((first, deepest))
     }
 
-    /// Where the hole's trace ends, when the log in `range` runs on below
-    /// it. A collar alone has no length recorded to mark.
+    /// Its total depth if recorded, else where the hole's trace ends when the
+    /// log in `range` runs on below it. A collar alone has no length to mark.
     fn recorded_depth(&self, range: (f64, f64)) -> Option<f64> {
+        if let Some(depth) = self.hole.total_depth {
+            return Some(depth);
+        }
         let [first, .., last] = self.hole.trace.as_slice() else { return None };
         (last.depth > first.depth && range.1 > last.depth).then_some(last.depth)
     }

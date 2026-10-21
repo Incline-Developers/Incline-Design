@@ -1225,6 +1225,22 @@ csv-drill-hole-row-attribute-not-number = { $file } ردیف { $row } در یک 
 csv-drill-hole-row-repeats-dhid = { $file } ردیف { $row } شناسه DHID '{ $dhid }' را تکرار می‌کند
 csv-drill-hole-most-rows-unreadable = { $file }: { $skipped } از { $count } ردیف خوانده نشد؛ دلایل در کنسول است
 csv-drill-hole-file-maps-dip-column-twice = { $file } ستون شیب یا میل را دو بار نگاشت می‌کند
+csv-drill-hole-file-has-more-than-one-total-depth = { $file } ستون عمق کل را دو بار نگاشت می‌کند
+csv-drill-hole-total-depths-left-out =
+    { $count ->
+        [one] { $file }: { $count } عمق کل خالی، صفر، منفی، مقدار بدون داده یا غیرعددی بود؛ آن دهانه بدون عمق کل نگه داشته می‌شود
+       *[other] { $file }: { $count } عمق کل خالی، صفر، منفی، مقدار بدون داده یا غیرعددی بودند؛ آن دهانه‌ها بدون عمق کل نگه داشته می‌شوند
+    }
+csv-drill-hole-logged-below-total-depth =
+    { $count ->
+        [one] { $file }: { $count } گمانه بازه‌هایی پایین‌تر از عمق کل خود دارد
+       *[other] { $file }: { $count } گمانه بازه‌هایی پایین‌تر از عمق کل خود دارند
+    }
+csv-drill-hole-surveyed-below-total-depth =
+    { $count ->
+        [one] { $file }: { $count } گمانه پایین‌تر از عمق کل خود برداشت مسیر شده است
+       *[other] { $file }: { $count } گمانه پایین‌تر از عمق کل خود برداشت مسیر شده‌اند
+    }
 csv-drill-hole-row-has-no-geometry = { $file } ردیف { $row } هندسه کامل XYZ یا آزیموت/شیب ندارد
 csv-drill-hole-row-invalid-interval = { $file } ردیف { $row } بازه نامعتبر { $from }..{ $to } برای DHID '{ $dhid }' دارد
 csv-drill-hole-row-zero-length-segment = { $file } ردیف { $row } یک قطعه با طول صفر در { $depth } برای DHID '{ $dhid }' دارد
@@ -1799,6 +1815,7 @@ io-start-x = X شروع
 io-start-y = Y شروع
 io-start-z = Z شروع
 io-stl = STL (.stl)
+io-total-depth = عمق کل
 io-triangulation = مثلث‌بندی:
 io-unmapped = نگاشت‌نشده
 io-wavefront-obj = Wavefront OBJ (.obj)
@@ -2705,6 +2722,7 @@ viewport-no-matches = هیچ نتیجه‌ای یافت نشد
 viewport-no-trace = بدون مسیر
 viewport-no-usable-range = (دامنه قابل استفاده‌ای وجود ندارد)
 viewport-not-logged = ثبت‌نشده
+viewport-not-recorded = درج نشده
 viewport-orientation-source = منبع جهت
 viewport-rebuild-variable-s-colours-from = بازسازی رنگ‌های این متغیر از داده‌های آن
 viewport-rename-seam-in-every-hole = تغییر نام در هر گمانه
@@ -2715,6 +2733,7 @@ viewport-roll-wheel-over-log-zoom = برای بزرگ‌نمایی روی یک �
 viewport-s = S
 viewport-sideways-scale = مقیاس جانبی
 viewport-squeeze-sideways-just-enough-keep = به‌اندازه‌ای از کنار فشرده می‌شود که گمانه در دید بماند. هرگز کشیده نمی‌کند.
+viewport-total-depth = عمق کل
 viewport-trace-extent = گستره مسیر
 viewport-w = W
 viewport-widen-panel-show-curve = برای نمایش { $curve }، پنل را عریض‌تر کنید

@@ -1223,6 +1223,22 @@ csv-drill-hole-row-attribute-not-number = { $file } linha { $row } tem '{ $value
 csv-drill-hole-row-repeats-dhid = { $file } linha { $row } repete o DHID '{ $dhid }'
 csv-drill-hole-most-rows-unreadable = { $file }: { $skipped } de { $count } linhas não puderam ser lidas; os motivos estão no console
 csv-drill-hole-file-maps-dip-column-twice = { $file } mapeia duas vezes uma coluna de mergulho ou inclinação
+csv-drill-hole-file-has-more-than-one-total-depth = { $file } mapeia duas vezes uma coluna de profundidade total
+csv-drill-hole-total-depths-left-out =
+    { $count ->
+        [one] { $file }: { $count } profundidade total estava vazia, era zero, negativa, um valor sem dados ou não era um número; essa boca é mantida sem profundidade total
+       *[other] { $file }: { $count } profundidades totais estavam vazias, eram zero, negativas, valores sem dados ou não eram números; essas bocas são mantidas sem profundidade total
+    }
+csv-drill-hole-logged-below-total-depth =
+    { $count ->
+        [one] { $file }: { $count } furo tem intervalos abaixo da sua profundidade total
+       *[other] { $file }: { $count } furos têm intervalos abaixo da sua profundidade total
+    }
+csv-drill-hole-surveyed-below-total-depth =
+    { $count ->
+        [one] { $file }: { $count } furo tem medições de trajetória abaixo da sua profundidade total
+       *[other] { $file }: { $count } furos têm medições de trajetória abaixo da sua profundidade total
+    }
 csv-drill-hole-row-has-no-geometry = { $file } linha { $row } não tem geometria XYZ ou azimute/mergulho completa
 csv-drill-hole-row-invalid-interval = { $file } linha { $row } tem intervalo inválido { $from }..{ $to } para o DHID '{ $dhid }'
 csv-drill-hole-row-zero-length-segment = { $file } linha { $row } tem um segmento de comprimento zero em { $depth } para o DHID '{ $dhid }'
@@ -1797,6 +1813,7 @@ io-start-x = X inicial
 io-start-y = Y inicial
 io-start-z = Z inicial
 io-stl = STL (.stl)
+io-total-depth = Profundidade total
 io-triangulation = Triangulação:
 io-unmapped = Não mapeado
 io-wavefront-obj = Wavefront OBJ (.obj)
@@ -2703,6 +2720,7 @@ viewport-no-matches = Sem correspondências
 viewport-no-trace = Sem traçado
 viewport-no-usable-range = (sem intervalo utilizável)
 viewport-not-logged = Não registado
+viewport-not-recorded = Não indicado
 viewport-orientation-source = Origem da orientação
 viewport-rebuild-variable-s-colours-from = Recriar as cores desta variável a partir dos seus dados
 viewport-rename-seam-in-every-hole = Renomear em todos os furos
@@ -2713,6 +2731,7 @@ viewport-roll-wheel-over-log-zoom = Rode a roda sobre o registo para ampliar um 
 viewport-s = S
 viewport-sideways-scale = Escala lateral
 viewport-squeeze-sideways-just-enough-keep = Comprime lateralmente o suficiente para manter o furo à vista. Nunca estica.
+viewport-total-depth = Profundidade total
 viewport-trace-extent = Extensão do traçado
 viewport-w = O
 viewport-widen-panel-show-curve = Alargue o painel para mostrar { $curve }
