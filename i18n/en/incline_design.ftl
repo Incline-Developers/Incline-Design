@@ -1440,7 +1440,31 @@ drill-hole-delete-interval-reason-hint = Why the interval goes
 drill-hole-delete-interval-submit = Delete
 drill-hole-delete-interval-note = The whole row leaves the interpreted data, every field it holds with it, and its ground reads as not logged. What was logged is kept, and the row is held in the correction.
 drill-hole-delete-interval-changed = This row is no longer the one picked. Close the dialog and pick the interval again.
-drill-hole-deletion-not-undone = The deleted row { $from } to { $to } m of { $hole } could not be put back, so its correction is kept.
+drill-hole-deletion-not-undone =
+    { $count ->
+        [one] The deleted row { $from } to { $to } m of { $hole } could not be put back, so its correction is kept.
+       *[other] { $count } deleted rows could not be put back, so their corrections are kept; the first is { $from } to { $to } m of { $hole }.
+    }
+drill-hole-correction-not-undone =
+    { $count ->
+        [one] The correction to { $from } to { $to } m of { $hole } could not be undone, so it is kept.
+       *[other] { $count } corrections could not be undone, so they are kept; the first is { $from } to { $to } m of { $hole }.
+    }
+drill-hole-deletion-not-applied =
+    { $count ->
+        [one] The row { $from } to { $to } m of { $hole } is no longer the one deleted, so it was not taken out.
+       *[other] { $count } rows are no longer the ones deleted, so they were not taken out; the first is { $from } to { $to } m of { $hole }.
+    }
+drill-hole-undo-no-record =
+    { $count ->
+        [one] The correction to { $from } to { $to } m of { $hole } was put back, but no record of it was found to withdraw.
+       *[other] { $count } corrections were put back, but no record of them was found to withdraw; the first is { $from } to { $to } m of { $hole }.
+    }
+drill-hole-undo-no-record-not-back =
+    { $count ->
+        [one] The correction to { $from } to { $to } m of { $hole } has no record and could not be put back.
+       *[other] { $count } corrections have no record and could not be put back; the first is { $from } to { $to } m of { $hole }.
+    }
 drill-hole-interval-deleted = deleted
 drill-hole-reset-colours = Reset colours
 drill-hole-reset-preset = Reset preset

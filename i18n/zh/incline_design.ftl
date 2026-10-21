@@ -1365,7 +1365,31 @@ drill-hole-delete-interval-reason-hint = 删除该区间的原因
 drill-hole-delete-interval-submit = 删除
 drill-hole-delete-interval-note = 整行连同其所含的每个字段一并移出解释数据，其地层读作未记录。已记录的内容予以保留，该行保存在订正中。
 drill-hole-delete-interval-changed = 该行已不是所选的那一行。请关闭对话框并重新选择区间。
-drill-hole-deletion-not-undone = 已删除的行（{ $from } 米至 { $to } 米，位于 { $hole }）无法恢复，因此保留其订正。
+drill-hole-deletion-not-undone =
+    { $count ->
+        [1] 已删除的行（{ $from } 米至 { $to } 米，位于 { $hole }）无法恢复，因此保留其订正。
+       *[other] { $count } 个已删除的行无法恢复，因此保留其订正；第一行为 { $hole } 的 { $from } 米至 { $to } 米。
+    }
+drill-hole-correction-not-undone =
+    { $count ->
+        [1] { $hole } 的 { $from } 米至 { $to } 米的订正无法撤销，因此予以保留。
+       *[other] { $count } 条订正无法撤销，因此予以保留；第一条为 { $hole } 的 { $from } 米至 { $to } 米。
+    }
+drill-hole-deletion-not-applied =
+    { $count ->
+        [1] { $hole } 的 { $from } 米至 { $to } 米的行已不是被删除的那一行，因此未移除。
+       *[other] { $count } 行已不是被删除的行，因此未移除；第一行为 { $hole } 的 { $from } 米至 { $to } 米。
+    }
+drill-hole-undo-no-record =
+    { $count ->
+        [1] { $hole } 的 { $from } 米至 { $to } 米的订正已撤销，但未找到可撤回的订正记录。
+       *[other] { $count } 条订正已撤销，但未找到可撤回的订正记录；第一条为 { $hole } 的 { $from } 米至 { $to } 米。
+    }
+drill-hole-undo-no-record-not-back =
+    { $count ->
+        [1] { $hole } 的 { $from } 米至 { $to } 米的订正没有记录，无法撤销。
+       *[other] { $count } 条订正没有记录，无法撤销；第一条为 { $hole } 的 { $from } 米至 { $to } 米。
+    }
 drill-hole-interval-deleted = 已删除
 drill-hole-reset-colours = 重置颜色
 drill-hole-reset-preset = 重置预设

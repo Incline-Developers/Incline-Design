@@ -3290,15 +3290,15 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             Some(None) => self.bundle.warnings.push(crate::i18n::tr!("omf-corrections-unreadable", name = element.name.clone())),
             None => {}
         }
-        // Only columns the file still holds: a name with no column behind it
-        // would let a later import of that name be written over.
-        if let Some(columns) = element
+        // Only columns a row still holds, in a hole or in a deletion's record:
+        // a name with no column behind it would let a later import of that
+        // name be written over.
+        let stored = element
             .metadata
             .get(META_DERIVED_COLUMNS)
             .and_then(|value| std::collections::BTreeSet::<String>::deserialize(value).ok())
-        {
-            dataset.derived_columns = columns.into_iter().filter(|column| dataset.fields.iter().any(|field| &field.key == column)).collect();
-        }
+            .unwrap_or_default();
+        dataset.restore_derived_columns(stored);
         // Resolved after construction: it is `new` that fixes the hole order
         // the stored names are looked up against.
         if let Some(value) = element.metadata.get(META_TIE_INS)

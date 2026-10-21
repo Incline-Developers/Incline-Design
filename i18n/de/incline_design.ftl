@@ -1406,7 +1406,31 @@ drill-hole-delete-interval-reason-hint = Warum das Intervall entfällt
 drill-hole-delete-interval-submit = Löschen
 drill-hole-delete-interval-note = Die ganze Zeile verlässt die interpretierten Daten, mit jedem Feld, das sie enthält, und ihre Strecke gilt als nie aufgenommen. Das Aufgenommene bleibt erhalten, und die Zeile wird in der Korrektur festgehalten.
 drill-hole-delete-interval-changed = Diese Zeile ist nicht mehr die gewählte. Schließen Sie den Dialog und wählen Sie das Intervall erneut.
-drill-hole-deletion-not-undone = Die gelöschte Zeile { $from } m bis { $to } m in { $hole } konnte nicht wiederhergestellt werden, daher bleibt ihre Korrektur erhalten.
+drill-hole-deletion-not-undone =
+    { $count ->
+        [one] Die gelöschte Zeile { $from } m bis { $to } m in { $hole } konnte nicht wiederhergestellt werden, daher bleibt ihre Korrektur erhalten.
+       *[other] { $count } gelöschte Zeilen konnten nicht wiederhergestellt werden, daher bleiben ihre Korrekturen erhalten; die erste ist { $from } m bis { $to } m in { $hole }.
+    }
+drill-hole-correction-not-undone =
+    { $count ->
+        [one] Die Korrektur an { $from } m bis { $to } m in { $hole } konnte nicht rückgängig gemacht werden, daher bleibt sie erhalten.
+       *[other] { $count } Korrekturen konnten nicht rückgängig gemacht werden, daher bleiben sie erhalten; die erste betrifft { $from } m bis { $to } m in { $hole }.
+    }
+drill-hole-deletion-not-applied =
+    { $count ->
+        [one] Die Zeile { $from } m bis { $to } m in { $hole } ist nicht mehr die gelöschte, daher wurde sie nicht entfernt.
+       *[other] { $count } Zeilen sind nicht mehr die gelöschten, daher wurden sie nicht entfernt; die erste ist { $from } m bis { $to } m in { $hole }.
+    }
+drill-hole-undo-no-record =
+    { $count ->
+        [one] Die Korrektur an { $from } m bis { $to } m in { $hole } wurde rückgängig gemacht, aber kein Korrektursatz dazu wurde zum Zurückziehen gefunden.
+       *[other] { $count } Korrekturen wurden rückgängig gemacht, aber keine Korrektursätze dazu wurden zum Zurückziehen gefunden; die erste betrifft { $from } m bis { $to } m in { $hole }.
+    }
+drill-hole-undo-no-record-not-back =
+    { $count ->
+        [one] Die Korrektur an { $from } m bis { $to } m in { $hole } hat keinen Korrektursatz und konnte nicht rückgängig gemacht werden.
+       *[other] { $count } Korrekturen haben keinen Korrektursatz und konnten nicht rückgängig gemacht werden; die erste betrifft { $from } m bis { $to } m in { $hole }.
+    }
 drill-hole-interval-deleted = gelöscht
 drill-hole-reset-colours = Farben zurücksetzen
 drill-hole-reset-preset = Voreinstellung zurücksetzen

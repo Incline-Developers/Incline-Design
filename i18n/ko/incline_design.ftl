@@ -1398,7 +1398,31 @@ drill-hole-delete-interval-reason-hint = 구간을 삭제하는 이유
 drill-hole-delete-interval-submit = 삭제
 drill-hole-delete-interval-note = 행 전체가 포함된 모든 필드와 함께 해석 데이터에서 빠지고, 그 지반은 기록 안 됨으로 읽힙니다. 기록된 내용은 보존되고 행은 정정에 보관됩니다.
 drill-hole-delete-interval-changed = 이 행은 더 이상 선택한 행이 아닙니다. 대화 상자를 닫고 구간을 다시 선택하세요.
-drill-hole-deletion-not-undone = { $hole }의 { $from } m에서 { $to } m까지 삭제된 행을 되돌리지 못해 해당 정정은 보관됩니다.
+drill-hole-deletion-not-undone =
+    { $count ->
+        [1] { $hole }의 { $from } m에서 { $to } m까지 삭제된 행을 되돌리지 못해 해당 정정은 보관됩니다.
+       *[other] 삭제된 행 { $count }개를 되돌리지 못해 해당 정정은 보관됩니다. 첫 번째는 { $hole }의 { $from } m에서 { $to } m까지입니다.
+    }
+drill-hole-correction-not-undone =
+    { $count ->
+        [1] { $hole }의 { $from } m에서 { $to } m까지의 정정을 취소하지 못해 보관됩니다.
+       *[other] 정정 { $count }개를 취소하지 못해 보관됩니다. 첫 번째는 { $hole }의 { $from } m에서 { $to } m까지입니다.
+    }
+drill-hole-deletion-not-applied =
+    { $count ->
+        [1] { $hole }의 { $from } m에서 { $to } m까지의 행은 더 이상 삭제한 행이 아니어서 빼지 않았습니다.
+       *[other] 행 { $count }개가 더 이상 삭제한 행이 아니어서 빼지 않았습니다. 첫 번째는 { $hole }의 { $from } m에서 { $to } m까지입니다.
+    }
+drill-hole-undo-no-record =
+    { $count ->
+        [1] { $hole }의 { $from } m에서 { $to } m까지의 정정은 되돌렸지만 철회할 레코드를 찾지 못했습니다.
+       *[other] 정정 { $count }개를 되돌렸지만 철회할 레코드를 찾지 못했습니다. 첫 번째는 { $hole }의 { $from } m에서 { $to } m까지입니다.
+    }
+drill-hole-undo-no-record-not-back =
+    { $count ->
+        [1] { $hole }의 { $from } m에서 { $to } m까지의 정정은 레코드가 없어 되돌리지 못했습니다.
+       *[other] 정정 { $count }개는 레코드가 없어 되돌리지 못했습니다. 첫 번째는 { $hole }의 { $from } m에서 { $to } m까지입니다.
+    }
 drill-hole-interval-deleted = 삭제됨
 drill-hole-reset-colours = 색상 재설정
 drill-hole-reset-preset = 프리셋 재설정

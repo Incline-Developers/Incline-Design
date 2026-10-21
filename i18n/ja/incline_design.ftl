@@ -1393,7 +1393,31 @@ drill-hole-delete-interval-reason-hint = 区間を削除する理由
 drill-hole-delete-interval-submit = 削除
 drill-hole-delete-interval-note = 行全体が、含まれるすべてのフィールドとともに解釈データから外れ、その地盤は未記録として扱われます。記録されていた内容は保持され、行は訂正に保管されます。
 drill-hole-delete-interval-changed = この行は選択された行ではなくなりました。ダイアログを閉じて、区間をもう一度選択してください。
-drill-hole-deletion-not-undone = { $hole } の { $from } m から { $to } m の削除された行を元に戻せなかったため、その訂正は保持されます。
+drill-hole-deletion-not-undone =
+    { $count ->
+        [1] { $hole } の { $from } m から { $to } m の削除された行を元に戻せなかったため、その訂正は保持されます。
+       *[other] 削除された { $count } 行を元に戻せなかったため、それらの訂正は保持されます。最初の行は { $hole } の { $from } m から { $to } m です。
+    }
+drill-hole-correction-not-undone =
+    { $count ->
+        [1] { $hole } の { $from } m から { $to } m の訂正を取り消せなかったため、保持されます。
+       *[other] { $count } 件の訂正を取り消せなかったため、保持されます。最初の訂正は { $hole } の { $from } m から { $to } m です。
+    }
+drill-hole-deletion-not-applied =
+    { $count ->
+        [1] { $hole } の { $from } m から { $to } m の行は削除した行ではなくなったため、取り除かれませんでした。
+       *[other] { $count } 行は削除した行ではなくなったため、取り除かれませんでした。最初の行は { $hole } の { $from } m から { $to } m です。
+    }
+drill-hole-undo-no-record =
+    { $count ->
+        [1] { $hole } の { $from } m から { $to } m の訂正は元に戻されましたが、撤回するレコードが見つかりませんでした。
+       *[other] { $count } 件の訂正は元に戻されましたが、撤回するレコードが見つかりませんでした。最初の訂正は { $hole } の { $from } m から { $to } m です。
+    }
+drill-hole-undo-no-record-not-back =
+    { $count ->
+        [1] { $hole } の { $from } m から { $to } m の訂正にはレコードがなく、元に戻せませんでした。
+       *[other] { $count } 件の訂正にはレコードがなく、元に戻せませんでした。最初の訂正は { $hole } の { $from } m から { $to } m です。
+    }
 drill-hole-interval-deleted = 削除済み
 drill-hole-reset-colours = 色をリセット
 drill-hole-reset-preset = プリセットをリセット

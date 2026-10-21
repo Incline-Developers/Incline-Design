@@ -1407,7 +1407,31 @@ drill-hole-delete-interval-reason-hint = Perché l'intervallo viene eliminato
 drill-hole-delete-interval-submit = Elimina
 drill-hole-delete-interval-note = L'intera riga esce dai dati interpretati, con ogni campo che contiene, e il suo terreno risulta non registrato. Ciò che è stato registrato è conservato, e la riga è trattenuta nella correzione.
 drill-hole-delete-interval-changed = Questa riga non è più quella scelta. Chiudi la finestra di dialogo e scegli di nuovo l'intervallo.
-drill-hole-deletion-not-undone = La riga eliminata da { $from } m a { $to } m in { $hole } non ha potuto essere ripristinata, quindi la sua correzione è conservata.
+drill-hole-deletion-not-undone =
+    { $count ->
+        [one] La riga eliminata da { $from } m a { $to } m in { $hole } non ha potuto essere ripristinata, quindi la sua correzione è conservata.
+       *[other] { $count } righe eliminate non hanno potuto essere ripristinate, quindi le loro correzioni sono conservate; la prima va da { $from } m a { $to } m in { $hole }.
+    }
+drill-hole-correction-not-undone =
+    { $count ->
+        [one] La correzione da { $from } m a { $to } m in { $hole } non ha potuto essere annullata, quindi è conservata.
+       *[other] { $count } correzioni non hanno potuto essere annullate, quindi sono conservate; la prima riguarda l'intervallo da { $from } m a { $to } m in { $hole }.
+    }
+drill-hole-deletion-not-applied =
+    { $count ->
+        [one] La riga da { $from } m a { $to } m in { $hole } non è più quella eliminata, quindi non è stata tolta.
+       *[other] { $count } righe non sono più quelle eliminate, quindi non sono state tolte; la prima va da { $from } m a { $to } m in { $hole }.
+    }
+drill-hole-undo-no-record =
+    { $count ->
+        [one] La correzione da { $from } m a { $to } m in { $hole } è stata annullata, ma non è stato trovato alcun record da ritirare.
+       *[other] { $count } correzioni sono state annullate, ma non è stato trovato alcun record da ritirare; la prima riguarda l'intervallo da { $from } m a { $to } m in { $hole }.
+    }
+drill-hole-undo-no-record-not-back =
+    { $count ->
+        [one] La correzione da { $from } m a { $to } m in { $hole } non ha un record e non ha potuto essere annullata.
+       *[other] { $count } correzioni non hanno un record e non hanno potuto essere annullate; la prima riguarda l'intervallo da { $from } m a { $to } m in { $hole }.
+    }
 drill-hole-interval-deleted = eliminato
 drill-hole-reset-colours = Ripristina colori
 drill-hole-reset-preset = Ripristina preimpostazione

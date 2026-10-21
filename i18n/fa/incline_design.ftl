@@ -1365,7 +1365,31 @@ drill-hole-delete-interval-reason-hint = چرا بازه حذف می‌شود
 drill-hole-delete-interval-submit = حذف
 drill-hole-delete-interval-note = کل ردیف با هر فیلدی که دارد از داده‌های تفسیرشده خارج می‌شود و زمین آن ثبت‌نشده خوانده می‌شود. آنچه ثبت شده حفظ می‌شود و ردیف در تصحیح نگه داشته می‌شود.
 drill-hole-delete-interval-changed = این ردیف دیگر همان ردیف انتخاب‌شده نیست. گفتگو را ببندید و بازه را دوباره انتخاب کنید.
-drill-hole-deletion-not-undone = ردیف حذف‌شدهٔ { $from } متر تا { $to } متر در { $hole } بازگردانده نشد، بنابراین تصحیح آن نگه داشته می‌شود.
+drill-hole-deletion-not-undone =
+    { $count ->
+        [one] ردیف حذف‌شدهٔ { $from } متر تا { $to } متر در { $hole } بازگردانده نشد، بنابراین تصحیح آن نگه داشته می‌شود.
+       *[other] { $count } ردیف حذف‌شده بازگردانده نشد، بنابراین تصحیح‌های آن‌ها نگه داشته می‌شود؛ نخستین آن‌ها { $from } متر تا { $to } متر در { $hole } است.
+    }
+drill-hole-correction-not-undone =
+    { $count ->
+        [one] تصحیح { $from } متر تا { $to } متر در { $hole } واگردانی نشد، بنابراین نگه داشته می‌شود.
+       *[other] { $count } تصحیح واگردانی نشد، بنابراین نگه داشته می‌شوند؛ نخستین آن‌ها { $from } متر تا { $to } متر در { $hole } است.
+    }
+drill-hole-deletion-not-applied =
+    { $count ->
+        [one] ردیف { $from } متر تا { $to } متر در { $hole } دیگر همان ردیف حذف‌شده نیست، بنابراین برداشته نشد.
+       *[other] { $count } ردیف دیگر همان ردیف‌های حذف‌شده نیستند، بنابراین برداشته نشدند؛ نخستین آن‌ها { $from } متر تا { $to } متر در { $hole } است.
+    }
+drill-hole-undo-no-record =
+    { $count ->
+        [one] تصحیح { $from } متر تا { $to } متر در { $hole } واگردانی شد، اما رکوردی از آن برای پس گرفتن یافت نشد.
+       *[other] { $count } تصحیح واگردانی شد، اما رکوردی از آن‌ها برای پس گرفتن یافت نشد؛ نخستین آن‌ها { $from } متر تا { $to } متر در { $hole } است.
+    }
+drill-hole-undo-no-record-not-back =
+    { $count ->
+        [one] تصحیح { $from } متر تا { $to } متر در { $hole } رکوردی ندارد و واگردانی نشد.
+       *[other] { $count } تصحیح رکوردی ندارند و واگردانی نشدند؛ نخستین آن‌ها { $from } متر تا { $to } متر در { $hole } است.
+    }
 drill-hole-interval-deleted = حذف‌شده
 drill-hole-reset-colours = بازنشانی رنگ‌ها
 drill-hole-reset-preset = تنظیم مجدد

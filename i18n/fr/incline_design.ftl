@@ -1365,7 +1365,31 @@ drill-hole-delete-interval-reason-hint = Pourquoi l'intervalle est supprimé
 drill-hole-delete-interval-submit = Supprimer
 drill-hole-delete-interval-note = La ligne entière quitte les données interprétées, avec chaque champ qu'elle contient, et son terrain se lit comme non relevé. Ce qui a été relevé est conservé, et la ligne est retenue dans la correction.
 drill-hole-delete-interval-changed = Cette ligne n'est plus celle qui a été choisie. Fermez la boîte de dialogue et choisissez de nouveau l'intervalle.
-drill-hole-deletion-not-undone = La ligne supprimée de { $from } m à { $to } m dans { $hole } n'a pas pu être rétablie ; sa correction est donc conservée.
+drill-hole-deletion-not-undone =
+    { $count ->
+        [one] La ligne supprimée de { $from } m à { $to } m dans { $hole } n'a pas pu être rétablie ; sa correction est donc conservée.
+       *[other] { $count } lignes supprimées n'ont pas pu être rétablies ; leurs corrections sont donc conservées. La première va de { $from } m à { $to } m dans { $hole }.
+    }
+drill-hole-correction-not-undone =
+    { $count ->
+        [one] La correction de { $from } m à { $to } m dans { $hole } n'a pas pu être annulée ; elle est donc conservée.
+       *[other] { $count } corrections n'ont pas pu être annulées ; elles sont donc conservées. La première porte sur { $from } m à { $to } m dans { $hole }.
+    }
+drill-hole-deletion-not-applied =
+    { $count ->
+        [one] La ligne de { $from } m à { $to } m dans { $hole } n'est plus celle qui a été supprimée ; elle n'a donc pas été retirée.
+       *[other] { $count } lignes ne sont plus celles qui ont été supprimées ; elles n'ont donc pas été retirées. La première va de { $from } m à { $to } m dans { $hole }.
+    }
+drill-hole-undo-no-record =
+    { $count ->
+        [one] La correction de { $from } m à { $to } m dans { $hole } a été annulée, mais aucun enregistrement à retirer n'a été trouvé.
+       *[other] { $count } corrections ont été annulées, mais aucun enregistrement à retirer n'a été trouvé. La première porte sur { $from } m à { $to } m dans { $hole }.
+    }
+drill-hole-undo-no-record-not-back =
+    { $count ->
+        [one] La correction de { $from } m à { $to } m dans { $hole } n'a pas d'enregistrement et n'a pas pu être annulée.
+       *[other] { $count } corrections n'ont pas d'enregistrement et n'ont pas pu être annulées. La première porte sur { $from } m à { $to } m dans { $hole }.
+    }
 drill-hole-interval-deleted = supprimé
 drill-hole-reset-colours = Réinitialiser les couleurs
 drill-hole-reset-preset = Réinitialiser le préréglage

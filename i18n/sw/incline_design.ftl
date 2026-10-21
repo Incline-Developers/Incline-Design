@@ -1397,7 +1397,31 @@ drill-hole-delete-interval-reason-hint = Kwa nini kipindi kinaondolewa
 drill-hole-delete-interval-submit = Futa
 drill-hole-delete-interval-note = Safu nzima inatoka kwenye data iliyofasiriwa, pamoja na kila sehemu iliyo nayo, na ardhi yake inasomeka kama haijarekodiwa. Kilichorekodiwa kinahifadhiwa, na safu inashikiliwa katika sahihisho.
 drill-hole-delete-interval-changed = Safu hii si ile iliyochaguliwa tena. Funga kisanduku cha mazungumzo na uchague kipindi tena.
-drill-hole-deletion-not-undone = Safu iliyofutwa kutoka { $from } m hadi { $to } m katika { $hole } haikuweza kurudishwa, kwa hivyo sahihisho lake limehifadhiwa.
+drill-hole-deletion-not-undone =
+    { $count ->
+        [one] Safu iliyofutwa kutoka { $from } m hadi { $to } m katika { $hole } haikuweza kurudishwa, kwa hivyo sahihisho lake limehifadhiwa.
+       *[other] Safu { $count } zilizofutwa hazikuweza kurudishwa, kwa hivyo masahihisho yake yamehifadhiwa; ya kwanza ni kutoka { $from } m hadi { $to } m katika { $hole }.
+    }
+drill-hole-correction-not-undone =
+    { $count ->
+        [one] Sahihisho la { $from } m hadi { $to } m katika { $hole } halikuweza kutenduliwa, kwa hivyo limehifadhiwa.
+       *[other] Masahihisho { $count } hayakuweza kutenduliwa, kwa hivyo yamehifadhiwa; la kwanza ni la { $from } m hadi { $to } m katika { $hole }.
+    }
+drill-hole-deletion-not-applied =
+    { $count ->
+        [one] Safu ya { $from } m hadi { $to } m katika { $hole } si ile iliyofutwa tena, kwa hivyo haikuondolewa.
+       *[other] Safu { $count } si zile zilizofutwa tena, kwa hivyo hazikuondolewa; ya kwanza ni kutoka { $from } m hadi { $to } m katika { $hole }.
+    }
+drill-hole-undo-no-record =
+    { $count ->
+        [one] Sahihisho la { $from } m hadi { $to } m katika { $hole } limetenduliwa, lakini rekodi yake ya kuondoa haikupatikana.
+       *[other] Masahihisho { $count } yametenduliwa, lakini rekodi zake za kuondoa hazikupatikana; la kwanza ni la { $from } m hadi { $to } m katika { $hole }.
+    }
+drill-hole-undo-no-record-not-back =
+    { $count ->
+        [one] Sahihisho la { $from } m hadi { $to } m katika { $hole } halina rekodi na halikuweza kutenduliwa.
+       *[other] Masahihisho { $count } hayana rekodi na hayakuweza kutenduliwa; la kwanza ni la { $from } m hadi { $to } m katika { $hole }.
+    }
 drill-hole-interval-deleted = imefutwa
 drill-hole-reset-colours = Rejesha rangi
 drill-hole-reset-preset = Rejesha mpangilio

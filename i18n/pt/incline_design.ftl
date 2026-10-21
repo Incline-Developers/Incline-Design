@@ -1363,7 +1363,31 @@ drill-hole-delete-interval-reason-hint = Porque é que o intervalo é eliminado
 drill-hole-delete-interval-submit = Eliminar
 drill-hole-delete-interval-note = A linha inteira sai dos dados interpretados, com todos os campos que contém, e o seu terreno lê-se como não registado. O que foi registado é mantido, e a linha fica retida na correção.
 drill-hole-delete-interval-changed = Esta linha já não é a escolhida. Feche a caixa de diálogo e escolha o intervalo novamente.
-drill-hole-deletion-not-undone = A linha eliminada de { $from } m a { $to } m em { $hole } não pôde ser reposta, pelo que a sua correção é mantida.
+drill-hole-deletion-not-undone =
+    { $count ->
+        [one] A linha eliminada de { $from } m a { $to } m em { $hole } não pôde ser reposta, pelo que a sua correção é mantida.
+       *[other] { $count } linhas eliminadas não puderam ser repostas, pelo que as suas correções são mantidas; a primeira vai de { $from } m a { $to } m em { $hole }.
+    }
+drill-hole-correction-not-undone =
+    { $count ->
+        [one] A correção de { $from } m a { $to } m em { $hole } não pôde ser anulada, pelo que é mantida.
+       *[other] { $count } correções não puderam ser anuladas, pelo que são mantidas; a primeira é de { $from } m a { $to } m em { $hole }.
+    }
+drill-hole-deletion-not-applied =
+    { $count ->
+        [one] A linha de { $from } m a { $to } m em { $hole } já não é a que foi eliminada, pelo que não foi retirada.
+       *[other] { $count } linhas já não são as que foram eliminadas, pelo que não foram retiradas; a primeira vai de { $from } m a { $to } m em { $hole }.
+    }
+drill-hole-undo-no-record =
+    { $count ->
+        [one] A correção de { $from } m a { $to } m em { $hole } foi anulada, mas não foi encontrado nenhum registo dela para retirar.
+       *[other] { $count } correções foram anuladas, mas não foi encontrado nenhum registo delas para retirar; a primeira é de { $from } m a { $to } m em { $hole }.
+    }
+drill-hole-undo-no-record-not-back =
+    { $count ->
+        [one] A correção de { $from } m a { $to } m em { $hole } não tem registo e não pôde ser anulada.
+       *[other] { $count } correções não têm registo e não puderam ser anuladas; a primeira é de { $from } m a { $to } m em { $hole }.
+    }
 drill-hole-interval-deleted = eliminado
 drill-hole-reset-colours = Repor cores
 drill-hole-reset-preset = Redefinir predefinição

@@ -98,6 +98,7 @@ impl<'a> DrillHoleProperties<'a> {
             .copy_cells(&copied)
             .fingerprint(self.fingerprint())
             .max_height(max_height)
+            .measure_last(self.deleted.len())
             .show(ui);
     }
 

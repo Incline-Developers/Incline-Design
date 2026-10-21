@@ -1407,7 +1407,31 @@ drill-hole-delete-interval-reason-hint = Aralık neden siliniyor
 drill-hole-delete-interval-submit = Sil
 drill-hole-delete-interval-note = Satırın tamamı, içerdiği her alanla birlikte yorumlanmış veriden çıkar ve zemini kaydedilmedi olarak okunur. Kaydedilen korunur, satır düzeltmede tutulur.
 drill-hole-delete-interval-changed = Bu satır artık seçilen satır değil. İletişim kutusunu kapatın ve aralığı yeniden seçin.
-drill-hole-deletion-not-undone = { $hole } içinde { $from } m'den { $to } m'ye silinen satır geri konamadı, bu yüzden düzeltmesi korunuyor.
+drill-hole-deletion-not-undone =
+    { $count ->
+        [one] { $hole } içinde { $from } m'den { $to } m'ye silinen satır geri konamadı, bu yüzden düzeltmesi korunuyor.
+       *[other] { $count } silinen satır geri konamadı, bu yüzden düzeltmeleri korunuyor; ilki { $hole } içinde { $from } m'den { $to } m'ye.
+    }
+drill-hole-correction-not-undone =
+    { $count ->
+        [one] { $hole } içinde { $from } m'den { $to } m'ye düzeltme geri alınamadı, bu yüzden korunuyor.
+       *[other] { $count } düzeltme geri alınamadı, bu yüzden korunuyor; ilki { $hole } içinde { $from } m'den { $to } m'ye.
+    }
+drill-hole-deletion-not-applied =
+    { $count ->
+        [one] { $hole } içinde { $from } m'den { $to } m'ye satır artık silinen satır değil, bu yüzden çıkarılmadı.
+       *[other] { $count } satır artık silinen satırlar değil, bu yüzden çıkarılmadı; ilki { $hole } içinde { $from } m'den { $to } m'ye.
+    }
+drill-hole-undo-no-record =
+    { $count ->
+        [one] { $hole } içinde { $from } m'den { $to } m'ye düzeltme geri alındı, ancak geri çekilecek kaydı bulunamadı.
+       *[other] { $count } düzeltme geri alındı, ancak geri çekilecek kayıtları bulunamadı; ilki { $hole } içinde { $from } m'den { $to } m'ye.
+    }
+drill-hole-undo-no-record-not-back =
+    { $count ->
+        [one] { $hole } içinde { $from } m'den { $to } m'ye düzeltmenin kaydı yok ve geri alınamadı.
+       *[other] { $count } düzeltmenin kaydı yok ve geri alınamadı; ilki { $hole } içinde { $from } m'den { $to } m'ye.
+    }
 drill-hole-interval-deleted = silindi
 drill-hole-reset-colours = Renkleri sıfırla
 drill-hole-reset-preset = Ön ayarı sıfırla

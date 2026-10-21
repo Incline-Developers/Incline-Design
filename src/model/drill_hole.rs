@@ -101,14 +101,16 @@ pub(crate) struct TraceStation {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) enum DrillValue {
-    Numeric(f64),
+    Numeric(#[serde(with = "stored::number")] f64),
     Category(String),
 }
 
 /// One interval as the site logged it, and its identity within its hole.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct LoggedInterval {
+    #[serde(with = "stored::number")]
     pub(crate) from: f64,
+    #[serde(with = "stored::number")]
     pub(crate) to: f64,
     pub(crate) values: BTreeMap<String, DrillValue>,
     /// The site logged nothing here: the interval was inserted by a
@@ -122,7 +124,9 @@ pub(crate) struct LoggedInterval {
 /// `logged` is what the site sent, or `None` when nothing has parted them.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct DrillInterval {
+    #[serde(with = "stored::number")]
     pub(crate) from: f64,
+    #[serde(with = "stored::number")]
     pub(crate) to: f64,
     pub(crate) values: BTreeMap<String, DrillValue>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -194,15 +198,15 @@ pub(crate) enum CorrectionStatus {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Correction {
     pub(crate) hole: String,
-    #[serde(with = "stored::depth")]
+    #[serde(with = "stored::number")]
     pub(crate) logged_from: f64,
-    #[serde(with = "stored::depth")]
+    #[serde(with = "stored::number")]
     pub(crate) logged_to: f64,
     pub(crate) kind: CorrectionKind,
     pub(crate) field: String,
-    #[serde(default, with = "stored::value")]
+    #[serde(default)]
     pub(crate) before: Option<DrillValue>,
-    #[serde(default, with = "stored::value")]
+    #[serde(default)]
     pub(crate) after: Option<DrillValue>,
     pub(crate) author: String,
     pub(crate) date: String,
@@ -217,195 +221,77 @@ pub(crate) struct Correction {
     pub(crate) decided: Option<String>,
     /// For an insertion that puts its row in, the whole row: every value it
     /// holds, fixed when the insertion is proposed. Other records name none.
-    #[serde(default, skip_serializing_if = "Option::is_none", with = "stored::values")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) row: Option<BTreeMap<String, DrillValue>>,
     /// For a deletion, the interval it takes out, whole: its depths, every
     /// value it holds and its logged side, so undo puts it back exactly and
     /// what was logged stays in the record.
-    #[serde(default, skip_serializing_if = "Option::is_none", with = "stored::interval")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) removed: Option<DrillInterval>,
 }
 
-/// A correction's payloads as a file holds them. JSON has no NaN or infinity,
-/// so such a number is written as its text and read back from it, and a null
-/// an earlier save left reads as NaN: a record survives a save whatever its
-/// row holds. Finite values keep the shape they always had.
+/// Numbers of drill-hole values and depths as a file holds them. JSON has no
+/// NaN or infinity, so such a number is written as its text and read back
+/// from it, and a null an earlier save left reads as NaN: a row survives a
+/// save whatever it holds. Finite values keep the shape they always had.
 mod stored {
-    use std::collections::BTreeMap;
+    pub(super) mod number {
+        use std::fmt;
 
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+        use serde::{Deserializer, Serializer, de};
 
-    use super::{DrillInterval, DrillValue, LoggedInterval};
-
-    /// A number as a file holds it: finite as itself, NaN and the infinities
-    /// as their text, and a null an earlier save wrote, read as NaN. Any other
-    /// text is no number, and the record holding it is not read.
-    #[derive(Serialize)]
-    #[serde(untagged)]
-    enum Number {
-        Finite(f64),
-        Text(&'static str),
-        Lost,
-    }
-
-    impl<'de> Deserialize<'de> for Number {
-        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-            #[derive(Deserialize)]
-            #[serde(untagged)]
-            enum Stored {
-                Finite(f64),
-                Text(String),
-                Lost,
+        pub(crate) fn serialize<S: Serializer>(number: &f64, serializer: S) -> Result<S::Ok, S::Error> {
+            match *number {
+                number if number.is_finite() => serializer.serialize_f64(number),
+                number if number.is_nan() => serializer.serialize_str("NaN"),
+                number if number > 0.0 => serializer.serialize_str("inf"),
+                _ => serializer.serialize_str("-inf"),
             }
-            match Stored::deserialize(deserializer)? {
-                Stored::Finite(number) => Ok(Self::Finite(number)),
-                Stored::Text(text) => match text.as_str() {
-                    "NaN" => Ok(Self::Text("NaN")),
-                    "inf" => Ok(Self::Text("inf")),
-                    "-inf" => Ok(Self::Text("-inf")),
-                    _ => Err(serde::de::Error::custom(format!("not a number: {text:?}"))),
-                },
-                Stored::Lost => Ok(Self::Lost),
-            }
-        }
-    }
-
-    impl Number {
-        fn of(number: f64) -> Self {
-            match number {
-                number if number.is_finite() => Self::Finite(number),
-                number if number.is_nan() => Self::Text("NaN"),
-                number if number > 0.0 => Self::Text("inf"),
-                _ => Self::Text("-inf"),
-            }
-        }
-
-        fn number(self) -> f64 {
-            match self {
-                Self::Finite(number) => number,
-                Self::Text("inf") => f64::INFINITY,
-                Self::Text("-inf") => f64::NEG_INFINITY,
-                Self::Text(_) | Self::Lost => f64::NAN,
-            }
-        }
-    }
-
-    #[derive(Serialize, Deserialize)]
-    enum Value {
-        Numeric(Number),
-        Category(String),
-    }
-
-    impl Value {
-        fn of(value: &DrillValue) -> Self {
-            match value {
-                DrillValue::Numeric(number) => Self::Numeric(Number::of(*number)),
-                DrillValue::Category(text) => Self::Category(text.clone()),
-            }
-        }
-
-        fn value(self) -> DrillValue {
-            match self {
-                Self::Numeric(number) => DrillValue::Numeric(number.number()),
-                Self::Category(text) => DrillValue::Category(text),
-            }
-        }
-    }
-
-    fn map_of(values: &BTreeMap<String, DrillValue>) -> BTreeMap<String, Value> {
-        values.iter().map(|(key, value)| (key.clone(), Value::of(value))).collect()
-    }
-
-    fn map(values: BTreeMap<String, Value>) -> BTreeMap<String, DrillValue> {
-        values.into_iter().map(|(key, value)| (key, value.value())).collect()
-    }
-
-    #[derive(Serialize, Deserialize)]
-    struct Logged {
-        from: Number,
-        to: Number,
-        values: BTreeMap<String, Value>,
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-        never_logged: bool,
-    }
-
-    #[derive(Serialize, Deserialize)]
-    struct Interval {
-        from: Number,
-        to: Number,
-        values: BTreeMap<String, Value>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        logged: Option<Logged>,
-    }
-
-    pub(super) mod depth {
-        use super::*;
-
-        pub(crate) fn serialize<S: Serializer>(depth: &f64, serializer: S) -> Result<S::Ok, S::Error> {
-            Number::of(*depth).serialize(serializer)
         }
 
         pub(crate) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
-            Ok(Number::deserialize(deserializer)?.number())
-        }
-    }
-
-    pub(super) mod value {
-        use super::*;
-
-        pub(crate) fn serialize<S: Serializer>(value: &Option<DrillValue>, serializer: S) -> Result<S::Ok, S::Error> {
-            value.as_ref().map(Value::of).serialize(serializer)
+            deserializer.deserialize_any(Number)
         }
 
-        pub(crate) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<DrillValue>, D::Error> {
-            Ok(Option::<Value>::deserialize(deserializer)?.map(Value::value))
-        }
-    }
+        /// Reads a number as [`serialize`] writes it, and a null as NaN. Any
+        /// other text is no number, and the record holding it is not read.
+        struct Number;
 
-    pub(super) mod values {
-        use super::*;
+        impl de::Visitor<'_> for Number {
+            type Value = f64;
 
-        pub(crate) fn serialize<S: Serializer>(values: &Option<BTreeMap<String, DrillValue>>, serializer: S) -> Result<S::Ok, S::Error> {
-            values.as_ref().map(map_of).serialize(serializer)
-        }
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a number, \"NaN\", \"inf\", \"-inf\" or null")
+            }
 
-        pub(crate) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<BTreeMap<String, DrillValue>>, D::Error> {
-            Ok(Option::<BTreeMap<String, Value>>::deserialize(deserializer)?.map(map))
-        }
-    }
+            fn visit_f64<E: de::Error>(self, number: f64) -> Result<f64, E> {
+                Ok(number)
+            }
 
-    pub(super) mod interval {
-        use super::*;
+            fn visit_i64<E: de::Error>(self, number: i64) -> Result<f64, E> {
+                Ok(number as f64)
+            }
 
-        pub(crate) fn serialize<S: Serializer>(interval: &Option<DrillInterval>, serializer: S) -> Result<S::Ok, S::Error> {
-            interval
-                .as_ref()
-                .map(|interval| Interval {
-                    from: Number::of(interval.from),
-                    to: Number::of(interval.to),
-                    values: map_of(&interval.values),
-                    logged: interval.logged.as_ref().map(|logged| Logged {
-                        from: Number::of(logged.from),
-                        to: Number::of(logged.to),
-                        values: map_of(&logged.values),
-                        never_logged: logged.never_logged,
-                    }),
-                })
-                .serialize(serializer)
-        }
+            fn visit_u64<E: de::Error>(self, number: u64) -> Result<f64, E> {
+                Ok(number as f64)
+            }
 
-        pub(crate) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<DrillInterval>, D::Error> {
-            Ok(Option::<Interval>::deserialize(deserializer)?.map(|interval| DrillInterval {
-                from: interval.from.number(),
-                to: interval.to.number(),
-                values: map(interval.values),
-                logged: interval.logged.map(|logged| LoggedInterval {
-                    from: logged.from.number(),
-                    to: logged.to.number(),
-                    values: map(logged.values),
-                    never_logged: logged.never_logged,
-                }),
-            }))
+            fn visit_str<E: de::Error>(self, text: &str) -> Result<f64, E> {
+                match text {
+                    "NaN" => Ok(f64::NAN),
+                    "inf" => Ok(f64::INFINITY),
+                    "-inf" => Ok(f64::NEG_INFINITY),
+                    _ => Err(E::custom(format!("not a number: {text:?}"))),
+                }
+            }
+
+            fn visit_unit<E: de::Error>(self) -> Result<f64, E> {
+                Ok(f64::NAN)
+            }
+
+            fn visit_none<E: de::Error>(self) -> Result<f64, E> {
+                Ok(f64::NAN)
+            }
         }
     }
 }
@@ -455,6 +341,28 @@ impl Correction {
             row: None,
             removed: None,
         }
+    }
+}
+
+/// Records that met one outcome in an edit, counted for a single warning that
+/// names the first of them.
+#[derive(Default)]
+struct Tally<'a> {
+    count: usize,
+    first: Option<&'a Correction>,
+}
+
+impl<'a> Tally<'a> {
+    fn add(&mut self, record: &'a Correction) {
+        self.count += 1;
+        self.first.get_or_insert(record);
+    }
+
+    /// The count, and the first record's hole and logged depths as a message
+    /// names them; `None` when nothing was counted.
+    fn first(&self) -> Option<(usize, String, String, String)> {
+        self.first
+            .map(|record| (self.count, record.hole.clone(), format!("{:.2}", record.logged_from), format!("{:.2}", record.logged_to)))
     }
 }
 
@@ -1378,6 +1286,9 @@ pub(crate) struct DrillHoleDataset {
     /// Interval columns an Incline tool wrote and may write again. A column
     /// of the same name that came in with the data is never written over.
     pub(crate) derived_columns: BTreeSet<String>,
+    /// The deletion records of each hole, by index into `corrections`, worked
+    /// out on first use after an edit. Not saved.
+    deletions: std::sync::OnceLock<HashMap<String, Vec<usize>>>,
 }
 
 impl DrillHoleDataset {
@@ -1398,6 +1309,7 @@ impl DrillHoleDataset {
             corrections: Vec::new(),
             charges: BTreeMap::new(),
             derived_columns: BTreeSet::new(),
+            deletions: std::sync::OnceLock::new(),
         };
         // The one gate every importer and project load passes through, so the
         // boxes cannot fall out of step with the traces.
@@ -1940,10 +1852,7 @@ impl DrillHoleDataset {
     /// row a deletion took out ran on past it, so the ground it freed reads
     /// as not logged and takes an insertion.
     pub(crate) fn end_of(&self, drilled: &DrillHole) -> f64 {
-        self.corrections
-            .iter()
-            .filter(|record| record.kind == CorrectionKind::Deletion && record.hole == drilled.dhid)
-            .filter_map(|record| record.removed.as_ref())
+        self.deleted_rows(&drilled.dhid)
             .map(|row| row.to)
             .filter(|to| to.is_finite())
             .fold(drilled.end_depth(), f64::max)
@@ -1956,12 +1865,82 @@ impl DrillHoleDataset {
         let Some(drilled) = self.holes.get(hole) else {
             return Vec::new();
         };
+        self.deleted_rows(&drilled.dhid).filter(|row| !row.is_never_logged()).collect()
+    }
+
+    /// Every row deletions have taken out of the hole named `dhid`, oldest
+    /// first, read through the index rather than every record.
+    fn deleted_rows<'a>(&'a self, dhid: &'a str) -> impl Iterator<Item = &'a DrillInterval> + 'a {
+        let deletions = self.deletions.get_or_init(|| {
+            let mut deletions: HashMap<String, Vec<usize>> = HashMap::new();
+            for (index, record) in self.corrections.iter().enumerate() {
+                if record.kind == CorrectionKind::Deletion && record.removed.is_some() {
+                    deletions.entry(record.hole.clone()).or_default().push(index);
+                }
+            }
+            deletions
+        });
+        deletions
+            .get(dhid)
+            .into_iter()
+            .flatten()
+            .filter_map(|&index| self.corrections.get(index))
+            .filter(move |record| record.kind == CorrectionKind::Deletion && record.hole == dhid)
+            .filter_map(|record| record.removed.as_ref())
+    }
+
+    /// Work out again what is read from the records after they changed: the
+    /// deletions index, and the fields.
+    pub(crate) fn records_changed(&mut self) {
+        self.deletions = std::sync::OnceLock::new();
+        self.refresh_fields();
+    }
+
+    /// Collect the fields again. A field only logged rows deletions took out
+    /// still hold, as logged, is kept, so a deletion never takes a column
+    /// away; fields the holes' rows hold are theirs alone, and a column a tool
+    /// derives is not logged data.
+    fn refresh_fields(&mut self) {
+        let mut fields = collect_fields(&self.holes);
+        let kept: Vec<DrillField> = fields_of([self.deleted_logged_values()])
+            .into_iter()
+            .filter(|field| !self.derived_columns.contains(&field.key) && fields.iter().all(|live| live.key != field.key))
+            .collect();
+        if !kept.is_empty() {
+            fields.extend(kept);
+            fields.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.label, &b.label));
+        }
+        self.fields = fields;
+    }
+
+    /// The values of each logged row deletions took out, as logged.
+    fn deleted_logged_values(&self) -> impl Iterator<Item = &BTreeMap<String, DrillValue>> {
         self.corrections
             .iter()
-            .filter(|record| record.kind == CorrectionKind::Deletion && record.hole == drilled.dhid)
+            .filter(|record| record.kind == CorrectionKind::Deletion)
             .filter_map(|record| record.removed.as_ref())
             .filter(|row| !row.is_never_logged())
-            .collect()
+            .map(|row| row.logged().2)
+    }
+
+    /// Take the derived columns a file names, keeping those some row still
+    /// holds: one of the holes', or any row a deletion took out, logged or
+    /// inserted, either side, which keeps the column the tool's for an undo.
+    /// A name no row holds is dropped, since a later import of that name
+    /// would otherwise be written over.
+    pub(crate) fn restore_derived_columns(&mut self, stored: BTreeSet<String>) {
+        let deleted = || {
+            self.corrections
+                .iter()
+                .filter(|record| record.kind == CorrectionKind::Deletion)
+                .filter_map(|record| record.removed.as_ref())
+        };
+        let held = |column: &String| {
+            self.holes.iter().any(|hole| hole.intervals.iter().any(|interval| interval.values.contains_key(column)))
+                || deleted().any(|row| row.values.contains_key(column) || row.logged().2.contains_key(column))
+        };
+        self.derived_columns = stored.into_iter().filter(held).collect();
+        self.records_changed();
     }
 
     /// Which way the round crossed each tie, given [`Self::firing_times`],
@@ -2079,15 +2058,25 @@ impl DrillHoleDataset {
     /// row marked never logged. The as-logged interval is kept aside the
     /// first time anything parts the two, and is never written after that.
     pub(crate) fn apply_corrections(&mut self, targets: &[CorrectionTarget], records: &[Correction]) {
+        let mut not_applied = Tally::default();
         for (&target, record) in targets.iter().zip(records) {
-            let Some(hole) = self.holes.get_mut(target.hole) else {
+            // An insertion or deletion whose record is still in the trail is
+            // still in place, its undo having failed: writing it again would
+            // put in a second row or refuse, and add a second record.
+            if matches!(record.kind, CorrectionKind::Insertion | CorrectionKind::Deletion) && self.corrections.iter().any(|kept| same_record(kept, record)) {
                 continue;
-            };
-            if write_correction(hole, target, record, true) {
+            }
+            let written = self.holes.get_mut(target.hole).is_some_and(|hole| write_correction(hole, target, record, true));
+            if written {
                 self.corrections.push(record.clone());
+            } else if record.kind == CorrectionKind::Deletion {
+                not_applied.add(record);
             }
         }
-        self.fields = collect_fields(&self.holes);
+        if let Some((count, hole, from, to)) = not_applied.first() {
+            crate::userspace_warn!("{}", tr!("drill-hole-deletion-not-applied", count = count, hole = hole, from = from, to = to));
+        }
+        self.records_changed();
     }
 
     /// Write cells of a derived `column`, each `(hole, interval, value)`, and
@@ -2109,16 +2098,21 @@ impl DrillHoleDataset {
         } else {
             self.derived_columns.remove(column);
         }
-        self.fields = collect_fields(&self.holes);
+        self.refresh_fields();
     }
 
     /// Undo [`Self::apply_corrections`]: the `before` values and depths go
-    /// back and the records are withdrawn, latest first.
+    /// back and the records are withdrawn, latest first. A record whose undo
+    /// could not be written stays, as what it changed is still there. What
+    /// could not be undone as asked is said once per outcome, with a count.
     pub(crate) fn withdraw_corrections(&mut self, targets: &[CorrectionTarget], records: &[Correction]) {
+        let (mut rows_kept, mut kept, mut lost_back, mut lost) = (Tally::default(), Tally::default(), Tally::default(), Tally::default());
         for (&target, record) in targets.iter().zip(records).rev() {
             let position = self.corrections.iter().rposition(|kept| same_record(kept, record));
-            // A deletion that never took its row out has nothing to put back.
             if record.kind == CorrectionKind::Deletion && position.is_none() {
+                // A deletion with no record never took its row out, which was
+                // said when it was applied, or its record was left out when
+                // the file was read, which the read said: nothing to put back.
                 continue;
             }
             let written = self.holes.get_mut(target.hole).is_some_and(|hole| write_correction(hole, target, record, false));
@@ -2133,25 +2127,31 @@ impl DrillHoleDataset {
                     }
                 }
             }
-            // A deleted row that could not go back keeps its record, so the
-            // row it holds is not lost.
-            if record.kind == CorrectionKind::Deletion && !written {
-                crate::userspace_warn!(
-                    "{}",
-                    tr!(
-                        "drill-hole-deletion-not-undone",
-                        hole = record.hole.clone(),
-                        from = format!("{:.2}", record.logged_from),
-                        to = format!("{:.2}", record.logged_to)
-                    )
-                );
-                continue;
-            }
-            if let Some(position) = position {
-                self.corrections.remove(position);
+            match (position, written) {
+                (Some(position), true) => {
+                    self.corrections.remove(position);
+                }
+                // A deleted row that could not go back keeps its record, so
+                // the row it holds is not lost.
+                (Some(_), false) if record.kind == CorrectionKind::Deletion => rows_kept.add(record),
+                (Some(_), false) => kept.add(record),
+                (None, true) => lost_back.add(record),
+                (None, false) => lost.add(record),
             }
         }
-        self.fields = collect_fields(&self.holes);
+        if let Some((count, hole, from, to)) = rows_kept.first() {
+            crate::userspace_warn!("{}", tr!("drill-hole-deletion-not-undone", count = count, hole = hole, from = from, to = to));
+        }
+        if let Some((count, hole, from, to)) = kept.first() {
+            crate::userspace_warn!("{}", tr!("drill-hole-correction-not-undone", count = count, hole = hole, from = from, to = to));
+        }
+        if let Some((count, hole, from, to)) = lost_back.first() {
+            crate::userspace_warn!("{}", tr!("drill-hole-undo-no-record", count = count, hole = hole, from = from, to = to));
+        }
+        if let Some((count, hole, from, to)) = lost.first() {
+            crate::userspace_warn!("{}", tr!("drill-hole-undo-no-record-not-back", count = count, hole = hole, from = from, to = to));
+        }
+        self.records_changed();
     }
 
     /// The ties as a file holds them, keyed by hole name.
@@ -3477,7 +3477,7 @@ fn write_deletion(hole: &mut DrillHole, target: CorrectionTarget, record: &Corre
         return false;
     };
     if apply {
-        let ours = hole.intervals.get(target.interval).is_some_and(|row| same_interval(row, removed));
+        let ours = hole.intervals.get(target.interval).is_some_and(|row| same_interval_as_saved(row, removed));
         if ours {
             hole.intervals.remove(target.interval);
         }
@@ -3527,6 +3527,17 @@ pub(crate) fn same_interval(a: &DrillInterval, b: &DrillInterval) -> bool {
             (None, None) => true,
             _ => false,
         }
+}
+
+/// Whether `row` is `held`, either as held or as a save reads it back: the
+/// interval columns of a file hold no NaN or infinite number, so such a value
+/// comes back as none. The logged side keeps it.
+fn same_interval_as_saved(row: &DrillInterval, held: &DrillInterval) -> bool {
+    same_interval(row, held) || {
+        let mut saved = held.clone();
+        saved.values.retain(|_, value| !matches!(value, DrillValue::Numeric(number) if !number.is_finite()));
+        same_interval(row, &saved)
+    }
 }
 
 /// Whether two records are the same record, as [`same_interval`] matches rows.
@@ -3687,11 +3698,17 @@ fn set_value(values: &mut BTreeMap<String, DrillValue>, key: &str, value: Option
 }
 
 fn collect_fields(holes: &[DrillHole]) -> Vec<DrillField> {
+    fields_of(holes.iter().map(|hole| hole.intervals.iter().map(|interval| &interval.values)))
+}
+
+/// [`collect_fields`] over any groups of rows' values, such as those
+/// deletions hold.
+fn fields_of<'a, Rows: IntoIterator<Item = &'a BTreeMap<String, DrillValue>>>(holes: impl IntoIterator<Item = Rows>) -> Vec<DrillField> {
     let mut numeric: BTreeMap<String, (String, f64, f64, bool)> = BTreeMap::new();
     let mut categorical: BTreeMap<String, (String, BTreeSet<String>)> = BTreeMap::new();
     for hole in holes {
-        for interval in &hole.intervals {
-            for (key, value) in &interval.values {
+        for values in hole {
+            for (key, value) in values {
                 let label = key.clone();
                 match value {
                     // Sentinels stay out of the range; the field still shows.

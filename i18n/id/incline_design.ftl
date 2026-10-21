@@ -1365,7 +1365,31 @@ drill-hole-delete-interval-reason-hint = Mengapa interval dihapus
 drill-hole-delete-interval-submit = Hapus
 drill-hole-delete-interval-note = Seluruh baris keluar dari data yang diinterpretasikan, beserta setiap bidang yang dimuatnya, dan lapisannya terbaca sebagai tidak dicatat. Yang dicatat tetap disimpan, dan baris itu ditahan dalam koreksi.
 drill-hole-delete-interval-changed = Baris ini bukan lagi baris yang dipilih. Tutup dialog dan pilih interval lagi.
-drill-hole-deletion-not-undone = Baris yang dihapus dari { $from } m sampai { $to } m di { $hole } tidak dapat dikembalikan, sehingga koreksinya tetap disimpan.
+drill-hole-deletion-not-undone =
+    { $count ->
+        [1] Baris yang dihapus dari { $from } m sampai { $to } m di { $hole } tidak dapat dikembalikan, sehingga koreksinya tetap disimpan.
+       *[other] { $count } baris yang dihapus tidak dapat dikembalikan, sehingga koreksinya tetap disimpan; yang pertama dari { $from } m sampai { $to } m di { $hole }.
+    }
+drill-hole-correction-not-undone =
+    { $count ->
+        [1] Koreksi pada { $from } m sampai { $to } m di { $hole } tidak dapat dibatalkan, sehingga tetap disimpan.
+       *[other] { $count } koreksi tidak dapat dibatalkan, sehingga tetap disimpan; yang pertama pada { $from } m sampai { $to } m di { $hole }.
+    }
+drill-hole-deletion-not-applied =
+    { $count ->
+        [1] Baris { $from } m sampai { $to } m di { $hole } bukan lagi baris yang dihapus, sehingga tidak dikeluarkan.
+       *[other] { $count } baris bukan lagi baris yang dihapus, sehingga tidak dikeluarkan; yang pertama dari { $from } m sampai { $to } m di { $hole }.
+    }
+drill-hole-undo-no-record =
+    { $count ->
+        [1] Koreksi pada { $from } m sampai { $to } m di { $hole } telah dibatalkan, tetapi catatannya tidak ditemukan untuk ditarik.
+       *[other] { $count } koreksi telah dibatalkan, tetapi catatannya tidak ditemukan untuk ditarik; yang pertama pada { $from } m sampai { $to } m di { $hole }.
+    }
+drill-hole-undo-no-record-not-back =
+    { $count ->
+        [1] Koreksi pada { $from } m sampai { $to } m di { $hole } tidak memiliki catatan dan tidak dapat dibatalkan.
+       *[other] { $count } koreksi tidak memiliki catatan dan tidak dapat dibatalkan; yang pertama pada { $from } m sampai { $to } m di { $hole }.
+    }
 drill-hole-interval-deleted = dihapus
 drill-hole-reset-colours = Atur ulang warna
 drill-hole-reset-preset = Atur ulang prasetel

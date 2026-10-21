@@ -1435,7 +1435,31 @@ drill-hole-delete-interval-reason-hint = Dlaczego interwał jest usuwany
 drill-hole-delete-interval-submit = Usuń
 drill-hole-delete-interval-note = Cały wiersz opuszcza dane zinterpretowane wraz z każdym polem, które zawiera, a jego odcinek jest odczytywany jako nieopisany. To, co opisano, jest zachowane, a wiersz zostaje w poprawce.
 drill-hole-delete-interval-changed = Ten wiersz nie jest już tym, który wybrano. Zamknij okno dialogowe i wybierz interwał ponownie.
-drill-hole-deletion-not-undone = Usunięty wiersz od { $from } m do { $to } m w otworze { $hole } nie mógł zostać przywrócony, więc jego poprawka została zachowana.
+drill-hole-deletion-not-undone =
+    { $count ->
+        [one] Usunięty wiersz od { $from } m do { $to } m w otworze { $hole } nie mógł zostać przywrócony, więc jego poprawka została zachowana.
+       *[other] Nie udało się przywrócić usuniętych wierszy ({ $count }), więc ich poprawki zostały zachowane; pierwszy: od { $from } m do { $to } m w otworze { $hole }.
+    }
+drill-hole-correction-not-undone =
+    { $count ->
+        [one] Poprawki od { $from } m do { $to } m w otworze { $hole } nie udało się cofnąć, więc została zachowana.
+       *[other] Nie udało się cofnąć poprawek ({ $count }), więc zostały zachowane; pierwsza: od { $from } m do { $to } m w otworze { $hole }.
+    }
+drill-hole-deletion-not-applied =
+    { $count ->
+        [one] Wiersz od { $from } m do { $to } m w otworze { $hole } nie jest już tym, który usunięto, więc nie został usunięty.
+       *[other] Wiersze ({ $count }) nie są już tymi, które usunięto, więc nie zostały usunięte; pierwszy: od { $from } m do { $to } m w otworze { $hole }.
+    }
+drill-hole-undo-no-record =
+    { $count ->
+        [one] Poprawkę od { $from } m do { $to } m w otworze { $hole } cofnięto, ale nie znaleziono jej rekordu do wycofania.
+       *[other] Poprawki ({ $count }) cofnięto, ale nie znaleziono ich rekordów do wycofania; pierwsza: od { $from } m do { $to } m w otworze { $hole }.
+    }
+drill-hole-undo-no-record-not-back =
+    { $count ->
+        [one] Poprawka od { $from } m do { $to } m w otworze { $hole } nie ma rekordu i nie udało się jej cofnąć.
+       *[other] Poprawki ({ $count }) nie mają rekordu i nie udało się ich cofnąć; pierwsza: od { $from } m do { $to } m w otworze { $hole }.
+    }
 drill-hole-interval-deleted = usunięty
 drill-hole-reset-colours = Zresetuj kolory
 drill-hole-reset-preset = Resetuj ustawienie

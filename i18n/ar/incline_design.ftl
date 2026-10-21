@@ -1365,7 +1365,31 @@ drill-hole-delete-interval-reason-hint = سبب حذف الفاصل
 drill-hole-delete-interval-submit = حذف
 drill-hole-delete-interval-note = يخرج الصف كله من البيانات المفسَّرة بكل حقل يحويه، ويُقرأ باطنه على أنه غير مسجّل. يُحفظ ما سُجّل، ويُحتفظ بالصف في التصحيح.
 drill-hole-delete-interval-changed = لم يعد هذا الصف هو الذي اختير. أغلق الحوار واختر الفاصل مرة أخرى.
-drill-hole-deletion-not-undone = تعذّرت إعادة الصف المحذوف من { $from } م إلى { $to } م في { $hole }، لذا يُحتفظ بتصحيحه.
+drill-hole-deletion-not-undone =
+    { $count ->
+        [one] تعذّرت إعادة الصف المحذوف من { $from } م إلى { $to } م في { $hole }، لذا يُحتفظ بتصحيحه.
+       *[other] تعذّرت إعادة الصفوف المحذوفة ({ $count })، لذا يُحتفظ بتصحيحاتها؛ أولها من { $from } م إلى { $to } م في { $hole }.
+    }
+drill-hole-correction-not-undone =
+    { $count ->
+        [one] تعذّر التراجع عن التصحيح من { $from } م إلى { $to } م في { $hole }، لذا يُحتفظ به.
+       *[other] تعذّر التراجع عن التصحيحات ({ $count })، لذا يُحتفظ بها؛ أولها من { $from } م إلى { $to } م في { $hole }.
+    }
+drill-hole-deletion-not-applied =
+    { $count ->
+        [one] لم يعد الصف من { $from } م إلى { $to } م في { $hole } هو الصف المحذوف، لذا لم يُزل.
+       *[other] لم تعد الصفوف ({ $count }) هي الصفوف المحذوفة، لذا لم تُزل؛ أولها من { $from } م إلى { $to } م في { $hole }.
+    }
+drill-hole-undo-no-record =
+    { $count ->
+        [one] تم التراجع عن التصحيح من { $from } م إلى { $to } م في { $hole }، لكن لم يُعثر على سجل له لسحبه.
+       *[other] تم التراجع عن التصحيحات ({ $count })، لكن لم يُعثر على سجلات لها لسحبها؛ أولها من { $from } م إلى { $to } م في { $hole }.
+    }
+drill-hole-undo-no-record-not-back =
+    { $count ->
+        [one] ليس للتصحيح من { $from } م إلى { $to } م في { $hole } سجل، وتعذّر التراجع عنه.
+       *[other] ليس للتصحيحات ({ $count }) سجل، وتعذّر التراجع عنها؛ أولها من { $from } م إلى { $to } م في { $hole }.
+    }
 drill-hole-interval-deleted = محذوف
 drill-hole-reset-colours = إعادة تعيين الألوان
 drill-hole-reset-preset = إعادة تعيين الإعداد المسبق

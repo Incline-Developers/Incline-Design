@@ -1391,7 +1391,31 @@ drill-hole-delete-interval-reason-hint = Vì sao xóa khoảng này
 drill-hole-delete-interval-submit = Xóa
 drill-hole-delete-interval-note = Toàn bộ hàng rời khỏi dữ liệu đã diễn giải, cùng mọi trường nó chứa, và phần đất của nó được đọc là chưa ghi. Những gì đã ghi được giữ lại, và hàng được giữ trong hiệu chỉnh.
 drill-hole-delete-interval-changed = Hàng này không còn là hàng đã chọn. Hãy đóng hộp thoại và chọn lại khoảng.
-drill-hole-deletion-not-undone = Hàng đã xóa từ { $from } m đến { $to } m trong { $hole } không thể đặt lại, nên hiệu chỉnh của nó được giữ lại.
+drill-hole-deletion-not-undone =
+    { $count ->
+        [1] Hàng đã xóa từ { $from } m đến { $to } m trong { $hole } không thể đặt lại, nên hiệu chỉnh của nó được giữ lại.
+       *[other] { $count } hàng đã xóa không thể đặt lại, nên các hiệu chỉnh của chúng được giữ lại; hàng đầu tiên từ { $from } m đến { $to } m trong { $hole }.
+    }
+drill-hole-correction-not-undone =
+    { $count ->
+        [1] Hiệu chỉnh từ { $from } m đến { $to } m trong { $hole } không thể hoàn tác, nên được giữ lại.
+       *[other] { $count } hiệu chỉnh không thể hoàn tác, nên được giữ lại; hiệu chỉnh đầu tiên từ { $from } m đến { $to } m trong { $hole }.
+    }
+drill-hole-deletion-not-applied =
+    { $count ->
+        [1] Hàng từ { $from } m đến { $to } m trong { $hole } không còn là hàng đã xóa, nên không được lấy ra.
+       *[other] { $count } hàng không còn là các hàng đã xóa, nên không được lấy ra; hàng đầu tiên từ { $from } m đến { $to } m trong { $hole }.
+    }
+drill-hole-undo-no-record =
+    { $count ->
+        [1] Hiệu chỉnh từ { $from } m đến { $to } m trong { $hole } đã được hoàn tác, nhưng không tìm thấy bản ghi nào của nó để rút lại.
+       *[other] { $count } hiệu chỉnh đã được hoàn tác, nhưng không tìm thấy bản ghi nào của chúng để rút lại; hiệu chỉnh đầu tiên từ { $from } m đến { $to } m trong { $hole }.
+    }
+drill-hole-undo-no-record-not-back =
+    { $count ->
+        [1] Hiệu chỉnh từ { $from } m đến { $to } m trong { $hole } không có bản ghi và không thể hoàn tác.
+       *[other] { $count } hiệu chỉnh không có bản ghi và không thể hoàn tác; hiệu chỉnh đầu tiên từ { $from } m đến { $to } m trong { $hole }.
+    }
 drill-hole-interval-deleted = đã xóa
 drill-hole-reset-colours = Đặt lại màu
 drill-hole-reset-preset = Đặt lại thiết lập sẵn

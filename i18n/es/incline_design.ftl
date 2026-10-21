@@ -1363,7 +1363,31 @@ drill-hole-delete-interval-reason-hint = Por qué se elimina el intervalo
 drill-hole-delete-interval-submit = Eliminar
 drill-hole-delete-interval-note = La fila completa sale de los datos interpretados, con todos los campos que contiene, y su terreno se lee como no registrado. Lo registrado se conserva, y la fila queda guardada en la corrección.
 drill-hole-delete-interval-changed = Esta fila ya no es la elegida. Cierre el diálogo y elija el intervalo de nuevo.
-drill-hole-deletion-not-undone = No se pudo restaurar la fila eliminada de { $from } m a { $to } m en { $hole }, por lo que se conserva su corrección.
+drill-hole-deletion-not-undone =
+    { $count ->
+        [one] No se pudo restaurar la fila eliminada de { $from } m a { $to } m en { $hole }, por lo que se conserva su corrección.
+       *[other] No se pudieron restaurar { $count } filas eliminadas, por lo que se conservan sus correcciones; la primera es de { $from } m a { $to } m en { $hole }.
+    }
+drill-hole-correction-not-undone =
+    { $count ->
+        [one] No se pudo deshacer la corrección de { $from } m a { $to } m en { $hole }, por lo que se conserva.
+       *[other] No se pudieron deshacer { $count } correcciones, por lo que se conservan; la primera es de { $from } m a { $to } m en { $hole }.
+    }
+drill-hole-deletion-not-applied =
+    { $count ->
+        [one] La fila de { $from } m a { $to } m en { $hole } ya no es la que se eliminó, por lo que no se quitó.
+       *[other] { $count } filas ya no son las que se eliminaron, por lo que no se quitaron; la primera es de { $from } m a { $to } m en { $hole }.
+    }
+drill-hole-undo-no-record =
+    { $count ->
+        [one] Se deshizo la corrección de { $from } m a { $to } m en { $hole }, pero no se encontró ningún registro suyo que retirar.
+       *[other] Se deshicieron { $count } correcciones, pero no se encontró ningún registro suyo que retirar; la primera es de { $from } m a { $to } m en { $hole }.
+    }
+drill-hole-undo-no-record-not-back =
+    { $count ->
+        [one] La corrección de { $from } m a { $to } m en { $hole } no tiene registro y no se pudo deshacer.
+       *[other] { $count } correcciones no tienen registro y no se pudieron deshacer; la primera es de { $from } m a { $to } m en { $hole }.
+    }
 drill-hole-interval-deleted = eliminado
 drill-hole-reset-colours = Restablecer colores
 drill-hole-reset-preset = Restablecer preajuste
