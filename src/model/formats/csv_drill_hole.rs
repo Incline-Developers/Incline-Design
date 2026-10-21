@@ -781,7 +781,7 @@ fn link_geophysics<'m, R: std::io::BufRead>(
             ),
         }
     }
-    Ok((!files.is_empty()).then_some(crate::model::geophysics::GeophysicsLink { files }))
+    Ok((!files.is_empty()).then(|| crate::model::geophysics::GeophysicsLink::new(files)))
 }
 
 /// Enough to find the bad rows without burying the console.

@@ -144,9 +144,10 @@ fn draw_body(
             }
         }
         BoreholeInspectorTab::Log => {
+            let curve_names = dataset.geophysics.as_deref().map(crate::model::geophysics::GeophysicsLink::curve_names);
             CollapsibleSection::new(egui::Id::unique("borehole_inspector_log_display"), tr!("borehole-inspector-display"))
                 .default_open(true)
-                .show(ui, |ui| draw_log_field_pickers(ui, editor, dataset, commands));
+                .show(ui, |ui| draw_log_field_pickers(ui, editor, dataset, curve_names, commands));
             ui.add_space(4.0);
             // Matched on the hole id exactly as the dataset spells it.
             let view = well_logs.view(dataset, &hole.dhid);
@@ -186,6 +187,7 @@ fn draw_body(
                 .well_logs(logs, linked)
                 .reading(reading)
                 .logged_depths(logged)
+                .curves(curve_choice_for(editor, dataset.id, curve_names.unwrap_or_default()))
                 .well_log_style(editor.well_log_style)
                 .guide_depth(guide)
                 .corrections_locked(editor.correction_dialog_open())
@@ -906,12 +908,12 @@ fn strat_choice_for(editor: &EditorState, dataset: &OpenDrillHoleDataset) -> Opt
         .map(|field| field.key.clone())
 }
 
-/// Two pickers above the log: what the ribbon is coloured by, and what the
-/// strat column reads. Colour drives the dataset's own field, the one the
-/// scene is drawn by, because a categorical field's colours are held per
-/// dataset for that field alone. Strat is the panel's own, since which
-/// column names the rock is about this log.
-fn draw_log_field_pickers(ui: &mut egui::Ui, editor: &mut EditorState, dataset: &OpenDrillHoleDataset, commands: &mut Vec<UiCommand>) {
+/// The pickers above the log: what the ribbon is coloured by, what the strat
+/// column reads, and what the trace columns draw. Colour drives the dataset's
+/// own field, the one the scene is drawn by, because a categorical field's
+/// colours are held per dataset for that field alone. Strat is the panel's
+/// own, since which column names the rock is about this log.
+fn draw_log_field_pickers(ui: &mut egui::Ui, editor: &mut EditorState, dataset: &OpenDrillHoleDataset, curve_names: Option<&[String]>, commands: &mut Vec<UiCommand>) {
     let fields = &dataset.dataset.fields;
     let label_of = |key: Option<&str>, fallback: &str| {
         key.and_then(|key| dataset.dataset.field(key))
@@ -929,6 +931,81 @@ fn draw_log_field_pickers(ui: &mut egui::Ui, editor: &mut EditorState, dataset: 
         commands.push(UiCommand::SetDrillHoleColorField { id: dataset.id, field: chosen });
     }
     draw_strat_field_picker(ui, editor, dataset);
+    draw_curve_pickers(ui, editor, dataset.id, curve_names);
+}
+
+/// What dataset `id`'s left and right trace columns show, another curve as
+/// `names`, its link's curve names, spell it; the defaults until chosen,
+/// and a column's default for a curve the link no longer has.
+fn curve_choice_for<'d>(editor: &EditorState, id: DrillHoleId, names: &'d [String]) -> [crate::ui::widgets::log_traces::ColumnCurve<&'d str>; 2] {
+    use crate::ui::widgets::log_traces::ColumnCurve;
+    let defaults = ColumnCurve::defaults();
+    let Some((_, chosen)) = editor.borehole_log_curves.as_ref().filter(|(chosen_for, _)| *chosen_for == id) else {
+        return defaults;
+    };
+    let resolve = |chosen: &ColumnCurve<String>, default| match chosen {
+        ColumnCurve::Other(chosen) => names
+            .iter()
+            .find(|name| crate::model::geophysics::same_curve(name, chosen))
+            .map_or(default, |name| ColumnCurve::Other(name.as_str())),
+        ColumnCurve::Own(column) => ColumnCurve::Own(*column),
+        ColumnCurve::Hidden => ColumnCurve::Hidden,
+    };
+    [resolve(&chosen[0], defaults[0]), resolve(&chosen[1], defaults[1])]
+}
+
+/// What either trace column can show, as the pickers list it: density,
+/// gamma, each other curve the linked files carry, then nothing. Another
+/// curve named like a fixed entry is marked as the file's, so no two
+/// entries read alike.
+fn curve_options<'d>(names: &'d [String]) -> Vec<(crate::ui::widgets::log_traces::ColumnCurve<&'d str>, std::borrow::Cow<'d, str>)> {
+    use std::borrow::Cow;
+
+    use crate::ui::widgets::log_traces::{ColumnCurve, TraceColumn};
+    let fixed = [
+        (ColumnCurve::Own(TraceColumn::Density), tr!("log-traces-density")),
+        (ColumnCurve::Own(TraceColumn::Gamma), tr!("log-traces-gamma")),
+        (ColumnCurve::Hidden, tr!("common-none")),
+    ];
+    let others = names
+        .iter()
+        .map(|name| {
+            let label = if fixed.iter().any(|(_, label)| crate::model::geophysics::same_curve(label, name)) {
+                Cow::Owned(tr!("borehole-inspector-curve-from-file", curve = name.clone()))
+            } else {
+                Cow::Borrowed(name.as_str())
+            };
+            (ColumnCurve::Other(name.as_str()), label)
+        })
+        .collect::<Vec<_>>();
+    let [density, gamma, none] = fixed.map(|(curve, label)| (curve, Cow::Owned(label)));
+    [density, gamma].into_iter().chain(others).chain([none]).collect()
+}
+
+/// What the two trace columns show, the panel's own choice like strat,
+/// offered whenever the dataset has geophysics linked; `names` are its
+/// link's curve names, `None` without a link.
+fn draw_curve_pickers(ui: &mut egui::Ui, editor: &mut EditorState, id: DrillHoleId, names: Option<&[String]>) {
+    let Some(names) = names else {
+        return;
+    };
+    // Borrowed from the link: owned names only once a choice is kept.
+    let mut chosen = curve_choice_for(editor, id, names);
+    let options = curve_options(names);
+    let mut changed = false;
+    for (index, label) in [tr!("borehole-inspector-left-curve"), tr!("borehole-inspector-right-curve")].into_iter().enumerate() {
+        let selected = options
+            .iter()
+            .find(|(curve, _)| *curve == chosen[index])
+            .map_or_else(String::new, |(_, text)| text.to_string());
+        let entries = options.iter().map(|(curve, text)| (*curve, text.as_ref().into()));
+        changed |= MenuFieldCombo::new(("borehole_log_curve", id, index), label, &mut chosen[index], selected, entries)
+            .show(ui)
+            .changed();
+    }
+    if changed {
+        editor.borehole_log_curves = Some((id, chosen.map(|curve| curve.map(str::to_owned))));
+    }
 }
 
 /// What the strat column reads, the panel's own choice: the Log and Column

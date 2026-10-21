@@ -3758,7 +3758,7 @@ fn style_value<T: serde::de::DeserializeOwned>(style: Option<&Value>, key: &str)
 /// none.
 fn style_geophysics(style: Option<&Value>) -> Option<Arc<crate::model::geophysics::GeophysicsLink>> {
     let mut link = style_value::<crate::model::geophysics::GeophysicsLink>(style, "geophysics")?;
-    link.sort();
+    link.settle();
     Some(Arc::new(link))
 }
 

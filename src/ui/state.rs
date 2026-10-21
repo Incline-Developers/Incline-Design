@@ -1628,6 +1628,10 @@ pub(crate) struct EditorState {
     /// chosen for: a choice about one set's columns says nothing about
     /// another's. `None` guesses by name. Transient, like the tab.
     pub(crate) borehole_log_strat_field: Option<(DrillHoleId, String)>,
+    /// What the Log tab's left, then right, trace column shows, and the
+    /// dataset it was chosen for; `None` shows the defaults. Transient, like
+    /// the strat field.
+    pub(crate) borehole_log_curves: Option<(DrillHoleId, [crate::ui::widgets::log_traces::ColumnCurve<String>; 2])>,
     /// The last strat column check of each set and field, for the Column
     /// tab. Transient: an import or Check makes one; a project opened
     /// starts with none.
@@ -3030,6 +3034,7 @@ impl EditorState {
         self.selected_tie_ins.clear();
         self.inspected_hole = None;
         self.borehole_log_strat_field = None;
+        self.borehole_log_curves = None;
         self.strat_checks.clear();
         self.borehole_inspector_locked = false;
         self.hidden_handles.clear();
@@ -3274,6 +3279,7 @@ impl EditorState {
             show_borehole_inspector: false,
             borehole_inspector_tab: BoreholeInspectorTab::default(),
             borehole_log_strat_field: None,
+            borehole_log_curves: None,
             strat_checks: Vec::new(),
             well_log_style: Default::default(),
             panel_chrome: crate::app::io::default_panel_chrome(),
@@ -3799,10 +3805,14 @@ impl EditorState {
     }
 
     /// Forget every hole `keep` no longer vouches for: what is selected,
-    /// what the inspector reads, the context menu's hole.
+    /// what the inspector reads, the context menu's hole, and the strat
+    /// field and curves the log was set to for a dataset it drops.
     pub(crate) fn retain_drill_hole_datasets(&mut self, keep: impl Fn(DrillHoleId) -> bool) {
-        if self.inspected_hole.is_some_and(|hole| !keep(hole.dataset)) {
+        if self.borehole_log_strat_field.as_ref().is_some_and(|(id, _)| !keep(*id)) {
             self.borehole_log_strat_field = None;
+        }
+        if self.borehole_log_curves.as_ref().is_some_and(|(id, _)| !keep(*id)) {
+            self.borehole_log_curves = None;
         }
         self.selected_drill_holes.retain(|hole| keep(hole.dataset));
         self.selected_tie_ins.retain(|tie| keep(tie.dataset));

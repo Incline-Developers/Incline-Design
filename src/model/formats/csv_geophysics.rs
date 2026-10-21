@@ -806,7 +806,15 @@ impl<'a> HoleReader<'a> {
                 )
             );
         }
-        HoleLogs::new(self.curves.into_iter().filter_map(|curve| curve.built).collect())
+        HoleLogs::new(
+            self.curves
+                .into_iter()
+                .filter_map(|curve| match curve.key {
+                    CurveKey::Header(key) => curve.built.map(|trace| trace.with_key(key)),
+                    CurveKey::Kind(_) => curve.built,
+                })
+                .collect(),
+        )
     }
 }
 
@@ -954,7 +962,7 @@ fn row_pieces(bytes: &[u8]) -> Vec<&[u8]> {
 }
 
 fn curve_key(kind: Option<LogKind>, header: &str) -> CurveKey {
-    kind.map_or_else(|| CurveKey::Header(header.trim().to_lowercase()), CurveKey::Kind)
+    kind.map_or_else(|| CurveKey::Header(crate::model::geophysics::curve_key(header)), CurveKey::Kind)
 }
 
 /// A row's hole id and depth, or the reason it is refused.
