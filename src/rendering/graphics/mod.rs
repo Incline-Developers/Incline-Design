@@ -31,6 +31,7 @@ use crate::{
             bounds::{scene_bounds, visible_object_aabbs},
             build::{DocumentDrawBatch, DocumentObjectRanges, DocumentPrimitive, DocumentRenderStage, PolylineFillCache, TextDrawBatch},
             document_style::{DocumentStyleGpu, DocumentStyleSlots},
+            section_surface_lines::{SectionSurfaceStrokes, SurfaceLines},
         },
         snap::SNAP_THRESHOLD_PX,
         text::TextSystem,
@@ -344,6 +345,7 @@ pub(crate) struct Graphics<'a> {
     pub(super) lyon_index_gpu: wgpu::Buffer,
     pub(super) stroke_gpu: wgpu::Buffer,
     pub(super) overlay_stroke_gpu: wgpu::Buffer,
+    pub(super) section_surface_gpu: wgpu::Buffer,
     pub(super) dynamic_stroke_gpu: wgpu::Buffer,
     pub(super) text_vertex_gpu: wgpu::Buffer,
     pub(super) text_index_gpu: wgpu::Buffer,
@@ -462,8 +464,15 @@ pub(crate) struct Graphics<'a> {
     pub(super) cached_object_aabbs: Vec<(DVec3, DVec3)>,
     pub(super) overlay_dirty: bool,
     pub(super) cached_scale_factor: f32,
-    pub(super) cached_measurement_state: (bool, Option<DVec3>, Option<DVec3>, Vec<DVec3>),
+    pub(super) cached_measurement_state: (bool, Option<DVec3>, Option<DVec3>, Vec<DVec3>, bool),
     pub(super) cached_poly_finish_dialog: bool,
+    /// Which Thin Strings preview the overlay last drew, if one was open.
+    pub(super) cached_thin_preview: Option<u64>,
+    /// Where each shown surface cuts the section, as the App last cut them,
+    /// with its own stroke stream so a cursor-driven overlay rebuild leaves
+    /// it alone.
+    pub(super) section_surface: SectionSurfaceStrokes,
+    pub(super) section_surface_capacity: usize,
     pub(super) pick_records: Vec<PickRecord>,
     pub(super) text_pick_records: Vec<TextPickRecord>,
     pub(super) document_draw_batches: Vec<DocumentDrawBatch>,
@@ -891,6 +900,19 @@ impl<'a> Graphics<'a> {
         self.overlay_dirty = true;
     }
 
+    pub(crate) fn set_section_surface_lines(&mut self, surfaces: Vec<SurfaceLines>) {
+        self.section_surface.set(surfaces);
+    }
+
+    pub(crate) fn recolor_section_surface_lines(&mut self, colors: impl Iterator<Item = [f32; 4]>) {
+        self.section_surface.recolor(colors);
+    }
+
+    /// The surface lines the section draws, in their colours.
+    pub(crate) fn section_surface_lines(&self) -> &[SurfaceLines] {
+        self.section_surface.surfaces()
+    }
+
     /// Whether a floating egui surface - a tile, card or menu over the canvas -
     /// covers this window position, in physical pixels.
     pub(crate) fn overlay_at_physical_position(&self, x: f32, y: f32) -> bool {
@@ -1186,6 +1208,12 @@ impl<'a> Graphics<'a> {
 
     pub(crate) fn section_slab(&self) -> Option<SectionSlab> {
         self.slice_view.as_ref().map(SliceViewState::slab)
+    }
+
+    /// Whether the section is seen from the side it was entered on, where
+    /// screen right runs along the section; `None` with no section up.
+    pub(crate) fn section_viewed_from_front(&self) -> Option<bool> {
+        self.slice_view.as_ref().map(|slice| slice.viewing_from_front)
     }
 
     /// Turn the section camera to a standard view: the section line itself

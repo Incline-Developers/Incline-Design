@@ -5,18 +5,20 @@ use crate::{
     model::{
         LayerId,
         block_model::BlockModelId,
-        drill_hole::DrillHoleId,
+        drill_hole::{DrillHoleId, OpenDrillHoleDataset},
         formats::{
             MeshFormat,
             csv_block_model::{CsvColumnRole, validate_mapping},
-            csv_drill_hole::{CsvDrillColumnRole, CsvDrillFileMapping, CsvDrillFileRole, CsvDrillPreview, bundle_anchor},
+            csv_drill_hole::{CsvDrillColumnRole, CsvDrillFileMapping, CsvDrillFileRole, CsvDrillPreview, FileShape, WORKSHEET_HEADER, bundle_anchor},
         },
         triangulation::TriangulationId,
     },
     ui::{
+        elements::properties::read_only_row,
         fonts::bold,
         state::{DataMenu, EditorState, OmfExportSection, UiCommand, UiProjectView},
         widgets::{
+            data_table::DataTable,
             explorer::{ExplorerEntry, ExplorerHeader, explorer_note, row_height, stripe_bands},
             menu::{self, DragableMenu, MenuButton, MenuFieldBool, MenuFieldCombo, MenuFieldFilePicker},
             toolbar::GROUP_CORNER_RADIUS,
@@ -142,7 +144,7 @@ pub(crate) fn draw_import_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
                             commands.push(command);
                             close_after_action = true;
                         }
-                        if ui.add(MenuButton::new(tr!("io-default"))).clicked() {
+                        if ui.add(MenuButton::new(tr!("io-reset"))).clicked() {
                             #[cfg(target_arch = "wasm32")]
                             let import_kind = editor.data_menu;
                             reset_import_defaults(editor, project);
@@ -160,7 +162,7 @@ pub(crate) fn draw_import_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
     editor.show_import = show_import;
 }
 
-pub(crate) fn draw_export_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+pub(crate) fn draw_export_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, drill_holes: &[OpenDrillHoleDataset], commands: &mut Vec<UiCommand>) {
     if !editor.show_export {
         return;
     }
@@ -182,13 +184,13 @@ pub(crate) fn draw_export_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
                 ui.allocate_ui(egui::Vec2::new(DETAILS_WIDTH, MENU_HEIGHT - 25.0), |ui| {
                     ui.set_width(DETAILS_WIDTH);
                     ui.set_height(MENU_HEIGHT - 25.);
-                    draw_export_details(ui, editor, project);
+                    draw_export_details(ui, editor, project, drill_holes);
                 });
                 ui.allocate_ui_with_layout(
                     egui::Vec2::new(DETAILS_WIDTH, ui.spacing().interact_size.y),
                     egui::Layout::right_to_left(egui::Align::Center),
                     |ui| {
-                        let command = export_command(editor);
+                        let command = export_command(editor, drill_holes);
                         let confirm = menu::dialog_confirm_pressed(ui.ctx());
                         cancelled = menu::dialog_cancel_pressed(ui.ctx());
                         if (ui.add(MenuButton::new(tr!("io-export")).primary().enabled(command.is_some())).clicked() || confirm)
@@ -197,7 +199,7 @@ pub(crate) fn draw_export_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
                             commands.push(command);
                             close_after_action = true;
                         }
-                        if ui.add(MenuButton::new(tr!("io-default"))).clicked() {
+                        if ui.add(MenuButton::new(tr!("io-reset"))).clicked() {
                             reset_export_defaults(editor, project);
                         }
                     },
@@ -280,6 +282,7 @@ fn draw_export_explorer(ui: &mut egui::Ui, editor: &mut EditorState) {
         });
         ExplorerHeader::new(egui::Id::unique("export_drill_holes_section"), tr!("ws-menubar-drillholes")).show(ui, |ui| {
             draw_entry(ui, editor, &tr!("io-mapped-csv-bundle-csv"), DataMenu::CsvDrillHole);
+            draw_entry(ui, editor, &tr!("io-corrections-worksheet-csv"), DataMenu::CorrectionsWorksheet);
         });
     });
 }
@@ -302,11 +305,11 @@ fn draw_import_details(ui: &mut egui::Ui, editor: &mut EditorState, commands: &m
         DataMenu::CsvBlockModel => draw_import_csv_block_model(ui, editor, commands),
         DataMenu::Geotiff => draw_import_mesh(ui, editor, commands, &tr!("io-import-geotiff")),
         DataMenu::CsvDrillHole => draw_import_csv_drill_holes(ui, editor, commands),
-        DataMenu::None => {}
+        DataMenu::CorrectionsWorksheet | DataMenu::None => {}
     });
 }
 
-fn draw_export_details(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView) {
+fn draw_export_details(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, drill_holes: &[OpenDrillHoleDataset]) {
     ui.push_id(editor.data_menu, |ui| match editor.data_menu {
         DataMenu::Omf => draw_export_omf(ui, editor, project),
         DataMenu::Dxf => draw_export_dxf(ui, editor, project),
@@ -315,6 +318,7 @@ fn draw_export_details(ui: &mut egui::Ui, editor: &mut EditorState, project: &Ui
         DataMenu::Ply => draw_export_mesh(ui, editor, project, &tr!("io-export-ply")),
         DataMenu::CsvBlockModel => draw_export_csv_block_model(ui, editor, project),
         DataMenu::CsvDrillHole => draw_export_csv_drill_holes(ui, editor, project),
+        DataMenu::CorrectionsWorksheet => draw_export_corrections_worksheet(ui, editor, project, drill_holes),
         _ => {}
     });
 }
@@ -517,6 +521,7 @@ fn draw_import_csv_drill_holes(ui: &mut egui::Ui, editor: &mut EditorState, comm
     if editor.import_drill_csv.is_empty() {
         return;
     }
+    let mut moved_collar = None;
     egui::ScrollArea::both().auto_shrink([false, false]).max_height(ui.available_height()).show(ui, |ui| {
         for (file_index, (mapping, preview)) in editor.import_drill_csv.iter_mut().enumerate() {
             ui.push_id(("drill_csv_file", file_index), |ui| {
@@ -532,12 +537,19 @@ fn draw_import_csv_drill_holes(ui: &mut egui::Ui, editor: &mut EditorState, comm
                             CsvDrillFileRole::Interval,
                             CsvDrillFileRole::ExplicitSegments,
                             CsvDrillFileRole::Geophysics,
+                            CsvDrillFileRole::Ignore,
                         ] {
                             ui.selectable_value(&mut mapping.role, role, file_role_label(role));
                         }
                     });
                     if mapping.role != previous {
                         mapping.columns = crate::model::formats::csv_drill_hole::default_columns(mapping.role, &preview.headers);
+                        if mapping.role == CsvDrillFileRole::Collar {
+                            moved_collar = Some(file_index);
+                        }
+                    }
+                    if let Some(reason) = role_reason(mapping.role, preview.shape.as_ref()) {
+                        ui.weak(reason);
                     }
                 });
                 if mapping.role == CsvDrillFileRole::Unassigned {
@@ -547,7 +559,7 @@ fn draw_import_csv_drill_holes(ui: &mut egui::Ui, editor: &mut EditorState, comm
                     for (column, header) in preview.headers.iter().enumerate() {
                         ui.vertical(|ui| {
                             ui.strong(header);
-                            if mapping.role == CsvDrillFileRole::Unassigned {
+                            if matches!(mapping.role, CsvDrillFileRole::Unassigned | CsvDrillFileRole::Ignore) {
                                 ui.weak(tr!("io-unmapped"));
                             } else {
                                 let selected = &mut mapping.columns[column];
@@ -577,6 +589,9 @@ fn draw_import_csv_drill_holes(ui: &mut egui::Ui, editor: &mut EditorState, comm
             });
         }
     });
+    if let Some(keep) = moved_collar {
+        crate::model::formats::csv_drill_hole::keep_collar(&mut editor.import_drill_csv, keep);
+    }
     if geophysics_without_holes(&editor.import_drill_csv) {
         ui.weak(tr!("io-add-collar-file-explicit-segments"));
     }
@@ -590,6 +605,25 @@ fn file_role_label(role: CsvDrillFileRole) -> String {
         CsvDrillFileRole::Interval => tr!("io-interval"),
         CsvDrillFileRole::ExplicitSegments => tr!("io-explicit-segments"),
         CsvDrillFileRole::Geophysics => tr!("io-downhole-geophysics"),
+        CsvDrillFileRole::Ignore => tr!("io-ignore-file"),
+    }
+}
+
+/// Why a file was given its purpose, while it still has it.
+fn role_reason(role: CsvDrillFileRole, shape: Option<&FileShape>) -> Option<String> {
+    let looks_like = shape?.looks_like;
+    match (role, looks_like) {
+        (CsvDrillFileRole::Ignore, Some(CsvDrillFileRole::Collar)) => Some(tr!("io-role-reason-also-collar")),
+        (CsvDrillFileRole::Ignore, None) => Some(tr!("io-role-reason-not-recognised")),
+        (role, Some(found)) if role == found => match role {
+            CsvDrillFileRole::Collar => Some(tr!("io-role-reason-collar")),
+            CsvDrillFileRole::Survey => Some(tr!("io-role-reason-survey")),
+            CsvDrillFileRole::Interval => Some(tr!("io-role-reason-interval")),
+            CsvDrillFileRole::ExplicitSegments => Some(tr!("io-role-reason-segments")),
+            CsvDrillFileRole::Geophysics => Some(tr!("io-role-reason-geophysics")),
+            CsvDrillFileRole::Unassigned | CsvDrillFileRole::Ignore => None,
+        },
+        _ => None,
     }
 }
 
@@ -613,6 +647,7 @@ fn column_role_label(role: &CsvDrillColumnRole) -> String {
         CsvDrillColumnRole::EndNorth => tr!("io-end-y"),
         CsvDrillColumnRole::EndElevation => tr!("io-end-z"),
         CsvDrillColumnRole::Diameter => tr!("io-diameter"),
+        CsvDrillColumnRole::TotalDepth => tr!("io-total-depth"),
         CsvDrillColumnRole::Gamma => tr!("io-gamma-api"),
         CsvDrillColumnRole::LongDensity => tr!("io-long-spaced-density-g-cc"),
         CsvDrillColumnRole::ShortDensity => tr!("io-short-spaced-density-g-cc"),
@@ -636,12 +671,13 @@ fn column_role_help(file: CsvDrillFileRole, column: &CsvDrillColumnRole) -> Opti
 fn available_column_roles(role: CsvDrillFileRole, header: &str) -> Vec<CsvDrillColumnRole> {
     let mut roles = vec![CsvDrillColumnRole::Ignore, CsvDrillColumnRole::Dhid];
     match role {
-        CsvDrillFileRole::Unassigned => roles.truncate(1),
+        CsvDrillFileRole::Unassigned | CsvDrillFileRole::Ignore => roles.truncate(1),
         CsvDrillFileRole::Collar => roles.extend([
             CsvDrillColumnRole::East,
             CsvDrillColumnRole::North,
             CsvDrillColumnRole::Elevation,
             CsvDrillColumnRole::Diameter,
+            CsvDrillColumnRole::TotalDepth,
         ]),
         CsvDrillFileRole::Survey => roles.extend([
             CsvDrillColumnRole::Depth,
@@ -705,6 +741,74 @@ fn draw_export_csv_drill_holes(ui: &mut egui::Ui, editor: &mut EditorState, proj
     ensure_export_drill_hole(editor, project);
     drill_hole_combo(ui, "csv_export_drill_hole", &tr!("io-dataset"), project, &mut editor.export_drill_hole);
     ui.small(tr!("io-writes-three-files-beside-name"));
+}
+
+/// Worksheet lines the export shows before the file is written.
+const WORKSHEET_PREVIEW_LINES: usize = 20;
+
+/// What the worksheet export reports about one set, grouped once per
+/// revision of it rather than every frame.
+#[derive(Clone)]
+struct WorksheetPreview {
+    key: (u64, usize),
+    records: usize,
+    holes: usize,
+    lines: usize,
+    rows: std::sync::Arc<Vec<Vec<String>>>,
+}
+
+fn worksheet_preview(ui: &egui::Ui, dataset: &OpenDrillHoleDataset) -> WorksheetPreview {
+    let id = egui::Id::unique(("corrections_worksheet_preview", dataset.id));
+    let corrections = &dataset.dataset.corrections;
+    let key = (dataset.state.revision(), corrections.len());
+    if let Some(cached) = ui.data(|data| data.get_temp::<WorksheetPreview>(id)).filter(|cached| cached.key == key) {
+        return cached;
+    }
+    let mut rows = crate::model::formats::csv_drill_hole::worksheet_rows(corrections);
+    let lines = rows.len();
+    rows.truncate(WORKSHEET_PREVIEW_LINES);
+    let preview = WorksheetPreview {
+        key,
+        records: corrections.len(),
+        holes: crate::model::formats::csv_drill_hole::corrections_hole_count(corrections),
+        lines,
+        rows: std::sync::Arc::new(rows),
+    };
+    ui.data_mut(|data| data.insert_temp(id, preview.clone()));
+    preview
+}
+
+/// The corrections worksheet: the set picker, what the files will hold, and
+/// the first lines as the senior will read them.
+fn draw_export_corrections_worksheet(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, drill_holes: &[OpenDrillHoleDataset]) {
+    ui.heading(tr!("io-export-corrections-worksheet"));
+    ensure_export_drill_hole(editor, project);
+    drill_hole_combo(ui, "corrections_worksheet_drill_hole", &tr!("io-dataset"), project, &mut editor.export_drill_hole);
+    let Some(dataset) = editor
+        .export_drill_hole
+        .and_then(|id| drill_holes.iter().find(|dataset| dataset.id == id && dataset.state.loaded))
+    else {
+        return;
+    };
+    let preview = worksheet_preview(ui, dataset);
+    read_only_row(ui, &tr!("io-worksheet-records"), &preview.records.to_string());
+    read_only_row(ui, &tr!("io-worksheet-lines"), &preview.lines.to_string());
+    read_only_row(ui, &tr!("io-worksheet-holes"), &preview.holes.to_string());
+    if preview.records == 0 {
+        menu::menu_note(ui, tr!("io-worksheet-no-corrections"));
+        return;
+    }
+    ui.small(tr!("io-worksheet-writes-two-files"));
+    if preview.lines > preview.rows.len() {
+        ui.small(tr!("io-worksheet-preview-first", shown = preview.rows.len().to_string(), count = preview.lines.to_string()));
+    }
+    // The file's own column names, as written, so the preview matches the file.
+    let header = WORKSHEET_HEADER.map(str::to_owned);
+    let rows = &preview.rows;
+    let cells = |row: usize| rows.get(row).cloned().unwrap_or_default();
+    DataTable::new(("corrections_worksheet_table", dataset.id), &header, rows.len(), &cells)
+        .fingerprint(preview.key.0)
+        .show(ui);
 }
 
 fn layer_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, field_label: &str, project: &UiProjectView, selected: &mut Option<LayerId>) {
@@ -801,7 +905,7 @@ fn reset_export_defaults(editor: &mut EditorState, project: &UiProjectView) {
         DataMenu::CsvBlockModel => {
             editor.export_block_model = first_loaded_block_model(project);
         }
-        DataMenu::CsvDrillHole => {
+        DataMenu::CsvDrillHole | DataMenu::CorrectionsWorksheet => {
             editor.export_drill_hole = first_loaded_drill_hole(project);
         }
         _ => {}
@@ -886,31 +990,40 @@ fn import_command(editor: &EditorState) -> Option<UiCommand> {
             if editor.import_csv_error.is_none()
                 && !editor.import_drill_csv.is_empty()
                 && editor.import_drill_csv.iter().all(|(mapping, _)| mapping.role != CsvDrillFileRole::Unassigned)
+                && editor.import_drill_csv.iter().any(|(mapping, _)| mapping.role != CsvDrillFileRole::Ignore)
                 && !geophysics_without_holes(&editor.import_drill_csv) =>
         {
-            let anchor = bundle_anchor(editor.import_drill_csv.iter().map(|(mapping, _)| mapping));
+            let read = editor
+                .import_drill_csv
+                .iter()
+                .map(|(mapping, _)| mapping)
+                .filter(|mapping| mapping.role != CsvDrillFileRole::Ignore)
+                .collect::<Vec<_>>();
+            let anchor = bundle_anchor(read.iter().copied());
             let name = anchor
-                .or_else(|| editor.import_drill_csv.first().map(|(mapping, _)| mapping))?
+                .or_else(|| read.first().copied())?
                 .path
                 .file_stem()
                 .and_then(|stem| stem.to_str())
                 .map(str::to_owned)
                 .unwrap_or_else(|| tr!("io-drill-holes"));
             Some(UiCommand::ImportDrillHole(crate::model::drill_hole::DrillHoleSource::Csv {
-                name: if editor.import_drill_csv.len() > 1 {
-                    tr!("io-name-count-files", name = name.to_string(), count = (editor.import_drill_csv.len() - 1).to_string())
+                name: if read.len() > 1 {
+                    tr!("io-name-count-files", name = name.to_string(), count = (read.len() - 1).to_string())
                 } else {
                     name
                 },
+                // Ignored files leave the bundle App-side, in step with the
+                // browser's picked files.
                 files: editor.import_drill_csv.iter().map(|(mapping, _)| mapping.clone()).collect(),
                 browser_path: None,
             }))
         }
-        DataMenu::CsvDrillHole | DataMenu::None => None,
+        DataMenu::CsvDrillHole | DataMenu::CorrectionsWorksheet | DataMenu::None => None,
     }
 }
 
-fn export_command(editor: &EditorState) -> Option<UiCommand> {
+fn export_command(editor: &EditorState, drill_holes: &[OpenDrillHoleDataset]) -> Option<UiCommand> {
     match editor.data_menu {
         DataMenu::Omf if editor.export_omf.is_empty() => None,
         DataMenu::Omf => Some(UiCommand::ExportOmf(Box::new(editor.export_omf.clone()))),
@@ -922,6 +1035,10 @@ fn export_command(editor: &EditorState) -> Option<UiCommand> {
         }
         DataMenu::CsvBlockModel => editor.export_block_model.map(UiCommand::ExportBlockModelCsv),
         DataMenu::CsvDrillHole => editor.export_drill_hole.map(UiCommand::ExportDrillHoleCsv),
+        DataMenu::CorrectionsWorksheet => editor
+            .export_drill_hole
+            .filter(|id| drill_holes.iter().any(|dataset| dataset.id == *id && !dataset.dataset.corrections.is_empty()))
+            .map(UiCommand::ExportCorrectionsWorksheet),
         _ => None,
     }
 }
@@ -955,7 +1072,7 @@ fn is_import_menu(data_menu: DataMenu) -> bool {
 fn is_export_menu(data_menu: DataMenu) -> bool {
     matches!(
         data_menu,
-        DataMenu::Omf | DataMenu::Dxf | DataMenu::Obj | DataMenu::Stl | DataMenu::Ply | DataMenu::CsvBlockModel | DataMenu::CsvDrillHole
+        DataMenu::Omf | DataMenu::Dxf | DataMenu::Obj | DataMenu::Stl | DataMenu::Ply | DataMenu::CsvBlockModel | DataMenu::CsvDrillHole | DataMenu::CorrectionsWorksheet
     )
 }
 

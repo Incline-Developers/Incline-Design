@@ -1,12 +1,13 @@
 use glam::DVec3;
 
 use crate::{
-    app::{App, CollarMoveSession, GizmoDragConstraint, GizmoDragState, MoveSession},
+    app::{App, CollarMoveSession, GizmoDragConstraint, GizmoDragState, MoveSession, VertexDrag},
     logging::CommandReportSpec,
     model::{
         Command, Object, ObjectId, ObjectPoint, SceneEntityId,
         drill_hole::{DrillHoleRef, HolePlacement},
     },
+    rendering::camera::SectionSlab,
     ui::state::ActiveTool,
 };
 
@@ -20,6 +21,7 @@ impl<'a> App<'a> {
             self.apply_collar_move_delta(delta);
             return;
         }
+        let delta = self.held_to_section(delta);
         self.ensure_move_session_original();
         self.preview_move_delta(delta);
         let Some(session) = self.move_session_original.take() else {
@@ -62,6 +64,7 @@ impl<'a> App<'a> {
     /// every path that has to abandon an edit in progress.
     pub(crate) fn cancel_move_delta(&mut self) {
         self.gizmo_drag = None;
+        self.vertex_drag = None;
         self.editor.gizmo_drag_axis_index = None;
         self.editor.gizmo_drag_plane_index = None;
         self.restore_move_session_original();
@@ -80,6 +83,7 @@ impl<'a> App<'a> {
     /// paths so that an in-progress move is preserved rather than silently lost.
     pub(crate) fn commit_pending_move(&mut self) {
         self.gizmo_drag = None;
+        self.vertex_drag = None;
         self.collar_rotate_drag = None;
         self.editor.gizmo_drag_axis_index = None;
         self.editor.gizmo_drag_plane_index = None;
@@ -211,6 +215,7 @@ impl<'a> App<'a> {
                 gizmo.start_delta + axes[0] * first + axes[1] * second
             }
         };
+        let world_delta = self.held_to_section(world_delta);
         self.editor.move_panel_delta = [world_delta.x, world_delta.y, world_delta.z];
         self.preview_move_delta(world_delta);
         self.invalidate_geometry();
@@ -269,6 +274,7 @@ impl<'a> App<'a> {
             self.preview_collar_move_delta(delta);
             return;
         }
+        let delta = self.held_to_section(delta);
         let Some(session) = self.move_session_original.as_ref() else {
             return;
         };
@@ -283,6 +289,15 @@ impl<'a> App<'a> {
                 translate_move_target(&mut moved, vertex_target, delta);
                 project.project.document.replace_object(moved);
             }
+        }
+    }
+
+    /// On a section a move stays on it: the part of `delta` across the
+    /// section plane is dropped, typed or dragged.
+    fn held_to_section(&self, delta: DVec3) -> DVec3 {
+        match self.graphics.as_ref().and_then(|graphics| graphics.section_slab()) {
+            Some(slab) => delta - slab.normal * delta.dot(slab.normal),
+            None => delta,
         }
     }
 
@@ -607,6 +622,197 @@ fn plane_world_delta(screen_delta: (f32, f32), screen_basis: [(f64, f64); 2]) ->
     let dx = f64::from(screen_delta.0);
     let dy = f64::from(screen_delta.1);
     Some(((dx * by - dy * bx) / determinant, (ax * dy - ay * dx) / determinant))
+}
+
+/// How far a press on a vertex travels, in points, before it drags.
+const VERTEX_DRAG_START_PT: f32 = 4.0;
+
+impl<'a> App<'a> {
+    /// Geology's Move: a press that picked a vertex drags it once the mouse
+    /// moves; a click without moving leaves the gizmo on it, as before.
+    pub(crate) fn begin_vertex_drag(&mut self) {
+        self.vertex_drag = None;
+        // Holding another vertex ends the last one's undo step.
+        if self.editor.vertex_edit_run.is_some_and(|(held, _)| Some(held) != self.editor.move_vertex_target) {
+            self.editor.vertex_edit_run = None;
+        }
+        if !self.editor.active_workspace.has_drawing_aids() {
+            return;
+        }
+        let (Some(press_px), Some(start)) = (self.editor.cursor_screen_px, self.held_vertex_position()) else {
+            return;
+        };
+        let Some(start_world) = self.graphics.as_ref().and_then(|graphics| graphics.cursor_world(start.z)) else {
+            return;
+        };
+        self.vertex_drag = Some(VertexDrag {
+            press_px,
+            level: start.z,
+            start_world,
+            moved: false,
+        });
+    }
+
+    /// The held vertex follows the cursor: on its own level in plan, in the
+    /// plane on a section.
+    pub(crate) fn drag_vertex_to_cursor(&mut self) {
+        let (Some(drag), Some(cursor_px)) = (self.vertex_drag, self.editor.cursor_screen_px) else {
+            return;
+        };
+        if !self.editor.active_workspace.has_drawing_aids() || self.editor.active_tool != ActiveTool::Move {
+            self.vertex_drag = None;
+            return;
+        }
+        if !drag.moved {
+            let travelled = (cursor_px.0 - drag.press_px.0).hypot(cursor_px.1 - drag.press_px.1);
+            if travelled < self.points_to_px(VERTEX_DRAG_START_PT) {
+                return;
+            }
+            self.vertex_drag = Some(VertexDrag { moved: true, ..drag });
+        }
+        let Some(graphics) = self.graphics.as_ref() else {
+            return;
+        };
+        let Some(world) = graphics.cursor_world(drag.level) else {
+            return;
+        };
+        let delta = dragged_delta(drag.start_world, world, graphics.section_slab());
+        self.ensure_move_session_original();
+        self.preview_move_delta(delta);
+        self.editor.move_panel_delta = delta.to_array();
+        self.editor.move_panel_last_preview = self.editor.move_panel_delta;
+        self.invalidate_geometry();
+        self.invalidate_overlay();
+    }
+
+    /// Put the dragged vertex down, joining the vertex's undo step, and
+    /// keep it held.
+    pub(crate) fn finish_vertex_drag(&mut self) {
+        let Some(drag) = self.vertex_drag.take() else {
+            return;
+        };
+        let Some(target) = self.editor.move_vertex_target.filter(|_| drag.moved) else {
+            return;
+        };
+        let delta = DVec3::from_array(self.editor.move_panel_delta);
+        self.record_vertex_edit(target, |app| app.apply_move_delta(delta));
+        self.hold_vertex(target);
+    }
+
+    /// The Drag a Vertex row: Move armed, unless it is already.
+    pub(crate) fn arm_drag_vertex(&mut self) {
+        if self.editor.active_tool != ActiveTool::Move {
+            self.set_active_tool_from_toolbar(ActiveTool::Move);
+        }
+    }
+
+    /// The Nudge RL row: Move armed if it is not, and the panel open.
+    pub(crate) fn open_nudge_panel(&mut self) {
+        self.arm_drag_vertex();
+        self.editor.nudge_panel_open = self.editor.active_tool == ActiveTool::Move;
+        self.redraw_requested = true;
+    }
+
+    /// Raise the vertex Move holds by `rise` metres, lower it if negative:
+    /// each nudge joins the vertex's undo step, and the vertex stays held.
+    pub(crate) fn nudge_held_vertex(&mut self, rise: f64) {
+        if !self.editing_ready() || !rise.is_finite() || rise == 0.0 || self.editor.active_tool != ActiveTool::Move {
+            return;
+        }
+        // Undo, or an edit by another path, may have taken the vertex away.
+        let Some(target) = self.resolve_held_vertex() else {
+            self.cancel_move_delta();
+            return;
+        };
+        if self.held_vertex_position().is_none() {
+            self.cancel_move_delta();
+            return;
+        }
+        // A move standing over the vertex, dragged or typed, lands first.
+        self.commit_pending_move();
+        self.hold_vertex(target);
+        self.record_vertex_edit(target, |app| app.apply_move_delta(DVec3::Z * rise));
+        self.hold_vertex(target);
+    }
+
+    /// Run `edit` on held vertex `target` so its undo step joins the run of
+    /// drags and nudges already made on that vertex: one undo takes it back
+    /// to where the work on it began. Another vertex starts a run of its own.
+    fn record_vertex_edit(&mut self, target: (ObjectId, ObjectPoint), edit: impl FnOnce(&mut Self)) {
+        self.vertex_edit_revision = Some(run_onto(self.editor.vertex_edit_run, target));
+        edit(self);
+        self.editor.vertex_edit_run = self.vertex_edit_revision.take().flatten().map(|revision| (target, revision));
+    }
+
+    /// Where the vertex Move holds is now, if it is still there and may be
+    /// edited: locked and hidden strings are refused.
+    fn held_vertex_position(&self) -> Option<DVec3> {
+        let (id, point) = self.editor.move_vertex_target?;
+        if !self.editor.canvas_edits_object(self.active_document(), id) {
+            return None;
+        }
+        move_target_position(self.active_document().get_object(id)?, point)
+    }
+
+    /// The vertex the last drag or nudge held, found again by where it was
+    /// left if its string was renumbered since; `None` when it is gone.
+    /// A vertex Move picked by other means is taken as it is.
+    fn resolve_held_vertex(&mut self) -> Option<(ObjectId, ObjectPoint)> {
+        let target = self.editor.move_vertex_target?;
+        let Some((_, at)) = self.editor.held_vertex_at.filter(|(held, _)| *held == target) else {
+            return Some(target);
+        };
+        let object = self.active_document().get_object(target.0)?;
+        if move_target_position(object, target.1).is_some_and(|now| now.distance_squared(at) <= 1.0e-18) {
+            return Some(target);
+        }
+        let Object::Polyline { verts, .. } = object else {
+            return None;
+        };
+        let index = verts.iter().position(|vertex| vertex.pos.distance_squared(at) <= 1.0e-18)?;
+        let found = (target.0, ObjectPoint::Vertex(index));
+        self.hold_vertex(found);
+        Some(found)
+    }
+
+    fn hold_vertex(&mut self, target: (ObjectId, ObjectPoint)) {
+        self.editor.held_vertex_at = self
+            .active_document()
+            .get_object(target.0)
+            .and_then(|object| move_target_position(object, target.1))
+            .map(|at| (target, at));
+        self.editor.move_vertex_target = Some(target);
+        self.editor.selected_handles.clear();
+        self.editor.selected_handles.insert(SceneEntityId::Object(target.0));
+        self.invalidate_geometry();
+        self.invalidate_overlay();
+    }
+}
+
+/// The revision a drag or nudge of `target` may extend: the run's, if the
+/// run is on that same vertex.
+fn run_onto(run: Option<((ObjectId, ObjectPoint), u64)>, target: (ObjectId, ObjectPoint)) -> Option<u64> {
+    run.filter(|(held, _)| *held == target).map(|(_, revision)| revision)
+}
+
+/// How far a drag from `start` to `now` moves the vertex: across the
+/// section's plane not at all, and in plan only on the level.
+fn dragged_delta(start: DVec3, now: DVec3, slab: Option<SectionSlab>) -> DVec3 {
+    let delta = now - start;
+    match slab {
+        Some(slab) => delta - slab.normal * delta.dot(slab.normal),
+        None => DVec3::new(delta.x, delta.y, 0.0),
+    }
+}
+
+/// Where the point a Move vertex target names is on `object`.
+pub(crate) fn move_target_position(object: &Object, point: ObjectPoint) -> Option<DVec3> {
+    match (object, point) {
+        (Object::Polyline { verts, .. }, ObjectPoint::Vertex(index)) => verts.get(index).map(|vertex| vertex.pos),
+        (Object::Circle { center, .. }, ObjectPoint::Center) => Some(*center),
+        (Object::Point { pos, .. }, ObjectPoint::Vertex(0)) => Some(*pos),
+        _ => None,
+    }
 }
 
 fn translate_move_target(object: &mut Object, vertex_target: Option<(ObjectId, ObjectPoint)>, delta: DVec3) {

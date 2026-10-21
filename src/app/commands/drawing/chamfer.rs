@@ -4,10 +4,12 @@ use glam::DVec3;
 
 use crate::{
     app::{App, PICK_THRESHOLD_PX},
+    i18n::tr,
     logging::CommandReportSpec,
     model::{Command, Object, ObjectPoint, PolyVertex},
-    rendering::pick,
+    rendering::{camera::SectionSlab, pick},
     ui::state::ActiveTool,
+    userspace_warn,
 };
 
 impl<'a> App<'a> {
@@ -39,13 +41,21 @@ impl<'a> App<'a> {
             return;
         }
 
-        // Only accept real closed polylines. Modifying tools are not restricted
-        // to the active layer.
+        // Only accept real corners (`chamfers_corner`). Modifying tools are not
+        // restricted to the active layer.
+        let on_section = self.drawing_section().is_some();
         if !self
             .active_document()
             .get_object(oid)
-            .is_some_and(|o| matches!(o, Object::Polyline { closed: true, verts, .. } if verts.len() >= 3))
+            .is_some_and(|o| matches!(o, Object::Polyline { closed, verts, .. } if chamfers_corner(verts, *closed, vi, on_section)))
         {
+            return;
+        }
+        if let Some(slab) = self.drawing_section()
+            && let Some(Object::Polyline { verts, .. }) = self.active_document().get_object(oid)
+            && !rounds_on_section(verts, vi, slab)
+        {
+            userspace_warn!("{}", tr!("cmd-chamfer-no-corner-on-section"));
             return;
         }
 
@@ -62,6 +72,7 @@ impl<'a> App<'a> {
         if !self.activate_project_for_object(oid) {
             return;
         }
+        let slab = self.drawing_section();
         let Some(project) = self.workspace.active_project_mut() else {
             return;
         };
@@ -69,11 +80,22 @@ impl<'a> App<'a> {
         let Some(obj) = doc.get_object(oid) else {
             return;
         };
-        let Object::Polyline { verts, closed: true, .. } = obj else {
+        let Object::Polyline { verts, closed, .. } = obj else {
             return;
         };
+        if !chamfers_corner(verts, *closed, ci, slab.is_some()) {
+            return;
+        }
+        // The section may have moved off the corner since it was picked.
+        if slab.is_some_and(|slab| !rounds_on_section(verts, ci, slab)) {
+            userspace_warn!("{}", tr!("cmd-chamfer-no-corner-on-section"));
+            self.editor.chamfer_poly_id = None;
+            self.editor.chamfer_corner_index = None;
+            self.invalidate_overlay();
+            return;
+        }
         let before = obj.clone();
-        let new_verts = chamfer_corner(verts, ci, self.editor.chamfer_radius, self.editor.chamfer_segments);
+        let new_verts = chamfer_corner_on(verts, ci, self.editor.chamfer_radius, self.editor.chamfer_segments, slab);
         let mut after = before.clone();
         if let Object::Polyline { verts, .. } = &mut after {
             *verts = new_verts;
@@ -107,6 +129,54 @@ impl<'a> App<'a> {
         self.editor.active_tool = ActiveTool::None;
         self.invalidate_overlay();
     }
+}
+
+/// Whether vertex `corner` is a corner Chamfer rounds: any on a ring, and on
+/// a section an inner one of an open string too.
+pub(crate) fn chamfers_corner(verts: &[PolyVertex], closed: bool, corner: usize, on_section: bool) -> bool {
+    verts.len() >= 3 && corner < verts.len() && (closed || (on_section && corner > 0 && corner + 1 < verts.len()))
+}
+
+/// Whether `corner` rounds on `slab`: it and both neighbours lie in the slab
+/// and the string bends there in the section's plane.
+pub(crate) fn rounds_on_section(verts: &[PolyVertex], corner: usize, slab: SectionSlab) -> bool {
+    let n = verts.len();
+    let near = [(corner + n - 1) % n, corner, (corner + 1) % n];
+    near.iter().all(|&index| slab.contains(verts[index].pos)) && chamfer_max_radius_on(verts, corner, Some(slab)) < f64::MAX
+}
+
+/// `verts` in `slab`'s frame, where the plan kernels below work in its plane.
+fn frame_verts(verts: &[PolyVertex], slab: SectionSlab) -> Vec<PolyVertex> {
+    verts
+        .iter()
+        .map(|vertex| PolyVertex {
+            pos: slab.frame_coords(vertex.pos),
+            ..*vertex
+        })
+        .collect()
+}
+
+/// [`chamfer_max_radius`], in the plane of `slab` when one is given.
+pub(crate) fn chamfer_max_radius_on(verts: &[PolyVertex], corner_index: usize, slab: Option<SectionSlab>) -> f64 {
+    match slab {
+        Some(slab) => chamfer_max_radius(&frame_verts(verts, slab), corner_index),
+        None => chamfer_max_radius(verts, corner_index),
+    }
+}
+
+/// [`chamfer_corner`], in the plane of `slab` when one is given.
+pub(crate) fn chamfer_corner_on(verts: &[PolyVertex], corner_index: usize, radius: f64, segments: u32, slab: Option<SectionSlab>) -> Vec<PolyVertex> {
+    let Some(slab) = slab else {
+        return chamfer_corner(verts, corner_index, radius, segments);
+    };
+    let rounded = chamfer_corner(&frame_verts(verts, slab), corner_index, radius, segments);
+    rounded
+        .into_iter()
+        .map(|vertex| PolyVertex {
+            pos: slab.world_from_frame(vertex.pos),
+            ..vertex
+        })
+        .collect()
 }
 
 /// Compute the maximum chamfer radius for a given corner without distorting

@@ -10,12 +10,42 @@ use crate::{
     i18n::tr,
     model::{
         Command, Object, ObjectId,
-        object_edit::{drift_detected, validate_object},
+        object_edit::{drift_detected, reverse_vertices, validate_object},
     },
     userspace_log, userspace_warn,
 };
 
 impl<'a> App<'a> {
+    /// Reverse every selected string as one undoable batch, the way the
+    /// dialog's Reverse does one; hidden and locked strings are left alone.
+    pub(crate) fn reverse_selected_strings(&mut self) {
+        let selected = self.selected_polylines();
+        let Some(document) = self.workspace.active_document() else {
+            return;
+        };
+        let replacements: Vec<Command> = selected
+            .into_iter()
+            .filter(|&id| self.editor.canvas_edits_object(document, id))
+            .filter_map(|id| {
+                let before = document.get_object(id)?.clone();
+                let mut after = before.clone();
+                let Object::Polyline { verts, closed, .. } = &mut after else {
+                    return None;
+                };
+                reverse_vertices(verts, *closed);
+                (before != after).then_some(Command::Replace { before, after })
+            })
+            .collect();
+        if replacements.is_empty() {
+            userspace_warn!("{}", tr!("cmd-object-edit-no-strings-reverse"));
+            return;
+        }
+        let count = replacements.len();
+        self.execute_edit(Command::Batch(replacements));
+        userspace_log!("{}", tr!("cmd-object-edit-reversed-strings", count = count.to_string()));
+        self.invalidate_geometry();
+    }
+
     /// Open the "Edit Object" dialog on `id`, seeding its working copy from
     /// the active project's document (not `scene_document`, the read-only
     /// composite: the dialog needs the editable copy).

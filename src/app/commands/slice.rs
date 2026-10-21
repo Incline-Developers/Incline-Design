@@ -1,8 +1,15 @@
 //! Vertical slice view: two-click line placement and mode enter/exit.
 
-use glam::DVec2;
+use glam::{DVec2, DVec3};
 
-use crate::{app::App, i18n::tr, ui::state::ActiveTool, userspace_log};
+use crate::{
+    app::App,
+    i18n::tr,
+    model::{Command, Document, FillStyle, Layer, Object, ObjectColor, PolyVertex, SectionKind, kernel::XY_TOL, project::unique_item_name, triangulation::OpenTriangulation},
+    rendering::{camera::SectionSlab, scene::section_surface_lines::SurfaceLines},
+    ui::state::{ActiveTool, EditorState},
+    userspace_log, userspace_warn,
+};
 
 impl<'a> App<'a> {
     /// Canvas click while the Vertical Slice tool is armed. First click
@@ -84,6 +91,7 @@ impl<'a> App<'a> {
         if !self.editor.slice_mode_enabled {
             return;
         }
+        self.forget_section_picks();
         self.editor.slice_mode_enabled = false;
         self.editor.slice_preview_detached = false;
         self.editor.slice_preview_navigation.reset();
@@ -100,6 +108,33 @@ impl<'a> App<'a> {
         self.clear_rotation_centre();
         self.redraw_requested = true;
         userspace_log!("{}", tr!("cmd-slice-exited-slice-view"));
+    }
+
+    /// Offset, Chamfer and Relimit picks made in a section's plane mean nothing
+    /// in plan, so each tool stays armed one step back: Offset at its dialog,
+    /// Chamfer and Relimit waiting for the corner or target pick.
+    fn forget_section_picks(&mut self) {
+        if self.drawing_section().is_none() {
+            return;
+        }
+        let editor = &mut self.editor;
+        if editor.offset_awaiting_side_pick {
+            editor.offset_awaiting_side_pick = false;
+            editor.offset_dialog_open = true;
+            editor.offset_preview_world.clear();
+            editor.offset_preview_screen_px.clear();
+            editor.offset_preview_ranges.clear();
+        }
+        editor.chamfer_poly_id = None;
+        editor.chamfer_corner_index = None;
+        editor.chamfer_gizmo_drag_start_px = None;
+        if editor.relimit_confirming_end {
+            editor.relimit_confirming_end = false;
+            editor.relimit_waiting_for_pick = true;
+            editor.relimit_second_id = None;
+            editor.relimit_candidates.clear();
+        }
+        self.invalidate_overlay();
     }
 
     /// Reset View while sliced: square the camera to the section plane, then
@@ -150,6 +185,82 @@ impl<'a> App<'a> {
         userspace_log!("{}", tr!("cmd-slice-set-section-grid-enabled", enabled = enabled.to_string()));
     }
 
+    /// Surface Lines on Section: switch the lines on or off. Not persisted
+    /// with the project.
+    pub(crate) fn toggle_section_surface_lines(&mut self) {
+        self.editor.section_surface_lines = !self.editor.section_surface_lines;
+        self.redraw_requested = true;
+        userspace_log!("{}", tr!("cmd-slice-set-surface-lines", enabled = self.editor.section_surface_lines.to_string()));
+    }
+
+    /// Save Surface Lines as Strings: the lines the section draws, written
+    /// to a new layer as ordinary strings, one per line in its surface's
+    /// colour, so they can be edited and plotted. One undo step.
+    pub(crate) fn save_section_surface_lines(&mut self) {
+        let section_up = self.graphics.as_ref().is_some_and(|graphics| graphics.section_slab().is_some());
+        if !section_up || !self.editor.section_surface_lines_on() {
+            userspace_warn!("{}", tr!("cmd-slice-save-surface-lines-off"));
+            return;
+        }
+        // What is saved is what is drawn: bring the drawn lines up to date,
+        // which cuts only if the plane or a surface changed, then save them.
+        self.refresh_section_surface_lines();
+        let Some(graphics) = self.graphics.as_ref() else {
+            return;
+        };
+        let surfaces = graphics.section_surface_lines();
+        let Some(project) = self.workspace.active_project_mut() else {
+            userspace_warn!("{}", tr!("cmd-slice-open-project-save-surface-lines"));
+            return;
+        };
+        let Some((layer, objects)) = section_lines_layer(&mut project.project.document, surfaces) else {
+            userspace_warn!("{}", tr!("cmd-slice-no-surface-crosses-section"));
+            return;
+        };
+        let crossing = surfaces.iter().filter(|surface| !surface.lines.is_empty()).count();
+        let (layer_id, name, count) = (layer.id, layer.name.clone(), objects.len());
+        self.execute_edit(Command::AddLayerSnapshot { layer, objects });
+        self.editor.active_layer = Some(layer_id);
+        userspace_log!(
+            "{}",
+            tr!("cmd-slice-saved-surface-lines", count = count.to_string(), surfaces = crossing.to_string(), layer = name)
+        );
+        self.invalidate_geometry();
+    }
+
+    /// Cut the shown surfaces along the section again, only when the plane, a
+    /// surface or the switch changed since the last cut: a still section
+    /// costs a hash a frame, not a pass over every triangle. A colour change
+    /// recolours the cached lines without cutting.
+    pub(crate) fn refresh_section_surface_lines(&mut self) {
+        let Some(graphics) = self.graphics.as_mut() else {
+            return;
+        };
+        let slab = graphics.section_slab();
+        let key = section_surface_lines_key(&self.editor, slab, &self.triangulations);
+        if key != self.section_surface_lines_key {
+            self.section_surface_lines_key = key;
+            let mut surfaces = Vec::new();
+            if let (Some(_), Some(slab)) = (key, slab) {
+                for triangulation in shown_surfaces(&self.editor, &self.triangulations) {
+                    let lines = crate::app::commands::triangulation::section_surface_lines(&triangulation.mesh, &triangulation.spatial, &slab);
+                    surfaces.push(SurfaceLines {
+                        lines,
+                        color: surface_line_color(triangulation),
+                    });
+                }
+            }
+            self.section_surface_colors = surfaces.iter().map(|surface| surface.color).collect();
+            graphics.set_section_surface_lines(surfaces);
+        } else if key.is_some() {
+            let shown = || shown_surfaces(&self.editor, &self.triangulations).map(surface_line_color);
+            if !shown().eq(self.section_surface_colors.iter().copied()) {
+                self.section_surface_colors = shown().collect();
+                graphics.recolor_section_surface_lines(self.section_surface_colors.iter().copied());
+            }
+        }
+    }
+
     /// Re-places the cursor after a camera move with no mouse event behind it.
     /// Walking the section carries its targets past a still mouse, so the snap
     /// is asked again here rather than dropped; off any target the cursor
@@ -177,4 +288,89 @@ impl<'a> App<'a> {
             self.invalidate_overlay();
         }
     }
+}
+
+/// The surfaces a section draws: loaded and not hidden.
+fn shown_surfaces<'t>(editor: &'t EditorState, triangulations: &'t [OpenTriangulation]) -> impl Iterator<Item = &'t OpenTriangulation> {
+    triangulations
+        .iter()
+        .filter(|triangulation| triangulation.state.loaded && !editor.hidden_handles.contains(&triangulation.entity_id()))
+}
+
+/// The colour a surface's line is drawn in.
+fn surface_line_color(triangulation: &OpenTriangulation) -> [f32; 4] {
+    let [red, green, blue, _] = triangulation.color;
+    [red, green, blue, 1.0]
+}
+
+/// The layer Save Surface Lines as Strings adds, made as the contour command
+/// makes its own, and one string per cut line on it; `None` when no surface
+/// crosses the section.
+fn section_lines_layer(document: &mut Document, surfaces: &[SurfaceLines]) -> Option<(Layer, Vec<Object>)> {
+    if surfaces.iter().all(|surface| surface.lines.is_empty()) {
+        return None;
+    }
+    let layer_id = document.allocate_layer_id();
+    let layer = Layer {
+        id: layer_id,
+        name: unique_item_name(tr!("cmd-slice-section-lines-layer"), document.layers().iter().map(|layer| layer.name.as_str())),
+        color_index: None,
+        color: [1.0, 1.0, 1.0, 1.0],
+        loaded: true,
+        hidden: false,
+        elevation: 0.0,
+        folder: None,
+        section: SectionKind::natural_layer(),
+    };
+    let objects = surfaces
+        .iter()
+        .flat_map(|surface| surface.lines.iter().map(move |line| (line, surface.color)))
+        .map(|(line, color)| {
+            let (verts, closed) = section_line_string(line);
+            Object::Polyline {
+                id: document.allocate_object_id(),
+                layer: layer_id,
+                verts,
+                closed,
+                color: ObjectColor::Fixed(color),
+                fill: FillStyle::Clear,
+                line_weight: 1.0,
+            }
+        })
+        .collect();
+    Some((layer, objects))
+}
+
+/// One cut line as a string's vertices, each where the surface meets the
+/// plane. A line that comes back to its start is a ring: saved closed,
+/// without the repeated point.
+fn section_line_string(line: &[DVec3]) -> (Vec<PolyVertex>, bool) {
+    let closed = line.len() >= 4 && line.first().zip(line.last()).is_some_and(|(first, last)| (*first - *last).abs().max_element() < XY_TOL);
+    let points = if closed { &line[..line.len() - 1] } else { line };
+    (points.iter().copied().map(PolyVertex::straight).collect(), closed)
+}
+
+/// What the section's surface lines are cut from: the plane and each shown
+/// surface's mesh, not its colour, which recolours without a cut. `None`
+/// while none are drawn: the switch off, no section up, or a workspace other
+/// than Geology, the only one with the row.
+pub(crate) fn section_surface_lines_key(editor: &EditorState, slab: Option<SectionSlab>, triangulations: &[OpenTriangulation]) -> Option<u64> {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    if !editor.section_surface_lines_on() {
+        return None;
+    }
+    let slab = slab?;
+    let mut hasher = DefaultHasher::new();
+    for value in slab.normal.to_array() {
+        value.to_bits().hash(&mut hasher);
+    }
+    // Where the plane lies, to the micrometre, not where on it the section is
+    // centred: a pan along the plane keeps the lines.
+    ((slab.point.dot(slab.normal) * 1.0e6).round() as i64).hash(&mut hasher);
+    for triangulation in shown_surfaces(editor, triangulations) {
+        triangulation.id.hash(&mut hasher);
+        triangulation.state.revision().hash(&mut hasher);
+        (std::sync::Arc::as_ptr(&triangulation.mesh) as usize).hash(&mut hasher);
+    }
+    Some(hasher.finish())
 }

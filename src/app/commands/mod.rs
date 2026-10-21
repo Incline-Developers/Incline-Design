@@ -38,6 +38,10 @@ use crate::{
 
 impl<'a> App<'a> {
     pub(crate) fn apply_history_step(&mut self, undo: bool) {
+        // Before the step: a carry on ends even when there is none to take.
+        if self.editor.end_string_rework_for_history_step() {
+            self.invalidate_geometry();
+        }
         if self.restore_history_step(undo) {
             return;
         }
@@ -78,6 +82,25 @@ impl<'a> App<'a> {
         // references dangling. Both are settled by the same sweep.
         self.drop_editor_references_to_missing_items();
         self.apply_step_effects(effects);
+        // An open Thin Strings dialog previews the strings as they were.
+        self.refresh_thin_preview(true);
+        // A copy's first pick is a vertex number on a string the step may
+        // have renumbered or removed.
+        self.editor.copy_along = None;
+        // The string picked to split may be another now.
+        self.clear_split_at_crossings();
+        // Drags and nudges after an undo or redo start an undo step of
+        // their own.
+        self.editor.vertex_edit_run = None;
+        // Insert Point's marker sits on the string as it was, as do Fill
+        // Segment's, the piece Remove Between Crossings shows and the
+        // segment Measure Distance reads.
+        if matches!(
+            self.editor.active_tool,
+            ActiveTool::InsertPoint | ActiveTool::FillSegment | ActiveTool::RemoveBetweenCrossings | ActiveTool::MeasureDistance
+        ) {
+            self.clear_insert_point_marker();
+        }
         self.invalidate_geometry();
     }
 
@@ -153,6 +176,9 @@ impl<'a> App<'a> {
                 | UiCommand::BuildReferencePoints { .. }
                 | UiCommand::OpenCreateOreTriangulation
                 | UiCommand::RenameSeam { .. }
+                | UiCommand::MoveBoundary { .. }
+                | UiCommand::InsertInterval { .. }
+                | UiCommand::DeleteInterval { .. }
                 | UiCommand::CleanStrings
                 | UiCommand::CleanString(_)
                 | UiCommand::JoinAllAtHalfway
@@ -360,6 +386,10 @@ impl<'a> App<'a> {
             }
             UiCommand::ExportDrillHoleCsv(id) => {
                 self.choose_export_drill_hole_csv(id);
+                Ok(())
+            }
+            UiCommand::ExportCorrectionsWorksheet(id) => {
+                self.choose_export_corrections_worksheet(id);
                 Ok(())
             }
             UiCommand::HideSelection => {
@@ -810,6 +840,18 @@ impl<'a> App<'a> {
                 self.rename_seam(dataset, field, from, to, scope, reason);
                 Ok(())
             }
+            UiCommand::MoveBoundary { dataset, edit, reason } => {
+                self.move_boundary(dataset, edit, reason);
+                Ok(())
+            }
+            UiCommand::InsertInterval { dataset, edit, reason } => {
+                self.insert_interval(dataset, edit, reason);
+                Ok(())
+            }
+            UiCommand::DeleteInterval { dataset, edit, reason } => {
+                self.delete_interval(dataset, &edit, reason);
+                Ok(())
+            }
             UiCommand::SetStratColumn { id, field, codes } => {
                 self.set_strat_column(id, field, codes);
                 Ok(())
@@ -966,6 +1008,50 @@ impl<'a> App<'a> {
                 self.commit_stroke_open();
                 Ok(())
             }
+            UiCommand::RemoveLastStrokeVertex => {
+                self.remove_last_stroke_vertex();
+                Ok(())
+            }
+            UiCommand::ArmCopyAlongString => {
+                self.arm_copy_along_string();
+                Ok(())
+            }
+            UiCommand::ArmCarryOnString => {
+                self.arm_carry_on_string();
+                Ok(())
+            }
+            UiCommand::ArmRedrawRun => {
+                self.arm_redraw_run();
+                Ok(())
+            }
+            UiCommand::ArmDragVertex => {
+                self.arm_drag_vertex();
+                Ok(())
+            }
+            UiCommand::OpenNudgePanel => {
+                self.open_nudge_panel();
+                Ok(())
+            }
+            UiCommand::SetFillSegmentSpacing(spacing) => {
+                self.set_fill_segment_spacing(spacing);
+                Ok(())
+            }
+            UiCommand::NudgeHeldVertex(rise) => {
+                self.nudge_held_vertex(rise);
+                Ok(())
+            }
+            UiCommand::OpenNextVertexPanel => {
+                self.open_next_vertex_panel();
+                Ok(())
+            }
+            UiCommand::AddTypedStrokeVertex(world) => {
+                self.add_typed_stroke_vertex(world);
+                Ok(())
+            }
+            UiCommand::AddStrokeVertexAlongBearing { bearing, distance, dip } => {
+                self.add_stroke_vertex_along_bearing(bearing, distance, dip);
+                Ok(())
+            }
             UiCommand::CommitCircleTypedRadius => {
                 self.commit_circle_typed_radius();
                 Ok(())
@@ -993,6 +1079,14 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::SetGridShown(shown) => self.set_grid_shown(shown),
+            UiCommand::ToggleSectionSurfaceLines => {
+                self.toggle_section_surface_lines();
+                Ok(())
+            }
+            UiCommand::SaveSectionSurfaceLines => {
+                self.save_section_surface_lines();
+                Ok(())
+            }
             UiCommand::SetTopologyWireframes(enabled) => self.set_topology_wireframes(enabled),
             #[cfg(not(target_arch = "wasm32"))]
             UiCommand::SetSlicePreviewDetached(detached) => {
@@ -1082,6 +1176,7 @@ impl<'a> App<'a> {
                             self.editor.survey.definitions.clone(),
                             self.editor.survey.local_system.clone(),
                             self.editor.recent_design_functions.clone(),
+                            self.editor.recent_geology_functions.clone(),
                         );
                         crate::app::io::save_config(&config)?;
                         self.editor.workspace_order = order;
@@ -1215,6 +1310,14 @@ impl<'a> App<'a> {
                 self.insert_points_at_selected_intersections();
                 Ok(())
             }
+            UiCommand::ReverseSelectedStrings => {
+                self.reverse_selected_strings();
+                Ok(())
+            }
+            UiCommand::ArmDrapeAlongTriangles => {
+                self.arm_drape_along_triangles();
+                Ok(())
+            }
             UiCommand::OpenInsertPointAtElevationDialog => {
                 self.open_insert_point_at_elevation_dialog();
                 Ok(())
@@ -1272,6 +1375,40 @@ impl<'a> App<'a> {
             UiCommand::InsertPointsAtElevation { object_ids, elevation } => {
                 self.insert_points_at_elevation(object_ids, elevation);
                 Ok(())
+            }
+            UiCommand::OpenThinStringsDialog => {
+                self.open_thin_strings_dialog();
+                Ok(())
+            }
+            UiCommand::SetThinTolerance(tolerance) => {
+                self.set_thin_tolerance(tolerance);
+                Ok(())
+            }
+            UiCommand::ThinStrings { object_ids, tolerance } => {
+                self.thin_strings(object_ids, tolerance);
+                Ok(())
+            }
+            UiCommand::OpenInsertPointAtSpacingDialog => {
+                self.open_insert_point_at_spacing_dialog();
+                Ok(())
+            }
+            UiCommand::InsertPointsAtSpacing { object_ids, spacing } => {
+                let result = self.insert_points_at_spacing(object_ids, spacing);
+                if result.is_ok() {
+                    self.editor.insert_point_at_spacing_dialog = None;
+                }
+                result
+            }
+            UiCommand::OpenSmoothStringsDialog => {
+                self.open_smooth_strings_dialog();
+                Ok(())
+            }
+            UiCommand::SmoothStrings { object_ids, tolerance } => {
+                let result = self.smooth_strings(object_ids, tolerance);
+                if result.is_ok() {
+                    self.editor.smooth_strings_dialog = None;
+                }
+                result
             }
             UiCommand::CommitBatterBerm => {
                 self.commit_batter_berm();

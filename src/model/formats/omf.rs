@@ -1203,6 +1203,14 @@ fn write_drill_holes<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
         Location::Vertices,
         writer.array_numbers(holes.iter().map(|hole| hole.diameter.filter(|diameter| diameter.is_finite())))?,
     ));
+    // Only where a hole has one: blast patterns and bare sets carry none.
+    if holes.iter().any(|hole| hole.total_depth.is_some()) {
+        collars.attributes.push(Attribute::from_numbers(
+            "Total depth",
+            Location::Vertices,
+            writer.array_numbers(holes.iter().map(|hole| hole.total_depth.filter(|depth| depth.is_finite())))?,
+        ));
+    }
     put(&mut collars, META_KIND, "drillhole_collars");
 
     let mut segments = Vec::new();
@@ -3156,6 +3164,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         let positions = self.read_vertices(&collar_points.vertices).with_context(|| context("collars"))?;
         let (collar_holes, names) = self.read_drill_hole_category(collars).with_context(|| context("collars"))?;
         let diameters = self.read_drill_numbers(collars, "Diameter")?.unwrap_or_default();
+        let total_depths = self.read_drill_numbers(collars, "Total depth")?.unwrap_or_default();
         let mut holes = positions
             .iter()
             .enumerate()
@@ -3172,6 +3181,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 render_ranges: Vec::new(),
                 intervals: Vec::new(),
                 orientation_source: OrientationSource::Unknown,
+                total_depth: total_depths.get(index).copied().flatten().and_then(crate::model::drill_hole::recorded_total_depth),
             })
             .collect::<Vec<_>>();
 
@@ -3273,22 +3283,32 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             return Ok(None);
         }
         let mut dataset = DrillHoleDataset::new(holes);
-        if let Some(corrections) = element
-            .metadata
-            .get(META_CORRECTIONS)
-            .and_then(|value| Vec::<crate::model::drill_hole::Correction>::deserialize(value).ok())
-        {
-            dataset.corrections = corrections;
+        // Read record by record: one that cannot be read is left out and
+        // counted, never the whole list with it.
+        match element.metadata.get(META_CORRECTIONS).map(Value::as_array) {
+            Some(Some(stored)) => {
+                let read: Vec<_> = stored.iter().map(crate::model::drill_hole::Correction::deserialize).collect();
+                let dropped = read.iter().filter(|record| record.is_err()).count();
+                dataset.corrections = read.into_iter().filter_map(Result::ok).collect();
+                if dropped > 0 {
+                    self.bundle
+                        .warnings
+                        .push(crate::i18n::tr!("omf-correction-records-dropped", count = dropped.to_string(), name = element.name.clone()));
+                }
+            }
+            // Corrections that are not a list cannot be counted: all are lost.
+            Some(None) => self.bundle.warnings.push(crate::i18n::tr!("omf-corrections-unreadable", name = element.name.clone())),
+            None => {}
         }
-        // Only columns the file still holds: a name with no column behind it
-        // would let a later import of that name be written over.
-        if let Some(columns) = element
+        // Only columns a row still holds, in a hole or in a deletion's record:
+        // a name with no column behind it would let a later import of that
+        // name be written over.
+        let stored = element
             .metadata
             .get(META_DERIVED_COLUMNS)
             .and_then(|value| std::collections::BTreeSet::<String>::deserialize(value).ok())
-        {
-            dataset.derived_columns = columns.into_iter().filter(|column| dataset.fields.iter().any(|field| &field.key == column)).collect();
-        }
+            .unwrap_or_default();
+        dataset.restore_derived_columns(stored);
         // Resolved after construction: it is `new` that fixes the hole order
         // the stored names are looked up against.
         if let Some(value) = element.metadata.get(META_TIE_INS)
@@ -3748,7 +3768,7 @@ fn style_value<T: serde::de::DeserializeOwned>(style: Option<&Value>, key: &str)
 /// none.
 fn style_geophysics(style: Option<&Value>) -> Option<Arc<crate::model::geophysics::GeophysicsLink>> {
     let mut link = style_value::<crate::model::geophysics::GeophysicsLink>(style, "geophysics")?;
-    link.sort();
+    link.settle();
     Some(Arc::new(link))
 }
 

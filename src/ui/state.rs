@@ -30,7 +30,7 @@ use crate::{
         raster::RasterTextureId,
         triangulation::TriangulationId,
     },
-    ui::elements::main_menu::DesignRow,
+    ui::elements::main_menu::RecentRow,
 };
 
 type OptionalScreenPointPx = Option<(f32, f32)>;
@@ -416,6 +416,12 @@ impl EditorState {
         }
     }
 
+    /// Surface Lines on Section is on where it has a row, in Geology: the
+    /// lines are drawn, and can be saved, whenever a section is up.
+    pub(crate) fn section_surface_lines_on(&self) -> bool {
+        self.section_surface_lines && self.active_workspace == Workspace::Geology
+    }
+
     /// Whether a tool that runs on the selection is open on a snapshot of it.
     ///
     /// These tools take their inputs when they open and cannot be re-pointed
@@ -437,9 +443,12 @@ impl EditorState {
             || self.reference_surface_dialog.is_some()
             || self.thickness_points_dialog.is_some()
             || self.seam_surface_dialog.is_some()
+            || self.thin_strings_dialog.is_some()
             // Its limits are picked from the view, so the lock lifts while a
             // pick is armed.
             || (self.tri_cut_to_open && self.triangulation_pick_target.is_none())
+            || self.insert_point_at_spacing_dialog.is_some()
+            || self.smooth_strings_dialog.is_some()
     }
 
     /// Lock or unlock one scene entity by name. Layer locks go through
@@ -981,7 +990,183 @@ pub(crate) fn batter_angle_measurement(points: &[DVec3]) -> Option<BatterAngleMe
     })
 }
 
+/// A segment's figures from its first end to its second: the rise and grade
+/// are positive uphill that way. An arc is measured along itself in plan, as
+/// `polyline_length` does, and end to end for its rise and bearing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SegmentReadout {
+    /// Length in 3D, along an arc.
+    pub(crate) length: f64,
+    pub(crate) plan: f64,
+    pub(crate) rise: f64,
+    /// Degrees clockwise from grid north; `None` for a vertical segment.
+    pub(crate) bearing_degrees: Option<f64>,
+    /// Degrees above level, signed as the rise: 90 when vertical.
+    pub(crate) grade_degrees: f64,
+    /// Rise over plan length in percent; `None` for a vertical segment.
+    pub(crate) grade_percent: Option<f64>,
+}
+
+/// The readout from `start` to `end`, `bulge` making it an arc; `None` for a
+/// segment of no length.
+pub(crate) fn segment_readout(start: DVec3, end: DVec3, bulge: f64) -> Option<SegmentReadout> {
+    let chord = end - start;
+    let plan = match crate::model::geometry::bulge_arc_parameters(start, end, bulge) {
+        Some((_, _, sweep, radius)) => radius * sweep.abs(),
+        None => chord.truncate().length(),
+    };
+    let length = plan.hypot(chord.z);
+    if length <= 1.0e-9 {
+        return None;
+    }
+    // Relative, so a vertical edge far from the origin keeps its form.
+    let vertical = plan <= 1.0e-6 * length.max(1.0);
+    Some(SegmentReadout {
+        length,
+        plan,
+        rise: chord.z,
+        // Clockwise from grid north, as the strike above, at the two places
+        // shown, a hair west of north reading 0 rather than 360.
+        bearing_degrees: (!vertical).then(|| {
+            let bearing = (chord.x.atan2(chord.y).to_degrees().rem_euclid(360.0) * 100.0).round() / 100.0;
+            if bearing >= 360.0 { 0.0 } else { bearing + 0.0 }
+        }),
+        grade_degrees: chord.z.atan2(plan).to_degrees(),
+        grade_percent: (!vertical).then(|| 100.0 * chord.z / plan),
+    })
+}
+
 pub(crate) const CIRCLE_TYPED_RESET_DISTANCE_POINTS: f32 = 8.0;
+
+/// Copy Along a String, a step inside the Polyline tool: the stroke's first
+/// vertex when it was started, and the run's first pick once made.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct CopyAlong {
+    /// A finished or restarted stroke no longer starts here, and ends it.
+    pub(crate) anchor: Option<DVec3>,
+    /// The string, its vertex and where that vertex is.
+    pub(crate) first: Option<(ObjectId, usize, DVec3)>,
+}
+
+/// The copy along a string under way, if it still belongs to the Polyline
+/// tool and the stroke it was started on.
+pub(crate) fn copy_along_live(editor: &EditorState) -> Option<&CopyAlong> {
+    editor.copy_along.as_ref().filter(|copy| {
+        editor.active_tool == ActiveTool::MakePoly
+            && !editor.poly_finish_dialog
+            && editor.active_workspace.has_drawing_aids()
+            && editor.pending_stroke.first().copied() == copy.anchor
+    })
+}
+
+/// Carry On a String or Redraw Between Vertices, a step inside the Polyline
+/// tool: waiting for a string's vertex to be picked, then drawing from it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum StringRework {
+    Picking,
+    /// Drawing on from vertex `start` of string `id`, which read `before`
+    /// when picked; the stroke starts at that vertex, `anchor`.
+    From {
+        id: ObjectId,
+        start: usize,
+        before: Object,
+        anchor: DVec3,
+    },
+    PickingRun,
+    /// As `From`; a click on another vertex of the string ends the run.
+    Redraw {
+        id: ObjectId,
+        start: usize,
+        before: Object,
+        anchor: DVec3,
+    },
+}
+
+/// The carry on or redraw under way, if it still belongs to the Polyline
+/// tool and, once picked, to the stroke that starts at the string's vertex.
+pub(crate) fn string_rework_live(editor: &EditorState) -> Option<&StringRework> {
+    editor.string_rework.as_ref().filter(|rework| {
+        editor.active_tool == ActiveTool::MakePoly
+            && editor.active_workspace.has_drawing_aids()
+            && match rework {
+                StringRework::Picking | StringRework::PickingRun => editor.pending_stroke.is_empty(),
+                StringRework::From { anchor, .. } | StringRework::Redraw { anchor, .. } => editor.pending_stroke.first() == Some(anchor),
+            }
+    })
+}
+
+impl EditorState {
+    /// Draw on from vertex `start` of `string`: the stroke starts at that
+    /// vertex. A closed string has no end: false, and the carry on ends.
+    pub(crate) fn carry_on_from(&mut self, string: Object, start: usize) -> bool {
+        let Object::Polyline { id, verts, closed: false, .. } = &string else {
+            self.string_rework = None;
+            return false;
+        };
+        let (id, Some(anchor)) = (*id, verts.get(start).map(|vertex| vertex.pos)) else {
+            return false;
+        };
+        self.line_chain.clear();
+        self.copy_along = None;
+        self.pending_stroke = vec![anchor];
+        self.string_rework = Some(StringRework::From {
+            id,
+            start,
+            before: string,
+            anchor,
+        });
+        true
+    }
+
+    /// Redraw string `string` from its vertex `start`: the stroke starts at
+    /// that vertex. Unlike a carry on, a closed string is taken.
+    pub(crate) fn redraw_from(&mut self, string: Object, start: usize) -> bool {
+        let Object::Polyline { id, verts, .. } = &string else {
+            return false;
+        };
+        let (id, Some(anchor)) = (*id, verts.get(start).map(|vertex| vertex.pos)) else {
+            return false;
+        };
+        self.line_chain.clear();
+        self.copy_along = None;
+        self.pending_stroke = vec![anchor];
+        self.string_rework = Some(StringRework::Redraw {
+            id,
+            start,
+            before: string,
+            anchor,
+        });
+        true
+    }
+
+    /// Undo or redo ends a carry on or redraw, and the stroke drawn from the
+    /// string with it: the step may change the string, and the next click
+    /// starts afresh. True when there was one to end.
+    pub(crate) fn end_string_rework_for_history_step(&mut self) -> bool {
+        let Some(rework) = string_rework_live(self) else {
+            return false;
+        };
+        if matches!(rework, StringRework::From { .. } | StringRework::Redraw { .. }) {
+            self.pending_stroke.clear();
+            self.poly_finish_dialog = false;
+            self.poly_finish_dialog_px = None;
+        }
+        self.string_rework = None;
+        true
+    }
+}
+
+/// What the Next Vertex panel holds: a point to add as typed, and a step
+/// from the last vertex by bearing, level distance and dip.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct NextVertexPanel {
+    pub(crate) point: [f64; 3],
+    /// Degrees clockwise from grid north.
+    pub(crate) bearing: f64,
+    pub(crate) distance: f64,
+    /// Degrees above level; 0 keeps the last vertex's height.
+    pub(crate) dip: f64,
+}
 
 /// Transient state for the centre-to-radius phase of MakeCircle.
 #[derive(Clone, Debug, PartialEq)]
@@ -1443,6 +1628,10 @@ pub(crate) struct EditorState {
     /// chosen for: a choice about one set's columns says nothing about
     /// another's. `None` guesses by name. Transient, like the tab.
     pub(crate) borehole_log_strat_field: Option<(DrillHoleId, String)>,
+    /// What the Log tab's left, then right, trace column shows, and the
+    /// dataset it was chosen for; `None` shows the defaults. Transient, like
+    /// the strat field.
+    pub(crate) borehole_log_curves: Option<(DrillHoleId, [crate::ui::widgets::log_traces::ColumnCurve<String>; 2])>,
     /// The last strat column check of each set and field, for the Column
     /// tab. Transient: an import or Check makes one; a project opened
     /// starts with none.
@@ -1604,8 +1793,25 @@ pub(crate) struct EditorState {
     /// Vertices accumulated for an in-progress MakeLine / MakePoly stroke.
     pub(crate) pending_stroke: Vec<DVec3>,
     pub(crate) circle_draft: Option<CircleDraft>,
+    /// The Next Vertex panel beside a string being drawn, while it is open.
+    pub(crate) next_vertex_panel: Option<NextVertexPanel>,
+    /// Copy Along a String, while its picks are being made.
+    pub(crate) copy_along: Option<CopyAlong>,
+    /// Carry On a String, from its arming until the string is written.
+    pub(crate) string_rework: Option<StringRework>,
+    /// Where each segment the Line tool saved in the run being drawn starts,
+    /// newest last, so Backspace can take one back.
+    pub(crate) line_chain: Vec<DVec3>,
+    /// Set when Backspace gives back a vertex: until the mouse moves, the
+    /// leg to the cursor would retrace the segment just removed, so it is
+    /// drawn broken.
+    pub(crate) stroke_leg_broken: bool,
     pub(crate) measurement_start: Option<DVec3>,
     pub(crate) measurement_end: Option<DVec3>,
+    /// Geology's readout of the string segment under the cursor while
+    /// Measure Distance waits for its first point, and that segment's two
+    /// vertices for the overlay to light.
+    pub(crate) measure_segment_hover: Option<(SegmentReadout, [crate::model::PolyVertex; 2])>,
     pub(crate) batter_angle_points: Vec<DVec3>,
 
     // Text editing
@@ -1674,6 +1880,16 @@ pub(crate) struct EditorState {
     /// document the counts are derived from.
     pub(crate) selection_counts: SelectionCounts,
     pub(crate) insert_point_at_elevation_dialog: Option<crate::ui::dialogs::InsertPointAtElevationDialog>,
+    pub(crate) thin_strings_dialog: Option<crate::ui::dialogs::ThinStringsDialog>,
+    /// The tolerance Thin Strings opens with: the last one applied.
+    pub(crate) thin_tolerance: f64,
+    pub(crate) insert_point_at_spacing_dialog: Option<crate::ui::dialogs::InsertPointAtSpacingDialog>,
+    /// Last spacing applied by Insert Points at Spacing, offered on reopening.
+    pub(crate) insert_point_spacing: f64,
+    /// Smooth Strings, open on the strings it was opened with.
+    pub(crate) smooth_strings_dialog: Option<crate::ui::dialogs::SmoothStringsDialog>,
+    /// Last tolerance applied by Smooth Strings, offered on reopening.
+    pub(crate) smooth_tolerance: f64,
     /// The "Edit Object" dialog, holding a working copy of one design object
     /// until Apply or OK hands it back to the document.
     pub(crate) object_edit_dialog: Option<crate::ui::dialogs::object_edit::ObjectEditDialog>,
@@ -1720,6 +1936,9 @@ pub(crate) struct EditorState {
     pub(crate) slice_half_length: f64,
     /// Whether the section shows the world grid (constant-elevation and easting/northing lines).
     pub(crate) slice_grid_enabled: bool,
+    /// Whether a section in Geology draws where each shown surface cuts it.
+    /// Not persisted with the project.
+    pub(crate) section_surface_lines: bool,
     pub(crate) section_grid_px: Vec<SectionGridLine>,
     /// The section grid's look, from the grid button's right-click dialog.
     pub(crate) section_grid_style: SectionGridStyle,
@@ -1738,6 +1957,8 @@ pub(crate) struct EditorState {
     pub(crate) drape_phase: DrapePhase,
     /// Design objects retained while the second selection step chooses surfaces.
     pub(crate) drape_object_ids: Vec<ObjectId>,
+    /// Whether this drape also follows the surface between vertices.
+    pub(crate) drape_along_triangles: bool,
 
     // Offset Element tool
     pub(crate) offset_dialog_open: bool,
@@ -1746,6 +1967,8 @@ pub(crate) struct EditorState {
     pub(crate) offset_angle_degrees: f64,
     pub(crate) offset_measure: OffsetMeasure,
     pub(crate) offset_value_input: f64,
+    /// The distance typed on a section, kept apart from the plan value.
+    pub(crate) offset_section_distance: f64,
     /// Phase 2: dialog closed, waiting for canvas click to pick side.
     pub(crate) offset_awaiting_side_pick: bool,
     /// Absolute horizontal offset distance (sign determined by cursor position).
@@ -1837,6 +2060,12 @@ pub(crate) struct EditorState {
     pub(crate) tool_hover_vertex_px: Option<(f32, f32)>,
     /// Same vertex in world space, so the overlay can draw the shared point marker for it.
     pub(crate) tool_hover_vertex_world: Option<DVec3>,
+    /// The vertices Fill Segment would add to the segment under the cursor.
+    pub(crate) fill_segment_preview: Vec<DVec3>,
+    /// The string Split at Crossings cuts, as it read when picked.
+    pub(crate) split_crossings_target: Option<Object>,
+    /// The piece Remove Between Crossings would take out under the cursor.
+    pub(crate) removable_piece: Vec<crate::model::PolyVertex>,
     /// Screen position of the first chamfer corner vertex (raw pixels).
     pub(crate) chamfer_gizmo_corner_px: Option<(f32, f32)>,
     /// Screen direction of the gizmo bisector (used when radius=0 so arrow is still visible).
@@ -1852,6 +2081,18 @@ pub(crate) struct EditorState {
 
     // Move tool gizmo
     pub(crate) move_vertex_target: Option<(ObjectId, ObjectPoint)>,
+    /// Geology's Nudge RL panel beside Move, while it is open.
+    pub(crate) nudge_panel_open: bool,
+    /// How far one nudge raises or lowers the held vertex, in metres: the
+    /// last step used.
+    pub(crate) nudge_step: f64,
+    /// The vertex Geology's drags and nudges are working on, and the history
+    /// revision the last of them left: while it stands they undo as one step.
+    /// Ended by Esc, a tool, workspace or project switch, and undo or redo.
+    pub(crate) vertex_edit_run: Option<((ObjectId, ObjectPoint), u64)>,
+    /// Where the vertex the last drag or nudge held was left, so a string
+    /// renumbered since (reversed, thinned) cannot turn a nudge on another.
+    pub(crate) held_vertex_at: Option<((ObjectId, ObjectPoint), DVec3)>,
     /// Projected Move gizmo for the current frame.
     pub(crate) move_gizmo: MoveGizmoScreen,
     pub(crate) move_gizmo_hovered_axis: Option<u8>,
@@ -2109,6 +2350,12 @@ pub(crate) struct EditorState {
     pub(crate) seam_rename_dialog: Option<SeamRenameDraft>,
     /// The shift names dialog's hole, direction and reason while it is open.
     pub(crate) name_shift_dialog: Option<NameShiftDraft>,
+    /// The move boundary dialog's boundary and entries while it is open.
+    pub(crate) boundary_move_dialog: Option<BoundaryMoveDraft>,
+    /// The insert interval dialog's interval and entries while it is open.
+    pub(crate) interval_insert_dialog: Option<IntervalInsertDraft>,
+    /// The delete interval dialog's interval and reason while it is open.
+    pub(crate) interval_delete_dialog: Option<IntervalDeleteDraft>,
     pub(crate) optimization: OptimizationState,
     pub(crate) block_model_create_open: bool,
     pub(crate) kriging_drill_hole_id: Option<DrillHoleId>,
@@ -2209,6 +2456,8 @@ pub(crate) struct EditorState {
     pub(crate) workspace_order: [Workspace; 5],
     /// Production's recent functions by [`DesignRow::key`], newest last.
     pub(crate) recent_design_functions: Vec<String>,
+    /// Geology's, by [`GeologyRow::key`](crate::ui::elements::main_menu::GeologyRow::key).
+    pub(crate) recent_geology_functions: Vec<String>,
     pub(crate) recent_functions_shown: u32,
     /// The Drill & Blast workspace's stored products, in the order the palette
     /// lays them out.
@@ -2398,6 +2647,9 @@ impl EditorState {
         self.active_tool == ActiveTool::MakePoly
             && !self.poly_finish_dialog
             && self.pending_stroke.len() >= 2
+            // Carrying on or redrawing a string, the first vertex is the
+            // string's own, not a place to close.
+            && string_rework_live(self).is_none()
             && self
                 .pending_stroke
                 .first()
@@ -2416,8 +2668,14 @@ impl EditorState {
         self.cursor_mode.snaps()
     }
 
+    /// Whether Measure Distance reads the segment under the cursor: in
+    /// Geology, until its first point is set.
+    pub(crate) fn reads_segment_hover(&self) -> bool {
+        self.active_tool == ActiveTool::MeasureDistance && self.measurement_start.is_none() && self.active_workspace == Workspace::Geology
+    }
+
     pub(crate) fn view_mode_owns_canvas_click(&self) -> bool {
-        self.fly_mode_enabled || (self.slice_mode_enabled && self.active_tool.section_refuses())
+        self.fly_mode_enabled || (self.slice_mode_enabled && self.active_tool.section_refuses(self.active_workspace))
     }
 
     /// Dialogs that take Enter as their confirm shortcut.
@@ -2458,6 +2716,17 @@ impl EditorState {
             || self.text_editing_enabled
     }
 
+    /// Whether a drill hole correction dialog is open: rename, shift names,
+    /// move a boundary, insert or delete. While one is, the log offers no
+    /// other, as each takes Enter and Escape and an edit by one closes the rest.
+    pub(crate) fn correction_dialog_open(&self) -> bool {
+        self.seam_rename_dialog.is_some()
+            || self.name_shift_dialog.is_some()
+            || self.boundary_move_dialog.is_some()
+            || self.interval_insert_dialog.is_some()
+            || self.interval_delete_dialog.is_some()
+    }
+
     /// The common case: a dialog that confirms on Enter and cancels on Escape.
     fn dialog_owns_both_keys(&self) -> bool {
         self.grid_dialog.is_some()
@@ -2486,6 +2755,9 @@ impl EditorState {
             || self.move_to_layer_dialog.is_some()
             || self.move_to_axis_dialog.is_some()
             || self.insert_point_at_elevation_dialog.is_some()
+            || self.thin_strings_dialog.is_some()
+            || self.insert_point_at_spacing_dialog.is_some()
+            || self.smooth_strings_dialog.is_some()
             || self.new_layer_dialog_open
             || self.survey.definitions_open
             || self.survey.transform_open
@@ -2494,6 +2766,9 @@ impl EditorState {
             || self.renaming_item.is_some()
             || self.seam_rename_dialog.is_some()
             || self.name_shift_dialog.is_some()
+            || self.boundary_move_dialog.is_some()
+            || self.interval_insert_dialog.is_some()
+            || self.interval_delete_dialog.is_some()
             || self.tri_create_open
             || self.tri_create_failure.is_some()
             || self.tri_cut_poly_open
@@ -2759,6 +3034,7 @@ impl EditorState {
         self.selected_tie_ins.clear();
         self.inspected_hole = None;
         self.borehole_log_strat_field = None;
+        self.borehole_log_curves = None;
         self.strat_checks.clear();
         self.borehole_inspector_locked = false;
         self.hidden_handles.clear();
@@ -2789,6 +3065,9 @@ impl EditorState {
         self.drape_phase = DrapePhase::Designs;
         self.drape_object_ids.clear();
         self.pending_stroke.clear();
+        self.copy_along = None;
+        self.string_rework = None;
+        self.vertex_edit_run = None;
         self.circle_draft = None;
         self.poly_finish_dialog = false;
         self.poly_finish_dialog_px = None;
@@ -2799,9 +3078,13 @@ impl EditorState {
         self.move_to_layer_dialog = None;
         self.move_to_axis_dialog = None;
         self.insert_point_at_elevation_dialog = None;
+        self.thin_strings_dialog = None;
+        self.insert_point_at_spacing_dialog = None;
+        self.smooth_strings_dialog = None;
         self.object_edit_dialog = None;
         self.measurement_start = None;
         self.measurement_end = None;
+        self.measure_segment_hover = None;
         self.batter_angle_points.clear();
         self.text_editing_enabled = false;
         self.editing_labels_id = None;
@@ -2849,6 +3132,9 @@ impl EditorState {
         self.chamfer_hover_corner_px = None;
         self.tool_hover_vertex_px = None;
         self.tool_hover_vertex_world = None;
+        self.fill_segment_preview.clear();
+        self.split_crossings_target = None;
+        self.removable_piece.clear();
         self.chamfer_gizmo_corner_px = None;
         self.chamfer_gizmo_bisector_px = None;
         self.chamfer_gizmo_handle_px = None;
@@ -2920,6 +3206,9 @@ impl EditorState {
         self.seam_table = None;
         self.seam_rename_dialog = None;
         self.name_shift_dialog = None;
+        self.boundary_move_dialog = None;
+        self.interval_insert_dialog = None;
+        self.interval_delete_dialog = None;
     }
 
     pub(crate) fn current_preferences(&self) -> PreferencesDraft {
@@ -2990,6 +3279,7 @@ impl EditorState {
             show_borehole_inspector: false,
             borehole_inspector_tab: BoreholeInspectorTab::default(),
             borehole_log_strat_field: None,
+            borehole_log_curves: None,
             strat_checks: Vec::new(),
             well_log_style: Default::default(),
             panel_chrome: crate::app::io::default_panel_chrome(),
@@ -3070,8 +3360,14 @@ impl EditorState {
             pending_delete_item: None,
             pending_stroke: Vec::new(),
             circle_draft: None,
+            next_vertex_panel: None,
+            copy_along: None,
+            string_rework: None,
+            line_chain: Vec::new(),
+            stroke_leg_broken: false,
             measurement_start: None,
             measurement_end: None,
+            measure_segment_hover: None,
             batter_angle_points: Vec::new(),
             pending_text: String::new(),
             pending_text_height: 15.0,
@@ -3100,6 +3396,12 @@ impl EditorState {
             selection_has_polylines: false,
             selection_counts: SelectionCounts::default(),
             insert_point_at_elevation_dialog: None,
+            thin_strings_dialog: None,
+            thin_tolerance: crate::app::commands::drawing::thin::DEFAULT_THIN_TOLERANCE,
+            insert_point_at_spacing_dialog: None,
+            insert_point_spacing: 10.0,
+            smooth_strings_dialog: None,
+            smooth_tolerance: 0.5,
             object_edit_dialog: None,
             xray_enabled: false,
             cinematic_enabled: false,
@@ -3121,6 +3423,7 @@ impl EditorState {
             slice_direction: [1.0, 0.0],
             slice_half_length: 0.0,
             slice_grid_enabled: false,
+            section_surface_lines: false,
             section_grid_px: Vec::new(),
             section_grid_style: SectionGridStyle::default(),
             xy_grid_style: PlanGridStyle::default(),
@@ -3129,6 +3432,7 @@ impl EditorState {
             selection_box_start_px: None,
             selection_box_current_px: None,
             drape_phase: DrapePhase::Designs,
+            drape_along_triangles: false,
             drape_object_ids: Vec::new(),
             offset_dialog_open: false,
             offset_target_id: None,
@@ -3136,6 +3440,7 @@ impl EditorState {
             offset_angle_degrees: 60.0,
             offset_measure: OffsetMeasure::Distance,
             offset_value_input: 0.0,
+            offset_section_distance: 0.0,
             offset_awaiting_side_pick: false,
             offset_horiz_dist: 0.0,
             offset_z_delta: 0.0,
@@ -3178,6 +3483,9 @@ impl EditorState {
             chamfer_hover_corner_px: None,
             tool_hover_vertex_px: None,
             tool_hover_vertex_world: None,
+            fill_segment_preview: Vec::new(),
+            split_crossings_target: None,
+            removable_piece: Vec::new(),
             chamfer_gizmo_corner_px: None,
             chamfer_gizmo_bisector_px: None,
             chamfer_gizmo_handle_px: None,
@@ -3187,6 +3495,10 @@ impl EditorState {
             chamfer_gizmo_drag_start_px: None,
             chamfer_gizmo_drag_start_radius: 0.0,
             move_vertex_target: None,
+            nudge_panel_open: false,
+            nudge_step: 0.1,
+            vertex_edit_run: None,
+            held_vertex_at: None,
             move_gizmo: MoveGizmoScreen::default(),
             move_gizmo_hovered_axis: None,
             move_gizmo_hovered_plane: None,
@@ -3326,6 +3638,9 @@ impl EditorState {
             seam_table: None,
             seam_rename_dialog: None,
             name_shift_dialog: None,
+            boundary_move_dialog: None,
+            interval_insert_dialog: None,
+            interval_delete_dialog: None,
             optimization: OptimizationState::default(),
             block_model_create_open: false,
             kriging_drill_hole_id: None,
@@ -3385,6 +3700,7 @@ impl EditorState {
             active_workspace: Workspace::Production,
             workspace_order: Workspace::ALL,
             recent_design_functions: Vec::new(),
+            recent_geology_functions: Vec::new(),
             recent_functions_shown: crate::app::io::default_recent_functions_shown(),
             survey: Default::default(),
             delay_products: builtin_delay_products(),
@@ -3489,10 +3805,14 @@ impl EditorState {
     }
 
     /// Forget every hole `keep` no longer vouches for: what is selected,
-    /// what the inspector reads, the context menu's hole.
+    /// what the inspector reads, the context menu's hole, and the strat
+    /// field and curves the log was set to for a dataset it drops.
     pub(crate) fn retain_drill_hole_datasets(&mut self, keep: impl Fn(DrillHoleId) -> bool) {
-        if self.inspected_hole.is_some_and(|hole| !keep(hole.dataset)) {
+        if self.borehole_log_strat_field.as_ref().is_some_and(|(id, _)| !keep(*id)) {
             self.borehole_log_strat_field = None;
+        }
+        if self.borehole_log_curves.as_ref().is_some_and(|(id, _)| !keep(*id)) {
+            self.borehole_log_curves = None;
         }
         self.selected_drill_holes.retain(|hole| keep(hole.dataset));
         self.selected_tie_ins.retain(|tie| keep(tie.dataset));
@@ -3674,6 +3994,20 @@ pub(crate) enum ActiveTool {
     BatterBermOffset,
     Bezier,
     VerticalSlice,
+    /// Open the vertex sheet of the string under the cursor at the vertex
+    /// nearest it.
+    EditVertex,
+    /// Geology's: add a vertex where a click lands on a string's segment.
+    InsertPoint,
+    /// Geology's: cut the clicked segment into equal parts with new vertices.
+    FillSegment,
+    /// Geology's: cut a string wherever a second one crosses it.
+    SplitAtCrossings,
+    /// Geology's: take out the piece of a string between two crossings.
+    RemoveBetweenCrossings,
+    /// Geology's sibling of [`Self::ExplodePolyline`]: a point object at each
+    /// vertex of a string, in its place.
+    ExplodePolylineToPoints,
 }
 
 impl ActiveTool {
@@ -3741,8 +4075,36 @@ impl ActiveTool {
         )
     }
 
-    pub(crate) fn section_refuses(self) -> bool {
-        self != Self::None && !self.works_in_slice_view()
+    /// The bench tool and the distance measure, which only production carries.
+    pub(crate) fn designs_pit(self) -> bool {
+        matches!(self, Self::BatterBermOffset | Self::MeasureDistance)
+    }
+
+    /// The editing tools that keep a string on its section.
+    pub(crate) fn edits_in_slice_view(self) -> bool {
+        matches!(
+            self,
+            Self::Move
+                | Self::DrapeToTopology
+                | Self::Bezier
+                | Self::DeletePoints
+                | Self::ExplodePolyline
+                | Self::SplitAtPoints
+                | Self::FuseIntoPolyline
+                | Self::EditVertex
+                | Self::InsertPoint
+                | Self::FillSegment
+                | Self::SplitAtCrossings
+                | Self::RemoveBetweenCrossings
+                | Self::ExplodePolylineToPoints
+                | Self::OffsetElement
+                | Self::RelimitLine
+                | Self::Chamfer
+        )
+    }
+
+    pub(crate) fn section_refuses(self, workspace: Workspace) -> bool {
+        self != Self::None && !self.works_in_slice_view() && !(workspace.edits_in_slice_view() && self.edits_in_slice_view())
     }
 }
 
@@ -3929,6 +4291,9 @@ pub(crate) enum UiCommand {
     ExportBlockModelCsv(BlockModelId),
     /// One drillhole dataset out as the three tables it was read from.
     ExportDrillHoleCsv(DrillHoleId),
+    /// One drillhole dataset's corrections out as a worksheet for a senior
+    /// to decide on, and the records beside it.
+    ExportCorrectionsWorksheet(DrillHoleId),
     #[cfg(not(target_arch = "wasm32"))]
     RequestExit,
     SaveAndExit,
@@ -3998,6 +4363,31 @@ pub(crate) enum UiCommand {
     },
     FinishPolyClose,
     CommitStrokeOpen,
+    /// Give back the last vertex of the string being drawn.
+    RemoveLastStrokeVertex,
+    OpenNextVertexPanel,
+    /// Arm Move for dragging a vertex, unless it is armed already.
+    ArmDragVertex,
+    OpenNudgePanel,
+    /// Raise the vertex Move holds by this many metres; negative lowers it.
+    NudgeHeldVertex(f64),
+    /// Fill Segment's spacing in metres, kept with the active project.
+    SetFillSegmentSpacing(f64),
+    /// Take the next two clicks as a run of an existing string to copy.
+    ArmCopyAlongString,
+    /// Take the next click as the end of a string to draw on from.
+    ArmCarryOnString,
+    /// Take the next click as the vertex a string is redrawn from.
+    ArmRedrawRun,
+    /// Add this point to the string being drawn.
+    AddTypedStrokeVertex(DVec3),
+    /// Add the vertex a step from the last: bearing and dip in degrees,
+    /// distance on the level in metres.
+    AddStrokeVertexAlongBearing {
+        bearing: f64,
+        distance: f64,
+        dip: f64,
+    },
     CommitCircleTypedRadius,
     CancelOffset,
     ConfirmDrapeSelection,
@@ -4009,6 +4399,10 @@ pub(crate) enum UiCommand {
     ToggleRotationCentre,
     /// The grid button: the RL grid in a section, the XY grid in plan.
     SetGridShown(bool),
+    /// Surface Lines on Section: flip the switch.
+    ToggleSectionSurfaceLines,
+    /// Save Surface Lines as Strings: the drawn lines to a new layer.
+    SaveSectionSurfaceLines,
     SetTopologyWireframes(bool),
     SetShowPoints(bool),
     /// Presentation shading over the scene pass. Native only.
@@ -4267,6 +4661,27 @@ pub(crate) enum UiCommand {
         scope: crate::model::drill_hole::RenameScope,
         reason: String,
     },
+    /// Move a roof or floor of one interval of one hole, proposing one
+    /// boundary correction; a touching interval on the other side follows.
+    MoveBoundary {
+        dataset: DrillHoleId,
+        edit: crate::model::drill_hole::BoundaryMove,
+        reason: String,
+    },
+    /// Insert an interval into one hole, proposing its insertion and the
+    /// trims and split it makes as one undo step.
+    InsertInterval {
+        dataset: DrillHoleId,
+        edit: crate::model::drill_hole::IntervalInsert,
+        reason: String,
+    },
+    /// Take one interval of one hole out of the interpreted data, every field
+    /// it holds with it, proposing one deletion correction as one undo step.
+    DeleteInterval {
+        dataset: DrillHoleId,
+        edit: crate::model::drill_hole::IntervalDelete,
+        reason: String,
+    },
     /// Replace one categorical field's strat column, top first, as one undo
     /// step.
     SetStratColumn {
@@ -4420,12 +4835,39 @@ pub(crate) enum UiCommand {
     OpenMoveToAxisDialog(Axis),
     /// Insert vertices at every plan-view crossing between selected polylines.
     InsertPointsAtIntersections,
+    /// Reverse the direction of every selected polyline.
+    ReverseSelectedStrings,
+    /// Arm Drape so that strings follow the surface between their vertices.
+    ArmDrapeAlongTriangles,
     /// Open the elevation input for inserting vertices into selected polylines.
     OpenInsertPointAtElevationDialog,
     /// Insert vertices where selected polylines cross an elevation.
     InsertPointsAtElevation {
         object_ids: Vec<ObjectId>,
         elevation: f64,
+    },
+    /// Open Thin Strings on the selected strings.
+    OpenThinStringsDialog,
+    /// Preview Thin Strings at a new tolerance.
+    SetThinTolerance(f64),
+    /// Drop the vertices each string does not need within `tolerance`.
+    ThinStrings {
+        object_ids: Vec<ObjectId>,
+        tolerance: f64,
+    },
+    /// Open the spacing input for densifying selected polylines.
+    OpenInsertPointAtSpacingDialog,
+    /// Insert vertices so no selected polyline segment exceeds `spacing`.
+    InsertPointsAtSpacing {
+        object_ids: Vec<ObjectId>,
+        spacing: f64,
+    },
+    /// Open the tolerance input for rounding the corners of selected strings.
+    OpenSmoothStringsDialog,
+    /// Round the corners of the strings, each within `tolerance`.
+    SmoothStrings {
+        object_ids: Vec<ObjectId>,
+        tolerance: f64,
     },
     /// Run CDT on the supplied object list and add the result as a loaded triangulation.
     ExecuteCreateTriangulation {
@@ -4610,6 +5052,17 @@ impl UiCommand {
         }
         match self {
             Self::SetActiveTool(_)
+            | Self::RemoveLastStrokeVertex
+            | Self::OpenNextVertexPanel
+            | Self::ArmDragVertex
+            | Self::OpenNudgePanel
+            | Self::NudgeHeldVertex(_)
+            | Self::SetFillSegmentSpacing(_)
+            | Self::ArmCopyAlongString
+            | Self::ArmCarryOnString
+            | Self::ArmRedrawRun
+            | Self::AddTypedStrokeVertex(_)
+            | Self::AddStrokeVertexAlongBearing { .. }
             | Self::ToggleCreateDrillPattern
             | Self::BeginDrillPatternShapePick
             | Self::ClearSelection
@@ -4633,6 +5086,8 @@ impl UiCommand {
             | Self::TransformSurveySelection
             | Self::ReorderWorkspace { .. }
             | Self::ToggleViewOption(_)
+            | Self::ToggleSectionSurfaceLines
+            | Self::SaveSectionSurfaceLines
             | Self::SetInitiation { .. }
             | Self::ChargeSelectedHoles { .. }
             | Self::BeginRenameItem(_)
@@ -4667,8 +5122,13 @@ impl UiCommand {
             | Self::OpenCreateTriangulation
             | Self::OpenMoveToAxisDialog(_)
             | Self::OpenInsertPointAtElevationDialog
+            | Self::OpenThinStringsDialog
+            | Self::SetThinTolerance(_)
+            | Self::OpenInsertPointAtSpacingDialog
+            | Self::OpenSmoothStringsDialog
             | Self::OpenObjectEditDialog(_)
             | Self::ShowObjectVertex { .. }
+            | Self::ArmDrapeAlongTriangles
             | Self::OpenPointCloudTin
             | Self::OpenPointCloudJoin
             | Self::OpenPointCloudClassify
@@ -4762,6 +5222,7 @@ impl UiCommand {
             Self::ExportTriangulationAs(id, format) => report(tr!("state-export-triangulation"), format!("{id:?} · {format:?}")),
             Self::ExportBlockModelCsv(id) => report(tr!("state-export-block-model-csv"), format!("{id:?}")),
             Self::ExportDrillHoleCsv(id) => report(tr!("state-export-drillhole-csv"), format!("{id:?}")),
+            Self::ExportCorrectionsWorksheet(id) => report(tr!("state-export-corrections-worksheet"), format!("{id:?}")),
             #[cfg(not(target_arch = "wasm32"))]
             Self::RequestExit => report(tr!("state-exit-incline-design"), tr!("state-checking-unsaved-work")),
             Self::SaveAndExit => report(tr!("common-save-exit"), tr!("state-saving-current-project")),
@@ -4918,6 +5379,26 @@ impl UiCommand {
                 report(tr!("state-build-reference-points"), format!("{} {}, {} hole(s)", target.label(), side.label(), holes.len()))
             }
             Self::RenameSeam { from, to, .. } => report(tr!("state-rename-seam"), tr!("state-rename-seam-from-to", from = from.clone(), to = to.clone())),
+            Self::MoveBoundary { edit, .. } => report(
+                match edit.side {
+                    crate::model::drill_hole::BoundarySide::Roof => tr!("state-move-roof"),
+                    crate::model::drill_hole::BoundarySide::Floor => tr!("state-move-floor"),
+                },
+                tr!("state-move-boundary-from-to", from = format!("{:.2}", edit.at), to = format!("{:.2}", edit.to)),
+            ),
+            Self::InsertInterval { edit, .. } => report(
+                tr!("state-insert-interval"),
+                tr!(
+                    "state-insert-interval-at",
+                    code = edit.code.trim().to_owned(),
+                    from = format!("{:.2}", edit.from),
+                    to = format!("{:.2}", edit.to)
+                ),
+            ),
+            Self::DeleteInterval { edit, .. } => report(
+                tr!("state-delete-interval"),
+                tr!("state-move-boundary-from-to", from = format!("{:.2}", edit.row.from), to = format!("{:.2}", edit.row.to)),
+            ),
             Self::ShiftStratColumn { field, direction, from, .. } => report(
                 tr!("state-shift-names"),
                 match (direction, from) {
@@ -4962,6 +5443,7 @@ impl UiCommand {
             Self::RelimitLineResize { source_id, .. } => report(tr!("common-relimit-line"), format!("{source_id:?}")),
             Self::CommitBatterBerm => report(tr!("common-create-batter-berm"), tr!("state-apply-generated-rings")),
             Self::InsertPointsAtIntersections => report(tr!("state-insert-intersection-points"), tr!("state-selected-polylines")),
+            Self::ReverseSelectedStrings => report(tr!("toolbars-reverse-strings"), tr!("state-selected-polylines")),
             Self::ApplyObjectEdit { object, .. } => report(tr!("common-edit-object"), object.kind_name()),
             Self::CleanStrings => report(tr!("cmd-string-clean-clean-strings"), tr!("state-selected-polylines")),
             Self::CleanString(id) => report(tr!("cmd-string-clean-clean-this-string"), format!("{id:?}")),
@@ -4972,6 +5454,18 @@ impl UiCommand {
             Self::InsertPointsAtElevation { object_ids, elevation } => report(
                 tr!("state-insert-points-elevation"),
                 tr!("state-count-object-s-z-elevation", count = object_ids.len().to_string(), elevation = elevation.to_string()),
+            ),
+            Self::ThinStrings { object_ids, tolerance } => report(
+                tr!("state-thin-strings"),
+                tr!("state-count-object-s-tolerance", count = object_ids.len().to_string(), tolerance = tolerance.to_string()),
+            ),
+            Self::InsertPointsAtSpacing { object_ids, spacing } => report(
+                tr!("state-insert-points-spacing"),
+                tr!("state-count-object-s-spacing", count = object_ids.len().to_string(), spacing = spacing.to_string()),
+            ),
+            Self::SmoothStrings { object_ids, tolerance } => report(
+                tr!("state-smooth-strings"),
+                tr!("state-count-object-s-tolerance", count = object_ids.len().to_string(), tolerance = tolerance.to_string()),
             ),
             Self::ExecuteCreateTriangulation { name, object_ids, .. }
             | Self::ExecuteCreateTriangulationWithWeld { name, object_ids, .. }
@@ -5310,24 +5804,31 @@ pub(crate) fn note_recent(list: &mut Vec<String>, key: &str) -> bool {
 }
 
 impl EditorState {
-    /// Only Production keeps a recent functions list.
+    /// Production and Geology keep a recent functions list each.
     pub(crate) fn keeps_recent_functions(&self) -> bool {
-        self.active_workspace == Workspace::Production
+        matches!(self.active_workspace, Workspace::Production | Workspace::Geology)
     }
 
     /// The active workspace's recent functions, newest first and as many as
     /// the preference shows; `None` where the workspace keeps no list.
-    pub(crate) fn recent_design_rows(&self) -> Option<Vec<DesignRow>> {
-        self.keeps_recent_functions().then(|| {
-            let rows = self.recent_design_functions.iter().rev().filter_map(|key| DesignRow::from_key(key));
-            rows.take(self.recent_functions_shown as usize).collect()
-        })
+    pub(crate) fn recent_rows(&self) -> Option<Vec<RecentRow>> {
+        let keys = match self.active_workspace {
+            Workspace::Production => &self.recent_design_functions,
+            Workspace::Geology => &self.recent_geology_functions,
+            _ => return None,
+        };
+        let rows = keys.iter().rev().filter_map(|key| RecentRow::from_key(self.active_workspace, key));
+        Some(rows.take(self.recent_functions_shown as usize).collect())
     }
 
     /// The active workspace's recent function keys; `None` where it keeps no
     /// list.
     pub(crate) fn recent_functions_mut(&mut self) -> Option<&mut Vec<String>> {
-        self.keeps_recent_functions().then_some(&mut self.recent_design_functions)
+        match self.active_workspace {
+            Workspace::Production => Some(&mut self.recent_design_functions),
+            Workspace::Geology => Some(&mut self.recent_geology_functions),
+            _ => None,
+        }
     }
 }
 
@@ -5661,13 +6162,29 @@ impl Workspace {
 
     /// Whether this workspace carries the mine production tools.
     ///
-    /// The drawing toolbar, the cursor modes, the design menus and the layer / Z
-    /// / colour / fill settings those tools draw with all belong to production
-    /// alone. A workspace without them keeps what is true everywhere: the
+    /// The design menus and the tools that design a pit belong to production
+    /// alone; [`Self::has_drawing_tools`] says who shares the drawing
+    /// tools. A workspace without them keeps what is true everywhere: the
     /// project actions, the camera controls, the switches over how the scene is
     /// drawn, and the editors of its own discipline.
     pub(crate) fn has_production_tools(self) -> bool {
         matches!(self, Self::Production)
+    }
+
+    /// Whether this workspace carries the drawing toolbar and its settings.
+    pub(crate) fn has_drawing_tools(self) -> bool {
+        matches!(self, Self::Production | Self::Geology)
+    }
+
+    /// Whether this workspace edits strings on a section.
+    pub(crate) fn edits_in_slice_view(self) -> bool {
+        matches!(self, Self::Geology)
+    }
+
+    /// Whether this workspace's drawing tools take the next vertex typed, by
+    /// point or by bearing and distance.
+    pub(crate) fn has_drawing_aids(self) -> bool {
+        matches!(self, Self::Geology)
     }
 }
 
@@ -5917,6 +6434,8 @@ pub(crate) enum DataMenu {
     Pcd,
     CsvBlockModel,
     CsvDrillHole,
+    /// The corrections worksheet: export only.
+    CorrectionsWorksheet,
     Geotiff,
 }
 
@@ -6012,6 +6531,9 @@ pub(crate) struct ThicknessTable {
 #[derive(Clone, Debug)]
 pub(crate) struct SeamRenameDraft {
     pub(crate) dataset: DrillHoleId,
+    /// The dataset's revision when the dialog opened; any edit to it since
+    /// closes a rename in one horizon, as the interval it holds may have moved.
+    pub(crate) revision: u64,
     pub(crate) scope: crate::model::drill_hole::RenameScope,
     pub(crate) field: String,
     pub(crate) from: String,
@@ -6032,6 +6554,9 @@ pub(crate) struct SeamRenameDraft {
 #[derive(Clone, Debug)]
 pub(crate) struct NameShiftDraft {
     pub(crate) dataset: DrillHoleId,
+    /// The dataset's revision when the dialog opened; any edit to it since
+    /// closes the dialog, as the indices it holds may no longer fit.
+    pub(crate) revision: u64,
     pub(crate) hole: usize,
     /// The hole's name, for the dialog to show.
     pub(crate) dhid: String,
@@ -6044,6 +6569,189 @@ pub(crate) struct NameShiftDraft {
     pub(crate) unknown: usize,
     pub(crate) untouched: usize,
     pub(crate) reason: String,
+}
+
+/// What the move boundary dialog holds while open: the boundary, the two
+/// intervals it parts as they stood when it opened, and what has been
+/// typed. The move is judged again when it runs.
+#[derive(Clone, Debug)]
+pub(crate) struct BoundaryMoveDraft {
+    pub(crate) dataset: DrillHoleId,
+    /// The dataset's revision when the dialog opened; any edit to it since
+    /// closes the dialog, as the indices it holds may no longer fit.
+    pub(crate) revision: u64,
+    /// The move asked for; its `to` is the depth typed.
+    pub(crate) edit: crate::model::drill_hole::BoundaryMove,
+    /// The intervals above and below the boundary, as the dialog shows
+    /// them; `None` on a side nothing touches.
+    pub(crate) above: Option<String>,
+    pub(crate) below: Option<String>,
+    /// The hole's end, the deepest a boundary can go.
+    pub(crate) end: f64,
+    pub(crate) reason: String,
+    /// The hole as it would read at the depth typed, while that depth is
+    /// one the move takes, for the log to draw; built again only when the
+    /// depth changes, the depth it was built for beside it.
+    pub(crate) preview: Option<std::sync::Arc<crate::model::drill_hole::DrillHole>>,
+    pub(crate) previewed: Option<f64>,
+}
+
+/// What the delete interval dialog holds while open: the interval picked in
+/// the log, as the dialog shows it, and the reason typed. The deletion is
+/// judged again when it runs.
+#[derive(Clone, Debug)]
+pub(crate) struct IntervalDeleteDraft {
+    pub(crate) dataset: DrillHoleId,
+    /// The dataset's revision when the dialog opened; any edit to it since
+    /// closes the dialog, as the index it holds may no longer fit.
+    pub(crate) revision: u64,
+    pub(crate) hole: usize,
+    pub(crate) dhid: String,
+    pub(crate) interval: usize,
+    /// The field the interval was picked in, which its record names.
+    pub(crate) field: String,
+    /// The interval as the dialog lists it.
+    pub(crate) description: String,
+    /// The row as it was picked: a delete goes ahead only while the row at
+    /// `interval` is still this one.
+    pub(crate) row: crate::model::drill_hole::DrillInterval,
+    pub(crate) reason: String,
+}
+
+/// What the insert interval dialog holds while open: the hole, the depths,
+/// the field picked and the other code fields of its table, and what has
+/// been typed. The insertion is judged again when it runs.
+#[derive(Clone, Debug)]
+pub(crate) struct IntervalInsertDraft {
+    pub(crate) dataset: DrillHoleId,
+    /// The dataset's revision when the dialog opened; any edit to it since
+    /// closes the dialog, as the indices it holds may no longer fit.
+    pub(crate) revision: u64,
+    pub(crate) hole: usize,
+    pub(crate) dhid: String,
+    /// The depths: empty from a seam, the stretch's own from a gap.
+    pub(crate) from: DepthField,
+    pub(crate) to: DepthField,
+    /// The field picked, whose code is required.
+    pub(crate) picked: InsertCodeField,
+    /// The table's other code fields, each blank or filled from the interval
+    /// the insertion splits until typed in.
+    pub(crate) siblings: Vec<InsertSiblingField>,
+    pub(crate) reason: String,
+    /// While the out of sequence warning is up, the codes it names.
+    pub(crate) out_of_sequence: Option<String>,
+}
+
+impl IntervalInsertDraft {
+    /// Both depths, once each holds a depth, in a hole ending at `end`;
+    /// `None` while either is empty or not a depth, when the dialog judges
+    /// nothing about depths yet.
+    pub(crate) fn depths(&self, end: f64) -> Option<(f64, f64)> {
+        match (self.from.depth(None), self.to.depth(Some(end))) {
+            (TypedDepth::Depth(from), TypedDepth::Depth(to)) => Some((from, to)),
+            _ => None,
+        }
+    }
+
+    /// The insertion as typed in a hole ending at `end`, codes trimmed;
+    /// depths not yet given read as NaN, which the judgement refuses.
+    pub(crate) fn edit(&self, end: f64) -> crate::model::drill_hole::IntervalInsert {
+        let depths = self.depths(end);
+        crate::model::drill_hole::IntervalInsert {
+            hole: self.hole,
+            dhid: self.dhid.clone(),
+            field: self.picked.key.clone(),
+            from: depths.map_or(f64::NAN, |(from, _)| from),
+            to: depths.map_or(f64::NAN, |(_, to)| to),
+            code: self.picked.value.trim().to_owned(),
+            siblings: self
+                .siblings
+                .iter()
+                .map(|sibling| (sibling.field.key.clone(), sibling.field.value.trim().to_owned()))
+                .collect(),
+        }
+    }
+}
+
+/// One depth field of the insert dialog: the text in it, and the exact depth
+/// it was filled in with, beside the text it was shown as. A shown depth is
+/// rounded; while its text is unchanged it stands for the exact depth, so a
+/// prefill taken as it is leaves no sliver.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct DepthField {
+    pub(crate) text: String,
+    pub(crate) prefilled: Option<(f64, String)>,
+}
+
+impl DepthField {
+    /// A field filled in with `depth`, shown at most to the millimetre.
+    pub(crate) fn prefilled(depth: f64) -> Self {
+        let shown = crate::model::drill_hole::shown_depth(depth);
+        Self {
+            text: shown.clone(),
+            prefilled: Some((depth, shown)),
+        }
+    }
+
+    /// The depth the field holds: the exact prefill while what is typed is
+    /// the same number as it was shown as; for the To field, given the hole's
+    /// `end`, the end exactly while what is typed is the same number as the
+    /// hint shows; else the depth typed.
+    pub(crate) fn depth(&self, end: Option<f64>) -> TypedDepth {
+        let typed = typed_depth(&self.text);
+        let TypedDepth::Depth(number) = typed else {
+            return typed;
+        };
+        let same = |shown: &str| typed_depth(shown) == TypedDepth::Depth(number);
+        match (&self.prefilled, end) {
+            (Some((exact, shown)), _) if same(shown) => TypedDepth::Depth(*exact),
+            (_, Some(end)) if end.is_finite() && same(&crate::model::drill_hole::shown_depth(end)) => TypedDepth::Depth(end),
+            _ => typed,
+        }
+    }
+}
+
+/// A depth as typed in the insert dialog.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum TypedDepth {
+    Empty,
+    Depth(f64),
+    /// Something typed that is not a depth, a comma decimal included, which
+    /// could as well be a thousands mark.
+    NotADepth,
+}
+
+/// What `text` says as a depth in metres: a number, a point its decimal mark,
+/// with or without a trailing "m".
+pub(crate) fn typed_depth(text: &str) -> TypedDepth {
+    let text = text.trim();
+    if text.is_empty() {
+        return TypedDepth::Empty;
+    }
+    let number = text.strip_suffix('m').map_or(text, str::trim_end);
+    match number.parse::<f64>() {
+        Ok(depth) if depth.is_finite() => TypedDepth::Depth(depth),
+        _ => TypedDepth::NotADepth,
+    }
+}
+
+/// One code field of the insert interval dialog: the field, its label, the
+/// codes it offers ([`crate::model::drill_hole::offered_codes`]) when the
+/// dialog opened, and the code typed.
+#[derive(Clone, Debug)]
+pub(crate) struct InsertCodeField {
+    pub(crate) key: String,
+    pub(crate) label: String,
+    pub(crate) codes: Vec<String>,
+    pub(crate) value: String,
+}
+
+/// A code field other than the one picked, and whether it still takes the
+/// value of the interval the insertion splits, which it does until typed in.
+#[derive(Clone, Debug)]
+pub(crate) struct InsertSiblingField {
+    pub(crate) field: InsertCodeField,
+    pub(crate) follows_split: bool,
 }
 
 /// One strat column check: the order most holes agree on, the column as it

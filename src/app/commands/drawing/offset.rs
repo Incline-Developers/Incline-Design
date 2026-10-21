@@ -3,6 +3,7 @@ use crate::{
     i18n::tr,
     logging::CommandReportSpec,
     model::{Command, Object, ObjectId, PolyVertex, SceneEntityId},
+    rendering::camera::SectionSlab,
     ui::state::ActiveTool,
     userspace_warn,
 };
@@ -11,6 +12,11 @@ impl<'a> App<'a> {
     /// Open the offset dialog for the given object, or pick from selection.
     pub(crate) fn open_offset_dialog(&mut self) {
         let object_ids = self.selected_offset_polyline_ids();
+        let selected = self.editor.selected_handles.iter().filter_map(|handle| match handle {
+            SceneEntityId::Object(id) => Some(*id),
+            _ => None,
+        });
+        self.warn_refused_on_section(selected);
         if let Some(&first_id) = object_ids.first() {
             if !self.activate_project_for_object(first_id) {
                 return;
@@ -33,7 +39,7 @@ impl<'a> App<'a> {
                         .workspace
                         .active_document()
                         .and_then(|document| document.get_object(*id))
-                        .is_some_and(|object| matches!(object, Object::Polyline { .. } | Object::Circle { .. })) =>
+                        .is_some_and(|object| self.offset_takes(object)) =>
                 {
                     Some(*id)
                 }
@@ -42,13 +48,39 @@ impl<'a> App<'a> {
             .collect()
     }
 
+    /// On a section, say why a string or circle among `ids` is not offset.
+    fn warn_refused_on_section(&self, ids: impl IntoIterator<Item = ObjectId>) {
+        if self.drawing_section().is_none() {
+            return;
+        }
+        let (mut circle, mut string) = (false, false);
+        for id in ids {
+            match self.workspace.active_document().and_then(|document| document.get_object(id)) {
+                Some(object) if self.offset_takes(object) => {}
+                Some(Object::Circle { .. }) => circle = true,
+                Some(Object::Polyline { .. }) => string = true,
+                _ => {}
+            }
+        }
+        if circle {
+            userspace_warn!("{}", tr!("cmd-offset-circle-on-section"));
+        }
+        if string {
+            userspace_warn!("{}", tr!("cmd-offset-off-section"));
+        }
+    }
+
     /// Pick an element to offset when the tool is active but no target yet.
     pub(crate) fn pick_offset_target(&mut self) {
         let picked = self.pick_under_cursor();
         if let Some((SceneEntityId::Object(id), _)) = picked
             && self.activate_project_for_object(id)
-            && matches!(self.active_document().get_object(id), Some(Object::Polyline { .. } | Object::Circle { .. }))
+            && let Some(object) = self.active_document().get_object(id)
         {
+            if !self.offset_takes(object) {
+                self.warn_refused_on_section([id]);
+                return;
+            }
             self.editor.offset_target_id = Some(id);
             self.editor.offset_target_ids = vec![id];
             self.editor.offset_dialog_open = true;
@@ -70,10 +102,10 @@ impl<'a> App<'a> {
             userspace_warn!("{}", tr!("cmd-offset-distance-must-be-positive"));
             return;
         }
-        let target_ids: Vec<ObjectId> = object_ids
+        let (target_ids, refused): (Vec<ObjectId>, Vec<ObjectId>) = object_ids
             .into_iter()
-            .filter(|id| matches!(self.active_document().get_object(*id), Some(Object::Polyline { .. } | Object::Circle { .. })))
-            .collect();
+            .partition(|id| self.active_document().get_object(*id).is_some_and(|object| self.offset_takes(object)));
+        self.warn_refused_on_section(refused);
         if target_ids.is_empty() {
             return;
         }
@@ -91,6 +123,16 @@ impl<'a> App<'a> {
             .and_then(Object::string_geometry)
             .is_some_and(|(_, closed)| closed);
         self.editor.offset_preview_closed = closed;
+    }
+
+    /// Strings and circles offset; on a section only a string lying on it
+    /// (a circle is a plan shape).
+    fn offset_takes(&self, object: &Object) -> bool {
+        match (object, self.drawing_section()) {
+            (Object::Polyline { .. } | Object::Circle { .. }, None) => true,
+            (Object::Polyline { .. }, Some(slab)) => object.tessellated_path().is_some_and(|(points, _)| lies_on_section(slab, &points)),
+            _ => false,
+        }
     }
 
     /// The offset of a circle is a concentric circle, so it is computed
@@ -121,7 +163,11 @@ impl<'a> App<'a> {
     /// choosing between a uniform offset and a per-vertex angled projection to a
     /// target absolute RL depending on `offset_project_to_rl`.
     fn compute_offset_result(&self, src_verts: &[glam::DVec3], closed: bool, cursor_world_xy: glam::DVec2) -> Vec<glam::DVec3> {
-        let result = if let Some((tan_angle, target_rl)) = self.editor.offset_project_to_rl {
+        let result = if let Some(slab) = self.drawing_section() {
+            let cursor = self.graphics.as_ref().and_then(|graphics| graphics.cursor_world(0.0)).unwrap_or(slab.point);
+            // `offset_takes` keeps strings off the section out of here.
+            section_offset(slab, src_verts, closed, cursor, self.editor.offset_horiz_dist.abs()).unwrap_or_default()
+        } else if let Some((tan_angle, target_rl)) = self.editor.offset_project_to_rl {
             // Per-vertex horizontal distance implied by each vertex's own elevation,
             // used only to size the cursor-side probe below.
             let probe_dist = if tan_angle.abs() < 1e-9 {
@@ -211,6 +257,9 @@ impl<'a> App<'a> {
             let Some(object) = self.active_document().get_object(object_id) else {
                 continue;
             };
+            if !self.offset_takes(object) {
+                continue;
+            }
             let Some((src_verts, closed)) = object.tessellated_path() else {
                 continue;
             };
@@ -261,10 +310,16 @@ impl<'a> App<'a> {
 
         let mut offset_specs = Vec::new();
         let mut collapsed_circles = 0usize;
+        // The section may have moved off a string since it was picked.
+        let mut refused = Vec::new();
         for object_id in object_ids {
             let Some(object) = self.active_document().get_object(object_id) else {
                 continue;
             };
+            if !self.offset_takes(object) {
+                refused.push(object_id);
+                continue;
+            }
             let (layer, color) = (object.layer(), object.color());
             let (Some(fill), Some(line_weight)) = (object.fill(), object.line_weight()) else {
                 continue;
@@ -302,6 +357,7 @@ impl<'a> App<'a> {
             offset_specs.push((layer, shape, color, fill, line_weight));
         }
 
+        self.warn_refused_on_section(refused);
         if collapsed_circles > 0 {
             userspace_warn!("{}", crate::i18n::tr!("cmd-offset-skipped-count-circle-s-offset", count = collapsed_circles.to_string()));
         }
@@ -366,4 +422,27 @@ impl<'a> App<'a> {
         self.editor.active_tool = ActiveTool::None;
         self.invalidate_geometry();
     }
+}
+
+/// Whether every point lies inside `slab` (`SectionSlab::contains`, the test
+/// section picking uses), as a string drawn on the section does.
+fn lies_on_section(slab: SectionSlab, points: &[glam::DVec3]) -> bool {
+    points.iter().all(|&point| slab.contains(point))
+}
+
+/// Offset on a section: the plan offset run in the section's frame, so the
+/// copy stays on the plane, `distance` square to the string, on the side of
+/// `cursor`. `None` for a string not lying on the section.
+fn section_offset(slab: SectionSlab, src_verts: &[glam::DVec3], closed: bool, cursor: glam::DVec3, distance: f64) -> Option<Vec<glam::DVec3>> {
+    if !lies_on_section(slab, src_verts) {
+        return None;
+    }
+    let frame: Vec<glam::DVec3> = src_verts.iter().map(|&point| slab.frame_coords(point)).collect();
+    let side = crate::model::geometry::offset_side_from_cursor(&frame, closed, slab.frame_point(cursor), distance);
+    Some(
+        crate::model::geometry::geometric_offset(&frame, closed, side * distance, 0.0)
+            .into_iter()
+            .map(|point| slab.world_from_frame(point))
+            .collect(),
+    )
 }

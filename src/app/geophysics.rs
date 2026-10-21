@@ -95,7 +95,7 @@ impl<'a> App<'a> {
         let link = match link {
             Some(link) => link,
             None => {
-                placeholder = Arc::new(GeophysicsLink { files: Vec::new() });
+                placeholder = Arc::new(GeophysicsLink::new(Vec::new()));
                 &placeholder
             }
         };
@@ -108,7 +108,8 @@ impl<'a> App<'a> {
     }
 
     /// Keep `link` as the dataset's, to be saved with it, and read from it.
-    pub(super) fn keep_geophysics_link(&mut self, id: DrillHoleId, link: GeophysicsLink) {
+    pub(super) fn keep_geophysics_link(&mut self, id: DrillHoleId, mut link: GeophysicsLink) {
+        link.settle();
         let link = Arc::new(link);
         let Some(dataset) = self.drill_holes.iter_mut().find(|item| item.id == id) else {
             return;
@@ -127,7 +128,7 @@ impl<'a> App<'a> {
         }
         match result {
             Ok(files) => {
-                let mut link = base.map_or_else(|| GeophysicsLink { files: Vec::new() }, |base| (*base).clone());
+                let mut link = base.map_or_else(|| GeophysicsLink::new(Vec::new()), |base| (*base).clone());
                 for (replaces, indexed) in files {
                     let file = indexed.into_file();
                     match replaces.and_then(|index| link.files.get_mut(index)) {

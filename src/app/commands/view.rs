@@ -1,7 +1,10 @@
 use crate::{
     app::App,
     i18n::tr,
-    ui::state::{ActiveTool, DelayProduct, RECENT_FUNCTION_LIMIT, Workspace, note_recent},
+    ui::{
+        elements::main_menu::RecentRow,
+        state::{ActiveTool, DelayProduct, RECENT_FUNCTION_LIMIT, Workspace, note_recent},
+    },
     userspace_log, userspace_warn,
 };
 
@@ -254,6 +257,7 @@ impl<'a> App<'a> {
             self.editor.survey.definitions.clone(),
             self.editor.survey.local_system.clone(),
             self.editor.recent_design_functions.clone(),
+            self.editor.recent_geology_functions.clone(),
         ))?;
 
         Ok(())
@@ -262,7 +266,9 @@ impl<'a> App<'a> {
     /// Remember a menu function as just used and save the list with the rest
     /// of the config; no project is touched, so nothing turns dirty.
     pub(crate) fn note_recent_function(&mut self, key: &'static str) -> anyhow::Result<()> {
-        if !self.editor.recent_functions_mut().is_some_and(|list| note_recent(list, key)) {
+        // Asked after the row's own command ran, which decided a tool's toggle.
+        let used = RecentRow::from_key(self.editor.active_workspace, key).is_some_and(|row| row.was_used(&self.editor));
+        if !used || !self.editor.recent_functions_mut().is_some_and(|list| note_recent(list, key)) {
             return Ok(());
         }
         crate::app::io::save_config(&config_from(
@@ -273,6 +279,7 @@ impl<'a> App<'a> {
             self.editor.survey.definitions.clone(),
             self.editor.survey.local_system.clone(),
             self.editor.recent_design_functions.clone(),
+            self.editor.recent_geology_functions.clone(),
         ))?;
         Ok(())
     }
@@ -358,6 +365,7 @@ impl<'a> App<'a> {
 /// palette owns them. The workspace order is passed separately for the same
 /// reason, so saving preferences or products preserves the tab arrangement.
 /// Mine-grid definitions are also carried through every config write.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn config_from(
     preferences: &crate::ui::state::PreferencesDraft,
     workspace_order: [crate::ui::state::Workspace; 5],
@@ -366,6 +374,7 @@ pub(crate) fn config_from(
     coordinate_systems: Vec<crate::model::survey::SystemDefinition>,
     mine_coordinate_system: Option<String>,
     recent_design_functions: Vec<String>,
+    recent_geology_functions: Vec<String>,
 ) -> crate::app::io::Config {
     crate::app::io::Config {
         language: preferences.language,
@@ -405,5 +414,6 @@ pub(crate) fn config_from(
         workspace_order: workspace_order.to_vec(),
         recent_functions_shown: preferences.recent_functions_shown,
         recent_design_functions,
+        recent_geology_functions,
     }
 }

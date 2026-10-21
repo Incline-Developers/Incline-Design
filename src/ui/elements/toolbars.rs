@@ -12,8 +12,10 @@
 
 use crate::{
     i18n::tr,
+    model::{Axis, SceneEntityId},
     ui::{
         EditorState, UiProjectView,
+        elements::main_menu::RecentRow,
         state::{ActiveTool, CursorMode, UiCommand, Workspace},
         themed_icon, unthemed_icon,
         widgets::toolbar::{TOOL_CELL_SIZE, ToolbarButton},
@@ -39,6 +41,8 @@ enum LeftToolAction {
     Tool(ActiveTool),
     /// Open or close the Drill & Blast pattern builder.
     DrillPattern,
+    /// Push this command, acting on the selection.
+    Command(Box<UiCommand>),
 }
 
 /// One button in the drawing toolbar's run.
@@ -61,7 +65,7 @@ struct LeftTool {
 fn left_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, project_active: bool) -> Vec<LeftTool> {
     let tool = |icon: egui::ImageSource<'static>, tooltip: String, tool: ActiveTool| {
         let layer_ok = !tool.requires_active_layer() || editor.active_layer.is_some();
-        let blocked_by_section = editor.slice_mode_enabled && tool.section_refuses();
+        let blocked_by_section = editor.slice_mode_enabled && tool.section_refuses(editor.active_workspace);
         LeftTool {
             icon: egui::Image::new(icon),
             hint: (blocked_by_section && editing_enabled && layer_ok).then(|| tr!("toolbars-tool-not-available-section-view", tool = tooltip.as_str().to_string())),
@@ -95,6 +99,60 @@ fn left_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, projec
         tool(unthemed_icon!("explode_polyline.svg"), tr!("toolbars-explode-polyline-lines"), ActiveTool::ExplodePolyline),
         tool(unthemed_icon!("delete_element.svg"), tr!("toolbars-delete-points"), ActiveTool::DeletePoints),
     ]
+}
+
+/// Production's drawing run less the tools that design a pit, then the
+/// string tools a geologist reaches for on a section.
+fn drawing_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, project_active: bool) -> Vec<LeftTool> {
+    let mut tools = left_tools(ui, editor, editing_enabled, project_active);
+    tools.retain(|tool| !matches!(tool.action, LeftToolAction::Tool(active) if active.designs_pit()));
+    let has_object = editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_)));
+    let cell = |icon: egui::ImageSource<'static>, tooltip: String, action: LeftToolAction, enabled: bool| LeftTool {
+        icon: egui::Image::new(icon),
+        tooltip,
+        action,
+        enabled: editing_enabled && enabled,
+        hint: None,
+    };
+    tools.extend([
+        cell(
+            unthemed_icon!("measure_batter_angle.svg"),
+            tr!("toolbars-strike-dip"),
+            LeftToolAction::Tool(ActiveTool::MeasureBatterAngle),
+            true,
+        ),
+        cell(
+            themed_icon!(ui, "edit_vertex.svg"),
+            tr!("toolbars-edit-vertex"),
+            LeftToolAction::Tool(ActiveTool::EditVertex),
+            true,
+        ),
+        cell(
+            themed_icon!(ui, "set_z.svg"),
+            tr!("common-set") + " Z...",
+            LeftToolAction::Command(Box::new(UiCommand::OpenMoveToAxisDialog(Axis::Z))),
+            has_object,
+        ),
+        cell(
+            themed_icon!(ui, "insert_crossings.svg"),
+            tr!("toolbars-insert-points-crossings"),
+            LeftToolAction::Command(Box::new(UiCommand::InsertPointsAtIntersections)),
+            editor.selection_has_intersections,
+        ),
+        cell(
+            themed_icon!(ui, "reverse_string.svg"),
+            tr!("toolbars-reverse-strings"),
+            LeftToolAction::Command(Box::new(UiCommand::ReverseSelectedStrings)),
+            editor.selection_has_polylines,
+        ),
+        cell(
+            themed_icon!(ui, "thin_string.svg"),
+            tr!("toolbars-thin-strings"),
+            LeftToolAction::Command(Box::new(UiCommand::OpenThinStringsDialog)),
+            editor.selection_has_polylines,
+        ),
+    ]);
+    tools
 }
 
 /// The Drill & Blast tools, in the order they are drawn: lay a pattern out,
@@ -171,6 +229,7 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
         LeftToolAction::NewLayer => editor.new_layer_dialog_open,
         LeftToolAction::Tool(active) => editor.active_tool == active,
         LeftToolAction::DrillPattern => editor.drill_pattern_open,
+        LeftToolAction::Command(_) => false,
     };
     let button = ToolbarButton::new(tool.icon.clone(), tool.tooltip.as_str())
         .id_salt(("left_tool", tool.tooltip.as_str()))
@@ -182,7 +241,7 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
     if !response.clicked() {
         return;
     }
-    match tool.action {
+    match &tool.action {
         LeftToolAction::NewLayer => {
             editor.new_layer_dialog_open = !editor.new_layer_dialog_open;
             if editor.new_layer_dialog_open {
@@ -190,8 +249,20 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
                 commands.push(UiCommand::SetActiveTool(ActiveTool::None));
             }
         }
-        LeftToolAction::Tool(active) => commands.push(UiCommand::SetActiveTool(active)),
+        LeftToolAction::Tool(active) => commands.push(UiCommand::SetActiveTool(*active)),
         LeftToolAction::DrillPattern => commands.push(UiCommand::ToggleCreateDrillPattern),
+        LeftToolAction::Command(command) => commands.push(command.as_ref().clone()),
+    }
+    if let LeftToolAction::Tool(_) | LeftToolAction::Command(_) = tool.action {
+        note_row_use(editor.active_workspace, commands);
+    }
+}
+
+/// A cell running a Design row's function, the last command pushed, is a use
+/// of that row.
+fn note_row_use(workspace: Workspace, commands: &mut Vec<UiCommand>) {
+    if let Some(row) = commands.last().and_then(|command| RecentRow::running(workspace, command)) {
+        commands.push(UiCommand::NoteRecentFunction(row.key()));
     }
 }
 
@@ -218,6 +289,7 @@ pub(crate) fn draw_left_toolbar(
 ) -> egui::Rect {
     let tools = match editor.active_workspace {
         workspace if workspace.has_production_tools() => left_tools(ui, editor, editing_enabled, project_active),
+        workspace if workspace.has_drawing_tools() => drawing_tools(ui, editor, editing_enabled, project_active),
         Workspace::DrillAndBlast => blast_tools(ui, project, editor, editing_enabled, project_active),
         _ => Vec::new(),
     };
@@ -421,6 +493,7 @@ pub(crate) fn tool_button(
 
     if response.clicked() {
         commands.push(UiCommand::SetActiveTool(tool));
+        note_row_use(editor.active_workspace, commands);
     }
 
     response

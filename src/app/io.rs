@@ -251,6 +251,10 @@ pub(crate) struct Config {
     #[serde(default)]
     #[serde(deserialize_with = "lenient_list")]
     pub(crate) recent_design_functions: Vec<String>,
+    /// Geology's, kept apart: its rows are Geology Design's.
+    #[serde(default)]
+    #[serde(deserialize_with = "lenient_list")]
+    pub(crate) recent_geology_functions: Vec<String>,
 }
 
 /// Deserialize a list, dropping entries this build cannot read instead of
@@ -324,6 +328,7 @@ impl Default for Config {
             mine_coordinate_system: None,
             recent_functions_shown: default_recent_functions_shown(),
             recent_design_functions: Vec::new(),
+            recent_geology_functions: Vec::new(),
         }
     }
 }
