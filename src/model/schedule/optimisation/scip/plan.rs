@@ -352,6 +352,9 @@ type Flow = (usize, f64, Carried);
 /// a few orders of magnitude of each other, which both solvers need.
 const UNIT: f64 = 1000.0;
 
+/// Tonnes below which a block is dust to a plan.
+const DUST_T: f64 = 1.0;
+
 /// A column carrying a block material's tonnes to a destination on a day:
 /// (block, material, destination, period), the column, tonnes per unit, and
 /// the loader when it is one loader's own dig.
@@ -444,10 +447,14 @@ impl<'a> Prepared<'a> {
             .collect();
         let periods = days.len();
 
+        // A block of dust is left out: the dispatch digs it at once, and in
+        // the plan its tonnes bound columns and scale rows a million times
+        // below the rest, which left a long-term relaxation's basis singular.
         let tonnes: BTreeMap<GroundId, f64> = match window {
             Some(window) => window.remaining.iter().map(|(ground, left)| (*ground, left / UNIT)).collect(),
             None => input.ground.iter().map(|source| (source.id, source.tonnes_t / UNIT)).collect(),
         };
+        let tonnes: BTreeMap<GroundId, f64> = tonnes.into_iter().filter(|(_, kilotonnes)| window.is_some() || *kilotonnes * UNIT >= DUST_T).collect();
         // Over the whole horizon a reclaim's grade is the one that suits each
         // use of it best. A bound's relaxation also reads every route, order
         // and reach as the most any schedule could have, and each blast at its
