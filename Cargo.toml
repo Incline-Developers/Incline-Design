@@ -27,8 +27,8 @@ winresource = "0.1.34"
 # hourly dispatch solves its linear programs with the solver crate
 # (crates/solver, HiGHS's LP and MIP solvers ported to Rust). Native builds
 # add Improve: the whole-horizon solve, the day-by-day fallback and the
-# search's daily plans, run in a solver process on crates/minlp (SCIP 10.0.2
-# ported to Rust). Their licences are in the crates.
+# search's daily plans, on crates/minlp (SCIP 10.0.2 ported to Rust).
+# Their licences are in the crates.
 #
 #   video-av1     on by default: Animate's video export writes AV1 (rav1e,
 #                 pure Rust) into MP4, MOV or WebM. Without it the export
