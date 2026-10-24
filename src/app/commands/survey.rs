@@ -183,6 +183,7 @@ impl App<'_> {
         let mut items = Vec::new();
         for handle in &self.editor.selected_handles {
             match *handle {
+                SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_) => anyhow::bail!("{}", tr!("haul-survey-selection")),
                 SceneEntityId::Object(id) => {
                     let object = project.project.document.get_object(id).ok_or_else(|| anyhow!("{}", tr!("survey-wrong-project")))?;
                     let layer = project.project.document.layer(object.layer()).ok_or_else(|| anyhow!("{}", tr!("survey-unavailable")))?;
@@ -375,6 +376,8 @@ fn transform_item(item: &mut OpenItem, transform: &SurveyTransform, target_syste
             ensure!(!cancel.is_cancelled(), "Cancelled");
             item.surface_face_order = Arc::new(triangulation::spatial_surface_face_order(&mesh));
             item.mesh = Arc::new(mesh);
+            // New ground: what was built from the old geometry is stale.
+            item.geometry = crate::model::triangulation::GeometryVersion::mint();
             item.raster_texture = None;
         }
         OpenItem::BlockModel(item) => {

@@ -4,11 +4,15 @@
 // rather than with a fragment test on the filled surface because a square-on
 // section sees flat benches exactly edge-on, and those rasterise no fragments.
 
+// The surface's style uniform (`SurfaceStyleUniform`), read in full for its
+// `cut` lane: x: cut line width in pixels; y: 1 while the surface is selected.
 struct SurfaceStyle {
     color: vec4<f32>,
-    // z: cut line width in pixels; w: 1 while the surface is selected.
     params: vec4<f32>,
     wire_color: vec4<f32>,
+    pattern_color: vec4<f32>,
+    pattern: vec4<f32>,
+    cut: vec4<f32>,
 };
 @group(1) @binding(0)
 var<uniform> surface_style: SurfaceStyle;
@@ -89,7 +93,7 @@ fn vs_main(@location(0) triangle: vec3<u32>, @builtin(vertex_index) corner: u32)
     let span = end_px - start_px;
     let direction = select(vec2<f32>(1.0, 0.0), span / length(span), length(span) > 1e-6);
     let normal = vec2<f32>(-direction.y, direction.x);
-    let half_width = surface_style.params.z * 0.5;
+    let half_width = surface_style.cut.x * 0.5;
     // Strip corners: start then end, each on both sides. Each end is pushed out
     // by half the width too, so neighbouring triangles' cuts overlap at the
     // shared crossing instead of leaving a notch at every bend.
@@ -107,6 +111,6 @@ fn vs_main(@location(0) triangle: vec3<u32>, @builtin(vertex_index) corner: u32)
 @fragment
 fn fs_main() -> @location(0) vec4<f32> {
     // A cut is a line, not a fill, so it draws solid even on a translucent surface.
-    let color = select(surface_style.color.rgb, surface_style.wire_color.rgb, surface_style.params.w > 0.5);
+    let color = select(surface_style.color.rgb, surface_style.wire_color.rgb, surface_style.cut.y > 0.5);
     return vec4<f32>(color, 1.0);
 }

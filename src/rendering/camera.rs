@@ -161,6 +161,20 @@ impl Projection {
         self.aspect = width.max(1) as f64 / height.max(1) as f64;
     }
 
+    /// This projection reshaped for a `width` x `height` target, framing the
+    /// largest centred part of what it framed that has the target's shape:
+    /// the same height where the target is no wider, the same width where it
+    /// is wider. The video export frames its picture this way.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn cropped_to(&self, width: u32, height: u32) -> Self {
+        let mut cropped = self.clone();
+        cropped.resize(width, height);
+        let shrink = (self.aspect / cropped.aspect).min(1.0);
+        cropped.zoom *= shrink;
+        cropped.perspective_fov_y = 2.0 * ((self.perspective_fov_y * 0.5).tan() * shrink).atan();
+        cropped
+    }
+
     pub(crate) fn set_symmetric_depth_extent(&mut self, half_depth: f64) {
         let half_depth = half_depth.max(1.0);
         self.znear = -half_depth;
@@ -272,6 +286,18 @@ pub(crate) struct CameraUniform {
     section_normal: [f32; 4],
 }
 
+/// The matrix [`CameraUniform::update_view_proj`] uploads, over points rebased
+/// by `scene_origin`.
+///
+/// An overlay drawn on top of a render has to project through the same matrix
+/// the GPU drew with, not one rebuilt from the live camera: the two differ
+/// wherever a pass uploads its own settings, as the solid preview does by
+/// rendering without vertical exaggeration.
+pub(crate) fn scene_view_proj(camera: &Camera, projection: &Projection, scene_origin: DVec3, vertical_exaggeration: f64) -> DMat4 {
+    let rebased_view = dcamera::rh::view::look_to_mat4(camera.position - scene_origin, camera.forward(), camera.up);
+    projection.calc_matrix() * rebased_view * DMat4::from_scale(DVec3::new(1.0, 1.0, vertical_exaggeration))
+}
+
 impl CameraUniform {
     pub(crate) fn new() -> Self {
         Self {
@@ -307,9 +333,7 @@ impl CameraUniform {
     }
 
     pub(crate) fn update_view_proj(&mut self, camera: &Camera, projection: &Projection, scene_origin: DVec3, vertical_exaggeration: f64) {
-        let rebased_view = dcamera::rh::view::look_to_mat4(camera.position - scene_origin, camera.forward(), camera.up);
-        let exaggeration = DMat4::from_scale(DVec3::new(1.0, 1.0, vertical_exaggeration));
-        let view_proj = projection.calc_matrix() * rebased_view * exaggeration;
+        let view_proj = scene_view_proj(camera, projection, scene_origin, vertical_exaggeration);
         self.view_proj = view_proj.as_mat4().to_cols_array_2d();
         self.inv_view_proj = view_proj.inverse().as_mat4().to_cols_array_2d();
         let forward = camera.forward();

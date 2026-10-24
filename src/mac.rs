@@ -78,6 +78,11 @@ pub(crate) enum MacMenuAction {
     OpenProject,
     OpenImport,
     OpenExport,
+    DrawHaulRoad,
+    ConvertHaulSelection,
+    ImportHaulRoads,
+    ExportHaulRoads,
+    EditHaulProperties,
     ExportViewportImage,
     OpenPlotDialog,
     RequestExit,
@@ -86,6 +91,7 @@ pub(crate) enum MacMenuAction {
     OpenCutTriangulationBySurface,
     OpenCutTopologyByPitShell,
     OpenIncludeSolidInTopology,
+    OpenBuildSolidFromSurfaces,
     OpenContourTriangulation,
     OpenPointCloudTin,
     OpenPointCloudJoin,
@@ -153,6 +159,11 @@ impl MacMenuAction {
         Self::OpenProject,
         Self::OpenImport,
         Self::OpenExport,
+        Self::DrawHaulRoad,
+        Self::ConvertHaulSelection,
+        Self::ImportHaulRoads,
+        Self::ExportHaulRoads,
+        Self::EditHaulProperties,
         Self::ExportViewportImage,
         Self::OpenPlotDialog,
         Self::RequestExit,
@@ -161,6 +172,7 @@ impl MacMenuAction {
         Self::OpenCutTriangulationBySurface,
         Self::OpenCutTopologyByPitShell,
         Self::OpenIncludeSolidInTopology,
+        Self::OpenBuildSolidFromSurfaces,
         Self::OpenContourTriangulation,
         Self::OpenPointCloudTin,
         Self::OpenPointCloudJoin,
@@ -360,6 +372,18 @@ pub(crate) fn install_menu_bar() {
     }
     add_submenu(&root, &tr!("menu-view"), &view_menu, mtm);
 
+    let haul_menu = menu(&tr!("haul-roads"), mtm);
+    haul_menu.setAutoenablesItems(false);
+    for (label, action) in [
+        (tr!("haul-draw"), MacMenuAction::DrawHaulRoad),
+        (tr!("haul-convert"), MacMenuAction::ConvertHaulSelection),
+        (tr!("haul-import"), MacMenuAction::ImportHaulRoads),
+        (tr!("haul-export"), MacMenuAction::ExportHaulRoads),
+        (tr!("haul-open-layout"), MacMenuAction::EditHaulProperties),
+    ] {
+        add_action(&haul_menu, &label, "", action, &target, mtm);
+    }
+    add_submenu(&root, &tr!("haul-roads"), &haul_menu, mtm);
     let design_menu = menu(&tr!("ws-menubar-design"), mtm);
     design_menu.setAutoenablesItems(false);
     for (group, (title, run)) in design_groups().into_iter().enumerate() {
@@ -420,6 +444,14 @@ pub(crate) fn install_menu_bar() {
         &tr!("common-merge-shell-into-topology-ellipsis"),
         "",
         MacMenuAction::OpenIncludeSolidInTopology,
+        &target,
+        mtm,
+    );
+    add_action(
+        &triangulation_menu,
+        &tr!("menu-build-solid-surfaces"),
+        "",
+        MacMenuAction::OpenBuildSolidFromSurfaces,
         &target,
         mtm,
     );
@@ -660,6 +692,15 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     for (index, enabled) in state.design_rows.iter().enumerate() {
         set_enabled(&root, MacMenuAction::DesignRow(index), *enabled);
     }
+    for action in [
+        MacMenuAction::DrawHaulRoad,
+        MacMenuAction::ImportHaulRoads,
+        MacMenuAction::ExportHaulRoads,
+        MacMenuAction::EditHaulProperties,
+    ] {
+        set_enabled(&root, action, project.has_active_project);
+    }
+    set_enabled(&root, MacMenuAction::ConvertHaulSelection, state.has_polyline_selection);
     for (index, checked) in state.view_toggles.iter().enumerate() {
         set_checked(&root, MacMenuAction::ToggleView(index), *checked);
     }

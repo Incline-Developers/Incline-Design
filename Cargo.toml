@@ -2,7 +2,7 @@ cargo-features = ["profile-rustflags"]
 
 [workspace]
 resolver = "3"
-members = [".", "crates/mineflow", "crates/omf"]
+members = [".", "crates/mineflow", "crates/minlp", "crates/omf", "crates/solver"]
 default-members = ["."]
 
 [package]
@@ -10,7 +10,7 @@ name = "incline-design"
 version = "0.4.0-dev"
 edition = "2024"
 description = "Free Open Source Mine Design"
-repository = "https://github.com/Incline-Developers/Incline"
+repository = "https://github.com/Incline-Developers/Incline-Design"
 license = "MIT"
 keywords = ["mining", "cad", "design"]
 categories = ["graphics", "science"]
@@ -21,6 +21,23 @@ exclude = [
 
 [build-dependencies]
 winresource = "0.1.34"
+
+[features]
+# Every build is pure Rust, the browser included: the first schedule's
+# hourly dispatch solves its linear programs with the solver crate
+# (crates/solver, HiGHS's LP and MIP solvers ported to Rust), and Improve -
+# the whole-horizon solve, the day-by-day fallback and the search's daily
+# plans - runs on crates/minlp (SCIP 10.0.2 ported to Rust).
+# Their licences are in the crates.
+#
+#   video-av1     on by default: Animate's video export writes AV1 (rav1e,
+#                 pure Rust) into MP4, MOV or WebM. Without it the export
+#                 offers GIF only. Desktop builds only.
+#   video-asm     rav1e's x86-64 assembly, about three times faster to
+#                 encode; needs nasm 2.14.02 or newer on the build machine.
+default = ["video-av1"]
+video-av1 = ["dep:rav1e"]
+video-asm = ["video-av1", "rav1e/asm"]
 
 [dependencies]
 anyhow = "1.0.104"
@@ -41,6 +58,8 @@ laz = { version = "0.13.0", features = ["parallel"] }
 log = "0.4.34"
 lyon = "1.0.19"
 mineflow = { path = "crates/mineflow" }
+minlp = { path = "crates/minlp" }
+solver = { path = "crates/solver" }
 omf = { path = "crates/omf", default-features = false, features = ["image", "parquet", "zlib-rs"] }
 png = "0.18.1"
 # `crs-definitions` feature omitted: only `from_proj_string` is used, and enabling it
@@ -69,9 +88,12 @@ winit = "0.30.13"
 dirs = "7.0.0"
 egui_system_font_provider = "0.37.0"
 egui-winit = "0.37.0"
+gif = "0.14.2"
 i18n-embed = { version = "0.16.0", features = ["desktop-requester"] }
 memmap2 = "0.9.11"
 pollster = "1.0.1"
+# The video export's AV1 encoder; see the `video-av1` feature.
+rav1e = { version = "0.8.1", default-features = false, features = ["threading"], optional = true }
 sys-locale = "0.3.2"
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 tempfile = "3.27.0"
