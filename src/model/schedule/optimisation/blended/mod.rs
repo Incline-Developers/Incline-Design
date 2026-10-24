@@ -48,9 +48,7 @@ pub(crate) mod greedy;
 pub(crate) mod input;
 pub(crate) mod lp;
 pub(crate) mod plan;
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod relaxation;
 pub(crate) mod replay;
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod rolling;
 pub(crate) mod utilisation;

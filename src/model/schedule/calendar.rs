@@ -195,7 +195,6 @@ impl LoaderCalendar {
 
     /// The utilisation target and the incentive per dug tonne per point
     /// below it, for one period.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
     pub(crate) fn incentive_at(&self, period: CalendarPeriod) -> (f64, f64) {
         let held = self.periods.get(&period);
         (
@@ -325,7 +324,6 @@ impl LoaderCalendar {
 }
 
 // Compiled calendars are read by the native schedule capture.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
 impl CompiledRateCalendar {
     pub(crate) fn rate_at(&self, hour: f64) -> f64 {
         let index = self.changes.partition_point(|change| change.at_h <= hour);

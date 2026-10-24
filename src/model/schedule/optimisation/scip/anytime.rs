@@ -55,19 +55,22 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    thread::JoinHandle,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use rayon::prelude::*;
+use web_time::Instant;
 
 use super::{
-    super::blended::{
-        greedy,
-        input::BlendInput,
-        plan::PlanTargets,
-        replay::{BlendSolution, ChunkRow, MovementRow, ReplayReport, replay_cancellable},
-        rolling::{self, Carry, Stitched},
+    super::{
+        background::{self, Background},
+        blended::{
+            greedy,
+            input::BlendInput,
+            plan::PlanTargets,
+            replay::{BlendSolution, ChunkRow, MovementRow, ReplayReport, replay_cancellable},
+            rolling::{self, Carry, Stitched},
+        },
     },
     plan::{self, PlanSolve, Settings, Window},
 };
@@ -369,9 +372,9 @@ fn earned(input: &BlendInput, solution: &BlendSolution) -> BTreeMap<u32, f64> {
 }
 
 /// The background plan, once it has finished; waited for when `wait`.
-fn finished(background: &mut Option<JoinHandle<Result<PlanSolve, String>>>, wait: bool) -> Option<Result<PlanSolve, String>> {
+fn finished(background: &mut Option<Background<Result<PlanSolve, String>>>, wait: bool) -> Option<Result<PlanSolve, String>> {
     if background.as_ref().is_some_and(|handle| wait || handle.is_finished()) {
-        return background.take().map(|handle| handle.join().unwrap_or_else(|_| Err("the background plan panicked".into())));
+        return background.take().map(|handle| handle.join().unwrap_or_else(|| Err("the background plan panicked".into())));
     }
     None
 }
@@ -379,7 +382,7 @@ fn finished(background: &mut Option<JoinHandle<Result<PlanSolve, String>>>, wait
 /// The relaxations solved beside the search, coarsest first, and what each
 /// has proved so far.
 struct Relaxations {
-    worker: JoinHandle<()>,
+    worker: Background<()>,
     proved: std::sync::mpsc::Receiver<(u32, Result<PlanSolve, String>)>,
 }
 
@@ -388,10 +391,10 @@ impl Relaxations {
     /// [`PERIOD_DAYS`] in turn, within `limit` in all: a coarse one proves a
     /// bound in seconds on any horizon, and each finer one that finishes in
     /// time tightens it.
-    fn start(input: &BlendInput, horizon_days: u32, limit: Duration, ending: &Arc<AtomicBool>) -> Self {
+    fn start(input: &BlendInput, horizon_days: u32, limit: Duration, ending: &Arc<AtomicBool>) -> Option<Self> {
         let (input, ending) = (input.clone(), Arc::clone(ending));
         let (sender, proved) = std::sync::mpsc::channel();
-        let worker = std::thread::spawn(move || {
+        let worker = background::spawn("schedule-relaxations", move || {
             let started = Instant::now();
             for period in PERIOD_DAYS.into_iter().filter(|period| *period == 1 || *period < horizon_days) {
                 let left = limit.saturating_sub(started.elapsed());
@@ -404,7 +407,13 @@ impl Relaxations {
                 }
             }
         });
-        Self { worker, proved }
+        match worker {
+            Ok(worker) => Some(Self { worker, proved }),
+            Err(error) => {
+                log::warn!("the search's relaxation bound was not started: {error}");
+                None
+            }
+        }
     }
 
     /// Tighten `bound` by every relaxation solved since last asked; what to
@@ -474,24 +483,29 @@ pub(crate) fn run(
     // horizon it can take longer than the whole budget, and the search has
     // no use for the bound until there is a gap to report.
     let horizon_days = input.intervals.iter().map(|interval| interval.day()).collect::<BTreeSet<_>>().len() as u32;
-    let relaxation = (!cancel.load(Ordering::Relaxed)).then(|| Relaxations::start(input, horizon_days, settings.budget, &ending));
-    let mut background = (settings.background_bound && !cancel.load(Ordering::Relaxed)).then(|| {
-        let (input, seed, ending) = (input.clone(), best.solution.clone(), Arc::clone(&ending));
-        let limit = settings.budget.saturating_sub(started.elapsed());
-        std::thread::spawn(move || {
-            plan::solve(
-                &input,
-                Some(&seed),
-                None,
-                Settings {
-                    time_limit: limit,
-                    relative_gap: 1e-4,
-                    relax: false,
-                },
-                &ending,
-            )
+    let relaxation = (!cancel.load(Ordering::Relaxed))
+        .then(|| Relaxations::start(input, horizon_days, settings.budget, &ending))
+        .flatten();
+    let mut background = (settings.background_bound && !cancel.load(Ordering::Relaxed))
+        .then(|| {
+            let (input, seed, ending) = (input.clone(), best.solution.clone(), Arc::clone(&ending));
+            let limit = settings.budget.saturating_sub(started.elapsed());
+            background::spawn("schedule-whole-plan", move || {
+                plan::solve(
+                    &input,
+                    Some(&seed),
+                    None,
+                    Settings {
+                        time_limit: limit,
+                        relative_gap: 1e-4,
+                        relax: false,
+                    },
+                    &ending,
+                )
+            })
+            .ok()
         })
-    });
+        .flatten();
     // What the latest plan of each day promised from its movements.
     let mut promised: BTreeMap<u32, f64> = BTreeMap::new();
 
@@ -631,7 +645,7 @@ pub(crate) fn run(
                 }
                 if let Some(outcome) = finished(&mut background, false) {
                     // Picked up at the top of the next pass.
-                    background = Some(std::thread::spawn(move || outcome));
+                    background = Some(Background::done(outcome));
                     break;
                 }
             }
@@ -748,7 +762,7 @@ pub(crate) fn run(
     while (background.as_ref().is_some_and(|handle| !handle.is_finished()) || relaxation.as_ref().is_some_and(|relaxations| !relaxations.worker.is_finished()))
         && waiting.elapsed() < BACKGROUND_GRACE
     {
-        std::thread::sleep(Duration::from_millis(20));
+        background::pause(Duration::from_millis(20));
     }
     relaxed(&relaxation, &mut bound);
     if let Some(Ok(whole_plan)) = finished(&mut background, false)

@@ -536,28 +536,25 @@ pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &mut EditorSt
     ui.spacing_mut().item_spacing.x = spacing;
     ui.add_space(6.0);
     // The hourly schedule is what every other control produces; this is the
-    // one that spends the solve time looking past it. Only a native build
-    // has Improve: its solve uses threads the browser build cannot start.
-    if cfg!(not(target_arch = "wasm32")) {
-        let improve = egui::Button::new(if editor.schedule_run_improve {
-            tr!("schedule-improving")
+    // one that spends the solve time looking past it.
+    let improve = egui::Button::new(if editor.schedule_run_improve {
+        tr!("schedule-improving")
+    } else {
+        tr!("schedule-improve")
+    })
+    .corner_radius(GROUP_CORNER_RADIUS)
+    .selected(editor.schedule_run_improve);
+    if ui
+        .add_enabled(startable, improve)
+        .on_hover_text(tr!("schedule-improve-note"))
+        .on_disabled_hover_text(if editor.schedule_run_improve {
+            tr!("schedule-improving-note")
         } else {
-            tr!("schedule-improve")
+            tr!("schedule-improve-note")
         })
-        .corner_radius(GROUP_CORNER_RADIUS)
-        .selected(editor.schedule_run_improve);
-        if ui
-            .add_enabled(startable, improve)
-            .on_hover_text(tr!("schedule-improve-note"))
-            .on_disabled_hover_text(if editor.schedule_run_improve {
-                tr!("schedule-improving-note")
-            } else {
-                tr!("schedule-improve-note")
-            })
-            .clicked()
-        {
-            commands.push(UiCommand::ImproveSchedule);
-        }
+        .clicked()
+    {
+        commands.push(UiCommand::ImproveSchedule);
     }
     let mut auto = editor.auto_run();
     if ui.checkbox(&mut auto.schedule, tr!("schedule-auto")).on_hover_text(tr!("schedule-auto-note")).changed() {

@@ -383,7 +383,6 @@ impl ScheduleBar {
         }
     }
 
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
     pub(crate) fn is_reclaim(&self) -> bool {
         matches!(self.work, BarWork::Reclaim(_))
     }

@@ -21,7 +21,9 @@
 //!
 //! The last makes the bound weaker on models that blend, not wrong.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use web_time::Instant;
 
 use super::{
     formulation::{BlendColumns, BlendSizes, Rows, formulate},

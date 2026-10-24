@@ -153,7 +153,8 @@ pub(crate) fn dump(model: &Model, seed: Option<&std::collections::HashMap<String
     }
 }
 
-pub(crate) fn install_cancellation(model: &mut Model, signal: Arc<AtomicBool>, audit: Arc<InterruptAudit>) {
+/// Interrupt the solve at its next event once any of `signals` is raised.
+pub(crate) fn install_cancellation(model: &mut Model, signals: Vec<Arc<AtomicBool>>, audit: Arc<InterruptAudit>) {
     let installed = model.include_event_callback(
         "incline_cancel",
         "interrupt from the worker thread after a cancellation request",
@@ -161,7 +162,7 @@ pub(crate) fn install_cancellation(model: &mut Model, signal: Arc<AtomicBool>, a
         move |solving, event| {
             audit.callbacks.fetch_add(1, Ordering::Relaxed);
             record_progress(solving, event, &audit);
-            if !signal.load(Ordering::Acquire) {
+            if !signals.iter().any(|signal| signal.load(Ordering::Acquire)) {
                 return;
             }
             // The callback runs synchronously on the thread executing this

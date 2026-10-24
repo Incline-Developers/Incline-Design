@@ -31,11 +31,6 @@
 //! Indexes the views need are built once, in [`CalculatedSchedule::new`], and
 //! the result is shared immutably behind an `Arc` from then on.
 
-#![cfg_attr(
-    target_arch = "wasm32",
-    allow(dead_code, reason = "the browser build draws this type but never builds one: schedule calculation is desktop-only")
-)]
-
 use std::collections::{BTreeMap, HashMap};
 
 use super::{BarId, DestinationId, LoaderAgentId, SCHEDULE_PERIOD_H, cashflow::Activity, experiment::GradeUnit, trucking::TruckClassId};

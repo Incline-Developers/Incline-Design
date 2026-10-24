@@ -326,7 +326,6 @@ impl GradeHalfSpace {
     /// Exact set complement: the negation of `>= v` is `< v`, and the
     /// negation of `> v` is `<= v`. Inclusivity flips with the direction, so
     /// nothing is lost and no boundary is quietly reassigned to both sides.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "used by Improve"))]
     pub(crate) fn negated(self) -> Self {
         Self {
             grade: self.grade,
@@ -398,7 +397,6 @@ impl GradePredicate {
         self.bounds.iter().all(|bound| bound.holds(blend))
     }
 
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "used by Improve"))]
     pub(crate) fn unconditional(&self) -> bool {
         self.bounds.is_empty()
     }
@@ -451,7 +449,6 @@ impl GradeQualification {
 
     /// Whether some alternative permits unconditionally, in which case the
     /// model needs no rows at all for this destination.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "used by Improve"))]
     pub(crate) fn unconditional(&self) -> bool {
         self.alternatives.iter().any(GradePredicate::unconditional)
     }
@@ -637,7 +634,6 @@ pub(crate) fn grade_ceilings(input: &BlendInput) -> Vec<f64> {
     ceilings
 }
 
-#[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "used by Improve"))]
 pub(crate) fn flat_cell(interval: usize, segment: usize, segments: usize) -> usize {
     interval * segments + segment
 }
@@ -706,7 +702,6 @@ pub(crate) const WINDOW_TOLERANCE_H: f64 = 1e-9;
 /// Whether the loader can physically perform this bar's activity in this
 /// interval. A zero rate means the bar has no work available, exactly as in
 /// the accepted backend.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "used by Improve"))]
 pub(crate) fn task_operable(loader: &Loader, task: &Task, interval: usize) -> bool {
     let Some(rate) = interval_rate(loader, interval) else { return false };
     match task.kind {
@@ -832,7 +827,6 @@ pub(crate) fn attribute_reclaim(input: &BlendInput, candidate: &MovementCandidat
     shares
 }
 
-#[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "used by Improve"))]
 pub(crate) fn delivers_to_pile(candidate: &MovementCandidate, pile: StockpileId, destinations: &BTreeMap<DestinationId, &Destination>) -> bool {
     destinations
         .get(&candidate.destination)

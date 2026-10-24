@@ -35,8 +35,10 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
+
+use web_time::Instant;
 
 use super::super::blended::{
     input::{BlendInput, attribute_reclaim, authored_tasks, grade_ceilings, interval_rate, task_active},

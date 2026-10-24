@@ -1,5 +1,6 @@
 //! Improve: the SCIP solve of one owned blended model, on the run's worker
-//! thread. Native builds only.
+//! thread; in the browser, its work beside the solve runs on the pool (see
+//! [`crate::model::schedule::optimisation::background`]).
 //!
 //! [`improve`] takes over from [`super::schedule_solve::execute_schedule`] once the first schedule
 //! is in hand: it builds the whole-horizon model, solves it seeded with that
@@ -18,14 +19,14 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    thread::JoinHandle,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use minlp::{
     model::{Model, Var},
     types::{Status, VarType},
 };
+use web_time::Instant;
 
 use super::{
     jobs::CancelFlag,
@@ -37,6 +38,7 @@ use super::{
 use crate::model::schedule::{
     optimisation::{
         Activity, DestinationId, DestinationKind, SourceId, StockpileId, TaskKind,
+        background::{self, Background},
         blended::{
             formulation::{BlendColumns, FamilySize},
             greedy,
@@ -380,7 +382,14 @@ pub(crate) fn improve(
     // cancellation or once the relaxation bound proves the seed.
     let interrupt = Arc::new(AtomicBool::new(false));
     adapter::dump(&model, completed.as_ref());
-    adapter::install_cancellation(&mut model, Arc::clone(&interrupt), Arc::clone(&activity.interrupt));
+    // The watcher raises `interrupt` for a cancel, a finish or a proof; the
+    // first two stop SCIP directly too, as in the browser the watcher waits
+    // for a free worker.
+    adapter::install_cancellation(
+        &mut model,
+        vec![Arc::clone(&interrupt), cancel.signal(), Arc::clone(&activity.finish)],
+        Arc::clone(&activity.interrupt),
+    );
     if cancel.is_cancelled() {
         out.stop(SolveTermination::Cancelled, "cancelled before solve");
         return out;
@@ -390,14 +399,18 @@ pub(crate) fn improve(
     let started = Instant::now();
     let (finished, proof) = (AtomicBool::new(false), AtomicBool::new(false));
     let proving = seed.as_ref().map(|found| found.solution.reported_objective).zip(options.relative_gap);
-    let solved = std::thread::scope(|scope| {
+    let solved = {
         let (interrupt, finished_ref, proof, relaxation) = (&*interrupt, &finished, &proof, &mut relaxation);
         let finishing = &*activity.finish;
-        scope.spawn(move || watch_solve(cancel, finishing, interrupt, finished_ref, proof, proving, relaxation));
-        let solved = model.solve();
-        finished.store(true, Ordering::Release);
-        solved
-    });
+        background::beside(
+            move || watch_solve(cancel, finishing, interrupt, finished_ref, proof, proving, relaxation),
+            || {
+                let solved = model.solve();
+                finished.store(true, Ordering::Release);
+                solved
+            },
+        )
+    };
     if let Err(error) = solved {
         out.stop(SolveTermination::BackendFailure, format!("SCIP stopped with {error:?}"));
         return out;
@@ -584,7 +597,7 @@ fn watch_solve(
                 return;
             }
         }
-        std::thread::sleep(WATCH_INTERVAL);
+        background::pause(WATCH_INTERVAL);
     }
 }
 
@@ -646,7 +659,7 @@ const RELAXATION_MARGIN_RELATIVE: f64 = 1e-6;
 struct RelaxationJob {
     run_id: u64,
     stop: Arc<AtomicBool>,
-    handle: Option<JoinHandle<Result<RelaxationBound, String>>>,
+    handle: Option<Background<Result<RelaxationBound, String>>>,
     bound: Option<f64>,
 }
 
@@ -654,9 +667,9 @@ impl RelaxationJob {
     fn start(input: &Arc<BlendInput>, limit: Option<Duration>, cancel: &CancelFlag, run_id: u64) -> Option<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let (input, cancel, stopped) = (Arc::clone(input), cancel.signal(), Arc::clone(&stop));
-        let spawned = std::thread::Builder::new()
-            .name("schedule-relaxation".into())
-            .spawn(move || relaxation_bound(&input, limit, Arc::new(move || stopped.load(Ordering::Acquire) || cancel.load(Ordering::Acquire))));
+        let spawned = background::spawn("schedule-relaxation", move || {
+            relaxation_bound(&input, limit, Arc::new(move || stopped.load(Ordering::Acquire) || cancel.load(Ordering::Acquire)))
+        });
         match spawned {
             Ok(handle) => Some(Self {
                 run_id,
@@ -675,7 +688,7 @@ impl RelaxationJob {
     fn ready(&mut self) -> Option<f64> {
         if let Some(handle) = self.handle.take_if(|handle| handle.is_finished()) {
             match handle.join() {
-                Ok(Ok(found)) => {
+                Some(Ok(found)) => {
                     log::info!(
                         "schedule run {}: relaxation bound {:.2} in {:.2?} ({} mixing equalities left out)",
                         self.run_id,
@@ -685,8 +698,8 @@ impl RelaxationJob {
                     );
                     self.bound = Some(found.value + RELAXATION_MARGIN_ABSOLUTE.max(found.value.abs() * RELAXATION_MARGIN_RELATIVE));
                 }
-                Ok(Err(problem)) => log::warn!("schedule run {}: no relaxation bound: {problem}", self.run_id),
-                Err(_) => log::warn!("schedule run {}: the relaxation bound panicked", self.run_id),
+                Some(Err(problem)) => log::warn!("schedule run {}: no relaxation bound: {problem}", self.run_id),
+                None => log::warn!("schedule run {}: the relaxation bound panicked", self.run_id),
             }
         }
         self.bound
@@ -785,7 +798,7 @@ fn solve_day_by_day(
         // describe the whole-horizon solve alone.
         let audit = Arc::new(adapter::InterruptAudit::default());
         adapter::dump(&model, start.as_ref());
-        adapter::install_cancellation(&mut model, cancel.signal(), Arc::clone(&audit));
+        adapter::install_cancellation(&mut model, vec![cancel.signal()], Arc::clone(&audit));
 
         activity.set(3);
         let phase = Instant::now();
@@ -910,7 +923,7 @@ fn polish_window(input: &BlendInput, seed: &BlendSolution, hold: &Hold, limit: D
         model = offer_seed(model, values).ok()?.0;
     }
     adapter::dump(&model, values.as_ref());
-    adapter::install_cancellation(&mut model, cancel.signal(), Arc::new(adapter::InterruptAudit::default()));
+    adapter::install_cancellation(&mut model, vec![cancel.signal()], Arc::new(adapter::InterruptAudit::default()));
     model.solve().ok()?;
     extract_solution(&model, &built.columns, || false).ok().flatten()
 }
@@ -1143,7 +1156,7 @@ fn complete_seed_with(
     };
     configured(&mut model).map_err(|error| format!("configuring the seed's completion: {error:?}"))?;
     adapter::dump(&model, None);
-    adapter::install_cancellation(&mut model, cancel.signal(), Arc::new(adapter::InterruptAudit::default()));
+    adapter::install_cancellation(&mut model, vec![cancel.signal()], Arc::new(adapter::InterruptAudit::default()));
     let solved = model.solve();
     if cancel.is_cancelled() {
         return Err("cancelled".into());

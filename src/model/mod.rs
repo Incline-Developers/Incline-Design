@@ -423,7 +423,6 @@ impl MiningExclusions {
     }
 
     /// Whether a dig block is out of mining for any reason.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
     pub(crate) fn excludes(&self, bench: f64, blast: Option<(f64, [f64; 2], f64)>, flitch: f64, face: &[Vec<glam::DVec2>]) -> bool {
         self.bench_excluded(bench) || blast.is_some_and(|(base, anchor, area)| self.blast_too_small(area) || self.blast_excluded(base, anchor)) || self.block_excluded(flitch, face)
     }

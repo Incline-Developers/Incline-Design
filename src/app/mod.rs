@@ -16,7 +16,6 @@ pub(crate) mod schedule_pipeline; // The Schedule workspace's Setup run/invalida
 pub(crate) mod schedule_publish; // A validated solution, translated into the shared calculated schedule
 pub(crate) mod schedule_run; // Run Period / Run All Periods: capture, solve, publish, currentness
 pub(crate) mod schedule_solve; // One schedule run: validation, the hourly dispatch, and Improve where built
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod scip_blend; // Improve: the SCIP solve of one owned blended model, on the run's worker thread
 pub(crate) mod step_pipeline; // The run/invalidation core shared by the Schedule and Haulage Setup pipelines
 pub(crate) mod tie_in; // Drill & Blast's tie-in and initiation point
@@ -507,7 +506,6 @@ pub(crate) struct App<'a> {
     /// several times a frame; see [`App::planning_snapshot`].
     pub(crate) planning_snapshot_cache: std::cell::RefCell<Option<(u64, std::sync::Arc<crate::app::commands::solids_view::PlanningSnapshot>)>>,
     /// Numbers the runs, so a result can be named rather than merely dated.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
     pub(crate) schedule_run_serial: u64,
     /// The inputs a recalculation was last started (or a run last failed or
     /// was stopped) for, so one that cannot succeed is not retried until

@@ -5,7 +5,6 @@
 //! [`formulate`]; nothing else about the constraints differs between them.
 //! Only Improve builds the model, so in the browser only [`BlendSizes`] is
 //! read.
-#![cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "only Improve builds the model"))]
 
 use std::collections::{BTreeMap, BTreeSet};
 

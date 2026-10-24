@@ -98,10 +98,6 @@ pub(crate) enum JobKey {
         request: u64,
     },
     /// One explicit schedule calculation, owned by its project and serial.
-    #[cfg_attr(
-        target_arch = "wasm32",
-        allow(dead_code, reason = "started only by the native schedule run; the browser build does not calculate")
-    )]
     ScheduleRun {
         runtime: u32,
         serial: u64,
@@ -165,7 +161,6 @@ impl CancelFlag {
     }
 
     /// A flag raised by whoever holds `signal`, not by a job's own cancel.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "only Improve finishes early"))]
     pub(crate) fn from_signal(signal: Arc<AtomicBool>) -> Self {
         Self(signal)
     }

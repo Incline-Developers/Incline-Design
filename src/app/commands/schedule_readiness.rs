@@ -192,10 +192,8 @@ pub(crate) struct MemberReport {
     pub(crate) tonnes: Option<f64>,
     /// Identity in the current run, used to detect two persistent references
     /// that resolve to the same occupied ground across different bars.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
     pub(crate) resolved: Option<crate::model::DigBlockId>,
     /// It lies in ground taken out of mining, so the bar passes over it.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
     pub(crate) excluded: bool,
 }
 
@@ -460,7 +458,6 @@ impl crate::app::App<'_> {
     /// The cached snapshot the reports were measured against, so run
     /// preparation reads the *same* ground the reports did rather than
     /// collecting it a second time.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "read by the native schedule capture; the browser build does not calculate"))]
     pub(crate) fn schedule_snapshot(&mut self) -> Option<Arc<PlanningSnapshot>> {
         self.ensure_schedule_report_cache();
         self.schedule_report_cache.as_ref().and_then(|cache| cache.snapshot.clone())

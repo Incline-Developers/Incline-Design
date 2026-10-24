@@ -173,8 +173,8 @@ impl ImproveFeed {
 /// Run the schedule solve on this worker thread, Improve's progress going to
 /// `feed`, whose finish request the solve polls. A cancelled run is asked to
 /// finish too, so every solve stops either way, and a panic in the solve
-/// fails the run rather than losing it.
-#[cfg(not(target_arch = "wasm32"))]
+/// fails the run rather than losing it (natively: the browser build aborts
+/// on a panic).
 fn solve_reporting(
     input: Arc<crate::model::schedule::optimisation::blended::input::BlendInput>,
     identity: super::schedule_solve::ScheduleRunIdentity,
@@ -184,26 +184,29 @@ fn solve_reporting(
     feed: &Arc<ImproveFeed>,
 ) -> super::schedule_solve::ScheduleCompletion {
     use super::schedule_solve::{ScheduleActivity, ScheduleCompletion, SolveTermination, execute_schedule};
+    use crate::model::schedule::optimisation::background;
     let report = Arc::clone(feed);
     let mut activity = ScheduleActivity::reporting(move |event| report.apply(event));
     activity.finish = Arc::clone(&feed.finish);
     let (finish, done) = (Arc::clone(&activity.finish), AtomicBool::new(false));
-    let solved = std::thread::scope(|scope| {
-        scope.spawn(|| {
+    let solved = background::beside(
+        || {
             while !done.load(Ordering::Acquire) {
                 if cancel.is_cancelled() {
                     finish.store(true, Ordering::Release);
                     return;
                 }
-                std::thread::sleep(std::time::Duration::from_millis(50));
+                background::pause(std::time::Duration::from_millis(50));
             }
-        });
-        let solved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            execute_schedule(Arc::clone(&input), identity, options, cancel, &activity, early)
-        }));
-        done.store(true, Ordering::Release);
-        solved
-    });
+        },
+        || {
+            let solved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                execute_schedule(Arc::clone(&input), identity, options, cancel, &activity, early)
+            }));
+            done.store(true, Ordering::Release);
+            solved
+        },
+    );
     match solved {
         Ok(completion) => {
             feed.apply(ImproveEvent::Stage(ImproveStage::Publish));
@@ -646,14 +649,7 @@ impl crate::app::App<'_> {
                         Err(reason) => log::warn!("schedule run {serial}: day-by-day schedule not shown early: {reason}"),
                     }
                 };
-                // In the browser the run is the hourly dispatch alone.
-                #[cfg(not(target_arch = "wasm32"))]
                 let completion = solve_reporting(Arc::clone(&input), identity, options, cancel, &early, &worker_feed);
-                #[cfg(target_arch = "wasm32")]
-                let completion = {
-                    worker_feed.apply(ImproveEvent::Stage(ImproveStage::FirstSchedule));
-                    super::schedule_solve::execute_schedule(Arc::clone(&input), identity, options, cancel, &Default::default(), &early)
-                };
                 if !completion.usable() {
                     return Ok(not_published(&completion));
                 }

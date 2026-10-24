@@ -7,7 +7,9 @@
 //! NLP solver, only counts as a failure. SCIP's block memory accounting is not
 //! ported: the memory in use counts as zero.
 
-use std::{any::Any, time::Instant};
+use std::any::Any;
+
+use web_time::Instant;
 
 use crate::{
     api,

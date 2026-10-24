@@ -85,14 +85,12 @@ pub(crate) struct ExtractionAdjustments {
 }
 
 impl ExtractionAdjustments {
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "used by Improve"))]
     pub(crate) fn movement(&mut self, tonnes: f64) {
         self.movement_count += 1;
         self.movement_total_t += tonnes.abs();
         self.movement_max_t = self.movement_max_t.max(tonnes.abs());
     }
 
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "used by Improve"))]
     pub(crate) fn chunk_receipt(&mut self, tonnes: f64) {
         self.chunk_receipt_count += 1;
         self.chunk_receipt_total_t += tonnes.abs();

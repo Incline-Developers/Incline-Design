@@ -124,7 +124,7 @@ pub(crate) fn grades_row(rows: &mut PropertyRows<'_>, plan: &SchedulePlan, docum
 }
 
 /// The settings few projects need to change: how finely the calendar is
-/// split and, where Improve is built in, how long it may search.
+/// split and how long Improve may search.
 ///
 /// The event capacity is left to its derived value: it trades model size
 /// against achievable production in a way nobody can set by eye.
@@ -135,8 +135,7 @@ pub(crate) fn draw_advanced(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut Ed
     let solve_seconds = parse_positive(&draft.solve_seconds).filter(|seconds| *seconds <= MAX_SOLVE_SECONDS);
     let relative_gap = draft.relative_gap.trim().parse::<f64>().ok().filter(|gap| gap.is_finite() && (0.0..=1.0).contains(gap));
     let invalid = crate::model::schedule::ScheduleError::InvalidExperimentSetting.message();
-    let improve = cfg!(not(target_arch = "wasm32"));
-    let rows_used = 2 + if improve { 2 } else { 0 };
+    let rows_used = 4;
     let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, rows_used).min(rect.height())));
     let mut edits = Vec::new();
     PropertyTable::new("schedule_experiment", table_rect, &tr!("experiment-advanced")).show(ui, |rows| {
@@ -155,9 +154,6 @@ pub(crate) fn draw_advanced(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut Ed
             ));
         }
         response.on_hover_text(tr!("experiment-interval-help"));
-        if !improve {
-            return;
-        }
         let response = rows.field(
             &tr!("experiment-solve-seconds"),
             &mut draft.solve_seconds,
