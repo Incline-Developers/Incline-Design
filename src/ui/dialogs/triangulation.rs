@@ -1212,6 +1212,9 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
             if editor.tri_contour_target_layer.is_none() && new_layer_name_conflicts {
                 ui.colored_label(egui::Color32::LIGHT_RED, tr!("tri-layer-already-exists-select-above"));
             }
+            MenuFieldBool::new(tr!("tri-contour-labels"), &mut editor.tri_contour_labels)
+                .help_text(tr!("tri-contour-labels-help"))
+                .show(ui);
 
             ui.add_space(6.0);
             ui.separator();
@@ -1243,6 +1246,7 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
                         major_color: editor.tri_contour_major_color,
                         minor_color: editor.tri_contour_minor_color,
                         z_range,
+                        contour_labels: editor.tri_contour_labels,
                         output_layer,
                     });
                 }

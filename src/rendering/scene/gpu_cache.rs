@@ -69,6 +69,9 @@ pub(crate) struct CachedTriangulationGpu {
     pub(crate) surface_style_bind_group: wgpu::BindGroup,
     /// Cached computed colour; used for transparency sorting and dirty-checking.
     pub(crate) color: [f32; 4],
+    /// The style uniform's `params` and `cut`, for dirty-checking.
+    surface_params: [f32; 4],
+    surface_cut: [f32; 4],
     pub(crate) raster_texture: Option<RasterTextureId>,
     pub(crate) raster_opacity: f32,
     pub(crate) edge_chunks: Vec<CachedEdgeChunk>,
@@ -121,6 +124,101 @@ pub(crate) struct CachedSurfaceChunk {
     /// The colour behind `debug_style_bind_group`, which the bounding-box
     /// debug view outlines the chunk in so box and fill match.
     pub(crate) debug_color: [f32; 4],
+    /// `vertex_buffer`'s length in vertices, for sizing `section_cut`.
+    vertex_count: u32,
+    /// The vertices again as a texture the section cut shader can fetch by
+    /// index, with the bind group (group 3) that holds it. Made on the GPU from
+    /// `vertex_buffer` only while a 2D section is up, and dropped after.
+    pub(crate) section_cut: Option<(wgpu::Texture, wgpu::BindGroup)>,
+}
+
+/// Width of the texture a surface chunk's vertices are copied into for the
+/// section cut shader; `SECTION_CUT_ROW` in `section_cut.wgsl`.
+const SECTION_CUT_ROW: u32 = 4096;
+const _: () = assert!(size_of::<SurfaceVertex>() == 6 * size_of::<f32>(), "section_cut.wgsl reads six floats per vertex");
+
+/// Group 3 of the section cut pipeline: one `r32float` texture.
+pub(crate) fn section_cut_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("section_cut_bind_group_layout"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        }],
+    })
+}
+
+impl CachedSurfaceChunk {
+    /// Records the copy of the vertex buffer into the section cut texture. A
+    /// vertex-stage storage buffer would read the buffer directly, but not
+    /// every WebGPU canvas offers one; a texture fetch works everywhere.
+    fn build_section_cut(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, layout: &wgpu::BindGroupLayout) {
+        let texels = self.vertex_count * (size_of::<SurfaceVertex>() / size_of::<f32>()) as u32;
+        let rows = texels.div_ceil(SECTION_CUT_ROW);
+        if rows == 0 || rows > device.limits().max_texture_dimension_2d {
+            return;
+        }
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Section Cut Vertex Texels"),
+            size: wgpu::Extent3d {
+                width: SECTION_CUT_ROW,
+                height: rows,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let row_bytes = SECTION_CUT_ROW * size_of::<f32>() as u32;
+        let full_rows = texels / SECTION_CUT_ROW;
+        let tail = texels % SECTION_CUT_ROW;
+        // Whole rows in one copy, then the part row left over, since the buffer stops short of a whole last row.
+        for (first_row, height, width) in [(0, full_rows, SECTION_CUT_ROW), (full_rows, 1, tail)] {
+            if height == 0 || width == 0 {
+                continue;
+            }
+            encoder.copy_buffer_to_texture(
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &self.vertex_buffer,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: u64::from(first_row) * u64::from(row_bytes),
+                        bytes_per_row: Some(row_bytes),
+                        rows_per_image: Some(height),
+                    },
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x: 0, y: first_row, z: 0 },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Section Cut Bind Group"),
+            layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&view),
+            }],
+        });
+        self.section_cut = Some((texture, bind_group));
+    }
 }
 
 pub(crate) struct CachedEdgeChunk {
@@ -141,7 +239,8 @@ pub(crate) struct EdgeInstance {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct SurfaceStyleUniform {
     color: [f32; 4],
-    /// x: raster blend opacity; y: in-shader wireframe width in pixels.
+    /// x: raster blend opacity; y: in-shader wireframe width in pixels;
+    /// z, w: scene-Z range to shade across, equal when depth shading is off.
     params: [f32; 4],
     wire_color: [f32; 4],
     pattern_color: [f32; 4],
@@ -149,6 +248,9 @@ struct SurfaceStyleUniform {
     /// and w: scene-relative threshold the pattern is drawn from (zero
     /// direction draws it everywhere).
     pattern: [f32; 4],
+    /// The surface drawn as its cut in a 2D section (`section_cut.wgsl`):
+    /// x: cut line width in pixels; y: 1 while selected; zw unused.
+    cut: [f32; 4],
 }
 
 /// Mirrors `ColorStop` for upload; `pos.x` holds the stop's `t`, the rest is
@@ -552,8 +654,14 @@ impl BlockModelGpuCache {
     /// Nearest depth-writing block under a ray. The cached opaque instance
     /// stream is the exact subset rendered with depth writes, so this avoids
     /// scanning hidden/transparent blocks from the source model.
-    pub(crate) fn nearest_opaque_hit(&self, ray_origin: DVec3, ray_direction: DVec3, hidden: &HashSet<crate::model::SceneEntityId>) -> Option<DVec3> {
-        self.nearest_hit(ray_origin, ray_direction, hidden, None, false).map(|(_, world)| world)
+    pub(crate) fn nearest_opaque_hit(
+        &self,
+        ray_origin: DVec3,
+        ray_direction: DVec3,
+        hidden: &HashSet<crate::model::SceneEntityId>,
+        slab: Option<crate::rendering::camera::SectionSlab>,
+    ) -> Option<DVec3> {
+        self.nearest_hit(ray_origin, ray_direction, hidden, None, false, slab).map(|(_, world)| world)
     }
 
     /// Nearest visible block under a ray, including translucent surface or
@@ -565,8 +673,9 @@ impl BlockModelGpuCache {
         ray_direction: DVec3,
         hidden: &HashSet<crate::model::SceneEntityId>,
         frozen: &HashSet<crate::model::SceneEntityId>,
+        slab: Option<crate::rendering::camera::SectionSlab>,
     ) -> Option<DVec3> {
-        self.nearest_visible_entity_hit(ray_origin, ray_direction, hidden, frozen).map(|(_, world)| world)
+        self.nearest_visible_entity_hit(ray_origin, ray_direction, hidden, frozen, slab).map(|(_, world)| world)
     }
 
     /// Nearest visible block model plus its stable scene identity.
@@ -576,8 +685,9 @@ impl BlockModelGpuCache {
         ray_direction: DVec3,
         hidden: &HashSet<crate::model::SceneEntityId>,
         frozen: &HashSet<crate::model::SceneEntityId>,
+        slab: Option<crate::rendering::camera::SectionSlab>,
     ) -> Option<(crate::model::SceneEntityId, DVec3)> {
-        self.nearest_hit(ray_origin, ray_direction, hidden, Some(frozen), true)
+        self.nearest_hit(ray_origin, ray_direction, hidden, Some(frozen), true, slab)
     }
 
     fn nearest_hit(
@@ -587,8 +697,20 @@ impl BlockModelGpuCache {
         hidden: &HashSet<crate::model::SceneEntityId>,
         frozen: Option<&HashSet<crate::model::SceneEntityId>>,
         include_transparent: bool,
+        slab: Option<crate::rendering::camera::SectionSlab>,
     ) -> Option<(crate::model::SceneEntityId, DVec3)> {
-        let mut nearest = f64::INFINITY;
+        // Inside a section only the part of the ray the section draws blocks
+        // along can hit one: the ray starts where that part does, and a hit
+        // past its end is no hit. Unclipped, the first block met lies in front
+        // of the slab, where nothing is drawn, and only the model's sides -
+        // where the ray enters it inside the slab - could ever be picked.
+        let (enter, leave) = match slab {
+            Some(slab) => slab.ray_span(ray_origin, ray_direction)?,
+            None => (0.0, f64::INFINITY),
+        };
+        let full_origin = ray_origin;
+        let ray_origin = ray_origin + ray_direction * enter;
+        let mut nearest = leave - enter;
         let mut nearest_entity = None;
         for (&id, cached) in &self.models {
             let entity = crate::model::SceneEntityId::BlockModel(id);
@@ -643,7 +765,7 @@ impl BlockModelGpuCache {
                 }
             }
         }
-        nearest_entity.map(|entity| (entity, ray_origin + ray_direction * nearest))
+        nearest_entity.map(|entity| (entity, full_origin + ray_direction * (enter + nearest)))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1266,6 +1388,19 @@ impl TriangulationGpuCache {
         self.meshes.get(&id)
     }
 
+    /// Gives every surface chunk its section cut texture while `enabled` (a 2D
+    /// section is up), and takes them away otherwise: a texture is as large as
+    /// the chunk's vertex buffer, too much to hold for a view seldom open.
+    pub(crate) fn sync_section_cuts(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, enabled: bool, layout: &wgpu::BindGroupLayout) {
+        for chunk in self.meshes.values_mut().flat_map(|cached| &mut cached.surface_chunks) {
+            if !enabled {
+                chunk.section_cut = None;
+            } else if chunk.section_cut.is_none() {
+                chunk.build_section_cut(device, encoder, layout);
+            }
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn sync(
         &mut self,
@@ -1355,6 +1490,12 @@ impl TriangulationGpuCache {
                 pattern: triangulation.pattern_from.map_or([pattern, 0.0, 0.0, 0.0], |[x, y, from]| {
                     [pattern, x as f32, y as f32, (from - x * scene_origin.x - y * scene_origin.y) as f32]
                 }),
+                cut: [
+                    (triangulation.line_weight.unwrap_or(1.0) * 2.0 * scale_factor).max(1.5),
+                    if selected { 1.0 } else { 0.0 },
+                    0.0,
+                    0.0,
+                ],
             };
 
             if let Some(cached) = self.meshes.get_mut(&triangulation.id) {
@@ -1378,6 +1519,8 @@ impl TriangulationGpuCache {
                     || cached.pattern_from != triangulation.pattern_from
                     || (triangulation.pattern_from.is_some() && origin_dirty)
                     || cached.color != color
+                    || cached.surface_params != surface_style.params
+                    || cached.surface_cut != surface_style.cut
                     || cached.raster_texture != raster_texture
                     || cached.raster_opacity != triangulation.raster_opacity
                     || (shader_wireframe && edge_style_dirty);
@@ -1404,6 +1547,8 @@ impl TriangulationGpuCache {
                     cached.depth_shade = triangulation.depth_shade;
                     cached.depth_origin_z = scene_origin.z;
                     cached.color = color;
+                    cached.surface_params = surface_style.params;
+                    cached.surface_cut = surface_style.cut;
                     cached.raster_texture = raster_texture;
                     cached.raster_opacity = triangulation.raster_opacity;
                 }
@@ -1485,6 +1630,8 @@ impl TriangulationGpuCache {
                         surface_style_buffer,
                         surface_style_bind_group,
                         color,
+                        surface_params: surface_style.params,
+                        surface_cut: surface_style.cut,
                         raster_texture,
                         raster_opacity: triangulation.raster_opacity,
                         edge_chunks,
@@ -1735,12 +1882,14 @@ fn upload_surface_chunk(
     let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Cached Triangulation Surface Vertices"),
         contents: bytemuck::cast_slice(vertices),
-        usage: wgpu::BufferUsages::VERTEX,
+        // Copied into the section cut texture while a 2D section is up.
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_SRC,
     });
     let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Cached Triangulation Surface Indices"),
         contents: bytemuck::cast_slice(indices),
-        usage: wgpu::BufferUsages::INDEX,
+        // Also read as per-triangle instances by the section cut pipeline.
+        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::VERTEX,
     });
     // Per-chunk debug colour uniform; the bind group keeps the buffer alive.
     let debug_color = chunk_debug_color(chunk_index);
@@ -1750,6 +1899,7 @@ fn upload_surface_chunk(
         wire_color: [0.0; 4],
         pattern_color: [0.0; 4],
         pattern: [0.0; 4],
+        cut: [0.0; 4],
     };
     let debug_style_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Chunk Debug Style Uniform"),
@@ -1794,6 +1944,8 @@ fn upload_surface_chunk(
         debug_style_bind_group,
         debug_style_buffer,
         debug_color,
+        vertex_count: vertices.len() as u32,
+        section_cut: None,
     })
 }
 
@@ -1823,6 +1975,7 @@ impl CachedSurfaceChunk {
             wire_color: surface_style.wire_color,
             pattern_color: [0.0; 4],
             pattern: [0.0; 4],
+            cut: [0.0; 4],
         };
         queue.write_buffer(&self.debug_style_buffer, 0, bytemuck::bytes_of(&style));
     }

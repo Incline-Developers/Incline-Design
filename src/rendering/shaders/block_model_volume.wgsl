@@ -403,7 +403,13 @@ fn clip_march_to_section_slab(ray_origin: vec3<f32>, ray_direction: vec3<f32>, t
     }
     let t_a = (camera.section_plane.w - d0) / dd;
     let t_b = (-camera.section_plane.w - d0) / dd;
-    let slab_min = max(t, min(t_a, t_b));
+    var slab_min = max(t, min(t_a, t_b));
+    if (camera.section_normal.w > 1.5) {
+        // A 2D section shows the blocks the plane cuts, not the slab's front
+        // wall: the march starts on the plane, so the cut lines and drill
+        // holes drawn there (which wrote depth) stop it and stay in front.
+        slab_min = max(t, -d0 / dd);
+    }
     let slab_max = min(t_exit, max(t_a, t_b));
     return vec2<f32>(slab_min, slab_max);
 }
