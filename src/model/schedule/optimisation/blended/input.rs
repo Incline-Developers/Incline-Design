@@ -103,7 +103,7 @@ pub(crate) const REST_RECEIPT_T: f64 = 1e-4;
 
 /// A blended pile: opening lots already combined by tonnes and contained
 /// quantity, because a blend has no ordered lots to preserve.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct BlendPile {
     pub(crate) id: StockpileId,
     pub(crate) capacity_t: f64,
@@ -139,29 +139,23 @@ pub(crate) struct BlendPile {
     /// The cell receiving as the input opens. `None` means the authored rule
     /// in [`Self::starting_receiver`]; a day-by-day window states the one the
     /// day before left.
-    #[serde(default)]
     pub(crate) chunk_receiving: Option<usize>,
     /// The authored mode of each calendar day from hour 0. A day past the
     /// end builds and reclaims.
-    #[serde(default)]
     pub(crate) modes: Vec<PileMode>,
     /// No deliveries in an interval the pile is reclaimed in.
-    #[serde(default)]
     pub(crate) exclusive: bool,
     /// Hours new material rests before reclaim: since the last delivery to
     /// the pile, or for a chunked one to the chunk.
-    #[serde(default)]
     pub(crate) rest_h: f64,
     /// End of the last interval before this input's first in which the pile
     /// received anything; `None` when opening stock is all it holds, which is
     /// rested. Set by a day-by-day window.
-    #[serde(default)]
     pub(crate) last_receipt_h: Option<f64>,
     /// End of the last interval before this input's first in which each
     /// chunk received anything, aligned with [`Self::chunks`]; `None` or
     /// missing means long enough ago to be rested. Set by a day-by-day
     /// window.
-    #[serde(default)]
     pub(crate) chunk_received_h: Vec<Option<f64>>,
 }
 
@@ -288,7 +282,7 @@ impl BlendPile {
 }
 
 /// One end of a grade interval in the captured numeric scale.
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct GradeEndpoint {
     pub(crate) value: f64,
     /// Whether the boundary value itself satisfies the test. Carried, never
@@ -302,7 +296,7 @@ pub(crate) struct GradeEndpoint {
 /// Both an authored bound and its negation are one of these, which is what
 /// lets a *truth* indicator be built for a condition rather than merely a
 /// permission; see [`GradeBound`].
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct GradeHalfSpace {
     pub(crate) grade: usize,
     /// `true` for `blend >= value` (or `>` when exclusive), `false` for
@@ -332,7 +326,7 @@ impl GradeHalfSpace {
     /// Exact set complement: the negation of `>= v` is `< v`, and the
     /// negation of `> v` is `<= v`. Inclusivity flips with the direction, so
     /// nothing is lost and no boundary is quietly reassigned to both sides.
-    #[cfg_attr(not(feature = "scip"), allow(dead_code, reason = "used by Improve"))]
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "used by Improve"))]
     pub(crate) fn negated(self) -> Self {
         Self {
             grade: self.grade,
@@ -351,7 +345,7 @@ impl GradeHalfSpace {
 /// `60 < Fe < 70` is one of these with two exclusive endpoints; `Fe >= 60` is
 /// one with a lower endpoint only. Nothing here widens an interval or makes
 /// an endpoint inclusive.
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct GradeBound {
     pub(crate) grade: usize,
     pub(crate) lower: Option<GradeEndpoint>,
@@ -390,7 +384,7 @@ impl GradeBound {
 ///
 /// An empty bound list is a rule that permits on identity alone, which is a
 /// predicate that is always true rather than a rule with no effect.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct GradePredicate {
     /// Which authored rule this came from, so an explanation can name it and
     /// so two rules that happen to be numerically identical stay two
@@ -404,7 +398,7 @@ impl GradePredicate {
         self.bounds.iter().all(|bound| bound.holds(blend))
     }
 
-    #[cfg_attr(not(feature = "scip"), allow(dead_code, reason = "used by Improve"))]
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "used by Improve"))]
     pub(crate) fn unconditional(&self) -> bool {
         self.bounds.is_empty()
     }
@@ -429,7 +423,7 @@ impl GradePredicate {
 /// that is the whole point of the structure. `Fe <= 55` and `Fe >= 65` into
 /// one destination admit 50 and 70 and must not admit 60; a single widened
 /// range `Fe <= 55 or... <= 70` would admit it. Two rules are two statements.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct GradeQualification {
     pub(crate) loader: LoaderId,
     pub(crate) pile: StockpileId,
@@ -441,7 +435,7 @@ pub(crate) struct GradeQualification {
 
 /// Minimum-only fixture contract retained for the older developer scenarios.
 /// Real-project capture emits [`GradeQualification`] instead.
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct GradeLimit {
     pub(crate) destination: DestinationId,
     pub(crate) grade: usize,
@@ -457,7 +451,7 @@ impl GradeQualification {
 
     /// Whether some alternative permits unconditionally, in which case the
     /// model needs no rows at all for this destination.
-    #[cfg_attr(not(feature = "scip"), allow(dead_code, reason = "used by Improve"))]
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "used by Improve"))]
     pub(crate) fn unconditional(&self) -> bool {
         self.alternatives.iter().any(GradePredicate::unconditional)
     }
@@ -479,7 +473,7 @@ impl GradeQualification {
 /// an otherwise matching rule applies. The model uses inward reward permission
 /// and outward cost-escape permission rather than two-sided truth indicators,
 /// so near-boundary blends remain feasible and are priced conservatively.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ConditionalValue {
     /// Index into [`BlendInput::movements`].
     pub(crate) candidate: usize,
@@ -517,7 +511,7 @@ impl ConditionalValue {
 
 /// One day's soft grade target on a destination's receipts, in the captured
 /// grade scale.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct BlendGradeTarget {
     pub(crate) destination: DestinationId,
     pub(crate) grade: usize,
@@ -536,7 +530,7 @@ impl BlendGradeTarget {
 /// contract from the accepted `OptimisationInput`: its stockpile semantics
 /// differ, so reusing the same type would invite comparing objectives that do
 /// not measure the same thing.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct BlendInput {
     pub(crate) intervals: Vec<Interval>,
     pub(crate) segments_per_interval: usize,
@@ -556,15 +550,12 @@ pub(crate) struct BlendInput {
     pub(crate) conditional_values: Vec<ConditionalValue>,
     /// Older developer scenarios only. Real project capture leaves this empty.
     pub(crate) grade_limits: Vec<GradeLimit>,
-    #[serde(default)]
     pub(crate) grade_targets: Vec<BlendGradeTarget>,
     /// Prior receipts, keyed by target position and absolute period. A vector
     /// keeps the solver-process JSON contract independent of map key encoding.
-    #[serde(default)]
     pub(crate) target_opening: Vec<(usize, u32, f64, f64)>,
     /// The drill and blast chain, when the project sequences it. Its ground
     /// is dug only once released; see [`super::drill_blast`].
-    #[serde(default)]
     pub(crate) drill_blast: Option<super::drill_blast::DrillBlastInput>,
 }
 
@@ -646,7 +637,7 @@ pub(crate) fn grade_ceilings(input: &BlendInput) -> Vec<f64> {
     ceilings
 }
 
-#[cfg_attr(not(feature = "scip"), allow(dead_code, reason = "used by Improve"))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "used by Improve"))]
 pub(crate) fn flat_cell(interval: usize, segment: usize, segments: usize) -> usize {
     interval * segments + segment
 }
@@ -715,7 +706,7 @@ pub(crate) const WINDOW_TOLERANCE_H: f64 = 1e-9;
 /// Whether the loader can physically perform this bar's activity in this
 /// interval. A zero rate means the bar has no work available, exactly as in
 /// the accepted backend.
-#[cfg_attr(not(feature = "scip"), allow(dead_code, reason = "used by Improve"))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "used by Improve"))]
 pub(crate) fn task_operable(loader: &Loader, task: &Task, interval: usize) -> bool {
     let Some(rate) = interval_rate(loader, interval) else { return false };
     match task.kind {
@@ -841,7 +832,7 @@ pub(crate) fn attribute_reclaim(input: &BlendInput, candidate: &MovementCandidat
     shares
 }
 
-#[cfg_attr(not(feature = "scip"), allow(dead_code, reason = "used by Improve"))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "used by Improve"))]
 pub(crate) fn delivers_to_pile(candidate: &MovementCandidate, pile: StockpileId, destinations: &BTreeMap<DestinationId, &Destination>) -> bool {
     destinations
         .get(&candidate.destination)

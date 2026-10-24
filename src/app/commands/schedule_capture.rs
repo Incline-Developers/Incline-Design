@@ -71,7 +71,7 @@ use crate::{
                 IntervalRate, Loader, LoaderId, MAX_INTERVALS, MaterialId, MaterialShare, MovementCandidate, NumericalTolerances, ReclaimOrder, RoutingRuleId, SEGMENT_CEILING,
                 SourceId, StockpileId, Task, TaskId, TaskKind, TruckClass, TruckClassId,
                 blended::{
-                    grade::{GradeBasis, GradeField, GradeTable},
+                    grade::{GradeField, GradeTable},
                     input::{BlendInput, BlendPile, CHUNK_FULL_T, ConditionalValue, GradeBound, GradeEndpoint, GradePredicate, GradeQualification},
                 },
                 build_intervals,
@@ -882,7 +882,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
     // reads must not block a run.
     let mut grade_fields = Vec::new();
     for (field, _) in &experiment.grades {
-        match GradeField::accept(*field, GradeBasis::Stored, &source.fields, Some(source.tonnage_field)) {
+        match GradeField::accept(*field, &source.fields, Some(source.tonnage_field)) {
             Ok(accepted) => grade_fields.push(accepted),
             Err(rejection) => problems.push(CaptureDiagnostic::new(field_name(&source.fields, *field), rejection.message()).at(ScheduleStep::Configuration)),
         }
@@ -1011,7 +1011,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
                             continue;
                         }
                     };
-                    let fraction = grade.basis.to_fraction(value);
+                    let fraction = value;
                     if !fraction.is_finite() || fraction < 0.0 {
                         problems.push(
                             CaptureDiagnostic::new(
@@ -2168,7 +2168,7 @@ fn reclaim_conditions(conditions: &[FieldCondition], grades: &[GradeField], fiel
                     return Err(tr!("schedule-capture-condition-unbounded", field = name.clone()));
                 }
                 let endpoint = |bound: &crate::model::schedule::destinations::Bound| -> Result<GradeEndpoint, String> {
-                    let value = grades[position].basis.to_fraction(bound.value);
+                    let value = bound.value;
                     if !value.is_finite() || value < 0.0 {
                         return Err(tr!("schedule-capture-condition-bound", field = name.clone(), value = bound.value.to_string()));
                     }
@@ -2306,7 +2306,6 @@ fn fingerprint(source: &CaptureSnapshot, input: &BlendInput) -> u64 {
     }
     for grade in &input.grades.fields {
         grade.field.0.hash(&mut hasher);
-        format!("{:?}", grade.basis).hash(&mut hasher);
     }
     for pile in &input.piles {
         pile.id.0.hash(&mut hasher);

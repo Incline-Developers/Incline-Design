@@ -1,13 +1,31 @@
-//! HiGHS's `scaleLp` with equilibration: powers of two for the rows and
+//! HiGHS's `scaleLp`: with equilibration, powers of two for the rows and
 //! columns that bring each one's largest and smallest entries about one,
-//! kept only when they improve the matrix.
+//! kept (unless forced) only when they improve the matrix; with max value,
+//! powers of two bringing each row's and then column's largest entry
+//! about one.
 
-use super::{ekk::SimplexLp, nla::Scale, options::Options};
+use super::{
+    ekk::SimplexLp,
+    nla::Scale,
+    options::{Options, SCALE_STRATEGY_CHOOSE, SCALE_STRATEGY_EQUILIBRATION, SCALE_STRATEGY_FORCED_EQUILIBRATION},
+};
 
-/// Scale `lp` in place, returning the factors, or leave it alone.
-pub(crate) fn scale_lp(options: &Options, lp: &mut SimplexLp) -> Option<Scale> {
+/// Scale `lp` in place, returning the factors, or leave it alone; also
+/// returns the strategy used (HiGHS's `scale_.strategy`).
+pub(crate) fn scale_lp(options: &Options, lp: &mut SimplexLp) -> (Option<Scale>, i32) {
     let num_col = lp.num_col;
     let num_row = lp.num_row;
+
+    // Determine the actual strategy to use: HiGHS left to choose uses
+    // forced equilibration.
+    let mut use_scale_strategy = options.simplex_scale_strategy;
+    if use_scale_strategy == SCALE_STRATEGY_CHOOSE {
+        use_scale_strategy = SCALE_STRATEGY_FORCED_EQUILIBRATION;
+    }
+    (scale_lp_with(options, lp, num_col, num_row, use_scale_strategy), use_scale_strategy)
+}
+
+fn scale_lp_with(options: &Options, lp: &mut SimplexLp, num_col: usize, num_row: usize, use_scale_strategy: i32) -> Option<Scale> {
     if num_col == 0 || num_row == 0 {
         return None;
     }
@@ -22,7 +40,13 @@ pub(crate) fn scale_lp(options: &Options, lp: &mut SimplexLp) -> Option<Scale> {
         col: vec![1.0; num_col],
         row: vec![1.0; num_row],
     };
-    if !equilibration_scale_matrix(options, lp, &mut scale, min_value, max_value) {
+    let equilibration_scaling = use_scale_strategy == SCALE_STRATEGY_EQUILIBRATION || use_scale_strategy == SCALE_STRATEGY_FORCED_EQUILIBRATION;
+    let scaled_matrix = if equilibration_scaling {
+        equilibration_scale_matrix(options, lp, &mut scale, min_value, max_value, use_scale_strategy)
+    } else {
+        max_value_scale_matrix(options, lp, &mut scale)
+    };
+    if !scaled_matrix {
         return None;
     }
     for col in 0..num_col {
@@ -37,7 +61,14 @@ pub(crate) fn scale_lp(options: &Options, lp: &mut SimplexLp) -> Option<Scale> {
     Some(scale)
 }
 
-fn equilibration_scale_matrix(options: &Options, lp: &mut SimplexLp, scale: &mut Scale, original_matrix_min_value: f64, original_matrix_max_value: f64) -> bool {
+fn equilibration_scale_matrix(
+    options: &Options,
+    lp: &mut SimplexLp,
+    scale: &mut Scale,
+    original_matrix_min_value: f64,
+    original_matrix_max_value: f64,
+    use_scale_strategy: i32,
+) -> bool {
     let num_col = lp.num_col;
     let num_row = lp.num_row;
     let start = &lp.a.start;
@@ -164,7 +195,79 @@ fn equilibration_scale_matrix(options: &Options, lp: &mut SimplexLp, scale: &mut
     let original_matrix_value_ratio = original_matrix_max_value / original_matrix_min_value;
     let matrix_value_ratio_improvement = original_matrix_value_ratio / matrix_value_ratio;
     let improvement_factor = extreme_equilibration_improvement * mean_equilibration_improvement * matrix_value_ratio_improvement;
-    if improvement_factor < 1.0 {
+    let possibly_abandon_scaling = use_scale_strategy != SCALE_STRATEGY_FORCED_EQUILIBRATION;
+    if possibly_abandon_scaling && improvement_factor < 1.0 {
+        // Not worth it: undo.
+        for col in 0..num_col {
+            for k in start[col]..start[col + 1] {
+                lp.a.value[k] /= scale.col[col] * scale.row[index[k]];
+            }
+        }
+        return false;
+    }
+    true
+}
+
+/// HiGHS's `maxValueScaleMatrix`.
+fn max_value_scale_matrix(options: &Options, lp: &mut SimplexLp, scale: &mut Scale) -> bool {
+    let num_col = lp.num_col;
+    let num_row = lp.num_row;
+    let log2 = 2f64.ln();
+    let max_allow_scale = 2f64.powi(options.allowed_matrix_scale_factor);
+    let min_allow_scale = 1.0 / max_allow_scale;
+    let start = &lp.a.start;
+    let index = &lp.a.index;
+
+    // Determine the row scaling, and the max/min original matrix values.
+    let mut original_matrix_min_value = f64::INFINITY;
+    let mut original_matrix_max_value: f64 = 0.0;
+    let mut row_max_value = vec![0.0f64; num_row];
+    for col in 0..num_col {
+        for k in start[col]..start[col + 1] {
+            let row = index[k];
+            let value = lp.a.value[k].abs();
+            row_max_value[row] = row_max_value[row].max(value);
+            original_matrix_min_value = original_matrix_min_value.min(value);
+            original_matrix_max_value = original_matrix_max_value.max(value);
+        }
+    }
+    for row in 0..num_row {
+        if row_max_value[row] != 0.0 {
+            // Convert the row scale factor to the nearest power of two,
+            // and ensure that it is not excessively large or small.
+            let mut row_scale_value = 1.0 / row_max_value[row];
+            row_scale_value = 2f64.powf((row_scale_value.ln() / log2 + 0.5).floor());
+            row_scale_value = min_allow_scale.max(row_scale_value).min(max_allow_scale);
+            scale.row[row] = row_scale_value;
+        }
+    }
+
+    // Determine the column scaling, whilst applying the row scaling.
+    let mut matrix_min_value = f64::INFINITY;
+    let mut matrix_max_value: f64 = 0.0;
+    for col in 0..num_col {
+        let mut col_max_value: f64 = 0.0;
+        for k in start[col]..start[col + 1] {
+            lp.a.value[k] *= scale.row[index[k]];
+            col_max_value = col_max_value.max(lp.a.value[k].abs());
+        }
+        if col_max_value != 0.0 {
+            let mut col_scale_value = 1.0 / col_max_value;
+            col_scale_value = 2f64.powf((col_scale_value.ln() / log2 + 0.5).floor());
+            col_scale_value = min_allow_scale.max(col_scale_value).min(max_allow_scale);
+            scale.col[col] = col_scale_value;
+            for k in start[col]..start[col + 1] {
+                lp.a.value[k] *= scale.col[col];
+                let value = lp.a.value[k].abs();
+                matrix_min_value = matrix_min_value.min(value);
+                matrix_max_value = matrix_max_value.max(value);
+            }
+        }
+    }
+    let matrix_value_ratio = matrix_max_value / matrix_min_value;
+    let original_matrix_value_ratio = original_matrix_max_value / original_matrix_min_value;
+    let improvement_factor = original_matrix_value_ratio / matrix_value_ratio;
+    if improvement_factor <= 1.0 {
         // Not worth it: undo.
         for col in 0..num_col {
             for k in start[col]..start[col + 1] {

@@ -20,9 +20,12 @@ use crate::{
         self, Infeasibilities, ModelStatus, SimplexResult,
         ekk::{Ekk, Interrupt, SimplexLp},
         nla::Scale,
-        options::{SimplexStrategy, Solver},
+        options::{SCALE_STRATEGY_CHOOSE, SCALE_STRATEGY_OFF, SimplexStrategy, Solver},
     },
 };
+
+/// HiGHS's `kHighsTiny`.
+const HIGHS_TINY: f64 = 1e-14;
 
 /// No index (HiGHS's -1).
 pub const NONE: usize = usize::MAX;
@@ -32,8 +35,9 @@ pub struct LpSolver {
     pub options: Options,
     /// The incumbent LP, unscaled, column-wise.
     lp: SimplexLp,
-    /// Whether scaling has been decided (HiGHS's `scale_.strategy` set).
-    scale_tried: bool,
+    /// The strategy the scale factors were decided with, off if not yet
+    /// tried (HiGHS's `scale_.strategy`).
+    scale_strategy: i32,
     scale: Option<Scale>,
     basis: Basis,
     /// The basis has one basic variable per row and matches the LP.
@@ -61,6 +65,10 @@ pub struct LpSolver {
     run_time: f64,
     /// HiGHS's `simplex_iterate_`, which outlives the simplex solver.
     iterate: Option<Iterate>,
+    /// A model without columns is solved as optimal at its offset, as
+    /// [`crate::solve`] and the MIP solver have it, instead of HiGHS's
+    /// `kModelEmpty` (see [`LpSolver::report_empty_model`]).
+    empty_model_optimal: bool,
 }
 
 /// HiGHS's `SimplexIterate`: a simplex basis, its factor and its dual edge
@@ -151,7 +159,7 @@ impl LpSolver {
         Self {
             options,
             lp,
-            scale_tried: false,
+            scale_strategy: SCALE_STRATEGY_OFF,
             scale: None,
             basis: Basis {
                 col_status: Vec::new(),
@@ -177,6 +185,7 @@ impl LpSolver {
             started: None,
             run_time: 0.0,
             iterate: None,
+            empty_model_optimal: true,
         }
     }
 
@@ -242,6 +251,12 @@ impl LpSolver {
         self.basis_useful = false;
     }
 
+    /// Report a model without columns as HiGHS does, with
+    /// [`ModelStatus::ModelEmpty`] and no solution or basis.
+    pub fn report_empty_model(&mut self) {
+        self.empty_model_optimal = false;
+    }
+
     /// HiGHS's `clearSolver`: forget the solution, the basis and the
     /// simplex solver's state.
     pub fn clear_solver(&mut self) {
@@ -268,7 +283,9 @@ impl LpSolver {
         // is no basis; it never has one here without a basis.
         self.invalidate_solution();
         if let Some(ekk) = &mut self.ekk {
+            // HiGHS's `clearDerivedModelProperties`, then
             // `LpAction::kNewBounds`.
+            ekk.clear_ray_records();
             ekk.status.has_fresh_rebuild = false;
             ekk.status.has_dual_objective_value = false;
             ekk.status.has_primal_objective_value = false;
@@ -338,7 +355,9 @@ impl LpSolver {
         }
         self.invalidate_solution();
         if let Some(ekk) = &mut self.ekk {
+            // HiGHS's `clearDerivedModelProperties`, then
             // `LpAction::kNewCosts`.
+            ekk.clear_ray_records();
             ekk.status.has_fresh_rebuild = false;
             ekk.status.has_dual_objective_value = false;
             ekk.status.has_primal_objective_value = false;
@@ -428,6 +447,364 @@ impl LpSolver {
         self.invalidate_solution();
         // `LpAction::kNewRows`: HiGHS clears its simplex solver.
         self.ekk = None;
+    }
+
+    /// HiGHS's `clearModel`: an empty LP, keeping the options.
+    pub fn clear_model(&mut self) {
+        let options = self.options.clone();
+        let interrupt = self.interrupt.take();
+        let empty_model_optimal = self.empty_model_optimal;
+        *self = LpSolver::new(&Problem::default(), options);
+        self.interrupt = interrupt;
+        self.empty_model_optimal = empty_model_optimal;
+    }
+
+    /// HiGHS's `passModel` for a column-wise LP: replaces the model (keeping
+    /// the options), column `j` having the entries `index[start[j]..start[j +
+    /// 1]]` (the last up to `index.len()`); small values are dropped as
+    /// `assessLp` does.
+    #[allow(clippy::too_many_arguments)]
+    pub fn pass_model(
+        &mut self,
+        sense: Sense,
+        offset: f64,
+        cost: &[f64],
+        lower: &[f64],
+        upper: &[f64],
+        row_lower: &[f64],
+        row_upper: &[f64],
+        start: &[usize],
+        index: &[usize],
+        value: &[f64],
+    ) {
+        let options = self.options.clone();
+        let interrupt = self.interrupt.take();
+        let empty_model_optimal = self.empty_model_optimal;
+        let num_col = cost.len();
+        let small = options.small_matrix_value;
+        let col_end = |col: usize| if col + 1 < num_col { start[col + 1] } else { index.len() };
+        let mut a_start = Vec::with_capacity(num_col + 1);
+        let mut a_index = Vec::new();
+        let mut a_value = Vec::new();
+        a_start.push(0);
+        for col in 0..num_col {
+            for k in start[col]..col_end(col) {
+                if value[k].abs() > small {
+                    a_index.push(index[k]);
+                    a_value.push(value[k]);
+                }
+            }
+            a_start.push(a_index.len());
+        }
+        *self = LpSolver::from_col_wise(
+            if sense == Sense::Maximise { -1.0 } else { 1.0 },
+            offset,
+            cost.to_vec(),
+            lower.to_vec(),
+            upper.to_vec(),
+            row_lower.to_vec(),
+            row_upper.to_vec(),
+            a_start,
+            a_index,
+            a_value,
+            options,
+        );
+        self.interrupt = interrupt;
+        self.empty_model_optimal = empty_model_optimal;
+    }
+
+    /// HiGHS's `changeObjectiveSense`.
+    pub fn change_sense(&mut self, sense: Sense) {
+        let sense = if sense == Sense::Maximise { -1.0 } else { 1.0 };
+        if sense != self.lp.sense {
+            self.lp.sense = sense;
+            // `clearDerivedModelProperties`.
+            if let Some(ekk) = &mut self.ekk {
+                ekk.clear_ray_records();
+            }
+            self.invalidate_solution();
+        }
+    }
+
+    /// HiGHS's `addCols`: column `j` has cost `cost[j]`, bounds
+    /// `lower[j]..upper[j]` and the entries `index[start[j]..start[j + 1]]`
+    /// (the last up to `index.len()`), `value[..]`.
+    pub fn add_cols(&mut self, cost: &[f64], lower: &[f64], upper: &[f64], start: &[usize], index: &[usize], value: &[f64]) {
+        let num_new_col = cost.len();
+        if num_new_col == 0 {
+            return;
+        }
+        let infinite_bound = self.options.infinite_bound;
+        let bound = |value: f64| if value.abs() >= infinite_bound { value.signum() * f64::INFINITY } else { value };
+        let small = self.options.small_matrix_value;
+        let num_col = self.lp.num_col;
+        let col_end = |col: usize| if col + 1 < num_new_col { start[col + 1] } else { index.len() };
+
+        // Append the columns to the LP vectors and matrix, small values
+        // dropped as HiGHS's `assess` does.
+        self.lp.col_cost.extend_from_slice(cost);
+        self.lp.col_lower.extend(lower.iter().map(|&value| bound(value)));
+        self.lp.col_upper.extend(upper.iter().map(|&value| bound(value)));
+        let mut new_cols: Vec<Vec<(usize, f64)>> = Vec::with_capacity(num_new_col);
+        for col in 0..num_new_col {
+            new_cols.push((start[col]..col_end(col)).filter(|&k| value[k].abs() > small).map(|k| (index[k], value[k])).collect());
+        }
+        let a = &mut self.lp.a;
+        for entries in &new_cols {
+            for &(row, entry) in entries {
+                a.index.push(row);
+                a.value.push(entry);
+            }
+            a.start.push(a.index.len());
+        }
+        a.num_col += num_new_col;
+
+        // Extend the column scaling factors: apply the existing row scaling
+        // to the new columns and consider column scaling for them
+        // (`considerColScaling`).
+        if let Some(scale) = &mut self.scale {
+            let max_allow_scale = 2f64.powi(self.options.allowed_matrix_scale_factor);
+            let min_allow_scale = 1.0 / max_allow_scale;
+            for entries in &new_cols {
+                let col_max_value = entries.iter().fold(0.0f64, |max, &(row, entry)| (entry * scale.row[row]).abs().max(max));
+                let col_scale = if col_max_value != 0.0 {
+                    let value = 2f64.powf(((1.0 / col_max_value).ln() / 2f64.ln() + 0.5).floor());
+                    min_allow_scale.max(value).min(max_allow_scale)
+                } else {
+                    1.0
+                };
+                scale.col.push(col_scale);
+            }
+        }
+
+        // Update the basis corresponding to new nonbasic columns
+        // (`appendNonbasicColsToBasisInterface`).
+        if self.basis_useful {
+            for col in num_col..num_col + num_new_col {
+                let (lower, upper) = (self.lp.col_lower[col], self.lp.col_upper[col]);
+                let status = if lower == upper {
+                    BasisStatus::Lower
+                } else if lower != f64::NEG_INFINITY {
+                    if upper != f64::INFINITY && lower.abs() >= upper.abs() {
+                        BasisStatus::Upper
+                    } else {
+                        BasisStatus::Lower
+                    }
+                } else if upper != f64::INFINITY {
+                    BasisStatus::Upper
+                } else {
+                    BasisStatus::Zero
+                };
+                self.basis.col_status.push(status);
+            }
+        }
+        self.lp.num_col += num_new_col;
+        self.invalidate_solution();
+        // `LpAction::kNewCols`: HiGHS clears its simplex solver.
+        self.ekk = None;
+    }
+
+    /// HiGHS's `deleteCols` by mask: deletes each column `c` with
+    /// `delete[c]`, returning each column's new index ([`NONE`] if
+    /// deleted).
+    pub fn delete_cols(&mut self, delete: &[bool]) -> Vec<usize> {
+        let num_col = self.lp.num_col;
+        let mut new_index = vec![NONE; num_col];
+        let mut kept = 0;
+        for col in 0..num_col {
+            if !delete[col] {
+                new_index[col] = kept;
+                kept += 1;
+            }
+        }
+        if kept == num_col {
+            return new_index;
+        }
+        let a = &mut self.lp.a;
+        let mut at = 0;
+        let mut new_start = vec![0usize; kept + 1];
+        let mut new_col = 0;
+        for col in 0..num_col {
+            if delete[col] {
+                continue;
+            }
+            for k in a.start[col]..a.start[col + 1] {
+                a.index[at] = a.index[k];
+                a.value[at] = a.value[k];
+                at += 1;
+            }
+            new_col += 1;
+            new_start[new_col] = at;
+        }
+        a.index.truncate(at);
+        a.value.truncate(at);
+        a.start = new_start;
+        a.num_col = kept;
+        let keep = |values: &mut Vec<f64>| {
+            let mut col = 0;
+            values.retain(|_| {
+                col += 1;
+                !delete[col - 1]
+            });
+        };
+        keep(&mut self.lp.col_cost);
+        keep(&mut self.lp.col_lower);
+        keep(&mut self.lp.col_upper);
+        self.lp.num_col = kept;
+        self.status = ModelStatus::NotSet;
+
+        // Maintain the column basis status values, and only invalidate the
+        // basis if a basic column has been deleted (`deleteBasisCols`).
+        if self.basis_useful {
+            let mut deleted_basic = false;
+            let mut col = 0;
+            self.basis.col_status.retain(|status| {
+                col += 1;
+                if delete[col - 1] {
+                    deleted_basic |= *status == BasisStatus::Basic;
+                    false
+                } else {
+                    true
+                }
+            });
+            if deleted_basic {
+                self.basis_valid = false;
+            }
+        }
+        if let Some(scale) = &mut self.scale {
+            keep(&mut scale.col);
+        }
+        self.invalidate_solution();
+        // `LpAction::kDelCols`.
+        self.ekk = None;
+        new_index
+    }
+
+    /// HiGHS's `deleteCols` for the interval `from..=to`.
+    pub fn delete_cols_range(&mut self, from: usize, to: usize) {
+        let delete: Vec<bool> = (0..self.lp.num_col).map(|col| (from..=to).contains(&col)).collect();
+        self.delete_cols(&delete);
+    }
+
+    /// HiGHS's `deleteRows` for the interval `from..=to`.
+    pub fn delete_rows_range(&mut self, from: usize, to: usize) {
+        let delete: Vec<bool> = (0..self.lp.num_row).map(|row| (from..=to).contains(&row)).collect();
+        self.delete_rows(&delete);
+    }
+
+    /// HiGHS's `changeRowsBounds`, for each `(row, lower, upper)`.
+    pub fn change_row_bounds(&mut self, changes: impl IntoIterator<Item = (usize, f64, f64)>) {
+        let infinite_bound = self.options.infinite_bound;
+        let bound = |value: f64| if value.abs() >= infinite_bound { value.signum() * f64::INFINITY } else { value };
+        let mut changed = false;
+        for (row, lower, upper) in changes {
+            changed = true;
+            self.lp.row_lower[row] = bound(lower);
+            self.lp.row_upper[row] = bound(upper);
+            self.set_nonbasic_row_status(row);
+        }
+        if !changed {
+            return;
+        }
+        self.invalidate_solution();
+        if let Some(ekk) = &mut self.ekk {
+            // HiGHS's `clearDerivedModelProperties`, then
+            // `LpAction::kNewBounds`.
+            ekk.clear_ray_records();
+            ekk.status.has_fresh_rebuild = false;
+            ekk.status.has_dual_objective_value = false;
+            ekk.status.has_primal_objective_value = false;
+        }
+    }
+
+    /// HiGHS's `setNonbasicStatusInterface` for one row: a nonbasic row
+    /// whose bounds changed sits at the bound its status names, or the
+    /// one that remains; a row's move is the opposite of a column's.
+    fn set_nonbasic_row_status(&mut self, row: usize) {
+        if !self.basis_valid || self.basis.row_status[row] == BasisStatus::Basic {
+            return;
+        }
+        let lower = self.lp.row_lower[row];
+        let upper = self.lp.row_upper[row];
+        let mut status = self.basis.row_status[row];
+        let movement: i8;
+        if lower == upper {
+            if status == BasisStatus::Nonbasic {
+                status = BasisStatus::Lower;
+            }
+            movement = 0;
+        } else if lower != f64::NEG_INFINITY {
+            if upper != f64::INFINITY {
+                if status == BasisStatus::Nonbasic {
+                    if lower.abs() < upper.abs() {
+                        status = BasisStatus::Lower;
+                        movement = -1;
+                    } else {
+                        status = BasisStatus::Upper;
+                        movement = 1;
+                    }
+                } else if status == BasisStatus::Lower {
+                    movement = -1;
+                } else {
+                    movement = 1;
+                }
+            } else {
+                status = BasisStatus::Lower;
+                movement = -1;
+            }
+        } else if upper != f64::INFINITY {
+            status = BasisStatus::Upper;
+            movement = 1;
+        } else {
+            status = BasisStatus::Zero;
+            movement = 0;
+        }
+        self.basis.row_status[row] = status;
+        let num_col = self.lp.num_col;
+        if let Some(ekk) = &mut self.ekk
+            && ekk.status.has_basis
+        {
+            ekk.basis.nonbasic_flag[num_col + row] = 1;
+            ekk.basis.nonbasic_move[num_col + row] = movement;
+        }
+    }
+
+    /// HiGHS's `changeCoeff`: the matrix entry at `row`, `col` becomes
+    /// `value` (removed when no bigger than `small_matrix_value`).
+    pub fn change_coeff(&mut self, row: usize, col: usize, value: f64) {
+        let zero_new_value = value.abs() <= self.options.small_matrix_value;
+        let a = &mut self.lp.a;
+        let range = a.start[col]..a.start[col + 1];
+        let found = range.clone().find(|&k| a.index[k] == row);
+        match (found, zero_new_value) {
+            (Some(k), false) => a.value[k] = value,
+            (Some(k), true) => {
+                a.index.remove(k);
+                a.value.remove(k);
+                for start in &mut a.start[col + 1..] {
+                    *start -= 1;
+                }
+            }
+            (None, false) => {
+                // HiGHS's `changeLpMatrixCoefficient` appends the new
+                // entry at the end of the column.
+                let at = range.end;
+                a.index.insert(at, row);
+                a.value.insert(at, value);
+                for start in &mut a.start[col + 1..] {
+                    *start += 1;
+                }
+            }
+            (None, true) => {}
+        }
+        self.invalidate_solution();
+        // `LpAction::kNewRows`: HiGHS clears its simplex solver.
+        self.ekk = None;
+    }
+
+    /// HiGHS's `getBasis`: the basis whether valid or not.
+    pub fn basis_any(&self) -> &Basis {
+        &self.basis
     }
 
     /// HiGHS's `deleteRows` by mask: deletes each row `r` with
@@ -524,8 +901,7 @@ impl LpSolver {
             ekk.status.has_fresh_rebuild = false;
             ekk.status.has_dual_objective_value = false;
             ekk.status.has_primal_objective_value = false;
-            ekk.dual_ray_record = None;
-            ekk.primal_ray_record = None;
+            ekk.clear_ray_records();
         }
         true
     }
@@ -660,7 +1036,7 @@ impl LpSolver {
 
     /// HiGHS's `getBasisInverseRowSparse`: row `row` of the basis inverse,
     /// in `row_ep`.
-    pub(crate) fn basis_inverse_row(&self, row: usize, row_ep: &mut HVector) {
+    pub(crate) fn basis_inverse_row_sparse(&self, row: usize, row_ep: &mut HVector) {
         let ekk = self.ekk.as_ref().expect("a factored basis");
         row_ep.clear();
         row_ep.count = 1;
@@ -672,7 +1048,7 @@ impl LpSolver {
 
     /// HiGHS's `getDualRaySparse`: the dual ray of the last infeasible
     /// solve, in `row_ep`, if it recorded one.
-    pub(crate) fn dual_ray(&self, row_ep: &mut HVector) -> bool {
+    pub(crate) fn dual_ray_sparse(&self, row_ep: &mut HVector) -> bool {
         let Some(ekk) = self.ekk.as_ref() else { return false };
         let Some((row, sign)) = ekk.dual_ray_record else { return false };
         row_ep.clear();
@@ -682,6 +1058,291 @@ impl LpSolver {
         row_ep.array[row] = sign as f64;
         ekk.nla.btran(row_ep, ekk.info.row_ep_density, &ekk.basis.basic_index);
         true
+    }
+
+    /// HiGHS's `basisSolveInterface`: solves with the basis matrix (its
+    /// transpose when `transpose`) in the unscaled LP's terms; returns the
+    /// dense solution, and its nonzeros when the solve knows them.
+    fn basis_solve(&self, rhs: &[f64], transpose: bool) -> (Vec<f64>, Option<Vec<usize>>) {
+        let num_row = self.lp.num_row;
+        let ekk = self.ekk.as_ref().expect("a factored basis");
+        let mut solve_vector = HVector::new(num_row);
+        solve_vector.clear();
+        let mut rhs_num_nz = 0;
+        for row in 0..num_row {
+            if rhs[row] != 0.0 {
+                solve_vector.index[rhs_num_nz] = row;
+                rhs_num_nz += 1;
+                solve_vector.array[row] = rhs[row];
+            }
+        }
+        solve_vector.count = rhs_num_nz as isize;
+        let expected_density = 1.0;
+        if transpose {
+            ekk.nla.btran(&mut solve_vector, expected_density, &ekk.basis.basic_index);
+        } else {
+            ekk.nla.ftran(&mut solve_vector, expected_density, &ekk.basis.basic_index);
+        }
+        if solve_vector.count < 0 || solve_vector.count as usize > num_row {
+            // Solution nonzeros not known.
+            (solve_vector.array[..num_row].to_vec(), None)
+        } else {
+            let mut solution = vec![0.0; num_row];
+            let count = solve_vector.count as usize;
+            for &row in &solve_vector.index[..count] {
+                solution[row] = solve_vector.array[row];
+            }
+            (solution, Some(solve_vector.index[..count].to_vec()))
+        }
+    }
+
+    /// The (dense, sparse) form B^-1 getters return: the nonzeros as the
+    /// solve found them, else those of the dense vector (HiGHS's
+    /// `basisSolveInterface` when the caller asks for indices).
+    fn solved_vector(solved: (Vec<f64>, Option<Vec<usize>>), want_sparse: bool) -> (Vec<f64>, Vec<usize>) {
+        let (dense, index) = solved;
+        if !want_sparse {
+            return (dense, Vec::new());
+        }
+        let index = index.unwrap_or_else(|| (0..dense.len()).filter(|&row| dense[row] != 0.0).collect());
+        (dense, index)
+    }
+
+    /// HiGHS's `getBasisInverseRow`: row `row` of B^-1, `None` without an
+    /// invertible basis.
+    pub fn basis_inverse_row(&self, row: usize, want_sparse: bool) -> Option<(Vec<f64>, Vec<usize>)> {
+        if row >= self.lp.num_row || !self.has_invert() {
+            return None;
+        }
+        let mut rhs = vec![0.0; self.lp.num_row];
+        rhs[row] = 1.0;
+        Some(Self::solved_vector(self.basis_solve(&rhs, true), want_sparse))
+    }
+
+    /// HiGHS's `getBasisInverseCol`: column `col` of B^-1.
+    pub fn basis_inverse_col(&self, col: usize, want_sparse: bool) -> Option<(Vec<f64>, Vec<usize>)> {
+        if col >= self.lp.num_row || !self.has_invert() {
+            return None;
+        }
+        let mut rhs = vec![0.0; self.lp.num_row];
+        rhs[col] = 1.0;
+        Some(Self::solved_vector(self.basis_solve(&rhs, false), want_sparse))
+    }
+
+    /// HiGHS's `getReducedRow`: row `row` of B^-1 A, from `binv_row` (that
+    /// row of B^-1) if given; entries of magnitude above `kHighsTiny`.
+    pub fn reduced_row(&self, row: usize, binv_row: Option<&[f64]>, want_sparse: bool) -> Option<(Vec<f64>, Vec<usize>)> {
+        if row >= self.lp.num_row || !self.has_invert() {
+            return None;
+        }
+        let num_row = self.lp.num_row;
+        let computed;
+        let basis_inverse_row = match binv_row {
+            Some(binv_row) => binv_row,
+            None => {
+                let mut rhs = vec![0.0; num_row];
+                rhs[row] = 1.0;
+                computed = self.basis_solve(&rhs, true).0;
+                &computed
+            }
+        };
+        let a = &self.lp.a;
+        let mut row_vector = vec![0.0; self.lp.num_col];
+        let mut row_indices = Vec::new();
+        for col in 0..self.lp.num_col {
+            let mut value = 0.0;
+            for el in a.start[col]..a.start[col + 1] {
+                value += a.value[el] * basis_inverse_row[a.index[el]];
+            }
+            if value.abs() > HIGHS_TINY {
+                if want_sparse {
+                    row_indices.push(col);
+                }
+                row_vector[col] = value;
+            }
+        }
+        Some((row_vector, row_indices))
+    }
+
+    /// HiGHS's `getReducedColumn`: column `col` of B^-1 A.
+    pub fn reduced_column(&self, col: usize, want_sparse: bool) -> Option<(Vec<f64>, Vec<usize>)> {
+        if col >= self.lp.num_col || !self.has_invert() {
+            return None;
+        }
+        let a = &self.lp.a;
+        let mut rhs = vec![0.0; self.lp.num_row];
+        for el in a.start[col]..a.start[col + 1] {
+            rhs[a.index[el]] = a.value[el];
+        }
+        Some(Self::solved_vector(self.basis_solve(&rhs, false), want_sparse))
+    }
+
+    /// HiGHS's `getBasicVariables`: the variable basic in each row, a
+    /// column as its index and a row `r` as `-1 - r`. `None` without a
+    /// valid basis, or without a factor (where HiGHS would factor the basis
+    /// without solving, which nothing here needs).
+    pub fn basic_variables_signed(&mut self) -> Option<Vec<i32>> {
+        let num_row = self.lp.num_row;
+        let num_col = self.lp.num_col;
+        if num_row == 0 {
+            return Some(Vec::new());
+        }
+        if !self.basis_valid {
+            return None;
+        }
+        if !self.has_invert() {
+            // The LP has no invert to use, so have to set one up, but only
+            // for the current basis.
+            if !self.form_simplex_lp_basis_and_factor_known() {
+                return None;
+            }
+        }
+        let ekk = self.ekk.as_ref().unwrap();
+        Some(
+            (0..num_row)
+                .map(|row| {
+                    let var = ekk.basis.basic_index[row];
+                    if var < num_col { var as i32 } else { -(1 + (var - num_col) as i32) }
+                })
+                .collect(),
+        )
+    }
+
+    /// HiGHS's `getDualRay(has_dual_ray, NULL)`: whether the last solve
+    /// recorded a dual ray.
+    pub fn has_dual_ray(&self) -> bool {
+        self.num_rows() > 0 && self.ekk.as_ref().is_some_and(|ekk| ekk.dual_ray_record.is_some())
+    }
+
+    /// HiGHS's `getPrimalRay(has_primal_ray, NULL)`.
+    pub fn has_primal_ray(&self) -> bool {
+        self.num_rows() > 0 && self.ekk.as_ref().is_some_and(|ekk| ekk.primal_ray_record.is_some())
+    }
+
+    /// HiGHS's `getDualRay` with a vector: the dual ray of the last solve,
+    /// computed from its record and kept. Without a ray or a factor, the LP
+    /// is solved again with zero costs and presolve off to find one.
+    pub fn get_dual_ray(&mut self) -> Option<Vec<f64>> {
+        let num_row = self.lp.num_row;
+        if num_row == 0 {
+            return None;
+        }
+        let mut has_dual_ray = self.has_dual_ray();
+        let mut solve_feasibility_problem = None;
+        if !has_dual_ray || !self.has_invert() {
+            // No point in trying to get a dual ray if the model status is
+            // optimal.
+            if self.status == ModelStatus::Optimal {
+                return None;
+            }
+
+            // Solve with zero costs, presolve off, keeping the primal ray
+            // record that changing the costs clears.
+            let col_cost = self.lp.col_cost.clone();
+            let presolve = self.options.presolve;
+            let primal_ray = self.ekk.as_ref().map(|ekk| (ekk.primal_ray_record, ekk.primal_ray_value.clone()));
+            self.change_col_costs((0..self.lp.num_col).map(|col| (col, 0.0)));
+            if let (Some(ekk), Some((record, value))) = (self.ekk.as_mut(), primal_ray) {
+                ekk.primal_ray_record = record;
+                ekk.primal_ray_value = value;
+            }
+            self.options.presolve = false;
+            self.run();
+            has_dual_ray = self.has_dual_ray();
+            solve_feasibility_problem = Some((col_cost, presolve));
+        }
+        let mut result = None;
+        if has_dual_ray {
+            let ekk = self.ekk.as_ref().unwrap();
+            if !ekk.dual_ray_value.is_empty() {
+                // Dual ray is already computed.
+                result = Some(ekk.dual_ray_value.clone());
+            } else if self.has_invert() {
+                // Dual ray is known and can be calculated.
+                let (row, sign) = ekk.dual_ray_record.unwrap();
+                let mut rhs = vec![0.0; num_row];
+                rhs[row] = sign as f64;
+                let (dual_ray, _) = self.basis_solve(&rhs, true);
+                self.ekk.as_mut().unwrap().dual_ray_value = dual_ray.clone();
+                result = Some(dual_ray);
+            }
+        }
+        if let Some((col_cost, presolve)) = solve_feasibility_problem {
+            // The objective-related information is lost; the costs are
+            // copied back directly.
+            self.lp.col_cost = col_cost;
+            self.options.presolve = presolve;
+            self.objective = 0.0;
+            self.dual_valid = false;
+            if !has_dual_ray {
+                self.status = ModelStatus::NotSet;
+            }
+        }
+        result
+    }
+
+    /// HiGHS's `getPrimalRay` with a vector: the primal ray of the last
+    /// solve, computed from its record and kept. Without a ray or a factor,
+    /// the LP is solved again with presolve off to find one.
+    pub fn get_primal_ray(&mut self) -> Option<Vec<f64>> {
+        let num_row = self.lp.num_row;
+        let num_col = self.lp.num_col;
+        if num_row == 0 {
+            return None;
+        }
+        let mut has_primal_ray = self.has_primal_ray();
+        let mut presolve_saved = None;
+        if !has_primal_ray || !self.has_invert() {
+            // No point in trying to get a primal ray if the model status is
+            // optimal.
+            if self.status == ModelStatus::Optimal {
+                return None;
+            }
+            presolve_saved = Some(self.options.presolve);
+            self.options.presolve = false;
+            self.run();
+            has_primal_ray = self.has_primal_ray();
+        }
+        let mut result = None;
+        if has_primal_ray {
+            let ekk = self.ekk.as_ref().unwrap();
+            if !ekk.primal_ray_value.is_empty() {
+                // Primal ray is already computed.
+                result = Some(ekk.primal_ray_value.clone());
+            } else if self.has_invert() {
+                // Primal ray is known and can be calculated: get this
+                // pivotal column.
+                let (col, sign) = ekk.primal_ray_record.unwrap();
+                let mut rhs = vec![0.0; num_row];
+                let a = &self.lp.a;
+                if col < num_col {
+                    for el in a.start[col]..a.start[col + 1] {
+                        rhs[a.index[el]] = sign as f64 * a.value[el];
+                    }
+                } else {
+                    rhs[col - num_col] = sign as f64;
+                }
+                let (column, _) = self.basis_solve(&rhs, false);
+
+                // Scatter the column according to the basic variables.
+                let mut primal_ray = vec![0.0; num_col];
+                for row in 0..num_row {
+                    let var = ekk.basis.basic_index[row];
+                    if var < num_col {
+                        primal_ray[var] = column[row];
+                    }
+                }
+                if col < num_col {
+                    primal_ray[col] = -(sign as f64);
+                }
+                self.ekk.as_mut().unwrap().primal_ray_value = primal_ray.clone();
+                result = Some(primal_ray);
+            }
+        }
+        if let Some(presolve) = presolve_saved {
+            self.options.presolve = presolve;
+        }
+        result
     }
 
     /// HiGHS's `putIterate`: save the simplex basis, factor and dual edge
@@ -797,7 +1458,7 @@ impl LpSolver {
     fn run_lp(&mut self) {
         let num_col = self.lp.num_col;
         let num_row = self.lp.num_row;
-        if num_col == 0 {
+        if num_col == 0 && self.empty_model_optimal {
             self.status = ModelStatus::Optimal;
             self.objective = self.lp.offset;
             self.col_value.clear();
@@ -806,6 +1467,13 @@ impl LpSolver {
             self.row_dual = vec![0.0; num_row];
             self.value_valid = true;
             self.dual_valid = true;
+            return;
+        }
+        if num_col == 0 {
+            // HiGHS's `setHighsModelStatusAndClearSolutionAndBasis`.
+            self.invalidate_solution();
+            self.invalidate_basis();
+            self.status = ModelStatus::ModelEmpty;
             return;
         }
         // NaNs make HiGHS cycle; refuse them.
@@ -970,19 +1638,62 @@ impl LpSolver {
         }
     }
 
-    /// HiGHS's `considerScaling`: decide the scale factors once.
+    /// HiGHS's `considerScaling`: decide the scale factors when scaling was
+    /// not tried yet or the strategy changed, else keep them.
     fn consider_scaling(&mut self, options: &Options) {
-        if !options.scale || self.lp.num_col == 0 {
-            if self.scale.is_some() {
-                self.scale = None;
-                self.scale_tried = false;
-            }
+        let allow_scaling = self.lp.num_col > 0 && options.simplex_scale_strategy != SCALE_STRATEGY_OFF;
+        if self.scale.is_some() && !allow_scaling {
+            // The LP had scaling before, but now it is not permitted.
+            self.scale = None;
+            self.scale_strategy = SCALE_STRATEGY_OFF;
             return;
         }
-        if !self.scale_tried {
-            self.scale = simplex::scale_factors(options, &self.lp);
-            self.scale_tried = true;
+        let scaling_not_tried = self.scale_strategy == SCALE_STRATEGY_OFF;
+        let new_scaling_strategy = options.simplex_scale_strategy != self.scale_strategy && options.simplex_scale_strategy != SCALE_STRATEGY_CHOOSE;
+        if allow_scaling && (scaling_not_tried || new_scaling_strategy) {
+            let (scale, strategy) = simplex::scale_factors(options, &self.lp);
+            self.scale = scale;
+            self.scale_strategy = strategy;
         }
+    }
+
+    /// HiGHS's `formSimplexLpBasisAndFactor(solver_object, true)`: factors
+    /// the current (valid, non-alien) basis without solving; false if it is
+    /// rank deficient. `considerScaling` applies the scale factors, so the
+    /// simplex solver gets the scaled LP as in a solve; afterwards the LP
+    /// moves back and the factor is queried with the scale factors.
+    fn form_simplex_lp_basis_and_factor_known(&mut self) -> bool {
+        let options = self.options.clone();
+        // Consider scaling the LP.
+        self.consider_scaling(&options);
+        let moved = match &self.scale {
+            Some(scale) => simplex::scaled_lp(&self.lp, scale),
+            None => self.lp.clone(),
+        };
+        let scaled = self.scale.is_some();
+        // `moveLp`.
+        let ekk = match &mut self.ekk {
+            Some(ekk) => {
+                ekk.lp = moved;
+                ekk.options = options.clone();
+                ekk.simplex_in_scaled_space = scaled;
+                ekk.scaled_a = None;
+                ekk.nla.scale = None;
+                ekk.status.has_ar_matrix = false;
+                ekk
+            }
+            None => self.ekk.insert(simplex::ekk::Ekk::new(options.clone(), moved, scaled)),
+        };
+        if !ekk.status.has_basis {
+            // The simplex solver has no basis, so pass the HiGHS basis.
+            ekk.set_basis(&self.basis);
+        }
+        // Now form the invert.
+        let ok = ekk.initialise_simplex_lp_basis_and_factor_from(true);
+        // `formSimplexLpBasisAndFactorReturn` and
+        // `setNlaPointersForLpAndScale`.
+        ekk.nla.scale = self.scale.clone();
+        ok
     }
 
     /// HiGHS's `solveLp` on the incumbent LP.

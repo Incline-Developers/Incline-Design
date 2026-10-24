@@ -124,7 +124,8 @@ pub(crate) struct PendingScheduleRun {
 #[derive(Debug)]
 pub(crate) struct ImproveFeed {
     progress: Mutex<ImproveProgress>,
-    finish: AtomicBool,
+    /// Shared with the run's [`ScheduleActivity`], which the solve polls.
+    finish: Arc<AtomicBool>,
     /// Moves with every change, so the app copies the progress only then.
     revision: AtomicU64,
 }
@@ -133,7 +134,7 @@ impl ImproveFeed {
     fn new(time_limit_s: Option<f64>) -> Self {
         Self {
             progress: Mutex::new(ImproveProgress::new(time_limit_s)),
-            finish: AtomicBool::new(false),
+            finish: Arc::new(AtomicBool::new(false)),
             revision: AtomicU64::new(0),
         }
     }
@@ -166,6 +167,59 @@ impl ImproveFeed {
 
     pub(crate) fn snapshot(&self) -> ImproveProgress {
         self.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+    }
+}
+
+/// Run the schedule solve on this worker thread, Improve's progress going to
+/// `feed`, whose finish request the solve polls. A cancelled run is asked to
+/// finish too, so every solve stops either way, and a panic in the solve
+/// fails the run rather than losing it.
+#[cfg(not(target_arch = "wasm32"))]
+fn solve_reporting(
+    input: Arc<crate::model::schedule::optimisation::blended::input::BlendInput>,
+    identity: super::schedule_solve::ScheduleRunIdentity,
+    options: super::schedule_solve::ScheduleSolveOptions,
+    cancel: &super::jobs::CancelFlag,
+    early: &dyn Fn(&super::schedule_solve::ScheduleCompletion),
+    feed: &Arc<ImproveFeed>,
+) -> super::schedule_solve::ScheduleCompletion {
+    use super::schedule_solve::{ScheduleActivity, ScheduleCompletion, SolveTermination, execute_schedule};
+    let report = Arc::clone(feed);
+    let mut activity = ScheduleActivity::reporting(move |event| report.apply(event));
+    activity.finish = Arc::clone(&feed.finish);
+    let (finish, done) = (Arc::clone(&activity.finish), AtomicBool::new(false));
+    let solved = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            while !done.load(Ordering::Acquire) {
+                if cancel.is_cancelled() {
+                    finish.store(true, Ordering::Release);
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        });
+        let solved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            execute_schedule(Arc::clone(&input), identity, options, cancel, &activity, early)
+        }));
+        done.store(true, Ordering::Release);
+        solved
+    });
+    match solved {
+        Ok(completion) => {
+            feed.apply(ImproveEvent::Stage(ImproveStage::Publish));
+            completion
+        }
+        Err(panic) => {
+            let reason = panic
+                .downcast_ref::<&str>()
+                .map(|text| (*text).to_owned())
+                .or_else(|| panic.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "panic".to_owned());
+            log::error!("schedule run {}: the solve panicked: {reason}", identity.run_id);
+            let mut out = ScheduleCompletion::new(identity, options, input);
+            out.stop(SolveTermination::BackendFailure, tr!("schedule-solver-crashed", status = reason));
+            out
+        }
     }
 }
 
@@ -592,13 +646,10 @@ impl crate::app::App<'_> {
                         Err(reason) => log::warn!("schedule run {serial}: day-by-day schedule not shown early: {reason}"),
                     }
                 };
-                // SCIP and the libraries under it are native code, and a fault
-                // in them would take the app down with it, so a build with
-                // Improve runs every solve in a solver process. Without it the
-                // run is the hourly dispatch alone, and runs here.
-                #[cfg(feature = "scip")]
-                let completion = super::solver_process::solve(Arc::clone(&input), identity, options, cancel, &early, &worker_feed);
-                #[cfg(not(feature = "scip"))]
+                // In the browser the run is the hourly dispatch alone.
+                #[cfg(not(target_arch = "wasm32"))]
+                let completion = solve_reporting(Arc::clone(&input), identity, options, cancel, &early, &worker_feed);
+                #[cfg(target_arch = "wasm32")]
                 let completion = {
                     worker_feed.apply(ImproveEvent::Stage(ImproveStage::FirstSchedule));
                     super::schedule_solve::execute_schedule(Arc::clone(&input), identity, options, cancel, &Default::default(), &early)

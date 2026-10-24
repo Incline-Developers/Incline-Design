@@ -35,7 +35,7 @@ use crate::model::schedule::{
     result::{BoundSource, DayByDayRole, DayByDaySummary, StartMethod},
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ScheduleRunIdentity {
     pub(crate) run_id: u64,
     pub(crate) inputs: ScheduleRunInputs,
@@ -52,16 +52,17 @@ pub(crate) struct ScheduleRunIdentity {
     pub(crate) semantic: u64,
 }
 
-#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct ScheduleSolveOptions {
     pub(crate) time_limit: Option<Duration>,
     pub(crate) relative_gap: Option<f64>,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "used by Improve"))]
     pub(crate) diagnostic_logging: bool,
     /// Stop at the hourly dispatch schedule: no relaxation bound and no
     /// whole-horizon solve. What a recalculation after an edit asks for; an
     /// Improve run leaves it off. Only a dispatcher that fails falls through
     /// to the solver path, since that is the only way to get a schedule.
-    #[serde(default)]
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "used by Improve"))]
     pub(crate) first_schedule_only: bool,
 }
 
@@ -76,12 +77,14 @@ impl Default for ScheduleSolveOptions {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SolveTermination {
     Optimal,
     FeasibleLimit,
     LimitNoIncumbent,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "used by Improve"))]
     Infeasible,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "used by Improve"))]
     Unbounded,
     Cancelled,
     InvalidInput,
@@ -89,7 +92,7 @@ pub(crate) enum SolveTermination {
     BackendFailure,
 }
 
-#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct PhaseTimings {
     pub(crate) input_validation: Duration,
     pub(crate) formulation: Duration,
@@ -119,13 +122,13 @@ pub(crate) struct ScheduleCompletion {
     pub(crate) sizes: BlendSizes,
     pub(crate) timings: PhaseTimings,
     pub(crate) diagnostics: crate::model::schedule::result::SolveDiagnostics,
-    #[cfg(feature = "scip")]
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) solver_limit_overshoot: Option<Duration>,
     pub(crate) backend_version: String,
     pub(crate) wrapper_version: &'static str,
-    #[cfg(feature = "scip")]
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) event_callbacks: u64,
-    #[cfg(feature = "scip")]
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) interrupt_calls: u64,
     /// Present when the horizon was first solved day by day.
     pub(crate) day_by_day: Option<DayByDaySummary>,
@@ -151,13 +154,13 @@ impl ScheduleCompletion {
             sizes: BlendSizes::default(),
             timings: PhaseTimings::default(),
             diagnostics: Default::default(),
-            #[cfg(feature = "scip")]
+            #[cfg(not(target_arch = "wasm32"))]
             solver_limit_overshoot: None,
             backend_version: lp::backend_name().to_owned(),
             wrapper_version: "",
-            #[cfg(feature = "scip")]
+            #[cfg(not(target_arch = "wasm32"))]
             event_callbacks: 0,
-            #[cfg(feature = "scip")]
+            #[cfg(not(target_arch = "wasm32"))]
             interrupt_calls: 0,
             day_by_day: None,
         }
@@ -180,7 +183,8 @@ impl ScheduleCompletion {
 
 /// What the backend said of its own solve, in SCIP's terms: only an Improve
 /// run's whole-horizon solve reports one.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "only Improve reports a backend status"))]
 pub(crate) enum BackendStatus {
     Unknown,
     UserInterrupt,
@@ -209,12 +213,11 @@ pub(crate) enum BackendStatus {
 #[derive(Default)]
 pub(crate) struct ScheduleActivity {
     phase: AtomicU8,
-    #[cfg(feature = "scip")]
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) formulation_checks: std::sync::atomic::AtomicU64,
-    #[cfg(feature = "scip")]
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) interrupt: Arc<crate::model::schedule::optimisation::scip::adapter::InterruptAudit>,
-    /// Where an Improve run's stages and values go: the solver process sends
-    /// them on to the app.
+    /// Where an Improve run's stages and values go: the run's progress card.
     pub(crate) report: Option<Box<dyn Fn(ImproveEvent) + Send + Sync>>,
     /// Raised to end an Improve run early and publish the best schedule it
     /// has. A cancelled run raises it too, so every solve stops either way.
@@ -223,7 +226,7 @@ pub(crate) struct ScheduleActivity {
 
 impl ScheduleActivity {
     /// An activity whose Improve run reports to `report`.
-    #[cfg_attr(not(feature = "scip"), allow(dead_code, reason = "only the solver process reports"))]
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "only Improve reports"))]
     pub(crate) fn reporting(report: impl Fn(ImproveEvent) + Send + Sync + 'static) -> Self {
         Self {
             report: Some(Box::new(report)),
@@ -237,7 +240,7 @@ impl ScheduleActivity {
         }
     }
 
-    #[cfg_attr(not(feature = "scip"), allow(dead_code, reason = "only Improve's search reports values"))]
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "only Improve's search reports values"))]
     pub(crate) fn value(&self, value: f64, bound: Option<f64>) {
         if let Some(report) = self.report.as_ref() {
             report(ImproveEvent::Point { value, bound });
@@ -245,7 +248,7 @@ impl ScheduleActivity {
     }
 
     /// Whether the run has been asked to stop and keep what it has.
-    #[cfg_attr(not(feature = "scip"), allow(dead_code, reason = "only Improve finishes early"))]
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "only Improve finishes early"))]
     pub(crate) fn finishing(&self) -> bool {
         self.finish.load(Ordering::Acquire)
     }
@@ -731,9 +734,8 @@ pub(crate) fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, o
     Ok(())
 }
 
-/// Runs on one thread. With SCIP this is the solver process's main one, and
-/// no SCIP model, pointer or solution wrapper leaves it; only owned, replayed
-/// rows do.
+/// Runs on one thread, the run's worker; no SCIP model or solution leaves
+/// it, only owned, replayed rows do.
 ///
 /// `early` is handed the first schedule, completed as a publishable answer,
 /// before an Improve run starts its whole-horizon solve, so a caller can show
@@ -774,7 +776,7 @@ pub(crate) fn execute_schedule(
     activity.set(3);
     activity.stage(ImproveStage::FirstSchedule);
     let attempt = hourly_dispatch(&mut out, cancel);
-    #[cfg(feature = "scip")]
+    #[cfg(not(target_arch = "wasm32"))]
     if !options.first_schedule_only {
         return super::scip_blend::improve(out, attempt, budget_started, cancel, activity, early);
     }

@@ -26,7 +26,7 @@ use super::input::{BlendInput, BlendPile, GradeLimit, WINDOW_TOLERANCE_H, attrib
 use crate::model::schedule::optimisation::{Activity, Destination, DestinationId, DestinationKind, GroundId, LoaderId, SourceId, StockpileId, TaskKind};
 
 /// One published movement: how much material a candidate moved in a cell.
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct MovementRow {
     pub(crate) candidate: usize,
     pub(crate) interval: usize,
@@ -39,7 +39,7 @@ pub(crate) struct MovementRow {
 /// Published for every live cell: the one receiving, and any holding
 /// material or drawn from. A cell with no row in an interval holds nothing:
 /// not yet reached, or drawn empty and not receiving again yet.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ChunkRow {
     pub(crate) pile: StockpileId,
     pub(crate) chunk: usize,
@@ -58,10 +58,9 @@ pub(crate) struct ChunkRow {
 }
 
 /// The extracted schedule, as published for replay.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct BlendSolution {
     pub(crate) movements: Vec<MovementRow>,
-    #[serde(with = "pairs")]
     pub(crate) durations: BTreeMap<(usize, usize), f64>,
     /// Empty for unchunked piles.
     pub(crate) chunks: Vec<ChunkRow>,
@@ -72,26 +71,10 @@ pub(crate) struct BlendSolution {
     pub(crate) adjustments: ExtractionAdjustments,
     /// What drill and blast did, from the hourly dispatch that simulated it;
     /// a later solve keeps the dispatch's.
-    #[serde(default)]
     pub(crate) drill_blast: Option<super::drill_blast::DrillBlastTimeline>,
 }
 
-/// A map as a list of pairs, for keys JSON cannot hold as object keys.
-mod pairs {
-    use std::collections::BTreeMap;
-
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    pub(super) fn serialize<K: Serialize, V: Serialize, S: Serializer>(map: &BTreeMap<K, V>, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_seq(map)
-    }
-
-    pub(super) fn deserialize<'de, K: Deserialize<'de> + Ord, V: Deserialize<'de>, D: Deserializer<'de>>(deserializer: D) -> Result<BTreeMap<K, V>, D::Error> {
-        Ok(Vec::<(K, V)>::deserialize(deserializer)?.into_iter().collect())
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct ExtractionAdjustments {
     pub(crate) movement_count: usize,
     pub(crate) movement_total_t: f64,
@@ -102,14 +85,14 @@ pub(crate) struct ExtractionAdjustments {
 }
 
 impl ExtractionAdjustments {
-    #[cfg_attr(not(feature = "scip"), allow(dead_code, reason = "used by Improve"))]
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "used by Improve"))]
     pub(crate) fn movement(&mut self, tonnes: f64) {
         self.movement_count += 1;
         self.movement_total_t += tonnes.abs();
         self.movement_max_t = self.movement_max_t.max(tonnes.abs());
     }
 
-    #[cfg_attr(not(feature = "scip"), allow(dead_code, reason = "used by Improve"))]
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "used by Improve"))]
     pub(crate) fn chunk_receipt(&mut self, tonnes: f64) {
         self.chunk_receipt_count += 1;
         self.chunk_receipt_total_t += tonnes.abs();
@@ -1126,6 +1109,7 @@ fn check_bar_priority(
     worked_bars
 }
 
+#[allow(clippy::too_many_arguments, reason = "the pile's own state, kept apart from the checker it reports to")]
 fn replay_pile(
     checker: &mut Checker<'_>,
     pile: &BlendPile,
@@ -1182,11 +1166,11 @@ fn replay_pile(
                 if let Some(slot) = per_segment_receipts.get_mut(row.segment) {
                     *slot += row.tonnes_t;
                 }
-                for g in 0..grades {
+                for (g, received) in received_q.iter_mut().enumerate().take(grades) {
                     // A receipt carries identified material, so its contained
                     // quantity is known exactly.
                     match input.grades.fraction(candidate.material, g) {
-                        Some(fraction) => received_q[g] += row.tonnes_t * fraction,
+                        Some(fraction) => *received += row.tonnes_t * fraction,
                         None => checker
                             .report
                             .issues

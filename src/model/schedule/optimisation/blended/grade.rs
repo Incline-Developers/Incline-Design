@@ -34,28 +34,6 @@ use crate::{
     model::{ReserveAggregation, ReserveField, ReserveFieldId, schedule::optimisation::MaterialId},
 };
 
-/// Stored numeric grades are used by project capture. Legacy fraction/percent
-/// cases remain available to the historical experiment fixtures.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub(crate) enum GradeBasis {
-    /// An ordinary numeric grade in its stored scale.
-    Stored,
-    /// Already a mass fraction in `0..=1`.
-    Fraction,
-    /// A percentage in `0..=100`.
-    Percent,
-}
-
-impl GradeBasis {
-    /// Convert a historical basis, or keep a stored numeric grade unchanged.
-    pub(crate) fn to_fraction(self, value: f64) -> f64 {
-        match self {
-            Self::Stored | Self::Fraction => value,
-            Self::Percent => value / 100.0,
-        }
-    }
-}
-
 /// Why a reserve field cannot be used as a blended grade.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum GradeRejection {
@@ -77,7 +55,7 @@ pub(crate) enum GradeRejection {
     /// A material reaching the blended pile has no value for this field.
     /// Missing is not zero: a blend cannot be computed without it.
     MissingValue { field: String, material: MaterialId },
-    /// A captured value is outside the range its basis allows.
+    /// A captured value is negative.
     OutOfRange { field: String, material: MaterialId, value: f64 },
 }
 
@@ -112,11 +90,10 @@ impl GradeRejection {
 }
 
 /// One grade the blended experiment tracks.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct GradeField {
     pub(crate) field: ReserveFieldId,
     pub(crate) name: String,
-    pub(crate) basis: GradeBasis,
 }
 
 impl GradeField {
@@ -125,7 +102,7 @@ impl GradeField {
     ///
     /// `tonnage` is the plan's configured tonnage field; a grade qualifies
     /// only when it is a weighted average *by that exact field*.
-    pub(crate) fn accept(field: ReserveFieldId, basis: GradeBasis, fields: &[ReserveField], tonnage: Option<ReserveFieldId>) -> Result<Self, GradeRejection> {
+    pub(crate) fn accept(field: ReserveFieldId, fields: &[ReserveField], tonnage: Option<ReserveFieldId>) -> Result<Self, GradeRejection> {
         let Some(definition) = fields.iter().find(|entry| entry.id == field) else {
             return Err(GradeRejection::UnknownField(field));
         };
@@ -136,7 +113,7 @@ impl GradeField {
         match definition.aggregation {
             ReserveAggregation::Category => Err(GradeRejection::Categorical { field: name }),
             ReserveAggregation::Sum => Err(GradeRejection::Summed { field: name }),
-            ReserveAggregation::WeightedAverage { weight_field } if weight_field == tonnage => Ok(Self { field, name, basis }),
+            ReserveAggregation::WeightedAverage { weight_field } if weight_field == tonnage => Ok(Self { field, name }),
             ReserveAggregation::VolumeAverage => Err(GradeRejection::ForeignWeight {
                 field: name,
                 weight: tr!("reserve-block-volume"),
@@ -161,25 +138,15 @@ impl GradeField {
             }
         }
     }
-
-    /// The largest fraction this basis can legitimately represent.
-    fn ceiling(&self) -> f64 {
-        match self.basis {
-            GradeBasis::Stored => f64::MAX,
-            GradeBasis::Fraction => 1.0,
-            GradeBasis::Percent => 1.0,
-        }
-    }
 }
 
-/// Per-material numeric grades in the selected basis. Project capture uses
-/// the stored numbers, without percentage/fraction conversion.
+/// Per-material numeric grades, in the scale the project stores them in.
 ///
 /// Built once by the experimental input builder. Every material that can
 /// reach a blended pile must have a value for every tracked grade - the
 /// builder refuses rather than defaulting, because a defaulted zero would
 /// quietly dilute a blend and a defaulted mean would invent metal.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct GradeTable {
     pub(crate) fields: Vec<GradeField>,
     values: BTreeMap<MaterialId, Vec<f64>>,
@@ -203,15 +170,14 @@ impl GradeTable {
                         material: *material,
                     });
                 }
-                let fraction = grade.basis.to_fraction(value);
-                if !(0.0..=grade.ceiling()).contains(&fraction) {
+                if value < 0.0 {
                     return Err(GradeRejection::OutOfRange {
                         field: grade.name.clone(),
                         material: *material,
                         value,
                     });
                 }
-                row.push(fraction);
+                row.push(value);
             }
             values.insert(*material, row);
         }
@@ -222,7 +188,7 @@ impl GradeTable {
         self.fields.len()
     }
 
-    /// Numeric grade in the captured basis (stored scale for real projects).
+    /// Numeric grade in the project's stored scale.
     pub(crate) fn fraction(&self, material: MaterialId, grade: usize) -> Option<f64> {
         self.values.get(&material).and_then(|row| row.get(grade).copied())
     }

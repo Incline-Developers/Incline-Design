@@ -26,7 +26,7 @@ pub(crate) mod progress;
 
 /// The nonlinear SCIP solver for that same blended model, separate from
 /// [`blended`] because it is the only part that needs SCIP.
-#[cfg(all(not(target_arch = "wasm32"), feature = "scip"))]
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod scip;
 
 macro_rules! id_type {
@@ -80,7 +80,7 @@ pub(crate) struct HorizonSpec {
     pub(crate) tolerances: NumericalTolerances,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Interval {
     pub(crate) index: usize,
     pub(crate) start_h: f64,
@@ -171,45 +171,45 @@ pub(crate) fn build_intervals(spec: HorizonSpec, windows: &[(f64, f64)], calenda
         .collect())
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Activity {
     Dig,
     Reclaim,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ReclaimOrder {
     Fifo,
     Lifo,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum SourceId {
     Ground(GroundId),
     Stockpile(StockpileId),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct MaterialShare {
     pub(crate) material: MaterialId,
     pub(crate) fraction: f64,
 }
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct GroundSource {
     pub(crate) id: GroundId,
     pub(crate) tonnes_t: f64,
     pub(crate) material: Vec<MaterialShare>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DestinationKind {
     Crusher,
     Dump,
     Stockpile(StockpileId),
 }
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Destination {
     pub(crate) id: DestinationId,
     pub(crate) kind: DestinationKind,
@@ -219,33 +219,27 @@ pub(crate) struct Destination {
     pub(crate) crusher_daily_t: Vec<Option<f64>>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct IntervalRate {
     pub(crate) interval: usize,
     pub(crate) dig_tph: f64,
     pub(crate) reclaim_tph: f64,
     /// The scheduled utilisation, a fraction, the dig incentive pays up to
     /// on this interval's day.
-    #[serde(default = "full_utilisation")]
     pub(crate) utilisation_target: f64,
     /// Objective weight per dug tonne per percentage point the loader's
     /// scheduled utilisation so far today stands below the target. Steers
     /// the hourly dispatch only; never money.
-    #[serde(default)]
     pub(crate) utilisation_incentive: f64,
 }
 
-fn full_utilisation() -> f64 {
-    1.0
-}
-
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Loader {
     pub(crate) id: LoaderId,
     pub(crate) rates: Vec<IntervalRate>,
 }
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum TaskKind {
     Dig {
         sequence: Vec<GroundId>,
@@ -261,7 +255,7 @@ pub(crate) enum TaskKind {
     Delay,
 }
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Task {
     pub(crate) id: TaskId,
     pub(crate) loader: LoaderId,
@@ -271,7 +265,7 @@ pub(crate) struct Task {
     pub(crate) kind: TaskKind,
 }
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TruckClass {
     pub(crate) id: TruckClassId,
     /// Available shared truck-hours by interval. Segments receive their
@@ -280,7 +274,7 @@ pub(crate) struct TruckClass {
     pub(crate) hours: Vec<f64>,
 }
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct CashflowContribution {
     pub(crate) rule: CashflowRuleId,
     pub(crate) value_per_tonne: f64,
@@ -289,7 +283,7 @@ pub(crate) struct CashflowContribution {
 /// One feasible destination/truck combination. Capture creates these only when
 /// the routing, trucking and cashflow selectors all resolve. Different truck
 /// classes are separate candidates sharing the same physical movement.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct MovementCandidate {
     pub(crate) loader: LoaderId,
     pub(crate) activity: Activity,
@@ -298,7 +292,6 @@ pub(crate) struct MovementCandidate {
     pub(crate) destination: DestinationId,
     pub(crate) truck: TruckClassId,
     pub(crate) truck_hours_per_tonne: f64,
-    #[serde(default)]
     pub(crate) cycle: super::trucking::CycleBreakdown,
     pub(crate) routing_rule: RoutingRuleId,
     pub(crate) routing_preference: u32,

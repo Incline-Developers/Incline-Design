@@ -223,6 +223,11 @@ pub(crate) struct Ekk {
     pub cost_perturbation_max_abs_cost: f64,
     pub dual_ray_record: Option<(usize, i32)>,
     pub primal_ray_record: Option<(usize, i32)>,
+    /// The dual ray, once computed from its record (HiGHS's
+    /// `dual_ray_record_.value`).
+    pub dual_ray_value: Vec<f64>,
+    /// The primal ray, once computed from its record.
+    pub primal_ray_value: Vec<f64>,
     pub edge_weight_error: f64,
     pub num_dual_phase_1_lp_dual_infeasibility: isize,
     pub cost_scale: f64,
@@ -269,6 +274,8 @@ impl Ekk {
             cost_perturbation_max_abs_cost: 0.0,
             dual_ray_record: None,
             primal_ray_record: None,
+            dual_ray_value: Vec::new(),
+            primal_ray_value: Vec::new(),
             edge_weight_error: 0.0,
             num_dual_phase_1_lp_dual_infeasibility: 0,
             cost_scale: 1.0,
@@ -447,6 +454,13 @@ impl Ekk {
     }
 
     fn initialise_simplex_lp_basis_and_factor(&mut self) {
+        self.initialise_simplex_lp_basis_and_factor_from(false);
+    }
+
+    /// HiGHS's `HEkk::initialiseSimplexLpBasisAndFactor(only_from_known_basis)`;
+    /// with `only_from_known_basis` a rank deficient basis is an error
+    /// (returns false) instead of being completed with logicals.
+    pub fn initialise_simplex_lp_basis_and_factor_from(&mut self, only_from_known_basis: bool) -> bool {
         if !self.status.has_basis {
             self.set_logical_basis();
         }
@@ -461,6 +475,10 @@ impl Ekk {
         if !self.status.has_invert {
             let rank_deficiency = self.compute_factor();
             if rank_deficiency > 0 {
+                if only_from_known_basis {
+                    // Supposed to be a full-rank basis, but incorrect.
+                    return false;
+                }
                 self.handle_rank_deficiency();
                 // A new basis: the edge weights and row-wise matrix no
                 // longer correspond.
@@ -475,6 +493,7 @@ impl Ekk {
             }
             self.reset_synthetic_clock();
         }
+        true
     }
 
     fn handle_rank_deficiency(&mut self) {
@@ -529,8 +548,7 @@ impl Ekk {
         if self.model_status == ModelStatus::Optimal {
             return;
         }
-        self.dual_ray_record = None;
-        self.primal_ray_record = None;
+        self.clear_ray_records();
         self.info.allow_cost_shifting = true;
         self.info.allow_cost_perturbation = true;
         self.info.allow_bound_perturbation = true;
@@ -1442,6 +1460,14 @@ impl Ekk {
 
     /// Called once as each solve returns: take the perturbations and
     /// shifts back out, recomputing what they changed.
+    /// HiGHS's `clearRayRecords`.
+    pub fn clear_ray_records(&mut self) {
+        self.dual_ray_record = None;
+        self.primal_ray_record = None;
+        self.dual_ray_value.clear();
+        self.primal_ray_value.clear();
+    }
+
     pub fn return_from_solve(&mut self) {
         self.called_return_from_solve = true;
         self.info.valid_backtracking_basis = false;
@@ -1474,7 +1500,7 @@ impl Ekk {
                 self.compute_dual();
                 self.compute_simplex_infeasible();
             }
-            ModelStatus::NotSet | ModelStatus::SolveError => return,
+            ModelStatus::NotSet | ModelStatus::ModelEmpty | ModelStatus::SolveError => return,
         }
         self.zero_basic_duals();
         self.compute_primal_objective_value();
@@ -1575,13 +1601,18 @@ impl Ekk {
     /// primal infeasible: the implied bound on its combination of rows
     /// cannot be met by any column values.
     pub fn proof_of_primal_infeasibility(&mut self, row_ep: &mut HVector, move_out: i32) -> bool {
-        if !self.status.has_ar_matrix {
-            self.initialise_partitioned_rowwise_matrix();
-        }
+        // HiGHS decides on the row-wise matrix at entry; `getMaxAbsRowValue`
+        // builds it on the way, but the product below still uses the
+        // column-wise one then.
+        let use_row_wise_matrix = self.status.has_ar_matrix;
         let mut proof_lower = CDouble::new(0.0);
         for k in 0..row_ep.count as usize {
             let row = row_ep.index[k];
             let row_ep_value = row_ep.array[row];
+            // HiGHS's `getMaxAbsRowValue`.
+            if !self.status.has_ar_matrix {
+                self.initialise_partitioned_rowwise_matrix();
+            }
             if (row_ep_value * self.ar_matrix.max_abs_row_value(row)).abs() <= self.options.small_matrix_value {
                 row_ep.array[row] = 0.0;
                 continue;
@@ -1604,7 +1635,11 @@ impl Ekk {
             };
             proof_lower += row_ep.array[row] * row_bound;
         }
-        let (proof_value, proof_index) = self.ar_matrix.product_transpose_quad(row_ep);
+        let (proof_value, proof_index) = if use_row_wise_matrix {
+            self.ar_matrix.product_transpose_quad(row_ep)
+        } else {
+            self.lp.a.product_transpose_quad(row_ep)
+        };
         let mut implied_upper = CDouble::new(0.0);
         let mut sum_inf = CDouble::new(0.0);
         for (i, &col) in proof_index.iter().enumerate() {
@@ -1631,6 +1666,7 @@ impl Ekk {
         }
         let infinite_implied_upper = sum_inf.value() > self.options.small_matrix_value;
         let gap = (proof_lower - implied_upper).value();
+
         !infinite_implied_upper && gap > self.options.primal_feasibility_tolerance
     }
 

@@ -536,9 +536,9 @@ pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &mut EditorSt
     ui.spacing_mut().item_spacing.x = spacing;
     ui.add_space(6.0);
     // The hourly schedule is what every other control produces; this is the
-    // one that spends the solve time looking past it. Only a build with SCIP
-    // can (the `scip` feature).
-    if cfg!(feature = "scip") {
+    // one that spends the solve time looking past it. Only a native build
+    // has Improve: its solve uses threads the browser build cannot start.
+    if cfg!(not(target_arch = "wasm32")) {
         let improve = egui::Button::new(if editor.schedule_run_improve {
             tr!("schedule-improving")
         } else {

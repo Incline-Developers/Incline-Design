@@ -52,7 +52,7 @@ use crate::{
 /// Held with the result rather than re-read from the project: a result that
 /// cannot say what it was calculated from cannot be told apart from one that
 /// is still true.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ScheduleRunInputs {
     /// The project. A different one does not inherit this answer.
     pub(crate) runtime: u32,

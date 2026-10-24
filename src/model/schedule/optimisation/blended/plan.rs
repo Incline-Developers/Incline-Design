@@ -1,13 +1,13 @@
 //! Targets from a coarse whole-horizon plan for the hourly dispatch to follow.
 //!
-//! The plan (`scip::plan` with the `scip` feature) decides, per loader and
+//! The plan (`scip::plan`, native builds only) decides, per loader and
 //! day, how many tonnes go to each destination, dug or reclaimed. The dispatch still chooses
 //! every hour's blocks, destinations and trucks itself, under authored bar
 //! priority, and the replay still checks the result; the targets only steer
 //! its objective. Each loader's route is paced through the day: tonnes up to
 //! the planned share of the day so far earn [`PlanTargets::follow`] per
 //! tonne, and tonnes past it cost [`PlanTargets::overrun`]. Neither is money.
-#![cfg_attr(not(feature = "scip"), allow(dead_code, reason = "only Improve's search sets targets, and it needs SCIP"))]
+#![cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "only Improve's search sets targets, and it runs natively"))]
 
 use std::collections::{BTreeMap, BTreeSet};
 

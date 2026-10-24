@@ -11,7 +11,10 @@ use std::{
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-use russcip::{Model, ProblemCreated, Variable, prelude::*};
+use minlp::{
+    model::{Model, Var},
+    types::{ObjSense, VarType},
+};
 
 use super::super::blended::{
     formulation::{BlendColumns, BlendSizes, FamilySize, FamilyTally, FormulationCancelled, Rows, formulate},
@@ -20,16 +23,16 @@ use super::super::blended::{
 use crate::model::schedule::optimisation::StockpileId;
 
 pub(crate) struct BlendFormulation {
-    pub(crate) model: Model<ProblemCreated>,
-    pub(crate) columns: BlendColumns<Variable>,
+    pub(crate) model: Model,
+    pub(crate) columns: BlendColumns<Var>,
     pub(crate) sizes: BlendSizes,
     /// Sizes by family, largest first, when asked for; empty otherwise.
     pub(crate) families: Vec<(String, FamilySize)>,
 }
 
 struct ScipRows<'a> {
-    model: Model<ProblemCreated>,
-    columns: BlendColumns<Variable>,
+    model: Model,
+    columns: BlendColumns<Var>,
     sizes: BlendSizes,
     cancel: Option<&'a AtomicBool>,
     checks: Option<&'a AtomicU64>,
@@ -39,9 +42,9 @@ struct ScipRows<'a> {
 }
 
 impl Rows for ScipRows<'_> {
-    type Var = Variable;
+    type Var = Var;
 
-    fn columns(&mut self) -> &mut BlendColumns<Variable> {
+    fn columns(&mut self) -> &mut BlendColumns<Var> {
         &mut self.columns
     }
 
@@ -52,48 +55,48 @@ impl Rows for ScipRows<'_> {
         self.cancel.is_some_and(|flag| flag.load(Ordering::Acquire))
     }
 
-    /// russcip fixes a column's objective coefficient at creation, so a column
-    /// that earns value must be created knowing it - there is no
-    /// `set_obj_coeff`.
-    fn valued(&mut self, upper: f64, value: f64, name: &str) -> Variable {
+    /// A column's objective coefficient is fixed at creation
+    /// (`SCIPcreateVarBasic`), so a column that earns value is created
+    /// knowing it.
+    fn valued(&mut self, upper: f64, value: f64, name: &str) -> Var {
         self.sizes.variables += 1;
         if let Some(families) = &mut self.families {
             families.column(name, false);
         }
         let upper = if upper.is_finite() { upper } else { 1e20 };
-        self.model.add(var().cont(0.0..=upper).obj(value).name(name))
+        self.model
+            .add_var(name, 0.0, upper, value, VarType::Continuous)
+            .expect("adding a column in the problem stage")
     }
 
-    fn binary(&mut self, name: &str) -> Variable {
+    fn binary(&mut self, name: &str) -> Var {
         self.sizes.variables += 1;
         self.sizes.binaries += 1;
         if let Some(families) = &mut self.families {
             families.column(name, true);
         }
-        self.model.add(var().bin().name(name))
+        self.model.add_var(name, 0.0, 1.0, 0.0, VarType::Binary).expect("adding a column in the problem stage")
     }
 
-    fn linear(&mut self, terms: Vec<(Variable, f64)>, lhs: f64, rhs: f64, name: &str) {
+    fn linear(&mut self, terms: Vec<(Var, f64)>, lhs: f64, rhs: f64, name: &str) {
         if terms.is_empty() {
             return;
         }
         self.count_row(&terms, name);
-        let vars: Vec<&Variable> = terms.iter().map(|(v, _)| v).collect();
-        let coefs: Vec<f64> = terms.iter().map(|(_, c)| *c).collect();
-        self.model.add_cons(vars, &coefs, lhs, rhs, name);
+        let (vars, coefs): (Vec<Var>, Vec<f64>) = terms.into_iter().unzip();
+        self.model.add_linear(name, &vars, &coefs, lhs, rhs).expect("adding a row in the problem stage");
     }
 
     /// SCIP's own indicator constraint rather than a big-M row: the linear
     /// part is then checked at its own scale, so the implication cannot be
     /// bent by `M x feastol`.
-    fn implies(&mut self, flag: Variable, terms: Vec<(Variable, f64)>, rhs: f64, _big_m: f64, name: &str) {
+    fn implies(&mut self, flag: Var, terms: Vec<(Var, f64)>, rhs: f64, _big_m: f64, name: &str) {
         if terms.is_empty() {
             return;
         }
         self.count_row(&terms, name);
-        let vars: Vec<&Variable> = terms.iter().map(|(v, _)| v).collect();
-        let mut coefs: Vec<f64> = terms.iter().map(|(_, c)| *c).collect();
-        self.model.add_cons_indicator(&flag, vars, &mut coefs, rhs, name);
+        let (vars, coefs): (Vec<Var>, Vec<f64>) = terms.into_iter().unzip();
+        self.model.add_indicator(name, flag, &vars, &coefs, rhs).expect("adding a row in the problem stage");
     }
 
     /// `Q_recl * T_open - T_recl * Q_open = 0`, posted through
@@ -109,21 +112,20 @@ impl Rows for ScipRows<'_> {
     /// rounding sits far inside the tolerance, while the reclaimed blend the
     /// tolerance admits is still within `1e-6 x capacity / (T_recl x T_open)`
     /// grade units of the pile's: a millionth for a tonne from a full pile.
-    fn mix(&mut self, pile: StockpileId, _interval: usize, _grade: usize, recl_q: Variable, open_t: Variable, recl_t: Variable, open_q: Variable, name: &str) {
+    fn mix(&mut self, pile: StockpileId, _interval: usize, _grade: usize, recl_q: Var, open_t: Var, recl_t: Var, open_q: Var, name: &str) {
         self.sizes.nonlinear_constraints += 1;
         if let Some(families) = &mut self.families {
             families.row(name, 4);
         }
-        let q1: Vec<&Variable> = vec![&recl_q, &recl_t];
-        let q2: Vec<&Variable> = vec![&open_t, &open_q];
         let scale = self.capacities.get(&pile).copied().filter(|capacity| *capacity > 1.0).map_or(1.0, f64::recip);
-        let mut coefs = [scale, -scale];
-        self.model.add_cons_quadratic(Vec::new(), &mut [], q1, q2, &mut coefs, 0.0, 0.0, name);
+        self.model
+            .add_quadratic(name, &[], &[], &[recl_q, recl_t], &[open_t, open_q], &[scale, -scale], 0.0, 0.0)
+            .expect("adding a row in the problem stage");
     }
 }
 
 impl ScipRows<'_> {
-    fn count_row(&mut self, terms: &[(Variable, f64)], name: &str) {
+    fn count_row(&mut self, terms: &[(Var, f64)], name: &str) {
         let entries = terms.iter().filter(|(_, coefficient)| *coefficient != 0.0).count();
         self.sizes.linear_constraints += 1;
         self.sizes.linear_coefficient_entries += entries;
@@ -141,11 +143,12 @@ pub(crate) fn formulate_scip_with_cancel(
     checks: Option<&AtomicU64>,
     count_families: bool,
 ) -> Result<BlendFormulation, FormulationCancelled> {
-    let model = Model::new()
-        .hide_output()
-        .include_default_plugins()
-        .create_prob("blended_stockpile")
-        .set_obj_sense(ObjSense::Maximize);
+    let mut model = Model::new("blended_stockpile").expect("creating a SCIP instance");
+    if super::adapter::dumping() {
+        model.record_calls();
+    }
+    model.set_int_param("display/verblevel", 0).expect("a core parameter");
+    model.set_objsense(ObjSense::Maximize).expect("setting the sense in the problem stage");
     let mut rows = ScipRows {
         model,
         columns: BlendColumns::new(),

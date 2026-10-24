@@ -47,15 +47,17 @@ mod rb_tree;
 mod simplex;
 mod util;
 
-pub use lp_solver::LpSolver;
+pub use lp_solver::{LpSolver, NONE};
 #[doc(hidden)]
-pub use mip::{DebugMipSolve, DebugPresolved, debug_mip_presolve, debug_mip_solve};
 pub use mip::{MipSettings, MipSolution, MipStatus, solve_mip};
 pub use problem::{Problem, Sense};
 pub use simplex::{
     Infeasibilities, ModelStatus as Status,
     ekk::Interrupt,
-    options::{EdgeWeightStrategy, Options, PriceStrategy, SimplexStrategy, Solver},
+    options::{
+        EdgeWeightStrategy, Options, PriceStrategy, SCALE_STRATEGY_CHOOSE, SCALE_STRATEGY_EQUILIBRATION, SCALE_STRATEGY_FORCED_EQUILIBRATION, SCALE_STRATEGY_MAX_VALUE,
+        SCALE_STRATEGY_OFF, SimplexStrategy, Solver,
+    },
 };
 
 /// Where a variable (a column, or a row's activity) sits in a basis.

@@ -764,7 +764,7 @@ impl LpRelaxation {
                 continue;
             }
             k -= 1;
-            self.lpsolver.basis_inverse_row(row - 1, &mut self.row_ep);
+            self.lpsolver.basis_inverse_row_sparse(row - 1, &mut self.row_ep);
             let row_dual = self.lpsolver.row_dual().expect("duals").to_vec();
             let row_value = self.lpsolver.row_value().expect("a solution").to_vec();
             let sign = self.lpsolver.col_dual().expect("duals")[var];
@@ -968,7 +968,7 @@ impl LpRelaxation {
                 self.dualproofinds.reserve(num_col);
             }
         }
-        self.hasdualproof = self.lpsolver.dual_ray(&mut self.row_ep);
+        self.hasdualproof = self.lpsolver.dual_ray_sparse(&mut self.row_ep);
         if !self.hasdualproof {
             return;
         }
@@ -1071,45 +1071,6 @@ impl LpRelaxation {
 
     /// HiGHS's `run`.
     pub fn run(&mut self, resolve_on_error: bool, data: &mut MipData) -> LpStatus {
-        if crate::util::tracing() {
-            let s = &self.lpsolver;
-            let mut h: u64 = 0;
-            let mut mix = |x: f64| h = h.wrapping_mul(1000003) ^ x.to_bits();
-            let (_, index, value) = s.matrix();
-            s.col_cost()
-                .iter()
-                .chain(s.col_lower())
-                .chain(s.col_upper())
-                .chain(s.row_lower())
-                .chain(s.row_upper())
-                .chain(value)
-                .for_each(|&x| mix(x));
-            index.iter().for_each(|&x| mix(x as f64));
-            eprintln!("LPIN {h:x} {}", s.basis().is_some() as i32);
-            if let Some(path) = std::env::var_os("SOLVER_DUMP_LP")
-                && !std::path::Path::new(&path).exists()
-            {
-                let mut out: Vec<u8> = Vec::new();
-                let mut word = |v: u64| out.extend_from_slice(&v.to_le_bytes());
-                let (start, index, value) = s.matrix();
-                word(s.num_cols() as u64);
-                word(s.num_rows() as u64);
-                for v in s.col_cost().iter().chain(s.col_lower()).chain(s.col_upper()).chain(s.row_lower()).chain(s.row_upper()) {
-                    word(v.to_bits());
-                }
-                word(index.len() as u64);
-                for &v in start {
-                    word(v as u64);
-                }
-                for &v in index {
-                    word(v as u64);
-                }
-                for v in value {
-                    word(v.to_bits());
-                }
-                std::fs::write(path, out).unwrap();
-            }
-        }
         self.lpsolver.options.time_limit = (data.options.time_limit - data.elapsed()).max(0.0);
         let solver = self.lpsolver.options.solver;
         self.lpsolver.options.solver = Solver::Simplex;
@@ -1118,14 +1079,6 @@ impl LpRelaxation {
         self.solved_first_lp = true;
         let itercount = self.lpsolver.iterations() as i64;
         self.numlpiters += itercount;
-        if crate::util::tracing() {
-            eprintln!(
-                "LP {itercount} {:x} {} {}",
-                self.lpsolver.objective().to_bits(),
-                self.lpsolver.num_rows(),
-                self.lpsolver.num_cols()
-            );
-        }
 
         let model_status = self.lpsolver.status();
         if model_status == ModelStatus::SolveError {

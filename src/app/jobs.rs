@@ -165,7 +165,7 @@ impl CancelFlag {
     }
 
     /// A flag raised by whoever holds `signal`, not by a job's own cancel.
-    #[cfg_attr(not(feature = "scip"), allow(dead_code, reason = "only Improve finishes early"))]
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "only Improve finishes early"))]
     pub(crate) fn from_signal(signal: Arc<AtomicBool>) -> Self {
         Self(signal)
     }

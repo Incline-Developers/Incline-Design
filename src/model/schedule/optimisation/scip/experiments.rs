@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use russcip::{Solved, Variable, prelude::*};
+use minlp::model::{Model, Var};
 
 use super::super::blended::{
     formulation::BlendColumns,
@@ -12,8 +12,11 @@ use crate::model::schedule::optimisation::{MaterialId, StockpileId};
 
 /// Extract published rows in bounded loops. The worker checks cancellation
 /// here.
-pub(crate) fn extract_solution(solved: &Model<Solved>, columns: &BlendColumns<Variable>, cancelled: impl Fn() -> bool) -> Result<Option<BlendSolution>, ()> {
-    let Some(best) = solved.best_sol() else { return Ok(None) };
+pub(crate) fn extract_solution(solved: &Model, columns: &BlendColumns<Var>, cancelled: impl Fn() -> bool) -> Result<Option<BlendSolution>, ()> {
+    if solved.n_sols() == 0 {
+        return Ok(None);
+    }
+    let best = |variable: &Var| solved.best_sol_value(*variable).unwrap_or(0.0);
     if cancelled() {
         return Err(());
     }
@@ -23,7 +26,7 @@ pub(crate) fn extract_solution(solved: &Model<Solved>, columns: &BlendColumns<Va
         if cancelled() {
             return Err(());
         }
-        let tonnes_t = best.val(variable);
+        let tonnes_t = best(variable);
         if tonnes_t.abs() <= 1e-9 {
             if tonnes_t != 0.0 {
                 adjustments.movement(tonnes_t);
@@ -42,7 +45,7 @@ pub(crate) fn extract_solution(solved: &Model<Solved>, columns: &BlendColumns<Va
         if cancelled() {
             return Err(());
         }
-        durations.insert(cell, best.val(variable));
+        durations.insert(cell, best(variable));
     }
     // A chunk's receipts are solved per material. Each material's published
     // movement tonnes in an interval are handed to its chunks in chunk order,
@@ -58,7 +61,7 @@ pub(crate) fn extract_solution(solved: &Model<Solved>, columns: &BlendColumns<Va
         if cancelled() {
             return Err(());
         }
-        let tonnes = best.val(variable);
+        let tonnes = best(variable);
         if tonnes.abs() <= 1e-9 {
             if tonnes != 0.0 {
                 adjustments.chunk_receipt(tonnes);
@@ -103,19 +106,15 @@ pub(crate) fn extract_solution(solved: &Model<Solved>, columns: &BlendColumns<Va
         if cancelled() {
             return Err(());
         }
-        let reclaimed_t = columns.chunk_recl_t.get(&(pile, chunk, interval)).map(|variable| best.val(variable)).unwrap_or(0.0);
-        let receiving = columns
-            .chunk_receiving
-            .get(&(pile, chunk, interval))
-            .map(|variable| best.val(variable) > 0.5)
-            .unwrap_or(false);
+        let reclaimed_t = columns.chunk_recl_t.get(&(pile, chunk, interval)).map(best).unwrap_or(0.0);
+        let receiving = columns.chunk_receiving.get(&(pile, chunk, interval)).map(|variable| best(variable) > 0.5).unwrap_or(false);
         let receipts = split.remove(&(pile, chunk, interval)).unwrap_or_default();
         let received_t = receipts.iter().map(|(_, tonnes)| tonnes).sum();
         chunks.push(ChunkRow {
             pile,
             chunk,
             interval,
-            open_t: best.val(open),
+            open_t: best(open),
             reclaimed_t,
             receiving,
             received_t,
@@ -126,7 +125,7 @@ pub(crate) fn extract_solution(solved: &Model<Solved>, columns: &BlendColumns<Va
         movements,
         durations,
         chunks,
-        reported_objective: solved.obj_val(),
+        reported_objective: solved.primal_bound(),
         adjustments,
         drill_blast: None,
     }))

@@ -4,7 +4,7 @@
 //! The blasts are the Solids run's, listed by solid and bench. A blast's
 //! starting stage is set in its row, or for a whole bench or solid from the
 //! heading's menu. Its own pattern, where it differs from the default, is set
-//! beside the settings once it is selected. See `docs/scheduling-drill-blast.md`.
+//! beside the settings once it is selected.
 
 use crate::{
     i18n::tr,

@@ -16,10 +16,8 @@ pub(crate) mod schedule_pipeline; // The Schedule workspace's Setup run/invalida
 pub(crate) mod schedule_publish; // A validated solution, translated into the shared calculated schedule
 pub(crate) mod schedule_run; // Run Period / Run All Periods: capture, solve, publish, currentness
 pub(crate) mod schedule_solve; // One schedule run: validation, the hourly dispatch, and Improve where built
-#[cfg(all(not(target_arch = "wasm32"), feature = "scip"))]
-pub(crate) mod scip_blend; // Improve: the SCIP solve of one owned blended model, run inside the solver process
-#[cfg(all(not(target_arch = "wasm32"), feature = "scip"))]
-pub(crate) mod solver_process; // The schedule solve in a child process, so a native fault ends one run, not the app
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod scip_blend; // Improve: the SCIP solve of one owned blended model, on the run's worker thread
 pub(crate) mod step_pipeline; // The run/invalidation core shared by the Schedule and Haulage Setup pipelines
 pub(crate) mod tie_in; // Drill & Blast's tie-in and initiation point
 #[cfg(not(target_arch = "wasm32"))]

@@ -1,9 +1,9 @@
 //! The SCIP backend for the *blended* stockpile model: the schedule
 //! optimiser behind Improve on native builds.
 //!
-//! Built only with the `scip` feature, and never for wasm: SCIP 10.0.2 built
-//! from source (`scip-source`), or whatever SCIP `$SCIPOPTDIR` points at
-//! (`scip-system`).
+//! Native builds only: SCIP 10.0.2 as crates/minlp ports it to Rust,
+//! through its [`minlp::model`] front end. The solve runs in a child
+//! process, which the browser has no way to start.
 //!
 //! # Why a different solver at all
 //!

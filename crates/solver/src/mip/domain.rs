@@ -1964,16 +1964,6 @@ impl Domain {
     /// one), record it on the stack with its reason, and fix what the clique
     /// table and implications imply when a binary is fixed.
     pub fn change_bound(&mut self, mut boundchg: DomainChange, reason: Reason, env: &mut DomainEnv) {
-        if crate::util::tracing() {
-            eprintln!(
-                "B {} {} {:x} {} {}",
-                boundchg.boundtype as i32,
-                boundchg.column,
-                boundchg.boundval.to_bits(),
-                reason.kind,
-                self.is_global as i32
-            );
-        }
         self.sync(env);
         let col = boundchg.column;
         let feastol = env.feastol;

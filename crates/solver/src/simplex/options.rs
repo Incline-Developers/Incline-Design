@@ -43,6 +43,13 @@ pub enum Solver {
     Ipm,
 }
 
+/// HiGHS's `SimplexScaleStrategy` values.
+pub const SCALE_STRATEGY_OFF: i32 = 0;
+pub const SCALE_STRATEGY_CHOOSE: i32 = 1;
+pub const SCALE_STRATEGY_EQUILIBRATION: i32 = 2;
+pub const SCALE_STRATEGY_FORCED_EQUILIBRATION: i32 = 3;
+pub const SCALE_STRATEGY_MAX_VALUE: i32 = 4;
+
 #[derive(Clone, Debug)]
 pub struct Options {
     /// Presolve the LP first (HiGHS's `presolve`), unless a solve starts
@@ -74,7 +81,16 @@ pub struct Options {
     pub less_infeasible_dse_check: bool,
     pub less_infeasible_dse_choose_row: bool,
     pub allowed_matrix_scale_factor: i32,
-    pub scale: bool,
+    /// HiGHS's `simplex_scale_strategy`: off / choose / equilibration /
+    /// forced equilibration / max value (0/1/2/3/4).
+    pub simplex_scale_strategy: i32,
+    /// HiGHS's `simplex_primal_edge_weight_strategy`.
+    pub primal_edge_weight_strategy: EdgeWeightStrategy,
+    /// HiGHS's `output_flag`; nothing is printed either way.
+    pub output_flag: bool,
+    /// HiGHS's `lp_presolve_requires_basis_postsolve`; presolve always
+    /// keeps what basis postsolve needs.
+    pub lp_presolve_requires_basis_postsolve: bool,
     pub random_seed: u32,
     pub objective_bound: f64,
     pub ipm_optimality_tolerance: f64,
@@ -112,7 +128,10 @@ impl Default for Options {
             less_infeasible_dse_check: true,
             less_infeasible_dse_choose_row: true,
             allowed_matrix_scale_factor: 20,
-            scale: true,
+            simplex_scale_strategy: SCALE_STRATEGY_EQUILIBRATION,
+            primal_edge_weight_strategy: EdgeWeightStrategy::Choose,
+            output_flag: true,
+            lp_presolve_requires_basis_postsolve: true,
             random_seed: 0,
             objective_bound: f64::INFINITY,
             ipm_optimality_tolerance: 1e-8,

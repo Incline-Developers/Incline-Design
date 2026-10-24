@@ -1,6 +1,5 @@
-//! Improve: the SCIP solve of one owned blended model, run inside the solver
-//! process (see [`super::solver_process`]). Built only with the `scip`
-//! feature.
+//! Improve: the SCIP solve of one owned blended model, on the run's worker
+//! thread. Native builds only.
 //!
 //! [`improve`] takes over from [`super::schedule_solve::execute_schedule`] once the first schedule
 //! is in hand: it builds the whole-horizon model, solves it seeded with that
@@ -15,35 +14,35 @@
 
 use std::{
     collections::{BTreeMap, HashMap},
-    io::Write,
-    path::PathBuf,
     sync::{
-        Arc, OnceLock,
+        Arc,
         atomic::{AtomicBool, Ordering},
     },
     thread::JoinHandle,
     time::{Duration, Instant},
 };
 
-use russcip::{Model, ProblemCreated, Status, Variable, ffi, prelude::*};
+use minlp::{
+    model::{Model, Var},
+    types::{Status, VarType},
+};
 
 use super::{
     jobs::CancelFlag,
     schedule_solve::{
-        BackendStatus, DayByDay, PhaseTimings, ScheduleActivity, ScheduleCompletion, ScheduleRunIdentity, ScheduleSolveOptions, Seed, SolveTermination, adopt_seed,
-        consistent_relaxation, exceeds_bound, log_outcome, relative_gap, validate_input,
+        BackendStatus, DayByDay, ScheduleActivity, ScheduleCompletion, ScheduleSolveOptions, Seed, SolveTermination, adopt_seed, consistent_relaxation, exceeds_bound, log_outcome,
+        relative_gap, validate_input,
     },
 };
 use crate::model::schedule::{
     optimisation::{
         Activity, DestinationId, DestinationKind, SourceId, StockpileId, TaskKind,
         blended::{
-            formulation::{BlendColumns, BlendSizes, FamilySize},
+            formulation::{BlendColumns, FamilySize},
             greedy,
             input::BlendInput,
-            lp,
             relaxation::{RelaxationBound, relaxation_bound},
-            replay::{BlendSolution, ExtractionAdjustments, MovementRow, ReplayReport, replay_cancellable},
+            replay::{BlendSolution, MovementRow, replay_cancellable},
             rolling::{self, Carry, Stitched, Window},
         },
         progress::ImproveStage,
@@ -58,142 +57,7 @@ use crate::model::schedule::{
 };
 
 /// The binding Improve is built against, for the run's report.
-const WRAPPER_VERSION: &str = "russcip 0.10.0";
-
-impl ScheduleCompletion {
-    /// What the solver process sends back for this completion.
-    pub(crate) fn report(&self) -> ReportedCompletion {
-        let issues = |pick: fn(&ReplayReport) -> &Vec<String>| self.replay.as_deref().map(pick).cloned().unwrap_or_default();
-        ReportedCompletion {
-            termination: self.termination,
-            backend_status: self.backend_status,
-            diagnostic: self.diagnostic.clone(),
-            solution: self.solution.as_deref().cloned(),
-            replay_issues: issues(|report| &report.issues),
-            replay_grade_issues: issues(|report| &report.grade_issues),
-            published_objective: self.published_objective,
-            raw_objective: self.raw_objective,
-            primary_bound: self.primary_bound,
-            primary_gap: self.primary_gap,
-            bound_source: self.bound_source,
-            adjustments: self.adjustments,
-            sizes: self.sizes,
-            timings: self.timings,
-            diagnostics: self.diagnostics.clone(),
-            solver_limit_overshoot: self.solver_limit_overshoot,
-            backend_version: self.backend_version.clone(),
-            event_callbacks: self.event_callbacks,
-            interrupt_calls: self.interrupt_calls,
-            day_by_day: self.day_by_day.clone(),
-        }
-    }
-
-    /// Rebuild a completion the solver process reported, replaying its
-    /// schedule again here rather than taking the process's word for it: the
-    /// process is the part of the app a native fault can corrupt, so what it
-    /// says is checked like any other solver claim.
-    pub(crate) fn from_report(identity: ScheduleRunIdentity, options: ScheduleSolveOptions, input: Arc<BlendInput>, report: ReportedCompletion, cancel: &CancelFlag) -> Self {
-        let mut out = Self::new(identity, options, input);
-        out.termination = report.termination;
-        out.backend_status = report.backend_status;
-        if out.backend_version != lp::backend_name() {
-            out.wrapper_version = WRAPPER_VERSION;
-        }
-        out.diagnostic = report.diagnostic;
-        out.raw_objective = report.raw_objective;
-        out.primary_bound = report.primary_bound;
-        out.primary_gap = report.primary_gap;
-        out.bound_source = report.bound_source;
-        out.adjustments = report.adjustments;
-        out.sizes = report.sizes;
-        out.timings = report.timings;
-        out.diagnostics = report.diagnostics;
-        out.solver_limit_overshoot = report.solver_limit_overshoot;
-        out.backend_version = report.backend_version;
-        out.event_callbacks = report.event_callbacks;
-        out.interrupt_calls = report.interrupt_calls;
-        out.day_by_day = report.day_by_day;
-        let Some(solution) = report.solution else {
-            // Nothing to publish; the process's replay findings are kept only
-            // to explain why.
-            if !report.replay_issues.is_empty() || !report.replay_grade_issues.is_empty() {
-                out.replay = Some(Arc::new(ReplayReport {
-                    issues: report.replay_issues,
-                    grade_issues: report.replay_grade_issues,
-                    ..ReplayReport::default()
-                }));
-            }
-            return out;
-        };
-        let started = Instant::now();
-        let checked = replay_cancellable(&out.input, &solution, &cancel.signal());
-        out.timings.replay += started.elapsed();
-        let Some(checked) = checked else {
-            out.stop(SolveTermination::Cancelled, "cancelled during replay");
-            return out;
-        };
-        let replayed = checked.replayed_objective;
-        let slack = checked.boundary_value_slack;
-        let valid = checked.is_valid();
-        out.replay = Some(Arc::new(checked));
-        if !valid {
-            out.stop(SolveTermination::ValidationFailure, "independent blended replay rejected the solver process's schedule");
-            return out;
-        }
-        let claimed = report.published_objective.unwrap_or(f64::NAN);
-        let agrees = (claimed - replayed).abs() <= REPORT_AGREEMENT * replayed.abs().max(1.0);
-        if !agrees {
-            out.stop(
-                SolveTermination::ValidationFailure,
-                format!("the solver process reported a schedule worth {claimed}, which replays to {replayed}"),
-            );
-            return out;
-        }
-        if let Some(bound) = out.primary_bound
-            && let Some(problem) = exceeds_bound(replayed - slack, bound)
-        {
-            out.stop(SolveTermination::ValidationFailure, problem);
-            return out;
-        }
-        out.published_objective = Some(replayed);
-        out.solution = Some(Arc::new(solution));
-        out
-    }
-}
-
-/// How closely the app's replay must agree with the value the solver
-/// process's replay found. Both run the same code on the same numbers - JSON
-/// carries every `f64` exactly - so any real difference means the process
-/// sent something other than what it replayed.
-const REPORT_AGREEMENT: f64 = 1e-9;
-
-/// A [`ScheduleCompletion`] as the solver process reports it (see
-/// [`super::solver_process`]): the input stays with the app, which sent it,
-/// and the replay is repeated by the app, so only its findings travel, to
-/// explain a schedule that was not published.
-#[derive(serde::Serialize, serde::Deserialize)]
-pub(crate) struct ReportedCompletion {
-    termination: SolveTermination,
-    backend_status: Option<BackendStatus>,
-    diagnostic: Option<String>,
-    solution: Option<BlendSolution>,
-    replay_issues: Vec<String>,
-    replay_grade_issues: Vec<String>,
-    published_objective: Option<f64>,
-    raw_objective: Option<f64>,
-    primary_bound: Option<f64>,
-    primary_gap: Option<f64>,
-    bound_source: BoundSource,
-    adjustments: Option<ExtractionAdjustments>,
-    sizes: BlendSizes,
-    timings: PhaseTimings,
-    diagnostics: crate::model::schedule::result::SolveDiagnostics,
-    solver_limit_overshoot: Option<Duration>,
-    backend_version: String,
-    event_callbacks: u64,
-    interrupt_calls: u64,
-    day_by_day: Option<DayByDaySummary>,
-}
+const WRAPPER_VERSION: &str = "minlp::model";
 
 impl From<Status> for BackendStatus {
     fn from(status: Status) -> Self {
@@ -204,17 +68,17 @@ impl From<Status> for BackendStatus {
             Status::TotalNodeLimit => Self::TotalNodeLimit,
             Status::StallNodeLimit => Self::StallNodeLimit,
             Status::TimeLimit => Self::TimeLimit,
-            Status::MemoryLimit => Self::MemoryLimit,
+            Status::MemLimit => Self::MemoryLimit,
             Status::GapLimit => Self::GapLimit,
             Status::PrimalLimit => Self::PrimalLimit,
             Status::DualLimit => Self::DualLimit,
-            Status::SolutionLimit => Self::SolutionLimit,
-            Status::BestSolutionLimit => Self::BestSolutionLimit,
+            Status::SolLimit => Self::SolutionLimit,
+            Status::BestSolLimit => Self::BestSolutionLimit,
             Status::RestartLimit => Self::RestartLimit,
             Status::Optimal => Self::Optimal,
             Status::Infeasible => Self::Infeasible,
             Status::Unbounded => Self::Unbounded,
-            Status::Inforunbd => Self::Inforunbd,
+            Status::InfOrUnbd => Self::Inforunbd,
             Status::Terminate => Self::Terminate,
         }
     }
@@ -491,12 +355,7 @@ pub(crate) fn improve(
         return out;
     }
 
-    let model = if options.diagnostic_logging {
-        built.model.show_output()
-    } else {
-        built.model.hide_output()
-    };
-    let mut model = match configure(model, remaining.or(options.time_limit), options.relative_gap) {
+    let mut model = match configure(built.model, remaining.or(options.time_limit), options.relative_gap) {
         Ok(model) => model,
         Err(problem) => {
             out.stop(SolveTermination::BackendFailure, problem);
@@ -520,6 +379,7 @@ pub(crate) fn improve(
     // SCIP polls `interrupt`, which `watch_solve` raises for the run's own
     // cancellation or once the relaxation bound proves the seed.
     let interrupt = Arc::new(AtomicBool::new(false));
+    adapter::dump(&model, completed.as_ref());
     adapter::install_cancellation(&mut model, Arc::clone(&interrupt), Arc::clone(&activity.interrupt));
     if cancel.is_cancelled() {
         out.stop(SolveTermination::Cancelled, "cancelled before solve");
@@ -538,6 +398,11 @@ pub(crate) fn improve(
         finished.store(true, Ordering::Release);
         solved
     });
+    if let Err(error) = solved {
+        out.stop(SolveTermination::BackendFailure, format!("SCIP stopped with {error:?}"));
+        return out;
+    }
+    let solved = model;
     let solve_time = started.elapsed();
     out.timings.solver += solve_time;
     if proof.load(Ordering::Acquire)
@@ -901,12 +766,7 @@ fn solve_day_by_day(
         out.timings.solver += phase.elapsed();
         let limit = deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
 
-        let model = if options.diagnostic_logging {
-            built.model.show_output()
-        } else {
-            built.model.hide_output()
-        };
-        let mut model = match configure(model, limit, options.relative_gap) {
+        let mut model = match configure(built.model, limit, options.relative_gap) {
             Ok(model) => model,
             Err(problem) => return DayByDay::Stop(SolveTermination::BackendFailure, problem),
         };
@@ -924,6 +784,7 @@ fn solve_day_by_day(
         // The window's own progress record: the published diagnostics
         // describe the whole-horizon solve alone.
         let audit = Arc::new(adapter::InterruptAudit::default());
+        adapter::dump(&model, start.as_ref());
         adapter::install_cancellation(&mut model, cancel.signal(), Arc::clone(&audit));
 
         activity.set(3);
@@ -931,6 +792,10 @@ fn solve_day_by_day(
         let solved = model.solve();
         let solve_time = phase.elapsed();
         out.timings.solver += solve_time;
+        if let Err(error) = solved {
+            return DayByDay::Stop(SolveTermination::BackendFailure, format!("SCIP stopped with {error:?}"));
+        }
+        let solved = model;
         if audit.failed.load(Ordering::Acquire) {
             return DayByDay::Stop(SolveTermination::BackendFailure, "SCIPinterruptSolve rejected a solver-thread callback".into());
         }
@@ -943,15 +808,17 @@ fn solve_day_by_day(
         activity.set(4);
         let phase = Instant::now();
         let extracted = extract_solution(&solved, &built.columns, || cancel.is_cancelled());
-        let paid = solved.best_sol().map_or(0.0, |best| {
+        let paid = if solved.n_sols() == 0 {
+            0.0
+        } else {
             built
                 .columns
                 .paid
                 .iter()
                 .filter(|&(&(_, interval, _), _)| interval < window.committed)
-                .map(|(&(conditional, _, _), column)| best.val(column) * input.conditional_values[conditional].value_per_tonne)
+                .map(|(&(conditional, _, _), column)| solved.best_sol_value(*column).unwrap_or(0.0) * input.conditional_values[conditional].value_per_tonne)
                 .sum()
-        });
+        };
         out.timings.extraction += phase.elapsed();
         drop(solved);
         let solution = match extracted {
@@ -1038,26 +905,29 @@ fn polish_window(input: &BlendInput, seed: &BlendSolution, hold: &Hold, limit: D
     let mut built = formulate_scip_with_cancel(input, Some(&cancel.signal()), None, false).ok()?;
     hold_progress(&mut built.model, &built.columns, input, Some(hold));
     let values = complete_seed(input, seed, Some(hold), Some(Instant::now() + limit.mul_f64(SEED_COMPLETION_SHARE)), cancel).ok();
-    let mut model = configure(built.model.hide_output(), Some(deadline.saturating_duration_since(Instant::now())), Some(1e-4)).ok()?;
+    let mut model = configure(built.model, Some(deadline.saturating_duration_since(Instant::now())), Some(1e-4)).ok()?;
     if let Some(values) = values.as_ref() {
         model = offer_seed(model, values).ok()?.0;
     }
+    adapter::dump(&model, values.as_ref());
     adapter::install_cancellation(&mut model, cancel.signal(), Arc::new(adapter::InterruptAudit::default()));
-    let solved = model.solve();
-    extract_solution(&solved, &built.columns, || false).ok().flatten()
+    model.solve().ok()?;
+    extract_solution(&model, &built.columns, || false).ok().flatten()
 }
 
 /// Hold each block and pile of `hold` at what it says at the end of its
 /// kept intervals: a polished window ends where the schedule it polishes
 /// leaves the ground, and its piles having received and given up the same
 /// tonnes.
-fn hold_progress(model: &mut Model<ProblemCreated>, columns: &BlendColumns<Variable>, input: &BlendInput, hold: Option<&Hold>) {
+fn hold_progress(model: &mut Model, columns: &BlendColumns<Var>, input: &BlendInput, hold: Option<&Hold>) {
     let Some(hold) = hold else { return };
     let segments = input.segments_per_interval.max(1);
     let last = crate::model::schedule::optimisation::blended::input::flat_cell(hold.kept, segments - 1, segments);
     for &(source, held) in &hold.blocks {
         if let Some(remaining) = columns.ground_remaining.get(&(source, last)) {
-            model.add_cons(vec![remaining], &[1.0], held - 1e-6, held + 1e-6, &format!("progress_{source}"));
+            model
+                .add_linear(&format!("progress_{source}"), &[*remaining], &[1.0], held - 1e-6, held + 1e-6)
+                .expect("adding a row in the problem stage");
         }
     }
     let pile_of = |destination: DestinationId| match input.destinations.iter().find(|entry| entry.id == destination).map(|entry| entry.kind) {
@@ -1072,17 +942,19 @@ fn hold_progress(model: &mut Model<ProblemCreated>, columns: &BlendColumns<Varia
             }
             let movement = &input.movements[candidate];
             if pile_of(movement.destination) == Some(pile) {
-                into.push(column);
+                into.push(*column);
             }
             if movement.source == SourceId::Stockpile(pile) {
-                out_of.push(column);
+                out_of.push(*column);
             }
         }
         for (terms, held, name) in [(into, received, "received"), (out_of, reclaimed, "reclaimed")] {
             if !terms.is_empty() {
                 let ones = vec![1.0; terms.len()];
                 let slack = 1e-6 * held.abs().max(1.0);
-                model.add_cons(terms, &ones, held - slack, held + slack, &format!("{name}_{}", pile.0));
+                model
+                    .add_linear(&format!("{name}_{}", pile.0), &terms, &ones, held - slack, held + slack)
+                    .expect("adding a row in the problem stage");
             }
         }
     }
@@ -1108,88 +980,28 @@ fn tighter(left: Option<f64>, right: Option<f64>) -> Option<f64> {
 
 /// The run's limits and LP settings; everything else is SCIP's default.
 ///
-/// # Primal simplex with devex pricing
+/// # Devex pricing
 ///
-/// SCIP starts the root LP with dual simplex and steepest-edge pricing. On
-/// the blended model primal simplex with devex pricing is faster wherever it
-/// was measured, and it is what lets a week's root LP finish inside a run:
+/// SCIP prices its dual simplex with steepest edge by default. On the blended
+/// model devex is faster: with HiGHS under minlp, the two whole-horizon models
+/// of the competition fixture (24 and 48 hours, 2,000 nodes) solved in 6.5 s
+/// and 21.7 s with devex against 7.9 s and 28.4 s without, to the same bound.
+/// Only the pricing changes, so the model and its optimum do not.
 ///
-/// | model | default | primal + devex |
-/// |---|---|---|
-/// | real project, week, first LP alone | 226.5 s | 103.0 s |
-/// | real project, week, seeded run | root LP unfinished in 208 s | root LP at 112 s, 0.11 % gap |
-/// | real project, one day | 0.45 s, optimal | 0.48 s, optimal |
-/// | known-answer fixture, 24 h / 72 h | 0.35 s / 2.04 s | 0.05 s / 0.19 s |
-/// | competition fixture, 24 / 48 / 72 h, 60 s | same bounds | same bounds, one better incumbent |
-///
-/// Only the LP algorithm changes, so the model and its optimum do not.
-fn configure(model: Model<ProblemCreated>, time_limit: Option<Duration>, relative_gap: Option<f64>) -> Result<Model<ProblemCreated>, String> {
-    let mut model = model;
-    for (name, value) in [(c"lp/initalgorithm", b'p'), (c"lp/pricing", b'd')] {
-        // SAFETY: a problem-stage parameter write on the thread that owns
-        // the model. russcip 0.10 has no char-parameter setter.
-        let code = unsafe { ffi::SCIPsetCharParam(model.scip_ptr(), name.as_ptr(), value as std::ffi::c_char) };
-        if code != ffi::SCIP_Retcode_SCIP_OKAY {
-            return Err(format!("setting SCIP {name:?}: retcode {code}"));
-        }
-    }
-    // A SCIP built from source here (`scip-source`) has no Ipopt, and so no
-    // Ipopt parameters to set.
-    // SAFETY: a parameter lookup on the thread that owns the model.
-    let has_ipopt = unsafe { !ffi::SCIPgetParam(model.scip_ptr(), c"nlpi/ipopt/optfile".as_ptr()).is_null() };
-    if has_ipopt && let Some(file) = ipopt_options_file() {
-        model = model
-            .set_str_param("nlpi/ipopt/optfile", file)
-            .map_err(|error| format!("setting SCIP's Ipopt options file: {error:?}"))?;
-    }
+/// SCIP's `lp/initalgorithm` stays at its default: minlp's LP interface, like
+/// SCIP's own for HiGHS, solves every LP with the dual simplex, so asking for
+/// the primal one changes nothing.
+fn configure(mut model: Model, time_limit: Option<Duration>, relative_gap: Option<f64>) -> Result<Model, String> {
+    model.set_char_param("lp/pricing", b'd').map_err(|error| format!("setting SCIP lp/pricing: {error:?}"))?;
     if let Some(limit) = time_limit {
-        model = model
+        model
             .set_real_param("limits/time", limit.as_secs_f64())
             .map_err(|error| format!("setting SCIP time limit: {error:?}"))?;
     }
     if let Some(gap) = relative_gap {
-        model = model.set_real_param("limits/gap", gap).map_err(|error| format!("setting SCIP gap: {error:?}"))?;
+        model.set_real_param("limits/gap", gap).map_err(|error| format!("setting SCIP gap: {error:?}"))?;
     }
     Ok(model)
-}
-
-/// Ipopt's options for every SCIP solve: MUMPS orders its factorisations
-/// with AMD rather than METIS.
-///
-/// Only a SCIP with Ipopt has these: `scip-source` has none, but a
-/// `scip-system` installation may. The prebuilt scipoptsuite-deploy
-/// library's METIS path is broken. Called by MUMPS through
-/// `mumps_metis_nodend_mixedto32`, it corrupts the heap: glibc then either
-/// aborts the process (`free(): invalid size` in `gk_malloc_cleanup`) or
-/// leaves the solver thread hanging in `malloc`. Any Ipopt solve can reach
-/// it - SCIP's sub-NLP heuristic did, in an unseeded solve of the
-/// competition fixture over a week, as did MPEC in a seeded one. With this
-/// option the same fixture completed every time; set to METIS explicitly it
-/// hung. AMD changes only the fill-in of Ipopt's factorisations, not what
-/// any solve means.
-const IPOPT_OPTIONS: &str = "mumps_pivot_order 0\n";
-
-/// SCIP takes Ipopt options only from a file. It is written once per
-/// process, atomically, so concurrent runs and app instances never see it
-/// half written. Without it, solves still run, on Ipopt's defaults.
-fn ipopt_options_file() -> Option<&'static str> {
-    static FILE: OnceLock<Option<String>> = OnceLock::new();
-    FILE.get_or_init(|| {
-        let path: PathBuf = std::env::temp_dir().join("incline-ipopt.opt");
-        let written = crate::model::atomic_file::write_atomic(&path, |file| Ok(file.write_all(IPOPT_OPTIONS.as_bytes())?));
-        match (written, path.to_str()) {
-            (Ok(()), Some(path)) => Some(path.to_owned()),
-            (Err(error), _) => {
-                log::warn!("SCIP's Ipopt options were not written to {}: {error:#}", path.display());
-                None
-            }
-            (Ok(()), None) => {
-                log::warn!("SCIP's Ipopt options path {} is not valid UTF-8", path.display());
-                None
-            }
-        }
-    })
-    .as_deref()
 }
 
 /// How far completion may move a seed value, in tonnes or hours: an absolute
@@ -1288,63 +1100,64 @@ fn complete_seed_with(
     if missing > 0 {
         return Err(format!("the seed names {missing} movement cells the whole-horizon model does not have"));
     }
-    let scip = built.model.scip_ptr();
-    let fix = |column: &Variable, value: f64| {
+    let model = &mut built.model;
+    // Problem-stage bound changes on the model's own original variables.
+    // Both lie inside the original bounds, so they never cross, and the
+    // changes cannot fail; as russcip's raw calls did, their result is not
+    // read.
+    let mut fix = |column: Var, value: f64| {
         let band = if value == 0.0 { 0.0 } else { SEED_BAND_ABSOLUTE.max(value.abs() * SEED_BAND_RELATIVE) };
-        let (lb, ub) = (column.lb(), column.ub());
+        let (lb, ub) = (model.var_lb(column), model.var_ub(column));
         let lower = (value - band).clamp(lb, ub);
         let upper = (value + band).clamp(lb, ub);
-        // SAFETY: problem-stage bound changes on this model's own original
-        // variables, on the thread that owns the model. Both lie inside the
-        // original bounds, so they never cross.
-        unsafe {
-            ffi::SCIPchgVarLb(scip, column.inner(), lower);
-            ffi::SCIPchgVarUb(scip, column.inner(), upper);
-        }
+        let _ = model.chg_var_lb(column, lower);
+        let _ = model.chg_var_ub(column, upper);
     };
     for (key, column) in &built.columns.movement {
-        fix(column, tonnes.get(key).copied().unwrap_or(0.0));
+        fix(*column, tonnes.get(key).copied().unwrap_or(0.0));
     }
     for (key, column) in &built.columns.duration {
         if let Some(duration) = seed.durations.get(key) {
-            fix(column, *duration);
+            fix(*column, *duration);
         }
     }
     if pin_piles {
         pin_pile_state(input, seed, &built.columns, |column, value| {
-            let value = value.clamp(column.lb(), column.ub());
-            // SAFETY: as for `fix` above.
-            unsafe {
-                ffi::SCIPchgVarLb(scip, column.inner(), value);
-                ffi::SCIPchgVarUb(scip, column.inner(), value);
-            }
+            let value = value.clamp(model.var_lb(*column), model.var_ub(*column));
+            let _ = model.chg_var_lb(*column, value);
+            let _ = model.chg_var_ub(*column, value);
         });
     }
     let limit = deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
     if limit.is_some_and(|limit| limit.is_zero()) {
         return Err("no time left to complete it".into());
     }
-    let mut model = configure(built.model.hide_output(), limit, None)?;
-    model = without_mpec(model)?;
-    let configured = |model: Model<ProblemCreated>| -> Result<Model<ProblemCreated>, russcip::Retcode> {
-        model
-            .set_bool_param("presolving/donotaggr", true)?
-            .set_bool_param("presolving/donotmultaggr", true)?
-            .set_bool_param("misc/allowstrongdualreds", false)?
-            .set_bool_param("misc/allowweakdualreds", false)?
-            .set_int_param("misc/usesymmetry", 0)?
-            .set_int_param("limits/solutions", 1)
+    let mut model = configure(built.model, limit, None)?;
+    let configured = |model: &mut Model| -> minlp::retcode::ScipResult {
+        model.set_bool_param("presolving/donotaggr", true)?;
+        model.set_bool_param("presolving/donotmultaggr", true)?;
+        model.set_bool_param("misc/allowstrongdualreds", false)?;
+        model.set_bool_param("misc/allowweakdualreds", false)?;
+        model.set_int_param("misc/usesymmetry", 0)?;
+        model.set_int_param("limits/solutions", 1)
     };
-    model = configured(model).map_err(|error| format!("configuring the seed's completion: {error:?}"))?;
+    configured(&mut model).map_err(|error| format!("configuring the seed's completion: {error:?}"))?;
+    adapter::dump(&model, None);
     adapter::install_cancellation(&mut model, cancel.signal(), Arc::new(adapter::InterruptAudit::default()));
     let solved = model.solve();
     if cancel.is_cancelled() {
         return Err("cancelled".into());
     }
-    let Some(best) = solved.best_sol() else {
-        return Err(format!("SCIP found no completion ({:?})", solved.status()));
+    solved.map_err(|error| format!("SCIP stopped completing the seed with {error:?}"))?;
+    let variables = model.orig_vars();
+    let Some(values) = model.best_sol_values(&variables) else {
+        return Err(format!("SCIP found no completion ({:?})", model.status()));
     };
-    Ok(solved.orig_vars().iter().map(|variable| (variable.name(), best.val(variable))).collect())
+    Ok(variables
+        .iter()
+        .zip(values)
+        .map(|(&variable, value)| (model.var_name(variable).to_owned(), value))
+        .collect())
 }
 
 /// Hold each unchunked pile's state - opening and reclaimed tonnes, and the
@@ -1355,7 +1168,7 @@ fn complete_seed_with(
 /// row for SCIP to search, and across a week of a reclaimed pile it ran out
 /// of time without a completion. Held, the equalities are only checked.
 /// Chunked piles mix per chunk and are left to SCIP.
-fn pin_pile_state(input: &BlendInput, seed: &BlendSolution, columns: &BlendColumns<Variable>, mut pin: impl FnMut(&Variable, f64)) {
+fn pin_pile_state(input: &BlendInput, seed: &BlendSolution, columns: &BlendColumns<Var>, mut pin: impl FnMut(&Var, f64)) {
     let grades = input.grades.count();
     // The pile each destination is, and the seed's rows by interval, so each
     // pile and interval reads its own rather than every row.
@@ -1437,41 +1250,28 @@ fn pin_pile_state(input: &BlendInput, seed: &BlendSolution, columns: &BlendColum
 /// It is sign-independent and does not occur on a purely linear MILP seeded
 /// the same way. Because the wrong run reports a zero gap, no status check
 /// can catch it, and replay checks feasibility, not optimality certificates.
-fn offer_seed(model: Model<ProblemCreated>, values: &HashMap<String, f64>) -> Result<(Model<ProblemCreated>, bool), String> {
-    let solution = model.create_orig_sol();
+/// minlp, being a faithful port, behaves the same: on 2026-10-24 the
+/// reproducer seeded with defaults returned 0.3 in 0 nodes there as in SCIP,
+/// and 0.6 with weak dual reductions off.
+fn offer_seed(mut model: Model, values: &HashMap<String, f64>) -> Result<(Model, bool), String> {
+    let mut solution = Vec::new();
     for variable in model.orig_vars() {
-        if let Some(value) = values.get(&variable.name()) {
+        if let Some(value) = values.get(model.var_name(variable)) {
             // An integer read back within SCIP's integrality tolerance, such
             // as a receiving flag at -2.5e-7, breaks a row that scales it by
             // a pile's receipts, so it is offered whole.
-            let value = match variable.var_type() {
-                russcip::VarType::Binary | russcip::VarType::Integer => value.round(),
+            let value = match model.var_type(variable) {
+                VarType::Binary | VarType::Integer => value.round(),
                 _ => *value,
             };
-            solution.set_val(&variable, value);
+            solution.push((variable, value));
         }
     }
-    let stored = model.add_sol(solution).is_ok();
-    let model = model
+    let stored = model.add_orig_sol(&solution).map_err(|error| format!("offering the seed: {error:?}"))?;
+    model
         .set_bool_param("misc/allowweakdualreds", false)
         .map_err(|error| format!("configuring the seeded solve: {error:?}"))?;
-    let model = without_mpec(model)?;
     Ok((model, stored))
-}
-
-/// Switch off SCIP's MPEC heuristic, in the seeded solve and the seed's
-/// completion only.
-///
-/// On the chunked fixtures solved day by day, the seeded whole-horizon solve
-/// hung in four runs out of four: MPEC handed Ipopt an NLP whose MUMPS
-/// ordering (METIS) corrupted the heap, glibc aborted inside `malloc`, and
-/// the abort left the solver thread waiting forever. With MPEC off the same
-/// runs completed three times out of three, and the seed took the dynamic
-/// FIFO fixture to its proven optimum. Unseeded solves keep SCIP's default.
-fn without_mpec(model: Model<ProblemCreated>) -> Result<Model<ProblemCreated>, String> {
-    model
-        .set_int_param("heuristics/mpec/freq", -1)
-        .map_err(|error| format!("switching off SCIP's MPEC heuristic: {error:?}"))
 }
 
 /// One line per finished solve, whatever became of it.
@@ -1562,9 +1362,9 @@ fn classify_status(status: Status, usable: bool) -> SolveTermination {
         | Status::NodeLimit
         | Status::TotalNodeLimit
         | Status::StallNodeLimit
-        | Status::MemoryLimit
-        | Status::SolutionLimit
-        | Status::BestSolutionLimit
+        | Status::MemLimit
+        | Status::SolLimit
+        | Status::BestSolLimit
         | Status::RestartLimit
         | Status::PrimalLimit
         | Status::DualLimit => {
@@ -1575,6 +1375,6 @@ fn classify_status(status: Status, usable: bool) -> SolveTermination {
             }
         }
         Status::Optimal | Status::GapLimit => SolveTermination::LimitNoIncumbent,
-        Status::Unknown | Status::Inforunbd | Status::Terminate => SolveTermination::BackendFailure,
+        Status::Unknown | Status::InfOrUnbd | Status::Terminate => SolveTermination::BackendFailure,
     }
 }

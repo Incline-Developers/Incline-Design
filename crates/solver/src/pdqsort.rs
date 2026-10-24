@@ -5,6 +5,9 @@
 //! makes, so it is ported step for step rather than replaced by
 //! `sort_unstable_by`. HiGHS's `pdqsort` with a lambda uses the branching
 //! partition; its explicit `pdqsort_branchless` uses the block partition.
+//!
+//! An altered version of pdqsort, Copyright (c) 2021 Orson Peters, under
+//! the zlib licence in `LICENSE-pdqsort` at the crate's root.
 
 const INSERTION_SORT_THRESHOLD: usize = 24;
 const NINTHER_THRESHOLD: usize = 128;

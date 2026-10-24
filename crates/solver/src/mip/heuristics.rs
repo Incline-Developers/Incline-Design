@@ -262,9 +262,6 @@ impl PrimalHeuristics {
     /// root or a terminator stopped it.
     #[allow(clippy::too_many_arguments)]
     fn solve_sub_mip(&mut self, data: &mut MipData, request: SubMipRequest, fixing_rate: f64) -> bool {
-        if crate::util::tracing() {
-            eprintln!("H solveSubMip");
-        }
         let outcome = data.run_sub_mip(request);
         self.stats.max_submip_level = self.stats.max_submip_level.max(outcome.max_submip_level + 1);
         if outcome.terminated {
@@ -318,9 +315,6 @@ impl PrimalHeuristics {
 
     /// HiGHS's `rootReducedCost`.
     pub fn root_reduced_cost(&mut self, lp: &LpRelaxation, data: &mut MipData) {
-        if crate::util::tracing() {
-            eprintln!("H rootReducedCost");
-        }
         let mut lurking_bounds = data.redcostfixing.lurking_bounds(data);
         if 10 * lurking_bounds.len() < data.integral_cols.len() {
             return;
@@ -491,9 +485,6 @@ impl PrimalHeuristics {
 
     /// HiGHS's `RENS`.
     pub fn rens(&mut self, lp: &LpRelaxation, data: &mut MipData, _relaxationsol: &[f64]) {
-        if crate::util::tracing() {
-            eprintln!("H RENS");
-        }
         if data.domain.infeasible() {
             return;
         }
@@ -625,9 +616,6 @@ impl PrimalHeuristics {
 
     /// HiGHS's `RINS`.
     pub fn rins(&mut self, lp: &LpRelaxation, data: &mut MipData, relaxationsol: &[f64]) {
-        if crate::util::tracing() {
-            eprintln!("H RINS");
-        }
         if data.domain.infeasible() || relaxationsol.len() != data.model.num_col {
             return;
         }
@@ -786,9 +774,6 @@ impl PrimalHeuristics {
 
     /// HiGHS's `tryRoundedPoint`.
     pub fn try_rounded_point(&mut self, data: &mut MipData, point: &[f64], source: SolutionSource) -> bool {
-        if crate::util::tracing() {
-            eprintln!("H tryRoundedPoint");
-        }
         let mut localdom = data.domain.local_copy();
         let mut integer_feasible = true;
         let numintcols = self.intcols.len();
@@ -837,9 +822,6 @@ impl PrimalHeuristics {
 
     /// HiGHS's `linesearchRounding`.
     pub fn linesearch_rounding(&mut self, data: &mut MipData, point1: &[f64], point2: &[f64], source: SolutionSource) -> bool {
-        if crate::util::tracing() {
-            eprintln!("H linesearchRounding");
-        }
         let mut roundedpoint = vec![0.0; data.model.num_col];
         let mut alpha = 0.0;
         while alpha < 1.0 {
@@ -879,9 +861,6 @@ impl PrimalHeuristics {
 
     /// HiGHS's `randomizedRounding`.
     pub fn randomized_rounding(&mut self, data: &mut MipData, relaxationsol: &[f64]) {
-        if crate::util::tracing() {
-            eprintln!("H randomizedRounding");
-        }
         if relaxationsol.len() != data.model.num_col {
             return;
         }
@@ -926,9 +905,6 @@ impl PrimalHeuristics {
 
     /// HiGHS's `shifting`.
     pub fn shifting(&mut self, lp: &LpRelaxation, data: &mut MipData, relaxationsol: &[f64]) {
-        if crate::util::tracing() {
-            eprintln!("H shifting");
-        }
         if relaxationsol.len() != data.model.num_col {
             return;
         }
@@ -1116,9 +1092,6 @@ impl PrimalHeuristics {
 
     /// HiGHS's `ziRound`.
     pub fn zi_round(&mut self, data: &mut MipData, relaxationsol: &[f64]) {
-        if crate::util::tracing() {
-            eprintln!("H ziRound");
-        }
         if relaxationsol.len() != data.model.num_col {
             return;
         }
@@ -1196,9 +1169,6 @@ impl PrimalHeuristics {
 
     /// HiGHS's `feasibilityPump`.
     pub fn feasibility_pump(&mut self, lp: &LpRelaxation, data: &mut MipData) {
-        if crate::util::tracing() {
-            eprintln!("H feasibilityPump");
-        }
         let mut lprelax = lp.copy(data);
         let mut referencepoints: HashSet<Vec<i64>> = HashSet::new();
         let mut status = lprelax.resolve_lp(LpDomain::None, data);
@@ -1286,9 +1256,6 @@ impl PrimalHeuristics {
 
     /// HiGHS's `centralRounding`.
     pub fn central_rounding(&mut self, data: &mut MipData) {
-        if crate::util::tracing() {
-            eprintln!("H centralRounding");
-        }
         if data.analytic_center.len() != data.model.num_col {
             return;
         }

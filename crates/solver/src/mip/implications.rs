@@ -430,9 +430,6 @@ impl Implications {
         cx: &mut MipCtx,
         pseudocost: &mut Pseudocost,
     ) -> bool {
-        if crate::util::tracing() {
-            eprintln!("P {col}");
-        }
         let model = cx.model;
         if !(globaldom.is_binary(model, col) && !self.implications_cached(col, true) && !self.implications_cached(col, false) && cliquetable.substitution(col).is_none()) {
             return false;

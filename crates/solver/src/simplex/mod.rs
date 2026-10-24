@@ -19,6 +19,8 @@ use crate::matrix::ColWise;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModelStatus {
     NotSet,
+    /// The model has no columns (HiGHS's `kModelEmpty`).
+    ModelEmpty,
     Optimal,
     Infeasible,
     UnboundedOrInfeasible,
@@ -29,6 +31,26 @@ pub enum ModelStatus {
     Interrupt,
     Unknown,
     SolveError,
+}
+
+impl ModelStatus {
+    /// The number of HiGHS's `HighsModelStatus` value.
+    pub fn highs_number(self) -> i32 {
+        match self {
+            ModelStatus::NotSet => 0,
+            ModelStatus::SolveError => 4,
+            ModelStatus::ModelEmpty => 6,
+            ModelStatus::Optimal => 7,
+            ModelStatus::Infeasible => 8,
+            ModelStatus::UnboundedOrInfeasible => 9,
+            ModelStatus::Unbounded => 10,
+            ModelStatus::ObjectiveBound => 11,
+            ModelStatus::TimeLimit => 13,
+            ModelStatus::IterationLimit => 14,
+            ModelStatus::Unknown => 15,
+            ModelStatus::Interrupt => 17,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,13 +97,18 @@ pub struct Infeasibilities {
 /// helps, then cleaned up on the unscaled LP if the unscaled solution is not
 /// optimal.
 pub(crate) fn solve_lp_simplex(lp: SimplexLp, options: &Options, basis: Option<&crate::Basis>, interrupt: Option<ekk::Interrupt>) -> SimplexResult {
-    let scale = if options.scale { scale::scale_lp(options, &mut lp.clone()) } else { None };
+    let scale = if options.simplex_scale_strategy != options::SCALE_STRATEGY_OFF {
+        scale::scale_lp(options, &mut lp.clone()).0
+    } else {
+        None
+    };
     let mut ekk = None;
     solve_lp_simplex_in(&mut ekk, &lp, scale.as_ref(), options, basis, interrupt)
 }
 
-/// The scale factors HiGHS's `scaleLp` would choose for `lp`, if any.
-pub(crate) fn scale_factors(options: &Options, lp: &SimplexLp) -> Option<Scale> {
+/// The scale factors HiGHS's `scaleLp` would choose for `lp`, if any,
+/// and the strategy it records as used.
+pub(crate) fn scale_factors(options: &Options, lp: &SimplexLp) -> (Option<Scale>, i32) {
     scale::scale_lp(options, &mut lp.clone())
 }
 
@@ -149,11 +176,15 @@ pub(crate) fn solve_lp_simplex_in(
     let unscaled = unscaled_infeasibilities(ekk, scale);
     let (num_unscaled_primal, num_unscaled_dual) = (unscaled.num_primal.unwrap_or(0), unscaled.num_dual.unwrap_or(0));
     let scaled_optimality_but_unscaled_infeasibilities = scaled_status == ModelStatus::Optimal && (num_unscaled_primal > 0 || num_unscaled_dual > 0);
+    // HiGHS's `scaled_objective_target_but_unscaled_primal_infeasibilities`
+    // needs an objective target, which this solver has no option for.
+    let scaled_objective_bound_but_unscaled_dual_infeasibilities = scaled_status == ModelStatus::ObjectiveBound && num_unscaled_dual > 0;
     let refine = scaled_optimality_but_unscaled_infeasibilities
         || matches!(
             scaled_status,
             ModelStatus::Infeasible | ModelStatus::UnboundedOrInfeasible | ModelStatus::Unbounded | ModelStatus::Unknown
-        );
+        )
+        || scaled_objective_bound_but_unscaled_dual_infeasibilities;
     if !refine {
         let mut out = result(ekk);
         out.infeasibilities = unscaled;
@@ -164,11 +195,17 @@ pub(crate) fn solve_lp_simplex_in(
         return out;
     }
 
+    // HiGHS takes the scaled solve's solution and basis, and unscales the
+    // solution, before deciding on refinement; that is the solution kept
+    // when the infeasibility proof holds for the unscaled LP.
+    let mut scaled_out = result(ekk);
+    unscale(&mut scaled_out, scale, ekk.lp.num_col);
+
     // Move the unscaled LP in, keeping the basis and its factor.
     ekk.lp = lp.clone();
     ekk.set_unscaled_with(scale.clone());
     if scaled_status == ModelStatus::Infeasible && ekk.dual_ray_record.is_some() && ekk.proof_of_primal_infeasibility_from_ray() {
-        let mut out = result(ekk);
+        let mut out = scaled_out;
         out.status = ModelStatus::Infeasible;
         out.infeasibilities = unscaled;
         return out;

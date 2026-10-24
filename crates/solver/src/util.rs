@@ -678,11 +678,3 @@ pub(crate) fn frexp_exp(x: f64) -> i32 {
     }
     exponent - 1022
 }
-
-/// Debug tracing (`SOLVER_TRACE_PRESOLVE`): print each bound change,
-/// reduction, LP and heuristic for diffing against an instrumented HiGHS.
-/// Read from the environment once.
-pub(crate) fn tracing() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("SOLVER_TRACE_PRESOLVE").is_some())
-}

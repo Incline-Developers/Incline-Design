@@ -3,9 +3,9 @@
 //! Reading this file is reading the model. Improve's SCIP backend and the
 //! HiGHS relaxation bound each supply a [`Rows`] implementation and then call
 //! [`formulate`]; nothing else about the constraints differs between them.
-//! Only Improve builds the model, so without the `scip` feature only
-//! [`BlendSizes`] is read.
-#![cfg_attr(not(feature = "scip"), allow(dead_code, reason = "only Improve builds the model"))]
+//! Only Improve builds the model, so in the browser only [`BlendSizes`] is
+//! read.
+#![cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "only Improve builds the model"))]
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -102,7 +102,7 @@ impl<V> BlendColumns<V> {
 }
 
 /// Sizes recorded for the benchmark table.
-#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct BlendSizes {
     pub(crate) variables: usize,
     pub(crate) binaries: usize,

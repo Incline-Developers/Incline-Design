@@ -294,6 +294,7 @@ impl Primal {
             }
         } else {
             self.solve_phase = SOLVE_PHASE_EXIT;
+            ekk.primal_ray_value.clear();
             ekk.primal_ray_record = Some((self.variable_in.unwrap(), -self.move_in));
             ekk.model_status = ModelStatus::Unbounded;
         }

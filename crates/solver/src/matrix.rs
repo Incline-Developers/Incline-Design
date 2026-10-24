@@ -23,6 +23,25 @@ pub(crate) struct ColWise {
 }
 
 impl ColWise {
+    /// HiGHS's column-wise `productTransposeQuad`: the nonzeros of
+    /// `columnᵀ A` in column order, in compensated arithmetic.
+    pub fn product_transpose_quad(&self, column: &HVector) -> (Vec<f64>, Vec<usize>) {
+        let mut values = Vec::with_capacity(self.num_col);
+        let mut index = Vec::with_capacity(self.num_col);
+        for col in 0..self.num_col {
+            let mut value = CDouble::new(0.0);
+            for el in self.start[col]..self.start[col + 1] {
+                value += column.array[self.index[el]] * self.value[el];
+            }
+            let abs = if value.value() < 0.0 { -value } else { value };
+            if (abs - TINY).value() > 0.0 {
+                values.push(value.value());
+                index.push(col);
+            }
+        }
+        (values, index)
+    }
+
     pub fn as_factor_matrix(&self) -> ColMatrix<'_> {
         ColMatrix {
             start: &self.start,

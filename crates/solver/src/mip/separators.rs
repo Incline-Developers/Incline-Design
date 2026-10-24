@@ -619,7 +619,7 @@ impl TableauSeparator {
         let mut row_ep_buffer = crate::hvector::HVector::new(num_row);
         self.num_tries += fractional_basisvars.len() as i64;
         for fracvar in fractional_basisvars.iter_mut() {
-            solver.basis_inverse_row(fracvar.basis_index, &mut row_ep_buffer);
+            solver.basis_inverse_row_sparse(fracvar.basis_index, &mut row_ep_buffer);
             if row_ep_buffer.count == 1 {
                 continue;
             }

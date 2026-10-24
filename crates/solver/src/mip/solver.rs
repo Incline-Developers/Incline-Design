@@ -435,14 +435,6 @@ impl MipSolver {
             detection.run(&mut symmetries);
         }
         self.data.symmetries = symmetries;
-        if crate::util::tracing() {
-            eprintln!(
-                "SYM gens {} perms {} orbitopes {}",
-                self.data.symmetries.num_generators,
-                self.data.symmetries.num_perms,
-                self.data.symmetries.orbitopes.len()
-            );
-        }
         if self.data.symmetries.num_generators == 0 {
             self.data.detect_symmetries = false;
         }

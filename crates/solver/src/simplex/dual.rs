@@ -936,6 +936,7 @@ impl Dual {
         }
         if ekk.proof_of_primal_infeasibility(&mut self.row_ep, self.move_out) {
             self.solve_phase = SOLVE_PHASE_EXIT;
+            ekk.dual_ray_value.clear();
             ekk.dual_ray_record = Some((self.row_out as usize, self.move_out));
             ekk.model_status = ModelStatus::Infeasible;
         } else {

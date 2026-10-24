@@ -2,12 +2,12 @@
 //! is in, and the value of the best schedule it holds over time, with the
 //! bound on every schedule once one is proved.
 //!
-//! The solve reports [`ImproveEvent`]s - from the solver process, across its
-//! pipe - and the app folds them into an [`ImproveProgress`], timed by its
-//! own clock from the moment the run started.
+//! The solve reports [`ImproveEvent`]s from the run's worker thread, and the
+//! app folds them into an [`ImproveProgress`], timed by its own clock from
+//! the moment the run started.
 
 /// A stage of an Improve run, in the order a run passes through them.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ImproveStage {
     /// Reading the project into the model.
     Capture,
@@ -22,7 +22,7 @@ pub(crate) enum ImproveStage {
 }
 
 /// One thing a run has to report.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug)]
 pub(crate) enum ImproveEvent {
     Stage(ImproveStage),
     /// The best schedule's value, and the tightest bound proved on every

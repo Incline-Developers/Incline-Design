@@ -13,8 +13,7 @@
 //! fired.
 //!
 //! Every later solve - Improve, the day-by-day windows - takes the release
-//! times the dispatch found as fixed data (`releases`); see
-//! `docs/scheduling-drill-blast.md`.
+//! times the dispatch found as fixed data (`releases`).
 
 use std::collections::BTreeMap;
 
@@ -28,8 +27,8 @@ use crate::model::schedule::{
 /// Work below this is none: a quantity done to within it is done.
 const DONE: f64 = 1e-6;
 
-/// The release hour of ground that never fires: finite, so it survives the
-/// solver process's JSON.
+/// The release hour of ground that never fires: finite, because capture
+/// hashes this input through JSON, where infinity would become `null`.
 pub(crate) const NEVER: f64 = f64::MAX;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -39,11 +38,9 @@ pub(crate) struct DrillBlastInput {
     pub(crate) tasks: Vec<BlastTask>,
     /// End of the daily blast window, in hours of the day.
     pub(crate) window_end_h: f64,
-    #[serde(default)]
     pub(crate) windows: Option<Vec<crate::model::schedule::drill_blast::BlastWindow>>,
     /// The timeline later solves keep, once the dispatch has found it.
     /// Also holds the clearance deadlines for overlying ground.
-    #[serde(default)]
     pub(crate) fixed: Option<DrillBlastTimeline>,
 }
 
@@ -57,7 +54,6 @@ pub(crate) struct BlastJob {
     pub(crate) releases: Vec<GroundId>,
     pub(crate) above: Vec<GroundId>,
     /// Ground above it that no bar digs stands for good, so it never clears.
-    #[serde(default)]
     pub(crate) never_clear: bool,
 }
 
@@ -78,11 +74,9 @@ pub(crate) struct BlastTask {
     pub(crate) end_h: f64,
     /// Positions in [`DrillBlastInput::blasts`], in authored order.
     pub(crate) sequence: Vec<usize>,
-    #[serde(default)]
     pub(crate) delay: bool,
     /// A follow bar: the agent whose blast bars it works, in place of a
     /// sequence of its own.
-    #[serde(default)]
     pub(crate) follow: Option<usize>,
 }
 

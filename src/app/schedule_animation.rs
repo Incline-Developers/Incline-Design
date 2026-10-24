@@ -306,13 +306,16 @@ pub(crate) struct ScheduleAnimation {
     machines_key: Option<(u64, u64, u64)>,
 }
 
+/// A loader's span of work: start and end hours, and its source.
+type LoaderSpan = (f64, f64, crate::model::schedule::result::WorkSource);
+
 /// Each machine's work, in time order: a loader's spans (start, end and
 /// source), and for each dozer, drill or MPU its step, its rows of the run's
 /// drill and blast work (by position), and its blast bars - each one's
 /// window and blasts - in priority order, for what holds it up when idle.
 #[derive(Default)]
 struct MachineWork {
-    loaders: Vec<(crate::model::schedule::LoaderAgentId, Vec<(f64, f64, crate::model::schedule::result::WorkSource)>)>,
+    loaders: Vec<(crate::model::schedule::LoaderAgentId, Vec<LoaderSpan>)>,
     drill_blast: Vec<DrillBlastMachine>,
 }
 

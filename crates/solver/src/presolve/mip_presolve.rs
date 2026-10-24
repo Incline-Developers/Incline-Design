@@ -111,18 +111,6 @@ impl Settings {
     }
 }
 
-use crate::util::tracing;
-
-/// Trace presolve's changes to stderr when `SOLVER_TRACE_PRESOLVE` is set,
-/// to compare with an instrumented HiGHS.
-macro_rules! trace {
-    ($($arg:tt)*) => {
-        if tracing() {
-            eprintln!($($arg)*);
-        }
-    };
-}
-
 macro_rules! check {
     ($call:expr) => {
         match $call {
@@ -832,7 +820,6 @@ impl<'a> MipPresolve<'a> {
     }
 
     fn add_to_matrix(&mut self, row: usize, col: usize, val: f64) {
-        trace!("A {row} {col} {:x}", val.to_bits());
         let mut pos = self.find_nonzero(row, col);
         self.mark_changed_row(row);
         self.mark_changed_col(col);
@@ -874,7 +861,6 @@ impl<'a> MipPresolve<'a> {
     }
 
     fn mark_row_deleted(&mut self, row: usize) {
-        trace!("DR {row}");
         if self.is_equation(row)
             && let Some(size) = self.eq_key[row].take()
         {
@@ -886,7 +872,6 @@ impl<'a> MipPresolve<'a> {
     }
 
     fn mark_col_deleted(&mut self, col: usize) {
-        trace!("DC {col}");
         self.changed_col_flag[col] = true;
         self.col_deleted[col] = true;
         self.num_deleted_cols += 1;
@@ -906,7 +891,6 @@ impl<'a> MipPresolve<'a> {
     // ---- Bounds ----------------------------------------------------------
 
     fn change_col_upper(&mut self, col: usize, mut new_upper: f64) -> Outcome {
-        trace!("U {col} {:x}", new_upper.to_bits());
         if self.mip.model.integrality[col] != VarType::Continuous {
             new_upper = (new_upper + self.primal_feastol).floor();
             if new_upper == self.mip.model.col_upper[col] {
@@ -927,7 +911,6 @@ impl<'a> MipPresolve<'a> {
     }
 
     fn change_col_lower(&mut self, col: usize, mut new_lower: f64) -> Outcome {
-        trace!("L {col} {:x}", new_lower.to_bits());
         if self.mip.model.integrality[col] != VarType::Continuous {
             new_lower = (new_lower - self.primal_feastol).ceil();
             if new_lower == self.mip.model.col_lower[col] {
@@ -1314,7 +1297,6 @@ impl<'a> MipPresolve<'a> {
     // ---- Removing rows and columns ---------------------------------------
 
     fn shrink_problem(&mut self) {
-        trace!("SHRINK");
         let old_num_col = self.mip.model.num_col;
         self.mip.model.num_col = 0;
         let mut new_col_index = vec![NONE; old_num_col];
