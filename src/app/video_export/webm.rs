@@ -6,14 +6,11 @@
 //! cluster's 16-bit relative timestamps would run out); the cues, the
 //! duration and the segment size are filled in when the file is finished.
 
-use std::{
-    fs::File,
-    io::{BufWriter, Seek, SeekFrom, Write},
-};
+use std::io::{BufWriter, Seek, SeekFrom, Write};
 
 use anyhow::Result;
 
-use super::encode::Av1Sink;
+use super::encode::{Av1Sink, VideoOutput};
 
 const EBML: u32 = 0x1A45_DFA3;
 const EBML_VERSION: u32 = 0x4286;
@@ -61,7 +58,7 @@ const TIMESTAMP_SCALE_NS: u64 = 1_000_000;
 const MAX_CLUSTER_SPAN_MS: u64 = 30_000;
 
 pub(crate) struct WebmWriter {
-    file: BufWriter<File>,
+    file: BufWriter<Box<dyn VideoOutput>>,
     width: u32,
     height: u32,
     fps: f64,
@@ -80,9 +77,9 @@ pub(crate) struct WebmWriter {
 }
 
 impl WebmWriter {
-    pub(crate) fn new(file: File, width: u32, height: u32, fps: f64) -> Result<Self> {
+    pub(crate) fn new(file: BufWriter<Box<dyn VideoOutput>>, width: u32, height: u32, fps: f64) -> Result<Self> {
         Ok(Self {
-            file: BufWriter::new(file),
+            file,
             width,
             height,
             fps,

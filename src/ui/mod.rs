@@ -164,13 +164,11 @@ impl Gui {
     }
 
     /// Points to physical pixels in the window, as the last frame drew.
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn pixels_per_point(&self) -> f32 {
         self.ctx.pixels_per_point()
     }
 
     /// The window's look, for another surface that has to match it.
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn visuals(&self) -> egui::Visuals {
         self.ctx.global_style().visuals.clone()
     }
@@ -347,13 +345,11 @@ impl Gui {
 /// Animate's picture the viewport draws through egui rather than the scene
 /// renderer. Either set of labels can be left out. Its own context and renderer, so the window's frame is
 /// untouched by it and its font atlas never collides with the window's.
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct VideoOverlay {
     ctx: egui::Context,
     renderer: egui_wgpu::Renderer,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl VideoOverlay {
     pub(crate) fn new(device: &wgpu::Device, format: wgpu::TextureFormat, visuals: egui::Visuals) -> Self {
         let ctx = egui::Context::default();

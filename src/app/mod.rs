@@ -19,7 +19,6 @@ pub(crate) mod schedule_solve; // One schedule run: validation, the hourly dispa
 pub(crate) mod scip_blend; // Improve: the SCIP solve of one owned blended model, on the run's worker thread
 pub(crate) mod step_pipeline; // The run/invalidation core shared by the Schedule and Haulage Setup pipelines
 pub(crate) mod tie_in; // Drill & Blast's tie-in and initiation point
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod video_export; // Animate played through the viewport into a video file
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web_download;
@@ -488,7 +487,6 @@ pub(crate) struct App<'a> {
     /// its job publishes nothing.
     pub(crate) pending_schedule_run: Option<crate::app::schedule_run::PendingScheduleRun>,
     /// Animate's video export while it is capturing frames.
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) video_recording: Option<video_export::Recording>,
     /// Why the last run published nothing, owned by the semantic inputs it
     /// was made against.
@@ -695,7 +693,6 @@ impl<'a> Default for App<'a> {
             planning_entry_step: None,
             schedule_calculation: None,
             pending_schedule_run: None,
-            #[cfg(not(target_arch = "wasm32"))]
             video_recording: None,
             schedule_run_diagnostics: None,
             schedule_report_cache: None,

@@ -199,7 +199,7 @@ pub(crate) enum FileDialogAction {
     #[cfg(not(target_arch = "wasm32"))]
     ExportViewportImage(PathBuf),
     /// Record Animate into this video file.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     ExportVideo(PathBuf, crate::ui::state::VideoExportRequest),
     /// Render and write the configured plot sheet.
     #[cfg(not(target_arch = "wasm32"))]
@@ -902,7 +902,6 @@ impl<'a> App<'a> {
                 graphics.request_screenshot(path);
                 Ok(())
             }
-            #[cfg(not(target_arch = "wasm32"))]
             FileDialogAction::ExportVideo(path, request) => self.start_video_export(path, request),
             #[cfg(not(target_arch = "wasm32"))]
             FileDialogAction::ExportPlotSheet(mut path) => {
@@ -1056,7 +1055,7 @@ impl<'a> App<'a> {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(super) fn trigger_browser_download(file_name: String, bytes: Vec<u8>, mime_type: &'static str, description: &'static str) {
+    pub(crate) fn trigger_browser_download(file_name: String, bytes: Vec<u8>, mime_type: &'static str, description: &'static str) {
         match crate::app::web_download::download(&file_name, &bytes, mime_type) {
             Ok(()) => userspace_log!(
                 "{}",

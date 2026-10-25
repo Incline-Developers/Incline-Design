@@ -7,15 +7,18 @@
 //! uploads that geometry, and right after it the video's frame is drawn
 //! offscreen at the video's size from the viewport's camera (see
 //! `rendering/graphics/video_capture.rs`). Its pixels arrive a frame or two
-//! later and go to an encoder running as a background job.
+//! later and go to an encoder running as a background job. Nothing waits on
+//! the GPU or the encoder: a frame is drawn only once both have room for it,
+//! which the browser needs, its main thread being unable to block.
+//!
+//! Desktop writes the file chosen in a save dialog; the browser encodes into
+//! memory and downloads the finished video.
 
 mod encode;
-#[cfg(feature = "video-av1")]
 mod iso;
-#[cfg(feature = "video-av1")]
 mod webm;
 
-use std::{path::PathBuf, sync::mpsc};
+use std::{collections::VecDeque, path::PathBuf, sync::mpsc};
 
 pub(crate) use encode::VideoFormat;
 
@@ -39,6 +42,8 @@ pub(crate) struct Recording {
     labels: crate::rendering::graphics::video_capture::VideoLabels,
     /// Frames to the encoder; dropped to tell it the last has been sent.
     frames: mpsc::SyncSender<Vec<u8>>,
+    /// Frames read back that the encoder has no room for yet, oldest first.
+    waiting: VecDeque<Vec<u8>>,
     /// Whether Animate shows the next frame's instant, so the video frame is
     /// drawn after this frame's window render.
     render_requested: bool,
@@ -66,13 +71,18 @@ impl Recording {
 }
 
 impl<'a> App<'a> {
-    /// Ask where to save the video, then record it.
+    /// Ask where to save the video, then record it. The browser has no save
+    /// dialog: it records straight away and downloads the first format.
     pub(crate) fn choose_video_export(&mut self, request: VideoExportRequest) {
-        use rfd::AsyncFileDialog;
-        let formats = VideoFormat::available();
+        let name = format!("{}.{}", tr!("video-export-file-name"), VideoFormat::ALL[0].extension());
+        #[cfg(target_arch = "wasm32")]
+        if let Err(error) = self.start_video_export(PathBuf::from(name), request) {
+            userspace_warn!("{}", tr!("video-export-failed", error = format!("{error:#}")));
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         self.spawn_file_dialog(async move {
-            let mut dialog = AsyncFileDialog::new().set_file_name(format!("{}.{}", tr!("video-export-file-name"), formats[0].extension()));
-            for format in &formats {
+            let mut dialog = rfd::AsyncFileDialog::new().set_file_name(name);
+            for format in VideoFormat::ALL {
                 dialog = dialog.add_filter(format.filter_name(), &[format.extension()]);
             }
             let path = dialog.save_file().await?.path().to_path_buf();
@@ -95,7 +105,7 @@ impl<'a> App<'a> {
             None => {
                 // A name typed without a known extension is saved as the
                 // first format offered, and says so in its name.
-                let format = VideoFormat::available()[0];
+                let format = VideoFormat::ALL[0];
                 let mut name = path.file_name().map(|name| name.to_os_string()).unwrap_or_default();
                 name.push(".");
                 name.push(format.extension());
@@ -119,7 +129,7 @@ impl<'a> App<'a> {
         let total = times.len();
         let fps = request.fps;
         let (sender, receiver) = mpsc::sync_channel::<Vec<u8>>(QUEUED_FRAMES);
-        let target = path.clone();
+        let destination = encode::Destination::new(path.clone());
         let label = tr!(
             "video-export-job",
             file = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default()
@@ -129,7 +139,7 @@ impl<'a> App<'a> {
             vec![JobKey::VideoExport],
             move |cancel, progress| {
                 let result = (|| {
-                    let mut encoder = encode::open(&target, format, width, height, fps)?;
+                    let mut encoder = encode::open(&destination, format, width, height, fps)?;
                     let mut done = 0u64;
                     for frame in receiver {
                         if cancel.is_cancelled() {
@@ -142,16 +152,24 @@ impl<'a> App<'a> {
                     if cancel.is_cancelled() || done < total as u64 {
                         bail!("{}", tr!("video-export-cancelled"));
                     }
-                    encoder.finish()?;
-                    Ok(target.clone())
+                    encoder.finish()
                 })();
-                if result.is_err() {
-                    encode::discard(&target);
+                match result {
+                    Ok(()) => Ok(destination.finished()),
+                    Err(error) => {
+                        destination.discard();
+                        Err(error)
+                    }
                 }
-                result
             },
-            move |app, result: anyhow::Result<PathBuf>| match result {
+            move |app, result| match result {
+                #[cfg(not(target_arch = "wasm32"))]
                 Ok(path) => userspace_log!("{}", tr!("video-export-saved", path = path.display().to_string())),
+                #[cfg(target_arch = "wasm32")]
+                Ok((path, bytes)) => {
+                    let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+                    Self::trigger_browser_download(name, bytes, format.mime_type(), "video");
+                }
                 Err(error) => {
                     // An encoder that failed leaves the capture with nowhere
                     // to send its frames.
@@ -173,6 +191,7 @@ impl<'a> App<'a> {
                 machines: request.machine_labels,
             },
             frames: sender,
+            waiting: VecDeque::new(),
             render_requested: false,
             restore_time_h: self.editor.schedule_time_h,
         });
@@ -210,24 +229,27 @@ impl<'a> App<'a> {
             self.editor.schedule_time_h = target;
             return;
         }
-        if self.animation_shows(target)
+        // The next frame waits until the encoder and the readback have room.
+        let backed_up = !recording.waiting.is_empty() || self.graphics.as_ref().is_some_and(|graphics| graphics.video_readback_full());
+        if !backed_up
+            && self.animation_shows(target)
             && let Some(recording) = self.video_recording.as_mut()
         {
             recording.render_requested = true;
         }
     }
 
-    /// Hand the frames whose pixels have arrived to the encoder, and finish
-    /// once the last has. Runs after the render.
+    /// Hand the frames whose pixels have arrived to the encoder, as many as
+    /// it has room for, and finish once it has the last. Runs after the
+    /// render.
     pub(crate) fn collect_video_frames(&mut self) {
-        let Some(recording) = self.video_recording.as_ref() else {
+        if self.video_recording.is_none() {
             return;
-        };
-        let rendered_all = recording.next == recording.times.len();
+        }
         let Some(graphics) = self.graphics.as_mut() else {
             return;
         };
-        let frames = match graphics.take_video_frames(rendered_all) {
+        let frames = match graphics.take_video_frames() {
             Ok(frames) => frames,
             Err(error) => {
                 userspace_warn!("{}", tr!("video-export-failed", error = format!("{error:#}")));
@@ -236,13 +258,20 @@ impl<'a> App<'a> {
             }
         };
         let recording = self.video_recording.as_mut().expect("checked above");
-        for frame in frames {
-            if recording.frames.send(frame).is_err() {
-                // The encoder has stopped; its job reports why.
-                self.stop_video_recording();
-                return;
+        recording.waiting.extend(frames);
+        while let Some(frame) = recording.waiting.pop_front() {
+            match recording.frames.try_send(frame) {
+                Ok(()) => recording.collected += 1,
+                Err(mpsc::TrySendError::Full(frame)) => {
+                    recording.waiting.push_front(frame);
+                    break;
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    // The encoder has stopped; its job reports why.
+                    self.stop_video_recording();
+                    return;
+                }
             }
-            recording.collected += 1;
         }
         let total = recording.times.len();
         self.editor.video_export_progress = Some((recording.collected, total));

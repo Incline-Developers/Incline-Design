@@ -537,7 +537,6 @@ impl crate::app::App<'_> {
     /// Whether the view on screen is the run at exactly `time_h`: every
     /// visible block cut for it, nothing in flight, and the machines placed
     /// for it. What the video export waits for before it takes a frame.
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn animation_shows(&self, time_h: f64) -> bool {
         let animation = &self.schedule_animation;
         !animation.pending

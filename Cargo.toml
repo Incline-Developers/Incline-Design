@@ -22,23 +22,6 @@ exclude = [
 [build-dependencies]
 winresource = "0.1.34"
 
-[features]
-# Every build is pure Rust, the browser included: the first schedule's
-# hourly dispatch solves its linear programs with the solver crate
-# (crates/solver, HiGHS's LP and MIP solvers ported to Rust), and Improve -
-# the whole-horizon solve, the day-by-day fallback and the search's daily
-# plans - runs on crates/minlp (SCIP 10.0.2 ported to Rust).
-# Their licences are in the crates.
-#
-#   video-av1     on by default: Animate's video export writes AV1 (rav1e,
-#                 pure Rust) into MP4, MOV or WebM. Without it the export
-#                 offers GIF only. Desktop builds only.
-#   video-asm     rav1e's x86-64 assembly, about three times faster to
-#                 encode; needs nasm 2.14.02 or newer on the build machine.
-default = ["video-av1"]
-video-av1 = ["dep:rav1e"]
-video-asm = ["video-av1", "rav1e/asm"]
-
 [dependencies]
 anyhow = "1.0.104"
 bytemuck = { version = "1.25.2", features = ["derive"] }
@@ -51,6 +34,7 @@ egui-wgpu = "0.37.0"
 egui_extras = { version = "0.37.0", default-features = false, features = ["svg"] }
 foldhash = "0.2.0"
 fontmesh = "0.7.0"
+gif = "0.14.2"
 glam = { version = "0.34.1", features = ["serde"] }
 i18n-embed = { version = "0.16.0", features = ["fluent-system"] }
 i18n-embed-fl = "0.10.1"
@@ -67,6 +51,10 @@ png = "0.18.1"
 proj4rs = { version = "0.2.1", default-features = false }
 crs-definitions = "0.6.0"
 csv = "1.4.0"
+# Animate's video export's AV1 encoder, pure Rust, on the shared rayon pool.
+# Its `asm` feature (about 2.7x faster on x86-64) is left off: it needs nasm
+# on every build machine.
+rav1e = { version = "0.8.1", default-features = false, features = ["threading"] }
 rayon = "1.12.0"
 rfd = { version = "0.17.2", features = ["file-handle-inner"] }
 robust = "1.2.0"
@@ -88,12 +76,9 @@ winit = "0.30.13"
 dirs = "7.0.0"
 egui_system_font_provider = "0.37.0"
 egui-winit = "0.37.0"
-gif = "0.14.2"
 i18n-embed = { version = "0.16.0", features = ["desktop-requester"] }
 memmap2 = "0.9.11"
 pollster = "1.0.1"
-# The video export's AV1 encoder; see the `video-av1` feature.
-rav1e = { version = "0.8.1", default-features = false, features = ["threading"], optional = true }
 sys-locale = "0.3.2"
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 tempfile = "3.27.0"

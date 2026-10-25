@@ -6,14 +6,11 @@
 //! sample is its own chunk at a constant duration, which keeps the sample
 //! tables to a line each apart from sizes, offsets and keyframes.
 
-use std::{
-    fs::File,
-    io::{BufWriter, Seek, SeekFrom, Write},
-};
+use std::io::{BufWriter, Seek, SeekFrom, Write};
 
 use anyhow::Result;
 
-use super::encode::Av1Sink;
+use super::encode::{Av1Sink, VideoOutput};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Flavour {
@@ -28,7 +25,7 @@ const TICKS_PER_FRAME: u32 = 1000;
 const MOVIE_TIMESCALE: u32 = 1000;
 
 pub(crate) struct IsoWriter {
-    file: BufWriter<File>,
+    file: BufWriter<Box<dyn VideoOutput>>,
     flavour: Flavour,
     width: u32,
     height: u32,
@@ -43,8 +40,7 @@ pub(crate) struct IsoWriter {
 }
 
 impl IsoWriter {
-    pub(crate) fn new(file: File, flavour: Flavour, width: u32, height: u32, fps: f64) -> Result<Self> {
-        let mut file = BufWriter::new(file);
+    pub(crate) fn new(mut file: BufWriter<Box<dyn VideoOutput>>, flavour: Flavour, width: u32, height: u32, fps: f64) -> Result<Self> {
         let ftyp = match flavour {
             Flavour::Mp4 => plain(b"ftyp", |body| {
                 body.extend_from_slice(b"isom");

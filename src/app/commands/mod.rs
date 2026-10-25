@@ -596,14 +596,10 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::ExportVideo(request) => {
-                #[cfg(not(target_arch = "wasm32"))]
                 self.choose_video_export(request);
-                #[cfg(target_arch = "wasm32")]
-                let _ = request;
                 Ok(())
             }
             UiCommand::CancelVideoExport => {
-                #[cfg(not(target_arch = "wasm32"))]
                 self.cancel_video_export();
                 Ok(())
             }

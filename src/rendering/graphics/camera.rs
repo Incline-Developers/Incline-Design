@@ -2054,7 +2054,6 @@ impl<'a> Graphics<'a> {
     /// Hold the view where it is, or let it go: while a video records, the
     /// camera ignores its input and anything that moved it - a command, a
     /// transition already under way - is put back each frame.
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn set_camera_locked(&mut self, locked: bool) {
         self.camera_lock = locked.then(|| (self.camera.clone(), self.projection.zoom));
         if locked {

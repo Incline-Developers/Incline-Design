@@ -9,7 +9,8 @@
 //!
 //! Readback does not wait: each frame's copy is mapped in the background and
 //! collected on a later frame, a few in flight at once, so the GPU and the
-//! app overlap rather than taking turns.
+//! app overlap rather than taking turns. Nothing here blocks, which the
+//! browser's main thread cannot.
 
 use std::{
     collections::VecDeque,
@@ -21,8 +22,8 @@ use std::{
 
 use super::{readback::RgbaReadback, *};
 
-/// Frames copied back but not yet collected before the next render waits
-/// for the oldest.
+/// Frames copied back but not yet collected before the export stops
+/// drawing new ones; see [`Graphics::video_readback_full`].
 const MAX_IN_FLIGHT: usize = 3;
 
 const MAP_PENDING: u8 = 0;
@@ -178,9 +179,14 @@ impl VideoTarget {
 }
 
 impl Graphics<'_> {
+    /// Whether as many frames as are let be in flight are still being
+    /// copied back, so the next should wait.
+    pub(crate) fn video_readback_full(&self) -> bool {
+        self.video_target.as_ref().is_some_and(|target| target.in_flight.len() >= MAX_IN_FLIGHT)
+    }
+
     /// Render one video frame and start copying it back; collect it with
-    /// [`Self::take_video_frames`]. Waits only when [`MAX_IN_FLIGHT`] frames
-    /// are still being copied.
+    /// [`Self::take_video_frames`].
     pub(crate) fn render_video_frame(&mut self, input: VideoFrameInput<'_>) {
         let VideoFrameInput {
             editor,
@@ -199,9 +205,6 @@ impl Graphics<'_> {
             Some(target) if target.size.width == width && target.size.height == height => target,
             _ => VideoTarget::new(self, width, height),
         };
-        if target.in_flight.len() >= MAX_IN_FLIGHT {
-            let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
-        }
         // The window's projection this frame - its clip planes fitted to the
         // scene - reshaped to the video.
         target.projection = self.projection.cropped_to(width, height);
@@ -301,13 +304,13 @@ impl Graphics<'_> {
         self.video_target = Some(target);
     }
 
-    /// The frames whose copies have arrived, oldest first; with `wait`, every
-    /// frame still in flight, waiting for them. `Err` when a copy failed.
-    pub(crate) fn take_video_frames(&mut self, wait: bool) -> anyhow::Result<Vec<Vec<u8>>> {
+    /// The frames whose copies have arrived, oldest first. `Err` when a copy
+    /// failed.
+    pub(crate) fn take_video_frames(&mut self) -> anyhow::Result<Vec<Vec<u8>>> {
         let Some(target) = self.video_target.as_mut() else {
             return Ok(Vec::new());
         };
-        let _ = self.device.poll(if wait { wgpu::PollType::wait_indefinitely() } else { wgpu::PollType::Poll });
+        let _ = self.device.poll(wgpu::PollType::Poll);
         let mut frames = Vec::new();
         while let Some(front) = target.in_flight.front() {
             match front.state.load(Ordering::Acquire) {

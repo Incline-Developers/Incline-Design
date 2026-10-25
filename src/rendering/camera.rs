@@ -165,7 +165,6 @@ impl Projection {
     /// largest centred part of what it framed that has the target's shape:
     /// the same height where the target is no wider, the same width where it
     /// is wider. The video export frames its picture this way.
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn cropped_to(&self, width: u32, height: u32) -> Self {
         let mut cropped = self.clone();
         cropped.resize(width, height);

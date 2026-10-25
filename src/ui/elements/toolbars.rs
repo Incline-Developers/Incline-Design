@@ -238,12 +238,8 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, edi
     ]
 }
 
-/// Animate's run: recording the schedule as a video. Desktop builds only:
-/// the browser has no way to read frames back for it yet.
+/// Animate's run: recording the schedule as a video.
 fn animate_tools(ui: &egui::Ui, editor: &EditorState) -> Vec<LeftTool> {
-    if cfg!(target_arch = "wasm32") {
-        return Vec::new();
-    }
     let recording = editor.video_export_progress.is_some();
     vec![LeftTool {
         icon: egui::Image::new(themed_icon!(ui, "record_video.svg")),

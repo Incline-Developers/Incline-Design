@@ -58,7 +58,6 @@ pub(crate) mod slice_preview;
 pub(crate) mod solid_preview;
 pub(crate) mod targets;
 mod touch;
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod video_capture;
 
 pub(super) const TEXT_CACHE_TRIM_INTERVAL_FRAMES: u64 = 300;
@@ -529,7 +528,6 @@ pub(crate) struct Graphics<'a> {
     pub(super) camera_lock: Option<(Camera, f64)>,
     /// The video export's offscreen target and the frames it has in flight;
     /// see `video_capture.rs`.
-    #[cfg(not(target_arch = "wasm32"))]
     pub(super) video_target: Option<video_capture::VideoTarget>,
 }
 

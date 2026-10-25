@@ -3,18 +3,16 @@
 //! Frames arrive as opaque RGBA8, one per call, at a fixed frame rate. AV1
 //! (rav1e) is written into MP4, MOV or WebM by the small muxers beside this
 //! module; GIF is written by the `gif` crate. Nothing here knows about the
-//! schedule: it is handed pixels and a path.
+//! schedule: it is handed pixels and somewhere to write them.
 
 use std::{
-    fs::File,
-    io::BufWriter,
-    path::{Path, PathBuf},
+    io::{BufWriter, Seek, Write},
+    path::PathBuf,
 };
 
-use anyhow::{Context as _, Result, anyhow};
+use anyhow::{Result, anyhow};
 
-/// What a video can be saved as. The AV1 containers need the `video-av1`
-/// feature; GIF is always there.
+/// What a video can be saved as.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum VideoFormat {
     Mp4,
@@ -24,16 +22,10 @@ pub(crate) enum VideoFormat {
 }
 
 impl VideoFormat {
-    /// The formats this build can write, in the order the save dialog
-    /// offers them: the first is what a name with no extension is saved as.
-    pub(crate) fn available() -> Vec<Self> {
-        let mut formats = Vec::new();
-        if cfg!(feature = "video-av1") {
-            formats.extend([Self::Mp4, Self::WebM, Self::Mov]);
-        }
-        formats.push(Self::Gif);
-        formats
-    }
+    /// Every format, in the order the save dialog offers them: the first is
+    /// what a name with no extension is saved as, and what the browser
+    /// downloads.
+    pub(crate) const ALL: [Self; 4] = [Self::Mp4, Self::WebM, Self::Mov, Self::Gif];
 
     pub(crate) fn extension(self) -> &'static str {
         match self {
@@ -45,6 +37,7 @@ impl VideoFormat {
     }
 
     /// The save dialog's name for the format.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) fn filter_name(self) -> &'static str {
         match self {
             Self::Mp4 => "MP4 video (AV1)",
@@ -54,11 +47,109 @@ impl VideoFormat {
         }
     }
 
-    /// The format a saved path names by its extension, among those this
-    /// build can write.
-    pub(crate) fn of_path(path: &Path) -> Option<Self> {
+    /// What the browser's download is labelled as.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn mime_type(self) -> &'static str {
+        match self {
+            Self::Mp4 => "video/mp4",
+            Self::Mov => "video/quicktime",
+            Self::WebM => "video/webm",
+            Self::Gif => "image/gif",
+        }
+    }
+
+    /// The format a saved path names by its extension.
+    pub(crate) fn of_path(path: &std::path::Path) -> Option<Self> {
         let extension = path.extension()?.to_str()?.to_ascii_lowercase();
-        Self::available().into_iter().find(|format| format.extension() == extension)
+        Self::ALL.into_iter().find(|format| format.extension() == extension)
+    }
+}
+
+/// Where an encoder writes. The muxers seek back to fill in sizes once the
+/// frames are in.
+pub(crate) trait VideoOutput: Write + Seek + Send {}
+
+impl<T: Write + Seek + Send> VideoOutput for T {}
+
+/// Where a finished video ends up: the file chosen on desktop; in the
+/// browser, memory, downloaded once the video is finished.
+pub(crate) struct Destination {
+    path: PathBuf,
+    #[cfg(target_arch = "wasm32")]
+    memory: memory::MemoryFile,
+}
+
+impl Destination {
+    pub(crate) fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            #[cfg(target_arch = "wasm32")]
+            memory: memory::MemoryFile::default(),
+        }
+    }
+
+    fn output(&self) -> Result<Box<dyn VideoOutput>> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use anyhow::Context as _;
+            let file = std::fs::File::create(&self.path).with_context(|| format!("Could not create {}", self.path.display()))?;
+            Ok(Box::new(file))
+        }
+        #[cfg(target_arch = "wasm32")]
+        Ok(Box::new(self.memory.clone()))
+    }
+
+    /// The finished video: its path, and in the browser its bytes too.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn finished(self) -> PathBuf {
+        self.path
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn finished(self) -> (PathBuf, Vec<u8>) {
+        (self.path, self.memory.take())
+    }
+
+    /// Remove the output if a run is abandoned, so a cancelled export leaves
+    /// no half-written file behind.
+    pub(crate) fn discard(&self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+mod memory {
+    use std::{
+        io::{Cursor, Result, Seek, SeekFrom, Write},
+        sync::{Arc, Mutex},
+    };
+
+    /// A growable in-memory file, shared so the export can take its bytes
+    /// back once the encoder that owns a handle has finished with it.
+    #[derive(Clone, Default)]
+    pub(super) struct MemoryFile(Arc<Mutex<Cursor<Vec<u8>>>>);
+
+    impl MemoryFile {
+        pub(super) fn take(&self) -> Vec<u8> {
+            std::mem::take(self.0.lock().expect("video memory poisoned").get_mut())
+        }
+    }
+
+    impl Write for MemoryFile {
+        fn write(&mut self, buf: &[u8]) -> Result<usize> {
+            self.0.lock().expect("video memory poisoned").write(buf)
+        }
+
+        fn flush(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Seek for MemoryFile {
+        fn seek(&mut self, position: SeekFrom) -> Result<u64> {
+            self.0.lock().expect("video memory poisoned").seek(position)
+        }
     }
 }
 
@@ -70,33 +161,28 @@ pub(crate) trait FrameEncoder: Send {
     fn finish(self: Box<Self>) -> Result<()>;
 }
 
-/// Open an encoder writing `format` to `path`.
-pub(crate) fn open(path: &Path, format: VideoFormat, width: u32, height: u32, fps: f64) -> Result<Box<dyn FrameEncoder>> {
-    let file = File::create(path).with_context(|| format!("Could not create {}", path.display()))?;
+/// Open an encoder writing `format` to `destination`.
+pub(crate) fn open(destination: &Destination, format: VideoFormat, width: u32, height: u32, fps: f64) -> Result<Box<dyn FrameEncoder>> {
+    let output = BufWriter::new(destination.output()?);
     match format {
-        VideoFormat::Gif => Ok(Box::new(GifEncoder::new(BufWriter::new(file), width, height, fps)?)),
-        #[cfg(feature = "video-av1")]
+        VideoFormat::Gif => Ok(Box::new(GifEncoder::new(output, width, height, fps)?)),
         VideoFormat::Mp4 | VideoFormat::Mov => {
             let flavour = if format == VideoFormat::Mov {
                 super::iso::Flavour::QuickTime
             } else {
                 super::iso::Flavour::Mp4
             };
-            let sink = super::iso::IsoWriter::new(file, flavour, width, height, fps)?;
+            let sink = super::iso::IsoWriter::new(output, flavour, width, height, fps)?;
             Ok(Box::new(av1::Av1Encoder::new(Box::new(sink), width, height, fps)?))
         }
-        #[cfg(feature = "video-av1")]
         VideoFormat::WebM => {
-            let sink = super::webm::WebmWriter::new(file, width, height, fps)?;
+            let sink = super::webm::WebmWriter::new(output, width, height, fps)?;
             Ok(Box::new(av1::Av1Encoder::new(Box::new(sink), width, height, fps)?))
         }
-        #[cfg(not(feature = "video-av1"))]
-        other => Err(anyhow!("This build cannot write {} files", other.extension())),
     }
 }
 
 /// Where an AV1 encoder puts its frames: a container writer.
-#[cfg(feature = "video-av1")]
 pub(crate) trait Av1Sink: Send {
     /// One temporal unit, temporal delimiters removed, in presentation
     /// order. `config` is the av1C record, given with every call so a writer
@@ -105,13 +191,6 @@ pub(crate) trait Av1Sink: Send {
     fn finish(self: Box<Self>, config: &[u8]) -> Result<()>;
 }
 
-/// Remove the output if a run is abandoned, so a cancelled export leaves no
-/// half-written file behind.
-pub(crate) fn discard(path: &PathBuf) {
-    let _ = std::fs::remove_file(path);
-}
-
-#[cfg(feature = "video-av1")]
 mod av1 {
     use rav1e::prelude::*;
 
@@ -123,9 +202,10 @@ mod av1 {
     /// fast as 9 for a file 7% larger.
     const SPEED_PRESET: u8 = 10;
     /// The most tiles a frame is split into. rav1e spreads a frame's work
-    /// across cores by tile, so one per core is what keeps them busy: at
-    /// 1080p, eight tiles encode nearly three times as fast as rav1e's own
-    /// choice, with files within a few percent of the size.
+    /// across the rayon pool's threads by tile, so one per thread is what
+    /// keeps them busy: at 1080p, eight tiles encode nearly three times as
+    /// fast as rav1e's own choice, with files within a few percent of the
+    /// size.
     const MAX_TILES: usize = 16;
     /// Constant quantiser, 0-255: lower is better and larger.
     const QUANTIZER: usize = 90;
@@ -167,7 +247,7 @@ mod av1 {
                 quantizer: QUANTIZER,
                 max_key_frame_interval: (fps * KEYFRAME_SECONDS).round().max(1.0) as u64,
                 speed_settings: SpeedSettings::from_preset(SPEED_PRESET),
-                tiles: std::thread::available_parallelism().map_or(4, std::num::NonZero::get).clamp(1, MAX_TILES),
+                tiles: rayon::current_num_threads().clamp(1, MAX_TILES),
                 ..Default::default()
             };
             let context: Context<u8> = Config::new()
@@ -335,7 +415,7 @@ const GIF_MAX_WIDTH: u32 = 960;
 const GIF_MIN_DELAY_CS: u64 = 2;
 
 struct GifEncoder {
-    encoder: gif::Encoder<BufWriter<File>>,
+    encoder: gif::Encoder<BufWriter<Box<dyn VideoOutput>>>,
     width: u32,
     height: u32,
     factor: u32,
@@ -348,7 +428,7 @@ struct GifEncoder {
 }
 
 impl GifEncoder {
-    fn new(file: BufWriter<File>, width: u32, height: u32, fps: f64) -> Result<Self> {
+    fn new(file: BufWriter<Box<dyn VideoOutput>>, width: u32, height: u32, fps: f64) -> Result<Self> {
         let factor = width.div_ceil(GIF_MAX_WIDTH).max(1);
         let (out_width, out_height) = ((width / factor).max(1), (height / factor).max(1));
         let size = |value: u32| u16::try_from(value).map_err(|_| anyhow!("The viewport is too large for a GIF"));
@@ -422,7 +502,7 @@ impl FrameEncoder for GifEncoder {
         let end = (self.count as f64 * 100.0 / self.fps).round() as u64;
         self.write_held(end)?;
         let mut file = self.encoder.into_inner()?;
-        std::io::Write::flush(&mut file)?;
+        file.flush()?;
         Ok(())
     }
 }
