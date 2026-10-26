@@ -53,6 +53,9 @@ struct MenuState {
     /// thresholding runs on.
     can_create_ore_triangulation: bool,
     can_undrape_rasters: bool,
+    /// Whether any design object is selected, which is what Convert to Road
+    /// turns into haul roads.
+    has_polyline_selection: bool,
     /// Whether each Design row can run, in [`DESIGN_ROWS`] order.
     design_rows: [bool; DESIGN_ROWS.len()],
     /// Whether the active project is a file that can be shown in Finder.
@@ -647,6 +650,7 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         can_build_reference_surface: editor.selection_counts.surface_points >= crate::app::commands::triangulation::reference_surface::MINIMUM_POINTS,
         can_create_ore_triangulation: editor.selection_counts.block_models == 1,
         can_undrape_rasters: project.raster_textures.iter().any(|raster| raster.is_draped),
+        has_polyline_selection: editor.selected_handles.iter().any(|handle| matches!(handle, crate::model::SceneEntityId::Object(_))),
         design_rows: DESIGN_ROWS.map(|row| row.enabled(editor)),
         has_project_file: project.active_path.is_some(),
         active_workspace: editor.active_workspace,
