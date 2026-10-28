@@ -76,7 +76,7 @@ use super::{
         blended::{
             drill_blast::{Chain, ChainState, DrillBlastTimeline, NEVER},
             greedy,
-            input::{BlendInput, authored_tasks},
+            input::{BlendInput, authored_tasks, interval_rate, task_active},
             plan::PlanTargets,
             replay::{BlendSolution, ChunkRow, MovementRow, ReplayReport, replay_as_published},
             rolling::{self, Carry, Stitched},
@@ -737,14 +737,40 @@ impl LongTerm {
     }
 }
 
-/// A period plan's routes as daily targets, each period's tonnes spread
-/// evenly over its days.
-fn daily_routes(routes: &BTreeMap<(usize, DestinationId, u32), f64>, periods: &BTreeMap<u32, Vec<u32>>) -> BTreeMap<(usize, DestinationId, u32), f64> {
+/// A period plan's routes as daily targets, spread over the loader's
+/// scheduled capacity rather than asking for deliveries while its bars are shut.
+fn daily_routes(input: &BlendInput, routes: &BTreeMap<(usize, DestinationId, u32), f64>, periods: &BTreeMap<u32, Vec<u32>>) -> BTreeMap<(usize, DestinationId, u32), f64> {
+    let mut capacity: BTreeMap<(usize, u32), f64> = BTreeMap::new();
+    for (loader_index, loader) in input.loaders.iter().enumerate() {
+        let tasks: Vec<_> = input.tasks.iter().filter(|task| task.loader == loader.id).collect();
+        for interval in &input.intervals {
+            let Some(rate) = interval_rate(loader, interval.index) else { continue };
+            let speed = tasks
+                .iter()
+                .filter(|task| task_active(task, *interval))
+                .map(|task| match &task.kind {
+                    TaskKind::Dig { .. } => rate.dig_tph,
+                    TaskKind::Reclaim { .. } => rate.reclaim_tph,
+                    TaskKind::Delay => 0.0,
+                })
+                .fold(0.0_f64, f64::max);
+            *capacity.entry((loader_index, interval.day())).or_default() += speed * interval.duration_h();
+        }
+    }
     let mut daily = BTreeMap::new();
     for (&(loader, destination, label), &tonnes) in routes {
         let Some(span) = periods.get(&label) else { continue };
-        for day in span {
-            *daily.entry((loader, destination, *day)).or_default() += tonnes / span.len() as f64;
+        let capacities: Vec<f64> = span.iter().map(|day| capacity.get(&(loader, *day)).copied().unwrap_or(0.0)).collect();
+        let total: f64 = capacities.iter().sum();
+        // Preserve uniform targets exactly when the calendar is uniform.
+        let uniform = capacities.windows(2).all(|pair| (pair[0] - pair[1]).abs() <= 1e-9 * pair[0].max(pair[1]).max(1.0));
+        for (index, day) in span.iter().enumerate() {
+            let target = if uniform || total <= 0.0 {
+                tonnes / span.len() as f64
+            } else {
+                tonnes * (capacities[index] / total)
+            };
+            *daily.entry((loader, destination, *day)).or_default() += target;
         }
     }
     daily
@@ -938,7 +964,7 @@ pub(crate) fn run(
                         planned.status
                     ),
                 );
-                let routes = daily_routes(&planned.routes, &planned.period_days);
+                let routes = daily_routes(input, &planned.routes, &planned.period_days);
                 let mut followed = false;
                 for live_round in [false, true] {
                     let Some(live) = live.as_ref().filter(|_| live_round).or((!live_round).then_some(input)) else {

@@ -1300,19 +1300,36 @@ fn solve_periods(
             })
             .collect();
         let mut prefix = 0.0;
+        let mut earliest: f64 = 0.0;
         let mut held = true;
         for (position, &(ground, task_index)) in chain.iter().enumerate() {
             let same_bar = position > 0 && chain[position - 1].1 == task_index;
             if !same_bar {
-                (prefix, held) = (0.0, true);
+                (prefix, earliest, held) = (0.0, 0.0, true);
             }
             prefix += tonnes[&ground];
             held &= diggers.get(&ground) == Some(&1) && !repeated.contains(&(loader_index, ground));
             if !held {
                 continue;
             }
+            // An exclusive bar cannot bank capacity while its next block
+            // waits for release. In cumulative capacity units, finishing
+            // this prefix takes its tonnes after the first allowed period
+            // opens, or after the previous prefix finishes, whichever is later.
+            // Tighten daily windows, where reducing branch work leaves more
+            // time to evaluate targets; keep coarse plans' order bounds.
+            if period_days == 1 {
+                let first = allowed[&(loader_index, ground)].first().copied().unwrap_or(periods);
+                let before = first.checked_sub(1).map_or(0.0, |p| available[p]);
+                earliest = earliest.max(before) + tonnes[&ground];
+            } else {
+                earliest = prefix;
+            }
             for p in 0..periods {
                 let Some(&flag) = finished.get(&(ground, p)) else { continue };
+                if period_days == 1 && earliest > available[p] + 1e-6 {
+                    builder.upper[flag] = 0.0;
+                }
                 builder.row(
                     &[(chain_so_far[&(loader_index, p)], 1.0), (flag, -prefix)],
                     0.0,
@@ -1326,9 +1343,27 @@ fn solve_periods(
                     && task == task_index
                     && let Some(&dug) = loader_so_far.get(&(loader_index, next, p))
                 {
-                    let room = (available[p] - prefix).max(0.0);
+                    let room = (available[p] - earliest).max(0.0);
                     if room < tonnes[&next] {
                         builder.row(&[(dug, 1.0), (flag, -room)], f64::NEG_INFINITY, 0.0, &format!("reachnext_{loader_index}_{}_{p}", next.0));
+                    }
+                }
+                // Daily windows can afford the denser suffix cuts: every
+                // later block shares the remaining capacity rather than
+                // receiving its own copy in the relaxation. Keep coarse
+                // whole-horizon plans sparse. Stop before a block reachable
+                // through another bar or loader.
+                if period_days == 1 {
+                    let later: Vec<(GroundId, usize)> = chain[position + 1..]
+                        .iter()
+                        .take_while(|(next, task)| *task == task_index && diggers.get(next) == Some(&1) && !repeated.contains(&(loader_index, *next)))
+                        .filter_map(|(next, _)| loader_so_far.get(&(loader_index, *next, p)).map(|column| (*next, *column)))
+                        .collect();
+                    let room = (available[p] - earliest).max(0.0);
+                    if later.len() > 1 && room < later.iter().map(|(next, _)| tonnes[next]).sum::<f64>() {
+                        let mut terms: Vec<(usize, f64)> = later.iter().map(|(_, column)| (*column, 1.0)).collect();
+                        terms.push((flag, -room));
+                        builder.row(&terms, f64::NEG_INFINITY, 0.0, &format!("reachlater_{loader_index}_{}_{p}", ground.0));
                     }
                 }
                 if same_bar && let Some(&ahead) = finished.get(&(chain[position - 1].0, p)) {
