@@ -696,6 +696,11 @@ pub(crate) fn reroute(
         // replay checks it, before a segment's receipts where a loader
         // delivering there worked blocks back to back and it is reclaimed.
         for pile in input.piles.iter().filter(|pile| pile.capacity_t.is_finite()) {
+            // Extraction rescales digging and cuts tiny reclaim excesses to
+            // meet truck and crusher limits. The stock those cuts leave can
+            // accumulate along a full pile's chain, so keep room for them
+            // rather than losing the entire routing move to a few kilograms.
+            let capacity = (pile.capacity_t - (1e-6 * pile.capacity_t).max(1e-4)).max(0.0);
             for at in 0..intervals {
                 let (col, offset) = tonnage[&pile.id][at];
                 let mut terms: Vec<(Col, f64)> = col.map(|col| vec![(col, 1.0)]).unwrap_or_default();
@@ -710,7 +715,7 @@ pub(crate) fn reroute(
                         let mut before = terms.clone();
                         before.extend(received.iter().copied());
                         if !before.is_empty() {
-                            problem.add_row(..=pile.capacity_t + SLACK_T - constant - received_constant, before);
+                            problem.add_row(..=capacity - constant - received_constant, before);
                         }
                     }
                     // Occupancy rises only where the pile receives: a segment
@@ -720,7 +725,7 @@ pub(crate) fn reroute(
                     terms.extend(reclaimed.into_iter().map(|(col, coefficient)| (col, -coefficient)));
                     constant += received_constant - reclaimed_constant;
                     if receives && !terms.is_empty() {
-                        problem.add_row(..=pile.capacity_t + SLACK_T - constant, terms.clone());
+                        problem.add_row(..=capacity - constant, terms.clone());
                     }
                 }
             }
