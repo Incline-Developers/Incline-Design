@@ -184,9 +184,8 @@ fn equilibration_scale_matrix(
             let mean = (sum / values.len() as f64).exp();
             mean.max(1.0 / mean)
         };
-        let mean_equilibration_improvement = ((geomean(&original_col_equilibrations) * geomean(&original_row_equilibrations))
-            / (geomean(&col_equilibrations) * geomean(&row_equilibrations)))
-        .sqrt();
+        let mean_equilibration_improvement =
+            ((geomean(&original_col_equilibrations) * geomean(&original_row_equilibrations)) / (geomean(&col_equilibrations) * geomean(&row_equilibrations))).sqrt();
         let improvement_factor = extreme_equilibration_improvement * mean_equilibration_improvement * matrix_value_ratio_improvement;
         !(improvement_factor < 1.0)
     };
