@@ -1363,6 +1363,15 @@ impl<'a> Graphics<'a> {
             render_pass.draw(0..6, 0..self.dynamic_strokes.len() as u32);
         }
 
+        // Before the overlay, so its tool previews draw over the surface lines.
+        if !self.section_surface.strokes().is_empty() {
+            render_pass.set_pipeline(&self.pipes().overlay_render_pipeline);
+            render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);
+            render_pass.set_bind_group(1, &self.document_style.all_bind_group, &[]);
+            render_pass.set_vertex_buffer(0, self.section_surface_gpu.slice(..));
+            render_pass.draw(0..6, 0..self.section_surface.strokes().len() as u32);
+        }
+
         if !self.overlay_strokes.is_empty() {
             render_pass.set_pipeline(&self.pipes().overlay_render_pipeline);
             render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);

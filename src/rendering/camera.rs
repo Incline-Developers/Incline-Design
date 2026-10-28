@@ -914,6 +914,28 @@ impl SectionSlab {
         self.signed_distance(world).abs() <= self.half_width
     }
 
+    /// `world` in the section's own frame: metres along the plane, then Z.
+    /// Where it lies across the slab is dropped.
+    pub(crate) fn frame_point(&self, world: DVec3) -> DVec2 {
+        self.frame_coords(world).truncate()
+    }
+
+    /// `world` as metres along the plane, Z, then its distance across, so a
+    /// plan kernel (XY, Z carried through) works in the section's plane.
+    pub(crate) fn frame_coords(&self, world: DVec3) -> DVec3 {
+        DVec3::new((world - self.point).dot(self.along()), world.z, self.signed_distance(world))
+    }
+
+    /// The world point of a [`Self::frame_coords`] point.
+    pub(crate) fn world_from_frame(&self, frame: DVec3) -> DVec3 {
+        let plan = self.point + self.along() * frame.x + self.normal * frame.z;
+        DVec3::new(plan.x, plan.y, frame.y)
+    }
+
+    fn along(&self) -> DVec3 {
+        DVec3::new(-self.normal.y, self.normal.x, 0.0)
+    }
+
     /// The stretch `(enter, leave)` of the ray `origin + direction * t`,
     /// `t >= 0`, along which the section draws filled geometry: between the
     /// walls, or from the plane on in a 2D section, matching the block

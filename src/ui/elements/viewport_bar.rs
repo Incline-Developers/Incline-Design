@@ -228,13 +228,13 @@ fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
 /// settings belonging specifically to that workspace.
 fn draw_centre_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView) {
     match editor.active_workspace {
-        Workspace::Production => draw_drawing_settings(ui, editor, project),
+        workspace if workspace.has_drawing_tools() => draw_drawing_settings(ui, editor, project),
         Workspace::DrillAndBlast => {
             draw_blast_settings(ui, editor, project);
             centre_part(ui);
             draw_z_setting(ui, editor);
         }
-        Workspace::Geology | Workspace::Planning | Workspace::Survey => {
+        _ => {
             ui.spacing_mut().item_spacing.x = CENTRE_LABEL_GAP;
             draw_z_setting(ui, editor);
         }

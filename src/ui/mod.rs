@@ -378,6 +378,24 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
     if editor.drill_pattern_awaiting_shape_pick {
         return Some(ViewportMessage::text(tr!("ui-click-closed-polyline-use-blast")).minor(tr!("ui-esc-cancels")));
     }
+    // Ahead of the section's own message: the copy's picks are made there too.
+    if let Some(copy) = state::copy_along_live(editor) {
+        let step = if copy.first.is_none() {
+            tr!("ui-click-copy-first-vertex")
+        } else {
+            tr!("ui-click-copy-last-vertex")
+        };
+        return Some(ViewportMessage::text(step).minor(tr!("ui-esc-cancels")));
+    }
+    let rework_step = match state::string_rework_live(editor) {
+        Some(state::StringRework::Picking) if !editor.poly_finish_dialog => Some(tr!("ui-click-string-end")),
+        Some(state::StringRework::PickingRun) if !editor.poly_finish_dialog => Some(tr!("ui-click-redraw-first-vertex")),
+        Some(state::StringRework::Redraw { .. }) => Some(tr!("ui-click-redraw-last-vertex")),
+        _ => None,
+    };
+    if let Some(step) = rework_step {
+        return Some(ViewportMessage::text(step).minor(tr!("ui-esc-cancels")));
+    }
     if editor.active_tool == ActiveTool::VerticalSlice {
         return Some(ViewportMessage::text(if editor.slice_pending_start.is_none() {
             tr!("ui-click-first-point-slice-line")
@@ -389,7 +407,21 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
     if editor.active_tool == ActiveTool::MeasureDistance
         && let (Some(start), Some(end)) = (editor.measurement_start, editor.measurement_end)
     {
-        return Some(ViewportMessage::text(tr!("ui-distance-meters", distance = format!("{:.3}", start.distance(end)))));
+        let distance = tr!("ui-distance-meters", distance = format!("{:.3}", start.distance(end)));
+        // Geology reads the line's slope as well: plan, rise, bearing, grade.
+        return Some(ViewportMessage::text(
+            match state::segment_readout(start, end, 0.0).filter(|_| editor.active_workspace == state::Workspace::Geology) {
+                Some(readout) => segment_readout_text(&readout, distance),
+                None => distance,
+            },
+        ));
+    }
+    // Nothing measured yet, Geology reads the string segment under the cursor.
+    if editor.reads_segment_hover()
+        && let Some((readout, _)) = editor.measure_segment_hover
+    {
+        let distance = tr!("ui-distance-meters", distance = format!("{:.3}", readout.length));
+        return Some(ViewportMessage::text(segment_readout_text(&readout, distance)));
     }
 
     if editor.active_tool == ActiveTool::MeasureBatterAngle {
@@ -403,15 +435,25 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
                 None => ViewportMessage::text(tr!("ui-dip-horizontal-no-strike", dip = dip.to_string())),
             });
         }
-        return Some(ViewportMessage::text(match editor.batter_angle_points.len() {
-            0 => tr!("ui-select-first-crest-toe-point"),
-            1 => tr!("ui-select-second-crest-toe-point"),
-            _ => tr!("ui-select-opposite-berm-point"),
+        // Geology measures a bed or a fault, not a bench, so its steps name
+        // points on a plane.
+        let geology = editor.active_workspace == state::Workspace::Geology;
+        return Some(ViewportMessage::text(match (editor.batter_angle_points.len(), geology) {
+            (0, true) => tr!("ui-pick-first-plane-point"),
+            (1, true) => tr!("ui-pick-second-plane-point"),
+            (_, true) => tr!("ui-pick-third-plane-point"),
+            (0, false) => tr!("ui-select-first-crest-toe-point"),
+            (1, false) => tr!("ui-select-second-crest-toe-point"),
+            (_, false) => tr!("ui-select-opposite-berm-point"),
         }));
     }
 
     if editor.slice_mode_enabled {
-        return Some(ViewportMessage::text(tr!("ui-slice-view")).minor(tr!("slice-viewport-gestures")));
+        // A workspace editing on the section shows the tool's next step first.
+        let prompt = (editor.active_workspace.edits_in_slice_view() && editor.active_tool.edits_in_slice_view())
+            .then(|| tool_prompt(editor))
+            .flatten();
+        return Some(prompt.unwrap_or_else(|| ViewportMessage::text(tr!("ui-slice-view")).minor(tr!("slice-viewport-gestures"))));
     }
 
     if editor.active_tool == ActiveTool::MakeCircle {
@@ -423,6 +465,40 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
         });
     }
 
+    tool_prompt(editor)
+}
+
+/// The distance read, then the segment's plan length, rise, bearing and
+/// grade: a reading, so all of it at full strength, as the strike and dip.
+/// The rise and degrees are signed unless they round to zero, the percent
+/// only when falling.
+fn segment_readout_text(readout: &state::SegmentReadout, distance: String) -> String {
+    let signed = |value: f64, places: usize| {
+        let text = format!("{value:+.places$}");
+        if text[1..].bytes().all(|byte| matches!(byte, b'0' | b'.')) {
+            text[1..].to_owned()
+        } else {
+            text
+        }
+    };
+    let rise = signed(readout.rise, 3);
+    let grade = signed(readout.grade_degrees, 2);
+    match (readout.bearing_degrees, readout.grade_percent) {
+        (Some(bearing), Some(percent)) => tr!(
+            "ui-segment-readout",
+            distance = distance,
+            plan = format!("{:.3}", readout.plan),
+            rise = rise,
+            bearing = format!("{bearing:06.2}"),
+            grade = grade,
+            percent = signed(percent, 1).trim_start_matches('+').to_owned()
+        ),
+        _ => tr!("ui-segment-readout-vertical", distance = distance, rise = rise, grade = grade),
+    }
+}
+
+/// The armed tool's next step, when it has one to say.
+fn tool_prompt(editor: &EditorState) -> Option<ViewportMessage> {
     let message = match editor.active_tool {
         ActiveTool::Move if !editor.move_tool_has_targets() => ViewportMessage::text(tr!("ui-select-item")),
         ActiveTool::MoveCollar if !editor.move_tool_has_targets() => ViewportMessage::text(tr!("ui-select-drill-hole")),
@@ -441,7 +517,11 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
         ActiveTool::TieHoles if editor.active_product().is_none() => ViewportMessage::text(tr!("ui-no-delay-product-tie")).minor(tr!("ui-right-click-delay-palette-heading")),
         ActiveTool::OffsetElement if editor.offset_awaiting_side_pick => ViewportMessage::text(tr!("ui-choose-offset-side")),
         ActiveTool::OffsetElement if editor.offset_target_ids.is_empty() => ViewportMessage::text(tr!("ui-select-line-polyline")),
+        ActiveTool::DrapeToTopology if editor.drape_phase == state::DrapePhase::Designs && editor.drape_along_triangles => {
+            ViewportMessage::text(tr!("ui-select-designs")).minor(tr!("ui-drape-follows-triangles"))
+        }
         ActiveTool::DrapeToTopology if editor.drape_phase == state::DrapePhase::Designs => ViewportMessage::text(tr!("ui-select-designs")),
+        ActiveTool::DrapeToTopology if editor.drape_along_triangles => ViewportMessage::text(tr!("ui-select-topologies")).minor(tr!("ui-drape-follows-triangles")),
         ActiveTool::DrapeToTopology => ViewportMessage::text(tr!("ui-select-topologies")),
         ActiveTool::RelimitLine if editor.relimit_confirming_end => ViewportMessage::text(tr!("ui-choose-relimit-side")),
         ActiveTool::RelimitLine if editor.relimit_waiting_for_pick => ViewportMessage::text(tr!("relimit-select-boundary")),
@@ -456,9 +536,15 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
         ActiveTool::Bezier if editor.bezier_poly_id.is_none() => ViewportMessage::text(tr!("ui-select-polyline")),
         ActiveTool::Bezier if editor.bezier_selected_verts[0].is_none() => ViewportMessage::text(tr!("ui-click-first-vertex")),
         ActiveTool::Bezier if editor.bezier_selected_verts[1].is_none() => ViewportMessage::text(tr!("ui-click-second-vertex")),
-        ActiveTool::ExplodePolyline => ViewportMessage::text(tr!("ui-select-polyline")),
+        ActiveTool::ExplodePolyline | ActiveTool::ExplodePolylineToPoints => ViewportMessage::text(tr!("ui-select-polyline")),
         ActiveTool::BatterBermOffset if editor.batter_berm_target_id.is_none() => ViewportMessage::text(tr!("ui-select-polyline")),
         ActiveTool::DeletePoints => ViewportMessage::text(tr!("ui-select-point")),
+        ActiveTool::EditVertex => ViewportMessage::text(tr!("ui-select-polyline-vertex")),
+        ActiveTool::InsertPoint => ViewportMessage::text(tr!("ui-click-string-insert-point")).minor(tr!("ui-esc-cancels")),
+        ActiveTool::FillSegment => ViewportMessage::text(tr!("ui-click-segment-fill")).minor(tr!("ui-esc-cancels")),
+        ActiveTool::SplitAtCrossings if editor.split_crossings_target.is_none() => ViewportMessage::text(tr!("ui-click-string-to-split")).minor(tr!("ui-esc-cancels")),
+        ActiveTool::SplitAtCrossings => ViewportMessage::text(tr!("ui-click-crossing-string")).minor(tr!("ui-esc-cancels")),
+        ActiveTool::RemoveBetweenCrossings => ViewportMessage::text(tr!("ui-click-piece-remove")).minor(tr!("ui-esc-cancels")),
         ActiveTool::Hide => ViewportMessage::text(tr!("ui-select-designs-to-hide")),
         _ => return None,
     };
@@ -763,9 +849,30 @@ fn draw_ui(
 
     // Either translate tool: the Blender-style gizmo and the numeric delta
     // panel, over whichever selection the active one moves.
+    // Geology's Nudge RL panel takes the dock while it holds a vertex, or
+    // asks for one with nothing to move; a selection moved whole keeps the
+    // Move panel and its Apply and Cancel.
+    let nudge_shown = editor.nudge_panel_open && (editor.move_vertex_target.is_some() || !editor.move_tool_has_targets());
     if editor.move_tool_has_targets() {
         draw_move_gizmo(root_ui, editor);
-        dialogs::editing::draw_move_panel(root_ui, editor, commands, canvas_rect);
+        if !nudge_shown {
+            dialogs::editing::draw_move_panel(root_ui, editor, commands, canvas_rect);
+        }
+    }
+    if nudge_shown {
+        let held_rl = editor
+            .move_vertex_target
+            .and_then(|(id, point)| crate::app::commands::drawing::move_tool::move_target_position(document.get_object(id)?, point))
+            .map(|position| position.z);
+        dialogs::editing::draw_nudge_panel(root_ui, editor, commands, canvas_rect, held_rl);
+    }
+
+    let stored_spacing = project.has_active_project.then_some(project.modelling.fill_spacing);
+    dialogs::editing::draw_fill_segment_panel(root_ui, editor, stored_spacing, commands, canvas_rect);
+
+    // A string being drawn in Geology: its typed next vertex.
+    if editor.next_vertex_panel.is_some() {
+        dialogs::editing::draw_next_vertex_panel(root_ui, editor, commands, canvas_rect);
     }
 
     // Rotate Collar: the two-ring gizmo and its angle panel, over the holes it
@@ -984,6 +1091,9 @@ fn draw_ui(
     dialogs::editing::draw_move_to_layer_dialog(root_ui, editor, project, commands);
     dialogs::editing::draw_move_to_axis_dialog(root_ui, editor, commands);
     dialogs::editing::draw_insert_point_at_elevation_dialog(root_ui, editor, commands);
+    dialogs::editing::draw_thin_strings_dialog(root_ui, editor, commands);
+    dialogs::editing::draw_insert_point_at_spacing_dialog(root_ui, editor, commands);
+    dialogs::editing::draw_smooth_strings_dialog(root_ui, editor, commands);
     dialogs::object_edit::draw_object_edit_dialog(root_ui, editor, commands);
     dialogs::about::draw_about_dialog(root_ui, editor);
     elements::properties::draw_preferences(root_ui, editor, project.has_active_project.then_some(&project.modelling), commands);
@@ -1273,6 +1383,9 @@ fn draw_global_dialogs(
     dialogs::drill_hole::draw_drill_hole_color_dialog(root_ui, editor, drill_holes, commands);
     dialogs::drill_hole::draw_seam_rename_dialog(root_ui, editor, drill_holes, commands);
     dialogs::drill_hole::draw_name_shift_dialog(root_ui, editor, drill_holes, commands);
+    dialogs::drill_hole::draw_boundary_move_dialog(root_ui, editor, drill_holes, commands);
+    dialogs::drill_hole::draw_interval_insert_dialog(root_ui, editor, drill_holes, commands);
+    dialogs::drill_hole::draw_interval_delete_dialog(root_ui, editor, drill_holes, commands);
     dialogs::reference_points::draw_reference_points_dialog(root_ui, editor, drill_holes, commands);
     dialogs::reference_surface::draw_reference_surface_dialog(root_ui, editor, project, commands);
     dialogs::thickness_points::draw_thickness_points_dialog(root_ui, editor, drill_holes, commands);
@@ -1403,7 +1516,7 @@ fn draw_global_dialogs(
 
     // import export menus
     dialogs::import_export::draw_import_menu(root_ui, editor, project, commands);
-    dialogs::import_export::draw_export_menu(root_ui, editor, project, commands);
+    dialogs::import_export::draw_export_menu(root_ui, editor, project, drill_holes, commands);
 
     geometry_dirty
 }

@@ -1350,6 +1350,14 @@ impl<'value> MenuFieldText<'value> {
             hint,
         } = self;
         let id = ui.scope_id().with(id_salt);
+        // Over a DragableMenu, which shares the Foreground order and rises
+        // over the popup on a click, keep the popup above it. egui sets a
+        // sublayer only within one order, and names the popup layer
+        // `id.with("completion_popup")`.
+        if ui.layer_id().order == egui::Order::Foreground {
+            let popup = egui::LayerId::new(egui::Order::Foreground, id.with("completion_popup"));
+            ui.ctx().set_sublayer(ui.layer_id(), popup);
+        }
         menu_field_row(ui, label, help_text, |ui, row_height, column_width| {
             let width = width.unwrap_or(column_width);
             let text_edit = egui::TextEdit::singleline(value)

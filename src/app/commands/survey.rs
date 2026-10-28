@@ -53,6 +53,7 @@ impl App<'_> {
             definitions,
             local,
             self.editor.recent_design_functions.clone(),
+            self.editor.recent_geology_functions.clone(),
         );
         Ok(crate::app::io::save_config(&config)?)
     }
@@ -472,6 +473,12 @@ fn transform_item(item: &mut OpenItem, transform: &SurveyTransform, target_syste
                     *diameter *= transform.length_scale();
                     ensure!(diameter.is_finite(), "{}", tr!("survey-invalid-transform"));
                 }
+                if let Some(depth) = hole.total_depth {
+                    let depth = depth * transform.length_scale();
+                    ensure!(depth.is_finite(), "{}", tr!("survey-invalid-transform"));
+                    // As a reopen would read it: a no-data value is none.
+                    hole.total_depth = crate::model::drill_hole::recorded_total_depth(depth);
+                }
                 for (from, to) in &mut hole.render_ranges {
                     *from *= transform.length_scale();
                     *to *= transform.length_scale();
@@ -489,6 +496,22 @@ fn transform_item(item: &mut OpenItem, transform: &SurveyTransform, target_syste
             for record in &mut dataset.corrections {
                 record.logged_from *= transform.length_scale();
                 record.logged_to *= transform.length_scale();
+                if record.kind == crate::model::drill_hole::CorrectionKind::Boundary {
+                    for depth in [&mut record.before, &mut record.after] {
+                        if let Some(crate::model::drill_hole::DrillValue::Numeric(depth)) = depth {
+                            *depth *= transform.length_scale();
+                        }
+                    }
+                }
+                // A deleted row goes back as it was, so it moves with the rest.
+                if let Some(removed) = &mut record.removed {
+                    removed.from *= transform.length_scale();
+                    removed.to *= transform.length_scale();
+                    if let Some(logged) = &mut removed.logged {
+                        logged.from *= transform.length_scale();
+                        logged.to *= transform.length_scale();
+                    }
+                }
             }
             // Rebuilt rather than reconstructed through `DrillHoleDataset::new`,
             // which sorts the holes: the ties and initiations beside them name

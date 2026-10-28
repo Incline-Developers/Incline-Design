@@ -36,6 +36,7 @@ pub(crate) struct DataTable<'a> {
     copy_cells: Option<RowCells<'a>>,
     fingerprint: u64,
     max_height: f32,
+    measure_last: usize,
 }
 
 /// A rectangular block of cells marked for copying: the cell the reader
@@ -84,6 +85,7 @@ impl<'a> DataTable<'a> {
             copy_cells: None,
             fingerprint: 0,
             max_height: f32::INFINITY,
+            measure_last: 0,
         }
     }
 
@@ -111,6 +113,13 @@ impl<'a> DataTable<'a> {
     /// Scroll the rows within `height` rather than all that is left.
     pub(crate) fn max_height(mut self, height: f32) -> Self {
         self.max_height = height;
+        self
+    }
+
+    /// Measure the last `rows` rows too, as many as the first ones sampled at
+    /// most: rows a caller lists after its own.
+    pub(crate) fn measure_last(mut self, rows: usize) -> Self {
+        self.measure_last = rows;
         self
     }
 
@@ -309,6 +318,7 @@ impl<'a> DataTable<'a> {
             use std::hash::Hasher;
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             self.fingerprint.hash(&mut hasher);
+            self.measure_last.hash(&mut hasher);
             self.row_count.hash(&mut hasher);
             self.header.hash(&mut hasher);
             font.size.to_bits().hash(&mut hasher);
@@ -320,7 +330,7 @@ impl<'a> DataTable<'a> {
 
         let measure = |text: &str| ui.painter().layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::PLACEHOLDER).size().x;
         let mut widths: Vec<f32> = self.header.iter().map(|label| measure(label)).collect();
-        for index in 0..self.row_count.min(WIDTH_SAMPLE) {
+        for index in measured_rows(self.row_count, self.measure_last) {
             for (width, cell) in widths.iter_mut().zip((self.cells)(index)) {
                 *width = width.max(measure(&cell));
             }
@@ -340,6 +350,13 @@ impl<'a> DataTable<'a> {
         });
         widths
     }
+}
+
+/// The rows measured for the column widths: the first [`WIDTH_SAMPLE`], then
+/// the last `last` of the rest, capped the same, each once.
+fn measured_rows(row_count: usize, last: usize) -> impl Iterator<Item = usize> {
+    let first = row_count.min(WIDTH_SAMPLE);
+    (0..first).chain(row_count.saturating_sub(last.min(WIDTH_SAMPLE)).max(first)..row_count)
 }
 
 /// Serialise rows as tab separated lines, one cell per tab.

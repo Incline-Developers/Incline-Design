@@ -1,11 +1,14 @@
+use anyhow::Result;
 use glam::DVec3;
 
 use crate::{
     app::{App, PICK_THRESHOLD_PX},
+    i18n::tr,
     logging::CommandReportSpec,
-    model::{Command, Object, PolyVertex, SceneEntityId, geometry::tessellate_bulge_segment},
+    model::{Command, Object, ObjectId, PolyVertex, SceneEntityId, geometry::tessellate_bulge_segment},
     rendering::pick,
-    ui::state::ActiveTool,
+    ui::{dialogs::SmoothStringsDialog, state::ActiveTool},
+    userspace_warn,
 };
 
 impl<'a> App<'a> {
@@ -74,7 +77,7 @@ impl<'a> App<'a> {
         let mut best_idx: Option<usize> = None;
 
         for (i, vert) in verts.iter().enumerate() {
-            if let Some(sp) = pick::world_to_screen(&vp, vert.pos, screen) {
+            if let Some(sp) = pick::slab_screen_point(graphics.section_slab(), &vp, screen, vert.pos) {
                 let d = sp.distance(cursor_d);
                 if d < best_dist {
                     best_dist = d;
@@ -200,6 +203,70 @@ impl<'a> App<'a> {
         self.editor.bezier_hover_cp = None;
         self.editor.bezier_dialog_open = false;
     }
+
+    /// Open Smooth Strings on every selected string the canvas may edit.
+    pub(crate) fn open_smooth_strings_dialog(&mut self) {
+        let object_ids: Vec<ObjectId> = self.editable_polyline_sources(self.selected_polylines()).into_iter().map(|(id, _, _)| id).collect();
+        if object_ids.is_empty() {
+            userspace_warn!("{}", tr!("cmd-smooth-select-strings"));
+            return;
+        }
+        self.editor.smooth_strings_dialog = Some(SmoothStringsDialog {
+            object_ids,
+            tolerance: self.editor.smooth_tolerance,
+        });
+    }
+
+    /// Round the strings' corners in place as one undoable batch. Only a
+    /// tolerance that is not positive keeps the dialog open. The strings are
+    /// filtered again here, in case one was locked while the dialog was open.
+    pub(crate) fn smooth_strings(&mut self, object_ids: Vec<ObjectId>, tolerance: f64) -> Result<()> {
+        if !(tolerance.is_finite() && tolerance > 0.0) {
+            anyhow::bail!(tr!("cmd-smooth-tolerance-must-be-positive"));
+        }
+        let sources = self.editable_polyline_sources(object_ids);
+        if sources.is_empty() {
+            userspace_warn!("{}", tr!("cmd-smooth-select-strings"));
+            return Ok(());
+        }
+        let Some(document) = self.workspace.active_document() else {
+            return Ok(());
+        };
+        let mut corners = 0usize;
+        let commands: Vec<Command> = sources
+            .iter()
+            .filter_map(|(id, old_verts, closed)| {
+                let (smoothed, rounded) = smooth_corners(old_verts, *closed, tolerance);
+                if rounded == 0 {
+                    return None;
+                }
+                let before = document.get_object(*id)?.clone();
+                let mut after = before.clone();
+                let Object::Polyline { verts, .. } = &mut after else {
+                    return None;
+                };
+                corners += rounded;
+                *verts = smoothed;
+                Some(Command::Replace { before, after })
+            })
+            .collect();
+        if commands.is_empty() {
+            userspace_warn!("{}", tr!("cmd-smooth-nothing-changed"));
+            return Ok(());
+        }
+        let count = commands.len();
+        self.editor.smooth_tolerance = tolerance;
+        self.execute_edit(Command::Batch(commands));
+        crate::logging::report_completed_action(
+            CommandReportSpec::new(
+                tr!("cmd-smooth-smooth-strings"),
+                tr!("cmd-smooth-count-corners", corners = corners.to_string(), count = count.to_string()),
+            ),
+            tr!("cmd-smooth-smoothed-count", count = count.to_string(), corners = corners.to_string()),
+        );
+        self.invalidate_geometry();
+        Ok(())
+    }
 }
 
 /// Evaluate a cubic bezier at parameter `t` in [0, 1].
@@ -210,7 +277,7 @@ pub(crate) fn bezier_eval(p0: DVec3, p1: DVec3, p2: DVec3, p3: DVec3, t: f64) ->
 
 /// Pick one of the two directed paths between vertices of a closed polyline.
 /// Length is measured along the actual source geometry, including bulged arcs.
-fn choose_closed_span(verts: &[PolyVertex], first: usize, second: usize, longer: bool) -> (usize, usize) {
+pub(crate) fn choose_closed_span(verts: &[PolyVertex], first: usize, second: usize, longer: bool) -> (usize, usize) {
     let forward = directed_span_length(verts, true, first, second);
     let reverse = directed_span_length(verts, true, second, first);
     if (longer && forward >= reverse) || (!longer && forward <= reverse) {
@@ -328,4 +395,85 @@ fn append_bezier_interior(result: &mut Vec<PolyVertex>, start: DVec3, cp1: DVec3
         let t = segment as f64 / segments as f64;
         result.push(PolyVertex::straight(bezier_eval(start, cp1, cp2, end, t)));
     }
+}
+
+/// Round every corner of a string by corner cutting (Chaikin 1974,
+/// Riesenfeld 1975) under a ceiling: the corner gives way to a quadratic
+/// Bezier tangent to both edges, cut no further along either than half the
+/// shorter, so the blend lies within `tolerance` of the string and the corner
+/// within `tolerance` of the blend, in 3D. Open ends, corners beside an arc,
+/// corners bending less than a hundredth of the tolerance, reversals and
+/// zero-length edges stay. Returns the new vertices and how many corners
+/// were rounded.
+pub(crate) fn smooth_corners(verts: &[PolyVertex], closed: bool, tolerance: f64) -> (Vec<PolyVertex>, usize) {
+    let count = verts.len();
+    if count < 3 || !(tolerance.is_finite() && tolerance > 0.0) {
+        return (verts.to_vec(), 0);
+    }
+    // Each vertex out, flagged when it is a sample of a blend.
+    let mut out: Vec<(PolyVertex, bool)> = Vec::with_capacity(count * 3);
+    let mut rounded = 0;
+    for index in 0..count {
+        let corner = (closed || (index > 0 && index + 1 < count)).then(|| corner_blend(verts, index, tolerance)).flatten();
+        let Some(samples) = corner else {
+            out.push((verts[index], false));
+            continue;
+        };
+        rounded += 1;
+        for sample in samples {
+            // Two half-edge cuts meet at the edge's midpoint.
+            if out.last().is_some_and(|&(last, blend)| blend && last.pos.distance(sample) < 1.0e-9) {
+                continue;
+            }
+            out.push((PolyVertex::straight(sample), true));
+        }
+    }
+    if closed && out.len() > 1 {
+        let (first, last) = (out[0], out[out.len() - 1]);
+        if first.1 && last.1 && first.0.pos.distance(last.0.pos) < 1.0e-9 {
+            out.pop();
+        }
+    }
+    (out.into_iter().map(|(vertex, _)| vertex).collect(), rounded)
+}
+
+/// The samples replacing corner `index`, from its cut on the incoming edge
+/// to its cut on the outgoing one; `None` where the corner stays.
+fn corner_blend(verts: &[PolyVertex], index: usize, tolerance: f64) -> Option<Vec<DVec3>> {
+    let count = verts.len();
+    let previous = (index + count - 1) % count;
+    let corner = verts[index].pos;
+    if verts[previous].bulge != 0.0 || verts[index].bulge != 0.0 {
+        return None;
+    }
+    let (incoming, outgoing) = (verts[previous].pos - corner, verts[(index + 1) % count].pos - corner);
+    let (in_length, out_length) = (incoming.length(), outgoing.length());
+    if in_length < 1.0e-9 || out_length < 1.0e-9 {
+        return None;
+    }
+    let (u1, u2) = (incoming / in_length, outgoing / out_length);
+    // Edges doubling back on each other leave no corner to round.
+    if (u1 - u2).length() < 1.0e-6 {
+        return None;
+    }
+    let spread = (u1 + u2).length();
+    let cut = (4.0 * tolerance / spread).min(0.5 * in_length.min(out_length));
+    // The blend's midpoint lies `height` from the corner. A corner under a
+    // hundredth of the tolerance stays, and a chord over 1/k of the blend
+    // sags height / k^2, kept under half that, so a second pass holds the
+    // first one's samples. An even k puts a sample on the midpoint.
+    let height = cut * spread / 4.0;
+    if height < tolerance / 100.0 {
+        return None;
+    }
+    let pieces = ((200.0 * height / tolerance).sqrt().ceil() as usize).div_ceil(2).clamp(1, 8) * 2;
+    // Taken about the corner and added back last, so a string far from the
+    // origin rounds as one near it.
+    let (start, end) = (cut * u1, cut * u2);
+    let (control1, control2) = (start * (1.0 / 3.0), end * (1.0 / 3.0));
+    Some(
+        (0..=pieces)
+            .map(|piece| corner + bezier_eval(start, control1, control2, end, piece as f64 / pieces as f64))
+            .collect(),
+    )
 }

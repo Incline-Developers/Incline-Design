@@ -92,6 +92,15 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
     }
 
     draw_tie_preview(&mut overlay, editor);
+    // Thin Strings: each string as Apply would leave it, and what it keeps.
+    if let Some(dialog) = &editor.thin_strings_dialog {
+        for (verts, closed) in &dialog.preview {
+            tessellate_polyline_stroke(&mut overlay, verts, *closed, DOC_LINE_WIDTH, PREVIEW_COLOR);
+            for vertex in verts {
+                draw_screen_point_marker(&mut overlay, vertex.pos, ACTIVE_POINT_COLOR);
+            }
+        }
+    }
     // The directional shells' starting point already picked, shown while it is picked again.
     if let Some(pick) = editor.optimization.start_pick.as_ref()
         && let Some((x, y)) = editor.optimization.draft.as_ref().and_then(|draft| draft.scenario.output.shell_start)
@@ -134,7 +143,16 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
             }
         }
     } else if let (Some(&last), Some(cursor)) = (editor.pending_stroke.last(), editor.cursor_world) {
-        draw_line(&mut overlay, last, cursor, DOC_LINE_WIDTH, PREVIEW_COLOR);
+        if editor.stroke_leg_broken {
+            // Solid, it would retrace the segment Backspace just took back.
+            for dash in (0..TIE_OVERWRITE_DASHES).step_by(2) {
+                let from = dash as f64 / TIE_OVERWRITE_DASHES as f64;
+                let to = (dash + 1) as f64 / TIE_OVERWRITE_DASHES as f64;
+                draw_line(&mut overlay, last.lerp(cursor, from), last.lerp(cursor, to), DOC_LINE_WIDTH, PREVIEW_COLOR);
+            }
+        } else {
+            draw_line(&mut overlay, last, cursor, DOC_LINE_WIDTH, PREVIEW_COLOR);
+        }
     }
 
     if editor.active_tool == ActiveTool::MakeCircle
@@ -198,10 +216,44 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
         }
     }
 
-    if matches!(editor.active_tool, ActiveTool::Move | ActiveTool::DeletePoints)
-        && let Some(hover) = editor.tool_hover_vertex_world
+    // Copy Along a String: the vertex its run starts from, once picked.
+    if let Some((_, _, first)) = crate::ui::state::copy_along_live(editor).and_then(|copy| copy.first) {
+        draw_screen_point_marker_sized(&mut overlay, first, 11.0, ACTIVE_POINT_COLOR);
+    }
+
+    if matches!(
+        editor.active_tool,
+        ActiveTool::Move | ActiveTool::DeletePoints | ActiveTool::EditVertex | ActiveTool::InsertPoint
+    ) && let Some(hover) = editor.tool_hover_vertex_world
     {
         draw_screen_point_marker_sized(&mut overlay, hover, 11.0, ACTIVE_POINT_COLOR);
+    }
+
+    // Inserting: every vertex of the string under the cursor is marked, a
+    // size below the point a click would add, so the new point reads against
+    // the ones already there.
+    if (matches!(editor.active_tool, ActiveTool::InsertPoint | ActiveTool::FillSegment) || (editor.active_tool == ActiveTool::Move && editor.active_workspace.has_drawing_aids()))
+        && let Some(Object::Polyline { verts, .. }) = editor.tool_highlight_id.and_then(|id| document.get_object(id))
+    {
+        for vertex in verts {
+            draw_screen_point_marker_sized(&mut overlay, vertex.pos, 9.0, PREVIEW_COLOR);
+        }
+    }
+    // Filling: the vertices a click would add, as Insert Point's one point.
+    if editor.active_tool == ActiveTool::FillSegment {
+        for &point in &editor.fill_segment_preview {
+            draw_screen_point_marker_sized(&mut overlay, point, 11.0, ACTIVE_POINT_COLOR);
+        }
+    }
+    // Removing: the piece a click would take out, over the string.
+    if editor.active_tool == ActiveTool::RemoveBetweenCrossings && editor.removable_piece.len() >= 2 {
+        tessellate_polyline_stroke(&mut overlay, &editor.removable_piece, false, 3.0, ACTIVE_POINT_COLOR);
+    }
+    // Measuring: the segment the banner reads, over the string.
+    if editor.reads_segment_hover()
+        && let Some((_, segment)) = &editor.measure_segment_hover
+    {
+        tessellate_polyline_stroke(&mut overlay, segment, false, 3.0, ACTIVE_POINT_COLOR);
     }
 
     let marker_target_id = editor.move_vertex_target.map(|(id, _)| id);

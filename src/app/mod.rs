@@ -123,6 +123,16 @@ struct DragState {
     moved: bool,
 }
 
+/// A press on a vertex under Geology's Move: where it was pressed, and the
+/// cursor's world point then, on the level of the vertex or on the section.
+#[derive(Clone, Copy)]
+pub(crate) struct VertexDrag {
+    pub(crate) press_px: (f32, f32),
+    pub(crate) level: f64,
+    pub(crate) start_world: DVec3,
+    pub(crate) moved: bool,
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum GizmoDragConstraint {
     Axis {
@@ -354,6 +364,11 @@ pub(crate) struct App<'a> {
     slice_surface_retry_deadline: Option<Instant>,
     last_scroll_instant: Option<Instant>,
     last_snap_poll_instant: Option<Instant>,
+    /// What the section's surface lines were last cut from, `None` while none
+    /// are drawn.
+    section_surface_lines_key: Option<u64>,
+    /// The colours those lines were last drawn in, one per shown surface.
+    section_surface_colors: Vec<[f32; 4]>,
     editor: EditorState,
     workspace: ProjectStore,
     /// Explorer/menu snapshot reused while its allocation-free source
@@ -393,6 +408,9 @@ pub(crate) struct App<'a> {
     /// Selection + composite fingerprint behind `EditorState::selection_has_intersections`,
     /// so the intersection scan only reruns when the selection or the documents change.
     intersection_availability_key: Option<u64>,
+    /// Remove Between Crossings: where the strings shown cross the string
+    /// hovered, behind the key of what they were found from.
+    removal_crossings: Option<(u64, commands::drawing::insert_point::CrossingCuts)>,
     history: crate::model::History,
     /// Whether the pointer was still driving a widget when the last UI frame
     /// ended. Edits that arrive while it is set belong to an unfinished
@@ -409,6 +427,11 @@ pub(crate) struct App<'a> {
     modifiers: ModifiersState,
     drag: Option<DragState>,
     pub(crate) gizmo_drag: Option<GizmoDragState>,
+    /// Geology's Move: a vertex pressed on, dragged once the mouse moves.
+    pub(crate) vertex_drag: Option<VertexDrag>,
+    /// Set only while a drag or nudge of a held vertex records itself: the
+    /// revision it may extend, then the one it left.
+    vertex_edit_revision: Option<Option<u64>>,
     /// Screen position where the right mouse button was pressed (physical px).
     /// Used to distinguish a quick context-menu click from a camera orbit drag.
     right_press_px: Option<(f32, f32)>,
@@ -518,6 +541,8 @@ impl<'a> Default for App<'a> {
             slice_surface_retry_deadline: None,
             last_scroll_instant: None,
             last_snap_poll_instant: None,
+            section_surface_lines_key: None,
+            section_surface_colors: Vec::new(),
             editor: EditorState::new(),
             workspace: ProjectStore::default(),
             ui_project_view_cache: RefCell::new(None),
@@ -542,6 +567,7 @@ impl<'a> Default for App<'a> {
             scene_document_key: None,
             layer_lock_key: None,
             intersection_availability_key: None,
+            removal_crossings: None,
             history: crate::model::History::new(),
             ui_pointer_gesture_active: false,
             reported_during_gesture: Vec::new(),
@@ -549,6 +575,8 @@ impl<'a> Default for App<'a> {
             modifiers: ModifiersState::empty(),
             drag: None,
             gizmo_drag: None,
+            vertex_drag: None,
+            vertex_edit_revision: None,
             right_press_px: None,
             right_orbit_active: false,
             slice_preview_cursor_px: None,
@@ -616,7 +644,13 @@ impl<'a> App<'a> {
                 None
             }
             MacMenuAction::RequestExit => Some(UiCommand::RequestExit),
-            MacMenuAction::CleanStrings => Some(UiCommand::CleanStrings),
+            MacMenuAction::GeologyRow(index) => match crate::ui::elements::main_menu::GEOLOGY_DESIGN_ROWS.get(index) {
+                Some(row) => {
+                    self.handle_ui_commands(vec![row.command(), UiCommand::NoteRecentFunction(row.key())]);
+                    return;
+                }
+                None => None,
+            },
             MacMenuAction::DesignRow(index) => match crate::ui::elements::main_menu::DESIGN_ROWS.get(index) {
                 Some(row) => {
                     self.handle_ui_commands(vec![row.command(), UiCommand::NoteRecentFunction(row.key())]);
@@ -749,15 +783,15 @@ impl<'a> App<'a> {
         self.editor.blast_library = config.blast_library.clone();
         self.editor.recent_functions_shown = config.recent_functions_shown.clamp(1, crate::ui::state::RECENT_FUNCTION_LIMIT as u32);
         // A key no row carries any more (a function since removed) is dropped.
-        let mut recent = Vec::new();
-        for key in config
-            .recent_design_functions
-            .iter()
-            .filter(|key| crate::ui::elements::main_menu::DesignRow::from_key(key).is_some())
-        {
-            crate::ui::state::note_recent(&mut recent, key);
-        }
-        self.editor.recent_design_functions = recent;
+        let known = |workspace, keys: &[String]| {
+            let mut recent = Vec::new();
+            for key in keys.iter().filter(|key| crate::ui::elements::main_menu::RecentRow::from_key(workspace, key).is_some()) {
+                crate::ui::state::note_recent(&mut recent, key);
+            }
+            recent
+        };
+        self.editor.recent_design_functions = known(crate::ui::state::Workspace::Production, &config.recent_design_functions);
+        self.editor.recent_geology_functions = known(crate::ui::state::Workspace::Geology, &config.recent_geology_functions);
         self.configure_graphics_camera_preferences();
     }
 
@@ -1058,6 +1092,11 @@ impl<'a> App<'a> {
     /// such as an interactive drag committed on mouse release.
     pub(crate) fn record_applied_edit(&mut self, command: Command) {
         let epoch = self.active_project_content_epoch();
+        // Geology's drag and nudge of one held vertex undo as one step.
+        if let Some(onto) = self.vertex_edit_revision {
+            self.vertex_edit_revision = Some(Some(self.history.push_applied_merging(epoch, command, onto)));
+            return;
+        }
         self.history.push_applied(epoch, command);
     }
 
@@ -1326,12 +1365,17 @@ impl<'a> App<'a> {
         // one's scenarios are read from it when the list first opens.
         self.editor.optimization = Default::default();
         self.scene_document_key = None;
+        self.section_surface_lines_key = None;
+        self.section_surface_colors.clear();
         // Item and object ids restart with the replacement project, so the
         // renderer's id-keyed caches would otherwise keep drawing this
         // project's geometry under the next one's items until something
         // that clears them (a view fit) happened to run.
         if let Some(graphics) = self.graphics.as_mut() {
             graphics.clear_item_caches();
+            // Leaving the section above cut nothing, so the lines go with
+            // the key, or they stay drawn over the next project.
+            graphics.set_section_surface_lines(Vec::new());
         }
         self.redraw_requested = true;
     }
@@ -1727,6 +1771,8 @@ impl<'a> App<'a> {
         #[cfg(target_arch = "wasm32")]
         crate::app::web_storage::set_dirty(false);
         self.graphics = None;
+        // A new renderer starts with no surface lines: cut them again for it.
+        self.section_surface_lines_key = None;
         #[cfg(target_os = "windows")]
         {
             self.trackpad = None;

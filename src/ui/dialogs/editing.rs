@@ -205,6 +205,7 @@ pub(crate) fn draw_right_click_context(
         let join_offered = (0..editor.string_rings.len()).any(|index| editor.string_ring_joinable(index));
         if open_string_selected && ContextMenuAction::new(tr!("cmd-string-clean-clean-strings")).show(ui).clicked() {
             commands.push(UiCommand::CleanStrings);
+            commands.push(UiCommand::NoteRecentFunction(crate::ui::elements::main_menu::DesignRow::CleanStrings.key()));
             commands.push(UiCommand::CloseCanvasContextMenu);
         }
         if join_offered && ContextMenuAction::new(tr!("cmd-string-clean-join-all-at-halfway")).show(ui).clicked() {
@@ -248,12 +249,16 @@ pub(crate) fn draw_recent_functions_context(ui: &mut egui::Ui, editor: &EditorSt
 
 /// One line per recent function, greyed exactly when its menu bar entry is.
 fn draw_recent_function_rows(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
-    let rows = editor.recent_design_rows().unwrap_or_default();
+    let rows = editor.recent_rows().unwrap_or_default();
     if rows.is_empty() {
         ContextMenuAction::new(tr!("edit-no-recent-functions")).enabled(false).show(ui);
     }
     for row in rows {
-        if ContextMenuAction::new(row.path()).enabled(row.enabled(editor)).show(ui).clicked() {
+        let mut action = ContextMenuAction::new(row.path()).enabled(row.enabled(editor));
+        if let Some(checked) = row.checked(editor) {
+            action = action.checked(checked);
+        }
+        if action.show(ui).clicked() {
             commands.push(row.command());
             commands.push(UiCommand::NoteRecentFunction(row.key()));
             commands.push(UiCommand::CloseCanvasContextMenu);
@@ -437,6 +442,176 @@ pub(crate) fn draw_insert_point_at_elevation_dialog(ui: &mut egui::Ui, editor: &
         editor.insert_point_at_elevation_dialog = None;
     } else if close || !open {
         editor.insert_point_at_elevation_dialog = None;
+    }
+}
+
+/// Thin Strings: a tolerance typed or slid, the strings as they would be
+/// drawn over the scene, Apply to keep it. Nothing changes until Apply.
+pub(crate) fn draw_thin_strings_dialog(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    let Some(dialog) = editor.thin_strings_dialog.as_mut() else {
+        return;
+    };
+
+    let object_count = dialog.object_ids.len();
+    let mut close = false;
+    let mut apply = false;
+    let mut open = true;
+    let mut tolerance = dialog.tolerance;
+
+    DragableMenu::new("thin_strings_dialog", tr!("edit-thin-strings"))
+        .open(&mut open)
+        .min_width(280.0)
+        .max_width(320.0)
+        .show(ui.ctx(), |ui| {
+            MenuFieldF64::new(tr!("edit-thin-tolerance"), &mut tolerance, 0.0..=f64::MAX)
+                .help_text(tr!("edit-thin-tolerance-help"))
+                .speed(0.01)
+                .max_decimals(3)
+                .suffix(format!(" {}", tr!("common-m")))
+                .width(120.0)
+                .show(ui);
+            let top = (dialog.slider_max * 1.1).max(0.01);
+            MenuField::new("").show(ui, |ui, _, width| {
+                let mut slid = tolerance.min(top);
+                if ui
+                    .add_sized(
+                        [width, ui.spacing().interact_size.y],
+                        egui::Slider::new(&mut slid, 0.0..=top).logarithmic(true).show_value(false),
+                    )
+                    .changed()
+                {
+                    tolerance = slid;
+                }
+            });
+            ui.label(tr!("edit-thin-vertex-count", before = dialog.before.to_string(), after = dialog.after.to_string()));
+            ui.add_space(4.0);
+            // A tolerance changed this frame has no preview yet, so Apply
+            // waits a frame for it rather than acting on one not shown.
+            let can_apply = tolerance == dialog.tolerance && dialog.after < dialog.before;
+            let submitted = menu::dialog_confirm_pressed(ui.ctx());
+            let cancelled = menu::dialog_cancel_pressed(ui.ctx());
+            menu::menu_actions(ui, |ui| {
+                if (submitted || ui.add(MenuButton::new(tr!("edit-apply")).primary().enabled(can_apply)).clicked()) && can_apply {
+                    apply = true;
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || cancelled {
+                    close = true;
+                }
+            });
+            ui.label(tr!("ui-selected-polylines", count = object_count));
+        });
+
+    if tolerance.is_finite() && tolerance != dialog.tolerance {
+        dialog.tolerance = tolerance;
+        commands.push(UiCommand::SetThinTolerance(tolerance));
+    }
+    if apply {
+        commands.push(UiCommand::ThinStrings {
+            object_ids: dialog.object_ids.clone(),
+            tolerance: dialog.tolerance,
+        });
+        editor.thin_strings_dialog = None;
+    } else if close || !open {
+        editor.thin_strings_dialog = None;
+    }
+}
+
+pub(crate) fn draw_insert_point_at_spacing_dialog(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    let Some(dialog) = editor.insert_point_at_spacing_dialog.as_mut() else {
+        return;
+    };
+
+    let object_count = dialog.object_ids.len();
+    let can_apply = dialog.spacing.is_finite() && dialog.spacing > 0.0 && object_count > 0;
+    let mut close = false;
+    let mut apply = false;
+    let mut open = true;
+
+    DragableMenu::new("insert_point_at_spacing_dialog", tr!("edit-insert-point-spacing"))
+        .open(&mut open)
+        .min_width(280.0)
+        .max_width(300.0)
+        .show(ui.ctx(), |ui| {
+            MenuFieldF64::new(tr!("edit-spacing"), &mut dialog.spacing, 0.001..=f64::MAX)
+                .help_text(tr!("edit-spacing-help"))
+                .width(120.0)
+                .speed(0.1)
+                .max_decimals(3)
+                .suffix(tr!("common-m"))
+                .show(ui);
+            ui.add_space(4.0);
+            let submitted = menu::dialog_confirm_pressed(ui.ctx());
+            let cancelled = menu::dialog_cancel_pressed(ui.ctx());
+            menu::menu_actions(ui, |ui| {
+                if (submitted || ui.add(MenuButton::new(tr!("edit-apply")).primary().enabled(can_apply)).clicked()) && can_apply {
+                    apply = true;
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || cancelled {
+                    close = true;
+                }
+            });
+            ui.label(tr!("ui-selected-polylines", count = object_count.to_string()));
+        });
+
+    // The run closes the dialog only when it succeeds, so a refused spacing
+    // can be changed and tried again.
+    if apply {
+        commands.push(UiCommand::InsertPointsAtSpacing {
+            object_ids: dialog.object_ids.clone(),
+            spacing: dialog.spacing,
+        });
+    } else if close || !open {
+        editor.insert_point_at_spacing_dialog = None;
+    }
+}
+
+/// Smooth Strings: a tolerance typed, Apply to round the corners.
+pub(crate) fn draw_smooth_strings_dialog(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    let Some(dialog) = editor.smooth_strings_dialog.as_mut() else {
+        return;
+    };
+
+    let object_count = dialog.object_ids.len();
+    let can_apply = dialog.tolerance.is_finite() && dialog.tolerance > 0.0 && object_count > 0;
+    let mut close = false;
+    let mut apply = false;
+    let mut open = true;
+
+    DragableMenu::new("smooth_strings_dialog", tr!("edit-smooth-strings"))
+        .open(&mut open)
+        .min_width(280.0)
+        .max_width(300.0)
+        .show(ui.ctx(), |ui| {
+            MenuFieldF64::new(tr!("edit-smooth-tolerance"), &mut dialog.tolerance, 0.001..=f64::MAX)
+                .help_text(tr!("edit-smooth-tolerance-help"))
+                .width(120.0)
+                .speed(0.01)
+                .max_decimals(3)
+                .suffix(tr!("common-m"))
+                .show(ui);
+            ui.add_space(4.0);
+            let submitted = menu::dialog_confirm_pressed(ui.ctx());
+            let cancelled = menu::dialog_cancel_pressed(ui.ctx());
+            menu::menu_actions(ui, |ui| {
+                if (submitted || ui.add(MenuButton::new(tr!("edit-apply")).primary().enabled(can_apply)).clicked()) && can_apply {
+                    apply = true;
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || cancelled {
+                    close = true;
+                }
+            });
+            ui.label(tr!("ui-selected-polylines", count = object_count.to_string()));
+        });
+
+    // The run closes the dialog only when it succeeds, so a refused
+    // tolerance can be changed and tried again.
+    if apply {
+        commands.push(UiCommand::SmoothStrings {
+            object_ids: dialog.object_ids.clone(),
+            tolerance: dialog.tolerance,
+        });
+    } else if close || !open {
+        editor.smooth_strings_dialog = None;
     }
 }
 
@@ -987,73 +1162,88 @@ pub(crate) fn draw_offset_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand
         return;
     }
 
+    // On a section the offset is square to the string in its plane: slope and
+    // height are plan ideas there.
+    let on_section = editor.slice_mode_enabled && editor.active_workspace.edits_in_slice_view();
     ViewportDockPanel::new("offset_element_panel", tr!("edit-offset-element"), viewport_rect)
         .min_width(350.0)
         .show(ui.ctx(), |ui| {
-            let response = MenuFieldF64::new(tr!("edit-angle"), &mut editor.offset_angle_degrees, -90.0..=90.0)
-                .help_text(tr!("edit-slope-angle-offset-positive-negative"))
-                .width(70.0)
-                .speed(0.5)
-                .suffix(tr!("common-degree-suffix"))
-                .show(ui);
-            if response.changed() {
-                editor.offset_angle_degrees = editor.offset_angle_degrees.clamp(-90.0, 90.0);
-            }
+            if on_section {
+                MenuFieldF64::new(tr!("edit-offset-section-distance"), &mut editor.offset_section_distance, 0.0..=f64::MAX)
+                    .help_text(tr!("edit-offset-section-distance-help"))
+                    .speed(0.1)
+                    .suffix(tr!("common-m"))
+                    .show(ui);
+            } else {
+                let response = MenuFieldF64::new(tr!("edit-angle"), &mut editor.offset_angle_degrees, -90.0..=90.0)
+                    .help_text(tr!("edit-slope-angle-offset-positive-negative"))
+                    .width(70.0)
+                    .speed(0.5)
+                    .suffix(tr!("common-degree-suffix"))
+                    .show(ui);
+                if response.changed() {
+                    editor.offset_angle_degrees = editor.offset_angle_degrees.clamp(-90.0, 90.0);
+                }
 
-            ui.add_space(4.0);
+                ui.add_space(4.0);
 
-            MenuField::new(tr!("edit-measure")).help_text(tr!("edit-measure-help")).show(ui, |ui, _, _| {
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut editor.offset_measure, OffsetMeasure::Distance, tr!("edit-distance"));
-                    ui.selectable_value(&mut editor.offset_measure, OffsetMeasure::Width, tr!("drill-hole-width"));
-                    let height_active = matches!(editor.offset_measure, OffsetMeasure::Height(_));
-                    if ui.add(egui::Button::selectable(height_active, tr!("edit-height"))).clicked() && !height_active {
-                        editor.offset_measure = OffsetMeasure::Height(HeightMode::Relative);
-                    }
-                })
-                .response
-            });
-            if let OffsetMeasure::Height(ref mut mode) = editor.offset_measure {
-                MenuField::new(tr!("edit-height-mode")).help_text(tr!("edit-elevation-mode-help")).show(ui, |ui, _, _| {
+                MenuField::new(tr!("edit-measure")).help_text(tr!("edit-measure-help")).show(ui, |ui, _, _| {
                     ui.horizontal(|ui| {
-                        ui.selectable_value(mode, HeightMode::Relative, tr!("edit-relative"));
-                        ui.selectable_value(mode, HeightMode::AbsoluteRL, tr!("edit-absolute-rl"));
+                        ui.selectable_value(&mut editor.offset_measure, OffsetMeasure::Distance, tr!("edit-distance"));
+                        ui.selectable_value(&mut editor.offset_measure, OffsetMeasure::Width, tr!("drill-hole-width"));
+                        let height_active = matches!(editor.offset_measure, OffsetMeasure::Height(_));
+                        if ui.add(egui::Button::selectable(height_active, tr!("edit-height"))).clicked() && !height_active {
+                            editor.offset_measure = OffsetMeasure::Height(HeightMode::Relative);
+                        }
                     })
                     .response
                 });
+                if let OffsetMeasure::Height(ref mut mode) = editor.offset_measure {
+                    MenuField::new(tr!("edit-height-mode")).help_text(tr!("edit-elevation-mode-help")).show(ui, |ui, _, _| {
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(mode, HeightMode::Relative, tr!("edit-relative"));
+                            ui.selectable_value(mode, HeightMode::AbsoluteRL, tr!("edit-absolute-rl"));
+                        })
+                        .response
+                    });
+                }
+
+                ui.add_space(4.0);
+
+                // Value label adapts to context
+                let value_label = match editor.offset_measure {
+                    OffsetMeasure::Distance => tr!("edit-distance-along-slope"),
+                    OffsetMeasure::Width => tr!("edit-horizontal-distance"),
+                    OffsetMeasure::Height(HeightMode::Relative) => tr!("edit-height-change"),
+                    OffsetMeasure::Height(HeightMode::AbsoluteRL) => tr!("edit-target-rl"),
+                };
+                let value_range = if matches!(editor.offset_measure, OffsetMeasure::Height(_)) {
+                    f64::MIN..=f64::MAX
+                } else {
+                    0.0..=f64::MAX
+                };
+                MenuFieldF64::new(value_label, &mut editor.offset_value_input, value_range)
+                    .help_text(tr!("edit-value-help"))
+                    .speed(0.1)
+                    .suffix(tr!("common-m"))
+                    .show(ui);
             }
-
-            ui.add_space(4.0);
-
-            // Value label adapts to context
-            let value_label = match editor.offset_measure {
-                OffsetMeasure::Distance => tr!("edit-distance-along-slope"),
-                OffsetMeasure::Width => tr!("edit-horizontal-distance"),
-                OffsetMeasure::Height(HeightMode::Relative) => tr!("edit-height-change"),
-                OffsetMeasure::Height(HeightMode::AbsoluteRL) => tr!("edit-target-rl"),
-            };
-            let value_range = if matches!(editor.offset_measure, OffsetMeasure::Height(_)) {
-                f64::MIN..=f64::MAX
-            } else {
-                0.0..=f64::MAX
-            };
-            MenuFieldF64::new(value_label, &mut editor.offset_value_input, value_range)
-                .help_text(tr!("edit-value-help"))
-                .speed(0.1)
-                .suffix(tr!("common-m"))
-                .show(ui);
 
             MenuFieldBool::new(tr!("edit-collide-triangulation"), &mut editor.offset_collide_with_triangulation)
                 .help_text(tr!("edit-stop-generated-offset-where-its"))
                 .show(ui);
 
             ui.add_space(8.0);
-            let can_pick_side = matches!(editor.offset_measure, OffsetMeasure::Height(HeightMode::AbsoluteRL)) || editor.offset_value_input.abs() > 1e-9;
+            let can_pick_side = if on_section {
+                editor.offset_section_distance > 1e-9
+            } else {
+                matches!(editor.offset_measure, OffsetMeasure::Height(HeightMode::AbsoluteRL)) || editor.offset_value_input.abs() > 1e-9
+            };
             let enter_pressed = ui.input(|input| input.key_pressed(egui::Key::Enter));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let pick_side_clicked = ui.add(MenuButton::new(tr!("edit-pick-side")).enabled(can_pick_side)).clicked();
                 if can_pick_side && (pick_side_clicked || enter_pressed) {
-                    queue_begin_offset_pick(commands, editor);
+                    queue_begin_offset_pick(commands, editor, on_section);
                 }
                 if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() {
                     commands.push(UiCommand::CancelOffset);
@@ -1062,10 +1252,11 @@ pub(crate) fn draw_offset_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand
         });
 }
 
-fn queue_begin_offset_pick(commands: &mut Vec<UiCommand>, editor: &EditorState) {
+fn queue_begin_offset_pick(commands: &mut Vec<UiCommand>, editor: &EditorState, on_section: bool) {
     let rad = editor.offset_angle_degrees.to_radians();
     let tan = rad.tan();
     let (horiz_dist, z_delta, project_to_rl) = match editor.offset_measure {
+        _ if on_section => (editor.offset_section_distance, 0.0, None),
         OffsetMeasure::Distance => {
             let h = editor.offset_value_input * rad.sin();
             let horiz = editor.offset_value_input * rad.cos();
@@ -1346,6 +1537,169 @@ pub(crate) fn draw_move_panel(ui: &mut egui::Ui, editor: &mut EditorState, comma
     });
 }
 
+/// Geology's Nudge RL panel beside Move: the held vertex's RL, and the step
+/// Raise and Lower move it by, as the Up and Down arrows do while it is open.
+pub(crate) fn draw_nudge_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect, held_rl: Option<f64>) {
+    // The panel goes down with the tool it nudges for.
+    if editor.active_tool != ActiveTool::Move || !editor.active_workspace.has_drawing_aids() {
+        editor.nudge_panel_open = false;
+        return;
+    }
+    let mut close = false;
+    ViewportDockPanel::new("nudge_panel", tr!("edit-nudge-rl"), viewport_rect)
+        .min_width(210.0)
+        .show(ui.ctx(), |ui| {
+            MenuFieldF64::new(tr!("edit-nudge-rl-step"), &mut editor.nudge_step, 0.001..=1000.0)
+                .help_text(tr!("edit-nudge-rl-step-help"))
+                .speed(0.01)
+                .max_decimals(3)
+                .show(ui);
+            match held_rl {
+                Some(rl) => crate::ui::elements::properties::read_only_row(ui, &tr!("edit-nudge-rl-vertex"), &format!("{rl:.3}")),
+                None => {
+                    ui.label(tr!("edit-nudge-rl-click-vertex"));
+                }
+            }
+            ui.add_space(4.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.add(MenuButton::new(tr!("common-close"))).clicked() {
+                    close = true;
+                }
+                if ui.add(MenuButton::new(tr!("edit-nudge-rl-lower")).enabled(held_rl.is_some())).clicked() {
+                    commands.push(UiCommand::NudgeHeldVertex(-editor.nudge_step));
+                }
+                if ui.add(MenuButton::new(tr!("edit-nudge-rl-raise")).primary().enabled(held_rl.is_some())).clicked() {
+                    commands.push(UiCommand::NudgeHeldVertex(editor.nudge_step));
+                }
+            });
+        });
+    if close {
+        editor.nudge_panel_open = false;
+    }
+}
+
+/// Geology's Fill Segment panel while the tool is armed: the spacing a
+/// click cuts the segment by, `stored` with the active project.
+pub(crate) fn draw_fill_segment_panel(ui: &mut egui::Ui, editor: &EditorState, stored: Option<f64>, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect) {
+    if editor.active_tool != ActiveTool::FillSegment || !editor.active_workspace.has_drawing_aids() {
+        return;
+    }
+    ViewportDockPanel::new("fill_segment_panel", tr!("edit-fill-segment"), viewport_rect)
+        .min_width(210.0)
+        .show(ui.ctx(), |ui| {
+            match stored {
+                // Drafted as the Modelling preferences are: sent once, when
+                // the edit ends.
+                Some(stored) => {
+                    let draft_id = ui.scope_id().with("fill_segment_spacing_draft");
+                    let mut spacing = ui.data(|data| data.get_temp::<f64>(draft_id)).unwrap_or(stored);
+                    let response = MenuFieldF64::new(tr!("edit-fill-segment-spacing"), &mut spacing, 0.001..=f64::MAX)
+                        .help_text(tr!("edit-fill-segment-spacing-help"))
+                        .speed(0.1)
+                        .max_decimals(3)
+                        .show(ui);
+                    if response.dragged() {
+                        ui.data_mut(|data| data.insert_temp(draft_id, spacing));
+                    } else {
+                        ui.data_mut(|data| data.remove::<f64>(draft_id));
+                    }
+                    if menu::committed(&response) && spacing != stored {
+                        commands.push(UiCommand::SetFillSegmentSpacing(spacing));
+                    }
+                }
+                None => {
+                    ui.label(egui::RichText::new(tr!("common-no-open-project")).weak());
+                }
+            }
+            ui.add_space(4.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.add(MenuButton::new(tr!("common-close"))).clicked() {
+                    commands.push(UiCommand::SetActiveTool(ActiveTool::None));
+                }
+            });
+        });
+}
+
+/// Draw the Next Vertex panel beside a string being drawn: a point to add as
+/// typed, and a step from the last vertex by bearing, level distance and dip.
+/// Enter in a field adds from that part; it never finishes the string.
+pub(crate) fn draw_next_vertex_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect) {
+    // The panel goes down with the tool that drew it.
+    if !matches!(editor.active_tool, ActiveTool::MakeLine | ActiveTool::MakePoly) || !editor.active_workspace.has_drawing_aids() {
+        editor.next_vertex_panel = None;
+        return;
+    }
+    let on_section = editor.slice_mode_enabled && editor.active_workspace.edits_in_slice_view();
+    let can_add = !editor.poly_finish_dialog;
+    let can_step = can_add && !editor.pending_stroke.is_empty();
+    let Some(panel) = editor.next_vertex_panel.as_mut() else {
+        return;
+    };
+    let submitted = |ui: &egui::Ui, response: &egui::Response| response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+    let mut close = false;
+    ViewportDockPanel::new("next_vertex_panel", tr!("edit-next-vertex"), viewport_rect)
+        .min_width(230.0)
+        .show(ui.ctx(), |ui| {
+            let mut add_point = false;
+            for (axis, value) in panel.point.iter_mut().enumerate() {
+                let name = crate::model::survey::axis_name(axis);
+                let response = MenuFieldF64::new(name.clone(), value, f64::MIN..=f64::MAX)
+                    .help_text(tr!("edit-next-vertex-axis-help", axis = name))
+                    .speed(0.1)
+                    .max_decimals(3)
+                    .show(ui);
+                add_point |= submitted(ui, &response);
+            }
+            ui.add_space(4.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                add_point |= ui.add(MenuButton::new(tr!("edit-next-vertex-add")).primary().enabled(can_add)).clicked();
+            });
+            if add_point && can_add {
+                commands.push(UiCommand::AddTypedStrokeVertex(glam::DVec3::from(panel.point)));
+            }
+
+            menu::menu_section(ui, tr!("edit-next-vertex-from-last"));
+            let mut add_step = false;
+            if on_section {
+                ui.label(tr!("edit-next-vertex-section-bearing"));
+            } else {
+                let response = MenuFieldF64::new(tr!("edit-next-vertex-bearing"), &mut panel.bearing, 0.0..=360.0)
+                    .help_text(tr!("edit-next-vertex-bearing-help"))
+                    .speed(0.25)
+                    .show(ui);
+                add_step |= submitted(ui, &response);
+            }
+            let response = MenuFieldF64::new(tr!("edit-distance"), &mut panel.distance, f64::MIN..=f64::MAX)
+                .help_text(tr!("edit-next-vertex-distance-help"))
+                .speed(0.1)
+                .max_decimals(3)
+                .show(ui);
+            add_step |= submitted(ui, &response);
+            let response = MenuFieldF64::new(tr!("edit-dip"), &mut panel.dip, -89.9..=89.9)
+                .help_text(tr!("edit-next-vertex-dip-help"))
+                .speed(0.25)
+                .show(ui);
+            add_step |= submitted(ui, &response);
+            ui.add_space(4.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.add(MenuButton::new(tr!("common-close"))).clicked() {
+                    close = true;
+                }
+                add_step |= ui.add(MenuButton::new(tr!("edit-next-vertex-add")).primary().enabled(can_step)).clicked();
+            });
+            if add_step && can_step {
+                commands.push(UiCommand::AddStrokeVertexAlongBearing {
+                    bearing: panel.bearing,
+                    distance: panel.distance,
+                    dip: panel.dip,
+                });
+            }
+        });
+    if close {
+        editor.next_vertex_panel = None;
+    }
+}
+
 /// Draw the floating Rotate Collar panel: the two angles a drill plan is
 /// written in, and an Apply button.
 ///
@@ -1400,7 +1754,9 @@ pub(crate) fn draw_chamfer_panel(ui: &mut egui::Ui, editor: &mut EditorState, co
     ViewportDockPanel::new("chamfer_panel", tr!("common-chamfer"), viewport_rect)
         .min_width(200.0)
         .show(ui.ctx(), |ui| {
-            if !corner_picked {
+            if !corner_picked && editor.slice_mode_enabled && editor.active_workspace.edits_in_slice_view() {
+                ui.label(tr!("edit-click-corner-section"));
+            } else if !corner_picked {
                 ui.label(tr!("edit-click-corner-closed-polyline"));
             } else {
                 MenuFieldU32::new(tr!("edit-segments"), &mut editor.chamfer_segments, 1..=64)

@@ -191,6 +191,18 @@ pub(crate) fn project_onto_segment(p: DVec2, a: DVec2, b: DVec2) -> (DVec2, f64)
     (a + ab * t, t)
 }
 
+/// [`project_onto_segment`] in 3D, for a distance a section or a slope must
+/// not lose to plan.
+pub(crate) fn project_onto_segment_3d(p: glam::DVec3, a: glam::DVec3, b: glam::DVec3) -> (glam::DVec3, f64) {
+    let ab = b - a;
+    let len_sq = ab.length_squared();
+    if len_sq == 0.0 {
+        return (a, 0.0);
+    }
+    let t = ((p - a).dot(ab) / len_sq).clamp(0.0, 1.0);
+    (a + ab * t, t)
+}
+
 fn collinear_overlap(a: DVec2, b: DVec2, c: DVec2, d: DVec2) -> Option<SegSeg> {
     let ab = b - a;
     let len_sq = ab.length_squared();

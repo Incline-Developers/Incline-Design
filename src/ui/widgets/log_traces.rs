@@ -1,7 +1,8 @@
 //! The well-log trace columns either side of the borehole log's hole track:
-//! density (long- and short-spaced, one shared scale) to its left, gamma to
-//! its right. Drawn from [`crate::model::geophysics::GeophysicsSession`] at a
-//! cost set by the column's height in pixels, never by the trace's length.
+//! by default density (long- and short-spaced, one shared scale) to its
+//! left, gamma to its right, each column set apart by [`ColumnCurve`]. Drawn
+//! from [`crate::model::geophysics::GeophysicsSession`] at a cost set by the
+//! column's height in pixels, never by the trace's length.
 
 use serde::{Deserialize, Serialize};
 
@@ -14,13 +15,64 @@ use crate::{
     },
 };
 
-/// Which of the log's two trace columns.
+/// The two drawn curve columns, each with its own scale and colours.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum TraceColumn {
-    /// Long- and short-spaced density, left of the hole.
+    /// Long- and short-spaced density, left of the hole by default.
     Density,
-    /// Natural gamma, right of the hole.
+    /// Natural gamma, right of the hole by default.
     Gamma,
+}
+
+/// What one of the log's two trace columns shows. `S` names another curve:
+/// owned where the choice is held, borrowed where it is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ColumnCurve<S> {
+    /// One of the drawn columns, with its own scale and colours.
+    Own(TraceColumn),
+    /// A curve the log does not draw by itself, by name.
+    Other(S),
+    /// Nothing: the column is left out.
+    Hidden,
+}
+
+impl<S> ColumnCurve<S> {
+    /// What the left, then the right, column shows until changed.
+    pub(crate) fn defaults() -> [Self; 2] {
+        [Self::Own(TraceColumn::Density), Self::Own(TraceColumn::Gamma)]
+    }
+
+    /// The same choice, another curve's name passed through `name`.
+    pub(crate) fn map<T>(self, name: impl FnOnce(S) -> T) -> ColumnCurve<T> {
+        match self {
+            Self::Own(column) => ColumnCurve::Own(column),
+            Self::Other(other) => ColumnCurve::Other(name(other)),
+            Self::Hidden => ColumnCurve::Hidden,
+        }
+    }
+}
+
+/// The colour another curve in the left, then the right, column is drawn
+/// in: its column's usual one, else the first of the palette the column
+/// beside it does not use, so two curves never share one.
+pub(crate) fn other_colours<S>(curves: &[ColumnCurve<S>; 2]) -> [LogKind; 2] {
+    let pick = |usual: LogKind, beside: &[LogKind]| {
+        [usual, LogKind::Gamma, LogKind::LongDensity, LogKind::ShortDensity]
+            .into_iter()
+            .find(|kind| !beside.contains(kind))
+            .unwrap_or(usual)
+    };
+    let uses = |curve: &ColumnCurve<S>| match curve {
+        ColumnCurve::Own(column) => column.kinds(),
+        ColumnCurve::Other(_) | ColumnCurve::Hidden => &[],
+    };
+    // The left picks first; the right steers clear of whatever it took.
+    let left = pick(LogKind::LongDensity, uses(&curves[1]));
+    let right = match curves[0] {
+        ColumnCurve::Other(_) => pick(LogKind::Gamma, &[left]),
+        _ => pick(LogKind::Gamma, uses(&curves[0])),
+    };
+    [left, right]
 }
 
 impl TraceColumn {
@@ -188,8 +240,8 @@ pub(crate) enum Clip {
     Above,
 }
 
-/// The traces one column draws for the inspected hole, in
-/// [`TraceColumn::kinds`] order.
+/// The traces one column draws for the inspected hole: its own curves in
+/// [`TraceColumn::kinds`] order, or one other curve chosen instead.
 #[derive(Clone, Copy)]
 pub(crate) struct ColumnTraces<'a> {
     pub(crate) column: TraceColumn,
@@ -197,6 +249,10 @@ pub(crate) struct ColumnTraces<'a> {
     /// The curves the column shows: those read, or while the hole is read,
     /// those its index says it has.
     shown: [bool; 2],
+    /// A curve drawn instead of the column's own: its name, its trace once
+    /// read, and the curve whose colour it takes (see [`other_colours`]). It
+    /// has no known unit, so it is scaled to its readings.
+    other: Option<(&'a str, Option<&'a LogTrace>, LogKind)>,
 }
 
 impl<'a> ColumnTraces<'a> {
@@ -207,7 +263,12 @@ impl<'a> ColumnTraces<'a> {
             *slot = hole.and_then(|hole| hole.trace(kind));
         }
         let shown = traces.map(|trace| trace.is_some());
-        shown.contains(&true).then_some(Self { column, traces, shown })
+        shown.contains(&true).then_some(Self {
+            column,
+            traces,
+            shown,
+            other: None,
+        })
     }
 
     /// The column of a hole still being read, laid out for the curves it
@@ -217,31 +278,84 @@ impl<'a> ColumnTraces<'a> {
         for (slot, kind) in shown.iter_mut().zip(column.kinds()) {
             *slot = kinds[kind.index()];
         }
-        shown.contains(&true).then_some(Self { column, traces: [None; 2], shown })
+        shown.contains(&true).then_some(Self {
+            column,
+            traces: [None; 2],
+            shown,
+            other: None,
+        })
     }
 
-    /// The curves the column shows, in column order.
-    pub(crate) fn curves(&self) -> impl Iterator<Item = LogKind> + '_ {
-        self.column.kinds().iter().zip(self.shown).filter_map(|(kind, shown)| shown.then_some(*kind))
+    /// A column drawing the curve named `name` in `colour`'s colour; `None`
+    /// when the hole has none of it.
+    pub(crate) fn of_curve(colour: LogKind, name: &'a str, hole: Option<&'a HoleLogs>) -> Option<Self> {
+        let trace = hole?.curve(name)?;
+        Some(Self::other(colour, name, Some(trace)))
+    }
+
+    /// The same for a hole still being read, laid out when its index says
+    /// it `has` the curve. Readings that make no trace leave the column to
+    /// [`Self::of_curve`], which drops it.
+    pub(crate) fn reading_curve(colour: LogKind, name: &'a str, has: bool) -> Option<Self> {
+        has.then(|| Self::other(colour, name, None))
+    }
+
+    fn other(colour: LogKind, name: &'a str, trace: Option<&'a LogTrace>) -> Self {
+        Self {
+            // Never read for its scale: only its colour's column, for show.
+            column: if colour == LogKind::Gamma { TraceColumn::Gamma } else { TraceColumn::Density },
+            traces: [None; 2],
+            shown: [false; 2],
+            other: Some((name, trace, colour)),
+        }
+    }
+
+    /// Whether the column draws a curve chosen instead of its own.
+    pub(crate) fn is_other(&self) -> bool {
+        self.other.is_some()
     }
 
     fn is_reading(&self) -> bool {
-        self.traces.iter().all(Option::is_none)
+        self.iter().next().is_none()
     }
 
     /// Whether the scale is known: an auto one waits for the readings.
     fn has_range(&self, style: &WellLogStyle) -> bool {
-        !self.is_reading() || !style.scale(self.column).auto
+        !self.is_reading() || (!self.is_other() && !style.scale(self.column).auto)
     }
 
     /// The present traces, in column order.
     pub(crate) fn iter(&self) -> impl Iterator<Item = &'a LogTrace> + '_ {
-        self.traces.into_iter().flatten()
+        self.traces.into_iter().flatten().chain(self.other.and_then(|(_, trace, _)| trace))
     }
 
-    /// The present traces with the curve each is, in column order.
-    fn kinded(&self) -> impl Iterator<Item = (LogKind, &'a LogTrace)> + '_ {
-        self.column.kinds().iter().zip(self.traces).filter_map(|(kind, trace)| trace.map(|trace| (*kind, trace)))
+    /// Each curve the column shows, with its name, colour and trace once
+    /// read, in column order.
+    fn entries(&self, style: &WellLogStyle) -> Vec<(String, [u8; 4], Option<&'a LogTrace>)> {
+        match self.other {
+            Some((name, trace, colour)) => vec![(name.to_owned(), style.color(colour), trace)],
+            None => self
+                .column
+                .kinds()
+                .iter()
+                .zip(self.shown)
+                .zip(self.traces)
+                .filter(|((_, shown), _)| *shown)
+                .map(|((&kind, _), trace)| (kind_label(kind), style.color(kind), trace))
+                .collect(),
+        }
+    }
+
+    /// The present traces with the colour each is drawn in, in column order.
+    fn painted<'s>(&'s self, style: &'s WellLogStyle) -> impl Iterator<Item = ([u8; 4], &'a LogTrace)> + 's {
+        let own = self
+            .column
+            .kinds()
+            .iter()
+            .zip(self.traces)
+            .filter_map(|(&kind, trace)| trace.map(|trace| (style.color(kind), trace)));
+        let other = self.other.and_then(|(_, trace, colour)| trace.map(|trace| (style.color(colour), trace)));
+        own.chain(other)
     }
 }
 
@@ -271,7 +385,25 @@ pub(crate) fn auto_range(column: TraceColumn, traces: &ColumnTraces) -> Option<[
             });
         }
     }
-    acc.map(|(lo, hi)| tidy_range(column, lo, hi))
+    acc.map(|(lo, hi)| if traces.is_other() { fitted_range(lo, hi) } else { tidy_range(column, lo, hi) })
+}
+
+/// [`tidy_range`] for a curve of no known unit: a flat span widens to a
+/// hundredth of its magnitude, or to one about zero, and negatives stay.
+fn fitted_range(lo: f32, hi: f32) -> [f32; 2] {
+    if !lo.is_finite() || !hi.is_finite() {
+        return [0.0, 1.0];
+    }
+    let (mut lo, mut hi) = if lo <= hi { (lo, hi) } else { (hi, lo) };
+    let magnitude = lo.abs().max(hi.abs());
+    let min_span = if magnitude > 0.0 { magnitude * 0.01 } else { 1.0 };
+    if hi - lo < min_span {
+        let center = 0.5 * (lo + hi);
+        lo = center - 0.5 * min_span;
+        hi = center + 0.5 * min_span;
+    }
+    let step = grid_step([lo, hi]);
+    [(lo / step).floor() * step, (hi / step).ceil() * step]
 }
 
 /// Round `[lo, hi]` outward to a tidy step (see [`grid_step`]) chosen so the
@@ -310,12 +442,16 @@ pub(crate) fn grid_step(range: [f32; 2]) -> f32 {
 fn range_decimals(range: [f32; 2]) -> usize {
     let mut step = f64::from(grid_step(range));
     let mut decimals = 0usize;
-    while (step - step.round()).abs() > 1e-6 && decimals < 4 {
+    // Relative, so a curve read in millionths still gets its decimals.
+    while (step - step.round()).abs() > step.abs() * 1e-6 && decimals < MAX_DECIMALS {
         step *= 10.0;
         decimals += 1;
     }
     decimals
 }
+
+/// Most decimals a scale edge or reading is written with.
+const MAX_DECIMALS: usize = 10;
 
 /// One edge of `range` as written: at least the decimals its gridlines
 /// need, and more where the edge itself has them, so a fixed 1.25 reads
@@ -341,7 +477,9 @@ fn edge_label(value: f32, range: [f32; 2]) -> String {
 pub(crate) fn column_range(style: &WellLogStyle, traces: &ColumnTraces) -> [f32; 2] {
     let column = traces.column;
     let scale = style.scale(column);
-    if scale.auto {
+    if traces.is_other() {
+        auto_range(column, traces).unwrap_or([0.0, 1.0])
+    } else if scale.auto {
         auto_range(column, traces).unwrap_or_else(|| column.default_fixed_range())
     } else {
         scale.range
@@ -373,8 +511,9 @@ pub(crate) fn value_x(value: f32, range: [f32; 2], left: f32, right: f32) -> (f3
 const HEADER_PADDING: f32 = 4.0;
 
 /// Height of a column's header: one line per curve plus one for the scale.
-pub(crate) fn header_height(column: TraceColumn, line_height: f32) -> f32 {
-    (column.kinds().len() as f32 + 1.0) * line_height + HEADER_PADDING
+pub(crate) fn header_height(traces: &ColumnTraces, line_height: f32) -> f32 {
+    let curves = if traces.is_other() { 1 } else { traces.column.kinds().len() };
+    (curves as f32 + 1.0) * line_height + HEADER_PADDING
 }
 
 const SWATCH_WIDTH: f32 = 10.0;
@@ -392,8 +531,8 @@ pub(crate) fn draw_header(ui: &egui::Ui, painter: &egui::Painter, rect: egui::Re
     let font = egui::TextStyle::Small.resolve(ui.style());
     let mut y = rect.top() + HEADER_PADDING * 0.5;
 
-    for kind in traces.curves() {
-        let color = to_color32(style.color(kind));
+    for (label, color, _) in traces.entries(style) {
+        let color = to_color32(color);
         let swatch_y = y + line_height * 0.5;
         painter.line_segment(
             [egui::pos2(rect.left(), swatch_y), egui::pos2(rect.left() + SWATCH_WIDTH, swatch_y)],
@@ -401,7 +540,7 @@ pub(crate) fn draw_header(ui: &egui::Ui, painter: &egui::Painter, rect: egui::Re
         );
         let text_left = rect.left() + SWATCH_WIDTH + SWATCH_GAP;
         let mut job = egui::text::LayoutJob::single_section(
-            kind_label(kind),
+            label,
             egui::TextFormat {
                 font_id: font.clone(),
                 color,
@@ -427,7 +566,8 @@ pub(crate) fn draw_header(ui: &egui::Ui, painter: &egui::Painter, rect: egui::Re
         left_bound += min_size.x + UNIT_LABEL_GAP;
         right_bound = max_pos.x - UNIT_LABEL_GAP;
     }
-    let unit_galley = painter.layout_no_wrap(traces.column.unit().to_owned(), font, weak);
+    let unit = if traces.is_other() { "" } else { traces.column.unit() };
+    let unit_galley = painter.layout_no_wrap(unit.to_owned(), font, weak);
     let unit_size = unit_galley.size();
     let unit_x = rect.center().x - unit_size.x * 0.5;
     if unit_x >= left_bound && unit_x + unit_size.x <= right_bound {
@@ -656,8 +796,7 @@ pub(crate) fn draw_body(ui: &egui::Ui, painter: &egui::Painter, rect: egui::Rect
     let buckets = ((rect.height() * ui.ctx().pixels_per_point()).round().max(1.0)) as usize;
     let min_width = 1.0 / ui.ctx().pixels_per_point();
 
-    for (kind, trace) in traces.kinded() {
-        let color = style.color(kind);
+    for (color, trace) in traces.painted(style) {
         let trace_step = trace.step();
         let geometry = if exact_mode(view_span, buckets, trace_step) {
             sample_geometry(trace.samples(top - trace_step, bottom + trace_step), rect, view, range)
@@ -672,23 +811,31 @@ pub(crate) fn draw_body(ui: &egui::Ui, painter: &egui::Painter, rect: egui::Rect
 /// curve's reading there in its colour, with the file curve it came from.
 pub(crate) fn readout(ui: &mut egui::Ui, traces: &ColumnTraces, depth: f64, style: &WellLogStyle) {
     ui.label(tr!("log-traces-depth-m", depth = format!("{depth:.2}")));
-    for (kind, trace) in traces.kinded() {
+    for (label, color, trace) in traces.entries(style) {
+        let Some(trace) = trace else { continue };
         // At most the two samples either side of the depth, never a scan.
         let half = 0.5 * trace.step();
         let reading = trace.samples(depth - half, depth + half).find_map(|(_, value)| value);
-        let decimals = (-kind.resolution().log10()).round().max(0.0) as usize;
-        let text = match reading {
-            Some(value) => tr!(
-                "log-traces-curve-value-unit",
-                curve = kind_label(kind).to_string(),
-                value = format!("{value:.decimals$}"),
-                unit = kind.unit().to_string()
-            ),
-            None => tr!("log-traces-curve-no-reading", curve = kind_label(kind).to_string()),
+        let text = match (reading, trace.kind()) {
+            (Some(value), Some(kind)) => {
+                let decimals = (-kind.resolution().log10()).round().max(0.0) as usize;
+                tr!(
+                    "log-traces-curve-value-unit",
+                    curve = label.clone(),
+                    value = format!("{value:.decimals$}"),
+                    unit = kind.unit().to_string()
+                )
+            }
+            // One decimal finer than the gridlines it is read against.
+            (Some(value), None) => {
+                let decimals = (range_decimals(column_range(style, traces)) + 1).min(MAX_DECIMALS);
+                tr!("log-traces-curve-value", curve = label.clone(), value = format!("{value:.decimals$}"))
+            }
+            (None, _) => tr!("log-traces-curve-no-reading", curve = label.clone()),
         };
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(text).color(to_color32(style.color(kind))));
-            if !trace.source().is_empty() {
+            ui.label(egui::RichText::new(text).color(to_color32(color)));
+            if !trace.source().is_empty() && trace.source() != label {
                 ui.weak(trace.source());
             }
         });

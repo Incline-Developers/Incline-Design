@@ -1,8 +1,8 @@
 use crate::{
     app::App,
     logging::CommandReportSpec,
-    model::{Command, LayerId, Object, PolyVertex},
-    ui::state::{ActiveTool, CircleDraft},
+    model::{Command, LayerId, Object, PolyVertex, SceneEntityId},
+    ui::state::{ActiveTool, CircleDraft, SegmentReadout, segment_readout},
 };
 
 /// Cursor radius, in logical pixels, within which the cursor snaps to the first
@@ -17,6 +17,7 @@ impl<'a> App<'a> {
         let Some(point) = self.editor.cursor_world else {
             return;
         };
+        self.editor.measure_segment_hover = None;
         if let Some(_) = self.editor.measurement_start
             && self.editor.measurement_end.is_none()
         {
@@ -26,6 +27,21 @@ impl<'a> App<'a> {
             self.editor.measurement_end = None;
         }
         self.invalidate_overlay();
+    }
+
+    /// The readout of the string segment under the cursor, in the string's
+    /// own vertex order, and the segment; only what the section draws of it
+    /// is hit.
+    pub(crate) fn measure_segment_hit(&self) -> Option<(SegmentReadout, [PolyVertex; 2])> {
+        let (SceneEntityId::Object(id), _) = self.pick_under_cursor()? else {
+            return None;
+        };
+        let Some(Object::Polyline { verts, closed, .. }) = self.scene_document.get_object(id) else {
+            return None;
+        };
+        let (edge, _) = self.edge_under_cursor(verts, *closed)?;
+        let (start, end) = (verts[edge], verts[(edge + 1) % verts.len()]);
+        Some((segment_readout(start.pos, end.pos, start.bulge)?, [start, end]))
     }
 
     pub(crate) fn measure_batter_angle_click(&mut self) {
@@ -101,14 +117,30 @@ impl<'a> App<'a> {
         }
         // A vertex is pinned to the plane showing when it was clicked; the
         // section can move afterwards (W/S walk, Q/E turn), so a line may span planes.
+        self.push_stroke_point(world, layer);
+        self.sync_next_vertex_panel();
+    }
+
+    /// Add `world` to the stroke as a click would, finishing a line at its
+    /// second vertex and a polyline brought back to its first.
+    pub(crate) fn push_stroke_point(&mut self, world: glam::DVec3, layer: LayerId) {
+        // A new run: Backspace must not reach back into the segments of one
+        // already finished, nor a copy armed for another stroke wake up.
+        if self.editor.pending_stroke.is_empty() {
+            self.editor.line_chain.clear();
+            self.editor.copy_along = None;
+            self.editor.string_rework = None;
+        }
         self.editor.pending_stroke.push(world);
         match self.editor.active_tool {
             ActiveTool::MakeLine if self.editor.pending_stroke.len() >= 2 => {
                 let verts: Vec<PolyVertex> = self.editor.pending_stroke.iter().map(|&p| PolyVertex::straight(p)).collect();
                 let chain_start = *self.editor.pending_stroke.last().unwrap();
+                let segment_start = self.editor.pending_stroke[0];
                 if !self.commit_polyline(verts, false, layer) {
                     return;
                 }
+                self.record_line_segment(segment_start);
                 crate::logging::report_completed_action(
                     CommandReportSpec::new(crate::i18n::tr!("common-create-line"), crate::i18n::tr!("cmd-placement-2-vertices")),
                     crate::i18n::tr!("cmd-placement-created-line-segment-2-vertices"),
@@ -116,6 +148,26 @@ impl<'a> App<'a> {
                 // Chain: end of the last segment becomes start of next
                 self.editor.pending_stroke.clear();
                 self.editor.pending_stroke.push(chain_start);
+            }
+            ActiveTool::MakePoly => {
+                // If the user clicked the first vertex, auto-close without showing a dialog.
+                let is_closing = self.editor.pending_stroke.len() >= 2
+                    && self
+                        .editor
+                        .pending_stroke
+                        .first()
+                        .zip(self.editor.pending_stroke.last())
+                        .is_some_and(|(first, last)| (*first - *last).length_squared() <= 1.0e-16);
+                // Carrying on a string, its end is not a place to close.
+                if is_closing && crate::ui::state::string_rework_live(&self.editor).is_some() {
+                    self.editor.pending_stroke.pop();
+                    self.invalidate_overlay();
+                    return;
+                }
+                if is_closing {
+                    self.finish_poly_closed();
+                    return;
+                }
             }
             _ => {}
         }
@@ -127,6 +179,10 @@ impl<'a> App<'a> {
     /// snaps onto it, whatever the snap mode, so the click lands exactly there.
     pub(crate) fn poly_close_target(&self) -> Option<glam::DVec3> {
         if self.editor.active_tool != ActiveTool::MakePoly || self.editor.poly_finish_dialog || self.editor.pending_stroke.len() < 2 {
+            return None;
+        }
+        // Carrying on or redrawing a string, its first vertex is no target.
+        if crate::ui::state::string_rework_live(&self.editor).is_some() {
             return None;
         }
         let first = *self.editor.pending_stroke.first()?;
@@ -201,7 +257,7 @@ impl<'a> App<'a> {
 
     /// Finish an in-progress MakePoly stroke as a closed polyline.
     pub(crate) fn finish_poly_closed(&mut self) {
-        if self.editor.active_tool != ActiveTool::MakePoly {
+        if self.editor.active_tool != ActiveTool::MakePoly || self.finish_carry_on(true) {
             return;
         }
         // Clicking the first vertex to close the preview records that point a
@@ -251,6 +307,7 @@ impl<'a> App<'a> {
         self.editor.circle_draft = None;
         self.editor.measurement_start = None;
         self.editor.measurement_end = None;
+        self.editor.measure_segment_hover = None;
         self.editor.batter_angle_points.clear();
         self.editor.poly_finish_dialog = false;
         self.editor.poly_finish_dialog_px = None;
@@ -260,6 +317,9 @@ impl<'a> App<'a> {
 
     /// Commit the current stroke as an open polyline if it has enough vertices.
     pub(crate) fn commit_stroke_open(&mut self) {
+        if self.editor.active_tool == ActiveTool::MakePoly && self.finish_carry_on(false) {
+            return;
+        }
         if self.editor.active_tool == ActiveTool::MakePoly
             && self.editor.pending_stroke.len() >= 2
             && let Some(layer) = self.active_layer()
@@ -288,6 +348,9 @@ impl<'a> App<'a> {
     /// A two-vertex stroke can only be an open polyline, so it commits directly.
     /// For MakeLine, clears the chain anchor so the next click starts a new string.
     pub(crate) fn try_finish_tool(&mut self) {
+        if self.editor.active_tool == ActiveTool::MakePoly && self.redraw_holds_stroke() {
+            return;
+        }
         match self.editor.active_tool {
             ActiveTool::MakeCircle if self.editor.circle_draft.take().is_some() => {
                 self.invalidate_overlay();
