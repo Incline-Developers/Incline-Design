@@ -251,7 +251,28 @@ pub(crate) fn improve(
         } else {
             solution.drill_blast = drill_blast;
         }
-        let value = searched.replay.replayed_objective;
+        // A search that ends with its budget left - its windows exhausted, or
+        // its final reroute done - refines its schedule with the reroute's
+        // operators until the budget is spent, on the timeline it settled.
+        let mut replay = searched.replay;
+        let left = budget.saturating_sub(started.elapsed());
+        let closed = searched_bound
+            .zip(options.relative_gap)
+            .is_some_and(|(bound, target)| gap_closed(replay.replayed_objective, bound, target));
+        if left >= CONTINUE_MINIMUM && !closed && !activity.finishing() && !cancel.is_cancelled() {
+            let timeline = solution.drill_blast.clone();
+            (solution, replay) = anytime::continue_from(&out.input, (solution, replay), left, &activity.finish, |progress| {
+                log::info!(
+                    "schedule run {run_id}: search at {:.1}s worth {:.2}: {}",
+                    started.elapsed().as_secs_f64(),
+                    progress.value,
+                    progress.note
+                );
+                activity.value(progress.value, searched_bound);
+            });
+            solution.drill_blast = timeline;
+        }
+        let value = replay.replayed_objective;
         log::info!(
             "schedule run {}: the search kept {} improvements in {:.2?}, worth {value:.2}",
             out.identity.run_id,
@@ -260,7 +281,7 @@ pub(crate) fn improve(
         );
         let found = Seed {
             solution,
-            replay: searched.replay,
+            replay,
             summary: DayByDaySummary {
                 method: StartMethod::Search,
                 windows: searched.kept,
@@ -669,6 +690,10 @@ const COLUMN_CEILING: usize = 4_000_000;
 /// The share of what is left of the budget the search has when SCIP may
 /// still improve on what it finds.
 const SEARCH_SHARE: f64 = 0.5;
+
+/// Below this much of its budget left, a search that has ended is not
+/// continued: a continuation's first window needs about that.
+const CONTINUE_MINIMUM: Duration = Duration::from_secs(1);
 
 /// The search's time when the run has no limit.
 const SEARCH_WITHOUT_LIMIT: Duration = Duration::from_secs(600);
