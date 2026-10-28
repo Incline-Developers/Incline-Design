@@ -1,6 +1,5 @@
 use std::marker::PhantomData;
 
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "parquet")]
@@ -13,7 +12,7 @@ pub trait ArrayType {
 
 macro_rules! array_types {
     ($(#[doc = $doc:literal] $name:ident,)*) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+        #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
         pub enum DataType {
             $($name,)*
         }
@@ -21,7 +20,7 @@ macro_rules! array_types {
         pub mod array_type {
             use super::*;
             $(
-                #[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+                #[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
                 pub struct $name {}
                 impl ArrayType for $name {
                     const DATA_TYPE: DataType = DataType::$name;
@@ -68,7 +67,7 @@ array_types! {
     Color,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Array<T> {
     filename: String,
     item_count: u64,
@@ -100,10 +99,7 @@ impl<T: ArrayType> Array<T> {
     }
 
     pub(crate) fn constraint(&self) -> &Constraint {
-        self.private
-            .constraint
-            .as_ref()
-            .expect("array should have been validated")
+        self.private.constraint.as_ref().expect("array should have been validated")
     }
 
     /// The filename of the array data within the zip file.

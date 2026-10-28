@@ -1,4 +1,3 @@
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -9,13 +8,10 @@ use crate::{
 };
 
 /// Defines a 2D grid spacing and size.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum Grid2 {
     /// Regularly spaced cells.
-    ///
-    /// <!--grid2_regular.svg-->
-    #[doc = include_str!("../docs/images/grid2_regular.svg")]
     Regular {
         /// The cell size in the U and V axes. Both must be greater than zero.
         size: [f64; 2],
@@ -23,9 +19,6 @@ pub enum Grid2 {
         count: [u32; 2],
     },
     /// Tensor cells, where each row and column can have a different size.
-    ///
-    /// <!--grid2_tensor.svg-->
-    #[doc = include_str!("../docs/images/grid2_tensor.svg")]
     Tensor {
         /// Array with `Scalar` type storing the size of each cell along the U axis.
         /// These sizes must be greater than zero.
@@ -69,22 +62,16 @@ impl Grid2 {
 impl Default for Grid2 {
     /// Creates a regular grid with size `[1.0, 1.0]` and count `[1, 1]`.
     fn default() -> Self {
-        Self::Regular {
-            size: [1.0, 1.0],
-            count: [1, 1],
-        }
+        Self::Regular { size: [1.0, 1.0], count: [1, 1] }
     }
 }
 
 /// Defines a 3D grid spacing and size.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 #[allow(clippy::large_enum_variant)]
 pub enum Grid3 {
     /// Regularly spaced cells.
-    ///
-    /// <!--grid3_regular.svg-->
-    #[doc = include_str!("../docs/images/grid3_regular.svg")]
     Regular {
         /// The block size in the U and V axes. All must be greater than zero.
         size: Vector3,
@@ -93,9 +80,6 @@ pub enum Grid3 {
     },
     /// Tensor cells, where each row, column, and layer can have a different size. All sizes
     /// must be greater than zero.
-    ///
-    /// <!--grid3_tensor.svg-->
-    #[doc = include_str!("../docs/images/grid3_tensor.svg")]
     Tensor {
         /// Array with `Scalar` type storing the size of each cell along the U axis.
         /// These sizes must be greater than zero.
@@ -116,11 +100,7 @@ impl Grid3 {
     }
 
     /// Create a 3D tensor grid from the size arrays.
-    pub fn from_arrays(
-        u: Array<array_type::Scalar>,
-        v: Array<array_type::Scalar>,
-        w: Array<array_type::Scalar>,
-    ) -> Self {
+    pub fn from_arrays(u: Array<array_type::Scalar>, v: Array<array_type::Scalar>, w: Array<array_type::Scalar>) -> Self {
         Self::Tensor { u, v, w }
     }
 
@@ -129,11 +109,7 @@ impl Grid3 {
         match self {
             Self::Regular { count, .. } => *count,
             // validation checks that this cast is valid
-            Self::Tensor { u, v, w } => [
-                u.item_count() as u32,
-                v.item_count() as u32,
-                w.item_count() as u32,
-            ],
+            Self::Tensor { u, v, w } => [u.item_count() as u32, v.item_count() as u32, w.item_count() as u32],
         }
     }
 
@@ -170,7 +146,7 @@ const fn k() -> Vector3 {
 }
 
 /// Defines the position and orientation of a 2D plane in 3D space.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[repr(C)]
 pub struct Orient2 {
     /// Origin point relative to the project origin and coordinate reference.
@@ -206,16 +182,12 @@ impl Orient2 {
 impl Default for Orient2 {
     /// Creates a new axis-aligned 2D orientation at the origin.
     fn default() -> Self {
-        Self {
-            origin: [0.0; 3],
-            u: i(),
-            v: j(),
-        }
+        Self { origin: [0.0; 3], u: i(), v: j() }
     }
 }
 
 /// Defines the position and orientation of a 3D sub-space.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[repr(C)]
 pub struct Orient3 {
     /// Origin point relative to the project origin and coordinate reference.
@@ -298,10 +270,7 @@ impl Validate for Grid3 {
 
 impl Validate for Orient2 {
     fn validate_inner(&mut self, val: &mut Validator) {
-        val.enter("Orient2")
-            .finite_seq(self.origin, "origin")
-            .unit_vector(self.u, "u")
-            .unit_vector(self.v, "v");
+        val.enter("Orient2").finite_seq(self.origin, "origin").unit_vector(self.u, "u").unit_vector(self.v, "v");
     }
 }
 

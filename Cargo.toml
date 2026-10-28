@@ -48,7 +48,7 @@ omf = { path = "crates/omf", default-features = false, features = ["image", "par
 png = "0.18.1"
 # `crs-definitions` feature omitted: only `from_proj_string` is used, and enabling it
 # would pull in a second copy of the EPSG tables pinned to crs-definitions 0.5.
-proj4rs = { version = "0.2.1", default-features = false }
+proj4rs = { version = "0.3.0", default-features = false }
 crs-definitions = "0.6.0"
 csv = "1.4.0"
 # Animate's video export's AV1 encoder, pure Rust, on the shared rayon pool.

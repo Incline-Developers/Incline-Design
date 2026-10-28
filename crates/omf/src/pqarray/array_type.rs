@@ -25,10 +25,7 @@ pub trait PqArrayType: Default + 'static {
         None
     }
 
-    fn from_parquet(
-        value: <Self::DataType as DataType>::T,
-        _logical_type: &Option<LogicalType>,
-    ) -> Self;
+    fn from_parquet(value: <Self::DataType as DataType>::T, _logical_type: &Option<LogicalType>) -> Self;
 
     fn to_parquet(self) -> <Self::DataType as DataType>::T;
 }
@@ -42,10 +39,7 @@ macro_rules! simple {
                 self
             }
 
-            fn from_parquet(
-                value: <Self::DataType as DataType>::T,
-                _logical_type: &Option<LogicalType>,
-            ) -> Self {
+            fn from_parquet(value: <Self::DataType as DataType>::T, _logical_type: &Option<LogicalType>) -> Self {
                 value
             }
         }
@@ -61,10 +55,7 @@ macro_rules! physical_integer {
                 self as <Self::DataType as DataType>::T
             }
 
-            fn from_parquet(
-                value: <Self::DataType as DataType>::T,
-                _logical_type: &Option<LogicalType>,
-            ) -> Self {
+            fn from_parquet(value: <Self::DataType as DataType>::T, _logical_type: &Option<LogicalType>) -> Self {
                 value as Self
             }
         }
@@ -87,10 +78,7 @@ macro_rules! logical_integer {
                 self as <Self::DataType as DataType>::T
             }
 
-            fn from_parquet(
-                value: <Self::DataType as DataType>::T,
-                _logical_type: &Option<LogicalType>,
-            ) -> Self {
+            fn from_parquet(value: <Self::DataType as DataType>::T, _logical_type: &Option<LogicalType>) -> Self {
                 value as Self
             }
         }
@@ -171,10 +159,7 @@ impl PqArrayType for DateTime<Utc> {
         self.timestamp_micros()
     }
 
-    fn from_parquet(
-        value: <Self::DataType as DataType>::T,
-        logical_type: &Option<LogicalType>,
-    ) -> Self {
+    fn from_parquet(value: <Self::DataType as DataType>::T, logical_type: &Option<LogicalType>) -> Self {
         match logical_type {
             Some(LogicalType::Timestamp(TimestampType { unit, .. })) => match unit {
                 TimeUnit::MILLIS => i64_milli_to_date_time(value),
