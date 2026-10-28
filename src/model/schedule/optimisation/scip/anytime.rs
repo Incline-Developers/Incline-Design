@@ -739,12 +739,11 @@ impl LongTerm {
 
 /// A period plan's routes as daily targets, each period's tonnes spread
 /// evenly over its days.
-fn daily_routes(input: &BlendInput, routes: &BTreeMap<(usize, DestinationId, u32), f64>, period: u32) -> BTreeMap<(usize, DestinationId, u32), f64> {
-    let days: BTreeSet<u32> = input.intervals.iter().map(|interval| interval.day()).collect();
+fn daily_routes(routes: &BTreeMap<(usize, DestinationId, u32), f64>, periods: &BTreeMap<u32, Vec<u32>>) -> BTreeMap<(usize, DestinationId, u32), f64> {
     let mut daily = BTreeMap::new();
     for (&(loader, destination, label), &tonnes) in routes {
-        let span: Vec<u32> = days.iter().copied().filter(|day| day / period * period == label).collect();
-        for day in &span {
+        let Some(span) = periods.get(&label) else { continue };
+        for day in span {
             *daily.entry((loader, destination, *day)).or_default() += tonnes / span.len() as f64;
         }
     }
@@ -939,7 +938,7 @@ pub(crate) fn run(
                         planned.status
                     ),
                 );
-                let routes = daily_routes(input, &planned.routes, period);
+                let routes = daily_routes(&planned.routes, &planned.period_days);
                 let mut followed = false;
                 for live_round in [false, true] {
                     let Some(live) = live.as_ref().filter(|_| live_round).or((!live_round).then_some(input)) else {

@@ -146,6 +146,8 @@ pub(crate) struct Settings {
 pub(crate) struct PlanSolve {
     /// Planned dug tonnes per (loader index, destination, day).
     pub(crate) routes: BTreeMap<(usize, DestinationId, u32), f64>,
+    /// Calendar days covered by each period label.
+    pub(crate) period_days: BTreeMap<u32, Vec<u32>>,
     pub(crate) objective: Option<f64>,
     pub(crate) bound: Option<f64>,
     pub(crate) variables: usize,
@@ -430,11 +432,36 @@ impl<'a> Prepared<'a> {
     pub(super) fn new(input: &'a BlendInput, window: Option<&'a Window>, period_days: u32, bounding: bool) -> Self {
         // ---- days ---------------------------------------------------------------
         let period_days = period_days.max(1);
+        // Keep the coarse plan small, but separate the largest changes in
+        // available ground so weekly targets better reflect blast timing.
+        let mut breaks = BTreeSet::new();
+        if period_days > 1
+            && !bounding
+            && window.is_none()
+            && let Some(chain) = &input.drill_blast
+            && let Some(timeline) = &chain.fixed
+        {
+            let tonnes: BTreeMap<_, _> = input.ground.iter().map(|ground| (ground.id, ground.tonnes_t)).collect();
+            let mut blasts: Vec<_> = chain
+                .blasts
+                .iter()
+                .zip(&timeline.blasts)
+                .filter(|(_, events)| events.fired_h.is_some_and(|hour| hour > 0.0))
+                .map(|(blast, events)| (blast.releases.iter().map(|ground| tonnes.get(ground).copied().unwrap_or(0.0)).sum::<f64>(), events))
+                .collect();
+            blasts.sort_by(|a, b| b.0.total_cmp(&a.0));
+            for (_, events) in blasts.into_iter().take(2) {
+                if let Some(hour) = events.fired_h {
+                    breaks.insert((hour / 24.0).ceil() as u32);
+                }
+            }
+        }
         let mut day_intervals: BTreeMap<u32, Vec<Interval>> = BTreeMap::new();
         let mut covered: BTreeMap<u32, BTreeSet<u32>> = BTreeMap::new();
         for interval in &input.intervals {
             if window.is_none_or(|window| (window.first_day..window.first_day + window.days).contains(&interval.day())) {
-                let label = interval.day() / period_days * period_days;
+                let weekly = interval.day() / period_days * period_days;
+                let label = breaks.range(weekly..=interval.day()).next_back().copied().unwrap_or(weekly);
                 day_intervals.entry(label).or_default().push(*interval);
                 covered.entry(label).or_default().insert(interval.day());
             }
@@ -1841,6 +1868,7 @@ fn solve_periods(
     }
     Ok(PlanSolve {
         day_values,
+        period_days: days.iter().copied().zip(covered.iter().cloned()).collect(),
         routes,
         objective,
         bound,
