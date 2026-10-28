@@ -2425,12 +2425,10 @@ pub fn conshdlr_propagate(
             let lastpropdomchgcount = domchgcount;
             let lastnusefulpropconss = c.nusefulpropconss;
 
-            // Get the array of the constraints to be processed.
-            let conss = if nconss > 0 {
-                c.propconss.0[firstcons as usize..(firstcons + nconss) as usize].to_vec()
-            } else {
-                Vec::new()
-            };
+            // Get the array of the constraints to be processed. Updates are
+            // delayed during the call, so the array cannot change: lend it
+            // out rather than copy it, and put it back after.
+            let propconss = if nconss > 0 { std::mem::take(&mut scip.conshdlrs[h].propconss.0) } else { Vec::new() };
             let counts = CallCounts::take(scip);
 
             // Check, if we want to use eager evaluation.
@@ -2447,7 +2445,17 @@ pub fn conshdlr_propagate(
             } else {
                 scip.conshdlrs[h].proptime.start(time_enabled);
             }
-            consprop(scip, h, &conss, nusefulconss, nmarkedpropconss, proptiming, &mut result)?;
+            let conss = if nconss > 0 {
+                &propconss[firstcons as usize..(firstcons + nconss) as usize]
+            } else {
+                &[][..]
+            };
+            let called = consprop(scip, h, conss, nusefulconss, nmarkedpropconss, proptiming, &mut result);
+            if nconss > 0 {
+                debug_assert!(scip.conshdlrs[h].propconss.0.is_empty(), "propagation changed the constraints it was given");
+                scip.conshdlrs[h].propconss.0 = propconss;
+            }
+            called?;
             if instrongbranching {
                 scip.conshdlrs[h].sbproptime.stop(time_enabled);
             } else {
