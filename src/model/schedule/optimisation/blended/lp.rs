@@ -224,9 +224,10 @@ pub(crate) struct WarmStarts {
 }
 
 impl WarmStarts {
-    /// How many shapes are held: the interval's first program and the few
-    /// an interval tries with more segments.
-    const HELD: usize = 4;
+    /// Day boundaries, crusher limits and segment refinements cycle through
+    /// more than a few shapes. Keep their bases across those transitions so
+    /// returning to a shape does not need another cold solve.
+    const HELD: usize = 32;
 
     fn take(&mut self, shape: u64) -> Option<solver::Basis> {
         let at = self.bases.iter().position(|(held, _)| *held == shape)?;

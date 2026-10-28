@@ -449,22 +449,22 @@ impl<'a> State<'a> {
     fn work(&mut self, interval: Interval) -> Result<(), String> {
         let input = self.input;
         let k = interval.index;
-        // Readiness is judged on the state the interval opened with, as the
-        // replay judges it.
-        let opening_ground = self.ground.clone();
+        // Ground stays at its opening state throughout planning: only apply
+        // changes it, after all topologies have been evaluated. Readiness and
+        // shared-block ordering therefore need no separate copy of the map.
         // Drill and blast works the hour first, on the ground standing as it
         // opens; what fires is dug from the end of its window.
         self.now_h = interval.start_h;
         if let Some(chain) = self.chain.as_mut() {
-            chain.advance(interval, |ground| opening_ground.get(&ground).is_some_and(|left| *left > FINISHED_T));
+            chain.advance(interval, |ground| self.ground.get(&ground).is_some_and(|left| *left > FINISHED_T));
         }
         let first: Vec<Bar> = (0..input.loaders.len())
             .filter_map(|loader| {
                 let rate = interval_rate(&input.loaders[loader], k)?;
                 let task = authored_tasks(input, loader)
                     .into_iter()
-                    .find(|&task| self.ready(task, interval, rate.dig_tph, rate.reclaim_tph, &opening_ground))?;
-                self.open_bar(loader, task, &BTreeSet::new(), &opening_ground)
+                    .find(|&task| self.ready(task, interval, rate.dig_tph, rate.reclaim_tph))?;
+                self.open_bar(loader, task, &BTreeSet::new())
             })
             .collect();
         let mut topology = Topology {
@@ -480,7 +480,7 @@ impl<'a> State<'a> {
         self.building.clear();
         let plan = self.solve(interval, &topology)?;
         let plan = self.reopen_idle(interval, &topology, plan)?;
-        let mut plan = self.settle(interval, &mut topology, plan, &opening_ground)?;
+        let mut plan = self.settle(interval, &mut topology, plan)?;
 
         // While a loader has finished its bar with time left in the
         // interval, give it its next bar in a segment of its own and solve
@@ -490,7 +490,7 @@ impl<'a> State<'a> {
         let budget = input.segments_per_interval.max(1);
         let mut tried: BTreeSet<(usize, usize, usize)> = BTreeSet::new();
         while topology.segments.len() < budget && !self.cancelled() {
-            let Some(mut trial) = self.transition(interval, &topology, &plan, &opening_ground, &mut tried) else {
+            let Some(mut trial) = self.transition(interval, &topology, &plan, &mut tried) else {
                 break;
             };
             // What the interval already decided for an exclusive pile
@@ -510,7 +510,7 @@ impl<'a> State<'a> {
             let found = self
                 .solve(interval, &trial)
                 .and_then(|found| self.reopen_idle(interval, &trial, found))
-                .and_then(|found| self.settle(interval, &mut trial, found, &opening_ground));
+                .and_then(|found| self.settle(interval, &mut trial, found));
             match found {
                 Ok(found)
                     if found.objective > plan.objective + IMPROVEMENT * plan.objective.abs().max(1.0) && found.money >= plan.money - MONEY_SLACK * plan.money.abs().max(1.0) =>
@@ -567,12 +567,12 @@ impl<'a> State<'a> {
 
     /// A loader's bar as it opens in a segment, or `None` when it has no
     /// work there: a delay.
-    fn open_bar(&self, loader: usize, task: usize, done: &BTreeSet<GroundId>, opening_ground: &BTreeMap<GroundId, f64>) -> Option<Bar> {
+    fn open_bar(&self, loader: usize, task: usize, done: &BTreeSet<GroundId>) -> Option<Bar> {
         match &self.input.tasks[task].kind {
             TaskKind::Dig { sequence } => Some(Bar {
                 loader,
                 task,
-                blocks: self.next_block(loader, sequence, None, done, opening_ground).into_iter().collect(),
+                blocks: self.next_block(sequence, None, done).into_iter().collect(),
                 pile: None,
                 emptied: Vec::new(),
             }),
@@ -617,7 +617,7 @@ impl<'a> State<'a> {
     /// until neither changes anything; a narrowed bar stays narrowed, so
     /// this ends. The answer before growing stays feasible, so no growth is
     /// worth less.
-    fn settle(&self, interval: Interval, topology: &mut Topology, mut plan: Plan, opening_ground: &BTreeMap<GroundId, f64>) -> Result<Plan, String> {
+    fn settle(&self, interval: Interval, topology: &mut Topology, mut plan: Plan) -> Result<Plan, String> {
         let input = self.input;
         let last = topology.segments.len() - 1;
         let done = topology.done();
@@ -641,7 +641,7 @@ impl<'a> State<'a> {
                 if !finished || rate * duration - used <= NEGLIGIBLE_T || self.shared.get(&(bar.loader, end)).copied().unwrap_or(false) {
                     continue;
                 }
-                if let Some(next) = self.next_block(bar.loader, sequence, Some(end), &done, opening_ground) {
+                if let Some(next) = self.next_block(sequence, Some(end), &done) {
                     bar.blocks.push(next);
                     grew = true;
                 }
@@ -663,14 +663,7 @@ impl<'a> State<'a> {
     /// bars between are passed over only when they surely have no work: a
     /// dig bar whose remaining blocks the program must finish first, a
     /// reclaim bar whose cap or piles were empty as the interval opened.
-    fn transition(
-        &self,
-        interval: Interval,
-        topology: &Topology,
-        plan: &Plan,
-        opening_ground: &BTreeMap<GroundId, f64>,
-        tried: &mut BTreeSet<(usize, usize, usize)>,
-    ) -> Option<Topology> {
+    fn transition(&self, interval: Interval, topology: &Topology, plan: &Plan, tried: &mut BTreeSet<(usize, usize, usize)>) -> Option<Topology> {
         let input = self.input;
         let last = topology.segments.len() - 1;
         let done = topology.done();
@@ -766,7 +759,7 @@ impl<'a> State<'a> {
                 }
             }
             let Some(task) = following else { continue };
-            let Some(opened) = self.open_bar(bar.loader, task, &gone, opening_ground) else {
+            let Some(opened) = self.open_bar(bar.loader, task, &gone) else {
                 continue;
             };
             if matches!(input.tasks[task].kind, TaskKind::Dig { .. }) && opened.blocks.is_empty() {
@@ -808,7 +801,7 @@ impl<'a> State<'a> {
                 }
             }
             // Read on the interval's opening, and only a cap spent before it.
-            TaskKind::Reclaim { .. } => Some(self.ready(task, interval, dig_tph, reclaim_tph, &self.ground)),
+            TaskKind::Reclaim { .. } => Some(self.ready(task, interval, dig_tph, reclaim_tph)),
             TaskKind::Delay => Some(true),
         }
     }
@@ -834,10 +827,10 @@ impl<'a> State<'a> {
     }
 
     /// The first block of `sequence` after `after` with tonnes left that
-    /// authored order lets `loader` start, `after` itself counting as
+    /// authored order lets a loader start, `after` itself counting as
     /// finished in this interval, and the blocks in `done` gone before the
     /// segment opens.
-    fn next_block(&self, loader: usize, sequence: &[GroundId], after: Option<GroundId>, done: &BTreeSet<GroundId>, opening_ground: &BTreeMap<GroundId, f64>) -> Option<GroundId> {
+    fn next_block(&self, sequence: &[GroundId], after: Option<GroundId>, done: &BTreeSet<GroundId>) -> Option<GroundId> {
         let start = after.map_or(0, |after| sequence.iter().position(|block| *block == after).map_or(sequence.len(), |position| position + 1));
         let mut previous = after;
         for &block in &sequence[start..] {
@@ -850,8 +843,7 @@ impl<'a> State<'a> {
                 // The formulation's `order` row: the earlier block gone by
                 // the end of this cell, or of the one before when another
                 // loader could also have dug it.
-                let shared = self.shared.get(&(loader, earlier)).copied().unwrap_or(false);
-                let gone = if shared { opening_ground.get(&earlier) } else { self.ground.get(&earlier) };
+                let gone = self.ground.get(&earlier);
                 if gone.is_some_and(|left| *left > FINISHED_T) {
                     return None;
                 }
@@ -1478,7 +1470,7 @@ impl<'a> State<'a> {
     }
 
     /// The replay's readiness, from the state the interval opened with.
-    fn ready(&self, bar: usize, interval: Interval, dig_tph: f64, reclaim_tph: f64, opening_ground: &BTreeMap<GroundId, f64>) -> bool {
+    fn ready(&self, bar: usize, interval: Interval, dig_tph: f64, reclaim_tph: f64) -> bool {
         let task = &self.input.tasks[bar];
         if !task_active(task, interval) {
             return false;
@@ -1493,7 +1485,7 @@ impl<'a> State<'a> {
                 }
                 let mut cursor = self.cursor.borrow_mut();
                 let at = cursor.entry(bar).or_default();
-                while sequence.get(*at).is_some_and(|block| !opening_ground.get(block).is_some_and(|left| *left > FINISHED_T)) {
+                while sequence.get(*at).is_some_and(|block| !self.ground.get(block).is_some_and(|left| *left > FINISHED_T)) {
                     *at += 1;
                 }
                 let current = sequence.get(*at).copied();
