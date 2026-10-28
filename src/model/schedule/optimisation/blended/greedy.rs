@@ -1104,7 +1104,18 @@ impl<'a> State<'a> {
             }
             for ((loader, destination), cols) in flows {
                 let planned = plan.routes.get(&(loader, destination, day)).copied().unwrap_or(0.0);
-                let due = (planned * paced - self.followed.get(&(loader, destination, day)).copied().unwrap_or(0.0)).max(0.0);
+                // A late release can postpone a route's work across midnight.
+                // Keep its missed tonnes due, but do not pull future days'
+                // work forward. A rebased tail starts with no earlier debt.
+                let first = input.intervals.first().map_or(day, |interval| interval.day());
+                let earlier: f64 = plan.routes.range((loader, destination, first)..(loader, destination, day)).map(|(_, tonnes)| tonnes).sum();
+                let delivered: f64 = self
+                    .followed
+                    .range((loader, destination, first)..=(loader, destination, day))
+                    .filter(|((_, _, day), _)| plan.planned.contains(day))
+                    .map(|(_, tonnes)| tonnes)
+                    .sum();
+                let due = (earlier + planned * paced - delivered).max(0.0);
                 let mut over: Vec<(Col, f64)> = cols.iter().map(|col| (*col, 1.0)).collect();
                 if due > NEGLIGIBLE_T && plan.follow > 0.0 {
                     let kept = problem.add_column(plan.follow, 0.0..=due);

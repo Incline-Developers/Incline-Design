@@ -4,9 +4,10 @@
 //! day, how many tonnes go to each destination, dug or reclaimed. The dispatch still chooses
 //! every hour's blocks, destinations and trucks itself, under authored bar
 //! priority, and the replay still checks the result; the targets only steer
-//! its objective. Each loader's route is paced through the day: tonnes up to
-//! the planned share of the day so far earn [`PlanTargets::follow`] per
-//! tonne, and tonnes past it cost [`PlanTargets::overrun`]. Neither is money.
+//! its objective. Each loader's route is paced through the day, carrying
+//! earlier days' shortfalls forward: tonnes up to the cumulative planned
+//! share earn [`PlanTargets::follow`] per tonne, and tonnes past it cost
+//! [`PlanTargets::overrun`]. Neither is money.
 
 use std::collections::{BTreeMap, BTreeSet};
 
