@@ -1292,6 +1292,13 @@ fn solve_periods(
         *diggers.entry(ground).or_default() += 1;
     }
     for (loader_index, chain) in chains.iter().enumerate() {
+        let available: Vec<f64> = capacity[loader_index]
+            .iter()
+            .scan(0.0, |total, hours| {
+                *total += hours;
+                Some(*total)
+            })
+            .collect();
         let mut prefix = 0.0;
         let mut held = true;
         for (position, &(ground, task_index)) in chain.iter().enumerate() {
@@ -1312,6 +1319,18 @@ fn solve_periods(
                     f64::INFINITY,
                     &format!("reach_{loader_index}_{}_{p}", ground.0),
                 );
+                // Once this prefix is finished, only the remaining loader
+                // capacity can reach the next block. Its whole tonnage is a
+                // loose big-M when that block is barely reachable this period.
+                if let Some(&(next, task)) = chain.get(position + 1)
+                    && task == task_index
+                    && let Some(&dug) = loader_so_far.get(&(loader_index, next, p))
+                {
+                    let room = (available[p] - prefix).max(0.0);
+                    if room < tonnes[&next] {
+                        builder.row(&[(dug, 1.0), (flag, -room)], f64::NEG_INFINITY, 0.0, &format!("reachnext_{loader_index}_{}_{p}", next.0));
+                    }
+                }
                 if same_bar && let Some(&ahead) = finished.get(&(chain[position - 1].0, p)) {
                     builder.row(&[(flag, 1.0), (ahead, -1.0)], f64::NEG_INFINITY, 0.0, &format!("inorder_{loader_index}_{}_{p}", ground.0));
                 }
