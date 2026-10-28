@@ -24,22 +24,11 @@ pub struct EncodedColumn {
 
 /// Encodes one column chunk. Owns its values, so the chunks of a row group - and of several row
 /// groups - can be compressed on different threads.
-pub type ColumnJob = Box<
-    dyn FnOnce(ColumnDescPtr, WriterPropertiesPtr) -> Result<EncodedColumn, ParquetError> + Send,
->;
+pub type ColumnJob = Box<dyn FnOnce(ColumnDescPtr, WriterPropertiesPtr) -> Result<EncodedColumn, ParquetError> + Send>;
 
-fn encode_column<T: DataType>(
-    descr: ColumnDescPtr,
-    props: WriterPropertiesPtr,
-    values: &[T::T],
-    def_levels: Option<&[i16]>,
-) -> Result<EncodedColumn, ParquetError> {
+fn encode_column<T: DataType>(descr: ColumnDescPtr, props: WriterPropertiesPtr, values: &[T::T], def_levels: Option<&[i16]>) -> Result<EncodedColumn, ParquetError> {
     let mut sink = TrackedWrite::new(Vec::new());
-    let mut column = get_typed_column_writer::<T>(get_column_writer(
-        descr,
-        props,
-        Box::new(SerializedPageWriter::new(&mut sink)),
-    ));
+    let mut column = get_typed_column_writer::<T>(get_column_writer(descr, props, Box::new(SerializedPageWriter::new(&mut sink))));
     column.write_batch(values, def_levels, None)?;
     let close = column.close()?;
     Ok(EncodedColumn {
@@ -52,14 +41,7 @@ fn column_job<T: DataType>(values: Vec<T::T>, def_levels: Option<Arc<Vec<i16>>>)
 where
     T::T: 'static,
 {
-    Box::new(move |descr, props| {
-        encode_column::<T>(
-            descr,
-            props,
-            &values,
-            def_levels.as_deref().map(Vec::as_slice),
-        )
-    })
+    Box::new(move |descr, props| encode_column::<T>(descr, props, &values, def_levels.as_deref().map(Vec::as_slice)))
 }
 
 pub trait Source {
@@ -72,11 +54,7 @@ pub trait Source {
 
 fn single_type<P: PqArrayType>(name: &str, nullable: bool) -> Type {
     Type::primitive_type_builder(name, P::physical_type())
-        .with_repetition(if nullable {
-            Repetition::OPTIONAL
-        } else {
-            Repetition::REQUIRED
-        })
+        .with_repetition(if nullable { Repetition::OPTIONAL } else { Repetition::REQUIRED })
         .with_logical_type(P::logical_type())
         .build()
         .expect("valid type")
@@ -159,12 +137,7 @@ pub struct NullableRowSource<R: PqArrayRow, I: Iterator<Item = Option<R>>> {
 }
 
 impl<R: PqArrayRow, I: Iterator<Item = Option<R>>> NullableRowSource<R, I> {
-    pub fn new(
-        group_name: &str,
-        names: &[&str],
-        iter: I,
-        row_group_size: usize,
-    ) -> Result<Self, TryReserveError> {
+    pub fn new(group_name: &str, names: &[&str], iter: I, row_group_size: usize) -> Result<Self, TryReserveError> {
         let capacity = buffer_capacity(iter.size_hint(), row_group_size);
         Ok(Self {
             ty: Type::group_type_builder(group_name)
@@ -241,10 +214,7 @@ impl<P: PqArrayType, const N: usize> PqArrayRow for [P; N] {
     }
 
     fn column_jobs(buffer: Self::Buffer, def_levels: Option<Arc<Vec<i16>>>) -> Vec<ColumnJob> {
-        buffer
-            .into_iter()
-            .map(|values| column_job::<P::DataType>(values, def_levels.clone()))
-            .collect()
+        buffer.into_iter().map(|values| column_job::<P::DataType>(values, def_levels.clone())).collect()
     }
 }
 

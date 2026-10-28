@@ -10,7 +10,5 @@ repository = "https://github.com/Incline-Developers/Incline-Design"
 solver = { path = "../solver" }
 log = "0.4"
 web-time = "1.1.0"
-
-# The browser has no C library to take `erf` from.
-[target.'cfg(target_arch = "wasm32")'.dependencies]
+# `erf`, which std lacks, in Rust rather than from the C library.
 libm = "0.2.16"

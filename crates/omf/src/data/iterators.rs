@@ -2,16 +2,12 @@ use std::fmt::Display;
 
 use chrono::{DateTime, NaiveDate, Utc};
 
+use super::{BoundaryValues, GenericArrays, GenericFreeformSubblocks, GenericNumbers, GenericOptionalArrays, GenericScalars, NumberType};
 use crate::{
     date_time::{date_time_to_f64, date_time_to_i64, date_to_f64, date_to_i64},
     error::Error,
     file::{ReadAt, SubFile},
     pqarray::read::SimpleIter,
-};
-
-use super::{
-    BoundaryValues, GenericArrays, GenericFreeformSubblocks, GenericNumbers, GenericOptionalArrays,
-    GenericScalars, NumberType,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -29,11 +25,7 @@ impl<T: NumberType> Boundary<T> {
     }
 
     pub fn from_value(value: T, is_inclusive: bool) -> Self {
-        if is_inclusive {
-            Self::LessEqual(value)
-        } else {
-            Self::Less(value)
-        }
+        if is_inclusive { Self::LessEqual(value) } else { Self::Less(value) }
     }
 
     pub fn value(self) -> T {
@@ -106,9 +98,7 @@ impl<R: ReadAt> Iterator for Vertices<R> {
     }
 }
 
-fn array_item_cast<T, U: From<T>, const N: usize>(
-    input: Option<Result<[T; N], Error>>,
-) -> Option<Result<[U; N], Error>> {
+fn array_item_cast<T, U: From<T>, const N: usize>(input: Option<Result<[T; N], Error>>) -> Option<Result<[U; N], Error>> {
     input.map(|r| r.map(|a| a.map(Into::into)))
 }
 
@@ -156,9 +146,7 @@ impl<R: ReadAt> Numbers<R> {
     pub fn try_into_f64(self) -> Result<NumbersF64<R>, Error> {
         match &self {
             Numbers::I64(_) => Err(Error::UnsafeCast("64-bit integer", "64-bit float")),
-            Numbers::F32(_) | Numbers::F64(_) | Numbers::Date(_) | Numbers::DateTime(_) => {
-                Ok(NumbersF64(self))
-            }
+            Numbers::F32(_) | Numbers::F64(_) | Numbers::Date(_) | Numbers::DateTime(_) => Ok(NumbersF64(self)),
         }
     }
 
@@ -224,9 +212,7 @@ impl<R: ReadAt> Iterator for Vectors<R> {
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            Self::F32x2(iter) => iter
-                .next()
-                .map(|r| r.map(|o| o.map(|[x, y]| [x.into(), y.into(), 0.0]))),
+            Self::F32x2(iter) => iter.next().map(|r| r.map(|o| o.map(|[x, y]| [x.into(), y.into(), 0.0]))),
             Self::F64x2(iter) => iter.next().map(|r| r.map(|o| o.map(|[x, y]| [x, y, 0.0]))),
             Self::F32x3(iter) => {
                 let input = iter.next();
@@ -243,14 +229,9 @@ pub struct GenericBoundaries<T: NumberType, R: ReadAt> {
     inclusive: SimpleIter<bool, SubFile<R>>,
 }
 
-impl<T: NumberType + std::fmt::Debug, R: ReadAt + std::fmt::Debug> std::fmt::Debug
-    for GenericBoundaries<T, R>
-{
+impl<T: NumberType + std::fmt::Debug, R: ReadAt + std::fmt::Debug> std::fmt::Debug for GenericBoundaries<T, R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GenericBoundaries")
-            .field("value", &self.value)
-            .field("inclusive", &"...")
-            .finish()
+        f.debug_struct("GenericBoundaries").field("value", &self.value).field("inclusive", &"...").finish()
     }
 }
 
@@ -299,10 +280,7 @@ impl<R: ReadAt> Boundaries<R> {
     pub fn try_into_f64(self) -> Result<BoundariesF64<R>, Error> {
         match &self {
             Boundaries::I64(_) => Err(Error::UnsafeCast("64-bit integer", "64-bit float")),
-            Boundaries::F32(_)
-            | Boundaries::F64(_)
-            | Boundaries::Date(_)
-            | Boundaries::DateTime(_) => Ok(BoundariesF64(self)),
+            Boundaries::F32(_) | Boundaries::F64(_) | Boundaries::Date(_) | Boundaries::DateTime(_) => Ok(BoundariesF64(self)),
         }
     }
 
@@ -315,9 +293,7 @@ impl<R: ReadAt> Boundaries<R> {
         match self {
             Boundaries::F32(_) => Err(Error::UnsafeCast("32-bit float", "64-bit integer")),
             Boundaries::F64(_) => Err(Error::UnsafeCast("64-bit float", "64-bit integer")),
-            Boundaries::I64(_) | Boundaries::Date(_) | Boundaries::DateTime(_) => {
-                Ok(BoundariesI64(self))
-            }
+            Boundaries::I64(_) | Boundaries::Date(_) | Boundaries::DateTime(_) => Ok(BoundariesI64(self)),
         }
     }
 }

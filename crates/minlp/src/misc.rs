@@ -771,23 +771,10 @@ pub fn compute_two_sample_t_test_value(meanx: f64, meany: f64, variancex: f64, v
     tresult
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-unsafe extern "C" {
-    /// The C library's `erf`, as SCIP calls it.
-    #[link_name = "erf"]
-    fn c_erf(x: f64) -> f64;
-}
-
-/// `SCIPerf`: the C library's error function. The browser has no C
-/// library; there it is `libm`'s, a port of musl's, which can differ from
-/// glibc's (correctly rounded since 2.40) in the last bit.
+/// `SCIPerf`: the error function. SCIP takes it from the C library; this is
+/// `libm`'s, a port of musl's, which can differ from glibc's (correctly
+/// rounded since 2.40) in the last bit.
 pub fn erf(x: f64) -> f64 {
-    #[cfg(not(target_arch = "wasm32"))]
-    // SAFETY: `erf` is a pure function of its argument.
-    unsafe {
-        c_erf(x)
-    }
-    #[cfg(target_arch = "wasm32")]
     libm::erf(x)
 }
 

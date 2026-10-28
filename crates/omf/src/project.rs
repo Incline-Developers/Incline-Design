@@ -1,5 +1,4 @@
 use chrono::{DateTime, Utc};
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -14,7 +13,7 @@ use crate::{
 ///
 /// This is the root element of an OMF file, holding global metadata and a list of
 /// [Elements](crate::Element) that describe the objects or shapes within the file.
-#[derive(Debug, PartialEq, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub struct Project {
     /// Project name.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -93,11 +92,7 @@ impl Validate for Project {
             .name(&self.name)
             .finite_seq(self.origin, "origin")
             .objs(&mut self.elements)
-            .unique(
-                self.elements.iter().map(|e| &e.name),
-                "elements[..]::name",
-                false,
-            );
+            .unique(self.elements.iter().map(|e| &e.name), "elements[..]::name", false);
     }
 }
 

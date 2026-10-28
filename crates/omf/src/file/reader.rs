@@ -2,15 +2,14 @@ use std::{io::Read, sync::Arc};
 
 use flate2::read::GzDecoder;
 
+use super::{
+    ReadAt, SubFile,
+    zip_container::{Archive, INDEX_NAME},
+};
 use crate::{
     FORMAT_VERSION_MAJOR, FORMAT_VERSION_MINOR, FORMAT_VERSION_PRERELEASE, Project, array,
     error::{Error, Limit},
     validate::{Problems, Validate, Validator},
-};
-
-use super::{
-    ReadAt, SubFile,
-    zip_container::{Archive, INDEX_NAME},
 };
 
 pub const DEFAULT_VALIDATION_LIMIT: u32 = 100;
@@ -147,27 +146,17 @@ impl<R: ReadAt> Reader<R> {
         // Inflated whole and parsed from the slice: serde_json's reader path pulls one
         // byte at a time through `Read` and is several times slower on a large index.
         let mut json = Vec::new();
-        LimitedRead::new(
-            GzDecoder::new(self.archive.open(INDEX_NAME)?),
-            self.limits().json_bytes.unwrap_or(u64::MAX),
-        )
-        .read_to_end(&mut json)?;
-        let mut project: Project =
-            serde_json::from_slice(&json).map_err(Error::DeserializationFailed)?;
+        LimitedRead::new(GzDecoder::new(self.archive.open(INDEX_NAME)?), self.limits().json_bytes.unwrap_or(u64::MAX)).read_to_end(&mut json)?;
+        let mut project: Project = serde_json::from_slice(&json).map_err(Error::DeserializationFailed)?;
         drop(json);
-        let mut val = Validator::new()
-            .with_filenames(self.archive.filenames())
-            .with_limit(self.limits().validation);
+        let mut val = Validator::new().with_filenames(self.archive.filenames()).with_limit(self.limits().validation);
         project.validate_inner(&mut val);
         let warnings = val.finish().into_result()?;
         Ok((project, warnings))
     }
 
     /// Returns the size in bytes of the compressed array.
-    pub fn array_compressed_size(
-        &self,
-        array: &array::Array<impl array::ArrayType>,
-    ) -> Result<u64, Error> {
+    pub fn array_compressed_size(&self, array: &array::Array<impl array::ArrayType>) -> Result<u64, Error> {
         Ok(self.archive.span(array.filename())?.size)
     }
 
@@ -176,10 +165,7 @@ impl<R: ReadAt> Reader<R> {
     /// Fails with an error if the range is invalid. The contents are not checked or validated by
     /// this method. The caller must ensure they are valid and safe to use. This function doesn't
     /// check against any limit.
-    pub fn array_bytes_reader(
-        &self,
-        array: &array::Array<impl array::ArrayType>,
-    ) -> Result<SubFile<R>, Error> {
+    pub fn array_bytes_reader(&self, array: &array::Array<impl array::ArrayType>) -> Result<SubFile<R>, Error> {
         array.constraint(); // Check that validation has been done.
         self.archive.open(array.filename())
     }
@@ -188,10 +174,7 @@ impl<R: ReadAt> Reader<R> {
     ///
     /// The will allocate memory to store the result. Call `array_compressed_size` to find out how
     /// much will be allocated.
-    pub fn array_bytes(
-        &self,
-        array: &array::Array<impl array::ArrayType>,
-    ) -> Result<Vec<u8>, Error> {
+    pub fn array_bytes(&self, array: &array::Array<impl array::ArrayType>) -> Result<Vec<u8>, Error> {
         let mut buf = Vec::new();
         self.array_bytes_reader(array)?.read_to_end(&mut buf)?;
         Ok(buf)
@@ -214,9 +197,7 @@ impl<R: Read> Read for LimitedRead<R> {
         let n = self.inner.read(buf)?;
         self.limit = self.limit.saturating_sub(n as u64);
         if self.limit == 0 {
-            Err(std::io::Error::other(Error::LimitExceeded(
-                Limit::JsonBytes,
-            )))
+            Err(std::io::Error::other(Error::LimitExceeded(Limit::JsonBytes)))
         } else {
             Ok(n)
         }
