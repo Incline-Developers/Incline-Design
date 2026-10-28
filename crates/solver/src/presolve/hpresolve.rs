@@ -1892,10 +1892,18 @@ impl Presolve {
             }
         }
 
+        // With no down (up) locks the column can go to its lower (upper)
+        // bound. A cost beyond the tolerance forces it there, and an
+        // infinite bound then means unboundedness; a column of about zero
+        // cost is dual feasible anywhere, so it is fixed only at a finite
+        // bound.
         if num_down_locks == 0 || num_up_locks == 0 {
+            let tol = self.settings.dual_feasibility_tolerance;
             if num_down_locks == 0 {
-                check!(self.fix_col_to_lower(postsolve, col));
-            } else {
+                if self.model.col_cost[col] > tol || self.model.col_lower[col] > -INF {
+                    check!(self.fix_col_to_lower(postsolve, col));
+                }
+            } else if self.model.col_cost[col] < -tol || self.model.col_upper[col] < INF {
                 check!(self.fix_col_to_upper(postsolve, col));
             }
             return Outcome::Ok;
