@@ -60,7 +60,7 @@ use super::{
             plan::{PlanTargets, Route},
             replay::{BlendSolution, ChunkRow, MovementRow, ReplayReport, replay_as_published},
             rolling::{self, Carry, Stitched},
-            utilisation,
+            routing, utilisation,
         },
     },
     plan::{self, PlanSolve, Settings, Window},
@@ -708,6 +708,22 @@ fn relaxed(relaxations: &Option<Relaxations>, bound: &mut Option<f64>) -> Option
 pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), settings: AnytimeSettings, cancel: &Arc<AtomicBool>, mut report: impl FnMut(&Progress)) -> Found {
     let input = original;
     let started = Instant::now();
+    // The search ends early enough to reroute its schedule's material over
+    // the whole horizon, digging, piles and reclaim held: see `routing`.
+    // Its size follows the schedule, so the time is judged again whenever
+    // the search keeps a better one.
+    let deadline = settings.budget;
+    let groups = routing::Groups::new(input);
+    let reserving = !cancel.load(Ordering::Relaxed);
+    let reserve_for = |schedule: &BlendSolution| {
+        if reserving {
+            routing::reserve(input, &groups, schedule, deadline)
+        } else {
+            Duration::ZERO
+        }
+    };
+    let reserve = std::cell::Cell::new(reserve_for(&start.0));
+    let search_budget = || deadline.saturating_sub(reserve.get());
     let mut best = Best {
         solution: start.0,
         replay: start.1,
@@ -843,6 +859,7 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
                         }
                         value = found.value();
                         best = found;
+                        reserve.set(reserve_for(&best.solution));
                         targets = candidate;
                         followed = true;
                         kept += 1;
@@ -884,7 +901,7 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
         };
         let mut interrupted = false;
         for start in starts {
-            let left = settings.budget.saturating_sub(started.elapsed());
+            let left = search_budget().saturating_sub(started.elapsed());
             if left.is_zero() || cancel.load(Ordering::Relaxed) {
                 break 'passes;
             }
@@ -938,7 +955,7 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
             // the chain live.
             let incumbent = schedule_fingerprint(&best.solution);
             let mut evaluate = |live_round: bool, tally: &mut Tally| {
-                if started.elapsed() >= settings.budget || cancel.load(Ordering::Relaxed) || (live_round && live.is_none()) {
+                if started.elapsed() >= search_budget() || cancel.load(Ordering::Relaxed) || (live_round && live.is_none()) {
                     return None;
                 }
                 let dispatching = Instant::now();
@@ -1013,6 +1030,7 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
                 }
                 value = found.value();
                 best = found;
+                reserve.set(reserve_for(&best.solution));
                 targets = candidate;
                 improved = true;
                 kept += 1;
@@ -1064,6 +1082,36 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
         background::pause(Duration::from_millis(20));
     }
     relaxed(&relaxation, &mut bound);
+    let reserve = reserve.get();
+    if !reserve.is_zero() && !cancel.load(Ordering::Relaxed) {
+        let timed = adopted.as_deref().unwrap_or(input);
+        let ends = started + deadline.saturating_sub(Duration::from_secs_f64(routing::REPLAY_S));
+        let stop: solver::Interrupt = Arc::new(move || Instant::now() >= ends);
+        let rerouting = Instant::now();
+        let begun = started.elapsed().as_secs_f64();
+        let note = match routing::reroute(timed, &groups, &best.solution, stop) {
+            Ok(mut solution) => match replay_as_published(timed, &mut solution, cancel) {
+                Some(replay) if replay.is_valid() && replay.ranked_objective() > value => {
+                    let gain = replay.ranked_objective() - value;
+                    value = replay.ranked_objective();
+                    best = Best { solution, replay };
+                    format!("rerouted, {gain:.0} better")
+                }
+                Some(replay) => format!("reroute not kept: valid {}, {:.0} better", replay.is_valid(), replay.ranked_objective() - value),
+                None => "reroute not kept: cancelled".into(),
+            },
+            Err(error) => format!("reroute not kept: {error}"),
+        };
+        record(
+            value,
+            bound,
+            format!(
+                "{note} (reserved {:.1}s, began at {begun:.1}s, took {:.1}s)",
+                reserve.as_secs_f64(),
+                rerouting.elapsed().as_secs_f64()
+            ),
+        );
+    }
     record(value, bound, tally.summary());
     record(value, bound, "done".into());
     Found {

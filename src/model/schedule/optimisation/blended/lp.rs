@@ -71,6 +71,28 @@ impl LinearProgram {
         self.maximise_solver(warm)
     }
 
+    /// Maximise with the interior point method, crossover and a simplex
+    /// finish, stopping when `stop` says so. For one large program, where
+    /// the simplex method's many degenerate pivots cost far more than the
+    /// interior point method's few factorisations.
+    pub(crate) fn maximise_ipm(&mut self, stop: Option<solver::Interrupt>) -> Result<Vec<f64>, String> {
+        self.tidy()?;
+        // Crossover takes the point to an exact vertex, so the interior
+        // point method need not close the last digits of its gap: on these
+        // programs it can stall there, and a stall falls back on a simplex
+        // solve from scratch.
+        let options = solver::Options {
+            solver: solver::Solver::Ipm,
+            ipm_optimality_tolerance: 1e-6,
+            ..solver::Options::default()
+        };
+        let solution = solver::solve_from(&self.to_solver(), &options, None, stop);
+        if solution.status != solver::Status::Optimal {
+            return Err(format!("solver ended {:?}", solution.status));
+        }
+        Ok(solution.col_value)
+    }
+
     /// What a basis carries over between programs: their columns, and each
     /// row's columns. Bounds, weights and coefficients may differ.
     fn shape(&self) -> u64 {

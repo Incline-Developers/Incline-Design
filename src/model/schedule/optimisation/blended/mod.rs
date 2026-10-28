@@ -50,6 +50,7 @@ pub(crate) mod input;
 pub(crate) mod lp;
 pub(crate) mod plan;
 pub(crate) mod reduce;
+pub(crate) mod routing;
 pub(crate) mod relaxation;
 pub(crate) mod replay;
 pub(crate) mod rolling;
