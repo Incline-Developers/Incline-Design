@@ -825,7 +825,8 @@ impl Presolve {
         if old_impl_upper >= -tol && new_upper < -tol {
             self.mark_changed_row(row);
         }
-        let new_dual_implied = !self.is_dual_implied_free(row) && old_impl_upper > self.row_dual_upper[row] + tol && new_upper <= self.row_dual_upper[row] + tol;
+        // Ranged rows included: the row's dual is implied non-positive.
+        let new_dual_implied = !self.is_dual_implied_free(row) && self.model.row_upper[row] != INF && new_upper <= tol;
         if old_upper_source != origin_col {
             if old_upper_source != NONE && old_upper_source != self.row_dual_lower_source[row] {
                 self.impl_row_dual_source_by_col[old_upper_source].remove(&row);
@@ -857,7 +858,8 @@ impl Presolve {
         if old_impl_lower <= tol && new_lower > tol {
             self.mark_changed_row(row);
         }
-        let new_dual_implied = !self.is_dual_implied_free(row) && old_impl_lower < self.row_dual_lower[row] - tol && new_lower >= self.row_dual_lower[row] - tol;
+        // Ranged rows included: the row's dual is implied non-negative.
+        let new_dual_implied = !self.is_dual_implied_free(row) && self.model.row_lower[row] != -INF && new_lower >= -tol;
         if old_lower_source != origin_col {
             if old_lower_source != NONE && old_lower_source != self.row_dual_upper_source[row] {
                 self.impl_row_dual_source_by_col[old_lower_source].remove(&row);
