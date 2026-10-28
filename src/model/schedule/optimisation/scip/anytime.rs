@@ -556,6 +556,9 @@ struct LongTerm {
 
 impl LongTerm {
     fn start(input: &BlendInput, first: &BlendSolution, limit: Duration, ending: &Arc<AtomicBool>) -> Option<Self> {
+        // Leave the digging search time to follow these targets and sweep
+        // windows before the final routing reserve begins.
+        let limit = limit / 4;
         let (input, first, ending) = (input.clone(), first.clone(), Arc::clone(ending));
         let (sender, planned) = std::sync::mpsc::channel();
         let worker = background::spawn("schedule-long-term", move || {
@@ -1039,7 +1042,10 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
                 None => chain_at(input, &best, from),
             };
             let solve = Settings {
-                time_limit: limit.min(left),
+                // A plan has value only after its targets are dispatched.
+                // Leave time to try the incumbent a hard MIP returns instead
+                // of spending the search's last seconds proving its gap.
+                time_limit: limit.min(left / 2),
                 relative_gap: 1e-3,
                 relax: false,
             };
