@@ -256,9 +256,9 @@ fn max_value_scale_matrix(options: &Options, lp: &mut SimplexLp, scale: &mut Sca
             col_scale_value = 2f64.powf((col_scale_value.ln() / log2 + 0.5).floor());
             col_scale_value = min_allow_scale.max(col_scale_value).min(max_allow_scale);
             scale.col[col] = col_scale_value;
-            for k in start[col]..start[col + 1] {
-                lp.a.value[k] *= scale.col[col];
-                let value = lp.a.value[k].abs();
+            for value_k in &mut lp.a.value[start[col]..start[col + 1]] {
+                *value_k *= scale.col[col];
+                let value = value_k.abs();
                 matrix_min_value = matrix_min_value.min(value);
                 matrix_max_value = matrix_max_value.max(value);
             }

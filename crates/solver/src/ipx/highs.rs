@@ -279,11 +279,11 @@ fn fill_in_ipx_data(lp: &SimplexLp) -> IpxData {
     let mut reduced_rowmap = vec![-1 as Int; num_row];
     let mut counter = 0;
     let mut findex = 0;
-    for row in 0..num_row {
+    for (row, mapped) in reduced_rowmap[..num_row].iter_mut().enumerate() {
         if findex < free_rows.len() && free_rows[findex] == row {
             findex += 1;
         } else {
-            reduced_rowmap[row] = counter;
+            *mapped = counter;
             counter += 1;
         }
     }

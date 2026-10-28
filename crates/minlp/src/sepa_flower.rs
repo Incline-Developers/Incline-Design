@@ -379,7 +379,7 @@ fn separate_standard(scip: &mut Scip, sepa: SepaId, hypergraph: &FlowerHypergrap
                 let infinity = scip.set.infinity();
                 let local = api::get_depth(scip) > 0;
                 let mut row = crate::scip_lp::create_empty_row_sepa(scip, sepa, &name, 0.0, infinity, local, false, true)?;
-                crate::scip_lp::add_vars_to_row(scip, row, &[vertexdata.var, edgedata.var], &[1.0 * vertexdata.coefscale, -1.0 * edgedata.coefscale])?;
+                crate::scip_lp::add_vars_to_row(scip, row, &[vertexdata.var, edgedata.var], &[1.0 * vertexdata.coefscale, -edgedata.coefscale])?;
 
                 add_cut(scip, sol, row, &mut nseparated, presult)?;
                 crate::scip_lp::release_row(scip, &mut row)?;
@@ -424,10 +424,10 @@ fn separate_one_flower(scip: &mut Scip, sepa: SepaId, hypergraph: &FlowerHypergr
             let adjacent = hypergraph.overlap_data(bestoverlap).minedge;
             let adjacentdata = hypergraph.edge_data(adjacent);
 
-            let mut terms = vec![(basedata.var, 1.0 * basedata.coefscale), (adjacentdata.var, -1.0 * adjacentdata.coefscale)];
+            let mut terms = vec![(basedata.var, 1.0 * basedata.coefscale), (adjacentdata.var, -adjacentdata.coefscale)];
             for &v in basevertices {
                 let vertexdata = hypergraph.vertex_data(v);
-                terms.push((vertexdata.var, -1.0 * vertexdata.coefscale));
+                terms.push((vertexdata.var, -vertexdata.coefscale));
             }
             for &v in overlapvertices {
                 let vertexdata = hypergraph.vertex_data(v);
@@ -512,12 +512,12 @@ fn separate_two_flower(scip: &mut Scip, sepa: SepaId, hypergraph: &FlowerHypergr
 
             let mut terms = vec![
                 (basedata.var, 1.0 * basedata.coefscale),
-                (adjacent1data.var, -1.0 * adjacent1data.coefscale),
-                (adjacent2data.var, -1.0 * adjacent2data.coefscale),
+                (adjacent1data.var, -adjacent1data.coefscale),
+                (adjacent2data.var, -adjacent2data.coefscale),
             ];
             for &v in basevertices {
                 let data = hypergraph.vertex_data(v);
-                terms.push((data.var, -1.0 * data.coefscale));
+                terms.push((data.var, -data.coefscale));
             }
             for &v in overlap1vertices {
                 let data = hypergraph.vertex_data(v);

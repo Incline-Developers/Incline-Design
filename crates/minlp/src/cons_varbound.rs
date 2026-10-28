@@ -2885,9 +2885,7 @@ fn lincons_upgd_varbound(scip: &mut Scip, cons: ConsId, s: &crate::cons_linear::
             1
         } else if set.is_integral(vals[0]) && !set.is_integral(vals[1]) {
             0
-        } else if !set.is_integral(vals[0]) && set.is_integral(vals[1]) {
-            1
-        } else if (vals[0].abs() - 1.0).abs() < (vals[1].abs() - 1.0).abs() {
+        } else if (!set.is_integral(vals[0]) && set.is_integral(vals[1])) || (vals[0].abs() - 1.0).abs() < (vals[1].abs() - 1.0).abs() {
             1
         } else {
             0

@@ -11,6 +11,9 @@ use super::{
 
 const INF: f64 = f64::INFINITY;
 
+/// An interior point in the user's terms: `(x, xl, xu, slack, y, zl, zu)`.
+pub(crate) type InteriorSolution = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>);
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Model {
     dualized: bool,
@@ -485,16 +488,8 @@ impl Model {
     }
 
     /// IPX's `PostsolveInteriorSolution`, into the user's space.
-    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
-    pub fn postsolve_interior_solution(
-        &self,
-        x_solver: &[f64],
-        xl_solver: &[f64],
-        xu_solver: &[f64],
-        y_solver: &[f64],
-        zl_solver: &[f64],
-        zu_solver: &[f64],
-    ) -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) {
+    #[allow(clippy::too_many_arguments)]
+    pub fn postsolve_interior_solution(&self, x_solver: &[f64], xl_solver: &[f64], xu_solver: &[f64], y_solver: &[f64], zl_solver: &[f64], zu_solver: &[f64]) -> InteriorSolution {
         let (nv, nc) = (u(self.num_var), u(self.num_constr));
         let mut x = vec![0.0; nv];
         let mut xl = vec![0.0; nv];
@@ -703,19 +698,15 @@ impl Model {
                 }
             }
             zu_user.fill(0.0);
-            let mut k = nc;
-            for &j in &self.boxed_vars {
-                zu_user[u(j)] = xl_solver[k];
-                k += 1;
+            for (&j, &xl) in self.boxed_vars.iter().zip(&xl_solver[nc..]) {
+                zu_user[u(j)] = xl;
             }
             for i in 0..m {
                 xl_user[i] = if self.scaled_lbuser[i].is_finite() { zl_solver[n + i] } else { INF };
             }
             xu_user.fill(INF);
-            let mut k = nc;
-            for &j in &self.boxed_vars {
-                xu_user[u(j)] = zl_solver[k];
-                k += 1;
+            for (&j, &zl) in self.boxed_vars.iter().zip(&zl_solver[nc..]) {
+                xu_user[u(j)] = zl;
             }
             for i in 0..nc {
                 slack_user[i] = match self.constr_type[i] {
@@ -770,10 +761,8 @@ impl Model {
             }
             y_user[..nc].copy_from_slice(&x_solver[..nc]);
             z_user[..nv].copy_from_slice(&x_solver[n..n + nv]);
-            let mut k = nc;
-            for &j in &self.boxed_vars {
-                z_user[u(j)] -= x_solver[k];
-                k += 1;
+            for (&j, &x) in self.boxed_vars.iter().zip(&x_solver[nc..]) {
+                z_user[u(j)] -= x;
             }
         } else {
             x_user[..nv].copy_from_slice(&x_solver[..nv]);
@@ -797,12 +786,10 @@ impl Model {
                     IPX_BASIC
                 };
             }
-            let mut k = nc;
-            for &j in &self.boxed_vars {
-                if basic_status_solver[k] == IPX_BASIC {
+            for (&j, &status) in self.boxed_vars.iter().zip(&basic_status_solver[nc..]) {
+                if status == IPX_BASIC {
                     vbasis_user[u(j)] = IPX_NONBASIC_UB;
                 }
-                k += 1;
             }
         } else {
             for i in 0..nc {
@@ -859,13 +846,13 @@ impl Model {
 }
 
 fn check_vectors(m: Int, n: Int, rhs: &[f64], constr_type: &[u8], obj: &[f64], lb: &[f64], ub: &[f64]) -> Int {
-    for i in 0..u(m) {
-        if !rhs[i].is_finite() {
+    for rhs_i in &rhs[..u(m)] {
+        if !rhs_i.is_finite() {
             return -1;
         }
     }
-    for j in 0..u(n) {
-        if !obj[j].is_finite() {
+    for obj_j in &obj[..u(n)] {
+        if !obj_j.is_finite() {
             return -2;
         }
     }
@@ -880,8 +867,8 @@ fn check_vectors(m: Int, n: Int, rhs: &[f64], constr_type: &[u8], obj: &[f64], l
             return -3;
         }
     }
-    for i in 0..u(m) {
-        if !matches!(constr_type[i], b'=' | b'<' | b'>') {
+    for constr_type_i in &constr_type[..u(m)] {
+        if !matches!(*constr_type_i, b'=' | b'<' | b'>') {
             return -4;
         }
     }
@@ -897,15 +884,15 @@ fn check_matrix(m: Int, n: Int, ap: &[Int], ai: &[Int], ax: &[f64]) -> Int {
             return -5;
         }
     }
-    for p in 0..u(ap[u(n)]) {
-        if !ax[p].is_finite() {
+    for ax_p in &ax[..u(ap[u(n)])] {
+        if !ax_p.is_finite() {
             return -6;
         }
     }
     let mut marked = vec![-1 as Int; u(m)];
     for j in 0..u(n) {
-        for p in u(ap[j])..u(ap[j + 1]) {
-            let i = ai[p];
+        for ai_p in &ai[u(ap[j])..u(ap[j + 1])] {
+            let i = *ai_p;
             if i < 0 || i >= m {
                 return -7;
             }
@@ -972,8 +959,8 @@ pub(crate) fn primal_residual(model: &Model, x: &[f64]) -> f64 {
     let ait = model.ait();
     let b = model.b();
     let mut res = 0.0;
-    for i in 0..b.len() {
-        let r = b[i] - dot_column(ait, i as Int, x);
+    for (i, b_i) in b.iter().enumerate() {
+        let r = *b_i - dot_column(ait, i as Int, x);
         res = std_max(res, r.abs());
     }
     res

@@ -368,7 +368,7 @@ fn determine_max_distance(scip: &Scip, d: &mut HeurData, distances: &[i32]) -> i
     // Determine the critical index to look for an appropriate neighborhood
     // distance, starting from the zero position.
     let mut criticalidx = zeropos as i32 + ((1.0 - d.minfixingrate) * nrelevantdistances as f64) as i32;
-    criticalidx = if criticalidx <= nrelevantdistances as i32 - 1 {
+    criticalidx = if criticalidx < nrelevantdistances as i32 {
         criticalidx
     } else {
         nrelevantdistances as i32 - 1
@@ -820,7 +820,7 @@ fn setup_sub_scip(scip: &Scip, subscip: &mut Scip, solvelimits: &SolveLimits, he
 
     // Add an objective cutoff.
     let upperbound = api::get_upperbound(scip) - scip.set.sumepsilon();
-    let cutoff = if !scip.set.is_infinity(-1.0 * api::get_lowerbound(scip)) {
+    let cutoff = if !scip.set.is_infinity(-api::get_lowerbound(scip)) {
         (1.0 - d.minimprove) * api::get_upperbound(scip) + d.minimprove * api::get_lowerbound(scip)
     } else if api::get_upperbound(scip) >= 0.0 {
         (1.0 - d.minimprove) * api::get_upperbound(scip)

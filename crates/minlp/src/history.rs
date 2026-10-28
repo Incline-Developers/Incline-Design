@@ -97,7 +97,7 @@ impl History {
         let olddelta = sumcontribution - self.pscostweightedmean[dir];
         self.pscostcount[dir] += weight;
         self.pscostweightedmean[dir] += weight * olddelta / self.pscostcount[dir];
-        self.pscostvariance[dir] = self.pscostvariance[dir] + weight * olddelta * (sumcontribution - self.pscostweightedmean[dir]);
+        self.pscostvariance[dir] += weight * olddelta * (sumcontribution - self.pscostweightedmean[dir]);
     }
 
     /// `SCIPhistoryUpdateAncPseudocost`.

@@ -1161,8 +1161,7 @@ fn separation_round_lp(
         let n = if pass == 1 { scip.set.nconshdlrs } else { scip.set.nsepas } as usize;
         let mut i = 0;
         while i < n && !*cutoff && !*lperror && !r.enoughcuts && lpok(scip) {
-            let result;
-            if pass == 1 {
+            let result = if pass == 1 {
                 let h = scip.set.conshdlrs_sepa[i];
                 i += 1;
 
@@ -1170,7 +1169,7 @@ fn separation_round_lp(
                     continue;
                 }
 
-                result = crate::cons::conshdlr_separate_lp(scip, h, actdepth, onlydelayed)?;
+                crate::cons::conshdlr_separate_lp(scip, h, actdepth, onlydelayed)?
             } else {
                 let sepa = scip.set.sepas[i];
                 i += 1;
@@ -1183,8 +1182,8 @@ fn separation_round_lp(
                     continue;
                 }
 
-                result = crate::sepa::sepa_exec_lp(scip, sepa, s, actdepth, bounddist, allowlocal, onlydelayed)?;
-            }
+                crate::sepa::sepa_exec_lp(scip, sepa, s, actdepth, bounddist, allowlocal, onlydelayed)?
+            };
 
             *cutoff = *cutoff || result == R::Cutoff;
             consadded = consadded || result == R::ConsAdded;
@@ -1251,8 +1250,7 @@ fn separation_round_sol(scip: &mut Scip, s: usize, sol: crate::types::SolId, act
         let n = if pass == 1 { scip.set.nconshdlrs } else { scip.set.nsepas } as usize;
         let mut i = 0;
         while i < n && !*cutoff && !enoughcuts && !solve_is_stopped(scip, false) {
-            let result;
-            if pass == 1 {
+            let result = if pass == 1 {
                 let h = scip.set.conshdlrs_sepa[i];
                 i += 1;
 
@@ -1260,7 +1258,7 @@ fn separation_round_sol(scip: &mut Scip, s: usize, sol: crate::types::SolId, act
                     continue;
                 }
 
-                result = crate::cons::conshdlr_separate_sol(scip, h, sol, actdepth, onlydelayed)?;
+                crate::cons::conshdlr_separate_sol(scip, h, sol, actdepth, onlydelayed)?
             } else {
                 let sepa = scip.set.sepas[i];
                 i += 1;
@@ -1273,8 +1271,8 @@ fn separation_round_sol(scip: &mut Scip, s: usize, sol: crate::types::SolId, act
                     continue;
                 }
 
-                result = crate::sepa::sepa_exec_sol(scip, sepa, s, sol, actdepth, allowlocal, onlydelayed)?;
-            }
+                crate::sepa::sepa_exec_sol(scip, sepa, s, sol, actdepth, allowlocal, onlydelayed)?
+            };
 
             *cutoff = *cutoff || result == R::Cutoff;
             consadded = consadded || result == R::ConsAdded;
@@ -1429,7 +1427,7 @@ pub fn price_loop(
         let enoughvars = if maxvars == i32::MAX {
             false
         } else {
-            scip.pricestore.as_ref().unwrap().nvars >= maxvars + 1
+            scip.pricestore.as_ref().unwrap().nvars > maxvars
         };
         let stoppricing = false;
         if scip.set.nactivepricers > 0 && !enoughvars {
@@ -3537,7 +3535,7 @@ pub fn solve_cip(scip: &mut Scip) -> ScipResult<bool> {
 
     while !solve_is_stopped(scip, true) && !restart {
         let mut foundsol = false;
-        let infeasible;
+
         let mut nodesel;
 
         loop {
@@ -3610,7 +3608,7 @@ pub fn solve_cip(scip: &mut Scip) -> ScipResult<bool> {
         cutoff = n.cutoff;
         postpone = n.postpone;
         unbounded = n.unbounded;
-        infeasible = n.infeasible;
+        let infeasible = n.infeasible;
         restart = n.restart;
         let afternodeheur = n.afternodeheur;
         let mut stopped = n.stopped;

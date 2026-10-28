@@ -333,10 +333,10 @@ impl<V: Default + Clone, E: Default + Clone, O: Default + Clone> Hypergraph<V, E
         // This loop sets beg[0] = 0, beg[1] = deg(0), beg[2] = deg(0) +
         // deg(1), beg[v] = deg(0) + ... + deg(v-1).
         let mut current = 0;
-        for v in 0..nv {
+        for beg in &mut self.verticesedgesbeg[..nv] {
             let temp = current;
-            current += self.verticesedgesbeg[v];
-            self.verticesedgesbeg[v] = temp;
+            current += *beg;
+            *beg = temp;
         }
 
         // We now traverse through all edges e and their incident vertices v,
@@ -424,10 +424,10 @@ impl<V: Default + Clone, E: Default + Clone, O: Default + Clone> Hypergraph<V, E
         // This loop sets beg[0] = 0, beg[1] = deg(0), beg[2] = deg(0) +
         // deg(1), beg[o] = deg(0) + ... + deg(o-1).
         let mut current = 0;
-        for o in 0..no {
+        for beg in &mut self.overlapsedgesbeg[..no] {
             let temp = current;
-            current += self.overlapsedgesbeg[o];
-            self.overlapsedgesbeg[o] = temp;
+            current += *beg;
+            *beg = temp;
         }
 
         // We now traverse through all edges e and their incident overlaps o,
@@ -478,10 +478,10 @@ impl<V: Default + Clone, E: Default + Clone, O: Default + Clone> Hypergraph<V, E
         // This loop sets beg[0] = 0, beg[1] = deg(0), beg[2] = deg(0) +
         // deg(1), beg[v] = deg(0) + ... + deg(v-1).
         let mut current = 0;
-        for v in 0..nv {
+        for beg in &mut self.verticesoverlapsbeg[..nv] {
             let temp = current;
-            current += self.verticesoverlapsbeg[v];
-            self.verticesoverlapsbeg[v] = temp;
+            current += *beg;
+            *beg = temp;
         }
 
         // We traverse through all overlaps o and their incident vertices v,

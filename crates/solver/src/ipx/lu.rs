@@ -17,6 +17,10 @@ const LU_STABILITY_THRESHOLD: f64 = 1e-12;
 const FT_DIAG_ERROR_TOL: f64 = 1e-8;
 const REALLOC_FACTOR: f64 = 1.5;
 
+/// `(L, U, rowperm, colperm, dependent_cols)`, as [`BasicLu::get_factors`]
+/// returns them.
+pub(crate) type LuFactors = (Option<SparseMatrix>, Option<SparseMatrix>, Vec<Int>, Vec<Int>, Vec<Int>);
+
 #[derive(Clone, Debug)]
 pub(crate) struct BasicLu {
     lu: Lu,
@@ -65,7 +69,7 @@ impl BasicLu {
     /// L (unit diagonal removed) and U, the row and column permutations,
     /// and the positions of the dependent columns (at the end of the
     /// pivot sequence).
-    pub fn get_factors(&mut self, want_l: bool, want_u: bool) -> (Option<SparseMatrix>, Option<SparseMatrix>, Vec<Int>, Vec<Int>, Vec<Int>) {
+    pub fn get_factors(&mut self, want_l: bool, want_u: bool) -> LuFactors {
         let dim = self.lu.m;
         let (rowperm, colperm, l, uf) = self.lu.get_factors(want_l, want_u);
         let to_matrix = |(colptr, rowidx, values): (Vec<Int>, Vec<Int>, Vec<f64>)| {

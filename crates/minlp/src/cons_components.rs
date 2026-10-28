@@ -843,13 +843,9 @@ fn cons_presol_components(
             }
 
             // If the component is unbounded or infeasible, this holds for the
-            // complete problem as well.
-            if *result == ScipResultCode::Unbounded || *result == ScipResultCode::Cutoff {
-                break;
-            }
-            // If there is only one component left, let's solve this in the
-            // main SCIP.
-            else if nsolved == comps.ncomponents - 1 {
+            // complete problem as well. If there is only one component left,
+            // let's solve this in the main SCIP.
+            if *result == ScipResultCode::Unbounded || *result == ScipResultCode::Cutoff || nsolved == comps.ncomponents - 1 {
                 break;
             }
         }

@@ -619,8 +619,8 @@ pub fn multiply_by_constant_expr_sum(scip: &mut Scip, expr: ExprId, constant: f6
     let n = scip.exprs[expr].children.len();
     let d = data_mut(scip, expr);
 
-    for i in 0..n {
-        d.coefficients[i] *= constant;
+    for coefficient in &mut d.coefficients[..n] {
+        *coefficient *= constant;
     }
     d.constant *= constant;
 }
@@ -734,12 +734,12 @@ pub fn power_expr_sum(scip: &mut Scip, base: ExprId, exponent: i32, simplify: bo
     let mut childrenpower = vec![vec![crate::var::NONE; exponent_u + 1]; nchildren];
     for i in 0..nchildren {
         childrenpower[i][1] = children[i];
-        for k in 2..=exponent_u {
-            childrenpower[i][k] = crate::expr_pow::create_expr_pow(scip, children[i], k as f64, None, 0)?;
+        for (k, i_k) in (2..=exponent_u).zip(&mut childrenpower[i][2..=exponent_u]) {
+            *i_k = crate::expr_pow::create_expr_pow(scip, children[i], k as f64, None, 0)?;
             if simplify {
-                let (simplified, _changed, _infeasible) = scip_expr::simplify_expr(scip, childrenpower[i][k], ownercreate, ownercreatedata)?;
-                expr::expr_release(scip, &mut childrenpower[i][k])?;
-                childrenpower[i][k] = simplified;
+                let (simplified, _changed, _infeasible) = scip_expr::simplify_expr(scip, *i_k, ownercreate, ownercreatedata)?;
+                expr::expr_release(scip, i_k)?;
+                *i_k = simplified;
             }
         }
     }
@@ -819,9 +819,9 @@ pub fn power_expr_sum(scip: &mut Scip, base: ExprId, exponent: i32, simplify: bo
             }
 
             let mut restsum = 0;
-            for i in betapos + 1..nterms {
-                restsum += beta[i];
-                beta[i] = 0;
+            for beta_i in &mut beta[betapos + 1..nterms] {
+                restsum += *beta_i;
+                *beta_i = 0;
             }
             beta[betapos + 1] = restsum;
         }

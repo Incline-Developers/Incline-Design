@@ -214,8 +214,8 @@ pub fn copy_plugins(
     }
 
     // Copy all expression handlers (every caller copies them).
-    for p in 0..set.exprhdlrs.len() {
-        let h = set.exprhdlrs[p];
+    for exprhdlr in &set.exprhdlrs {
+        let h = *exprhdlr;
         crate::expr::exprhdlr_copy_include(target, source, h)?;
     }
 

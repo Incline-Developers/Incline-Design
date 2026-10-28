@@ -160,9 +160,7 @@ fn update_best_candidate(
                     } else {
                         aggrvarsol2
                     }
-                } else if scip.set.is_feas_ge(aggrvarsol2, multvarub) {
-                    aggrvarsol1
-                } else if aggrvarsol1.abs() < aggrvarsol2.abs() {
+                } else if scip.set.is_feas_ge(aggrvarsol2, multvarub) || aggrvarsol1.abs() < aggrvarsol2.abs() {
                     aggrvarsol1
                 } else {
                     aggrvarsol2

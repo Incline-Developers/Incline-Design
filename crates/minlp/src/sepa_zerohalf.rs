@@ -509,16 +509,16 @@ fn mod2_matrix_transform_cont_rows(scip: &mut Scip, sol: SolId, maxrowdensity: f
         let rowcols = r.cols.0[..rowlen].to_vec();
         let (local, rank) = (r.local, r.rank);
 
-        if rhsslack <= maxslack {
-            if let Some(introw) = transform_non_integral_row(scip, sol, allowlocal, maxslack, 1, local, rank, &rowvals, &rowcols, rhs, &mut intvarpos)? {
-                m.transintrows.push(introw);
-            }
+        if rhsslack <= maxslack
+            && let Some(introw) = transform_non_integral_row(scip, sol, allowlocal, maxslack, 1, local, rank, &rowvals, &rowcols, rhs, &mut intvarpos)?
+        {
+            m.transintrows.push(introw);
         }
 
-        if lhsslack <= maxslack {
-            if let Some(introw) = transform_non_integral_row(scip, sol, allowlocal, maxslack, -1, local, rank, &rowvals, &rowcols, -lhs, &mut intvarpos)? {
-                m.transintrows.push(introw);
-            }
+        if lhsslack <= maxslack
+            && let Some(introw) = transform_non_integral_row(scip, sol, allowlocal, maxslack, -1, local, rank, &rowvals, &rowcols, -lhs, &mut intvarpos)?
+        {
+            m.transintrows.push(introw);
         }
     }
 

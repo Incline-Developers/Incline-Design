@@ -1036,11 +1036,11 @@ pub fn solve_knapsack_exactly(
         // Update solution information.
         if let Some(s) = sol.as_deref_mut() {
             // Collect items.
-            for l in 0..j {
-                s.solitems.push(myitems[l]);
+            for myitem in &myitems[..j] {
+                s.solitems.push(*myitem);
             }
-            for l in j..nmyitems {
-                s.nonsolitems.push(myitems[l]);
+            for myitem in &myitems[j..nmyitems] {
+                s.nonsolitems.push(*myitem);
             }
         }
 
@@ -1088,8 +1088,8 @@ pub fn solve_knapsack_exactly(
     allcurrminweight[0] = currminweight;
 
     // Fills first row of dynamic programming table with optimal values.
-    for d in currminweight as usize..intcap {
-        optvalues[d] = myprofits[0];
+    for optvalue in &mut optvalues[currminweight as usize..intcap] {
+        *optvalue = myprofits[0];
     }
 
     // Fills dynamic programming table with optimal values.
@@ -1507,8 +1507,8 @@ fn enlarge_minweights(scip: &Scip, minweights: &mut Vec<i64>, minweightslen: &mu
     }
 
     // Initialize new elements.
-    for j in *minweightslen..newlen {
-        minweights[j] = i64::MAX;
+    for minweight in &mut minweights[*minweightslen..newlen] {
+        *minweight = i64::MAX;
     }
     *minweightslen = newlen;
 }
@@ -3523,13 +3523,9 @@ fn propagate_cons(scip: &mut Scip, cons: ConsId, nfixedvars: &mut i32, mut usene
                         *nfixedvars += 1;
                         maxvarfixed = true;
                     }
-                    // The remaining cliques are singletons such that all subsequent
-                    // variables have a weight that fits into the knapsack.
-                    else if nnegcliques - c as i32 == nvars - startvarposclique {
-                        break;
-                    }
-                    // Early termination of the remaining loop because no further
-                    // variable fixings are possible:
+                    // Stop when the remaining cliques are singletons such that all
+                    // subsequent variables have a weight that fits into the knapsack,
+                    // or when no further variable fixings are possible:
                     //
                     // the gain in any of the following negated cliques (the
                     // additional term if the maximum weight variable was set to 1, and
@@ -3540,7 +3536,9 @@ fn propagate_cons(scip: &mut Scip, cons: ConsId, nfixedvars: &mut i32, mut usene
                     //   c' >= c: maxweights[c'] <= maxcliqueweight
                     // - their second largest elements are at least as large as the
                     //   smallest weight of the knapsack
-                    else if onesweightsum + minweightsum + (maxcliqueweight - cd(scip, cons).weights[nvars - 1]) <= capacity {
+                    else if nnegcliques - c as i32 == nvars - startvarposclique
+                        || onesweightsum + minweightsum + (maxcliqueweight - cd(scip, cons).weights[nvars - 1]) <= capacity
+                    {
                         break;
                     }
 
@@ -3785,8 +3783,8 @@ fn delete_redundant_vars(scip: &mut Scip, cons: ConsId, frontsum: i64, splitpos:
             let mut cliquenum = 0;
 
             // Calculate maximum activity due to cliques.
-            for w in 0..len {
-                if clqpart[w] == cliquenum {
+            for (w, clqpart_w) in clqpart[..len].iter().enumerate() {
+                if *clqpart_w == cliquenum {
                     maxactduetoclq += cd(scip, cons).weights[w + (splitpos + 1) as usize];
                     cliquenum += 1;
                 }
@@ -4056,9 +4054,9 @@ fn set_middle_weights(scip: &mut Scip, cons: ConsId, v: &mut i32, end: i32, nvar
 /// constraints
 ///
 /// 1. a) check if all two pairs exceed the capacity, then we can upgrade
-///       this constraint to a set-packing constraint
+///    this constraint to a set-packing constraint
 ///    b) check if all but the smallest weight fit into the knapsack, then we
-///       can upgrade this constraint to a logicor constraint
+///    can upgrade this constraint to a logicor constraint
 ///
 /// 2. check if besides big coefficients, that fit only by itself, for a
 ///    certain amount of variables all combination of these are a minimal
@@ -4660,7 +4658,7 @@ fn prepare_cons(scip: &mut Scip, cons: ConsId, nfixedvars: &mut i32, ndelconss: 
 ///
 ///    9x1 + 6x2 + 6x3 + 5x4 <= 13  =>  9x1 + 6x2 + 6x3 + 6x4 <= 12  =>  3x1 +
 ///    2x2 + 2x3 + 2x4 <= 4  =>  4x1 + 2x2 + 2x3 + 2x4 <= 4
-///                                                                      =>
+///    =>
 ///    2x1 + x2 + x3 + x4 <= 2
 ///    9x1 + 6x2 + 6x3 + 7x4 <= 13  =>  9x1 + 6x2 + 6x3 + 6x4 <= 12  =>  see
 ///    above
@@ -5723,11 +5721,9 @@ fn tighten_weights(
     }
 
     // Apply rule (3).
-    if (presoltiming & PRESOLTIMING_EXHAUSTIVE) != 0 {
-        if tighten_weights_lift(scip, cons, nchgcoefs)? {
-            // C keeps going after a cutoff here, only reporting it.
-            return tighten_weights_tail(scip, cons, presoltiming, nchgcoefs).map(|()| true);
-        }
+    if (presoltiming & PRESOLTIMING_EXHAUSTIVE) != 0 && tighten_weights_lift(scip, cons, nchgcoefs)? {
+        // C keeps going after a cutoff here, only reporting it.
+        return tighten_weights_tail(scip, cons, presoltiming, nchgcoefs).map(|()| true);
     }
 
     tighten_weights_tail(scip, cons, presoltiming, nchgcoefs).map(|()| false)
@@ -6134,8 +6130,8 @@ fn add_cliques_body(scip: &mut Scip, cons: ConsId, cliqueextractfactor: f64, nbd
         }
 
         // Use the gain weights and free capacity to derive greedily cliques.
-        if nposcliquevars > 1 {
-            if greedy_clique_algorithm(
+        if nposcliquevars > 1
+            && greedy_clique_algorithm(
                 scip,
                 &mut poscliquevars[..nposcliquevars],
                 &mut gainweights[..nposcliquevars],
@@ -6143,9 +6139,9 @@ fn add_cliques_body(scip: &mut Scip, cons: ConsId, cliqueextractfactor: f64, nbd
                 false,
                 cliqueextractfactor,
                 nbdchgs,
-            )? {
-                return Ok(true);
-            }
+            )?
+        {
+            return Ok(true);
         }
     }
 

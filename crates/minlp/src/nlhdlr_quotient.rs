@@ -780,8 +780,7 @@ fn estimate_bivariate_quotient(
         scip,
         // Bounds of x'.
         cmin(a * lbx, a * ubx) + b,
-        cmax(a * lbx, a * ubx) + b,
-        // Bounds of y'.
+        cmax(a * lbx, a * ubx) + b, // Bounds of y'.
         cmin(c * lby, c * uby) + d,
         cmax(c * lby, c * uby) + d,
         lbz,

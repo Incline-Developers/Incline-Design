@@ -166,7 +166,7 @@ impl RowPrep {
             // We consider eliminating either the term with maximal or the one with
             // minimal coefficient, taking the one that leads to the least weakening
             // of the cut.
-            for pos in 0..2 {
+            for (pos, loss_pos) in loss[..2].iter_mut().enumerate() {
                 let idx = if pos == 1 { nvars - 1 } else { maxcoefidx };
                 let var = self.vars[idx];
                 let coef = self.coefs[idx];
@@ -185,10 +185,10 @@ impl RowPrep {
                 // would loose w.r.t. ref(x).
                 if (coef > 0.0 && self.sidetype == SideType::Right) || (coef < 0.0 && self.sidetype == SideType::Left) {
                     // We would need to aggregate with -coef*var <= -coef*lb(x).
-                    loss[pos] = if scip.set.is_infinity(-lb) { INVALID } else { coef.abs() * (r - lb) };
+                    *loss_pos = if scip.set.is_infinity(-lb) { INVALID } else { coef.abs() * (r - lb) };
                 } else {
                     // We would need to aggregate with -coef*var >= -coef*ub(x).
-                    loss[pos] = if scip.set.is_infinity(ub) { INVALID } else { coef.abs() * (ub - r) };
+                    *loss_pos = if scip.set.is_infinity(ub) { INVALID } else { coef.abs() * (ub - r) };
                 }
             }
 
@@ -910,10 +910,10 @@ impl RowPrep {
         }
         let mut maxval = self.side.abs();
 
-        for i in 0..self.vars.len() {
-            let frac = ((self.coefs[i] + 0.5).floor() - self.coefs[i]).abs();
+        for coef in &self.coefs[..self.vars.len()] {
+            let frac = ((*coef + 0.5).floor() - *coef).abs();
             if frac != 0.0 {
-                if self.coefs[i].abs() > 0.5 {
+                if coef.abs() > 0.5 {
                     if frac < minfrac {
                         minfrac = frac;
                     }
@@ -921,8 +921,8 @@ impl RowPrep {
                     minfrac0 = frac;
                 }
             }
-            if self.coefs[i].abs() > maxval {
-                maxval = self.coefs[i].abs();
+            if coef.abs() > maxval {
+                maxval = coef.abs();
             }
         }
 

@@ -637,8 +637,8 @@ pub fn exprhdlr_hash_expr(scip: &mut Scip, expr: ExprId, hashkey: &mut u32, chil
         *hashkey = crate::misc::calc_fib_hash(*hashkey as f64);
 
         // Now make use of the hashkeys of the children.
-        for i in 0..scip.exprs[expr].children.len() {
-            *hashkey ^= childrenhashes[i];
+        for childhash in &childrenhashes[..scip.exprs[expr].children.len()] {
+            *hashkey ^= *childhash;
         }
     }
 
@@ -1580,9 +1580,9 @@ pub fn expr_eval_gradient(scip: &mut Scip, rootexpr: ExprId, sol: SolId, soltag:
         scip.exprs[child].difftag = difftag;
 
         // Call backward differentiation callback.
-        let derivative;
-        if expr_is_value(scip, child) {
-            derivative = 0.0;
+
+        let derivative = if expr_is_value(scip, child) {
+            0.0
         } else {
             let mut d = crate::def::INVALID;
             let h = scip.exprs[expr].exprhdlr;
@@ -1593,8 +1593,8 @@ pub fn expr_eval_gradient(scip: &mut Scip, rootexpr: ExprId, sol: SolId, soltag:
                 scip.exprs[rootexpr].derivative = crate::def::INVALID;
                 break;
             }
-            derivative = d;
-        }
+            d
+        };
 
         // Update partial derivative stored in the child expression: for a
         // variable, we have to sum up the partial derivatives of the root w.r.t.

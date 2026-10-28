@@ -194,7 +194,7 @@ pub fn exprcurv_power_inv(mut basebounds: Interval, exponent: f64, powercurv: Ex
         if basebounds.sup <= 0.0 && exponent > 1.0 && expisint && (exponent as i32) % 2 != 0 {
             return ExprCurv::Concave;
         }
-        if basebounds.inf >= 0.0 && exponent < 1.0 && exponent >= 0.0 {
+        if basebounds.inf >= 0.0 && (0.0..1.0).contains(&exponent) {
             return ExprCurv::Concave;
         }
 
@@ -305,9 +305,7 @@ pub fn exprcurv_monomial(nfactors: usize, exponents: Option<&[f64]>, factoridxs:
     //   exp_j*f_j'' >= 0
     // and for concavity, we require that
     // - all factors are concave, i.e., exp_j*f_j'' <= 0
-    let curv = if nnegative == nfactors && expcurvpos {
-        ExprCurv::Convex
-    } else if nnegative == nfactors - 1 && eps_ge(sum, 1.0, 1e-9) && expcurvpos {
+    let curv = if (nnegative == nfactors && expcurvpos) || (nnegative == nfactors - 1 && eps_ge(sum, 1.0, 1e-9) && expcurvpos) {
         ExprCurv::Convex
     } else if npositive == nfactors && eps_le(sum, 1.0, 1e-9) && expcurvneg {
         ExprCurv::Concave

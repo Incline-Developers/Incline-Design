@@ -83,7 +83,7 @@ fn vbounds_search_pos(vbounds: &Option<Box<VBounds>>, var: VarId, negativecoef: 
                     *insertpos = pos + 1;
                     *found = false;
                 }
-            } else if pos - 1 >= 0 && vb.vars[pos - 1] == var {
+            } else if pos > 0 && vb.vars[pos - 1] == var {
                 *insertpos = pos - 1;
                 *found = true;
             } else {
@@ -248,7 +248,7 @@ fn implics_search_var(implics: &Implics, varfixing: bool, implvar: VarId, poslow
                 // Upper implication found: check for a lower one before
                 // it.
                 *posupper = pos;
-                if pos - 1 >= 0 && implics.vars[f][pos - 1] == implvar {
+                if pos > 0 && implics.vars[f][pos - 1] == implvar {
                     *poslower = pos - 1;
                     *posadd = pos - 1;
                 } else {

@@ -545,9 +545,9 @@ impl<'a> Iterate<'a> {
         }
         multiply_add(ai, &self.y, -1.0, &mut e.rc, 'T');
         if !self.postprocessed {
-            for j in 0..n + m {
+            for (j, rc_j) in e.rc[..n + m].iter_mut().enumerate() {
                 if self.state_of(j) == State::Fixed {
-                    e.rc[j] = 0.0;
+                    *rc_j = 0.0;
                 }
             }
         }

@@ -17,12 +17,7 @@
 //! solver does with one thread: presolve, the root node's cuts and
 //! heuristics, restarts, symmetry handling and branch and bound.
 
-#![allow(clippy::needless_range_loop, reason = "a port of HiGHS's indexed loops, kept recognisable")]
-#![allow(clippy::neg_cmp_op_on_partial_ord, reason = "HiGHS's negated comparisons, which differ from the plain ones on NaN")]
-#![allow(clippy::manual_clamp, reason = "HiGHS's min/max pairs, which unlike clamp accept any bounds and NaN")]
 #![allow(clippy::too_many_arguments, reason = "HiGHS's signatures, kept for the port")]
-#![allow(clippy::type_complexity, reason = "HiGHS's nested containers, kept for the port")]
-#![allow(clippy::explicit_counter_loop, reason = "HiGHS's loops with a second counter, kept for the port")]
 
 mod factor;
 #[allow(dead_code, reason = "the MIP solver is being ported; nothing calls it yet")]

@@ -132,11 +132,11 @@ impl<'a> Basis<'a> {
     pub fn set_to_slack_basis(&mut self) {
         let m = u(self.model.rows());
         let n = u(self.model.cols());
-        for i in 0..m {
-            self.basis[i] = (n + i) as Int;
+        for (i, basic) in self.basis[..m].iter_mut().enumerate() {
+            *basic = (n + i) as Int;
         }
-        for j in 0..n {
-            self.map2basis[j] = -1;
+        for map in &mut self.map2basis[..n] {
+            *map = -1;
         }
         for i in 0..m {
             self.map2basis[n + i] = i as Int;
@@ -221,8 +221,8 @@ impl<'a> Basis<'a> {
         let ait = self.model.ait();
         if is_sparse {
             let mut nz = 0;
-            for k in 0..u(btran.nnz) {
-                let i = btran.pattern[k];
+            for pattern_k in &btran.pattern[..u(btran.nnz)] {
+                let i = *pattern_k;
                 nz += ait.end(i) - ait.begin(i);
             }
             nz /= 2;
@@ -305,9 +305,9 @@ impl<'a> Basis<'a> {
         let n = u(self.model.cols());
         let (b, c, ai) = (self.model.b(), self.model.c(), self.model.ai());
         y.copy_from_slice(b);
-        for j in 0..n + m {
+        for (j, x_j) in x[..n + m].iter().enumerate() {
             if self.is_nonbasic(j as Int) {
-                scatter_column(ai, j as Int, -x[j], y);
+                scatter_column(ai, j as Int, -*x_j, y);
             }
         }
         let input = y.to_vec();
@@ -447,8 +447,8 @@ impl<'a> Basis<'a> {
     fn inverse_search(&mut self, work: &mut [f64]) -> (Int, Int, f64) {
         let m = work.len();
         let mut inverse_max = 0.0;
-        for i in 0..m {
-            work[i] = 1.0 / (i + 1) as f64;
+        for (i, work_i) in work[..m].iter_mut().enumerate() {
+            *work_i = 1.0 / (i + 1) as f64;
         }
         loop {
             let input = work.to_vec();
@@ -689,8 +689,8 @@ fn power_method(mut func: impl FnMut(&[f64], &mut [f64]), v: &mut [f64]) -> f64 
     const TOL: f64 = 1e-3;
     let dim = v.len();
     let mut fv = vec![0.0; dim];
-    for i in 0..dim {
-        v[i] = 1.0 + 1.0 / (i + 1) as f64;
+    for (i, v_i) in v[..dim].iter_mut().enumerate() {
+        *v_i = 1.0 + 1.0 / (i + 1) as f64;
     }
     let norm = twonorm(v);
     for vi in v.iter_mut() {
@@ -742,8 +742,8 @@ fn compute_values(l: &SparseMatrix, ai: &SparseMatrix, j: Int, rownumber: &[Int]
     }
     let mut lhsmax = 0.0;
     let mut imax: Int = -1;
-    for t in u(top)..m {
-        let i = u(pattern[t]);
+    for pattern_t in &pattern[u(top)..m] {
+        let i = u(*pattern_t);
         let temp = lhs[i];
         let k = rownumber[i];
         if temp != 0.0 {
@@ -801,8 +801,8 @@ fn guess_basis(model: &Model, colweights: &[f64]) -> Vec<Int> {
     }
 
     // Singletons.
-    for i in 0..m {
-        if rownumber[i] >= 0 {
+    for (i, rownumber_i) in rownumber[..m].iter_mut().enumerate() {
+        if *rownumber_i >= 0 {
             continue;
         }
         let mut rowmax: f64 = 0.0;
@@ -823,7 +823,7 @@ fn guess_basis(model: &Model, colweights: &[f64]) -> Vec<Int> {
             }
         }
         if max_singleton > 0.0 && max_singleton >= 0.5 * rowmax {
-            rownumber[i] = basis.len() as Int;
+            *rownumber_i = basis.len() as Int;
             basis.push(jsingleton);
             active[u(jsingleton)] = false;
         }
@@ -868,8 +868,8 @@ fn guess_basis(model: &Model, colweights: &[f64]) -> Vec<Int> {
             }
         }
     }
-    for i in 0..m {
-        if rownumber[i] < 0 {
+    for (i, rownumber_i) in rownumber[..m].iter().enumerate() {
+        if *rownumber_i < 0 {
             basis.push((n + i) as Int);
         }
     }
@@ -898,8 +898,8 @@ pub(crate) fn starting_basis(iterate: &mut Iterate<'_>, basis: &mut Basis<'_>, i
     if info.errflag != 0 {
         return;
     }
-    for j in 0..n + m {
-        if colscale[j] == 0.0 || colscale[j].is_infinite() {
+    for (j, colscale_j) in colscale[..n + m].iter().enumerate() {
+        if *colscale_j == 0.0 || colscale_j.is_infinite() {
             if basis.is_basic(j as Int) {
                 basis.free_basic_variable(j as Int);
             } else {
@@ -941,10 +941,10 @@ fn postprocess_dependencies(iterate: &mut Iterate<'_>, basis: &mut Basis<'_>, in
         }
     }
     if info.dependent_rows > 0 {
-        for p in 0..m {
+        for (p, dy_p) in dy[..m].iter_mut().enumerate() {
             let j = u(basis.at(p));
             if j >= n && lb[j] == ub[j] {
-                dy[p] = -iterate.y[j - n];
+                *dy_p = -iterate.y[j - n];
                 dependent_rows.push(j - n);
             }
         }

@@ -348,7 +348,7 @@ fn estimate_special_power(scip: &Scip, d: &ExprData, sign: bool, multiplier: f64
         // (upper right or lower left half space) the point is in. Thus, we can
         // determine the region, and use the associated three extreme point to
         // interpolate the affine function.
-        let facetconstant;
+
         let mut facetcoefs = [0.0, 0.0];
         let mut vars = [NONE, NONE];
         let mut refexponents = [0.0, 0.0];
@@ -388,21 +388,21 @@ fn estimate_special_power(scip: &Scip, d: &ExprData, sign: bool, multiplier: f64
         let f1w1u = boxv[3].powf(refexponents[1]);
         let fw0lw1u = f0w0l * f1w1u;
         let fw0uw1l = f0w0u * f1w1l;
-        if isupperright {
+        let facetconstant = if isupperright {
             // Underestimator: fw0uw1u + (fw0uw1u - fw0lw1u) / (dw0) * (x0 - w0u) +
             // (fw0uw1u - fw0uw1l) / (dw1) * (x1 - w1u).
             let fw0uw1u = f0w0u * f1w1u;
             facetcoefs[0] = (fw0uw1u - fw0lw1u) / dw0;
             facetcoefs[1] = (fw0uw1u - fw0uw1l) / dw1;
-            facetconstant = fw0uw1u - facetcoefs[0] * boxv[1] - facetcoefs[1] * boxv[3];
+            fw0uw1u - facetcoefs[0] * boxv[1] - facetcoefs[1] * boxv[3]
         } else {
             // Underestimator: fw0lw1l + (fw0uw1l - fw0lw1l) / (dw0) * (x0 - w0l) +
             // (fw0lw1u- fw0lw1l) / (dw1) * (x1 - w1l).
             let fw0lw1l = f0w0l * f1w1l;
             facetcoefs[0] = (fw0uw1l - fw0lw1l) / dw0;
             facetcoefs[1] = (fw0lw1u - fw0lw1l) / dw1;
-            facetconstant = fw0lw1l - facetcoefs[0] * boxv[0] - facetcoefs[1] * boxv[2];
-        }
+            fw0lw1l - facetcoefs[0] * boxv[0] - facetcoefs[1] * boxv[2]
+        };
         rowprep.add_constant(multiplier * facetconstant);
         rowprep.add_term(vars[0], multiplier * facetcoefs[0] / scale[0]);
         rowprep.add_term(vars[1], multiplier * facetcoefs[1] / scale[1]);

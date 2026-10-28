@@ -795,8 +795,8 @@ impl Search {
                 let new_stack_size = self.localdom.domain_change_stack().len();
                 let domchgstack = self.localdom.domain_change_stack();
                 let mut solution_valid = true;
-                for j in domchg_stack_size + 1..new_stack_size {
-                    let change = domchgstack[j];
+                for domchgstack_j in &domchgstack[domchg_stack_size + 1..new_stack_size] {
+                    let change = *domchgstack_j;
                     if change.boundtype == BoundType::Lower {
                         if change.boundval > sol[change.column] + feastol {
                             solution_valid = false;
@@ -1192,9 +1192,10 @@ impl Search {
                     }
                     ChildSelectionRule::Obj => data.model.col_cost[col] >= 0.0,
                     ChildSelectionRule::Random => self.random.bit(),
-                    ChildSelectionRule::BestCost => {
-                        !(pc!(self, data).pseudocost_up_offset(col, branching_point, feastol) > pc!(self, data).pseudocost_down_offset(col, branching_point, feastol))
-                    }
+                    ChildSelectionRule::BestCost => pc!(self, data)
+                        .pseudocost_up_offset(col, branching_point, feastol)
+                        .partial_cmp(&pc!(self, data).pseudocost_down_offset(col, branching_point, feastol))
+                        .is_none_or(std::cmp::Ordering::is_le),
                     ChildSelectionRule::WorstCost => pc!(self, data).pseudocost_up(col, branching_point) >= pc!(self, data).pseudocost_down(col, branching_point),
                     ChildSelectionRule::Disjunction => {
                         let nodequeue = data.nodequeue.borrow();

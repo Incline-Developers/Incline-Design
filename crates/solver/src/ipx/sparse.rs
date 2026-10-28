@@ -636,7 +636,7 @@ pub(crate) fn sortperm(m: Int, values: Option<&[f64]>, reverse: bool) -> Vec<Int
         return perm;
     };
     // `std::pair`'s ordering, NaNs included.
-    let less = |a: (f64, Int), b: (f64, Int)| a.0 < b.0 || (!(b.0 < a.0) && a.1 < b.1);
+    let less = |a: (f64, Int), b: (f64, Int)| a.0 < b.0 || (b.0.partial_cmp(&a.0).is_none_or(std::cmp::Ordering::is_ge) && a.1 < b.1);
     if reverse {
         pdqsort(&mut perm, |&i, &j| less((values[u(j)], j), (values[u(i)], i)));
     } else {

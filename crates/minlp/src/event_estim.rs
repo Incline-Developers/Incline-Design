@@ -1525,11 +1525,7 @@ fn is_restart_applicable(scip: &Scip, eventhdlrdata: &EventhdlrData) -> bool {
         eventhdlrdata.treedata.nvisited
     };
 
-    if nnodes < eventhdlrdata.minnodes {
-        return false;
-    }
-
-    true
+    nnodes >= eventhdlrdata.minnodes
 }
 
 /// `shouldApplyRestartCompletion`: should a restart be applied based on the

@@ -434,14 +434,14 @@ fn expr_is_semicontinuous(scip: &mut Scip, nlhdlr: NlhdlrId, nlhdlrexprdata: usi
                         continue;
                     }
 
-                    for v2 in k..bvars.len() {
-                        if crate::var::var_comp(scip, bvars[v2], ind[v1]) > 0 {
+                    for (v2, bvar) in (k..).zip(&bvars[k..]) {
+                        if crate::var::var_comp(scip, *bvar, ind[v1]) > 0 {
                             k = v2;
                             break;
                         }
 
-                        if bvars[v2] == ind[v1] {
-                            ind[cnt] = bvars[v2];
+                        if *bvar == ind[v1] {
+                            ind[cnt] = *bvar;
                             cnt += 1;
                             k = v2 + 1;
                             break;

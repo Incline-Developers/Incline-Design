@@ -723,11 +723,11 @@ impl CliqueTable {
             if !globaldom.is_fixed(cliquevars[i].col()) || cliquevars[i].val() as f64 != globaldom.col_lower[cliquevars[i].col()] {
                 continue;
             }
-            for k in 0..numcliquevars {
+            for (k, cliquevar) in cliquevars[..numcliquevars].iter().enumerate() {
                 if k == i {
                     continue;
                 }
-                if !self.fix_col(globaldom, cliquevars[k], false, cc) {
+                if !self.fix_col(globaldom, *cliquevar, false, cc) {
                     return false;
                 }
             }
@@ -759,11 +759,11 @@ impl CliqueTable {
                 }
                 self.prune_nodes_with_both(cliquevars[i], cliquevars[j], cc);
                 if iscover {
-                    for k in 0..numcliquevars {
+                    for (k, cliquevar) in cliquevars[..numcliquevars].iter().enumerate() {
                         if k == i || k == j {
                             continue;
                         }
-                        if !self.fix_col(globaldom, cliquevars[k], false, cc) {
+                        if !self.fix_col(globaldom, *cliquevar, false, cc) {
                             return false;
                         }
                     }
@@ -1055,8 +1055,8 @@ impl CliqueTable {
         }
         let do_fixings = |cliqueid: usize, domain: &mut Domain, env: &mut DomainEnv| -> bool {
             let (start, end) = (self.cliques[cliqueid].start(), self.cliques[cliqueid].end());
-            for i in start..end {
-                let entry = self.cliqueentries[i];
+            for cliqueentrie in &self.cliqueentries[start..end] {
+                let entry = *cliqueentrie;
                 if entry.col32() == v.col32() {
                     continue;
                 }
@@ -1870,8 +1870,8 @@ impl CliqueTable {
         let iscandidate = &mut self.iscandidate;
         let mut add = |cliqueid: usize| {
             let (start, end) = (cliques[cliqueid].start(), cliques[cliqueid].end());
-            for i in start..end {
-                let entry = cliqueentries[i];
+            for cliqueentrie in &cliqueentries[start..end] {
+                let entry = *cliqueentrie;
                 if iscandidate[entry.index()] || globaldom.is_fixed(entry.col()) {
                     continue;
                 }
@@ -1936,8 +1936,8 @@ impl CliqueTable {
         }
         self.num_neighbourhood_queries = queries;
         if equation {
-            for i in initial_clique_size..clique.len() {
-                let v = clique[i];
+            for clique_i in &clique[initial_clique_size..] {
+                let v = *clique_i;
                 self.vertex_infeasible(globaldom, v.col(), v.val() as usize, cc);
             }
         } else {

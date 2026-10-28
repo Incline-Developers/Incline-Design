@@ -32,6 +32,10 @@ pub fn hash_key_val_string(s: &str) -> u64 {
     hash
 }
 
+/// `SCIP_KEYALREADYEXISTING`: an insert found its key already there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KeyExists;
+
 /// `SCIP_HASHTABLE`.
 #[derive(Clone, Debug)]
 pub struct HashTable<E> {
@@ -61,8 +65,8 @@ impl<E: Copy + Default> HashTable<E> {
         (pos.wrapping_add(self.mask).wrapping_add(1).wrapping_sub(self.hashes[pos as usize] >> self.shift)) & self.mask
     }
 
-    /// `hashtableInsert`: `Err(())` is `SCIP_KEYALREADYEXISTING`.
-    fn insert_hashed<O: HashOps<E>>(&mut self, ops: &O, mut element: E, mut key: O::Key, mut hashval: u32, override_: bool) -> Result<(), ()> {
+    /// `hashtableInsert`: `Err(KeyExists)` if the key exists.
+    fn insert_hashed<O: HashOps<E>>(&mut self, ops: &O, mut element: E, mut key: O::Key, mut hashval: u32, override_: bool) -> Result<(), KeyExists> {
         let mut pos = hashval >> self.shift;
         let mut elemdistance = 0u32;
         loop {
@@ -78,7 +82,7 @@ impl<E: Copy + Default> HashTable<E> {
                     self.hashes[pos as usize] = hashval;
                     return Ok(());
                 }
-                return Err(());
+                return Err(KeyExists);
             }
             let distance = self.elem_distance(pos);
             if distance < elemdistance {
@@ -119,9 +123,8 @@ impl<E: Copy + Default> HashTable<E> {
         let _ = self.insert_hashed(ops, element, key, hashval, true);
     }
 
-    /// `SCIPhashtableSafeInsert`: `Err(())` if the key exists.
-    #[allow(clippy::result_unit_err, reason = "SCIP_KEYALREADYEXISTING carries nothing more")]
-    pub fn safe_insert<O: HashOps<E>>(&mut self, ops: &O, element: E) -> Result<(), ()> {
+    /// `SCIPhashtableSafeInsert`: `Err(KeyExists)` if the key exists.
+    pub fn safe_insert<O: HashOps<E>>(&mut self, ops: &O, element: E) -> Result<(), KeyExists> {
         self.check_load(ops);
         let key = ops.get_key(&element);
         let hashval = hashvalue(ops.key_val(&key));
@@ -246,7 +249,7 @@ impl<V: Copy + Default> HashMap<V> {
     }
 
     /// `hashmapInsert`.
-    fn insert_hashed(&mut self, mut origin: u64, mut image: V, mut hashval: u32, override_: bool) -> Result<(), ()> {
+    fn insert_hashed(&mut self, mut origin: u64, mut image: V, mut hashval: u32, override_: bool) -> Result<(), KeyExists> {
         let mut pos = hashval >> self.shift;
         let mut elemdistance = 0u32;
         loop {
@@ -264,7 +267,7 @@ impl<V: Copy + Default> HashMap<V> {
                     self.hashes[p] = hashval;
                     return Ok(());
                 }
-                return Err(());
+                return Err(KeyExists);
             }
             let distance = self.elem_distance(pos);
             if distance < elemdistance {
@@ -320,9 +323,8 @@ impl<V: Copy + Default> HashMap<V> {
     }
 
     /// `SCIPhashmapInsert` (and its Int, Long and Real variants):
-    /// `Err(())` if the origin is already mapped.
-    #[allow(clippy::result_unit_err, reason = "SCIP_KEYALREADYEXISTING carries nothing more")]
-    pub fn insert(&mut self, origin: u64, image: V) -> Result<(), ()> {
+    /// `Err(KeyExists)` if the origin is already mapped.
+    pub fn insert(&mut self, origin: u64, image: V) -> Result<(), KeyExists> {
         self.check_load();
         self.insert_hashed(origin, image, hashvalue(origin), false)
     }

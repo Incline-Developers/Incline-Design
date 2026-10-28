@@ -414,8 +414,8 @@ fn create_sepa_data(scip: &mut Scip, sepadata: &mut SepaData) -> ScipResult {
     let terms = get_bilin_terms_nonlinear(scip, sepadata.conshdlr);
     sepadata.eqauxexpr = vec![-1; sepadata.nbilinterms as usize];
     for i in 0..sepadata.nbilinterms as usize {
-        for j in 0..terms[i].nauxexprs as usize {
-            if terms[i].auxexprs[j].underestimate && terms[i].auxexprs[j].overestimate {
+        for (j, auxexpr) in terms[i].auxexprs[..terms[i].nauxexprs as usize].iter().enumerate() {
+            if auxexpr.underestimate & auxexpr.overestimate {
                 sepadata.eqauxexpr[i] = j as i32;
                 break;
             }
@@ -426,7 +426,7 @@ fn create_sepa_data(scip: &mut Scip, sepadata: &mut SepaData) -> ScipResult {
     // number of occurrences (same as normal sort, except that entries at
     // positions maxusedvars..nbilinvars may be unsorted at end).
     let nbilinvars = sepadata.nbilinvars();
-    let k = if sepadata.maxusedvars <= nbilinvars - 1 { sepadata.maxusedvars } else { nbilinvars - 1 };
+    let k = if sepadata.maxusedvars < nbilinvars { sepadata.maxusedvars } else { nbilinvars - 1 };
     if k >= 0 {
         crate::sort::select_down(&mut sepadata.varpriorities[..], (&mut sepadata.varssorted[..],), crate::sort::cmp_int, k as usize);
     }

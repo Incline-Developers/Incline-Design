@@ -591,9 +591,9 @@ impl LpRelaxation {
         let mut deletemask = vec![false; nlprows];
         deletemask[modelrows..].fill(true);
         self.lpsolver.delete_rows(&deletemask);
-        for i in modelrows..nlprows {
-            if self.lprows[i].origin == Origin::CutPool {
-                data.cutpool.lp_cut_removed(self.lprows[i].index);
+        for lprow in &self.lprows[modelrows..nlprows] {
+            if lprow.origin == Origin::CutPool {
+                data.cutpool.lp_cut_removed(lprow.index);
             }
         }
         self.lprows.truncate(modelrows);
@@ -662,9 +662,9 @@ impl LpRelaxation {
 
     /// HiGHS's `notifyCutPoolsLpCopied`.
     pub fn notify_cut_pools_lp_copied(&self, n: i16, data: &mut MipData) {
-        for i in data.model.num_row..self.num_rows() {
-            if self.lprows[i].origin == Origin::CutPool {
-                data.cutpool.increase_num_lps(self.lprows[i].index, n);
+        for lprow in &self.lprows[data.model.num_row..self.num_rows()] {
+            if lprow.origin == Origin::CutPool {
+                data.cutpool.increase_num_lps(lprow.index, n);
             }
         }
     }
@@ -1274,8 +1274,8 @@ impl LpRelaxation {
                 }
                 let row_value = self.lpsolver.row_value().expect("a solution");
                 let row_upper = self.lpsolver.row_upper();
-                for j in col_start..col_end {
-                    let row = a_index[j];
+                for a_index_j in &a_index[col_start..col_end] {
+                    let row = *a_index_j;
                     if self.lprows[row].age == 0 {
                         continue;
                     }

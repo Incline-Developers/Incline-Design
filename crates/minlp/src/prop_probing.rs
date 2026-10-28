@@ -475,7 +475,8 @@ fn apply_probing(
 
                 // Determine implicit binary variables.
                 let lastidx = nnewbinvars + nnewintvars + nnewimplvars;
-                for v in nnewbinvars..lastidx {
+                let firstnonbin = nnewbinvars;
+                for v in firstnonbin..lastidx {
                     if var_is_binary(scip, newvars[v]) {
                         newvars.swap(nnewbinvars, v);
                         nnewbinvars += 1;
@@ -654,7 +655,8 @@ fn prop_presol_probing(
 
         // Determine implicit binary variables.
         let lastidx = nbinvars + nintvars + nimplvars;
-        for v in nbinvars..lastidx {
+        let firstnonbin = nbinvars;
+        for v in firstnonbin..lastidx {
             if var_is_binary(scip, sortedvars[v]) {
                 sortedvars.swap(nbinvars, v);
                 nbinvars += 1;
@@ -1109,11 +1111,10 @@ pub fn analyze_deductions_probing(
                 newlb
             };
 
-            let fixed;
-            if at_root(scip) {
+            let fixed = if at_root(scip) {
                 let (c, f) = scip_var::fix_var(scip, var, fixval)?;
                 *cutoff = c;
-                fixed = f;
+                f
             } else {
                 let (c, f) = scip_var::tighten_var_lb(scip, var, fixval, true)?;
                 *cutoff = c;
@@ -1123,8 +1124,8 @@ pub fn analyze_deductions_probing(
                     *cutoff = c;
                     f &= tightened;
                 }
-                fixed = f;
-            }
+                f
+            };
 
             if fixed {
                 *nfixedvars += 1;

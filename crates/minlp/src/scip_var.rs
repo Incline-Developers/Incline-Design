@@ -1417,8 +1417,8 @@ fn calc_clique_partition_greedy(scip: &mut Scip, vars: &[VarId], values: &[bool]
         if nvarcliques > 0 && var::var_is_active(scip, var) {
             let mut foundpart = false;
 
-            for p in 0..ncliques as usize {
-                nneigh[p] = 0;
+            for nneigh_p in &mut nneigh[..ncliques as usize] {
+                *nneigh_p = 0;
             }
 
             // Loop over cliques of the variable.
@@ -1495,8 +1495,8 @@ pub fn calc_clique_partition(scip: &mut Scip, vars: &[VarId], probtoidxmap: &mut
 
     // If we have no cliques, every variable is its own part.
     if get_n_cliques(scip) == 0 {
-        for i in 0..nvars {
-            cliquepartition[i] = i as i32;
+        for (i, part) in cliquepartition[..nvars].iter_mut().enumerate() {
+            *part = i as i32;
         }
         return Ok(nvars as i32);
     }

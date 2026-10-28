@@ -322,7 +322,6 @@ fn problem_text(line: usize, problem: &DelayRowProblem) -> String {
 }
 
 /// One delay list: its title and type, then its table.
-#[allow(clippy::too_many_lines, reason = "one table, read top to bottom")]
 fn draw_list(
     ui: &mut egui::Ui,
     rect: egui::Rect,

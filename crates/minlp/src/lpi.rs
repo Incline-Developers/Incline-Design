@@ -683,19 +683,19 @@ pub fn lpi_get_primal_ray(lpi: &mut Lpi, ray: &mut [f64]) -> ScipResult {
     let mut success = false;
     if lpi.highs.num_rows() == 0 {
         let maximize = lpi.highs.sense() == -1.0;
-        for i in 0..lpi.highs.num_cols() {
+        for (i, ray_i) in ray[..lpi.highs.num_cols()].iter_mut().enumerate() {
             let mut minobj = lpi.highs.col_cost()[i];
             if maximize {
                 minobj = -minobj;
             }
             if lpi_is_infinity(lpi, -lpi.highs.col_lower()[i]) && minobj > 0.0 {
-                ray[i] = -1.0;
+                *ray_i = -1.0;
                 success = true;
             } else if lpi_is_infinity(lpi, lpi.highs.col_upper()[i]) && minobj < 0.0 {
-                ray[i] = 1.0;
+                *ray_i = 1.0;
                 success = true;
             } else {
-                ray[i] = 0.0;
+                *ray_i = 0.0;
             }
         }
     } else if let Some(primal_ray) = lpi.highs.get_primal_ray() {
@@ -881,8 +881,8 @@ pub fn lpi_set_state(lpi: &mut Lpi, lpistate: &LpiState) -> ScipResult {
 
     // Extend the basis to the current LP beyond the previously existing
     // columns.
-    for i in lpistate.ncols as usize..lpncols {
-        cstat[i] = if !lpi_is_infinity(lpi, -lpi.highs.col_lower()[i]) {
+    for (i, cstat_i) in (lpistate.ncols as usize..lpncols).zip(&mut cstat[lpistate.ncols as usize..lpncols]) {
+        *cstat_i = if !lpi_is_infinity(lpi, -lpi.highs.col_lower()[i]) {
             BASESTAT_LOWER as i32
         } else if !lpi_is_infinity(lpi, lpi.highs.col_upper()[i]) {
             BASESTAT_UPPER as i32
@@ -890,8 +890,8 @@ pub fn lpi_set_state(lpi: &mut Lpi, lpistate: &LpiState) -> ScipResult {
             BASESTAT_ZERO as i32
         };
     }
-    for i in lpistate.nrows as usize..lpnrows {
-        rstat[i] = BASESTAT_BASIC as i32;
+    for rstat_i in &mut rstat[lpistate.nrows as usize..lpnrows] {
+        *rstat_i = BASESTAT_BASIC as i32;
     }
 
     // Load basis information.

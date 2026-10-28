@@ -1560,8 +1560,7 @@ fn fill_flat_ring(vertices: &[mesh_data::Vertex], ring: &[u32], flatness: f64) -
 /// from the edge's start along its points, wound against its face, which use
 /// the whole edge once and each piece once, so the slab stays closed. They
 /// lie on the edge and enclose nothing.
-#[allow(clippy::type_complexity)]
-fn directed_cap_rings(rim: &[[mesh_data::Vertex; 2]], sides: &CapSides, weld: Weld) -> Option<(Vec<(Vec<mesh_data::Vertex>, bool)>, Vec<[mesh_data::Vertex; 3]>)> {
+fn directed_cap_rings(rim: &[[mesh_data::Vertex; 2]], sides: &CapSides, weld: Weld) -> Option<CapRings> {
     use std::collections::HashMap;
     let mut points: HashMap<PointKey, mesh_data::Vertex, FixedState> = HashMap::default();
     // Each rim edge with the solid on its left, and whether its face runs it
@@ -1901,6 +1900,16 @@ type CutPiece = (Slab, Vec<bool>, Vec<bool>);
 
 /// One finished cell: its piece and its volume.
 type Cell = (Slab, Vec<bool>, Vec<bool>, f64);
+
+/// A cap's rings, each with whether it bounds solid (wound that way), and
+/// the seam triangles that keep the slab closed.
+type CapRings = (Vec<(Vec<mesh_data::Vertex>, bool)>, Vec<[mesh_data::Vertex; 3]>);
+
+/// A region's rings in the plane.
+type Rings = Vec<Vec<glam::DVec2>>;
+
+/// A splitting line and the regions either side of it.
+type Halves = ((glam::DVec2, glam::DVec2), Vec<Rings>, Vec<Rings>);
 
 /// A region is cut cell by cell once it has no more ring points than this and
 /// the body over it no more faces than [`CLIP_LEAF_FACES`]; until then it is
@@ -2279,8 +2288,7 @@ fn clip_region(piece: CutPiece, region: Vec<Vec<glam::DVec2>>, face: &[Vec<glam:
 /// Split a region along a line through the middle of its longer side: the
 /// line, and the parts either side of it. `None` when the split leaves no part
 /// on one side, so the region is cut whole instead.
-#[allow(clippy::type_complexity, reason = "the split line and its two sides, used once by the caller")]
-fn halve_region(region: &[Vec<glam::DVec2>]) -> Option<((glam::DVec2, glam::DVec2), Vec<Vec<Vec<glam::DVec2>>>, Vec<Vec<Vec<glam::DVec2>>>)> {
+fn halve_region(region: &[Vec<glam::DVec2>]) -> Option<Halves> {
     let (min, max) = region
         .iter()
         .flatten()

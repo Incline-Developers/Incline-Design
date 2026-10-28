@@ -257,8 +257,8 @@ impl PathSeparator {
                                     try_negated_scale: &mut bool| {
                         if curr_path_len == 1 && !*try_negated_scale {
                             if col_arcs[col].1 - col_arcs[col].0 <= curr_path_len {
-                                for k in col_arcs[col].0..col_arcs[col].1 {
-                                    if arc_rows[k].0 != i {
+                                for arc_row in &arc_rows[col_arcs[col].0..col_arcs[col].1] {
+                                    if arc_row.0 != i {
                                         *try_negated_scale = true;
                                         break;
                                     }
@@ -271,8 +271,8 @@ impl PathSeparator {
                             return true;
                         }
                         if other_col_arcs[col].1 - other_col_arcs[col].0 <= curr_path_len {
-                            for k in other_col_arcs[col].0..other_col_arcs[col].1 {
-                                if !is_row_in_current_path(other_arc_rows[k].0, curr_path_len) {
+                            for other_arc_row in &other_arc_rows[other_col_arcs[col].0..other_col_arcs[col].1] {
+                                if !is_row_in_current_path(other_arc_row.0, curr_path_len) {
                                     return false;
                                 }
                             }
@@ -562,15 +562,15 @@ impl TableauSeparator {
         let feastol = data.feastol;
 
         let mut fractional_basisvars: Vec<FractionalInteger> = Vec::with_capacity(num_row);
-        for i in 0..num_row {
-            let my_fractionality = if basisinds[i] >= num_col {
-                let row = basisinds[i] - num_col;
+        for (i, basisind) in basisinds[..num_row].iter().enumerate() {
+            let my_fractionality = if *basisind >= num_col {
+                let row = *basisind - num_col;
                 if !lp.is_row_integral(row, data) {
                     continue;
                 }
                 crate::integers::fractionality(row_value[row])
             } else {
-                let col = basisinds[i];
+                let col = *basisind;
                 if data.model.is_col_continuous(col) {
                     continue;
                 }

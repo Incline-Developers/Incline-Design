@@ -3687,8 +3687,7 @@ fn get_binary_product_expr(
         return Ok(e);
     }
 
-    let newexpr;
-    if nchildren == 2 {
+    let newexpr = if nchildren == 2 {
         let mut found_clique = false;
         let mut found = NONE;
 
@@ -3758,15 +3757,15 @@ fn get_binary_product_expr(
         }
 
         // If the variables are not in a clique, do standard linearization.
-        newexpr = if !found_clique {
+        if !found_clique {
             get_binary_product_expr_do(scip, conshdlr, prodexpr, naddconss, reformbinprodsand)?
         } else {
             found
-        };
+        }
     } else {
         // Linearize binary product using an AND constraint because nchildren > 2.
-        newexpr = get_binary_product_expr_do(scip, conshdlr, prodexpr, naddconss, reformbinprodsand)?;
-    }
+        get_binary_product_expr_do(scip, conshdlr, prodexpr, naddconss, reformbinprodsand)?
+    };
 
     // Hash variable expression.
     exprmap.insert(prodexpr, newexpr);
@@ -5527,9 +5526,7 @@ fn collect_branching_candidates(scip: &mut Scip, conshdlr: ConshdlrId, conss: &[
             let consviol = get_cons_rel_violation(scip, cons, sol, soltag)?;
 
             let high = hd(scip, conshdlr).branchhighviolfactor * maxrelconsviol;
-            if attempt == 0 && consviol < high {
-                continue;
-            } else if attempt == 1 && consviol >= high {
+            if (attempt == 0 && consviol < high) || (attempt == 1 && consviol >= high) {
                 continue;
             }
 
@@ -7838,8 +7835,8 @@ fn compute_vertex_polyhedral_facet_lp(
         // Transform the facet to original space and compute value at x^*, i.e.,
         // alpha x + beta.
         let mut facetvalue = 0.0;
-        for i in 0..nvars {
-            let varpos = nonfixedpos[i];
+        for pos in &nonfixedpos[..nvars] {
+            let varpos = *pos;
             let lb = boxv[2 * varpos];
             let ub = boxv[2 * varpos + 1];
 
@@ -7936,16 +7933,16 @@ pub fn compute_facet_vertex_polyhedral_nonlinear(
             corner[j] = (boxv[2 * j] + boxv[2 * j + 1]) / 2.0;
         }
     }
-    for i in 0..ncorners {
+    for (i, funval) in funvals[..ncorners].iter_mut().enumerate() {
         for (j, &varpos) in nonfixedpos.iter().enumerate() {
             // If j'th bit of row index i is set, then take upper bound on var j,
             // otherwise lower bound var j.
             corner[varpos] = if (i >> j) & 0x1 != 0 { boxv[2 * varpos + 1] } else { boxv[2 * varpos] };
         }
 
-        funvals[i] = function(scip, &corner);
+        *funval = function(scip, &corner);
 
-        if funvals[i] == INVALID || scip.set.is_infinity(funvals[i].abs()) {
+        if *funval == INVALID || scip.set.is_infinity(funval.abs()) {
             return Ok(false);
         }
     }
@@ -10166,9 +10163,9 @@ pub fn find_nlhdlr_nonlinear(scip: &Scip, conshdlr: ConshdlrId, name: &str) -> N
 /// detected by nlhdlr or nlhdlr did not store data).
 pub fn get_nlhdlr_expr_data_nonlinear(scip: &Scip, nlhdlr: NlhdlrId, expr: ExprId) -> usize {
     let o = od(scip, expr);
-    for e in 0..o.nenfos.max(0) as usize {
-        if o.enfos[e].nlhdlr == nlhdlr {
-            return o.enfos[e].nlhdlrexprdata;
+    for enfo in &o.enfos[..o.nenfos.max(0) as usize] {
+        if enfo.nlhdlr == nlhdlr {
+            return enfo.nlhdlrexprdata;
         }
     }
 

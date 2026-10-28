@@ -523,10 +523,10 @@ pub fn sepastore_apply_cuts(scip: &mut Scip, s: usize, transprob: usize, origpro
     let maxsepacuts = scip.set.get_sepa_maxcuts(root);
 
     // If all cuts are forced cuts, no selection is required.
-    let nselectedcuts;
+
     let (ncuts, nforcedcuts, initiallp) = (ss!(scip, s).ncuts, ss!(scip, s).nforcedcuts, ss!(scip, s).initiallp);
-    if nforcedcuts >= ncuts.min(maxsepacuts) {
-        nselectedcuts = nforcedcuts;
+    let nselectedcuts = if nforcedcuts >= ncuts.min(maxsepacuts) {
+        nforcedcuts
     } else {
         // Call cut selection algorithms.
         let mut cuts = std::mem::take(&mut ss!(scip, s).cuts);
@@ -536,8 +536,8 @@ pub fn sepastore_apply_cuts(scip: &mut Scip, s: usize, transprob: usize, origpro
         // Note that cut selector statistics are updated here also when in
         // probing mode; this may lead to an offset with
         // separator/constraint handler statistics.
-        nselectedcuts = r? + nforcedcuts;
-    }
+        r? + nforcedcuts
+    };
 
     // Apply all selected cuts.
     let mut ncutsapplied = 0;

@@ -335,8 +335,8 @@ impl Bandit {
                     // Pick action w.r.t. the weights distribution.
                     let mut sum = 0.0;
                     let mut selection = -1;
-                    for j in 0..nactions - 1 {
-                        sum += weights[j];
+                    for (j, weight) in weights[..nactions - 1].iter().enumerate() {
+                        sum += *weight;
                         if sum >= randnr {
                             selection = j as i32;
                             break;
@@ -410,14 +410,14 @@ impl Bandit {
 
                     // Loop over all items and update their weights based on the
                     // influence of the beta parameter.
-                    for j in 0..nactions {
-                        let probaj = oneminusgamma * weights[j] / *weightsum + gammaoverk;
+                    for (j, weight) in weights[..nactions].iter_mut().enumerate() {
+                        let probaj = oneminusgamma * *weight / *weightsum + gammaoverk;
 
                         // Consider the score only for the chosen arm i, use
                         // constant beta offset otherwise.
                         let gainestim = if j == s { (score + *beta) / probaj } else { *beta / probaj };
-                        weights[j] *= (eta * gainestim).exp();
-                        newweightsum += weights[j];
+                        *weight *= (eta * gainestim).exp();
+                        newweightsum += *weight;
                     }
                 }
 

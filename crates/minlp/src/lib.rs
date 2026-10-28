@@ -11,31 +11,7 @@
 //! HiGHS 1.15.0 as its LP solver, it takes the same nodes, LP iterations,
 //! cuts and solutions on the same instance and settings.
 
-#![allow(clippy::needless_range_loop, reason = "a port of SCIP's indexed loops, kept recognisable")]
-#![allow(clippy::neg_cmp_op_on_partial_ord, reason = "SCIP's negated comparisons, which differ from the plain ones on NaN")]
 #![allow(clippy::too_many_arguments, reason = "SCIP's signatures, kept for the port")]
-#![allow(
-    clippy::collapsible_if,
-    clippy::collapsible_match,
-    clippy::if_same_then_else,
-    clippy::needless_bool,
-    clippy::needless_late_init,
-    clippy::mut_range_bound,
-    reason = "SCIP's control flow and declarations, kept as the C has them so the port reads against it line by line"
-)]
-#![allow(
-    clippy::neg_multiply,
-    clippy::int_plus_one,
-    clippy::manual_range_contains,
-    clippy::assign_op_pattern,
-    clippy::excessive_precision,
-    reason = "SCIP's expressions and constants, written as in the C"
-)]
-#![allow(
-    clippy::doc_overindented_list_items,
-    clippy::doc_lazy_continuation,
-    reason = "SCIP's comments, transcribed with their own layout"
-)]
 
 /// The current LP, `scip.lp` (C's `SCIP_LP*`), as a place; borrows only
 /// that field.

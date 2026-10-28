@@ -435,19 +435,19 @@ fn get_feasible_points_bilinear(
         let mut val = if i == 0 { exprbounds.inf } else { exprbounds.sup };
         val /= prodcoef;
 
-        for k in 0..4 {
-            if !scip.set.is_zero(vals[k]) {
-                let res = val / vals[k];
+        for (k, val_k) in vals[..4].iter().enumerate() {
+            if !scip.set.is_zero(*val_k) {
+                let res = val / *val_k;
 
                 // Fix x to lbx or ubx.
-                if k < 2 && is_point_feasible(scip, vals[k], res, lbx, ubx, lby, uby, &ineqs, nineqs) {
-                    xs.push(vals[k]);
+                if k < 2 && is_point_feasible(scip, *val_k, res, lbx, ubx, lby, uby, &ineqs, nineqs) {
+                    xs.push(*val_k);
                     ys.push(res);
                 }
                 // Fix y to lby or uby.
-                else if k >= 2 && is_point_feasible(scip, res, vals[k], lbx, ubx, lby, uby, &ineqs, nineqs) {
+                else if k >= 2 && is_point_feasible(scip, res, *val_k, lbx, ubx, lby, uby, &ineqs, nineqs) {
                     xs.push(res);
-                    ys.push(vals[k]);
+                    ys.push(*val_k);
                 }
             }
         }

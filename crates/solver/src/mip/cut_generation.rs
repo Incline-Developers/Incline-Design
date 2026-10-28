@@ -286,12 +286,12 @@ impl CutGeneration {
             return false;
         }
         let phi = |a: f64| {
-            for i in 0..p {
-                if a <= (s[i] - lambda).value() {
+            for (i, s_i) in s[..p].iter().enumerate() {
+                if a <= (*s_i - lambda).value() {
                     return (i as f64 * lambda).value();
                 }
-                if a <= s[i] {
-                    return ((i + 1) as f64 * lambda + (CDouble::new(a) - s[i])).value();
+                if a <= *s_i {
+                    return ((i + 1) as f64 * lambda + (CDouble::new(a) - *s_i)).value();
                 }
             }
             (p as f64 * lambda + (CDouble::new(a) - s[p - 1])).value()
@@ -375,7 +375,7 @@ impl CutGeneration {
             let eta = mudival.ceil();
             let ulminusetaplusone = CDouble::new(ub) - eta + 1.0;
             let cplusthreshold = (ulminusetaplusone * vals[j]).value();
-            let cplusend = self.cover.partition_point(|&i| !(cplusthreshold > vals[i]));
+            let cplusend = self.cover.partition_point(|&i| cplusthreshold.partial_cmp(&vals[i]).is_none_or(std::cmp::Ordering::is_le));
             let mut mcplus = m[cplusend];
             if i < cplusend {
                 mcplus -= mju;
@@ -690,8 +690,8 @@ impl CutGeneration {
             return true;
         }
         let mut max_abs_value = 0.0f64;
-        for i in 0..self.rowlen {
-            max_abs_value = self.vals[i].abs().max(max_abs_value);
+        for val in &self.vals[..self.rowlen] {
+            max_abs_value = val.abs().max(max_abs_value);
         }
         let min_coefficient_value = 100.0 * feastol * max_abs_value.max(1e-3);
         self.integral_support = true;
@@ -758,8 +758,8 @@ impl CutGeneration {
             }
             if scale_smallest_val_to_one {
                 let mut min_abs_value = INF;
-                for i in 0..self.rowlen {
-                    min_abs_value = self.vals[i].abs().min(min_abs_value);
+                for val in &self.vals[..self.rowlen] {
+                    min_abs_value = val.abs().min(min_abs_value);
                 }
                 self.scale(min_abs_value - epsilon);
             }
@@ -790,8 +790,8 @@ impl CutGeneration {
         let mut num_zeros = 0;
         let mut maxact = -feastol;
         let mut max_abs_val = 0.0f64;
-        for i in 0..self.rowlen {
-            max_abs_val = self.vals[i].abs().max(max_abs_val);
+        for val in &self.vals[..self.rowlen] {
+            max_abs_val = val.abs().max(max_abs_val);
         }
         self.initial_scale = self.scale(max_abs_val);
         self.isintegral.resize(self.rowlen, false);

@@ -637,8 +637,8 @@ fn check_violations(scip: &Scip, st: &mut State, colidx: i32) {
         st.nviolatedrows = 0;
 
         // Reinitialize the violated rows.
-        for i in 0..nrows {
-            st.violatedrowpos[i] = -1;
+        for pos in &mut st.violatedrowpos[..nrows] {
+            *pos = -1;
         }
 
         // Clear the violated row counters for all variables.
@@ -1056,8 +1056,8 @@ fn heur_exec_shiftandpropagate(scip: &mut Scip, heur: HeurId, _heurtiming: HeurT
     // cons_xor.c).
     let mut ndiscvars = 0;
     let mut nbinvars = 0;
-    for c in 0..nlpcols {
-        let col = st.lpcols[c];
+    for (c, lpcol) in st.lpcols[..nlpcols].iter().enumerate() {
+        let col = *lpcol;
         let colvar = scip.cols[col].var;
 
         if var_is_discrete(scip, colvar, impliscontinuous) {

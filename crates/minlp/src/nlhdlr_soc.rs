@@ -1204,9 +1204,10 @@ fn nlhdlr_detect_soc(
         // bilinear term (x*y=constant), then it seems that handling both sides by
         // nlhdlr_bilinear can still be beneficial (the latter means lhs or rhs
         // disappear, or expr is not a product and not a sum with only 1 term).
-        if scip.set.is_infinity(-crate::cons_nonlinear::get_lhs_nonlinear(scip, cons)) || scip.set.is_infinity(crate::cons_nonlinear::get_rhs_nonlinear(scip, cons)) {
-            *enforcing |= *participating;
-        } else if !expr::expr_is_product(scip, e) && scip.exprs[e].children.len() > 1 {
+        if scip.set.is_infinity(-crate::cons_nonlinear::get_lhs_nonlinear(scip, cons))
+            || scip.set.is_infinity(crate::cons_nonlinear::get_rhs_nonlinear(scip, cons))
+            || (!expr::expr_is_product(scip, e) && scip.exprs[e].children.len() > 1)
+        {
             *enforcing |= *participating;
         }
     }
@@ -1324,8 +1325,8 @@ fn nlhdlr_init_sepa_soc(
         let mut norm = 0.0;
         {
             let d = ed(scip, nlhdlrexprdata);
-            for i in d.termbegins[0] as usize..d.termbegins[1] as usize {
-                norm += d.transcoefs[i] * d.transcoefs[i];
+            for transcoef in &d.transcoefs[d.termbegins[0] as usize..d.termbegins[1] as usize] {
+                norm += *transcoef * *transcoef;
             }
         }
 
@@ -1455,8 +1456,8 @@ fn nlhdlr_init_sepa_soc(
         let mut norm = 0.0;
         {
             let d = ed(scip, nlhdlrexprdata);
-            for i in d.termbegins[1] as usize..d.termbegins[2] as usize {
-                norm += d.transcoefs[i] * d.transcoefs[i];
+            for transcoef in &d.transcoefs[d.termbegins[1] as usize..d.termbegins[2] as usize] {
+                norm += *transcoef * *transcoef;
             }
         }
 
@@ -1510,27 +1511,27 @@ fn nlhdlr_init_sepa_soc(
 
                 // Calculate ||v_k||^2.
                 let mut norm = 0.0;
-                for i in d.termbegins[k] as usize..d.termbegins[k + 1] as usize {
-                    norm += d.transcoefs[i] * d.transcoefs[i];
+                for transcoef in &d.transcoefs[d.termbegins[k] as usize..d.termbegins[k + 1] as usize] {
+                    norm += *transcoef * *transcoef;
                 }
                 (vkzero, norm)
             };
 
             edm(scip, nlhdlrexprdata).varvals.iter_mut().for_each(|v| *v = 0.0);
 
-            for point in if vkzero { 1 } else { 0 }..3 {
+            for refpoint in &REFPOINTS[if vkzero { 1 } else { 0 }..3] {
                 // Set x = v_k / ||v_k||^2 (refpoints[point][0] - beta_k) / 2.
                 {
                     let d = edm(scip, nlhdlrexprdata);
                     for i in d.termbegins[k] as usize..d.termbegins[k + 1] as usize {
                         let idx = d.transcoefsidx[i] as usize;
-                        d.varvals[idx] = d.transcoefs[i] / norm * (REFPOINTS[point][0] - d.offsets[k]);
+                        d.varvals[idx] = d.transcoefs[i] / norm * (refpoint[0] - d.offsets[k]);
                     }
                 }
 
                 // Set y_k = v_n^T x + beta_n + 0/1/-1.
                 let rhsval = eval_single_term(ed(scip, nlhdlrexprdata), nterms - 1);
-                edm(scip, nlhdlrexprdata).disvarvals[k] = rhsval + REFPOINTS[point][1];
+                edm(scip, nlhdlrexprdata).disvarvals[k] = rhsval + refpoint[1];
 
                 // Compute gradient cut.
                 let rowprep = generate_cut_sol_disagg(scip, e, nlhdlrexprdata, k, ninf, rhsval);

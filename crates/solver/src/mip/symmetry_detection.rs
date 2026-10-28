@@ -758,8 +758,8 @@ impl SymmetryDetection {
             for j in self.g_start[i] as usize..self.g_end[i] as usize {
                 graph_triplets.insert((self.vertex_to_cell[self.g_edge[j].0 as usize], col_cell, self.g_edge[j].1));
             }
-            for j in self.g_end[i] as usize..self.g_start[i + 1] as usize {
-                graph_triplets.insert((self.g_edge[j].0, col_cell, self.g_edge[j].1));
+            for g_edge_j in &self.g_edge[self.g_end[i] as usize..self.g_start[i + 1] as usize] {
+                graph_triplets.insert((g_edge_j.0, col_cell, g_edge_j.1));
             }
         }
         graph_triplets
@@ -815,8 +815,8 @@ impl SymmetryDetection {
                     return false;
                 }
             }
-            for j in self.g_end[i] as usize..self.g_start[i + 1] as usize {
-                if !other_graph.contains(&(self.g_edge[j].0, col_cell, self.g_edge[j].1)) {
+            for g_edge_j in &self.g_edge[self.g_end[i] as usize..self.g_start[i + 1] as usize] {
+                if !other_graph.contains(&(g_edge_j.0, col_cell, g_edge_j.1)) {
                     *wrong_cell = col_cell;
                     return false;
                 }

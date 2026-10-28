@@ -78,47 +78,47 @@ enum Fixingdirection {
 #[allow(clippy::too_many_arguments)]
 fn residuals_from(scip: &Scip, lb: f64, ub: f64, coef: f64, tmpminact: f64, tmpmaxact: f64, minactinf: i32, maxactinf: i32) -> (f64, f64) {
     let inf = scip.set.infinity();
-    let minresactivity;
-    let maxresactivity;
 
     // The coefficient is positive, so the upper bound contributed to the
     // maxactivity and the lower bound to the minactivity.
-    if coef >= 0.0 {
-        maxresactivity = if scip.set.is_infinity(ub) {
-            if maxactinf == 1 { tmpmaxact } else { inf }
-        } else if maxactinf > 0 {
-            inf
-        } else {
-            tmpmaxact - coef * ub
-        };
-
-        minresactivity = if scip.set.is_infinity(-lb) {
-            if minactinf == 1 { tmpminact } else { -inf }
-        } else if minactinf > 0 {
-            -inf
-        } else {
-            tmpminact - coef * lb
-        };
+    let (maxresactivity, minresactivity) = if coef >= 0.0 {
+        (
+            if scip.set.is_infinity(ub) {
+                if maxactinf == 1 { tmpmaxact } else { inf }
+            } else if maxactinf > 0 {
+                inf
+            } else {
+                tmpmaxact - coef * ub
+            },
+            if scip.set.is_infinity(-lb) {
+                if minactinf == 1 { tmpminact } else { -inf }
+            } else if minactinf > 0 {
+                -inf
+            } else {
+                tmpminact - coef * lb
+            },
+        )
     }
     // The coefficient is negative, so the lower bound contributed to the
     // maxactivity and the upper bound to the minactivity.
     else {
-        maxresactivity = if scip.set.is_infinity(-lb) {
-            if maxactinf == 1 { tmpmaxact } else { inf }
-        } else if maxactinf > 0 {
-            inf
-        } else {
-            tmpmaxact - coef * lb
-        };
-
-        minresactivity = if scip.set.is_infinity(ub) {
-            if minactinf == 1 { tmpminact } else { -inf }
-        } else if minactinf > 0 {
-            -inf
-        } else {
-            tmpminact - coef * ub
-        };
-    }
+        (
+            if scip.set.is_infinity(-lb) {
+                if maxactinf == 1 { tmpmaxact } else { inf }
+            } else if maxactinf > 0 {
+                inf
+            } else {
+                tmpmaxact - coef * lb
+            },
+            if scip.set.is_infinity(ub) {
+                if minactinf == 1 { tmpminact } else { -inf }
+            } else if minactinf > 0 {
+                -inf
+            } else {
+                tmpminact - coef * ub
+            },
+        )
+    };
 
     (minresactivity, maxresactivity)
 }
@@ -349,28 +349,28 @@ fn update_bounds(scip: &Scip, matrix: &Matrix, row: usize, col1: usize, val1: f6
     };
 
     // Update bounds in case if they are better.
-    if let Some(newub) = b.ub {
-        if newub < p.upperbound {
-            p.upperbound = newub;
-        }
+    if let Some(newub) = b.ub
+        && newub < p.upperbound
+    {
+        p.upperbound = newub;
     }
 
-    if let Some(newwclb) = b.wclb {
-        if newwclb > p.wclowerbound {
-            p.wclowerbound = newwclb;
-        }
+    if let Some(newwclb) = b.wclb
+        && newwclb > p.wclowerbound
+    {
+        p.wclowerbound = newwclb;
     }
 
-    if let Some(newlb) = b.lb {
-        if newlb > p.lowerbound {
-            p.lowerbound = newlb;
-        }
+    if let Some(newlb) = b.lb
+        && newlb > p.lowerbound
+    {
+        p.lowerbound = newlb;
     }
 
-    if let Some(newwcub) = b.wcub {
-        if newwcub < p.wcupperbound {
-            p.wcupperbound = newwcub;
-        }
+    if let Some(newwcub) = b.wcub
+        && newwcub < p.wcupperbound
+    {
+        p.wcupperbound = newwcub;
     }
 }
 
@@ -610,16 +610,18 @@ fn find_fixings(
         }
     }
 
-    if varstofix[dominatedidx] == Fixingdirection::NoFix && !scip.set.is_negative(scip.vars[dominatedvar].obj) {
-        if !scip.set.is_infinity(-dominatingwclb) && scip.set.is_le(dominatingwclb, dominatingvarub) {
-            // We have a x->y dominance relation with a positive obj coefficient of
-            // the dominated variable y. We need to secure feasibility by testing if
-            // the predicted lower worst case bound is less equal the current upper
-            // bound. It is possible, that the lower worst case bound is infinity
-            // and the upper bound of the dominating variable x is infinity too.
-            varstofix[dominatedidx] = Fixingdirection::FixAtLb;
-            *nfixings += 1;
-        }
+    if varstofix[dominatedidx] == Fixingdirection::NoFix
+        && !scip.set.is_negative(scip.vars[dominatedvar].obj)
+        && !scip.set.is_infinity(-dominatingwclb)
+        && scip.set.is_le(dominatingwclb, dominatingvarub)
+    {
+        // We have a x->y dominance relation with a positive obj coefficient of
+        // the dominated variable y. We need to secure feasibility by testing if
+        // the predicted lower worst case bound is less equal the current upper
+        // bound. It is possible, that the lower worst case bound is infinity
+        // and the upper bound of the dominating variable x is infinity too.
+        varstofix[dominatedidx] = Fixingdirection::FixAtLb;
+        *nfixings += 1;
     }
 
     if varstofix[dominatedidx] == Fixingdirection::NoFix && !scip.set.is_infinity(dominatingub) && scip.set.is_le(dominatingub, dominatingvarub) {
@@ -1261,14 +1263,14 @@ fn presol_exec_domcol(
         // increasing row-sparsity.
         crate::sort::sort(&mut rowsparsity, (&mut rowidxsorted[..],), crate::sort::cmp_int);
 
-        for r in 0..nrows {
+        for (r, row) in rowidxsorted[..nrows].iter().enumerate() {
             // Break if the time limit was reached; since the check is expensive,
             // we only check all 1000 constraints.
             if (r % 1000 == 0) && crate::solve::solve_is_stopped(scip, false) {
                 break;
             }
 
-            let rowidx = rowidxsorted[r] as usize;
+            let rowidx = *row as usize;
 
             if matrix.row_nnonzs(rowidx) == 1 {
                 continue;

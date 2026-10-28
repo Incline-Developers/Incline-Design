@@ -325,7 +325,7 @@ fn setup_and_solve_subscip(
     // If there is already a solution, add an objective cutoff.
     if api::get_n_sols(scip) > 0 {
         let upperbound = api::get_upperbound(scip) - scip.set.sumepsilon();
-        let cutoff = if !scip.set.is_infinity(-1.0 * api::get_lowerbound(scip)) {
+        let cutoff = if !scip.set.is_infinity(-api::get_lowerbound(scip)) {
             (1.0 - minimprove) * api::get_upperbound(scip) + minimprove * api::get_lowerbound(scip)
         } else if api::get_upperbound(scip) >= 0.0 {
             (1.0 - minimprove) * api::get_upperbound(scip)

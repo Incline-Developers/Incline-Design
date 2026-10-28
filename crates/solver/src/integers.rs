@@ -114,7 +114,7 @@ pub(crate) fn integral_scale(vals: &[f64], deltadown: f64, deltaup: f64) -> f64 
         if value.abs() < minval.abs() {
             minval = value;
         }
-        if !(value.abs() < maxval.abs()) {
+        if value.abs().partial_cmp(&maxval.abs()).is_none_or(std::cmp::Ordering::is_ge) {
             maxval = value;
         }
     }

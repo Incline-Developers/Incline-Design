@@ -422,10 +422,8 @@ fn update_minimum_improvement(d: &mut HeurData, subscipstatus: Status, runstats:
         // improvement.
         Status::SolLimit | Status::BestSolLimit | Status::Optimal => increase_minimum_improvement(d),
         // Subproblem was too hard, decrease minimum improvement.
-        Status::NodeLimit | Status::StallNodeLimit | Status::UserInterrupt => {
-            if runstats.nbestsolsfound <= 0 {
-                decrease_minimum_improvement(d);
-            }
+        Status::NodeLimit | Status::StallNodeLimit | Status::UserInterrupt if runstats.nbestsolsfound <= 0 => {
+            decrease_minimum_improvement(d);
         }
         _ => {}
     }
@@ -1131,7 +1129,6 @@ fn determine_limits(scip: &Scip, heur: HeurId, solvelimits: &mut SolveLimits, mu
 /// measure.
 fn get_reward(scip: &Scip, d: &HeurData, runstats: &NhStats) -> [f64; NREWARDTYPES] {
     let mut rewardptr = [0.0; NREWARDTYPES];
-    let reward;
 
     let mut effort = runstats.usednodes as f64 / 100.0;
 
@@ -1145,7 +1142,7 @@ fn get_reward(scip: &Scip, d: &HeurData, runstats: &NhStats) -> [f64; NREWARDTYP
 
     // A positive reward is only assigned if a new incumbent solution was
     // found.
-    if runstats.nbestsolsfound > 0 {
+    let reward = if runstats.nbestsolsfound > 0 {
         let rewardcontrol = d.rewardcontrol;
 
         // The indicator function is simply 1.0.
@@ -1173,7 +1170,7 @@ fn get_reward(scip: &Scip, d: &HeurData, runstats: &NhStats) -> [f64; NREWARDTYP
 
         // Add the baseline and rescale the reward into the interval
         // [baseline, 1.0].
-        reward = d.rewardbaseline + (1.0 - d.rewardbaseline) * r;
+        d.rewardbaseline + (1.0 - d.rewardbaseline) * r
     } else {
         // Linearly decrease the reward based on the number of nodes spent.
         let maxeffort = d.targetnodes as f64;
@@ -1185,8 +1182,8 @@ fn get_reward(scip: &Scip, d: &HeurData, runstats: &NhStats) -> [f64; NREWARDTYP
 
         rewardptr[REWARDTYPE_NOSOLPENALTY] = 1.0 - (usednodes / maxeffort);
         rewardptr[REWARDTYPE_NOSOLPENALTY] = crate::def::max(0.0, rewardptr[REWARDTYPE_NOSOLPENALTY]);
-        reward = d.rewardbaseline * rewardptr[REWARDTYPE_NOSOLPENALTY];
-    }
+        d.rewardbaseline * rewardptr[REWARDTYPE_NOSOLPENALTY]
+    };
 
     rewardptr[REWARDTYPE_TOTAL] = reward;
     rewardptr
@@ -1246,7 +1243,7 @@ fn setup_sub_scip(scip: &Scip, subscip: &mut Scip, subvars: &[VarId], solvelimit
     // Add an objective cutoff.
     if !scip.set.is_infinity(api::get_upperbound(scip)) {
         let upperbound = api::get_upperbound(scip) - scip.set.sumepsilon();
-        let mut cutoff = if !scip.set.is_infinity(-1.0 * api::get_lowerbound(scip)) {
+        let mut cutoff = if !scip.set.is_infinity(-api::get_lowerbound(scip)) {
             (1.0 - d.minimprove) * api::get_upperbound(scip) + d.minimprove * api::get_lowerbound(scip)
         } else if api::get_upperbound(scip) >= 0.0 {
             (1.0 - d.minimprove) * api::get_upperbound(scip)

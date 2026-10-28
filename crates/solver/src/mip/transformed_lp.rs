@@ -139,19 +139,19 @@ impl TransformedLp {
 
         let num_lp_row = lp.num_rows();
         let index_offset = data.model.num_col;
-        for row in 0..num_lp_row {
+        for (row, value) in row_value[..num_lp_row].iter().enumerate() {
             let slack_index = index_offset + row;
             let bestub = lp.slack_upper(row, &data.domain);
             let bestlb = lp.slack_lower(row, &data.domain);
             if bestlb == bestub {
                 continue;
             }
-            this.lb_dist[slack_index] = row_value[row] - bestlb;
+            this.lb_dist[slack_index] = *value - bestlb;
             if this.lb_dist[slack_index] <= feastol {
                 this.lb_dist[slack_index] = 0.0;
             }
             this.simple_lb_dist[slack_index] = this.lb_dist[slack_index];
-            this.ub_dist[slack_index] = bestub - row_value[row];
+            this.ub_dist[slack_index] = bestub - *value;
             if this.ub_dist[slack_index] <= feastol {
                 this.ub_dist[slack_index] = 0.0;
             }
