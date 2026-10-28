@@ -207,7 +207,11 @@ const WINDOW_CHOICES: f64 = 130_000.0;
 /// widest program that fits in 60% of `budget` is chosen; the held one,
 /// over the whole horizon at once, when nothing wider does.
 pub(crate) fn reserve(input: &BlendInput, groups: &Groups, schedule: &BlendSolution, budget: Duration) -> Reserve {
-    let most = budget.mul_f64(0.6);
+    plan(input, groups, schedule, budget.mul_f64(0.6))
+}
+
+/// The widest reroute of `schedule` judged to fit in `most`.
+pub(crate) fn plan(input: &BlendInput, groups: &Groups, schedule: &BlendSolution, most: Duration) -> Reserve {
     let choices = |open: bool| {
         group(input, groups, schedule, None, open).map(|grouped| grouped.dug.iter().map(|(.., options)| options.len()).filter(|&count| count > 1).sum::<usize>() as f64)
     };
@@ -257,6 +261,7 @@ pub(crate) fn reroute(
     program: Program,
     draw_reach: f64,
     open_reclaim: bool,
+    free_digging: bool,
     window: Option<&std::ops::Range<usize>>,
     stop: solver::Interrupt,
 ) -> Result<BlendSolution, String> {
@@ -335,7 +340,64 @@ pub(crate) fn reroute(
     // Each choice's entries: the candidate, its interval and segment, and its
     // column or, where there is nothing to choose, its held tonnes.
     let mut entries: Vec<(usize, usize, usize, Option<Col>, f64)> = Vec::new();
+    // In the exact pass, digging moves in time within each block: each
+    // loader's block dug in a cell is a column, free within the block's
+    // total (each loader keeps its blocks and its extraction) and the
+    // loader's rate, in the cells the schedule dug it in; each material
+    // takes its share of it (a block's shares are the same in every cell).
+    let free_digging = free_digging && draw_reach == 0.0 && program != Program::Held && tonnes_may_move(input);
+    type BlockCell = (crate::model::schedule::optimisation::LoaderId, SourceId, usize, usize);
+    let mut block_t: BTreeMap<(crate::model::schedule::optimisation::LoaderId, SourceId), f64> = BTreeMap::new();
+    let mut block_material_t: BTreeMap<(crate::model::schedule::optimisation::LoaderId, SourceId, crate::model::schedule::optimisation::MaterialId), f64> = BTreeMap::new();
+    // Outside the window a group is one entry per option it moved, each
+    // keeping its part of the material's tonnes in the cell.
+    let mut material_cell_t: BTreeMap<
+        (
+            crate::model::schedule::optimisation::LoaderId,
+            SourceId,
+            crate::model::schedule::optimisation::MaterialId,
+            usize,
+            usize,
+        ),
+        f64,
+    > = BTreeMap::new();
+    // Only in the window's cells, so the program stays the size of one
+    // that holds digging: a block crossing the window's edge keeps what
+    // the schedule dug of it inside.
+    let digs_free = |interval: usize| free_digging && window.is_none_or(|window| window.contains(&interval));
+    if free_digging {
+        for (interval, segment, tonnes, options) in dug.iter().filter(|group| digs_free(group.0)) {
+            let Some(&first) = options.first() else { continue };
+            let movement = &input.movements[first];
+            *block_t.entry((movement.loader, movement.source)).or_default() += tonnes;
+            *block_material_t.entry((movement.loader, movement.source, movement.material)).or_default() += tonnes;
+            *material_cell_t
+                .entry((movement.loader, movement.source, movement.material, *interval, *segment))
+                .or_default() += tonnes;
+        }
+    }
+    let mut x_cols: BTreeMap<BlockCell, Col> = BTreeMap::new();
+    let mut group_x: Vec<Option<(Col, f64)>> = Vec::new();
     for (interval, segment, tonnes, options) in &dug {
+        if let (true, Some(&first)) = (digs_free(*interval), options.first()) {
+            let movement = &input.movements[first];
+            let key = (movement.loader, movement.source, *interval, *segment);
+            let x = *x_cols.entry(key).or_insert_with(|| problem.add_column(0.0, 0.0..));
+            let part = material_cell_t[&(movement.loader, movement.source, movement.material, *interval, *segment)];
+            let part = if part > 0.0 { tonnes / part } else { 0.0 };
+            let share = part * block_material_t[&(movement.loader, movement.source, movement.material)] / block_t[&(movement.loader, movement.source)];
+            let mut sum = Vec::with_capacity(options.len() + 1);
+            for &option in options {
+                let col = problem.add_column(input.movements[option].value_per_tonne().unwrap_or(0.0), 0.0..);
+                sum.push((col, 1.0));
+                entries.push((option, *interval, *segment, Some(col), 0.0));
+            }
+            sum.push((x, -share));
+            problem.add_row(0.0..=0.0, sum);
+            group_x.push(Some((x, share)));
+            continue;
+        }
+        group_x.push(None);
         if let [only] = options.as_slice() {
             entries.push((*only, *interval, *segment, None, *tonnes));
             continue;
@@ -347,6 +409,26 @@ pub(crate) fn reroute(
             entries.push((option, *interval, *segment, Some(col), 0.0));
         }
         problem.add_row(*tonnes..=*tonnes, sum);
+    }
+    if free_digging {
+        let mut by_block: BTreeMap<(crate::model::schedule::optimisation::LoaderId, SourceId), Vec<(Col, f64)>> = BTreeMap::new();
+        let mut by_cell: BTreeMap<(crate::model::schedule::optimisation::LoaderId, usize, usize), Vec<(Col, f64)>> = BTreeMap::new();
+        for (&(loader, source, interval, segment), &col) in &x_cols {
+            by_block.entry((loader, source)).or_default().push((col, 1.0));
+            by_cell.entry((loader, interval, segment)).or_default().push((col, 1.0));
+        }
+        for (block, terms) in by_block {
+            let total = block_t[&block];
+            problem.add_row(total..=total, terms);
+        }
+        for ((loader, interval, segment), terms) in by_cell {
+            let Some(loader) = input.loaders.iter().find(|entry| entry.id == loader) else {
+                continue;
+            };
+            let Some(rate) = super::input::interval_rate(loader, interval) else { continue };
+            let duration = schedule.durations.get(&(interval, segment)).copied().unwrap_or(0.0);
+            problem.add_row(..=rate.dig_tph * duration + SLACK_T, terms);
+        }
     }
 
     // The entries and the held rows of each interval, and the intervals of
@@ -719,7 +801,10 @@ pub(crate) fn reroute(
             if terms.is_empty() {
                 continue;
             }
-            problem.add_row(..=available + SLACK_T - constant - reclaim_constant, terms);
+            // Moved digging fills truck hours to the last digit, which the
+            // replay's rounding can take over: keep a hair back.
+            let margin = if digs_free(at) { -1e-4 } else { SLACK_T };
+            problem.add_row(..=available + margin - constant - reclaim_constant, terms);
         }
     }
 
@@ -874,7 +959,8 @@ pub(crate) fn reroute(
     // the others.
     let mut routed: BTreeMap<(usize, usize, usize), f64> = BTreeMap::new();
     let mut next = 0;
-    for (_, _, tonnes, options) in &dug {
+    for ((_, _, tonnes, options), x) in dug.iter().zip(&group_x) {
+        let tonnes = &x.map_or(*tonnes, |(col, share)| share * solution[col.index()].max(0.0));
         let group = &entries[next..next + options.len().max(1)];
         next += group.len();
         let values: Vec<f64> = group.iter().map(|&(.., col, held)| col.map_or(held, |col| solution[col.index()].max(0.0))).collect();

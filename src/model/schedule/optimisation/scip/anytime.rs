@@ -741,6 +741,63 @@ fn routing_step(opening: &BlendSolution, proposed: &BlendSolution, fraction: f64
 /// `best` rerouted window by window by `reserve`'s program, each window kept
 /// as it improves, so a deadline (`ends`) inside one keeps what the windows
 /// before it found. What happened, for the record.
+/// One window of a reroute pass, kept when the replay finds it valid and
+/// worth more; with `line_search` (a linearised reclaim move) half, a
+/// quarter and three quarters of the move are judged too. What happened,
+/// for the record.
+#[allow(clippy::too_many_arguments)]
+fn reroute_window(
+    input: &BlendInput,
+    groups: &routing::Groups,
+    best: &mut Best,
+    value: &mut f64,
+    program: routing::Program,
+    reach: f64,
+    open_reclaim: bool,
+    free_digging: bool,
+    line_search: bool,
+    window: Option<&std::ops::Range<usize>>,
+    stop: solver::Interrupt,
+    ends: Instant,
+    cancel: &AtomicBool,
+) -> String {
+    match routing::reroute(input, groups, &best.solution, program, reach, open_reclaim, free_digging, window, stop) {
+        Ok(mut solution) => {
+            let opening = line_search.then(|| best.solution.clone());
+            let proposed = opening.as_ref().map(|_| solution.clone());
+            let mut step = 1.0;
+            let mut judged = replay_as_published(input, &mut solution, cancel);
+            if let (Some(opening), Some(proposed)) = (&opening, &proposed) {
+                for fraction in [0.5, 0.25, 0.75] {
+                    if Instant::now() >= ends || cancel.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let mut partial = routing_step(opening, proposed, fraction);
+                    if let Some(replay) = replay_as_published(input, &mut partial, cancel)
+                        && replay.is_valid()
+                        && judged.as_ref().is_none_or(|held| !held.is_valid() || replay.ranked_objective() > held.ranked_objective())
+                    {
+                        solution = partial;
+                        judged = Some(replay);
+                        step = fraction;
+                    }
+                }
+            }
+            match judged {
+                Some(replay) if replay.is_valid() && replay.ranked_objective() > *value => {
+                    let gain = replay.ranked_objective() - *value;
+                    *value = replay.ranked_objective();
+                    *best = Best { solution, replay };
+                    format!("{gain:.0} better (step {step})")
+                }
+                Some(replay) => format!("not kept: valid {}, {:.0} better", replay.is_valid(), replay.ranked_objective() - *value),
+                None => "not kept: cancelled".into(),
+            }
+        }
+        Err(error) => format!("not kept: {error}"),
+    }
+}
+
 fn reroute_best(input: &BlendInput, groups: &routing::Groups, best: &mut Best, value: &mut f64, reserve: routing::Reserve, ends: Instant, cancel: &AtomicBool) -> String {
     let stop: solver::Interrupt = Arc::new(move || Instant::now() >= ends);
     let mut notes: Vec<String> = Vec::new();
@@ -770,42 +827,21 @@ fn reroute_best(input: &BlendInput, groups: &routing::Groups, best: &mut Best, v
         // Spare passes may also start reclaim in hours the schedule left
         // idle; the reserved ones keep to its own, so that their gain is
         // secured before a larger, slower program.
-        let note = match routing::reroute(input, groups, &best.solution, reserve.program, reach, extra, window.as_ref(), stop.clone()) {
-            Ok(mut solution) => {
-                let opening = extra.then(|| best.solution.clone());
-                let proposed = opening.as_ref().map(|_| solution.clone());
-                let mut step = 1.0;
-                let mut judged = replay_as_published(input, &mut solution, cancel);
-                if let (Some(opening), Some(proposed)) = (&opening, &proposed) {
-                    for fraction in [0.5, 0.25, 0.75] {
-                        if Instant::now() >= ends || cancel.load(Ordering::Relaxed) {
-                            break;
-                        }
-                        let mut partial = routing_step(opening, proposed, fraction);
-                        if let Some(replay) = replay_as_published(input, &mut partial, cancel)
-                            && replay.is_valid()
-                            && judged.as_ref().is_none_or(|held| !held.is_valid() || replay.ranked_objective() > held.ranked_objective())
-                        {
-                            solution = partial;
-                            judged = Some(replay);
-                            step = fraction;
-                        }
-                    }
-                }
-                match judged {
-                    Some(replay) if replay.is_valid() && replay.ranked_objective() > *value => {
-                        let gain = replay.ranked_objective() - *value;
-                        *value = replay.ranked_objective();
-                        *best = Best { solution, replay };
-                        format!("{gain:.0} better (step {step})")
-                    }
-                    Some(replay) => format!("not kept: valid {}, {:.0} better", replay.is_valid(), replay.ranked_objective() - *value),
-                    None => "not kept: cancelled".into(),
-                }
-            }
-            Err(error) => format!("not kept: {error}"),
-        };
-        notes.push(note);
+        notes.push(reroute_window(
+            input,
+            groups,
+            best,
+            value,
+            reserve.program,
+            reach,
+            extra,
+            false,
+            extra,
+            window.as_ref(),
+            stop.clone(),
+            ends,
+            cancel,
+        ));
         if Instant::now() >= ends {
             break;
         }
@@ -822,6 +858,80 @@ fn reroute_best(input: &BlendInput, groups: &routing::Groups, best: &mut Best, v
         notes.join("; "),
         reserve.time.as_secs_f64()
     )
+}
+
+/// After a run, `start` refined by the reroute's operators until `until`
+/// has gone, for a run allowed to go on: an exact pass with digging free to
+/// move in time within each block, then reclaim passes at reaches of 1, a
+/// half and a third with idle hours open, in windows half the size, over
+/// and over; each window kept as it improves, so stopping at any moment
+/// keeps the best schedule found. Within three minutes these lose to the
+/// search and its reroute; after them they keep gaining (centralia +$0.4M
+/// in two minutes, long +$2.9M in seven).
+pub(crate) fn continue_from(
+    input: &BlendInput,
+    start: (BlendSolution, ReplayReport),
+    until: Duration,
+    cancel: &AtomicBool,
+    mut report: impl FnMut(&Progress),
+) -> (BlendSolution, ReplayReport) {
+    let started = Instant::now();
+    let ends = started + until.saturating_sub(Duration::from_secs_f64(routing::REPLAY_S));
+    let stop: solver::Interrupt = Arc::new(move || Instant::now() >= ends);
+    let groups = routing::Groups::new(input);
+    let mut best = Best {
+        solution: start.0,
+        replay: start.1,
+    };
+    let mut value = best.value();
+    // The widest program, whatever its size: there is no search to share
+    // the time with.
+    let plan = routing::plan(input, &groups, &best.solution, Duration::from_secs(86_400));
+    if plan.program == routing::Program::Held {
+        return (best.solution, best.replay);
+    }
+    'cycles: loop {
+        let before = value;
+        for (reach, size) in [(0.0, 1), (1.0, 2), (0.5, 2), (1.0 / 3.0, 2)] {
+            let windows = plan.windows * size;
+            for index in 0..windows {
+                if Instant::now() >= ends || cancel.load(Ordering::Relaxed) {
+                    break 'cycles;
+                }
+                let window = routing::window(input, windows, index);
+                let drawing = reach > 0.0;
+                let note = reroute_window(
+                    input,
+                    &groups,
+                    &mut best,
+                    &mut value,
+                    plan.program,
+                    reach,
+                    drawing,
+                    !drawing,
+                    drawing,
+                    window.as_ref(),
+                    stop.clone(),
+                    ends,
+                    cancel,
+                );
+                report(&Progress {
+                    elapsed_s: started.elapsed().as_secs_f64(),
+                    value,
+                    bound: None,
+                    note: format!(
+                        "continued, {} at reach {reach:.2} in {window:?}: {note}",
+                        if drawing { "reclaim" } else { "exact, digging free" }
+                    ),
+                });
+            }
+        }
+        // A whole cycle that found nothing will find nothing again.
+        if value <= before + 1.0 {
+            break;
+        }
+    }
+    (best.solution, best.replay)
 }
 
 /// Search from `start`, a schedule of `input` the replay accepted, until the
