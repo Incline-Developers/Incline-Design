@@ -428,6 +428,9 @@ impl SymmetryDetection {
                 continue;
             }
             let cell_end = self.current_partition_links[cell_start as usize];
+            // What a pruned refinement must roll back (HiGHS #3182).
+            let start_creation_stack_size = self.cell_creation_stack.len();
+            let start_certificate_size = self.curr_node_certificate.len();
             let refine_start = {
                 let hashes = &self.vertex_hash;
                 cell_start + cpp_partition(&mut self.current_partition[cell_start as usize..cell_end as usize], |v| !hashes.contains_key(v)) as i32
@@ -471,6 +474,12 @@ impl SymmetryDetection {
                 while i >= refine_start {
                     self.update_cell_membership(i, first_cell_start, false);
                     i -= 1;
+                }
+                self.cell_creation_stack.truncate(start_creation_stack_size);
+                self.curr_node_certificate.truncate(start_certificate_size);
+                if !self.first_leave_certificate.is_empty() {
+                    self.first_leave_prefix_len = self.first_leave_prefix_len.min(start_certificate_size as i32);
+                    self.best_leave_prefix_len = self.best_leave_prefix_len.min(start_certificate_size as i32);
                 }
                 return false;
             }

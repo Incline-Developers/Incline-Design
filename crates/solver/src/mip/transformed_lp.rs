@@ -4,7 +4,7 @@
 
 use super::{
     data::MipData,
-    implications::{Implications, VarBound},
+    implications::{Cleanup, Implications, VarBound},
     lp_relaxation::LpRelaxation,
     sparse_vector_sum::SparseVectorSum,
 };
@@ -233,11 +233,29 @@ impl TransformedLp {
                 return false;
             }
             // Tighten the best variable bounds against bounds found since.
-            if self.best_vub[col].0.is_some() && self.best_vub[col].1.max_value() > ub + feastol {
-                Implications::cleanup_vub(self.best_vub[col].0, &mut self.best_vub[col].1, ub, feastol, data.epsilon);
+            // A variable bound made redundant is dropped, falling back to
+            // the simple bound (HiGHS #3177).
+            if self.best_vub[col].0.is_some()
+                && self.best_vub[col].1.max_value() > ub + feastol
+                && matches!(
+                    Implications::cleanup_vub(self.best_vub[col].0, &mut self.best_vub[col].1, ub, feastol, data.epsilon),
+                    Cleanup::Redundant
+                )
+            {
+                self.best_vub[col].0 = None;
+                self.bounds[col].ub_dist = self.bounds[col].simple_ub_dist;
+                self.bounds[col].bound_dist = self.bounds[col].lb_dist.min(self.bounds[col].ub_dist);
             }
-            if self.best_vlb[col].0.is_some() && self.best_vlb[col].1.min_value() < lb - feastol {
-                Implications::cleanup_vlb(self.best_vlb[col].0, &mut self.best_vlb[col].1, lb, feastol, data.epsilon);
+            if self.best_vlb[col].0.is_some()
+                && self.best_vlb[col].1.min_value() < lb - feastol
+                && matches!(
+                    Implications::cleanup_vlb(self.best_vlb[col].0, &mut self.best_vlb[col].1, lb, feastol, data.epsilon),
+                    Cleanup::Redundant
+                )
+            {
+                self.best_vlb[col].0 = None;
+                self.bounds[col].lb_dist = self.bounds[col].simple_lb_dist;
+                self.bounds[col].bound_dist = self.bounds[col].lb_dist.min(self.bounds[col].ub_dist);
             }
             let old_bound_type = self.bounds[col].bound_type;
             if self.bounds[col].integral {
@@ -344,7 +362,8 @@ impl TransformedLp {
                     self.vectorsum.add(inds[i], vals[i]);
                 }
             }
-            self.vectorsum.cleanup(|_, val| val.abs() <= small);
+            // Negligible against the column's bounds (HiGHS #3223).
+            self.vectorsum.cleanup(|col, val| super::domain::term_is_zero(val, get_lb(col), get_ub(col), data.epsilon));
             inds.clone_from(&self.vectorsum.nonzeroinds);
             num_nz = inds.len();
             vals.resize(num_nz, 0.0);
@@ -468,13 +487,12 @@ impl TransformedLp {
             *rhs = tmp_rhs.value().round();
         } else {
             let mut abort = false;
-            let small = data.options.small_matrix_value;
             let feastol = data.feastol;
             self.vectorsum.cleanup(|col, val| {
-                let absval = val.abs();
-                if absval <= small {
+                if super::domain::term_is_zero(val, globaldom.col_lower[col], globaldom.col_upper[col], data.epsilon) {
                     return true;
                 }
+                let absval = val.abs();
                 if absval <= feastol {
                     if val > 0.0 {
                         if globaldom.col_lower[col] == -INF {

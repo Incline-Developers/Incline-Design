@@ -429,12 +429,14 @@ impl<'a> MipPresolve<'a> {
         self.yields_implied_lower_bound(row, -val)
     }
 
+    // Only on a side the row has (HiGHS #3385; the other case is dual
+    // infeasible).
     fn is_implied_equation_at_lower(&self, row: usize) -> bool {
-        self.impl_row_dual_lower[row] > self.settings.dual_feasibility_tolerance
+        self.mip.model.row_lower[row] != -INF && self.impl_row_dual_lower[row] > self.settings.dual_feasibility_tolerance
     }
 
     fn is_implied_equation_at_upper(&self, row: usize) -> bool {
-        self.impl_row_dual_upper[row] < -self.settings.dual_feasibility_tolerance
+        self.mip.model.row_upper[row] != INF && self.impl_row_dual_upper[row] < -self.settings.dual_feasibility_tolerance
     }
 
     /// HiGHS's `isImpliedIntegral`: whether the model implies an integer
@@ -573,7 +575,16 @@ impl<'a> MipPresolve<'a> {
                 pos = self.a_next[pos];
             }
         }
-        let (lower, upper) = (self.mip.model.col_lower[col], self.mip.model.col_upper[col]);
+        // Strengthen the bounds from the implied ones first: a fractional
+        // implied bound tighter than the rounded one breaks rules that
+        // assume integrality (HiGHS #3276).
+        let (mut lower, mut upper) = (self.mip.model.col_lower[col], self.mip.model.col_upper[col]);
+        if self.impl_col_lower[col] > lower + self.primal_feastol {
+            lower = self.impl_col_lower[col];
+        }
+        if self.impl_col_upper[col] < upper - self.primal_feastol {
+            upper = self.impl_col_upper[col];
+        }
         StatusResult::result(self.change_col_bounds(col, lower, upper))
     }
 
@@ -1569,7 +1580,7 @@ impl<'a> MipPresolve<'a> {
             self.reinsert_equation(colrow);
         }
         if self.mip.model.col_cost[col] != 0.0 {
-            let objscale = CDouble::new(self.mip.model.col_cost[col] * substrowscale);
+            let objscale = CDouble::new(self.mip.model.col_cost[col]) * substrowscale;
             self.mip.model.offset = (-(objscale * rhs) + self.mip.model.offset).value();
             for k in 0..self.rowpositions_len {
                 let rowiter = self.rowpositions[k];
@@ -1589,6 +1600,18 @@ impl<'a> MipPresolve<'a> {
 
     /// Substitute `substcol = offset + scale * staycol` everywhere.
     fn substitute_cols(&mut self, substcol: usize, staycol: usize, offset: f64, scale: f64) {
+        // An implied integer standing in for an integer column becomes one,
+        // so integrality is not lost (HiGHS #3268).
+        if self.mip.model.integrality[substcol] == VarType::Integer && self.mip.model.integrality[staycol] == VarType::ImplicitInteger {
+            self.mip.model.integrality[staycol] = VarType::Integer;
+            let mut pos = self.colhead[staycol];
+            while pos != NONE {
+                let row = self.a_row[pos];
+                self.rowsize_integer[row] += 1;
+                self.rowsize_impl_int[row] -= 1;
+                pos = self.a_next[pos];
+            }
+        }
         let mut coliter = self.colhead[substcol];
         while coliter != NONE {
             let colrow = self.a_row[coliter];
@@ -1803,7 +1826,8 @@ impl MipPresolve<'_> {
                 new_col_upper = row_lower / val;
             }
         }
-        let bound_tol = feastol / max(1.0, val.abs());
+        // At least machine epsilon (HiGHS #3224).
+        let bound_tol = (feastol / max(1.0, val.abs())).max(f64::EPSILON);
         let mut lower_tightened = new_col_lower > col_lower + bound_tol;
         let mut upper_tightened = new_col_upper < col_upper - bound_tol;
         let is_integral = self.mip.model.integrality[col] != VarType::Continuous;
@@ -1916,6 +1940,14 @@ impl MipPresolve<'_> {
             || self.implied_row_bounds.sum_upper(row, CDouble::default()) < self.mip.model.row_lower[row] - feastol
         {
             return Outcome::PrimalInfeasible;
+        }
+        // A row dual bounded away from zero on a side the row lacks
+        // (HiGHS #3392).
+        let dual_tol = self.settings.dual_feasibility_tolerance;
+        if (self.impl_row_dual_lower[row] > dual_tol && self.mip.model.row_lower[row] == -INF)
+            || (self.impl_row_dual_upper[row] < -dual_tol && self.mip.model.row_upper[row] == INF)
+        {
+            return Outcome::DualInfeasible;
         }
         if self.rowsize[row] == 1 {
             return self.singleton_row(row);
@@ -2048,14 +2080,22 @@ impl MipPresolve<'_> {
                 }
             }
             if bin_col != NONE {
+                // The bounds as they stand now: removing or substituting a
+                // column changes them, which would make later substitutions
+                // invalid (HiGHS #3260).
+                let snapshot: Vec<(f64, f64)> = (0..self.rowpositions_len)
+                    .map(|k| {
+                        let col = self.a_col[self.rowpositions[k]];
+                        (impl_var_lower(col_bounds!(self), row, col), impl_var_upper(col_bounds!(self), row, col))
+                    })
+                    .collect();
                 for k in 0..self.rowpositions_len {
                     let rowiter = self.rowpositions[k];
                     let col = self.a_col[rowiter];
                     if col == bin_col {
                         continue;
                     }
-                    let col_lower = impl_var_lower(col_bounds!(self), row, col);
-                    let col_upper = impl_var_upper(col_bounds!(self), row, col);
+                    let (col_lower, col_upper) = snapshot[k];
                     if self.mip.model.col_lower[col] == self.mip.model.col_upper[col] {
                         self.ps.fixed_col(col, self.mip.model.col_lower[col]);
                         self.remove_fixed_col(col);
@@ -2534,7 +2574,7 @@ impl MipPresolve<'_> {
     fn check_forcing_row(&mut self, row: usize, direction: f64, row_side: f64, implied_row_bound: f64, dynamism: CDouble, row_type: RowType) -> Outcome {
         if direction * row_side == -INF
             || direction * implied_row_bound == INF
-            || (CDouble::new(row_side) - CDouble::new(implied_row_bound)).abs().value() > (CDouble::new(self.primal_feastol) / dynamism).value()
+            || (CDouble::new(row_side) - CDouble::new(implied_row_bound)).abs().value() > (CDouble::new(self.primal_feastol) / dynamism).value().max(f64::EPSILON)
         {
             return Outcome::Ok;
         }
@@ -2709,7 +2749,7 @@ impl MipPresolve<'_> {
             } else {
                 -s.implied_dual_row_bounds.sum_lower_orig(col, cost)
             };
-            if bound_on_col_dual.abs() <= (CDouble::new(tol) / dynamism).value() {
+            if bound_on_col_dual.abs() <= (CDouble::new(tol) / dynamism).value().max(f64::EPSILON) {
                 let col_integral = s.mip.model.integrality[col] == VarType::Integer;
                 let entries = s.col_entries(col);
                 s.ps.forcing_column(col, entries, other_bound, direction < 0.0, col_integral);
@@ -2912,10 +2952,6 @@ impl MipPresolve<'_> {
         };
         if new_bound != -INF && (new_bound >= direction * current_bound - self.primal_feastol || new_bound.abs() > huge_bound) {
             return None;
-        }
-        let mut new_bound = new_bound;
-        if self.mip.model.integrality[col] != VarType::Continuous {
-            new_bound = (new_bound - self.primal_feastol).ceil();
         }
         Some(new_bound * direction)
     }
@@ -3229,7 +3265,7 @@ impl MipPresolve<'_> {
         let mut upper_bound = INF;
         let mut worst_case_lower_bound = -INF;
         let mut worst_case_upper_bound = INF;
-        let compute_bound = |s: &Self, t: &Triplet, rhs: f64, direction: f64, worst_case: bool| -> f64 {
+        let compute_bound = |s: &Self, t: &Triplet, rhs: f64, direction: f64, is_lower: bool, worst_case: bool| -> f64 {
             let b = col_bounds!(s);
             let residual;
             if (direction > 0.0 && !worst_case) || (direction < 0.0 && worst_case) {
@@ -3251,7 +3287,17 @@ impl MipPresolve<'_> {
                     return -INF.copysign(t.jval);
                 }
             }
-            ((CDouble::new(rhs) - CDouble::new(residual)) / t.jval).value()
+            let bound = ((CDouble::new(rhs) - CDouble::new(residual)) / t.jval).value();
+            // An integer column's bound is rounded here (HiGHS #3411). An
+            // implied bound holds for every feasible point, so the primal
+            // tolerance is safe; a worst-case bound is where the column may
+            // be fixed, and moving past it by delta violates the row by
+            // |jval| delta, so its tolerance is divided by |jval|.
+            if s.mip.model.integrality[col] != VarType::Continuous {
+                let tol = if worst_case { s.primal_feastol / max(1.0, t.jval.abs()) } else { s.primal_feastol };
+                return if is_lower { (bound - tol).ceil() } else { (bound + tol).floor() };
+            }
+            bound
         };
         for t in &nzs {
             for (rhs, direction) in [(self.mip.model.row_upper[t.row], 1.0), (self.mip.model.row_lower[t.row], -1.0)] {
@@ -3260,17 +3306,17 @@ impl MipPresolve<'_> {
                 }
                 if direction * t.jval < 0.0 {
                     if want[0] {
-                        lower_bound = max(lower_bound, compute_bound(self, t, rhs, direction, false));
+                        lower_bound = max(lower_bound, compute_bound(self, t, rhs, direction, true, false));
                     }
                     if want[2] && worst_case_lower_bound != INF {
-                        worst_case_lower_bound = max(worst_case_lower_bound, compute_bound(self, t, rhs, direction, true));
+                        worst_case_lower_bound = max(worst_case_lower_bound, compute_bound(self, t, rhs, direction, true, true));
                     }
                 } else {
                     if want[1] {
-                        upper_bound = min(upper_bound, compute_bound(self, t, rhs, direction, false));
+                        upper_bound = min(upper_bound, compute_bound(self, t, rhs, direction, false, false));
                     }
                     if want[3] && worst_case_upper_bound != -INF {
-                        worst_case_upper_bound = min(worst_case_upper_bound, compute_bound(self, t, rhs, direction, true));
+                        worst_case_upper_bound = min(worst_case_upper_bound, compute_bound(self, t, rhs, direction, false, true));
                     }
                 }
             }
@@ -3713,12 +3759,17 @@ impl MipPresolve<'_> {
                         check!(self.fix_col_to_upper(col));
                     }
                     _ => {
-                        // HiGHS merges even when the postsolve stack
-                        // refuses the merge (it only reports that in debug).
+                        // A merge the postsolve stack refuses would lose
+                        // integrality (HiGHS 1.15 made it anyway; fixed in
+                        // #3261).
                         let x_int = self.mip.model.integrality[col] == VarType::Integer;
                         let y_int = self.mip.model.integrality[duplicate_col] == VarType::Integer;
-                        self.ps
-                            .duplicate_column(col_scale, cl, cu, dl, du, col, duplicate_col, x_int, y_int, self.settings.primal_feasibility_tolerance);
+                        if !self
+                            .ps
+                            .duplicate_column(col_scale, cl, cu, dl, du, col, duplicate_col, x_int, y_int, self.settings.primal_feasibility_tolerance)
+                        {
+                            continue;
+                        }
                         // A continuous column merged into an integer one
                         // makes it continuous.
                         let rowsize_int_reduction = !y_int && x_int;
@@ -4219,42 +4270,33 @@ impl MipPresolve<'_> {
             upper_bound = self.compute_implied_upper_bound(col, other_col, other_col_bound, other_col_coeff_pattern);
             lower_bound = min(col_bound, self.compute_implied_lower_bound(col, other_col, other_col_bound, other_col_coeff_pattern));
             if self.mip.model.col_cost[col] <= 0.0 {
-                let mut worst_case_upper = self.compute_worst_case_upper_bound(col, other_col, other_col_bound, other_col_coeff_pattern);
-                if integral(self) {
-                    worst_case_upper = (worst_case_upper + self.primal_feastol).floor();
-                }
+                let worst_case_upper = self.compute_worst_case_upper_bound(col, other_col, other_col_bound, other_col_coeff_pattern);
                 lower_bound = max(lower_bound, min(col_bound, worst_case_upper));
             }
         } else {
             lower_bound = self.compute_implied_lower_bound(col, other_col, other_col_bound, other_col_coeff_pattern);
             upper_bound = max(col_bound, self.compute_implied_upper_bound(col, other_col, other_col_bound, other_col_coeff_pattern));
             if self.mip.model.col_cost[col] >= 0.0 {
-                let mut worst_case_lower = self.compute_worst_case_lower_bound(col, other_col, other_col_bound, other_col_coeff_pattern);
-                if integral(self) {
-                    worst_case_lower = (worst_case_lower - self.primal_feastol).ceil();
-                }
+                let worst_case_lower = self.compute_worst_case_lower_bound(col, other_col, other_col_bound, other_col_coeff_pattern);
                 upper_bound = min(upper_bound, max(col_bound, worst_case_lower));
             }
         }
-        if lower_bound > self.mip.model.col_lower[col] + self.primal_feastol {
-            if integral(self) {
-                lower_bound = (lower_bound - self.primal_feastol).ceil();
-            }
+        // Infinite bounds are no tightening (HiGHS #3285); integer bounds
+        // come rounded (#3411).
+        if lower_bound < INF && lower_bound > self.mip.model.col_lower[col] + self.primal_feastol {
             if lower_bound == self.mip.model.col_upper[col] {
                 stats.num_fixed_cols_pred_bnd_analysis += 1;
-                check!(self.dominated_fix_col(stats, col, 1.0));
+                // Done once fixed (HiGHS #3290).
+                return self.dominated_fix_col(stats, col, 1.0);
             } else if integral(self) {
                 stats.num_modified_bnds_pred_bnd_analysis += 1;
                 check!(self.change_col_lower(col, lower_bound));
             }
         }
-        if upper_bound < self.mip.model.col_upper[col] - self.primal_feastol {
-            if integral(self) {
-                upper_bound = (upper_bound + self.primal_feastol).floor();
-            }
+        if upper_bound > -INF && upper_bound < self.mip.model.col_upper[col] - self.primal_feastol {
             if upper_bound == self.mip.model.col_lower[col] {
                 stats.num_fixed_cols_pred_bnd_analysis += 1;
-                check!(self.dominated_fix_col(stats, col, -1.0));
+                return self.dominated_fix_col(stats, col, -1.0);
             } else if integral(self) {
                 stats.num_modified_bnds_pred_bnd_analysis += 1;
                 check!(self.change_col_upper(col, upper_bound));
@@ -4579,7 +4621,9 @@ impl MipPresolve<'_> {
                     *num_bnds_tightened += 1;
                 }
             }
-            check!(self.check_limits());
+            // No limit check here: the clique table has deleted rows
+            // without postsolve entries, relying on every fixing being
+            // applied (HiGHS #3220).
         }
 
         check!(self.apply_conflict_graph_substitutions(num_vars_substituted));
@@ -5264,8 +5308,11 @@ impl MipPresolve<'_> {
     /// of inequalities by covers of their maximal violation.
     fn strengthen_inequalities(&mut self, num_strengthened: &mut usize) -> Outcome {
         let mut complementation: Vec<i8> = Vec::new();
-        let mut reducedcost: Vec<f64> = Vec::new();
-        let mut upper: Vec<f64> = Vec::new();
+        // In double-double throughout, as HiGHS since #3234.
+        let mut reducedcost: Vec<CDouble> = Vec::new();
+        let mut upper: Vec<CDouble> = Vec::new();
+        let cmin = |a: CDouble, b: CDouble| if a < b { a } else { b };
+        let cmax = |a: CDouble, b: CDouble| if a > b { a } else { b };
         let mut indices: Vec<usize> = Vec::new();
         let mut positions: Vec<usize> = Vec::new();
         let mut stack: Vec<usize> = Vec::new();
@@ -5314,13 +5361,13 @@ impl MipPresolve<'_> {
                 }
                 let comp: i8;
                 let mut weight = self.a_value[pos] * scale;
-                let ub = self.mip.model.col_upper[col] - self.mip.model.col_lower[col];
+                let ub = CDouble::new(self.mip.model.col_upper[col]) - CDouble::new(self.mip.model.col_lower[col]);
                 if weight > 0.0 {
                     comp = 1;
-                    maxviolation += self.mip.model.col_upper[col] * weight;
+                    maxviolation += CDouble::new(self.mip.model.col_upper[col]) * weight;
                 } else {
                     comp = -1;
-                    maxviolation += self.mip.model.col_lower[col] * weight;
+                    maxviolation += CDouble::new(self.mip.model.col_lower[col]) * weight;
                     weight = -weight;
                 }
                 if ub <= feastol || weight <= feastol {
@@ -5332,7 +5379,7 @@ impl MipPresolve<'_> {
                 }
                 indices.push(reducedcost.len());
                 positions.push(pos);
-                reducedcost.push(weight);
+                reducedcost.push(CDouble::new(weight));
                 complementation.push(comp);
                 upper.push(ub);
             }
@@ -5383,19 +5430,19 @@ impl MipPresolve<'_> {
                 }
                 let al = reducedcost[alpos];
                 coefs.resize(cover.len(), 0.0);
-                let coverrhs = max(((lambda / al - feastol).value()).ceil(), 1.0);
-                let mut slackupper = CDouble::new(-coverrhs);
-                let mut step = INF;
+                let coverrhs = cmax((lambda / al - feastol).ceil(), CDouble::new(1.0));
+                let mut slackupper = -coverrhs;
+                let mut step = CDouble::new(INF);
                 for i in 0..cover.len() {
-                    coefs[i] = (min(reducedcost[cover[i]], lambda.value()) / al - self.settings.small_matrix_value).ceil();
+                    coefs[i] = (cmin(reducedcost[cover[i]], lambda) / al - self.settings.small_matrix_value).ceil().value();
                     slackupper += upper[cover[i]] * coefs[i];
-                    step = min(step, reducedcost[cover[i]] / coefs[i]);
+                    step = cmin(step, reducedcost[cover[i]] / coefs[i]);
                 }
-                step = min(step, (maxviolation / coverrhs).value());
+                step = cmin(step, maxviolation / coverrhs);
                 maxviolation -= step * coverrhs;
                 let slackind = reducedcost.len();
                 reducedcost.push(step);
-                upper.push(slackupper.value());
+                upper.push(slackupper);
                 for i in 0..cover.len() {
                     reducedcost[cover[i]] -= step * coefs[i];
                 }
@@ -5410,14 +5457,14 @@ impl MipPresolve<'_> {
             let direction = if scale < 0.0 { -1.0 } else { 1.0 };
             let mut rhs = CDouble::new(if scale < 0.0 { self.mip.model.row_lower[row] } else { self.mip.model.row_upper[row] });
             for &i in &indices {
-                let coefdelta = direction * (reducedcost[i] - maxviolation).value();
+                let coefdelta = direction * (reducedcost[i] - maxviolation);
                 let col = self.a_col[positions[i]];
                 if complementation[i] == -1 {
                     rhs += coefdelta * self.mip.model.col_lower[col];
-                    self.add_to_matrix(row, col, coefdelta);
+                    self.add_to_matrix(row, col, coefdelta.value());
                 } else {
                     rhs -= coefdelta * self.mip.model.col_upper[col];
-                    self.add_to_matrix(row, col, -coefdelta);
+                    self.add_to_matrix(row, col, (-coefdelta).value());
                 }
             }
             if scale < 0.0 {

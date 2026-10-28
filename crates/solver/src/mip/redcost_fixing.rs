@@ -273,12 +273,14 @@ impl RedcostFixing {
         for &col in &data.integral_cols {
             let lower = data.domain.col_lower[col];
             let upper = data.domain.col_upper[col];
-            if lpredcost[col] > feastol {
+            // Bounds beyond HiGHS's integer infinity are left alone (#3241).
+            let iinf = i32::MAX as f64;
+            if lpredcost[col] > feastol && lower > -iinf {
                 let (lurking_upper, lurking_lower) = (&mut self.lurking_col_upper[col], &mut self.lurking_col_lower[col]);
-                find_lurking_bounds(1, lower as i32 as i64, upper as i32 as i64, upper != INF, lpredcost[col], lurking_upper, lurking_lower);
-            } else if lpredcost[col] < -feastol {
+                find_lurking_bounds(1, lower as i32 as i64, upper as i32 as i64, upper < iinf, lpredcost[col], lurking_upper, lurking_lower);
+            } else if lpredcost[col] < -feastol && upper < iinf {
                 let (lurking_lower, lurking_upper) = (&mut self.lurking_col_lower[col], &mut self.lurking_col_upper[col]);
-                find_lurking_bounds(-1, upper as i32 as i64, lower as i32 as i64, lower != -INF, lpredcost[col], lurking_lower, lurking_upper);
+                find_lurking_bounds(-1, upper as i32 as i64, lower as i32 as i64, lower > -iinf, lpredcost[col], lurking_lower, lurking_upper);
             }
         }
     }

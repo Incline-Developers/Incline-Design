@@ -579,29 +579,37 @@ fn find_common_in_leaves<'a, K: HashKey, V>(leaf1: &'a Leaf<K, V>, leaf2: &Leaf<
             j += 1;
             offset2 += 1;
         }
+        // Entries with equal hashes are compared all against all: HiGHS
+        // 1.15 compared them pairwise and could miss a common key (#3327).
+        fn past_chunk_end<K: HashKey, V>(leaf: &Leaf<K, V>, i: usize, pos: u8) -> bool {
+            i >= leaf.size() || get_first_chunk16(leaf.hashes[i]) != pos
+        }
+        fn advance_past_current_hash<K: HashKey, V>(leaf: &Leaf<K, V>, i: &mut usize, pos: u8) {
+            let common_hash = leaf.hashes[*i];
+            *i += 1;
+            while !past_chunk_end(leaf, *i, pos) && leaf.hashes[*i] == common_hash {
+                *i += 1;
+            }
+        }
         loop {
             if leaf1.hashes[i] > leaf2.hashes[j] {
                 i += 1;
-                if i == leaf1.size() || get_first_chunk16(leaf1.hashes[i]) != pos {
-                    break;
-                }
             } else if leaf2.hashes[j] > leaf1.hashes[i] {
                 j += 1;
-                if j == leaf2.size() || get_first_chunk16(leaf2.hashes[j]) != pos {
-                    break;
-                }
             } else {
-                if leaf1.entries[i].0 == leaf2.entries[j].0 {
-                    return Some(&leaf1.entries[i]);
+                let (i_save, j_save) = (i, j);
+                advance_past_current_hash(leaf1, &mut i, pos);
+                advance_past_current_hash(leaf2, &mut j, pos);
+                for ii in i_save..i {
+                    for jj in j_save..j {
+                        if leaf1.entries[ii].0 == leaf2.entries[jj].0 {
+                            return Some(&leaf1.entries[ii]);
+                        }
+                    }
                 }
-                i += 1;
-                if i == leaf1.size() || get_first_chunk16(leaf1.hashes[i]) != pos {
-                    break;
-                }
-                j += 1;
-                if j == leaf2.size() || get_first_chunk16(leaf2.hashes[j]) != pos {
-                    break;
-                }
+            }
+            if past_chunk_end(leaf1, i, pos) || past_chunk_end(leaf2, j, pos) {
+                break;
             }
         }
     }

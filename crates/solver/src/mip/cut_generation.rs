@@ -817,7 +817,12 @@ impl CutGeneration {
                 }
                 has_continuous = true;
             } else {
-                if self.upper[i] == INF {
+                // A product past 2^52 has no fraction to cut, and bounds at
+                // HiGHS's integer infinity count as none (#3267).
+                if self.upper[i] != INF && (self.vals[i] * self.upper[i]).abs() > super::domain::INV_MACHEPS {
+                    return None;
+                }
+                if self.upper[i] >= i32::MAX as f64 {
                     has_unbounded_ints = true;
                     has_general_ints = true;
                 } else if self.upper[i] != 1.0 {

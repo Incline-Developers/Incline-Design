@@ -463,6 +463,9 @@ impl FeasibilityJumpSolver {
                 break;
             }
             let var = self.select_variable();
+            if var == usize::MAX {
+                break;
+            }
             self.do_variable_move(var);
         }
     }
@@ -495,7 +498,8 @@ impl FeasibilityJumpSolver {
                     best_var = Some(var_idx);
                 }
             }
-            return best_var.expect("a good variable");
+            // No move scored (HiGHS #3269: the search stops).
+            return best_var.unwrap_or(usize::MAX);
         }
         self.update_weights();
         if !self.problem.violated_constraints.is_empty() {

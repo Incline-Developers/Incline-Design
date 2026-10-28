@@ -128,6 +128,19 @@ impl<'a> std::ops::DerefMut for DomainEnv<'_, 'a> {
     }
 }
 
+/// HiGHS's `kHighsInvMacheps`: 2^52, past which a double holds no fraction.
+pub(crate) const INV_MACHEPS: f64 = 4503599627370496.0;
+
+/// HiGHS's `termIsZero` (#3223): a coefficient negligible both on its own
+/// and times the column's largest bound.
+pub(crate) fn term_is_zero(val: f64, lb: f64, ub: f64, epsilon: f64) -> bool {
+    let abs_val = val.abs();
+    if abs_val <= f64::MIN_POSITIVE {
+        return true;
+    }
+    abs_val <= epsilon && abs_val * lb.abs().max(ub.abs()) <= epsilon
+}
+
 fn activity_contribution_min(coef: f64, lb: f64, ub: f64) -> f64 {
     if coef < 0.0 {
         if ub == INF { -INF } else { coef * ub }
@@ -468,6 +481,17 @@ impl Domain {
 
     pub fn previous_bounds(&self) -> &[(f64, isize)] {
         &self.prevboundval
+    }
+
+    /// HiGHS's `walkBoundChain` (#3196): follow `pos` back through the
+    /// previous bounds while they are at or past `target` in `direction`
+    /// (1 for a lower bound, -1 for an upper), and say whether a position
+    /// is left. HiGHS 1.15 walked off the end of the chain.
+    fn walk_bound_chain(&self, pos: &mut isize, target: f64, direction: f64) -> bool {
+        while *pos != NO_POS && direction * self.prevboundval[*pos as usize].0 >= direction * target {
+            *pos = self.prevboundval[*pos as usize].1;
+        }
+        *pos != NO_POS
     }
 
     pub fn domain_change_stack(&self) -> &[DomainChange] {
@@ -1970,6 +1994,11 @@ impl Domain {
         let prev_pos;
         match boundchg.boundtype {
             BoundType::Lower => {
+                // An integral column's bound stays integral, also when a
+                // variable bound upgrades it (HiGHS #3320).
+                if env.model.is_col_integral(col) {
+                    boundchg.boundval = (boundchg.boundval - feastol).ceil();
+                }
                 if boundchg.boundval <= self.col_lower[col] {
                     if reason.kind != Reason::BRANCHING {
                         return;
@@ -1994,6 +2023,9 @@ impl Domain {
                 self.col_lower_pos[col] = self.domchgstack.len() as isize;
             }
             BoundType::Upper => {
+                if env.model.is_col_integral(col) {
+                    boundchg.boundval = (boundchg.boundval + feastol).floor();
+                }
                 if boundchg.boundval >= self.col_upper[col] {
                     if reason.kind != Reason::BRANCHING {
                         return;
@@ -2101,7 +2133,7 @@ impl Domain {
 
     /// HiGHS's `setDomainChangeStack` with branching positions: replay the
     /// stack, propagating after each change, the branchings as branchings.
-    pub fn set_domain_change_stack_with_branching(&mut self, domchgstack: &[DomainChange], branching_positions: &[usize], env: &mut DomainEnv) {
+    pub fn set_domain_change_stack_with_branching(&mut self, domchgstack: &[DomainChange], branching_positions: &[usize], detect_symmetries: bool, env: &mut DomainEnv) {
         self.infeasible = false;
         self.clear_stack_positions();
         let stacksize = domchgstack.len();
@@ -2127,17 +2159,18 @@ impl Domain {
             if k == stacksize {
                 return;
             }
-            // A branching made redundant only by its subtree being done (and
-            // the global bound updated) stays a branching, for symmetry
-            // handling; it goes only when strictly redundant globally or
-            // already implied by a local change.
+            // A redundant branching goes when strictly redundant globally or
+            // already implied by a local change, but only without symmetry
+            // handling, whose stabilisers need every branching (HiGHS #3357).
             let domchg = domchgstack[k];
-            if domchg.boundtype == BoundType::Lower {
-                if domchg.boundval <= self.col_lower[domchg.column] && (domchg.boundval < self.col_lower[domchg.column] || self.col_lower_pos[domchg.column] != NO_POS) {
+            if !detect_symmetries {
+                if domchg.boundtype == BoundType::Lower {
+                    if domchg.boundval <= self.col_lower[domchg.column] && (domchg.boundval < self.col_lower[domchg.column] || self.col_lower_pos[domchg.column] != NO_POS) {
+                        continue;
+                    }
+                } else if domchg.boundval >= self.col_upper[domchg.column] && (domchg.boundval > self.col_upper[domchg.column] || self.col_upper_pos[domchg.column] != NO_POS) {
                     continue;
                 }
-            } else if domchg.boundval >= self.col_upper[domchg.column] && (domchg.boundval > self.col_upper[domchg.column] || self.col_upper_pos[domchg.column] != NO_POS) {
-                continue;
             }
             self.change_bound(domchg, Reason::branching(), env);
             if !self.infeasible {
@@ -2607,7 +2640,8 @@ impl Domain {
         globaldom: &Domain,
         cx: &MipCtx,
     ) -> bool {
-        if max_act == INF {
+        // Too large to hold a fraction: no explanation (HiGHS #3267).
+        if max_act == INF || max_act.abs() > INV_MACHEPS {
             return false;
         }
         let mut domchg_val = 0.0;
@@ -2706,7 +2740,7 @@ impl Domain {
         globaldom: &Domain,
         cx: &MipCtx,
     ) -> bool {
-        if min_act == -INF {
+        if min_act == -INF || min_act.abs() > INV_MACHEPS {
             return false;
         }
         let mut domchg_val = 0.0;
@@ -2827,15 +2861,16 @@ impl Domain {
                             continue;
                         }
                         set.resolved_domain_changes[ku].1.boundval = relax_lb;
-                        if relax_lb - glb <= cx.epsilon {
+                        // Dropped only if the conflict still holds without it (HiGHS #3149).
+                        if relax_lb - glb <= cx.epsilon && m - cand.delta - m_upper <= feastol {
                             let last = set.resolved_domain_changes.len() - 1;
                             set.resolved_domain_changes.swap(last, ku);
                             set.resolved_domain_changes.truncate(last);
                             m -= cand.delta;
                         } else {
                             let mut pos = pos;
-                            while relax_lb <= self.prevboundval[pos as usize].0 {
-                                pos = self.prevboundval[pos as usize].1;
+                            if !self.walk_bound_chain(&mut pos, relax_lb, 1.0) {
+                                return false;
                             }
                             set.resolved_domain_changes[ku].0 = pos;
                             m += vals[i] * (relax_lb - lb);
@@ -2856,15 +2891,15 @@ impl Domain {
                             continue;
                         }
                         set.resolved_domain_changes[ku].1.boundval = relax_ub;
-                        if relax_ub - gub >= -cx.epsilon {
+                        if relax_ub - gub >= -cx.epsilon && m - cand.delta - m_upper <= feastol {
                             let last = set.resolved_domain_changes.len() - 1;
                             set.resolved_domain_changes.swap(last, ku);
                             set.resolved_domain_changes.truncate(last);
                             m -= cand.delta;
                         } else {
                             let mut pos = pos;
-                            while relax_ub >= self.prevboundval[pos as usize].0 {
-                                pos = self.prevboundval[pos as usize].1;
+                            if !self.walk_bound_chain(&mut pos, relax_ub, -1.0) {
+                                return false;
                             }
                             set.resolved_domain_changes[ku].0 = pos;
                             m += vals[i] * (relax_ub - ub);
@@ -2918,15 +2953,15 @@ impl Domain {
                             continue;
                         }
                         set.resolved_domain_changes[ku].1.boundval = relax_lb;
-                        if relax_lb - glb <= cx.epsilon {
+                        if relax_lb - glb <= cx.epsilon && m - cand.delta - m_lower >= -feastol {
                             let last = set.resolved_domain_changes.len() - 1;
                             set.resolved_domain_changes.swap(last, ku);
                             set.resolved_domain_changes.truncate(last);
                             m -= cand.delta;
                         } else {
                             let mut pos = pos;
-                            while relax_lb <= self.prevboundval[pos as usize].0 {
-                                pos = self.prevboundval[pos as usize].1;
+                            if !self.walk_bound_chain(&mut pos, relax_lb, 1.0) {
+                                return false;
                             }
                             set.resolved_domain_changes[ku].0 = pos;
                             m += vals[i] * (relax_lb - lb);
@@ -2947,15 +2982,15 @@ impl Domain {
                             continue;
                         }
                         set.resolved_domain_changes[ku].1.boundval = relax_ub;
-                        if relax_ub - gub >= -cx.epsilon {
+                        if relax_ub - gub >= -cx.epsilon && m - cand.delta - m_lower >= -feastol {
                             let last = set.resolved_domain_changes.len() - 1;
                             set.resolved_domain_changes.swap(last, ku);
                             set.resolved_domain_changes.truncate(last);
                             m -= cand.delta;
                         } else {
                             let mut pos = pos;
-                            while relax_ub >= self.prevboundval[pos as usize].0 {
-                                pos = self.prevboundval[pos as usize].1;
+                            if !self.walk_bound_chain(&mut pos, relax_ub, -1.0) {
+                                return false;
                             }
                             set.resolved_domain_changes[ku].0 = pos;
                             m += vals[i] * (relax_ub - ub);
@@ -2986,8 +3021,8 @@ impl Domain {
                 if pos == NO_POS || lb < entry.boundval {
                     return false;
                 }
-                while self.prevboundval[pos as usize].0 >= entry.boundval {
-                    pos = self.prevboundval[pos as usize].1;
+                if !self.walk_bound_chain(&mut pos, entry.boundval, 1.0) {
+                    return false;
                 }
             } else {
                 let (ub, p) = self.col_upper_pos(entry.column, self.infeasible_pos);
@@ -2995,8 +3030,8 @@ impl Domain {
                 if pos == NO_POS || ub > entry.boundval {
                     return false;
                 }
-                while self.prevboundval[pos as usize].0 <= entry.boundval {
-                    pos = self.prevboundval[pos as usize].1;
+                if !self.walk_bound_chain(&mut pos, entry.boundval, -1.0) {
+                    return false;
                 }
             }
             set.resolved_domain_changes.push((pos, *entry));
@@ -3006,7 +3041,7 @@ impl Domain {
 
     /// HiGHS's `explainInfeasibilityGeq`.
     fn explain_infeasibility_geq(&self, set: &mut ConflictSet, inds: &[usize], vals: &[f64], rhs: f64, max_act: f64, globaldom: &Domain, cx: &MipCtx) -> bool {
-        if max_act == INF {
+        if max_act == INF || max_act.abs() > INV_MACHEPS {
             return false;
         }
         let infeasible_pos = if self.infeasible { self.infeasible_pos } else { POS_INF };
@@ -3045,7 +3080,7 @@ impl Domain {
 
     /// HiGHS's `explainInfeasibilityLeq`.
     fn explain_infeasibility_leq(&self, set: &mut ConflictSet, inds: &[usize], vals: &[f64], rhs: f64, min_act: f64, globaldom: &Domain, cx: &MipCtx) -> bool {
-        if min_act == -INF {
+        if min_act == -INF || min_act.abs() > INV_MACHEPS {
             return false;
         }
         let infeasible_pos = if self.infeasible { self.infeasible_pos } else { POS_INF };
@@ -3177,7 +3212,8 @@ impl Domain {
             Reason::OBJECTIVE => {
                 let (inds, vals, rhs) = self.objective_propagation_constraint(pos, Some(domchg.column), env);
                 let (ninfmin, min_act) = globaldom.compute_min_activity(&inds, &vals);
-                if ninfmin == 1 {
+                // Any infinite contribution, not just one (HiGHS #3275).
+                if ninfmin > 0 {
                     return false;
                 }
                 self.explain_bound_change_leq(set, frontier, pos, domchg, &inds, &vals, rhs, min_act.value(), globaldom, cx)
@@ -3228,8 +3264,8 @@ impl Domain {
                 if pos == NO_POS || lb < entry.boundval {
                     return false;
                 }
-                while self.prevboundval[pos as usize].0 >= entry.boundval {
-                    pos = self.prevboundval[pos as usize].1;
+                if !self.walk_bound_chain(&mut pos, entry.boundval, 1.0) {
+                    return false;
                 }
             } else {
                 let (ub, p) = self.col_upper_pos(entry.column, locpos - 1);
@@ -3237,8 +3273,8 @@ impl Domain {
                 if pos == NO_POS || ub > entry.boundval {
                     return false;
                 }
-                while self.prevboundval[pos as usize].0 <= entry.boundval {
-                    pos = self.prevboundval[pos as usize].1;
+                if !self.walk_bound_chain(&mut pos, entry.boundval, -1.0) {
+                    return false;
                 }
             }
             set.resolved_domain_changes.push((pos, self.domchgstack[pos as usize]));
@@ -3393,8 +3429,15 @@ impl Domain {
         if 10 * set.resolved_domain_changes.len() > 1000 + 3 * env.num_integral_cols {
             return;
         }
+        // A change already in the frontier keeps the stronger relaxed bound
+        // (HiGHS #3443).
         for &(pos, domchg) in &set.resolved_domain_changes {
-            set.reason_side_frontier.entry(pos).or_insert(domchg);
+            let existing = set.reason_side_frontier.entry(pos).or_insert(domchg);
+            existing.boundval = if domchg.boundtype == BoundType::Lower {
+                cmax(existing.boundval, domchg.boundval)
+            } else {
+                cmin(existing.boundval, domchg.boundval)
+            };
         }
         let mut num_conflicts = 0;
         let mut last_depth = self.branch_pos.len() as isize;

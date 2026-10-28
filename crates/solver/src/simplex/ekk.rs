@@ -995,6 +995,11 @@ impl Ekk {
         for work_cost_col in &self.info.work_cost[..num_col] {
             max_abs_cost = max_abs_cost.max(work_cost_col.abs());
         }
+        // No nonzero cost: perturb as if the largest were 1. HiGHS 1.15 did
+        // so only with logging on (#3226).
+        if max_abs_cost == 0.0 {
+            max_abs_cost = 1.0;
+        }
         if max_abs_cost > 100.0 {
             max_abs_cost = max_abs_cost.sqrt().sqrt();
         }

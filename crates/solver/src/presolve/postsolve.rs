@@ -721,11 +721,11 @@ fn undo_duplicate_row(
     } else {
         compute_status_in(solution.row_dual[row], &mut basis.row_status[row], tol.dual_feasibility)
     };
-    let compute_row_dual_and_status = |tightened: bool, solution: &mut Solution, basis: &mut Basis| {
+    let compute_row_dual_and_status = |tightened: bool, direction: f64, solution: &mut Solution, basis: &mut Basis| {
         if tightened {
-            solution.row_dual[duplicate_row] = solution.row_dual[row] / duplicate_row_scale;
+            solution.row_dual[duplicate_row] = solution.row_dual[row] * duplicate_row_scale;
             if basis.valid {
-                basis.row_status[duplicate_row] = if duplicate_row_scale > 0.0 { Status::Upper } else { Status::Lower };
+                basis.row_status[duplicate_row] = if direction * duplicate_row_scale > 0.0 { Status::Upper } else { Status::Lower };
             }
             solution.row_dual[row] = 0.0;
             if basis.valid {
@@ -745,8 +745,8 @@ fn undo_duplicate_row(
                 basis.row_status[duplicate_row] = Status::Basic;
             }
         }
-        Status::Upper => compute_row_dual_and_status(row_upper_tightened, solution, basis),
-        Status::Lower => compute_row_dual_and_status(row_lower_tightened, solution, basis),
+        Status::Upper => compute_row_dual_and_status(row_upper_tightened, 1.0, solution, basis),
+        Status::Lower => compute_row_dual_and_status(row_lower_tightened, -1.0, solution, basis),
         _ => {}
     }
 }

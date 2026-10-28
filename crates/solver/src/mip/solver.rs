@@ -386,13 +386,16 @@ impl MipSolver {
         }
         let data = &mut self.data;
         data.analytic_center_computed = true;
-        if data.analytic_center_status == ModelStatus::Optimal {
+        // HiGHS #3408: no fixings with presolve off, where sets of
+        // equalities and redundant rows can put a valid centre near a bound;
+        // and a tenth of the tolerance.
+        if data.analytic_center_status == ModelStatus::Optimal && data.options.presolve {
             for i in 0..data.model.num_col {
                 let bound_range = data.domain.col_upper[i] - data.domain.col_lower[i];
                 if bound_range == 0.0 {
                     continue;
                 }
-                let tolerance = data.feastol * super::cmin(bound_range, 1.0);
+                let tolerance = (data.feastol / 10.0) * super::cmin(bound_range, 1.0);
                 if data.analytic_center[i] <= data.model.col_lower[i] + tolerance {
                     let bound = data.model.col_lower[i];
                     data.parts()

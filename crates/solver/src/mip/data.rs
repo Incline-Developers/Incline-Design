@@ -555,7 +555,7 @@ impl MipData {
             if model.is_col_integer(i) && fractionality(solution[i]) > self.feastol {
                 return false;
             }
-            obj += model.col_cost[i] * solution[i];
+            obj += CDouble::new(model.col_cost[i]) * solution[i];
         }
         for i in 0..model.num_row {
             let mut rowactivity = 0.0;
@@ -641,7 +641,7 @@ impl MipData {
         let mut obj = CDouble::new(lp.offset);
         for i in 0..lp.num_col {
             let value = col_value[i];
-            obj += lp.col_cost[i] * value;
+            obj += CDouble::new(lp.col_cost[i]) * value;
             if lp.integrality[i] == VarType::Integer {
                 integrality_violation = super::cmax(fractionality(value), integrality_violation);
             }
@@ -754,7 +754,9 @@ impl MipData {
                 if primal_feasible {
                     self.total_repair_lp_feasible += 1;
                     col_value = repair.col_value().unwrap().to_vec();
-                    row_value = repair.row_value().unwrap().to_vec();
+                    // Row activities in quad precision from the repaired
+                    // columns (HiGHS #3181).
+                    row_value = super::calculate_row_values_quad(&self.orig_model, &col_value);
                     allow_try_again = false;
                     continue;
                 }
@@ -992,7 +994,7 @@ impl MipData {
             }
             let mut cdouble_obj = CDouble::new(0.0);
             for i_col in 0..num_col {
-                cdouble_obj += self.model.col_cost[i_col] * solution[i_col];
+                cdouble_obj += CDouble::new(self.model.col_cost[i_col]) * solution[i_col];
             }
             let sol = solution.clone();
             self.add_incumbent(&sol, cdouble_obj.value(), *source, true, false);

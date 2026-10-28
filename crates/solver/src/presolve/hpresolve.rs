@@ -3,7 +3,9 @@
 //! basis, in the order HiGHS applies them. The MIP-only reductions
 //! (probing, clique and implied-integer detection, sparsification,
 //! dominated columns and coefficient strengthening) are left out, as are
-//! HiGHS's options for logging and switching rules off.
+//! HiGHS's options for logging and switching rules off. So is the
+//! dominated (forcing) column rule 1.15 applied: its basis postsolve is
+//! wrong, and HiGHS has used it only without one since #3348.
 
 use std::{
     collections::{BTreeSet, HashMap},
@@ -187,6 +189,8 @@ pub(crate) struct Presolve {
     row_deleted: Vec<bool>,
     col_deleted: Vec<bool>,
     single_equation_checked: Vec<bool>,
+    /// How many rows are flagged in `single_equation_checked` (HiGHS #3341).
+    num_single_equation_checked: usize,
     num_deleted_rows: usize,
     num_deleted_cols: usize,
     old_num_col: usize,
@@ -255,6 +259,7 @@ impl Presolve {
             row_deleted: vec![false; num_row],
             col_deleted: vec![false; num_col],
             single_equation_checked: vec![false; num_row],
+            num_single_equation_checked: 0,
             num_deleted_rows: 0,
             num_deleted_cols: 0,
             old_num_col: 0,
@@ -349,12 +354,14 @@ impl Presolve {
         self.yields_implied_lower_bound(row, -val)
     }
 
+    // Only on a side the row has (HiGHS #3385; the other case is dual
+    // infeasible).
     fn is_implied_equation_at_lower(&self, row: usize) -> bool {
-        self.impl_row_dual_lower[row] > self.settings.dual_feasibility_tolerance
+        self.model.row_lower[row] != -INF && self.impl_row_dual_lower[row] > self.settings.dual_feasibility_tolerance
     }
 
     fn is_implied_equation_at_upper(&self, row: usize) -> bool {
-        self.impl_row_dual_upper[row] < -self.settings.dual_feasibility_tolerance
+        self.model.row_upper[row] != INF && self.impl_row_dual_upper[row] < -self.settings.dual_feasibility_tolerance
     }
 
     // ---- Matrix storage ------------------------------------------------
@@ -542,7 +549,7 @@ impl Presolve {
             self.changed_row_indices.push(row);
             self.changed_row_flag[row] = true;
         }
-        self.single_equation_checked[row] = false;
+        self.reset_single_equation_checked(row);
     }
 
     fn mark_changed_col(&mut self, col: usize) {
@@ -550,6 +557,24 @@ impl Presolve {
             self.changed_col_indices.push(col);
             self.changed_col_flag[col] = true;
         }
+        // Its rows' single equations are worth checking again (HiGHS #3232),
+        // until no row is flagged (#3341).
+        let mut pos = self.colhead[col];
+        while pos != NONE {
+            if !self.reset_single_equation_checked(self.a_row[pos]) {
+                break;
+            }
+            pos = self.a_next[pos];
+        }
+    }
+
+    /// Clear `row`'s flag; whether any row is still flagged.
+    fn reset_single_equation_checked(&mut self, row: usize) -> bool {
+        if self.single_equation_checked[row] {
+            self.single_equation_checked[row] = false;
+            self.num_single_equation_checked -= 1;
+        }
+        self.num_single_equation_checked > 0
     }
 
     fn get_max_abs_col_val(&self, col: usize) -> f64 {
@@ -629,6 +654,7 @@ impl Presolve {
         self.changed_row_flag[row] = true;
         self.row_deleted[row] = true;
         self.num_deleted_rows += 1;
+        self.reset_single_equation_checked(row);
     }
 
     fn mark_col_deleted(&mut self, col: usize) {
@@ -1272,7 +1298,7 @@ impl Presolve {
             self.reinsert_equation(colrow);
         }
         if self.model.col_cost[col] != 0.0 {
-            let objscale = CDouble::new(self.model.col_cost[col] * substrowscale);
+            let objscale = CDouble::new(self.model.col_cost[col]) * substrowscale;
             self.model.offset = (-(objscale * rhs) + self.model.offset).value();
             for k in 0..self.rowpositions.len() {
                 let rowiter = self.rowpositions[k];
@@ -1475,7 +1501,8 @@ impl Presolve {
                 new_col_upper = row_lower / val;
             }
         }
-        let bound_tol = feastol / max(1.0, val.abs());
+        // At least machine epsilon (HiGHS #3224).
+        let bound_tol = (feastol / max(1.0, val.abs())).max(f64::EPSILON);
         let mut lower_tightened = new_col_lower > col_lower + bound_tol;
         let mut upper_tightened = new_col_upper < col_upper - bound_tol;
         let mut lb = if lower_tightened { new_col_lower } else { col_lower };
@@ -1554,6 +1581,12 @@ impl Presolve {
             || self.implied_row_bounds.sum_upper(row, CDouble::default()) < self.model.row_lower[row] - feastol
         {
             return Outcome::PrimalInfeasible;
+        }
+        // A row dual bounded away from zero on a side the row lacks
+        // (HiGHS #3392).
+        let dual_tol = self.settings.dual_feasibility_tolerance;
+        if (self.impl_row_dual_lower[row] > dual_tol && self.model.row_lower[row] == -INF) || (self.impl_row_dual_upper[row] < -dual_tol && self.model.row_upper[row] == INF) {
+            return Outcome::DualInfeasible;
         }
         if self.rowsize[row] == 1 {
             return self.singleton_row(postsolve, row);
@@ -1646,7 +1679,7 @@ impl Presolve {
     ) -> Outcome {
         if direction * row_side == -INF
             || direction * implied_row_bound == INF
-            || (CDouble::new(row_side) - CDouble::new(implied_row_bound)).abs().value() > (CDouble::new(self.primal_feastol) / dynamism).value()
+            || (CDouble::new(row_side) - CDouble::new(implied_row_bound)).abs().value() > (CDouble::new(self.primal_feastol) / dynamism).value().max(f64::EPSILON)
         {
             return Outcome::Ok;
         }
@@ -1776,7 +1809,7 @@ impl Presolve {
             } else {
                 -s.implied_dual_row_bounds.sum_lower_orig(col, cost)
             };
-            if bound_on_col_dual.abs() <= (CDouble::new(tol) / dynamism).value() {
+            if bound_on_col_dual.abs() <= (CDouble::new(tol) / dynamism).value().max(f64::EPSILON) {
                 postsolve.forcing_column(col, s.col_entries(col), other_bound, direction < 0.0);
                 s.mark_col_deleted(col);
                 let mut coliter = s.colhead[col];
@@ -1878,6 +1911,7 @@ impl Presolve {
             if equation_row != NONE && !self.single_equation_checked[equation_row] {
                 check!(self.handle_single_equation(postsolve, equation_row));
                 self.single_equation_checked[equation_row] = true;
+                self.num_single_equation_checked += 1;
                 if self.col_deleted[col] {
                     return Outcome::Ok;
                 }

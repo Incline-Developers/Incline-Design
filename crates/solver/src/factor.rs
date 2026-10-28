@@ -1344,7 +1344,10 @@ impl Factor {
         let max_value = self.mc_value[start..start + (self.mc_count_a[i_col] as usize)]
             .iter()
             .fold(0.0f64, |max, value| max.max(value.abs()));
-        self.mc_min_pivot[i_col] = max_value * self.pivot_threshold;
+        // Never below the pivot tolerance, or a pivot under it can be chosen
+        // over larger entries that meet it, and the column is then taken
+        // as singular (HiGHS #3354).
+        self.mc_min_pivot[i_col] = (max_value * self.pivot_threshold).max(self.pivot_tolerance);
     }
 
     fn col_delete(&mut self, i_col: usize, i_row: usize) -> f64 {

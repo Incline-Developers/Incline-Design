@@ -896,13 +896,13 @@ impl LpRelaxation {
         for i in 0..self.num_rows() {
             if row_dual[i] > 0.0 {
                 if row_lower[i] != -INF {
-                    upper -= row_dual[i] * row_lower[i];
+                    upper -= CDouble::new(row_dual[i]) * row_lower[i];
                 } else {
                     row_dual[i] = 0.0;
                 }
             } else if row_dual[i] < 0.0 {
                 if row_upper[i] != INF {
-                    upper -= row_dual[i] * row_upper[i];
+                    upper -= CDouble::new(row_dual[i]) * row_upper[i];
                 } else {
                     row_dual[i] = 0.0;
                 }
@@ -915,15 +915,17 @@ impl LpRelaxation {
         let col_cost = self.lpsolver.col_cost();
         let col_value = self.lpsolver.col_value().expect("a solution");
         for i in 0..num_col {
-            let mut sum = CDouble::new(col_cost[i]);
+            let mut exact_val = CDouble::new(col_cost[i]);
             for j in a_start[i]..a_start[i + 1] {
                 if row_dual[a_index[j]] == 0.0 {
                     continue;
                 }
-                sum -= a_value[j] * row_dual[a_index[j]];
+                exact_val -= CDouble::new(a_value[j]) * row_dual[a_index[j]];
             }
-            let val = sum.value();
-            if val.abs() <= data.options.small_matrix_value {
+            let val = exact_val.value();
+            // Negligible against the column's bounds, and removed in
+            // double-double (HiGHS #3223).
+            if super::domain::term_is_zero(val, globaldomain.col_lower[i], globaldomain.col_upper[i], data.epsilon) {
                 continue;
             }
             let mut remove_value = val.abs() <= data.feastol;
@@ -939,12 +941,12 @@ impl LpRelaxation {
                     if globaldomain.col_upper[i] == INF {
                         return None;
                     }
-                    upper -= val * globaldomain.col_upper[i];
+                    upper -= exact_val * globaldomain.col_upper[i];
                 } else {
                     if globaldomain.col_lower[i] == -INF {
                         return None;
                     }
-                    upper -= val * globaldomain.col_lower[i];
+                    upper -= exact_val * globaldomain.col_lower[i];
                 }
                 continue;
             }
@@ -992,24 +994,25 @@ impl LpRelaxation {
                 if row_upper[i_row] == INF {
                     continue;
                 }
-                upper += weight * row_upper[i_row];
+                upper += CDouble::new(weight) * row_upper[i_row];
             } else {
                 if row_lower[i_row] == -INF {
                     continue;
                 }
-                upper += weight * row_lower[i_row];
+                upper += CDouble::new(weight) * row_lower[i_row];
             }
             let (inds, vals) = self.lprows[i_row].get(data);
             for j in 0..inds.len() {
-                self.row_ap.add(inds[j], weight * vals[j]);
+                self.row_ap.add_c(inds[j], CDouble::new(weight) * vals[j]);
             }
         }
         let globaldomain = &data.domain;
         let lp_col_lower = self.lpsolver.col_lower();
         let lp_col_upper = self.lpsolver.col_upper();
         for &i in self.row_ap.nonzeros() {
-            let val = self.row_ap.value(i);
-            if val.abs() <= data.epsilon {
+            let exact_val = self.row_ap.values[i];
+            let val = exact_val.value();
+            if super::domain::term_is_zero(val, globaldomain.col_lower[i], globaldomain.col_upper[i], data.epsilon) {
                 continue;
             }
             let mut remove_value = val.abs() <= data.feastol;
@@ -1026,13 +1029,13 @@ impl LpRelaxation {
                         self.hasdualproof = false;
                         return;
                     }
-                    upper -= val * globaldomain.col_upper[i];
+                    upper -= exact_val * globaldomain.col_upper[i];
                 } else {
                     if globaldomain.col_lower[i] == -INF {
                         self.hasdualproof = false;
                         return;
                     }
-                    upper -= val * globaldomain.col_lower[i];
+                    upper -= exact_val * globaldomain.col_lower[i];
                 }
                 continue;
             }
@@ -1330,13 +1333,13 @@ impl LpRelaxation {
                 };
             }
             for i in 0..num_col {
-                objsum += roundsol[i] * data.model.col_cost[i];
+                objsum += CDouble::new(roundsol[i]) * data.model.col_cost[i];
             }
             data.add_incumbent(&roundsol, objsum.value(), SolutionSource::SolveLp, true, false);
             objsum = CDouble::new(0.0);
         }
         for i in 0..num_col {
-            objsum += col_value[i] * data.model.col_cost[i];
+            objsum += CDouble::new(col_value[i]) * data.model.col_cost[i];
         }
         if self.fractionalints.is_empty() && !self.status.unscaled_primal_feasible() {
             let mut fix_sol = col_value.clone();
