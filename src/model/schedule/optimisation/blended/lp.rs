@@ -81,11 +81,13 @@ impl LinearProgram {
         self.dump();
         // Crossover takes the point to an exact vertex, so the interior
         // point method need not close the last digits of its gap: on these
-        // programs it can stall there, and a stall falls back on a simplex
-        // solve from scratch.
+        // programs it can stall there. A stalled point is crossed over too,
+        // so the simplex clean-up starts from its basis rather than from
+        // scratch (long's worst window: 108 s to 17 s, the same optimum).
         let options = solver::Options {
             solver: solver::Solver::Ipm,
             ipm_optimality_tolerance: 1e-6,
+            ipm_crossover_on_no_progress: true,
             ..solver::Options::default()
         };
         let solution = solver::solve_from(&self.to_solver(), &options, None, stop);

@@ -216,6 +216,7 @@ fn solve_lp_ipx(lp: &SimplexLp, options: &Options, interrupt: Option<Interrupt>)
         time_limit: options.time_limit,
         ipm_maxiter: options.ipm_iteration_limit.min(i32::MAX as usize) as Int,
         run_crossover: 1,
+        crossover_on_no_progress: options.ipm_crossover_on_no_progress,
         ..Parameters::default()
     };
     let mut control = Control::new(parameters, interrupt);
@@ -271,14 +272,17 @@ fn solve_lp_ipx(lp: &SimplexLp, options: &Options, interrupt: Option<Interrupt>)
     if info.status_ipm == IPX_STATUS_DUAL_INFEAS {
         return failed(ModelStatus::UnboundedOrInfeasible, out);
     }
-    if info.status_ipm != IPX_STATUS_OPTIMAL && info.status_ipm != IPX_STATUS_IMPRECISE {
+    let stalled = info.status_ipm == IPX_STATUS_NO_PROGRESS && info.status_crossover != IPX_STATUS_NOT_RUN;
+    if info.status_ipm != IPX_STATUS_OPTIMAL && info.status_ipm != IPX_STATUS_IMPRECISE && !stalled {
         return failed(ModelStatus::SolveError, out);
     }
     if info.status_crossover != IPX_STATUS_NOT_RUN && info.status_crossover != IPX_STATUS_OPTIMAL && info.status_crossover != IPX_STATUS_IMPRECISE {
         return failed(ModelStatus::SolveError, out);
     }
     let have_basic_solution = info.status_crossover != IPX_STATUS_NOT_RUN;
-    let imprecise_solution = info.status_crossover == IPX_STATUS_IMPRECISE || info.status_ipm == IPX_STATUS_IMPRECISE;
+    // A crossover from a stalled interior point leaves a basis for the
+    // simplex clean-up, not an answer.
+    let imprecise_solution = info.status_crossover == IPX_STATUS_IMPRECISE || info.status_ipm == IPX_STATUS_IMPRECISE || stalled;
     let mut basis_valid = false;
     if have_basic_solution {
         let Some((x, slack, y, z, cbasis, vbasis)) = lps.basic_solution(&model) else {

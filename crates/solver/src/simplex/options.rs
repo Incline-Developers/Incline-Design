@@ -96,6 +96,11 @@ pub struct Options {
     pub ipm_optimality_tolerance: f64,
     pub start_crossover_tolerance: f64,
     pub ipm_iteration_limit: usize,
+    /// Run crossover from the interior point when the interior point
+    /// method stops making progress, so the simplex clean-up starts from
+    /// its basis rather than from scratch. HiGHS runs it only after an
+    /// optimal or imprecise interior point.
+    pub ipm_crossover_on_no_progress: bool,
 }
 
 impl Default for Options {
@@ -137,6 +142,7 @@ impl Default for Options {
             ipm_optimality_tolerance: 1e-8,
             start_crossover_tolerance: 1e-8,
             ipm_iteration_limit: i32::MAX as usize,
+            ipm_crossover_on_no_progress: false,
         }
     }
 }

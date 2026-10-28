@@ -26,6 +26,8 @@ pub(crate) struct Parameters {
     pub lu_pivottol: f64,
     pub run_crossover: Int,
     pub start_crossover_tol: f64,
+    /// Crossover after the interior point method stops making progress.
+    pub crossover_on_no_progress: bool,
     pub pfeasibility_tol: f64,
     pub dfeasibility_tol: f64,
     pub switchiter: Int,
@@ -59,6 +61,7 @@ impl Default for Parameters {
             lu_pivottol: 0.0625,
             run_crossover: 1,
             start_crossover_tol: 1e-8,
+            crossover_on_no_progress: false,
             pfeasibility_tol: 1e-7,
             dfeasibility_tol: 1e-7,
             switchiter: -1,
