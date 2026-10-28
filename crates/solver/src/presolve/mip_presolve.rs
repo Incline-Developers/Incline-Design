@@ -4384,10 +4384,18 @@ impl MipPresolve<'_> {
         bound_implied: bool,
         has_cliques: bool,
     ) -> Outcome {
-        self.store_row(row);
+        // The row's own copy of its positions (HiGHS #3472): checking the
+        // columns can change the row and the stored one.
+        if self.row_deleted[row] {
+            return Outcome::Ok;
+        }
+        let mut positions = Vec::new();
+        matrix::in_order(self.rowroot[row], &self.ar_left, &self.ar_right, &mut positions);
         let only_pred_bnd_analysis = !bound_implied && !has_cliques;
-        for i in 0..self.rowpositions_len {
-            let pos = self.rowpositions[i];
+        for pos in positions {
+            if self.a_value[pos] == 0.0 || self.a_row[pos] != row {
+                continue;
+            }
             let k = self.a_col[pos];
             if k == col || self.col_deleted[k] {
                 continue;
@@ -4399,13 +4407,13 @@ impl MipPresolve<'_> {
             }
             if self.check_domination_non_zero(row, direction * best_val, direction * ak) {
                 check!(self.dominated_check_cols(signatures, stats, col, k, direction, 1.0, bound_implied, has_cliques, same_var_type));
-                if self.col_deleted[col] {
+                if self.col_deleted[col] || self.row_deleted[row] {
                     break;
                 }
             }
-            if !self.col_deleted[k] && self.check_domination_non_zero(row, direction * best_val, -direction * ak) {
+            if !self.col_deleted[k] && self.a_value[pos] != 0.0 && self.a_row[pos] == row && self.check_domination_non_zero(row, direction * best_val, -direction * ak) {
                 check!(self.dominated_check_cols(signatures, stats, col, k, direction, -1.0, bound_implied, has_cliques, same_var_type));
-                if self.col_deleted[col] {
+                if self.col_deleted[col] || self.row_deleted[row] {
                     break;
                 }
             }
@@ -5342,6 +5350,9 @@ impl MipPresolve<'_> {
             }
             let mut maxviolation;
             let mut continuouscontribution = CDouble::new(0.0);
+            // The most that negligible terms, left out of covers, contribute
+            // (HiGHS #3468): a term is negligible if that is at most feastol.
+            let mut smallcontribution = CDouble::new(0.0);
             let scale;
             if self.mip.model.row_lower[row] != -INF {
                 maxviolation = CDouble::new(self.mip.model.row_lower[row]);
@@ -5380,11 +5391,12 @@ impl MipPresolve<'_> {
                     maxviolation += CDouble::new(self.mip.model.col_lower[col]) * weight;
                     weight = -weight;
                 }
-                if ub <= feastol || weight <= feastol {
-                    continue;
-                }
                 if self.mip.model.integrality[col] == VarType::Continuous {
                     continuouscontribution += weight * ub;
+                    continue;
+                }
+                if ub * weight <= feastol {
+                    smallcontribution += ub * weight;
                     continue;
                 }
                 indices.push(reducedcost.len());
@@ -5406,11 +5418,11 @@ impl MipPresolve<'_> {
             }
             let small_val = max(100.0 * feastol, feastol * maxviolation.value());
             loop {
-                if maxviolation - continuouscontribution <= small_val || indices.is_empty() {
+                if maxviolation - continuouscontribution - smallcontribution <= small_val || indices.is_empty() {
                     break;
                 }
                 indices.sort_unstable_by(|&i1, &i2| reducedcost[i2].partial_cmp(&reducedcost[i1]).unwrap().then(i2.cmp(&i1)));
-                let mut lambda = maxviolation - continuouscontribution;
+                let mut lambda = maxviolation - continuouscontribution - smallcontribution;
                 cover.clear();
                 for i in (1..=indices.len()).rev() {
                     let index = indices[i - 1];
@@ -5450,14 +5462,27 @@ impl MipPresolve<'_> {
                 }
                 step = cmin(step, maxviolation / coverrhs);
                 maxviolation -= step * coverrhs;
-                let slackind = reducedcost.len();
-                reducedcost.push(step);
-                upper.push(slackupper);
+                // Only the cover's reduced costs change, so only they can
+                // become negligible: their most goes to smallcontribution and
+                // their reduced cost to zero, removing them below.
                 for i in 0..cover.len() {
-                    reducedcost[cover[i]] -= step * coefs[i];
+                    let index = cover[i];
+                    reducedcost[index] -= step * coefs[i];
+                    if reducedcost[index] * upper[index] <= feastol {
+                        if reducedcost[index] > 0.0 {
+                            smallcontribution += reducedcost[index] * upper[index];
+                        }
+                        reducedcost[index] = CDouble::new(0.0);
+                    }
                 }
-                indices.retain(|&i| reducedcost[i].partial_cmp(&feastol).is_none_or(std::cmp::Ordering::is_gt));
-                indices.push(slackind);
+                indices.retain(|&i| reducedcost[i] > 0.0);
+                if step * slackupper <= feastol {
+                    smallcontribution += step * slackupper;
+                } else {
+                    indices.push(reducedcost.len());
+                    reducedcost.push(step);
+                    upper.push(slackupper);
+                }
             }
             let threshold = (maxviolation + feastol).value();
             indices.retain(|&i| !(i >= positions.len() || reducedcost[i].abs() <= threshold));
