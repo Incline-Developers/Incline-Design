@@ -1006,8 +1006,9 @@ impl Factor {
                 if pivot_multiplier.abs() > TINY {
                     rhs.index[rhs_count] = pivot_row;
                     rhs_count += 1;
-                    for k in self.l_start[i]..self.l_start[i + 1] {
-                        rhs.array[self.l_index[k]] -= pivot_multiplier * self.l_value[k];
+                    let range = self.l_start[i]..self.l_start[i + 1];
+                    for (&row, &value) in self.l_index[range.clone()].iter().zip(&self.l_value[range]) {
+                        rhs.array[row] -= pivot_multiplier * value;
                     }
                 } else {
                     rhs.array[pivot_row] = 0.0;
@@ -1040,8 +1041,9 @@ impl Factor {
                 if pivot_multiplier.abs() > TINY {
                     rhs.index[rhs_count] = pivot_row;
                     rhs_count += 1;
-                    for k in self.lr_start[i]..self.lr_start[i + 1] {
-                        rhs.array[self.lr_index[k]] -= pivot_multiplier * self.lr_value[k];
+                    let range = self.lr_start[i]..self.lr_start[i + 1];
+                    for (&row, &value) in self.lr_index[range.clone()].iter().zip(&self.lr_value[range]) {
+                        rhs.array[row] -= pivot_multiplier * value;
                     }
                 } else {
                     rhs.array[pivot_row] = 0.0;
@@ -1091,8 +1093,8 @@ impl Factor {
                     if i_logic >= self.num_row {
                         rhs_synthetic_tick += (end - start) as f64;
                     }
-                    for k in start..end {
-                        rhs.array[self.u_index[k]] -= pivot_multiplier * self.u_value[k];
+                    for (&row, &value) in self.u_index[start..end].iter().zip(&self.u_value[start..end]) {
+                        rhs.array[row] -= pivot_multiplier * value;
                     }
                 } else {
                     rhs.array[pivot_row] = 0.0;
@@ -1138,8 +1140,8 @@ impl Factor {
                     if i_logic >= self.num_row {
                         rhs_synthetic_tick += (end - start) as f64;
                     }
-                    for k in start..end {
-                        rhs.array[self.ur_index[k]] -= pivot_multiplier * self.ur_value[k];
+                    for (&row, &value) in self.ur_index[start..end].iter().zip(&self.ur_value[start..end]) {
+                        rhs.array[row] -= pivot_multiplier * value;
                     }
                 } else {
                     rhs.array[pivot_row] = 0.0;
@@ -1174,8 +1176,9 @@ impl Factor {
             let i_row = self.pf_pivot_index[i];
             let value0 = rhs.array[i_row];
             let mut value1 = value0;
-            for k in self.pf_start[i]..self.pf_start[i + 1] {
-                value1 -= rhs.array[self.pf_index[k]] * self.pf_value[k];
+            let range = self.pf_start[i]..self.pf_start[i + 1];
+            for (&row, &value) in self.pf_index[range.clone()].iter().zip(&self.pf_value[range]) {
+                value1 -= rhs.array[row] * value;
             }
             if value0 != 0.0 || value1 != 0.0 {
                 if value0 == 0.0 {
@@ -1204,10 +1207,9 @@ impl Factor {
                 let start = self.pf_start[i];
                 let end = self.pf_start[i + 1];
                 rhs_synthetic_tick += (end - start) as f64;
-                for k in start..end {
-                    let i_row = self.pf_index[k];
+                for (&i_row, &value) in self.pf_index[start..end].iter().zip(&self.pf_value[start..end]) {
                     let value0 = rhs.array[i_row];
-                    let value1 = value0 - pivot_multiplier * self.pf_value[k];
+                    let value1 = value0 - pivot_multiplier * value;
                     if value0 == 0.0 {
                         rhs.index[rhs_count] = i_row;
                         rhs_count += 1;
@@ -1439,6 +1441,14 @@ fn solve_hyper(
     h_value: &[f64],
     rhs: &mut HVector,
 ) {
+    // Updated factors can have more pivots than rows. Marks are indexed by
+    // pivot; the traversal and its stack contain at most one per row.
+    if rhs.cwork.len() < h_pivot_index.len() {
+        rhs.cwork.resize(h_pivot_index.len(), 0);
+    }
+    if rhs.iwork.len() < h_size * 4 {
+        rhs.iwork.resize(h_size * 4, 0);
+    }
     let rhs_count = rhs.count as usize;
     let HVector {
         index: rhs_index,

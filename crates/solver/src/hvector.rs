@@ -40,12 +40,13 @@ impl HVector {
         self.count = 0;
         self.index = vec![0; size];
         self.array = vec![0.0; size];
-        // Room for the factor's pivots and up to 6400 updates' worth.
-        self.cwork = vec![0; size + 6400];
-        self.iwork = vec![0; size * 4];
+        // Most vectors never need a hyper-sparse solve or a packed update.
+        // Allocate that scratch space only when the operation needs it.
+        self.cwork.clear();
+        self.iwork.clear();
         self.pack_count = 0;
-        self.pack_index = vec![0; size];
-        self.pack_value = vec![0.0; size];
+        self.pack_index.clear();
+        self.pack_value.clear();
         self.pack_flag = false;
         self.synthetic_tick = 0.0;
     }
@@ -98,7 +99,12 @@ impl HVector {
         }
         self.pack_flag = false;
         self.pack_count = 0;
-        for k in 0..self.count as usize {
+        let count = self.count as usize;
+        if self.pack_index.len() < count {
+            self.pack_index.resize(count, 0);
+            self.pack_value.resize(count, 0.0);
+        }
+        for k in 0..count {
             let i = self.index[k];
             self.pack_index[self.pack_count] = i;
             self.pack_value[self.pack_count] = self.array[i];
