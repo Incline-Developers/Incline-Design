@@ -544,10 +544,13 @@ const LONG_TERM_DAYS: u32 = 7;
 /// `SEARCH_STALL_S`, once `SEARCH_MIN_S` in, ends and leaves the rest of the
 /// budget to the reroute: its late gains are mostly routing the reroute
 /// finds anyway (centralia, from 23 s to 98 s: $774k before rerouting,
-/// $233k after), while trucks60's digging gains keep it running.
+/// $233k after). The stall must also last `SEARCH_STALL_WINDOWS` windows:
+/// 20 s is seven of centralia's windows but two of trucks60's, whose
+/// digging gains then turned on whether two windows took 19 s or 21 s.
 const SEARCH_MIN_S: f64 = 30.0;
 const SEARCH_STALL_S: f64 = 20.0;
 const SEARCH_STALL_GAIN: f64 = 5e-4;
+const SEARCH_STALL_WINDOWS: usize = 5;
 
 /// The gap a long-term plan stops at. Its answer is only targets, and
 /// proving it took 40% of its solve: on Centralia the optimum was found at
@@ -1002,6 +1005,7 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
     // The best value after each window, to judge whether the search still
     // pays.
     let mut gains: Vec<(f64, f64)> = Vec::new();
+    let mut window_values: Vec<f64> = Vec::new();
     let mut record = |value: f64, bound: Option<f64>, note: String| {
         report(&Progress {
             elapsed_s: started.elapsed().as_secs_f64(),
@@ -1161,7 +1165,10 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
                 .rev()
                 .find(|&&(at, _)| at <= now - SEARCH_STALL_S)
                 .map_or(f64::NEG_INFINITY, |&(_, earlier)| earlier);
-            if now >= SEARCH_MIN_S && value - since < SEARCH_STALL_GAIN * value.abs() {
+            window_values.push(value);
+            let windows_quiet =
+                window_values.len() > SEARCH_STALL_WINDOWS && value - window_values[window_values.len() - 1 - SEARCH_STALL_WINDOWS] < SEARCH_STALL_GAIN * value.abs();
+            if now >= SEARCH_MIN_S && value - since < SEARCH_STALL_GAIN * value.abs() && windows_quiet {
                 record(value, bound, format!("search handed to the reroute at {now:.1}s"));
                 break 'passes;
             }
@@ -1193,10 +1200,10 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
                 None => chain_at(input, &best, from),
             };
             let solve = Settings {
-                // A plan has value only after its targets are dispatched.
-                // Leave time to try the incumbent a hard MIP returns instead
-                // of spending the search's last seconds proving its gap.
-                time_limit: limit.min(left / 2),
+                // A late window may take all the search has left: halving
+                // it, to leave time to dispatch, cut trucks60's days 30..35
+                // off half a second short of a plan worth $650k.
+                time_limit: limit.min(left),
                 relative_gap: 1e-3,
                 relax: false,
             };
