@@ -220,6 +220,7 @@ pub(crate) struct ContextMenuAction {
     enabled: bool,
     submenu: bool,
     checked: Option<bool>,
+    strikethrough: bool,
 }
 
 impl ContextMenuAction {
@@ -230,7 +231,17 @@ impl ContextMenuAction {
             enabled: true,
             submenu: false,
             checked: None,
+            strikethrough: false,
         }
+    }
+
+    /// Strike a line through the label: for a row naming something that is no
+    /// longer there, such as a recent project whose file has gone. macOS shows
+    /// Open Recent in its native menu instead.
+    #[cfg(not(target_os = "macos"))]
+    pub(crate) fn strikethrough(mut self, strikethrough: bool) -> Self {
+        self.strikethrough = strikethrough;
+        self
     }
 
     /// Mark this row as a switch rather than a command, drawing a tick at its
@@ -264,6 +275,7 @@ impl ContextMenuAction {
             enabled,
             submenu,
             checked,
+            strikethrough,
         } = self;
         ui.add_enabled_ui(enabled, |ui| {
             let font_id = egui::TextStyle::Button.resolve(ui.style());
@@ -299,13 +311,16 @@ impl ContextMenuAction {
                         egui::Stroke::new(1.4, text_color),
                     ));
                 }
-                painter.text(
+                let label_rect = painter.text(
                     rect.left_center() + egui::vec2(text_left, 0.0),
                     egui::Align2::LEFT_CENTER,
                     label.text(),
                     egui::TextStyle::Button.resolve(ui.style()),
                     text_color,
                 );
+                if strikethrough {
+                    painter.hline(label_rect.x_range(), label_rect.center().y, egui::Stroke::new(1.0, text_color));
+                }
                 if let Some(shortcut) = shortcut {
                     painter.text(
                         rect.right_center() - egui::vec2(right_padding, 0.0),
