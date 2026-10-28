@@ -283,9 +283,16 @@ struct Checker<'a> {
     input: &'a BlendInput,
     cancel: Option<&'a AtomicBool>,
     report: ReplayReport,
+    material_grades: Vec<Option<&'a [f64]>>,
 }
 
 impl<'a> Checker<'a> {
+    /// A candidate keeps its material throughout the replay. Borrow its grades
+    /// once rather than searching the material table for every grade and row.
+    fn material_grades(&mut self, candidate: usize) -> &'a [f64] {
+        *self.material_grades[candidate].get_or_insert_with(|| self.input.grades.fractions(self.input.movements[candidate].material).unwrap_or_default())
+    }
+
     fn cancelled(&self) -> bool {
         self.cancel.is_some_and(|flag| flag.load(Ordering::Acquire))
     }
@@ -330,6 +337,7 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
         input,
         cancel,
         report: ReplayReport::default(),
+        material_grades: vec![None; input.movements.len()],
     };
 
     let destinations: BTreeMap<DestinationId, &Destination> = input.destinations.iter().map(|entry| (entry.id, entry)).collect();
@@ -358,9 +366,10 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
         };
         replayed += row.tonnes_t * candidate.value_per_tonne().unwrap_or(0.0);
         if !input.grade_targets.is_empty() && candidate.activity != Activity::Reclaim {
+            let fractions = checker.material_grades(row.candidate);
             let contained = checker.report.movement_contained.entry((row.candidate, row.interval)).or_insert_with(|| vec![0.0; grades]);
             for (g, q) in contained.iter_mut().enumerate() {
-                if let Some(fraction) = input.grades.fraction(candidate.material, g) {
+                if let Some(fraction) = fractions.get(g).copied() {
                     *q += row.tonnes_t * fraction;
                 } else if input.grade_targets.iter().any(|t| t.grade == g && t.destination == candidate.destination) {
                     checker.report.issues.push(format!("grade target movement {} has no grade {g}", row.candidate));
@@ -1268,10 +1277,11 @@ fn replay_pile(
                 if let Some(slot) = per_segment_receipts.get_mut(row.segment) {
                     *slot += row.tonnes_t;
                 }
+                let fractions = checker.material_grades(row.candidate);
                 for (g, received) in received_q.iter_mut().enumerate().take(grades) {
                     // A receipt carries identified material, so its contained
                     // quantity is known exactly.
-                    match input.grades.fraction(candidate.material, g) {
+                    match fractions.get(g).copied() {
                         Some(fraction) => *received += row.tonnes_t * fraction,
                         None => checker
                             .report
@@ -1679,8 +1689,9 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> ChunkDra
                 for (candidate, tonnes) in &state.receipts {
                     let Some(movement) = checker.input.movements.get(*candidate) else { continue };
                     held_t[chunk] += tonnes;
+                    let fractions = checker.material_grades(*candidate);
                     for (g, chunk_g) in held_q[chunk][..grades].iter_mut().enumerate() {
-                        match checker.input.grades.fraction(movement.material, g) {
+                        match fractions.get(g).copied() {
                             Some(value) => *chunk_g += tonnes * value,
                             None => checker
                                 .report

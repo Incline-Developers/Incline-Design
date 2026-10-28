@@ -193,6 +193,11 @@ impl GradeTable {
         self.values.get(&material).and_then(|row| row.get(grade).copied())
     }
 
+    /// All captured grades of a material, for callers visiting them together.
+    pub(crate) fn fractions(&self, material: MaterialId) -> Option<&[f64]> {
+        self.values.get(&material).map(Vec::as_slice)
+    }
+
     /// The highest fraction any tracked material carries, per grade. Used as
     /// the physically derived upper bound on contained quantity so the
     /// bilinear relaxation stays finite and cannot invent metal.

@@ -866,37 +866,6 @@ pub(crate) fn task_authorises(task: &Task, candidate: &MovementCandidate) -> boo
     }
 }
 
-/// Each dig bar's blocks, so whether a bar authorises a movement is a lookup
-/// rather than a walk of its sequence; see [`task_authorises`].
-pub(crate) struct Authority {
-    blocks: BTreeSet<(usize, GroundId)>,
-}
-
-impl Authority {
-    pub(crate) fn new(input: &BlendInput) -> Self {
-        let blocks = input
-            .tasks
-            .iter()
-            .enumerate()
-            .filter_map(|(index, task)| match &task.kind {
-                TaskKind::Dig { sequence } => Some(sequence.iter().map(move |ground| (index, *ground))),
-                _ => None,
-            })
-            .flatten()
-            .collect();
-        Self { blocks }
-    }
-
-    /// [`task_authorises`] for `input.tasks[task]`.
-    pub(crate) fn authorises(&self, input: &BlendInput, task: usize, candidate: &MovementCandidate) -> bool {
-        let bar = &input.tasks[task];
-        match (&bar.kind, candidate.source) {
-            (TaskKind::Dig { .. }, SourceId::Ground(ground)) => bar.loader == candidate.loader && candidate.activity == Activity::Dig && self.blocks.contains(&(task, ground)),
-            _ => task_authorises(bar, candidate),
-        }
-    }
-}
-
 /// The reclaim bars that `tonnes` of `candidate`, reclaimed in `interval`,
 /// count against, given what each bar has already reclaimed.
 ///
