@@ -1858,34 +1858,37 @@ pub(crate) fn accumulate_target_receipts<'a>(
     if input.grade_targets.is_empty() {
         return;
     }
+    // Index only targets that can price the same receipt. Daily targets on
+    // other days need no aggregation, sorting or contained-quantity lookup.
+    let mut targets: BTreeMap<(DestinationId, u32), Vec<usize>> = BTreeMap::new();
+    for (index, target) in input.grade_targets.iter().enumerate() {
+        targets.entry((target.destination, target.day)).or_default().push(index);
+    }
     let mut tonnes: HashMap<(usize, usize), f64, foldhash::fast::FixedState> = HashMap::default();
     for row in movements {
-        *tonnes.entry((row.candidate, row.interval)).or_default() += row.tonnes_t;
-    }
-    // Each destination's targets, in order, so a receipt reads its own.
-    let mut by_destination: BTreeMap<DestinationId, Vec<usize>> = BTreeMap::new();
-    for (index, target) in input.grade_targets.iter().enumerate() {
-        by_destination.entry(target.destination).or_default().push(index);
+        let Some(movement) = input.movements.get(row.candidate) else { continue };
+        let Some(interval) = input.intervals.get(interval_offset + row.interval) else {
+            continue;
+        };
+        let day = crate::model::schedule::grade_targets::target_day(interval.start_h);
+        if targets.contains_key(&(movement.destination, day)) {
+            *tonnes.entry((row.candidate, row.interval)).or_default() += row.tonnes_t;
+        }
     }
     // Accumulate each key in published order, then visit keys in the original
     // candidate/interval order so target sums retain their exact rounding.
     let mut tonnes: Vec<_> = tonnes.into_iter().collect();
     tonnes.sort_unstable_by_key(|&(key, _)| key);
     for ((candidate, local_interval), t) in tonnes {
-        let Some(movement) = input.movements.get(candidate) else { continue };
-        let Some(interval) = input.intervals.get(interval_offset + local_interval) else {
-            continue;
-        };
-        for (index, target) in by_destination
-            .get(&movement.destination)
-            .into_iter()
-            .flatten()
-            .map(|&index| (index, &input.grade_targets[index]))
-            .filter(|(_, target)| target.applies(interval.start_h))
-        {
-            let entry = totals.entry((index, crate::model::schedule::grade_targets::target_day(interval.start_h))).or_default();
+        let movement = &input.movements[candidate];
+        let interval = &input.intervals[interval_offset + local_interval];
+        let day = crate::model::schedule::grade_targets::target_day(interval.start_h);
+        let quantities = contained.get(&(candidate, local_interval));
+        for &index in &targets[&(movement.destination, day)] {
+            let target = &input.grade_targets[index];
+            let entry = totals.entry((index, day)).or_default();
             entry.0 += t;
-            entry.1 += contained.get(&(candidate, local_interval)).and_then(|q| q.get(target.grade)).copied().unwrap_or(0.0);
+            entry.1 += quantities.and_then(|q| q.get(target.grade)).copied().unwrap_or(0.0);
         }
     }
 }
