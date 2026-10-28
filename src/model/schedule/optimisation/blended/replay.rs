@@ -439,7 +439,12 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
         }
         for segment in 0..segments {
             let duration = solution.durations.get(&(interval.index, segment)).copied().unwrap_or(0.0);
-            let rows = by_cell.get(&(interval.index, segment)).cloned().unwrap_or_default();
+            let rows = by_cell.get(&(interval.index, segment)).map(Vec::as_slice).unwrap_or_default();
+            // An unused slot has zero use and zero capacity. The interval's
+            // clock is still checked below, including all its durations.
+            if rows.is_empty() && duration == 0.0 {
+                continue;
+            }
 
             for loader in &input.loaders {
                 let Some(rate) = super::input::interval_rate(loader, interval.index) else {
@@ -777,12 +782,13 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
             if checker.cancelled() {
                 return None;
             }
-            for segment in 0..segments {
+            // Only cells with rows can deplete ground or break its order.
+            for (&(_, segment), rows) in by_cell.range((interval.index, 0)..(interval.index, segments)) {
                 // What each block this cell digs held as the cell opened.
                 let mut before: BTreeMap<GroundId, f64> = BTreeMap::new();
                 // Tonnes each (loader, block) dug in this cell.
                 let mut dug: BTreeMap<_, f64> = BTreeMap::new();
-                for row in by_cell.get(&(interval.index, segment)).map(Vec::as_slice).unwrap_or_default() {
+                for row in rows {
                     let Some(candidate) = input.movements.get(row.candidate) else { continue };
                     let SourceId::Ground(ground) = candidate.source else { continue };
                     if candidate.activity != Activity::Dig {
@@ -989,7 +995,6 @@ fn check_bar_priority(
     for (index, row) in solution.movements.iter().enumerate() {
         cell_rows.entry((row.interval, row.segment)).or_default().push(index);
     }
-    let empty = Vec::new();
     let outlets = super::input::OutletIndex::new(input);
     let authority = super::input::Authority::new(input);
     // Each loader's highest-priority ready bar, by cell.
@@ -1031,7 +1036,10 @@ fn check_bar_priority(
                 .iter()
                 .find(|entry| entry.id == loader)
                 .and_then(|entry| super::input::interval_rate(entry, interval.index));
-            for segment in 0..segments {
+            // Empty cells change neither ground nor a bar's reclaim cap.
+            // Readiness is only needed to attribute and check actual rows;
+            // most of the reserved segment slots have none.
+            for (&(_, segment), rows) in cell_rows.range((interval.index, 0)..(interval.index, segments)) {
                 for &bar in &bars {
                     if let TaskKind::Dig { sequence } = &input.tasks[bar].kind {
                         let at = current.entry(bar).or_default();
@@ -1079,8 +1087,6 @@ fn check_bar_priority(
                 if let Some(bar) = highest {
                     worked_bars.insert((loader, interval.index, segment), bar);
                 }
-                let rows = cell_rows.get(&(interval.index, segment)).unwrap_or(&empty);
-
                 // What this loader actually moved in this cell, by bar.
                 for &index in rows {
                     let row = solution.movements[index];
