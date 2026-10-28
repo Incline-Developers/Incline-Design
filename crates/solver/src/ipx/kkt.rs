@@ -11,8 +11,8 @@ use super::{
     maxvolume::Maxvolume,
     model::Model,
     sparse::{
-        IndexedVector, Int, SparseMatrix, add_normal_product, backward_solve, copy_columns, dot, dot_column, forward_solve, infnorm, inverse_perm, permute_rows, scale_column,
-        scatter_column, u,
+        IndexedVector, Int, SparseMatrix, add_normal_product, backward_solve, copy_columns, dot, dot_column, forward_solve, infnorm, inverse_perm, normal_column_product,
+        permute_rows, scale_column, scatter_column, u,
     },
 };
 
@@ -52,26 +52,13 @@ impl LinearOperator for NormalMatrix<'_> {
             }
             for j in 0..n {
                 let (index, value) = (&ai_idx[u(ap[j])..u(ap[j + 1])], &ax[u(ap[j])..u(ap[j + 1])]);
-                let mut d = 0.0;
-                for (&i, &v) in index.iter().zip(value) {
-                    d += rhs[u(i)] * v;
-                }
-                d *= w[j];
-                for (&i, &v) in index.iter().zip(value) {
-                    lhs[u(i)] += d * v;
-                }
+                normal_column_product(index, value, Some(w[j]), rhs, lhs);
             }
         } else {
             lhs[..m].fill(0.0);
             for j in 0..n {
                 let (index, value) = (&ai_idx[u(ap[j])..u(ap[j + 1])], &ax[u(ap[j])..u(ap[j + 1])]);
-                let mut d = 0.0;
-                for (&i, &v) in index.iter().zip(value) {
-                    d += rhs[u(i)] * v;
-                }
-                for (&i, &v) in index.iter().zip(value) {
-                    lhs[u(i)] += d * v;
-                }
+                normal_column_product(index, value, None, rhs, lhs);
             }
         }
         if want_dot { dot(rhs, lhs) } else { 0.0 }

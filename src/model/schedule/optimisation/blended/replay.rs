@@ -740,20 +740,68 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
     }
 
     // ---- blended inventory, recomputed --------------------------------------
-    // The published rows of each interval, in published order, so each
-    // pile's walk reads an interval's own rows rather than every row.
-    let mut by_interval: Vec<Vec<MovementRow>> = vec![Vec::new(); input.intervals.len()];
+    // A pile only needs its own receipts and draws, in published order.
+    let pile_index: BTreeMap<_, _> = input.piles.iter().enumerate().map(|(index, pile)| (pile.id, index)).collect();
+    let mut by_pile = vec![vec![Vec::new(); input.intervals.len()]; input.piles.len()];
     for row in &solution.movements {
-        if let Some(rows) = by_interval.get_mut(row.interval) {
-            rows.push(*row);
+        if row.interval >= input.intervals.len() {
+            continue;
+        }
+        let Some(candidate) = input.movements.get(row.candidate) else { continue };
+        let receiving = destinations.get(&candidate.destination).and_then(|destination| match destination.kind {
+            DestinationKind::Stockpile(pile) => pile_index.get(&pile).copied(),
+            _ => None,
+        });
+        let drawing = match (candidate.activity, candidate.source) {
+            (Activity::Reclaim, SourceId::Stockpile(pile)) => pile_index.get(&pile).copied(),
+            _ => None,
+        };
+        if let Some(pile) = receiving {
+            by_pile[pile][row.interval].push(*row);
+        }
+        if let Some(pile) = drawing.filter(|pile| Some(*pile) != receiving) {
+            by_pile[pile][row.interval].push(*row);
+        }
+    }
+    // Whether a loader's deliveries can peak inside a segment depends on all
+    // its digging, including blocks routed elsewhere. Read that once for all
+    // piles; only the presence of a second distinct block matters.
+    let mut uneven = vec![BTreeSet::new(); input.intervals.len()];
+    for (&(interval, segment), rows) in &by_cell {
+        let Some(uneven) = uneven.get_mut(interval) else { continue };
+        // Only concurrent reclaim can offset receipts and hide a peak.
+        if !rows.iter().any(|row| {
+            row.tonnes_t > 0.0
+                && input
+                    .movements
+                    .get(row.candidate)
+                    .is_some_and(|candidate| candidate.activity == Activity::Reclaim && matches!(candidate.source, SourceId::Stockpile(pile) if pile_index.contains_key(&pile)))
+        }) {
+            continue;
+        }
+        let mut blocks: BTreeMap<LoaderId, (GroundId, bool)> = BTreeMap::new();
+        for row in rows {
+            let Some(candidate) = input.movements.get(row.candidate) else { continue };
+            if candidate.activity == Activity::Dig
+                && row.tonnes_t > REPLAY_TOLERANCE_T
+                && let SourceId::Ground(ground) = candidate.source
+            {
+                let entry = blocks.entry(candidate.loader).or_insert((ground, false));
+                entry.1 |= entry.0 != ground;
+            }
+        }
+        for (loader, (_, multiple)) in blocks {
+            if multiple {
+                uneven.insert((segment, loader));
+            }
         }
     }
     let mut openings: HashMap<(StockpileId, usize), f64, foldhash::fast::FixedState> = HashMap::default();
-    for pile in &input.piles {
+    for (index, pile) in input.piles.iter().enumerate() {
         if checker.cancelled() {
             return None;
         }
-        let state = replay_pile(&mut checker, pile, &by_interval, &destinations, grades, segments, &mut openings, &drawn);
+        let state = replay_pile(&mut checker, pile, &by_pile[index], &uneven, &destinations, grades, segments, &mut openings, &drawn);
         checker.report.closing.push(state);
         // A chunked pile gives a reclaim bar work only in a chunk it
         // releases: closed, rested and holding material.
@@ -1225,6 +1273,7 @@ fn replay_pile(
     checker: &mut Checker<'_>,
     pile: &BlendPile,
     movements: &[Vec<MovementRow>],
+    uneven: &[BTreeSet<(usize, LoaderId)>],
     destinations: &BTreeMap<DestinationId, &Destination>,
     grades: usize,
     segments: usize,
@@ -1252,10 +1301,7 @@ fn replay_pile(
         let mut reclaimed_t = 0.0;
         let mut per_segment_receipts = vec![0.0; segments];
         let mut per_segment_reclaim = vec![0.0; segments];
-        // Blocks each loader dug per segment, and which loaders delivered
-        // here: a loader that worked two blocks back to back delivered at an
-        // uneven rate, so occupancy can peak inside that segment.
-        let mut blocks_dug: BTreeMap<(usize, LoaderId), BTreeSet<GroundId>> = BTreeMap::new();
+        // A loader that dug multiple blocks can deliver at an uneven rate.
         let mut delivering: BTreeSet<(usize, LoaderId)> = BTreeSet::new();
 
         for row in &movements[k] {
@@ -1263,12 +1309,6 @@ fn replay_pile(
             let to_pile = destinations
                 .get(&candidate.destination)
                 .is_some_and(|destination| matches!(destination.kind, DestinationKind::Stockpile(target) if target == pile.id));
-            if candidate.activity == Activity::Dig
-                && row.tonnes_t > REPLAY_TOLERANCE_T
-                && let SourceId::Ground(ground) = candidate.source
-            {
-                blocks_dug.entry((row.segment, candidate.loader)).or_default().insert(ground);
-            }
             if to_pile && row.tonnes_t > REPLAY_TOLERANCE_T {
                 delivering.insert((row.segment, candidate.loader));
             }
@@ -1336,9 +1376,7 @@ fn replay_pile(
         // opening occupancy, with no credit for its own reclaim.
         let mut occupied = open_t;
         for segment in 0..segments {
-            let uneven = delivering
-                .iter()
-                .any(|&(cell, loader)| cell == segment && blocks_dug.get(&(segment, loader)).is_some_and(|blocks| blocks.len() > 1));
+            let uneven = delivering.iter().any(|&(cell, loader)| cell == segment && uneven[k].contains(&(segment, loader)));
             if uneven && per_segment_reclaim[segment] > REPLAY_TOLERANCE_T {
                 checker.breach(
                     || format!("pile {} capacity while blocks were worked back to back in interval {k} segment {segment}", pile.id.0),

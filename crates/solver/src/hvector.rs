@@ -119,11 +119,28 @@ impl HVector {
         }
         let mut count = 0;
         let index = &mut self.index[..self.size];
-        for (i, &value) in self.array[..self.size].iter().enumerate() {
-            if value != 0.0 {
-                index[count] = i;
+        let array = &self.array[..self.size];
+        let end = self.size / 8 * 8;
+        // Classify a block together, then visit only its nonzeros. The mask
+        // keeps ascending row order without branching on each array entry.
+        for (block, values) in array[..end].chunks_exact(8).enumerate() {
+            let mut mask = u8::from(values[0] != 0.0)
+                | (u8::from(values[1] != 0.0) << 1)
+                | (u8::from(values[2] != 0.0) << 2)
+                | (u8::from(values[3] != 0.0) << 3)
+                | (u8::from(values[4] != 0.0) << 4)
+                | (u8::from(values[5] != 0.0) << 5)
+                | (u8::from(values[6] != 0.0) << 6)
+                | (u8::from(values[7] != 0.0) << 7);
+            while mask != 0 {
+                index[count] = block * 8 + mask.trailing_zeros() as usize;
                 count += 1;
+                mask &= mask - 1;
             }
+        }
+        for (i, &value) in array.iter().enumerate().skip(end) {
+            index[count] = i;
+            count += usize::from(value != 0.0);
         }
         self.count = count as isize;
     }

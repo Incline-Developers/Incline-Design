@@ -21,15 +21,22 @@ enum BoundType {
     VariableLb,
 }
 
+// Cut rows visit columns sparsely, so keep the distances they read together.
+#[derive(Clone, Copy, Default)]
+struct ColumnBounds {
+    simple_lb_dist: f64,
+    simple_ub_dist: f64,
+    lb_dist: f64,
+    ub_dist: f64,
+    bound_dist: f64,
+    bound_type: BoundType,
+    integral: bool,
+}
+
 pub(crate) struct TransformedLp {
     best_vub: Vec<(Option<usize>, VarBound)>,
     best_vlb: Vec<(Option<usize>, VarBound)>,
-    simple_lb_dist: Vec<f64>,
-    simple_ub_dist: Vec<f64>,
-    lb_dist: Vec<f64>,
-    ub_dist: Vec<f64>,
-    bound_dist: Vec<f64>,
-    bound_types: Vec<BoundType>,
+    bounds: Vec<ColumnBounds>,
     vectorsum: SparseVectorSum,
 }
 
@@ -41,12 +48,14 @@ impl TransformedLp {
         let mut this = Self {
             best_vub: vec![(None, VarBound::default()); num_transformed_col],
             best_vlb: vec![(None, VarBound::default()); num_transformed_col],
-            simple_lb_dist: vec![0.0; num_transformed_col],
-            simple_ub_dist: vec![0.0; num_transformed_col],
-            lb_dist: vec![0.0; num_transformed_col],
-            ub_dist: vec![0.0; num_transformed_col],
-            bound_dist: vec![0.0; num_transformed_col],
-            bound_types: vec![BoundType::default(); num_transformed_col],
+            // Column and row integrality stays fixed throughout this separation
+            // round. Keep it with the distances read for each transformed term.
+            bounds: (0..num_transformed_col)
+                .map(|col| ColumnBounds {
+                    integral: lp.is_col_integral(col, data),
+                    ..ColumnBounds::default()
+                })
+                .collect(),
             vectorsum: SparseVectorSum::new(num_transformed_col),
         };
         let solver = lp.lp_solver();
@@ -71,26 +80,26 @@ impl TransformedLp {
             let globaldom = &data.domain;
             let nodequeue = data.nodequeue.borrow();
             let mut bestub = globaldom.col_upper[col];
-            this.simple_ub_dist[col] = bestub - col_value[col];
-            if this.simple_ub_dist[col] <= feastol {
-                this.simple_ub_dist[col] = 0.0;
+            this.bounds[col].simple_ub_dist = bestub - col_value[col];
+            if this.bounds[col].simple_ub_dist <= feastol {
+                this.bounds[col].simple_ub_dist = 0.0;
             }
             this.best_vub[col] = data.implications.get_best_vub(col, &col_value, &col_dual, &mut bestub, globaldom, &nodequeue, feastol);
             let mut bestlb = globaldom.col_lower[col];
-            this.simple_lb_dist[col] = col_value[col] - bestlb;
-            if this.simple_lb_dist[col] <= feastol {
-                this.simple_lb_dist[col] = 0.0;
+            this.bounds[col].simple_lb_dist = col_value[col] - bestlb;
+            if this.bounds[col].simple_lb_dist <= feastol {
+                this.bounds[col].simple_lb_dist = 0.0;
             }
             this.best_vlb[col] = data.implications.get_best_vlb(col, &col_value, &col_dual, &mut bestlb, globaldom, &nodequeue, feastol);
-            this.lb_dist[col] = col_value[col] - bestlb;
-            if this.lb_dist[col] <= feastol {
-                this.lb_dist[col] = 0.0;
+            this.bounds[col].lb_dist = col_value[col] - bestlb;
+            if this.bounds[col].lb_dist <= feastol {
+                this.bounds[col].lb_dist = 0.0;
             }
-            this.ub_dist[col] = bestub - col_value[col];
-            if this.ub_dist[col] <= feastol {
-                this.ub_dist[col] = 0.0;
+            this.bounds[col].ub_dist = bestub - col_value[col];
+            if this.bounds[col].ub_dist <= feastol {
+                this.bounds[col].ub_dist = 0.0;
             }
-            this.bound_dist[col] = this.lb_dist[col].min(this.ub_dist[col]);
+            this.bounds[col].bound_dist = this.bounds[col].lb_dist.min(this.bounds[col].ub_dist);
         }
 
         for &col in &data.integral_cols.clone() {
@@ -100,40 +109,40 @@ impl TransformedLp {
             if data.domain.infeasible() {
                 return this;
             }
-            this.simple_ub_dist[col] = bestub - col_value[col];
-            if this.simple_ub_dist[col] <= feastol {
-                this.simple_ub_dist[col] = 0.0;
+            this.bounds[col].simple_ub_dist = bestub - col_value[col];
+            if this.bounds[col].simple_ub_dist <= feastol {
+                this.bounds[col].simple_ub_dist = 0.0;
             }
-            this.simple_lb_dist[col] = col_value[col] - bestlb;
-            if this.simple_lb_dist[col] <= feastol {
-                this.simple_lb_dist[col] = 0.0;
+            this.bounds[col].simple_lb_dist = col_value[col] - bestlb;
+            if this.bounds[col].simple_lb_dist <= feastol {
+                this.bounds[col].simple_lb_dist = 0.0;
             }
-            let simple_bnd_dist = this.simple_lb_dist[col].min(this.simple_ub_dist[col]);
+            let simple_bnd_dist = this.bounds[col].simple_lb_dist.min(this.bounds[col].simple_ub_dist);
             if simple_bnd_dist > 0.0 && (nearest_integer(col_value[col]) as f64 - col_value[col]).abs() < feastol {
                 let globaldom = &data.domain;
                 let nodequeue = data.nodequeue.borrow();
                 this.best_vub[col] = data.implications.get_best_vub(col, &col_value, &col_dual, &mut bestub, globaldom, &nodequeue, feastol);
                 this.best_vlb[col] = data.implications.get_best_vlb(col, &col_value, &col_dual, &mut bestlb, globaldom, &nodequeue, feastol);
-                this.lb_dist[col] = col_value[col] - bestlb;
-                if this.lb_dist[col] <= feastol {
-                    this.lb_dist[col] = 0.0;
+                this.bounds[col].lb_dist = col_value[col] - bestlb;
+                if this.bounds[col].lb_dist <= feastol {
+                    this.bounds[col].lb_dist = 0.0;
                 }
-                this.ub_dist[col] = bestub - col_value[col];
-                if this.ub_dist[col] <= feastol {
-                    this.ub_dist[col] = 0.0;
+                this.bounds[col].ub_dist = bestub - col_value[col];
+                if this.bounds[col].ub_dist <= feastol {
+                    this.bounds[col].ub_dist = 0.0;
                 }
-                this.bound_dist[col] = this.lb_dist[col].min(this.ub_dist[col]);
-                if this.bound_dist[col] > simple_bnd_dist + feastol {
-                    this.lb_dist[col] = this.simple_lb_dist[col];
-                    this.ub_dist[col] = this.simple_ub_dist[col];
-                    this.bound_dist[col] = simple_bnd_dist;
+                this.bounds[col].bound_dist = this.bounds[col].lb_dist.min(this.bounds[col].ub_dist);
+                if this.bounds[col].bound_dist > simple_bnd_dist + feastol {
+                    this.bounds[col].lb_dist = this.bounds[col].simple_lb_dist;
+                    this.bounds[col].ub_dist = this.bounds[col].simple_ub_dist;
+                    this.bounds[col].bound_dist = simple_bnd_dist;
                     this.best_vub[col].0 = None;
                     this.best_vlb[col].0 = None;
                 }
             } else {
-                this.lb_dist[col] = this.simple_lb_dist[col];
-                this.ub_dist[col] = this.simple_ub_dist[col];
-                this.bound_dist[col] = simple_bnd_dist;
+                this.bounds[col].lb_dist = this.bounds[col].simple_lb_dist;
+                this.bounds[col].ub_dist = this.bounds[col].simple_ub_dist;
+                this.bounds[col].bound_dist = simple_bnd_dist;
             }
         }
 
@@ -146,23 +155,23 @@ impl TransformedLp {
             if bestlb == bestub {
                 continue;
             }
-            this.lb_dist[slack_index] = *value - bestlb;
-            if this.lb_dist[slack_index] <= feastol {
-                this.lb_dist[slack_index] = 0.0;
+            this.bounds[slack_index].lb_dist = *value - bestlb;
+            if this.bounds[slack_index].lb_dist <= feastol {
+                this.bounds[slack_index].lb_dist = 0.0;
             }
-            this.simple_lb_dist[slack_index] = this.lb_dist[slack_index];
-            this.ub_dist[slack_index] = bestub - *value;
-            if this.ub_dist[slack_index] <= feastol {
-                this.ub_dist[slack_index] = 0.0;
+            this.bounds[slack_index].simple_lb_dist = this.bounds[slack_index].lb_dist;
+            this.bounds[slack_index].ub_dist = bestub - *value;
+            if this.bounds[slack_index].ub_dist <= feastol {
+                this.bounds[slack_index].ub_dist = 0.0;
             }
-            this.simple_ub_dist[slack_index] = this.ub_dist[slack_index];
-            this.bound_dist[slack_index] = this.lb_dist[slack_index].min(this.ub_dist[slack_index]);
+            this.bounds[slack_index].simple_ub_dist = this.bounds[slack_index].ub_dist;
+            this.bounds[slack_index].bound_dist = this.bounds[slack_index].lb_dist.min(this.bounds[slack_index].ub_dist);
         }
         this
     }
 
     pub fn bound_distance(&self, col: usize) -> f64 {
-        self.bound_dist[col]
+        self.bounds[col].bound_dist
     }
 
     /// HiGHS's `transform`: rewrite the row `vals . x <= rhs` over
@@ -230,12 +239,12 @@ impl TransformedLp {
             if self.best_vlb[col].0.is_some() && self.best_vlb[col].1.min_value() < lb - feastol {
                 Implications::cleanup_vlb(self.best_vlb[col].0, &mut self.best_vlb[col].1, lb, feastol, data.epsilon);
             }
-            let old_bound_type = self.bound_types[col];
-            if lp.is_col_integral(col, data) {
-                if ub - lb <= 1.5 || self.bound_dist[col] != 0.0 || self.simple_lb_dist[col] == 0.0 || self.simple_ub_dist[col] == 0.0 {
-                    self.bound_types[col] = if self.simple_lb_dist[col] < self.simple_ub_dist[col] - feastol {
+            let old_bound_type = self.bounds[col].bound_type;
+            if self.bounds[col].integral {
+                if ub - lb <= 1.5 || self.bounds[col].bound_dist != 0.0 || self.bounds[col].simple_lb_dist == 0.0 || self.bounds[col].simple_ub_dist == 0.0 {
+                    self.bounds[col].bound_type = if self.bounds[col].simple_lb_dist < self.bounds[col].simple_ub_dist - feastol {
                         BoundType::SimpleLb
-                    } else if self.simple_ub_dist[col] < self.simple_lb_dist[col] - feastol {
+                    } else if self.bounds[col].simple_ub_dist < self.bounds[col].simple_lb_dist - feastol {
                         BoundType::SimpleUb
                     } else if vals[i] > 0.0 {
                         BoundType::SimpleLb
@@ -245,9 +254,9 @@ impl TransformedLp {
                     i += 1;
                     continue;
                 }
-                self.bound_types[col] = if self.best_vlb[col].0.is_none() || self.ub_dist[col] < self.lb_dist[col] - feastol {
+                self.bounds[col].bound_type = if self.best_vlb[col].0.is_none() || self.bounds[col].ub_dist < self.bounds[col].lb_dist - feastol {
                     BoundType::VariableUb
-                } else if self.best_vub[col].0.is_none() || self.lb_dist[col] < self.ub_dist[col] - feastol {
+                } else if self.best_vub[col].0.is_none() || self.bounds[col].lb_dist < self.bounds[col].ub_dist - feastol {
                     BoundType::VariableLb
                 } else if vals[i] > 0.0 {
                     BoundType::VariableUb
@@ -255,18 +264,18 @@ impl TransformedLp {
                     BoundType::VariableLb
                 };
             } else {
-                self.bound_types[col] = if self.lb_dist[col] < self.ub_dist[col] - feastol {
+                self.bounds[col].bound_type = if self.bounds[col].lb_dist < self.bounds[col].ub_dist - feastol {
                     if self.best_vlb[col].0.is_none() {
                         BoundType::SimpleLb
-                    } else if prefer_vbds || vals[i] > 0.0 || self.simple_lb_dist[col] > self.lb_dist[col] + feastol {
+                    } else if prefer_vbds || vals[i] > 0.0 || self.bounds[col].simple_lb_dist > self.bounds[col].lb_dist + feastol {
                         BoundType::VariableLb
                     } else {
                         BoundType::SimpleLb
                     }
-                } else if self.ub_dist[col] < self.lb_dist[col] - feastol {
+                } else if self.bounds[col].ub_dist < self.bounds[col].lb_dist - feastol {
                     if self.best_vub[col].0.is_none() {
                         BoundType::SimpleUb
-                    } else if prefer_vbds || vals[i] < 0.0 || self.simple_ub_dist[col] > self.ub_dist[col] + feastol {
+                    } else if prefer_vbds || vals[i] < 0.0 || self.bounds[col].simple_ub_dist > self.bounds[col].ub_dist + feastol {
                         BoundType::VariableUb
                     } else {
                         BoundType::SimpleUb
@@ -287,11 +296,11 @@ impl TransformedLp {
                     BoundType::SimpleUb
                 };
             }
-            match self.bound_types[col] {
+            match self.bounds[col].bound_type {
                 BoundType::SimpleLb => {
                     if vals[i] > 0.0 {
                         tmp_rhs -= lb * vals[i];
-                        self.bound_types[col] = old_bound_type;
+                        self.bounds[col].bound_type = old_bound_type;
                         remove(inds, vals, &mut num_nz, i);
                         continue;
                     }
@@ -299,7 +308,7 @@ impl TransformedLp {
                 BoundType::SimpleUb => {
                     if vals[i] < 0.0 {
                         tmp_rhs -= ub * vals[i];
-                        self.bound_types[col] = old_bound_type;
+                        self.bounds[col].bound_type = old_bound_type;
                         remove(inds, vals, &mut num_nz, i);
                         continue;
                     }
@@ -309,7 +318,7 @@ impl TransformedLp {
                     tmp_rhs -= vlb.constant * vals[i];
                     self.vectorsum.add(vlb_col.expect("a variable lower bound"), vals[i] * vlb.coef);
                     if vals[i] > 0.0 {
-                        self.bound_types[col] = old_bound_type;
+                        self.bounds[col].bound_type = old_bound_type;
                         remove(inds, vals, &mut num_nz, i);
                         continue;
                     }
@@ -320,7 +329,7 @@ impl TransformedLp {
                     self.vectorsum.add(vub_col.expect("a variable upper bound"), vals[i] * vub.coef);
                     vals[i] = -vals[i];
                     if vals[i] > 0.0 {
-                        self.bound_types[col] = old_bound_type;
+                        self.bounds[col].bound_type = old_bound_type;
                         remove(inds, vals, &mut num_nz, i);
                         continue;
                     }
@@ -352,19 +361,19 @@ impl TransformedLp {
             let col = inds[j];
             let lb = get_lb(col);
             let ub = get_ub(col);
-            if !lp.is_col_integral(col, data) {
+            if !self.bounds[col].integral {
                 continue;
             }
-            if matches!(self.bound_types[col], BoundType::VariableLb | BoundType::VariableUb) {
+            if matches!(self.bounds[col].bound_type, BoundType::VariableLb | BoundType::VariableUb) {
                 continue;
             }
-            self.bound_types[col] = if *integers_positive {
+            self.bounds[col].bound_type = if *integers_positive {
                 if (lb != -INF && vals[j] > 0.0) || ub == INF {
                     BoundType::SimpleLb
                 } else {
                     BoundType::SimpleUb
                 }
-            } else if self.lb_dist[col] < self.ub_dist[col] {
+            } else if self.bounds[col].lb_dist < self.bounds[col].ub_dist {
                 BoundType::SimpleLb
             } else {
                 BoundType::SimpleUb
@@ -378,20 +387,20 @@ impl TransformedLp {
             let lb = get_lb(col);
             let ub = get_ub(col);
             upper[j] = ub - lb;
-            match self.bound_types[col] {
+            match self.bounds[col].bound_type {
                 BoundType::SimpleLb => {
                     tmp_rhs -= lb * vals[j];
-                    solval[j] = self.lb_dist[col];
+                    solval[j] = self.bounds[col].lb_dist;
                 }
                 BoundType::SimpleUb => {
                     tmp_rhs -= ub * vals[j];
                     vals[j] = -vals[j];
-                    solval[j] = self.ub_dist[col];
+                    solval[j] = self.bounds[col].ub_dist;
                 }
-                BoundType::VariableLb => solval[j] = self.lb_dist[col],
-                BoundType::VariableUb => solval[j] = self.ub_dist[col],
+                BoundType::VariableLb => solval[j] = self.bounds[col].lb_dist,
+                BoundType::VariableUb => solval[j] = self.bounds[col].ub_dist,
             }
-            if lp.is_col_integral(col, data) {
+            if self.bounds[col].integral {
                 *integers_positive = *integers_positive && vals[j] > 0.0;
             }
         }
@@ -412,7 +421,7 @@ impl TransformedLp {
                 continue;
             }
             let col = inds[i];
-            match self.bound_types[col] {
+            match self.bounds[col].bound_type {
                 BoundType::VariableLb => {
                     let (vlb_col, vlb) = self.best_vlb[col];
                     tmp_rhs += vlb.constant * vals[i];
