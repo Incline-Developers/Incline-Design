@@ -231,54 +231,17 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
     // One column per (candidate, interval, segment). A candidate is a
     // resolved destination/truck combination, so routing and cashflow are
     // already decided; only the tonnage is a decision here.
-    let reach = DigReach::new(input);
-    let held: BTreeSet<GroundId> = input.ground.iter().map(|source| source.id).collect();
-    // Drill and blast: a block is dug only from its blast's release, which
-    // the hourly dispatch found and every later solve keeps.
-    let releases = input.drill_blast.as_ref().map(|chain| chain.releases()).unwrap_or_default();
+    let openings = MovementCells::new(input);
     for (index, candidate) in input.movements.iter().enumerate() {
         if rows.cancelled() {
             return Err(FormulationCancelled);
-        }
-        // A block the input does not hold has no ground balance to draw its
-        // tonnes from, so it gets no columns. Capture never names one; a
-        // later day of a day-by-day solve names every block that an earlier
-        // day finished.
-        if let (Activity::Dig, SourceId::Ground(ground)) = (candidate.activity, candidate.source)
-            && !held.contains(&ground)
-        {
-            continue;
         }
         let value = candidate.value_per_tonne().unwrap_or(0.0);
         for interval in &input.intervals {
             if rows.cancelled() {
                 return Err(FormulationCancelled);
             }
-            let Some(rate) = loader_rate(input, candidate, interval.index) else { continue };
-            if rate <= 0.0 {
-                continue;
-            }
-            // These columns would be forced to zero by mvsel below. Omit
-            // them before building the model, preserving every feasible
-            // movement while avoiding inactive-window routing columns.
-            if !input.tasks.iter().any(|task| task_active(task, *interval) && task_authorises(task, candidate)) {
-                continue;
-            }
-            // Likewise columns that authored block order forces to zero.
-            if !reach.allows(candidate, *interval) {
-                continue;
-            }
-            if let (Activity::Dig, SourceId::Ground(ground)) = (candidate.activity, candidate.source)
-                && releases.get(&ground).is_some_and(|released| *released > interval.start_h + 1e-9)
-            {
-                continue;
-            }
-            // And movements a pile's authored mode forbids this day: no
-            // receipts while it is not building, no reclaim while it is not
-            // reclaiming.
-            if !pile_mode_allows(input, candidate, *interval) {
-                continue;
-            }
+            let Some(rate) = openings.rate(input, candidate, *interval) else { continue };
             let bound = rate * interval.duration_h();
             for segment in 0..segments {
                 let column = rows.valued(bound, value, &format!("mv_{index}_{}_{segment}", interval.index));
@@ -530,11 +493,14 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
 
     // Improve holds the drill and blast timeline. It must also remove the
     // overlying ground before that timeline's clearance, rather than moving
-    // it later and leaving preparation underneath standing material.
+    // it later and leaving preparation underneath standing material. A
+    // window that ends before a deadline leaves that ground to the hours
+    // after it: held to the deadline, its own hours would have to clear it.
     if let Some(chain) = input.drill_blast.as_ref()
         && let Some(timeline) = &chain.fixed
     {
-        for (ground, deadline) in chain.clearance_deadlines(timeline) {
+        let end_h = input.intervals.last().map_or(0.0, |interval| interval.end_h);
+        for (ground, deadline) in chain.clearance_deadlines(timeline).into_iter().filter(|(_, deadline)| *deadline <= end_h + 1e-9) {
             let Some(&source_index) = ground_index.get(&ground) else {
                 continue;
             };
@@ -1169,7 +1135,11 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
                                 // ready - P + E + Z >= 0, constants moved right.
                                 let mut terms = vec![(ready.clone(), 1.0)];
                                 let mut rhs = 0.0;
-                                if releases.get(&input.ground[*source_index].id).is_some_and(|released| *released > interval.start_h + 1e-9) {
+                                if openings
+                                    .releases
+                                    .get(&input.ground[*source_index].id)
+                                    .is_some_and(|released| *released > interval.start_h + 1e-9)
+                                {
                                     rhs -= 1.0;
                                 }
                                 match &prefix {
@@ -1937,29 +1907,98 @@ fn reclaim_ceiling(input: &BlendInput, pile: StockpileId, interval: usize, segme
     capacity.min(reachable).max(0.0)
 }
 
+/// Which (candidate, interval) cells get movement columns.
+struct MovementCells {
+    reach: DigReach,
+    held: BTreeSet<GroundId>,
+    /// Drill and blast: a block is dug only from its blast's release, which
+    /// the hourly dispatch found and every later solve keeps.
+    releases: BTreeMap<GroundId, f64>,
+}
+
+impl MovementCells {
+    fn new(input: &BlendInput) -> Self {
+        Self {
+            reach: DigReach::new(input),
+            held: input.ground.iter().map(|source| source.id).collect(),
+            releases: input.drill_blast.as_ref().map(|chain| chain.releases()).unwrap_or_default(),
+        }
+    }
+
+    /// The loader's rate for `candidate` in `interval`, when the cell can be
+    /// nonzero in some feasible schedule.
+    fn rate(&self, input: &BlendInput, candidate: &MovementCandidate, interval: Interval) -> Option<f64> {
+        // A block the input does not hold has no ground balance to draw its
+        // tonnes from, so it gets no columns. Capture never names one; a
+        // later day of a day-by-day solve names every block that an earlier
+        // day finished.
+        if let (Activity::Dig, SourceId::Ground(ground)) = (candidate.activity, candidate.source)
+            && (!self.held.contains(&ground) || self.releases.get(&ground).is_some_and(|released| *released > interval.start_h + 1e-9))
+        {
+            return None;
+        }
+        let rate = loader_rate(input, candidate, interval.index).filter(|rate| *rate > 0.0)?;
+        // These columns would be forced to zero by mvsel below. Omit them
+        // before building the model, preserving every feasible movement
+        // while avoiding inactive-window routing columns.
+        if !input.tasks.iter().any(|task| task_active(task, interval) && task_authorises(task, candidate)) {
+            return None;
+        }
+        // Likewise columns that authored block order forces to zero, and
+        // movements a pile's authored mode forbids this day: no receipts
+        // while it is not building, no reclaim while it is not reclaiming.
+        (self.reach.allows(candidate, interval) && pile_mode_allows(input, candidate, interval)).then_some(rate)
+    }
+}
+
+/// How many movement columns the exact model of `input` has.
+pub(crate) fn movement_columns(input: &BlendInput) -> usize {
+    let openings = MovementCells::new(input);
+    let open = input
+        .movements
+        .iter()
+        .map(|candidate| input.intervals.iter().filter(|interval| openings.rate(input, candidate, **interval).is_some()).count())
+        .sum::<usize>();
+    open * input.segments_per_interval.max(1)
+}
+
 /// Which dig columns authored block order already forces to zero.
 ///
-/// Loader `L` may dig block `b` in a cell only once every block authored
-/// immediately ahead of `b` in `L`'s sequences is exhausted by the end of the
-/// previous cell (the `order` rows). A block cannot be exhausted before the
-/// loaders able to dig it could have lifted its tonnes, and each of those
-/// loaders can only start on it once *its own* predecessors are exhausted.
-/// That recursion gives a lower bound on every block's exhaustion time, and a
-/// column in an interval that ends before some predecessor's bound is zero in
-/// every feasible schedule. Omitting it therefore removes no schedule.
+/// Each bar's `order` rows let loader `L` dig block `b` under that bar in a
+/// cell only once the block authored immediately ahead of `b` in the bar is
+/// exhausted by the end of the cell, and never before the bar opens or `b`'s
+/// blast releases it. A block listed by several bars can be dug under any of
+/// them, so `L` can start on it once any one of those bars could reach it. A
+/// block cannot be exhausted before the loaders able to dig it could have
+/// lifted its tonnes from those starts. That recursion gives a lower bound on
+/// every block's exhaustion time, and a column in an interval that ends
+/// before every bar's way to the block is open is zero in every feasible
+/// schedule. Omitting it therefore removes no schedule.
 ///
-/// The bound is deliberately optimistic wherever it simplifies: bar windows
-/// are ignored, a loader's capacity is counted in full for every block it
-/// could dig, and the within-interval arrival of capacity is taken at the
-/// interval's fastest combined rate. A tolerance covers the solver's own
-/// feasibility slack on "exhausted". Each of these only keeps more columns.
+/// Taking the bars one at a time matters where they overlap: a later bar
+/// that lists a bar's blocks again in the opposite order, to take what is
+/// left of them, would otherwise leave each block with no predecessor
+/// common to both, and every one of them open from the first hour.
+///
+/// The bound is deliberately optimistic wherever it simplifies: a loader's
+/// capacity is counted in full for every block it could dig, the bars do
+/// not take time from one another, and the within-interval arrival of
+/// capacity is taken at the interval's fastest combined rate. A tolerance
+/// covers the solver's own feasibility slack on "exhausted". Each of these
+/// only keeps more columns.
 struct DigReach {
-    /// Keyed (loader, block): the blocks authored immediately ahead of it.
-    predecessors: BTreeMap<(LoaderId, GroundId), Vec<GroundId>>,
+    /// Keyed (loader, block): a way for each bar listing it.
+    ways: BTreeMap<(LoaderId, GroundId), Vec<Way>>,
+    /// The hour each block's blast releases it.
+    released_h: BTreeMap<GroundId, f64>,
     /// Lower bound on the hour each block can be exhausted; infinite when no
     /// loader could remove it within the horizon.
     exhausted_from_h: BTreeMap<GroundId, f64>,
 }
+
+/// A bar's way to a block: the hour the bar opens, and the block authored
+/// immediately ahead of it there.
+type Way = (f64, Option<GroundId>);
 
 /// Relative and absolute slack on "exhausted", comfortably above the
 /// solver's integrality and feasibility tolerances on the `exhlink` row.
@@ -1969,34 +2008,23 @@ const REACH_TIME_SLACK_H: f64 = 1e-9;
 
 impl DigReach {
     fn new(input: &BlendInput) -> Self {
-        // A block may be dug under any bar listing it, and each bar orders
-        // only its own digs, so a block waits only for what every bar listing
-        // it puts ahead of it.
-        let mut predecessors: BTreeMap<(LoaderId, GroundId), Vec<GroundId>> = BTreeMap::new();
-        let mut authorised: BTreeSet<(LoaderId, GroundId)> = BTreeSet::new();
+        let held: BTreeSet<GroundId> = input.ground.iter().map(|source| source.id).collect();
+        let mut ways: BTreeMap<(LoaderId, GroundId), Vec<Way>> = BTreeMap::new();
         for task in &input.tasks {
             let TaskKind::Dig { sequence } = &task.kind else { continue };
             for (position, &ground) in sequence.iter().enumerate() {
                 // A predecessor the capture did not include has no order row.
-                let ahead: Vec<GroundId> = position
-                    .checked_sub(1)
-                    .map(|before| sequence[before])
-                    .filter(|before| input.ground.iter().any(|source| source.id == *before))
-                    .into_iter()
-                    .collect();
-                if authorised.insert((task.loader, ground)) {
-                    predecessors.insert((task.loader, ground), ahead);
-                } else if let Some(held) = predecessors.get_mut(&(task.loader, ground)) {
-                    held.retain(|block| ahead.contains(block));
-                }
+                let ahead = position.checked_sub(1).map(|before| sequence[before]).filter(|before| held.contains(before));
+                ways.entry((task.loader, ground)).or_default().push((task.window_start_h, ahead));
             }
         }
+        let released_h = input.drill_blast.as_ref().map(|chain| chain.releases()).unwrap_or_default();
         let mut diggers: BTreeMap<GroundId, Vec<usize>> = BTreeMap::new();
         for candidate in &input.movements {
             let (Activity::Dig, SourceId::Ground(ground)) = (candidate.activity, candidate.source) else {
                 continue;
             };
-            if !authorised.contains(&(candidate.loader, ground)) {
+            if !ways.contains_key(&(candidate.loader, ground)) {
                 continue;
             }
             let Some(loader_index) = input.loaders.iter().position(|loader| loader.id == candidate.loader) else {
@@ -2008,7 +2036,11 @@ impl DigReach {
             }
         }
 
-        let mut exhausted_from_h: BTreeMap<GroundId, f64> = input.ground.iter().map(|source| (source.id, 0.0)).collect();
+        let mut reach = Self {
+            ways,
+            released_h,
+            exhausted_from_h: input.ground.iter().map(|source| (source.id, 0.0)).collect(),
+        };
         // Every pass keeps each figure a valid lower bound, so stopping early
         // (an authored cycle) is safe; an acyclic order settles well within
         // one pass per block.
@@ -2020,20 +2052,13 @@ impl DigReach {
                     .map(|loaders| {
                         loaders
                             .iter()
-                            .map(|&loader_index| {
-                                let loader = input.loaders[loader_index].id;
-                                let start = predecessors
-                                    .get(&(loader, source.id))
-                                    .map(|ahead| ahead.iter().map(|block| exhausted_from_h[block]).fold(0.0, f64::max))
-                                    .unwrap_or(0.0);
-                                (loader_index, start)
-                            })
+                            .map(|&loader_index| (loader_index, reach.start_h(input.loaders[loader_index].id, source.id)))
                             .collect()
                     })
                     .unwrap_or_default();
                 let bound = earliest_removal_h(input, &starts, source.tonnes_t);
-                if bound > exhausted_from_h[&source.id] {
-                    exhausted_from_h.insert(source.id, bound);
+                if bound > reach.exhausted_from_h[&source.id] {
+                    reach.exhausted_from_h.insert(source.id, bound);
                     changed = true;
                 }
             }
@@ -2041,7 +2066,19 @@ impl DigReach {
                 break;
             }
         }
-        Self { predecessors, exhausted_from_h }
+        reach
+    }
+
+    /// The earliest hour `loader` could start on `ground` under any bar
+    /// listing it; infinite when none does.
+    fn start_h(&self, loader: LoaderId, ground: GroundId) -> f64 {
+        let released = self.released_h.get(&ground).copied().unwrap_or(0.0);
+        self.ways
+            .get(&(loader, ground))
+            .into_iter()
+            .flatten()
+            .map(|&(opens, ahead)| opens.max(ahead.map_or(0.0, |block| self.exhausted_from_h[&block])).max(released))
+            .fold(f64::INFINITY, f64::min)
     }
 
     /// Whether a movement column can be nonzero in this interval.
@@ -2049,10 +2086,10 @@ impl DigReach {
         let (Activity::Dig, SourceId::Ground(ground)) = (candidate.activity, candidate.source) else {
             return true;
         };
-        let Some(ahead) = self.predecessors.get(&(candidate.loader, ground)) else { return true };
-        ahead
-            .iter()
-            .all(|block| self.exhausted_from_h.get(block).is_none_or(|&from| from <= interval.end_h + REACH_TIME_SLACK_H))
+        if !self.ways.contains_key(&(candidate.loader, ground)) {
+            return true;
+        }
+        self.start_h(candidate.loader, ground) <= interval.end_h + REACH_TIME_SLACK_H
     }
 }
 

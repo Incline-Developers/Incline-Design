@@ -43,6 +43,7 @@ use crate::model::schedule::{
             formulation::{BlendColumns, FamilySize},
             greedy,
             input::BlendInput,
+            reduce::Reduced,
             relaxation::{RelaxationBound, relaxation_bound},
             replay::{BlendSolution, MovementRow, replay_cancellable},
             rolling::{self, Carry, Stitched, Window},
@@ -950,6 +951,8 @@ fn solve_day_by_day(
 /// extracted schedule is `None`, and the search keeps what it had.
 fn polish_window(input: &BlendInput, seed: &BlendSolution, hold: &Hold, limit: Duration, cancel: &CancelFlag) -> Option<BlendSolution> {
     let deadline = Instant::now() + limit;
+    let reduced = Reduced::new(input);
+    let (input, seed) = (&reduced.input, &reduced.seed(seed));
     let mut built = formulate_scip_with_cancel(input, Some(&cancel.signal()), None, false).ok()?;
     hold_progress(&mut built.model, &built.columns, input, Some(hold));
     let values = complete_seed(input, seed, Some(hold), Some(Instant::now() + limit.mul_f64(SEED_COMPLETION_SHARE)), cancel).ok();
@@ -960,7 +963,7 @@ fn polish_window(input: &BlendInput, seed: &BlendSolution, hold: &Hold, limit: D
     adapter::dump(&model, values.as_ref());
     adapter::install_cancellation(&mut model, vec![cancel.signal()], Arc::new(adapter::InterruptAudit::default()));
     model.solve().ok()?;
-    extract_solution(&model, &built.columns, || false).ok().flatten()
+    extract_solution(&model, &built.columns, || false).ok().flatten().map(|found| reduced.expand(found))
 }
 
 /// Hold each block and pile of `hold` at what it says at the end of its
@@ -973,8 +976,13 @@ fn hold_progress(model: &mut Model, columns: &BlendColumns<Var>, input: &BlendIn
     let last = crate::model::schedule::optimisation::blended::input::flat_cell(hold.kept, segments - 1, segments);
     for &(source, held) in &hold.blocks {
         if let Some(remaining) = columns.ground_remaining.get(&(source, last)) {
+            // Relative to the block, as the replay counts a block cleared
+            // and the piles below are held: to an absolute millionth of a
+            // tonne, a 20,000 t block's hold sat inside SCIP's rounding, and
+            // its presolve proved the seed's own end state infeasible.
+            let slack = 1e-6 * input.ground[source].tonnes_t.max(1.0);
             model
-                .add_linear(&format!("progress_{source}"), &[*remaining], &[1.0], held - 1e-6, held + 1e-6)
+                .add_linear(&format!("progress_{source}"), &[*remaining], &[1.0], held - slack, held + slack)
                 .expect("adding a row in the problem stage");
         }
     }
@@ -1048,6 +1056,14 @@ fn tighter(left: Option<f64>, right: Option<f64>) -> Option<f64> {
 /// the primal one changes nothing.
 fn configure(mut model: Model, time_limit: Option<Duration>, relative_gap: Option<f64>) -> Result<Model, String> {
     model.set_char_param("lp/pricing", b'd').map_err(|error| format!("setting SCIP lp/pricing: {error:?}"))?;
+    // A pile's contained-quantity balance has a zero side and terms of tens
+    // of millions (grade times tonnes), so checked against an absolute 1e-6,
+    // as SCIP does by default, double precision alone breaks it: a seed's
+    // own completion was refused by 1e-5 on a no-blasts week. Checked
+    // against the row's largest term instead, it holds.
+    model
+        .set_bool_param("constraints/linear/checkrelmaxabs", true)
+        .map_err(|error| format!("setting SCIP's linear check: {error:?}"))?;
     if let Some(limit) = time_limit {
         model
             .set_real_param("limits/time", limit.as_secs_f64())
@@ -1108,7 +1124,18 @@ fn dispatch_start(input: &BlendInput, deadline: Option<Instant>, cancel: &Cancel
 /// columns those imply. An unchunked pile's state is held too, at exactly
 /// what the seed's movements give it (see [`pin_pile_state`]). The completed
 /// solution is SCIP's own, so it satisfies the model as SCIP checks it.
-/// Should that hold leave no completion, the movements are tried alone.
+/// Should that leave no completion, it is tried without `progress`, and then
+/// with the movements held alone.
+///
+/// `progress` only restates where the seed itself ends, yet with it SCIP can
+/// prove a seed's completion infeasible that it completes without it: on
+/// Centralia's week from day 20 the root node did, while either half of the
+/// hold alone, or the hold to a looser slack, completed. Without it the
+/// completion may use the movements' band to move a few tonnes between
+/// blocks, which the hold then rejects (Trucks 60%, five days from day 25);
+/// tried first, the hold rules that out wherever it completes. A completion
+/// without it is still offered to the held model, which keeps it only if
+/// it meets the hold.
 ///
 /// Presolve only takes the fixed columns out: it neither aggregates columns
 /// nor makes dual reductions, and the first solution found ends the solve.
@@ -1125,13 +1152,18 @@ fn dispatch_start(input: &BlendInput, deadline: Option<Instant>, cancel: &Cancel
 /// real week it spent the whole budget returning a schedule worth a
 /// seventieth of the seed.
 fn complete_seed(input: &BlendInput, seed: &BlendSolution, progress: Option<&Hold>, deadline: Option<Instant>, cancel: &CancelFlag) -> Result<HashMap<String, f64>, String> {
-    match complete_seed_with(input, seed, true, progress, deadline, cancel) {
+    let time_left = || !cancel.is_cancelled() && deadline.is_none_or(|deadline| Instant::now() < deadline);
+    let pinned = match complete_seed_with(input, seed, true, progress, deadline, cancel) {
+        Err(problem) if progress.is_some() && time_left() => {
+            complete_seed_with(input, seed, true, None, deadline, cancel).map_err(|again| format!("{problem}; without the hold, {again}"))
+        }
+        done => done,
+    };
+    match pinned {
         // A stitched day-by-day seed may need its movements' band to meet
         // the model's rows, which exact pile state can rule out: try again
         // with the movements held alone, in what is left.
-        Err(problem) if !cancel.is_cancelled() && deadline.is_none_or(|deadline| Instant::now() < deadline) => {
-            complete_seed_with(input, seed, false, progress, deadline, cancel).map_err(|again| format!("{problem}; with the movements alone, {again}"))
-        }
+        Err(problem) if time_left() => complete_seed_with(input, seed, false, progress, deadline, cancel).map_err(|again| format!("{problem}; with the movements alone, {again}")),
         done => done,
     }
 }

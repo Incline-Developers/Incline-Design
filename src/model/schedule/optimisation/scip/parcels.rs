@@ -9,14 +9,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::super::blended::{
     grade::GradeTable,
     input::{BlendInput, authored_tasks},
+    replay::{BlendSolution, MovementRow},
 };
 use crate::model::schedule::optimisation::{
     Activity, CashflowContribution, CashflowRuleId, DestinationId, GroundId, GroundSource, LoaderId, MaterialId, MaterialShare, MovementCandidate, RoutingRuleId, SourceId,
     TaskKind, TruckClassId,
 };
 
-/// `input` with its ground in parcels, and each block's parcel.
-pub(crate) fn parcels(input: &BlendInput) -> (BlendInput, BTreeMap<GroundId, GroundId>) {
+/// `input` with its ground in parcels, and each of its candidates' in the
+/// parcels' input.
+pub(crate) fn parcels(input: &BlendInput) -> (BlendInput, Vec<Option<usize>>) {
     let mut owner: BTreeMap<GroundId, usize> = BTreeMap::new();
     let mut above: BTreeMap<GroundId, BTreeSet<usize>> = BTreeMap::new();
     if let Some(chain) = &input.drill_blast {
@@ -128,13 +130,16 @@ pub(crate) fn parcels(input: &BlendInput) -> (BlendInput, BTreeMap<GroundId, Gro
     type Route = (MaterialId, LoaderId, DestinationId, TruckClassId, RoutingRuleId, u32);
     let mut joined: BTreeMap<Route, (f64, MovementCandidate, BTreeMap<CashflowRuleId, f64>)> = BTreeMap::new();
     let mut movements = Vec::new();
+    let mut kept: Vec<Option<usize>> = vec![None; input.movements.len()];
+    let mut route_of: Vec<Option<Route>> = vec![None; input.movements.len()];
     let block_tonnes: BTreeMap<(GroundId, MaterialId), f64> = input
         .ground
         .iter()
         .flat_map(|source| source.material.iter().map(move |share| ((source.id, share.material), source.tonnes_t * share.fraction)))
         .collect();
-    for candidate in &input.movements {
+    for (index, candidate) in input.movements.iter().enumerate() {
         let SourceId::Ground(block) = candidate.source else {
+            kept[index] = Some(movements.len());
             movements.push(candidate.clone());
             continue;
         };
@@ -151,6 +156,7 @@ pub(crate) fn parcels(input: &BlendInput) -> (BlendInput, BTreeMap<GroundId, Gro
             candidate.routing_rule,
             candidate.routing_preference,
         );
+        route_of[index] = Some(key);
         let entry = joined.entry(key).or_insert_with(|| {
             let mut first = candidate.clone();
             first.source = SourceId::Ground(parcel);
@@ -175,7 +181,9 @@ pub(crate) fn parcels(input: &BlendInput) -> (BlendInput, BTreeMap<GroundId, Gro
             *entry.2.entry(contribution.rule).or_default() += weight * contribution.value_per_tonne;
         }
     }
-    for (_, (weight, mut candidate, cashflow)) in joined {
+    let mut position: BTreeMap<Route, usize> = BTreeMap::new();
+    for (route, (weight, mut candidate, cashflow)) in joined {
+        position.insert(route, movements.len());
         let share = if weight > 0.0 { 1.0 / weight } else { 0.0 };
         candidate.truck_hours_per_tonne *= share;
         let c = &mut candidate.cycle;
@@ -201,6 +209,11 @@ pub(crate) fn parcels(input: &BlendInput) -> (BlendInput, BTreeMap<GroundId, Gro
         movements.push(candidate);
     }
     output.movements = movements;
+    for (index, route) in route_of.iter().enumerate() {
+        if let Some(route) = route {
+            kept[index] = Some(position[route]);
+        }
+    }
     let regrouped = |blocks: &[GroundId]| {
         let mut seen = BTreeSet::new();
         blocks
@@ -222,5 +235,30 @@ pub(crate) fn parcels(input: &BlendInput) -> (BlendInput, BTreeMap<GroundId, Gro
             blast.above = regrouped(&blast.above);
         }
     }
-    (output, parcel_of)
+    (output, kept)
+}
+
+/// `solution`, a schedule of the input [`parcels`] was given, as one of its
+/// parcels: each movement on its candidate's parcel candidate. `candidates`
+/// is what [`parcels`] returned with them.
+pub(crate) fn seed(solution: &BlendSolution, candidates: &[Option<usize>]) -> BlendSolution {
+    let mut tonnes: BTreeMap<(usize, usize, usize), f64> = BTreeMap::new();
+    for row in &solution.movements {
+        if let Some(candidate) = candidates[row.candidate] {
+            *tonnes.entry((candidate, row.interval, row.segment)).or_default() += row.tonnes_t;
+        }
+    }
+    BlendSolution {
+        movements: tonnes
+            .into_iter()
+            .map(|((candidate, interval, segment), tonnes_t)| MovementRow {
+                candidate,
+                interval,
+                segment,
+                tonnes_t,
+            })
+            .collect(),
+        chunks: Vec::new(),
+        ..solution.clone()
+    }
 }

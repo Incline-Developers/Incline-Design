@@ -1794,6 +1794,10 @@ fn solve_periods(
                 worth -= slope * UNIT * excess.max(0.0);
             }
         }
+        // A schedule the replay accepts clears every blast on time.
+        for index in on_time_of.keys() {
+            values.insert(format!("ontime_{index}"), 1.0);
+        }
         seed_values = Some(builder.names.iter().map(|name| values.get(name).copied().unwrap_or(0.0)).collect::<Vec<f64>>());
         seeded = Some(worth);
     }

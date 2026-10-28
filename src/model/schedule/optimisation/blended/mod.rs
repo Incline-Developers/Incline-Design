@@ -12,6 +12,7 @@
 //! | [`greedy`] | the hourly dispatch schedule, one LP per interval: a run's first schedule and SCIP's start |
 //! | [`rolling`] | windows, carried state and stitching for day-by-day solving, the fallback when the dispatcher fails |
 //! | [`relaxation`] | a proven bound from the linear relaxation, by HiGHS's interior-point method |
+//! | [`reduce`] | the exact model's input without columns that only stand in for others, and the way back |
 //! | [`drill_blast`] | the drill and blast chain the dispatch simulates, and the release times later solves keep |
 //!
 //! The nonlinear SCIP formulation lives next door in
@@ -48,6 +49,7 @@ pub(crate) mod greedy;
 pub(crate) mod input;
 pub(crate) mod lp;
 pub(crate) mod plan;
+pub(crate) mod reduce;
 pub(crate) mod relaxation;
 pub(crate) mod replay;
 pub(crate) mod rolling;

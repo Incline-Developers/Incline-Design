@@ -75,9 +75,10 @@ use super::{
         background::{self, Background},
         blended::{
             drill_blast::{Chain, ChainState, DrillBlastTimeline, NEVER},
-            greedy,
+            formulation, greedy,
             input::{BlendInput, authored_tasks, interval_rate, task_active},
             plan::{PlanTargets, Route},
+            reduce::Reduced,
             replay::{BlendSolution, ChunkRow, MovementRow, ReplayReport, replay_as_published},
             rolling::{self, Carry, Stitched},
             utilisation,
@@ -471,10 +472,6 @@ fn polish(
         .iter()
         .position(|interval| interval.day() >= first_day + days + lookahead)
         .unwrap_or(input.intervals.len());
-    let size = input.movements.len() * (solved_to - first) * input.segments_per_interval.max(1);
-    if size > columns {
-        return Err(format!("{size} movement columns"));
-    }
     let mut carry = carried(input, best, first);
     let window = rolling::Window {
         first,
@@ -482,6 +479,10 @@ fn polish(
         end: solved_to,
     };
     let local = carry.window_input(input, window);
+    let size = formulation::movement_columns(&Reduced::new(&local).input);
+    if size > columns {
+        return Err(format!("{size} movement columns"));
+    }
     // Every block where the best schedule leaves it by the end of the kept
     // days.
     let left_by_then = Window::opening(input, &best.solution, None, first_day + days, 0).remaining;
@@ -514,13 +515,13 @@ fn polish(
     };
     // The window's own objective prices its grade targets on its days
     // alone; the replay's figure is the one reported, as when stitching.
+    // Only the stitched schedule's replay, over the whole horizon, decides
+    // validity: the window's own holds the window to clearance deadlines
+    // after its end, which the hours after it meet.
     let mut polished = polished;
     let Some(checked) = replay_as_published(&local, &mut polished, cancel) else {
         return Ok(None);
     };
-    if !checked.is_valid() {
-        return Ok(None);
-    }
     let count = input.intervals.len();
     if end == count {
         return Ok(stitch(input, best, first, &[(whole(first, end), &polished)], cancel));
@@ -705,12 +706,15 @@ struct LongTerm {
 }
 
 impl LongTerm {
-    fn start(input: &BlendInput, limit: Duration, ending: &Arc<AtomicBool>) -> Option<Self> {
-        let (input, ending) = (input.clone(), Arc::clone(ending));
+    fn start(input: &BlendInput, first: &BlendSolution, limit: Duration, ending: &Arc<AtomicBool>) -> Option<Self> {
+        let (input, first, ending) = (input.clone(), first.clone(), Arc::clone(ending));
         let (sender, planned) = std::sync::mpsc::channel();
         let worker = background::spawn("schedule-long-term", move || {
             let started = Instant::now();
-            let (parcelled, _) = super::parcels::parcels(&input);
+            let (parcelled, candidates) = super::parcels::parcels(&input);
+            // The first schedule starts it: its flags, fixed, leave the
+            // solver a plan to improve on from the outset.
+            let seed = super::parcels::seed(&first, &candidates);
             let left = limit.saturating_sub(started.elapsed());
             if left.is_zero() || ending.load(Ordering::Relaxed) {
                 return;
@@ -720,7 +724,7 @@ impl LongTerm {
                 relative_gap: LONG_TERM_GAP,
                 relax: false,
             };
-            let _ = sender.send((LONG_TERM_DAYS, plan::long_term(&parcelled, None, LONG_TERM_DAYS, settings, &ending)));
+            let _ = sender.send((LONG_TERM_DAYS, plan::long_term(&parcelled, Some(&seed), LONG_TERM_DAYS, settings, &ending)));
         });
         match worker {
             Ok(worker) => Some(Self {
@@ -917,7 +921,7 @@ pub(crate) fn run(
         .then(|| Relaxations::start(input, horizon_days, settings.budget, &ending))
         .flatten();
     let mut long_term = (settings.background_bound && !cancel.load(Ordering::Relaxed))
-        .then(|| LongTerm::start(input, settings.budget.saturating_sub(started.elapsed()), &ending))
+        .then(|| LongTerm::start(input, &best.solution, settings.budget.saturating_sub(started.elapsed()), &ending))
         .flatten();
     // What the latest plan of each day promised from its movements.
     let mut promised: BTreeMap<u32, f64> = BTreeMap::new();
