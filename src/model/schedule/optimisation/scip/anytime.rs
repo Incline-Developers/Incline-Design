@@ -703,25 +703,87 @@ fn relaxed(relaxations: &Option<Relaxations>, bound: &mut Option<f64>) -> Option
     relaxations.as_ref()?.take(bound)
 }
 
+/// The routing LP holds digging and durations, so intermediate steps keep
+/// the same physical capacities. Reclaim grades are nonlinear, however:
+/// judge a partial step rather than trusting the linearised full move.
+fn routing_step(opening: &BlendSolution, proposed: &BlendSolution, fraction: f64) -> BlendSolution {
+    let mut tonnes: BTreeMap<(usize, usize, usize), f64> = BTreeMap::new();
+    for (solution, weight) in [(opening, 1.0 - fraction), (proposed, fraction)] {
+        for row in &solution.movements {
+            *tonnes.entry((row.candidate, row.interval, row.segment)).or_default() += weight * row.tonnes_t;
+        }
+    }
+    let movements = tonnes
+        .into_iter()
+        .filter(|(_, tonnes)| *tonnes > 0.0)
+        .map(|((candidate, interval, segment), tonnes_t)| MovementRow {
+            candidate,
+            interval,
+            segment,
+            tonnes_t,
+        })
+        .collect();
+    BlendSolution { movements, ..opening.clone() }
+}
+
 /// `best` rerouted window by window by `reserve`'s program, each window kept
 /// as it improves, so a deadline (`ends`) inside one keeps what the windows
 /// before it found. What happened, for the record.
 fn reroute_best(input: &BlendInput, groups: &routing::Groups, best: &mut Best, value: &mut f64, reserve: routing::Reserve, ends: Instant, cancel: &AtomicBool) -> String {
     let stop: solver::Interrupt = Arc::new(move || Instant::now() >= ends);
     let mut notes: Vec<String> = Vec::new();
-    for (pass, index) in (0..reserve.passes).flat_map(|pass| (0..reserve.windows).map(move |index| (pass, index))) {
+    // First keep the reserved passes' gains. A wider linearised move can
+    // give a worse direction even after backtracking, so try it only in the
+    // time those passes leave, without cutting the digging search short.
+    // Refine with smaller moves afterwards: the changed pile blends make
+    // the next linearisation more accurate near its new opening schedule.
+    let passes = reserve.passes + 3 * usize::from(reserve.program != routing::Program::Held);
+    for (pass, index) in (0..passes).flat_map(|pass| (0..reserve.windows).map(move |index| (pass, index))) {
+        if Instant::now() >= ends || cancel.load(Ordering::Relaxed) {
+            break;
+        }
         let window = routing::window(input, reserve.windows, index);
-        let note = match routing::reroute(input, groups, &best.solution, reserve.program, pass > 0, window.as_ref(), stop.clone()) {
-            Ok(mut solution) => match replay_as_published(input, &mut solution, cancel) {
-                Some(replay) if replay.is_valid() && replay.ranked_objective() > *value => {
-                    let gain = replay.ranked_objective() - *value;
-                    *value = replay.ranked_objective();
-                    *best = Best { solution, replay };
-                    format!("{gain:.0} better")
+        let extra = pass >= reserve.passes;
+        let reach = if extra {
+            1.0 / (pass - reserve.passes + 1) as f64
+        } else if pass > 0 {
+            0.3
+        } else {
+            0.0
+        };
+        let note = match routing::reroute(input, groups, &best.solution, reserve.program, reach, window.as_ref(), stop.clone()) {
+            Ok(mut solution) => {
+                let opening = extra.then(|| best.solution.clone());
+                let proposed = opening.as_ref().map(|_| solution.clone());
+                let mut step = 1.0;
+                let mut judged = replay_as_published(input, &mut solution, cancel);
+                if let (Some(opening), Some(proposed)) = (&opening, &proposed) {
+                    for fraction in [0.5, 0.25, 0.75] {
+                        if Instant::now() >= ends || cancel.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        let mut partial = routing_step(opening, proposed, fraction);
+                        if let Some(replay) = replay_as_published(input, &mut partial, cancel)
+                            && replay.is_valid()
+                            && judged.as_ref().is_none_or(|held| !held.is_valid() || replay.ranked_objective() > held.ranked_objective())
+                        {
+                            solution = partial;
+                            judged = Some(replay);
+                            step = fraction;
+                        }
+                    }
                 }
-                Some(replay) => format!("not kept: valid {}, {:.0} better", replay.is_valid(), replay.ranked_objective() - *value),
-                None => "not kept: cancelled".into(),
-            },
+                match judged {
+                    Some(replay) if replay.is_valid() && replay.ranked_objective() > *value => {
+                        let gain = replay.ranked_objective() - *value;
+                        *value = replay.ranked_objective();
+                        *best = Best { solution, replay };
+                        format!("{gain:.0} better (step {step})")
+                    }
+                    Some(replay) => format!("not kept: valid {}, {:.0} better", replay.is_valid(), replay.ranked_objective() - *value),
+                    None => "not kept: cancelled".into(),
+                }
+            }
             Err(error) => format!("not kept: {error}"),
         };
         notes.push(note);
@@ -737,7 +799,7 @@ fn reroute_best(input: &BlendInput, groups: &routing::Groups, best: &mut Best, v
     format!(
         "rerouted in {} of {} windows: {} ({program}, reserved {:.1}s)",
         notes.len(),
-        reserve.windows * reserve.passes,
+        reserve.windows * passes,
         notes.join("; "),
         reserve.time.as_secs_f64()
     )

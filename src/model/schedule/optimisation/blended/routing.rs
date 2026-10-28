@@ -192,13 +192,9 @@ pub(crate) struct Reserve {
     pub(crate) program: Program,
     pub(crate) windows: usize,
     /// How many times the horizon is rerouted: once exactly, then with each
-    /// reclaim's tonnes free within `DRAW_REACH` of the last pass's.
+    /// reclaim's tonnes free within 30% of the last pass's.
     pub(crate) passes: usize,
 }
-
-/// How far a drawing pass may move each reclaim's tonnes, as a fraction of
-/// the schedule's: its metal is linearised about them.
-const DRAW_REACH: f64 = 0.3;
 
 /// Routing choices one window takes at most. The interior point method's
 /// time grows about as their square; one window a pass costs a build, the
@@ -259,7 +255,7 @@ pub(crate) fn reroute(
     groups: &Groups,
     schedule: &BlendSolution,
     program: Program,
-    drawing: bool,
+    draw_reach: f64,
     window: Option<&std::ops::Range<usize>>,
     stop: solver::Interrupt,
 ) -> Result<BlendSolution, String> {
@@ -367,7 +363,7 @@ pub(crate) fn reroute(
     let free = program != Program::Held && tonnes_may_move(input);
     // Each reclaim's tonnes as a column, boxed about the schedule's, where
     // the reclaim may move.
-    let draw: Option<f64> = (free && drawing).then_some(DRAW_REACH);
+    let draw: Option<f64> = (free && draw_reach > 0.0).then_some(draw_reach);
     let drawing: Vec<Option<Col>> = fixed
         .iter()
         .zip(&share)
