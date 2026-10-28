@@ -1951,17 +1951,6 @@ impl MovementCells {
     }
 }
 
-/// How many movement columns the exact model of `input` has.
-pub(crate) fn movement_columns(input: &BlendInput) -> usize {
-    let openings = MovementCells::new(input);
-    let open = input
-        .movements
-        .iter()
-        .map(|candidate| input.intervals.iter().filter(|interval| openings.rate(input, candidate, **interval).is_some()).count())
-        .sum::<usize>();
-    open * input.segments_per_interval.max(1)
-}
-
 /// Which dig columns authored block order already forces to zero.
 ///
 /// Each bar's `order` rows let loader `L` dig block `b` under that bar in a

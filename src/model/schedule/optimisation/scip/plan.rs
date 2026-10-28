@@ -188,8 +188,6 @@ pub(crate) struct PlanSolve {
     pub(crate) seed_violations: Option<usize>,
     /// Planned dug tonnes per (loader index, block) over the plan.
     pub(crate) dug: BTreeMap<(usize, GroundId), f64>,
-    /// What the plan's movements earn on each day it plans.
-    pub(crate) day_values: BTreeMap<u32, f64>,
     pub(crate) status: String,
 }
 
@@ -1947,18 +1945,7 @@ fn solve_periods(
     }
     let objective = Some(answer.objective);
     let bound = answer.bound;
-    // A movement column's name ends in its period: x_l_b_p, r_b_m_d_p,
-    // rc_t_s_p and rq_t_s_d_p.
-    let mut day_values: BTreeMap<u32, f64> = BTreeMap::new();
-    for (column, name) in builder.names.iter().enumerate() {
-        if ["x_", "r_", "rc_", "rq_"].iter().any(|prefix| name.starts_with(prefix))
-            && let Some(p) = name.rsplit('_').next().and_then(|p| p.parse::<usize>().ok())
-        {
-            *day_values.entry(days[p]).or_default() += builder.cost[column] * answer.values[column];
-        }
-    }
     Ok(PlanSolve {
-        day_values,
         period_days: days.iter().copied().zip(covered.iter().cloned()).collect(),
         routes,
         objective,

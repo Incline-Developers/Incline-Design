@@ -11,28 +11,8 @@
 //! whole-horizon plan keeps nothing more, the gap is closed or the budget is
 //! spent. Every kept schedule is a replayed one, so the value only rises.
 //!
-//! When a cycle of plan windows keeps nothing, the days are polished, in
-//! order, before the windows grow: the exact hourly model of a day and a
-//! look-ahead past it, opening in the state the best schedule leaves, is
-//! solved from that schedule's own hours; only the day is kept, and the
-//! dispatch works the days after it again from where it ends. That goes
-//! after what following a plan loses - the plan sees days, not hours. The
-//! look-ahead is what makes it pay on long horizons: a day solved as though
-//! the horizon ended with it takes value now that the days after it lose
-//! more than, and the dispatch after it has to live with that. Even a day
-//! ahead is too short to see why the plan strips waste now, so a polished
-//! day must also leave every block exactly as the best schedule leaves it:
-//! polishing rearranges the hours, the plan windows decide the strategy.
-//! The ground the days after it open with is then the same, so they can
-//! keep the best schedule's own hours, which the dispatch rarely matches:
-//! those hours came from dispatches following earlier targets. The dispatch
-//! from the day's end is tried as well, and the better kept.
-//!
 //! Every candidate keeps the best schedule's hours before its window and is
-//! dispatched from the state they leave, so a polished day is not undone by
-//! a later plan window starting after it. A polished day also leaves each
-//! pile having received and given up what the best schedule's did, so the
-//! piles the days after open with hold the same tonnes.
+//! dispatched from the state they leave.
 //!
 //! Schedules are ranked as the exact solve ranks them: cashflow and the
 //! utilisation incentive. The plan values cashflow alone, so each of its
@@ -75,10 +55,9 @@ use super::{
         background::{self, Background},
         blended::{
             drill_blast::{Chain, ChainState, DrillBlastTimeline, NEVER},
-            formulation, greedy,
+            greedy,
             input::{BlendInput, authored_tasks, interval_rate, task_active},
             plan::{PlanTargets, Route},
-            reduce::Reduced,
             replay::{BlendSolution, ChunkRow, MovementRow, ReplayReport, replay_as_published},
             rolling::{self, Carry, Stitched},
             utilisation,
@@ -86,7 +65,7 @@ use super::{
     },
     plan::{self, PlanSolve, Settings, Window},
 };
-use crate::model::schedule::optimisation::{Activity, DestinationKind, GroundId, SourceId, StockpileId, TaskKind};
+use crate::model::schedule::optimisation::{Activity, GroundId, SourceId, TaskKind};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct AnytimeSettings {
@@ -94,36 +73,12 @@ pub(crate) struct AnytimeSettings {
     pub(crate) window_days: u32,
     pub(crate) step_days: u32,
     pub(crate) window_limit: Duration,
-    /// Days per polished window, and the time each gets.
-    pub(crate) polish_days: u32,
-    /// Days solved past each polished window and then discarded.
-    pub(crate) polish_lookahead_days: u32,
-    pub(crate) polish_limit: Duration,
-    /// Windows whose exact model would have more movement columns than this
-    /// are not polished.
-    pub(crate) polish_columns: usize,
     /// Solve long-term plans over the whole horizon in the background, for
     /// their targets.
     pub(crate) background_bound: bool,
     /// A gap to the bound at or below which there is nothing left worth
     /// searching for.
     pub(crate) closed_gap: f64,
-}
-
-/// Solves one window's exact hourly model from a schedule of it, within a
-/// time limit, holding what [`Hold`] says: the window's own input and
-/// schedule, in its own interval numbering. The SCIP side lives with the
-/// app's other solves.
-pub(crate) type Polisher<'a> = &'a (dyn Fn(&BlendInput, &BlendSolution, &Hold, Duration) -> Option<BlendSolution> + Sync);
-
-/// Where a polished window must leave things at the end of its interval
-/// `kept`, as the schedule it polishes does.
-pub(crate) struct Hold {
-    pub(crate) kept: usize,
-    /// What each block of the window's input (by position) holds.
-    pub(crate) blocks: Vec<(usize, f64)>,
-    /// What each pile has received and given up over the kept intervals.
-    pub(crate) piles: Vec<(StockpileId, f64, f64)>,
 }
 
 impl AnytimeSettings {
@@ -135,10 +90,6 @@ impl AnytimeSettings {
             window_days: 5,
             step_days: 3,
             window_limit: Duration::from_secs(60),
-            polish_days: 1,
-            polish_lookahead_days: 1,
-            polish_limit: Duration::from_secs(60),
-            polish_columns: 400_000,
             background_bound: true,
             closed_gap: gap_target.unwrap_or(DEFAULT_CLOSED_GAP),
         }
@@ -445,97 +396,6 @@ fn slice(best: &Best, first: usize, end: usize) -> BlendSolution {
     }
 }
 
-/// Polish `days` days from `first_day`: their exact hourly model, with
-/// `lookahead` days more solved and discarded, from `best`'s hours, then the
-/// dispatch again from where the kept days end.
-#[allow(clippy::too_many_arguments)]
-fn polish(
-    input: &BlendInput,
-    best: &Best,
-    first_day: u32,
-    days: u32,
-    lookahead: u32,
-    targets: &PlanTargets,
-    polisher: Polisher,
-    limit: Duration,
-    columns: usize,
-    cancel: &AtomicBool,
-) -> Result<Option<Best>, String> {
-    let first = input.intervals.iter().position(|interval| interval.day() >= first_day).ok_or("past the horizon")?;
-    let end = input
-        .intervals
-        .iter()
-        .position(|interval| interval.day() >= first_day + days)
-        .unwrap_or(input.intervals.len());
-    let solved_to = input
-        .intervals
-        .iter()
-        .position(|interval| interval.day() >= first_day + days + lookahead)
-        .unwrap_or(input.intervals.len());
-    let mut carry = carried(input, best, first);
-    let window = rolling::Window {
-        first,
-        committed: end - first,
-        end: solved_to,
-    };
-    let local = carry.window_input(input, window);
-    let size = formulation::movement_columns(&Reduced::new(&local).input);
-    if size > columns {
-        return Err(format!("{size} movement columns"));
-    }
-    // Every block where the best schedule leaves it by the end of the kept
-    // days.
-    let left_by_then = Window::opening(input, &best.solution, None, first_day + days, 0).remaining;
-    let mut piles: BTreeMap<StockpileId, (f64, f64)> = input.piles.iter().map(|pile| (pile.id, (0.0, 0.0))).collect();
-    for row in best.solution.movements.iter().filter(|row| (first..end).contains(&row.interval)) {
-        let candidate = &input.movements[row.candidate];
-        if let Some(DestinationKind::Stockpile(pile)) = input.destinations.iter().find(|entry| entry.id == candidate.destination).map(|entry| entry.kind)
-            && let Some(flows) = piles.get_mut(&pile)
-        {
-            flows.0 += row.tonnes_t;
-        }
-        if let SourceId::Stockpile(pile) = candidate.source
-            && let Some(flows) = piles.get_mut(&pile)
-        {
-            flows.1 += row.tonnes_t;
-        }
-    }
-    let hold = Hold {
-        kept: end - first - 1,
-        blocks: local
-            .ground
-            .iter()
-            .enumerate()
-            .map(|(index, source)| (index, left_by_then.get(&source.id).copied().unwrap_or(0.0)))
-            .collect(),
-        piles: piles.into_iter().map(|(pile, (received, reclaimed))| (pile, received, reclaimed)).collect(),
-    };
-    let Some(polished) = polisher(&local, &slice(best, first, solved_to), &hold, limit) else {
-        return Ok(None);
-    };
-    // The window's own objective prices its grade targets on its days
-    // alone; the replay's figure is the one reported, as when stitching.
-    // Only the stitched schedule's replay, over the whole horizon, decides
-    // validity: the window's own holds the window to clearance deadlines
-    // after its end, which the hours after it meet.
-    let mut polished = polished;
-    let Some(checked) = replay_as_published(&local, &mut polished, cancel) else {
-        return Ok(None);
-    };
-    let count = input.intervals.len();
-    if end == count {
-        return Ok(stitch(input, best, first, &[(whole(first, end), &polished)], cancel));
-    }
-    let kept_after = stitch(input, best, first, &[(window, &polished), (whole(end, count), &slice(best, end, count))], cancel);
-    carry.advance(input, window, &polished, &checked);
-    let tail = carry.window_input(input, whole(end, count));
-    let dispatched_after = greedy::dispatch_unreplayed(&tail, input, Some(&targets.rebased(&tail)), cancel)
-        .ok()
-        .flatten()
-        .and_then(|found| stitch(input, best, first, &[(window, &polished), (whole(end, count), &found)], cancel));
-    Ok([kept_after, dispatched_after].into_iter().flatten().max_by(|a, b| a.value().total_cmp(&b.value())))
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct Progress {
     pub(crate) elapsed_s: f64,
@@ -673,17 +533,6 @@ impl Tally {
 
 /// [`AnytimeSettings::closed_gap`] for a run with no gap target.
 const DEFAULT_CLOSED_GAP: f64 = 1e-4;
-
-/// What `solution` earns from its movements on each day.
-fn earned(input: &BlendInput, solution: &BlendSolution) -> BTreeMap<u32, f64> {
-    let mut earned: BTreeMap<u32, f64> = BTreeMap::new();
-    for row in &solution.movements {
-        if let (Some(interval), Some(candidate)) = (input.intervals.get(row.interval), input.movements.get(row.candidate)) {
-            *earned.entry(interval.day()).or_default() += row.tonnes_t * candidate.value_per_tonne().unwrap_or(0.0);
-        }
-    }
-    earned
-}
 
 /// The period length of the long-term plan solved beside the search. A
 /// second plan over four days, after it, took 20-40 s on the worlds with
@@ -856,14 +705,7 @@ fn relaxed(relaxations: &Option<Relaxations>, bound: &mut Option<f64>) -> Option
 
 /// Search from `start`, a schedule of `input` the replay accepted, until the
 /// budget is spent, `cancel` is set or there is nothing left to find.
-pub(crate) fn run(
-    original: &BlendInput,
-    start: (BlendSolution, ReplayReport),
-    settings: AnytimeSettings,
-    polisher: Option<Polisher>,
-    cancel: &Arc<AtomicBool>,
-    mut report: impl FnMut(&Progress),
-) -> Found {
+pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), settings: AnytimeSettings, cancel: &Arc<AtomicBool>, mut report: impl FnMut(&Progress)) -> Found {
     let input = original;
     let started = Instant::now();
     let mut best = Best {
@@ -923,8 +765,6 @@ pub(crate) fn run(
     let mut long_term = (settings.background_bound && !cancel.load(Ordering::Relaxed))
         .then(|| LongTerm::start(input, &best.solution, settings.budget.saturating_sub(started.elapsed()), &ending))
         .flatten();
-    // What the latest plan of each day promised from its movements.
-    let mut promised: BTreeMap<u32, f64> = BTreeMap::new();
 
     let days: Vec<u32> = input.intervals.iter().map(|interval| interval.day()).collect::<BTreeSet<_>>().into_iter().collect();
     let spread = PlanTargets::value_spread(input);
@@ -938,8 +778,6 @@ pub(crate) fn run(
     // Where a pass a long-term plan interrupted carries on.
     let mut resume: Option<usize> = None;
 
-    // Whether the days have been polished since a plan window was last kept.
-    let mut polished_since = false;
     'passes: loop {
         let held = adopted.clone();
         let input: &BlendInput = held.as_deref().unwrap_or(original);
@@ -1006,7 +844,6 @@ pub(crate) fn run(
                         value = found.value();
                         best = found;
                         targets = candidate;
-                        polished_since = false;
                         followed = true;
                         kept += 1;
                         record(
@@ -1029,91 +866,6 @@ pub(crate) fn run(
         if closed {
             record(value, bound, "gap closed".into());
             break;
-        }
-        if quiet_passes >= step
-            && let Some(polisher) = polisher
-            && !polished_since
-        {
-            // A whole cycle of plan windows kept nothing: polish each day
-            // before the windows grow.
-            polished_since = true;
-            let mut kept_any = false;
-            // In order: a day polished first can shut off what the day before
-            // it would have found. How far each falls short of its plan is
-            // logged.
-            let earning = earned(input, &best.solution);
-            let order: Vec<(f64, u32)> = days
-                .iter()
-                .step_by(settings.polish_days.max(1) as usize)
-                .map(|day| {
-                    (
-                        promised.get(day).map_or(f64::NEG_INFINITY, |promise| promise - earning.get(day).copied().unwrap_or(0.0)),
-                        *day,
-                    )
-                })
-                .collect();
-            for (short, day) in order {
-                let held = adopted.clone();
-                let input: &BlendInput = held.as_deref().unwrap_or(original);
-                let left = settings.budget.saturating_sub(started.elapsed());
-                if left.is_zero() || cancel.load(Ordering::Relaxed) {
-                    break 'passes;
-                }
-                let polishing = Instant::now();
-                match polish(
-                    input,
-                    &best,
-                    day,
-                    settings.polish_days.max(1),
-                    settings.polish_lookahead_days,
-                    &targets,
-                    polisher,
-                    settings.polish_limit.min(left),
-                    settings.polish_columns,
-                    cancel,
-                ) {
-                    Ok(Some(found)) if found.value() > value + 1e-7 * value.abs().max(1.0) => {
-                        value = found.value();
-                        best = found;
-                        kept_any = true;
-                        kept += 1;
-                        record(
-                            value,
-                            bound,
-                            format!("polished day {day} (short {short:.0}) in {:.1}s: kept", polishing.elapsed().as_secs_f64()),
-                        );
-                    }
-                    Ok(Some(found)) => record(
-                        value,
-                        bound,
-                        format!(
-                            "polished day {day} (short {short:.0}) in {:.1}s: {:.0}, no better",
-                            polishing.elapsed().as_secs_f64(),
-                            found.value()
-                        ),
-                    ),
-                    Ok(None) => record(
-                        value,
-                        bound,
-                        format!("polished day {day} (short {short:.0}) in {:.1}s: no schedule", polishing.elapsed().as_secs_f64()),
-                    ),
-                    Err(reason) => {
-                        record(value, bound, format!("days not polished: {reason}"));
-                        break;
-                    }
-                }
-                if let Some(note) = relaxed(&relaxation, &mut bound) {
-                    record(value, bound, note);
-                }
-                if long_term.as_mut().is_some_and(|long_term| long_term.ready()) {
-                    // Tried at the top of the next pass.
-                    break;
-                }
-            }
-            if kept_any {
-                quiet_passes = 0;
-                continue;
-            }
         }
         if quiet_passes >= step {
             // A whole cycle of offsets kept nothing: longer windows.
@@ -1179,7 +931,6 @@ pub(crate) fn run(
             };
             tally.plan(&planned);
             let covered: BTreeSet<u32> = (first_day..first_day + length).collect();
-            promised.extend(planned.day_values.iter().map(|(day, earned)| (*day, *earned)));
             // Each weight is dispatched at once, side by side; the first of the
             // best is chosen, as it would be one after another. A round is
             // the tails after the best schedule's hours on the timeline the
@@ -1266,7 +1017,6 @@ pub(crate) fn run(
                 improved = true;
                 kept += 1;
                 tally.kept += 1;
-                polished_since = false;
                 record(
                     value,
                     bound,
