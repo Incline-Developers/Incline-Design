@@ -703,6 +703,40 @@ fn relaxed(relaxations: &Option<Relaxations>, bound: &mut Option<f64>) -> Option
     relaxations.as_ref()?.take(bound)
 }
 
+/// `best` rerouted window by window by `reserve`'s program, each window kept
+/// as it improves, so a deadline (`ends`) inside one keeps what the windows
+/// before it found. What happened, for the record.
+fn reroute_best(input: &BlendInput, groups: &routing::Groups, best: &mut Best, value: &mut f64, reserve: routing::Reserve, ends: Instant, cancel: &AtomicBool) -> String {
+    let stop: solver::Interrupt = Arc::new(move || Instant::now() >= ends);
+    let mut notes: Vec<String> = Vec::new();
+    for index in 0..reserve.windows {
+        let window = routing::window(input, reserve.windows, index);
+        let note = match routing::reroute(input, groups, &best.solution, reserve.program, window.as_ref(), stop.clone()) {
+            Ok(mut solution) => match replay_as_published(input, &mut solution, cancel) {
+                Some(replay) if replay.is_valid() && replay.ranked_objective() > *value => {
+                    let gain = replay.ranked_objective() - *value;
+                    *value = replay.ranked_objective();
+                    *best = Best { solution, replay };
+                    format!("{gain:.0} better")
+                }
+                Some(replay) => format!("not kept: valid {}, {:.0} better", replay.is_valid(), replay.ranked_objective() - *value),
+                None => "not kept: cancelled".into(),
+            },
+            Err(error) => format!("not kept: {error}"),
+        };
+        notes.push(note);
+        if Instant::now() >= ends {
+            break;
+        }
+    }
+    let program = match reserve.program {
+        routing::Program::Held => "pile tonnes held",
+        routing::Program::Moving => "pile tonnes moving",
+        routing::Program::Opening => "pile tonnes moving, new cells open",
+    };
+    format!("rerouted in {} of {} windows: {} ({program}, reserved {:.1}s)", notes.len(), reserve.windows, notes.join("; "), reserve.time.as_secs_f64())
+}
+
 /// Search from `start`, a schedule of `input` the replay accepted, until the
 /// budget is spent, `cancel` is set or there is nothing left to find.
 pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), settings: AnytimeSettings, cancel: &Arc<AtomicBool>, mut report: impl FnMut(&Progress)) -> Found {
@@ -1086,43 +1120,10 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
     if !reserve.time.is_zero() && !cancel.load(Ordering::Relaxed) {
         let timed = adopted.as_deref().unwrap_or(input);
         let ends = started + deadline.saturating_sub(Duration::from_secs_f64(routing::REPLAY_S));
-        let stop: solver::Interrupt = Arc::new(move || Instant::now() >= ends);
         let rerouting = Instant::now();
         let begun = started.elapsed().as_secs_f64();
-        // Window by window, each kept as it improves, so a deadline inside
-        // one keeps what the windows before it found.
-        let mut notes: Vec<String> = Vec::new();
-        for index in 0..reserve.windows {
-            let window = routing::window(timed, reserve.windows, index);
-            let note = match routing::reroute(timed, &groups, &best.solution, reserve.tonnes_move, window.as_ref(), stop.clone()) {
-                Ok(mut solution) => match replay_as_published(timed, &mut solution, cancel) {
-                    Some(replay) if replay.is_valid() && replay.ranked_objective() > value => {
-                        let gain = replay.ranked_objective() - value;
-                        value = replay.ranked_objective();
-                        best = Best { solution, replay };
-                        format!("{gain:.0} better")
-                    }
-                    Some(replay) => format!("not kept: valid {}, {:.0} better", replay.is_valid(), replay.ranked_objective() - value),
-                    None => "not kept: cancelled".into(),
-                },
-                Err(error) => format!("not kept: {error}"),
-            };
-            notes.push(note);
-            if Instant::now() >= ends {
-                break;
-            }
-        }
-        let note = format!("rerouted in {} of {} windows: {}", notes.len(), reserve.windows, notes.join("; "));
-        record(
-            value,
-            bound,
-            format!(
-                "{note} ({}, reserved {:.1}s, began at {begun:.1}s, took {:.1}s)",
-                if reserve.tonnes_move { "pile tonnes moving" } else { "pile tonnes held" },
-                reserve.time.as_secs_f64(),
-                rerouting.elapsed().as_secs_f64()
-            ),
-        );
+        let note = reroute_best(timed, &groups, &mut best, &mut value, reserve, ends, cancel);
+        record(value, bound, format!("{note}, began at {begun:.1}s, took {:.1}s", rerouting.elapsed().as_secs_f64()));
     }
     record(value, bound, tally.summary());
     record(value, bound, "done".into());

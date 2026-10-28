@@ -77,7 +77,7 @@ fn pile_of(input: &BlendInput, destination: DestinationId) -> Option<StockpileId
     }
 }
 
-fn group(input: &BlendInput, groups: &Groups, schedule: &BlendSolution, window: Option<&std::ops::Range<usize>>) -> Result<Grouped, String> {
+fn group(input: &BlendInput, groups: &Groups, schedule: &BlendSolution, window: Option<&std::ops::Range<usize>>, open: bool) -> Result<Grouped, String> {
     let mut dug: BTreeMap<(usize, usize, usize), f64> = BTreeMap::new();
     let mut fixed: Vec<MovementRow> = Vec::new();
     let mut held: BTreeMap<(usize, usize, usize), f64> = BTreeMap::new();
@@ -93,6 +93,28 @@ fn group(input: &BlendInput, groups: &Groups, schedule: &BlendSolution, window: 
             *receipts.entry((pile, row.interval, row.segment)).or_default() += row.tonnes_t;
         }
     }
+    // When `open`, a pile may also receive where the schedule did not, as
+    // its rules allow: on a day it builds, not while an exclusive pile is
+    // reclaimed, and rested again before its next reclaim.
+    let mut reclaimed_at: BTreeMap<StockpileId, BTreeSet<usize>> = BTreeMap::new();
+    for row in schedule.movements.iter().filter(|row| row.tonnes_t > 0.0) {
+        if let SourceId::Stockpile(pile) = input.movements[row.candidate].source {
+            reclaimed_at.entry(pile).or_default().insert(row.interval);
+        }
+    }
+    let mut receivable: BTreeMap<(StockpileId, usize), bool> = BTreeMap::new();
+    let mut may_receive = |pile: StockpileId, at: usize| {
+        *receivable.entry((pile, at)).or_insert_with(|| {
+            let Some(blend) = input.piles.iter().find(|entry| entry.id == pile) else { return false };
+            let interval = input.intervals[at];
+            let reclaims = reclaimed_at.get(&pile);
+            blend.builds(interval)
+                && !(blend.exclusive && reclaims.is_some_and(|reclaims| reclaims.contains(&at)))
+                && reclaims
+                    .and_then(|reclaims| reclaims.range(at + 1..).next())
+                    .is_none_or(|&next| blend.rested(interval.end_h, input.intervals[next]))
+        })
+    };
     let mut choices = Vec::with_capacity(dug.len());
     for ((group, interval, segment), tonnes) in dug {
         // Outside the window, each candidate keeps what it moved.
@@ -110,7 +132,7 @@ fn group(input: &BlendInput, groups: &Groups, schedule: &BlendSolution, window: 
         let mut alike: BTreeMap<(DestinationId, TruckClassId, u64), usize> = BTreeMap::new();
         for &option in &groups.options[group] {
             let movement = &input.movements[option];
-            if pile_of(input, movement.destination).is_some_and(|pile| !receipts.contains_key(&(pile, interval, segment))) {
+            if pile_of(input, movement.destination).is_some_and(|pile| !receipts.contains_key(&(pile, interval, segment)) && !(open && may_receive(pile, interval))) {
                 continue;
             }
             let rank = |index: usize| {
@@ -149,12 +171,25 @@ fn tonnes_may_move(input: &BlendInput) -> bool {
         && !input.tasks.iter().any(|task| matches!(task.kind, TaskKind::Reclaim { maximum_t: Some(_), .. }))
 }
 
-/// The time a search leaves at its end for rerouting, whether pile tonnes
-/// may move in it, and how many windows the horizon is rerouted in.
+/// What a reroute may change beyond which destination each dug tonne takes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Program {
+    /// Nothing: each pile's receipts are held.
+    #[default]
+    Held,
+    /// Pile intake, stock and reclaim tonnes, in the cells the schedule
+    /// received in.
+    Moving,
+    /// Those, and receipts in any cell the pile's rules allow.
+    Opening,
+}
+
+/// The time a search leaves at its end for rerouting, what the reroute may
+/// change, and how many windows the horizon is rerouted in.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Reserve {
     pub(crate) time: Duration,
-    pub(crate) tonnes_move: bool,
+    pub(crate) program: Program,
     pub(crate) windows: usize,
 }
 
@@ -165,29 +200,38 @@ const WINDOW_CHOICES: f64 = 130_000.0;
 
 /// The time to leave a search's end for rerouting `schedule`, judged by the
 /// number of routing choices it has: what the interior point method took on
-/// the test worlds side by side, with a margin, window by window. Pile
-/// tonnes move with the routing when that fits in 60% of `budget`;
-/// otherwise only the routing moves, over the whole horizon at once.
+/// the test worlds side by side, with a margin, window by window. The
+/// widest program that fits in 60% of `budget` is chosen; the held one,
+/// over the whole horizon at once, when nothing wider does.
 pub(crate) fn reserve(input: &BlendInput, groups: &Groups, schedule: &BlendSolution, budget: Duration) -> Reserve {
-    let Ok(grouped) = group(input, groups, schedule, None) else {
+    let most = budget.mul_f64(0.6);
+    let choices = |open: bool| {
+        group(input, groups, schedule, None, open).map(|grouped| grouped.dug.iter().map(|(.., options)| options.len()).filter(|&count| count > 1).sum::<usize>() as f64)
+    };
+    if tonnes_may_move(input) {
+        for program in [Program::Opening, Program::Moving] {
+            let Ok(columns) = choices(program == Program::Opening) else {
+                return Reserve::default();
+            };
+            let windows = (columns / WINDOW_CHOICES).ceil().max(1.0);
+            let each = columns / windows;
+            let time = Duration::from_secs_f64((1.5 * windows * (1.9e-9 * each * each + 2.0)).max(6.0) + REPLAY_S);
+            if time <= most {
+                return Reserve {
+                    time,
+                    program,
+                    windows: windows as usize,
+                };
+            }
+        }
+    }
+    let Ok(columns) = choices(false) else {
         return Reserve::default();
     };
-    let columns = grouped.dug.iter().map(|(.., options)| options.len()).filter(|&count| count > 1).sum::<usize>() as f64;
-    let most = budget.mul_f64(0.6);
-    let windows = (columns / WINDOW_CHOICES).ceil().max(1.0);
-    let each = columns / windows;
-    let moving = Duration::from_secs_f64((1.5 * windows * (1.9e-9 * each * each + 2.0)).max(6.0) + REPLAY_S);
-    if tonnes_may_move(input) && moving <= most {
-        return Reserve {
-            time: moving,
-            tonnes_move: true,
-            windows: windows as usize,
-        };
-    }
     let held = Duration::from_secs_f64((2.0 * (2.1e-4 * columns - 8.0)).max(6.0) + REPLAY_S);
     Reserve {
         time: held.min(most),
-        tonnes_move: false,
+        program: Program::Held,
         windows: 1,
     }
 }
@@ -205,11 +249,11 @@ pub(crate) fn reroute(
     input: &BlendInput,
     groups: &Groups,
     schedule: &BlendSolution,
-    tonnes_move: bool,
+    program: Program,
     window: Option<&std::ops::Range<usize>>,
     stop: solver::Interrupt,
 ) -> Result<BlendSolution, String> {
-    let Grouped { dug, fixed, receipts } = group(input, groups, schedule, window)?;
+    let Grouped { dug, fixed, receipts } = group(input, groups, schedule, window, program == Program::Opening && tonnes_may_move(input))?;
     let intervals = input.intervals.len();
     let mut problem = LinearProgram::default();
     // Each choice's entries: the candidate, its interval and segment, and its
@@ -310,7 +354,7 @@ pub(crate) fn reroute(
         // A pile drawn to its last tonne keeps nothing, not rounding.
         if fraction > 1.0 - 1e-9 { 0.0 } else { 1.0 - fraction }
     };
-    let free = tonnes_move && tonnes_may_move(input);
+    let free = program != Program::Held && tonnes_may_move(input);
 
     // Each pile's stock at the opening of each interval, a column plus a
     // constant: what it held, less the held fraction reclaimed, plus what it
