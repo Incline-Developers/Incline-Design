@@ -14,10 +14,10 @@
 //!   one material with their fractions added. Most of a block's materials
 //!   are often like this.
 //!
-//! A schedule of the original input maps onto the reduced one by adding
-//! tonnes; one of the reduced input maps back by splitting each merged
-//! movement over its materials by their fractions, which is exactly the
-//! split the `portion` rows ask of the original.
+//! A run works on the reduced input throughout (`app::schedule_solve`), and
+//! its schedule maps back by splitting each merged movement over its
+//! materials by their fractions, which is exactly the split the `portion`
+//! rows ask of the original.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -29,8 +29,6 @@ use crate::model::schedule::optimisation::{Activity, DestinationId, DestinationK
 
 pub(crate) struct Reduced {
     pub(crate) input: BlendInput,
-    /// Each original candidate's reduced candidate.
-    forward: Vec<usize>,
     /// Each reduced candidate's original candidates, with each one's share
     /// of its tonnes.
     back: Vec<Vec<(usize, f64)>>,
@@ -162,33 +160,7 @@ impl Reduced {
         let mut reduced = input.clone();
         reduced.ground = ground;
         reduced.movements = movements;
-        Self { input: reduced, forward, back }
-    }
-
-    /// `solution`, a schedule of the original input, as one of the reduced.
-    pub(crate) fn seed(&self, solution: &BlendSolution) -> BlendSolution {
-        let mut tonnes: BTreeMap<(usize, usize, usize), f64> = BTreeMap::new();
-        for row in &solution.movements {
-            *tonnes.entry((self.forward[row.candidate], row.interval, row.segment)).or_default() += row.tonnes_t;
-        }
-        let mut seeded = solution.clone();
-        seeded.movements = tonnes
-            .into_iter()
-            .map(|((candidate, interval, segment), tonnes_t)| MovementRow {
-                candidate,
-                interval,
-                segment,
-                tonnes_t,
-            })
-            .collect();
-        for chunk in &mut seeded.chunks {
-            let mut receipts: BTreeMap<usize, f64> = BTreeMap::new();
-            for &(candidate, tonnes) in &chunk.receipts {
-                *receipts.entry(self.forward[candidate]).or_default() += tonnes;
-            }
-            chunk.receipts = receipts.into_iter().collect();
-        }
-        seeded
+        Self { input: reduced, back }
     }
 
     /// `solution`, a schedule of the reduced input, as one of the original.
