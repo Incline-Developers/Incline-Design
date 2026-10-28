@@ -1975,53 +1975,47 @@ impl Lu {
                 let jpivot = u(is[pivotcol + k]);
                 let ipivot = u(is[pivotrow + k]);
                 let x = work1[jpivot] / self.col_pivot[jpivot];
-                for pos in is[wbegin + jpivot]..is[wend + jpivot] {
-                    work1[u(self.wi[u(pos)])] -= x * self.wx[u(pos)];
+                let range = u(is[wbegin + jpivot])..u(is[wend + jpivot]);
+                for (&i, &value) in self.wi[range.clone()].iter().zip(&self.wx[range]) {
+                    work1[u(i)] -= x * value;
                 }
                 lhs[ipivot] = x;
             }
             for t in (0..nforrest).rev() {
                 let ipivot = u(is[eta_row + t]);
                 let x = lhs[ipivot];
-                for pos in is[rbegin + t]..is[rbegin + t + 1] {
-                    let i = u(self.li[u(pos)]);
-                    lhs[i] -= x * self.lx[u(pos)];
+                let range = u(is[rbegin + t])..u(is[rbegin + t + 1]);
+                for (&i, &value) in self.li[range.clone()].iter().zip(&self.lx[range]) {
+                    lhs[u(i)] -= x * value;
                 }
             }
             for k in (0..mu).rev() {
                 let mut x = 0.0;
-                let mut pos = is[lbegin_p + k];
-                loop {
-                    let i = self.li[u(pos)];
-                    if i < 0 {
-                        break;
-                    }
-                    x += lhs[u(i)] * self.lx[u(pos)];
-                    pos += 1;
+                let begin = u(is[lbegin_p + k]);
+                let end = u(is[lbegin_p + k + 1]) - 1;
+                for (&i, &value) in self.li[begin..end].iter().zip(&self.lx[begin..end]) {
+                    x += lhs[u(i)] * value;
                 }
                 lhs[u(is[p + k])] -= x;
             }
         } else {
             for k in 0..mu {
                 let mut x = 0.0;
-                let mut pos = is[ltbegin_p + k];
-                loop {
-                    let i = self.li[u(pos)];
-                    if i < 0 {
-                        break;
-                    }
-                    x += work1[u(i)] * self.lx[u(pos)];
-                    pos += 1;
+                let begin = u(is[ltbegin_p + k]);
+                // L and its transpose are packed with one terminator per
+                // column. Their extents stay fixed through basis updates.
+                let end = u(if k + 1 < mu { is[ltbegin_p + k + 1] } else { 2 * is[lbegin_p + mu] }) - 1;
+                for (&i, &value) in self.li[begin..end].iter().zip(&self.lx[begin..end]) {
+                    x += work1[u(i)] * value;
                 }
                 work1[u(is[p + k])] -= x;
             }
-            let mut pos = is[rbegin];
             for t in 0..nforrest {
                 let ipivot = u(is[eta_row + t]);
                 let mut x = 0.0;
-                while pos < is[rbegin + t + 1] {
-                    x += work1[u(self.li[u(pos)])] * self.lx[u(pos)];
-                    pos += 1;
+                let range = u(is[rbegin + t])..u(is[rbegin + t + 1]);
+                for (&i, &value) in self.li[range.clone()].iter().zip(&self.lx[range]) {
+                    x += work1[u(i)] * value;
                 }
                 work1[ipivot] -= x;
             }
