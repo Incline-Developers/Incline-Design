@@ -1205,6 +1205,9 @@ impl<'a> State<'a> {
                 }
             }
             for ((loader, destination), cols) in flows {
+                let value = plan.values.get(&(loader, destination, day)).copied().unwrap_or(1.0);
+                let follow = plan.follow * value;
+                let overrun = plan.overrun * value;
                 let planned = plan.routes.get(&(loader, destination, day)).copied().unwrap_or(0.0);
                 // A late release can postpone a route's work across midnight.
                 // Keep its missed tonnes due, but do not pull future days'
@@ -1219,17 +1222,17 @@ impl<'a> State<'a> {
                     .sum();
                 let due = (earlier + planned * paced - delivered).max(0.0);
                 let mut over: Vec<(Col, f64)> = cols.iter().map(|col| (*col, 1.0)).collect();
-                if due > NEGLIGIBLE_T && plan.follow > 0.0 {
-                    let kept = problem.add_column(plan.follow, 0.0..=due);
-                    incentive.push((kept, plan.follow));
+                if due > NEGLIGIBLE_T && follow > 0.0 {
+                    let kept = problem.add_column(follow, 0.0..=due);
+                    incentive.push((kept, follow));
                     let mut row = vec![(kept, 1.0)];
                     row.extend(cols.iter().map(|col| (*col, -1.0)));
                     problem.add_row(..=0.0, row);
                     over.push((kept, -1.0));
                 }
-                if plan.overrun > 0.0 {
-                    let past = problem.add_column(-plan.overrun, 0.0..);
-                    incentive.push((past, -plan.overrun));
+                if overrun > 0.0 {
+                    let past = problem.add_column(-overrun, 0.0..);
+                    incentive.push((past, -overrun));
                     over.push((past, -1.0));
                     problem.add_row(..=0.0, over);
                 }

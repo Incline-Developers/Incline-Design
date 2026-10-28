@@ -22,6 +22,8 @@ pub(crate) struct PlanTargets {
     pub(crate) follow: f64,
     /// Objective cost per tonne past the paced target.
     pub(crate) overrun: f64,
+    /// Relative route values on days still guided by the long-term plan.
+    pub(crate) values: BTreeMap<(usize, DestinationId, u32), f64>,
     /// Start and end hour of each day the horizon touches.
     days: BTreeMap<u32, (f64, f64)>,
     /// Days the plan covers. Any other day is worked as if there were no
@@ -42,6 +44,7 @@ impl PlanTargets {
             routes,
             follow,
             overrun,
+            values: BTreeMap::new(),
             days,
             planned,
         }
@@ -52,7 +55,32 @@ impl PlanTargets {
     pub(crate) fn rebased(&self, input: &BlendInput) -> Self {
         let mut rebased = Self::new(input, self.routes.clone(), self.follow, self.overrun);
         rebased.planned = self.planned.clone();
+        rebased.values = self.values.clone();
         rebased
+    }
+
+    /// Weekly plans have more freedom than the hourly dispatch. When their
+    /// routes compete, preserve valuable deliveries before cheap production.
+    /// Daily window targets retain their full strength to guide stripping.
+    pub(crate) fn valued(mut self, input: &BlendInput) -> Self {
+        let loaders: BTreeMap<_, _> = input.loaders.iter().enumerate().map(|(index, loader)| (loader.id, index)).collect();
+        let mut values = BTreeMap::<(usize, DestinationId), f64>::new();
+        for movement in &input.movements {
+            let Some(&loader) = loaders.get(&movement.loader) else { continue };
+            let value = movement.value_per_tonne().unwrap_or(0.0).max(0.0);
+            let entry = values.entry((loader, movement.destination)).or_default();
+            *entry = entry.max(value);
+        }
+        let highest = values.values().copied().fold(0.0_f64, f64::max);
+        if highest > 0.0 {
+            self.values.clear();
+            for ((loader, destination), value) in values {
+                for &day in &self.planned {
+                    self.values.insert((loader, destination, day), value / highest);
+                }
+            }
+        }
+        self
     }
 
     /// These targets with `days` replaced by `routes`' for them.
@@ -70,6 +98,12 @@ impl PlanTargets {
             routes: merged,
             follow,
             overrun,
+            values: self
+                .values
+                .iter()
+                .filter(|((_, _, day), _)| !days.contains(day))
+                .map(|(key, value)| (*key, *value))
+                .collect(),
             days: self.days.clone(),
             planned,
         }

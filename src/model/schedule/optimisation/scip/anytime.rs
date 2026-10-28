@@ -213,6 +213,9 @@ fn targets_fingerprint(targets: &PlanTargets) -> u64 {
         (loader, destination.0, day, tonnes.to_bits()).hash(&mut hasher);
     }
     (targets.follow.to_bits(), targets.overrun.to_bits()).hash(&mut hasher);
+    for (key, value) in &targets.values {
+        (key, value.to_bits()).hash(&mut hasher);
+    }
     targets.planned.hash(&mut hasher);
     hasher.finish()
 }
@@ -976,7 +979,7 @@ pub(crate) fn run(
                         break;
                     }
                     for (follow, overrun) in WEIGHTS {
-                        let candidate = targets.replacing(&all, &routes, follow * spread, overrun * spread);
+                        let candidate = targets.replacing(&all, &routes, follow * spread, overrun * spread).valued(input);
                         let tried = if live_round {
                             redispatch_live(input, live, &best, 0, None, &candidate, &Timing::default(), cancel)
                         } else {
