@@ -1216,12 +1216,16 @@ impl<'a> State<'a> {
                 }
             }
             // How far the day's digging to each destination is behind its
-            // paced targets so far: crusher room reclaim may fill.
+            // paced targets so far, and what it is still owed for the day:
+            // crusher room reclaim may fill is what the digging has missed
+            // and what it will not need.
             let mut behind: BTreeMap<DestinationId, f64> = BTreeMap::new();
+            let mut owed: BTreeMap<DestinationId, f64> = BTreeMap::new();
             for (&(loader, activity, destination, target_day), &tonnes) in &plan.routes {
                 if activity == Activity::Dig && target_day == day {
                     let delivered = self.followed.get(&(loader, Activity::Dig, destination, day)).copied().unwrap_or(0.0);
                     *behind.entry(destination).or_default() += (tonnes * paced - delivered).max(0.0);
+                    *owed.entry(destination).or_default() += (tonnes - delivered).max(0.0);
                 }
             }
             for ((loader, activity, destination), cols) in flows {
@@ -1242,11 +1246,14 @@ impl<'a> State<'a> {
                     .sum();
                 let due = (earlier + planned * paced - delivered).max(0.0);
                 // A crusher's day is shared as the plan shares it: reclaim
-                // takes its own paced target and whatever the digging falls
-                // behind, never the room dug ore is still owed, or it fills
-                // the budget by morning and sends the day's ore to the piles.
+                // takes its own paced target, whatever the digging falls
+                // behind and, paced through the day, any room the digging is
+                // not owed; never the room
+                // dug ore is still owed, or it fills the budget by morning and
+                // sends the day's ore to the piles.
                 if activity == Activity::Reclaim && input.destinations.iter().any(|entry| entry.id == destination && entry.kind == DestinationKind::Crusher) {
-                    let room = due + behind.get(&destination).copied().unwrap_or(0.0);
+                    let spare = self.destination_room(destination, interval) - owed.get(&destination).copied().unwrap_or(0.0);
+                    let room = (due + behind.get(&destination).copied().unwrap_or(0.0)).max(spare * paced);
                     problem.add_row(..=room, cols.iter().map(|col| (*col, 1.0)).collect());
                 }
                 let mut over: Vec<(Col, f64)> = cols.iter().map(|col| (*col, 1.0)).collect();
