@@ -836,8 +836,9 @@ fn reroute_best(input: &BlendInput, groups: &routing::Groups, best: &mut Best, v
 /// After a run, `start` refined by the reroute's operators until `until`
 /// has gone, for a run allowed to go on: an exact pass with digging free to
 /// move in time within each block, then reclaim passes at reaches of 1, a
-/// half and a third with idle hours open, in windows half the size, over
-/// and over; each window kept as it improves, so stopping at any moment
+/// half and a third with idle hours open, all in smaller windows. Exact
+/// windows avoid cutting movable blocks where possible. Each window is
+/// kept as it improves, so stopping at any moment
 /// keeps the best schedule found. Within three minutes these lose to the
 /// search and its reroute; after them they keep gaining (centralia +$0.4M
 /// in two minutes, long +$2.9M in seven).
@@ -865,14 +866,19 @@ pub(crate) fn continue_from(
     }
     'cycles: loop {
         let before = value;
-        for (reach, size) in [(0.0, 1), (1.0, 2), (0.5, 2), (1.0 / 3.0, 2)] {
-            let windows = plan.windows * size;
+        let exact_windows = routing::digging_windows(input, &best.solution, plan.windows * 2);
+        for (reach, size) in [(0.0, 2), (1.0, 2), (0.5, 2), (1.0 / 3.0, 2)] {
+            let windows = if reach == 0.0 { exact_windows.len() } else { plan.windows * size };
             for index in 0..windows {
                 if Instant::now() >= ends || cancel.load(Ordering::Relaxed) {
                     break 'cycles;
                 }
-                let window = routing::window(input, windows, index);
                 let drawing = reach > 0.0;
+                let window = if drawing {
+                    routing::window(input, windows, index)
+                } else {
+                    exact_windows.get(index).cloned()
+                };
                 // A difficult exact LP can otherwise consume the whole
                 // continuation before later windows get a turn. Share the
                 // remaining time; quick windows pass their unused share on.

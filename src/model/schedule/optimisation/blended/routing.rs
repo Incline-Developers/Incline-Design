@@ -255,6 +255,67 @@ pub(crate) fn window(input: &BlendInput, windows: usize, index: usize) -> Option
     (windows > 1).then(|| index * count / windows..(index + 1) * count / windows)
 }
 
+/// Small exact windows, with edges near the uniform partition that cut
+/// as little movable digging as possible. A block's tonnes stay within
+/// each window, so cutting between its slack and its tonnes loses a move.
+pub(crate) fn digging_windows(input: &BlendInput, schedule: &BlendSolution, windows: usize) -> Vec<std::ops::Range<usize>> {
+    let count = input.intervals.len();
+    let windows = windows.min(count).max(1);
+    let mut cells: BTreeMap<(LoaderId, SourceId, usize, usize), f64> = BTreeMap::new();
+    for row in &schedule.movements {
+        let movement = &input.movements[row.candidate];
+        if movement.activity == Activity::Dig && row.tonnes_t > 0.0 {
+            *cells.entry((movement.loader, movement.source, row.interval, row.segment)).or_default() += row.tonnes_t;
+        }
+    }
+    let mut blocks: BTreeMap<(LoaderId, SourceId), BTreeMap<usize, (f64, f64)>> = BTreeMap::new();
+    for ((loader, source, at, segment), tonnes) in cells {
+        let capacity = input
+            .loaders
+            .iter()
+            .find(|entry| entry.id == loader)
+            .and_then(|loader| super::input::interval_rate(loader, at))
+            .map_or(tonnes, |rate| rate.dig_tph * schedule.durations.get(&(at, segment)).copied().unwrap_or(0.0));
+        let cell = blocks.entry((loader, source)).or_default().entry(at).or_default();
+        cell.0 += tonnes;
+        cell.1 += (capacity - tonnes).max(0.0);
+    }
+    let mut crossing = vec![0.0; count + 1];
+    for cells in blocks.values() {
+        let total: f64 = cells.values().map(|cell| cell.0).sum();
+        let spare: f64 = cells.values().map(|cell| cell.1).sum();
+        if cells.len() < 2 || spare <= 1e-3 {
+            continue;
+        }
+        let mut left_t = 0.0;
+        let mut left_spare = 0.0;
+        let mut entries = cells.iter().peekable();
+        while let Some((&at, &(tonnes, room))) = entries.next() {
+            left_t += tonnes;
+            left_spare += room;
+            if let Some(&(&next, _)) = entries.peek() {
+                let lost = left_t.min((spare - left_spare).max(0.0)) + left_spare.min((total - left_t).max(0.0));
+                for cost in &mut crossing[at + 1..=next] {
+                    *cost += lost;
+                }
+            }
+        }
+    }
+    let radius = count / (4 * windows);
+    let mut edges = vec![0];
+    for index in 1..windows {
+        let centre = index * count / windows;
+        let first = centre.saturating_sub(radius).max(edges[index - 1] + 1);
+        let end = (centre + radius).min(count - (windows - index));
+        let edge = (first..=end)
+            .min_by(|&a, &b| crossing[a].total_cmp(&crossing[b]).then_with(|| a.abs_diff(centre).cmp(&b.abs_diff(centre))))
+            .unwrap();
+        edges.push(edge);
+    }
+    edges.push(count);
+    edges.windows(2).map(|edge| edge[0]..edge[1]).collect()
+}
+
 /// `schedule` with its dug material rerouted to the most it can earn, or an
 /// error when the LP stops (`stop`) or fails.
 #[allow(clippy::too_many_arguments, reason = "the neighbourhood's settings, each set by its caller's pass")]
