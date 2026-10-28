@@ -14,8 +14,8 @@
 //! allow it and the bar's authored cap, out of a daily pile inventory that
 //! the plan's own deliveries fill. A loader's dig and reclaim share its
 //! hours. A blend is a ratio of two decisions, so a reclaim's grade is
-//! fixed: in a window, the blend the schedule it improves leaves the pile
-//! with as the window opens; over the whole horizon, for a bound, the one
+//! fixed: in a window, the opening blend, or the incumbent's delivered blend
+//! over the window if the pile opens empty; over the whole horizon, for a bound, the one
 //! that suits each grade target best and every grade-conditional value
 //! earned when it pays and not when it costs.
 //!
@@ -76,6 +76,9 @@ pub(crate) struct Window {
     pub(crate) piles: BTreeMap<StockpileId, (f64, Vec<f64>)>,
     /// What each reclaim bar (by task index) had drawn before the first day.
     pub(crate) reclaimed: BTreeMap<usize, f64>,
+    /// Empty piles have no opening blend. Estimate their future reclaim
+    /// across the window so moving deliveries between days keeps their grade.
+    pub(crate) reclaim_blends: BTreeMap<StockpileId, Vec<f64>>,
 }
 
 impl Window {
@@ -110,7 +113,7 @@ impl Window {
         remaining.retain(|_, left| *left > FINISHED_T);
         let grades = input.grades.count();
         let first = input.intervals.iter().position(|interval| interval.day() >= first_day).unwrap_or(0);
-        let piles = input
+        let piles: BTreeMap<StockpileId, (f64, Vec<f64>)> = input
             .piles
             .iter()
             .map(|pile| {
@@ -121,6 +124,28 @@ impl Window {
                 (pile.id, state)
             })
             .collect();
+        let mut drawn: BTreeMap<StockpileId, (f64, Vec<f64>)> = BTreeMap::new();
+        if let Some(replay) = replay {
+            for (&(pile, interval), state) in &replay.pile_intervals {
+                let day = input.intervals[interval].day();
+                if !(first_day..first_day + days).contains(&day)
+                    || piles.get(&pile).is_some_and(|(tonnes, _)| *tonnes > 1e-9)
+                    || state.reclaimed_t <= 1e-9
+                    || state.delivered_blend.len() != grades
+                {
+                    continue;
+                }
+                let entry = drawn.entry(pile).or_insert_with(|| (0.0, vec![0.0; grades]));
+                entry.0 += state.reclaimed_t;
+                for (quantity, fraction) in entry.1.iter_mut().zip(&state.delivered_blend) {
+                    *quantity += state.reclaimed_t * fraction;
+                }
+            }
+        }
+        let reclaim_blends = drawn
+            .into_iter()
+            .map(|(pile, (tonnes, quantities))| (pile, quantities.into_iter().map(|quantity| quantity / tonnes).collect()))
+            .collect();
         Self {
             first_day,
             days,
@@ -128,6 +153,7 @@ impl Window {
             received,
             piles,
             reclaimed,
+            reclaim_blends,
         }
     }
 }
@@ -789,7 +815,13 @@ impl<'a> Prepared<'a> {
                     self.ceilings.get(grade).copied().unwrap_or(0.0)
                 }
             }
-            Carried::Pile(pile) => self.blend.get(&pile).and_then(|blend| blend.get(grade)).copied().unwrap_or(0.0),
+            Carried::Pile(pile) => self
+                .window
+                .and_then(|window| window.reclaim_blends.get(&pile))
+                .or_else(|| self.blend.get(&pile))
+                .and_then(|blend| blend.get(grade))
+                .copied()
+                .unwrap_or(0.0),
         }
     }
 
