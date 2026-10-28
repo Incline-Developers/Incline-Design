@@ -368,11 +368,13 @@ fn scatter_sub(index: &[Int], value: &[f64], temp: f64, x: &mut [f64]) {
     }
 }
 
+#[inline(always)]
 pub(crate) fn dot_column(a: &SparseMatrix, j: Int, rhs: &[f64]) -> f64 {
     let (index, value) = column(a, j);
     gather_dot(index, value, rhs)
 }
 
+#[inline(always)]
 pub(crate) fn scatter_column(a: &SparseMatrix, j: Int, alpha: f64, lhs: &mut [f64]) {
     let (index, value) = column(a, j);
     for (&i, &v) in index.iter().zip(value) {
@@ -409,6 +411,7 @@ pub(crate) fn add_normal_product(a: &SparseMatrix, d: Option<&[f64]>, rhs: &[f64
 /// `unitdiag` when its diagonal is implicit (otherwise each column's
 /// diagonal entry is its last if upper, first if lower). Returns the
 /// number of nonzeros in the solution.
+#[inline(always)]
 pub(crate) fn triangular_solve(a: &SparseMatrix, x: &mut [f64], trans: char, upper: bool, unitdiag: bool) -> Int {
     let ncol = a.cols();
     let ap = &a.colptr;
