@@ -710,8 +710,7 @@ impl KktSolver for KktSolverBasis<'_, '_, '_> {
             }
         }
         if num_free > 0 {
-            let input = work.clone();
-            self.basis.solve_dense(&input, &mut work, 'T');
+            self.basis.solve_dense_vec(&mut work, 'T');
         }
         if num_free > 0 {
             for j in 0..n + m {
@@ -731,8 +730,7 @@ impl KktSolver for KktSolverBasis<'_, '_, '_> {
                 }
             }
         }
-        let input = rhs.clone();
-        self.basis.solve_dense(&input, &mut rhs, 'N');
+        self.basis.solve_dense_vec(&mut rhs, 'N');
         self.basis.solve_dense(b, &mut work, 'N');
         for p in 0..m {
             let j = self.basis.at(p);
@@ -766,8 +764,7 @@ impl KktSolver for KktSolverBasis<'_, '_, '_> {
                 *y_p = a[u(j)];
             }
         }
-        let input = y.to_vec();
-        self.basis.solve_dense(&input, y, 'T');
+        self.basis.solve_dense_in_place(y, 'T');
         work.copy_from_slice(&b[..m]);
         for j in 0..n + m {
             let mut xj = 0.0;
@@ -778,8 +775,7 @@ impl KktSolver for KktSolverBasis<'_, '_, '_> {
             }
             x[j] = xj;
         }
-        let input = work.clone();
-        self.basis.solve_dense(&input, &mut work, 'N');
+        self.basis.solve_dense_vec(&mut work, 'N');
         for p in 0..m {
             x[u(self.basis.at(p))] = work[p];
         }

@@ -1923,6 +1923,29 @@ impl Lu {
 
     /// `basiclu_solve_dense`.
     pub fn solve_dense(&mut self, rhs: &[f64], lhs: &mut [f64], trans: char) -> Int {
+        self.solve_dense_inner(Some(rhs), lhs, trans)
+    }
+
+    /// The solve already stages its right hand side in `work1`, so a
+    /// caller solving in place need not allocate another copy first.
+    pub fn solve_dense_in_place(&mut self, lhs: &mut [f64], trans: char) -> Int {
+        self.work1.copy_from_slice(&lhs[..u(self.m)]);
+        self.solve_dense_inner(None, lhs, trans)
+    }
+
+    /// Owned vectors can become the staging buffer directly. Every output
+    /// entry is overwritten by the solve, so its old buffer is reusable.
+    pub fn solve_dense_vec(&mut self, lhs: &mut Vec<f64>, trans: char) -> Int {
+        if self.nupdate < 0 {
+            self.load();
+            return ERROR_INVALID_CALL;
+        }
+        assert_eq!(lhs.len(), u(self.m));
+        std::mem::swap(lhs, &mut self.work1);
+        self.solve_dense_inner(None, lhs, trans)
+    }
+
+    fn solve_dense_inner(&mut self, rhs: Option<&[f64]>, lhs: &mut [f64], trans: char) -> Int {
         self.load();
         if self.nupdate < 0 {
             return ERROR_INVALID_CALL;
@@ -1944,8 +1967,10 @@ impl Lu {
         );
         let is = &self.is;
         let work1 = &mut self.work1;
-        if trans == 't' || trans == 'T' {
+        if let Some(rhs) = rhs {
             work1.copy_from_slice(&rhs[..mu]);
+        }
+        if trans == 't' || trans == 'T' {
             for k in 0..mu {
                 let jpivot = u(is[pivotcol + k]);
                 let ipivot = u(is[pivotrow + k]);
@@ -1977,7 +2002,6 @@ impl Lu {
                 lhs[u(is[p + k])] -= x;
             }
         } else {
-            work1.copy_from_slice(&rhs[..mu]);
             for k in 0..mu {
                 let mut x = 0.0;
                 let mut pos = is[ltbegin_p + k];

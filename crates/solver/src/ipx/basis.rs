@@ -186,6 +186,14 @@ impl<'a> Basis<'a> {
         self.lu.solve_dense(rhs, lhs, trans);
     }
 
+    pub fn solve_dense_in_place(&mut self, lhs: &mut [f64], trans: char) {
+        self.lu.solve_dense_in_place(lhs, trans);
+    }
+
+    pub fn solve_dense_vec(&mut self, lhs: &mut Vec<f64>, trans: char) {
+        self.lu.solve_dense_vec(lhs, trans);
+    }
+
     /// FTRAN of nonbasic column `j`, or BTRAN of basic `j`'s row, with
     /// the solution in `lhs`, kept for an update.
     pub fn solve_for_update_into(&mut self, j: Int, lhs: &mut IndexedVector) {
@@ -310,16 +318,14 @@ impl<'a> Basis<'a> {
                 scatter_column(ai, j as Int, -*x_j, y);
             }
         }
-        let input = y.to_vec();
-        self.solve_dense(&input, y, 'N');
+        self.solve_dense_in_place(y, 'N');
         for p in 0..m {
             x[u(self.basis[p])] = y[p];
         }
         for p in 0..m {
             y[p] = c[u(self.basis[p])] - z[u(self.basis[p])];
         }
-        let input = y.to_vec();
-        self.solve_dense(&input, y, 'T');
+        self.solve_dense_in_place(y, 'T');
         for j in 0..n + m {
             if self.is_nonbasic(j as Int) {
                 z[j] = c[j] - dot_column(ai, j as Int, y);
@@ -362,8 +368,7 @@ impl<'a> Basis<'a> {
         let lambda = power_method(
             |x, fx| {
                 self.solve_dense(x, fx, 'N');
-                let input = fx.to_vec();
-                self.solve_dense(&input, fx, 'T');
+                self.solve_dense_in_place(fx, 'T');
             },
             &mut v,
         );
@@ -451,16 +456,14 @@ impl<'a> Basis<'a> {
             *work_i = 1.0 / (i + 1) as f64;
         }
         loop {
-            let input = work.to_vec();
-            self.solve_dense(&input, work, 'N');
+            self.solve_dense_in_place(work, 'N');
             if !all_finite(work) {
                 break;
             }
             let pmax = find_max_abs(work);
             work.fill(0.0);
             work[u(pmax)] = 1.0;
-            let input = work.to_vec();
-            self.solve_dense(&input, work, 'T');
+            self.solve_dense_in_place(work, 'T');
             if !all_finite(work) {
                 break;
             }
@@ -934,8 +937,7 @@ fn postprocess_dependencies(iterate: &mut Iterate<'_>, basis: &mut Basis<'_>, in
                 dependent_cols.push(j);
             }
         }
-        let input = dxbasic.clone();
-        basis.solve_dense(&input, &mut dxbasic, 'N');
+        basis.solve_dense_vec(&mut dxbasic, 'N');
         for p in 0..m {
             dx[u(basis.at(p))] = dxbasic[p];
         }
@@ -948,8 +950,7 @@ fn postprocess_dependencies(iterate: &mut Iterate<'_>, basis: &mut Basis<'_>, in
                 dependent_rows.push(j - n);
             }
         }
-        let input = dy.clone();
-        basis.solve_dense(&input, &mut dy, 'T');
+        basis.solve_dense_vec(&mut dy, 'T');
         for &i in &dependent_rows {
             dy[i] = -iterate.y[i];
         }

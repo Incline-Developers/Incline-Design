@@ -94,6 +94,16 @@ impl BasicLu {
         assert_eq!(status, 0, "basiclu_solve_dense failed");
     }
 
+    pub fn solve_dense_in_place(&mut self, lhs: &mut [f64], trans: char) {
+        let status = self.lu.solve_dense_in_place(lhs, trans);
+        assert_eq!(status, 0, "basiclu_solve_dense failed");
+    }
+
+    pub fn solve_dense_vec(&mut self, lhs: &mut Vec<f64>, trans: char) {
+        let status = self.lu.solve_dense_vec(lhs, trans);
+        assert_eq!(status, 0, "basiclu_solve_dense failed");
+    }
+
     /// FTRAN of the column `bi`/`bx` entering the basis, keeping what the
     /// update needs, and its solution in `lhs` if given.
     pub fn ftran_for_update(&mut self, nzrhs: Int, bi: &[Int], bx: &[f64], lhs: Option<&mut IndexedVector>) {

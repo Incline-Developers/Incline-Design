@@ -190,8 +190,7 @@ impl<'c> Maxvolume<'c> {
         for p in 0..m {
             slice.work[p] = if slice.tblrow_used[p] { slice.invscale_basic[p] } else { 0.0 };
         }
-        let input = slice.work.clone();
-        basis.solve_dense(&input, &mut slice.work, 'T');
+        basis.solve_dense_vec(&mut slice.work, 'T');
         for j in 0..n + m {
             if slice.colscale[j] != 0.0 {
                 let sum = dot_column(ai, j as Int, &slice.work);
