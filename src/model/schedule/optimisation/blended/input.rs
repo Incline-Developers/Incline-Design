@@ -78,7 +78,7 @@
 //! rather than something the solver has to discover, and they tighten the
 //! bilinear relaxation considerably.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use super::grade::GradeTable;
 use crate::model::schedule::optimisation::{
