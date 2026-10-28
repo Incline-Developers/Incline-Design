@@ -1089,19 +1089,30 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
         let stop: solver::Interrupt = Arc::new(move || Instant::now() >= ends);
         let rerouting = Instant::now();
         let begun = started.elapsed().as_secs_f64();
-        let note = match routing::reroute(timed, &groups, &best.solution, reserve.tonnes_move, stop) {
-            Ok(mut solution) => match replay_as_published(timed, &mut solution, cancel) {
-                Some(replay) if replay.is_valid() && replay.ranked_objective() > value => {
-                    let gain = replay.ranked_objective() - value;
-                    value = replay.ranked_objective();
-                    best = Best { solution, replay };
-                    format!("rerouted, {gain:.0} better")
-                }
-                Some(replay) => format!("reroute not kept: valid {}, {:.0} better", replay.is_valid(), replay.ranked_objective() - value),
-                None => "reroute not kept: cancelled".into(),
-            },
-            Err(error) => format!("reroute not kept: {error}"),
-        };
+        // Window by window, each kept as it improves, so a deadline inside
+        // one keeps what the windows before it found.
+        let mut notes: Vec<String> = Vec::new();
+        for index in 0..reserve.windows {
+            let window = routing::window(timed, reserve.windows, index);
+            let note = match routing::reroute(timed, &groups, &best.solution, reserve.tonnes_move, window.as_ref(), stop.clone()) {
+                Ok(mut solution) => match replay_as_published(timed, &mut solution, cancel) {
+                    Some(replay) if replay.is_valid() && replay.ranked_objective() > value => {
+                        let gain = replay.ranked_objective() - value;
+                        value = replay.ranked_objective();
+                        best = Best { solution, replay };
+                        format!("{gain:.0} better")
+                    }
+                    Some(replay) => format!("not kept: valid {}, {:.0} better", replay.is_valid(), replay.ranked_objective() - value),
+                    None => "not kept: cancelled".into(),
+                },
+                Err(error) => format!("not kept: {error}"),
+            };
+            notes.push(note);
+            if Instant::now() >= ends {
+                break;
+            }
+        }
+        let note = format!("rerouted in {} of {} windows: {}", notes.len(), reserve.windows, notes.join("; "));
         record(
             value,
             bound,

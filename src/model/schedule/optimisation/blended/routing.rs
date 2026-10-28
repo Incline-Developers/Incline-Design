@@ -77,7 +77,7 @@ fn pile_of(input: &BlendInput, destination: DestinationId) -> Option<StockpileId
     }
 }
 
-fn group(input: &BlendInput, groups: &Groups, schedule: &BlendSolution) -> Result<Grouped, String> {
+fn group(input: &BlendInput, groups: &Groups, schedule: &BlendSolution, window: Option<&std::ops::Range<usize>>) -> Result<Grouped, String> {
     let mut dug: BTreeMap<(usize, usize, usize), f64> = BTreeMap::new();
     let mut fixed: Vec<MovementRow> = Vec::new();
     let mut held: BTreeMap<(usize, usize, usize), f64> = BTreeMap::new();
@@ -95,6 +95,15 @@ fn group(input: &BlendInput, groups: &Groups, schedule: &BlendSolution) -> Resul
     }
     let mut choices = Vec::with_capacity(dug.len());
     for ((group, interval, segment), tonnes) in dug {
+        // Outside the window, each candidate keeps what it moved.
+        if window.is_some_and(|window| !window.contains(&interval)) {
+            for &option in &groups.options[group] {
+                if let Some(&moved) = held.get(&(option, interval, segment)) {
+                    choices.push((interval, segment, moved, vec![option]));
+                }
+            }
+            continue;
+        }
         // A pile cell the schedule left empty is held empty. Of destinations
         // alike in every constraint - one destination, one truck class at one
         // rate - only the best paid can be worth taking.
@@ -122,7 +131,7 @@ fn group(input: &BlendInput, groups: &Groups, schedule: &BlendSolution) -> Resul
         if alike.is_empty() {
             return Err(format!("no destination left for dig group {group} in interval {interval} segment {segment}"));
         }
-        choices.push((interval, segment, tonnes, alike.into_values().collect()));
+        choices.push((interval, segment, tonnes, alike.into_values().collect::<Vec<usize>>()));
     }
     Ok(Grouped { dug: choices, fixed, receipts })
 }
@@ -140,40 +149,67 @@ fn tonnes_may_move(input: &BlendInput) -> bool {
         && !input.tasks.iter().any(|task| matches!(task.kind, TaskKind::Reclaim { maximum_t: Some(_), .. }))
 }
 
-/// The time a search leaves at its end for rerouting, and whether pile
-/// tonnes may move in it.
+/// The time a search leaves at its end for rerouting, whether pile tonnes
+/// may move in it, and how many windows the horizon is rerouted in.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Reserve {
     pub(crate) time: Duration,
     pub(crate) tonnes_move: bool,
+    pub(crate) windows: usize,
 }
+
+/// Routing choices one window takes at most. The interior point method's
+/// time grows about as their square; one window a pass costs a build, the
+/// whole horizon's pile chains and a replay besides.
+const WINDOW_CHOICES: f64 = 130_000.0;
 
 /// The time to leave a search's end for rerouting `schedule`, judged by the
 /// number of routing choices it has: what the interior point method took on
-/// the test worlds side by side, with a margin. Pile tonnes move with the
-/// routing when that program fits in 55% of `budget`; otherwise only the
-/// routing moves, a program about half the time on the largest worlds.
+/// the test worlds side by side, with a margin, window by window. Pile
+/// tonnes move with the routing when that fits in 60% of `budget`;
+/// otherwise only the routing moves, over the whole horizon at once.
 pub(crate) fn reserve(input: &BlendInput, groups: &Groups, schedule: &BlendSolution, budget: Duration) -> Reserve {
-    let Ok(grouped) = group(input, groups, schedule) else {
+    let Ok(grouped) = group(input, groups, schedule, None) else {
         return Reserve::default();
     };
     let columns = grouped.dug.iter().map(|(.., options)| options.len()).filter(|&count| count > 1).sum::<usize>() as f64;
-    let most = budget.mul_f64(0.55);
-    let moving = Duration::from_secs_f64((1.5 * 2.4e-9 * columns * columns).max(6.0) + REPLAY_S);
+    let most = budget.mul_f64(0.6);
+    let windows = (columns / WINDOW_CHOICES).ceil().max(1.0);
+    let each = columns / windows;
+    let moving = Duration::from_secs_f64((1.5 * windows * (1.9e-9 * each * each + 2.0)).max(6.0) + REPLAY_S);
     if tonnes_may_move(input) && moving <= most {
-        return Reserve { time: moving, tonnes_move: true };
+        return Reserve {
+            time: moving,
+            tonnes_move: true,
+            windows: windows as usize,
+        };
     }
     let held = Duration::from_secs_f64((2.0 * (2.1e-4 * columns - 8.0)).max(6.0) + REPLAY_S);
     Reserve {
         time: held.min(most),
         tonnes_move: false,
+        windows: 1,
     }
+}
+
+/// The intervals the `index`th of `windows` windows frees, in time order;
+/// one window is the whole horizon.
+pub(crate) fn window(input: &BlendInput, windows: usize, index: usize) -> Option<std::ops::Range<usize>> {
+    let count = input.intervals.len();
+    (windows > 1).then(|| index * count / windows..(index + 1) * count / windows)
 }
 
 /// `schedule` with its dug material rerouted to the most it can earn, or an
 /// error when the LP stops (`stop`) or fails.
-pub(crate) fn reroute(input: &BlendInput, groups: &Groups, schedule: &BlendSolution, tonnes_move: bool, stop: solver::Interrupt) -> Result<BlendSolution, String> {
-    let Grouped { dug, fixed, receipts } = group(input, groups, schedule)?;
+pub(crate) fn reroute(
+    input: &BlendInput,
+    groups: &Groups,
+    schedule: &BlendSolution,
+    tonnes_move: bool,
+    window: Option<&std::ops::Range<usize>>,
+    stop: solver::Interrupt,
+) -> Result<BlendSolution, String> {
+    let Grouped { dug, fixed, receipts } = group(input, groups, schedule, window)?;
     let intervals = input.intervals.len();
     let mut problem = LinearProgram::default();
     // Each choice's entries: the candidate, its interval and segment, and its
@@ -448,10 +484,41 @@ pub(crate) fn reroute(input: &BlendInput, groups: &Groups, schedule: &BlendSolut
             problem.add_row(..=capacity + SLACK_T - constant, terms);
         }
     }
+    // Each targeted crusher's tonnes per target day, direct feed and
+    // reclaim, as one column: every target of the day and its budget read
+    // it, rather than each repeating the day's thousands of terms.
+    let mut day_tonnes: BTreeMap<(DestinationId, u32), Col> = BTreeMap::new();
+    for target in &input.grade_targets {
+        if day_tonnes.contains_key(&(target.destination, target.day)) {
+            continue;
+        }
+        let at: &[usize] = target_intervals.get(&target.day).map_or(&[], Vec::as_slice);
+        let weight = |candidate: usize, _: usize, _: usize| (input.movements[candidate].destination == target.destination).then_some(1.0);
+        let (mut terms, constant) = expression(at, &weight);
+        let to_target = |row: &MovementRow| {
+            (input.movements[row.candidate].destination == target.destination && matches!(input.movements[row.candidate].source, SourceId::Stockpile(_))).then_some(1.0)
+        };
+        let (reclaimed, reclaimed_constant) = held_moved(at, &to_target);
+        terms.extend(reclaimed);
+        for term in &mut terms {
+            term.1 = -term.1;
+        }
+        let tonnes = problem.add_column(0.0, 0.0..);
+        terms.push((tonnes, 1.0));
+        let rhs = constant + reclaimed_constant;
+        problem.add_row(rhs..=rhs, terms);
+        day_tonnes.insert((target.destination, target.day), tonnes);
+    }
     // Crusher budgets per day, reclaim included.
     for destination in &input.destinations {
         for (&day, at) in &day_intervals {
             let Some(Some(budget)) = destination.crusher_daily_t.get(day as usize) else { continue };
+            if let Some(&tonnes) = day_tonnes.get(&(destination.id, day))
+                && target_intervals.get(&day) == Some(at)
+            {
+                problem.add_row(..=*budget, vec![(tonnes, 1.0)]);
+                continue;
+            }
             let weight = |candidate: usize, _: usize, _: usize| (input.movements[candidate].destination == destination.id).then_some(1.0);
             let (mut terms, constant) = expression(at, &weight);
             let (reclaimed, reclaimed_constant) = held_moved(at, &|row: &MovementRow| (input.movements[row.candidate].destination == destination.id).then_some(1.0));
@@ -534,18 +601,14 @@ pub(crate) fn reroute(input: &BlendInput, groups: &Groups, schedule: &BlendSolut
     // reclaim carrying its held fraction of the pile's metal.
     for (index, target) in input.grade_targets.iter().enumerate() {
         let at: &[usize] = target_intervals.get(&target.day).map_or(&[], Vec::as_slice);
-        let tonnes_weight = |candidate: usize, _: usize, _: usize| (input.movements[candidate].destination == target.destination).then_some(1.0);
         let metal_weight = |candidate: usize, _: usize, _: usize| {
             let movement = &input.movements[candidate];
             (movement.destination == target.destination).then(|| input.grades.fraction(movement.material, target.grade).unwrap_or(0.0))
         };
-        let (mut tonnes_terms, tonnes_constant) = expression(at, &tonnes_weight);
         let (metal_terms, metal_constant) = expression(at, &metal_weight);
         let to_target = |row: &MovementRow| {
             (input.movements[row.candidate].destination == target.destination && matches!(input.movements[row.candidate].source, SourceId::Stockpile(_))).then_some(1.0)
         };
-        let (reclaim_t_terms, reclaim_t) = held_moved(at, &to_target);
-        tonnes_terms.extend(reclaim_t_terms);
         let mut reclaim_q: Vec<(Col, f64)> = Vec::new();
         let mut reclaim_q_constant = 0.0;
         for &k in at {
@@ -562,6 +625,13 @@ pub(crate) fn reroute(input: &BlendInput, groups: &Groups, schedule: &BlendSolut
                 reclaim_q_constant += share * offset;
             }
         }
+        // The day's metal as one column, like its tonnes.
+        let contained = problem.add_column(0.0, 0.0..);
+        let mut terms: Vec<(Col, f64)> = metal_terms.iter().chain(&reclaim_q).map(|&(col, coefficient)| (col, -coefficient)).collect();
+        terms.push((contained, 1.0));
+        let rhs = metal_constant + reclaim_q_constant;
+        problem.add_row(rhs..=rhs, terms);
+        let tonnes = day_tonnes[&(target.destination, target.day)];
         let (opening_t, opening_q) = input
             .target_opening
             .iter()
@@ -571,13 +641,10 @@ pub(crate) fn reroute(input: &BlendInput, groups: &Groups, schedule: &BlendSolut
             if slope == 0.0 {
                 continue;
             }
-            // slack >= direction * (Q - boundary T)
+            // slack >= direction * (Q - boundary T), opening included
             let slack = problem.add_column(-slope, 0.0..);
-            let mut terms = vec![(slack, 1.0)];
-            terms.extend(metal_terms.iter().chain(&reclaim_q).map(|&(col, coefficient)| (col, -direction * coefficient)));
-            terms.extend(tonnes_terms.iter().map(|&(col, coefficient)| (col, direction * boundary * coefficient)));
-            let constant = direction * ((metal_constant + opening_q + reclaim_q_constant) - boundary * (tonnes_constant + reclaim_t + opening_t));
-            problem.add_row(constant.., terms);
+            let terms = vec![(slack, 1.0), (contained, -direction), (tonnes, direction * boundary)];
+            problem.add_row(direction * (opening_q - boundary * opening_t).., terms);
         }
     }
 
