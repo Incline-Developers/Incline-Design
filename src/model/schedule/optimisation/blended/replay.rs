@@ -18,7 +18,7 @@
 //! disagreement between them is detectable.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     sync::atomic::{AtomicBool, Ordering},
 };
 
@@ -372,7 +372,7 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
 
     // The published dig rows of each ground source, in published order, so
     // each source's checks read its own rows rather than every row.
-    let mut dug_rows: BTreeMap<GroundId, Vec<&MovementRow>> = BTreeMap::new();
+    let mut dug_rows: HashMap<GroundId, Vec<&MovementRow>, foldhash::fast::FixedState> = HashMap::default();
     for row in &solution.movements {
         let Some(candidate) = input.movements.get(row.candidate) else { continue };
         if candidate.activity == Activity::Dig
@@ -528,7 +528,7 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
     // ---- destination and crusher limits -------------------------------------
     // What each destination received, in all and by day, in one pass over
     // the rows (in their order, so each sum is the same as a scan of its own).
-    let mut received: BTreeMap<DestinationId, (f64, BTreeMap<usize, f64>)> = BTreeMap::new();
+    let mut received: HashMap<DestinationId, (f64, BTreeMap<usize, f64>), foldhash::fast::FixedState> = HashMap::default();
     for row in &solution.movements {
         let Some(candidate) = input.movements.get(row.candidate) else { continue };
         let (total, by_day) = received.entry(candidate.destination).or_default();
@@ -587,7 +587,7 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
     }
 
     // ---- exact authored bar windows -----------------------------------------
-    let authority = super::input::Authority::new(input);
+    let authority = BarSources::new(input);
     // A movement may only occur inside the window a planner authored, and the
     // convention is *containment*, matching the accepted backend: a bar that
     // covers only part of a calendar interval is not worked in that interval.
@@ -600,7 +600,7 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
         }
         let Some(candidate) = input.movements.get(row.candidate) else { continue };
         let Some(interval) = input.intervals.get(row.interval) else { continue };
-        let authorised = (0..input.tasks.len()).any(|task| covers(&input.tasks[task], *interval) && authority.authorises(input, task, candidate));
+        let authorised = authority.of(candidate).iter().any(|&task| covers(&input.tasks[task], *interval));
         if !authorised {
             checker
                 .report
@@ -739,7 +739,7 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
             rows.push(*row);
         }
     }
-    let mut openings: BTreeMap<(StockpileId, usize), f64> = BTreeMap::new();
+    let mut openings: HashMap<(StockpileId, usize), f64, foldhash::fast::FixedState> = HashMap::default();
     for pile in &input.piles {
         if checker.cancelled() {
             return None;
@@ -757,7 +757,7 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
 
     // ---- mandatory authored bar priority ------------------------------------
     let room = dig_room(checker.input, solution, &checker.report.pile_intervals);
-    let worked_bars = check_bar_priority(&mut checker, solution, &openings, &room, &releases, segments);
+    let worked_bars = check_bar_priority(&mut checker, solution, &openings, &room, &releases, segments, &authority);
     if checker.cancelled() {
         return None;
     }
@@ -769,7 +769,7 @@ fn replay_inner<'a>(input: &'a BlendInput, solution: &BlendSolution, cancel: Opt
     // loader also dug the earlier block in that cell, when nothing says who
     // finished it first and the earlier block must be gone a cell before.
     {
-        let mut remaining: BTreeMap<_, f64> = input.ground.iter().map(|source| (source.id, source.tonnes_t)).collect();
+        let mut remaining: HashMap<_, f64, foldhash::fast::FixedState> = input.ground.iter().map(|source| (source.id, source.tonnes_t)).collect();
         let ordered: BTreeMap<_, Vec<usize>> = input.loaders.iter().enumerate().map(|(index, loader)| (loader.id, authored_tasks(input, index))).collect();
         let tolerance = |ground| {
             input
@@ -917,7 +917,7 @@ fn covers(task: &crate::model::schedule::optimisation::Task, interval: crate::mo
 /// The destinations with room for a dig bar as each interval opened, from the
 /// replayed pile balances and the published receipts; see
 /// [`super::input::OutletIndex::of`].
-fn dig_room(input: &BlendInput, solution: &BlendSolution, piles: &BTreeMap<(StockpileId, usize), PileInterval>) -> BTreeSet<(DestinationId, usize)> {
+fn dig_room(input: &BlendInput, solution: &BlendSolution, piles: &BTreeMap<(StockpileId, usize), PileInterval>) -> HashSet<(DestinationId, usize), foldhash::fast::FixedState> {
     let horizon = input.intervals.len();
     let mut received: BTreeMap<DestinationId, Vec<f64>> = input.destinations.iter().map(|entry| (entry.id, vec![0.0; horizon])).collect();
     for row in &solution.movements {
@@ -927,7 +927,7 @@ fn dig_room(input: &BlendInput, solution: &BlendSolution, piles: &BTreeMap<(Stoc
             *slot += row.tonnes_t;
         }
     }
-    let mut room = BTreeSet::new();
+    let mut room = HashSet::default();
     for entry in &input.destinations {
         let (mut before, mut today, mut day) = (0.0, 0.0, None);
         for interval in &input.intervals {
@@ -960,6 +960,59 @@ fn dig_room(input: &BlendInput, solution: &BlendSolution, piles: &BTreeMap<(Stoc
     room
 }
 
+/// Source authorisations in authored priority order, shared by the window
+/// and priority checks. Material and destination do not affect authorisation.
+struct BarSources {
+    sources: HashMap<(LoaderId, SourceId), Vec<usize>, foldhash::fast::FixedState>,
+}
+
+impl BarSources {
+    fn new(input: &BlendInput) -> Self {
+        let mut bars: Vec<usize> = (0..input.tasks.len()).collect();
+        bars.sort_by(|&left, &right| {
+            let left = &input.tasks[left];
+            let right = &input.tasks[right];
+            (left.priority, left.window_start_h, left.id)
+                .partial_cmp(&(right.priority, right.window_start_h, right.id))
+                .expect("authored windows are finite")
+        });
+        let mut sources: HashMap<(LoaderId, SourceId), Vec<usize>, foldhash::fast::FixedState> = HashMap::default();
+        for bar in bars {
+            let task = &input.tasks[bar];
+            let mut add = |source| {
+                let tasks = sources.entry((task.loader, source)).or_default();
+                if tasks.last() != Some(&bar) {
+                    tasks.push(bar);
+                }
+            };
+            match &task.kind {
+                TaskKind::Dig { sequence } => {
+                    for &ground in sequence {
+                        add(SourceId::Ground(ground));
+                    }
+                }
+                TaskKind::Reclaim { approved_sources, .. } => {
+                    for &pile in approved_sources {
+                        add(SourceId::Stockpile(pile));
+                    }
+                }
+                TaskKind::Delay => {}
+            }
+        }
+        Self { sources }
+    }
+
+    fn of(&self, candidate: &crate::model::schedule::optimisation::MovementCandidate) -> &[usize] {
+        if !matches!(
+            (candidate.activity, candidate.source),
+            (Activity::Dig, SourceId::Ground(_)) | (Activity::Reclaim, SourceId::Stockpile(_))
+        ) {
+            return &[];
+        }
+        self.sources.get(&(candidate.loader, candidate.source)).map(Vec::as_slice).unwrap_or_default()
+    }
+}
+
 /// Recompute authored bar priority from the replayed physical state (§4).
 ///
 /// The model's `ready` columns are not consulted. Readiness is recomputed
@@ -981,10 +1034,11 @@ fn dig_room(input: &BlendInput, solution: &BlendSolution, piles: &BTreeMap<(Stoc
 fn check_bar_priority(
     checker: &mut Checker<'_>,
     solution: &BlendSolution,
-    openings: &BTreeMap<(StockpileId, usize), f64>,
-    room: &BTreeSet<(DestinationId, usize)>,
+    openings: &HashMap<(StockpileId, usize), f64, foldhash::fast::FixedState>,
+    room: &HashSet<(DestinationId, usize), foldhash::fast::FixedState>,
     releases: &BTreeMap<GroundId, f64>,
     segments: usize,
+    authority: &BarSources,
 ) -> BTreeMap<(LoaderId, usize, usize), usize> {
     let input = checker.input;
     let loaders: Vec<_> = input.loaders.iter().map(|entry| entry.id).collect();
@@ -996,15 +1050,18 @@ fn check_bar_priority(
         cell_rows.entry((row.interval, row.segment)).or_default().push(index);
     }
     let outlets = super::input::OutletIndex::new(input);
-    let authority = super::input::Authority::new(input);
     // Each loader's highest-priority ready bar, by cell.
     let mut worked_bars = BTreeMap::new();
 
+    struct LoaderState {
+        loader: LoaderId,
+        bars: Vec<usize>,
+        spent: BTreeMap<usize, f64>,
+        current: Vec<usize>,
+        issues: Vec<String>,
+    }
+    let mut states = Vec::new();
     for loader in loaders {
-        if checker.cancelled() {
-            return worked_bars;
-        }
-        // Authored order: priority, then window start, then id.
         let mut bars: Vec<usize> = input.tasks.iter().enumerate().filter(|(_, task)| task.loader == loader).map(|(index, _)| index).collect();
         bars.sort_by(|&left, &right| {
             let left = &input.tasks[left];
@@ -1013,36 +1070,37 @@ fn check_bar_priority(
                 .partial_cmp(&(right.priority, right.window_start_h, right.id))
                 .expect("authored windows are finite")
         });
-        if bars.is_empty() {
-            continue;
+        if !bars.is_empty() {
+            let spent = bars.iter().map(|bar| (*bar, 0.0)).collect();
+            states.push(LoaderState {
+                loader,
+                bars,
+                spent,
+                current: vec![0; input.tasks.len()],
+                issues: Vec::new(),
+            });
         }
-        // Priority can only be broken between two bars; a single bar still
-        // needs its rows attributed.
-        let check = bars.len() > 1;
-
-        // Physical state walked forward, cell by cell.
-        let mut remaining: BTreeMap<_, f64> = input.ground.iter().map(|source| (source.id, source.tonnes_t)).collect();
-        let mut spent: BTreeMap<usize, f64> = bars.iter().map(|bar| (*bar, 0.0)).collect();
-        // Each dig bar's current block: the first of its sequence still
-        // standing. Ground only goes down, so it only moves forward.
-        let mut current: BTreeMap<usize, usize> = BTreeMap::new();
-
-        for interval in &input.intervals {
-            if checker.cancelled() {
-                return worked_bars;
-            }
-            let rate = input
-                .loaders
-                .iter()
-                .find(|entry| entry.id == loader)
-                .and_then(|entry| super::input::interval_rate(entry, interval.index));
-            // Empty cells change neither ground nor a bar's reclaim cap.
-            // Readiness is only needed to attribute and check actual rows;
-            // most of the reserved segment slots have none.
-            for (&(_, segment), rows) in cell_rows.range((interval.index, 0)..(interval.index, segments)) {
-                for &bar in &bars {
+    }
+    // Every loader sees the same opening ground. Advance it only after all
+    // loaders have checked the cell, retaining the published subtraction order.
+    let mut remaining: HashMap<_, f64, foldhash::fast::FixedState> = input.ground.iter().map(|source| (source.id, source.tonnes_t)).collect();
+    for interval in &input.intervals {
+        if checker.cancelled() {
+            return worked_bars;
+        }
+        for (&(_, segment), rows) in cell_rows.range((interval.index, 0)..(interval.index, segments)) {
+            for state in &mut states {
+                let loader = state.loader;
+                let bars = &state.bars;
+                let check = bars.len() > 1;
+                let rate = input
+                    .loaders
+                    .iter()
+                    .find(|entry| entry.id == loader)
+                    .and_then(|entry| super::input::interval_rate(entry, interval.index));
+                for &bar in bars {
                     if let TaskKind::Dig { sequence } = &input.tasks[bar].kind {
-                        let at = current.entry(bar).or_default();
+                        let at = &mut state.current[bar];
                         while sequence.get(*at).is_some_and(|source| remaining.get(source).copied().unwrap_or(0.0) <= REPLAY_TOLERANCE_T) {
                             *at += 1;
                         }
@@ -1060,7 +1118,7 @@ fn check_bar_priority(
                         // opened.
                         TaskKind::Dig { sequence } => {
                             rate.dig_tph > 0.0
-                                && current.get(&bar).and_then(|&at| sequence.get(at)).is_some_and(|current| {
+                                && sequence.get(state.current[bar]).is_some_and(|current| {
                                     releases.get(current).is_none_or(|released| *released <= interval.start_h + 1e-9)
                                         && outlets.diggable(input, task, *current, |destination| room.contains(&(destination, interval.index)))
                                 })
@@ -1083,7 +1141,7 @@ fn check_bar_priority(
                     }
                 };
 
-                let highest = bars.iter().copied().find(|bar| ready(*bar, &spent));
+                let highest = bars.iter().copied().find(|bar| ready(*bar, &state.spent));
                 if let Some(bar) = highest {
                     worked_bars.insert((loader, interval.index, segment), bar);
                 }
@@ -1094,52 +1152,61 @@ fn check_bar_priority(
                     if candidate.loader != loader {
                         continue;
                     }
-                    let worked: Vec<usize> = bars
-                        .iter()
-                        .copied()
-                        .filter(|bar| covers(&input.tasks[*bar], *interval) && authority.authorises(input, *bar, candidate))
-                        .collect();
+                    // Readiness was fixed at the cell opening; charge rows
+                    // in their original order for the next cell's caps.
+                    if candidate.activity == Activity::Reclaim {
+                        for (bar, share) in attribute_reclaim(input, candidate, *interval, row.tonnes_t, &state.spent) {
+                            *state.spent.entry(bar).or_default() += share;
+                        }
+                    }
+                    let mut first = None;
+                    let mut expected_authorised = false;
+                    for &bar in authority.of(candidate) {
+                        if covers(&input.tasks[bar], *interval) {
+                            first.get_or_insert(bar);
+                            expected_authorised |= highest == Some(bar);
+                        }
+                    }
                     // The bar the row was worked under: the highest-priority
                     // ready one when it authorises the row, and otherwise the
                     // first authorising bar - which only a row the checks
                     // below reject can need.
-                    let attributed = highest.filter(|bar| worked.contains(bar)).or_else(|| worked.first().copied());
+                    let attributed = highest.filter(|_| expected_authorised).or(first);
                     checker.report.row_tasks[index] = attributed.map(|bar| input.tasks[bar].id);
-                    if row.tonnes_t <= REPLAY_TOLERANCE_T || worked.is_empty() || !check {
+                    if row.tonnes_t <= REPLAY_TOLERANCE_T || first.is_none() || !check {
                         continue;
                     }
                     match highest {
-                        None => checker.report.issues.push(format!(
+                        None => state.issues.push(format!(
                             "loader {} moved {:.6} t in interval {} segment {segment} with no bar holding available work",
                             loader.0, row.tonnes_t, interval.index
                         )),
-                        Some(expected) if !worked.contains(&expected) => checker.report.issues.push(format!(
+                        Some(expected) if !expected_authorised => state.issues.push(format!(
                             "authored priority broken: loader {} worked bar {} in interval {} segment {segment} while higher-priority bar {} had work available",
-                            loader.0, input.tasks[worked[0]].id.0, interval.index, input.tasks[expected].id.0
+                            loader.0,
+                            input.tasks[first.expect("an authorising bar")].id.0,
+                            interval.index,
+                            input.tasks[expected].id.0
                         )),
                         Some(_) => {}
                     }
                 }
-
-                // Advance the physical state past this cell. Ground is shared
-                // by every loader; a reclaim cap is this loader's own.
-                for &index in rows {
-                    let row = solution.movements[index];
-                    let Some(candidate) = input.movements.get(row.candidate) else { continue };
-                    if let SourceId::Ground(ground) = candidate.source
-                        && candidate.activity == Activity::Dig
-                        && let Some(slot) = remaining.get_mut(&ground)
-                    {
-                        *slot -= row.tonnes_t;
-                    }
-                    if candidate.loader == loader && candidate.activity == Activity::Reclaim {
-                        for (bar, share) in attribute_reclaim(input, candidate, *interval, row.tonnes_t, &spent) {
-                            *spent.entry(bar).or_default() += share;
-                        }
-                    }
+            }
+            for &index in rows {
+                let row = solution.movements[index];
+                let Some(candidate) = input.movements.get(row.candidate) else { continue };
+                if let SourceId::Ground(ground) = candidate.source
+                    && candidate.activity == Activity::Dig
+                    && let Some(slot) = remaining.get_mut(&ground)
+                {
+                    *slot -= row.tonnes_t;
                 }
             }
         }
+    }
+    // Checks formerly walked one loader at a time. Keep that report order.
+    for state in states {
+        checker.report.issues.extend(state.issues);
     }
     worked_bars
 }
@@ -1152,7 +1219,7 @@ fn replay_pile(
     destinations: &BTreeMap<DestinationId, &Destination>,
     grades: usize,
     segments: usize,
-    openings: &mut BTreeMap<(StockpileId, usize), f64>,
+    openings: &mut HashMap<(StockpileId, usize), f64, foldhash::fast::FixedState>,
     drawn: &BTreeMap<(StockpileId, usize), (f64, Vec<f64>)>,
 ) -> ClosingState {
     let input = checker.input;
@@ -1780,7 +1847,7 @@ pub(crate) fn accumulate_target_receipts<'a>(
     if input.grade_targets.is_empty() {
         return;
     }
-    let mut tonnes: BTreeMap<(usize, usize), f64> = BTreeMap::new();
+    let mut tonnes: HashMap<(usize, usize), f64, foldhash::fast::FixedState> = HashMap::default();
     for row in movements {
         *tonnes.entry((row.candidate, row.interval)).or_default() += row.tonnes_t;
     }
@@ -1789,6 +1856,10 @@ pub(crate) fn accumulate_target_receipts<'a>(
     for (index, target) in input.grade_targets.iter().enumerate() {
         by_destination.entry(target.destination).or_default().push(index);
     }
+    // Accumulate each key in published order, then visit keys in the original
+    // candidate/interval order so target sums retain their exact rounding.
+    let mut tonnes: Vec<_> = tonnes.into_iter().collect();
+    tonnes.sort_unstable_by_key(|&(key, _)| key);
     for ((candidate, local_interval), t) in tonnes {
         let Some(movement) = input.movements.get(candidate) else { continue };
         let Some(interval) = input.intervals.get(interval_offset + local_interval) else {
