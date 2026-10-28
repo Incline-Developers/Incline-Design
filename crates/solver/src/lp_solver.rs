@@ -1577,6 +1577,20 @@ impl LpSolver {
                 self.solve_lp(&options);
             }
         }
+        // HiGHS stops here with an error. Presolve can hand back a basis
+        // that is singular once postsolved (no blasts' reclaim window: IPX
+        // and crossover optimal on the reduced LP, rank deficiency 1 on the
+        // original), and the simplex cannot recover from it; the LP itself
+        // is sound, so solve it again as it is.
+        if self.status == ModelStatus::SolveError {
+            self.ekk = None;
+            self.invalidate_basis();
+            let options = Options {
+                presolve: false,
+                ..self.options.clone()
+            };
+            self.solve_lp(&options);
+        }
     }
 
     /// HiGHS's `infeasibleBoundsOk`: bounds crossed by less than the
