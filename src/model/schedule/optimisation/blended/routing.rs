@@ -365,10 +365,36 @@ pub(crate) fn reroute(
     // that holds digging: a block crossing the window's edge keeps what
     // the schedule dug of it inside.
     let digs_free = |interval: usize| free_digging && window.is_none_or(|window| window.contains(&interval));
+    let mut movable = BTreeSet::new();
     if free_digging {
+        let mut cells: BTreeMap<BlockCell, f64> = BTreeMap::new();
         for (interval, segment, tonnes, options) in dug.iter().filter(|group| digs_free(group.0)) {
             let Some(&first) = options.first() else { continue };
             let movement = &input.movements[first];
+            *cells.entry((movement.loader, movement.source, *interval, *segment)).or_default() += tonnes;
+        }
+        let mut room: BTreeMap<(LoaderId, SourceId), (usize, f64)> = BTreeMap::new();
+        for ((loader, source, interval, segment), tonnes) in cells {
+            let capacity = input
+                .loaders
+                .iter()
+                .find(|entry| entry.id == loader)
+                .and_then(|loader| super::input::interval_rate(loader, interval))
+                .map_or(tonnes, |rate| rate.dig_tph * schedule.durations.get(&(interval, segment)).copied().unwrap_or(0.0));
+            let (count, spare) = room.entry((loader, source)).or_default();
+            *count += 1;
+            *spare += (capacity - tonnes).max(0.0);
+        }
+        // With its total held, a block in one cell cannot move. Nor can
+        // one filling every cell's loader capacity: extra columns and rows
+        // there only ask the LP to rediscover the schedule's fixed tonnes.
+        movable.extend(room.into_iter().filter(|(_, (count, spare))| *count > 1 && *spare > 1e-3).map(|(block, _)| block));
+        for (interval, segment, tonnes, options) in dug.iter().filter(|group| digs_free(group.0)) {
+            let Some(&first) = options.first() else { continue };
+            let movement = &input.movements[first];
+            if !movable.contains(&(movement.loader, movement.source)) {
+                continue;
+            }
             *block_t.entry((movement.loader, movement.source)).or_default() += tonnes;
             *block_material_t.entry((movement.loader, movement.source, movement.material)).or_default() += tonnes;
             *material_cell_t
@@ -377,27 +403,33 @@ pub(crate) fn reroute(
         }
     }
     let mut x_cols: BTreeMap<BlockCell, Col> = BTreeMap::new();
+    let mut held_dig: BTreeMap<(LoaderId, usize, usize), f64> = BTreeMap::new();
     let mut group_x: Vec<Option<(Col, f64)>> = Vec::new();
     for (interval, segment, tonnes, options) in &dug {
         if let (true, Some(&first)) = (digs_free(*interval), options.first()) {
             let movement = &input.movements[first];
-            let key = (movement.loader, movement.source, *interval, *segment);
-            let x = *x_cols.entry(key).or_insert_with(|| problem.add_column(0.0, 0.0..));
-            let part = material_cell_t[&(movement.loader, movement.source, movement.material, *interval, *segment)];
-            let part = if part > 0.0 { tonnes / part } else { 0.0 };
-            let share = part * block_material_t[&(movement.loader, movement.source, movement.material)] / block_t[&(movement.loader, movement.source)];
-            let mut sum = Vec::with_capacity(options.len() + 1);
-            for &option in options {
-                let col = problem.add_column(input.movements[option].value_per_tonne().unwrap_or(0.0), 0.0..);
-                sum.push((col, 1.0));
-                entries.push((option, *interval, *segment, Some(col), 0.0));
+            if movable.contains(&(movement.loader, movement.source)) {
+                let key = (movement.loader, movement.source, *interval, *segment);
+                let x = *x_cols.entry(key).or_insert_with(|| problem.add_column(0.0, 0.0..));
+                let part = material_cell_t[&(movement.loader, movement.source, movement.material, *interval, *segment)];
+                let part = if part > 0.0 { tonnes / part } else { 0.0 };
+                let share = part * block_material_t[&(movement.loader, movement.source, movement.material)] / block_t[&(movement.loader, movement.source)];
+                let mut sum = Vec::with_capacity(options.len() + 1);
+                for &option in options {
+                    let col = problem.add_column(input.movements[option].value_per_tonne().unwrap_or(0.0), 0.0..);
+                    sum.push((col, 1.0));
+                    entries.push((option, *interval, *segment, Some(col), 0.0));
+                }
+                sum.push((x, -share));
+                problem.add_row(0.0..=0.0, sum);
+                group_x.push(Some((x, share)));
+                continue;
             }
-            sum.push((x, -share));
-            problem.add_row(0.0..=0.0, sum);
-            group_x.push(Some((x, share)));
-            continue;
         }
         group_x.push(None);
+        if free_digging && let Some(&first) = options.first() {
+            *held_dig.entry((input.movements[first].loader, *interval, *segment)).or_default() += tonnes;
+        }
         if let [only] = options.as_slice() {
             entries.push((*only, *interval, *segment, None, *tonnes));
             continue;
@@ -427,7 +459,8 @@ pub(crate) fn reroute(
             };
             let Some(rate) = super::input::interval_rate(loader, interval) else { continue };
             let duration = schedule.durations.get(&(interval, segment)).copied().unwrap_or(0.0);
-            problem.add_row(..=rate.dig_tph * duration + SLACK_T, terms);
+            let held = held_dig.get(&(loader.id, interval, segment)).copied().unwrap_or(0.0);
+            problem.add_row(..=rate.dig_tph * duration + SLACK_T - held, terms);
         }
     }
 
