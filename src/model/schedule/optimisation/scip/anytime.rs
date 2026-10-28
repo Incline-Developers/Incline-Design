@@ -493,11 +493,22 @@ impl Tally {
 /// [`AnytimeSettings::closed_gap`] for a run with no gap target.
 const DEFAULT_CLOSED_GAP: f64 = 1e-4;
 
-/// The period length of the long-term plan solved beside the search. A
-/// second plan over four days, after it, took 20-40 s on the worlds with
-/// blasts and was kept on none of them; the core it took was worth more to
-/// the search.
+/// The long-term plan solved beside the search covers the horizon in about
+/// this many periods, of a day at least and [`LONG_TERM_DAYS`] at most: on
+/// a horizon of a few days, a week-long period would average away the days
+/// the plan is for (a 3-day mine lost 1.4% to it), while 52 days in weeks
+/// solve in seconds.
+const LONG_TERM_PERIODS: u32 = 8;
+
+/// The longest long-term plan period. A second plan over four days, after
+/// a weekly one, took 20-40 s on the worlds with blasts and was kept on none
+/// of them; the core it took was worth more to the search.
 const LONG_TERM_DAYS: u32 = 7;
+
+/// The long-term plan's period for a horizon of `days`.
+fn long_term_days(days: u32) -> u32 {
+    days.div_ceil(LONG_TERM_PERIODS).clamp(1, LONG_TERM_DAYS)
+}
 
 /// A search that gains less than `SEARCH_STALL_GAIN` of its value over
 /// `SEARCH_STALL_S`, once `SEARCH_MIN_S` in, ends and leaves the rest of the
@@ -526,7 +537,7 @@ struct LongTerm {
 }
 
 impl LongTerm {
-    fn start(input: &BlendInput, first: &BlendSolution, limit: Duration, ending: &Arc<AtomicBool>) -> Option<Self> {
+    fn start(input: &BlendInput, first: &BlendSolution, period: u32, limit: Duration, ending: &Arc<AtomicBool>) -> Option<Self> {
         // Leave the digging search time to follow these targets and sweep
         // windows before the final routing reserve begins.
         let limit = limit / 4;
@@ -547,7 +558,7 @@ impl LongTerm {
                 relative_gap: LONG_TERM_GAP,
                 relax: false,
             };
-            let _ = sender.send((LONG_TERM_DAYS, plan::long_term(&parcelled, Some(&seed), LONG_TERM_DAYS, settings, &ending)));
+            let _ = sender.send((period, plan::long_term(&parcelled, Some(&seed), period, settings, &ending)));
         });
         match worker {
             Ok(worker) => Some(Self {
@@ -986,7 +997,15 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
         .then(|| Relaxations::start(input, horizon_days, settings.budget, &ending))
         .flatten();
     let mut long_term = (settings.background_bound && !cancel.load(Ordering::Relaxed))
-        .then(|| LongTerm::start(input, &best.solution, settings.budget.saturating_sub(started.elapsed()), &ending))
+        .then(|| {
+            LongTerm::start(
+                input,
+                &best.solution,
+                long_term_days(horizon_days),
+                settings.budget.saturating_sub(started.elapsed()),
+                &ending,
+            )
+        })
         .flatten();
 
     let days: Vec<u32> = input.intervals.iter().map(|interval| interval.day()).collect::<BTreeSet<_>>().into_iter().collect();
