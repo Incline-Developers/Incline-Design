@@ -123,7 +123,7 @@ impl HVector {
         let end = self.size / 8 * 8;
         // Classify a block together, then visit only its nonzeros. The mask
         // keeps ascending row order without branching on each array entry.
-        for (block, values) in array[..end].chunks_exact(8).enumerate() {
+        for (block, values) in array[..end].as_chunks::<8>().0.iter().enumerate() {
             let mut mask = u8::from(values[0] != 0.0)
                 | (u8::from(values[1] != 0.0) << 1)
                 | (u8::from(values[2] != 0.0) << 2)

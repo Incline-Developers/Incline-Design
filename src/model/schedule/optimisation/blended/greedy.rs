@@ -191,8 +191,13 @@ fn dispatch(input: &BlendInput, original: &BlendInput, plan: Option<&PlanTargets
 /// itself, leaving the search time for another window.
 struct Clearances {
     hours: Vec<f64>,
-    due: Vec<(usize, Vec<(GroundId, f64, f64, f64)>)>,
+    /// The interval each clearance is due by, and the blocks due then.
+    due: Vec<(usize, Vec<DueBlock>)>,
 }
+
+/// A block due cleared: its cheapest truck hours per tonne, the tonnes it
+/// may still stand at, and its tonnes as the dispatch opens.
+type DueBlock = (GroundId, f64, f64, f64);
 
 impl Clearances {
     fn new(input: &BlendInput, original: &BlendInput) -> Self {

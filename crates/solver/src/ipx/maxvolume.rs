@@ -304,8 +304,8 @@ impl LargestWeights {
                 let end = (begin + Self::BLOCK).min(weights.len());
                 let mut local_pair = [-1; 2];
                 let mut local_best = [0.0; 2];
-                for j in begin..end {
-                    Self::consider(j as Int, weights[j].abs(), &mut local_pair, &mut local_best);
+                for (j, weight) in weights[begin..end].iter().enumerate() {
+                    Self::consider((begin + j) as Int, weight.abs(), &mut local_pair, &mut local_best);
                 }
                 // Visit the block's winners in index order to retain the
                 // original scan's first-index tie breaking.

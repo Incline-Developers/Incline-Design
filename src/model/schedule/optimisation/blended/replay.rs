@@ -290,7 +290,7 @@ impl<'a> Checker<'a> {
     /// A candidate keeps its material throughout the replay. Borrow its grades
     /// once rather than searching the material table for every grade and row.
     fn material_grades(&mut self, candidate: usize) -> &'a [f64] {
-        *self.material_grades[candidate].get_or_insert_with(|| self.input.grades.fractions(self.input.movements[candidate].material).unwrap_or_default())
+        self.material_grades[candidate].get_or_insert_with(|| self.input.grades.fractions(self.input.movements[candidate].material).unwrap_or_default())
     }
 
     fn cancelled(&self) -> bool {

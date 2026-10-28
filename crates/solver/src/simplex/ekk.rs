@@ -66,8 +66,11 @@ impl RandomVectors {
     const HELD: usize = 16;
 }
 
+/// The random vectors last made, by their seed and sizes.
+type RandomVectorCache = Vec<((u64, usize, usize), std::rc::Rc<RandomVectors>)>;
+
 thread_local! {
-    static RANDOM_VECTORS: std::cell::RefCell<Vec<((u64, usize, usize), std::rc::Rc<RandomVectors>)>> = const { std::cell::RefCell::new(Vec::new()) };
+    static RANDOM_VECTORS: std::cell::RefCell<RandomVectorCache> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// The LP the simplex solver works on: costs, bounds and the matrix,

@@ -600,10 +600,10 @@ fn find_common_in_leaves<'a, K: HashKey, V>(leaf1: &'a Leaf<K, V>, leaf2: &Leaf<
                 let (i_save, j_save) = (i, j);
                 advance_past_current_hash(leaf1, &mut i, pos);
                 advance_past_current_hash(leaf2, &mut j, pos);
-                for ii in i_save..i {
-                    for jj in j_save..j {
-                        if leaf1.entries[ii].0 == leaf2.entries[jj].0 {
-                            return Some(&leaf1.entries[ii]);
+                for entry1 in &leaf1.entries[i_save..i] {
+                    for entry2 in &leaf2.entries[j_save..j] {
+                        if entry1.0 == entry2.0 {
+                            return Some(entry1);
                         }
                     }
                 }

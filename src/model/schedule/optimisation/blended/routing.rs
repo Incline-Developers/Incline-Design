@@ -247,6 +247,9 @@ pub(crate) fn plan(input: &BlendInput, groups: &Groups, schedule: &BlendSolution
 
 /// The intervals the `index`th of `windows` windows frees, in time order;
 /// one window is the whole horizon.
+/// A column plus a constant, either of which may be missing (`None`, 0).
+type Affine = (Option<Col>, f64);
+
 pub(crate) fn window(input: &BlendInput, windows: usize, index: usize) -> Option<std::ops::Range<usize>> {
     let count = input.intervals.len();
     (windows > 1).then(|| index * count / windows..(index + 1) * count / windows)
@@ -254,6 +257,7 @@ pub(crate) fn window(input: &BlendInput, windows: usize, index: usize) -> Option
 
 /// `schedule` with its dug material rerouted to the most it can earn, or an
 /// error when the LP stops (`stop`) or fails.
+#[allow(clippy::too_many_arguments, reason = "the neighbourhood's settings, each set by its caller's pass")]
 pub(crate) fn reroute(
     input: &BlendInput,
     groups: &Groups,
@@ -701,8 +705,7 @@ pub(crate) fn reroute(
             // accumulate along a full pile's chain, so keep room for them
             // rather than losing the entire routing move to a few kilograms.
             let capacity = (pile.capacity_t - (1e-6 * pile.capacity_t).max(1e-4)).max(0.0);
-            for at in 0..intervals {
-                let (col, offset) = tonnage[&pile.id][at];
+            for (at, &(col, offset)) in tonnage[&pile.id].iter().enumerate().take(intervals) {
                 let mut terms: Vec<(Col, f64)> = col.map(|col| vec![(col, 1.0)]).unwrap_or_default();
                 let mut constant = offset;
                 for cell in 0..input.segments_per_interval {
@@ -849,7 +852,7 @@ pub(crate) fn reroute(
     // Each pile's metal of each targeted grade at the opening of each
     // interval, a column plus a constant: what it held, less the held
     // fraction reclaimed, plus what it received.
-    let mut metal: BTreeMap<(StockpileId, usize), Vec<(Option<Col>, f64)>> = BTreeMap::new();
+    let mut metal: BTreeMap<(StockpileId, usize), Vec<Affine>> = BTreeMap::new();
     // The schedule's metal in each pile at each interval's opening, where
     // the reclaimed metal is linearised: r·M/S about the schedule's r, M, S.
     let mut metal_held: BTreeMap<(StockpileId, usize), Vec<f64>> = BTreeMap::new();
@@ -1022,8 +1025,8 @@ pub(crate) fn reroute(
     }
     for pile in &input.piles {
         let mut held = pile.total_opening(input.grades.count()).0;
-        for at in 0..intervals {
-            let rows: Vec<usize> = fixed_by_interval[at]
+        for (at, at_interval) in fixed_by_interval.iter().enumerate().take(intervals) {
+            let rows: Vec<usize> = at_interval
                 .iter()
                 .copied()
                 .filter(|&index| matches!(share[index], Some((of, _)) if of == pile.id))

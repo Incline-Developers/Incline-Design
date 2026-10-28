@@ -187,7 +187,7 @@ fn equilibration_scale_matrix(
         let mean_equilibration_improvement =
             ((geomean(&original_col_equilibrations) * geomean(&original_row_equilibrations)) / (geomean(&col_equilibrations) * geomean(&row_equilibrations))).sqrt();
         let improvement_factor = extreme_equilibration_improvement * mean_equilibration_improvement * matrix_value_ratio_improvement;
-        !(improvement_factor < 1.0)
+        improvement_factor.partial_cmp(&1.0).is_none_or(std::cmp::Ordering::is_ge)
     };
     let possibly_abandon_scaling = use_scale_strategy != SCALE_STRATEGY_FORCED_EQUILIBRATION;
     if possibly_abandon_scaling && !improves {
