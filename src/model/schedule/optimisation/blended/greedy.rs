@@ -339,7 +339,7 @@ struct State<'a> {
     /// Targets to follow, and the dug tonnes each (loader, destination, day)
     /// has delivered so far.
     plan: Option<&'a PlanTargets>,
-    followed: BTreeMap<(usize, DestinationId, u32), f64>,
+    followed: BTreeMap<super::plan::Route, f64>,
     /// Where the interval programs start from; see [`WarmStarts`].
     warm: RefCell<WarmStarts>,
     /// Each dig bar's current block, by position in its sequence, as the
@@ -1208,30 +1208,47 @@ impl<'a> State<'a> {
         if let Some(plan) = self.plan.filter(|_| priced).filter(|plan| plan.planned.contains(&interval.day())) {
             let day = interval.day();
             let paced = plan.paced(interval);
-            let mut flows: BTreeMap<(usize, DestinationId), Vec<Col>> = BTreeMap::new();
+            let mut flows: BTreeMap<(usize, Activity, DestinationId), Vec<Col>> = BTreeMap::new();
             for &(index, _, col) in &columns {
                 let candidate = &input.movements[index];
                 if let Some(loader) = input_loader(input, candidate.loader) {
-                    flows.entry((loader, candidate.destination)).or_default().push(col);
+                    flows.entry((loader, candidate.activity, candidate.destination)).or_default().push(col);
                 }
             }
-            for ((loader, destination), cols) in flows {
+            // How far the day's digging to each destination is behind its
+            // paced targets so far: crusher room reclaim may fill.
+            let mut behind: BTreeMap<DestinationId, f64> = BTreeMap::new();
+            for (&(loader, activity, destination, target_day), &tonnes) in &plan.routes {
+                if activity == Activity::Dig && target_day == day {
+                    let delivered = self.followed.get(&(loader, Activity::Dig, destination, day)).copied().unwrap_or(0.0);
+                    *behind.entry(destination).or_default() += (tonnes * paced - delivered).max(0.0);
+                }
+            }
+            for ((loader, activity, destination), cols) in flows {
                 let value = plan.values.get(&(loader, destination, day)).copied().unwrap_or(1.0);
                 let follow = plan.follow * value;
                 let overrun = plan.overrun * value;
-                let planned = plan.routes.get(&(loader, destination, day)).copied().unwrap_or(0.0);
+                let planned = plan.routes.get(&(loader, activity, destination, day)).copied().unwrap_or(0.0);
                 // A late release can postpone a route's work across midnight.
                 // Keep its missed tonnes due, but do not pull future days'
                 // work forward. A rebased tail starts with no earlier debt.
                 let first = input.intervals.first().map_or(day, |interval| interval.day());
-                let earlier: f64 = plan.routes.range((loader, destination, first)..(loader, destination, day)).map(|(_, tonnes)| tonnes).sum();
+                let earlier: f64 = plan.routes.range((loader, activity, destination, first)..(loader, activity, destination, day)).map(|(_, tonnes)| tonnes).sum();
                 let delivered: f64 = self
                     .followed
-                    .range((loader, destination, first)..=(loader, destination, day))
-                    .filter(|((_, _, day), _)| plan.planned.contains(day))
+                    .range((loader, activity, destination, first)..=(loader, activity, destination, day))
+                    .filter(|((_, _, _, day), _)| plan.planned.contains(day))
                     .map(|(_, tonnes)| tonnes)
                     .sum();
                 let due = (earlier + planned * paced - delivered).max(0.0);
+                // A crusher's day is shared as the plan shares it: reclaim
+                // takes its own paced target and whatever the digging falls
+                // behind, never the room dug ore is still owed, or it fills
+                // the budget by morning and sends the day's ore to the piles.
+                if activity == Activity::Reclaim && input.destinations.iter().any(|entry| entry.id == destination && entry.kind == DestinationKind::Crusher) {
+                    let room = due + behind.get(&destination).copied().unwrap_or(0.0);
+                    problem.add_row(..=room, cols.iter().map(|col| (*col, 1.0)).collect());
+                }
                 let mut over: Vec<(Col, f64)> = cols.iter().map(|col| (*col, 1.0)).collect();
                 if due > NEGLIGIBLE_T && follow > 0.0 {
                     let kept = problem.add_column(follow, 0.0..=due);
@@ -1446,7 +1463,7 @@ impl<'a> State<'a> {
             for (index, _, tonnes) in &rows {
                 let candidate = &input.movements[*index];
                 if let Some(loader) = input_loader(input, candidate.loader) {
-                    *self.followed.entry((loader, candidate.destination, interval.day())).or_default() += tonnes;
+                    *self.followed.entry((loader, candidate.activity, candidate.destination, interval.day())).or_default() += tonnes;
                 }
             }
         }

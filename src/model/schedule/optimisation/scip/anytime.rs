@@ -77,7 +77,7 @@ use super::{
             drill_blast::{Chain, ChainState, DrillBlastTimeline, NEVER},
             greedy,
             input::{BlendInput, authored_tasks, interval_rate, task_active},
-            plan::PlanTargets,
+            plan::{PlanTargets, Route},
             replay::{BlendSolution, ChunkRow, MovementRow, ReplayReport, replay_as_published},
             rolling::{self, Carry, Stitched},
             utilisation,
@@ -85,7 +85,7 @@ use super::{
     },
     plan::{self, PlanSolve, Settings, Window},
 };
-use crate::model::schedule::optimisation::{Activity, DestinationId, DestinationKind, GroundId, SourceId, StockpileId, TaskKind};
+use crate::model::schedule::optimisation::{Activity, DestinationKind, GroundId, SourceId, StockpileId, TaskKind};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct AnytimeSettings {
@@ -209,8 +209,8 @@ impl Timing {
 fn targets_fingerprint(targets: &PlanTargets) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    for (&(loader, destination, day), tonnes) in &targets.routes {
-        (loader, destination.0, day, tonnes.to_bits()).hash(&mut hasher);
+    for (&(loader, activity, destination, day), tonnes) in &targets.routes {
+        (loader, activity, destination.0, day, tonnes.to_bits()).hash(&mut hasher);
     }
     (targets.follow.to_bits(), targets.overrun.to_bits()).hash(&mut hasher);
     for (key, value) in &targets.values {
@@ -744,7 +744,7 @@ impl LongTerm {
 
 /// A period plan's routes as daily targets, spread over the loader's
 /// scheduled capacity rather than asking for deliveries while its bars are shut.
-fn daily_routes(input: &BlendInput, routes: &BTreeMap<(usize, DestinationId, u32), f64>, periods: &BTreeMap<u32, Vec<u32>>) -> BTreeMap<(usize, DestinationId, u32), f64> {
+fn daily_routes(input: &BlendInput, routes: &BTreeMap<Route, f64>, periods: &BTreeMap<u32, Vec<u32>>) -> BTreeMap<Route, f64> {
     let mut capacity: BTreeMap<(usize, u32), f64> = BTreeMap::new();
     for (loader_index, loader) in input.loaders.iter().enumerate() {
         let tasks: Vec<_> = input.tasks.iter().filter(|task| task.loader == loader.id).collect();
@@ -763,7 +763,7 @@ fn daily_routes(input: &BlendInput, routes: &BTreeMap<(usize, DestinationId, u32
         }
     }
     let mut daily = BTreeMap::new();
-    for (&(loader, destination, label), &tonnes) in routes {
+    for (&(loader, activity, destination, label), &tonnes) in routes {
         let Some(span) = periods.get(&label) else { continue };
         let capacities: Vec<f64> = span.iter().map(|day| capacity.get(&(loader, *day)).copied().unwrap_or(0.0)).collect();
         let total: f64 = capacities.iter().sum();
@@ -775,7 +775,7 @@ fn daily_routes(input: &BlendInput, routes: &BTreeMap<(usize, DestinationId, u32
             } else {
                 tonnes * (capacities[index] / total)
             };
-            *daily.entry((loader, destination, *day)).or_default() += target;
+            *daily.entry((loader, activity, destination, *day)).or_default() += target;
         }
     }
     daily

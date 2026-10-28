@@ -12,12 +12,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::input::BlendInput;
-use crate::model::schedule::optimisation::{DestinationId, Interval};
+use crate::model::schedule::optimisation::{Activity, DestinationId, Interval};
+
+/// A route a plan sets a target for: a loader digging or reclaiming to a
+/// destination on a day. Digging and reclaiming are apart, so neither's
+/// shortfall becomes room for the other.
+pub(crate) type Route = (usize, Activity, DestinationId, u32);
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PlanTargets {
-    /// Planned dug tonnes per (loader index, destination, day).
-    pub(crate) routes: BTreeMap<(usize, DestinationId, u32), f64>,
+    /// Planned tonnes per route.
+    pub(crate) routes: BTreeMap<Route, f64>,
     /// Objective weight per tonne up to the paced target.
     pub(crate) follow: f64,
     /// Objective cost per tonne past the paced target.
@@ -32,14 +37,14 @@ pub(crate) struct PlanTargets {
 }
 
 impl PlanTargets {
-    pub(crate) fn new(input: &BlendInput, routes: BTreeMap<(usize, DestinationId, u32), f64>, follow: f64, overrun: f64) -> Self {
+    pub(crate) fn new(input: &BlendInput, routes: BTreeMap<Route, f64>, follow: f64, overrun: f64) -> Self {
         let mut days: BTreeMap<u32, (f64, f64)> = BTreeMap::new();
         for interval in &input.intervals {
             let span = days.entry(interval.day()).or_insert((interval.start_h, interval.end_h));
             span.0 = span.0.min(interval.start_h);
             span.1 = span.1.max(interval.end_h);
         }
-        let planned = routes.keys().map(|(_, _, day)| *day).collect();
+        let planned = routes.keys().map(|(_, _, _, day)| *day).collect();
         Self {
             routes,
             follow,
@@ -84,14 +89,14 @@ impl PlanTargets {
     }
 
     /// These targets with `days` replaced by `routes`' for them.
-    pub(crate) fn replacing(&self, days: &BTreeSet<u32>, routes: &BTreeMap<(usize, DestinationId, u32), f64>, follow: f64, overrun: f64) -> Self {
+    pub(crate) fn replacing(&self, days: &BTreeSet<u32>, routes: &BTreeMap<Route, f64>, follow: f64, overrun: f64) -> Self {
         let mut merged: BTreeMap<_, _> = self
             .routes
             .iter()
-            .filter(|((_, _, day), _)| !days.contains(day))
+            .filter(|((_, _, _, day), _)| !days.contains(day))
             .map(|(key, tonnes)| (*key, *tonnes))
             .collect();
-        merged.extend(routes.iter().filter(|((_, _, day), _)| days.contains(day)).map(|(key, tonnes)| (*key, *tonnes)));
+        merged.extend(routes.iter().filter(|((_, _, _, day), _)| days.contains(day)).map(|(key, tonnes)| (*key, *tonnes)));
         let mut planned: BTreeSet<u32> = self.planned.difference(days).copied().collect();
         planned.extend(days.iter().copied());
         Self {

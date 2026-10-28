@@ -170,8 +170,9 @@ pub(crate) struct Settings {
 
 /// The solved plan.
 pub(crate) struct PlanSolve {
-    /// Planned dug tonnes per (loader index, destination, day).
-    pub(crate) routes: BTreeMap<(usize, DestinationId, u32), f64>,
+    /// Planned tonnes per route: a loader digging or reclaiming to a
+    /// destination on a day.
+    pub(crate) routes: BTreeMap<crate::model::schedule::optimisation::blended::plan::Route, f64>,
     /// Calendar days covered by each period label.
     pub(crate) period_days: BTreeMap<u32, Vec<u32>>,
     pub(crate) objective: Option<f64>,
@@ -1917,7 +1918,7 @@ fn solve_periods(
             *by_loader_block.entry((loader_index, ground)).or_default() += value;
         }
     }
-    let mut routes: BTreeMap<(usize, DestinationId, u32), f64> = BTreeMap::new();
+    let mut routes: BTreeMap<crate::model::schedule::optimisation::blended::plan::Route, f64> = BTreeMap::new();
     // A split column is the block's, shared between its diggers by what each
     // dug that day.
     for ((ground, _, id, p), column, per_unit, owner) in &routed {
@@ -1926,18 +1927,18 @@ fn solve_periods(
             continue;
         }
         if let Some(loader_index) = owner {
-            *routes.entry((*loader_index, *id, days[*p])).or_default() += tonnes_t;
+            *routes.entry((*loader_index, Activity::Dig, *id, days[*p])).or_default() += tonnes_t;
         } else if let Some(diggers) = dug.get(&(*ground, *p)) {
             let total: f64 = diggers.iter().map(|(_, t)| t).sum();
             for (loader_index, share) in diggers {
-                *routes.entry((*loader_index, *id, days[*p])).or_default() += tonnes_t * share / total;
+                *routes.entry((*loader_index, Activity::Dig, *id, days[*p])).or_default() += tonnes_t * share / total;
             }
         }
     }
     for (loader_index, id, p, column) in &reclaim_routes {
         let tonnes_t = answer.values[*column].max(0.0) * UNIT;
         if tonnes_t > 1e-6 {
-            *routes.entry((*loader_index, *id, days[*p])).or_default() += tonnes_t;
+            *routes.entry((*loader_index, Activity::Reclaim, *id, days[*p])).or_default() += tonnes_t;
         }
     }
     let objective = Some(answer.objective);
