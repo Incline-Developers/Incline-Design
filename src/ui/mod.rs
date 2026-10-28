@@ -163,6 +163,16 @@ impl Gui {
         }
     }
 
+    /// Points to physical pixels in the window, as the last frame drew.
+    pub(crate) fn pixels_per_point(&self) -> f32 {
+        self.ctx.pixels_per_point()
+    }
+
+    /// The window's look, for another surface that has to match it.
+    pub(crate) fn visuals(&self) -> egui::Visuals {
+        self.ctx.global_style().visuals.clone()
+    }
+
     pub(crate) fn register_native_texture(&mut self, device: &wgpu::Device, view: &wgpu::TextureView) -> egui::TextureId {
         self.renderer.register_native_texture(device, view, wgpu::FilterMode::Linear)
     }
@@ -307,7 +317,9 @@ impl Gui {
             self.renderer.free_texture(&id);
         }
 
-        let canvas_rect = if canvas_rect_logical.is_finite() && canvas_rect_logical.is_positive() {
+        let canvas_rect = if editor.is_planning_setup() {
+            ViewportRect { x: 0, y: 0, width: 0, height: 0 }
+        } else if canvas_rect_logical.is_finite() && canvas_rect_logical.is_positive() {
             ViewportRect {
                 x: (canvas_rect_logical.min.x * pixels_per_point).round().max(0.0) as u32,
                 y: (canvas_rect_logical.min.y * pixels_per_point).round().max(0.0) as u32,
@@ -324,6 +336,97 @@ impl Gui {
             commands,
             canvas_rect,
             pointer_gesture_active,
+        }
+    }
+}
+
+/// What the video export paints over each frame it renders: the destination
+/// labels, the machine icons and the machines' names - the parts of
+/// Animate's picture the viewport draws through egui rather than the scene
+/// renderer. Either set of labels can be left out. Its own context and renderer, so the window's frame is
+/// untouched by it and its font atlas never collides with the window's.
+pub(crate) struct VideoOverlay {
+    ctx: egui::Context,
+    renderer: egui_wgpu::Renderer,
+}
+
+impl VideoOverlay {
+    pub(crate) fn new(device: &wgpu::Device, format: wgpu::TextureFormat, visuals: egui::Visuals) -> Self {
+        let ctx = egui::Context::default();
+        setup_custom_fonts(&ctx);
+        ctx.set_visuals(visuals);
+        Self {
+            ctx,
+            renderer: egui_wgpu::Renderer::new(device, format, egui_wgpu::RendererOptions::default()),
+        }
+    }
+
+    /// Paint over `target`, `size` physical pixels, at `pixels_per_point`.
+    /// The editor's projections (icons, pins, flows) must already be in this
+    /// target's pixels.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn paint(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        size: [u32; 2],
+        pixels_per_point: f32,
+        editor: &EditorState,
+        document: &Document,
+        project: &UiProjectView,
+        labels: crate::rendering::graphics::video_capture::VideoLabels,
+    ) {
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size[0] as f32, size[1] as f32) / pixels_per_point);
+        let mut raw_input = egui::RawInput {
+            screen_rect: Some(rect),
+            ..Default::default()
+        };
+        raw_input.viewports.entry(egui::ViewportId::ROOT).or_default().native_pixels_per_point = Some(pixels_per_point);
+        let output = self.ctx.run_ui(raw_input, |ui| {
+            if labels.destinations {
+                draw_haul_pin_labels(ui, editor, project, document, rect);
+            }
+            draw_machine_icons(ui, editor, rect);
+            if labels.machines {
+                draw_machine_labels(ui, editor, &project.schedule, rect);
+            }
+        });
+        for (id, deltas) in &output.textures_delta.set {
+            for delta in deltas {
+                self.renderer.update_texture(device, queue, *id, delta);
+            }
+        }
+        let jobs = self.ctx.tessellate(output.shapes, output.pixels_per_point);
+        let screen = ScreenDescriptor {
+            size_in_pixels: size,
+            pixels_per_point: output.pixels_per_point,
+        };
+        for buffer in self.renderer.update_buffers(device, queue, encoder, &jobs, &screen) {
+            queue.submit(std::iter::once(buffer));
+        }
+        {
+            let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Video overlay pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            self.renderer.render(&mut pass.forget_lifetime(), &jobs, &screen);
+        }
+        for id in &output.textures_delta.free {
+            self.renderer.free_texture(id);
         }
     }
 }
@@ -584,6 +687,9 @@ fn draw_ui(
     // Before any panel is claimed: every region reads the preference back off
     // the context as it is drawn. See `chrome::set_enabled`.
     chrome::set_enabled(root_ui.ctx(), editor.panel_chrome);
+    // Every schedule page writes its times through this; see
+    // `schedule_periods::set_clock`.
+    elements::schedule_periods::set_clock(project.schedule.periods().start_date);
 
     // The window background sits behind every panel, but its shape depends on
     // where the scene ends up, which is only known once they have all been
@@ -615,7 +721,83 @@ fn draw_ui(
     // column, the tools and the scene all start below it.
     let viewport_bar_rect = elements::viewport_bar::draw_viewport_bar(root_ui, editor, project, commands);
 
-    let explorer = elements::explorer::draw_explorer(root_ui, editor, project, commands);
+    if editor.is_planning_setup() {
+        let explorer = if editor.is_schedule_pane() {
+            elements::explorer::ExplorerLayout::empty()
+        } else {
+            elements::explorer::draw_explorer(root_ui, editor, project, document, commands)
+        };
+        let console_rect = editor.show_console.then(|| {
+            let available_height = root_ui.available_height();
+            let toolbar_height = elements::toolbars::bottom_toolbar_height(root_ui.ctx());
+            let (console_min, console_max) = chrome::panel_size_limits(root_ui.ctx(), available_height - toolbar_height);
+            elements::console::draw_console(root_ui, console_min, console_max, frame_context.console_snapshot)
+        });
+        let console = console_rect.unwrap_or(egui::Rect::NOTHING);
+        let planning_page = editor.planning_page;
+        let mut planning_layout = elements::planning_setup::PlanningLayout::default();
+        let details = if editor.is_solids_view() {
+            // The View page arranges a column of its own beside its inspector,
+            // so it hands back the same layout the Setup steps do.
+            planning_layout = elements::solids_view::draw_details(root_ui, editor, project, document, commands);
+            planning_layout.rect
+        } else if editor.is_schedule_gantt() {
+            // The Gantt owns the whole pane rather than arranging islands in
+            // it, so - like the Solids View - it hands its own rect back to be
+            // rounded off as one region.
+            elements::schedule_gantt::draw_details(root_ui, editor, project, document, commands)
+        } else if editor.is_schedule_charts() {
+            elements::schedule_charts::draw_details(root_ui, editor, project, document, commands)
+        } else if editor.is_schedule_calendar() {
+            elements::schedule_calendar::draw_details(root_ui, editor, project, document, commands)
+        } else {
+            planning_layout = elements::planning_setup::draw_details(root_ui, editor, project, document, block_models, commands, planning_page);
+            planning_layout.rect
+        };
+        dialogs::about::draw_about_dialog(root_ui, editor);
+        elements::properties::draw_preferences(root_ui, editor, commands);
+        if editor.renaming_item.is_some() {
+            dialogs::editing::draw_rename_dialog(root_ui, commands, editor);
+        }
+        #[cfg(target_arch = "wasm32")]
+        if editor.new_project_dialog_open {
+            dialogs::editing::draw_create_project_dialog(root_ui, commands, editor, details);
+        }
+        #[cfg(target_arch = "wasm32")]
+        let naming_browser_project = editor.new_project_dialog_open;
+        #[cfg(not(target_arch = "wasm32"))]
+        let naming_browser_project = false;
+        if project.needs_startup_dialog && !naming_browser_project {
+            dialogs::editing::draw_select_project_dialog(root_ui, project, commands);
+        }
+        *canvas_rect_out = egui::Rect::ZERO;
+        geometry_dirty |= draw_global_dialogs(root_ui, editor, document, project, block_models, drill_holes, commands);
+        let ctx = root_ui.ctx();
+        chrome::paint_window_background(ctx, window_background, egui::Rect::ZERO);
+        let details_region = if editor.is_solids_view() || editor.is_schedule_pane() {
+            details
+        } else {
+            egui::Rect::NOTHING
+        };
+        chrome::paint_regions(
+            ctx,
+            [viewport_bar_rect, console, details_region]
+                .into_iter()
+                .chain(explorer.regions)
+                .chain(planning_layout.regions),
+        );
+        chrome::paint_grips(ctx, planning_layout.grips);
+        chrome::paint_grips(
+            ctx,
+            explorer
+                .grips
+                .into_iter()
+                .chain([chrome::Grip::new(console, chrome::Edge::Top, root_ui.scope_id().with(elements::console::PANEL_ID))]),
+        );
+        return geometry_dirty;
+    }
+
+    let explorer = elements::explorer::draw_explorer(root_ui, editor, project, document, commands);
 
     // The console belongs below the bottom toolbar. Reserve the toolbar's height
     // before showing the console so dragging it to its maximum cannot starve the
@@ -634,6 +816,41 @@ fn draw_ui(
     }
 
     let (bottom_toolbar_rect, cursor_modes_centre) = elements::toolbars::draw_bottom_toolbar(root_ui, editor, commands);
+    let animation_timeline_rect = if editor.is_schedule_animation() {
+        elements::schedule_animation::draw_timeline(root_ui, editor, document, &project.schedule, commands)
+    } else {
+        // As above: keep the root auto-id sequence the same whether or not
+        // this optional panel is drawn, so leaving Animate does not renumber
+        // every panel after it.
+        root_ui.skip_ahead_auto_ids(1);
+        egui::Rect::NOTHING
+    };
+
+    // The planning cut steps' panels, down the right edge. Claimed after the
+    // two strips below it, so it stops at the bottom toolbar's top and they
+    // carry on underneath it, and after the viewport bar, so it starts
+    // directly under it.
+    // Its regions and seams: one of each for an island, more for a column
+    // of panes.
+    let planning_island: Option<(Vec<egui::Rect>, Vec<chrome::Grip>)> = if editor.is_planning_cut_step() {
+        let island = if editor.is_dig_strips_step() {
+            elements::dig_strips::draw_panel(root_ui, editor, document, commands)
+        } else {
+            elements::blasting::draw_panel(root_ui, editor, document, commands)
+        };
+        Some((island.regions, vec![island.grip]))
+    } else if editor.is_planning_viewport() && editor.planning_page == state::PlanningPage::Haulage {
+        let column = elements::haulage::draw_panel(root_ui, editor, document, project, commands);
+        Some((column.regions, column.grips))
+    } else {
+        None
+    };
+    if planning_island.is_none() {
+        // `Panel::show` creates one direct child of `root_ui`. Keep the root
+        // auto-id sequence identical in the workspaces without this panel, or
+        // every panel drawn after it receives a different unique id.
+        root_ui.skip_ahead_auto_ids(1);
+    }
 
     // Down the right edge. Claimed after the two strips below it, so it stops
     // at the bottom toolbar's top and they carry on underneath it, and after
@@ -656,8 +873,8 @@ fn draw_ui(
 
     // --- Compute canvas rect (area not occupied by panels) ---
     let canvas_bottom = console_rect.map_or_else(
-        || status_bar_rect.top().min(bottom_toolbar_rect.top()),
-        |rect| status_bar_rect.top().min(bottom_toolbar_rect.top()).min(rect.top()),
+        || status_bar_rect.top().min(bottom_toolbar_rect.top()).min(animation_timeline_rect.top()),
+        |rect| status_bar_rect.top().min(bottom_toolbar_rect.top()).min(animation_timeline_rect.top()).min(rect.top()),
     );
     // The scene is a region like any other, so it takes the same gap around it
     // as its neighbours do.
@@ -964,6 +1181,7 @@ fn draw_ui(
         dialogs::editing::draw_select_project_dialog(root_ui, project, commands);
     }
     dialogs::files::draw_vertical_exaggeration_dialog(root_ui, editor, canvas_rect);
+    dialogs::video_export::draw_video_export_dialog(root_ui, editor, canvas_rect, commands);
     dialogs::files::draw_grid_options_dialog(root_ui, editor, canvas_rect);
     dialogs::editing::draw_move_to_layer_dialog(root_ui, editor, project, commands);
     dialogs::editing::draw_move_to_axis_dialog(root_ui, editor, commands);
@@ -1110,6 +1328,60 @@ fn draw_ui(
         dialogs::editing::draw_finish_polyline_menu(root_ui, commands, editor);
     }
 
+    if editor.haul_draw
+        && editor.is_haulage_page()
+        && root_ui.input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary) && i.pointer.hover_pos().is_some_and(|p| canvas_rect.contains(p)))
+    {
+        commands.push(UiCommand::FinishHaulRoad);
+    }
+    if let Some(handle) = editor
+        .tri_hover_handles
+        .iter()
+        .find(|id| matches!(id, crate::model::SceneEntityId::HaulRoad(_) | crate::model::SceneEntityId::HaulNode(_)))
+        && let Some(pos) = root_ui.ctx().pointer_hover_pos().filter(|p| canvas_rect.contains(*p))
+    {
+        let network = document.haulage();
+        let text = match *handle {
+            crate::model::SceneEntityId::HaulRoad(id) => network.road(id).map(|r| {
+                let points = network.points(r);
+                let length: f64 = points.windows(2).map(|p| p[0].distance(p[1])).sum();
+                let grade = points.windows(2).map(|p| crate::model::haulage::network::grade(p[0], p[1]).abs()).fold(0.0, f64::max);
+                format!(
+                    "{} · {:.0} m · {:.1}% · {}",
+                    r.name,
+                    length,
+                    grade * 100.0,
+                    r.speed_limit_kph.map(|v| format!("{v:.0} km/h")).unwrap_or_else(|| tr!("haul-unlimited"))
+                )
+            }),
+            crate::model::SceneEntityId::HaulNode(id) => network.node(id).map(|n| {
+                format!(
+                    "{} · {:.1} m RL · {}",
+                    elements::haulage::role_label(&project.haul_destinations, n.role),
+                    n.pos.z,
+                    tr!("haul-drag-hint")
+                )
+            }),
+            _ => None,
+        };
+        if let Some(text) = text {
+            let painter = root_ui.painter().with_clip_rect(canvas_rect);
+            let galley = painter.layout_no_wrap(text, egui::FontId::proportional(12.0), root_ui.visuals().text_color());
+            let rect = egui::Rect::from_min_size(pos + egui::vec2(12.0, 18.0), galley.size() + egui::vec2(12.0, 8.0));
+            painter.rect_filled(rect, widgets::toolbar::GROUP_CORNER_RADIUS, root_ui.visuals().window_fill());
+            painter.galley(rect.min + egui::vec2(6.0, 4.0), galley, root_ui.visuals().text_color());
+        }
+    }
+    draw_haul_pin_labels(root_ui, editor, project, document, canvas_rect);
+    // Under the flows' read-out, which is what the pointer is asking for.
+    draw_machine_icons(root_ui, editor, canvas_rect);
+    draw_machine_labels(root_ui, editor, &project.schedule, canvas_rect);
+    draw_haul_flows(root_ui, editor, canvas_rect);
+    if editor.is_schedule_animation()
+        && let Some(frame) = editor.video_export_frame
+    {
+        draw_video_frame_marker(root_ui, frame, canvas_rect);
+    }
     // --- Canvas overlays ---
 
     // Orbit marker (clipped to the 3D viewport)
@@ -1121,14 +1393,33 @@ fn draw_ui(
     }
 
     if editor.show_world_axis_gizmo {
-        elements::cursors::draw_orientation_gizmo(
+        let gizmo = elements::cursors::draw_orientation_gizmo(
             root_ui,
+            egui::Id::unique("world_orientation_gizmo"),
             canvas_rect,
             frame_context.camera_forward,
             frame_context.camera_up,
             editor.slice_mode_enabled,
-            commands,
         );
+        if let Some(view) = gizmo.clicked {
+            commands.push(UiCommand::SetStandardView(view));
+        }
+    }
+
+    if editor.is_planning_cut_step() && editor.cut_labels() {
+        let painter = root_ui.painter().with_clip_rect(canvas_rect);
+        let scale = root_ui.ctx().pixels_per_point();
+        for (name, (x, y), selected) in &editor.blast_labels {
+            let center = egui::pos2(x / scale, y / scale);
+            let galley = painter.layout_no_wrap(
+                name.clone(),
+                egui::FontId::proportional(15.0),
+                if *selected { egui::Color32::from_rgb(255, 190, 40) } else { egui::Color32::WHITE },
+            );
+            let rect = egui::Rect::from_center_size(center, galley.size());
+            painter.rect_filled(rect.expand2(egui::vec2(5.0, 3.0)), 3.0, egui::Color32::from_black_alpha(190));
+            painter.galley(rect.min, galley, egui::Color32::WHITE);
+        }
     }
 
     // The drawn cursor, and with it the decision to hide the system pointer.
@@ -1151,31 +1442,36 @@ fn draw_ui(
     let ctx = root_ui.ctx().clone();
     chrome::paint_window_background(&ctx, window_background, scene_rect);
     let console_claimed = console_rect.unwrap_or(egui::Rect::NOTHING);
-    let products_claimed = explorer.products.unwrap_or(egui::Rect::NOTHING);
+    let (planning_regions, planning_grips) = planning_island.unwrap_or_default();
     let borehole_inspector_claimed = borehole_inspector_rect.unwrap_or(egui::Rect::NOTHING);
     chrome::paint_regions(
         &ctx,
         [
             viewport_bar_rect,
-            explorer.tree,
             left_toolbar_rect,
             bottom_toolbar_rect,
+            animation_timeline_rect,
             console_claimed,
-            products_claimed,
             borehole_inspector_claimed,
             scene_claimed,
-        ],
+        ]
+        .into_iter()
+        .chain(planning_regions),
     );
     // Centre the explorer resize grip on its full-height column.
     let panel_id = |salt: &str| root_ui.scope_id().with(salt);
     chrome::paint_grips(
         &ctx,
-        [
-            chrome::Grip::new(explorer.column, chrome::Edge::Right, panel_id(elements::explorer::PANEL_ID)),
-            chrome::Grip::new(console_claimed, chrome::Edge::Top, panel_id(elements::console::PANEL_ID)).centred_at_x(cursor_modes_centre),
-            chrome::Grip::new(products_claimed, chrome::Edge::Top, panel_id(elements::products::PANEL_ID)),
-            chrome::Grip::new(borehole_inspector_claimed, chrome::Edge::Left, panel_id(elements::borehole_inspector::PANEL_ID)),
-        ],
+        explorer
+            .grips
+            .into_iter()
+            .chain([
+                chrome::Grip::new(console_claimed, chrome::Edge::Top, panel_id(elements::console::PANEL_ID)).centred_at_x(cursor_modes_centre),
+                chrome::Grip::new(borehole_inspector_claimed, chrome::Edge::Left, panel_id(elements::borehole_inspector::PANEL_ID)),
+            ])
+            // The island names its own seam, so the grip lights up for whichever
+            // of the right-edge panels the workspace drew.
+            .chain(planning_grips),
     );
 
     geometry_dirty
@@ -1252,6 +1548,8 @@ fn draw_global_dialogs(
     commands: &mut Vec<UiCommand>,
 ) -> bool {
     let mut geometry_dirty = false;
+    // An Improve run goes on whichever page is open, and so does its card.
+    elements::improve_progress::draw_improve_card(root_ui, editor, commands);
     dialogs::survey::draw_definitions_dialog(root_ui, editor, commands);
     dialogs::survey::draw_transform_dialog(root_ui, editor, project.has_active_project, commands);
     dialogs::drill_hole::draw_drill_hole_color_dialog(root_ui, editor, drill_holes, commands);
@@ -1274,6 +1572,8 @@ fn draw_global_dialogs(
     if editor.lossy_save_confirm_open {
         dialogs::confirmations::draw_lossy_save_dialog(root_ui, commands, editor, project);
     }
+
+    elements::haulage::draw_promote_dialog(root_ui, editor, project, commands);
 
     // Delete selection confirmation
     if editor.delete_confirm_open {
@@ -1337,6 +1637,10 @@ fn draw_global_dialogs(
 
     if editor.tri_cut_surface_open {
         dialogs::triangulation::draw_cut_surface_dialog(root_ui, editor, project, commands);
+    }
+
+    if editor.tri_solid_open {
+        dialogs::triangulation::draw_build_solid_dialog(root_ui, editor, project, commands);
     }
 
     if editor.tri_cut_pitshell_open {
@@ -1594,4 +1898,290 @@ fn theme_visuals(dark_mode: bool, selection_color: egui::Color32) -> egui::Visua
         stock.active.weak_bg_fill = egui::Color32::from_gray(55);
     }
     visuals
+}
+
+/// Animate's haul flows: the loaded routes trucks are on at the shown
+/// instant. Stripes run from the loader towards the destination, faster and
+/// wider - and the line under them warmer - the more tonnes per hour cross
+/// that piece of road, so where the haulage concentrates reads at a glance.
+/// Animate's machines too far off to draw as models: a badge each, on the
+/// block or blast it works. Machines sharing one stand side by side.
+/// The part of the viewport a video of `width` x `height` frames: the largest
+/// centred rect of its shape. The rest is dimmed, so the shot can be set up
+/// before recording and watched while it records.
+fn draw_video_frame_marker(ui: &egui::Ui, (width, height): (u32, u32), canvas_rect: egui::Rect) {
+    let aspect = width.max(1) as f32 / height.max(1) as f32;
+    let size = if canvas_rect.aspect_ratio() > aspect {
+        egui::vec2(canvas_rect.height() * aspect, canvas_rect.height())
+    } else {
+        egui::vec2(canvas_rect.width(), canvas_rect.width() / aspect)
+    };
+    let frame = egui::Rect::from_center_size(canvas_rect.center(), size);
+    let painter = ui.painter().with_clip_rect(canvas_rect);
+    let shade = egui::Color32::from_black_alpha(110);
+    for outside in [
+        egui::Rect::from_min_max(canvas_rect.min, egui::pos2(frame.left(), canvas_rect.bottom())),
+        egui::Rect::from_min_max(egui::pos2(frame.right(), canvas_rect.top()), canvas_rect.max),
+        egui::Rect::from_min_max(egui::pos2(frame.left(), canvas_rect.top()), egui::pos2(frame.right(), frame.top())),
+        egui::Rect::from_min_max(egui::pos2(frame.left(), frame.bottom()), egui::pos2(frame.right(), canvas_rect.bottom())),
+    ] {
+        if outside.is_positive() {
+            painter.rect_filled(outside, 0.0, shade);
+        }
+    }
+    painter.rect_stroke(
+        frame.shrink(1.0),
+        0.0,
+        egui::Stroke::new(1.5, egui::Color32::from_white_alpha(200)),
+        egui::StrokeKind::Inside,
+    );
+}
+
+/// Destination points: the name, and what trucks do there, on a pill that
+/// stays legible over pale ground. Zoomed out, a label that would land on one
+/// already drawn gives way rather than stacking illegibly.
+fn draw_haul_pin_labels(ui: &egui::Ui, editor: &EditorState, project: &UiProjectView, document: &Document, canvas_rect: egui::Rect) {
+    let scale = ui.ctx().pixels_per_point();
+    let mut placed: Vec<egui::Rect> = Vec::new();
+    for ((x, y), role) in &editor.haul_pins {
+        use crate::model::{haulage::NodeRole, schedule::DestinationKind};
+        let (name, kind) = match role.destination() {
+            crate::model::schedule::DestinationId::Standalone(id) => project.schedule.routing().standalone(id).map(|d| (d.name.clone(), Some(d.kind))),
+            crate::model::schedule::DestinationId::Solid(id) => document.solid(id).map(|d| (d.name.clone(), DestinationKind::of_solid(d.kind))),
+        }
+        .unwrap_or_else(|| (tr!("destination-unresolved"), None));
+        // What the destination is; and for a stockpile dumped at one point
+        // and reclaimed at another, which point this is.
+        let what = match (kind, role) {
+            (Some(DestinationKind::Stockpile), NodeRole::Dump(_)) => tr!("haul-pin-stockpile-dump"),
+            (Some(DestinationKind::Stockpile), NodeRole::Reclaim(_)) => tr!("haul-pin-stockpile-reclaim"),
+            (Some(kind), _) => kind.label(),
+            (None, _) => String::new(),
+        };
+        let painter = ui.painter().with_clip_rect(canvas_rect);
+        let visuals = ui.visuals();
+        let mut job = egui::text::LayoutJob::default();
+        job.append(&name, 0.0, egui::TextFormat::simple(egui::FontId::proportional(12.0), visuals.strong_text_color()));
+        job.append(&what, 6.0, egui::TextFormat::simple(egui::FontId::proportional(11.0), visuals.weak_text_color()));
+        let galley = painter.layout_job(job);
+        let anchor = egui::pos2(x / scale, y / scale);
+        let rect = egui::Rect::from_min_size(anchor + egui::vec2(10.0, -galley.size().y - 14.0), galley.size() + egui::vec2(12.0, 6.0));
+        if placed.iter().any(|other| other.intersects(rect)) {
+            continue;
+        }
+        placed.push(rect);
+        painter.line_segment([anchor, rect.left_bottom()], egui::Stroke::new(1.0, visuals.weak_text_color()));
+        painter.rect(
+            rect,
+            widgets::toolbar::GROUP_CORNER_RADIUS,
+            visuals.window_fill().gamma_multiply(0.92),
+            visuals.window_stroke(),
+            egui::StrokeKind::Inside,
+        );
+        painter.galley(rect.min + egui::vec2(6.0, 3.0), galley, visuals.text_color());
+    }
+}
+
+/// The height a machine icon is drawn at, in points.
+const MACHINE_ICON_HEIGHT: f32 = 30.0;
+
+/// Animate's machine icons gathered by the job they stand on - machines
+/// sharing a block or blast share its anchor - each group's in drawing
+/// order, and the groups with a machine at work last, so theirs go on top.
+fn machine_icon_groups(editor: &EditorState, scale: f32) -> Vec<(egui::Pos2, Vec<&crate::rendering::machines::MachineIcon>)> {
+    let mut groups: Vec<(egui::Pos2, Vec<&crate::rendering::machines::MachineIcon>)> = Vec::new();
+    for icon in &editor.animation_machine_icons {
+        let at = egui::pos2(icon.at.0 / scale, icon.at.1 / scale);
+        match groups.iter_mut().find(|(held, _)| held.distance(at) < 1.0) {
+            Some((_, members)) => members.push(icon),
+            None => groups.push((at, vec![icon])),
+        }
+    }
+    groups.sort_by_key(|(_, members)| members.iter().any(|icon| icon.working));
+    for (_, members) in &mut groups {
+        members.sort_by_key(|icon| (icon.model, !icon.working, icon.agent));
+    }
+    groups
+}
+
+fn draw_machine_icons(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect) {
+    const GAP: f32 = 1.0;
+    if editor.animation_machine_icons.is_empty() {
+        return;
+    }
+    let painter = ui.painter().with_clip_rect(canvas_rect);
+    for (at, members) in machine_icon_groups(editor, ui.ctx().pixels_per_point()) {
+        let badges: Vec<_> = members
+            .iter()
+            .filter_map(|icon| {
+                let texture = machine_icon_texture(ui.ctx(), icon.model, icon.working)?;
+                let size = texture.size_vec2();
+                Some((texture, MACHINE_ICON_HEIGHT * size.x / size.y.max(1.0)))
+            })
+            .collect();
+        let width = badges.iter().map(|badge| badge.1 + GAP).sum::<f32>() - GAP;
+        let mut left = at.x - width / 2.0;
+        for (texture, icon_width) in badges {
+            let rect = egui::Rect::from_min_size(egui::pos2(left, at.y - MACHINE_ICON_HEIGHT / 2.0), egui::vec2(icon_width, MACHINE_ICON_HEIGHT));
+            left += icon_width + GAP;
+            if canvas_rect.intersects(rect) {
+                painter.image(texture.id(), rect, egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+            }
+        }
+    }
+}
+
+/// Each machine's name: under the model of one drawn close up, and under
+/// the icons of the rest - one line naming every machine on a job, in the
+/// order its icons run. Like the destination labels, one that would land on
+/// a label already drawn gives way.
+fn draw_machine_labels(ui: &egui::Ui, editor: &EditorState, plan: &crate::model::schedule::SchedulePlan, canvas_rect: egui::Rect) {
+    let scale = ui.ctx().pixels_per_point();
+    let name = |agent| plan.agent(agent).map(|agent| agent.name.as_str()).unwrap_or_default();
+    let mut lines: Vec<(egui::Pos2, String)> = editor
+        .animation_machine_labels
+        .iter()
+        .map(|label| (egui::pos2(label.at.0 / scale, label.at.1 / scale + 10.0), name(label.agent).to_owned()))
+        .collect();
+    // Those at work last among the icons, as drawn, so they win a clash -
+    // reversed here because the first label placed is the one kept.
+    for (at, members) in machine_icon_groups(editor, scale).into_iter().rev() {
+        let names: Vec<&str> = members.iter().map(|icon| name(icon.agent)).filter(|name| !name.is_empty()).collect();
+        lines.push((egui::pos2(at.x, at.y + MACHINE_ICON_HEIGHT / 2.0 + 2.0), names.join(" · ")));
+    }
+    let painter = ui.painter().with_clip_rect(canvas_rect);
+    let visuals = ui.visuals();
+    let mut placed: Vec<egui::Rect> = Vec::new();
+    for (top_centre, text) in lines {
+        if text.is_empty() {
+            continue;
+        }
+        let galley = painter.layout_no_wrap(text, egui::FontId::proportional(11.0), visuals.strong_text_color());
+        let rect = egui::Rect::from_min_size(top_centre - egui::vec2(galley.size().x / 2.0 + 5.0, 0.0), galley.size() + egui::vec2(10.0, 4.0));
+        if !canvas_rect.intersects(rect) || placed.iter().any(|other| other.intersects(rect)) {
+            continue;
+        }
+        placed.push(rect);
+        painter.rect_filled(rect, widgets::toolbar::GROUP_CORNER_RADIUS, visuals.window_fill().gamma_multiply(0.85));
+        painter.galley(rect.min + egui::vec2(5.0, 2.0), galley, visuals.strong_text_color());
+    }
+}
+
+/// A machine's icon, uploaded once: in grey for a machine standing idle, and
+/// ringed by a light halo so it reads over dark ground and light alike.
+fn machine_icon_texture(ctx: &egui::Context, model: crate::rendering::machines::MachineModel, working: bool) -> Option<egui::TextureHandle> {
+    use crate::rendering::machines::MachineModel;
+    let id = egui::Id::unique(("machine-icon", model, working));
+    if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
+        return Some(texture);
+    }
+    let bytes: &[u8] = match model {
+        MachineModel::Excavator => include_bytes!("../../res/ui/icons/machine_excavator.png"),
+        MachineModel::WheelLoader => include_bytes!("../../res/ui/icons/machine_wheel_loader.png"),
+        MachineModel::Dozer => include_bytes!("../../res/ui/icons/machine_dozer.png"),
+        MachineModel::DrillRig => include_bytes!("../../res/ui/icons/machine_drill.png"),
+        MachineModel::Mpu => include_bytes!("../../res/ui/icons/machine_mpu.png"),
+    };
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::ALPHA | png::Transformations::STRIP_16);
+    let mut reader = decoder.read_info().ok()?;
+    let mut pixels = vec![0; reader.output_buffer_size()?];
+    let info = reader.next_frame(&mut pixels).ok()?;
+    pixels.truncate(info.buffer_size());
+    if info.color_type != png::ColorType::Rgba {
+        return None;
+    }
+    if !working {
+        for pixel in pixels.as_chunks_mut::<4>().0 {
+            let luma = 0.3 * f32::from(pixel[0]) + 0.59 * f32::from(pixel[1]) + 0.11 * f32::from(pixel[2]);
+            let grey = (40.0 + 0.6 * luma) as u8;
+            *pixel = [grey, grey, grey, pixel[3]];
+        }
+    }
+    // The halo: the icon's shape grown by a few pixels, under the icon.
+    const HALO: usize = 3;
+    let halo = if working { [255.0, 255.0, 255.0] } else { [215.0, 215.0, 215.0] };
+    let (width, height) = (info.width as usize, info.height as usize);
+    let (wide, high) = (width + 2 * HALO, height + 2 * HALO);
+    let alpha = |x: isize, y: isize| -> f32 {
+        if x < 0 || y < 0 || x as usize >= width || y as usize >= height {
+            return 0.0;
+        }
+        f32::from(pixels[(y as usize * width + x as usize) * 4 + 3]) / 255.0
+    };
+    let reach = HALO as isize;
+    let mut ringed = vec![0u8; wide * high * 4];
+    for y in 0..high {
+        for x in 0..wide {
+            let (sx, sy) = (x as isize - reach, y as isize - reach);
+            let mut cover: f32 = 0.0;
+            for dy in -reach..=reach {
+                for dx in -reach..=reach {
+                    if dx * dx + dy * dy <= reach * reach {
+                        cover = cover.max(alpha(sx + dx, sy + dy));
+                    }
+                }
+            }
+            let halo_alpha = cover * 0.9;
+            let icon_alpha = alpha(sx, sy);
+            let out_alpha = icon_alpha + halo_alpha * (1.0 - icon_alpha);
+            let at = (y * wide + x) * 4;
+            if out_alpha > 0.0 {
+                for channel in 0..3 {
+                    let icon = if icon_alpha > 0.0 {
+                        f32::from(pixels[(sy as usize * width + sx as usize) * 4 + channel])
+                    } else {
+                        0.0
+                    };
+                    ringed[at + channel] = ((icon * icon_alpha + halo[channel] * halo_alpha * (1.0 - icon_alpha)) / out_alpha) as u8;
+                }
+                ringed[at + 3] = (out_alpha * 255.0) as u8;
+            }
+        }
+    }
+    let image = egui::ColorImage::from_rgba_unmultiplied([wide, high], &ringed);
+    let texture = ctx.load_texture(format!("machine-icon-{model:?}-{working}"), image, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
+    Some(texture)
+}
+
+fn draw_haul_flows(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect) {
+    // The flows themselves are scene strokes (`rebuild_flow_scene`), hidden
+    // where solids stand in front of them; this adds the read-outs.
+    let flows = &editor.animation_flows;
+    if flows.is_empty() {
+        return;
+    }
+    let scale = ui.ctx().pixels_per_point();
+    let painter = ui.painter().with_clip_rect(canvas_rect);
+    let busiest = flows.iter().map(|f| f.tph).fold(0.0, f64::max).max(1e-9);
+    let pointer = ui.ctx().pointer_hover_pos().filter(|p| canvas_rect.contains(*p));
+    let mut hovered: Option<f64> = None;
+    if let Some(p) = pointer {
+        for flow in flows {
+            let a = egui::pos2(flow.a.0 / scale, flow.a.1 / scale);
+            let b = egui::pos2(flow.b.0 / scale, flow.b.1 / scale);
+            let length = a.distance(b);
+            if length < 0.5 {
+                continue;
+            }
+            let direction = (b - a) / length;
+            let width = 3.0 + 4.0 * (flow.tph / busiest) as f32;
+            let t = (p - a).dot(direction).clamp(0.0, length);
+            if p.distance(a + direction * t) <= width + 4.0 {
+                hovered = Some(hovered.map_or(flow.tph, |h: f64| h.max(flow.tph)));
+            }
+        }
+    }
+    if let (Some(tph), Some(p)) = (hovered, pointer) {
+        let galley = painter.layout_no_wrap(
+            tr!("haul-flow-hover", rate = format!("{tph:.0}")),
+            egui::FontId::proportional(12.0),
+            ui.visuals().text_color(),
+        );
+        let rect = egui::Rect::from_min_size(p + egui::vec2(12.0, 18.0), galley.size() + egui::vec2(12.0, 8.0));
+        painter.rect_filled(rect, widgets::toolbar::GROUP_CORNER_RADIUS, ui.visuals().window_fill());
+        painter.galley(rect.min + egui::vec2(6.0, 4.0), galley, ui.visuals().text_color());
+    }
+    ui.ctx().request_repaint();
 }

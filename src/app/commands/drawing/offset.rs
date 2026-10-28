@@ -100,7 +100,7 @@ impl<'a> App<'a> {
     /// colliding with triangulations is on - a ring stopped by topography at
     /// different distances around its sweep genuinely is not a circle, so that
     /// case falls back to the general polyline path.
-    fn offset_circle_result(&self, object: &Object, cursor_world_xy: glam::DVec2) -> Option<(glam::DVec3, f64)> {
+    fn offset_circle_result(&self, object: &Object, cursor_world_xy: glam::DVec2, scale: f64) -> Option<(glam::DVec3, f64)> {
         if self.editor.offset_collide_with_triangulation {
             return None;
         }
@@ -111,7 +111,7 @@ impl<'a> App<'a> {
                 let dist = if tan_angle.abs() < 1e-9 { 0.0 } else { ((target_rl - center.z) / tan_angle).abs() };
                 (dist, target_rl)
             }
-            None => (self.editor.offset_horiz_dist.abs(), center.z + self.editor.offset_z_delta),
+            None => (self.editor.offset_horiz_dist.abs() * scale, center.z + self.editor.offset_z_delta * scale),
         };
         let radius = if outward { radius + horiz_dist } else { radius - horiz_dist };
         (radius > 1.0e-9).then_some((glam::DVec3::new(center.x, center.y, result_z), radius))
@@ -120,7 +120,9 @@ impl<'a> App<'a> {
     /// Compute the offset result geometry for the current side-pick settings,
     /// choosing between a uniform offset and a per-vertex angled projection to a
     /// target absolute RL depending on `offset_project_to_rl`.
-    fn compute_offset_result(&self, src_verts: &[glam::DVec3], closed: bool, cursor_world_xy: glam::DVec2) -> Vec<glam::DVec3> {
+    /// `scale` multiplies the configured offset, so the planning tool can lay
+    /// down its second, third and further copies through the same path.
+    fn compute_offset_result(&self, src_verts: &[glam::DVec3], closed: bool, cursor_world_xy: glam::DVec2, scale: f64) -> Vec<glam::DVec3> {
         let result = if let Some((tan_angle, target_rl)) = self.editor.offset_project_to_rl {
             // Per-vertex horizontal distance implied by each vertex's own elevation,
             // used only to size the cursor-side probe below.
@@ -132,18 +134,44 @@ impl<'a> App<'a> {
             let side = crate::model::geometry::offset_side_from_cursor(src_verts, closed, cursor_world_xy, probe_dist);
             crate::model::geometry::geometric_offset_project_to_rl(src_verts, closed, side, tan_angle, target_rl)
         } else {
-            let horiz_dist = self.editor.offset_horiz_dist;
-            let abs_dist = horiz_dist.abs();
-            let z_delta = self.editor.offset_z_delta;
+            let abs_dist = self.editor.offset_horiz_dist.abs() * scale;
+            let z_delta = self.editor.offset_z_delta * scale;
             let side = crate::model::geometry::offset_side_from_cursor(src_verts, closed, cursor_world_xy, abs_dist);
             crate::model::geometry::geometric_offset(src_verts, closed, side * abs_dist, z_delta)
         };
 
-        if self.editor.offset_collide_with_triangulation {
+        // Planning cuts lie flat on one bench or flitch, where there is no
+        // batter for the clamp to stop against, so the setting is ignored
+        // rather than reset - the full tool keeps whatever the user chose.
+        if self.editor.offset_collide_with_triangulation && !self.editor.is_planning_cut_step() {
             self.clamp_offset_to_triangulations(src_verts, &result)
         } else {
             result
         }
+    }
+
+    /// How many evenly spaced copies one side-pick should lay down.
+    ///
+    /// A planning cut is drawn flat on a single bench or flitch, so the tool is
+    /// reduced to a spacing and repeats out to the cursor: pointing 110 m south
+    /// at a 20 m spacing lays strips at 20, 40, 60, 80 and 100 m. Everywhere
+    /// else the tool keeps its single-copy behaviour.
+    fn offset_repeat_steps(&self, src_verts: &[glam::DVec3], cursor_world_xy: glam::DVec2) -> usize {
+        /// Guards against a spacing typo turning one drag into unbounded work.
+        const MAX_STEPS: usize = 500;
+
+        if !self.editor.is_planning_cut_step() {
+            return 1;
+        }
+        let spacing = self.editor.offset_horiz_dist.abs();
+        if spacing < 1e-9 {
+            return 1;
+        }
+        let reach = src_verts
+            .windows(2)
+            .map(|edge| segment_distance_xy(cursor_world_xy, edge[0].truncate(), edge[1].truncate()))
+            .fold(f64::INFINITY, f64::min);
+        spaced_copies(reach, spacing, MAX_STEPS)
     }
 
     fn clamp_offset_to_triangulations(&self, src_verts: &[glam::DVec3], proposed: &[glam::DVec3]) -> Vec<glam::DVec3> {
@@ -214,16 +242,19 @@ impl<'a> App<'a> {
             let Some((src_verts, closed)) = object.tessellated_path() else {
                 continue;
             };
-            let preview = match self.offset_circle_result(object, cursor_world_xy) {
-                Some((center, radius)) => crate::model::geometry::tessellate_circle(center, radius),
-                None if object.circle().is_some() && !self.editor.offset_collide_with_triangulation => continue,
-                None => self.compute_offset_result(&src_verts, closed, cursor_world_xy),
-            };
-            let start = preview_world.len();
-            preview_world.extend(preview);
-            ranges.push((start, preview_world.len(), closed));
-            if ranges.len() == 1 {
-                first_closed = closed;
+            for step in 1..=self.offset_repeat_steps(&src_verts, cursor_world_xy) {
+                let scale = step as f64;
+                let preview = match self.offset_circle_result(object, cursor_world_xy, scale) {
+                    Some((center, radius)) => crate::model::geometry::tessellate_circle(center, radius),
+                    None if object.circle().is_some() && !self.editor.offset_collide_with_triangulation => break,
+                    None => self.compute_offset_result(&src_verts, closed, cursor_world_xy, scale),
+                };
+                let start = preview_world.len();
+                preview_world.extend(preview);
+                ranges.push((start, preview_world.len(), closed));
+                if ranges.len() == 1 {
+                    first_closed = closed;
+                }
             }
         }
 
@@ -269,37 +300,30 @@ impl<'a> App<'a> {
             let (Some(fill), Some(line_weight)) = (object.fill(), object.line_weight()) else {
                 continue;
             };
-            let shape = if object.circle().is_some() {
-                match self.offset_circle_result(object, cursor_world_xy) {
+            let Some((src_verts, closed)) = object.tessellated_path() else {
+                continue;
+            };
+            for step in 1..=self.offset_repeat_steps(&src_verts, cursor_world_xy) {
+                let scale = step as f64;
+                let shape = match self.offset_circle_result(object, cursor_world_xy, scale) {
                     Some((center, radius)) => OffsetShape::Circle { center, radius },
                     // Only a collapse lands here when collision is off; with
                     // collision on the general path below is the right answer.
-                    None if !self.editor.offset_collide_with_triangulation => {
+                    // A further copy collapses too, so stop at the first.
+                    None if object.circle().is_some() && !self.editor.offset_collide_with_triangulation => {
                         collapsed_circles += 1;
-                        continue;
+                        break;
                     }
                     None => {
-                        let Some((src_verts, closed)) = object.tessellated_path() else {
-                            continue;
-                        };
-                        let new_positions = self.compute_offset_result(&src_verts, closed, cursor_world_xy);
+                        let new_positions = self.compute_offset_result(&src_verts, closed, cursor_world_xy, scale);
                         OffsetShape::Polyline {
                             verts: new_positions.into_iter().map(PolyVertex::straight).collect(),
                             closed,
                         }
                     }
-                }
-            } else {
-                let Some((src_verts, closed)) = object.tessellated_path() else {
-                    continue;
                 };
-                let new_positions = self.compute_offset_result(&src_verts, closed, cursor_world_xy);
-                OffsetShape::Polyline {
-                    verts: new_positions.into_iter().map(PolyVertex::straight).collect(),
-                    closed,
-                }
-            };
-            offset_specs.push((layer, shape, color, fill, line_weight));
+                offset_specs.push((layer, shape, color, fill, line_weight));
+            }
         }
 
         if collapsed_circles > 0 {
@@ -366,4 +390,24 @@ impl<'a> App<'a> {
         self.editor.active_tool = ActiveTool::None;
         self.invalidate_geometry();
     }
+}
+
+/// Copies of a cut that fit within `reach` at `spacing`, always at least one so
+/// a pick close to the source still draws the cut the user asked for.
+fn spaced_copies(reach: f64, spacing: f64, max_steps: usize) -> usize {
+    if !reach.is_finite() || spacing < 1e-9 {
+        return 1;
+    }
+    ((reach / spacing).floor() as usize).clamp(1, max_steps)
+}
+
+/// Shortest XY distance from `point` to the segment `start`-`end`.
+fn segment_distance_xy(point: glam::DVec2, start: glam::DVec2, end: glam::DVec2) -> f64 {
+    let edge = end - start;
+    let length_squared = edge.length_squared();
+    if length_squared < 1e-18 {
+        return point.distance(start);
+    }
+    let t = ((point - start).dot(edge) / length_squared).clamp(0.0, 1.0);
+    point.distance(start + edge * t)
 }

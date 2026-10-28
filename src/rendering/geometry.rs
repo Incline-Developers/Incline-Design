@@ -19,6 +19,8 @@ pub(crate) struct DrawContext<'a> {
     pub(crate) scale_factor: f32,
     /// Style slot stamped on everything drawn; see `scene::document_style`.
     pub(crate) style: u32,
+    /// Stamped on every stroke drawn; see `StrokeInstance::fade_size_m`.
+    pub(crate) fade_size_m: f32,
 }
 
 impl<'a> DrawContext<'a> {
@@ -37,6 +39,7 @@ impl<'a> DrawContext<'a> {
             scene_origin,
             scale_factor,
             style: STYLE_SLOT_NONE,
+            fade_size_m: 0.0,
         }
     }
 
@@ -47,6 +50,7 @@ impl<'a> DrawContext<'a> {
             end,
             style: self.style | flags,
             color,
+            fade_size_m: self.fade_size_m,
         });
     }
 }

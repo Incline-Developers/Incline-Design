@@ -74,6 +74,16 @@ impl App<'_> {
             .collect()
     }
 
+    /// The surface a topology tool (Trim, Cut Topology with Pit Shell,
+    /// Include Solid) opens on: the active one, in the slot for the surface
+    /// being worked on. A surface selected before opening one of these is the
+    /// shape or the surface to trim far more often than it is the ground, so
+    /// the topology is left for the user to choose rather than guessed.
+    pub(crate) fn topology_tool_surface(&self) -> Option<TriangulationId> {
+        self.active_triangulation
+            .filter(|id| self.triangulations.iter().any(|triangulation| triangulation.id == *id && triangulation.state.loaded))
+    }
+
     /// Selected point clouds that are loaded, in project order.
     pub(crate) fn selected_point_clouds(&self) -> Vec<PointCloudId> {
         self.point_clouds
