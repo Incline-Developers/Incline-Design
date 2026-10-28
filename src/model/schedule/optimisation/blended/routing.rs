@@ -256,10 +256,80 @@ pub(crate) fn reroute(
     schedule: &BlendSolution,
     program: Program,
     draw_reach: f64,
+    open_reclaim: bool,
     window: Option<&std::ops::Range<usize>>,
     stop: solver::Interrupt,
 ) -> Result<BlendSolution, String> {
-    let Grouped { dug, fixed, receipts } = group(input, groups, schedule, window, program == Program::Opening && tonnes_may_move(input))?;
+    let Grouped { dug, mut fixed, receipts } = group(input, groups, schedule, window, program == Program::Opening && tonnes_may_move(input))?;
+    // A percentage box around existing draws cannot start reclaim in an
+    // idle hour. With `open_reclaim`, a dedicated reclaim loader's empty
+    // cells in the window open too, where its bar, the pile's mode and rest
+    // and the opening stock allow, without changing any of the digging held
+    // by this neighbourhood.
+    if open_reclaim && program != Program::Held && draw_reach > 0.0 && tonnes_may_move(input) {
+        let occupied: BTreeSet<_> = fixed.iter().map(|row| (row.candidate, row.interval, row.segment)).collect();
+        // A loader reclaims one pile at a time: a segment it reclaims in
+        // opens to no other pile, and an empty one only to the pile it
+        // reclaims nearest in time, the earlier first.
+        let mut reclaimed_in: BTreeMap<(LoaderId, usize, usize), StockpileId> = BTreeMap::new();
+        let mut reclaimed_at: BTreeMap<LoaderId, BTreeMap<usize, StockpileId>> = BTreeMap::new();
+        for row in fixed.iter().filter(|row| row.tonnes_t > 1e-9) {
+            let movement = &input.movements[row.candidate];
+            if let SourceId::Stockpile(pile) = movement.source {
+                reclaimed_in.insert((movement.loader, row.interval, row.segment), pile);
+                reclaimed_at.entry(movement.loader).or_default().insert(row.interval, pile);
+            }
+        }
+        let nearest = |loader: LoaderId, at: usize| -> Option<StockpileId> {
+            let times = reclaimed_at.get(&loader)?;
+            let before = times.range(..=at).next_back();
+            let after = times.range(at..).next();
+            match (before, after) {
+                (Some((&b, &pb)), Some((&a, &pa))) => Some(if at - b <= a - at { pb } else { pa }),
+                (Some((_, &pile)), None) | (None, Some((_, &pile))) => Some(pile),
+                (None, None) => None,
+            }
+        };
+        for loader in &input.loaders {
+            let tasks: Vec<_> = input.tasks.iter().filter(|task| task.loader == loader.id).collect();
+            let [task] = tasks.as_slice() else { continue };
+            if !matches!(task.kind, TaskKind::Reclaim { maximum_t: None, .. }) {
+                continue;
+            }
+            for (candidate, movement) in input.movements.iter().enumerate() {
+                if !super::input::task_authorises(task, movement) {
+                    continue;
+                }
+                let SourceId::Stockpile(pile) = movement.source else { continue };
+                let Some(pile) = input.piles.iter().find(|entry| entry.id == pile) else { continue };
+                if pile.exclusive || pile.rest_h > 0.0 {
+                    continue;
+                }
+                for (at, interval) in input.intervals.iter().enumerate() {
+                    if window.is_some_and(|window| !window.contains(&at)) || !super::input::task_active(task, *interval) || !pile.reclaims(*interval) {
+                        continue;
+                    }
+                    if super::input::interval_rate(loader, at).is_none_or(|rate| rate.reclaim_tph <= 0.0) {
+                        continue;
+                    }
+                    for segment in 0..input.segments_per_interval {
+                        let one_pile = match reclaimed_in.get(&(loader.id, at, segment)) {
+                            Some(&other) => other == pile.id,
+                            None => nearest(loader.id, at) == Some(pile.id),
+                        };
+                        if one_pile && schedule.durations.get(&(at, segment)).copied().unwrap_or(0.0) > 0.0 && !occupied.contains(&(candidate, at, segment)) {
+                            fixed.push(MovementRow {
+                                candidate,
+                                interval: at,
+                                segment,
+                                tonnes_t: 0.0,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
     let intervals = input.intervals.len();
     let mut problem = LinearProgram::default();
     // Each choice's entries: the candidate, its interval and segment, and its
@@ -370,9 +440,15 @@ pub(crate) fn reroute(
         .map(|(row, share)| {
             let reach = draw?;
             share.as_ref()?;
+            let capacity = if row.tonnes_t > 0.0 {
+                row.tonnes_t
+            } else {
+                let loader = input.loaders.iter().find(|loader| loader.id == input.movements[row.candidate].loader)?;
+                super::input::interval_rate(loader, row.interval)?.reclaim_tph * schedule.durations.get(&(row.interval, row.segment)).copied().unwrap_or(0.0)
+            };
             Some(problem.add_column(
                 input.movements[row.candidate].value_per_tonne().unwrap_or(0.0),
-                row.tonnes_t * (1.0 - reach).max(0.0)..=row.tonnes_t * (1.0 + reach),
+                row.tonnes_t * (1.0 - reach).max(0.0)..=row.tonnes_t + reach * capacity,
             ))
         })
         .collect();
@@ -700,7 +776,7 @@ pub(crate) fn reroute(
                     (pile_of(input, movement.destination) == Some(pile.id)).then(|| input.grades.fraction(movement.material, grade).unwrap_or(0.0))
                 };
                 let (mut terms, constant) = expression(&[at], &weight);
-                if kept == 1.0 && terms.is_empty() && constant == 0.0 {
+                if kept == 1.0 && terms.is_empty() && constant == 0.0 && !drawn_by.contains_key(&(pile.id, at)) {
                     states.push((col, offset));
                     continue;
                 }
@@ -895,7 +971,12 @@ pub(crate) fn reroute(
             }
         }
     }
-    let mut movements: Vec<MovementRow> = fixed.iter().zip(&reclaimed).map(|(row, &tonnes_t)| MovementRow { tonnes_t, ..*row }).collect();
+    let mut movements: Vec<MovementRow> = fixed
+        .iter()
+        .zip(&reclaimed)
+        .filter(|(_, tonnes)| **tonnes > 1e-9)
+        .map(|(row, &tonnes_t)| MovementRow { tonnes_t, ..*row })
+        .collect();
     movements.extend(routed.into_iter().map(|((candidate, interval, segment), tonnes_t)| MovementRow {
         candidate,
         interval,

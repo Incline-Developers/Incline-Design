@@ -758,7 +758,10 @@ fn reroute_best(input: &BlendInput, groups: &routing::Groups, best: &mut Best, v
         } else {
             0.0
         };
-        let note = match routing::reroute(input, groups, &best.solution, reserve.program, reach, window.as_ref(), stop.clone()) {
+        // Spare passes may also start reclaim in hours the schedule left
+        // idle; the reserved ones keep to its own, so that their gain is
+        // secured before a larger, slower program.
+        let note = match routing::reroute(input, groups, &best.solution, reserve.program, reach, extra, window.as_ref(), stop.clone()) {
             Ok(mut solution) => {
                 let opening = extra.then(|| best.solution.clone());
                 let proposed = opening.as_ref().map(|_| solution.clone());
