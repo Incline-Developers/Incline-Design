@@ -161,14 +161,13 @@ impl<'c> ConjugateResiduals<'c> {
                 residual[i] = rhs[i] - residual[i];
             }
         }
+        if Self::resnorm(&residual, resscale) <= tol {
+            return;
+        }
         let mut cdot = c.apply(&residual, &mut cresidual, true);
         step.copy_from_slice(&residual);
         cstep.copy_from_slice(&cresidual);
         loop {
-            let resnorm = Self::resnorm(&residual, resscale);
-            if resnorm <= tol {
-                break;
-            }
             if self.iter == maxiter {
                 self.errflag = IPX_ERROR_CR_ITER_LIMIT;
                 break;
@@ -187,16 +186,21 @@ impl<'c> ConjugateResiduals<'c> {
                 lhs[i] += alpha * step[i];
                 residual[i] -= alpha * cstep[i];
             }
-            let cdotnew = c.apply(&residual, &mut cresidual, true);
-            let beta = cdotnew / cdot;
-            for i in 0..m {
-                step[i] = residual[i] + beta * step[i];
-                cstep[i] = cresidual[i] + beta * cstep[i];
+            // A converged residual needs no next search direction. The
+            // operator's scratch and these directions are local to this solve.
+            let converged = Self::resnorm(&residual, resscale) <= tol;
+            if !converged {
+                let cdotnew = c.apply(&residual, &mut cresidual, true);
+                let beta = cdotnew / cdot;
+                for i in 0..m {
+                    step[i] = residual[i] + beta * step[i];
+                    cstep[i] = cresidual[i] + beta * cstep[i];
+                }
+                cdot = cdotnew;
             }
-            cdot = cdotnew;
             self.iter += 1;
             self.errflag = self.control.interrupt_check();
-            if self.errflag != 0 {
+            if self.errflag != 0 || converged {
                 break;
             }
         }
@@ -233,15 +237,14 @@ impl<'c> ConjugateResiduals<'c> {
                 residual[i] = rhs[i] - residual[i];
             }
         }
+        if Self::resnorm(&residual, resscale) <= tol {
+            return;
+        }
         let mut resnorm_precond_system = p.apply(&residual, &mut sresidual, true);
         let mut cdot = c.apply(&sresidual, &mut csresidual, true);
         step.copy_from_slice(&sresidual);
         cstep.copy_from_slice(&csresidual);
         loop {
-            let resnorm = Self::resnorm(&residual, resscale);
-            if resnorm <= tol {
-                break;
-            }
             if self.iter == maxiter {
                 self.errflag = IPX_ERROR_CR_ITER_LIMIT;
                 break;
@@ -266,13 +269,16 @@ impl<'c> ConjugateResiduals<'c> {
                 residual[i] -= alpha * cstep[i];
                 sresidual[i] -= alpha * csresidual[i];
             }
-            let cdotnew = c.apply(&sresidual, &mut csresidual, true);
-            let beta = cdotnew / cdot;
-            for i in 0..m {
-                step[i] = sresidual[i] + beta * step[i];
-                cstep[i] = csresidual[i] + beta * cstep[i];
+            let converged = Self::resnorm(&residual, resscale) <= tol;
+            if !converged {
+                let cdotnew = c.apply(&sresidual, &mut csresidual, true);
+                let beta = cdotnew / cdot;
+                for i in 0..m {
+                    step[i] = sresidual[i] + beta * step[i];
+                    cstep[i] = csresidual[i] + beta * cstep[i];
+                }
+                cdot = cdotnew;
             }
-            cdot = cdotnew;
             self.iter += 1;
             if self.iter % 5 == 0 {
                 let rsdot = p.apply(&residual, &mut sresidual, true);
@@ -283,7 +289,7 @@ impl<'c> ConjugateResiduals<'c> {
                 resnorm_precond_system = rsdot;
             }
             self.errflag = self.control.interrupt_check();
-            if self.errflag != 0 {
+            if self.errflag != 0 || converged {
                 break;
             }
         }
