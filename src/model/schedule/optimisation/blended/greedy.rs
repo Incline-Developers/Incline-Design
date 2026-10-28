@@ -299,6 +299,8 @@ struct State<'a> {
     piles: BTreeMap<StockpileId, (f64, Vec<f64>)>,
     /// Chunked piles only.
     chunks: BTreeMap<StockpileId, Cells>,
+    /// Opening blends stay fixed across every topology tried this interval.
+    released: BTreeMap<StockpileId, Released>,
     chunk_rows: Vec<ChunkRow>,
     /// What each dump has taken, and each crusher day.
     dumped: BTreeMap<DestinationId, f64>,
@@ -517,6 +519,7 @@ impl<'a> State<'a> {
                 .filter(|pile| !pile.chunks.is_empty())
                 .map(|pile| (pile.id, opening_chunks(pile, input.grades.count())))
                 .collect(),
+            released: BTreeMap::new(),
             chunk_rows: Vec::new(),
             dumped: BTreeMap::new(),
             crushed: BTreeMap::new(),
@@ -556,6 +559,7 @@ impl<'a> State<'a> {
         // Drill and blast works the hour first, on the ground standing as it
         // opens; what fires is dug from the end of its window.
         self.now_h = interval.start_h;
+        self.released = input.piles.iter().filter_map(|pile| Some((pile.id, self.release(pile.id, interval)?))).collect();
         if let Some(chain) = self.chain.as_mut() {
             chain.advance(interval, |ground| self.ground.get(&ground).is_some_and(|left| *left > FINISHED_T));
         }
@@ -705,7 +709,7 @@ impl<'a> State<'a> {
             .filter(|pile| {
                 input.piles.iter().any(|entry| entry.id == *pile && entry.exclusive)
                     && self.reclaims(*pile, interval)
-                    && self.released(*pile, interval).is_some_and(|released| released.tonnes > NEGLIGIBLE_T)
+                    && self.released.get(pile).is_some_and(|released| released.tonnes > NEGLIGIBLE_T)
             })
             .collect()
     }
@@ -822,14 +826,14 @@ impl<'a> State<'a> {
                             .filter(|(index, _, _)| input.movements[*index].source == SourceId::Stockpile(pile))
                             .map(|(_, _, tonnes)| tonnes)
                             .sum();
-                        let released = self.released(pile, interval).map_or(0.0, |found| found.tonnes);
+                        let released = self.released.get(&pile).map_or(0.0, |found| found.tonnes);
                         let mut emptied = bar.emptied.clone();
                         emptied.push(pile);
                         let others = approved_sources.iter().any(|other| {
                             !emptied.contains(other)
                                 && !self.building.contains(other)
                                 && self.reclaims(*other, interval)
-                                && self.released(*other, interval).is_some_and(|found| found.tonnes > NEGLIGIBLE_T)
+                                && self.released.get(other).is_some_and(|found| found.tonnes > NEGLIGIBLE_T)
                         });
                         if pile_drawn < released - SNAP_T || !others {
                             continue;
@@ -1063,7 +1067,7 @@ impl<'a> State<'a> {
                             .iter()
                             .filter(|pile| bar.pile.is_none_or(|only| only == **pile) && !bar.emptied.contains(pile) && !self.building.contains(pile))
                         {
-                            let Some(released) = self.released(*pile, interval).filter(|found| self.reclaims(*pile, interval) && found.tonnes > NEGLIGIBLE_T) else {
+                            let Some(released) = self.released.get(pile).filter(|found| self.reclaims(*pile, interval) && found.tonnes > NEGLIGIBLE_T) else {
                                 continue;
                             };
                             for index in self.reclaim_candidates(bar.loader, *pile, bar.task, interval) {
@@ -1100,7 +1104,7 @@ impl<'a> State<'a> {
             problem.add_row(left..=left, terms);
         }
         for (pile, terms) in pile_draw {
-            problem.add_row(..=self.released(pile, interval).map_or(0.0, |released| released.tonnes), terms);
+            problem.add_row(..=self.released.get(&pile).map_or(0.0, |released| released.tonnes), terms);
         }
         for (task, draws) in caps {
             let TaskKind::Reclaim { maximum_t: Some(maximum), .. } = input.tasks[task].kind else {
@@ -1237,7 +1241,11 @@ impl<'a> State<'a> {
                 // Keep its missed tonnes due, but do not pull future days'
                 // work forward. A rebased tail starts with no earlier debt.
                 let first = input.intervals.first().map_or(day, |interval| interval.day());
-                let earlier: f64 = plan.routes.range((loader, activity, destination, first)..(loader, activity, destination, day)).map(|(_, tonnes)| tonnes).sum();
+                let earlier: f64 = plan
+                    .routes
+                    .range((loader, activity, destination, first)..(loader, activity, destination, day))
+                    .map(|(_, tonnes)| tonnes)
+                    .sum();
                 let delivered: f64 = self
                     .followed
                     .range((loader, activity, destination, first)..=(loader, activity, destination, day))
@@ -1283,24 +1291,30 @@ impl<'a> State<'a> {
         for (index, target) in input.grade_targets.iter().enumerate().filter(|(_, t)| t.applies(interval.start_h)) {
             let period = crate::model::schedule::grade_targets::target_day(interval.start_h);
             let (opening_t, opening_q) = self.target_totals.get(&(index, period)).copied().unwrap_or_default();
+            // Hinges share the same feed. Read only this destination's source
+            // grades, once, and preserve the movement column order.
+            let feed: Vec<(Col, f64)> = columns
+                .iter()
+                .filter_map(|&(candidate, _, column)| {
+                    let movement = &input.movements[candidate];
+                    if movement.destination != target.destination {
+                        return None;
+                    }
+                    let fraction = match movement.source {
+                        SourceId::Stockpile(pile) if movement.activity == Activity::Reclaim => self.released.get(&pile).and_then(|found| found.blend.get(target.grade)).copied(),
+                        _ => input.grades.fraction(movement.material, target.grade),
+                    }
+                    .unwrap_or(0.0);
+                    Some((column, fraction))
+                })
+                .collect();
             for (boundary, direction, slope) in target.specification.hinges() {
                 if slope == 0.0 {
                     continue;
                 }
                 let slack = problem.add_column(-slope, 0.0..);
                 let mut terms = vec![(slack, -1.0)];
-                for &(candidate, _, column) in &columns {
-                    let movement = &input.movements[candidate];
-                    if movement.destination != target.destination {
-                        continue;
-                    }
-                    let fraction = match movement.source {
-                        SourceId::Stockpile(pile) if movement.activity == Activity::Reclaim => self.released(pile, interval).and_then(|r| r.blend.get(target.grade).copied()),
-                        _ => input.grades.fraction(movement.material, target.grade),
-                    }
-                    .unwrap_or(0.0);
-                    terms.push((column, direction * (fraction - boundary)));
-                }
+                terms.extend(feed.iter().map(|&(column, fraction)| (column, direction * (fraction - boundary))));
                 problem.add_row(..=-direction * (opening_q - boundary * opening_t), terms);
             }
         }
@@ -1409,13 +1423,8 @@ impl<'a> State<'a> {
 
         // A draw within [`SNAP_T`] of emptying what its pile released
         // empties it, so a drained chunk reads as empty to the order rules.
-        let mut released: BTreeMap<StockpileId, Released> = BTreeMap::new();
-        for pile in &input.piles {
-            if let Some(found) = self.released(pile.id, interval) {
-                released.insert(pile.id, found);
-            }
-        }
-        for (pile, found) in &released {
+        let released = &self.released;
+        for (pile, found) in released {
             let drawn: f64 = rows
                 .iter()
                 .filter(|(index, _, _)| input.movements[*index].source == SourceId::Stockpile(*pile))
@@ -1476,6 +1485,7 @@ impl<'a> State<'a> {
         }
         // The grade targets on this interval's day, once rather than per row.
         let targets: Vec<(usize, &BlendGradeTarget)> = input.grade_targets.iter().enumerate().filter(|(_, t)| t.applies(interval.start_h)).collect();
+        let missing = vec![0.0; grades];
         for (index, segment, tonnes) in rows {
             let candidate = &input.movements[index];
             *self.rows.entry((index, k, segment)).or_default() += tonnes;
@@ -1485,11 +1495,11 @@ impl<'a> State<'a> {
                     for (task, share) in attribute_reclaim(input, candidate, interval, tonnes, &self.reclaimed) {
                         *self.reclaimed.entry(task).or_default() += share;
                     }
-                    let blend = released.get(&pile).map(|found| found.blend.clone()).unwrap_or_else(|| vec![0.0; grades]);
-                    self.conditional += tonnes * conditional_value(input, index, &blend, pile_drawn.get(&pile).copied().unwrap_or(tonnes));
+                    let blend = released.get(&pile).map(|found| found.blend.as_slice()).unwrap_or(&missing);
+                    self.conditional += tonnes * conditional_value(input, index, blend, pile_drawn.get(&pile).copied().unwrap_or(tonnes));
                     blend
                 }
-                _ => (0..grades).map(|grade| input.grades.fraction(candidate.material, grade).unwrap_or(0.0)).collect(),
+                _ => input.grades.fractions(candidate.material).unwrap_or(&missing),
             };
             for &(i, target) in targets.iter().filter(|(_, t)| t.destination == candidate.destination) {
                 let entry = self
@@ -1593,7 +1603,7 @@ impl<'a> State<'a> {
     /// What `pile` releases to reclaim this interval: an unchunked pile its
     /// whole opening blend, a chunked one the chunk its order releases, if
     /// any.
-    fn released(&self, pile: StockpileId, interval: Interval) -> Option<Released> {
+    fn release(&self, pile: StockpileId, interval: Interval) -> Option<Released> {
         let blend = |tonnes: f64, contained: &[f64]| contained.iter().map(|value| if tonnes > 0.0 { value / tonnes } else { 0.0 }).collect();
         let entry = self.input.piles.iter().find(|entry| entry.id == pile)?;
         let Some(Cells { cells, receiving }) = self.chunks.get(&pile) else {
@@ -1650,7 +1660,7 @@ impl<'a> State<'a> {
                         // what sits in the chunk still filling cannot be drawn.
                         self.reclaims(*pile, interval)
                             && if self.chunks.contains_key(pile) {
-                                self.released(*pile, interval).is_some_and(|found| found.tonnes > NEGLIGIBLE_T)
+                                self.released.get(pile).is_some_and(|found| found.tonnes > NEGLIGIBLE_T)
                             } else {
                                 self.piles.get(pile).is_some_and(|(open_t, _)| *open_t > NEGLIGIBLE_T)
                             }
@@ -1716,7 +1726,7 @@ impl<'a> State<'a> {
     /// the blend the pile releases with the formulation's margin to spare.
     fn reclaim_candidates(&self, loader: usize, pile: StockpileId, bar: usize, interval: Interval) -> Vec<usize> {
         let input = self.input;
-        let Some(Released { tonnes, blend, .. }) = self.released(pile, interval) else {
+        let Some(Released { tonnes, blend, .. }) = self.released.get(&pile) else {
             return Vec::new();
         };
         let band = GRADE_MARGIN + GRADE_CUSHION_T / tonnes.max(GRADE_CUSHION_T) + 1e-9;
@@ -1746,7 +1756,7 @@ impl<'a> State<'a> {
                             .qualifications
                             .iter()
                             .find(|entry| entry.loader == candidate.loader && entry.pile == pile && entry.destination == candidate.destination)
-                            .is_some_and(|entry| admits_clearly(entry, &blend, band))
+                            .is_some_and(|entry| admits_clearly(entry, blend, band))
                     })
                     .collect()
             })
