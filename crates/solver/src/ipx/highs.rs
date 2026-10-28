@@ -11,7 +11,7 @@ use super::{
     *,
 };
 use crate::{
-    BasisStatus, Options,
+    BasisStatus, Options, SimplexStrategy,
     simplex::{
         self, ModelStatus, SimplexResult,
         ekk::{Interrupt, SimplexLp},
@@ -24,12 +24,42 @@ const INF: f64 = f64::INFINITY;
 /// the simplex method from IPX's basis (or from scratch, without one)
 /// when IPX's status is not one HiGHS accepts.
 pub(crate) fn solve_lp(lp: &SimplexLp, options: &Options, interrupt: Option<Interrupt>) -> SimplexResult {
+    solve_lp_falling_back(lp, options, interrupt, false)
+}
+
+/// [`solve_lp`] on a presolved LP. Where the simplex clean-up of an
+/// imprecise crossover fails, the crossover's basis is returned instead,
+/// unknown, for postsolve to carry to the original LP and the simplex
+/// method to finish there. HiGHS would fail the solve: on long's routing
+/// LPs, perturbing costs up to 1e8 left the reduced clean-up 22,000 dual
+/// infeasibilities from a basis the original LP finishes in 16 pivots.
+pub(crate) fn solve_reduced_lp(lp: &SimplexLp, options: &Options, interrupt: Option<Interrupt>) -> SimplexResult {
+    solve_lp_falling_back(lp, options, interrupt, true)
+}
+
+fn solve_lp_falling_back(lp: &SimplexLp, options: &Options, interrupt: Option<Interrupt>, keep_crossover: bool) -> SimplexResult {
     let mut result = solve_lp_ipx(lp, options, interrupt.clone());
     if result.status == ModelStatus::Unknown || result.status == ModelStatus::UnboundedOrInfeasible {
         let basis = result.basis_valid.then_some(&result.out.basis);
-        let mut cleanup = simplex::solve_lp_simplex(lp.clone(), options, basis, interrupt);
+        let mut cleanup = simplex::solve_lp_simplex(lp.clone(), options, basis, interrupt.clone());
         cleanup.ipm_iterations = result.out.ipm_iterations;
         cleanup.crossover_iterations = result.out.crossover_iterations;
+        if keep_crossover && cleanup.status == ModelStatus::SolveError && result.status == ModelStatus::Unknown && result.basis_valid {
+            let primal = Options {
+                simplex_strategy: SimplexStrategy::Primal,
+                ..options.clone()
+            };
+            let mut again = simplex::solve_lp_simplex(lp.clone(), &primal, Some(&result.out.basis), interrupt);
+            again.ipm_iterations = result.out.ipm_iterations;
+            again.crossover_iterations = result.out.crossover_iterations;
+            again.iterations += cleanup.iterations;
+            if again.status != ModelStatus::SolveError {
+                return again;
+            }
+            result.out.status = ModelStatus::Unknown;
+            result.out.iterations = again.iterations;
+            return result.out;
+        }
         return cleanup;
     }
     result.out.status = result.status;

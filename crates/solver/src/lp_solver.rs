@@ -1522,6 +1522,12 @@ impl LpSolver {
             self.solve_lp(&options);
             return;
         }
+        // `runPresolve`: presolve off leaves the LP as it is.
+        if !self.options.presolve {
+            let options = self.options.clone();
+            self.solve_lp(&options);
+            return;
+        }
         let presolved = presolve::solve(&self.lp, &self.options, self.interrupt.clone());
         match presolved {
             Presolved::NotReduced => {

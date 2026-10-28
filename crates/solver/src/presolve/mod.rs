@@ -132,7 +132,7 @@ pub(crate) fn solve(lp: &SimplexLp, options: &Options, interrupt: Option<Interru
             };
             let result = match options.solver {
                 Solver::Simplex => simplex::solve_lp_simplex(reduced_lp, &reduced_options, None, interrupt.clone()),
-                Solver::Ipm => crate::ipx::solve_lp(&reduced_lp, &reduced_options, interrupt.clone()),
+                Solver::Ipm => crate::ipx::solve_reduced_lp(&reduced_lp, &reduced_options, interrupt.clone()),
             };
             iterations = result.iterations;
             ipm_iterations = (result.ipm_iterations, result.crossover_iterations);
