@@ -719,11 +719,11 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
         if reserving {
             routing::reserve(input, &groups, schedule, deadline)
         } else {
-            Duration::ZERO
+            routing::Reserve::default()
         }
     };
     let reserve = std::cell::Cell::new(reserve_for(&start.0));
-    let search_budget = || deadline.saturating_sub(reserve.get());
+    let search_budget = || deadline.saturating_sub(reserve.get().time);
     let mut best = Best {
         solution: start.0,
         replay: start.1,
@@ -1083,13 +1083,13 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
     }
     relaxed(&relaxation, &mut bound);
     let reserve = reserve.get();
-    if !reserve.is_zero() && !cancel.load(Ordering::Relaxed) {
+    if !reserve.time.is_zero() && !cancel.load(Ordering::Relaxed) {
         let timed = adopted.as_deref().unwrap_or(input);
         let ends = started + deadline.saturating_sub(Duration::from_secs_f64(routing::REPLAY_S));
         let stop: solver::Interrupt = Arc::new(move || Instant::now() >= ends);
         let rerouting = Instant::now();
         let begun = started.elapsed().as_secs_f64();
-        let note = match routing::reroute(timed, &groups, &best.solution, stop) {
+        let note = match routing::reroute(timed, &groups, &best.solution, reserve.tonnes_move, stop) {
             Ok(mut solution) => match replay_as_published(timed, &mut solution, cancel) {
                 Some(replay) if replay.is_valid() && replay.ranked_objective() > value => {
                     let gain = replay.ranked_objective() - value;
@@ -1106,8 +1106,9 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
             value,
             bound,
             format!(
-                "{note} (reserved {:.1}s, began at {begun:.1}s, took {:.1}s)",
-                reserve.as_secs_f64(),
+                "{note} ({}, reserved {:.1}s, began at {begun:.1}s, took {:.1}s)",
+                if reserve.tonnes_move { "pile tonnes moving" } else { "pile tonnes held" },
+                reserve.time.as_secs_f64(),
                 rerouting.elapsed().as_secs_f64()
             ),
         );

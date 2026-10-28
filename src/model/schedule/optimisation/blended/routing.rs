@@ -1,12 +1,15 @@
-//! A schedule's dug material rerouted over the whole horizon, its digging,
-//! each pile's receipts and every reclaim held, so that only which material
-//! goes where can change.
+//! A schedule's dug material rerouted over the whole horizon, its digging
+//! and every reclaim's share of its pile held.
 //!
 //! A pile is fully mixed and reclaim draws its opening blend, so a reclaim
 //! of a fixed fraction `a` of the pile's opening stock takes the same
 //! fraction of its metal. With each interval's fraction held at the
-//! schedule's, the piles' metal is linear in the receipts, and a receipt's
-//! grade reaches the crusher's targets weeks later inside one LP. The LP is
+//! schedule's, the piles' stock and metal are linear in the receipts, and a
+//! receipt's grade reaches the crusher's targets weeks later inside one LP.
+//! Where the program fits the time, pile intake, stock and reclaim tonnes
+//! move with the routing (receipts only where the schedule received, so
+//! every pile's modes and rests hold); otherwise each pile's receipts are
+//! held too and only which material goes where can change. Either LP is
 //! exact: solved, its routing replays to the value it modelled.
 
 use std::{
@@ -19,7 +22,7 @@ use super::{
     lp::{Col, LinearProgram},
     replay::{BlendSolution, MovementRow},
 };
-use crate::model::schedule::optimisation::{Activity, DestinationId, DestinationKind, SourceId, StockpileId, TruckClassId};
+use crate::model::schedule::optimisation::{Activity, DestinationId, DestinationKind, GroundId, LoaderId, SourceId, StockpileId, TaskKind, TruckClassId};
 
 /// Tolerance on the held capacities, which the schedule meets to the
 /// replay's own tolerance.
@@ -124,22 +127,52 @@ fn group(input: &BlendInput, groups: &Groups, schedule: &BlendSolution) -> Resul
     Ok(Grouped { dug: choices, fixed, receipts })
 }
 
+/// Whether pile tonnes may move with the routing: only what the LP models
+/// exactly - unchunked piles, unconditional reclaim routing and payments,
+/// and no cap on any bar's reclaim.
+fn tonnes_may_move(input: &BlendInput) -> bool {
+    input.piles.iter().all(|pile| pile.chunks.is_empty())
+        && input.conditional_values.is_empty()
+        && input
+            .qualifications
+            .iter()
+            .all(|entry| entry.alternatives.iter().any(|alternative| alternative.unconditional()))
+        && !input.tasks.iter().any(|task| matches!(task.kind, TaskKind::Reclaim { maximum_t: Some(_), .. }))
+}
+
+/// The time a search leaves at its end for rerouting, and whether pile
+/// tonnes may move in it.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Reserve {
+    pub(crate) time: Duration,
+    pub(crate) tonnes_move: bool,
+}
+
 /// The time to leave a search's end for rerouting `schedule`, judged by the
 /// number of routing choices it has: what the interior point method took on
-/// the test worlds alone, doubled for a machine shared by other solves, and
-/// never more than 45% of `budget`.
-pub(crate) fn reserve(input: &BlendInput, groups: &Groups, schedule: &BlendSolution, budget: Duration) -> Duration {
+/// the test worlds side by side, with a margin. Pile tonnes move with the
+/// routing when that program fits in 55% of `budget`; otherwise only the
+/// routing moves, a program about half the time on the largest worlds.
+pub(crate) fn reserve(input: &BlendInput, groups: &Groups, schedule: &BlendSolution, budget: Duration) -> Reserve {
     let Ok(grouped) = group(input, groups, schedule) else {
-        return Duration::ZERO;
+        return Reserve::default();
     };
-    let columns: usize = grouped.dug.iter().map(|(.., options)| options.len()).filter(|&count| count > 1).sum();
-    let seconds = (2.0 * (2.1e-4 * columns as f64 - 8.0)).max(6.0) + REPLAY_S;
-    Duration::from_secs_f64(seconds).min(budget.mul_f64(0.45))
+    let columns = grouped.dug.iter().map(|(.., options)| options.len()).filter(|&count| count > 1).sum::<usize>() as f64;
+    let most = budget.mul_f64(0.55);
+    let moving = Duration::from_secs_f64((1.5 * 2.4e-9 * columns * columns).max(6.0) + REPLAY_S);
+    if tonnes_may_move(input) && moving <= most {
+        return Reserve { time: moving, tonnes_move: true };
+    }
+    let held = Duration::from_secs_f64((2.0 * (2.1e-4 * columns - 8.0)).max(6.0) + REPLAY_S);
+    Reserve {
+        time: held.min(most),
+        tonnes_move: false,
+    }
 }
 
 /// `schedule` with its dug material rerouted to the most it can earn, or an
 /// error when the LP stops (`stop`) or fails.
-pub(crate) fn reroute(input: &BlendInput, groups: &Groups, schedule: &BlendSolution, stop: solver::Interrupt) -> Result<BlendSolution, String> {
+pub(crate) fn reroute(input: &BlendInput, groups: &Groups, schedule: &BlendSolution, tonnes_move: bool, stop: solver::Interrupt) -> Result<BlendSolution, String> {
     let Grouped { dug, fixed, receipts } = group(input, groups, schedule)?;
     let intervals = input.intervals.len();
     let mut problem = LinearProgram::default();
@@ -170,7 +203,6 @@ pub(crate) fn reroute(input: &BlendInput, groups: &Groups, schedule: &BlendSolut
     for (index, row) in fixed.iter().enumerate() {
         fixed_by_interval[row.interval].push(index);
     }
-    let held_rows = |at: &[usize]| at.iter().flat_map(|&k| &fixed_by_interval[k]).map(|&index| &fixed[index]).collect::<Vec<_>>();
     let mut day_intervals: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
     let mut target_intervals: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
     for (k, interval) in input.intervals.iter().enumerate() {
@@ -195,64 +227,8 @@ pub(crate) fn reroute(input: &BlendInput, groups: &Groups, schedule: &BlendSolut
         (terms, constant)
     };
 
-    // Each pile's receipts held per interval and segment, wherever a column
-    // could deliver.
-    let cells: BTreeSet<(StockpileId, usize, usize)> = entries
-        .iter()
-        .filter(|entry| entry.3.is_some())
-        .filter_map(|&(candidate, interval, segment, ..)| Some((pile_of(input, input.movements[candidate].destination)?, interval, segment)))
-        .collect();
-    for &(pile, at, cell) in &cells {
-        let weight = |candidate: usize, _: usize, segment: usize| (segment == cell && pile_of(input, input.movements[candidate].destination) == Some(pile)).then_some(1.0);
-        let held = receipts.get(&(pile, at, cell)).copied().unwrap_or(0.0);
-        let (terms, constant) = expression(&[at], &weight);
-        problem.add_row(held - constant..=held - constant, terms);
-    }
-    // Crusher budgets per day, reclaim included.
-    for destination in &input.destinations {
-        for (&day, at) in &day_intervals {
-            let Some(Some(budget)) = destination.crusher_daily_t.get(day as usize) else { continue };
-            let weight = |candidate: usize, _: usize, _: usize| (input.movements[candidate].destination == destination.id).then_some(1.0);
-            let (terms, constant) = expression(at, &weight);
-            if terms.is_empty() {
-                continue;
-            }
-            let reclaimed: f64 = held_rows(at)
-                .into_iter()
-                .filter(|row| input.movements[row.candidate].destination == destination.id)
-                .map(|row| row.tonnes_t)
-                .sum();
-            problem.add_row(..=budget + SLACK_T - constant - reclaimed, terms);
-        }
-    }
-    // Truck hours per class, interval and segment.
-    let truck_cells: BTreeSet<(usize, usize)> = entries.iter().filter(|entry| entry.3.is_some()).map(|entry| (entry.1, entry.2)).collect();
-    for truck in &input.trucks {
-        for &(at, cell) in &truck_cells {
-            let Some(hours) = truck.hours.get(at).copied() else { continue };
-            let interval = input.intervals[at];
-            if interval.duration_h() <= 0.0 {
-                continue;
-            }
-            let available = hours / interval.duration_h() * schedule.durations.get(&(at, cell)).copied().unwrap_or(0.0);
-            let weight = |candidate: usize, _: usize, segment: usize| {
-                let movement = &input.movements[candidate];
-                (segment == cell && movement.truck == truck.id).then_some(movement.truck_hours_per_tonne)
-            };
-            let (terms, constant) = expression(&[at], &weight);
-            if terms.is_empty() {
-                continue;
-            }
-            let reclaim: f64 = held_rows(&[at])
-                .into_iter()
-                .filter(|row| row.segment == cell && input.movements[row.candidate].truck == truck.id)
-                .map(|row| row.tonnes_t * input.movements[row.candidate].truck_hours_per_tonne)
-                .sum();
-            problem.add_row(..=available + SLACK_T - constant - reclaim, terms);
-        }
-    }
-
-    // Each pile's stock, held: opening, receipts and reclaim per interval.
+    // The schedule's reclaim from each pile per interval, and its stock at
+    // the opening of each interval.
     let grades: BTreeSet<usize> = input.grade_targets.iter().map(|target| target.grade).collect();
     let mut drawn: BTreeMap<(StockpileId, usize), f64> = BTreeMap::new();
     for row in &fixed {
@@ -275,6 +251,248 @@ pub(crate) fn reroute(input: &BlendInput, groups: &Groups, schedule: &BlendSolut
         }
         stock.insert(pile.id, held);
     }
+    // Each reclaim takes its share of the pile's opening stock in its
+    // interval, held at the schedule's; where the pile was empty it is held.
+    let share: Vec<Option<(StockpileId, f64)>> = fixed
+        .iter()
+        .map(|row| {
+            let SourceId::Stockpile(pile) = input.movements[row.candidate].source else {
+                return None;
+            };
+            let held = stock[&pile][row.interval];
+            (held > 1e-9).then(|| (pile, row.tonnes_t / held))
+        })
+        .collect();
+    // The fraction of each pile's opening stock drawn in each interval.
+    let kept = |pile: StockpileId, at: usize| {
+        let held = stock[&pile][at];
+        let fraction = if held > 1e-9 {
+            (drawn.get(&(pile, at)).copied().unwrap_or(0.0) / held).min(1.0)
+        } else {
+            0.0
+        };
+        // A pile drawn to its last tonne keeps nothing, not rounding.
+        if fraction > 1.0 - 1e-9 { 0.0 } else { 1.0 - fraction }
+    };
+    let free = tonnes_move && tonnes_may_move(input);
+
+    // Each pile's stock at the opening of each interval, a column plus a
+    // constant: what it held, less the held fraction reclaimed, plus what it
+    // received. Held at the schedule's unless the tonnes may move, when each
+    // column earns what its interval's reclaim is paid.
+    let mut paid: BTreeMap<(StockpileId, usize), f64> = BTreeMap::new();
+    for (row, share) in fixed.iter().zip(&share) {
+        if let Some((pile, share)) = share {
+            *paid.entry((*pile, row.interval)).or_default() += share * input.movements[row.candidate].value_per_tonne().unwrap_or(0.0);
+        }
+    }
+    let into = |pile: StockpileId| move |candidate: usize, _: usize, _: usize| (pile_of(input, input.movements[candidate].destination) == Some(pile)).then_some(1.0);
+    let mut tonnage: BTreeMap<StockpileId, Vec<(Option<Col>, f64)>> = BTreeMap::new();
+    for pile in &input.piles {
+        let mut states: Vec<(Option<Col>, f64)> = vec![(None, stock[&pile.id][0])];
+        for at in 0..intervals {
+            if !free {
+                states.push((None, stock[&pile.id][at + 1]));
+                continue;
+            }
+            let (col, offset) = states[at];
+            let kept = kept(pile.id, at);
+            let (mut terms, constant) = expression(&[at], &into(pile.id));
+            // A pile neither receiving nor reclaimed holds what it held,
+            // unless the next interval's reclaim needs a column to earn on.
+            if kept == 1.0 && terms.is_empty() && constant == 0.0 && !paid.contains_key(&(pile.id, at + 1)) {
+                states.push((col, offset));
+                continue;
+            }
+            let next = problem.add_column(paid.get(&(pile.id, at + 1)).copied().unwrap_or(0.0), 0.0..);
+            for term in &mut terms {
+                term.1 = -term.1;
+            }
+            terms.push((next, 1.0));
+            if let Some(col) = col {
+                terms.push((col, -kept));
+            }
+            let rhs = constant + kept * offset;
+            problem.add_row(rhs..=rhs, terms);
+            states.push((Some(next), 0.0));
+        }
+        tonnage.insert(pile.id, states);
+    }
+    // What a held row moves: its share of the pile's stock, or its tonnes.
+    let moved = |index: usize| -> (Option<(Col, f64)>, f64) {
+        match share[index] {
+            Some((pile, share)) => {
+                let (col, offset) = tonnage[&pile][fixed[index].interval];
+                (col.map(|col| (col, share)), share * offset)
+            }
+            None => (None, fixed[index].tonnes_t),
+        }
+    };
+    let held_moved = |at: &[usize], keep: &dyn Fn(&MovementRow) -> Option<f64>| {
+        let mut terms: Vec<(Col, f64)> = Vec::new();
+        let mut constant = 0.0;
+        for &k in at {
+            for &index in &fixed_by_interval[k] {
+                let Some(coefficient) = keep(&fixed[index]) else { continue };
+                let (term, offset) = moved(index);
+                if let Some((col, share)) = term {
+                    terms.push((col, coefficient * share));
+                }
+                constant += coefficient * offset;
+            }
+        }
+        (terms, constant)
+    };
+
+    if !free {
+        // Each pile's receipts held per interval and segment, wherever a
+        // column could deliver.
+        let cells: BTreeSet<(StockpileId, usize, usize)> = entries
+            .iter()
+            .filter(|entry| entry.3.is_some())
+            .filter_map(|&(candidate, interval, segment, ..)| Some((pile_of(input, input.movements[candidate].destination)?, interval, segment)))
+            .collect();
+        for &(pile, at, cell) in &cells {
+            let weight = |candidate: usize, _: usize, segment: usize| (segment == cell && pile_of(input, input.movements[candidate].destination) == Some(pile)).then_some(1.0);
+            let held = receipts.get(&(pile, at, cell)).copied().unwrap_or(0.0);
+            let (terms, constant) = expression(&[at], &weight);
+            problem.add_row(held - constant..=held - constant, terms);
+        }
+    } else {
+        // The blocks each loader dug per interval and segment: a loader that
+        // worked two back to back delivered at an uneven rate.
+        let mut blocks: BTreeMap<(LoaderId, usize, usize), BTreeSet<GroundId>> = BTreeMap::new();
+        for row in schedule.movements.iter().filter(|row| row.tonnes_t > 1e-5) {
+            let movement = &input.movements[row.candidate];
+            if let (Activity::Dig, SourceId::Ground(ground)) = (movement.activity, movement.source) {
+                blocks.entry((movement.loader, row.interval, row.segment)).or_default().insert(ground);
+            }
+        }
+        let uneven = |pile: StockpileId, at: usize, cell: usize| {
+            by_interval[at]
+                .iter()
+                .map(|&index| &entries[index])
+                .filter(|entry| entry.2 == cell)
+                .any(|&(candidate, ..)| {
+                    let movement = &input.movements[candidate];
+                    pile_of(input, movement.destination) == Some(pile) && blocks.get(&(movement.loader, at, cell)).is_some_and(|blocks| blocks.len() > 1)
+                })
+        };
+        // Each pile's occupancy at the end of each segment, and, as the
+        // replay checks it, before a segment's receipts where a loader
+        // delivering there worked blocks back to back and it is reclaimed.
+        for pile in input.piles.iter().filter(|pile| pile.capacity_t.is_finite()) {
+            for at in 0..intervals {
+                let (col, offset) = tonnage[&pile.id][at];
+                let mut terms: Vec<(Col, f64)> = col.map(|col| vec![(col, 1.0)]).unwrap_or_default();
+                let mut constant = offset;
+                for cell in 0..input.segments_per_interval {
+                    let into_cell =
+                        |candidate: usize, _: usize, segment: usize| (segment == cell && pile_of(input, input.movements[candidate].destination) == Some(pile.id)).then_some(1.0);
+                    let (received, received_constant) = expression(&[at], &into_cell);
+                    let drawn_cell = |row: &MovementRow| (row.segment == cell && input.movements[row.candidate].source == SourceId::Stockpile(pile.id)).then_some(1.0);
+                    let (reclaimed, reclaimed_constant) = held_moved(&[at], &drawn_cell);
+                    if (!reclaimed.is_empty() || reclaimed_constant > 1e-5) && uneven(pile.id, at, cell) {
+                        let mut before = terms.clone();
+                        before.extend(received.iter().copied());
+                        if !before.is_empty() {
+                            problem.add_row(..=pile.capacity_t + SLACK_T - constant - received_constant, before);
+                        }
+                    }
+                    // Occupancy rises only where the pile receives: a segment
+                    // without receipts ends no fuller than the last one did.
+                    let receives = !received.is_empty() || received_constant > 0.0;
+                    terms.extend(received);
+                    terms.extend(reclaimed.into_iter().map(|(col, coefficient)| (col, -coefficient)));
+                    constant += received_constant - reclaimed_constant;
+                    if receives && !terms.is_empty() {
+                        problem.add_row(..=pile.capacity_t + SLACK_T - constant, terms.clone());
+                    }
+                }
+            }
+        }
+        // Each loader's reclaim rate per interval and segment.
+        let mut reclaim_cells: BTreeSet<(usize, usize, usize)> = BTreeSet::new();
+        for (row, share) in fixed.iter().zip(&share) {
+            if share.is_some()
+                && let Some(loader) = input.loaders.iter().position(|loader| loader.id == input.movements[row.candidate].loader)
+            {
+                reclaim_cells.insert((loader, row.interval, row.segment));
+            }
+        }
+        for &(loader, at, cell) in &reclaim_cells {
+            let Some(rate) = super::input::interval_rate(&input.loaders[loader], at) else {
+                continue;
+            };
+            let duration = schedule.durations.get(&(at, cell)).copied().unwrap_or(0.0);
+            let id = input.loaders[loader].id;
+            let by_loader = |row: &MovementRow| {
+                let movement = &input.movements[row.candidate];
+                (row.segment == cell && movement.loader == id && movement.activity == Activity::Reclaim).then_some(1.0)
+            };
+            let (terms, constant) = held_moved(&[at], &by_loader);
+            if !terms.is_empty() {
+                problem.add_row(..=rate.reclaim_tph * duration + SLACK_T - constant, terms);
+            }
+        }
+    }
+    // Dumps' capacities over the horizon.
+    let all: Vec<usize> = (0..intervals).collect();
+    for destination in &input.destinations {
+        let (DestinationKind::Dump, Some(capacity)) = (destination.kind, destination.capacity_t) else {
+            continue;
+        };
+        let weight = |candidate: usize, _: usize, _: usize| (input.movements[candidate].destination == destination.id).then_some(1.0);
+        let (terms, constant) = expression(&all, &weight);
+        if !terms.is_empty() {
+            problem.add_row(..=capacity + SLACK_T - constant, terms);
+        }
+    }
+    // Crusher budgets per day, reclaim included.
+    for destination in &input.destinations {
+        for (&day, at) in &day_intervals {
+            let Some(Some(budget)) = destination.crusher_daily_t.get(day as usize) else { continue };
+            let weight = |candidate: usize, _: usize, _: usize| (input.movements[candidate].destination == destination.id).then_some(1.0);
+            let (mut terms, constant) = expression(at, &weight);
+            let (reclaimed, reclaimed_constant) = held_moved(at, &|row: &MovementRow| (input.movements[row.candidate].destination == destination.id).then_some(1.0));
+            terms.extend(reclaimed);
+            if terms.is_empty() {
+                continue;
+            }
+            problem.add_row(..=budget - constant - reclaimed_constant, terms);
+        }
+    }
+    // Truck hours per class, interval and segment.
+    let mut truck_cells: BTreeSet<(usize, usize)> = entries.iter().filter(|entry| entry.3.is_some()).map(|entry| (entry.1, entry.2)).collect();
+    if free {
+        truck_cells.extend(fixed.iter().zip(&share).filter(|(_, share)| share.is_some()).map(|(row, _)| (row.interval, row.segment)));
+    }
+    for truck in &input.trucks {
+        for &(at, cell) in &truck_cells {
+            let Some(hours) = truck.hours.get(at).copied() else { continue };
+            let interval = input.intervals[at];
+            if interval.duration_h() <= 0.0 {
+                continue;
+            }
+            let available = hours / interval.duration_h() * schedule.durations.get(&(at, cell)).copied().unwrap_or(0.0);
+            let weight = |candidate: usize, _: usize, segment: usize| {
+                let movement = &input.movements[candidate];
+                (segment == cell && movement.truck == truck.id).then_some(movement.truck_hours_per_tonne)
+            };
+            let (mut terms, constant) = expression(&[at], &weight);
+            let by_truck = |row: &MovementRow| {
+                let movement = &input.movements[row.candidate];
+                (row.segment == cell && movement.truck == truck.id).then_some(movement.truck_hours_per_tonne)
+            };
+            let (reclaim, reclaim_constant) = held_moved(&[at], &by_truck);
+            terms.extend(reclaim);
+            if terms.is_empty() {
+                continue;
+            }
+            problem.add_row(..=available + SLACK_T - constant - reclaim_constant, terms);
+        }
+    }
+
     // Each pile's metal of each targeted grade at the opening of each
     // interval, a column plus a constant: what it held, less the held
     // fraction reclaimed, plus what it received.
@@ -285,21 +503,18 @@ pub(crate) fn reroute(input: &BlendInput, groups: &Groups, schedule: &BlendSolut
             let mut states: Vec<(Option<Col>, f64)> = vec![(None, opening.get(grade).copied().unwrap_or(0.0))];
             for at in 0..intervals {
                 let (col, offset) = states[at];
-                let held = stock[&pile.id][at];
-                let fraction = if held > 1e-9 {
-                    (drawn.get(&(pile.id, at)).copied().unwrap_or(0.0) / held).min(1.0)
-                } else {
-                    0.0
-                };
-                // A pile drawn to its last tonne keeps nothing, not rounding.
-                let kept = if fraction > 1.0 - 1e-9 { 0.0 } else { 1.0 - fraction };
+                let kept = kept(pile.id, at);
                 let weight = |candidate: usize, _: usize, _: usize| {
                     let movement = &input.movements[candidate];
                     (pile_of(input, movement.destination) == Some(pile.id)).then(|| input.grades.fraction(movement.material, grade).unwrap_or(0.0))
                 };
                 let (mut terms, constant) = expression(&[at], &weight);
+                if kept == 1.0 && terms.is_empty() && constant == 0.0 {
+                    states.push((col, offset));
+                    continue;
+                }
                 // next - receipts' metal - kept previous = constant + kept offset
-                let next = problem.add_column(0.0, ..);
+                let next = problem.add_column(0.0, 0.0..);
                 for term in &mut terms {
                     term.1 = -term.1;
                 }
@@ -324,18 +539,23 @@ pub(crate) fn reroute(input: &BlendInput, groups: &Groups, schedule: &BlendSolut
             let movement = &input.movements[candidate];
             (movement.destination == target.destination).then(|| input.grades.fraction(movement.material, target.grade).unwrap_or(0.0))
         };
-        let (tonnes_terms, tonnes_constant) = expression(at, &tonnes_weight);
+        let (mut tonnes_terms, tonnes_constant) = expression(at, &tonnes_weight);
         let (metal_terms, metal_constant) = expression(at, &metal_weight);
-        let mut reclaim_t = 0.0;
+        let to_target = |row: &MovementRow| {
+            (input.movements[row.candidate].destination == target.destination && matches!(input.movements[row.candidate].source, SourceId::Stockpile(_))).then_some(1.0)
+        };
+        let (reclaim_t_terms, reclaim_t) = held_moved(at, &to_target);
+        tonnes_terms.extend(reclaim_t_terms);
         let mut reclaim_q: Vec<(Col, f64)> = Vec::new();
         let mut reclaim_q_constant = 0.0;
-        for row in held_rows(at).into_iter().filter(|row| input.movements[row.candidate].destination == target.destination) {
-            let SourceId::Stockpile(pile) = input.movements[row.candidate].source else { continue };
-            reclaim_t += row.tonnes_t;
-            let held = stock[&pile][row.interval];
-            if held > 1e-9 {
+        for &k in at {
+            for &row_index in &fixed_by_interval[k] {
+                let row = &fixed[row_index];
+                if to_target(row).is_none() {
+                    continue;
+                }
+                let Some((pile, share)) = share[row_index] else { continue };
                 let (col, offset) = metal[&(pile, target.grade)][row.interval];
-                let share = row.tonnes_t / held;
                 if let Some(col) = col {
                     reclaim_q.push((col, share));
                 }
@@ -362,14 +582,105 @@ pub(crate) fn reroute(input: &BlendInput, groups: &Groups, schedule: &BlendSolut
     }
 
     let solution = problem.maximise_ipm(Some(stop))?;
-    let mut movements = fixed;
+    // Each choice's tonnes, clipped at zero and scaled back to exactly what
+    // was dug: a column a hair below zero would otherwise leave its excess on
+    // the others.
     let mut routed: BTreeMap<(usize, usize, usize), f64> = BTreeMap::new();
-    for &(candidate, interval, segment, col, tonnes) in &entries {
-        let value = col.map_or(tonnes, |col| solution[col.index()].max(0.0));
-        if value > 1e-9 {
-            *routed.entry((candidate, interval, segment)).or_default() += value;
+    let mut next = 0;
+    for (_, _, tonnes, options) in &dug {
+        let group = &entries[next..next + options.len().max(1)];
+        next += group.len();
+        let values: Vec<f64> = group.iter().map(|&(.., col, held)| col.map_or(held, |col| solution[col.index()].max(0.0))).collect();
+        let total: f64 = values.iter().sum();
+        let scale = if total > 0.0 { tonnes / total } else { 0.0 };
+        for (&(candidate, interval, segment, ..), value) in group.iter().zip(values) {
+            if value * scale > 1e-9 {
+                *routed.entry((candidate, interval, segment)).or_default() += value * scale;
+            }
         }
     }
+    // Each reclaim's share of its pile's stock as the routed rows leave it,
+    // run forward exactly: the LP's stock is right only to its tolerance, and
+    // a pile drawn out on that would close below empty.
+    let mut reclaimed: Vec<f64> = fixed.iter().map(|row| row.tonnes_t).collect();
+    let mut received: BTreeMap<(StockpileId, usize), f64> = BTreeMap::new();
+    for (&(candidate, interval, _), &tonnes) in &routed {
+        if let Some(pile) = pile_of(input, input.movements[candidate].destination) {
+            *received.entry((pile, interval)).or_default() += tonnes;
+        }
+    }
+    for pile in &input.piles {
+        let mut held = pile.total_opening(input.grades.count()).0;
+        for at in 0..intervals {
+            let rows: Vec<usize> = fixed_by_interval[at]
+                .iter()
+                .copied()
+                .filter(|&index| matches!(share[index], Some((of, _)) if of == pile.id))
+                .collect();
+            let wanted: f64 = rows.iter().map(|&index| share[index].map_or(0.0, |(_, share)| share) * held).sum();
+            let scale = if wanted > held { held / wanted } else { 1.0 };
+            let mut drawn = 0.0;
+            for &index in &rows {
+                let tonnes = share[index].map_or(0.0, |(_, share)| share) * held * scale;
+                reclaimed[index] = tonnes;
+                drawn += tonnes;
+            }
+            held = (held + received.get(&(pile.id, at)).copied().unwrap_or(0.0) - drawn).max(0.0);
+        }
+    }
+    // A crusher's day meets its budget in the LP only to the solver's
+    // tolerance, which a whole day's rows can take past the replay's. The
+    // excess goes from direct feed to another destination it may take that
+    // is no pile, or, where reclaim alone feeds the day, stays in the piles.
+    for destination in input.destinations.iter().filter(|destination| destination.kind == DestinationKind::Crusher) {
+        for (&day, at) in &day_intervals {
+            let Some(Some(budget)) = destination.crusher_daily_t.get(day as usize) else { continue };
+            let reclaims: Vec<usize> = at
+                .iter()
+                .flat_map(|&k| &fixed_by_interval[k])
+                .copied()
+                .filter(|&index| input.movements[fixed[index].candidate].destination == destination.id)
+                .collect();
+            let reclaim_t: f64 = reclaims.iter().map(|&index| reclaimed[index]).sum();
+            let fed: f64 = routed
+                .iter()
+                .filter(|&(&(candidate, interval, _), _)| at.contains(&interval) && input.movements[candidate].destination == destination.id)
+                .map(|(_, tonnes)| tonnes)
+                .sum();
+            let mut excess = fed + reclaim_t - budget;
+            if excess <= 0.0 {
+                continue;
+            }
+            let feeding: Vec<(usize, usize, usize)> = routed
+                .keys()
+                .copied()
+                .filter(|&(candidate, interval, _)| at.contains(&interval) && input.movements[candidate].destination == destination.id)
+                .collect();
+            for (candidate, interval, segment) in feeding {
+                let Some(group) = groups.of[candidate] else { continue };
+                let Some(&elsewhere) = groups.options[group].iter().find(|&&option| {
+                    let movement = &input.movements[option];
+                    movement.destination != destination.id && pile_of(input, movement.destination).is_none()
+                }) else {
+                    continue;
+                };
+                let moved_t = routed[&(candidate, interval, segment)].min(excess);
+                *routed.get_mut(&(candidate, interval, segment)).expect("the row is routed") -= moved_t;
+                *routed.entry((elsewhere, interval, segment)).or_default() += moved_t;
+                excess -= moved_t;
+                if excess <= 0.0 {
+                    break;
+                }
+            }
+            if excess > 0.0 && reclaim_t > 0.0 {
+                let scale = (reclaim_t - excess).max(0.0) / reclaim_t;
+                for &index in &reclaims {
+                    reclaimed[index] *= scale;
+                }
+            }
+        }
+    }
+    let mut movements: Vec<MovementRow> = fixed.iter().zip(&reclaimed).map(|(row, &tonnes_t)| MovementRow { tonnes_t, ..*row }).collect();
     movements.extend(routed.into_iter().map(|((candidate, interval, segment), tonnes_t)| MovementRow {
         candidate,
         interval,

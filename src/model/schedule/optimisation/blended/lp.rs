@@ -77,6 +77,8 @@ impl LinearProgram {
     /// interior point method's few factorisations.
     pub(crate) fn maximise_ipm(&mut self, stop: Option<solver::Interrupt>) -> Result<Vec<f64>, String> {
         self.tidy()?;
+        #[cfg(not(target_arch = "wasm32"))]
+        self.dump();
         // Crossover takes the point to an exact vertex, so the interior
         // point method need not close the last digits of its gap: on these
         // programs it can stall there, and a stall falls back on a simplex
