@@ -201,10 +201,11 @@ impl<'c> Maxvolume<'c> {
             }
         }
         let mut candidates: Vec<Int> = Vec::new();
+        let mut largest = LargestWeights::new(n + m);
         let mut skipped = 0;
         loop {
             if candidates.is_empty() {
-                candidates = find_largest(&slice.colweights);
+                candidates.extend(largest.find(&slice.colweights));
             }
             let jn = *candidates.last().unwrap();
             let weight = slice.colweights[u(jn)];
@@ -221,6 +222,7 @@ impl<'c> Maxvolume<'c> {
             let vmax = scaled_pivot.abs();
             if vmax <= volumetol {
                 slice.colweights[u(jn)] = 0.0;
+                largest.changed(u(jn));
                 slice.colscale[u(jn)] = 0.0;
                 candidates.pop();
                 skipped += 1;
@@ -259,9 +261,12 @@ impl<'c> Maxvolume<'c> {
             let (colweights, colscale) = (&mut slice.colweights, &slice.colscale);
             slice.row.for_each_nonzero(|j, x| {
                 colweights[j] += alpha * x * colscale[j];
+                largest.changed(j);
             });
             slice.colweights[u(jb)] = used + alpha / dbinv;
             slice.colweights[u(jn)] = 0.0;
+            largest.changed(u(jb));
+            largest.changed(u(jn));
             candidates.clear();
         }
         self.skipped += skipped;
@@ -269,34 +274,66 @@ impl<'c> Maxvolume<'c> {
     }
 }
 
-/// The positions of the second largest and the largest |weight|.
-fn find_largest(weights: &[f64]) -> Vec<Int> {
-    let mut jmax = 0;
-    let mut jmax2 = 0;
-    let mut wmax = 0.0;
-    let mut wmax2 = 0.0;
-    // Only a weight above `wmax2` changes anything (`wmax2 <= wmax`), so a
-    // chunk with none is skipped whole; the result is IPX's.
-    const CHUNK: usize = 16;
-    for (c, chunk) in weights.chunks(CHUNK).enumerate() {
-        let largest = chunk.iter().fold(0.0f64, |largest, w| largest.max(w.abs()));
-        if largest <= wmax2 {
-            continue;
-        }
-        for (k, w) in chunk.iter().enumerate() {
-            let (j, w) = (c * CHUNK + k, w.abs());
-            if w > wmax {
-                wmax2 = wmax;
-                wmax = w;
-                jmax2 = jmax;
-                jmax = j;
-            } else if w > wmax2 {
-                wmax2 = w;
-                jmax2 = j;
-            }
+// Tableau updates touch only part of the weights. Retain the two largest
+// entries in each block and rescan only blocks containing changed weights.
+struct LargestWeights {
+    pairs: Vec<[Int; 2]>,
+    dirty: Vec<bool>,
+}
+
+impl LargestWeights {
+    const BLOCK: usize = 128;
+
+    fn new(len: usize) -> Self {
+        let blocks = len.div_ceil(Self::BLOCK);
+        Self {
+            pairs: vec![[-1; 2]; blocks],
+            dirty: vec![true; blocks],
         }
     }
-    vec![jmax2 as Int, jmax as Int]
+
+    fn changed(&mut self, j: usize) {
+        self.dirty[j / Self::BLOCK] = true;
+    }
+
+    fn find(&mut self, weights: &[f64]) -> [Int; 2] {
+        let mut pair = [0; 2];
+        let mut best = [0.0; 2];
+        for block in 0..self.pairs.len() {
+            if self.dirty[block] {
+                let begin = block * Self::BLOCK;
+                let end = (begin + Self::BLOCK).min(weights.len());
+                let mut local_pair = [-1; 2];
+                let mut local_best = [0.0; 2];
+                for j in begin..end {
+                    Self::consider(j as Int, weights[j].abs(), &mut local_pair, &mut local_best);
+                }
+                // Visit the block's winners in index order to retain the
+                // original scan's first-index tie breaking.
+                local_pair.sort_unstable();
+                self.pairs[block] = local_pair;
+                self.dirty[block] = false;
+            }
+            for &j in &self.pairs[block] {
+                if j >= 0 {
+                    Self::consider(j, weights[u(j)].abs(), &mut pair, &mut best);
+                }
+            }
+        }
+        pair
+    }
+
+    fn consider(j: Int, weight: f64, pair: &mut [Int; 2], best: &mut [f64; 2]) {
+        if weight > best[1] {
+            best[0] = best[1];
+            best[1] = weight;
+            pair[0] = pair[1];
+            pair[1] = j;
+        } else if weight > best[0] {
+            best[0] = weight;
+            pair[0] = j;
+        }
+    }
 }
 
 /// Scale the FTRAN result to the scaled tableau column; returns the
