@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 230" width="540" height="230" role="img" aria-label="Geology workspace, plan view, vertex 2 of a string dragged north from (1200, 950, 76.0) to about (1200, 1000, 76.0), the former position dashed grey, RL still 76.0.">
+  <defs>
+    <marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#d9622b"/>
+    </marker>
+  </defs>
+  <polyline points="70,170 470,170" fill="none" stroke="#888" stroke-width="1" stroke-dasharray="4 3"/>
+  <polyline points="70,170 470,70" fill="none" stroke="#d9622b" stroke-width="3"/>
+  <g fill="#000"><circle cx="70" cy="170" r="3"/></g>
+  <circle cx="470" cy="170" r="3" fill="#888"/>
+  <circle cx="470" cy="70" r="3" fill="#d9622b"/>
+  <line x1="505" y1="52" x2="505" y2="22" stroke="#d9622b" stroke-width="3" marker-end="url(#head)"/>
+  <text x="505" y="16" font-family="sans-serif" font-size="15" fill="#000" text-anchor="middle">N</text>
+  <g font-family="sans-serif" font-size="13" fill="#000" text-anchor="middle">
+    <text x="70" y="194">(1000, 950, 80.0)</text>
+    <text x="440" y="194">(1200, 950, 76.0)</text>
+    <text x="395" y="62">about (1200, 1000, 76.0)</text>
+  </g>
+</svg>

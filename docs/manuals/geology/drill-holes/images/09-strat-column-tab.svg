@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 300" width="540" height="300" role="img" aria-label="Geology workspace, S1 picked, Borehole Inspector on the Column tab: Check section reading 3 holes read, Hole side with A 20.00-22.00 and B 40.00-41.50 beside Set column side with 1 A and 2 B.">
+  <g stroke="#000" stroke-width="1" fill="#fff">
+    <rect x="70" y="10" width="400" height="280"/>
+    <rect x="78" y="18" width="50" height="22" stroke="#888"/>
+    <rect x="130" y="18" width="50" height="22" stroke="#888"/>
+    <rect x="182" y="18" width="62" height="22"/>
+    <g transform="translate(0,50)">
+    <rect x="85" y="55" width="370" height="50"/>
+    <rect x="85" y="115" width="370" height="115"/>
+    </g>
+  </g>
+  <g transform="translate(0,50)">
+  <rect x="270" y="160" width="175" height="60" fill="none" stroke="#d9622b" stroke-width="3"/>
+  <g stroke="#000" stroke-width="1" fill="#ccc">
+    <rect x="97" y="168" width="14" height="14"/>
+    <rect x="97" y="194" width="14" height="14"/>
+    <rect x="282" y="168" width="14" height="14"/>
+    <rect x="282" y="194" width="14" height="14"/>
+  </g>
+  </g>
+  <g font-family="sans-serif" fill="#000">
+    <text x="85" y="64" font-size="15" font-weight="bold">S1</text>
+    <text x="85" y="82" font-size="13" fill="#888">S-collars + 1 files</text>
+    <g font-size="13">
+    <text x="87" y="34" fill="#888">Data</text>
+    <text x="139" y="34" fill="#888">Log</text>
+    <text x="191" y="34">Column</text>
+    </g>
+    <g transform="translate(0,50)">
+    <text x="95" y="73" font-size="15">Check: 0 holes flagged</text>
+    <text x="95" y="93" font-size="13">3 holes read; 0 disagree with the column.</text>
+    <text x="95" y="135" font-size="15">Strat column</text>
+    <text x="97" y="154" font-size="13" fill="#888">Hole</text>
+    <text x="282" y="154" font-size="13" fill="#888">Set column</text>
+    <text x="118" y="180" font-size="13">A  20.00-22.00  2.00</text>
+    <text x="118" y="206" font-size="13">B  40.00-41.50  1.50</text>
+    <text x="304" y="180" font-size="13">1  A</text>
+    <text x="304" y="206" font-size="13">2  B</text>
+    </g>
+  </g>
+</svg>

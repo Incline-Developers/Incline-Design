@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 300" width="540" height="300" role="img" aria-label="Geology workspace, section view: A Roof plane Cut flat at RL 77 on the left, A Floor Cut flat at RL 75 on the right, the originals fainter behind">
+  <line x1="60" y1="40" x2="60" y2="250" stroke="#000" stroke-width="1"/>
+  <line x1="60" y1="250" x2="470" y2="250" stroke="#000" stroke-width="1"/>
+  <g stroke="#888" stroke-width="1" stroke-dasharray="4 3" fill="none">
+    <polyline points="80,75 440,175"/><polyline points="80,125 440,225"/>
+  </g>
+  <polyline points="170,150 350,200 440,200" stroke="#000" stroke-width="1" fill="none"/>
+  <polyline points="170,150 350,150 440,175" stroke="#000" stroke-width="1" fill="none"/>
+  <line x1="170" y1="150" x2="350" y2="150" stroke="#d9622b" stroke-width="3"/>
+  <line x1="350" y1="200" x2="440" y2="200" stroke="#d9622b" stroke-width="3"/>
+  <g font-family="sans-serif" font-size="13" fill="#000" text-anchor="middle">
+    <text x="52" y="154" text-anchor="end">77</text><text x="52" y="204" text-anchor="end">75</text>
+    <text x="80" y="268">1000</text><text x="260" y="268">1100</text><text x="440" y="268">1200</text>
+    <text x="265" y="288">X (m)</text>
+    <text x="30" y="150" transform="rotate(-90 30 150)">RL (m)</text>
+    <text x="115" y="68" fill="#888">A Roof plane</text>
+    <text x="115" y="118" fill="#888">A Floor</text>
+  </g>
+  <line x1="300" y1="104" x2="270" y2="146" stroke="#000" stroke-width="1"/>
+  <g font-family="sans-serif" font-size="15" fill="#000" text-anchor="middle">
+    <text x="300" y="100" text-anchor="start">A Roof plane Cut, flat at RL 77</text>
+    <text x="300" y="244">A Floor Cut, flat at RL 75</text>
+  </g>
+</svg>

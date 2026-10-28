@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 340" width="540" height="340" role="img" aria-label="Geology workspace, the Next Vertex panel with X 1200, Y 1100, Z 77 typed above, and Bearing 90, Distance 100, Dip 0 under From the last vertex, each group with its Add Vertex button.">
+  <g stroke="#000" stroke-width="1" fill="#fff">
+    <rect x="130" y="10" width="280" height="320"/>
+    <line x1="130" y1="44" x2="410" y2="44"/>
+    <line x1="146" y1="188" x2="394" y2="188"/>
+    <rect x="310" y="132" width="84" height="26"/>
+    <rect x="224" y="292" width="76" height="26"/>
+    <rect x="310" y="292" width="84" height="26"/>
+  </g>
+  <g font-family="sans-serif" fill="#000">
+    <text x="146" y="34" font-size="15">Next Vertex</text>
+    <g font-size="13">
+      <text x="146" y="70">X</text><text x="394" y="70" text-anchor="end">1200</text>
+      <text x="146" y="96">Y</text><text x="394" y="96" text-anchor="end">1100</text>
+      <text x="146" y="122">Z</text><text x="394" y="122" text-anchor="end">77</text>
+      <text x="352" y="150" text-anchor="middle">Add Vertex</text>
+      <text x="146" y="182">From the last vertex</text>
+      <text x="146" y="216">Bearing</text><text x="394" y="216" text-anchor="end">90</text>
+      <text x="146" y="246">Distance</text><text x="394" y="246" text-anchor="end">100</text>
+      <text x="146" y="276">Dip</text><text x="394" y="276" text-anchor="end">0</text>
+      <text x="262" y="310" text-anchor="middle">Add Vertex</text>
+      <text x="352" y="310" text-anchor="middle">Close</text>
+    </g>
+  </g>
+</svg>

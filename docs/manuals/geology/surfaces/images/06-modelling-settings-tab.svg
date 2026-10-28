@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 220" width="540" height="220" role="img" aria-label="Preferences window on the Modelling tab, Steep-pair distance 3 m and Steep-pair angle 70 degrees">
+<g stroke="#000" stroke-width="1" fill="#fff">
+<rect x="20" y="10" width="500" height="200"/>
+<line x1="20" y1="38" x2="520" y2="38"/>
+<line x1="150" y1="38" x2="150" y2="210"/>
+<rect x="24" y="144" width="122" height="24" fill="#ccc" stroke="#888"/>
+</g>
+<g font-family="sans-serif" fill="#000">
+<text x="30" y="30" font-size="15" text-anchor="start" >Preferences</text>
+<text x="34" y="64" font-size="13" text-anchor="start" >Interface</text>
+<text x="34" y="88" font-size="13" text-anchor="start" >Camera</text>
+<text x="34" y="112" font-size="13" text-anchor="start" >Performance</text>
+<text x="34" y="136" font-size="13" text-anchor="start" >Developer</text>
+<text x="34" y="160" font-size="13" text-anchor="start" >Modelling</text>
+<text x="168" y="64" font-size="15" text-anchor="start" >Modelling</text>
+<text x="168" y="100" font-size="13" text-anchor="start" >Steep-pair distance</text>
+<text x="500" y="100" font-size="13" text-anchor="end" >3 m</text>
+<text x="168" y="130" font-size="13" text-anchor="start" >Steep-pair angle</text>
+<text x="500" y="130" font-size="13" text-anchor="end" >70°</text>
+</g>
+</svg>

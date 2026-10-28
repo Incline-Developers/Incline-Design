@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 240" width="540" height="240" role="img" aria-label="Geology workspace, plan view, a string redrawn between vertices 2 and 4: the former run through (1200, 1100) replaced by a run through (1200, 1150, 78).">
+  <defs>
+    <marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#d9622b"/>
+    </marker>
+  </defs>
+  <polyline points="40,170 190,170" fill="none" stroke="#000" stroke-width="1"/>
+  <polyline points="190,170 340,170 490,170" fill="none" stroke="#888" stroke-width="1" stroke-dasharray="4 3"/>
+  <polyline points="190,170 340,95 490,170" fill="none" stroke="#d9622b" stroke-width="3"/>
+  <g fill="#000"><circle cx="40" cy="170" r="3"/><circle cx="190" cy="170" r="3"/><circle cx="490" cy="170" r="3"/></g>
+  <g fill="#888"><circle cx="340" cy="170" r="3"/></g>
+  <g fill="#d9622b"><circle cx="340" cy="95" r="3"/></g>
+  <line x1="505" y1="52" x2="505" y2="22" stroke="#d9622b" stroke-width="3" marker-end="url(#head)"/>
+  <g font-family="sans-serif" font-size="13" fill="#000" text-anchor="middle">
+    <text x="505" y="14" font-size="15">N</text>
+    <text x="340" y="86">(1200, 1150, 78)</text>
+    <text x="340" y="196">(1200, 1100)</text>
+    <text x="190" y="196">(1100, 1100, 79)</text>
+    <text x="440" y="196">(1300, 1100, 77)</text>
+  </g>
+</svg>

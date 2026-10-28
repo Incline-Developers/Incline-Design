@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 390" width="540" height="390" role="img" aria-label="Geology workspace, S1 picked, Borehole Inspector on the Log tab: Left curve Density and Right curve Gamma in the Display section, curves either side of the hole log.">
+  <g stroke="#000" stroke-width="1" fill="#fff">
+    <rect x="130" y="10" width="280" height="370"/>
+    <rect x="138" y="18" width="50" height="22" stroke="#888"/>
+    <rect x="190" y="18" width="50" height="22"/>
+    <rect x="242" y="18" width="62" height="22" stroke="#888"/>
+    <g transform="translate(0,66)">
+    <rect x="145" y="50" width="250" height="62"/>
+    <rect x="140" y="130" width="80" height="170"/>
+    <rect x="260" y="130" width="20" height="170"/>
+    <rect x="325" y="130" width="70" height="170"/>
+    </g>
+  </g>
+  <g transform="translate(0,66)">
+  <rect x="260" y="187" width="20" height="6" fill="#ccc" stroke="#000" stroke-width="1"/>
+  <rect x="260" y="243" width="20" height="5" fill="#ccc" stroke="#000" stroke-width="1"/>
+  <g fill="none" stroke-width="3" stroke="#d9622b">
+    <polyline points="205,135 205,180 175,187 175,193 205,200 205,240 180,244 180,248 205,255 205,295"/>
+    <polyline points="370,135 370,180 340,187 340,193 370,200 370,240 345,244 345,248 370,255 370,295"/>
+  </g>
+  </g>
+  <g font-family="sans-serif" fill="#000">
+    <text x="145" y="64" font-size="15" font-weight="bold">S1</text>
+    <text x="145" y="82" font-size="13" fill="#888">S-collars + 1 files</text>
+    <text x="145" y="108" font-size="15">Display</text>
+    <g font-size="13">
+    <text x="147" y="34" fill="#888">Data</text>
+    <text x="199" y="34">Log</text>
+    <text x="251" y="34" fill="#888">Column</text>
+    <g transform="translate(0,66)">
+    <text x="155" y="74">Left curve</text>
+    <text x="385" y="74" text-anchor="end">Density</text>
+    <text x="155" y="98">Right curve</text>
+    <text x="385" y="98" text-anchor="end">Gamma</text>
+    <text x="180" y="124" text-anchor="middle">Long density</text>
+    <text x="360" y="124" text-anchor="middle">Gamma</text>
+    </g>
+    </g>
+  </g>
+</svg>

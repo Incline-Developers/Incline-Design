@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 290" width="540" height="290" role="img" aria-label="Geology workspace, Borehole Inspector Log tab: seam menu opened on B in the strat column, listing Rename in this hole, Rename in every hole, Move Roof..., Move Floor..., Insert Interval..., Delete Interval..., then Up from here, All up, All down and Down from here.">
+  <g stroke="#000" stroke-width="1" fill="#fff">
+    <rect x="30" y="20" width="70" height="250"/>
+    <rect x="30" y="70" width="70" height="30"/>
+    <rect x="260" y="20" width="250" height="258"/>
+  </g>
+  <rect x="30" y="170" width="70" height="30" stroke="#d9622b" stroke-width="3" fill="#fff"/>
+  <line x1="260" y1="46" x2="510" y2="46" stroke="#000" stroke-width="1"/>
+  <line x1="260" y1="182" x2="510" y2="182" stroke="#000" stroke-width="1"/>
+  <g font-family="sans-serif" font-size="15" fill="#000">
+    <text x="65" y="90" text-anchor="middle">A</text>
+    <text x="65" y="190" text-anchor="middle">B</text>
+    <text x="270" y="38">B</text>
+    <text x="270" y="66">Rename in this hole</text>
+    <text x="270" y="88">Rename in every hole</text>
+    <text x="270" y="110">Move Roof...</text>
+    <text x="270" y="132">Move Floor...</text>
+    <text x="270" y="154">Insert Interval...</text>
+    <text x="270" y="176">Delete Interval...</text>
+    <text x="270" y="198">Up from here</text>
+    <text x="270" y="220">All up</text>
+    <text x="270" y="242">All down</text>
+    <text x="270" y="264">Down from here</text>
+  </g>
+</svg>

@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 360" width="540" height="360" role="img" aria-label="Geology workspace, 3D view: the new surface A Roof with the control string lying on it, and the three roof points">
+<g stroke="#000" stroke-width="1" fill="#fff">
+<polygon points="126.3,198.8 346.3,246.8 387.2,235.8 367.2,121.8 317.9,111.1 117.9,177.1"/>
+<polyline points="137.5,193.5 247.5,217.5 357.5,235.5" stroke="#d9622b" stroke-width="3" fill="none"/>
+<circle cx="137.5" cy="187.5" r="4" fill="#000"/>
+<circle cx="357.5" cy="235.5" r="4" fill="#000"/>
+<circle cx="337.5" cy="121.5" r="4" fill="#000"/>
+</g>
+<g font-family="sans-serif" fill="#000">
+<text x="145.5" y="181.5" font-size="15" text-anchor="start" >S1</text>
+<text x="365.5" y="229.5" font-size="15" text-anchor="start" >S2</text>
+<text x="345.5" y="115.5" font-size="15" text-anchor="start" >S3</text>
+<text x="211.2" y="72.2" font-size="15" text-anchor="start" >A Roof</text>
+</g>
+</svg>

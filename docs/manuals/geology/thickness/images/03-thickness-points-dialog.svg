@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 350" width="540" height="350" role="img" aria-label="Geology workspace, plan view: the surface A Roof plane selected, the Thickness Points dialog open with Side set to Roof, and the three points of A thickness points, one at the roof of each hole">
+  <polygon points="30,270 150,270 90,120" stroke="#d9622b" stroke-width="3" stroke-dasharray="4 3" fill="none"/>
+  <g stroke="#000" stroke-width="1" fill="#fff">
+    <circle cx="30" cy="270" r="6"/><circle cx="150" cy="270" r="6"/><circle cx="90" cy="120" r="6"/>
+  </g>
+  <g fill="#000"><circle cx="30" cy="270" r="3"/><circle cx="150" cy="270" r="3"/><circle cx="90" cy="120" r="3"/></g>
+  <line x1="160" y1="60" x2="160" y2="30" stroke="#000" stroke-width="1"/>
+  <path d="M160 24 l-4 9 h8 z" fill="#000"/>
+  <g stroke="#000" stroke-width="1" fill="#fff">
+    <rect x="190" y="40" width="345" height="285"/>
+    <line x1="190" y1="66" x2="535" y2="66"/>
+    <rect x="400" y="288" width="62" height="24"/>
+    <rect x="468" y="288" width="62" height="24"/>
+  </g>
+  <g font-family="sans-serif" font-size="13" fill="#000">
+    <text x="198" y="58" font-size="15">Thickness Points</text>
+    <text x="198" y="88">Surface</text><text x="527" y="88" text-anchor="end">A Roof plane</text>
+    <text x="198" y="112">Holes</text>
+    <text x="527" y="112" text-anchor="end">Every loaded hole holding the working section</text>
+    <text x="527" y="128" text-anchor="end">(1 dataset(s))</text>
+    <text x="198" y="156">Working section field</text>
+    <text x="198" y="180">Working section</text><text x="527" y="180" text-anchor="end">A</text>
+    <text x="198" y="204">Side</text><text x="527" y="204" text-anchor="end">Roof</text>
+    <text x="198" y="228">Then make the other surface</text>
+    <text x="431" y="305" text-anchor="middle">Make</text>
+    <text x="499" y="305" text-anchor="middle">Cancel</text>
+    <text x="30" y="292" text-anchor="middle">S1</text>
+    <text x="150" y="292" text-anchor="middle">S2</text>
+    <text x="90" y="106" text-anchor="middle">S3</text>
+    <text x="174" y="38">N</text>
+    <text x="10" y="338">Selected: A Roof plane. Points: A thickness points</text>
+  </g>
+</svg>

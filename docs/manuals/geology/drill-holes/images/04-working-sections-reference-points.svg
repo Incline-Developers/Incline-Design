@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 290" width="540" height="290" role="img" aria-label="Geology workspace, Reference Points dialog with the three holes selected: Working section list open showing A (working section) and B (working section) above the codes A and B.">
+  <g stroke="#000" stroke-width="1" fill="#fff">
+    <rect x="50" y="5" width="440" height="280"/>
+    <line x1="50" y1="35" x2="490" y2="35"/>
+    <rect x="250" y="76" width="230" height="22"/>
+    <rect x="250" y="106" width="230" height="22"/>
+    <rect x="250" y="136" width="230" height="22"/>
+    <rect x="250" y="158" width="230" height="92"/>
+  </g>
+  <rect x="250" y="158" width="230" height="46" fill="none" stroke="#d9622b" stroke-width="3"/>
+  <g font-family="sans-serif" font-size="15" fill="#000">
+    <text x="62" y="26">Reference Points</text>
+  </g>
+  <g font-family="sans-serif" font-size="13" fill="#000">
+    <text x="62" y="62">Holes</text>
+    <text x="258" y="62">3 holes from 'S-collars + 1 files'</text>
+    <text x="62" y="92">Points at</text>
+    <text x="258" y="92">A logged pick</text>
+    <text x="62" y="122">Working section field</text>
+    <text x="258" y="122">SEAM</text>
+    <text x="62" y="152">Working section</text>
+    <text x="258" y="152">A (working section)</text>
+    <text x="258" y="178">A (working section)</text>
+    <text x="258" y="198">B (working section)</text>
+    <text x="258" y="224">A</text>
+    <text x="258" y="244">B</text>
+  </g>
+</svg>
