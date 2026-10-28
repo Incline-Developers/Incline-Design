@@ -58,7 +58,7 @@ use super::{
             greedy,
             input::{BlendInput, authored_tasks, interval_rate, task_active},
             plan::{PlanTargets, Route},
-            replay::{BlendSolution, ChunkRow, MovementRow, ReplayReport, replay_as_published},
+            replay::{BlendSolution, MovementRow, ReplayReport, replay_as_published},
             rolling::{self, Carry, Stitched},
             routing, utilisation,
         },
@@ -189,12 +189,6 @@ fn schedule_fingerprint(solution: &BlendSolution) -> u64 {
     hasher.finish()
 }
 
-/// `best`'s intervals before `first`, then `pieces` (each in its own
-/// numbering), replayed against the whole horizon: `None` unless valid.
-fn stitch(input: &BlendInput, best: &Best, first: usize, pieces: &[(rolling::Window, &BlendSolution)], cancel: &AtomicBool) -> Option<Best> {
-    stitch_on(input, best, first, pieces, None, &Timing::default(), cancel).ok()
-}
-
 /// What `replay` rejects a schedule for, its numbers left out so that alike
 /// reasons count together: the first physical rule it breaks, or else the
 /// first grade condition.
@@ -222,7 +216,9 @@ fn accepted(solution: BlendSolution, replay: ReplayReport) -> Tried {
     }
 }
 
-/// [`stitch`], the whole on `timeline` when the pieces moved the blasts.
+/// `best`'s intervals before `first`, then `pieces` (each in its own
+/// numbering), replayed against the whole horizon, the whole on `timeline`
+/// when the pieces moved the blasts.
 fn stitch_on(
     input: &BlendInput,
     best: &Best,
@@ -357,43 +353,6 @@ fn moved_blasts(held: Option<&DrillBlastTimeline>, moved: &DrillBlastTimeline) -
         }
     }
     format!("{sooner} fire sooner, {later} later, {days:.1} days moved")
-}
-
-/// `best`'s rows in intervals `first..end`, renumbered from `first`.
-fn slice(best: &Best, first: usize, end: usize) -> BlendSolution {
-    let range = first..end;
-    BlendSolution {
-        movements: best
-            .solution
-            .movements
-            .iter()
-            .filter(|row| range.contains(&row.interval))
-            .map(|row| MovementRow {
-                interval: row.interval - first,
-                ..*row
-            })
-            .collect(),
-        durations: best
-            .solution
-            .durations
-            .iter()
-            .filter(|((interval, _), _)| range.contains(interval))
-            .map(|(&(interval, segment), &duration)| ((interval - first, segment), duration))
-            .collect(),
-        chunks: best
-            .solution
-            .chunks
-            .iter()
-            .filter(|row| range.contains(&row.interval))
-            .map(|row| ChunkRow {
-                interval: row.interval - first,
-                ..row.clone()
-            })
-            .collect(),
-        reported_objective: 0.0,
-        adjustments: Default::default(),
-        drill_blast: None,
-    }
 }
 
 #[derive(Clone, Debug)]
