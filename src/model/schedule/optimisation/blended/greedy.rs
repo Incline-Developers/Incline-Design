@@ -673,7 +673,7 @@ impl<'a> State<'a> {
             TaskKind::Dig { sequence } => Some(Bar {
                 loader,
                 task,
-                blocks: self.next_block(sequence, None, done).into_iter().collect(),
+                blocks: self.next_block(task, sequence, None, done).into_iter().collect(),
                 pile: None,
                 emptied: Vec::new(),
             }),
@@ -742,7 +742,7 @@ impl<'a> State<'a> {
                 if !finished || rate * duration - used <= NEGLIGIBLE_T || self.shared.get(&(bar.loader, end)).copied().unwrap_or(false) {
                     continue;
                 }
-                if let Some(next) = self.next_block(sequence, Some(end), &done) {
+                if let Some(next) = self.next_block(bar.task, sequence, Some(end), &done) {
                     bar.blocks.push(next);
                     grew = true;
                 }
@@ -792,7 +792,8 @@ impl<'a> State<'a> {
             match &input.tasks[bar.task].kind {
                 TaskKind::Dig { sequence } => {
                     // Every block of the sequence gone, by any loader.
-                    let remaining: Vec<GroundId> = sequence
+                    let start = self.cursor.borrow().get(&bar.task).copied().unwrap_or(0).min(sequence.len());
+                    let remaining: Vec<GroundId> = sequence[start..]
                         .iter()
                         .copied()
                         .filter(|block| !done.contains(block) && self.ground.get(block).is_some_and(|left| *left > FINISHED_T))
@@ -931,8 +932,18 @@ impl<'a> State<'a> {
     /// authored order lets a loader start, `after` itself counting as
     /// finished in this interval, and the blocks in `done` gone before the
     /// segment opens.
-    fn next_block(&self, sequence: &[GroundId], after: Option<GroundId>, done: &BTreeSet<GroundId>) -> Option<GroundId> {
-        let start = after.map_or(0, |after| sequence.iter().position(|block| *block == after).map_or(sequence.len(), |position| position + 1));
+    fn next_block(&self, task: usize, sequence: &[GroundId], after: Option<GroundId>, done: &BTreeSet<GroundId>) -> Option<GroundId> {
+        // Only opening ground advances the cursor. Blocks finished by a trial
+        // topology must remain visible to the other trials in this interval.
+        let mut cursor = self.cursor.borrow_mut();
+        let at = cursor.entry(task).or_default();
+        while sequence.get(*at).is_some_and(|block| !self.ground.get(block).is_some_and(|left| *left > FINISHED_T)) {
+            *at += 1;
+        }
+        let start = after.map_or(*at, |after| {
+            sequence.iter().position(|block| *block == after).map_or(sequence.len(), |position| position + 1)
+        });
+        drop(cursor);
         let mut previous = after;
         for &block in &sequence[start..] {
             // A block the input no longer holds was finished before it.
