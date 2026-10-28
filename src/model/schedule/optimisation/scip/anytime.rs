@@ -50,7 +50,7 @@
 //! longer than the budget. So is the whole horizon's plan as a
 //! mixed-integer program, for one more set of targets when it finishes.
 //!
-//! When no tail on the timeline the search holds improves on a window, the
+//! When the timeline the search holds takes none of a window's tails, the
 //! tails are dispatched again with the drill and blast chain live, resumed
 //! as the best schedule's hours leave it, so blasts move with the digging.
 //! One that wins gives the search its timeline from then on.
@@ -1232,9 +1232,11 @@ pub(crate) fn run(
                 }
                 chosen
             };
-            let better = |found: &Option<(Best, PlanTargets)>| found.as_ref().is_some_and(|(found, _)| found.value() > value + 1e-7 * value.abs().max(1.0));
+            // The chain goes live only when the held timeline takes none of
+            // the tails. Where it takes one but values it lower, the live
+            // tails have not been found to win, and they cost as much again.
             let mut chosen = evaluate(false, &mut tally);
-            if live.is_some() && !better(&chosen) {
+            if chosen.is_none() {
                 chosen = evaluate(true, &mut tally);
             }
             if let Some((found, candidate)) = chosen
