@@ -450,6 +450,11 @@ fn ground_materials(input: &BlendInput, ground: GroundId) -> Vec<(MaterialId, f6
         .unwrap_or_default()
 }
 
+/// A long-term plan's periods for each extra period break at a large
+/// blast's firing day: more breaks made the plan much slower to solve for
+/// targets no better.
+const BREAKS_PER_PERIOD: u32 = 4;
+
 impl<'a> Prepared<'a> {
     /// The plan's preparation, over periods of `period_days` days each:
     /// one, but for the whole-horizon relaxation's bound, which may join days
@@ -458,7 +463,8 @@ impl<'a> Prepared<'a> {
         // ---- days ---------------------------------------------------------------
         let period_days = period_days.max(1);
         // Keep the coarse plan small, but separate the largest changes in
-        // available ground so weekly targets better reflect blast timing.
+        // available ground so its targets better reflect blast timing: the
+        // largest blasts' firing days, one for every four periods.
         let mut breaks = BTreeSet::new();
         if period_days > 1
             && !bounding
@@ -475,7 +481,9 @@ impl<'a> Prepared<'a> {
                 .map(|(blast, events)| (blast.releases.iter().map(|ground| tonnes.get(ground).copied().unwrap_or(0.0)).sum::<f64>(), events))
                 .collect();
             blasts.sort_by(|a, b| b.0.total_cmp(&a.0));
-            for (_, events) in blasts.into_iter().take(2) {
+            let days = input.intervals.iter().map(|interval| interval.day()).collect::<BTreeSet<_>>().len() as u32;
+            let periods = days.div_ceil(period_days);
+            for (_, events) in blasts.into_iter().take((periods / BREAKS_PER_PERIOD).max(1) as usize) {
                 if let Some(hour) = events.fired_h {
                     breaks.insert((hour / 24.0).ceil() as u32);
                 }
