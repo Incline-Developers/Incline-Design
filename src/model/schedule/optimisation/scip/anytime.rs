@@ -900,6 +900,16 @@ pub(crate) fn continue_from(
                 }
                 let window = routing::window(input, windows, index);
                 let drawing = reach > 0.0;
+                // A difficult exact LP can otherwise consume the whole
+                // continuation before later windows get a turn. Share the
+                // remaining time; quick windows pass their unused share on.
+                let window_ends = if drawing {
+                    ends
+                } else {
+                    let now = Instant::now();
+                    now + ends.saturating_duration_since(now) / (windows - index) as u32
+                };
+                let window_stop: solver::Interrupt = if drawing { stop.clone() } else { Arc::new(move || Instant::now() >= window_ends) };
                 let note = reroute_window(
                     input,
                     &groups,
@@ -911,8 +921,8 @@ pub(crate) fn continue_from(
                     !drawing,
                     drawing,
                     window.as_ref(),
-                    stop.clone(),
-                    ends,
+                    window_stop,
+                    window_ends,
                     cancel,
                 );
                 report(&Progress {
