@@ -738,11 +738,15 @@ fn reroute_best(input: &BlendInput, groups: &routing::Groups, best: &mut Best, v
     // Refine with smaller moves afterwards: the changed pile blends make
     // the next linearisation more accurate near its new opening schedule.
     let passes = reserve.passes + 3 * usize::from(reserve.program != routing::Program::Held);
-    for (pass, index) in (0..passes).flat_map(|pass| (0..reserve.windows).map(move |index| (pass, index))) {
+    // Spare passes refine locally: a large drawing LP can spend the entire
+    // remainder without completing even one move. Smaller routing windows
+    // keep the horizon's pile chains while giving each move time to finish.
+    let windows_for = |pass| reserve.windows * if pass >= reserve.passes { 2 } else { 1 };
+    for (pass, index) in (0..passes).flat_map(|pass| (0..windows_for(pass)).map(move |index| (pass, index))) {
         if Instant::now() >= ends || cancel.load(Ordering::Relaxed) {
             break;
         }
-        let window = routing::window(input, reserve.windows, index);
+        let window = routing::window(input, windows_for(pass), index);
         let extra = pass >= reserve.passes;
         let reach = if extra {
             1.0 / (pass - reserve.passes + 1) as f64
@@ -799,7 +803,7 @@ fn reroute_best(input: &BlendInput, groups: &routing::Groups, best: &mut Best, v
     format!(
         "rerouted in {} of {} windows: {} ({program}, reserved {:.1}s)",
         notes.len(),
-        reserve.windows * passes,
+        (0..passes).map(windows_for).sum::<usize>(),
         notes.join("; "),
         reserve.time.as_secs_f64()
     )
