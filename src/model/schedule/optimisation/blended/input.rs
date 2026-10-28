@@ -742,7 +742,8 @@ pub(crate) struct OutletIndex {
     /// Dig candidates' destinations by (loader, block, material), sorted.
     /// Indexed once: walking every candidate for every readiness check is the
     /// candidate count times the horizon.
-    digs: BTreeMap<(LoaderId, GroundId, MaterialId), Vec<DestinationId>>,
+    digs: Vec<((LoaderId, GroundId, MaterialId), std::ops::Range<usize>)>,
+    destinations: Vec<DestinationId>,
     /// Each block's position in [`BlendInput::ground`].
     ground: BTreeMap<GroundId, usize>,
     /// The distinct destination lists a loader's digs of a block need room
@@ -756,42 +757,78 @@ pub(crate) struct OutletIndex {
 
 impl OutletIndex {
     pub(crate) fn new(input: &BlendInput) -> Self {
-        let mut digs: BTreeMap<_, Vec<DestinationId>> = BTreeMap::new();
-        for candidate in &input.movements {
-            if let SourceId::Ground(ground) = candidate.source
-                && candidate.activity == Activity::Dig
-            {
-                digs.entry((candidate.loader, ground, candidate.material)).or_default().push(candidate.destination);
-            }
-        }
-        for outlets in digs.values_mut() {
-            outlets.sort_unstable();
-            outlets.dedup();
-        }
+        // Group before allocating: candidates repeat a block's materials for
+        // every route, while the index needs one sorted list per material.
+        let mut routes: Vec<_> = input
+            .movements
+            .iter()
+            .filter_map(|candidate| match (candidate.activity, candidate.source) {
+                (Activity::Dig, SourceId::Ground(ground)) => Some(((candidate.loader, ground, candidate.material), candidate.destination)),
+                _ => None,
+            })
+            .collect();
+        routes.sort_unstable();
+        routes.dedup();
+        let mut destinations = Vec::with_capacity(routes.len());
+        let digs: Vec<_> = routes
+            .chunk_by(|left, right| left.0 == right.0)
+            .map(|group| {
+                let start = destinations.len();
+                destinations.extend(group.iter().map(|route| route.1));
+                (group[0].0, start..destinations.len())
+            })
+            .collect();
+        drop(routes);
         let ground: BTreeMap<GroundId, usize> = input.ground.iter().enumerate().map(|(index, source)| (source.id, index)).collect();
-        let loaders: BTreeSet<(LoaderId, GroundId)> = digs.keys().map(|&(loader, ground, _)| (loader, ground)).collect();
-        let mut needs: BTreeMap<(LoaderId, GroundId), Vec<Vec<DestinationId>>> = BTreeMap::new();
-        for &(loader, block) in &loaders {
+        let mut needs = BTreeMap::new();
+        // Keys are already sorted. Visit each loader/block once, without a
+        // second tree containing every material key.
+        for group in digs.chunk_by(|left, right| (left.0.0, left.0.1) == (right.0.0, right.0.1)) {
+            let (loader, block, _) = group[0].0;
             let Some(source) = ground.get(&block).map(|&index| &input.ground[index]) else {
                 continue;
             };
-            let mut sets: Vec<Vec<DestinationId>> = source
+            // Most materials have identical outlets. Deduplicate references
+            // first so only the distinct readiness lists are copied.
+            let mut sets: Vec<&[DestinationId]> = source
                 .material
                 .iter()
                 .filter(|share| share.fraction > 0.0)
-                .map(|share| digs.get(&(loader, block, share.material)).cloned().unwrap_or_default())
+                .map(|share| {
+                    group
+                        .binary_search_by_key(&share.material, |entry| entry.0.2)
+                        .map(|index| &destinations[group[index].1.clone()])
+                        .unwrap_or_default()
+                })
                 .collect();
             sets.sort_unstable();
             sets.dedup();
-            needs.insert((loader, block), sets);
+            needs.insert((loader, block), sets.into_iter().map(<[DestinationId]>::to_vec).collect());
         }
-        let mut shares = BTreeMap::new();
-        for source in &input.ground {
-            for share in &source.material {
-                shares.entry((source.id, share.material)).or_insert(share.fraction);
-            }
+        // Stable sorting retains the first authored share when a material
+        // is listed more than once, while allowing a bulk tree build.
+        let mut shares: Vec<_> = input
+            .ground
+            .iter()
+            .flat_map(|source| source.material.iter().map(move |share| ((source.id, share.material), share.fraction)))
+            .collect();
+        shares.sort_by_key(|entry| entry.0);
+        shares.dedup_by_key(|entry| entry.0);
+        let shares = shares.into_iter().collect();
+        Self {
+            digs,
+            destinations,
+            ground,
+            needs,
+            shares,
         }
-        Self { digs, ground, needs, shares }
+    }
+
+    fn destinations(&self, loader: LoaderId, ground: GroundId, material: MaterialId) -> Option<&[DestinationId]> {
+        self.digs
+            .binary_search_by_key(&(loader, ground, material), |entry| entry.0)
+            .ok()
+            .map(|index| &self.destinations[self.digs[index].1.clone()])
     }
 
     /// The block `ground`, as [`BlendInput::ground`] holds it.
@@ -816,7 +853,7 @@ impl OutletIndex {
             .filter(|share| share.fraction > 0.0)
             .map(|share| {
                 authorised
-                    .then(|| self.digs.get(&(task.loader, ground, share.material)).cloned())
+                    .then(|| self.destinations(task.loader, ground, share.material).map(<[DestinationId]>::to_vec))
                     .flatten()
                     .unwrap_or_default()
             })
@@ -845,8 +882,7 @@ impl OutletIndex {
             return quick;
         }
         let full = source.material.iter().filter(|share| share.fraction > 0.0).all(|share| {
-            self.digs
-                .get(&(task.loader, ground, share.material))
+            self.destinations(task.loader, ground, share.material)
                 .is_some_and(|destinations| destinations.iter().any(|destination| has_room(*destination)))
         });
         debug_assert_eq!(quick, full, "outlet sets disagree for block {}", ground.0);
