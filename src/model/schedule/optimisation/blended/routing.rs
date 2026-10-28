@@ -919,6 +919,48 @@ pub(crate) fn reroute(
             held = (held + received.get(&(pile.id, at)).copied().unwrap_or(0.0) - drawn).max(0.0);
         }
     }
+    // A cell's truck hours meet the fleet's in the LP only to the solver's
+    // tolerance, which can leave a full cell a hair over the replay's (2.2e-5
+    // h on trucks60 rerouted twice, from a sliver of reclaim). Its reclaim on
+    // that class gives way: what it leaves stays in the pile.
+    let mut used_h: BTreeMap<(TruckClassId, usize, usize), f64> = BTreeMap::new();
+    for (&(candidate, interval, segment), &tonnes) in &routed {
+        let movement = &input.movements[candidate];
+        *used_h.entry((movement.truck, interval, segment)).or_default() += tonnes * movement.truck_hours_per_tonne;
+    }
+    for (row, &tonnes) in fixed.iter().zip(&reclaimed) {
+        let movement = &input.movements[row.candidate];
+        *used_h.entry((movement.truck, row.interval, row.segment)).or_default() += tonnes * movement.truck_hours_per_tonne;
+    }
+    for truck in &input.trucks {
+        for (&(class, at, cell), &used) in used_h.range((truck.id, 0, 0)..=(truck.id, usize::MAX, usize::MAX)) {
+            debug_assert_eq!(class, truck.id);
+            let (Some(hours), Some(interval)) = (truck.hours.get(at).copied(), input.intervals.get(at)) else {
+                continue;
+            };
+            if interval.duration_h() <= 0.0 {
+                continue;
+            }
+            let available = hours / interval.duration_h() * schedule.durations.get(&(at, cell)).copied().unwrap_or(0.0);
+            let mut over = used - available;
+            if over <= 0.0 {
+                continue;
+            }
+            for &index in fixed_by_interval[at].iter() {
+                let row = &fixed[index];
+                let movement = &input.movements[row.candidate];
+                if row.segment != cell || movement.truck != truck.id || movement.truck_hours_per_tonne <= 0.0 || share[index].is_none() {
+                    continue;
+                }
+                let cut = (over / movement.truck_hours_per_tonne).min(reclaimed[index]);
+                reclaimed[index] -= cut;
+                over -= cut * movement.truck_hours_per_tonne;
+                if over <= 0.0 {
+                    break;
+                }
+            }
+        }
+    }
     // A crusher's day meets its budget in the LP only to the solver's
     // tolerance, which a whole day's rows can take past the replay's. The
     // excess goes from direct feed to another destination it may take that
