@@ -709,9 +709,9 @@ fn relaxed(relaxations: &Option<Relaxations>, bound: &mut Option<f64>) -> Option
 fn reroute_best(input: &BlendInput, groups: &routing::Groups, best: &mut Best, value: &mut f64, reserve: routing::Reserve, ends: Instant, cancel: &AtomicBool) -> String {
     let stop: solver::Interrupt = Arc::new(move || Instant::now() >= ends);
     let mut notes: Vec<String> = Vec::new();
-    for index in 0..reserve.windows {
+    for (pass, index) in (0..reserve.passes).flat_map(|pass| (0..reserve.windows).map(move |index| (pass, index))) {
         let window = routing::window(input, reserve.windows, index);
-        let note = match routing::reroute(input, groups, &best.solution, reserve.program, window.as_ref(), stop.clone()) {
+        let note = match routing::reroute(input, groups, &best.solution, reserve.program, pass > 0, window.as_ref(), stop.clone()) {
             Ok(mut solution) => match replay_as_published(input, &mut solution, cancel) {
                 Some(replay) if replay.is_valid() && replay.ranked_objective() > *value => {
                     let gain = replay.ranked_objective() - *value;
@@ -734,7 +734,13 @@ fn reroute_best(input: &BlendInput, groups: &routing::Groups, best: &mut Best, v
         routing::Program::Moving => "pile tonnes moving",
         routing::Program::Opening => "pile tonnes moving, new cells open",
     };
-    format!("rerouted in {} of {} windows: {} ({program}, reserved {:.1}s)", notes.len(), reserve.windows, notes.join("; "), reserve.time.as_secs_f64())
+    format!(
+        "rerouted in {} of {} windows: {} ({program}, reserved {:.1}s)",
+        notes.len(),
+        reserve.windows * reserve.passes,
+        notes.join("; "),
+        reserve.time.as_secs_f64()
+    )
 }
 
 /// Search from `start`, a schedule of `input` the replay accepted, until the

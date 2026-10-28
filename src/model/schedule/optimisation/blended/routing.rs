@@ -191,7 +191,14 @@ pub(crate) struct Reserve {
     pub(crate) time: Duration,
     pub(crate) program: Program,
     pub(crate) windows: usize,
+    /// How many times the horizon is rerouted: once exactly, then with each
+    /// reclaim's tonnes free within `DRAW_REACH` of the last pass's.
+    pub(crate) passes: usize,
 }
+
+/// How far a drawing pass may move each reclaim's tonnes, as a fraction of
+/// the schedule's: its metal is linearised about them.
+const DRAW_REACH: f64 = 0.3;
 
 /// Routing choices one window takes at most. The interior point method's
 /// time grows about as their square; one window a pass costs a build, the
@@ -209,18 +216,19 @@ pub(crate) fn reserve(input: &BlendInput, groups: &Groups, schedule: &BlendSolut
         group(input, groups, schedule, None, open).map(|grouped| grouped.dug.iter().map(|(.., options)| options.len()).filter(|&count| count > 1).sum::<usize>() as f64)
     };
     if tonnes_may_move(input) {
-        for program in [Program::Opening, Program::Moving] {
+        for (program, passes) in [(Program::Opening, 2), (Program::Moving, 2), (Program::Opening, 1), (Program::Moving, 1)] {
             let Ok(columns) = choices(program == Program::Opening) else {
                 return Reserve::default();
             };
             let windows = (columns / WINDOW_CHOICES).ceil().max(1.0);
             let each = columns / windows;
-            let time = Duration::from_secs_f64((1.5 * windows * (1.9e-9 * each * each + 2.0)).max(6.0) + REPLAY_S);
+            let time = Duration::from_secs_f64(passes as f64 * (1.5 * windows * (1.9e-9 * each * each + 2.0)).max(6.0) + REPLAY_S);
             if time <= most {
                 return Reserve {
                     time,
                     program,
                     windows: windows as usize,
+                    passes,
                 };
             }
         }
@@ -233,6 +241,7 @@ pub(crate) fn reserve(input: &BlendInput, groups: &Groups, schedule: &BlendSolut
         time: held.min(most),
         program: Program::Held,
         windows: 1,
+        passes: 1,
     }
 }
 
@@ -250,6 +259,7 @@ pub(crate) fn reroute(
     groups: &Groups,
     schedule: &BlendSolution,
     program: Program,
+    drawing: bool,
     window: Option<&std::ops::Range<usize>>,
     stop: solver::Interrupt,
 ) -> Result<BlendSolution, String> {
@@ -355,13 +365,37 @@ pub(crate) fn reroute(
         if fraction > 1.0 - 1e-9 { 0.0 } else { 1.0 - fraction }
     };
     let free = program != Program::Held && tonnes_may_move(input);
+    // Each reclaim's tonnes as a column, boxed about the schedule's, where
+    // the reclaim may move.
+    let draw: Option<f64> = (free && drawing).then_some(DRAW_REACH);
+    let drawing: Vec<Option<Col>> = fixed
+        .iter()
+        .zip(&share)
+        .map(|(row, share)| {
+            let reach = draw?;
+            share.as_ref()?;
+            Some(problem.add_column(
+                input.movements[row.candidate].value_per_tonne().unwrap_or(0.0),
+                row.tonnes_t * (1.0 - reach).max(0.0)..=row.tonnes_t * (1.0 + reach),
+            ))
+        })
+        .collect();
+    let mut drawn_by: BTreeMap<(StockpileId, usize), Vec<usize>> = BTreeMap::new();
+    for (index, row) in fixed.iter().enumerate() {
+        if drawing[index].is_some()
+            && let Some((pile, _)) = share[index]
+        {
+            drawn_by.entry((pile, row.interval)).or_default().push(index);
+        }
+    }
+    let tonnes_kept = |pile: StockpileId, at: usize| if draw.is_some() && drawn_by.contains_key(&(pile, at)) { 1.0 } else { kept(pile, at) };
 
     // Each pile's stock at the opening of each interval, a column plus a
     // constant: what it held, less the held fraction reclaimed, plus what it
     // received. Held at the schedule's unless the tonnes may move, when each
     // column earns what its interval's reclaim is paid.
     let mut paid: BTreeMap<(StockpileId, usize), f64> = BTreeMap::new();
-    for (row, share) in fixed.iter().zip(&share) {
+    for (row, share) in fixed.iter().zip(&share).filter(|_| draw.is_none()) {
         if let Some((pile, share)) = share {
             *paid.entry((*pile, row.interval)).or_default() += share * input.movements[row.candidate].value_per_tonne().unwrap_or(0.0);
         }
@@ -376,11 +410,12 @@ pub(crate) fn reroute(
                 continue;
             }
             let (col, offset) = states[at];
-            let kept = kept(pile.id, at);
+            let kept = tonnes_kept(pile.id, at);
             let (mut terms, constant) = expression(&[at], &into(pile.id));
+            let rows = drawn_by.get(&(pile.id, at)).map_or(&[][..], Vec::as_slice);
             // A pile neither receiving nor reclaimed holds what it held,
             // unless the next interval's reclaim needs a column to earn on.
-            if kept == 1.0 && terms.is_empty() && constant == 0.0 && !paid.contains_key(&(pile.id, at + 1)) {
+            if kept == 1.0 && rows.is_empty() && terms.is_empty() && constant == 0.0 && !paid.contains_key(&(pile.id, at + 1)) {
                 states.push((col, offset));
                 continue;
             }
@@ -392,6 +427,15 @@ pub(crate) fn reroute(
             if let Some(col) = col {
                 terms.push((col, -kept));
             }
+            // The reclaim takes what it draws, and no more than the pile holds.
+            if !rows.is_empty() {
+                let mut most: Vec<(Col, f64)> = rows.iter().map(|&index| (drawing[index].expect("drawn"), 1.0)).collect();
+                terms.extend(most.iter().copied());
+                if let Some(col) = col {
+                    most.push((col, -1.0));
+                }
+                problem.add_row(..=offset, most);
+            }
             let rhs = constant + kept * offset;
             problem.add_row(rhs..=rhs, terms);
             states.push((Some(next), 0.0));
@@ -400,6 +444,9 @@ pub(crate) fn reroute(
     }
     // What a held row moves: its share of the pile's stock, or its tonnes.
     let moved = |index: usize| -> (Option<(Col, f64)>, f64) {
+        if let Some(col) = drawing[index] {
+            return (Some((col, 1.0)), 0.0);
+        }
         match share[index] {
             Some((pile, share)) => {
                 let (col, offset) = tonnage[&pile][fixed[index].interval];
@@ -608,6 +655,43 @@ pub(crate) fn reroute(
     // interval, a column plus a constant: what it held, less the held
     // fraction reclaimed, plus what it received.
     let mut metal: BTreeMap<(StockpileId, usize), Vec<(Option<Col>, f64)>> = BTreeMap::new();
+    // The schedule's metal in each pile at each interval's opening, where
+    // the reclaimed metal is linearised: r·M/S about the schedule's r, M, S.
+    let mut metal_held: BTreeMap<(StockpileId, usize), Vec<f64>> = BTreeMap::new();
+    if draw.is_some() {
+        for pile in &input.piles {
+            let opening = pile.total_opening(input.grades.count()).1;
+            for &grade in &grades {
+                let mut received = vec![0.0; intervals];
+                for row in &schedule.movements {
+                    let movement = &input.movements[row.candidate];
+                    if pile_of(input, movement.destination) == Some(pile.id) {
+                        received[row.interval] += row.tonnes_t * input.grades.fraction(movement.material, grade).unwrap_or(0.0);
+                    }
+                }
+                let mut held = vec![opening.get(grade).copied().unwrap_or(0.0)];
+                for at in 0..intervals {
+                    held.push((held[at] * kept(pile.id, at) + received[at]).max(0.0));
+                }
+                metal_held.insert((pile.id, grade), held);
+            }
+        }
+    }
+    // A drawn reclaim's metal: its terms and constant, given the pile's
+    // stock and metal states at its interval.
+    let drawn_metal = |index: usize, grade: usize, tonnes: (Option<Col>, f64), contained: (Option<Col>, f64)| -> (Vec<(Col, f64)>, f64) {
+        let (pile, share) = share[index].expect("drawn rows have a share");
+        let at = fixed[index].interval;
+        let grade_held = metal_held[&(pile, grade)][at] / stock[&pile][at];
+        let mut terms = vec![(drawing[index].expect("drawn"), grade_held)];
+        if let Some(col) = contained.0 {
+            terms.push((col, share));
+        }
+        if let Some(col) = tonnes.0 {
+            terms.push((col, -share * grade_held));
+        }
+        (terms, share * contained.1 - share * grade_held * tonnes.1)
+    };
     for pile in &input.piles {
         let opening = pile.total_opening(input.grades.count()).1;
         for &grade in &grades {
@@ -630,10 +714,24 @@ pub(crate) fn reroute(
                     term.1 = -term.1;
                 }
                 terms.push((next, 1.0));
-                if let Some(col) = col {
+                let mut rhs = constant + kept * offset;
+                // A drawn reclaim takes its linearised metal, net of what the
+                // held fraction already took.
+                if let Some(rows) = drawn_by.get(&(pile.id, at)) {
+                    let mut sum_share = 0.0;
+                    for &index in rows {
+                        let (out, out_constant) = drawn_metal(index, grade, tonnage[&pile.id][at], (col, offset));
+                        terms.extend(out);
+                        rhs -= out_constant;
+                        sum_share += share[index].expect("drawn").1;
+                    }
+                    if let Some(col) = col {
+                        terms.push((col, -(kept + sum_share)));
+                    }
+                    rhs += sum_share * offset;
+                } else if let Some(col) = col {
                     terms.push((col, -kept));
                 }
-                let rhs = constant + kept * offset;
                 problem.add_row(rhs..=rhs, terms);
                 states.push((Some(next), 0.0));
             }
@@ -663,6 +761,12 @@ pub(crate) fn reroute(
                 }
                 let Some((pile, share)) = share[row_index] else { continue };
                 let (col, offset) = metal[&(pile, target.grade)][row.interval];
+                if drawing[row_index].is_some() {
+                    let (out, out_constant) = drawn_metal(row_index, target.grade, tonnage[&pile][row.interval], (col, offset));
+                    reclaim_q.extend(out);
+                    reclaim_q_constant += out_constant;
+                    continue;
+                }
                 if let Some(col) = col {
                     reclaim_q.push((col, share));
                 }
@@ -728,11 +832,15 @@ pub(crate) fn reroute(
                 .copied()
                 .filter(|&index| matches!(share[index], Some((of, _)) if of == pile.id))
                 .collect();
-            let wanted: f64 = rows.iter().map(|&index| share[index].map_or(0.0, |(_, share)| share) * held).sum();
+            let want = |index: usize| match drawing[index] {
+                Some(col) => solution[col.index()].max(0.0),
+                None => share[index].map_or(0.0, |(_, share)| share) * held,
+            };
+            let wanted: f64 = rows.iter().map(|&index| want(index)).sum();
             let scale = if wanted > held { held / wanted } else { 1.0 };
             let mut drawn = 0.0;
             for &index in &rows {
-                let tonnes = share[index].map_or(0.0, |(_, share)| share) * held * scale;
+                let tonnes = want(index) * scale;
                 reclaimed[index] = tonnes;
                 drawn += tonnes;
             }
