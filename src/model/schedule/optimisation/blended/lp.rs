@@ -64,11 +64,11 @@ impl LinearProgram {
     /// The column values at a maximum of the objective, or why there are
     /// none, starting from the basis the last program of the same shape in
     /// `warm` ended on, and leaving this one's there.
-    pub(crate) fn maximise_from(&self, warm: &mut WarmStarts) -> Result<Vec<f64>, String> {
-        let tidy = self.tidied()?;
+    pub(crate) fn maximise_from(&mut self, warm: &mut WarmStarts) -> Result<Vec<f64>, String> {
+        self.tidy()?;
         #[cfg(not(target_arch = "wasm32"))]
-        tidy.dump();
-        tidy.maximise_solver(warm)
+        self.dump();
+        self.maximise_solver(warm)
     }
 
     /// What a basis carries over between programs: their columns, and each
@@ -124,19 +124,24 @@ impl LinearProgram {
     ///
     /// Two parallel rows are the classic way to a basis that is singular
     /// apart from rounding.
-    fn tidied(&self) -> Result<Self, String> {
+    fn tidy(&mut self) -> Result<(), String> {
+        use std::hash::{BuildHasher, Hash, Hasher};
+
         let mut rows: Vec<Row> = Vec::with_capacity(self.rows.len());
-        let mut seen: std::collections::HashMap<Vec<(usize, u64)>, usize, foldhash::fast::FixedState> = std::collections::HashMap::default();
-        for row in &self.rows {
-            let mut terms: Vec<(Col, f64)> = Vec::with_capacity(row.terms.len());
-            let mut sorted = row.terms.clone();
-            sorted.sort_by_key(|(col, _)| col.0);
-            for (col, coefficient) in sorted {
-                match terms.last_mut() {
-                    Some((last, total)) if *last == col => *total += coefficient,
-                    _ => terms.push((col, coefficient)),
+        let state = foldhash::fast::FixedState::default();
+        let mut seen: std::collections::HashMap<u64, usize, foldhash::fast::FixedState> = std::collections::HashMap::with_capacity_and_hasher(self.rows.len(), state.clone());
+        let mut previous: Vec<Option<usize>> = Vec::with_capacity(self.rows.len());
+        for mut row in std::mem::take(&mut self.rows) {
+            let terms = &mut row.terms;
+            terms.sort_by_key(|(col, _)| col.0);
+            terms.dedup_by(|next, held| {
+                if next.0 == held.0 {
+                    held.1 += next.1;
+                    true
+                } else {
+                    false
                 }
-            }
+            });
             if let Some((col, coefficient)) = terms.iter().find(|(_, coefficient)| !coefficient.is_finite()) {
                 return Err(format!("a constraint has coefficient {coefficient} on column {}", col.0));
             }
@@ -151,9 +156,25 @@ impl LinearProgram {
                 }
                 continue;
             }
-            let key: Vec<(usize, u64)> = terms.iter().map(|(col, coefficient)| (col.0, coefficient.to_bits())).collect();
-            match seen.get(&key) {
-                Some(&index) => {
+            // Keep only the hash in the index: copying every row's terms
+            // into a key costs an allocation on every hourly solve. Check
+            // actual terms along the collision chain before merging bounds.
+            let mut hasher = state.build_hasher();
+            terms.len().hash(&mut hasher);
+            for (col, coefficient) in terms.iter() {
+                col.0.hash(&mut hasher);
+                coefficient.to_bits().hash(&mut hasher);
+            }
+            let key = hasher.finish();
+            let mut found = seen.get(&key).copied();
+            while let Some(index) = found {
+                if rows[index].terms.len() == terms.len() && rows[index].terms.iter().zip(terms.iter()).all(|((a, x), (b, y))| a == b && x.to_bits() == y.to_bits()) {
+                    break;
+                }
+                found = previous[index];
+            }
+            match found {
+                Some(index) => {
                     let held = &mut rows[index];
                     held.lower = held.lower.max(row.lower);
                     held.upper = held.upper.min(row.upper);
@@ -168,20 +189,13 @@ impl LinearProgram {
                     }
                 }
                 None => {
-                    seen.insert(key, rows.len());
-                    rows.push(Row {
-                        lower: row.lower,
-                        upper: row.upper,
-                        terms,
-                    });
+                    previous.push(seen.insert(key, rows.len()));
+                    rows.push(row);
                 }
             }
         }
-        Ok(Self {
-            objective: self.objective.clone(),
-            column_bounds: self.column_bounds.clone(),
-            rows,
-        })
+        self.rows = rows;
+        Ok(())
     }
 
     /// Solve with the `solver` crate, HiGHS's presolve and dual simplex method in Rust,
