@@ -574,7 +574,7 @@ fn heur_exec_clique(scip: &mut Scip, heur: HeurId, _heurtiming: HeurTiming, _nod
                 let minimprove = hd(scip, heur).minimprove;
                 let upperbound = api::get_upperbound(scip) - scip.set.sumepsilon();
 
-                let cutoffbound = if !scip.set.is_infinity(-1.0 * lowerbound) {
+                let cutoffbound = if !scip.set.is_infinity(-lowerbound) {
                     (1.0 - minimprove) * api::get_upperbound(scip) + minimprove * lowerbound
                 } else if api::get_upperbound(scip) >= 0.0 {
                     (1.0 - minimprove) * api::get_upperbound(scip)

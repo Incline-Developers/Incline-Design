@@ -69,7 +69,6 @@ impl Default for Grid2 {
 /// Defines a 3D grid spacing and size.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
-#[allow(clippy::large_enum_variant)]
 pub enum Grid3 {
     /// Regularly spaced cells.
     Regular {
@@ -83,13 +82,13 @@ pub enum Grid3 {
     Tensor {
         /// Array with `Scalar` type storing the size of each cell along the U axis.
         /// These sizes must be greater than zero.
-        u: Array<array_type::Scalar>,
+        u: Box<Array<array_type::Scalar>>,
         /// Array with `Scalar` type storing the size of each cell along the V axis.
         /// These sizes must be greater than zero.
-        v: Array<array_type::Scalar>,
+        v: Box<Array<array_type::Scalar>>,
         /// Array with `Scalar` type storing the size of each cell along the W axis.
         /// These sizes must be greater than zero.
-        w: Array<array_type::Scalar>,
+        w: Box<Array<array_type::Scalar>>,
     },
 }
 
@@ -101,7 +100,11 @@ impl Grid3 {
 
     /// Create a 3D tensor grid from the size arrays.
     pub fn from_arrays(u: Array<array_type::Scalar>, v: Array<array_type::Scalar>, w: Array<array_type::Scalar>) -> Self {
-        Self::Tensor { u, v, w }
+        Self::Tensor {
+            u: Box::new(u),
+            v: Box::new(v),
+            w: Box::new(w),
+        }
     }
 
     /// Returns the number of blocks in each axis.

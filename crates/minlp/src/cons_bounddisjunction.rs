@@ -1664,12 +1664,8 @@ fn conflict_exec_bounddisjunction(
 
             // Check whether both literals contribute with the same bound type.
             if boundtypes[ju] == boundtype {
-                // Check whether the lower bound can be relaxed.
-                if boundtype == BoundType::Lower && scip.set.is_lt(bound, bounds[ju]) {
-                    bounds[ju] = bound;
-                }
-                // Check whether the upper bound can be relaxed.
-                else if boundtype == BoundType::Upper && scip.set.is_gt(bound, bounds[ju]) {
+                // Check whether the lower or the upper bound can be relaxed.
+                if (boundtype == BoundType::Lower && scip.set.is_lt(bound, bounds[ju])) || (boundtype == BoundType::Upper && scip.set.is_gt(bound, bounds[ju])) {
                     bounds[ju] = bound;
                 }
 

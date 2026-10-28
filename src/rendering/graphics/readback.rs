@@ -1,9 +1,9 @@
 //! Offscreen colour targets copied back to the CPU as RGBA8, shared by the
 //! viewport image export and the plot map render.
 
-use std::sync::Arc;
-
 use anyhow::{Result, anyhow};
+
+use super::Shared;
 
 /// A `width` x `height` colour target in `format` that can be rendered into and
 /// copied out of.
@@ -29,7 +29,7 @@ pub(super) fn offscreen_target(device: &wgpu::Device, label: &str, format: wgpu:
 /// A texture copied into a mappable buffer, awaiting readback.
 pub(super) struct RgbaReadback {
     /// Shared so a browser map callback can unmap the buffer it was handed.
-    pub(super) buffer: Arc<wgpu::Buffer>,
+    pub(super) buffer: Shared<wgpu::Buffer>,
     padded_bytes_per_row: u32,
     pub(super) width: u32,
     pub(super) height: u32,
@@ -47,10 +47,7 @@ impl RgbaReadback {
     pub(super) fn record_region(device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, texture: &wgpu::Texture, origin: (u32, u32), size: (u32, u32), label: &str) -> Self {
         let (width, height) = size;
         let padded_bytes_per_row = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
-        // On wasm `wgpu::Buffer` is not Send+Sync; the Arc never crosses threads
-        // there, but the native readback path requires Arc over Rc.
-        #[cfg_attr(target_arch = "wasm32", allow(clippy::arc_with_non_send_sync))]
-        let buffer = Arc::new(device.create_buffer(&wgpu::BufferDescriptor {
+        let buffer = Shared::new(device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
             size: u64::from(padded_bytes_per_row) * u64::from(height),
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,

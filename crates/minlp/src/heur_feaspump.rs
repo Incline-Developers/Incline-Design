@@ -511,7 +511,7 @@ fn heur_exec_feaspump(scip: &mut Scip, heur: HeurId, heurtiming: HeurTiming, nod
 
         // Randomly choose maximum number of variables to flip in current
         // pumping round in case of a 1-cycle.
-        let lo = if nfracs / 2 + 1 <= minflips { nfracs / 2 + 1 } else { minflips };
+        let lo = if nfracs / 2 < minflips { nfracs / 2 + 1 } else { minflips };
         let hi = if nfracs <= maxflips { nfracs } else { maxflips };
         let maxnflipcands = rng(scip, heur).get_int(lo, hi);
         let mut nflipcands = 0;
@@ -553,7 +553,7 @@ fn heur_exec_feaspump(scip: &mut Scip, heur: HeurId, heurtiming: HeurTiming, nod
 
         // Initialize cycle check.
         let cl = cyclelength as i32;
-        let mut minimum = if cl <= nloops - 1 { cl } else { nloops - 1 };
+        let mut minimum = if cl < nloops { cl } else { nloops - 1 };
         for j in 0..cyclelength {
             cycles[j] = nloops > j as i32 + 1 && (lastalphas[j] - alpha).abs() < alphadiff;
         }
@@ -577,12 +577,12 @@ fn heur_exec_feaspump(scip: &mut Scip, heur: HeurId, heurtiming: HeurTiming, nod
             handle_cycle(scip, heur, &vars, nenfovars, alpha, scalingfactor)?;
             nbestsolsfound = api::get_n_best_sols_found(scip);
         } else {
-            minimum = if cl <= nloops - 1 { cl } else { nloops - 1 };
+            minimum = if cl < nloops { cl } else { nloops - 1 };
 
-            for j in 0..minimum as usize {
+            for (j, cycle) in cycles[..minimum as usize].iter().enumerate() {
                 // If we got the same rounded solution as in some step before,
                 // we have to flip some variables.
-                if cycles[j] {
+                if *cycle {
                     // 1-cycles have a special flipping rule (flip most
                     // fractional variables).
                     if j == 0 {

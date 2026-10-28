@@ -2229,18 +2229,18 @@ fn cuts_transform_mir(
         // Perform bound substitution for added variables.
         for i in cutindsstart..data.ncutinds as usize {
             let v = data.cutinds[i];
-            let bestbnd;
-            if best[i].selectedbound == BoundType::Lower {
+
+            let bestbnd = if best[i].selectedbound == BoundType::Lower {
                 // Use lower bound as transformation bound: x'_j := x_j - lb_j.
                 boundtype[i] = best[i].bestlbtype;
                 varsign[i] = 1;
-                bestbnd = best[i].bestlb;
+                best[i].bestlb
             } else {
                 // Use upper bound as transformation bound: x'_j := ub_j - x_j.
                 boundtype[i] = best[i].bestubtype;
                 varsign[i] = -1;
-                bestbnd = best[i].bestub;
-            }
+                best[i].bestub
+            };
             do_mir_bound_substitution(scip, data, varsign[i], boundtype[i], bestbnd, v, &mut localbdsused);
         }
     }
@@ -2286,18 +2286,17 @@ fn cuts_transform_mir(
                         newfj = scip.set.frac(-varsign[i] as f64 * coef.to_dbl());
                     }
 
-                    let violgain;
-                    if !ignoresol {
+                    let violgain = if !ignoresol {
                         let solval = get_sol_val(scip, sol, vars[v as usize]);
                         let viol = f0 - fj * if varsign[i] == 1 { solval - b.bestlb } else { b.bestub - solval };
                         let newviol = newf0 - newfj * if varsign[i] == -1 { solval - b.bestlb } else { b.bestub - solval };
-                        violgain = newviol - viol;
+                        newviol - viol
                     } else {
                         // todo: this should be done, this can improve the dualray
                         // significantly.
                         log::error!("Cannot handle closest bounds with ignoring the LP solution.");
                         return Err(crate::retcode::Retcode::InvalidCall);
-                    }
+                    };
 
                     // Prefer larger violations; for equal violations, prefer
                     // smaller f0 values since then the possibility that we f_j >
@@ -3084,11 +3083,11 @@ pub fn cut_generation_heuristic_cmir(
             }
         }
 
-        for i in 0..nbounddist {
-            let absmksetcoef = deltacands[i].abs();
+        for deltacand in &mut deltacands[..nbounddist] {
+            let absmksetcoef = deltacand.abs();
             maxabsmksetcoef = crate::def::max(absmksetcoef, maxabsmksetcoef);
 
-            deltacands[i] = absmksetcoef;
+            *deltacand = absmksetcoef;
         }
 
         // Also test 1.0 and maxabsmksetcoef + 1.0 as last delta values.
@@ -3293,8 +3292,8 @@ pub fn cut_generation_heuristic_cmir(
         // Try to improve efficacy by switching complementation of integral
         // variables that are not at their bounds in order of non-increasing
         // bound distance.
-        for i in 0..nbounddist {
-            let k = bounddistpos[i] as usize;
+        for pos in &bounddistpos[..nbounddist] {
+            let k = *pos as usize;
             let var = get_vars(scip)[data.cutinds[k] as usize];
 
             let (bestlb, bestlbtype) = find_best_lb(scip, var, sol, 0, allowlocal);
@@ -4086,8 +4085,8 @@ fn construct_snf_relaxation(
     snf.transrhs = transrhs.to_dbl();
 
     // Transform remaining binary variables of row.
-    for i in nnonbinvarsrow..n {
-        let probidx = rowinds[i] as usize;
+    for rowind in &rowinds[nnonbinvarsrow..n] {
+        let probidx = *rowind as usize;
 
         // Binary variable was processed together with a non-binary variable.
         if binvarused[probidx] == 0 {
@@ -5249,8 +5248,8 @@ pub fn calc_knapsack_cover(scip: &mut Scip, sol: SolId, allowlocal: bool, aggrro
 
     tmpinds[..nnz as usize].copy_from_slice(&aggrrow.inds[..nnz as usize]);
 
-    for k in 0..nnz as usize {
-        let j = tmpinds[k] as usize;
+    for tmpind in &tmpinds[..nnz as usize] {
+        let j = *tmpind as usize;
         let mut coef = aggrrow.vals[j];
         coef.hi = nonzero(coef.hi);
         tmpcoefs[j] = coef;
@@ -5538,18 +5537,18 @@ fn cuts_transform_strong_cg(scip: &Scip, data: &mut MirData, sol: SolId, boundsw
             // Perform bound substitution for all nonzeros in the section.
             for i in cutindsstart..data.ncutinds as usize {
                 let v = data.cutinds[i];
-                let bestbnd;
-                if best[i].selectedbound == BoundType::Lower {
+
+                let bestbnd = if best[i].selectedbound == BoundType::Lower {
                     // Use lower bound as transformation bound: x'_j := x_j - lb_j.
                     boundtype[i] = best[i].bestlbtype;
                     varsign[i] = 1;
-                    bestbnd = best[i].bestlb;
+                    best[i].bestlb
                 } else {
                     // Use upper bound as transformation bound: x'_j := ub_j - x_j.
                     boundtype[i] = best[i].bestubtype;
                     varsign[i] = -1;
-                    bestbnd = best[i].bestub;
-                }
+                    best[i].bestub
+                };
 
                 do_mir_bound_substitution(scip, data, varsign[i], boundtype[i], bestbnd, v, &mut localbdsused);
             }

@@ -1171,9 +1171,9 @@ fn estimate_vertex_polyhedral(
 
     rowprep.local = true;
     rowprep.add_constant(facetconstant);
-    for i in 0..nleafs {
+    for (i, coef) in coefs[..nleafs].iter().enumerate() {
         let var = crate::expr_var::get_var_expr_var(scip, ed(scip, nlhdlrexprdata).leafexprs[i]);
-        rowprep.add_term(var, coefs[i]);
+        rowprep.add_term(var, *coef);
     }
 
     Ok(())

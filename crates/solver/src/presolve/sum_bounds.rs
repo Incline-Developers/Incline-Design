@@ -7,7 +7,6 @@
 //! implied bound that came from the sum itself.
 
 #![allow(clippy::too_many_arguments, reason = "HiGHS's residual queries, argument for argument")]
-
 use super::NONE;
 use crate::util::CDouble;
 

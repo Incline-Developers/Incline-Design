@@ -186,8 +186,8 @@ impl DualRow {
     fn choose_final_large_alpha(&self, ekk: &Ekk) -> (Option<usize>, usize) {
         let permutation = &ekk.info.num_tot_permutation;
         let mut final_compare: f64 = 0.0;
-        for i in 0..self.work_count {
-            final_compare = final_compare.max(self.work_data[i].1);
+        for work_data_i in &self.work_data[..self.work_count] {
+            final_compare = final_compare.max(work_data_i.1);
         }
         final_compare = (0.1 * final_compare).min(1.0);
         let count_group = self.work_group.len() - 1;
@@ -221,8 +221,8 @@ impl DualRow {
     pub fn update_flip(&self, ekk: &mut Ekk, bfrt_column: &mut HVector) {
         let mut dual_objective_value_change = 0.0;
         bfrt_column.clear();
-        for i in 0..self.work_count {
-            let (col, change) = self.work_data[i];
+        for work_data_i in &self.work_data[..self.work_count] {
+            let (col, change) = *work_data_i;
             dual_objective_value_change += change * ekk.info.work_dual[col] * ekk.cost_scale;
             ekk.flip_bound(col);
             ekk.lp.a.collect_aj(bfrt_column, col, change);

@@ -322,15 +322,15 @@ fn mcfnetwork_fill(
     let ncols = n_lp_cols(scip);
 
     // Generate v -> compv mapping.
-    for i in 0..ncompnodes as usize {
-        let v = compnodes[i];
+    for (i, compnode) in compnodes[..ncompnodes as usize].iter().enumerate() {
+        let v = *compnode;
         compnodeid[v as usize] = i as i32;
     }
 
     // Generate k -> compk mapping.
     let mut ncompcommodities = 0;
-    for i in 0..nflowcands as usize {
-        let r = flowcands[i] as usize;
+    for flowcand in &flowcands[..nflowcands as usize] {
+        let r = *flowcand as usize;
         let rv = rownodeid[r];
         if rv >= 0 && compnodeid[rv as usize] >= 0 {
             let k = rowcommodity[r];
@@ -366,8 +366,8 @@ fn mcfnetwork_fill(
     mcfnetwork.colcommodity = vec![0; ncols as usize];
 
     // Fill in existing node data.
-    for i in 0..nflowcands as usize {
-        let r = flowcands[i] as usize;
+    for flowcand in &flowcands[..nflowcands as usize] {
+        let r = *flowcand as usize;
         let rv = rownodeid[r];
         if rv >= 0 && compnodeid[rv as usize] >= 0 {
             let v = compnodeid[rv as usize] as usize;
@@ -1096,8 +1096,8 @@ fn invert_commodity(scip: &Scip, mcfdata: &mut McfData, comrows: &[RowId], ncomr
     }
 
     // Switch plus/minusflow of columns of the given commodity.
-    for i in 0..ncomcolids as usize {
-        let c = comcolids[i] as usize;
+    for comcolid in &comcolids[..ncomcolids as usize] {
+        let c = *comcolid as usize;
         std::mem::swap(&mut mcfdata.plusflow[c], &mut mcfdata.minusflow[c]);
     }
 }
@@ -1110,8 +1110,8 @@ fn delete_commodity(scip: &Scip, mcfdata: &mut McfData, k: i32, comrows: &[RowId
     let mut ndelflowrows = 0;
     let mut ndelflowvars = 0;
 
-    for n in 0..nrows as usize {
-        let row = comrows[n];
+    for comrow in &comrows[..nrows as usize] {
+        let row = *comrow;
         let r = scip.rows[row].lppos as usize;
 
         // Remove the lhs/rhs assignment and the inverted flag.
@@ -2048,8 +2048,8 @@ fn find_uncapacitated_arcs(scip: &mut Scip, mcfdata: &mut McfData) -> ScipResult
         }
 
         // Check if we want to add uncapacitated arcs s -> v or v -> t.
-        for l in 0..nadjnodes {
-            let u = adjnodes[l];
+        for adjnode in &adjnodes[..nadjnodes] {
+            let u = *adjnode;
 
             // Add arcs u -> v.
             if sourcecount[u as usize] >= arcsthreshold {
@@ -2176,8 +2176,8 @@ fn cleanup_network(scip: &mut Scip, mcfdata: &mut McfData) -> ScipResult {
 
     // Calculate maximal number of nodes per commodity.
     let mut maxnnodes = 0;
-    for k in 0..ncommodities {
-        maxnnodes = max(maxnnodes, nnodespercom[k]);
+    for nnodes in &nnodespercom[..ncommodities] {
+        maxnnodes = max(maxnnodes, *nnodes);
     }
 
     // We want to keep only commodities that have at least a certain size
@@ -2405,8 +2405,8 @@ fn identify_sources_targets(scip: &mut Scip, mcfdata: &mut McfData, maxinconsist
         let mut besttargetv = -1;
         let mut bestsourcecnt = 0.0;
         let mut besttargetcnt = 0.0;
-        for i in 0..ntouchednodes {
-            let v = touchednodes[i];
+        for node in &touchednodes[..ntouchednodes] {
+            let v = *node;
             let vu = v as usize;
 
             if modeltype == MCFMODELTYPE_DIRECTED {
@@ -2699,8 +2699,8 @@ fn mcfnetwork_extract(scip: &mut Scip, sepa: SepaId) -> ScipResult<(Vec<McfNetwo
 /// each element into its own set.
 fn unionfind_init_sets(representatives: &mut [i32], nelems: usize) {
     // We start with each element being in its own set.
-    for v in 0..nelems {
-        representatives[v] = v as i32;
+    for (v, representative) in representatives[..nelems].iter_mut().enumerate() {
+        *representative = v as i32;
     }
 }
 
@@ -2845,14 +2845,14 @@ fn nodepairqueue_create(scip: &mut Scip, mcfnetwork: &McfNetwork) -> NodePairQue
     // Calculate max and min weight.
     let mut maxweight = 1.0; // we want maxweight to be positive
     let mut minweight = -1.0; // we want minweight to be negative
-    for n in 0..nnodepairs {
+    for nodepair in &nodepairs[..nnodepairs] {
         // maxweight should not be infinity (uncap arcs have infinity
         // weight).
-        if !scip.set.is_infinity(nodepairs[n].weight) {
-            maxweight = max(maxweight, nodepairs[n].weight);
+        if !scip.set.is_infinity(nodepair.weight) {
+            maxweight = max(maxweight, nodepair.weight);
         }
 
-        minweight = min(minweight, nodepairs[n].weight);
+        minweight = min(minweight, nodepair.weight);
     }
 
     // Initialize priority queue.
@@ -3267,16 +3267,15 @@ fn generate_cluster_cuts(
     while partition <= allpartitions.wrapping_sub(1) && !crate::solve::solve_is_stopped(scip, false) && *ncuts < maxsepacuts && !*cutoff {
         let mut bestdelta = 1.0;
 
-        if checkcutshoreconnectivity {
-            if let Some(np) = nodepartition {
-                if !nodepartition_is_connected(mcfnetwork, np, partition) {
-                    // If S or T are not connected, it is very likely that
-                    // there is a cut in our cluster partition that gives
-                    // dominating inequalities.
-                    partition += 1;
-                    continue;
-                }
-            }
+        if checkcutshoreconnectivity
+            && let Some(np) = nodepartition
+            && !nodepartition_is_connected(mcfnetwork, np, partition)
+        {
+            // If S or T are not connected, it is very likely that
+            // there is a cut in our cluster partition that gives
+            // dominating inequalities.
+            partition += 1;
+            continue;
         }
 
         let mut inverted = false;
@@ -3315,7 +3314,7 @@ fn generate_cluster_cuts(
                     comcutdemands[k] += rhs * nodeflowscales[v][k];
                 }
             }
-            debug_assert!(1 <= nnodesins && nnodesins <= nnodes - 1);
+            debug_assert!(1 <= nnodesins && nnodesins < nnodes);
 
             // Ignore cuts with only a single node in S or in T, since these
             // have already been tried as single node cuts.
@@ -3620,12 +3619,12 @@ fn generate_cluster_cuts(
             if separateflowcutset && oldncuts == *ncuts && !*cutoff {
                 // Try to separate flow cuts for the best delta.
                 let f0 = scip.set.frac(baserhs / bestdelta);
-                if MINFRAC <= f0 && f0 <= MAXFRAC {
+                if (MINFRAC..=MAXFRAC).contains(&f0) {
                     let mut totalviolationdelta = 0.0;
                     let onedivoneminsf0 = 1.0 / (1.0 - f0);
-                    for a in 0..narcs {
+                    for arccapacityrow in &arccapacityrows[..narcs] {
                         // Arc might be uncapacitated.
-                        let caprow = arccapacityrows[a];
+                        let caprow = *arccapacityrow;
                         if caprow == NONE {
                             continue;
                         }

@@ -346,7 +346,7 @@ fn topological_sort(scip: &Scip) -> Vec<i32> {
 /// `initializeCandsLists` and `setupAndSolveSubscip`).
 fn heur_cutoffbound(scip: &Scip, minimprove: f64, lowerbound: f64) -> f64 {
     let upperbound = api::get_upperbound(scip) - scip.set.sumepsilon();
-    let cutoffbound = if !scip.set.is_infinity(-1.0 * lowerbound) {
+    let cutoffbound = if !scip.set.is_infinity(-lowerbound) {
         (1.0 - minimprove) * api::get_upperbound(scip) + minimprove * lowerbound
     } else if api::get_upperbound(scip) >= 0.0 {
         (1.0 - minimprove) * api::get_upperbound(scip)

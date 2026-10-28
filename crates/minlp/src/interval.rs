@@ -1773,7 +1773,6 @@ pub fn sign(resultant: &mut Interval, operand: Interval) {
 /// Uses Algorithm 2.2 from Domes and Neumaier: Constraint propagation on
 /// quadratic constraints (2008).
 pub fn quad_upper_bound(infinity: f64, a: f64, b_: Interval, mut x: Interval) -> f64 {
-    let b;
     let mut u;
 
     // Handle b*x separately.
@@ -1795,16 +1794,16 @@ pub fn quad_upper_bound(infinity: f64, a: f64, b_: Interval, mut x: Interval) ->
         return u;
     }
 
-    if x.sup <= 0.0 {
+    let b = if x.sup <= 0.0 {
         // Change sign of x: enclose a*x^2 + [-bub, -blb]*(-x) for (-x) in
         // [-xub, -xlb].
         u = x.sup;
         x.sup = -x.inf;
         x.inf = -u;
-        b = -b_.inf;
+        -b_.inf
     } else {
-        b = b_.sup;
-    }
+        b_.sup
+    };
 
     if x.inf >= 0.0 {
         // Upper bound for a*x^2 + b*x.

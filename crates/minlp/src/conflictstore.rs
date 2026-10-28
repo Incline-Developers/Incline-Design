@@ -160,14 +160,12 @@ fn conflictstore_ensure_mem(scip: &mut Scip, num: i32) {
     }
 
     if num > cs!(scip).conflictsize {
-        let newsize;
-
         // Initialize the complete data structure.
-        if cs!(scip).conflictsize == 0 {
-            newsize = cs!(scip).storesize.min(CONFLICTSTORE_SIZE).max(num);
+        let newsize = if cs!(scip).conflictsize == 0 {
+            cs!(scip).storesize.min(CONFLICTSTORE_SIZE).max(num)
         } else {
-            newsize = scip.set.calc_mem_grow_size(num).min(cs!(scip).maxstoresize);
-        }
+            scip.set.calc_mem_grow_size(num).min(cs!(scip).maxstoresize)
+        };
         let c = &mut cs!(scip);
         c.conflicts.0.resize(newsize as usize, NONE);
         c.confprimalbnds.realloc(newsize);

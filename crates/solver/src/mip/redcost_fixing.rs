@@ -69,8 +69,8 @@ impl RedcostFixing {
             self.lurking_col_lower[col].drain(..end);
             let end = upper_bound(&self.lurking_col_upper[col], lower_bound_value);
             self.lurking_col_upper[col].drain(..end);
-            for at in lower_bound(&self.lurking_col_lower[col], upper_limit)..self.lurking_col_lower[col].len() {
-                let bound = self.lurking_col_lower[col][at].1 as f64;
+            for col_at in &self.lurking_col_lower[col][lower_bound(&self.lurking_col_lower[col], upper_limit)..self.lurking_col_lower[col].len()] {
+                let bound = col_at.1 as f64;
                 if bound > parts.domain.col_lower[col] {
                     parts.on_domain(|dom, env| dom.change_bound(DomainChange::new(bound, col, BoundType::Lower), Reason::unspecified(), env));
                     if parts.domain.infeasible() {
@@ -78,8 +78,8 @@ impl RedcostFixing {
                     }
                 }
             }
-            for at in lower_bound(&self.lurking_col_upper[col], upper_limit)..self.lurking_col_upper[col].len() {
-                let bound = self.lurking_col_upper[col][at].1 as f64;
+            for col_at in &self.lurking_col_upper[col][lower_bound(&self.lurking_col_upper[col], upper_limit)..self.lurking_col_upper[col].len()] {
+                let bound = col_at.1 as f64;
                 if bound < parts.domain.col_upper[col] {
                     parts.on_domain(|dom, env| dom.change_bound(DomainChange::new(bound, col, BoundType::Upper), Reason::unspecified(), env));
                     if parts.domain.infeasible() {

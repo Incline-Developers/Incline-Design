@@ -379,10 +379,9 @@ impl LpSolver {
         let num_row = self.lp.num_row;
         let row_end = |row: usize| if row + 1 < num_new_row { start[row + 1] } else { index.len() };
         // The new rows, small values dropped as HiGHS's `assess` does.
-        let mut rows: Vec<Vec<(usize, f64)>> = Vec::with_capacity(num_new_row);
-        for row in 0..num_new_row {
-            rows.push((start[row]..row_end(row)).filter(|&k| value[k].abs() > small).map(|k| (index[k], value[k])).collect());
-        }
+        let rows: Vec<Vec<(usize, f64)>> = (0..num_new_row)
+            .map(|row| (start[row]..row_end(row)).filter(|&k| value[k].abs() > small).map(|k| (index[k], value[k])).collect())
+            .collect();
         // `HighsSparseMatrix::addRows` on a column-wise matrix: each
         // column's new entries follow its old ones, in row order.
         let a = &self.lp.a;
@@ -487,8 +486,8 @@ impl LpSolver {
         let mut a_index = Vec::new();
         let mut a_value = Vec::new();
         a_start.push(0);
-        for col in 0..num_col {
-            for k in start[col]..col_end(col) {
+        for (col, &col_start) in start[..num_col].iter().enumerate() {
+            for k in col_start..col_end(col) {
                 if value[k].abs() > small {
                     a_index.push(index[k]);
                     a_value.push(value[k]);
@@ -545,10 +544,9 @@ impl LpSolver {
         self.lp.col_cost.extend_from_slice(cost);
         self.lp.col_lower.extend(lower.iter().map(|&value| bound(value)));
         self.lp.col_upper.extend(upper.iter().map(|&value| bound(value)));
-        let mut new_cols: Vec<Vec<(usize, f64)>> = Vec::with_capacity(num_new_col);
-        for col in 0..num_new_col {
-            new_cols.push((start[col]..col_end(col)).filter(|&k| value[k].abs() > small).map(|k| (index[k], value[k])).collect());
-        }
+        let new_cols: Vec<Vec<(usize, f64)>> = (0..num_new_col)
+            .map(|col| (start[col]..col_end(col)).filter(|&k| value[k].abs() > small).map(|k| (index[k], value[k])).collect())
+            .collect();
         let a = &mut self.lp.a;
         for entries in &new_cols {
             for &(row, entry) in entries {

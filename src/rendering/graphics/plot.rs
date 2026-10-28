@@ -7,9 +7,6 @@
 //! technique the slice preview uses - then read back as RGBA pixels for
 //! [`crate::model::plot`] to compose the sheet around.
 
-#[cfg(target_arch = "wasm32")]
-use std::sync::Arc;
-
 use super::{
     readback::{self, RgbaReadback},
     *,
@@ -200,8 +197,8 @@ impl<'a> Graphics<'a> {
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn resolve_plot_map_async(&self, capture: PendingPlotMap, deliver: impl FnOnce(Result<Vec<u8>>) + 'static) {
         let PendingPlotMap(capture) = capture;
-        let buffer = Arc::clone(&capture.buffer);
-        let callback_buffer = Arc::clone(&buffer);
+        let buffer = Shared::clone(&capture.buffer);
+        let callback_buffer = Shared::clone(&buffer);
         buffer.map_async(wgpu::MapMode::Read, .., move |result| {
             let pixels = result.map_err(|error| anyhow!("Plot buffer map failed: {error}")).and_then(|()| capture.unpack());
             callback_buffer.unmap();

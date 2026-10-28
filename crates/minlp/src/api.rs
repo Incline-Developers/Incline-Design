@@ -1436,11 +1436,13 @@ pub fn include_branchrule_basic(
     Ok(branchrule)
 }
 
+/// `(lpcands, lpcandssol, lpcandsfrac, nlpcands, npriolpcands,
+/// nfracimplvars)`, as [`get_lp_branch_cands`] returns them.
+pub type LpBranchCands = (Vec<crate::types::VarId>, Vec<f64>, Vec<f64>, i32, i32, i32);
+
 /// `SCIPgetLPBranchCands` (`scip_branch.c`): gets branching candidates for
-/// LP solution branching (fractional variables) as `(lpcands, lpcandssol,
-/// lpcandsfrac, nlpcands, npriolpcands, nfracimplvars)`.
-#[allow(clippy::type_complexity)]
-pub fn get_lp_branch_cands(scip: &mut Scip) -> crate::retcode::ScipResult<(Vec<crate::types::VarId>, Vec<f64>, Vec<f64>, i32, i32, i32)> {
+/// LP solution branching (fractional variables).
+pub fn get_lp_branch_cands(scip: &mut Scip) -> crate::retcode::ScipResult<LpBranchCands> {
     use crate::types::LpSolStat;
     let solstat = crate::lp::lp_get_solstat(scip);
     if solstat != LpSolStat::Optimal && solstat != LpSolStat::UnboundedRay {

@@ -98,8 +98,8 @@ impl<'a> DiagonalPrecond<'a> {
         let ai = self.model.ai();
         if let Some(w) = w {
             self.diagonal[..m].copy_from_slice(&w[n..n + m]);
-            for j in 0..n {
-                let wj = w[j];
+            for (j, w_j) in w[..n].iter().enumerate() {
+                let wj = *w_j;
                 for p in ai.begin(j as Int)..ai.end(j as Int) {
                     self.diagonal[u(ai.index(p))] += ai.value(p) * wj * ai.value(p);
                 }
@@ -360,9 +360,9 @@ impl KktSolver for KktSolverDiag<'_, '_> {
                 }
                 self.w[j] = 1.0 / g;
             }
-            for j in 0..n + m {
-                if self.w[j].is_infinite() {
-                    self.w[j] = 1.0 / regval;
+            for w_j in &mut self.w[..n + m] {
+                if w_j.is_infinite() {
+                    *w_j = 1.0 / regval;
                 }
             }
         } else {
@@ -673,8 +673,8 @@ impl KktSolver for KktSolverBasis<'_, '_, '_> {
         self.factorized = false;
         self.iter = 0;
         self.basis_changes = 0;
-        for j in 0..n + m {
-            self.colscale[j] = iterate.scaling_factor(j);
+        for (j, colscale_j) in self.colscale[..n + m].iter_mut().enumerate() {
+            *colscale_j = iterate.scaling_factor(j);
         }
         if iterate.pobjective() >= iterate.dobjective() {
             self.drop_primal(iterate, info);
@@ -715,10 +715,10 @@ impl KktSolver for KktSolverBasis<'_, '_, '_> {
         let mut work = vec![0.0; m];
         info.errflag = 0;
         let mut num_free = 0;
-        for p in 0..m {
+        for (p, work_p) in work[..m].iter_mut().enumerate() {
             let j = self.basis.at(p);
             if self.basis.status_of(j) == BasicStatus::BasicFree {
-                work[p] = a[u(j)];
+                *work_p = a[u(j)];
                 num_free += 1;
             }
         }
@@ -771,12 +771,12 @@ impl KktSolver for KktSolverBasis<'_, '_, '_> {
         for k in 0..m {
             y[u(colperm[k])] = lhs[k];
         }
-        for p in 0..m {
+        for (p, y_p) in y[..m].iter_mut().enumerate() {
             let j = self.basis.at(p);
             if self.basis.status_of(j) == BasicStatus::Basic {
-                y[p] /= self.colscale[u(j)];
+                *y_p /= self.colscale[u(j)];
             } else {
-                y[p] = a[u(j)];
+                *y_p = a[u(j)];
             }
         }
         let input = y.to_vec();

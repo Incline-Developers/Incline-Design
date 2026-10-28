@@ -391,8 +391,8 @@ impl OrbitopeMatrix {
                 };
                 fill(colj0, colj1, i_d);
                 colj0[i_d] = 1;
-                for k in i_d + 1..n {
-                    colj0[k] += i8::from(colj0[k] == -1);
+                for colj0_k in &mut colj0[i_d + 1..n] {
+                    *colj0_k += i8::from(*colj0_k == -1);
                 }
             }
         }
@@ -410,8 +410,8 @@ impl OrbitopeMatrix {
                 };
                 fill(colj0, colj1, i_d);
                 colj0[i_d] = 0;
-                for k in i_d + 1..n {
-                    colj0[k] += 2 * i8::from(colj0[k] == -1);
+                for colj0_k in &mut colj0[i_d + 1..n] {
+                    *colj0_k += 2 * i8::from(*colj0_k == -1);
                 }
             }
         }

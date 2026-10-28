@@ -45,7 +45,7 @@ struct CinematicUniform {
 /// neither the shader compilation nor the shadow maps.
 pub(crate) struct CinematicPipelines {
     /// The lit copy of the scene pipelines, drawing into `HDR_FORMAT`.
-    scene: Arc<scene_pipelines::ScenePipelines>,
+    scene: Shared<scene_pipelines::ScenePipelines>,
     /// Group 0 for `scene`: the camera, parameter block and shadow maps.
     scene_camera_bind_group: wgpu::BindGroup,
 
@@ -286,7 +286,7 @@ impl<'a> Graphics<'a> {
             entries: &scene_camera_entries,
             label: Some("cinematic_scene_camera_bind_group_layout"),
         });
-        let scene = Arc::new(scene_pipelines::create_scene_pipelines(
+        let scene = Shared::new(scene_pipelines::create_scene_pipelines(
             device,
             &scene_pipelines::ScenePipelineLayouts {
                 camera: &scene_camera_layout,

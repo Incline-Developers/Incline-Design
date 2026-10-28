@@ -1334,7 +1334,7 @@ fn prop_indicator(scip: &mut Scip, conshdlr: ConshdlrId, cons: ConsId, dualreduc
             // multiaggregated; we would need the minimal activity in this case.
             if !scip.set.is_infinity(rhs) {
                 // Divide by coeff of slackvar.
-                let mut newub = (maxactivity - rhs) / (-1.0 * coeffslack);
+                let mut newub = (maxactivity - rhs) / -coeffslack;
 
                 // Adjust bound if slackvar is (implicit) integer.
                 newub = scip_var::adjusted_var_ub(scip, slackvar, newub);
@@ -1465,12 +1465,12 @@ fn enforce_indicators(scip: &mut Scip, conshdlr: ConshdlrId, conss: &[ConsId], s
 /// Then the cuts
 /// \f[ \Sigma(I,x,y) \leq \sum_{i \notin I, \alpha_i < 0} \alpha_i \ell_i
 ///    + \sum_{i \notin I, \alpha_i > 0} \alpha_i u_i \f]
-/// are valid for the disjunction
-/// \f[ \{y = 0,\; \ell \leq x \leq u\} \cup \{y = 1,\; \ell \leq x \leq
-///    u,\; \alpha^T x \leq \beta\}. \f]
-/// These cuts can easily be separated for a given point \f$(x^*, y^*)\f$ by
-/// checking for each \f$i \in \{1, \dots, n\}\f$ whether
-/// \f[ y^*(\alpha_i\, u_i\, [\alpha_i < 0] + \alpha_i\, \ell_i\, [\alpha_i
+///      are valid for the disjunction
+///      \f[ \{y = 0,\; \ell \leq x \leq u\} \cup \{y = 1,\; \ell \leq x \leq
+///      u,\; \alpha^T x \leq \beta\}. \f]
+///      These cuts can easily be separated for a given point \f$(x^*, y^*)\f$ by
+///      checking for each \f$i \in \{1, \dots, n\}\f$ whether
+///      \f[ y^*(\alpha_i\, u_i\, [\alpha_i < 0] + \alpha_i\, \ell_i\, [\alpha_i
 ///    > 0]) > \alpha_i x_i^* + y^* )\alpha_i \ell_i [\alpha_i < 0] +
 /// > \alpha_i u_i [\alpha_i > 0]), \f]
 /// > where \f$[C] = 1\f$ if condition \f$C\f$ is satisfied, otherwise it is 0.

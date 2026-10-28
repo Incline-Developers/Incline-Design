@@ -60,6 +60,14 @@ pub(crate) mod targets;
 mod touch;
 pub(crate) mod video_capture;
 
+/// Shared ownership of GPU handles: `Arc` natively, where a readback finishes
+/// on another thread, and `Rc` in the browser, where wgpu's handles are not
+/// `Send` and never leave their thread.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type Shared<T> = Arc<T>;
+#[cfg(target_arch = "wasm32")]
+pub(crate) type Shared<T> = std::rc::Rc<T>;
+
 pub(super) const TEXT_CACHE_TRIM_INTERVAL_FRAMES: u64 = 300;
 pub(super) const MSAA_SAMPLE_COUNT: u32 = 4;
 pub(super) const CAMERA_ROTATE_SENSITIVITY: f64 = 0.003;
@@ -301,7 +309,7 @@ impl GridUniform {
 /// pipelines, the camera-plus-lighting bind group they take at group 0, the
 /// half-float multisample target they draw into.
 pub(crate) struct ActiveScene {
-    pub(crate) pipelines: Arc<scene_pipelines::ScenePipelines>,
+    pub(crate) pipelines: Shared<scene_pipelines::ScenePipelines>,
     pub(crate) camera_bind_group: wgpu::BindGroup,
     pub(crate) msaa_view: wgpu::TextureView,
 }
@@ -312,7 +320,7 @@ pub(crate) struct Graphics<'a> {
     pub(super) gui: Gui,
     pub(super) text_system: TextSystem,
     /// The pipelines the ordinary scene pass and the editor overlay draw with.
-    pub(super) scene_pipelines: Arc<scene_pipelines::ScenePipelines>,
+    pub(super) scene_pipelines: Shared<scene_pipelines::ScenePipelines>,
     /// What the scene pass draws with and into while `frame::render` diverts
     /// it into the cinematic view's lit target. `None` everywhere else, so
     /// every other pass - the overlay, the previews, the plot - draws with the

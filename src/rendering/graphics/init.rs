@@ -605,8 +605,7 @@ impl<'a> Graphics<'a> {
         let drill_hole_gpu = DrillHoleGpuCache::new(&device);
         let document_style = DocumentStyleGpu::new(&device);
         // wgpu handles are not Send or Sync on wasm, where nothing crosses threads.
-        #[cfg_attr(target_arch = "wasm32", allow(clippy::arc_with_non_send_sync))]
-        let scene_pipelines = Arc::new(scene_pipelines::create_scene_pipelines(
+        let scene_pipelines = Shared::new(scene_pipelines::create_scene_pipelines(
             &device,
             &scene_pipelines::ScenePipelineLayouts {
                 camera: &camera_bind_group_layout,

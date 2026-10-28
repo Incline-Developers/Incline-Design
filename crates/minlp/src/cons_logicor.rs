@@ -2567,12 +2567,12 @@ fn create_normalized_logicor(scip: &mut Scip, name: &str, vars: &[VarId], vals: 
 /// - logic or constraints consist only of binary variables with a
 ///   coefficient of +1.0 or -1.0 (variables with -1.0 coefficients can be
 ///   negated):
-///       lhs     <= x1 + ... + xp - y1 - ... - yn <= rhs
+///   lhs     <= x1 + ... + xp - y1 - ... - yn <= rhs
 /// - negating all variables y = (1-Y) with negative coefficients gives:
-///       lhs + n <= x1 + ... + xp + Y1 + ... + Yn <= rhs + n
+///   lhs + n <= x1 + ... + xp + Y1 + ... + Yn <= rhs + n
 /// - negating all variables x = (1-X) with positive coefficients and
 ///   multiplying with -1 gives:
-///       p - rhs <= X1 + ... + Xp + y1 + ... + yn <= p - lhs
+///   p - rhs <= X1 + ... + Xp + y1 + ... + yn <= p - lhs
 /// - logic or constraints have left hand side of +1.0, and right hand side
 ///   of +infinity: x(S) >= 1.0
 ///   -> without negations:  (lhs == 1 - n  and  rhs == +inf)  or  (lhs ==
@@ -2896,11 +2896,9 @@ fn cons_check_logicor(
     while c < conss.len() && (*result == ScipResultCode::Feasible || completely) {
         let cons = conss[c];
         let row = cd(scip, cons).row;
-        if checklprows || row == NONE || scip.rows[row].lppos < 0 {
-            if is_cons_violated(scip, cons, sol) {
-                // Constraint is violated.
-                *result = ScipResultCode::Infeasible;
-            }
+        if (checklprows || row == NONE || scip.rows[row].lppos < 0) && is_cons_violated(scip, cons, sol) {
+            // Constraint is violated.
+            *result = ScipResultCode::Infeasible;
         }
         c += 1;
     }
@@ -3021,37 +3019,35 @@ fn cons_presol_logicor(
             counts.ndelconss += 1;
             *result = ScipResultCode::Success;
             continue;
-        } else if !scip.conss[cons].modifiable {
-            if cd(scip, cons).nvars <= 2 {
-                let mut cutoff = false;
+        } else if !scip.conss[cons].modifiable && cd(scip, cons).nvars <= 2 {
+            let mut cutoff = false;
 
-                // Handle all cases with less than three variables in a logicor
-                // constraint.
-                fix_delete_or_upgrade_cons(
-                    scip,
-                    cons,
-                    eventhdlr,
-                    conshdlrlinear,
-                    conshdlrsetppc,
-                    &mut counts.nfixedvars,
-                    &mut counts.nchgbds,
-                    &mut counts.nchgcoefs,
-                    &mut counts.ndelconss,
-                    &mut counts.naddconss,
-                    &mut counts.nupgdconss,
-                    &mut cutoff,
-                )?;
+            // Handle all cases with less than three variables in a logicor
+            // constraint.
+            fix_delete_or_upgrade_cons(
+                scip,
+                cons,
+                eventhdlr,
+                conshdlrlinear,
+                conshdlrsetppc,
+                &mut counts.nfixedvars,
+                &mut counts.nchgbds,
+                &mut counts.nchgcoefs,
+                &mut counts.ndelconss,
+                &mut counts.naddconss,
+                &mut counts.nupgdconss,
+                &mut cutoff,
+            )?;
 
-                if cutoff {
-                    *result = ScipResultCode::Cutoff;
-                    return Ok(());
-                } else if changed(counts) {
-                    *result = ScipResultCode::Success;
-                }
+            if cutoff {
+                *result = ScipResultCode::Cutoff;
+                return Ok(());
+            } else if changed(counts) {
+                *result = ScipResultCode::Success;
+            }
 
-                if scip.conss[cons].deleted {
-                    continue;
-                }
+            if scip.conss[cons].deleted {
+                continue;
             }
         }
 
@@ -3329,18 +3325,16 @@ fn event_exec_logicor(scip: &mut Scip, _eventhdlr: EventhdlrId, event: &Event, e
         // We only catch this event in presolving stage.
         cdm(scip, cons).presolved = false;
 
-        if scip.vars[var].varstatus != VarStatus::Fixed {
-            if scip.conss[cons].is_active() {
-                let x = &scip.vars[var];
-                if x.glbdom.lb < 0.5 && x.glbdom.ub > 0.5 {
-                    cdm(scip, cons).merged = false;
-                }
+        if scip.vars[var].varstatus != VarStatus::Fixed && scip.conss[cons].is_active() {
+            let x = &scip.vars[var];
+            if x.glbdom.lb < 0.5 && x.glbdom.ub > 0.5 {
+                cdm(scip, cons).merged = false;
+            }
 
-                if !cd(scip, cons).existmultaggr {
-                    let probvar = crate::var::var_get_probvar(scip, var);
-                    if scip.vars[probvar].varstatus == VarStatus::MultAggr {
-                        cdm(scip, cons).existmultaggr = true;
-                    }
+            if !cd(scip, cons).existmultaggr {
+                let probvar = crate::var::var_get_probvar(scip, var);
+                if scip.vars[probvar].varstatus == VarStatus::MultAggr {
+                    cdm(scip, cons).existmultaggr = true;
                 }
             }
         }

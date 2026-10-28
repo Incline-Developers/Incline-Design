@@ -817,14 +817,14 @@ pub fn replace_common_subexpressions(scip: &mut Scip, exprs: &mut [ExprId]) -> S
 
     let mut repliterator = expr::ExprIter::create();
 
-    for i in 0..exprs.len() {
+    for root in exprs.iter_mut() {
         // Check the root for equivalence separately first.
-        let newroot = find_equal_expr(scip, &hashiterator, exprs[i], &mut key2expr);
+        let newroot = find_equal_expr(scip, &hashiterator, *root, &mut key2expr);
 
         if newroot != NONE {
-            expr::expr_release(scip, &mut exprs[i])?;
+            expr::expr_release(scip, root)?;
 
-            exprs[i] = newroot;
+            *root = newroot;
             expr::expr_capture(scip, newroot);
 
             replacedroot = true;
@@ -833,7 +833,7 @@ pub fn replace_common_subexpressions(scip: &mut Scip, exprs: &mut [ExprId]) -> S
         }
 
         // Replace equivalent sub-expressions in the tree.
-        repliterator.init(scip, exprs[i], expr::ExprIterType::Dfs, false)?;
+        repliterator.init(scip, *root, expr::ExprIterType::Dfs, false)?;
         repliterator.set_stages_dfs(scip, expr::EXPRITER_VISITINGCHILD);
 
         while !repliterator.is_end() {

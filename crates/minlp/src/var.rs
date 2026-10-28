@@ -4227,11 +4227,7 @@ fn var_add_vbound(scip: &mut Scip, var: VarId, vbtype: BoundType, vbvar: VarId, 
     if var == vbvar {
         return Ok(());
     }
-    let added = if vbtype == BoundType::Lower {
-        crate::implics::vbounds_add(scip, var, vbtype, vbvar, vbcoef, vbconstant)
-    } else {
-        crate::implics::vbounds_add(scip, var, vbtype, vbvar, vbcoef, vbconstant)
-    };
+    let added = crate::implics::vbounds_add(scip, var, vbtype, vbvar, vbcoef, vbconstant);
     scip.vars[var].closestvblpcount = -1;
     if added {
         var_event_impl_added(scip, var)?;

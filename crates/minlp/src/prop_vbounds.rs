@@ -307,10 +307,10 @@ fn extract_cycle(scip: &mut Scip, prop: PropId, dfsstack: &[i32], stacknextedge:
             let impltype = implics.types[currlower as usize][k];
             let implbound = implics.bounds[currlower as usize][k];
             let nextvar = p.vars[get_var_index(dfsstack[ju + 1])];
-            let newcoef;
+
             let newconstant;
 
-            if impltype == BoundType::Lower {
+            let newcoef = if impltype == BoundType::Lower {
                 let mut c = implbound - scip.vars[nextvar].locdom.lb;
                 if currlower {
                     newconstant = scip.vars[nextvar].locdom.lb;
@@ -318,7 +318,7 @@ fn extract_cycle(scip: &mut Scip, prop: PropId, dfsstack: &[i32], stacknextedge:
                     newconstant = implbound;
                     c *= -1.0;
                 }
-                newcoef = c;
+                c
             } else {
                 let mut c = scip.vars[nextvar].locdom.ub - implbound;
                 if currlower {
@@ -327,8 +327,8 @@ fn extract_cycle(scip: &mut Scip, prop: PropId, dfsstack: &[i32], stacknextedge:
                 } else {
                     newconstant = implbound;
                 }
-                newcoef = c;
-            }
+                c
+            };
 
             coef *= newcoef;
             constant = constant * newcoef + newconstant;
@@ -347,9 +347,7 @@ fn extract_cycle(scip: &mut Scip, prop: PropId, dfsstack: &[i32], stacknextedge:
 
     // We have a relation x <=/>= coef * x + constant now.
     if scip.set.is_eq(coef, 1.0) {
-        if islower && scip.set.is_feas_positive(constant) {
-            *infeasible = true;
-        } else if !islower && scip.set.is_feas_negative(constant) {
+        if (islower && scip.set.is_feas_positive(constant)) || (!islower && scip.set.is_feas_negative(constant)) {
             *infeasible = true;
         }
     } else {
@@ -1725,11 +1723,11 @@ fn tarjan(scip: &Scip, startnode: i32, startindex: &mut i32, t: &mut Tarjan, mut
         }
         // In a pure dfs, the node would now leave the stack, add it to the
         // array of nodes in reverse topological order.
-        if let Some((order, nordered)) = topoorder.as_mut() {
-            if stacksize > 0 || label > *startindex + 1 {
-                order[**nordered as usize] = curridx;
-                **nordered += 1;
-            }
+        if let Some((order, nordered)) = topoorder.as_mut()
+            && (stacksize > 0 || label > *startindex + 1)
+        {
+            order[**nordered as usize] = curridx;
+            **nordered += 1;
         }
 
         // The current node was handled, backtrack.

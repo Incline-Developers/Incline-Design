@@ -478,23 +478,23 @@ fn perform_strongbranch_with_propagation(
 
     // If the subproblem was feasible, we store the local bounds of the
     // variables after propagation and (possibly) conflict analysis.
-    if !r.cutoff {
-        if let Some((newlbs, newubs)) = newbounds.as_mut() {
-            if firstchild {
-                // Initialize the newlbs and newubs to the current local bounds.
-                for (v, &x) in vars.iter().enumerate() {
-                    newlbs[v] = scip.vars[x].locdom.lb;
-                    newubs[v] = scip.vars[x].locdom.ub;
-                }
-            } else {
-                // Update newlbs and newubs: take the weaker of the already stored
-                // bounds and the current local bounds.
-                for (v, &x) in vars.iter().enumerate() {
-                    let lb = scip.vars[x].locdom.lb;
-                    let ub = scip.vars[x].locdom.ub;
-                    newlbs[v] = crate::def::min(newlbs[v], lb);
-                    newubs[v] = crate::def::max(newubs[v], ub);
-                }
+    if !r.cutoff
+        && let Some((newlbs, newubs)) = newbounds.as_mut()
+    {
+        if firstchild {
+            // Initialize the newlbs and newubs to the current local bounds.
+            for (v, &x) in vars.iter().enumerate() {
+                newlbs[v] = scip.vars[x].locdom.lb;
+                newubs[v] = scip.vars[x].locdom.ub;
+            }
+        } else {
+            // Update newlbs and newubs: take the weaker of the already stored
+            // bounds and the current local bounds.
+            for (v, &x) in vars.iter().enumerate() {
+                let lb = scip.vars[x].locdom.lb;
+                let ub = scip.vars[x].locdom.ub;
+                newlbs[v] = crate::def::min(newlbs[v], lb);
+                newubs[v] = crate::def::max(newubs[v], ub);
             }
         }
     }

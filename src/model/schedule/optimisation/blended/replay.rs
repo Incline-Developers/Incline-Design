@@ -1488,7 +1488,6 @@ type ChunkDraws = (BTreeMap<(StockpileId, usize), (f64, Vec<f64>)>, BTreeMap<(St
 ///
 /// Every rule here is checked from the published chunk state, not from the
 /// constraints that were supposed to enforce it.
-#[allow(clippy::needless_range_loop)]
 fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> ChunkDraws {
     let mut drawn: BTreeMap<(StockpileId, usize), (f64, Vec<f64>)> = BTreeMap::new();
     let mut released_t: BTreeMap<(StockpileId, usize), f64> = BTreeMap::new();
@@ -1541,8 +1540,8 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> ChunkDra
             for chunk in 0..count {
                 let key = super::formulation::chunk_key(chunk, interval, horizon);
                 if held_t[chunk] > REPLAY_TOLERANCE_T {
-                    for g in 0..grades {
-                        checker.report.blends.insert((pile.id, key, g), held_q[chunk][g] / held_t[chunk]);
+                    for (g, chunk_g) in held_q[chunk][..grades].iter().enumerate() {
+                        checker.report.blends.insert((pile.id, key, g), *chunk_g / held_t[chunk]);
                     }
                 }
                 let Some(state) = published.get(&(pile.id, chunk, interval)) else {
@@ -1576,9 +1575,9 @@ fn check_chunks(checker: &mut Checker<'_>, solution: &BlendSolution) -> ChunkDra
                 for (candidate, tonnes) in &state.receipts {
                     let Some(movement) = checker.input.movements.get(*candidate) else { continue };
                     held_t[chunk] += tonnes;
-                    for g in 0..grades {
+                    for (g, chunk_g) in held_q[chunk][..grades].iter_mut().enumerate() {
                         match checker.input.grades.fraction(movement.material, g) {
-                            Some(value) => held_q[chunk][g] += tonnes * value,
+                            Some(value) => *chunk_g += tonnes * value,
                             None => checker
                                 .report
                                 .issues

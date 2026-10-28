@@ -125,10 +125,8 @@ fn calc_pscost_quot(scip: &mut Scip, heur: HeurId, var: VarId, primsol: f64, mut
         false
     } else if set.is_gt(primsol, rootsol + 0.4) || (set.is_eq(primsol, rootsol + 0.4) && rng.get_int(0, 1) == 0) {
         true
-    } else if set.is_lt(pscostdown, pscostup) || (set.is_eq(pscostdown, pscostup) && rng.get_int(0, 1) == 0) {
-        false
     } else {
-        true
+        !(set.is_lt(pscostdown, pscostup) || (set.is_eq(pscostdown, pscostup) && rng.get_int(0, 1) == 0))
     };
 
     // Calculate pseudo cost quotient.

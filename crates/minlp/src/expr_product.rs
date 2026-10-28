@@ -1072,8 +1072,8 @@ fn hash_product(scip: &mut Scip, expr: ExprId, hashkey: &mut u32, childrenhashes
     *hashkey = exprhdlr_hashkey();
     *hashkey ^= crate::misc::calc_fib_hash(get_coef_expr_product(scip, expr));
 
-    for c in 0..scip.exprs[expr].children.len() {
-        *hashkey ^= childrenhashes[c];
+    for childhash in &childrenhashes[..scip.exprs[expr].children.len()] {
+        *hashkey ^= *childhash;
     }
 
     Ok(())
@@ -1391,14 +1391,14 @@ fn reverseprop_product(scip: &mut Scip, expr: ExprId, bounds: Interval, children
         otherfactor.set(coefficient);
 
         // Compute prod_{j:j!=i} c_j.
-        for j in 0..nchildren {
+        for (j, childbound) in childrenbounds[..nchildren].iter().enumerate() {
             if i == j {
                 continue;
             }
 
             // TODO we should compute these only one time instead of repeating this
             // for almost every i.
-            let childbounds = childrenbounds[j];
+            let childbounds = *childbound;
             if interval::is_empty(INTERVAL_INFINITY, childbounds) {
                 *infeasible = true;
                 return Ok(());

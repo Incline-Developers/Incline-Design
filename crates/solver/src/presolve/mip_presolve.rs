@@ -1383,19 +1383,11 @@ impl<'a> MipPresolve<'a> {
                 self.row_dual_upper_source[i] = new_col_index[self.row_dual_upper_source[i]];
             }
         }
-        for i in 0..num_col {
-            let set: BTreeSet<usize> = self.impl_row_dual_source_by_col[i]
-                .iter()
-                .filter_map(|&row| (new_row_index[row] != NONE).then_some(new_row_index[row]))
-                .collect();
-            self.impl_row_dual_source_by_col[i] = set;
+        for sources in &mut self.impl_row_dual_source_by_col[..num_col] {
+            *sources = sources.iter().filter_map(|&row| (new_row_index[row] != NONE).then_some(new_row_index[row])).collect();
         }
-        for i in 0..num_row {
-            let set: BTreeSet<usize> = self.col_impl_source_by_row[i]
-                .iter()
-                .filter_map(|&col| (new_col_index[col] != NONE).then_some(new_col_index[col]))
-                .collect();
-            self.col_impl_source_by_row[i] = set;
+        for sources in &mut self.col_impl_source_by_row[..num_row] {
+            *sources = sources.iter().filter_map(|&col| (new_col_index[col] != NONE).then_some(new_col_index[col])).collect();
         }
         self.row_deleted = vec![false; num_row];
         self.mip.model.row_lower.truncate(num_row);
@@ -3393,8 +3385,7 @@ impl MipPresolve<'_> {
             check!(self.presolve_col_singletons());
             check!(self.presolve_changed_cols());
             // Not `<=`: a reduction of NaN (nothing left to reduce) stops it.
-            #[allow(clippy::neg_cmp_op_on_partial_ord)]
-            if !(self.problem_size_reduction() > 0.01) {
+            if self.problem_size_reduction().partial_cmp(&0.01).is_none_or(std::cmp::Ordering::is_le) {
                 return Outcome::Ok;
             }
         }
@@ -5190,8 +5181,8 @@ impl MipPresolve<'_> {
                 }
             }
 
-            for i in 0..num_worst_case_bounds {
-                let col = worst_case_bounds[i];
+            for worst_case_bound in &mut worst_case_bounds[..num_worst_case_bounds] {
+                let col = *worst_case_bound;
                 if worst_case_lower_bound[col] > self.mip.domain.col_lower[col] {
                     let bound = worst_case_lower_bound[col];
                     self.mip
@@ -5212,7 +5203,7 @@ impl MipPresolve<'_> {
                 }
                 worst_case_lower_bound[col] = INF;
                 worst_case_upper_bound[col] = -INF;
-                worst_case_bounds[i] = 0;
+                *worst_case_bound = 0;
             }
 
             for i in 0..num_vars - 1 {
@@ -5408,7 +5399,7 @@ impl MipPresolve<'_> {
                 for i in 0..cover.len() {
                     reducedcost[cover[i]] -= step * coefs[i];
                 }
-                indices.retain(|&i| !(reducedcost[i] <= feastol));
+                indices.retain(|&i| reducedcost[i].partial_cmp(&feastol).is_none_or(std::cmp::Ordering::is_gt));
                 indices.push(slackind);
             }
             let threshold = (maxviolation + feastol).value();
@@ -5483,7 +5474,7 @@ impl ScaleMap {
 
     fn emplace(&mut self, key: f64, value: i64) {
         let at = self.lower_bound(key);
-        if at < self.0.len() && !(key < self.0[at].0) {
+        if at < self.0.len() && key.partial_cmp(&self.0[at].0).is_none_or(std::cmp::Ordering::is_ge) {
             return;
         }
         self.0.insert(at, (key, value));

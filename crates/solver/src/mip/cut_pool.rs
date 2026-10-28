@@ -408,7 +408,7 @@ impl CutPool {
         });
         self.best_observed_score = super::cmax(efficacious_cuts[0].0, self.best_observed_score);
         let min_score = self.min_score_factor * self.best_observed_score;
-        let mut numefficacious = efficacious_cuts.partition_point(|cut| !(min_score > cut.0));
+        let mut numefficacious = efficacious_cuts.partition_point(|cut| min_score.partial_cmp(&cut.0).is_none_or(std::cmp::Ordering::is_le));
         let lower_threshold = efficacious_cuts.len() / 20;
         let upper_threshold = efficacious_cuts.len() - 1;
         if numefficacious <= lower_threshold {

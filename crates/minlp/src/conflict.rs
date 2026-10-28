@@ -2847,7 +2847,7 @@ fn lp_lpi(scip: &mut Scip) -> &mut crate::lpi::Lpi {
 ///     state
 ///  4. analyze conflict
 ///     -> put remaining changed bounds (see lb/ubchginfoposs arrays) into
-///        starting conflict set
+///     starting conflict set
 ///
 /// The LPI is the LP's. Adds the LP iterations used to `iterations`, sets
 /// `dualproofsuccess` when dual proof analysis succeeded, and updates
@@ -3309,12 +3309,11 @@ pub fn aggr_row_get_min_activity(scip: &Scip, transprob: usize, aggrrow: &crate:
 
     let mut minact = Quad::new(0.0);
 
-    for i in 0..nnz {
-        let v = inds[i] as usize;
+    for ind in &inds[..nnz] {
+        let v = *ind as usize;
         let val = crate::cuts::aggr_row_get_probvar_value(aggrrow, v as i32);
 
-        let delta;
-        if val > 0.0 {
+        let delta = if val > 0.0 {
             let bnd = match curvarlbs {
                 None => scip.vars[vars[v]].glbdom.lb,
                 Some(l) => l[v],
@@ -3322,7 +3321,7 @@ pub fn aggr_row_get_min_activity(scip: &Scip, transprob: usize, aggrrow: &crate:
             if set.is_infinity(-bnd) {
                 return (-set.infinity(), true);
             }
-            delta = prod_dd(val, bnd);
+            prod_dd(val, bnd)
         } else {
             let bnd = match curvarubs {
                 None => scip.vars[vars[v]].glbdom.ub,
@@ -3331,8 +3330,8 @@ pub fn aggr_row_get_min_activity(scip: &Scip, transprob: usize, aggrrow: &crate:
             if set.is_infinity(bnd) {
                 return (-set.infinity(), true);
             }
-            delta = prod_dd(val, bnd);
-        }
+            prod_dd(val, bnd)
+        };
 
         // Update minimal activity.
         minact = sum_qq(minact, delta);
@@ -3525,8 +3524,8 @@ pub fn get_farkas_proof(scip: &mut Scip, prob: usize, farkasrow: &mut crate::cut
     let scip = &*scip;
 
     // Check whether the Farkas solution is numerically stable.
-    for r in 0..nrows {
-        if dualfarkas[r].abs() > SOLSTOP {
+    for farkas in &dualfarkas[..nrows] {
+        if farkas.abs() > SOLSTOP {
             return Ok((farkasact, validdepth, false));
         }
     }
@@ -3657,8 +3656,8 @@ pub fn get_dual_proof(scip: &mut Scip, transprob: usize, farkasrow: &mut crate::
     let scip = &*scip;
 
     // Check whether the dual solution is numerically stable.
-    for r in 0..nrows {
-        if dualsols[r].abs() > SOLSTOP {
+    for dualsol in &dualsols[..nrows] {
+        if dualsol.abs() > SOLSTOP {
             return Ok((farkasact, validdepth, false));
         }
     }
@@ -4822,11 +4821,10 @@ fn get_min_max_activity(scip: &Scip, transprob: usize, coefs: &[f64], inds: &[i3
         let v = inds[i] as usize;
         let val = coefs[i];
 
-        let delta;
         // Minimal activity: lower bounds for positive coefficients; maximal
         // activity: lower bounds for negative ones.
         let uselb = if max { val < 0.0 } else { val > 0.0 };
-        if uselb {
+        let delta = if uselb {
             let bnd = match curvarlbs {
                 None => scip.vars[vars[v]].glbdom.lb,
                 Some(l) => l[v],
@@ -4834,7 +4832,7 @@ fn get_min_max_activity(scip: &Scip, transprob: usize, coefs: &[f64], inds: &[i3
             if set.is_infinity(-bnd) {
                 return if max { set.infinity() } else { -set.infinity() };
             }
-            delta = prod_dd(val, bnd);
+            prod_dd(val, bnd)
         } else {
             let bnd = match curvarubs {
                 None => scip.vars[vars[v]].glbdom.ub,
@@ -4843,8 +4841,8 @@ fn get_min_max_activity(scip: &Scip, transprob: usize, coefs: &[f64], inds: &[i3
             if set.is_infinity(bnd) {
                 return if max { set.infinity() } else { -set.infinity() };
             }
-            delta = prod_dd(val, bnd);
-        }
+            prod_dd(val, bnd)
+        };
 
         // Update minimal (maximal) activity.
         act = sum_qq(act, delta);
@@ -4896,9 +4894,8 @@ fn create_and_add_proofcons(scip: &mut Scip, proofset: &ProofSet, eventfilter: u
             }
         }
 
-        let toolong;
-        if scip.set.conf_minmaxvars >= nnz {
-            toolong = false;
+        let toolong = if scip.set.conf_minmaxvars >= nnz {
+            false
         } else {
             let p = &scip.probs[transprob];
             let maxnnz = if p.startnconss < 100 { 0.85 * p.nvars as f64 } else { p.nvars as f64 };
@@ -4916,8 +4913,8 @@ fn create_and_add_proofcons(scip: &mut Scip, proofset: &ProofSet, eventfilter: u
             }
 
             tl = tl && (nnz as f64 > scip.set.conf_maxvarsfac * p.nvars as f64);
-            toolong = tl;
-        }
+            tl
+        };
 
         // Don't store global dual proofs that are too long / have too many
         // non-zeros.
@@ -5174,8 +5171,8 @@ pub fn conflict_flush_proofset(scip: &mut Scip, transprob: usize, origprob: usiz
             // todo: check whether this is really what we want
             if scip.set.conf_prefinfproof && proofset.conflicttype == ConfType::BndExceeding {
                 let c = &cf!(scip);
-                for i in 0..c.nproofsets as usize {
-                    if c.proofsets[i].conflicttype == ConfType::InfeasLp {
+                for proofset in &c.proofsets[..c.nproofsets as usize] {
+                    if proofset.conflicttype == ConfType::InfeasLp {
                         skipinitialproof = true;
                         break;
                     }

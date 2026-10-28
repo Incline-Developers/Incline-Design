@@ -633,27 +633,25 @@ fn presolve_round(
 
     if !*unbounded && !*infeasible {
         // Call more expensive presolvers.
-        if api::is_presolve_finished(scip) || lastround {
-            if *timing != PRESOLTIMING_FINAL {
-                // Increase timing.
-                *timing = if *timing == PRESOLTIMING_FAST {
-                    PRESOLTIMING_MEDIUM
-                } else if *timing == PRESOLTIMING_MEDIUM {
-                    PRESOLTIMING_EXHAUSTIVE
-                } else {
-                    PRESOLTIMING_FINAL
-                };
+        if (api::is_presolve_finished(scip) || lastround) && *timing != PRESOLTIMING_FINAL {
+            // Increase timing.
+            *timing = if *timing == PRESOLTIMING_FAST {
+                PRESOLTIMING_MEDIUM
+            } else if *timing == PRESOLTIMING_MEDIUM {
+                PRESOLTIMING_EXHAUSTIVE
+            } else {
+                PRESOLTIMING_FINAL
+            };
 
-                // Computational experiments showed that always starting the loop of
-                // exhaustive presolvers from the beginning performs better than
-                // continuing from the last processed presolver. Therefore, we start
-                // from 0, but keep the mechanisms to possibly change this back later.
-                st.presolstart = 0;
-                st.propstart = 0;
-                st.consstart = 0;
+            // Computational experiments showed that always starting the loop of
+            // exhaustive presolvers from the beginning performs better than
+            // continuing from the last processed presolver. Therefore, we start
+            // from 0, but keep the mechanisms to possibly change this back later.
+            st.presolstart = 0;
+            st.propstart = 0;
+            st.consstart = 0;
 
-                presolve_round(scip, timing, unbounded, infeasible, lastround, st, presolend, propend, consend)?;
-            }
+            presolve_round(scip, timing, unbounded, infeasible, lastround, st, presolend, propend, consend)?;
         }
     }
 

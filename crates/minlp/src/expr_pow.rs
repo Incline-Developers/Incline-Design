@@ -51,17 +51,17 @@ const SIGNPOW_ROOTS_KNOWN: usize = 10;
 /// The positive root of the polynomial (n-1) y^n + n y^(n-1) - 1 is needed
 /// in separation. Here we store these roots for small integer values of n.
 static SIGNPOW_ROOTS: [f64; SIGNPOW_ROOTS_KNOWN + 1] = [
-    -1.0,                   // no root for n=0
-    -1.0,                   // no root for n=1
-    0.41421356237309504880, // root for n=2 (-1+sqrt(2))
-    0.5,                    // root for n=3
-    0.56042566045031785945, // root for n=4
-    0.60582958618826802099, // root for n=5
-    0.64146546982884663257, // root for n=6
-    0.67033204760309682774, // root for n=7
-    0.69428385661425826738, // root for n=8
-    0.71453772716733489700, // root for n=9
-    0.73192937842370733350, // root for n=10
+    -1.0,                     // no root for n=0
+    -1.0,                     // no root for n=1
+    0.414_213_562_373_095_03, // root for n=2 (-1+sqrt(2))
+    0.5,                      // root for n=3
+    0.560_425_660_450_317_8,  // root for n=4
+    0.605_829_586_188_268,    // root for n=5
+    0.641_465_469_828_846_7,  // root for n=6
+    0.670_332_047_603_096_8,  // root for n=7
+    0.694_283_856_614_258_3,  // root for n=8
+    0.714_537_727_167_334_9,  // root for n=9
+    0.731_929_378_423_707_3,  // root for n=10
 ];
 
 /// `SCIP_ExprhdlrData`: expression handler data.
@@ -125,7 +125,7 @@ fn compute_signpower_root(scip: &Scip, exponent: f64) -> ScipResult<f64> {
 
     // Lookup for weymouth exponent.
     if set.is_eq(exponent, 1.852) {
-        return Ok(0.39821689389382575186);
+        return Ok(0.398_216_893_893_825_75);
     }
 
     // Search for a positive root of (n-1) y^n + n y^(n-1) - 1; use the closest
@@ -1148,8 +1148,8 @@ fn simplify_pow(scip: &mut Scip, expr: ExprId, simplifiedexpr: &mut ExprId, owne
             // Release everything.
             expr::expr_release(scip, &mut expansion)?;
             // Release the *created* expanded children.
-            for i in 0..nexpandedchildren - nchildren {
-                expr::expr_release(scip, &mut expandedchildren[i])?;
+            for child in &mut expandedchildren[..nexpandedchildren - nchildren] {
+                expr::expr_release(scip, child)?;
             }
 
             return Ok(());

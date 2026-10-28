@@ -174,10 +174,10 @@ fn select_best_cut(cuts: &mut [RowId], scores: &mut [f64]) {
     let mut bestscore = scores[0];
     let mut bestpos = 0;
 
-    for i in 1..cuts.len() {
-        if scores[i] > bestscore {
+    for (i, score) in (1..cuts.len()).zip(&scores[1..cuts.len()]) {
+        if *score > bestscore {
             bestpos = i;
-            bestscore = scores[i];
+            bestscore = *score;
         }
     }
 

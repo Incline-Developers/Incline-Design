@@ -332,20 +332,16 @@ fn cancel_row(
                         let var = matrix.vars[col];
                         let newcoef = scale * eqrowvals[b];
 
-                        if (newcoef > 0.0 && !scip.set.is_infinity(cancelrhs)) || (newcoef < 0.0 && !scip.set.is_infinity(-cancellhs)) {
-                            if matrix.nuplocks[col] <= 1 {
-                                abortpair = true;
-                                b += 1;
-                                break;
-                            }
+                        if ((newcoef > 0.0 && !scip.set.is_infinity(cancelrhs)) || (newcoef < 0.0 && !scip.set.is_infinity(-cancellhs))) && matrix.nuplocks[col] <= 1 {
+                            abortpair = true;
+                            b += 1;
+                            break;
                         }
 
-                        if (newcoef < 0.0 && !scip.set.is_infinity(cancelrhs)) || (newcoef > 0.0 && !scip.set.is_infinity(-cancellhs)) {
-                            if matrix.ndownlocks[col] <= 1 {
-                                abortpair = true;
-                                b += 1;
-                                break;
-                            }
+                        if ((newcoef < 0.0 && !scip.set.is_infinity(cancelrhs)) || (newcoef > 0.0 && !scip.set.is_infinity(-cancellhs))) && matrix.ndownlocks[col] <= 1 {
+                            abortpair = true;
+                            b += 1;
+                            break;
                         }
 
                         b += 1;

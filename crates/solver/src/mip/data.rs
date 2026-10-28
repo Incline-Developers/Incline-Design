@@ -905,8 +905,8 @@ impl MipData {
         let mut all_integer_lower_zero = true;
         let mut all_integer_lower_finite = true;
         let mut all_integer_upper_finite = true;
-        for k in 0..self.numintegercols {
-            let i_col = self.integer_cols[k];
+        for integer_col in &self.integer_cols[..self.numintegercols] {
+            let i_col = *integer_col;
             col_lower[i_col] = col_lower[i_col].ceil();
             col_upper[i_col] = col_upper[i_col].floor();
             let legal_bounds =
@@ -934,7 +934,7 @@ impl MipData {
         let feasibility_tolerance = self.options.mip_feasibility_tolerance;
         let num_col = self.model.num_col;
         let mut solution = vec![0.0; num_col];
-        for try_heuristic in 0..4 {
+        for (try_heuristic, source) in heuristic_source[..4].iter().enumerate() {
             match try_heuristic {
                 0 => {
                     if !all_integer_lower_non_positive {
@@ -967,8 +967,8 @@ impl MipData {
                         let model = &self.model;
                         let mut num_positive_values = 0;
                         let mut num_negative_values = 0;
-                        for el in model.a_start[i_col]..model.a_start[i_col + 1] {
-                            if model.a_value[el] > 0.0 {
+                        for a_value_el in &model.a_value[model.a_start[i_col]..model.a_start[i_col + 1]] {
+                            if *a_value_el > 0.0 {
                                 num_positive_values += 1;
                             } else {
                                 num_negative_values += 1;
@@ -990,7 +990,7 @@ impl MipData {
                 cdouble_obj += self.model.col_cost[i_col] * solution[i_col];
             }
             let sol = solution.clone();
-            self.add_incumbent(&sol, cdouble_obj.value(), heuristic_source[try_heuristic], true, false);
+            self.add_incumbent(&sol, cdouble_obj.value(), *source, true, false);
         }
         false
     }

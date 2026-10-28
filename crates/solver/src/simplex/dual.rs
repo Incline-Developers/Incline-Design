@@ -903,7 +903,11 @@ impl Dual {
     /// passed the bound, so every so often check the dual objective of the
     /// unperturbed costs before stopping there.
     fn reached_exact_objective_bound(&mut self, ekk: &mut Ekk) -> bool {
-        let use_row_ap_density = ekk.info.row_ap_density.max(0.01).min(1.0);
+        let use_row_ap_density = if ekk.info.row_ap_density.is_nan() {
+            0.01
+        } else {
+            ekk.info.row_ap_density.clamp(0.01, 1.0)
+        };
         let check_frequency = ((1.0 / use_row_ap_density) as usize).max(1);
         if !ekk.info.update_count.is_multiple_of(check_frequency) {
             return false;
@@ -1027,8 +1031,8 @@ fn is_less_infeasible_dse_candidate(ekk: &Ekk) -> bool {
         if col_num_en > max_assess_col_num_en {
             return false;
         }
-        for el in a.start[col]..a.start[col + 1] {
-            if a.value[el].abs() != 1.0 {
+        for value_el in &a.value[a.start[col]..a.start[col + 1]] {
+            if value_el.abs() != 1.0 {
                 return false;
             }
         }

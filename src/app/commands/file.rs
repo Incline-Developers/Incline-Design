@@ -115,7 +115,6 @@ fn mesh_format_mime_type(format: MeshFormat) -> &'static str {
 /// along with whatever IDs or indices are needed to act on them.
 #[derive(Debug)]
 // On wasm the native variants are compiled out, leaving only the `Web`-prefixed ones.
-#[cfg_attr(target_arch = "wasm32", allow(clippy::enum_variant_names))]
 pub(crate) enum FileDialogAction {
     /// Start a new, never-saved project. It carries no path until the first
     /// Save asks for one.

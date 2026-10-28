@@ -2332,11 +2332,11 @@ impl Domain {
                         let (upper_count, lower_count) = self.prop_row_num_changed_bounds[k];
                         if upper_count != 0 {
                             let start = starts[k];
-                            for j in start..start + upper_count {
+                            for changedbound in &changedbounds[start..start + upper_count] {
                                 if self.infeasible {
                                     break;
                                 }
-                                self.change_bound(changedbounds[j], Reason::model_row_upper(i), env);
+                                self.change_bound(*changedbound, Reason::model_row_upper(i), env);
                             }
                             if self.infeasible {
                                 break;
@@ -2344,11 +2344,11 @@ impl Domain {
                         }
                         if lower_count != 0 {
                             let start = starts[k] + upper_count;
-                            for j in start..start + lower_count {
+                            for changedbound in &changedbounds[start..start + lower_count] {
                                 if self.infeasible {
                                     break;
                                 }
-                                self.change_bound(changedbounds[j], Reason::model_row_lower(i), env);
+                                self.change_bound(*changedbound, Reason::model_row_lower(i), env);
                             }
                             if self.infeasible {
                                 break;
@@ -2393,11 +2393,11 @@ impl Domain {
                         if count != 0 {
                             env.cx.cutpool.reset_age(i);
                             let start = starts[k];
-                            for j in start..start + count {
+                            for changedbound in &changedbounds[start..start + count] {
                                 if self.infeasible {
                                     break;
                                 }
-                                self.change_bound(changedbounds[j], Reason::cut(pool, i), env);
+                                self.change_bound(*changedbound, Reason::cut(pool, i), env);
                             }
                         }
                         if self.infeasible {

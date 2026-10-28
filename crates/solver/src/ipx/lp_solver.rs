@@ -9,10 +9,13 @@ use super::{
     ipm::Ipm,
     iterate::Iterate,
     kkt::{KktSolverBasis, KktSolverDiag},
-    model::{Model, dual_infeasibility, primal_infeasibility},
+    model::{InteriorSolution, Model, dual_infeasibility, primal_infeasibility},
     sparse::{Int, u},
     *,
 };
+
+/// A basic solution in the user's terms: `(x, slack, y, z, cbasis, vbasis)`.
+pub(crate) type BasicSolution = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<Int>, Vec<Int>);
 
 /// What `LpSolver::Solve` leaves: its info and, after a crossover that
 /// succeeded, the basic solution in the solver's terms.
@@ -74,8 +77,7 @@ impl LpSolver {
 
     /// `LpSolver::GetBasicSolution`: `(x, slack, y, z, cbasis, vbasis)` in
     /// the user's terms, if crossover found one.
-    #[allow(clippy::type_complexity)]
-    pub fn basic_solution(&self, model: &Model) -> Option<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<Int>, Vec<Int>)> {
+    pub fn basic_solution(&self, model: &Model) -> Option<BasicSolution> {
         if self.basic_statuses.is_empty() {
             return None;
         }
@@ -86,8 +88,7 @@ impl LpSolver {
 
     /// `LpSolver::GetInteriorSolution`: the final IPM iterate in the user's
     /// terms, `(x, xl, xu, slack, y, zl, zu)`.
-    #[allow(clippy::type_complexity)]
-    pub fn interior_solution(&self, model: &Model) -> Option<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>)> {
+    pub fn interior_solution(&self, model: &Model) -> Option<InteriorSolution> {
         let [x, xl, xu, y, zl, zu] = self.interior.as_ref()?;
         Some(model.postsolve_interior_solution(x, xl, xu, y, zl, zu))
     }

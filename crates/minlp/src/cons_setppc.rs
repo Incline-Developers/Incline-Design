@@ -252,10 +252,10 @@ fn cons_eventhdlr(scip: &Scip, cons: ConsId) -> EventhdlrId {
 ///     more! variables than the first or
 ///  3. both constraints are set packing constraints and the second has
 ///     less! variables than the first
-/// a "0" is return if
+///     a "0" is return if
 ///  1. both constraint are of the same type and have the amount of
 ///     variables or
-/// and a "1" is returned otherwise.
+///     and a "1" is returned otherwise.
 #[allow(dead_code)] // used by the clique lifting only
 fn setppc_compare(scip: &Scip, cons1: ConsId, cons2: ConsId) -> i32 {
     // The partitioning type should be the smallest value and the packing the
@@ -284,11 +284,11 @@ fn setppc_compare(scip: &Scip, cons1: ConsId, cons2: ConsId) -> i32 {
 ///     more! variables than the first or
 ///  4. both constraints are set packing constraints and the second has
 ///     less! variables than the first
-/// a "0" is return if
+///     a "0" is return if
 ///  1. both constraint are set-covering constraints
 ///  2. both constraint are of the same type and have the amount of
 ///     variables or
-/// and a "1" is returned otherwise.
+///     and a "1" is returned otherwise.
 fn setppc_compare2(scip: &Scip, cons1: ConsId, cons2: ConsId) -> i32 {
     if scip.conss[cons1].deleted {
         if scip.conss[cons2].deleted {
@@ -1211,22 +1211,23 @@ fn apply_fixings(scip: &mut Scip, cons: ConsId, mut counts: Option<(&mut i32, &m
                     // Constraint is redundant.
                     if v2 == v && nconsvars == 0 {
                         // We can fix.
-                        if cd(scip, cons).nvars > 1 && cd(scip, cons).setppctype != SetppcType::Covering {
-                            if let Some((_, _, nfixedvars)) = counts.as_mut() {
-                                for v2 in (0..cd(scip, cons).nvars).rev() {
-                                    let var2 = cd(scip, cons).vars[v2];
-                                    if var2 != var {
-                                        // Fix all remaining variables to zero, constraint is
-                                        // already feasible or infeasible.
-                                        let fixed;
-                                        (cutoff, fixed) = scip_var::fix_var(scip, var2, 0.0)?;
-                                        if cutoff {
-                                            break 'outer;
-                                        }
+                        if cd(scip, cons).nvars > 1
+                            && cd(scip, cons).setppctype != SetppcType::Covering
+                            && let Some((_, _, nfixedvars)) = counts.as_mut()
+                        {
+                            for v2 in (0..cd(scip, cons).nvars).rev() {
+                                let var2 = cd(scip, cons).vars[v2];
+                                if var2 != var {
+                                    // Fix all remaining variables to zero, constraint is
+                                    // already feasible or infeasible.
+                                    let fixed;
+                                    (cutoff, fixed) = scip_var::fix_var(scip, var2, 0.0)?;
+                                    if cutoff {
+                                        break 'outer;
+                                    }
 
-                                        if fixed {
-                                            **nfixedvars += 1;
-                                        }
+                                    if fixed {
+                                        **nfixedvars += 1;
                                     }
                                 }
                             }
@@ -3066,12 +3067,12 @@ fn create_normalized_setppc(scip: &mut Scip, name: &str, vars: &[VarId], vals: &
 /// - all set partitioning / packing / covering constraints consist only of
 ///   binary variables with a coefficient of +1.0 or -1.0 (variables with -1.0
 ///   coefficients can be negated):
-///       lhs    <= x1 + ... + xp - y1 - ... - yn <= rhs
+///   lhs    <= x1 + ... + xp - y1 - ... - yn <= rhs
 /// - negating all variables y = (1-Y) with negative coefficients gives:
-///       lhs + n <= x1 + ... + xp + Y1 + ... + Yn <= rhs + n
+///   lhs + n <= x1 + ... + xp + Y1 + ... + Yn <= rhs + n
 /// - negating all variables x = (1-X) with positive coefficients and
 ///   multiplying with -1 gives:
-///       p - rhs <= X1 + ... + Xp + y1 + ... + yn <= p - lhs
+///   p - rhs <= X1 + ... + Xp + y1 + ... + yn <= p - lhs
 /// - a set partitioning constraint has left hand side of +1.0, and right
 ///   hand side of +1.0 : x(S) == 1.0
 ///   -> without negations:  lhs == rhs == 1 - n  or  lhs == rhs == p - 1
@@ -3355,11 +3356,9 @@ fn cons_check_setppc(
     while c < conss.len() && (*result == ScipResultCode::Feasible || completely) {
         let cons = conss[c];
         let row = cd(scip, cons).row;
-        if checklprows || row == NONE || scip.rows[row].lppos < 0 {
-            if !check_cons(scip, cons, sol) {
-                // Constraint is violated.
-                *result = ScipResultCode::Infeasible;
-            }
+        if (checklprows || row == NONE || scip.rows[row].lppos < 0) && !check_cons(scip, cons, sol) {
+            // Constraint is violated.
+            *result = ScipResultCode::Infeasible;
         }
         c += 1;
     }

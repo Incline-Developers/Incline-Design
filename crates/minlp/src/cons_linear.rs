@@ -5224,60 +5224,60 @@ fn extract_cliques_refresh(
 /// 1. collect binary variables and sort them in non increasing order, then
 ///
 ///    a) if the constraint has a finite right hand side and the negative
-///       infinity counters for the minactivity are zero then add the
-///       variables as a clique for which all successive pairs of
-///       coefficients fullfill the following condition
+///    infinity counters for the minactivity are zero then add the
+///    variables as a clique for which all successive pairs of
+///    coefficients fullfill the following condition
 ///
 ///         minactivity + vals[i] + vals[i+1] > rhs
 ///
 ///       and also add the binary to binary implication also for
-///       non-successive variables for which the same argument holds
+///    non-successive variables for which the same argument holds
 ///
 ///         minactivity + vals[i] + vals[j] > rhs
 ///
 ///       e.g. 5.3 x1 + 3.6 x2 + 3.3 x3 + 2.1 x4 <= 5.5 (all x are binary)
-///       would lead to the clique (x1, x2, x3) and the binary to binary
-///       implications x1 = 1 => x4 = 0 and x2 = 1 => x4 = 0
+///    would lead to the clique (x1, x2, x3) and the binary to binary
+///    implications x1 = 1 => x4 = 0 and x2 = 1 => x4 = 0
 ///
 ///    b) if the constraint has a finite left hand side and the positive
-///       infinity counters for the maxactivity are zero then add the
-///       variables as a clique for which all successive pairs of
-///       coefficients fullfill the follwoing condition
+///    infinity counters for the maxactivity are zero then add the
+///    variables as a clique for which all successive pairs of
+///    coefficients fullfill the follwoing condition
 ///
 ///         maxactivity + vals[i] + vals[i-1] < lhs
 ///
 ///       and also add the binary to binary implication also for
-///       non-successive variables for which the same argument holds
+///    non-successive variables for which the same argument holds
 ///
 ///         maxactivity + vals[i] + vals[j] < lhs
 ///
 ///       e.g. you could multiply the above example by -1
 ///
 ///    c) the constraint has a finite right hand side and a finite
-///       minactivity then add the variables as a negated clique(clique on
-///       the negated variables) for which all successive pairs of
-///       coefficients fullfill the following condition
+///    minactivity then add the variables as a negated clique(clique on
+///    the negated variables) for which all successive pairs of
+///    coefficients fullfill the following condition
 ///
 ///         minactivity - vals[i] - vals[i-1] > rhs
 ///
 ///       and also add the binary to binary implication also for
-///       non-successive variables for which the same argument holds
+///    non-successive variables for which the same argument holds
 ///
 ///         minactivity - vals[i] - vals[j] > rhs
 ///
 ///       e.g. -4 x1 -3 x2 - 2 x3 + 2 x4 <= -4 would lead to the (negated)
-///       clique (~x1, ~x2) and the binary to binary implication x1 = 0 =>
-///       x3 = 1
+///    clique (~x1, ~x2) and the binary to binary implication x1 = 0 =>
+///    x3 = 1
 ///
 ///    d) the constraint has a finite left hand side and a finite
-///       maxactivity then add the variables as a negated clique(clique on
-///       the negated variables) for which all successive pairs of
-///       coefficients fullfill the following condition
+///    maxactivity then add the variables as a negated clique(clique on
+///    the negated variables) for which all successive pairs of
+///    coefficients fullfill the following condition
 ///
 ///         maxactivity - vals[i] - vals[i+1] < lhs
 ///
 ///       and also add the binary to binary implication also for
-///       non-successive variables for which the same argument holds
+///    non-successive variables for which the same argument holds
 ///
 ///         maxactivity - vals[i] - vals[j] < lhs
 ///
@@ -8298,12 +8298,11 @@ fn simplify_inequalities(scip: &mut Scip, cons: ConsId, nchgcoefs: &mut i32, nch
         }
 
         let mut gcd: i64 = -1;
-        let foundbin: i32;
 
         // Calculate greatest common divisor over all integer variables; note
         // that the onlybin flag needs to be recomputed because coefficients of
         // non-binary variables might have changed to zero.
-        if !onlybin {
+        let foundbin: i32 = if !onlybin {
             let mut fb = -1;
             onlybin = true;
 
@@ -8336,10 +8335,10 @@ fn simplify_inequalities(scip: &mut Scip, cons: ConsId, nchgcoefs: &mut i32, nch
                 }
                 v -= 1;
             }
-            foundbin = fb;
+            fb
         } else {
-            foundbin = nvars - 1;
-        }
+            nvars - 1
+        };
 
         // We need at least one binary variable and a gcd greater than 1 to try
         // to perform further coefficient changes.
@@ -8420,8 +8419,7 @@ fn simplify_inequalities(scip: &mut Scip, cons: ConsId, nchgcoefs: &mut i32, nch
             ((candval + feastol) as i64) % gcd
         };
 
-        let newcoef;
-        if hasrhs {
+        let newcoef = if hasrhs {
             if rest > 0 {
                 // Replace old with new right hand side.
                 chg_rhs(scip, cons, rhs - rest as f64)?;
@@ -8429,11 +8427,11 @@ fn simplify_inequalities(scip: &mut Scip, cons: ConsId, nchgcoefs: &mut i32, nch
             }
 
             // Calculate new coefficient.
-            newcoef = if restcoef > rest {
+            if restcoef > rest {
                 candval - restcoef as f64 + gcd as f64
             } else {
                 candval - restcoef as f64
-            };
+            }
         } else {
             if rest > 0 {
                 // Replace old with new left hand side.
@@ -8442,12 +8440,12 @@ fn simplify_inequalities(scip: &mut Scip, cons: ConsId, nchgcoefs: &mut i32, nch
             }
 
             // Calculate new coefficient.
-            newcoef = if rest == 0 || restcoef < rest {
+            if rest == 0 || restcoef < rest {
                 candval - restcoef as f64
             } else {
                 candval - restcoef as f64 + gcd as f64
-            };
-        }
+            }
+        };
 
         if scip.set.is_zero(newcoef) {
             // Delete redundant coefficient.
@@ -9590,8 +9588,8 @@ fn presol_stuffing(scip: &mut Scip, cons: ConsId, singletonstuffing: bool, singl
             sort::sort(&mut ratios[..nsingletons], (&mut varpos[..nsingletons],), sort::cmp_real);
 
             // Verify which singleton continuous variables can be fixed.
-            for v in 0..nsingletons {
-                let idx = varpos[v] as usize;
+            for pos in &varpos[..nsingletons] {
+                let idx = *pos as usize;
                 let var = vars[idx];
                 let val = (factor * vals[idx]).abs();
                 let lb = scip.vars[var].glbdom.lb;
@@ -11213,8 +11211,8 @@ fn event_exec_linear(scip: &mut Scip, eventhdlr: EventhdlrId, event: &Event, eve
 
             // Check whether bound tightening might now be successful.
             if c.boundstightened > 0 {
-                let rhsfinite = !(c.rhs >= infinity);
-                let lhsfinite = !(-c.lhs >= infinity);
+                let rhsfinite = c.rhs.partial_cmp(&infinity).is_none_or(std::cmp::Ordering::is_lt);
+                let lhsfinite = (-c.lhs).partial_cmp(&infinity).is_none_or(std::cmp::Ordering::is_lt);
                 match eventtype {
                     EVENTTYPE_LBTIGHTENED => {
                         if if val > 0.0 { rhsfinite } else { lhsfinite } {

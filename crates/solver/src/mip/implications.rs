@@ -243,11 +243,11 @@ impl Implications {
         pdqsort(&mut implics[..binstart], |a, b| a < b);
 
         let colvar = CliqueVar::new(col, usize::from(val));
-        for i in binstart..implics.len() {
-            let other = if implics[i].boundtype == BoundType::Lower {
-                CliqueVar::new(implics[i].column, 0)
+        for implic in &implics[binstart..] {
+            let other = if implic.boundtype == BoundType::Lower {
+                CliqueVar::new(implic.column, 0)
             } else {
-                CliqueVar::new(implics[i].column, 1)
+                CliqueVar::new(implic.column, 1)
             };
             let mut clique = [colvar, other];
             cliquetable.add_clique(model, globaldom, &mut clique, false, NO_ORIGIN, &mut CliqueCtx { cx, implications: self });
@@ -257,8 +257,8 @@ impl Implications {
         }
 
         let feastol = cx.feastol;
-        for i in 0..binstart {
-            let implic = implics[i];
+        for implic_i in &implics[..binstart] {
+            let implic = *implic_i;
             let c = implic.column;
             if implic.boundtype == BoundType::Lower {
                 if val {

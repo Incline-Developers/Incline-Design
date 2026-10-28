@@ -67,10 +67,10 @@ impl<'c> Maxvolume<'c> {
         let maxpasses = self.control.params.maxpasses;
         let volumetol = self.control.params.volume_tol.max(1.0);
         let mut invscale_basic = vec![0.0; m];
-        for p in 0..m {
+        for (p, invscale) in invscale_basic[..m].iter_mut().enumerate() {
             let j = basis.at(p);
             if basis.status_of(j) == BasicStatus::Basic {
-                invscale_basic[p] = colscale.map_or(1.0, |colscale| 1.0 / colscale[u(j)]);
+                *invscale = colscale.map_or(1.0, |colscale| 1.0 / colscale[u(j)]);
             }
         }
         self.reset();
@@ -153,10 +153,10 @@ impl<'c> Maxvolume<'c> {
         let mut errflag = 0;
         self.reset();
         let num_slices = (5 + (m as Int / self.control.params.rows_per_slice).max(0)).min(m as Int);
-        for p in 0..m {
+        for (p, invscale) in slice.invscale_basic[..m].iter_mut().enumerate() {
             let j = basis.at(p);
             if basis.status_of(j) == BasicStatus::Basic {
-                slice.invscale_basic[p] = colscale.map_or(1.0, |colscale| 1.0 / colscale[u(j)]);
+                *invscale = colscale.map_or(1.0, |colscale| 1.0 / colscale[u(j)]);
             }
         }
         for j in 0..n + m {

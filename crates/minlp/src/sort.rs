@@ -137,7 +137,7 @@ fn median_three<K: Copy>(key: &[K], cmp: &impl Fn(&K, &K) -> i32, a: usize, b: u
 }
 
 fn select_pivot_index<K: Copy>(key: &[K], cmp: &impl Fn(&K, &K) -> i32, start: usize, end: usize) -> usize {
-    if end - start + 1 <= SHELLSORTMAX {
+    if end - start < SHELLSORTMAX {
         (start + end) / 2
     } else if end - start + 1 < MINSIZENINTHER {
         let mid = (start + end) / 2;

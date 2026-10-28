@@ -173,8 +173,8 @@ impl RowPartitioned {
     /// Move `var_in` to the basic part and `var_out` to the nonbasic part.
     pub fn update(&mut self, var_in: usize, var_out: usize, matrix: &ColWise) {
         if var_in < self.num_col {
-            for el in matrix.start[var_in]..matrix.start[var_in + 1] {
-                let row = matrix.index[el];
+            for index_el in &matrix.index[matrix.start[var_in]..matrix.start[var_in + 1]] {
+                let row = *index_el;
                 let mut find = self.start[row];
                 self.p_end[row] -= 1;
                 let swap = self.p_end[row];
@@ -186,8 +186,8 @@ impl RowPartitioned {
             }
         }
         if var_out < self.num_col {
-            for el in matrix.start[var_out]..matrix.start[var_out + 1] {
-                let row = matrix.index[el];
+            for index_el in &matrix.index[matrix.start[var_out]..matrix.start[var_out + 1]] {
+                let row = *index_el;
                 let mut find = self.p_end[row];
                 let swap = self.p_end[row];
                 self.p_end[row] += 1;
@@ -202,7 +202,6 @@ impl RowPartitioned {
 
     /// `result = columnᵀ A` over the nonbasic columns, row-wise and
     /// hyper-sparse, going dense once `result` passes `switch_density`.
-    #[allow(clippy::mut_range_bound, reason = "the range is fixed; next_index records how far the loop got")]
     pub fn price_by_row_with_switch(&self, quad_precision: bool, result: &mut HVector, column: &HVector, expected_density: f64, from_index: usize, switch_density: f64) {
         let mut sum = SparseVectorSum::default();
         if quad_precision {
@@ -212,7 +211,7 @@ impl RowPartitioned {
         let column_count = column.count.max(0) as usize;
         if expected_density <= HYPER_PRICE_DENSITY {
             let inv_num_col = 1.0 / self.num_col as f64;
-            for ix in next_index..column_count {
+            for ix in from_index..column_count {
                 let row = column.index[ix];
                 let to_el = self.p_end[row];
                 let row_num_nz = to_el - self.start[row];

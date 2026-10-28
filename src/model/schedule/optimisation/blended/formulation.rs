@@ -201,7 +201,6 @@ pub(crate) trait Rows {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FormulationCancelled;
 
-#[allow(clippy::needless_range_loop)]
 pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(), FormulationCancelled> {
     let grades = input.grades.count();
     let ceilings = super::input::grade_ceilings(input);
@@ -758,8 +757,8 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
             let open_t = rows.cont(capacity, &format!("openT_{}_{k}", pile.id.0));
             rows.columns().open_t.insert((pile.id, k), open_t.clone());
             let mut open_q = Vec::with_capacity(grades);
-            for g in 0..grades {
-                let column = rows.cont(capacity * ceilings[g], &format!("openQ_{}_{k}_{g}", pile.id.0));
+            for (g, ceiling) in ceilings[..grades].iter().enumerate() {
+                let column = rows.cont(capacity * *ceiling, &format!("openQ_{}_{k}_{g}", pile.id.0));
                 rows.columns().open_q.insert((pile.id, k, g), column.clone());
                 open_q.push(column);
             }
@@ -818,8 +817,8 @@ pub(crate) fn formulate<R: Rows>(rows: &mut R, input: &BlendInput) -> Result<(),
             let recl_t = rows.cont(capacity, &format!("reclT_{}_{k}", pile.id.0));
             rows.columns().recl_t.insert((pile.id, k), recl_t.clone());
             let mut recl_q = Vec::with_capacity(grades);
-            for g in 0..grades {
-                let column = rows.cont(capacity * ceilings[g], &format!("reclQ_{}_{k}_{g}", pile.id.0));
+            for (g, ceiling) in ceilings[..grades].iter().enumerate() {
+                let column = rows.cont(capacity * *ceiling, &format!("reclQ_{}_{k}_{g}", pile.id.0));
                 rows.columns().recl_q.insert((pile.id, k, g), column.clone());
                 recl_q.push(column);
             }
@@ -2207,7 +2206,7 @@ fn predicate_owed<R: Rows>(rows: &mut R, pile: StockpileId, interval: usize, tes
 /// A cell ahead of the receiving one in fill order is out of play until the
 /// receipts so far could have reached it, with no columns, so a short input
 /// costs only the cells it can reach.
-#[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
+#[allow(clippy::too_many_arguments)]
 fn chunked_pile<R: Rows>(
     rows: &mut R,
     input: &BlendInput,
@@ -2471,13 +2470,13 @@ fn chunked_pile<R: Rows>(
             if k == 0 || !active(c, k - 1) {
                 let value = if k == 0 { opening.get(c).map(|(tonnes, _)| *tonnes).unwrap_or(0.0) } else { 0.0 };
                 rows.eq(vec![(open.clone(), 1.0)], value, &format!("cT0_{}_{c}_{k}", pile.id.0));
-                for g in 0..grades {
+                for (g, open_g) in open_q[c][..grades].iter().enumerate() {
                     let value = if k == 0 {
                         opening.get(c).and_then(|(_, contained)| contained.get(g).copied()).unwrap_or(0.0)
                     } else {
                         0.0
                     };
-                    rows.eq(vec![(take(&open_q[c][g][k]), 1.0)], value, &format!("cQ0_{}_{c}_{k}_{g}", pile.id.0));
+                    rows.eq(vec![(take(&open_g[k]), 1.0)], value, &format!("cQ0_{}_{c}_{k}_{g}", pile.id.0));
                 }
             } else {
                 let prior = take(&open_t[c][k - 1]);
@@ -2642,7 +2641,7 @@ fn chunked_pile<R: Rows>(
         if rows.cancelled() {
             return Err(FormulationCancelled);
         }
-        let opening: Vec<(R::Var, f64)> = (0..count).filter_map(|c| open_t[c][k].clone()).map(|column| (column, 1.0)).collect();
+        let opening: Vec<(R::Var, f64)> = open_t[..count].iter().filter_map(|chunk| chunk[k].clone()).map(|column| (column, 1.0)).collect();
         occupancy_rows(rows, input, pile, k, segments, destinations, opening, receipt_peak);
     }
 

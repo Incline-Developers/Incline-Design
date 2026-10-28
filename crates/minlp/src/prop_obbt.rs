@@ -378,11 +378,7 @@ fn include_var_gen_vbound(scip: &mut Scip, var: VarId) -> bool {
     }
 
     let dualfeastol = scip.set.dualfeastol();
-    if redcost < dualfeastol && redcost > -dualfeastol {
-        return false;
-    }
-
-    true
+    !(redcost < dualfeastol && redcost > -dualfeastol)
 }
 
 /// `getIterationsLeft`: returns number of LP iterations left (-1: no limit).
@@ -669,11 +665,7 @@ fn bilinbound_get_score(scip: &Scip, randnumgen: &mut RandNumGen, bilinbound: &B
 fn indicator_var_is_interesting(scip: &Scip, var: VarId, nlcount: i32, nindcount: i32, threshold: f64) -> bool {
     // If variable is only part of indicator constraints, consider current
     // upper bound.
-    if nlcount == 0 && nindcount > 0 && scip.set.is_le(scip.vars[var].locdom.ub, threshold) {
-        return false;
-    }
-
-    true
+    !(nlcount == 0 && nindcount > 0 && scip.set.is_le(scip.vars[var].locdom.ub, threshold))
 }
 
 /// `filterExistingLP`: trying to filter some bounds using the existing LP
@@ -1158,7 +1150,7 @@ fn next_bound(scip: &Scip, propdata: &PropData, convexphase: bool) -> i32 {
             let mut boundval = eval_bound(scip, tmpbound);
 
             // Negate boundval if we use the reverse greedy algorithm.
-            boundval = if propdata.orderingalgo == 2 { -1.0 * boundval } else { boundval };
+            boundval = if propdata.orderingalgo == 2 { -boundval } else { boundval };
 
             if bestidx == -1 || boundval < bestval {
                 bestidx = k;
@@ -1258,9 +1250,7 @@ fn find_new_bounds(scip: &mut Scip, propdata: &mut PropData, nleftiterations: &m
 
             // Try to tighten bound in probing mode.
             let mut success = false;
-            if propdata.tightintboundsprobing && var_is_integral(scip, currbound.var) {
-                success = tighten_bound_probing(scip, &currbound, currbound.newval)?;
-            } else if propdata.tightcontboundsprobing && !var_is_integral(scip, currbound.var) {
+            if (propdata.tightintboundsprobing && var_is_integral(scip, currbound.var)) || (propdata.tightcontboundsprobing && !var_is_integral(scip, currbound.var)) {
                 success = tighten_bound_probing(scip, &currbound, currbound.newval)?;
             }
 

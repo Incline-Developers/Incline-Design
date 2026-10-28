@@ -1110,19 +1110,11 @@ impl Presolve {
                 self.row_dual_upper_source[i] = new_col_index[self.row_dual_upper_source[i]];
             }
         }
-        for i in 0..num_col {
-            let set: BTreeSet<usize> = self.impl_row_dual_source_by_col[i]
-                .iter()
-                .filter_map(|&row| (new_row_index[row] != NONE).then_some(new_row_index[row]))
-                .collect();
-            self.impl_row_dual_source_by_col[i] = set;
+        for sources in &mut self.impl_row_dual_source_by_col[..num_col] {
+            *sources = sources.iter().filter_map(|&row| (new_row_index[row] != NONE).then_some(new_row_index[row])).collect();
         }
-        for i in 0..num_row {
-            let set: BTreeSet<usize> = self.col_impl_source_by_row[i]
-                .iter()
-                .filter_map(|&col| (new_col_index[col] != NONE).then_some(new_col_index[col]))
-                .collect();
-            self.col_impl_source_by_row[i] = set;
+        for sources in &mut self.col_impl_source_by_row[..num_row] {
+            *sources = sources.iter().filter_map(|&col| (new_col_index[col] != NONE).then_some(new_col_index[col])).collect();
         }
         self.row_deleted = vec![false; num_row];
         self.model.row_lower.truncate(num_row);
@@ -2351,8 +2343,7 @@ impl Presolve {
             check!(self.presolve_col_singletons(postsolve));
             check!(self.presolve_changed_cols(postsolve));
             // Not `<=`: a reduction of NaN (nothing left to reduce) stops it.
-            #[allow(clippy::neg_cmp_op_on_partial_ord)]
-            if !(self.problem_size_reduction() > 0.01) {
+            if self.problem_size_reduction().partial_cmp(&0.01).is_none_or(std::cmp::Ordering::is_le) {
                 return Outcome::Ok;
             }
         }
@@ -2846,8 +2837,8 @@ impl Presolve {
         if factor.timed_out {
             return Outcome::Ok;
         }
-        for k in 0..rank_deficiency {
-            let var = factor.var_with_no_pivot[k];
+        for var_with_no_pivot_k in &factor.var_with_no_pivot[..rank_deficiency] {
+            let var = *var_with_no_pivot_k;
             if var != NONE {
                 let redundant_row = eq_set[var];
                 postsolve.redundant_row(redundant_row);

@@ -47,8 +47,8 @@ struct Clique {
 /// node array.
 fn create_clique(nodes: &[i32]) -> Clique {
     let mut out: Vec<i32> = vec![0; nodes.len()];
-    for i in 0..nodes.len() {
-        let node = nodes[i];
+    for (i, node_i) in nodes.iter().enumerate() {
+        let node = *node_i;
         let mut j = i;
         while j > 0 && node < out[j - 1] {
             out[j] = out[j - 1];
@@ -855,8 +855,8 @@ pub fn tclique_max_clique<'a>(
     let weights = g.weights();
     let mut v: Vec<i32> = Vec::with_capacity(nnodes);
     let mut vzero: Vec<i32> = Vec::with_capacity(nnodes);
-    for i in 0..nnodes {
-        if weights[i] == 0 {
+    for (i, weight) in weights[..nnodes].iter().enumerate() {
+        if *weight == 0 {
             vzero.push(i as i32);
         } else {
             v.push(i as i32);

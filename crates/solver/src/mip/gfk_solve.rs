@@ -212,8 +212,8 @@ impl GfkSolve {
     pub fn solve(&mut self, k: u32, mut report_solution: impl FnMut(&mut Vec<SolutionEntry>)) {
         let less = |a: &(usize, usize), b: &(usize, usize)| a.0 > b.0;
         let mut pqueue: Vec<(usize, usize)> = Vec::new();
-        for i in 0..self.num_col {
-            cpp_heap_push(&mut pqueue, (self.colsize[i], i), less);
+        for (i, colsize_i) in self.colsize[..self.num_col].iter().enumerate() {
+            cpp_heap_push(&mut pqueue, (*colsize_i, i), less);
         }
         let max_pivot = self.num_row.min(self.num_col);
         self.factor_col_perm.clear();
@@ -337,8 +337,8 @@ impl GfkSolve {
             for i in (0..num_factor_rows).rev() {
                 let row = self.factor_row_perm[i];
                 let mut solval: u32 = 0;
-                for e in 0..solution.len() {
-                    let entry = solution[e];
+                for value in &solution {
+                    let entry = *value;
                     if let Some(pos) = self.find_nonzero(row, entry.index) {
                         solval = solval.wrapping_add(self.a_value[pos].wrapping_mul(entry.weight));
                     }

@@ -752,9 +752,9 @@ impl Primal {
         for col in 0..self.num_col {
             ekk.info.work_dual[col] = -(ekk.basis.nonbasic_flag[col] as f64) * buffer_long.array[col];
         }
-        for row in 0..self.num_row {
+        for (row, value) in buffer.array[..self.num_row].iter().enumerate() {
             let col = self.num_col + row;
-            ekk.info.work_dual[col] = -(ekk.basis.nonbasic_flag[col] as f64) * buffer.array[row];
+            ekk.info.work_dual[col] = -(ekk.basis.nonbasic_flag[col] as f64) * *value;
         }
     }
 

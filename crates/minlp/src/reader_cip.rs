@@ -61,15 +61,15 @@ pub fn write_orig_problem(scip: &Scip) -> ScipResult<String> {
     debug_assert_eq!(prob.nfixedvars, 0);
     if nvars > 0 {
         let _ = writeln!(out, "VARIABLES");
-        for i in 0..nvars {
-            var_print(scip, prob.vars.0[i], &mut out)?;
+        for &var in &prob.vars.0[..nvars] {
+            var_print(scip, var, &mut out)?;
         }
     }
 
     if nconss > 0 {
         let _ = writeln!(out, "CONSTRAINTS");
-        for i in 0..nconss {
-            cons_print(scip, prob.conss.0[i], &mut out)?;
+        for &cons in &prob.conss.0[..nconss] {
+            cons_print(scip, cons, &mut out)?;
             let _ = writeln!(out, ";");
         }
     }

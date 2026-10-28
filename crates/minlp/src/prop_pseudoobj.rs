@@ -402,8 +402,8 @@ fn objimplics_create(
 fn objimplics_free(scip: &mut Scip, objimplics: &mut ObjImplics) -> ScipResult {
     // Release all variables.
     let n = (objimplics.nlbimpls + objimplics.nubimpls) as usize;
-    for v in 0..n {
-        let mut var = objimplics.objvars[v];
+    for objvar in &objimplics.objvars[..n] {
+        let mut var = *objvar;
         api::release_var(scip, &mut var)?;
     }
 

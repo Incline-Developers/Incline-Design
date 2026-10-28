@@ -49,6 +49,9 @@ enum PatternOut<'a> {
     Slice(&'a mut [Int]),
 }
 
+/// A factor column-wise: `(colptr, rowidx, values)`.
+pub(crate) type CscFactor = (Vec<Int>, Vec<Int>, Vec<f64>);
+
 #[derive(Clone, Debug)]
 pub(crate) struct Lu {
     // Parameters.
@@ -1022,17 +1025,14 @@ impl Lu {
             return REALLOCATE;
         }
         let mut uput = self.is[ubegin + rank];
-        let mut position = 1;
-        for pos in cbeg + 1..cend {
+        for (pos, position) in (cbeg + 1..cend).zip(1..) {
             let i = u(self.wi[u(pos)]);
             self.is[marked + i] = position;
-            position += 1;
         }
         // The pivot column's entries, which the eliminations read while
         // the file moves around them: HiGHS's `wi`/`wx` point at them.
         let wi_base = u(cbeg);
-        let mut col_number = 0usize;
-        for rpos in rbeg + 1..rend {
+        for (col_number, rpos) in (rbeg + 1..rend).enumerate() {
             let j = u(self.wi[u(rpos)]);
             let mut cmx: f64 = 0.0;
             where_ = -1;
@@ -1112,7 +1112,6 @@ impl Lu {
             let nz = self.is[wend + j] - self.is[wbegin + j];
             list_move(&mut self.is, ccf, ccb, j, u(nz), m, Some(&mut self.min_colnz));
             self.col_pivot[j] = cmx;
-            col_number += 1;
         }
         for pos in cbeg + 1..cend {
             let i = u(self.wi[u(pos)]);
@@ -1143,13 +1142,11 @@ impl Lu {
                 self.nexpand += 1;
             }
             if small {
-                let mut col_number = 0usize;
-                for rpos in rbeg + 1..rend {
+                for (col_number, rpos) in (rbeg + 1..rend).enumerate() {
                     if self.cancelled[col_number] & mask == 0 {
                         self.wi[u(put)] = self.wi[u(rpos)];
                         put += 1;
                     }
-                    col_number += 1;
                 }
                 mask <<= 1;
             } else {
@@ -1413,10 +1410,10 @@ impl Lu {
         self.is[ubegin + rank + 1] = uput;
         if ncancelled > 0 {
             self.is[marked + pivot_col] = 1;
-            let mut put = self.is[wbegin + m + other_row];
+            let begin = self.is[wbegin + m + other_row];
             let end = self.is[wend + m + other_row];
-            #[allow(clippy::mut_range_bound, reason = "the range starts at put, read once as C's loop does")]
-            for pos in put..end {
+            let mut put = begin;
+            for pos in begin..end {
                 let j = self.wi[u(pos)];
                 if self.is[marked + u(j)] != 0 {
                     self.is[marked + u(j)] = 0;
@@ -1808,8 +1805,8 @@ impl Lu {
             self.work1[ipivot] += 1.0;
             onenorm = onenorm.max(1.0);
         }
-        for i in 0..mu {
-            infnorm = infnorm.max(self.work1[i]);
+        for work1_i in &self.work1[..mu] {
+            infnorm = infnorm.max(*work1_i);
         }
         self.onenorm = onenorm;
         self.infnorm = infnorm;
@@ -1819,8 +1816,7 @@ impl Lu {
 
     /// `basiclu_get_factors`: the row and column pivot orders, and L and
     /// U column-wise with their unit and pivot diagonals first.
-    #[allow(clippy::type_complexity)]
-    pub fn get_factors(&mut self, want_l: bool, want_u: bool) -> (Vec<Int>, Vec<Int>, Option<(Vec<Int>, Vec<Int>, Vec<f64>)>, Option<(Vec<Int>, Vec<Int>, Vec<f64>)>) {
+    pub fn get_factors(&mut self, want_l: bool, want_u: bool) -> (Vec<Int>, Vec<Int>, Option<CscFactor>, Option<CscFactor>) {
         self.load();
         let m = u(self.m);
         let (pivotrow, pivotcol) = (self.pivotrow(), self.pivotcol());
@@ -2042,10 +2038,7 @@ impl Lu {
                 return ERROR_INVALID_ARGUMENT;
             }
         } else {
-            let mut ok = nrhs >= 0 && nrhs <= self.m;
-            for n in 0..u(nrhs.max(0)) {
-                ok = ok && irhs[n] >= 0 && irhs[n] < self.m;
-            }
+            let ok = nrhs >= 0 && nrhs <= self.m && irhs[..u(nrhs)].iter().all(|&i| i >= 0 && i < self.m);
             if !ok {
                 return ERROR_INVALID_ARGUMENT;
             }
@@ -2304,10 +2297,10 @@ impl Lu {
                         PatternOut::Slice(ilhs),
                         &mut uflops,
                     );
-                    for n in 0..u(nz) {
-                        let i = u(ilhs[n]);
+                    for index in &mut ilhs[..u(nz)] {
+                        let i = u(*index);
                         let j = self.is[qmap + i];
-                        ilhs[n] = j;
+                        *index = j;
                         xlhs[u(j)] = self.work0[i];
                         self.work0[i] = 0.0;
                     }
@@ -2515,10 +2508,8 @@ impl Lu {
                 let mut col_reach = Vec::with_capacity(nreach);
                 row_reach.push(ipivot);
                 col_reach.push(jpivot);
-                let mut pos = self.is[rbegin + nforrest];
-                for _ in 1..nreach {
-                    let i = self.li[u(pos)];
-                    pos += 1;
+                let first = u(self.is[rbegin + nforrest]);
+                for &i in &self.li[first..first + nreach - 1] {
                     row_reach.push(i);
                     col_reach.push(self.is[qmap + u(i)]);
                 }
@@ -2603,10 +2594,10 @@ impl Lu {
             self.min_pivot = self.min_pivot.min(newpiv.abs());
             self.max_pivot = self.max_pivot.max(newpiv.abs());
             let mut nz = 0;
-            let mut put = self.is[rbegin + nforrest];
+            let begin = self.is[rbegin + nforrest];
+            let mut put = begin;
             let mut max_eta: f64 = 0.0;
-            #[allow(clippy::mut_range_bound, reason = "the range starts at put, read once as C's loop does")]
-            for pos in put..self.is[rbegin + nforrest + 1] {
+            for pos in begin..self.is[rbegin + nforrest + 1] {
                 if self.lx[u(pos)] != 0.0 {
                     max_eta = max_eta.max(self.lx[u(pos)].abs());
                     self.li[u(put)] = self.li[u(pos)];
@@ -2627,16 +2618,9 @@ impl Lu {
         if self.pivotlen + nreach > 2 * m {
             self.garbage_perm();
         }
-        let mut put = u(self.pivotlen);
-        for &row in &row_reach {
-            self.is[pivotrow + put] = row;
-            put += 1;
-        }
-        let mut put = u(self.pivotlen);
-        for &col in &col_reach {
-            self.is[pivotcol + put] = col;
-            put += 1;
-        }
+        let start = u(self.pivotlen);
+        self.is[pivotrow + start..pivotrow + start + row_reach.len()].copy_from_slice(&row_reach);
+        self.is[pivotcol + start..pivotcol + start + col_reach.len()].copy_from_slice(&col_reach);
         self.pivotlen += nreach;
 
         let used = self.is[ubegin + mu];

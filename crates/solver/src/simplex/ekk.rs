@@ -946,16 +946,16 @@ impl Ekk {
         }
         let num_col = self.lp.num_col;
         let mut max_abs_cost: f64 = 0.0;
-        for col in 0..num_col {
-            max_abs_cost = max_abs_cost.max(self.info.work_cost[col].abs());
+        for work_cost_col in &self.info.work_cost[..num_col] {
+            max_abs_cost = max_abs_cost.max(work_cost_col.abs());
         }
         if max_abs_cost > 100.0 {
             max_abs_cost = max_abs_cost.sqrt().sqrt();
         }
         let num_tot = self.num_tot();
         let mut boxed_rate = 0.0;
-        for var in 0..num_tot {
-            if self.info.work_range[var] < 1e30 {
+        for work_range_var in &self.info.work_range[..num_tot] {
+            if *work_range_var < 1e30 {
                 boxed_rate += 1.0;
             }
         }

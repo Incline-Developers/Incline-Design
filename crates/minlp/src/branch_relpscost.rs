@@ -648,11 +648,7 @@ fn continue_strong_branching_tree_size_estimation(scip: &Scip, branchrule: Branc
         d.dynamiclookdistribution,
     );
 
-    if scip.set.is_le(nexttreesize, currenttreesize - 1.0) {
-        return true;
-    }
-
-    false
+    scip.set.is_le(nexttreesize, currenttreesize - 1.0)
 }
 
 /// `needsStrongBranching`: determine if strong branching is needed on the
@@ -699,10 +695,13 @@ fn needs_strong_branching(
         }
     };
 
-    if d.userelerrorforreliability && d.usehyptestforreliability {
-        if !var_is_pscost_relerror_reliable(scip, branchcand, relerrorthreshold, clevel) && !significant(BranchDir::Downwards) && !significant(BranchDir::Upwards) {
-            return true;
-        }
+    if d.userelerrorforreliability
+        && d.usehyptestforreliability
+        && !var_is_pscost_relerror_reliable(scip, branchcand, relerrorthreshold, clevel)
+        && !significant(BranchDir::Downwards)
+        && !significant(BranchDir::Upwards)
+    {
+        return true;
     }
 
     // Check if relative error is tolerable.

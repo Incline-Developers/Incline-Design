@@ -352,31 +352,34 @@ fn aggregation(scip: &mut Scip, matrix: &mut Matrix, presol: PresolId, vars: &mu
     let inf = scip.set.infinity();
     let (lb1, ub1) = (scip.vars[vars[colidx1]].glbdom.lb, scip.vars[vars[colidx1]].glbdom.ub);
     let (lb2, ub2) = (scip.vars[vars[colidx2]].glbdom.lb, scip.vars[vars[colidx2]].glbdom.ub);
-    let newlb;
-    let newub;
-    if weight1 > 0.0 {
-        newlb = if scip.set.is_infinity(-lb1) || scip.set.is_infinity(-lb2) {
-            -inf
-        } else {
-            weight1 * lb1 + lb2
-        };
-        newub = if scip.set.is_infinity(ub1) || scip.set.is_infinity(ub2) {
-            inf
-        } else {
-            weight1 * ub1 + ub2
-        };
+
+    let (newlb, newub) = if weight1 > 0.0 {
+        (
+            if scip.set.is_infinity(-lb1) || scip.set.is_infinity(-lb2) {
+                -inf
+            } else {
+                weight1 * lb1 + lb2
+            },
+            if scip.set.is_infinity(ub1) || scip.set.is_infinity(ub2) {
+                inf
+            } else {
+                weight1 * ub1 + ub2
+            },
+        )
     } else {
-        newlb = if scip.set.is_infinity(ub1) || scip.set.is_infinity(-lb2) {
-            -inf
-        } else {
-            weight1 * ub1 + lb2
-        };
-        newub = if scip.set.is_infinity(lb1) || scip.set.is_infinity(ub2) {
-            inf
-        } else {
-            weight1 * lb1 + ub2
-        };
-    }
+        (
+            if scip.set.is_infinity(ub1) || scip.set.is_infinity(-lb2) {
+                -inf
+            } else {
+                weight1 * ub1 + lb2
+            },
+            if scip.set.is_infinity(lb1) || scip.set.is_infinity(ub2) {
+                inf
+            } else {
+                weight1 * lb1 + ub2
+            },
+        )
+    };
 
     let newvartype = if var_is_integral(scip, aggregatedvar) { VarType::Integer } else { VarType::Continuous };
     let newvarimpltype = if var_is_implied_integral(scip, aggregatedvar) {

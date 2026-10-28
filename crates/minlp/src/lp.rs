@@ -2637,23 +2637,23 @@ fn row_scale(scip: &mut Scip, row: RowId, scaleval: f64, integralcontvars: bool,
 
         // Calculate scaled coefficient.
         let mut newval = val * scaleval;
-        if integralcontvars || scip.cols[col].integral || scip.set.is_integral(newval) {
-            if let Some(intval) = is_integral_scalar(val, scaleval, minrounddelta, maxrounddelta) {
-                if !scip.set.is_eq(intval, newval) {
-                    if intval < newval {
-                        mindelta += (intval - newval) * ub;
-                        maxdelta += (intval - newval) * lb;
-                        mindeltainf = mindeltainf || scip.set.is_infinity(ub);
-                        maxdeltainf = maxdeltainf || scip.set.is_infinity(-lb);
-                    } else {
-                        mindelta += (intval - newval) * lb;
-                        maxdelta += (intval - newval) * ub;
-                        mindeltainf = mindeltainf || scip.set.is_infinity(-lb);
-                        maxdeltainf = maxdeltainf || scip.set.is_infinity(ub);
-                    }
+        if (integralcontvars || scip.cols[col].integral || scip.set.is_integral(newval))
+            && let Some(intval) = is_integral_scalar(val, scaleval, minrounddelta, maxrounddelta)
+        {
+            if !scip.set.is_eq(intval, newval) {
+                if intval < newval {
+                    mindelta += (intval - newval) * ub;
+                    maxdelta += (intval - newval) * lb;
+                    mindeltainf = mindeltainf || scip.set.is_infinity(ub);
+                    maxdeltainf = maxdeltainf || scip.set.is_infinity(-lb);
+                } else {
+                    mindelta += (intval - newval) * lb;
+                    maxdelta += (intval - newval) * ub;
+                    mindeltainf = mindeltainf || scip.set.is_infinity(-lb);
+                    maxdeltainf = maxdeltainf || scip.set.is_infinity(ub);
                 }
-                newval = intval;
             }
+            newval = intval;
         }
         if !scip.set.is_eq(val, newval) {
             // If column knows of the row, change the corresponding
@@ -7339,9 +7339,7 @@ pub fn lp_get_unbounded_sol(scip: &mut Scip, check: bool) -> ScipResult<(bool, b
     // Compute the scale of the ray, such that the resulting solution has
     // infinite objective value.
     let set = &scip.set;
-    let rayscale = if check && !primalfeasible {
-        0.0
-    } else if check && !rayfeasible {
+    let rayscale = if check && (!primalfeasible || !rayfeasible) {
         0.0
     } else if !set.is_negative(rayobjval) {
         // Due to numerical problems, the objective of the ray might be

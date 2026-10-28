@@ -777,8 +777,8 @@ impl PrimalHeuristics {
         let mut localdom = data.domain.local_copy();
         let mut integer_feasible = true;
         let numintcols = self.intcols.len();
-        for i in 0..numintcols {
-            let col = self.intcols[i];
+        for intcol in &self.intcols[..numintcols] {
+            let col = *intcol;
             let rounded = point[col].round();
             let feasible = fractionality(point[col]) <= data.feastol;
             integer_feasible = integer_feasible && feasible;
@@ -933,8 +933,8 @@ impl PrimalHeuristics {
                 let mut r_index = 0;
                 while !fractional_integer_found && r_index != current_infeasible_rows.len() {
                     let r = current_infeasible_rows[r_index].0;
-                    for j_ind in model.ar_start[r]..model.ar_start[r + 1] {
-                        fractional_integer_found = find_pair(&current_fractional_integers, model.ar_index[j_ind]).is_some();
+                    for col in &model.ar_index[model.ar_start[r]..model.ar_start[r + 1]] {
+                        fractional_integer_found = find_pair(&current_fractional_integers, *col).is_some();
                         if fractional_integer_found {
                             break;
                         }
@@ -1049,8 +1049,8 @@ impl PrimalHeuristics {
                 let mut j_min = 0;
                 let mut x_j_min = INF;
                 let mut sigma = 0;
-                for i in 0..current_fractional_integers.len() {
-                    let it = current_fractional_integers[i];
+                for (i, fractional) in current_fractional_integers.iter().enumerate() {
+                    let it = *fractional;
                     let col = it.0;
                     let mut is_better = |xi: f64, roundedval: f64, direction: i32| {
                         let c_min = model.col_cost[col] * (roundedval - it.1);

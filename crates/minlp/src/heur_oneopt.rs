@@ -380,8 +380,8 @@ fn heur_exec_oneopt(scip: &mut Scip, heur: HeurId, heurtiming: HeurTiming, _node
 
                     // Try to shift each variable -> Activities have to be
                     // updated.
-                    for i in 0..nshiftcands {
-                        let var = shiftcands[i];
+                    for shiftcand in &shiftcands[..nshiftcands] {
+                        let var = *shiftcand;
                         let solval = api::get_sol_val(scip, worksol, var);
                         let shiftval = calc_shift_val(scip, var, solval, &activities);
 
