@@ -149,28 +149,31 @@ pub(crate) fn dispatch_cancellable(input: &BlendInput, cancel: &AtomicBool) -> R
 
 /// [`dispatch_following`]'s schedule without its replay, for a caller that
 /// replays what it makes of it anyway - a tail stitched onto the rest of a
-/// horizon.
-pub(crate) fn dispatch_unreplayed(input: &BlendInput, plan: Option<&PlanTargets>, cancel: &AtomicBool) -> Result<Option<BlendSolution>, String> {
-    dispatch(input, plan, cancel)
+/// horizon. `original` supplies whole-block sizes for clearance tolerances
+/// when the tail starts on partly dug ground.
+pub(crate) fn dispatch_unreplayed(input: &BlendInput, original: &BlendInput, plan: Option<&PlanTargets>, cancel: &AtomicBool) -> Result<Option<BlendSolution>, String> {
+    dispatch(input, original, plan, cancel)
 }
 
 /// [`dispatch_cancellable`], steered towards a whole-horizon plan's targets
 /// when there is one; see [`super::plan`].
 pub(crate) fn dispatch_following(input: &BlendInput, plan: Option<&PlanTargets>, cancel: &AtomicBool) -> Result<Option<Dispatched>, String> {
-    let Some(solution) = dispatch(input, plan, cancel)? else { return Ok(None) };
+    let Some(solution) = dispatch(input, input, plan, cancel)? else { return Ok(None) };
     let Some(replay) = replay_cancellable(input, &solution, cancel) else { return Ok(None) };
     Ok(Some(Dispatched { solution, replay }))
 }
 
 /// The dispatch schedule, loaders moving to their next bar inside an
 /// interval as the captured segments allow.
-fn dispatch(input: &BlendInput, plan: Option<&PlanTargets>, cancel: &AtomicBool) -> Result<Option<BlendSolution>, String> {
+fn dispatch(input: &BlendInput, original: &BlendInput, plan: Option<&PlanTargets>, cancel: &AtomicBool) -> Result<Option<BlendSolution>, String> {
     let mut state = State::new(input, cancel);
     state.plan = plan;
+    let clearances = Clearances::new(input, original);
     for interval in &input.intervals {
         if state.cancelled() {
             return Ok(None);
         }
+        clearances.check(&state, *interval)?;
         match state.work(*interval) {
             // An interval cut short reports why it stopped as a failure.
             Err(_) if state.cancelled() => return Ok(None),
@@ -181,6 +184,105 @@ fn dispatch(input: &BlendInput, plan: Option<&PlanTargets>, cancel: &AtomicBool)
         return Ok(None);
     }
     Ok(Some(state.finish()))
+}
+
+/// A lower bound on the fleet hours still needed before each held clearance.
+/// Checking future deadlines can abandon an impossible tail before the deadline
+/// itself, leaving the search time for another window.
+struct Clearances {
+    hours: Vec<f64>,
+    due: Vec<(usize, Vec<(GroundId, f64, f64, f64)>)>,
+}
+
+impl Clearances {
+    fn new(input: &BlendInput, original: &BlendInput) -> Self {
+        let mut result = Self {
+            hours: vec![0.0],
+            due: Vec::new(),
+        };
+        let Some(chain) = &input.drill_blast else { return result };
+        let Some(timeline) = &chain.fixed else { return result };
+        let deadlines = chain.clearance_deadlines(timeline);
+        if deadlines.is_empty() {
+            return result;
+        }
+        for interval in &input.intervals {
+            let hours: f64 = input.trucks.iter().filter_map(|truck| truck.hours.get(interval.index)).map(|hours| hours.max(0.0)).sum();
+            result.hours.push(result.hours.last().copied().unwrap() + hours);
+        }
+        let mut cheapest: BTreeMap<(GroundId, MaterialId), f64> = BTreeMap::new();
+        for candidate in input.movements.iter().filter(|candidate| candidate.activity == Activity::Dig) {
+            let SourceId::Ground(ground) = candidate.source else { continue };
+            // An unconfigured truck class has no fleet row in the dispatch.
+            let constrained = input.trucks.iter().any(|truck| truck.id == candidate.truck && truck.hours.len() >= input.intervals.len());
+            let hours = if constrained { candidate.truck_hours_per_tonne.max(0.0) } else { 0.0 };
+            cheapest.entry((ground, candidate.material)).and_modify(|least| *least = least.min(hours)).or_insert(hours);
+        }
+        let blocks: Vec<_> = input
+            .ground
+            .iter()
+            .filter_map(|source| {
+                let deadline = *deadlines.get(&source.id)?;
+                let end = input.intervals.partition_point(|interval| interval.end_h <= deadline + 1e-9);
+                let haul: f64 = source
+                    .material
+                    .iter()
+                    .map(|share| share.fraction.max(0.0) * cheapest.get(&(source.id, share.material)).copied().unwrap_or(0.0))
+                    .sum();
+                let initial = original
+                    .ground
+                    .iter()
+                    .find(|ground| ground.id == source.id)
+                    .map_or(source.tonnes_t, |ground| ground.tonnes_t);
+                // Allow the whole-horizon replay's indicator leak and extra room
+                // for arithmetic in carried balances and extraction snapping.
+                let tolerance = (initial * 1e-6).max(1e-5) + initial.abs().max(1.0) * 1e-8;
+                Some((end, (source.id, haul, tolerance, source.tonnes_t)))
+            })
+            .collect();
+        let ends: BTreeSet<usize> = blocks.iter().map(|(end, _)| *end).collect();
+        result.due = ends
+            .into_iter()
+            .map(|end| (end, blocks.iter().filter(|(at, _)| *at == end).map(|(_, block)| *block).collect()))
+            .collect();
+        result
+    }
+
+    fn check(&self, state: &State<'_>, interval: Interval) -> Result<(), String> {
+        let mut needed = 0.0;
+        for (end, blocks) in &self.due {
+            needed += blocks
+                .iter()
+                .map(|(ground, haul, tolerance, _)| (state.ground.get(ground).copied().unwrap_or(0.0) - tolerance).max(0.0) * haul)
+                .sum::<f64>();
+            if *end < interval.index {
+                continue;
+            }
+            let available = self.hours[*end] - self.hours[interval.index];
+            if needed <= available + 1e-6 * available.max(1.0) {
+                continue;
+            }
+            // Confirm against the published movements before discarding a
+            // proposal: the dispatch's extraction state is only a quick filter.
+            let blocks: Vec<_> = self.due.iter().take_while(|(at, _)| at <= end).flat_map(|(_, blocks)| blocks).collect();
+            let mut left: BTreeMap<GroundId, f64> = blocks.iter().map(|(ground, _, _, opening)| (*ground, *opening)).collect();
+            for (&(candidate, _, _), tonnes) in &state.rows {
+                let candidate = &state.input.movements[candidate];
+                if candidate.activity == Activity::Dig
+                    && let SourceId::Ground(ground) = candidate.source
+                    && let Some(left) = left.get_mut(&ground)
+                {
+                    *left -= tonnes;
+                }
+            }
+            let needed: f64 = blocks.iter().map(|(ground, haul, tolerance, _)| (left[ground] - tolerance).max(0.0) * haul).sum();
+            if needed > available + 1e-6 * available.max(1.0) {
+                log::debug!("stop tail: clearance needs {needed:.3} truck hours, only {available:.3} remain before interval {end}");
+                return Err("blast clearance exceeds remaining fleet hours".into());
+            }
+        }
+        Ok(())
+    }
 }
 
 /// The dispatcher's physical state, walked forward an interval at a time.

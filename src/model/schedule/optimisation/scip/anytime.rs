@@ -305,15 +305,15 @@ fn redispatch(input: &BlendInput, best: &Best, first: usize, targets: &PlanTarge
         // Dispatched and replayed in one: counted as dispatch.
         let found = greedy::dispatch_following(input, Some(targets), cancel);
         Timing::add(&timing.dispatch_ns, dispatching);
-        let found = found.ok().flatten().ok_or(None)?;
+        let found = found.map_err(Some)?.ok_or(None)?;
         return accepted(found.solution, found.replay);
     }
     let count = input.intervals.len();
     let tail = carried(input, best, first).window_input(input, whole(first, count));
     // Stitching replays the whole horizon, the tail with it.
-    let found = greedy::dispatch_unreplayed(&tail, Some(&targets.rebased(&tail)), cancel);
+    let found = greedy::dispatch_unreplayed(&tail, input, Some(&targets.rebased(&tail)), cancel);
     Timing::add(&timing.dispatch_ns, dispatching);
-    let found = found.ok().flatten().ok_or(None)?;
+    let found = found.map_err(Some)?.ok_or(None)?;
     stitch_on(input, best, first, &[(whole(first, count), &found)], None, timing, cancel)
 }
 
@@ -375,7 +375,7 @@ fn redispatch_live(
         chain.fixed = None;
         chain.resume = Some(state);
     }
-    let found = greedy::dispatch_unreplayed(&tail, Some(&targets.rebased(&tail)), cancel);
+    let found = greedy::dispatch_unreplayed(&tail, input, Some(&targets.rebased(&tail)), cancel);
     Timing::add(&timing.dispatch_ns, dispatching);
     let found = found.ok().flatten().ok_or(None)?;
     let timeline = found.drill_blast.clone();
@@ -525,7 +525,9 @@ fn polish(
     let kept_after = stitch(input, best, first, &[(window, &polished), (whole(end, count), &slice(best, end, count))], cancel);
     carry.advance(input, window, &polished, &checked);
     let tail = carry.window_input(input, whole(end, count));
-    let dispatched_after = greedy::dispatch_unreplayed(&tail, Some(&targets.rebased(&tail)), cancel)?
+    let dispatched_after = greedy::dispatch_unreplayed(&tail, input, Some(&targets.rebased(&tail)), cancel)
+        .ok()
+        .flatten()
         .and_then(|found| stitch(input, best, first, &[(window, &polished), (whole(end, count), &found)], cancel));
     Ok([kept_after, dispatched_after].into_iter().flatten().max_by(|a, b| a.value().total_cmp(&b.value())))
 }
