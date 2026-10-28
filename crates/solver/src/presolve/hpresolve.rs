@@ -61,6 +61,8 @@ pub(crate) enum PresolveStatus {
     ReducedToEmpty,
     Infeasible,
     UnboundedOrInfeasible,
+    /// Stopped at the time limit (`kTimeout`).
+    Timeout,
 }
 
 /// The options presolve reads.
@@ -140,6 +142,8 @@ macro_rules! trees {
 pub(crate) struct Presolve {
     pub model: Lp,
     settings: Settings,
+    /// When presolve began, for its time limit.
+    started: web_time::Instant,
     primal_feastol: f64,
 
     a_value: Vec<f64>,
@@ -217,6 +221,7 @@ impl Presolve {
         let mut presolve = Presolve {
             model,
             settings,
+            started: web_time::Instant::now(),
             primal_feastol: settings.primal_feasibility_tolerance,
             a_value: Vec::new(),
             a_row: Vec::new(),
@@ -1355,6 +1360,10 @@ impl Presolve {
     // ---- Limits ----------------------------------------------------------
 
     fn check_limits(&self, postsolve: &PostsolveStack) -> Outcome {
+        // HiGHS reads its clock every 1024 reductions.
+        if postsolve.num_reductions() & 1023 == 0 && self.timed_out() {
+            return Outcome::Stopped;
+        }
         if postsolve.num_reductions() >= self.reduction_limit {
             Outcome::Stopped
         } else {
@@ -2936,11 +2945,16 @@ impl Presolve {
         Outcome::Ok
     }
 
+    fn timed_out(&self) -> bool {
+        self.settings.time_limit < f64::INFINITY && self.started.elapsed().as_secs_f64() >= self.settings.time_limit
+    }
+
     /// HiGHS's `HPresolve::run`: presolve, then compact the reduced LP
     /// into `model`.
     pub fn run(&mut self, postsolve: &mut PostsolveStack) -> PresolveStatus {
         self.shrink_problem_enabled = true;
         match self.presolve(postsolve) {
+            Outcome::Stopped if self.timed_out() => return PresolveStatus::Timeout,
             Outcome::Ok | Outcome::Stopped => {}
             Outcome::PrimalInfeasible => return PresolveStatus::Infeasible,
             Outcome::DualInfeasible => return PresolveStatus::UnboundedOrInfeasible,

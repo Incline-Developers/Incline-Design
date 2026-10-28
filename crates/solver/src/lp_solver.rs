@@ -1727,6 +1727,13 @@ impl LpSolver {
 
     /// HiGHS's `solveLp` on the incumbent LP.
     fn solve_lp(&mut self, options: &Options) {
+        // HiGHS reads one clock for the whole run, presolve and every solve
+        // after it included: each solve here has only what is left of it.
+        let left = Options {
+            time_limit: (options.time_limit - self.started.map_or(0.0, |started| started.elapsed().as_secs_f64())).max(0.0),
+            ..options.clone()
+        };
+        let options = &left;
         if self.lp.num_row == 0 || self.lp.a.value.is_empty() {
             self.solve_unconstrained();
             return;

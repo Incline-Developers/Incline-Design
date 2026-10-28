@@ -59,6 +59,7 @@ pub(crate) enum Presolved {
 /// Presolve `lp` as HiGHS does, solve what remains and postsolve its
 /// basis.
 pub(crate) fn solve(lp: &SimplexLp, options: &Options, interrupt: Option<Interrupt>) -> Presolved {
+    let started = web_time::Instant::now();
     let num_col = lp.num_col;
     let num_row = lp.num_row;
     let sense = lp.sense;
@@ -97,6 +98,7 @@ pub(crate) fn solve(lp: &SimplexLp, options: &Options, interrupt: Option<Interru
     let (mut solution, mut basis) = match status {
         PresolveStatus::NotReduced => return Presolved::NotReduced,
         PresolveStatus::Infeasible => return Presolved::Done(empty_result(lp, ModelStatus::Infeasible)),
+        PresolveStatus::Timeout => return Presolved::Done(empty_result(lp, ModelStatus::TimeLimit)),
         PresolveStatus::UnboundedOrInfeasible => return Presolved::UnboundedOrInfeasible,
         PresolveStatus::ReducedToEmpty => (
             postsolve::Solution {
@@ -125,9 +127,11 @@ pub(crate) fn solve(lp: &SimplexLp, options: &Options, interrupt: Option<Interru
                 reduced.index,
                 reduced.value,
             );
-            // HiGHS lifts any objective bound for the reduced solve.
+            // HiGHS lifts any objective bound for the reduced solve, which
+            // has what presolve left of the time.
             let reduced_options = Options {
                 objective_bound: f64::INFINITY,
+                time_limit: (options.time_limit - started.elapsed().as_secs_f64()).max(0.0),
                 ..options.clone()
             };
             let result = match options.solver {
