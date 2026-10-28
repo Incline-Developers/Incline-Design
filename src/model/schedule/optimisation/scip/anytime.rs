@@ -540,6 +540,15 @@ const DEFAULT_CLOSED_GAP: f64 = 1e-4;
 /// the search.
 const LONG_TERM_DAYS: u32 = 7;
 
+/// A search that gains less than `SEARCH_STALL_GAIN` of its value over
+/// `SEARCH_STALL_S`, once `SEARCH_MIN_S` in, ends and leaves the rest of the
+/// budget to the reroute: its late gains are mostly routing the reroute
+/// finds anyway (centralia, from 23 s to 98 s: $774k before rerouting,
+/// $233k after), while trucks60's digging gains keep it running.
+const SEARCH_MIN_S: f64 = 30.0;
+const SEARCH_STALL_S: f64 = 20.0;
+const SEARCH_STALL_GAIN: f64 = 5e-4;
+
 /// The gap a long-term plan stops at. Its answer is only targets, and
 /// proving it took 40% of its solve: on Centralia the optimum was found at
 /// 12 s and proved at 20 s.
@@ -870,6 +879,9 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
             }
         }
     }
+    // The best value after each window, to judge whether the search still
+    // pays.
+    let mut gains: Vec<(f64, f64)> = Vec::new();
     let mut record = |value: f64, bound: Option<f64>, note: String| {
         report(&Progress {
             elapsed_s: started.elapsed().as_secs_f64(),
@@ -1015,6 +1027,22 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
         for start in starts {
             let left = search_budget().saturating_sub(started.elapsed());
             if left.is_zero() || cancel.load(Ordering::Relaxed) {
+                break 'passes;
+            }
+            // Late in a search its gains are mostly ones the reroute finds
+            // anyway, while the reroute's spare passes still gain at the
+            // deadline: a search that has stopped paying hands its time over.
+            let now = started.elapsed().as_secs_f64();
+            if gains.last().is_none_or(|&(_, last)| value > last) {
+                gains.push((now, value));
+            }
+            let since = gains
+                .iter()
+                .rev()
+                .find(|&&(at, _)| at <= now - SEARCH_STALL_S)
+                .map_or(f64::NEG_INFINITY, |&(_, earlier)| earlier);
+            if now >= SEARCH_MIN_S && value - since < SEARCH_STALL_GAIN * value.abs() {
+                record(value, bound, format!("search handed to the reroute at {now:.1}s"));
                 break 'passes;
             }
             // A long-term plan that has arrived is tried at the top of the
