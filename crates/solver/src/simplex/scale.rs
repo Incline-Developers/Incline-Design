@@ -84,6 +84,7 @@ fn equilibration_scale_matrix(
 
     let mut row_min_value = vec![finite_infinity; num_row];
     let mut row_max_value = vec![1.0 / finite_infinity; num_row];
+    let abs_value: Vec<f64> = lp.a.value.iter().map(|value| value.abs()).collect();
     for _ in 0..6 {
         for col in 0..num_col {
             let mut col_min_value = finite_infinity;
@@ -93,16 +94,18 @@ fn equilibration_scale_matrix(
                 col_min_value = col_min_value.min(abs_col_cost);
                 col_max_value = col_max_value.max(abs_col_cost);
             }
-            for k in start[col]..start[col + 1] {
-                let value = lp.a.value[k].abs() * scale.row[index[k]];
+            let rows = &index[start[col]..start[col + 1]];
+            let values = &abs_value[start[col]..start[col + 1]];
+            for (&row, &value) in rows.iter().zip(values) {
+                let value = value * scale.row[row];
                 col_min_value = col_min_value.min(value);
                 col_max_value = col_max_value.max(value);
             }
             let col_equilibration = 1.0 / (col_min_value * col_max_value).sqrt();
-            scale.col[col] = col_equilibration.max(min_allow_scale).min(max_allow_scale);
-            for k in start[col]..start[col + 1] {
-                let row = index[k];
-                let value = lp.a.value[k].abs() * scale.col[col];
+            let col_scale = col_equilibration.max(min_allow_scale).min(max_allow_scale);
+            scale.col[col] = col_scale;
+            for (&row, &value) in rows.iter().zip(values) {
+                let value = value * col_scale;
                 row_min_value[row] = row_min_value[row].min(value);
                 row_max_value[row] = row_max_value[row].max(value);
             }
@@ -114,25 +117,18 @@ fn equilibration_scale_matrix(
         row_min_value.fill(finite_infinity);
         row_max_value.fill(1.0 / finite_infinity);
     }
-    let log2 = 2f64.ln();
     for value in scale.col.iter_mut().chain(scale.row.iter_mut()) {
-        *value = 2f64.powf((value.ln() / log2 + 0.5).floor());
+        *value = nearest_power_of_two(*value);
     }
 
     let mut matrix_min_value = finite_infinity;
     let mut matrix_max_value: f64 = 0.0;
-    let mut min_original_col_equilibration = finite_infinity;
-    let mut sum_original_log_col_equilibration = 0.0;
-    let mut max_original_col_equilibration: f64 = 0.0;
-    let mut min_original_row_equilibration = finite_infinity;
-    let mut sum_original_log_row_equilibration = 0.0;
-    let mut max_original_row_equilibration: f64 = 0.0;
-    let mut min_col_equilibration = finite_infinity;
-    let mut sum_log_col_equilibration = 0.0;
-    let mut max_col_equilibration: f64 = 0.0;
-    let mut min_row_equilibration = finite_infinity;
-    let mut sum_log_row_equilibration = 0.0;
-    let mut max_row_equilibration: f64 = 0.0;
+    // Each column's and row's equilibration before and after, for the
+    // geometric means below.
+    let mut original_col_equilibrations = Vec::with_capacity(num_col);
+    let mut col_equilibrations = Vec::with_capacity(num_col);
+    let mut original_row_equilibrations = Vec::with_capacity(num_row);
+    let mut row_equilibrations = Vec::with_capacity(num_row);
     let mut original_row_min_value = vec![finite_infinity; num_row];
     let mut original_row_max_value = vec![1.0 / finite_infinity; num_row];
     row_min_value.fill(finite_infinity);
@@ -158,45 +154,44 @@ fn equilibration_scale_matrix(
         }
         matrix_min_value = matrix_min_value.min(col_min_value);
         matrix_max_value = matrix_max_value.max(col_max_value);
-        let original_col_equilibration = 1.0 / (original_col_min_value * original_col_max_value).sqrt();
-        min_original_col_equilibration = min_original_col_equilibration.min(original_col_equilibration);
-        sum_original_log_col_equilibration += original_col_equilibration.ln();
-        max_original_col_equilibration = max_original_col_equilibration.max(original_col_equilibration);
-        let col_equilibration = 1.0 / (col_min_value * col_max_value).sqrt();
-        min_col_equilibration = min_col_equilibration.min(col_equilibration);
-        sum_log_col_equilibration += col_equilibration.ln();
-        max_col_equilibration = max_col_equilibration.max(col_equilibration);
+        original_col_equilibrations.push(1.0 / (original_col_min_value * original_col_max_value).sqrt());
+        col_equilibrations.push(1.0 / (col_min_value * col_max_value).sqrt());
     }
     for row in 0..num_row {
-        let original_row_equilibration = 1.0 / (original_row_min_value[row] * original_row_max_value[row]).sqrt();
-        min_original_row_equilibration = min_original_row_equilibration.min(original_row_equilibration);
-        sum_original_log_row_equilibration += original_row_equilibration.ln();
-        max_original_row_equilibration = max_original_row_equilibration.max(original_row_equilibration);
-        let row_equilibration = 1.0 / (row_min_value[row] * row_max_value[row]).sqrt();
-        min_row_equilibration = min_row_equilibration.min(row_equilibration);
-        sum_log_row_equilibration += row_equilibration.ln();
-        max_row_equilibration = max_row_equilibration.max(row_equilibration);
+        original_row_equilibrations.push(1.0 / (original_row_min_value[row] * original_row_max_value[row]).sqrt());
+        row_equilibrations.push(1.0 / (row_min_value[row] * row_max_value[row]).sqrt());
     }
-    let geomean = |sum: f64, count: usize| {
-        let mean = (sum / count as f64).exp();
-        mean.max(1.0 / mean)
-    };
-    let geomean_original_col = geomean(sum_original_log_col_equilibration, num_col);
-    let geomean_original_row = geomean(sum_original_log_row_equilibration, num_row);
-    let geomean_col = geomean(sum_log_col_equilibration, num_col);
-    let geomean_row = geomean(sum_log_row_equilibration, num_row);
-    let mean_equilibration_improvement = ((geomean_original_col * geomean_original_row) / (geomean_col * geomean_row)).sqrt();
-    let original_col_ratio = max_original_col_equilibration / min_original_col_equilibration;
-    let original_row_ratio = max_original_row_equilibration / min_original_row_equilibration;
-    let col_ratio = max_col_equilibration / min_col_equilibration;
-    let row_ratio = max_row_equilibration / min_row_equilibration;
-    let extreme_equilibration_improvement = (original_col_ratio + original_row_ratio) / (col_ratio + row_ratio);
+    let original_col = Spread::of(&original_col_equilibrations);
+    let original_row = Spread::of(&original_row_equilibrations);
+    let col = Spread::of(&col_equilibrations);
+    let row = Spread::of(&row_equilibrations);
+    let extreme_equilibration_improvement = (original_col.ratio() + original_row.ratio()) / (col.ratio() + row.ratio());
     let matrix_value_ratio = matrix_max_value / matrix_min_value;
     let original_matrix_value_ratio = original_matrix_max_value / original_matrix_min_value;
     let matrix_value_ratio_improvement = original_matrix_value_ratio / matrix_value_ratio;
-    let improvement_factor = extreme_equilibration_improvement * mean_equilibration_improvement * matrix_value_ratio_improvement;
+    // The geometric means take a logarithm per column and row. Each lies
+    // within its values' range, which often settles the question alone.
+    let known = extreme_equilibration_improvement * matrix_value_ratio_improvement;
+    let least = known * ((original_col.least_geomean() * original_row.least_geomean()) / (col.most_geomean() * row.most_geomean())).sqrt();
+    let most = known * ((original_col.most_geomean() * original_row.most_geomean()) / (col.least_geomean() * row.least_geomean())).sqrt();
+    let improves = if least >= 1.0 + 1e-9 {
+        true
+    } else if most < 1.0 - 1e-9 {
+        false
+    } else {
+        let geomean = |values: &[f64]| {
+            let sum: f64 = values.iter().fold(0.0, |sum, value| sum + value.ln());
+            let mean = (sum / values.len() as f64).exp();
+            mean.max(1.0 / mean)
+        };
+        let mean_equilibration_improvement = ((geomean(&original_col_equilibrations) * geomean(&original_row_equilibrations))
+            / (geomean(&col_equilibrations) * geomean(&row_equilibrations)))
+        .sqrt();
+        let improvement_factor = extreme_equilibration_improvement * mean_equilibration_improvement * matrix_value_ratio_improvement;
+        !(improvement_factor < 1.0)
+    };
     let possibly_abandon_scaling = use_scale_strategy != SCALE_STRATEGY_FORCED_EQUILIBRATION;
-    if possibly_abandon_scaling && improvement_factor < 1.0 {
+    if possibly_abandon_scaling && !improves {
         // Not worth it: undo.
         for col in 0..num_col {
             for k in start[col]..start[col + 1] {
@@ -277,4 +272,57 @@ fn max_value_scale_matrix(options: &Options, lp: &mut SimplexLp, scale: &mut Sca
         return false;
     }
     true
+}
+
+/// The range of a set of equilibration factors.
+struct Spread {
+    least: f64,
+    most: f64,
+}
+
+impl Spread {
+    fn of(values: &[f64]) -> Self {
+        let mut spread = Spread { least: 1e200, most: 0.0 };
+        for &value in values {
+            spread.least = spread.least.min(value);
+            spread.most = spread.most.max(value);
+        }
+        spread
+    }
+
+    fn ratio(&self) -> f64 {
+        self.most / self.least
+    }
+
+    /// The least `max(mean, 1 / mean)` can be for a geometric mean within
+    /// the range.
+    fn least_geomean(&self) -> f64 {
+        if self.least >= 1.0 {
+            self.least
+        } else if self.most <= 1.0 {
+            1.0 / self.most
+        } else {
+            1.0
+        }
+    }
+
+    /// The most it can be.
+    fn most_geomean(&self) -> f64 {
+        self.most.max(1.0 / self.least)
+    }
+}
+
+/// HiGHS's `pow(2.0, floor(log(value) / log(2.0) + 0.5))`: `value` rounded
+/// to a power of two, the nearest by its logarithm. Read from its exponent
+/// and mantissa, which settle it but within a hair of the halfway mantissa,
+/// the square root of 2, where the logarithm's rounding decides.
+fn nearest_power_of_two(value: f64) -> f64 {
+    let bits = value.to_bits();
+    let exponent = ((bits >> 52) & 0x7ff) as i64;
+    let mantissa = f64::from_bits((bits & ((1 << 52) - 1)) | (1023 << 52));
+    if value <= 0.0 || exponent == 0 || exponent >= 0x7fe || (mantissa - std::f64::consts::SQRT_2).abs() < 1e-9 {
+        return 2f64.powf((value.ln() / 2f64.ln() + 0.5).floor());
+    }
+    let power = exponent + i64::from(mantissa > std::f64::consts::SQRT_2);
+    f64::from_bits((power as u64) << 52)
 }

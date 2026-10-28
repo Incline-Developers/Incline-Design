@@ -487,6 +487,12 @@ impl Random {
         random
     }
 
+    /// Where the sequence has got to: two generators in the same state
+    /// draw the same numbers.
+    pub fn state(&self) -> u64 {
+        self.state
+    }
+
     pub fn initialise(&mut self, seed: u32) {
         self.state = seed as u64;
         loop {

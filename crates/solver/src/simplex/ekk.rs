@@ -50,6 +50,26 @@ pub(crate) const EXCESSIVE_PRIMAL_VALUE: f64 = 1e25;
 pub(crate) const NO_ROW_SOUGHT: isize = -2;
 pub(crate) const NO_ROW_CHOSEN: isize = -1;
 
+/// The random vectors drawn for an LP with so many columns and variables,
+/// from a generator in a given state, and the generator after. They are
+/// the same each time, and the hourly dispatch solves thousands of small
+/// LPs of a few sizes, each with a new `Ekk` seeded alike, so the last few
+/// are kept per thread rather than drawn again.
+struct RandomVectors {
+    col_permutation: Option<Vec<usize>>,
+    tot_permutation: Vec<usize>,
+    tot_random_value: Vec<f64>,
+    after: Random,
+}
+
+impl RandomVectors {
+    const HELD: usize = 16;
+}
+
+thread_local! {
+    static RANDOM_VECTORS: std::cell::RefCell<Vec<((u64, usize, usize), std::rc::Rc<RandomVectors>)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 /// The LP the simplex solver works on: costs, bounds and the matrix,
 /// minimised when `sense` is 1 and maximised when it is -1.
 #[derive(Clone, Debug, Default)]
@@ -349,15 +369,41 @@ impl Ekk {
         if num_tot == 0 {
             return;
         }
-        if num_col > 0 {
-            let mut permutation: Vec<usize> = (0..num_col).collect();
-            self.random.shuffle(&mut permutation);
-            self.info.num_col_permutation = permutation;
+        let key = (self.random.state(), num_col, num_tot);
+        let drawn = RANDOM_VECTORS.with_borrow_mut(|held| {
+            let at = held.iter().position(|(drawn_for, _)| *drawn_for == key)?;
+            let entry = held.remove(at);
+            let drawn = entry.1.clone();
+            held.insert(0, entry);
+            Some(drawn)
+        });
+        let drawn = drawn.unwrap_or_else(|| {
+            let col_permutation = (num_col > 0).then(|| {
+                let mut permutation: Vec<usize> = (0..num_col).collect();
+                self.random.shuffle(&mut permutation);
+                permutation
+            });
+            let mut tot_permutation: Vec<usize> = (0..num_tot).collect();
+            self.random.shuffle(&mut tot_permutation);
+            let tot_random_value = (0..num_tot).map(|_| self.random.fraction()).collect();
+            let drawn = std::rc::Rc::new(RandomVectors {
+                col_permutation,
+                tot_permutation,
+                tot_random_value,
+                after: self.random.clone(),
+            });
+            RANDOM_VECTORS.with_borrow_mut(|held| {
+                held.insert(0, (key, drawn.clone()));
+                held.truncate(RandomVectors::HELD);
+            });
+            drawn
+        });
+        if let Some(permutation) = &drawn.col_permutation {
+            self.info.num_col_permutation.clone_from(permutation);
         }
-        let mut permutation: Vec<usize> = (0..num_tot).collect();
-        self.random.shuffle(&mut permutation);
-        self.info.num_tot_permutation = permutation;
-        self.info.num_tot_random_value = (0..num_tot).map(|_| self.random.fraction()).collect();
+        self.info.num_tot_permutation.clone_from(&drawn.tot_permutation);
+        self.info.num_tot_random_value.clone_from(&drawn.tot_random_value);
+        self.random = drawn.after.clone();
     }
 
     /// A logical basis.
