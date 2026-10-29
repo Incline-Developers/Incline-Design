@@ -1,8 +1,7 @@
 use std::io::{BufReader, Cursor, Seek, Write};
 
-use crate::{Array, array_type, error::Error};
-
 use super::{Limits, ReadAt, Reader, Writer};
+use crate::{Array, array_type, error::Error};
 
 impl From<Limits> for image::Limits {
     fn from(value: Limits) -> Self {
@@ -28,10 +27,7 @@ impl<W: Write + Seek> Writer<W> {
     /// Write an image in PNG encoding.
     ///
     /// This supports grayscale, grayscale + alpha, RGB, and RGBA, in 8 or 16 bits per channel.
-    pub fn image_png(
-        &mut self,
-        image: &image::DynamicImage,
-    ) -> Result<Array<array_type::Image>, Error> {
+    pub fn image_png(&mut self, image: &image::DynamicImage) -> Result<Array<array_type::Image>, Error> {
         let mut bytes = Vec::new();
         image.write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)?;
         self.image_bytes(&bytes)
@@ -47,16 +43,9 @@ impl<W: Write + Seek> Writer<W> {
     /// If you have an existing image in JPEG encoding you shouldn't be using this method,
     /// instead add the raw bytes of the file with `writer.image_bytes(&bytes)` to avoid recompressing
     /// the image and losing more detail.
-    pub fn image_jpeg(
-        &mut self,
-        image: &image::RgbImage,
-        quality: u8,
-    ) -> Result<Array<array_type::Image>, Error> {
+    pub fn image_jpeg(&mut self, image: &image::RgbImage, quality: u8) -> Result<Array<array_type::Image>, Error> {
         let mut bytes = Vec::new();
-        image.write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(
-            &mut Cursor::new(&mut bytes),
-            quality.clamp(1, 100),
-        ))?;
+        image.write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(&mut Cursor::new(&mut bytes), quality.clamp(1, 100)))?;
         self.image_bytes(&bytes)
     }
 }

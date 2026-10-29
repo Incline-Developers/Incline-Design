@@ -28,6 +28,11 @@ impl<'a> App<'a> {
             self.cancel_move_delta();
         }
         self.editor.selected_handles.clear();
+        if self.editor.is_planning_cut_step() {
+            self.editor.selected_handles.extend(self.active_project_object_ids().into_iter().map(SceneEntityId::Object));
+            self.invalidate_overlay();
+            return;
+        }
         let handles = self.workspace.active_project().map_or_else(Vec::new, |project| {
             project
                 .project
@@ -176,18 +181,27 @@ impl<'a> App<'a> {
         let Some(before) = self.active_document().get_object(object_id).cloned() else {
             return false;
         };
-        let Some(after) = without_polyline_vertex(&before, vertex_index) else {
-            return false;
-        };
+        // A planning cut is a working line rather than authored geometry, so
+        // taking it below the minimum opens or retires it instead of refusing.
+        let after =
+            without_polyline_vertex(&before, vertex_index).or_else(|| self.editor.is_planning_cut_step().then(|| collapsed_polyline_vertex(&before, vertex_index)).flatten());
+        let Some(after) = after else { return false };
 
         if !self.workspace.has_active_project() {
             return false;
         }
-        self.execute_edit(Command::Replace { before, after });
+        let retired = matches!(&after, Object::Polyline { verts, .. } if verts.len() < 2);
+        if retired {
+            self.execute_edit(Command::delete_object(before));
+        } else {
+            self.execute_edit(Command::Replace { before, after });
+        }
         self.editor.tool_hover_vertex_px = None;
         self.editor.tool_hover_vertex_world = None;
         self.editor.selected_handles.clear();
-        self.editor.selected_handles.insert(SceneEntityId::Object(object_id));
+        if !retired {
+            self.editor.selected_handles.insert(SceneEntityId::Object(object_id));
+        }
         crate::logging::report_completed_action(
             CommandReportSpec::new(crate::i18n::tr!("cmd-selection-delete-vertex"), format!("{:?}", object_id)),
             crate::i18n::tr!("cmd-selection-deleted-vertex", vertex = vertex_index.to_string(), object_id = format!("{:?}", object_id)),
@@ -198,7 +212,12 @@ impl<'a> App<'a> {
     }
 
     fn delete_polyline_vertex_hit(&mut self) -> Option<DeleteVertexHit> {
-        self.polyline_vertex_hit(pick::VertexPickFilter::DeletablePolyline)
+        let filter = if self.editor.is_planning_cut_step() {
+            pick::VertexPickFilter::PlanningPolyline
+        } else {
+            pick::VertexPickFilter::DeletablePolyline
+        };
+        self.polyline_vertex_hit(filter)
     }
 
     /// The polyline vertex nearest the cursor that `filter` allows; Edit
@@ -242,6 +261,26 @@ impl<'a> App<'a> {
             return;
         }
         let handles: Vec<SceneEntityId> = self.editor.selected_handles.iter().copied().collect();
+        let before = self.active_document().haulage().clone();
+        let mut after = before.clone();
+        for handle in &handles {
+            match *handle {
+                SceneEntityId::HaulRoad(id) => after.delete_road(id),
+                SceneEntityId::HaulNode(id) if after.node(id).is_some_and(|n| n.role.is_some()) => {
+                    self.editor.haul_delete_node = Some(id);
+                }
+                SceneEntityId::HaulNode(id) => after.delete_node(id),
+                _ => {}
+            }
+        }
+        if before != after {
+            self.execute_edit(Command::SetHaulNetwork {
+                before: Box::new(before),
+                after: Box::new(after),
+            });
+            self.refresh_haulage_view();
+            self.invalidate_geometry();
+        }
         let batch: Vec<Command> = handles
             .iter()
             .filter_map(|&handle| {
@@ -378,6 +417,22 @@ impl<'a> App<'a> {
 
 fn is_point_object(object: &Object) -> bool {
     matches!(object, Object::Point { .. })
+}
+
+/// Remove a vertex even where that leaves the polyline under the minimum a
+/// stored shape needs: a closed ring opens, and a line left with a single
+/// vertex is retired by the caller.
+fn collapsed_polyline_vertex(object: &Object, vertex_index: usize) -> Option<Object> {
+    let mut result = object.clone();
+    let Object::Polyline { verts, closed, .. } = &mut result else {
+        return None;
+    };
+    if vertex_index >= verts.len() {
+        return None;
+    }
+    verts.remove(vertex_index);
+    *closed &= verts.len() >= 3;
+    Some(result)
 }
 
 fn without_polyline_vertex(object: &Object, vertex_index: usize) -> Option<Object> {

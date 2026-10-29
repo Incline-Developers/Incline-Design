@@ -22,12 +22,13 @@ const DEFAULT_TRIANGULATION_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 
 mod contours;
 mod creation;
-mod cuts;
+pub(crate) mod cuts;
 mod geometry;
 mod include;
 mod point_cloud_tin;
 pub(crate) mod reference_surface;
 pub(crate) mod session;
+pub(crate) mod solid_between;
 
 pub(crate) use contours::section_surface_lines;
 pub(crate) use cuts::seam_targets;

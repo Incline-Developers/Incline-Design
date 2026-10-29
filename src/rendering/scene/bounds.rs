@@ -18,15 +18,25 @@ pub(crate) fn scene_bounds(
     drill_holes: &[OpenDrillHoleDataset],
     point_clouds: &[OpenPointCloud],
     hidden: &std::collections::HashSet<SceneEntityId>,
+    haul_roads: bool,
 ) -> Option<(DVec3, DVec3)> {
     let mut min = DVec3::splat(f64::MAX);
     let mut max = DVec3::splat(f64::MIN);
     let mut any = false;
-    for_each_visible_object_aabb(document, triangulations, block_models, drill_holes, point_clouds, hidden, &mut |object_min, object_max| {
-        min = min.min(object_min);
-        max = max.max(object_max);
-        any = true;
-    });
+    for_each_visible_object_aabb(
+        document,
+        triangulations,
+        block_models,
+        drill_holes,
+        point_clouds,
+        hidden,
+        haul_roads,
+        &mut |object_min, object_max| {
+            min = min.min(object_min);
+            max = max.max(object_max);
+            any = true;
+        },
+    );
     any.then_some((min, max))
 }
 
@@ -41,17 +51,26 @@ pub(crate) fn visible_object_aabbs(
     drill_holes: &[OpenDrillHoleDataset],
     point_clouds: &[OpenPointCloud],
     hidden: &std::collections::HashSet<SceneEntityId>,
+    haul_roads: bool,
 ) -> Vec<(DVec3, DVec3)> {
     let mut aabbs = Vec::new();
-    for_each_visible_object_aabb(document, triangulations, block_models, drill_holes, point_clouds, hidden, &mut |object_min, object_max| {
-        aabbs.push((object_min, object_max))
-    });
+    for_each_visible_object_aabb(
+        document,
+        triangulations,
+        block_models,
+        drill_holes,
+        point_clouds,
+        hidden,
+        haul_roads,
+        &mut |object_min, object_max| aabbs.push((object_min, object_max)),
+    );
     aabbs
 }
 
 /// Shared visible-object iteration. Each object contributes one AABB; text,
 /// polylines and roads collapse their many points into a single min/max so
 /// callers see one box per object.
+#[allow(clippy::too_many_arguments)]
 fn for_each_visible_object_aabb(
     document: &Document,
     triangulations: &[OpenTriangulation],
@@ -59,8 +78,24 @@ fn for_each_visible_object_aabb(
     drill_holes: &[OpenDrillHoleDataset],
     point_clouds: &[OpenPointCloud],
     hidden: &std::collections::HashSet<SceneEntityId>,
+    haul_roads: bool,
     emit: &mut impl FnMut(DVec3, DVec3),
 ) {
+    // Roads only count where they are drawn: framing Production around a
+    // network it does not show would zoom out to nothing visible.
+    let roads = if haul_roads { document.haulage().roads.as_slice() } else { &[] };
+    for road in roads {
+        if hidden.contains(&SceneEntityId::HaulRoad(road.id)) {
+            continue;
+        }
+        let points = document.haulage().points(road);
+        if !points.is_empty() {
+            emit(
+                points.iter().copied().fold(DVec3::splat(f64::MAX), DVec3::min),
+                points.iter().copied().fold(DVec3::splat(f64::MIN), DVec3::max),
+            );
+        }
+    }
     let hidden_layers: std::collections::HashSet<_> = document.layers().iter().filter(|layer| !layer.loaded).map(|layer| layer.id).collect();
     for object in document.objects() {
         if hidden_layers.contains(&object.layer()) || hidden.contains(&SceneEntityId::Object(object.id())) {
@@ -149,12 +184,20 @@ fn for_each_visible_object_aabb(
 /// measured over every vertex, so the box stays conservative. Falls back to
 /// the axis-aligned box whenever that is no larger, so no chunk culls worse.
 ///
-/// `vertices` are chunk-local (relative to `chunk_origin`, the AABB centre),
-/// read through `position`, and `aabb_size` is the chunk's full AABB extent.
+/// `vertices` are local to `chunk_origin` (which may be shared by several chunks),
+/// read through `position`. `aabb_center` and `aabb_size` describe its world-space
+/// AABB independently of that vertex origin.
 /// `extra_normals` adds slab normals to try beside the covariance's weakest
 /// direction and vertical - a surface passes its mean face normal; a point
 /// cloud, having no normals, passes none.
-pub(crate) fn fit_chunk_box<P>(vertices: &[P], position: impl Fn(&P) -> DVec3, extra_normals: &[DVec3], chunk_origin: DVec3, aabb_size: DVec3) -> (DVec3, [Vec3; 3], Vec3) {
+pub(crate) fn fit_chunk_box<P>(
+    vertices: &[P],
+    position: impl Fn(&P) -> DVec3,
+    extra_normals: &[DVec3],
+    chunk_origin: DVec3,
+    aabb_center: DVec3,
+    aabb_size: DVec3,
+) -> (DVec3, [Vec3; 3], Vec3) {
     /// Vertices the orientation search scores against.
     const SEARCH_SAMPLES: usize = 1024;
     /// Coarse in-plane sweep over the quarter turn a box repeats in, then a
@@ -166,7 +209,9 @@ pub(crate) fn fit_chunk_box<P>(vertices: &[P], position: impl Fn(&P) -> DVec3, e
     // than that rounding so the box never clips the geometry it bounds. Also
     // keeps a flat chunk's zero thickness from making every volume zero.
     let padding = 1e-6 * aabb_size.max_element() + 1e-3;
-    let aabb = (chunk_origin, [Vec3::X, Vec3::Y, Vec3::Z], (aabb_size * 0.5 + padding).as_vec3());
+    // Planning slabs share a vertex origin to keep seams aligned. That origin
+    // can be far outside this chunk; the fallback box must still surround it.
+    let aabb = (aabb_center, [Vec3::X, Vec3::Y, Vec3::Z], (aabb_size * 0.5 + padding).as_vec3());
     if vertices.len() < 3 {
         return aabb;
     }

@@ -596,7 +596,7 @@ fn draw_strat_column(
                         ui.painter().hline(set_left..=rows.right(), line_y, egui::Stroke::new(2.0, menu::accent_fill(ui.visuals())));
                         if ui.input(|input| input.pointer.any_released()) {
                             let mut codes = column.to_vec();
-                            crate::ui::widgets::data_grid::move_to_slot(&mut codes, drag.from, slot);
+                            crate::ui::widgets::editable_grid::move_to_slot(&mut codes, drag.from, slot);
                             if codes != column {
                                 edited = Some(codes);
                             }

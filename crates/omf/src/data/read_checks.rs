@@ -1,16 +1,15 @@
 use std::collections::HashSet;
 
+use super::{
+    FloatType, NumberType,
+    write_checks::{subblock_is_octree_compat, valid_subblock_sizes},
+};
 use crate::{
     SubblockMode,
     array::Constraint,
     error::{Error, InvalidData},
     file::{ReadAt, SubFile},
     pqarray::read::{MultiIter, NullableGroupIter, NullableIter, SimpleIter},
-};
-
-use super::{
-    FloatType, NumberType,
-    write_checks::{subblock_is_octree_compat, valid_subblock_sizes},
 };
 
 /// Iterator for reading scalar data, supporting `f32` and `f64` types generically.
@@ -40,10 +39,7 @@ impl<T: FloatType, R: ReadAt> Iterator for GenericScalars<T, R> {
             && let Ok(value) = item
             && value <= T::default()
         {
-            return Some(Err(InvalidData::SizeZeroOrLess {
-                value: value.into(),
-            }
-            .into()));
+            return Some(Err(InvalidData::SizeZeroOrLess { value: value.into() }.into()));
         }
         Some(item)
     }
@@ -63,10 +59,7 @@ impl<R: ReadAt> Indices<R> {
         let &Constraint::Index(category_count) = constraint else {
             panic!("invalid constraint");
         };
-        Self {
-            inner,
-            category_count,
-        }
+        Self { inner, category_count }
     }
 }
 
@@ -104,10 +97,7 @@ impl<const N: usize, R: ReadAt> GenericPrimitives<N, R> {
             Constraint::Segment(n) | Constraint::Triangle(n) => *n,
             _ => panic!("invalid constraint"),
         };
-        Self {
-            inner,
-            vertex_count,
-        }
+        Self { inner, vertex_count }
     }
 }
 
@@ -143,10 +133,7 @@ pub(super) struct BoundaryValues<T: NumberType, R: ReadAt> {
 
 impl<T: NumberType, R: ReadAt> BoundaryValues<T, R> {
     pub(crate) fn new(inner: SimpleIter<T, SubFile<R>>) -> Self {
-        Self {
-            inner,
-            previous: None,
-        }
+        Self { inner, previous: None }
     }
 }
 
@@ -175,21 +162,12 @@ pub struct GenericFreeformSubblocks<T: FloatType, R: ReadAt> {
 }
 
 impl<T: FloatType, R: ReadAt> GenericFreeformSubblocks<T, R> {
-    pub(crate) fn new(
-        parents: MultiIter<u32, SubFile<R>, 3>,
-        corners: MultiIter<T, SubFile<R>, 6>,
-        constraint: &Constraint,
-    ) -> Self {
+    pub(crate) fn new(parents: MultiIter<u32, SubFile<R>, 3>, corners: MultiIter<T, SubFile<R>, 6>, constraint: &Constraint) -> Self {
         let block_count = match constraint {
-            &Constraint::RegularSubblock { block_count, .. }
-            | &Constraint::FreeformSubblock { block_count } => block_count,
+            &Constraint::RegularSubblock { block_count, .. } | &Constraint::FreeformSubblock { block_count } => block_count,
             _ => panic!("invalid constraint"),
         };
-        Self {
-            parents,
-            corners,
-            block_count,
-        }
+        Self { parents, corners, block_count }
     }
 }
 
@@ -226,11 +204,7 @@ pub struct RegularSubblocks<R: ReadAt> {
 }
 
 impl<R: ReadAt> RegularSubblocks<R> {
-    pub(crate) fn new(
-        parents: MultiIter<u32, SubFile<R>, 3>,
-        corners: MultiIter<u32, SubFile<R>, 6>,
-        constraint: &Constraint,
-    ) -> Self {
+    pub(crate) fn new(parents: MultiIter<u32, SubFile<R>, 3>, corners: MultiIter<u32, SubFile<R>, 6>, constraint: &Constraint) -> Self {
         let &Constraint::RegularSubblock {
             block_count,
             subblock_count,
@@ -284,39 +258,23 @@ fn check_parent(block_count: [u32; 3], parent: [u32; 3]) -> Result<(), Error> {
 }
 
 #[inline]
-fn check_regular_corners(
-    subblock_count: [u32; 3],
-    mode_and_sizes: &Option<(SubblockMode, HashSet<[u32; 3]>)>,
-    corners: [u32; 6],
-) -> Result<(), Error> {
+fn check_regular_corners(subblock_count: [u32; 3], mode_and_sizes: &Option<(SubblockMode, HashSet<[u32; 3]>)>, corners: [u32; 6]) -> Result<(), Error> {
     let corners: [u32; 6] = corners.map(Into::into);
     for i in 0..3 {
         if corners[i] >= corners[i + 3] {
             return Err(InvalidData::RegularSubblockZeroSize { corners }.into());
         }
         if corners[i + 3] > subblock_count[i] {
-            return Err(InvalidData::RegularSubblockOutsideParent {
-                corners,
-                maximum: subblock_count,
-            }
-            .into());
+            return Err(InvalidData::RegularSubblockOutsideParent { corners, maximum: subblock_count }.into());
         }
     }
     if let Some((mode, valid_sizes)) = &mode_and_sizes {
         let size = std::array::from_fn(|i| corners[i + 3] - corners[i]);
         if !valid_sizes.contains(&size) {
-            return Err(InvalidData::RegularSubblockNotInMode {
-                corners,
-                mode: *mode,
-            }
-            .into());
+            return Err(InvalidData::RegularSubblockNotInMode { corners, mode: *mode }.into());
         }
         if *mode == SubblockMode::Octree && !subblock_is_octree_compat(&corners) {
-            return Err(InvalidData::RegularSubblockNotInMode {
-                corners,
-                mode: *mode,
-            }
-            .into());
+            return Err(InvalidData::RegularSubblockNotInMode { corners, mode: *mode }.into());
         }
     }
     Ok(())
@@ -326,22 +284,13 @@ fn check_regular_corners(
 fn check_freeform_corners<T: FloatType>(corners: [T; 6]) -> Result<(), Error> {
     for i in 0..3 {
         if corners[i] < T::ZERO {
-            return Err(InvalidData::FreeformSubblockOutsideParent {
-                corners: corners.map(Into::into),
-            }
-            .into());
+            return Err(InvalidData::FreeformSubblockOutsideParent { corners: corners.map(Into::into) }.into());
         }
         if corners[i + 3] > T::ONE {
-            return Err(InvalidData::FreeformSubblockOutsideParent {
-                corners: corners.map(Into::into),
-            }
-            .into());
+            return Err(InvalidData::FreeformSubblockOutsideParent { corners: corners.map(Into::into) }.into());
         }
         if corners[i] >= corners[i + 3] {
-            return Err(InvalidData::FreeformSubblockZeroSize {
-                corners: corners.map(Into::into),
-            }
-            .into());
+            return Err(InvalidData::FreeformSubblockZeroSize { corners: corners.map(Into::into) }.into());
         }
     }
     Ok(())
@@ -361,9 +310,7 @@ impl<T: NumberType, R: ReadAt> Iterator for GenericNumbers<T, R> {
 
 /// Iterator for reading small fixed-size arrays, like vertices and texture coordinates.
 #[derive(Debug)]
-pub struct GenericArrays<T: NumberType, const N: usize, R: ReadAt>(
-    pub(crate) MultiIter<T, SubFile<R>, N>,
-);
+pub struct GenericArrays<T: NumberType, const N: usize, R: ReadAt>(pub(crate) MultiIter<T, SubFile<R>, N>);
 
 impl<T: NumberType, const N: usize, R: ReadAt> Iterator for GenericArrays<T, N, R> {
     type Item = Result<[T; N], Error>;
@@ -387,9 +334,7 @@ impl<R: ReadAt> Iterator for Gradient<R> {
 
 /// Iterator for reading small optional fixed-size arrays, like 2D and 3D vectors.
 #[derive(Debug)]
-pub struct GenericOptionalArrays<T: NumberType, const N: usize, R: ReadAt>(
-    pub(crate) NullableGroupIter<T, SubFile<R>, N>,
-);
+pub struct GenericOptionalArrays<T: NumberType, const N: usize, R: ReadAt>(pub(crate) NullableGroupIter<T, SubFile<R>, N>);
 
 impl<T: NumberType, const N: usize, R: ReadAt> Iterator for GenericOptionalArrays<T, N, R> {
     type Item = Result<Option<[T; N]>, Error>;

@@ -1,5 +1,6 @@
 use std::io::{Seek, Write};
 
+use super::super::{Compression, Writer};
 use crate::{
     Array, ArrayType, array_type,
     data::{write_checks::*, *},
@@ -7,8 +8,6 @@ use crate::{
     file::zip_container::FileType,
     pqarray::{PqArrayWriter, PqWriteOptions},
 };
-
-use super::super::{Compression, Writer};
 
 impl From<Compression> for PqWriteOptions {
     fn from(value: Compression) -> Self {
@@ -80,10 +79,7 @@ impl<W: Write + Seek + Send> Writer<W> {
     {
         let mut max = MaximumIndex::new();
         let mut writer = self.array_writer();
-        writer.add_multiple(
-            &["a", "b", "c"],
-            data.into_iter().map(|v| max.visit_array(v)),
-        )?;
+        writer.add_multiple(&["a", "b", "c"], data.into_iter().map(|v| max.visit_array(v)))?;
         Ok(self.array_write(writer)?.add_write_checks(max.get()))
     }
 
@@ -132,11 +128,7 @@ impl<W: Write + Seek + Send> Writer<W> {
     {
         let mut increasing = IncreasingBoundary::new();
         let mut writer = self.array_writer();
-        writer.add_multiple(
-            &["value", "inclusive"],
-            data.into_iter()
-                .map(|b| (increasing.visit(b.value()), b.is_inclusive())),
-        )?;
+        writer.add_multiple(&["value", "inclusive"], data.into_iter().map(|b| (increasing.visit(b.value()), b.is_inclusive())))?;
         Ok(self.array_write(writer)?.add_write_checks(increasing.get()))
     }
 
@@ -151,10 +143,7 @@ impl<W: Write + Seek + Send> Writer<W> {
     /// separately be `[u8; 6]`, `[u16; 6]`, or `[u32; 6]` which each row storing
     /// $(u_{min}, v_{min}, w_{min}, u_{max}, v_{max}, w_{max})$ as indices into the regular
     /// grid within the parent block.
-    pub fn array_regular_subblocks<I>(
-        &mut self,
-        data: I,
-    ) -> Result<Array<array_type::RegularSubblock>, Error>
+    pub fn array_regular_subblocks<I>(&mut self, data: I) -> Result<Array<array_type::RegularSubblock>, Error>
     where
         I: IntoIterator<Item = ([u32; 3], [u32; 6])>,
     {
@@ -179,10 +168,7 @@ impl<W: Write + Seek + Send> Writer<W> {
                 (p[0], p[1], p[2], c[0], c[1], c[2], c[3], c[4], c[5])
             }),
         )?;
-        Ok(self
-            .array_write(writer)?
-            .add_write_checks(parents.get())
-            .add_write_checks(corners.get()))
+        Ok(self.array_write(writer)?.add_write_checks(parents.get()).add_write_checks(corners.get()))
     }
 
     /// Write an [`array_type::FreeformSubblock`](crate::array_type::FreeformSubblock) array.
@@ -195,10 +181,7 @@ impl<W: Write + Seek + Send> Writer<W> {
     /// `[f32; 6]` or `[f64; 6]` which each row storing
     /// $(u_{min}, v_{min}, w_{min}, u_{max}, v_{max}, w_{max})$ in the range [0, 1] relative
     /// to the parent block.
-    pub fn array_freeform_subblocks<I, C>(
-        &mut self,
-        data: I,
-    ) -> Result<Array<array_type::FreeformSubblock>, Error>
+    pub fn array_freeform_subblocks<I, C>(&mut self, data: I) -> Result<Array<array_type::FreeformSubblock>, Error>
     where
         I: IntoIterator<Item = ([u32; 3], [C; 6])>,
         C: FloatType,
@@ -224,10 +207,7 @@ impl<W: Write + Seek + Send> Writer<W> {
                 (p[0], p[1], p[2], c[0], c[1], c[2], c[3], c[4], c[5])
             }),
         )?;
-        Ok(self
-            .array_write(writer)?
-            .add_write_checks(parent.get())
-            .add_write_checks(corner.get()))
+        Ok(self.array_write(writer)?.add_write_checks(parent.get()).add_write_checks(corner.get()))
     }
 
     /// Write an [`array_type::Number`](crate::array_type::Number) array.
@@ -271,17 +251,9 @@ impl<W: Write + Seek + Send> Writer<W> {
     {
         let mut writer = self.array_writer();
         if V::IS_3D {
-            writer.add_nullable_group(
-                "vector",
-                &["x", "y", "z"],
-                data.into_iter().map(|o| o.map(V::into_3d)),
-            )?;
+            writer.add_nullable_group("vector", &["x", "y", "z"], data.into_iter().map(|o| o.map(V::into_3d)))?;
         } else {
-            writer.add_nullable_group(
-                "vector",
-                &["x", "y"],
-                data.into_iter().map(|o| o.map(V::into_2d)),
-            )?;
+            writer.add_nullable_group("vector", &["x", "y"], data.into_iter().map(|o| o.map(V::into_2d)))?;
         }
         self.array_write(writer)
     }
