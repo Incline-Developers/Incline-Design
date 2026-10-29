@@ -284,3 +284,18 @@ impl<'a> ColorSquarePicker<'a> {
         .inner
     }
 }
+
+/// A hairline between two runs of buttons, `gap` clear either side.
+///
+/// A hairline rather than a gap: a toolbar's buttons meet each other, so a
+/// space alone would read as a missing button. Held clear of the strip's top
+/// and bottom by the same `gap`, so it marks a seam between two runs rather
+/// than looking like an edge of the bar itself.
+pub(crate) fn divider(ui: &mut Ui, side: f32, gap: f32) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(1.0 + 2.0 * gap, side), Sense::hover());
+    let visuals = ui.visuals();
+    let color = super::shifted(visuals.panel_fill, if visuals.dark_mode { 26 } else { -46 });
+    let painter = ui.painter();
+    let x = painter.round_to_pixel_center(rect.center().x);
+    painter.vline(x, (rect.top() + gap)..=(rect.bottom() - gap), Stroke::new(1.0, color));
+}

@@ -651,8 +651,11 @@ fn draw_blast_preview_slider(ui: &mut egui::Ui, draft: &mut crate::ui::state::Bl
         let mut position = draft.preview;
         let width = (ui.available_width() - 220.0).max(120.0);
         ui.add_enabled_ui(total > 0, |ui| {
-            ui.spacing_mut().slider_width = width;
-            ui.add(egui::Slider::new(&mut position, 0..=total).show_value(false));
+            // Whole steps: a scrub lands on the nearest one.
+            let mut at = position as f64;
+            if ui.add(crate::ui::widgets::scrubber::Scrubber::new(&mut at, 0.0..=total as f64).width(width)).changed() {
+                position = at.round() as usize;
+            }
         });
         draft.preview = position.min(total);
         ui.label(egui::RichText::new(tr!("blast-sequence-preview-at", fired = draft.preview.to_string(), total = total.to_string())).weak());

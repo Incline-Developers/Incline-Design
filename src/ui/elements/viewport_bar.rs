@@ -43,8 +43,6 @@ const CENTRE_CLEARANCE: f32 = 16.0;
 /// Clear space either side of the hairline parting the view controls every
 /// workspace carries from the ones the open workspace adds - see [`divider`].
 const DIVIDER_GAP: f32 = 7.0;
-/// How far that hairline is held clear of the strip's top and bottom.
-const DIVIDER_INSET: f32 = 7.0;
 /// Gap between one drawing setting in the centre run and the next. Wider than
 /// the gap between buttons: these are labelled fields rather than a run of
 /// icons, and they read as separate settings.
@@ -468,18 +466,8 @@ fn draw_geology_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, side: f3
 }
 
 /// Part the run every workspace carries from the run this one adds.
-///
-/// A hairline rather than a gap: the bar's buttons meet each other, so a space
-/// alone would read as a missing button. Held clear of the strip's top and
-/// bottom so it marks a seam between two runs rather than looking like an edge
-/// of the bar itself.
 fn divider(ui: &mut egui::Ui, side: f32) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0 + 2.0 * DIVIDER_GAP, side), egui::Sense::hover());
-    let visuals = ui.visuals();
-    let color = crate::ui::widgets::shifted(visuals.panel_fill, if visuals.dark_mode { 26 } else { -46 });
-    let painter = ui.painter();
-    let x = painter.round_to_pixel_center(rect.center().x);
-    painter.vline(x, (rect.top() + DIVIDER_INSET)..=(rect.bottom() - DIVIDER_INSET), egui::Stroke::new(1.0, color));
+    crate::ui::widgets::toolbar::divider(ui, side, DIVIDER_GAP);
 }
 
 /// What every workspace asks of the camera: how far the scene is stretched

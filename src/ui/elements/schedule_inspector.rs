@@ -35,11 +35,8 @@ use crate::{
     },
 };
 
-/// Width the Inspector takes from the Gantt while open.
+/// Width the Inspector's island opens at, before it is dragged.
 pub(crate) const INSPECTOR_WIDTH: f32 = 300.0;
-/// The Gantt keeps at least this much timeline beside it; narrower and the
-/// Inspector is not drawn, rather than squeezing the timeline to nothing.
-pub(crate) const MIN_TIMELINE_WIDTH: f32 = 420.0;
 
 const NAME_ROW_H: f32 = 20.0;
 const DETAIL_ROW_H: f32 = 16.0;
@@ -69,11 +66,6 @@ pub(crate) fn draw_inspector(
     destinations: &[DestinationView],
     fields: &[(ReserveFieldId, String)],
 ) {
-    let visuals = ui.visuals().clone();
-    let (surface, _) = crate::ui::widgets::tree_row_colors(ui);
-    ui.painter().rect_filled(rect, 0.0, surface);
-    ui.painter().line_segment([rect.left_top(), rect.left_bottom()], visuals.widgets.noninteractive.bg_stroke);
-
     let inner = rect.shrink2(egui::vec2(12.0, 8.0));
     let mut child = ui.new_child(egui::UiBuilder::new().id_salt("gantt_inspector").max_rect(inner));
     child.set_clip_rect(rect);
@@ -84,10 +76,11 @@ pub(crate) fn draw_inspector(
         ui.label(bold(&instant_label(hour * GanttView::HOUR)).size(16.0));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
-            if ui.button("›").on_hover_text(tr!("inspector-next-hour")).clicked() {
+            use crate::ui::widgets::transport::{Transport, transport_button};
+            if transport_button(ui, Transport::StepForward, tr!("inspector-next-hour")).clicked() {
                 editor.schedule_time_h = editor.schedule_time_h.floor() + 1.0;
             }
-            if ui.button("‹").on_hover_text(tr!("inspector-previous-hour")).clicked() {
+            if transport_button(ui, Transport::StepBack, tr!("inspector-previous-hour")).clicked() {
                 editor.schedule_time_h = (editor.schedule_time_h.ceil() - 1.0).max(0.0);
             }
         });

@@ -1917,11 +1917,13 @@ sequence-objects = Objects
 
 planning-subpage-gantt = Gantt
 planning-subpage-charts = Charts
-gantt-empty-fleet = No agent rows yet. Add loader classes and loader agents in Setup → Site Data
+gantt-empty-fleet = No machines yet. Their rows appear here once loader agents are added in Setup.
+gantt-add-loaders = Add Loader Agents
 schedule-add-work = Add work
 schedule-open-setup = Open Schedule Setup
 schedule-open-solids-setup = Open Solids Setup
 gantt-reset-view = Reset View
+gantt-reset-view-help = Fit the view to the scheduled work
 gantt-zoom-in = Zoom in
 gantt-zoom-out = Zoom out
 gantt-day = Day { $day }

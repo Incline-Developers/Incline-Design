@@ -221,6 +221,7 @@ pub(crate) struct ContextMenuAction {
     submenu: bool,
     checked: Option<bool>,
     strikethrough: bool,
+    swatch: Option<egui::Color32>,
 }
 
 impl ContextMenuAction {
@@ -232,7 +233,15 @@ impl ContextMenuAction {
             submenu: false,
             checked: None,
             strikethrough: false,
+            swatch: None,
         }
+    }
+
+    /// A colour square at the head of the row, in the tick column, for a
+    /// choice between things known by their colour: a delay type, say.
+    pub(crate) fn swatch(mut self, color: egui::Color32) -> Self {
+        self.swatch = Some(color);
+        self
     }
 
     /// Strike a line through the label: for a row naming something that is no
@@ -276,6 +285,7 @@ impl ContextMenuAction {
             submenu,
             checked,
             strikethrough,
+            swatch,
         } = self;
         ui.add_enabled_ui(enabled, |ui| {
             let font_id = egui::TextStyle::Button.resolve(ui.style());
@@ -287,7 +297,11 @@ impl ContextMenuAction {
                     .size()
                     .x
             });
-            let text_left = if checked.is_some() { CHECK_COLUMN } else { f32::from(ROW_HORIZONTAL_PADDING) };
+            let text_left = if checked.is_some() || swatch.is_some() {
+                CHECK_COLUMN
+            } else {
+                f32::from(ROW_HORIZONTAL_PADDING)
+            };
             let right_padding = if submenu { 14.0 } else { 4.0 };
             let shortcut_gap = if shortcut.is_some() { 16.0 } else { 0.0 };
             let natural_width = text_left + label_width + shortcut_gap + shortcut_width + right_padding;
@@ -301,6 +315,10 @@ impl ContextMenuAction {
                     painter.rect_filled(rect, 1.0, visuals.bg_fill);
                 }
                 let text_color = visuals.fg_stroke.color;
+                if let Some(color) = swatch {
+                    let center = rect.left_center() + egui::vec2(CHECK_COLUMN / 2.0, 0.0);
+                    painter.rect_filled(egui::Rect::from_center_size(center, egui::vec2(9.0, 9.0)), CORNER_RADIUS, color);
+                }
                 if checked == Some(true) {
                     // A tick drawn rather than set as text: the row's glyphs
                     // come from the button style, and a checkmark character is
