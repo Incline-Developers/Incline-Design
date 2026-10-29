@@ -7101,13 +7101,13 @@ pub(crate) enum Workspace {
     Production,
     DrillAndBlast,
     Geology,
-    Planning,
     Survey,
+    Planning,
 }
 
 impl Workspace {
     /// Every workspace, in the default tab order.
-    pub(crate) const ALL: [Self; 5] = [Self::Production, Self::DrillAndBlast, Self::Geology, Self::Planning, Self::Survey];
+    pub(crate) const ALL: [Self; 5] = [Self::Production, Self::DrillAndBlast, Self::Geology, Self::Survey, Self::Planning];
 
     pub(crate) fn label(self) -> String {
         match self {
