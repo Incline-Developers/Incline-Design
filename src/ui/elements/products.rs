@@ -61,13 +61,13 @@ pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState, c
     // The explorer's row colours, because these are the explorer's rows: the
     // two islands share one palette rather than each mixing its own.
     let (surface, stripe) = crate::ui::widgets::tree_row_colors(ui);
-    let (min_height, max_height) = crate::ui::chrome::panel_size_limits(ui.ctx(), ui.available_height());
+    let (min_height, max_height) = crate::ui::chrome::panel_size_limits(ui.available_height());
     egui::Panel::bottom(PANEL_ID)
         .resizable(true)
         .default_size(max_height)
         .min_size(min_height)
         .max_size(max_height)
-        .show_separator_line(crate::ui::chrome::show_separator_line(ui))
+        .show_separator_line(false)
         .frame(crate::ui::chrome::region_frame(ui).fill(surface).inner_margin(egui::Margin::ZERO))
         .show(ui, |ui| {
             // Prevent content from forcing the panel wider than the user has dragged it.

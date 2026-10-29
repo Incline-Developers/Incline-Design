@@ -742,7 +742,7 @@ impl HoleSelection {
 /// scene background the same way the viewport picks its overlay ink - see
 /// `contrast_ink` in `ui/widgets/viewport.rs`, whose 0.45 threshold this
 /// matches. The scene background is `EditorState::renderer_background_color`,
-/// a preference independent of the UI's own dark/light toggle.
+/// which follows the UI's dark/light toggle.
 fn string_color_for(background: [f32; 4]) -> [f32; 3] {
     let rgba = if crate::rendering::color::relative_luminance(background) > 0.45 {
         crate::rendering::color::hex_to_linear_rgba(0x383838)

@@ -271,18 +271,15 @@ impl<'a> ColorSquarePicker<'a> {
                 widget.expansion = -SWATCH_INSET;
             }
 
-            ui.allocate_ui_with_layout(egui::vec2(self.size.x, self.size.y + 1.0), egui::Layout::top_down(egui::Align::Center), |ui| {
-                ui.add_space(2.0);
+            // Added straight into the row, so it is centred on it the way the
+            // hatch picker's combo beside it is.
+            let response = super::color::edit_srgba(ui, self.color, egui::color_picker::Alpha::Opaque);
 
-                let response = super::color::edit_srgba(ui, self.color, egui::color_picker::Alpha::Opaque);
+            let painter = ui.painter();
+            painter.rect_filled(response.rect, SWATCH_CORNER_RADIUS, *self.color);
+            painter.rect_stroke(response.rect, SWATCH_CORNER_RADIUS, Stroke::new(1., Color32::BLACK), egui::StrokeKind::Inside);
 
-                let painter = ui.painter();
-                painter.rect_filled(response.rect, SWATCH_CORNER_RADIUS, *self.color);
-                painter.rect_stroke(response.rect, SWATCH_CORNER_RADIUS, Stroke::new(1., Color32::BLACK), egui::StrokeKind::Inside);
-
-                response
-            })
-            .inner
+            response
         })
         .inner
     }

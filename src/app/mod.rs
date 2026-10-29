@@ -896,11 +896,8 @@ impl<'a> App<'a> {
         self.editor.well_log_style = config.well_log_style.sanitized();
         self.editor.dark_mode = config.dark_mode;
         self.editor.show_console = config.show_console;
-        self.editor.panel_chrome = config.panel_chrome;
         self.editor.ui_size_percent = io::finite_clamped(config.ui_size_percent, 50.0, 200.0, io::default_ui_size_percent());
-        self.editor.show_world_axis_gizmo = config.show_world_axis_gizmo;
-        self.editor.show_scale_bar = config.show_scale_bar;
-        self.editor.renderer_background_color = config.renderer_background_color;
+        self.editor.renderer_background_color = crate::ui::scene_background_color(config.dark_mode);
         self.editor.snap_poll_rate = config.snap_poll_rate.clamp(5, 1000);
         self.editor.vsync_enabled = config.vsync_enabled;
         self.editor.frame_rate_cap = config.frame_rate_cap.clamp(20, 1000);
@@ -915,7 +912,6 @@ impl<'a> App<'a> {
         self.editor.plan_zoom_sensitivity = io::finite_clamped(config.plan_zoom_sensitivity, 0.0001, 0.05, io::default_plan_zoom_sensitivity());
         self.editor.plan_invert_vertical_look = config.plan_invert_vertical_look;
         self.editor.plan_invert_horizontal_look = config.plan_invert_horizontal_look;
-        self.editor.plan_zoom_towards_cursor = config.plan_zoom_towards_cursor;
         self.editor.fly_field_of_view_degrees = io::finite_clamped(config.fly_field_of_view_degrees, 20.0, 120.0, io::default_fly_field_of_view_degrees());
         self.editor.fly_mouse_look_sensitivity = io::finite_clamped(config.fly_mouse_look_sensitivity, 0.0001, 0.02, io::default_fly_mouse_look_sensitivity());
         self.editor.fly_invert_vertical_look = config.fly_invert_vertical_look;

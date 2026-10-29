@@ -63,7 +63,7 @@ pub(crate) fn draw_borehole_inspector(
         .default_size(DEFAULT_WIDTH.min(widest))
         .min_size(MIN_WIDTH)
         .max_size(widest)
-        .show_separator_line(crate::ui::chrome::show_separator_line(ui))
+        .show_separator_line(false)
         .frame(crate::ui::chrome::region_frame(ui).fill(surface).inner_margin(egui::Margin::ZERO))
         .show(ui, |ui| {
             // Report exactly the rect we were offered rather than whatever
