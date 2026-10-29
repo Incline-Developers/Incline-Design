@@ -58,7 +58,7 @@ fn framed_pane<R>(ui: &mut egui::Ui, id: &str, rect: egui::Rect, title: &str, ex
                 }
                 if let Some((label, value)) = extras.toggle {
                     ui.add_space(4.0);
-                    ui.add(super::toggle::Toggle::new(value, label));
+                    ui.add(super::menu::SlidingToggle::new(value).label(label));
                 }
                 if let Some((label, tooltip, clicked)) = extras.action {
                     ui.add_space(4.0);

@@ -17,7 +17,6 @@ pub(crate) mod preview_navigation;
 pub(crate) mod progress;
 pub(crate) mod rosette_diagram;
 pub(crate) mod toast;
-pub(crate) mod toggle;
 pub(crate) mod toolbar;
 pub(crate) mod transport;
 pub(crate) mod value_field;

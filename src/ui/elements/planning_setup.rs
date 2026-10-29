@@ -356,7 +356,7 @@ fn run_header(
         let action = draw_run_buttons(ui, salt, running, run_step);
         if let Some((auto, note)) = auto {
             ui.add_space(10.0);
-            ui.add(crate::ui::widgets::toggle::Toggle::new(auto, tr!("planning-auto"))).on_hover_text(note);
+            ui.add(crate::ui::widgets::menu::SlidingToggle::new(auto).label(tr!("planning-auto"))).on_hover_text(note);
         }
         let label = tr!("stage-progress-short", done = done, total = total);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
