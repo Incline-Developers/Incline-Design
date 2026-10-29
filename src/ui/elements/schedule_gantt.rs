@@ -54,16 +54,16 @@ use crate::{
     },
     ui::{
         EditorState, UiProjectView, chrome,
-        elements::schedule_calendar::format_tonnes,
+        elements::{planning_setup::PlanningLayout, schedule_calendar::format_tonnes},
         fonts::bold,
         state::{
-            BarNameDialog, BarWindowDialog, BlastBarDialog, DelayDrop, GanttDrag, GanttDragMode, GanttPaletteItem, GanttView, PlanningPage, PlanningSubpage, ReclaimBarDialog,
-            ScheduleBarView, ScheduleEdit, ScheduleRepairTarget, ScheduleStep, UiCommand,
+            BarNameDialog, BarWindowDialog, BlastBarDialog, DelayDrop, GanttDrag, GanttDragMode, GanttPaletteItem, GanttView, ReclaimBarDialog, ScheduleBarView, ScheduleEdit,
+            ScheduleStep, UiCommand,
         },
-        themed_icon,
         widgets::{
-            context_menu::{ContextMenuAction, checklist_popup, context_menu_fields, context_menu_popup},
-            menu::MenuFieldF32,
+            context_menu::{ContextMenu, ContextMenuAction, context_menu_fields, context_menu_popup, context_menu_separator},
+            island::{Island, Side},
+            menu::MenuButton,
             toolbar::{GROUP_CORNER_RADIUS, ToolbarButton},
         },
     },
@@ -142,7 +142,13 @@ pub(crate) fn instant_label(seconds: f64) -> String {
 
 /// The Gantt page. Returns the rect it claimed, for the caller to round off
 /// as one chrome region.
-pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, document: &crate::model::Document, commands: &mut Vec<UiCommand>) -> egui::Rect {
+pub(crate) fn draw_details(
+    ui: &mut egui::Ui,
+    editor: &mut EditorState,
+    project: &UiProjectView,
+    document: &crate::model::Document,
+    commands: &mut Vec<UiCommand>,
+) -> PlanningLayout {
     // Cloned rather than borrowed: the canvas takes `editor` mutably to hold
     // its drag and its selection. Every edit below is addressed to the project
     // this plan was read from, so one queued against a project that is closed
@@ -150,7 +156,7 @@ pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project:
     // to its successor.
     let plan = project.schedule.clone();
     let session = project.active_session;
-    let rect = draw_timeline_page(ui, editor, &plan, document, Some(session), commands, |ui, timeline, editor, destinations, commands| {
+    let layout = draw_timeline_page(ui, editor, &plan, document, commands, |ui, timeline, editor, destinations, commands| {
         draw_canvas(ui, timeline, editor, &plan, destinations, session, commands);
     });
     crate::ui::dialogs::schedule::draw_bar_name_dialog(ui, editor, &plan, session, commands);
@@ -159,7 +165,7 @@ pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project:
     crate::ui::dialogs::schedule::draw_blast_bar_dialog(ui, editor, project, document, &plan, session, commands);
     crate::ui::dialogs::schedule::draw_blast_window_dialog(ui, editor, &plan, session, commands);
     crate::ui::dialogs::sequence_editor::draw_sequence_editor(ui, editor, project, document, &plan, session, commands);
-    rect
+    layout
 }
 
 /// One priority lane of a row, and the sub-rows its markers are packed into.
@@ -277,7 +283,8 @@ impl Layout {
     fn build(ui: &egui::Ui, editor: &EditorState, plan: &SchedulePlan, body: egui::Rect) -> Self {
         let markers = layout_markers(ui, editor, plan, body);
         let extents: Vec<BarExtent> = markers.iter().map(|marker| marker.extent).collect();
-        let mut rows = layout_rows(plan, &extents);
+        // A row edge being dragged shows its height before the plan has it.
+        let mut rows = layout_rows(plan, &extents, editor.gantt_bar_height_drag.unwrap_or(plan.bar_height()));
         if let Some(row) = rows.iter_mut().find(|row| row.blasting) {
             let lanes = firing_markers(ui, editor.schedule_result.as_deref(), editor.gantt, body)
                 .iter()
@@ -350,7 +357,7 @@ fn pack_lane(bars: &[usize], extents: &[BarExtent]) -> Vec<Vec<usize>> {
 /// a bar whose machine was deleted is still the user's work and has to be
 /// somewhere it can be seen and reassigned, but an empty lane above the fleet
 /// would be a permanent reminder of nothing.
-fn layout_rows(plan: &SchedulePlan, extents: &[BarExtent]) -> Vec<Row> {
+fn layout_rows(plan: &SchedulePlan, extents: &[BarExtent], bar_height: f32) -> Vec<Row> {
     let mut rows: Vec<Row> = Vec::with_capacity(plan.agents().len() + 1);
     // A bar counts as unassigned when it names no machine, and also when it
     // names one this plan does not hold. Load refuses such a plan and no edit
@@ -444,7 +451,7 @@ fn layout_rows(plan: &SchedulePlan, extents: &[BarExtent]) -> Vec<Row> {
             if lane.stacks.is_empty() {
                 lane.stacks.push(Vec::new());
             }
-            lane.height = (BAR_TOP + plan.bar_height() + BAR_BOTTOM) * lane.stacks.len() as f32;
+            lane.height = (BAR_TOP + bar_height + BAR_BOTTOM) * lane.stacks.len() as f32;
             lanes_height += lane.height;
         }
         // A row is never shorter than a machine's name and its class need.
@@ -466,64 +473,113 @@ fn layout_rows(plan: &SchedulePlan, extents: &[BarExtent]) -> Vec<Row> {
     rows
 }
 
-/// Run Period, Run All Periods and Cancel, as the Gantt and the Calendar
-/// both show them.
+/// Run Period, Run All Periods, Improve and Cancel, as the Gantt, the
+/// Calendar and Animate show them, with where the schedule stands - the
+/// status line and the detail behind it - on each one's hover.
 ///
 /// The run controls are the Solids page's own, in the same order and with the
 /// same icons: a schedule is run the way everything else in this project is
 /// run. One control in two places rather than two that drift: `salt` keeps
 /// their widget ids apart, because both pages can be laid out in the same
 /// frame.
-pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &mut EditorState, salt: &str, commands: &mut Vec<UiCommand>) {
-    use crate::ui::elements::planning_setup::{CANCEL_TINT, RUN_ALL_TINT, RUN_STEP_TINT};
+pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &mut EditorState, plan: &SchedulePlan, salt: &str, commands: &mut Vec<UiCommand>) {
+    use crate::ui::elements::planning_setup::{CANCEL_TINT, IMPROVE_TINT, RUN_ALL_TINT, RUN_STEP_TINT};
 
     let working = editor.schedule_run_working;
     let startable = !working;
+    // With Auto on, a current schedule is kept current on its own, so Run and
+    // Run All are held. Without one - never run, blocked, or the last attempt
+    // failed - they are what starts it, running the Setup steps it waits on.
+    // Nor while it stops short of the horizon: Auto recalculates as far as
+    // the schedule reaches, and only a run by hand takes it further.
+    let horizon_h = f64::from(plan.experiment().planning_end_day) * crate::model::schedule::SCHEDULE_PERIOD_H;
+    let held = editor.auto_run().all() && editor.schedule_result.as_ref().is_some_and(|schedule| schedule.requested_end_h >= horizon_h - 1e-9);
+    let runnable = startable && !held;
     let tint = |color: egui::Color32, enabled: bool| if enabled { color } else { color.gamma_multiply(0.35) };
     let side = ui.available_height();
+    // Where the schedule stands goes with the buttons that change it, on
+    // hover, rather than as a line of its own along the toolbar: each one's
+    // own note first, then the status and what lies behind it.
+    let status = std::iter::once(editor.schedule_run_status.as_str())
+        .chain(editor.schedule_run_details.iter().map(String::as_str))
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let hover = |note: String| if status.is_empty() { note } else { format!("{note}\n\n{status}") };
     let spacing = std::mem::replace(&mut ui.spacing_mut().item_spacing.x, 0.0);
+    let held_note = |note: String| if held { hover(tr!("schedule-auto-holds")) } else { hover(note) };
     if ui
         .add_enabled(
-            startable,
+            runnable,
             ToolbarButton::new(
-                egui::Image::new(crate::ui::unthemed_icon!("play.svg")).tint(tint(RUN_STEP_TINT, startable)),
-                tr!("schedule-run-period-note"),
+                egui::Image::new(crate::ui::unthemed_icon!("play.svg")).tint(tint(RUN_STEP_TINT, runnable)),
+                hover(tr!("schedule-run-period-note")),
             )
             .button_side(side)
             .id_salt(format!("{salt}_run_period")),
         )
+        .on_disabled_hover_text(held_note(tr!("schedule-run-period-note")))
         .clicked()
     {
         commands.push(UiCommand::RunSchedulePeriod);
     }
     if ui
         .add_enabled(
-            startable,
+            runnable,
             ToolbarButton::new(
-                egui::Image::new(crate::ui::unthemed_icon!("play_all.svg")).tint(tint(RUN_ALL_TINT, startable)),
-                tr!("schedule-run-whole-note"),
+                egui::Image::new(crate::ui::unthemed_icon!("play_all.svg")).tint(tint(RUN_ALL_TINT, runnable)),
+                hover(tr!("schedule-run-whole-note")),
             )
             .button_side(side)
             .id_salt(format!("{salt}_run_whole")),
         )
+        .on_disabled_hover_text(held_note(tr!("schedule-run-whole-note")))
         .clicked()
     {
         commands.push(UiCommand::RunAllSchedulePeriods);
+    }
+    // The hourly schedule is what the buttons before it produce; this is the
+    // one that spends the solve time looking past it. Held down while it does.
+    if ui
+        .add_enabled(
+            startable,
+            ToolbarButton::new(
+                egui::Image::new(crate::ui::unthemed_icon!("improve.svg")).tint(tint(IMPROVE_TINT, startable || editor.schedule_run_improve)),
+                hover(if editor.schedule_run_improve {
+                    tr!("schedule-improving-note")
+                } else {
+                    tr!("schedule-improve-note")
+                }),
+            )
+            .button_side(side)
+            .selected(editor.schedule_run_improve)
+            .id_salt(format!("{salt}_improve")),
+        )
+        // Held while any run is working, when it still says what that is.
+        .on_disabled_hover_text(hover(if editor.schedule_run_improve {
+            tr!("schedule-improving-note")
+        } else {
+            tr!("schedule-improve-note")
+        }))
+        .clicked()
+    {
+        commands.push(UiCommand::ImproveSchedule);
     }
     if ui
         .add_enabled(
             working,
             ToolbarButton::new(
                 egui::Image::new(crate::ui::unthemed_icon!("stop.svg")).tint(tint(CANCEL_TINT, working)),
-                if editor.schedule_run_improving {
+                hover(if editor.schedule_run_improving {
                     tr!("schedule-run-stop-early-note")
                 } else {
                     tr!("schedule-run-cancel-note")
-                },
+                }),
             )
             .button_side(side)
             .id_salt(format!("{salt}_run_cancel")),
         )
+        .on_disabled_hover_text(hover(tr!("schedule-run-cancel-note")))
         .clicked()
     {
         // Stopping Improve keeps the best schedule it has found.
@@ -534,57 +590,17 @@ pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &mut EditorSt
         });
     }
     ui.spacing_mut().item_spacing.x = spacing;
-    ui.add_space(6.0);
-    // The hourly schedule is what every other control produces; this is the
-    // one that spends the solve time looking past it.
-    let improve = egui::Button::new(if editor.schedule_run_improve {
-        tr!("schedule-improving")
-    } else {
-        tr!("schedule-improve")
-    })
-    .corner_radius(GROUP_CORNER_RADIUS)
-    .selected(editor.schedule_run_improve);
+    ui.add_space(8.0);
+    // The same one Auto Setup shows: Solids, Haulage and the schedule kept
+    // up to date together.
+    let mut auto = editor.auto_run().all();
     if ui
-        .add_enabled(startable, improve)
-        .on_hover_text(tr!("schedule-improve-note"))
-        .on_disabled_hover_text(if editor.schedule_run_improve {
-            tr!("schedule-improving-note")
-        } else {
-            tr!("schedule-improve-note")
-        })
-        .clicked()
+        .add(crate::ui::widgets::menu::SlidingToggle::new(&mut auto).label(tr!("planning-auto")))
+        .on_hover_text(tr!("setup-auto-note"))
+        .changed()
     {
-        commands.push(UiCommand::ImproveSchedule);
+        commands.push(UiCommand::SetAutoRun(crate::model::schedule::AutoRun::every(auto)));
     }
-    let mut auto = editor.auto_run();
-    if ui.checkbox(&mut auto.schedule, tr!("schedule-auto")).on_hover_text(tr!("schedule-auto-note")).changed() {
-        commands.push(UiCommand::SetAutoRun(auto));
-    }
-}
-
-/// The one status line the run controls carry, with the detail behind it on
-/// hover: value, bound and gap, timings, and the approximations the result
-/// rests on. Shared by the Gantt and the Calendar.
-pub(crate) fn draw_run_status(ui: &mut egui::Ui, editor: &EditorState) {
-    if editor.schedule_run_status.is_empty() {
-        return;
-    }
-    let text = egui::RichText::new(&editor.schedule_run_status);
-    // A result that leaves loaders waiting on blasts nobody works is a
-    // schedule, but not the one the planner meant: it reads as a warning.
-    let unworked = editor.schedule_result.as_ref().is_some_and(|schedule| schedule.report.unworked_blasts > 0);
-    let text = if (editor.schedule_run_stale && editor.schedule_result.is_none()) || unworked {
-        text.color(ui.visuals().warn_fg_color)
-    } else {
-        text.weak()
-    };
-    ui.add(egui::Label::new(text).truncate()).on_hover_ui(|ui| {
-        ui.set_max_width(520.0);
-        ui.label(&editor.schedule_run_status);
-        for line in &editor.schedule_run_details {
-            ui.add(egui::Label::new(egui::RichText::new(line).weak()).wrap());
-        }
-    });
 }
 
 /// How far the work on the timeline reaches, in elapsed seconds, or `None`
@@ -604,147 +620,80 @@ fn scheduled_extent(editor: &EditorState, plan: &crate::model::schedule::Schedul
     (end > 0.0).then_some(end)
 }
 
-fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, settings: Option<u32>, commands: &mut Vec<UiCommand>) {
-    let mut child = ui.new_child(egui::UiBuilder::new().id_salt("gantt_toolbar").max_rect(rect));
-    child.set_clip_rect(child.clip_rect().intersect(rect));
-    child.horizontal_centered(|ui| {
-        draw_calculation_controls(ui, editor, "gantt", commands);
-        ui.spacing_mut().item_spacing.x = 4.0;
-        ui.add_space(8.0);
-        let button = |ui: &mut egui::Ui, label: &str, tooltip: String| ui.add(egui::Button::new(label).corner_radius(GROUP_CORNER_RADIUS)).on_hover_text(tooltip);
-        if button(ui, "−", tr!("gantt-zoom-out")).clicked() {
-            editor.gantt.zoom_at(1.0 / ZOOM_STEP, 0.5);
-        }
-        if button(ui, "+", tr!("gantt-zoom-in")).clicked() {
-            editor.gantt.zoom_at(ZOOM_STEP, 0.5);
-        }
-        if ui.add(egui::Button::new(tr!("gantt-reset-view")).corner_radius(GROUP_CORNER_RADIUS)).clicked() {
-            // Reset to what is there, not to a fixed week: a sequence running
-            // to day 45 is reset to day 45.
-            let extent = scheduled_extent(editor, plan);
-            editor.gantt.reset_to(extent);
-        }
-        ui.add_space(8.0);
-        ui.toggle_value(&mut editor.gantt_inspector_open, tr!("gantt-inspector"))
-            .on_hover_text(tr!("gantt-inspector-help"));
-        ui.add_space(8.0);
-        ui.label(
-            egui::RichText::new(tr!(
-                "gantt-range",
-                from = instant_label(editor.gantt.start_seconds),
-                to = instant_label(editor.gantt.end_seconds())
-            ))
-            .weak(),
-        );
-        // One status names what the calculated marks mean. When it names a
-        // blocker, the adjacent action opens the exact setup step that owns
-        // the repair.
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.add_space(4.0);
-            if let Some(session) = settings {
-                draw_settings(ui, plan, session, commands);
-                ui.add_space(8.0);
-            }
-            if let Some(target) = editor.schedule_run_repair {
-                let label = match target {
-                    ScheduleRepairTarget::Schedule(_) => tr!("schedule-open-setup"),
-                    ScheduleRepairTarget::Solids(_) => tr!("schedule-open-solids-setup"),
-                };
-                if ui.button(label).clicked() {
-                    match target {
-                        ScheduleRepairTarget::Schedule(step) => editor.open_schedule_step(step),
-                        ScheduleRepairTarget::Solids(step) => {
-                            editor.planning_page = PlanningPage::Solids;
-                            editor.solids_subpage = PlanningSubpage::Setup;
-                            editor.planning_solids_step = step;
-                        }
-                    }
-                }
-            }
-            draw_run_status(ui, editor);
-        });
-    });
-}
-
-/// The Gantt's own display settings, behind the gear at the toolbar's right
-/// end: how tall a dig sequence bar is drawn.
-///
-/// The height is held while it is dragged or typed and written once, when
-/// that stops, so one adjustment is one undo step rather than one per frame.
-fn draw_settings(ui: &mut egui::Ui, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
-    let side = ui.spacing().interact_size.y;
-    let button = ui.add(
-        ToolbarButton::new(egui::Image::new(themed_icon!(ui, "open_preferences.svg")), tr!("gantt-settings"))
-            .id_salt("gantt_settings")
-            .button_side(side),
+/// Where the Gantt's and the Charts' timeline is looking, in the viewport
+/// bar's centre while either page is open.
+pub(crate) fn draw_timeline_range(ui: &mut egui::Ui, editor: &EditorState) {
+    ui.label(
+        egui::RichText::new(tr!(
+            "gantt-range",
+            from = instant_label(editor.gantt.start_seconds),
+            to = instant_label(editor.gantt.end_seconds())
+        ))
+        .weak(),
     );
-    checklist_popup(&button, tr!("gantt-settings"), 280.0, |ui| {
-        context_menu_fields(ui, |ui| {
-            let id = ui.scope_id().with("gantt_bar_height");
-            let mut height = ui.data(|data| data.get_temp::<f32>(id)).unwrap_or(plan.bar_height());
-            let response = MenuFieldF32::new(
-                tr!("schedule-bar-height"),
-                &mut height,
-                crate::model::schedule::MIN_BAR_HEIGHT..=crate::model::schedule::MAX_BAR_HEIGHT,
-            )
-            .max_decimals(0)
-            .show(ui);
-            if response.dragged() || response.has_focus() {
-                ui.data_mut(|data| data.insert_temp(id, height));
-            } else {
-                ui.data_mut(|data| data.remove::<f32>(id));
-                if height != plan.bar_height() {
-                    commands.push(UiCommand::schedule(session, ScheduleEdit::SetBarHeight(height)));
-                }
-            }
-        });
-    });
 }
 
-/// A page laid out like the Gantt: the toolbar across the top, a timeline
-/// canvas drawn by `draw`, and the Inspector beside it while it is open.
-/// `settings` carries the session when the page offers the Gantt's own
-/// display settings. Returns the rect it claimed, for the caller to round off
-/// as one region.
+/// Zoom out, zoom in, and fit the timeline to the scheduled work, at the
+/// viewport bar's right end. Added right to left, so they read in that order.
+pub(crate) fn draw_timeline_zoom(ui: &mut egui::Ui, editor: &mut EditorState, plan: &SchedulePlan, side: f32) {
+    let tool = |ui: &mut egui::Ui, icon: egui::ImageSource<'static>, tooltip: String, salt: &str| {
+        ui.add(ToolbarButton::new(egui::Image::new(icon), tooltip).button_side(side).id_salt(("gantt_tool", salt)))
+    };
+    if tool(ui, crate::ui::unthemed_icon!("zoom_to_extents.svg"), tr!("gantt-reset-view-help"), "fit").clicked() {
+        // Reset to what is there, not to a fixed week: a sequence running to
+        // day 45 is reset to day 45.
+        let extent = scheduled_extent(editor, plan);
+        editor.gantt.reset_to(extent);
+    }
+    if tool(ui, crate::ui::unthemed_icon!("zoom_in.svg"), tr!("gantt-zoom-in"), "zoom_in").clicked() {
+        editor.gantt.zoom_at(ZOOM_STEP, 0.5);
+    }
+    if tool(ui, crate::ui::unthemed_icon!("zoom_out.svg"), tr!("gantt-zoom-out"), "zoom_out").clicked() {
+        editor.gantt.zoom_at(1.0 / ZOOM_STEP, 0.5);
+    }
+}
+
+/// A page laid out like the Gantt: a timeline canvas drawn by `draw` in an
+/// island, with the Inspector in an island of its own beside it. Its run
+/// controls and its timeline's navigation are in the viewport bar. Returns
+/// the regions and seams it claimed, for the caller to round off.
 pub(super) fn draw_timeline_page(
     ui: &mut egui::Ui,
     editor: &mut EditorState,
     plan: &SchedulePlan,
     document: &crate::model::Document,
-    settings: Option<u32>,
     commands: &mut Vec<UiCommand>,
     draw: impl FnOnce(&mut egui::Ui, egui::Rect, &mut EditorState, &[DestinationView], &mut Vec<UiCommand>),
-) -> egui::Rect {
-    egui::CentralPanel::default()
-        .frame(chrome::region_frame(ui))
+) -> PlanningLayout {
+    let mut layout = PlanningLayout::default();
+    // Names are resolved here, at draw time, by stable id: a rename relabels
+    // a calculated span without recalculating it.
+    let destinations = crate::model::schedule::destinations::available(document.solids(), plan.routing());
+    {
+        let fields: Vec<_> = document.reserve_fields().iter().map(|field| (field.id, field.name.clone())).collect();
+        let island = Island::new("schedule_inspector_island", Side::Right)
+            .default_width(super::schedule_inspector::INSPECTOR_WIDTH)
+            .min_width(240.0)
+            .max_width(560.0)
+            .flush()
+            .show(ui, |ui, rect| super::schedule_inspector::draw_inspector(ui, rect, editor, plan, &destinations, &fields));
+        layout.regions.extend(island.regions);
+        layout.grips.push(island.grip);
+    }
+    let rect = egui::CentralPanel::default()
+        .frame(chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
         .show(ui, |ui| {
-            let available = ui.available_rect_before_wrap();
-            let toolbar_height = ui.spacing().interact_size.y + 8.0;
-            let toolbar = egui::Rect::from_min_size(available.min, egui::vec2(available.width(), toolbar_height.min(available.height())));
-            let canvas = egui::Rect::from_min_max(egui::pos2(available.left(), toolbar.bottom()), available.max);
-            draw_toolbar(ui, toolbar, editor, plan, settings, commands);
+            let canvas = ui.available_rect_before_wrap();
             if canvas.is_positive() {
-                // Names are resolved here, at draw time, by stable id: a
-                // rename relabels a calculated span without recalculating it.
-                let destinations = crate::model::schedule::destinations::available(document.solids(), plan.routing());
-                let inspector_width = super::schedule_inspector::INSPECTOR_WIDTH;
-                let inspect = editor.gantt_inspector_open && canvas.width() >= inspector_width + super::schedule_inspector::MIN_TIMELINE_WIDTH;
-                let timeline = if inspect {
-                    egui::Rect::from_min_max(canvas.min, egui::pos2(canvas.right() - inspector_width, canvas.bottom()))
-                } else {
-                    canvas
-                };
-                draw(ui, timeline, editor, &destinations, commands);
-                if inspect {
-                    let fields: Vec<_> = document.reserve_fields().iter().map(|field| (field.id, field.name.clone())).collect();
-                    let panel = egui::Rect::from_min_max(egui::pos2(timeline.right(), canvas.top()), canvas.max);
-                    super::schedule_inspector::draw_inspector(ui, panel, editor, plan, &destinations, &fields);
-                }
+                draw(ui, canvas, editor, &destinations, commands);
             }
-            ui.allocate_rect(available, egui::Sense::hover());
+            ui.allocate_rect(canvas, egui::Sense::hover());
         })
         .response
-        .rect
+        .rect;
+    layout.regions.push(rect);
+    layout.rect = rect;
+    layout
 }
 
 /// The parts of a timeline canvas: the name column, the ruler over the body,
@@ -829,17 +778,17 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
 
     let visuals = ui.visuals().clone();
     let rule = visuals.widgets.noninteractive.bg_stroke;
-    let (surface, stripe) = crate::ui::widgets::tree_row_colors(ui);
-    ui.painter().rect_filled(rect, 0.0, surface);
-    ui.painter().rect_filled(ruler, 0.0, visuals.widgets.noninteractive.bg_fill);
-    ui.painter().rect_filled(corner, 0.0, visuals.widgets.noninteractive.bg_fill);
+    let (_, stripe) = crate::ui::widgets::tree_row_colors(ui);
+    ui.painter().rect_filled(corner, top_corners(true, false), ruler_fill(&visuals));
 
     let interval = RulerScale::new(ui, editor.gantt, body.width()).interval();
-    // Marked days as a solid strip along the ruler's top edge, where it
-    // reads at any zoom without fighting the text or the bars.
-    draw_period_colors(ui, egui::Rect::from_min_size(ruler.min, egui::vec2(ruler.width(), 3.0)), editor.gantt, plan);
     draw_ruler(ui, ruler, editor.gantt);
+    // Marked days as a solid strip along the ruler's top edge, where it
+    // reads at any zoom without fighting the text or the bars. After the
+    // ruler, which paints its own surface.
+    draw_period_colors(ui, egui::Rect::from_min_size(ruler.min, egui::vec2(ruler.width(), 3.0)), editor.gantt, plan);
     draw_rows(ui, header, body, stripe, editor, &layout.rows);
+    draw_row_resize(ui, header, editor, plan, &layout.rows, session, commands);
     draw_grid(ui, body, editor.gantt);
     draw_calendar_delays(ui, body, editor.gantt, editor.gantt.row_scroll, plan, &layout.rows);
     draw_palette(ui, corner, editor);
@@ -853,7 +802,6 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
     let painter = ui.painter();
     painter.line_segment([ruler.left_bottom(), ruler.right_bottom()], rule);
     painter.line_segment([corner.right_top(), header.right_bottom()], rule);
-    painter.rect_stroke(rect, 0.0, rule, egui::StrokeKind::Inside);
 
     // The lanes first and the bars over them, both after the canvas: a click
     // on a bar is a click on the bar rather than a pan of the timeline, and a
@@ -872,19 +820,32 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
     // so its handle takes the pointer from the bars it crosses.
     draw_time_slider(ui, ruler, body, editor, interval, over_canvas);
 
-    if plan.agents().is_empty() && layout.rows.is_empty() {
-        centred_note(ui, body, tr!("gantt-empty-fleet"));
+    if plan.agents().is_empty() {
+        // Under whatever rows there are - the Blasting row stands without a
+        // fleet - with the way to make one, rather than an empty grid.
+        let free = egui::Rect::from_min_max(egui::pos2(body.left(), (body.top() + rows_height - editor.gantt.row_scroll).max(body.top())), body.max);
+        if free.height() > 80.0 {
+            let center = free.center();
+            ui.painter().text(
+                center - egui::vec2(0.0, 16.0),
+                egui::Align2::CENTER_CENTER,
+                tr!("gantt-empty-fleet"),
+                egui::TextStyle::Body.resolve(ui.style()),
+                ui.visuals().weak_text_color(),
+            );
+            let button = egui::Rect::from_center_size(center + egui::vec2(0.0, 16.0), egui::vec2(160.0, ui.spacing().interact_size.y + 6.0));
+            if ui.put(button, MenuButton::new(tr!("gantt-add-loaders")).primary()).clicked() {
+                editor.open_schedule_step(ScheduleStep::LoaderAgents);
+            }
+        }
     } else if plan.bars().is_empty()
         && let Some(agent) = plan.agents().first()
     {
         // A single empty-state action remains reachable even when the fleet's
         // empty rows fill the viewport.
-        let size = egui::vec2(120.0, ui.spacing().interact_size.y);
+        let size = egui::vec2(140.0, ui.spacing().interact_size.y + 6.0);
         let button_rect = egui::Rect::from_center_size(body.center(), size);
-        if ui
-            .put(button_rect, egui::Button::new(tr!("schedule-add-work")).corner_radius(GROUP_CORNER_RADIUS))
-            .clicked()
-        {
+        if ui.put(button_rect, MenuButton::new(tr!("schedule-add-work")).primary()).clicked() {
             commands.push(UiCommand::schedule(
                 session,
                 ScheduleEdit::AddBar {
@@ -1222,9 +1183,8 @@ fn text_width(ui: &egui::Ui, text: &str, font: &egui::FontId) -> f32 {
 
 /// One band of labelled columns: a rule at each column's start and, inside
 /// what shows of the column, the longest way of writing its label that fits.
-fn draw_ruler_cells(ui: &egui::Ui, painter: &egui::Painter, band: egui::Rect, rule_height: egui::Rangef, view: GanttView, unit: RulerUnit) {
+fn draw_ruler_cells(ui: &egui::Ui, painter: &egui::Painter, band: egui::Rect, rule_height: egui::Rangef, view: GanttView, unit: RulerUnit, text_color: egui::Color32) {
     let rule = ui.visuals().widgets.noninteractive.bg_stroke;
-    let text_color = ui.visuals().weak_text_color();
     let font = egui::TextStyle::Body.resolve(ui.style());
     let cells = unit.cells(view);
     let width = |start: f64, end: f64| view.x_of(end, band.left(), band.width()) - view.x_of(start, band.left(), band.width());
@@ -1270,8 +1230,12 @@ pub(super) fn draw_ruler(ui: &egui::Ui, rect: egui::Rect, view: GanttView) {
     }
     let scale = RulerScale::new(ui, view, rect.width());
     let painter = ui.painter_at(rect);
+    // The ruler runs to the island's right edge, so it rounds that corner.
+    painter.rect_filled(rect, top_corners(false, true), ruler_fill(ui.visuals()));
     let rule = ui.visuals().widgets.noninteractive.bg_stroke;
-    let text_color = ui.visuals().weak_text_color();
+    // The grouping unit names the span, so it is the one read first; the
+    // columns under it are only counted along.
+    let (group_color, text_color) = (ui.visuals().text_color(), ui.visuals().weak_text_color());
     let band = RULER_BAND.min(rect.height() / 2.0);
     let parent_band = egui::Rect::from_min_max(rect.min, egui::pos2(rect.right(), rect.top() + band));
     let minor_band = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - band), rect.max);
@@ -1279,7 +1243,7 @@ pub(super) fn draw_ruler(ui: &egui::Ui, rect: egui::Rect, view: GanttView) {
     if let Some(parent) = scale.minor.parent() {
         // The group's rule runs down through both bands, so a day reads as
         // the hours under it.
-        draw_ruler_cells(ui, &painter, parent_band, rect.y_range(), view, parent);
+        draw_ruler_cells(ui, &painter, parent_band, rect.y_range(), view, parent, group_color);
     }
     painter.line_segment([minor_band.left_top(), minor_band.right_top()], rule);
 
@@ -1292,13 +1256,31 @@ pub(super) fn draw_ruler(ui: &egui::Ui, rect: egui::Rect, view: GanttView) {
                     egui::pos2(x + 4.0, minor_band.center().y),
                     egui::Align2::LEFT_CENTER,
                     time_of(tick),
-                    egui::TextStyle::Body.resolve(ui.style()),
+                    egui::TextStyle::Small.resolve(ui.style()),
                     text_color,
                 );
             }
         }
-        unit => draw_ruler_cells(ui, &painter, minor_band, minor_band.y_range(), view, unit),
+        unit => draw_ruler_cells(ui, &painter, minor_band, minor_band.y_range(), view, unit, text_color),
     }
+}
+
+/// Rounding for a fill along the top of a timeline island: the island's own
+/// radius on the corners named, square where it meets its neighbour.
+pub(super) fn top_corners(left: bool, right: bool) -> egui::CornerRadius {
+    let radius = |round: bool| if round { GROUP_CORNER_RADIUS } else { 0 };
+    egui::CornerRadius {
+        nw: radius(left),
+        ne: radius(right),
+        sw: 0,
+        se: 0,
+    }
+}
+
+/// The surface the ruler and the corner beside it sit on: a step off the
+/// rows, so the timeline's heading reads as one strip above them.
+pub(super) fn ruler_fill(visuals: &egui::Visuals) -> egui::Color32 {
+    crate::ui::widgets::shifted(visuals.panel_fill, if visuals.dark_mode { 7 } else { -9 })
 }
 
 /// The agent column and the row bands beside it, drawn together so a row's
@@ -1362,6 +1344,57 @@ fn draw_rows(ui: &mut egui::Ui, header: egui::Rect, body: egui::Rect, stripe: eg
         if hover.is_positive() {
             ui.interact(hover, ui.scope_id().with(("gantt_row", index)), egui::Sense::hover())
                 .on_hover_text(format!("{}\n{}", row.title, row.subtitle));
+        }
+    }
+}
+
+/// Height of the strip along a row's foot in the name column that takes the
+/// drag resizing it.
+const ROW_EDGE_GRAB: f32 = 6.0;
+
+/// The rows' edges in the name column, which drag to set how tall a bar is
+/// drawn - every bar's, since the plan holds one height for the Gantt - and
+/// double-click back to the default. Shown live while dragged and written
+/// once when let go, so one resize is one undo step.
+fn draw_row_resize(ui: &mut egui::Ui, header: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, rows: &[Row], session: u32, commands: &mut Vec<UiCommand>) {
+    use crate::model::schedule::{DEFAULT_BAR_HEIGHT, MAX_BAR_HEIGHT, MIN_BAR_HEIGHT};
+    let scroll = editor.gantt.row_scroll;
+    for (index, row) in rows.iter().enumerate() {
+        let bottom = header.top() + row.top - scroll + row.height;
+        if bottom < header.top() || bottom > header.bottom() {
+            continue;
+        }
+        let grab = egui::Rect::from_min_max(
+            egui::pos2(header.left(), bottom - ROW_EDGE_GRAB / 2.0),
+            egui::pos2(header.right(), bottom + ROW_EDGE_GRAB / 2.0),
+        )
+        .intersect(header);
+        let response = ui
+            .interact(grab, ui.scope_id().with(("gantt_row_edge", index)), egui::Sense::click_and_drag())
+            .on_hover_cursor(egui::CursorIcon::ResizeVertical)
+            .on_hover_text(tr!("gantt-row-resize-help"));
+        if response.hovered() || response.dragged() {
+            ui.painter()
+                .hline(header.x_range(), bottom, egui::Stroke::new(2.0, crate::ui::widgets::menu::accent_fill(ui.visuals())));
+        }
+        if response.double_clicked() {
+            editor.gantt_bar_height_drag = None;
+            if plan.bar_height() != DEFAULT_BAR_HEIGHT {
+                commands.push(UiCommand::schedule(session, ScheduleEdit::SetBarHeight(DEFAULT_BAR_HEIGHT)));
+            }
+        } else if response.dragged() {
+            // The edge follows the pointer: a row of several stacked bars
+            // grows by each of them, so the step is shared between them.
+            let stacks = row.lanes.iter().map(|lane| lane.stacks.len()).sum::<usize>().max(1) as f32;
+            let height = editor.gantt_bar_height_drag.unwrap_or(plan.bar_height());
+            editor.gantt_bar_height_drag = Some((height + response.drag_delta().y / stacks).clamp(MIN_BAR_HEIGHT, MAX_BAR_HEIGHT));
+        } else if response.drag_stopped()
+            && let Some(height) = editor.gantt_bar_height_drag.take()
+        {
+            let height = height.round();
+            if height != plan.bar_height() {
+                commands.push(UiCommand::schedule(session, ScheduleEdit::SetBarHeight(height)));
+            }
         }
     }
 }
@@ -2767,10 +2800,28 @@ pub(super) fn draw_grid(ui: &egui::Ui, rect: egui::Rect, view: GanttView) {
         return;
     }
     let painter = ui.painter_at(rect);
-    let stroke = egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color.gamma_multiply(0.6));
-    for start in RulerScale::new(ui, view, rect.width()).boundaries(view) {
-        let x = view.x_of(start, rect.left(), rect.width());
-        painter.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], stroke);
+    let color = ui.visuals().widgets.noninteractive.bg_stroke.color;
+    // Two weights, as the ruler has two bands: the columns faint, and the
+    // unit grouping them - the day over its hours - at full strength, so a
+    // day reads as one span rather than as four more columns.
+    let scale = RulerScale::new(ui, view, rect.width());
+    let majors: Vec<f64> = scale
+        .minor
+        .parent()
+        .map(|parent| parent.cells(view).into_iter().map(|cell| cell.0).filter(|start| *start >= view.start_seconds).collect())
+        .unwrap_or_default();
+    let minor = egui::Stroke::new(1.0, color.gamma_multiply(0.35));
+    for start in scale.boundaries(view) {
+        if majors.iter().any(|major| (major - start).abs() < 1.0) {
+            continue;
+        }
+        let x = painter.round_to_pixel_center(view.x_of(start, rect.left(), rect.width()));
+        painter.vline(x, rect.y_range(), minor);
+    }
+    let major = egui::Stroke::new(1.0, color);
+    for start in majors {
+        let x = painter.round_to_pixel_center(view.x_of(start, rect.left(), rect.width()));
+        painter.vline(x, rect.y_range(), major);
     }
 }
 
@@ -2825,6 +2876,9 @@ fn palette_color(item: GanttPaletteItem) -> egui::Color32 {
 /// The chips in the corner above the machine names: drag one onto a row to
 /// make that kind of bar there.
 fn draw_palette(ui: &mut egui::Ui, corner: egui::Rect, editor: &mut EditorState) {
+    const COLUMNS: usize = 3;
+    const GAP: f32 = 3.0;
+    const EDGE: f32 = 3.0;
     let items = [
         GanttPaletteItem::Dig,
         GanttPaletteItem::Reclaim,
@@ -2832,56 +2886,52 @@ fn draw_palette(ui: &mut egui::Ui, corner: egui::Rect, editor: &mut EditorState)
         GanttPaletteItem::Blast,
         GanttPaletteItem::Follow,
     ];
-    let inner = corner.shrink2(egui::vec2(6.0, 3.0));
+    let inner = corner.shrink2(egui::vec2(6.0, 4.0));
     if !inner.is_positive() {
         return;
     }
-    let gap = 4.0;
     let font = egui::TextStyle::Small.resolve(ui.style());
     let visuals = ui.visuals().clone();
-    // Each chip as wide as its name, wrapping onto a second row rather than
-    // cutting names short when the corner is narrow.
-    let widths: Vec<f32> = items
-        .iter()
-        .map(|item| 4.0 + 7.0 + 4.0 + ui.painter().layout_no_wrap(palette_label(*item), font.clone(), visuals.text_color()).size().x + 6.0)
-        .collect();
-    let mut places = Vec::with_capacity(items.len());
-    let (mut x, mut row) = (inner.left(), 0usize);
-    for width in &widths {
-        if x > inner.left() && x + width > inner.right() {
-            x = inner.left();
-            row += 1;
-        }
-        places.push((x, row));
-        x += width + gap;
-    }
-    let rows = row + 1;
-    let height = ((inner.height() - gap * row as f32) / rows as f32).min(18.0);
-    let top = inner.center().y - (height * rows as f32 + gap * row as f32) * 0.5;
+    let rows = items.len().div_ceil(COLUMNS);
+    // An even grid rather than chips as wide as their names: the corner
+    // reads as one palette, and every chip is as easy to take hold of.
+    let size = egui::vec2(
+        (inner.width() - GAP * (COLUMNS - 1) as f32) / COLUMNS as f32,
+        ((inner.height() - GAP * (rows - 1) as f32) / rows as f32).min(18.0),
+    );
+    let top = inner.center().y - (size.y * rows as f32 + GAP * (rows - 1) as f32) * 0.5;
+    let rest = crate::ui::widgets::shifted(ruler_fill(&visuals), if visuals.dark_mode { -10 } else { 8 });
+    let hot = crate::ui::widgets::shifted(ruler_fill(&visuals), if visuals.dark_mode { 14 } else { 12 });
     for (index, item) in items.into_iter().enumerate() {
-        let (left, row) = places[index];
-        let chip = egui::Rect::from_min_size(
-            egui::pos2(left, top + row as f32 * (height + gap)),
-            egui::vec2(widths[index].min(inner.right() - left), height),
-        );
+        let (column, row) = (index % COLUMNS, index / COLUMNS);
+        let chip = egui::Rect::from_min_size(egui::pos2(inner.left() + column as f32 * (size.x + GAP), top + row as f32 * (size.y + GAP)), size);
         let response = ui
             .interact(chip, ui.scope_id().with(("gantt_palette", index)), egui::Sense::drag())
             .on_hover_text(tr!("gantt-palette-hint", item = palette_label(item)));
-        let fill = if response.hovered() || editor.gantt_palette_drag == Some(item) {
-            visuals.widgets.hovered.bg_fill
-        } else {
-            visuals.widgets.inactive.bg_fill
-        };
-        ui.painter().rect_filled(chip, GROUP_CORNER_RADIUS, fill);
-        // A swatch of the colour the bar will be, beside its name.
-        let swatch = egui::Rect::from_min_size(egui::pos2(chip.left() + 4.0, chip.center().y - 3.5), egui::vec2(7.0, 7.0));
-        ui.painter().rect_filled(swatch, 1.0, palette_color(item));
-        ui.painter_at(chip).text(
-            egui::pos2(swatch.right() + 4.0, chip.center().y),
+        let carried = editor.gantt_palette_drag == Some(item);
+        let painter = ui.painter_at(chip);
+        painter.rect_filled(chip, GROUP_CORNER_RADIUS, if response.hovered() || carried { hot } else { rest });
+        // The colour the bar will be, as an edge down the chip's left.
+        painter.rect_filled(
+            egui::Rect::from_min_size(chip.min, egui::vec2(EDGE, chip.height())),
+            egui::CornerRadius {
+                nw: GROUP_CORNER_RADIUS,
+                sw: GROUP_CORNER_RADIUS,
+                ne: 0,
+                se: 0,
+            },
+            palette_color(item),
+        );
+        painter.text(
+            egui::pos2(chip.left() + EDGE + 5.0, chip.center().y),
             egui::Align2::LEFT_CENTER,
             palette_label(item),
             font.clone(),
-            visuals.text_color(),
+            if response.hovered() || carried {
+                visuals.strong_text_color()
+            } else {
+                visuals.text_color()
+            },
         );
         if response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
@@ -3031,40 +3081,32 @@ fn draw_delay_drop_menu(ui: &mut egui::Ui, editor: &mut EditorState, plan: &Sche
         return;
     };
     let mut chosen: Option<Option<crate::model::schedule::DelayTypeId>> = None;
-    let mut close = false;
     let mut open_setup = false;
-    let area = egui::Area::new(ui.scope_id().with("gantt_delay_drop"))
-        .order(egui::Order::Foreground)
-        .fixed_pos(drop.pos)
+    let (_, mut close) = ContextMenu::new("gantt_delay_drop", tr!("gantt-delay-type-title"))
+        .position(drop.pos)
+        .width(200.0)
         .show(ui.ctx(), |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.set_min_width(180.0);
-                ui.set_max_width(220.0);
-                ui.label(bold(&tr!("gantt-delay-type-title")));
-                ui.add_space(2.0);
-                let swatch_row = |ui: &mut egui::Ui, color: egui::Color32, name: String| {
-                    let response = ui.add(egui::Button::new(format!("     {name}")).frame(false).min_size(egui::vec2(ui.available_width(), 0.0)));
-                    let swatch = egui::Rect::from_min_size(egui::pos2(response.rect.left() + 4.0, response.rect.center().y - 5.0), egui::vec2(10.0, 10.0));
-                    ui.painter().rect_filled(swatch, 2.0, color);
-                    response.clicked()
-                };
-                for entry in &plan.delays().types {
-                    if swatch_row(ui, super::schedule_delays::delay_color(entry.color), entry.name.clone()) {
-                        chosen = Some(Some(entry.id));
-                    }
+            for entry in &plan.delays().types {
+                if ContextMenuAction::new(entry.name.clone())
+                    .swatch(super::schedule_delays::delay_color(entry.color))
+                    .show(ui)
+                    .clicked()
+                {
+                    chosen = Some(Some(entry.id));
                 }
-                if swatch_row(ui, super::schedule_delays::UNTYPED_DELAY_COLOR, tr!("delay-untyped")) {
-                    chosen = Some(None);
-                }
-                ui.separator();
-                if ui.add(egui::Button::new(tr!("gantt-delay-types-setup")).frame(false)).clicked() {
-                    open_setup = true;
-                }
-            });
+            }
+            if ContextMenuAction::new(tr!("delay-untyped"))
+                .swatch(super::schedule_delays::UNTYPED_DELAY_COLOR)
+                .show(ui)
+                .clicked()
+            {
+                chosen = Some(None);
+            }
+            context_menu_separator(ui);
+            if ContextMenuAction::new(tr!("gantt-delay-types-setup")).show(ui).clicked() {
+                open_setup = true;
+            }
         });
-    if area.response.clicked_elsewhere() || ui.input(|input| input.key_pressed(egui::Key::Escape)) {
-        close = true;
-    }
     if let Some(kind) = chosen {
         commands.push(UiCommand::schedule(
             session,
@@ -3082,9 +3124,7 @@ fn draw_delay_drop_menu(ui: &mut egui::Ui, editor: &mut EditorState, plan: &Sche
         close = true;
     }
     if open_setup {
-        editor.planning_page = PlanningPage::Schedule;
-        editor.schedule_subpage = PlanningSubpage::Setup;
-        editor.schedule_setup_step = ScheduleStep::Delays;
+        editor.open_schedule_step(ScheduleStep::Delays);
         editor.schedule_selected_delay = Some(crate::ui::state::DelaySelection::Types);
         close = true;
     }
@@ -3110,32 +3150,24 @@ fn draw_follow_drop_menu(ui: &mut egui::Ui, editor: &mut EditorState, plan: &Sch
         return;
     };
     let mut chosen = None;
-    let area = egui::Area::new(ui.scope_id().with("gantt_follow_drop"))
-        .order(egui::Order::Foreground)
-        .fixed_pos(drop.pos)
+    let (_, mut close) = ContextMenu::new("gantt_follow_drop", tr!("gantt-follow-title"))
+        .position(drop.pos)
+        .width(220.0)
         .show(ui.ctx(), |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.set_min_width(180.0);
-                ui.set_max_width(240.0);
-                ui.label(bold(&tr!("gantt-follow-title")));
-                ui.label(egui::RichText::new(tr!("follow-bar-help")).weak().small());
-                ui.add_space(2.0);
-                let mut any = false;
-                for agent in follow_leaders(plan, drop.agent) {
-                    any = true;
-                    if ui
-                        .add(egui::Button::new(agent.name.clone()).frame(false).min_size(egui::vec2(ui.available_width(), 0.0)))
-                        .clicked()
-                    {
-                        chosen = Some(agent.id);
-                    }
+            let leaders = follow_leaders(plan, drop.agent);
+            for agent in &leaders {
+                if ContextMenuAction::new(agent.name.clone()).show(ui).clicked() {
+                    chosen = Some(agent.id);
                 }
-                if !any {
-                    ui.label(egui::RichText::new(tr!("gantt-follow-none")).weak());
-                }
+            }
+            if leaders.is_empty() {
+                ContextMenuAction::new(tr!("gantt-follow-none")).enabled(false).show(ui);
+            }
+            context_menu_separator(ui);
+            context_menu_fields(ui, |ui| {
+                ui.add(egui::Label::new(egui::RichText::new(tr!("follow-bar-help")).weak().small()).wrap());
             });
         });
-    let mut close = area.response.clicked_elsewhere() || ui.input(|input| input.key_pressed(egui::Key::Escape));
     if let Some(leader) = chosen {
         commands.push(UiCommand::schedule(
             session,

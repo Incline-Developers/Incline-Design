@@ -1,4 +1,4 @@
-//! The Solids page's View subpage: everything the setup has generated.
+//! The Planning workspace's Reserves view: everything the setup has generated.
 //!
 //! Where the Setup pages configure a solid, this one is for looking through
 //! what came out - the solids grouped by what they are, each opening into its
@@ -74,7 +74,17 @@ fn navigation_selection(editor: &EditorState, tree: NavigationTree) -> &[SolidsV
 /// viewport.
 pub(crate) fn draw_animation_tree(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document, tree: NavigationTree, commands: &mut Vec<UiCommand>) {
     ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
-    egui::ScrollArea::vertical().auto_shrink([false; 2]).min_scrolled_height(0.0).show(ui, |ui| {
+    egui::ScrollArea::vertical()
+        .auto_shrink([false; 2])
+        .min_scrolled_height(0.0)
+        .show(ui, |ui| draw_navigation_rows(ui, editor, document, tree, commands));
+}
+
+/// The rows of a Solids Navigation tree, for a pane that scrolls them itself:
+/// [`draw_animation_tree`]'s, or the table stack down the Road Network's
+/// column.
+pub(crate) fn draw_navigation_rows(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document, tree: NavigationTree, commands: &mut Vec<UiCommand>) {
+    {
         ui.spacing_mut().item_spacing.y = 0.0;
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
         let (slot, top) = reserve_fixed_stripes(ui);
@@ -99,7 +109,7 @@ pub(crate) fn draw_animation_tree(ui: &mut egui::Ui, editor: &mut EditorState, d
             }
         }
         paint_fixed_stripes(ui, slot, top, crate::ui::widgets::tree_row_colors(ui).1);
-    });
+    }
 }
 
 /// How the Layout's dug blocks under a Haulage navigation row meet the roads:
@@ -1193,9 +1203,9 @@ fn bench_base_for(solid: &crate::model::Solid, band: BenchSelection) -> f64 {
         .map_or(f64::NAN, |bench| bench.base)
 }
 
-/// The View subpage's own layout: the tree is drawn into the explorer column,
+/// The Reserves view's own layout: the tree is drawn into the explorer column,
 /// and this fills the rest of the window with the properties beside it.
-/// The View page: what the selection is and what it holds, down the right, and
+/// The Reserves view: what the selection is and what it holds, down the right, and
 /// the inspector taking the rest.
 ///
 /// The two tables are a column of their own rather than a slice cut out of the
@@ -1212,14 +1222,11 @@ pub(crate) fn draw_details(
     let rect = egui::CentralPanel::default()
         .frame(egui::Frame::NONE)
         .show(ui, |ui| {
-            super::planning_setup::stacked_column(
-                ui,
-                &mut layout,
-                "solids_view_column",
-                "solids_view_contents_island",
-                |ui, rect| draw_properties(ui, rect, editor, project, document),
-                |ui, rect| draw_contents(ui, rect, editor, document),
-            );
+            super::planning_setup::stacked_column(ui, &mut layout, "solids_view_column", |ui| {
+                use crate::ui::widgets::data_grid::stack_slot;
+                draw_properties(ui, stack_slot(ui), editor, project, document);
+                draw_contents(ui, stack_slot(ui), editor, document);
+            });
             super::planning_setup::central_pane_of(ui, |ui, rect| {
                 super::planning_setup::draw_solid_render(ui, rect, editor, project.active_session, commands);
             })

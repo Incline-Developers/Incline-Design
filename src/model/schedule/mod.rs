@@ -848,11 +848,24 @@ fn default_true() -> bool {
 
 impl Default for AutoRun {
     fn default() -> Self {
+        Self::every(true)
+    }
+}
+
+impl AutoRun {
+    /// Every switch at `on`: the one Auto the pages show sets them together.
+    pub(crate) fn every(on: bool) -> Self {
         Self {
-            solids: true,
-            haulage: true,
-            schedule: true,
+            solids: on,
+            haulage: on,
+            schedule: on,
         }
+    }
+
+    /// Whether everything is kept up to date on its own, which is what the
+    /// one Auto the pages show reads as on.
+    pub(crate) fn all(self) -> bool {
+        self.solids && self.haulage && self.schedule
     }
 }
 

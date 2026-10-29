@@ -1974,7 +1974,7 @@ impl<'a> HaulCapture<'a> {
             .searches
             .entry((args.destination, class.id))
             .or_insert_with(|| crate::model::haulage::routing::DestinationSearch::new(self.network, &self.index, class, target));
-        // The cycle alone: the drawn path and profile are the Haulage page's.
+        // The cycle alone: the drawn path and profile are the Road Network's.
         let cycle = search.as_ref().and_then(|s| s.cycle(&self.index, source, args.haul_link, dig, rate, spot, dump));
         self.cycles.insert(key, cycle);
         cycle

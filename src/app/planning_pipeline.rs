@@ -500,7 +500,7 @@ impl crate::app::App<'_> {
             }
         }
         self.advance_planning_run();
-        if self.editor.planning_page == crate::ui::state::PlanningPage::Schedule {
+        if self.editor.is_schedule_context() {
             // The blasts drill and blast lists, refreshed as the run or the
             // project (blast names included) moves.
             let completed = self.planning_pipeline.as_ref().and_then(|p| p.status(SolidsStep::LAST).completed_inputs);
@@ -516,10 +516,15 @@ impl crate::app::App<'_> {
         let haul_page = self.editor.is_haulage_page();
         if self.editor.haul_page_drawn != haul_page {
             self.editor.haul_page_drawn = haul_page;
+            // A road half drawn over the Road Network is put down on leaving
+            // it, however it was left: a click elsewhere must not place one.
+            if !haul_page {
+                self.editor.cancel_haul_edit();
+            }
             self.invalidate_geometry();
             self.invalidate_overlay();
         }
-        if self.editor.planning_page == crate::ui::state::PlanningPage::Haulage {
+        if self.editor.is_setup_group(crate::ui::state::SetupGroup::Haulage) {
             let completed = self.planning_pipeline.as_ref().and_then(|p| p.status(SolidsStep::LAST).completed_inputs);
             // The document revision covers road, truck-class and destination
             // edits, undo included, so the connection tint and issue list
@@ -577,13 +582,6 @@ impl crate::app::App<'_> {
             }
         });
         let running = pipeline.is_running();
-        // What a scheduler would get if it asked right now, shown where the
-        // run controls are: the readiness gate is the point of the pipeline,
-        // so it should not be invisible until something consumes it.
-        let snapshot = match self.planning_snapshot() {
-            Ok(snapshot) => tr!("planning-snapshot-ready", blocks = snapshot.blocks.len().to_string()),
-            Err(reason) => reason.describe(),
-        };
         // Run Step moves the list on to the next step once the step it ran
         // succeeds, so setup reads top to bottom. Only while the user is still
         // looking at that step: having picked another, they have moved on.
@@ -602,10 +600,9 @@ impl crate::app::App<'_> {
                 }
             }
         }
-        if self.editor.planning_stages != views || self.editor.planning_run_active != running || self.editor.planning_snapshot_status != snapshot {
+        if self.editor.planning_stages != views || self.editor.planning_run_active != running {
             self.editor.planning_stages = views;
             self.editor.planning_run_active = running;
-            self.editor.planning_snapshot_status = snapshot;
             self.redraw_requested = true;
         }
     }
@@ -781,16 +778,14 @@ impl crate::app::App<'_> {
     ///
     /// Like the schedule's Auto: at most once for one set of inputs, so a step
     /// that fails, or a run the user cancelled, is not retried until something
-    /// changes. A project with no solids has nothing to plan, and is left with
-    /// its steps not run rather than failed.
+    /// changes. It runs what Run All runs, so the two leave the steps alike.
     pub(crate) fn auto_run_planning(&mut self) {
         self.planning_auto_deadline = None;
         let Some(pipeline) = self.planning_pipeline.as_ref() else {
             self.planning_auto_settle = None;
             return;
         };
-        let has_solids = self.workspace.active_document().is_some_and(|document| !document.solids().is_empty());
-        if !self.editor.planning_auto_run || !has_solids || pipeline.is_running() {
+        if !self.editor.planning_auto_run || pipeline.is_running() {
             self.planning_auto_settle = None;
             // Switched off, edits can leave steps stale over inputs Auto has
             // already seen; switching it back on has to look again.

@@ -126,7 +126,7 @@ impl crate::app::App<'_> {
         self.editor.animation_routes = routes;
     }
     pub(crate) fn refresh_haulage_view(&mut self) {
-        if self.editor.planning_page != crate::ui::state::PlanningPage::Haulage {
+        if !self.editor.is_setup_group(crate::ui::state::SetupGroup::Haulage) {
             return;
         }
         self.editor.haul_view_revision = self.editor.haul_view_revision.wrapping_add(1);
@@ -318,8 +318,7 @@ impl crate::app::App<'_> {
     }
     pub(crate) fn start_haul_road(&mut self) {
         self.editor.active_workspace = crate::ui::state::Workspace::Planning;
-        self.editor.planning_page = crate::ui::state::PlanningPage::Haulage;
-        self.editor.haulage_subpage = crate::ui::state::PlanningSubpage::Layout;
+        self.editor.open_haulage_step(crate::ui::state::HaulageStep::Network);
         self.refresh_haulage_view();
         self.editor.haul_draw = true;
         self.editor.haul_points.clear();
@@ -504,7 +503,7 @@ impl crate::app::App<'_> {
         }
         self.invalidate_overlay();
     }
-    /// Delete key on the Haulage page. Roads go at once; a destination's node
+    /// Delete key on the Road Network. Roads go at once; a destination's node
     /// asks first, because it carries a role. Returns whether it acted.
     pub(crate) fn delete_selected_haulage(&mut self) -> bool {
         let Some(project) = self.workspace.active_project() else { return false };
@@ -527,7 +526,7 @@ impl crate::app::App<'_> {
         }
         true
     }
-    /// What the Haulage Layout shows: its roads and the dig blocks not hidden
+    /// What the Road Network shows: its roads and the dig blocks not hidden
     /// in Solids Navigation.
     pub(crate) fn haul_layout_bounds(&self) -> Option<(DVec3, DVec3)> {
         let network = self.workspace.active_document()?.haulage();
@@ -659,13 +658,11 @@ impl crate::app::App<'_> {
             },
         ]));
         self.editor.schedule_selected_destination = Some(destination);
-        self.editor.planning_page = crate::ui::state::PlanningPage::Schedule;
-        self.editor.schedule_subpage = crate::ui::state::PlanningSubpage::Setup;
-        self.editor.schedule_setup_step = match kind {
+        self.editor.open_schedule_step(match kind {
             DestinationKind::Stockpile => crate::ui::state::ScheduleStep::Stockpiles,
             DestinationKind::Dump => crate::ui::state::ScheduleStep::Dumps,
             DestinationKind::Crusher => crate::ui::state::ScheduleStep::Crushers,
-        };
+        });
         Ok(())
     }
 }

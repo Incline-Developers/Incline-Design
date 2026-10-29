@@ -458,7 +458,7 @@ pub(crate) struct App<'a> {
     pub(crate) solid_view_cache: std::collections::HashMap<crate::model::SolidId, crate::app::commands::solids_view::ViewSolid>,
     pub(crate) solid_view_body: Vec<crate::model::triangulation::OpenTriangulation>,
     pub(crate) solid_view_body_key: Option<u64>,
-    /// The Haulage Layout's dig blocks as one flat surface at their flitch
+    /// The Road Network's dig blocks as one flat surface at their flitch
     /// bases, for the orbit pivot and the rotation centre to land on. Never
     /// drawn: the blocks are filled in the document scene.
     pub(crate) haul_block_surface: Vec<crate::model::triangulation::OpenTriangulation>,

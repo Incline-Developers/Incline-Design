@@ -1,4 +1,4 @@
-//! Haulage layout: what is selected in the network, a route check while the
+//! Road Network: what is selected in the network, a route check while the
 //! selection names a haul, and the network's issues, as a column of panes
 //! beside the viewport.
 //!
@@ -20,11 +20,10 @@ use crate::{
     },
     ui::{
         EditorState, UiProjectView,
-        elements::planning_setup::{central_pane_of, stacked_lower_share},
         state::{HaulEdit, HaulPromote, HaulPromotePoint, HaulPromoteTarget, UiCommand},
         widgets::{
             context_menu::ContextMenuAction,
-            data_grid::{DataGrid, PropertyRows, PropertyTable, grid_cell_entry, grid_cell_warning, grid_columns_row, grid_empty_state, property_table_height},
+            data_grid::{DataGrid, PropertyRows, PropertyTable, grid_cell_entry, grid_cell_warning, grid_columns_row, grid_empty_state, stack_slot, table_stack},
             island::{Island, Side},
             menu,
         },
@@ -112,46 +111,43 @@ pub(crate) struct LayoutColumn {
     pub(crate) grips: Vec<crate::ui::chrome::Grip>,
 }
 
-/// The Layout page's column down the right edge: what is selected in the
-/// viewport, a route check while a block and a destination are, and the
-/// network's issues.
-pub(crate) fn draw_panel(ui: &mut egui::Ui, editor: &mut EditorState, _document: &Document, project: &UiProjectView, commands: &mut Vec<UiCommand>) -> LayoutColumn {
+/// The Road Network step's column down the right edge: what is selected in
+/// the viewport, a route check while a block and a destination are, the
+/// network's issues, and the settings every road is joined and driven by.
+pub(crate) fn draw_panel(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document, project: &UiProjectView, commands: &mut Vec<UiCommand>) -> LayoutColumn {
     let network = &project.haulage;
     let session = project.active_session;
     let destinations = project.haul_destinations.clone();
+    // What is selected, the route check while there is one to make, the
+    // network's issues and its settings, and the Solids Navigation that hides
+    // ground to see a block or click the right one, one under the other in
+    // one island that scrolls as a whole.
     let column = Island::new("haulage_layout", Side::Right)
         .default_width(360.0)
         .min_width(260.0)
         .max_width(560.0)
-        .bare()
-        .show(ui, |ui, _| {
-            // Claimed from the bottom up; the selection takes what is left.
-            let mut regions = Vec::new();
-            let mut grips = Vec::new();
-            let picked = Picked::of(editor, network);
-            let reserve = property_table_height(ui, picked.rows()) + crate::ui::chrome::region_frame(ui).total_margin().sum().y;
-            let (rect, seam) = stacked_lower_share(ui, "haul_issues_pane", 0.25, reserve, |ui, rect| issues(ui, rect, editor, network, &destinations, commands));
-            regions.push(rect);
-            grips.push(seam);
-            match route_question(editor, network, &destinations) {
-                Some(question) => {
-                    let (rect, seam) = stacked_lower_share(ui, "haul_route_pane", 0.55, reserve, |ui, rect| {
-                        route_check(ui, rect, editor, network, project, &destinations, &question, commands);
-                    });
-                    regions.push(rect);
-                    grips.push(seam);
+        .flush()
+        .show(ui, |ui, rect| {
+            table_stack(ui, rect, "haulage_layout", |ui| {
+                let picked = Picked::of(editor, network);
+                let question = route_question(editor, network, &destinations);
+                selection(ui, stack_slot(ui), picked, editor, network, project, &destinations, session, commands);
+                match question {
+                    Some(question) => route_check(ui, stack_slot(ui), editor, network, project, &destinations, &question, commands),
+                    None if editor.haul_route.take().is_some() => commands.push(UiCommand::RefreshHaulOverlay),
+                    None => {}
                 }
-                None if editor.haul_route.take().is_some() => commands.push(UiCommand::RefreshHaulOverlay),
-                None => {}
-            }
-            regions.push(central_pane_of(ui, |ui, rect| {
-                selection(ui, rect, picked, editor, network, project, &destinations, session, commands);
-            }));
-            (regions, grips)
+                issues(ui, stack_slot(ui), editor, network, &destinations, commands);
+                draw_network_settings(ui, stack_slot(ui), network, session, commands);
+                DataGrid::new("haulage_solids_navigation", stack_slot(ui), &tr!("sequence-solids-navigation")).show(ui, |ui| {
+                    super::solids_view::draw_navigation_rows(ui, editor, document, super::solids_view::NavigationTree::Haulage, commands);
+                });
+            });
         });
-    let (regions, mut grips) = column.inner;
-    grips.push(column.grip);
-    LayoutColumn { regions, grips }
+    LayoutColumn {
+        regions: column.regions,
+        grips: vec![column.grip],
+    }
 }
 
 /// What the Selection pane is describing this frame.
@@ -222,23 +218,6 @@ impl Picked {
             (true, false) => Self::Nodes(nodes),
             (false, false) => Self::Mixed(roads, nodes),
             (true, true) => Self::Nothing,
-        }
-    }
-
-    /// Rows the pane draws, so the panes under it leave room for them.
-    fn rows(&self) -> usize {
-        match self {
-            Self::Drawing(_) | Self::ConfirmDelete(_) => 3,
-            Self::Linking(..) => 4,
-            Self::Blocks(blocks) if blocks.len() == 1 => 3 + blocks[0].links.len().max(1),
-            Self::Blocks(_) => 6,
-            Self::Destination(_) => 2,
-            Self::Roads(roads) if roads.len() == 1 => 5,
-            Self::Roads(_) => 2,
-            Self::Nodes(nodes) if nodes.len() == 1 => 5,
-            Self::Nodes(nodes) if nodes.len() == 2 => 2,
-            Self::Nodes(_) | Self::Mixed(..) => 1,
-            Self::Nothing => 1,
         }
     }
 }
@@ -600,33 +579,38 @@ fn issue_help(kind: IssueKind) -> String {
 /// Shares of the Road Network grid's columns: the setting, then its value.
 const SETTING_FRACTIONS: [f32; 2] = [0.6, 0.4];
 
-/// Haulage Setup's Road Network step: how roads join and how blocks reach
-/// them, one row each, with what a setting does on hover.
-pub(crate) fn draw_network_settings(ui: &mut egui::Ui, rect: egui::Rect, network: &HaulNetwork, session: u32, commands: &mut Vec<UiCommand>) {
+/// How many settings [`draw_network_settings`] lists.
+const NETWORK_SETTINGS: usize = 4;
+
+/// The Road Network's settings: how roads join and how blocks reach them,
+/// one row each, with what a setting does on hover.
+fn draw_network_settings(ui: &mut egui::Ui, rect: egui::Rect, network: &HaulNetwork, session: u32, commands: &mut Vec<UiCommand>) {
     let current = network.settings.clone();
     let columns = [(tr!("haul-setting"), SETTING_FRACTIONS[0]), (tr!("planning-value"), SETTING_FRACTIONS[1])];
-    let fields: [(String, String, f64, std::ops::RangeInclusive<f64>, &str); 4] = [
+    let fields: [(String, String, f64, std::ops::RangeInclusive<f64>, &str); NETWORK_SETTINGS] = [
         (tr!("haul-join"), tr!("haul-join-help"), current.join_tolerance_m, 0.01..=100.0, "m"),
         (tr!("haul-auto-join"), tr!("haul-auto-join-help"), current.auto_join_m, 1.0..=100_000.0, "m"),
         (tr!("haul-bench-speed"), tr!("haul-bench-speed-help"), current.bench_speed_kph, 1.0..=200.0, "km/h"),
         (tr!("haul-acceleration"), tr!("haul-acceleration-help"), current.acceleration_kph_s, 0.1..=20.0, "km/h/s"),
     ];
-    DataGrid::new("haul_network_settings", rect, &tr!("haul-step-network")).columns(&columns).show(ui, |ui| {
-        for (index, (label, help, mut value, range, suffix)) in fields.into_iter().enumerate() {
-            let (response, cells) = grid_columns_row(ui, &SETTING_FRACTIONS, &[&label, ""], false);
-            response.on_hover_text(&help);
-            if grid_cell_entry(ui, ("haul_setting", index), cells[1], &mut value, suffix) {
-                let mut settings = current.clone();
-                *[
-                    &mut settings.join_tolerance_m,
-                    &mut settings.auto_join_m,
-                    &mut settings.bench_speed_kph,
-                    &mut settings.acceleration_kph_s,
-                ][index] = value.clamp(*range.start(), *range.end());
-                command(commands, session, HaulEdit::Settings(settings));
+    DataGrid::new("haul_network_settings", rect, &tr!("haul-network-settings"))
+        .columns(&columns)
+        .show(ui, |ui| {
+            for (index, (label, help, mut value, range, suffix)) in fields.into_iter().enumerate() {
+                let (response, cells) = grid_columns_row(ui, &SETTING_FRACTIONS, &[&label, ""], false);
+                response.on_hover_text(&help);
+                if grid_cell_entry(ui, ("haul_setting", index), cells[1], &mut value, suffix) {
+                    let mut settings = current.clone();
+                    *[
+                        &mut settings.join_tolerance_m,
+                        &mut settings.auto_join_m,
+                        &mut settings.bench_speed_kph,
+                        &mut settings.acceleration_kph_s,
+                    ][index] = value.clamp(*range.start(), *range.end());
+                    command(commands, session, HaulEdit::Settings(settings));
+                }
             }
-        }
-    });
+        });
 }
 
 fn road_menu(ui: &mut egui::Ui, editor: &EditorState, id: RoadId, session: u32, commands: &mut Vec<UiCommand>) {
@@ -769,7 +753,7 @@ pub(crate) fn draw_promote_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
     editor.haul_promote = (open && !close).then_some(promote);
 }
 
-/// The canvas right-click menu's haulage part. Only on the Haulage page, and
+/// The canvas right-click menu's haulage part. Only on the Road Network, and
 /// for one thing at a time: actions for each of several selected roads would
 /// repeat the same entries.
 pub(crate) fn canvas_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {

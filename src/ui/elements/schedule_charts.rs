@@ -75,11 +75,17 @@ struct Chart {
     height: f32,
 }
 
-/// The Charts page. Returns the rect it claimed.
-pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, document: &crate::model::Document, commands: &mut Vec<UiCommand>) -> egui::Rect {
+/// The Charts page. Returns the regions it claimed.
+pub(crate) fn draw_details(
+    ui: &mut egui::Ui,
+    editor: &mut EditorState,
+    project: &UiProjectView,
+    document: &crate::model::Document,
+    commands: &mut Vec<UiCommand>,
+) -> super::planning_setup::PlanningLayout {
     let plan = project.schedule.clone();
     let fields: Vec<(ReserveFieldId, String)> = document.reserve_fields().iter().map(|field| (field.id, field.name.clone())).collect();
-    draw_timeline_page(ui, editor, &plan, document, None, commands, |ui, rect, editor, destinations, _commands| {
+    draw_timeline_page(ui, editor, &plan, document, commands, |ui, rect, editor, destinations, _commands| {
         draw_canvas(ui, rect, editor, &plan, destinations, &fields);
     })
 }
@@ -133,10 +139,9 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
 
     let visuals = ui.visuals().clone();
     let rule = visuals.widgets.noninteractive.bg_stroke;
-    let (surface, stripe) = crate::ui::widgets::tree_row_colors(ui);
-    ui.painter().rect_filled(rect, 0.0, surface);
-    ui.painter().rect_filled(frame.ruler, 0.0, visuals.widgets.noninteractive.bg_fill);
-    ui.painter().rect_filled(frame.corner, 0.0, visuals.widgets.noninteractive.bg_fill);
+    let (_, stripe) = crate::ui::widgets::tree_row_colors(ui);
+    ui.painter()
+        .rect_filled(frame.corner, super::schedule_gantt::top_corners(true, false), super::schedule_gantt::ruler_fill(&visuals));
     let interval = frame.interval(ui, editor.gantt);
     draw_ruler(ui, frame.ruler, editor.gantt);
 
@@ -187,7 +192,6 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
     let painter = ui.painter();
     painter.line_segment([frame.ruler.left_bottom(), frame.ruler.right_bottom()], rule);
     painter.line_segment([frame.corner.right_top(), frame.header.right_bottom()], rule);
-    painter.rect_stroke(rect, 0.0, rule, egui::StrokeKind::Inside);
     draw_time_slider(ui, frame.ruler, frame.body, editor, interval, over_canvas);
 }
 

@@ -27,7 +27,7 @@ use crate::{
         widgets::{
             color::edit_srgba,
             context_menu::{ContextMenuAction, context_menu_popup},
-            data_grid::{DataGrid, PropertyTable, grid_columns_row, grid_columns_row_height, property_table_height},
+            data_grid::{DataGrid, PropertyTable, grid_columns_row, grid_columns_row_height},
             date_picker::date_popup,
         },
     },
@@ -94,51 +94,47 @@ pub(crate) fn draw_periods(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut Edi
     let days = plan.experiment().planning_end_day;
     let start = periods.start_date;
     let mut edits = Vec::new();
-    let table_rect = egui::Rect::from_min_size(
-        rect.min,
-        egui::vec2(rect.width(), property_table_height(ui, 4 + usize::from(start.is_none())).min(rect.height())),
-    );
-    PropertyTable::new("schedule_periods_dates", table_rect, &tr!("periods-dates")).show(ui, |rows| {
-        rows.header(&tr!("planning-property"), &tr!("planning-value"));
-        let start_text = start.map_or_else(|| tr!("periods-choose-date"), date_text);
-        let response = rows.select(&tr!("periods-start-date"), &start_text);
-        if let Some(date) = date_popup(&response, start)
-            && Some(date) != start
-        {
-            edits.push(UiCommand::schedule(session, ScheduleEdit::SetStartDate(Some(date))));
-        }
-        let end = start.and_then(|start| last_date(start, days));
-        let end_text = end.map_or_else(|| tr!("periods-needs-start"), date_text);
-        let response = rows.select(&tr!("periods-end-date"), &end_text);
-        if let Some(start) = start
-            && let Some(date) = date_popup(&response, end)
-        {
-            // The last day the schedule covers, so the same day is one day.
-            match u32::try_from((date - start).num_days() + 1) {
-                Ok(end_day) if end_day > 0 => {
-                    if end_day != days {
-                        edits.push(UiCommand::schedule(
-                            session,
-                            ScheduleEdit::SetExperimentHorizon {
-                                end_day,
-                                interval_h: plan.experiment().interval_h,
-                            },
-                        ));
-                    }
-                }
-                _ => crate::userspace_warn!("{}", tr!("periods-end-before-start")),
+    // The dates, then every day they cover, scrolling as one.
+    crate::ui::widgets::data_grid::table_stack(ui, rect, "schedule_periods", |ui| {
+        PropertyTable::new("schedule_periods_dates", crate::ui::widgets::data_grid::stack_slot(ui), &tr!("periods-dates")).show(ui, |rows| {
+            rows.header(&tr!("planning-property"), &tr!("planning-value"));
+            let start_text = start.map_or_else(|| tr!("periods-choose-date"), date_text);
+            let response = rows.select(&tr!("periods-start-date"), &start_text);
+            if let Some(date) = date_popup(&response, start)
+                && Some(date) != start
+            {
+                edits.push(UiCommand::schedule(session, ScheduleEdit::SetStartDate(Some(date))));
             }
-        }
-        super::schedule_optimisation::horizon_row(rows, editor, plan, session, &mut edits);
-        if start.is_none() {
-            rows.note(&tr!("periods-no-start-note"));
-        }
-    });
+            let end = start.and_then(|start| last_date(start, days));
+            let end_text = end.map_or_else(|| tr!("periods-needs-start"), date_text);
+            let response = rows.select(&tr!("periods-end-date"), &end_text);
+            if let Some(start) = start
+                && let Some(date) = date_popup(&response, end)
+            {
+                // The last day the schedule covers, so the same day is one day.
+                match u32::try_from((date - start).num_days() + 1) {
+                    Ok(end_day) if end_day > 0 => {
+                        if end_day != days {
+                            edits.push(UiCommand::schedule(
+                                session,
+                                ScheduleEdit::SetExperimentHorizon {
+                                    end_day,
+                                    interval_h: plan.experiment().interval_h,
+                                },
+                            ));
+                        }
+                    }
+                    _ => crate::userspace_warn!("{}", tr!("periods-end-before-start")),
+                }
+            }
+            super::schedule_optimisation::horizon_row(rows, editor, plan, session, &mut edits);
+            if start.is_none() {
+                rows.note(&tr!("periods-no-start-note"));
+            }
+        });
 
-    let below = egui::Rect::from_min_max(egui::pos2(rect.left(), table_rect.bottom() + ui.spacing().item_spacing.y), rect.max);
-    if below.is_positive() {
-        draw_period_list(ui, below, editor, plan, session, &mut edits);
-    }
+        draw_period_list(ui, crate::ui::widgets::data_grid::stack_slot(ui), editor, plan, session, &mut edits);
+    });
     commands.append(&mut edits);
 }
 

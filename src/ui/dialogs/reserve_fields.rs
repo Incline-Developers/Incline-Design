@@ -1,4 +1,4 @@
-//! The Solids Setup subpage's New Field dialog (Field List step).
+//! The Solids Setup's New Field dialog (Field List step).
 
 use crate::{
     i18n::tr,

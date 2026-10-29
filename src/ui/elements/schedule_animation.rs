@@ -128,13 +128,10 @@ pub(crate) fn draw_timeline(
             let (band, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), band_height), egui::Sense::hover());
             paint_period_band(ui, band, horizon, editor.schedule_time_h, &plan.periods().colors);
 
-            ui.spacing_mut().slider_width = ui.available_width();
             ui.spacing_mut().interact_size.y = 28.0;
             let slider = ui.add_enabled(
                 editor.schedule_animation_enabled && editor.video_export_progress.is_none(),
-                egui::Slider::new(&mut editor.schedule_time_h, 0.0..=horizon.max(f64::EPSILON))
-                    .show_value(false)
-                    .clamping(egui::SliderClamping::Edits),
+                crate::ui::widgets::scrubber::Scrubber::new(&mut editor.schedule_time_h, 0.0..=horizon.max(f64::EPSILON)),
             );
             // Taking hold of the cursor stops playback, as it does in the
             // blast review.

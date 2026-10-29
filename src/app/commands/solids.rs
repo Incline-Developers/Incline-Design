@@ -675,10 +675,7 @@ impl crate::app::App<'_> {
     pub(crate) fn showing_solid_preview(&self) -> bool {
         use crate::ui::state::SolidsStep;
         self.editor.is_solids_view()
-            || self.editor.is_planning_setup()
-                && self.editor.planning_page == crate::ui::state::PlanningPage::Solids
-                && self.editor.solids_subpage == crate::ui::state::PlanningSubpage::Setup
-                && matches!(self.editor.planning_solids_step, SolidsStep::Solids | SolidsStep::Benching)
+            || self.editor.is_setup_group(crate::ui::state::SetupGroup::Solids) && matches!(self.editor.planning_solids_step, SolidsStep::Solids | SolidsStep::Benching)
     }
 
     /// The preview the page is asking for, or `None` when no solid is

@@ -136,7 +136,7 @@ fn blasting_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool) ->
     ]
 }
 
-/// The Haulage Layout tools: draw a road, turn design strings into roads,
+/// The Road Network tools: draw a road, turn design strings into roads,
 /// and bring roads in from or out to DXF.
 fn haulage_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, project_active: bool) -> Vec<LeftTool> {
     let objects = editor.selected_handles.iter().any(|h| matches!(h, crate::model::SceneEntityId::Object(_)));

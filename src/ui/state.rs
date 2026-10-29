@@ -126,11 +126,37 @@ impl EditorState {
         }
     }
 
-    pub(crate) fn planning_subpage(&self) -> PlanningSubpage {
-        match self.planning_page {
-            PlanningPage::Solids => self.solids_subpage,
-            PlanningPage::Haulage => self.haulage_subpage,
-            PlanningPage::Schedule => self.schedule_subpage,
+    /// Whether the Planning workspace is showing `view`.
+    pub(crate) fn is_planning_view(&self, view: PlanningView) -> bool {
+        self.active_workspace == Workspace::Planning && self.planning_view == view
+    }
+
+    /// Whether Setup is open on one of `group`'s steps.
+    pub(crate) fn is_setup_group(&self, group: SetupGroup) -> bool {
+        self.is_planning_view(PlanningView::Setup) && self.setup_group == group
+    }
+
+    /// Open Setup on a Solids step.
+    pub(crate) fn open_solids_step(&mut self, step: SolidsStep) {
+        self.planning_view = PlanningView::Setup;
+        self.setup_group = SetupGroup::Solids;
+        self.planning_solids_step = step;
+    }
+
+    /// Open Setup on a Haulage step.
+    pub(crate) fn open_haulage_step(&mut self, step: HaulageStep) {
+        self.planning_view = PlanningView::Setup;
+        self.setup_group = SetupGroup::Haulage;
+        self.haulage_setup_step = step;
+    }
+
+    /// Whether the schedule's own pages are what the Planning workspace is
+    /// on: a Schedule Setup step, or any view of the calculated schedule.
+    pub(crate) fn is_schedule_context(&self) -> bool {
+        match self.planning_view {
+            PlanningView::Setup => self.setup_group == SetupGroup::Schedule,
+            PlanningView::Reserves => false,
+            PlanningView::Calendar | PlanningView::Gantt | PlanningView::Charts | PlanningView::Animate => true,
         }
     }
 
@@ -141,10 +167,7 @@ impl EditorState {
     /// snap and orbit against the real scene. So it reverses both of the
     /// predicates below rather than adding a layout branch of its own.
     pub(crate) fn is_blasting_step(&self) -> bool {
-        self.active_workspace == Workspace::Planning
-            && self.planning_page == PlanningPage::Solids
-            && self.solids_subpage == PlanningSubpage::Setup
-            && self.planning_solids_step == SolidsStep::Blasting
+        self.is_setup_group(SetupGroup::Solids) && self.planning_solids_step == SolidsStep::Blasting
     }
 
     /// Whether the open cut step labels its blasts or dig blocks.
@@ -162,10 +185,7 @@ impl EditorState {
     }
 
     pub(crate) fn is_dig_strips_step(&self) -> bool {
-        self.active_workspace == Workspace::Planning
-            && self.planning_page == PlanningPage::Solids
-            && self.solids_subpage == PlanningSubpage::Setup
-            && self.planning_solids_step == SolidsStep::DigStrips
+        self.is_setup_group(SetupGroup::Solids) && self.planning_solids_step == SolidsStep::DigStrips
     }
     pub(crate) fn is_planning_cut_step(&self) -> bool {
         self.is_blasting_step() || self.is_dig_strips_step()
@@ -181,34 +201,29 @@ impl EditorState {
         }
     }
 
+    /// Whether a Setup step that frames the 3D viewport, rather than owning
+    /// the window, is open: the two cut steps, and the Road Network.
+    pub(crate) fn is_viewport_step(&self) -> bool {
+        self.is_planning_cut_step() || self.is_haulage_page()
+    }
+
     pub(crate) fn is_planning_viewport(&self) -> bool {
-        self.active_workspace == Workspace::Planning
-            && (!matches!(
-                self.planning_subpage(),
-                PlanningSubpage::Setup | PlanningSubpage::View | PlanningSubpage::Calendar | PlanningSubpage::Gantt | PlanningSubpage::Charts
-            ) || self.is_planning_cut_step())
+        self.is_planning_view(PlanningView::Animate) || self.is_viewport_step()
     }
 
     /// Whether a Planning page that owns the whole window - rather than
-    /// framing the 3D viewport - is on screen. Both the Solids setup and the
-    /// view of what it produced are laid out that way.
+    /// framing the 3D viewport - is on screen. Every Setup step but the
+    /// viewport ones is laid out that way, and so is every view but Animate.
     pub(crate) fn is_planning_setup(&self) -> bool {
-        self.active_workspace == Workspace::Planning
-            && matches!(
-                self.planning_subpage(),
-                PlanningSubpage::Setup | PlanningSubpage::View | PlanningSubpage::Calendar | PlanningSubpage::Gantt | PlanningSubpage::Charts
-            )
-            && !self.is_planning_cut_step()
+        self.active_workspace == Workspace::Planning && self.planning_view != PlanningView::Animate && !self.is_viewport_step()
     }
 
-    /// Whether the Schedule page is showing its Gantt subpage.
     pub(crate) fn is_schedule_gantt(&self) -> bool {
-        self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Schedule && self.schedule_subpage == PlanningSubpage::Gantt
+        self.is_planning_view(PlanningView::Gantt)
     }
 
-    /// Whether the Schedule page is showing its Charts subpage.
     pub(crate) fn is_schedule_charts(&self) -> bool {
-        self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Schedule && self.schedule_subpage == PlanningSubpage::Charts
+        self.is_planning_view(PlanningView::Charts)
     }
 
     /// Whether a Schedule page that lays out its own whole pane - the
@@ -218,20 +233,17 @@ impl EditorState {
     }
 
     pub(crate) fn is_schedule_calendar(&self) -> bool {
-        self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Schedule && self.schedule_subpage == PlanningSubpage::Calendar
+        self.is_planning_view(PlanningView::Calendar)
     }
 
     /// Whether the Schedule Setup page is showing the Destinations step, the
     /// one page whose choices are drawn from the Solids run's own bands.
     pub(crate) fn is_schedule_destinations(&self) -> bool {
-        self.active_workspace == Workspace::Planning
-            && self.planning_page == PlanningPage::Schedule
-            && self.schedule_subpage == PlanningSubpage::Setup
-            && self.schedule_setup_step == ScheduleStep::Destinations
+        self.is_setup_group(SetupGroup::Schedule) && self.schedule_setup_step == ScheduleStep::Destinations
     }
 
     pub(crate) fn is_schedule_animation(&self) -> bool {
-        self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Schedule && self.schedule_subpage == PlanningSubpage::Animate
+        self.is_planning_view(PlanningView::Animate)
     }
 
     /// Whether the floating sequence editor is on screen.
@@ -331,17 +343,17 @@ impl EditorState {
         }
     }
 
-    /// Whether a completed Solids View pick may still move that page's
+    /// Whether a completed Reserves view pick may still move that page's
     /// selection. The same refusal as [`Self::sequence_pick_target`], for the
-    /// pane that selects rather than edits: the pick belongs to the View page,
+    /// pane that selects rather than edits: the pick belongs to the Reserves view,
     /// and only while it is the page on screen.
     pub(crate) fn solids_view_pick_target(&self, session: u32, request: &SolidPreviewPickRequest) -> bool {
         request.owner == SolidPreviewPickOwner::SolidsView && request.session == session && self.is_solids_view()
     }
 
-    /// Whether the Solids page is showing its View subpage.
+    /// Whether the Reserves view, of what the Solids steps generated, is showing.
     pub(crate) fn is_solids_view(&self) -> bool {
-        self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Solids && self.solids_subpage == PlanningSubpage::View
+        self.is_planning_view(PlanningView::Reserves)
     }
 
     /// Set (or clear) the status-bar message. Whenever the displayed task
@@ -490,7 +502,7 @@ pub(crate) enum TriSurfaceType {
     SolidClosed,
 }
 
-/// The Solids Setup subpage's steps, in the order the step tree lists them:
+/// The Solids Setup's steps, in the order the step tree lists them:
 /// the project-wide Field List, each block model's mapping onto it, then the
 /// solids those reserves are computed over.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -600,12 +612,12 @@ pub(crate) enum SolidPick {
 
 /// Which pane a click on the shared solid preview belongs to.
 ///
-/// The Solids View page and the sequence editor draw through the same offscreen
+/// The Reserves view and the sequence editor draw through the same offscreen
 /// image, so the click alone cannot say who made it - and a click one pane
 /// made must never be answered into the other.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SolidPreviewPickOwner {
-    /// The Solids View page's inspector pane, selecting a dig block.
+    /// The Reserves view's inspector pane, selecting a dig block.
     SolidsView,
     BlastSequence {
         edition: u64,
@@ -637,7 +649,7 @@ pub(crate) struct SolidPreviewPickRequest {
     pub(crate) session: u32,
     pub(crate) owner: SolidPreviewPickOwner,
     /// The run generation the clicked image depicted. `None` where the pane
-    /// picks displayed geometry without a scheduling gate (the Solids View
+    /// picks displayed geometry without a scheduling gate (the Reserves view
     /// page may pick out benches before any dig-block run exists).
     pub(crate) generation: Option<u64>,
     /// The revision of the displayed image the click was made on. The renderer
@@ -663,7 +675,7 @@ pub(crate) struct SolidPreviewPickResult {
     pub(crate) outcome: SolidPick,
 }
 
-/// A row of the Solids View tree: a solid, one of its benches, or one flitch
+/// A row of the Reserves view tree: a solid, one of its benches, or one flitch
 /// inside a bench. The kind heading a group is not itself selectable - it
 /// stands for every solid under it, which selecting those says better.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -722,7 +734,7 @@ pub(crate) struct HaulFlowSegment {
     pub(crate) tph: f64,
 }
 
-/// One dig block as the Haulage layout shows it: its outline, and how it
+/// One dig block as the Road Network shows it: its outline, and how it
 /// meets the road network.
 #[derive(Clone, Debug)]
 pub(crate) struct HaulBlock {
@@ -2374,7 +2386,7 @@ pub(crate) struct EditorState {
     /// The bench selection the view was last framed on, so picking a bench
     /// zooms to it once rather than fighting the user's pan every frame.
     pub(crate) blasting_framed_key: Option<u64>,
-    /// The project the Haulage Layout was last framed on, so it fits the
+    /// The project the Road Network was last framed on, so it fits the
     /// network once when opened rather than fighting the user's pan.
     pub(crate) haulage_framed_key: Option<u32>,
     /// What the Blasting step took over on entry and puts back on leaving, so
@@ -2396,8 +2408,6 @@ pub(crate) struct EditorState {
     pub(crate) planning_stages: [PlanningStageView; SolidsStep::ALL.len()],
     /// Whether a run is queued or in flight, so the controls can offer Cancel.
     pub(crate) planning_run_active: bool,
-    /// What a scheduler asking for a snapshot right now would be told.
-    pub(crate) planning_snapshot_status: String,
     pub(crate) solid_view_reserves: Option<crate::model::solid_reserves::ReserveTotals>,
     pub(crate) solid_view_reserve_status: Option<String>,
     /// Why each absent reserve field is absent, so every dash in the figures
@@ -2875,16 +2885,14 @@ pub(crate) struct EditorState {
     pub(crate) active_property_tab: PropertyTab,
     /// The workspace tab selected in the menu bar.
     pub(crate) active_workspace: Workspace,
-    pub(crate) planning_page: PlanningPage,
-    pub(crate) schedule_subpage: PlanningSubpage,
-    pub(crate) haulage_subpage: PlanningSubpage,
+    /// The Planning tab showing.
+    pub(crate) planning_view: PlanningView,
+    /// Which group's step Setup has open. Each group remembers its own step.
+    pub(crate) setup_group: SetupGroup,
     pub(crate) haulage_setup_step: HaulageStep,
-    /// Which Solids subpage is showing: its setup, or the view of what that
-    /// setup produced.
-    pub(crate) solids_subpage: PlanningSubpage,
-    /// Rows picked out in the Solids View tree.
+    /// Rows picked out in the Reserves view tree.
     pub(crate) solids_view_selection: Vec<SolidsViewRow>,
-    /// Selected row in the Solids Setup subpage's Block Models step.
+    /// Selected row in the Solids Setup's Block Models step.
     pub(crate) planning_selected_block_model: Option<BlockModelId>,
     /// Whether the New Field dialog (Solids Setup's Field List step) is open,
     /// and its draft contents.
@@ -2892,11 +2900,11 @@ pub(crate) struct EditorState {
     pub(crate) new_reserve_field_name: String,
     pub(crate) new_reserve_field_kind: ReserveFieldKind,
     pub(crate) new_reserve_field_weight_field: Option<crate::model::ReserveFieldId>,
-    /// Selected step in the Solids Setup subpage's step tree. Held here
+    /// Selected step in the Solids Setup's step tree. Held here
     /// rather than in egui's temporary data because `App` reads it too: the
     /// solid preview is only built while the Solids step is on screen.
     pub(crate) planning_solids_step: SolidsStep,
-    /// Selected row in the Solids Setup subpage's Solids step.
+    /// Selected row in the Solids Setup's Solids step.
     pub(crate) planning_selected_solid: Option<crate::model::SolidId>,
     /// Whether the New Solid dialog (Solids Setup's Solids step) is open, and
     /// its draft contents.
@@ -3092,7 +3100,7 @@ pub(crate) struct EditorState {
     /// exact selected step on the Schedule or Solids setup page.
     pub(crate) schedule_run_repair: Option<ScheduleRepairTarget>,
     /// Schedule Animate is session-only: selection and visibility here never
-    /// move the Solids View page or alter saved project item visibility.
+    /// move the Reserves view or alter saved project item visibility.
     pub(crate) schedule_animation_selection: Vec<SolidsViewRow>,
     pub(crate) schedule_animation_hidden: SolidsVisibility,
     /// The schedule's time slider, in hours from the origin: one instant
@@ -3174,8 +3182,9 @@ pub(crate) struct EditorState {
     pub(crate) new_destination_kind: crate::model::schedule::DestinationKind,
     /// Where the Gantt is looking: see [`GanttView`].
     pub(crate) gantt: GanttView,
-    /// Whether the Inspector is open beside the Gantt and the Charts.
-    pub(crate) gantt_inspector_open: bool,
+    /// The bar height a drag on a row's edge in the Gantt's name column is
+    /// showing, until it is let go and written to the plan.
+    pub(crate) gantt_bar_height_drag: Option<f32>,
     /// Downward scroll of the Charts page's rows, in points.
     pub(crate) schedule_charts_scroll: f32,
     /// How the Calendar's report export groups its rows.
@@ -3389,46 +3398,43 @@ impl EditorState {
     }
 
     /// Whether the viewport shows the haul network: its roads, node pins and
-    /// route check belong to the Haulage pages and Animate, which draws what
+    /// route check belong to the Haulage steps and Animate, which draws what
     /// travels on them, and nowhere else.
     pub(crate) fn shows_haul_network(&self) -> bool {
-        let planning = self.active_workspace == Workspace::Planning;
-        (planning && self.planning_page == PlanningPage::Haulage) || self.is_schedule_animation()
+        self.is_setup_group(SetupGroup::Haulage) || self.is_schedule_animation()
     }
 
-    /// Whether the Haulage Layout - the road network over the viewport - is
-    /// showing.
+    /// Whether the Road Network step - the road network over the viewport,
+    /// where roads are drawn and joined - is showing.
     pub(crate) fn is_haulage_page(&self) -> bool {
-        self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Haulage && self.haulage_subpage == PlanningSubpage::Layout
+        self.is_setup_group(SetupGroup::Haulage) && self.haulage_setup_step == HaulageStep::Network
     }
 
     /// Open the Calendar on `address`: its group unfolded, the cell selected
     /// and scrolled into view.
     pub(crate) fn open_calendar_cell(&mut self, address: CalendarCellAddress) {
-        self.planning_page = PlanningPage::Schedule;
-        self.schedule_subpage = PlanningSubpage::Calendar;
+        self.planning_view = PlanningView::Calendar;
         self.schedule_calendar.collapsed.remove(&address.owner);
         self.schedule_calendar.selection = Some(CalendarSelection { anchor: address, focus: address });
         self.schedule_calendar.draft = None;
         self.schedule_calendar.reveal = Some(address);
     }
 
-    /// Open the page that repairs a Schedule Setup step. What the Haulage step
-    /// reports is a truck class's, and is repaired on the Haulage page.
+    /// Open the step that repairs a Schedule Setup step. What the Road
+    /// Access step reports is a truck class's, and is repaired in Haulage's
+    /// Truck Classes.
     pub(crate) fn open_schedule_step(&mut self, step: ScheduleStep) {
         if step == ScheduleStep::Haulage {
-            self.planning_page = PlanningPage::Haulage;
-            self.haulage_subpage = PlanningSubpage::Setup;
-            self.haulage_setup_step = HaulageStep::TruckClasses;
+            self.open_haulage_step(HaulageStep::TruckClasses);
         } else {
-            self.planning_page = PlanningPage::Schedule;
-            self.schedule_subpage = PlanningSubpage::Setup;
+            self.planning_view = PlanningView::Setup;
+            self.setup_group = SetupGroup::Schedule;
             self.schedule_setup_step = step;
         }
     }
 
     /// Put down whatever road edit is in progress. A road is drawn over the
-    /// Haulage Layout's viewport, so leaving it must not leave the next click
+    /// Road Network's viewport, so leaving it must not leave the next click
     /// in another workspace placing road points.
     pub(crate) fn cancel_haul_edit(&mut self) {
         self.haul_draw = false;
@@ -4106,7 +4112,6 @@ impl EditorState {
             solids_tree_reveal: false,
             planning_stages: Default::default(),
             planning_run_active: false,
-            planning_snapshot_status: String::new(),
             solid_view_reserves: None,
             solid_view_reserve_issues: Default::default(),
             solid_view_coverage: None,
@@ -4371,11 +4376,9 @@ impl EditorState {
             bezier_dialog_open: false,
             active_property_tab: PropertyTab::Interface,
             active_workspace: Workspace::Production,
-            planning_page: PlanningPage::Solids,
-            schedule_subpage: PlanningSubpage::Setup,
-            haulage_subpage: PlanningSubpage::Setup,
+            planning_view: PlanningView::Setup,
+            setup_group: SetupGroup::Solids,
             haulage_setup_step: HaulageStep::Network,
-            solids_subpage: PlanningSubpage::Setup,
             solids_view_selection: Vec::new(),
             planning_selected_block_model: None,
             new_reserve_field_open: false,
@@ -4496,7 +4499,7 @@ impl EditorState {
             new_destination_name: String::new(),
             new_destination_kind: crate::model::schedule::DestinationKind::Stockpile,
             gantt: GanttView::default(),
-            gantt_inspector_open: true,
+            gantt_bar_height_drag: None,
             schedule_charts_scroll: 0.0,
             schedule_report_grouping: Default::default(),
             schedule_calendar: ScheduleCalendarView::default(),
@@ -5382,8 +5385,7 @@ pub(crate) enum UiCommand {
     SetStandardView(StandardView),
     OpenPreferences,
     ApplyPreferences(PreferencesDraft),
-    SetPlanningPage(PlanningPage),
-    SetPlanningSubpage(PlanningSubpage),
+    SetPlanningView(PlanningView),
     FocusScheduleAnimationSolid(crate::model::SolidId),
     OpenSurveyDefinitions,
     OpenSurveyTransform,
@@ -5899,8 +5901,7 @@ impl UiCommand {
             | Self::CancelRelimit
             | Self::OpenPreferences
             | Self::ApplyPreferences(_)
-            | Self::SetPlanningPage(_)
-            | Self::SetPlanningSubpage(_)
+            | Self::SetPlanningView(_)
             | Self::FocusScheduleAnimationSolid(_)
             | Self::SetWellLogStyle(_)
             | Self::OpenSurveyDefinitions
@@ -7101,13 +7102,13 @@ pub(crate) enum Workspace {
     Production,
     DrillAndBlast,
     Geology,
-    Planning,
     Survey,
+    Planning,
 }
 
 impl Workspace {
     /// Every workspace, in the default tab order.
-    pub(crate) const ALL: [Self; 5] = [Self::Production, Self::DrillAndBlast, Self::Geology, Self::Planning, Self::Survey];
+    pub(crate) const ALL: [Self; 5] = [Self::Production, Self::DrillAndBlast, Self::Geology, Self::Survey, Self::Planning];
 
     pub(crate) fn label(self) -> String {
         match self {
@@ -7136,15 +7137,17 @@ impl Workspace {
     }
 }
 
-/// Fixed pages within the Planning workspace, remembered for this session.
+/// The groups of Setup's one step list, in the order they run: each is a
+/// pipeline of its own, and each one after the first reads what the one
+/// before it produced.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum PlanningPage {
+pub(crate) enum SetupGroup {
     Solids,
     Haulage,
     Schedule,
 }
 
-impl PlanningPage {
+impl SetupGroup {
     pub(crate) const ALL: [Self; 3] = [Self::Solids, Self::Haulage, Self::Schedule];
 
     pub(crate) fn label(self) -> String {
@@ -7152,20 +7155,6 @@ impl PlanningPage {
             Self::Solids => tr!("planning-page-solids"),
             Self::Haulage => tr!("planning-page-haulage"),
             Self::Schedule => tr!("planning-page-schedule"),
-        }
-    }
-
-    pub(crate) fn subpages(self) -> &'static [PlanningSubpage] {
-        match self {
-            Self::Solids => &[PlanningSubpage::Setup, PlanningSubpage::View],
-            Self::Haulage => &[PlanningSubpage::Setup, PlanningSubpage::Layout],
-            Self::Schedule => &[
-                PlanningSubpage::Setup,
-                PlanningSubpage::Calendar,
-                PlanningSubpage::Gantt,
-                PlanningSubpage::Charts,
-                PlanningSubpage::Animate,
-            ],
         }
     }
 }
@@ -7264,29 +7253,30 @@ impl PlaybackSpan {
     }
 }
 
-/// Steps within a Planning page. Schedule remembers its selected step.
+/// The Planning workspace's tabs: Setup, where every input is, then the
+/// views of what it produces. One row, so a tab always opens the same page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum PlanningSubpage {
+pub(crate) enum PlanningView {
+    /// Every step of the Solids, Haulage and Schedule pipelines, in one list.
     Setup,
-    /// Solids: everything the setup has generated, to look through rather than
-    /// to configure.
-    View,
-    Layout,
+    /// Everything the Solids steps have generated, to look through rather
+    /// than to configure.
+    Reserves,
     Calendar,
-    /// Schedule: one timeline row per loader agent, along elapsed project
-    /// time. Stage 1 draws the rows and the ruler; the bars follow.
+    /// One timeline row per loader agent, along elapsed project time.
     Gantt,
-    /// Schedule: a chart per destination along the Gantt's own timeline.
+    /// A chart per destination along the Gantt's own timeline.
     Charts,
     Animate,
 }
 
-impl PlanningSubpage {
+impl PlanningView {
+    pub(crate) const ALL: [Self; 6] = [Self::Setup, Self::Reserves, Self::Calendar, Self::Gantt, Self::Charts, Self::Animate];
+
     pub(crate) fn label(self) -> String {
         match self {
             Self::Setup => tr!("planning-page-setup"),
-            Self::View => tr!("planning-subpage-view"),
-            Self::Layout => tr!("planning-subpage-layout"),
+            Self::Reserves => tr!("planning-view-reserves"),
             Self::Calendar => tr!("planning-subpage-calendar"),
             Self::Gantt => tr!("planning-subpage-gantt"),
             Self::Charts => tr!("planning-subpage-charts"),
@@ -7295,7 +7285,7 @@ impl PlanningSubpage {
     }
 }
 
-/// The Schedule Setup subpage's steps, in the order the step tree lists them.
+/// The Schedule Setup's steps, in the order the step tree lists them.
 ///
 /// Configuration is the schedule's own name and the field read as tonnes; the
 /// two fleet steps are the machines the Gantt draws its rows from; Scheduling
@@ -7436,14 +7426,14 @@ impl ScheduleStep {
             Self::LoaderAgents => tr!("schedule-loader-agents"),
             Self::Delays => tr!("delay-step"),
             Self::DrillBlast => tr!("drill-blast-step"),
-            Self::Haulage => tr!("planning-page-haulage"),
+            Self::Haulage => tr!("schedule-step-road-access"),
             Self::Stockpiles => tr!("planning-stockpiles"),
             Self::Dumps => tr!("planning-dumps"),
             Self::Crushers => tr!("destination-crushers"),
             Self::Destinations => tr!("destination-destinations"),
             Self::TruckingRules => tr!("truck-rules"),
             Self::Cashflow => tr!("cashflow"),
-            Self::Solids => tr!("planning-page-solids"),
+            Self::Solids => tr!("schedule-step-block-tonnes"),
             Self::Readiness => tr!("schedule-readiness-step"),
         }
     }

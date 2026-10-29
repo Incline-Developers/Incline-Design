@@ -1,4 +1,4 @@
-//! The Schedule workspace's Setup subpage: the loader fleet.
+//! The Schedule workspace's Setup: the loader fleet.
 //!
 //! Two editable lists and a name. *Loader Classes* are machine types with a
 //! dig rate; *Loader Agents* are the machines on site, each of one class and
@@ -83,7 +83,8 @@ pub(crate) fn name_problem(name: &str, taken: impl Iterator<Item = String>) -> O
 /// the Gantt bar that works it, and is authored there; a second list of them
 /// here would be a second place the same thing could be edited.
 pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
-    let mut step = editor.schedule_setup_step;
+    let open = editor.setup_group == crate::ui::state::SetupGroup::Schedule;
+    let mut step = open.then_some(editor.schedule_setup_step);
     let mut markers = Vec::with_capacity(ScheduleStep::ALL.len());
     for entry in ScheduleStep::ALL {
         let status = &editor.schedule_stages[entry.index()];
@@ -92,7 +93,7 @@ pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: 
             let entry_response = ExplorerEntry::new(egui::Id::unique(entry.tree_id()), bold(&entry.label()))
                 .leading_icon(super::planning_setup::StepBadge::of(status.state, &status.diagnostics).icon(), egui::Color32::WHITE)
                 .header_aligned_icon()
-                .selected(step == entry)
+                .selected(step == Some(entry))
                 .show(ui);
             if let Some(rect) = entry_response.icon_rect {
                 markers.push((rect, status.state));
@@ -102,7 +103,7 @@ pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: 
                 super::planning_setup::stage_tooltip_parts(ui, status.state, status.blocked_by.map(ScheduleStep::label), status.message.as_deref(), &status.diagnostics);
             });
             if response.clicked() {
-                step = entry;
+                step = Some(entry);
             }
             super::planning_setup::draw_stage_menu(
                 &response,
@@ -114,7 +115,12 @@ pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: 
         });
     }
     super::planning_setup::paint_step_links(ui, &markers);
-    editor.schedule_setup_step = step;
+    // Set rather than opened: `open_schedule_step` sends Road Access on to
+    // what repairs it, and a click in the list means this step.
+    if let Some(step) = step.filter(|step| !open || *step != editor.schedule_setup_step) {
+        editor.setup_group = crate::ui::state::SetupGroup::Schedule;
+        editor.schedule_setup_step = step;
+    }
 }
 
 /// The Scheduling Readiness step: what the last completed run checked, and
@@ -249,22 +255,16 @@ pub(crate) fn draw_configuration(
     session: u32,
     commands: &mut Vec<UiCommand>,
 ) {
-    let table = draw_general_table(ui, rect, editor, plan, document, session, commands);
-    let below = egui::Rect::from_min_max(egui::pos2(rect.left(), table.bottom() + ui.spacing().item_spacing.y), rect.max);
-    if below.is_positive() {
-        super::schedule_optimisation::draw_advanced(ui, below, editor, plan, session, commands);
-    }
+    // General, then Advanced, each as tall as its rows and the two scrolling
+    // as one, parted by a single rule.
+    crate::ui::widgets::data_grid::table_stack(ui, rect, "schedule_configuration", |ui| {
+        use crate::ui::widgets::data_grid::stack_slot;
+        draw_general_table(ui, stack_slot(ui), editor, plan, document, session, commands);
+        super::schedule_optimisation::draw_advanced(ui, stack_slot(ui), editor, plan, session, commands);
+    });
 }
 
-fn draw_general_table(
-    ui: &mut egui::Ui,
-    rect: egui::Rect,
-    editor: &mut EditorState,
-    plan: &SchedulePlan,
-    document: &Document,
-    session: u32,
-    commands: &mut Vec<UiCommand>,
-) -> egui::Rect {
+fn draw_general_table(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, document: &Document, session: u32, commands: &mut Vec<UiCommand>) {
     if editor.schedule_name_draft.as_ref().is_none_or(|draft| draft.source != plan.name) {
         editor.schedule_name_draft = Some(ScheduleNameDraft {
             source: plan.name.clone(),
@@ -273,13 +273,8 @@ fn draw_general_table(
     }
     let mut edits = Vec::new();
     let no_fields = document.reserve_fields().is_empty();
-    // Header, name, tonnage field and grades, plus the explanatory row when
-    // the project has no reserve schema. The header is a table row too;
-    // omitting it from this count clips the tonnage combo. The horizon is
-    // the Periods step's, as the dates it runs between.
-    let rows = 4 + usize::from(no_fields);
-    let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, rows).min(rect.height())));
-    PropertyTable::new("schedule_configuration", table_rect, &tr!("schedule-general")).show(ui, |rows| {
+    // The horizon is the Periods step's, as the dates it runs between.
+    PropertyTable::new("schedule_configuration", rect, &tr!("schedule-general")).show(ui, |rows| {
         rows.header(&tr!("planning-property"), &tr!("planning-value"));
         let draft = editor.schedule_name_draft.as_mut().expect("just ensured");
         let response = rows.field(&tr!("planning-schedule-name"), &mut draft.text, None);
@@ -308,7 +303,6 @@ fn draw_general_table(
         }
     });
     commands.extend(edits);
-    egui::Rect::from_min_max(rect.min, egui::pos2(rect.right(), table_rect.bottom()))
 }
 
 /// The Loader Classes list. Selecting one drives the property table beside it.

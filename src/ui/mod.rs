@@ -716,7 +716,7 @@ fn draw_ui(
 
     // The bar spans the window, so it is claimed before the explorer: the
     // column, the tools and the scene all start below it.
-    let viewport_bar_rect = elements::viewport_bar::draw_viewport_bar(root_ui, editor, project, commands);
+    let viewport_bar_rect = elements::viewport_bar::draw_viewport_bar(root_ui, editor, project, document, commands);
 
     if editor.is_planning_setup() {
         let explorer = if editor.is_schedule_pane() {
@@ -731,26 +731,24 @@ fn draw_ui(
             elements::console::draw_console(root_ui, console_min, console_max, frame_context.console_snapshot)
         });
         let console = console_rect.unwrap_or(egui::Rect::NOTHING);
-        let planning_page = editor.planning_page;
-        let mut planning_layout = elements::planning_setup::PlanningLayout::default();
-        let details = if editor.is_solids_view() {
-            // The View page arranges a column of its own beside its inspector,
+        let setup_group = editor.setup_group;
+        let planning_layout = if editor.is_solids_view() {
+            // The Reserves view arranges a column of its own beside its inspector,
             // so it hands back the same layout the Setup steps do.
-            planning_layout = elements::solids_view::draw_details(root_ui, editor, project, document, commands);
-            planning_layout.rect
+            elements::solids_view::draw_details(root_ui, editor, project, document, commands)
         } else if editor.is_schedule_gantt() {
-            // The Gantt owns the whole pane rather than arranging islands in
-            // it, so - like the Solids View - it hands its own rect back to be
-            // rounded off as one region.
+            // The schedule pages arrange islands as the Setup steps do: a
+            // toolbar across the top and the page under it, with the Gantt's
+            // Inspector beside it.
             elements::schedule_gantt::draw_details(root_ui, editor, project, document, commands)
         } else if editor.is_schedule_charts() {
             elements::schedule_charts::draw_details(root_ui, editor, project, document, commands)
         } else if editor.is_schedule_calendar() {
             elements::schedule_calendar::draw_details(root_ui, editor, project, document, commands)
         } else {
-            planning_layout = elements::planning_setup::draw_details(root_ui, editor, project, document, block_models, commands, planning_page);
-            planning_layout.rect
+            elements::planning_setup::draw_details(root_ui, editor, project, document, block_models, commands, setup_group)
         };
+        let details = planning_layout.rect;
         dialogs::about::draw_about_dialog(root_ui, editor);
         elements::properties::draw_preferences(root_ui, editor, commands);
         if editor.renaming_item.is_some() {
@@ -771,11 +769,7 @@ fn draw_ui(
         geometry_dirty |= draw_global_dialogs(root_ui, editor, document, project, block_models, drill_holes, frame_context.console_snapshot, commands);
         let ctx = root_ui.ctx();
         chrome::paint_window_background(ctx, window_background, egui::Rect::ZERO);
-        let details_region = if editor.is_solids_view() || editor.is_schedule_pane() {
-            details
-        } else {
-            egui::Rect::NOTHING
-        };
+        let details_region = if editor.is_solids_view() { details } else { egui::Rect::NOTHING };
         chrome::paint_regions(
             ctx,
             [viewport_bar_rect, console, details_region]
@@ -836,7 +830,7 @@ fn draw_ui(
             elements::blasting::draw_panel(root_ui, editor, document, commands)
         };
         Some((island.regions, vec![island.grip]))
-    } else if editor.is_planning_viewport() && editor.planning_page == state::PlanningPage::Haulage {
+    } else if editor.is_haulage_page() {
         let column = elements::haulage::draw_panel(root_ui, editor, document, project, commands);
         Some((column.regions, column.grips))
     } else {

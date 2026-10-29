@@ -1,4 +1,4 @@
-//! Shared layout for the planning Setup subpages.
+//! Shared layout for the planning Setups.
 //!
 //! Solids' Setup is the Reserves setup: a project-wide Field List (summed,
 //! weighted-average, or category columns, e.g. Tonnes, Fe, and Rock Type)
@@ -23,13 +23,13 @@ use crate::{
         dialogs::solids::{block_model_label, block_model_options, kind_label, triangulation_label, triangulation_options},
         elements::solids_view::format_rl,
         fonts::bold,
-        state::{PlanningPage, SolidsStep, UiCommand},
+        state::{SetupGroup, SolidsStep, UiCommand},
         unthemed_icon,
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup},
             data_grid::{
                 CELL_WARNING_WIDTH, CellOption, DataGrid, GridRow, grid_add_action_row, grid_add_row, grid_cell_color, grid_cell_combo, grid_cell_fixed, grid_cell_number,
-                grid_cell_warning, grid_columns_row, grid_empty_state, grid_group_row, grid_row, grid_separator_row, property_table_height,
+                grid_cell_warning, grid_columns_row, grid_empty_state, grid_group_row, grid_row, grid_separator_row, property_table_height, stack_slot, table_stack,
             },
             explorer::{ExplorerEntry, paint_fixed_stripes, reserve_fixed_stripes},
             island::{Island, Side},
@@ -48,12 +48,40 @@ fn striped_list(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui)) {
     });
 }
 
-pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState, page: PlanningPage, commands: &mut Vec<UiCommand>) {
-    match page {
-        PlanningPage::Solids => draw_solids_steps(ui, editor, commands),
-        PlanningPage::Schedule => striped_list(ui, |ui| super::schedule_setup::draw_steps(ui, editor, commands)),
-        PlanningPage::Haulage => striped_list(ui, |ui| draw_haulage_steps(ui, editor, commands)),
-    }
+/// Setup's one step list: the Solids, Haulage and Schedule groups in the
+/// order they run, each under a heading that folds it away and carries the
+/// worst of its steps' badges, so a folded group still says where it stands.
+pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    use crate::ui::widgets::explorer::ExplorerHeader;
+    striped_list(ui, |ui| {
+        for group in SetupGroup::ALL {
+            let badge = group_badge(editor, group);
+            ExplorerHeader::new(egui::Id::unique(("setup_group", group as u8)), group.label())
+                .icon(badge.icon())
+                .show(ui, |ui| match group {
+                    SetupGroup::Solids => draw_solids_steps(ui, editor, commands),
+                    SetupGroup::Haulage => draw_haulage_steps(ui, editor, commands),
+                    SetupGroup::Schedule => super::schedule_setup::draw_steps(ui, editor, commands),
+                });
+        }
+    });
+}
+
+/// The badge a group's heading carries: its most pressing step's.
+fn group_badge(editor: &EditorState, group: SetupGroup) -> StepBadge {
+    let badges: Vec<StepBadge> = match group {
+        SetupGroup::Solids => editor.planning_stages.iter().map(|status| StepBadge::of(status.state, &status.diagnostics)).collect(),
+        SetupGroup::Haulage => editor.haulage_stages.iter().map(|status| StepBadge::of(status.state, &status.diagnostics)).collect(),
+        SetupGroup::Schedule => editor.schedule_stages.iter().map(|status| StepBadge::of(status.state, &status.diagnostics)).collect(),
+    };
+    let urgency = |badge: StepBadge| match badge {
+        StepBadge::Complete => 0,
+        StepBadge::NotRun => 1,
+        StepBadge::Warning => 2,
+        StepBadge::Stale => 3,
+        StepBadge::Error => 4,
+    };
+    badges.into_iter().max_by_key(|badge| urgency(*badge)).unwrap_or(StepBadge::NotRun)
 }
 
 /// Schedule's Haulage step: where each Haulage step stands, each opening its
@@ -69,18 +97,15 @@ fn draw_haulage_summary(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut Editor
                 let state = editor.haulage_stages[step.index()].state.label();
                 let (response, _) = grid_columns_row(ui, &FRACTIONS, &[&step.label(), &state], false);
                 if response.on_hover_text(tr!("schedule-haulage-open")).clicked() {
-                    editor.planning_page = crate::ui::state::PlanningPage::Haulage;
-                    editor.haulage_subpage = crate::ui::state::PlanningSubpage::Setup;
-                    editor.haulage_setup_step = step;
+                    editor.open_haulage_step(step);
                 }
             }
         });
 }
 
-/// Open the Haulage page's Layout, where a connection is fixed.
+/// Open the Road Network step, where a connection is fixed.
 fn open_haul_layout(editor: &mut EditorState) {
-    editor.planning_page = PlanningPage::Haulage;
-    editor.haulage_subpage = crate::ui::state::PlanningSubpage::Layout;
+    editor.open_haulage_step(crate::ui::state::HaulageStep::Network);
 }
 
 /// Each destination's dump point, and each stockpile's reclaim point, and
@@ -180,9 +205,7 @@ fn draw_solids_summary(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorS
             let state = editor.planning_stages[step.index()].state.label();
             let (response, _) = grid_columns_row(ui, &FRACTIONS, &[&step.label(), &state], false);
             if response.on_hover_text(tr!("schedule-solids-open")).clicked() {
-                editor.planning_page = PlanningPage::Solids;
-                editor.solids_subpage = crate::ui::state::PlanningSubpage::Setup;
-                editor.planning_solids_step = step;
+                editor.open_solids_step(step);
             }
         }
     });
@@ -191,7 +214,8 @@ fn draw_solids_summary(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorS
 /// Haulage Setup's steps, marked from the Haulage pipeline.
 fn draw_haulage_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
     use crate::ui::state::HaulageStep;
-    let mut step = editor.haulage_setup_step;
+    let open = editor.setup_group == SetupGroup::Haulage;
+    let mut step = open.then_some(editor.haulage_setup_step);
     let mut markers = Vec::with_capacity(HaulageStep::ALL.len());
     for entry in HaulageStep::ALL {
         let status = &editor.haulage_stages[entry.index()];
@@ -208,7 +232,7 @@ fn draw_haulage_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mu
             let entry_response = ExplorerEntry::new(egui::Id::unique(("haulage_step", entry as u8)), bold(&entry.label()))
                 .leading_icon(badge.icon(), egui::Color32::WHITE)
                 .header_aligned_icon()
-                .selected(step == entry)
+                .selected(step == Some(entry))
                 .show(ui);
             if let Some(rect) = entry_response.icon_rect {
                 markers.push((rect, if empty { crate::app::planning_pipeline::StageState::NotRun } else { status.state }));
@@ -217,7 +241,7 @@ fn draw_haulage_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mu
                 stage_tooltip_parts(ui, status.state, status.blocked_by.map(HaulageStep::label), status.message.as_deref(), &status.diagnostics);
             });
             if response.clicked() {
-                step = entry;
+                step = Some(entry);
             }
             draw_stage_menu(
                 &response,
@@ -229,42 +253,45 @@ fn draw_haulage_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mu
         });
     }
     paint_step_links(ui, &markers);
-    editor.haulage_setup_step = step;
+    if let Some(step) = step.filter(|step| !open || *step != editor.haulage_setup_step) {
+        editor.open_haulage_step(step);
+    }
 }
 
 fn draw_solids_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
-    let mut step = editor.planning_solids_step;
-    striped_list(ui, |ui| {
-        let mut markers = Vec::with_capacity(SolidsStep::ALL.len());
-        for entry in SolidsStep::ALL {
-            let status = &editor.planning_stages[entry.index()];
-            ui.horizontal(|ui| {
-                ui.add_space(ui.spacing().indent);
-                let entry_response = ExplorerEntry::new(egui::Id::unique(entry.tree_id()), bold(&entry.label()))
-                    .leading_icon(StepBadge::of(status.state, &status.diagnostics).icon(), egui::Color32::WHITE)
-                    .header_aligned_icon()
-                    .selected(step == entry)
-                    .show(ui);
-                if let Some(rect) = entry_response.icon_rect {
-                    markers.push((rect, status.state));
-                }
-                // The badge's reason, where the badge is.
-                let response = entry_response.response.on_hover_ui(|ui| stage_tooltip(ui, status));
-                if response.clicked() {
-                    step = entry;
-                }
-                draw_stage_menu(
-                    &response,
-                    entry.label(),
-                    editor.planning_run_active,
-                    [UiCommand::RunPlanningStage(entry), UiCommand::RunAllPlanningStages, UiCommand::CancelPlanningRun],
-                    commands,
-                );
-            });
-        }
-        paint_step_links(ui, &markers);
-    });
-    editor.planning_solids_step = step;
+    let open = editor.setup_group == SetupGroup::Solids;
+    let mut step = open.then_some(editor.planning_solids_step);
+    let mut markers = Vec::with_capacity(SolidsStep::ALL.len());
+    for entry in SolidsStep::ALL {
+        let status = &editor.planning_stages[entry.index()];
+        ui.horizontal(|ui| {
+            ui.add_space(ui.spacing().indent);
+            let entry_response = ExplorerEntry::new(egui::Id::unique(entry.tree_id()), bold(&entry.label()))
+                .leading_icon(StepBadge::of(status.state, &status.diagnostics).icon(), egui::Color32::WHITE)
+                .header_aligned_icon()
+                .selected(step == Some(entry))
+                .show(ui);
+            if let Some(rect) = entry_response.icon_rect {
+                markers.push((rect, status.state));
+            }
+            // The badge's reason, where the badge is.
+            let response = entry_response.response.on_hover_ui(|ui| stage_tooltip(ui, status));
+            if response.clicked() {
+                step = Some(entry);
+            }
+            draw_stage_menu(
+                &response,
+                entry.label(),
+                editor.planning_run_active,
+                [UiCommand::RunPlanningStage(entry), UiCommand::RunAllPlanningStages, UiCommand::CancelPlanningRun],
+                commands,
+            );
+        });
+    }
+    paint_step_links(ui, &markers);
+    if let Some(step) = step.filter(|step| !open || *step != editor.planning_solids_step) {
+        editor.open_solids_step(step);
+    }
 }
 
 /// Join consecutive step badges with a line showing how far a run reached.
@@ -306,6 +333,9 @@ pub(crate) const RUN_ALL_TINT: egui::Color32 = RUN_STEP_TINT;
 /// Cancel: a soft red, muted well below the error red the failed stages carry
 /// so it is a button rather than an alarm.
 pub(crate) const CANCEL_TINT: egui::Color32 = egui::Color32::from_rgb(0xCB, 0x63, 0x63);
+/// Improve: a soft blue, as muted as the run green, for the run that looks
+/// past the hourly schedule.
+pub(crate) const IMPROVE_TINT: egui::Color32 = egui::Color32::from_rgb(0x5B, 0x9B, 0xF0);
 
 /// What a run bar's buttons asked for this frame.
 enum RunAction {
@@ -317,11 +347,15 @@ enum RunAction {
 /// A pipeline's run buttons. Idle, Run Step (where the page has a step to run)
 /// and Run All; running, Stop alone in their place, so the one control that
 /// can act is the only one shown rather than sitting beside two dimmed ones.
-fn draw_run_buttons(ui: &mut egui::Ui, salt: &'static str, running: bool, run_step: bool) -> Option<RunAction> {
+///
+/// `held` while Auto is keeping the steps current, when a run by hand would
+/// only repeat it: the two are dimmed, and say so.
+fn draw_run_buttons(ui: &mut egui::Ui, salt: &'static str, running: bool, run_step: bool, held: bool) -> Option<RunAction> {
     use crate::ui::widgets::toolbar::ToolbarButton;
 
     let side = ui.available_height();
     let button = |icon: egui::ImageSource<'static>, tint: egui::Color32, tooltip: String, id: &'static str| {
+        let tint = if held { tint.gamma_multiply(0.35) } else { tint };
         ToolbarButton::new(egui::Image::new(icon).tint(tint), tooltip).button_side(side).id_salt((salt, id))
     };
     if running {
@@ -331,160 +365,157 @@ fn draw_run_buttons(ui: &mut egui::Ui, salt: &'static str, running: bool, run_st
             .then_some(RunAction::Cancel);
     }
     let mut action = None;
-    if run_step && ui.add(button(unthemed_icon!("play.svg"), RUN_STEP_TINT, tr!("stage-run-step"), "step")).clicked() {
+    if run_step
+        && ui
+            .add_enabled(!held, button(unthemed_icon!("play.svg"), RUN_STEP_TINT, tr!("stage-run-step"), "step"))
+            .on_disabled_hover_text(tr!("stage-auto-holds"))
+            .clicked()
+    {
         action = Some(RunAction::Step);
     }
-    if ui.add(button(unthemed_icon!("play_all.svg"), RUN_ALL_TINT, tr!("stage-run-all"), "all")).clicked() {
+    if ui
+        .add_enabled(!held, button(unthemed_icon!("play_all.svg"), RUN_ALL_TINT, tr!("stage-run-all"), "all"))
+        .on_disabled_hover_text(tr!("stage-auto-holds"))
+        .clicked()
+    {
         action = Some(RunAction::All);
     }
     action
 }
 
-/// One pipeline's run controls: its buttons, Auto where the pipeline has it,
-/// and its progress, with `hover` saying where it stands.
-fn run_header(
-    ui: &mut egui::Ui,
-    salt: &'static str,
-    running: bool,
-    run_step: bool,
-    auto: Option<(&mut bool, String)>,
-    (done, total): (usize, usize),
-    hover: impl FnOnce(&mut egui::Ui),
-) -> Option<RunAction> {
-    ui.horizontal_centered(|ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        let action = draw_run_buttons(ui, salt, running, run_step);
-        if let Some((auto, note)) = auto {
-            ui.add_space(10.0);
-            ui.add(crate::ui::widgets::toggle::Toggle::new(auto, tr!("planning-auto"))).on_hover_text(note);
-        }
-        let label = tr!("stage-progress-short", done = done, total = total);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            crate::ui::widgets::progress::draw_planning_progress(ui, &label, done as f32 / total as f32);
-        })
-        .response
-        .on_hover_ui(hover);
-        action
-    })
-    .inner
+/// One pipeline's run controls, in the viewport bar after the Planning tabs:
+/// its buttons, then the one Auto.
+///
+/// With Auto on, Run and Run All are held: Auto reruns what is out of date on
+/// its own. Not once a step has failed or been cancelled, which Auto does not
+/// retry until something changes - then a run by hand is the way to.
+fn run_header(ui: &mut egui::Ui, group: SetupGroup, running: bool, run_step: bool, auto: &mut bool, stuck: bool) -> Option<RunAction> {
+    ui.spacing_mut().item_spacing.x = 0.0;
+    let salt = match group {
+        SetupGroup::Solids => "planning_run",
+        SetupGroup::Haulage => "haulage_run",
+        SetupGroup::Schedule => "schedule_run",
+    };
+    let held = *auto && !stuck;
+    let action = draw_run_buttons(ui, salt, running, run_step, held);
+    ui.add_space(8.0);
+    ui.add(crate::ui::widgets::menu::SlidingToggle::new(auto).label(tr!("planning-auto")))
+        .on_hover_text(tr!("setup-auto-note"));
+    action
 }
 
-/// Contents of the separate run-control island at the top of the sidebar.
-pub(crate) fn draw_solids_run_controls(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+/// Whether a group has a step that failed or was cancelled: what Auto leaves
+/// alone until something changes, so Run is offered again.
+fn stuck(mut states: impl Iterator<Item = crate::app::planning_pipeline::StageState>) -> bool {
     use crate::app::planning_pipeline::StageState;
+    states.any(|state| matches!(state, StageState::Failed | StageState::Cancelled))
+}
 
+/// Setup's run controls, for the group whose step is open: its Run and Run
+/// All, and Auto. Run All runs what the open step needs, so
+/// on a Schedule step it runs the Solids and Haulage steps too.
+pub(crate) fn draw_setup_run_controls(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    match editor.setup_group {
+        SetupGroup::Solids => draw_solids_run_controls(ui, editor, commands),
+        SetupGroup::Haulage => draw_haulage_run_controls(ui, editor, commands),
+        SetupGroup::Schedule => draw_schedule_run_controls(ui, editor, commands),
+    }
+}
+
+/// Whether any of Setup's pipelines is running. One run can start another -
+/// a Schedule run starts the Solids steps it needs - so the controls show
+/// Cancel while any is.
+fn any_run_active(editor: &EditorState) -> bool {
+    editor.planning_run_active || editor.haulage_run_active || editor.schedule_run_active
+}
+
+/// Stop every Setup run, so Cancel stops whatever is running whichever
+/// group's step is open.
+fn cancel_runs(editor: &EditorState, commands: &mut Vec<UiCommand>) {
+    if editor.schedule_run_active {
+        commands.push(UiCommand::CancelScheduleRun);
+    }
+    if editor.haulage_run_active {
+        commands.push(UiCommand::CancelHaulageRun);
+    }
+    if editor.planning_run_active {
+        commands.push(UiCommand::CancelPlanningRun);
+    }
+}
+
+/// The Solids group's run controls, and the Reserves view's, which shows
+/// what the Solids steps produced.
+pub(crate) fn draw_solids_run_controls(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
     let step = editor.planning_solids_step;
-    let completed = editor.planning_stages.iter().filter(|stage| stage.state == StageState::Complete).count();
-    let active = SolidsStep::ALL.into_iter().find(|step| editor.planning_stages[step.index()].state == StageState::Running);
-    let reported = active.unwrap_or(if editor.is_solids_view() { SolidsStep::LAST } else { step });
-    let status = editor.planning_stages[reported.index()].clone();
-    let snapshot = editor.planning_snapshot_status.clone();
-    let mut auto = editor.auto_run();
+    // One Auto for every group: see `AutoRun::all`.
+    let mut auto = editor.auto_run().all();
     let action = run_header(
         ui,
-        "planning_run",
-        editor.planning_run_active,
+        SetupGroup::Solids,
+        any_run_active(editor),
         !editor.is_solids_view(),
-        Some((&mut auto.solids, tr!("planning-auto-note"))),
-        (completed, SolidsStep::ALL.len()),
-        |ui| {
-            ui.label(reported.label());
-            stage_tooltip(ui, &status);
-            if !snapshot.is_empty() {
-                ui.separator();
-                ui.label(&snapshot);
-            }
-        },
+        &mut auto,
+        stuck(editor.planning_stages.iter().map(|stage| stage.state)),
     );
-    if auto != editor.auto_run() {
-        commands.push(UiCommand::SetAutoRun(auto));
+    if auto != editor.auto_run().all() {
+        commands.push(UiCommand::SetAutoRun(crate::model::schedule::AutoRun::every(auto)));
     }
     match action {
         Some(RunAction::Step) => commands.push(UiCommand::RunPlanningStage(step)),
         Some(RunAction::All) => commands.push(UiCommand::RunAllPlanningStages),
-        Some(RunAction::Cancel) => commands.push(UiCommand::CancelPlanningRun),
+        Some(RunAction::Cancel) => cancel_runs(editor, commands),
         None => {}
     }
 }
 
-/// The Schedule Setup page's run controls: the same buttons and the same
-/// progress readout as the Solids page, over its own pipeline.
+/// The Schedule group's run controls: the same buttons as the Solids
+/// group's, over its own pipeline.
 ///
-/// Kept beside the Solids controls rather than merged with them: the two
-/// pipelines run different things, and one control that switched which
-/// pipeline it drove on a page change would be one Cancel that could stop the
-/// wrong run.
-///
-/// Its Auto is the Gantt's: one switch that reruns these steps and
-/// recalculates the schedule, shown on both pages.
-pub(crate) fn draw_schedule_run_controls(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
-    use crate::{app::planning_pipeline::StageState, ui::state::ScheduleStep};
-
+/// Its Auto is every group's and the Gantt's: one switch that keeps the
+/// lot up to date.
+fn draw_schedule_run_controls(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
     let step = editor.schedule_setup_step;
-    let completed = editor.schedule_stages.iter().filter(|stage| stage.state == StageState::Complete).count();
-    let active = ScheduleStep::ALL.into_iter().find(|step| editor.schedule_stages[step.index()].state == StageState::Running);
-    let reported = active.unwrap_or(step);
-    let status = editor.schedule_stages[reported.index()].clone();
-    let calculation = editor.schedule_calculation_status.clone();
-    let mut auto = editor.auto_run();
+    // One Auto for every group: see `AutoRun::all`.
+    let mut auto = editor.auto_run().all();
     let action = run_header(
         ui,
-        "schedule_run",
-        editor.schedule_run_active,
+        SetupGroup::Schedule,
+        any_run_active(editor),
         true,
-        Some((&mut auto.schedule, tr!("schedule-setup-auto-note"))),
-        (completed, ScheduleStep::ALL.len()),
-        |ui| {
-            ui.label(reported.label());
-            stage_tooltip_parts(ui, status.state, status.blocked_by.map(ScheduleStep::label), status.message.as_deref(), &status.diagnostics);
-            // What the Gantt would be told if it asked to calculate now,
-            // where the buttons that change that answer are.
-            if !calculation.is_empty() {
-                ui.separator();
-                ui.label(&calculation);
-            }
-        },
+        &mut auto,
+        stuck(editor.schedule_stages.iter().map(|stage| stage.state)),
     );
-    if auto != editor.auto_run() {
-        commands.push(UiCommand::SetAutoRun(auto));
+    if auto != editor.auto_run().all() {
+        commands.push(UiCommand::SetAutoRun(crate::model::schedule::AutoRun::every(auto)));
     }
     match action {
         Some(RunAction::Step) => commands.push(UiCommand::RunScheduleStage(step)),
         Some(RunAction::All) => commands.push(UiCommand::RunAllScheduleStages),
-        Some(RunAction::Cancel) => commands.push(UiCommand::CancelScheduleRun),
+        Some(RunAction::Cancel) => cancel_runs(editor, commands),
         None => {}
     }
 }
 
-/// The Haulage Setup page's run controls, over the Haulage pipeline.
-pub(crate) fn draw_haulage_run_controls(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
-    use crate::{app::planning_pipeline::StageState, ui::state::HaulageStep};
-
+/// The Haulage group's run controls, over the Haulage pipeline.
+fn draw_haulage_run_controls(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
     let step = editor.haulage_setup_step;
-    let completed = editor.haulage_stages.iter().filter(|stage| stage.state == StageState::Complete).count();
-    let active = HaulageStep::ALL.into_iter().find(|step| editor.haulage_stages[step.index()].state == StageState::Running);
-    let reported = active.unwrap_or(step);
-    let status = editor.haulage_stages[reported.index()].clone();
-    let mut auto = editor.auto_run();
+    // One Auto for every group: see `AutoRun::all`.
+    let mut auto = editor.auto_run().all();
     let action = run_header(
         ui,
-        "haulage_run",
-        editor.haulage_run_active,
+        SetupGroup::Haulage,
+        any_run_active(editor),
         true,
-        Some((&mut auto.haulage, tr!("planning-auto-note"))),
-        (completed, HaulageStep::ALL.len()),
-        |ui| {
-            ui.label(reported.label());
-            stage_tooltip_parts(ui, status.state, status.blocked_by.map(HaulageStep::label), status.message.as_deref(), &status.diagnostics);
-        },
+        &mut auto,
+        stuck(editor.haulage_stages.iter().map(|stage| stage.state)),
     );
-    if auto != editor.auto_run() {
-        commands.push(UiCommand::SetAutoRun(auto));
+    if auto != editor.auto_run().all() {
+        commands.push(UiCommand::SetAutoRun(crate::model::schedule::AutoRun::every(auto)));
     }
     match action {
         Some(RunAction::Step) => commands.push(UiCommand::RunHaulageStage(step)),
         Some(RunAction::All) => commands.push(UiCommand::RunAllHaulageStages),
-        Some(RunAction::Cancel) => commands.push(UiCommand::CancelHaulageRun),
+        Some(RunAction::Cancel) => cancel_runs(editor, commands),
         None => {}
     }
 }
@@ -528,7 +559,7 @@ impl StepBadge {
 
 /// The Reserving step's page: what its last run found, one row each.
 ///
-/// The blocks themselves are inspected in Solids View; this says whether the
+/// The blocks themselves are inspected in Reserves view; this says whether the
 /// cut and the measurement went through, and where they did not.
 fn draw_reserving(ui: &mut egui::Ui, rect: egui::Rect, editor: &EditorState) {
     use crate::app::planning_pipeline::StageState;
@@ -978,32 +1009,28 @@ fn stat_text(value: Option<f64>) -> String {
 /// the workspace they drive with a third of the window.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StepList {
-    Solids,
     BlockModels,
 }
 
 pub(crate) fn step_list(editor: &EditorState) -> Option<StepList> {
-    if !editor.is_planning_setup() || editor.planning_page != PlanningPage::Solids || editor.solids_subpage != crate::ui::state::PlanningSubpage::Setup {
+    if !editor.is_planning_setup() || !editor.is_setup_group(SetupGroup::Solids) {
         return None;
     }
     match editor.planning_solids_step {
-        SolidsStep::Solids | SolidsStep::Benching => Some(StepList::Solids),
         SolidsStep::BlockModels => Some(StepList::BlockModels),
-        SolidsStep::FieldList | SolidsStep::Blasting | SolidsStep::DigStrips | SolidsStep::Reserving => None,
+        SolidsStep::FieldList | SolidsStep::Solids | SolidsStep::Benching | SolidsStep::Blasting | SolidsStep::DigStrips | SolidsStep::Reserving => None,
     }
 }
 
-pub(crate) fn draw_step_list(
-    ui: &mut egui::Ui,
-    rect: egui::Rect,
-    list: StepList,
-    editor: &mut EditorState,
-    project: &UiProjectView,
-    document: &Document,
-    commands: &mut Vec<UiCommand>,
-) {
+/// Whether the explorer column carries the object tree under the step list:
+/// on the Solids and Benching steps, whose solids list is beside the panes it
+/// drives, the tree is what those solids are built from.
+pub(crate) fn shows_object_tree(editor: &EditorState) -> bool {
+    editor.is_planning_setup() && editor.is_setup_group(SetupGroup::Solids) && matches!(editor.planning_solids_step, SolidsStep::Solids | SolidsStep::Benching)
+}
+
+pub(crate) fn draw_step_list(ui: &mut egui::Ui, rect: egui::Rect, list: StepList, editor: &mut EditorState, project: &UiProjectView) {
     match list {
-        StepList::Solids => draw_solid_list(ui, rect, editor, document, commands),
         StepList::BlockModels => draw_block_model_list(ui, rect, editor, project),
     }
 }
@@ -1331,53 +1358,6 @@ fn island<R>(ui: &mut egui::Ui, layout: &mut PlanningLayout, id: &'static str, w
     response.inner
 }
 
-/// Least height a stacked pane may be dragged to before its neighbour stops
-/// giving way. Two rows and a title strip: below that a grid says nothing.
-const MIN_STACKED_PANE: f32 = 96.0;
-
-/// The lower half of a column of two stacked panes.
-///
-/// Vertical stacking is how a column carries two grids without the workspace
-/// paying for two columns of width, and the split between them is the user's:
-/// the seam takes a grip of its own, the same three dots every other seam
-/// here is marked with. The upper half is [`central_pane`], which takes
-/// whatever this leaves.
-fn stacked_lower<R>(ui: &mut egui::Ui, id: &'static str, content: impl FnOnce(&mut egui::Ui, egui::Rect) -> R) -> (egui::Rect, chrome::Grip) {
-    stacked_lower_share(ui, id, 0.5, 0.0, content)
-}
-
-/// [`stacked_lower`], opening at `share` of the height on offer rather than
-/// half, and never taking the `reserve` a pane claimed after it needs: for a
-/// column of more than two panes, claimed from the bottom up.
-pub(crate) fn stacked_lower_share<R>(
-    ui: &mut egui::Ui,
-    id: &'static str,
-    share: f32,
-    reserve: f32,
-    content: impl FnOnce(&mut egui::Ui, egui::Rect) -> R,
-) -> (egui::Rect, chrome::Grip) {
-    // Bounded against the height actually on offer rather than a fixed pair of
-    // limits, so a short window narrows both panes instead of letting one of
-    // them push the other off the bottom.
-    let available = ui.available_height() - reserve;
-    let max = (available - MIN_STACKED_PANE).max(MIN_STACKED_PANE);
-    let rect = egui::Panel::bottom(id)
-        .resizable(true)
-        .default_size(available * share)
-        .min_size(MIN_STACKED_PANE.min(max))
-        .max_size(max)
-        .show_separator_line(false)
-        .frame(chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
-        .show(ui, |ui| {
-            let rect = ui.available_rect_before_wrap();
-            ui.set_clip_rect(ui.clip_rect().intersect(rect));
-            content(ui, rect);
-        })
-        .response
-        .rect;
-    (rect, chrome::Grip::new(rect, chrome::Edge::Top, ui.scope_id().with(id)))
-}
-
 /// Whatever is left once the islands have taken their columns, as one pane.
 /// Returns what it claimed, for a caller that registers it itself.
 fn central_pane(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui, egui::Rect)) -> egui::Rect {
@@ -1388,25 +1368,22 @@ fn central_pane(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui, egui::Rec
         .rect
 }
 
-/// A right-hand column of two stacked panes, each a region with the seam
-/// between them marked. Used where a page reads two tables side by side down
-/// one edge rather than across the workspace.
-pub(crate) fn stacked_column(
-    ui: &mut egui::Ui,
-    layout: &mut PlanningLayout,
-    id: &'static str,
-    lower_id: &'static str,
-    upper: impl FnOnce(&mut egui::Ui, egui::Rect),
-    lower: impl FnOnce(&mut egui::Ui, egui::Rect),
-) {
-    let column = Island::new(id, Side::Right).default_width(360.0).min_width(200.0).bare().show(ui, |ui, _| {
-        let (lower_rect, seam) = stacked_lower(ui, lower_id, lower);
-        let upper_rect = central_pane(ui, upper);
-        ([upper_rect, lower_rect], seam)
-    });
-    layout.regions.extend(column.inner.0);
+/// A right-hand column of tables, one under the other in one island and
+/// scrolling together: see [`table_stack`]. `content` draws each into
+/// [`stack_slot`].
+pub(crate) fn stacked_column(ui: &mut egui::Ui, layout: &mut PlanningLayout, id: &'static str, content: impl FnOnce(&mut egui::Ui)) {
+    let column = Island::new(id, Side::Right)
+        .default_width(360.0)
+        .min_width(200.0)
+        .flush()
+        .show(ui, |ui, rect| table_stack(ui, rect, id, content));
+    layout.regions.extend(column.regions);
     layout.grips.push(column.grip);
-    layout.grips.push(column.inner.1);
+}
+
+/// Tables one under the other in the central island, scrolling together.
+fn central_stack(ui: &mut egui::Ui, layout: &mut PlanningLayout, id: &'static str, content: impl FnOnce(&mut egui::Ui)) {
+    central_island(ui, layout, |ui, rect| table_stack(ui, rect, id, content));
 }
 
 /// [`central_pane`], for a caller in another module.
@@ -1419,74 +1396,47 @@ fn central_island(ui: &mut egui::Ui, layout: &mut PlanningLayout, content: impl 
     layout.regions.push(rect);
 }
 
-/// The object tree with a second pane stacked under it.
-///
-/// The step's own figures - a solid's properties, a bench run's results - are
-/// read against the objects they describe, so they share that column and the
-/// seam between them is the user's, like every other seam here.
-fn objects_column(
+/// The solids, with what is read about the one picked among them under the
+/// list: one island down the right, scrolling as a whole. The object tree
+/// those solids are built from is in the explorer column.
+fn solids_column(
     ui: &mut egui::Ui,
     layout: &mut PlanningLayout,
     editor: &mut EditorState,
-    project: &UiProjectView,
+    document: &Document,
     commands: &mut Vec<UiCommand>,
-    lower_id: &'static str,
     lower: impl FnOnce(&mut egui::Ui, egui::Rect, &mut EditorState, &mut Vec<UiCommand>),
 ) {
-    let title = tr!("sequence-objects");
     let column = Island::new("planning_objects_island", Side::Right)
         .default_width(300.0)
         .min_width(160.0)
-        .bare()
-        .show(ui, |ui, _| {
-            // The pane below is handed the editor and the command queue rather
-            // than capturing them: the tree above needs both as well, and one
-            // closure holding them would shut the other out.
-            let (lower_rect, seam) = stacked_lower(ui, lower_id, |ui, rect| lower(ui, rect, editor, commands));
-            let tree = central_pane(ui, |ui, rect| {
-                framed_render_pane(ui, rect, &title, |ui, body| {
-                    ui.scope_builder(egui::UiBuilder::new().id_salt("planning_solid_objects").max_rect(body), |ui| {
-                        ui.set_clip_rect(ui.clip_rect().intersect(body));
-                        ui.set_min_size(body.size());
-                        ui.painter().rect_filled(body, 0.0, crate::ui::widgets::tree_row_colors(ui).0);
-                        crate::ui::elements::explorer::draw_object_tree(ui, editor, project, commands);
-                    });
-                });
+        .flush()
+        .show(ui, |ui, rect| {
+            table_stack(ui, rect, "planning_solids_column", |ui| {
+                draw_solid_list(ui, stack_slot(ui), editor, document, commands);
+                lower(ui, stack_slot(ui), editor, commands);
             });
-            ([tree, lower_rect], seam)
         });
-    layout.regions.extend(column.inner.0);
+    layout.regions.extend(column.regions);
     layout.grips.push(column.grip);
-    layout.grips.push(column.inner.1);
 }
 
 fn draw_solids_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut EditorState, project: &UiProjectView, document: &Document, commands: &mut Vec<UiCommand>) {
     let session = project.active_session;
-    // The solid list is in the explorer column under the step list; what is
-    // read *about* the solid picked there belongs beside the objects it
-    // describes, so it stacks under the object tree.
     // Open on a solid rather than an empty preview.
     if editor.planning_selected_solid.is_none_or(|id| document.solid(id).is_none()) {
         editor.planning_selected_solid = document.solids().first().map(|solid| solid.id);
     }
     let selected = editor.planning_selected_solid.and_then(|id| document.solid(id));
-    objects_column(
-        ui,
-        layout,
-        editor,
-        project,
-        commands,
-        "planning_solids_properties_island",
-        |ui, rect, _editor, commands| match selected {
-            Some(solid) => draw_solid_properties(ui, rect, project, solid, commands),
-            None => {
-                let columns = [(tr!("planning-property"), 0.4), (tr!("planning-value"), 0.6)];
-                DataGrid::new("planning_solid_properties_empty", rect, &tr!("planning-properties"))
-                    .columns(&columns)
-                    .show(ui, |_| {});
-            }
-        },
-    );
+    solids_column(ui, layout, editor, document, commands, |ui, rect, _editor, commands| match selected {
+        Some(solid) => draw_solid_properties(ui, rect, project, solid, commands),
+        None => {
+            let columns = [(tr!("planning-property"), 0.4), (tr!("planning-value"), 0.6)];
+            DataGrid::new("planning_solid_properties_empty", rect, &tr!("planning-properties"))
+                .columns(&columns)
+                .show(ui, |_| {});
+        }
+    });
     central_island(ui, layout, |ui, rect| draw_solid_render(ui, rect, editor, session, commands));
     crate::ui::dialogs::solids::draw_new_solid_dialog(ui, editor, project, commands);
     crate::ui::dialogs::solids::draw_topography_update_dialog(ui, editor, project, document.solids(), commands);
@@ -1695,7 +1645,7 @@ fn draw_flitch_styles(ui: &mut egui::Ui, rect: egui::Rect, plan: &mut BenchingPl
 /// Shares of the results grid's columns.
 const RESULT_FRACTIONS: [f32; 3] = [0.35, 0.35, 0.3];
 
-/// The Benching step's pane under the object tree: every bench the plan
+/// The Benching step's results, under the solids list: every bench the plan
 /// produces that holds some of the solid, bottom up, with its flitches beneath
 /// it, each named by its base RL as the rest of the app names them.
 ///
@@ -1767,11 +1717,9 @@ fn draw_benching_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &m
     let solid_color = selected.map_or([1.0; 4], |solid| solid.color);
     let mut plan = selected.map(|solid| solid.benching.clone()).unwrap_or_default();
     let mut changed = false;
-    // Results read against the objects they were measured from, so they take
-    // the pane under the object tree; the solid list is in the explorer
-    // column under the step list.
+    // The results of the solid picked, under the list it is picked from.
     let results = plan.clone();
-    objects_column(ui, layout, editor, project, commands, "planning_bench_results_island", |ui, rect, editor, _commands| {
+    solids_column(ui, layout, editor, document, commands, |ui, rect, editor, _commands| {
         if solid_id.is_some() {
             draw_bench_results(ui, rect, &results, editor);
         } else {
@@ -1779,37 +1727,26 @@ fn draw_benching_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &m
         }
     });
 
-    // This column arranges two panes rather than being one, so it carries no
-    // frame of its own and they halve its height between them. It still closes
-    // as a whole: the seam down its side drags both of them shut.
+    // The benching and its flitch styles, one under the other in one island
+    // that scrolls as a whole.
     let settings = Island::new("planning_bench_settings_column", Side::Left)
         .default_width(300.0)
         .min_width(140.0)
-        .bare()
-        .show(ui, |ui, _| {
-            let (flitching, seam) = stacked_lower(ui, "planning_flitching_island", |ui, rect| {
+        .flush()
+        .show(ui, |ui, rect| {
+            table_stack(ui, rect, "planning_bench_settings", |ui| {
                 if solid_id.is_some() {
-                    draw_flitch_styles(ui, rect, &mut plan, solid_color, &mut changed);
+                    draw_benching_list(ui, stack_slot(ui), &mut plan, &mut changed);
+                    draw_flitch_styles(ui, stack_slot(ui), &mut plan, solid_color, &mut changed);
                 } else {
-                    DataGrid::new("planning_flitching_empty", rect, &tr!("planning-flitch-styles")).show(ui, |_| {});
-                }
-            });
-            let benching = central_pane(ui, |ui, rect| {
-                if solid_id.is_some() {
-                    draw_benching_list(ui, rect, &mut plan, &mut changed);
-                } else {
-                    DataGrid::new("planning_benching_empty", rect, &tr!("planning-benching")).show(ui, |ui| {
+                    DataGrid::new("planning_benching_empty", stack_slot(ui), &tr!("planning-benching")).show(ui, |ui| {
                         grid_empty_state(ui, &tr!("planning-no-solid-selected"), None);
                     });
                 }
             });
-            ([flitching, benching], seam)
         });
-    // The column is not a region itself: the two panes inside it are, and the
-    // seam between them resizes the split the column's own seam cannot.
-    layout.regions.extend(settings.inner.0);
+    layout.regions.extend(settings.regions);
     layout.grips.push(settings.grip);
-    layout.grips.push(settings.inner.1);
     central_island(ui, layout, |ui, rect| draw_solid_render(ui, rect, editor, project.active_session, commands));
     crate::ui::dialogs::solids::draw_new_solid_dialog(ui, editor, project, commands);
     if let Some(solid_id) = solid_id
@@ -1877,9 +1814,9 @@ fn draw_solids_details(
 fn draw_haulage_details(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
     let session = project.active_session;
     match editor.haulage_setup_step {
-        crate::ui::state::HaulageStep::Network => {
-            central_island(ui, layout, |ui, rect| super::haulage::draw_network_settings(ui, rect, &project.haulage, session, commands));
-        }
+        // Frames the viewport instead, with its settings in the Road Network
+        // column (`haulage::draw_panel`), so it never owns the window.
+        crate::ui::state::HaulageStep::Network => {}
         crate::ui::state::HaulageStep::TruckClasses => {
             let plan = project.schedule.clone();
             // Open on a class rather than an empty table.
@@ -1889,24 +1826,16 @@ fn draw_haulage_details(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: 
             island(ui, layout, "schedule_truck_class_list_island", 320.0, |ui, rect| {
                 super::schedule_trucking::draw_class_list(ui, rect, editor, &plan, session, commands)
             });
-            // The class's figures above, its grade speeds below, with the
-            // split between them the user's. It opens with the figures' rows
-            // fitted and the bands, which run longer, taking the rest.
-            let figures = crate::ui::widgets::data_grid::property_table_height(ui, 8) + 2.0;
-            let share = (1.0 - figures / ui.available_height().max(1.0)).clamp(0.3, 0.85);
-            let (bands, seam) = stacked_lower_share(ui, "schedule_truck_grade_speeds_pane", share, 0.0, |ui, rect| {
-                super::schedule_trucking::draw_grade_speeds(ui, rect, editor, &plan, session, commands)
-            });
-            layout.regions.push(bands);
-            layout.grips.push(seam);
-            central_island(ui, layout, |ui, rect| {
-                super::schedule_trucking::draw_class_properties(ui, rect, editor, &plan, session, commands)
+            // The class's figures, then its grade speeds, scrolling as one.
+            central_stack(ui, layout, "schedule_truck_class", |ui| {
+                super::schedule_trucking::draw_class_properties(ui, stack_slot(ui), editor, &plan, session, commands);
+                super::schedule_trucking::draw_grade_speeds(ui, stack_slot(ui), editor, &plan, session, commands);
             });
         }
     }
 }
 
-/// The Schedule Setup subpage's panes: a list beside the properties of the
+/// The Schedule Setup's panes: a list beside the properties of the
 /// row selected in it, the same shape the Solids steps use.
 fn draw_schedule_details(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut EditorState, project: &UiProjectView, document: &Document, commands: &mut Vec<UiCommand>) {
     use crate::ui::state::ScheduleStep;
@@ -1990,10 +1919,10 @@ fn draw_schedule_details(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor:
         }
         ScheduleStep::Haulage => {
             island(ui, layout, "schedule_haulage_steps_island", 320.0, |ui, rect| draw_haulage_summary(ui, rect, editor));
-            let (pits, seam) = stacked_lower_share(ui, "schedule_haul_pits_island", 0.3, 0.0, |ui, rect| draw_pit_connections(ui, rect, editor));
-            layout.regions.push(pits);
-            layout.grips.push(seam);
-            central_island(ui, layout, |ui, rect| draw_destination_connections(ui, rect, editor));
+            central_stack(ui, layout, "schedule_haul_connections", |ui| {
+                draw_destination_connections(ui, stack_slot(ui), editor);
+                draw_pit_connections(ui, stack_slot(ui), editor);
+            });
         }
         ScheduleStep::TruckingRules => {
             island(ui, layout, "schedule_truck_rule_list_island", 380.0, |ui, rect| {
@@ -2034,13 +1963,13 @@ pub(crate) fn draw_details(
     document: &Document,
     block_models: &[OpenBlockModel],
     commands: &mut Vec<UiCommand>,
-    page: PlanningPage,
+    group: SetupGroup,
 ) -> PlanningLayout {
     let mut layout = PlanningLayout::default();
-    let response = egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| match page {
-        PlanningPage::Solids => draw_solids_details(ui, &mut layout, editor, project, document, block_models, commands),
-        PlanningPage::Schedule => draw_schedule_details(ui, &mut layout, editor, project, document, commands),
-        PlanningPage::Haulage => draw_haulage_details(ui, &mut layout, editor, project, commands),
+    let response = egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| match group {
+        SetupGroup::Solids => draw_solids_details(ui, &mut layout, editor, project, document, block_models, commands),
+        SetupGroup::Schedule => draw_schedule_details(ui, &mut layout, editor, project, document, commands),
+        SetupGroup::Haulage => draw_haulage_details(ui, &mut layout, editor, project, commands),
     });
     layout.rect = response.response.rect;
     layout

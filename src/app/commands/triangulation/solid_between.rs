@@ -1948,7 +1948,7 @@ const CLIP_MAX_DEPTH: usize = 12;
 ///
 /// An open body is clipped and returned rather than rejected: bench bodies are
 /// allowed to be open (`build_solid_between_surfaces` warns rather than
-/// failing, and the View page reports it through `planning-reserve-open-solid`).
+/// failing, and the Reserves view reports it through `planning-reserve-open-solid`).
 /// Failing here would take the whole View render down for a condition the page
 /// already knows how to show.
 pub(crate) fn clip_solid_to_plan(mesh: &mesh_data::Triangulation, face: &[Vec<glam::DVec2>], cancel: &crate::app::jobs::CancelFlag) -> Result<ClippedSolid> {

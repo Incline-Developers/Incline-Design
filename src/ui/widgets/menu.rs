@@ -1207,32 +1207,55 @@ impl<'value> MenuFieldBool<'value> {
     }
 }
 
-/// The switch a [`MenuFieldBool`] shows, for rows that lay out their own label.
+/// The switch a [`MenuFieldBool`] shows, for rows that lay out their own label,
+/// or with its label beside it where a lone setting sits in a toolbar or a
+/// title strip.
+///
+/// A checkbox reads as "include this item"; a switch reads as "this mode is
+/// on", which is what an Auto run is.
 pub(crate) struct SlidingToggle<'value> {
     value: &'value mut bool,
+    label: Option<egui::WidgetText>,
 }
 
 impl<'value> SlidingToggle<'value> {
     pub(crate) fn new(value: &'value mut bool) -> Self {
-        Self { value }
+        Self { value, label: None }
+    }
+
+    /// Text after the switch, clickable with it.
+    pub(crate) fn label(mut self, label: impl Into<egui::WidgetText>) -> Self {
+        self.label = Some(label.into());
+        self
     }
 }
 
 impl egui::Widget for SlidingToggle<'_> {
     fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+        const LABEL_GAP: f32 = 6.0;
+        let galley = self
+            .label
+            .map(|label| label.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body));
+        let label_width = galley.as_ref().map_or(0.0, |galley| LABEL_GAP + galley.size().x);
         // The track is a fixed size, but the row's full height stays clickable
         // so the switch is no harder to hit than the fields above it.
         let height = ui.spacing().interact_size.y.max(TOGGLE_HEIGHT);
-        let (rect, mut response) = ui.allocate_exact_size(egui::vec2(TOGGLE_WIDTH, height), egui::Sense::click());
+        let (rect, mut response) = ui.allocate_exact_size(egui::vec2(TOGGLE_WIDTH + label_width, height), egui::Sense::click());
 
         if response.clicked() {
             *self.value = !*self.value;
             response.mark_changed();
         }
 
-        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), *self.value, ""));
+        let text = galley.as_ref().map_or("", |galley| galley.text());
+        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), *self.value, text));
 
         if ui.is_rect_visible(rect) {
+            let rect = egui::Rect::from_min_size(rect.min, egui::vec2(TOGGLE_WIDTH, height));
+            if let Some(galley) = galley {
+                let text_pos = egui::pos2(rect.right() + LABEL_GAP, rect.center().y - galley.size().y / 2.0);
+                ui.painter().galley(text_pos, galley, ui.style().interact(&response).text_color());
+            }
             let visuals = ui.style().interact_selectable(&response, *self.value);
             // Keyed by the bool's own address rather than `response.id`: that id is
             // assigned by allocation order within the enclosing panel, so switching

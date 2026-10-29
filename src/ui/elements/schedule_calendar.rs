@@ -26,7 +26,7 @@ use crate::{
     },
     ui::{
         EditorState, UiProjectView, chrome,
-        state::{CalendarCellAddress, CalendarCellDraft, CalendarOwner, CalendarRow, CalendarSelection, PlanningSubpage, ScheduleEdit, ScheduleStep, UiCommand},
+        state::{CalendarCellAddress, CalendarCellDraft, CalendarOwner, CalendarRow, CalendarSelection, ScheduleEdit, ScheduleStep, UiCommand},
     },
 };
 
@@ -37,7 +37,6 @@ const DEFAULT_W: f32 = 100.0;
 const TOTAL_W: f32 = 112.0;
 const PERIOD_W: f32 = 112.0;
 const HEADER_H: f32 = 30.0;
-const TOOLBAR_H: f32 = 34.0;
 const OVERSCAN: i32 = 1;
 /// Height of the day scroll bar along the bottom of the period columns.
 const SCROLLBAR_H: f32 = 12.0;
@@ -279,7 +278,13 @@ fn destination_row_kinds(kind: DestinationKind) -> &'static [CalendarRow] {
     }
 }
 
-pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, document: &Document, commands: &mut Vec<UiCommand>) -> egui::Rect {
+pub(crate) fn draw_details(
+    ui: &mut egui::Ui,
+    editor: &mut EditorState,
+    project: &UiProjectView,
+    document: &Document,
+    commands: &mut Vec<UiCommand>,
+) -> super::planning_setup::PlanningLayout {
     if editor.schedule_calendar.runtime != project.active_session {
         // A cell another page just sent the Calendar to outlives the reset
         // its first visit makes.
@@ -318,62 +323,35 @@ pub(crate) fn draw_details(ui: &mut egui::Ui, editor: &mut EditorState, project:
     };
     let destinations = destination_rows(plan, document);
     editor.schedule_calendar.visible_days = editor.schedule_calendar.visible_days.max(required_days(plan, figures.result));
-    egui::CentralPanel::default()
-        .frame(chrome::region_frame(ui))
+    // The grid in an island of its own; its run controls and its report are
+    // in the viewport bar.
+    let mut layout = super::planning_setup::PlanningLayout::default();
+    let rect = egui::CentralPanel::default()
+        .frame(chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
         .show(ui, |ui| {
-            let rect = ui.available_rect_before_wrap();
-            let toolbar = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), TOOLBAR_H.min(rect.height())));
-            let grid = egui::Rect::from_min_max(egui::pos2(rect.left(), toolbar.bottom()), rect.max);
-            draw_toolbar(ui, toolbar, editor, plan, document, commands);
+            let grid = ui.available_rect_before_wrap();
             if plan.agents().is_empty() && destinations.is_empty() && plan.trucks().classes.is_empty() {
                 draw_empty(ui, grid, editor);
             } else if grid.is_positive() {
                 draw_grid(ui, grid, editor, plan, &destinations, &figures, project.active_session, commands);
             }
-            ui.allocate_rect(rect, egui::Sense::hover());
+            ui.allocate_rect(grid, egui::Sense::hover());
         })
         .response
-        .rect
-}
-
-/// The Calendar's own toolbar: the schedule run controls, and whatever the
-/// held result or the last edit has to say.
-///
-/// Days are reached by scrolling rather than by asking for them: the extent
-/// already covers the authored overrides, the sequenced bars and the
-/// calculated interval, so a button that added a fortnight of empty columns
-/// and a box that jumped to one were two ways of saying the same thing the
-/// scroll bar says.
-fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, document: &Document, commands: &mut Vec<UiCommand>) {
-    let mut child = ui.new_child(egui::UiBuilder::new().id_salt("schedule_calendar_toolbar").max_rect(rect));
-    child.set_clip_rect(child.clip_rect().intersect(rect));
-    child.horizontal_centered(|ui| {
-        super::schedule_gantt::draw_calculation_controls(ui, editor, "calendar", commands);
-        ui.add_space(8.0);
-        draw_report_menu(ui, editor, plan, document, commands);
-        // Said once, here: the alternative is repeating it in every
-        // calculated row. The same status the Gantt shows, with the same
-        // detail behind it.
-        ui.add_space(8.0);
-        super::schedule_gantt::draw_run_status(ui, editor);
-        if let Some(error) = &editor.schedule_calendar.error {
-            ui.colored_label(ui.visuals().error_fg_color, error);
-        }
-    });
+        .rect;
+    layout.regions.push(rect);
+    layout.rect = rect;
+    layout
 }
 
 /// The report export: how to group the rows, then copy or save. Built from
 /// the held result when asked, never per frame.
-fn draw_report_menu(ui: &mut egui::Ui, editor: &mut EditorState, plan: &SchedulePlan, document: &Document, commands: &mut Vec<UiCommand>) {
+pub(crate) fn draw_report_menu(ui: &mut egui::Ui, editor: &mut EditorState, plan: &SchedulePlan, document: &Document, commands: &mut Vec<UiCommand>) {
     use super::schedule_report::{ReportGrouping, ReportNames, build, to_text};
     let ready = editor.schedule_result.is_some();
     let button = ui
-        .add_enabled(
-            ready,
-            egui::Button::new(tr!("report-export")).corner_radius(crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS),
-        )
-        .on_hover_text(tr!("report-export-help"))
-        .on_disabled_hover_text(tr!("report-export-unavailable"));
+        .add(crate::ui::widgets::menu::MenuButton::new(tr!("report-export")).enabled(ready))
+        .on_hover_text(if ready { tr!("report-export-help") } else { tr!("report-export-unavailable") });
     let text = |editor: &EditorState, separator: char| -> Option<(String, String)> {
         let schedule = editor.schedule_result.as_deref()?;
         let destinations = destinations::available(document.solids(), plan.routing())
@@ -407,20 +385,30 @@ fn draw_report_menu(ui: &mut egui::Ui, editor: &mut EditorState, plan: &Schedule
     };
     // Stays open while the grouping is chosen; closes on Copy, Save or a
     // click outside.
-    crate::ui::widgets::context_menu::checklist_popup(&button, tr!("report-export-title"), 240.0, |ui| {
-        ui.label(egui::RichText::new(tr!("report-group-by")).weak());
+    use crate::ui::widgets::context_menu::{ContextMenuAction, checklist_popup, context_menu_fields, context_menu_separator};
+    if !ready {
+        return;
+    }
+    checklist_popup(&button, tr!("report-export-title"), 240.0, |ui| {
+        context_menu_fields(ui, |ui| ui.label(egui::RichText::new(tr!("report-group-by")).weak().small()));
         for grouping in ReportGrouping::ALL {
-            ui.radio_value(&mut editor.schedule_report_grouping, grouping, grouping.label());
+            if ContextMenuAction::new(grouping.label())
+                .checked(editor.schedule_report_grouping == grouping)
+                .show(ui)
+                .clicked()
+            {
+                editor.schedule_report_grouping = grouping;
+            }
         }
-        ui.separator();
-        if ui.button(tr!("report-copy")).on_hover_text(tr!("report-copy-help")).clicked() {
+        context_menu_separator(ui);
+        if ContextMenuAction::new(tr!("report-copy")).show(ui).on_hover_text(tr!("report-copy-help")).clicked() {
             if let Some((_, text)) = text(editor, '\t') {
                 ui.ctx().copy_text(text);
                 crate::userspace_log!("{}", tr!("report-copied"));
             }
             ui.close();
         }
-        if ui.button(tr!("report-save")).clicked() {
+        if ContextMenuAction::new(tr!("report-save")).show(ui).clicked() {
             if let Some((file_name, text)) = text(editor, ',') {
                 commands.push(UiCommand::ExportScheduleReport(Box::new((file_name, text))));
             }
@@ -434,9 +422,9 @@ fn draw_empty(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState) {
         ui.centered_and_justified(|ui| {
             ui.vertical_centered(|ui| {
                 ui.label(tr!("schedule-calendar-empty"));
-                if ui.button(tr!("schedule-calendar-add-loader")).clicked() {
-                    editor.schedule_subpage = PlanningSubpage::Setup;
-                    editor.schedule_setup_step = ScheduleStep::LoaderAgents;
+                ui.add_space(6.0);
+                if ui.add(crate::ui::widgets::menu::MenuButton::new(tr!("schedule-calendar-add-loader")).primary()).clicked() {
+                    editor.open_schedule_step(ScheduleStep::LoaderAgents);
                 }
             });
         });
@@ -539,18 +527,19 @@ const TRUCK_ROWS: [CalendarRow; 6] = [
 /// Dig and reclaim tonnes are two rows, never summed: reclaim moves material
 /// that was already mined.
 ///
-/// The utilisation target and incentive sit beside the scheduled utilisation
-/// they steer, under the tonnes it is worked out from.
+/// What is set first and what the schedule worked out after, as every group
+/// lists them: the inputs in one run to move through and type into, rather
+/// than broken up by figures that cannot be edited.
 const LOADER_ROWS: [CalendarRow; 9] = [
     CalendarRow::Input(CalendarField::Availability),
     CalendarRow::Input(CalendarField::Utilisation),
     CalendarRow::Input(CalendarField::Rate),
     CalendarRow::Input(CalendarField::ReclaimRate),
+    CalendarRow::Input(CalendarField::UtilisationTarget),
+    CalendarRow::Input(CalendarField::UtilisationIncentive),
     CalendarRow::DigTonnes,
     CalendarRow::ReclaimTonnes,
     CalendarRow::ScheduledUtilisation,
-    CalendarRow::Input(CalendarField::UtilisationTarget),
-    CalendarRow::Input(CalendarField::UtilisationIncentive),
 ];
 
 /// A dozer's, drill's or MPU's rows: its time and its rate, and what it got
@@ -611,7 +600,9 @@ fn draw_grid(
     handle_keyboard(ui, editor, plan, destinations, figures, session, commands);
     let visuals = ui.visuals().clone();
     let stroke = visuals.widgets.noninteractive.bg_stroke;
-    ui.painter().rect_filled(rect, 0.0, crate::ui::widgets::tree_row_colors(ui).1);
+    // Rounded as the island it fills is, which draws the outline round it.
+    ui.painter()
+        .rect_filled(rect, crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS, crate::ui::widgets::tree_row_colors(ui).1);
     let hierarchy_head = egui::Rect::from_min_size(rect.min, egui::vec2(HIERARCHY_W, HEADER_H));
     let default_head = egui::Rect::from_min_size(egui::pos2(hierarchy_head.right(), rect.top()), egui::vec2(DEFAULT_W, HEADER_H));
     paint_header(ui, hierarchy_head, tr!("schedule-calendar-setting"), None);
@@ -664,7 +655,7 @@ fn draw_grid(
             commands,
         );
     }
-    ui.painter().rect_stroke(rect, 0.0, stroke, egui::StrokeKind::Inside);
+    draw_selection(ui, body);
     ui.painter()
         .line_segment([egui::pos2(hierarchy_head.right(), rect.top()), egui::pos2(hierarchy_head.right(), body.bottom())], stroke);
     ui.painter()
@@ -732,7 +723,8 @@ fn paint_header(ui: &mut egui::Ui, rect: egui::Rect, text: String, hover: Option
     if !rect.is_positive() {
         return;
     }
-    ui.painter().rect_filled(rect, 0.0, ui.visuals().widgets.noninteractive.bg_fill);
+    // The surface the Gantt's ruler sits on, so the two pages' headings match.
+    ui.painter().rect_filled(rect, 0.0, super::schedule_gantt::ruler_fill(ui.visuals()));
     let response = ui.put(rect.shrink(5.0), egui::Label::new(crate::ui::fonts::bold(&text)).truncate());
     if let Some(hover) = hover {
         response.on_hover_text(hover);
@@ -1060,13 +1052,31 @@ fn draw_cell(
         return;
     }
     let selected = selected(editor, plan, destinations, address);
-    if address.row.is_calculated() {
+    let can_edit = editable(address);
+    // Every cell that cannot be typed into reads as such, calculated or
+    // carried from elsewhere alike: one surface for all of them.
+    if !can_edit {
         ui.painter().rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
     }
     if selected {
-        ui.painter().rect_filled(rect, 0.0, ui.visuals().selection.bg_fill);
+        // Outlined as one block once the grid is drawn: see `draw_selection`.
+        ui.data_mut(|data| {
+            let bounds = data.get_temp_mut_or(selection_bounds_id(ui), egui::Rect::NOTHING);
+            *bounds = bounds.union(rect);
+        });
     }
     let response = ui.interact(rect, cell_id(ui, address), egui::Sense::click());
+    // A cell that can be typed into says so under the pointer; one that
+    // cannot stays still.
+    if can_edit && response.hovered() && !selected {
+        ui.painter().rect_stroke(
+            rect.shrink(1.5),
+            crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS,
+            egui::Stroke::new(1.0, ui.visuals().widgets.hovered.bg_stroke.color),
+            egui::StrokeKind::Inside,
+        );
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+    }
     if response.clicked() {
         if !commit_draft(editor, plan, session, commands) {
             return;
@@ -1178,18 +1188,19 @@ fn draw_mode_menu(ui: &mut egui::Ui, rect: egui::Rect, address: CalendarCellAddr
         choices.insert(0, (None, tr!("pile-mode-inherit", mode = operation.default_mode.label())));
     }
     let mut chosen = None;
-    let area = egui::Area::new(ui.scope_id().with(("pile_mode_menu", address.owner, address.cell)))
-        .order(egui::Order::Foreground)
-        .fixed_pos(rect.left_bottom())
+    let (_, dismissed) = crate::ui::widgets::context_menu::ContextMenu::new(("pile_mode_menu", address.owner, address.cell), tr!("pile-mode-row"))
+        .position(rect.left_bottom())
+        .width(rect.width())
         .show(ui.ctx(), |ui| {
-            egui::Frame::menu(ui.style()).show(ui, |ui| {
-                ui.set_min_width(rect.width());
-                for (mode, label) in &choices {
-                    if ui.selectable_label(*mode == current, label).clicked() {
-                        chosen = Some(*mode);
-                    }
+            for (mode, label) in &choices {
+                if crate::ui::widgets::context_menu::ContextMenuAction::new(label.as_str())
+                    .checked(*mode == current)
+                    .show(ui)
+                    .clicked()
+                {
+                    chosen = Some(*mode);
                 }
-            });
+            }
         });
     if let Some(mode) = chosen {
         commands.push(UiCommand::schedule(
@@ -1206,8 +1217,6 @@ fn draw_mode_menu(ui: &mut egui::Ui, rect: egui::Rect, address: CalendarCellAddr
         editor.schedule_calendar.error = None;
         return;
     }
-    let dismissed = ui.input(|input| input.key_pressed(egui::Key::Escape))
-        || (ui.input(|input| input.pointer.any_pressed()) && !area.response.contains_pointer() && !ui.rect_contains_pointer(rect));
     if dismissed {
         editor.schedule_calendar.mode_menu = None;
     }
@@ -1486,6 +1495,31 @@ fn crusher_target(address: CalendarCellAddress) -> Option<StandaloneDestinationI
         DestinationId::Standalone(id) => Some(id),
         DestinationId::Solid(_) => None,
     }
+}
+
+/// Where the cells drawn this frame gather the extent of the selection.
+fn selection_bounds_id(ui: &egui::Ui) -> egui::Id {
+    ui.scope_id().with("calendar_selection_bounds")
+}
+
+/// The selection as one rounded outline round every selected cell in view,
+/// in the selection colour, rather than a fill over each.
+fn draw_selection(ui: &egui::Ui, clip: egui::Rect) {
+    let id = selection_bounds_id(ui);
+    let bounds = ui.data_mut(|data| {
+        let bounds = data.get_temp::<egui::Rect>(id);
+        data.remove::<egui::Rect>(id);
+        bounds
+    });
+    let Some(bounds) = bounds.filter(|bounds| bounds.is_positive()) else {
+        return;
+    };
+    ui.painter().with_clip_rect(clip).rect_stroke(
+        bounds.shrink(1.0),
+        crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS,
+        egui::Stroke::new(1.5, ui.visuals().selection.stroke.color),
+        egui::StrokeKind::Inside,
+    );
 }
 
 fn cell_id(ui: &egui::Ui, address: CalendarCellAddress) -> egui::Id {

@@ -4,6 +4,10 @@
 //! selector gutter; [`PropertyTable`] is the two-column key/value editor that
 //! sits beside it. Both paint their own fill, border and row rules so callers
 //! only supply content.
+//!
+//! Either fills the rect it is given and scrolls its rows inside it - or,
+//! given a rect of unbounded height, is as tall as its rows, so that several
+//! can follow one another in a [`table_stack`] and scroll as one.
 
 use super::explorer::row_height;
 use crate::ui::{fonts::bold, unthemed_icon};
@@ -35,15 +39,70 @@ pub(crate) fn property_table_height(ui: &egui::Ui, rows: usize) -> f32 {
     TITLE_STRIP + rows as f32 * (grid_row_height(ui) + COLUMN_ROW_EXTRA)
 }
 
+/// Dress the stock controls a cell holds - a combo, a dragged number, a
+/// picker button - as the cell's own value: nothing painted behind them at
+/// rest, so they read like every other value in the table, and the rows'
+/// hover fill while the pointer is on one, so it still says it can be used.
+/// A field being typed in keeps its focus outline.
+pub(crate) fn cell_style(ui: &mut egui::Ui) {
+    let visuals = ui.visuals_mut();
+    let hover = visuals.widgets.hovered.bg_fill;
+    visuals.extreme_bg_color = egui::Color32::TRANSPARENT;
+    let widgets = &mut visuals.widgets;
+    for state in [&mut widgets.noninteractive, &mut widgets.inactive] {
+        state.bg_fill = egui::Color32::TRANSPARENT;
+        state.weak_bg_fill = egui::Color32::TRANSPARENT;
+        state.bg_stroke = egui::Stroke::NONE;
+    }
+    for state in [&mut widgets.hovered, &mut widgets.active, &mut widgets.open] {
+        state.bg_fill = hover;
+        state.weak_bg_fill = hover;
+        state.bg_stroke = egui::Stroke::NONE;
+        state.expansion = 0.0;
+    }
+}
+
+/// The arrow at a picker cell's right end, saying a click opens a list: the
+/// one a combo draws, in the same place, size and colour, so the two kinds
+/// of cell read alike.
+fn paint_picker_arrow(ui: &egui::Ui, response: &egui::Response) {
+    let side = ui.spacing().icon_width;
+    let inner = response.rect.shrink2(ui.spacing().button_padding);
+    let icon = egui::Align2::RIGHT_CENTER.align_size_within_rect(egui::vec2(side, side), inner);
+    let arrow = egui::Rect::from_center_size(icon.center(), egui::vec2(icon.width() * 0.7, icon.height() * 0.45));
+    let color = ui.style().interact(response).fg_stroke.color;
+    ui.painter().add(egui::Shape::convex_polygon(
+        vec![arrow.left_top(), arrow.right_top(), arrow.center_bottom()],
+        color,
+        egui::Stroke::NONE,
+    ));
+}
+
+/// Whether a pane given `rect` is sized to its rows rather than filling it:
+/// see [`table_stack`].
+fn fitted(rect: egui::Rect) -> bool {
+    !rect.height().is_finite()
+}
+
 /// Paint the tree-stripe background, title strip and border shared by both surfaces,
 /// then run `content` clipped to `rect` with zero vertical row spacing.
+///
+/// A [`fitted`] pane takes only the height its content does, and is laid out
+/// in `ui` like any widget, so the next one starts under it. It draws a rule
+/// along its top in place of a border: the island round the stack is the
+/// outline, and the rule is what parts one table from the one above it.
 fn framed_pane<R>(ui: &mut egui::Ui, id: &str, rect: egui::Rect, title: &str, extras: TitleExtras<'_>, content: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let fit = fitted(rect);
     let mut out = None;
-    ui.scope_builder(egui::UiBuilder::new().id_salt(id).max_rect(rect), |ui| {
-        ui.set_clip_rect(ui.clip_rect().intersect(rect));
-        ui.set_min_size(rect.size());
+    let background = ui.painter().add(egui::Shape::Noop);
+    let drawn = ui.scope_builder(egui::UiBuilder::new().id_salt(id).max_rect(rect), |ui| {
+        if fit {
+            ui.set_width(rect.width());
+        } else {
+            ui.set_clip_rect(ui.clip_rect().intersect(rect));
+            ui.set_min_size(rect.size());
+        }
         ui.spacing_mut().item_spacing.y = 0.0;
-        ui.painter().rect_filled(rect, 0.0, super::tree_row_colors(ui).1);
         ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), TITLE_STRIP), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.add_space(8.0);
             ui.label(bold(title));
@@ -58,7 +117,7 @@ fn framed_pane<R>(ui: &mut egui::Ui, id: &str, rect: egui::Rect, title: &str, ex
                 }
                 if let Some((label, value)) = extras.toggle {
                     ui.add_space(4.0);
-                    ui.add(super::toggle::Toggle::new(value, label));
+                    ui.add(super::menu::SlidingToggle::new(value).label(label));
                 }
                 if let Some((label, tooltip, clicked)) = extras.action {
                     ui.add_space(4.0);
@@ -67,9 +126,44 @@ fn framed_pane<R>(ui: &mut egui::Ui, id: &str, rect: egui::Rect, title: &str, ex
             });
         });
         out = Some(content(ui));
-        ui.painter().rect_stroke(rect, 0.0, ui.visuals().widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
+        if !fit {
+            ui.painter().rect_stroke(rect, 0.0, ui.visuals().widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
+        }
     });
+    // Painted behind the content now its extent is known, which for a
+    // fitted pane is only once its rows are in.
+    let filled = if fit { drawn.response.rect } else { rect };
+    ui.painter().set(background, egui::Shape::rect_filled(filled, 0.0, super::tree_row_colors(ui).1));
+    if fit {
+        ui.painter().hline(filled.x_range(), filled.top() + 0.5, ui.visuals().widgets.noninteractive.bg_stroke);
+    }
     out.expect("scope_builder always runs its body")
+}
+
+/// Tables one after another in `rect`, scrolling as one: each draws into
+/// [`stack_slot`] and takes the height its rows do, rather than each taking
+/// a pane, a seam and a scroll bar of its own. What is left under the last
+/// is the empty surface.
+pub(crate) fn table_stack<R>(ui: &mut egui::Ui, rect: egui::Rect, id: &str, content: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    ui.scope_builder(egui::UiBuilder::new().id_salt((id, "table_stack")).max_rect(rect), |ui| {
+        ui.set_clip_rect(ui.clip_rect().intersect(rect));
+        egui::ScrollArea::vertical()
+            .id_salt((id, "table_stack_scroll"))
+            .auto_shrink([false; 2])
+            .min_scrolled_height(0.0)
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                content(ui)
+            })
+            .inner
+    })
+    .inner
+}
+
+/// Where the next table in a [`table_stack`] goes: under the last, the full
+/// width, and as tall as its rows.
+pub(crate) fn stack_slot(ui: &egui::Ui) -> egui::Rect {
+    egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), f32::INFINITY))
 }
 
 /// What a pane's title strip carries besides its title.
@@ -235,6 +329,7 @@ pub(crate) fn grid_choice_row<T: Copy + PartialEq>(
     ui.scope_builder(egui::UiBuilder::new().id_salt(id).max_rect(cell), |ui| {
         ui.set_clip_rect(ui.clip_rect().intersect(cell));
         ui.spacing_mut().interact_size.y = cell.height();
+        cell_style(ui);
         let mut picked = false;
         egui::ComboBox::from_id_salt(id.with("combo"))
             .selected_text(selected)
@@ -267,15 +362,16 @@ pub(crate) fn grid_select_row(ui: &mut egui::Ui, id: impl std::hash::Hash + std:
     ui.scope_builder(egui::UiBuilder::new().id_salt(id).max_rect(cell), |ui| {
         ui.set_clip_rect(ui.clip_rect().intersect(cell));
         ui.spacing_mut().interact_size.y = cell.height();
-        ui.put(
+        cell_style(ui);
+        let response = ui.put(
             cell,
             // Text left, as every other value in a table reads.
             egui::Button::new((egui::RichText::new(summary), egui::Atom::grow()))
-                .fill(ui.visuals().extreme_bg_color)
-                .stroke(ui.visuals().widgets.inactive.bg_stroke)
                 .wrap_mode(egui::TextWrapMode::Truncate)
                 .min_size(cell.size()),
-        )
+        );
+        paint_picker_arrow(ui, &response);
+        response
     })
     .inner
 }
@@ -422,6 +518,7 @@ pub(crate) fn grid_cell_combo<T: Clone + PartialEq, O: Into<CellOption<T>>>(
     let mut child = ui.new_child(egui::UiBuilder::new().id_salt(id).max_rect(cell));
     child.set_clip_rect(child.clip_rect().intersect(cell));
     child.spacing_mut().interact_size.y = cell.height();
+    cell_style(&mut child);
     let mut picked = false;
     egui::ComboBox::from_id_salt(id.with("combo"))
         .selected_text(selected_text)
@@ -449,6 +546,7 @@ pub(crate) fn grid_cell_number(ui: &mut egui::Ui, id: impl std::hash::Hash + std
     }
     let mut child = ui.new_child(egui::UiBuilder::new().id_salt(egui::Id::unique(id)).max_rect(cell));
     child.set_clip_rect(child.clip_rect().intersect(cell));
+    cell_style(&mut child);
     let response = child.put(
         cell,
         egui::DragValue::new(value)
@@ -678,12 +776,17 @@ pub(crate) fn grid_add_action_row(ui: &mut egui::Ui, label: &str) -> bool {
 pub(crate) fn grid_empty_state(ui: &mut egui::Ui, message: &str, action: Option<&str>) -> bool {
     let rect = ui.available_rect_before_wrap();
     let mut clicked = false;
+    // In a fitted table there is no height to centre in: a band of its own.
+    let fit = !rect.height().is_finite();
     ui.scope_builder(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::top_down(egui::Align::Center)), |ui| {
-        ui.add_space((rect.height() * 0.35).max(24.0));
+        ui.add_space(if fit { 16.0 } else { (rect.height() * 0.35).max(24.0) });
         ui.label(egui::RichText::new(message).color(ui.visuals().weak_text_color()));
         if let Some(action) = action {
             ui.add_space(10.0);
             clicked = ui.add(super::menu::MenuButton::new(action).primary()).clicked();
+        }
+        if fit {
+            ui.add_space(16.0);
         }
     });
     clicked
@@ -764,6 +867,9 @@ impl<'a> DataGrid<'a> {
             if let Some(columns) = self.columns {
                 grid_columns_header(ui, columns);
             }
+            if fitted(self.rect) {
+                return body(ui);
+            }
             egui::ScrollArea::vertical()
                 .id_salt((self.id, "body"))
                 .auto_shrink([false; 2])
@@ -790,6 +896,10 @@ impl<'a> PropertyTable<'a> {
     /// [`PropertyRows::field`].
     pub(crate) fn show(self, ui: &mut egui::Ui, body: impl FnOnce(&mut PropertyRows<'_>)) {
         framed_pane(ui, self.id, self.rect, self.title, TitleExtras::default(), |ui| {
+            if fitted(self.rect) {
+                body(&mut PropertyRows { ui });
+                return;
+            }
             egui::ScrollArea::vertical()
                 .id_salt((self.id, "body"))
                 .auto_shrink([false; 2])
@@ -951,6 +1061,7 @@ impl PropertyRows<'_> {
         // The combo is a button, and its natural height would overrun the
         // row rule; the cell it sits in is the height it gets.
         child.spacing_mut().interact_size.y = value_rect.height();
+        cell_style(&mut child);
         let mut response = egui::ComboBox::from_id_salt(id)
             .selected_text(selected_text)
             .width(value_rect.width())
@@ -974,16 +1085,18 @@ impl PropertyRows<'_> {
         let (rect, split) = self.begin_row(false);
         self.paint_key(rect, split, key);
         let value_rect = self.value_rect(rect, split);
-        let visuals = self.ui.visuals().clone();
-        self.place(
+        let mut child = self.ui.new_child(egui::UiBuilder::new().max_rect(value_rect));
+        child.set_clip_rect(child.clip_rect().intersect(value_rect));
+        cell_style(&mut child);
+        let response = child.put(
             value_rect,
             // Text left, as every other value in a table reads.
             egui::Button::new((egui::RichText::new(summary), egui::Atom::grow()))
-                .fill(visuals.extreme_bg_color)
-                .stroke(visuals.widgets.inactive.bg_stroke)
                 .wrap_mode(egui::TextWrapMode::Truncate)
                 .min_size(value_rect.size()),
-        )
+        );
+        paint_picker_arrow(&child, &response);
+        response
     }
 
     /// A button on a row of its own, at the left where a key would start:
