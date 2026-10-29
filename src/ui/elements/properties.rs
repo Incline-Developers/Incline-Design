@@ -6,7 +6,7 @@ use crate::{
         Document, FillStyle, ObjectColor, ObjectId, SceneEntityId,
         block_model::{BlockModelId, OpenBlockModel},
     },
-    rendering::color::{byte_to_linear_rgba, color32_to_rgba, linear_to_srgb_byte, rgba_to_color32},
+    rendering::color::{color32_to_rgba, rgba_to_color32},
     ui::{
         UiCommand, UiProjectView,
         state::{EditorState, PreferencesDraft, PropertyTab},
@@ -238,7 +238,7 @@ pub(crate) fn draw_block_model_controls(ui: &mut egui::Ui, editor: &mut EditorSt
     let (card_size, scale_bar) = ui.ctx().memory(|memory| {
         (
             memory.area_rect(area_id).map_or(egui::vec2(BLOCK_MODEL_CARD_WIDTH, 0.0), |rect| rect.size()),
-            memory.area_rect(egui::Id::unique("viewport_scale_bar")).filter(|_| editor.show_scale_bar),
+            memory.area_rect(egui::Id::unique("viewport_scale_bar")),
         )
     });
     let card_width = card_size.x;
@@ -385,13 +385,9 @@ fn settings_section(
 
 fn reset_interface_defaults(draft: &mut PreferencesDraft) {
     let defaults = PreferencesDraft::default();
-    draft.renderer_background_color = defaults.renderer_background_color;
     draft.dark_mode = defaults.dark_mode;
     draft.show_console = defaults.show_console;
-    draft.panel_chrome = defaults.panel_chrome;
     draft.ui_size_percent = defaults.ui_size_percent;
-    draft.show_world_axis_gizmo = defaults.show_world_axis_gizmo;
-    draft.show_scale_bar = defaults.show_scale_bar;
     draft.recent_functions_shown = defaults.recent_functions_shown;
 }
 
@@ -408,7 +404,6 @@ fn reset_camera_defaults(draft: &mut PreferencesDraft) {
     draft.plan_zoom_sensitivity = defaults.plan_zoom_sensitivity;
     draft.plan_invert_vertical_look = defaults.plan_invert_vertical_look;
     draft.plan_invert_horizontal_look = defaults.plan_invert_horizontal_look;
-    draft.plan_zoom_towards_cursor = defaults.plan_zoom_towards_cursor;
     draft.fly_field_of_view_degrees = defaults.fly_field_of_view_degrees;
     draft.fly_mouse_look_sensitivity = defaults.fly_mouse_look_sensitivity;
     draft.fly_invert_vertical_look = defaults.fly_invert_vertical_look;
@@ -439,21 +434,8 @@ fn draw_interface_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
         |ui, draft| {
             let mut changed = false;
 
-            let [r, g, b, _] = draft.renderer_background_color;
-            let mut background = egui::Color32::from_rgb(linear_to_srgb_byte(r), linear_to_srgb_byte(g), linear_to_srgb_byte(b));
-            let response = MenuFieldColor32::new(tr!("common-background"), &mut background).show(ui);
-            if response.changed() {
-                draft.renderer_background_color = [
-                    byte_to_linear_rgba(background.r()),
-                    byte_to_linear_rgba(background.g()),
-                    byte_to_linear_rgba(background.b()),
-                    1.0,
-                ];
-            }
-            changed |= committed(&response);
             changed |= committed(&MenuFieldBool::new(tr!("properties-dark-mode"), &mut draft.dark_mode).show(ui));
             changed |= committed(&MenuFieldBool::new(tr!("properties-show-console"), &mut draft.show_console).show(ui));
-            changed |= committed(&MenuFieldBool::new(tr!("properties-panel-chrome"), &mut draft.panel_chrome).show(ui));
             changed |= committed(
                 &MenuFieldF64::new(tr!("preferences-ui-size"), &mut draft.ui_size_percent, 50.0..=200.0)
                     .help_text(tr!("preferences-ui-size-help"))
@@ -462,8 +444,6 @@ fn draw_interface_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
                     .max_decimals(0)
                     .show(ui),
             );
-            changed |= committed(&MenuFieldBool::new(tr!("properties-world-axis-gizmo"), &mut draft.show_world_axis_gizmo).show(ui));
-            changed |= committed(&MenuFieldBool::new(tr!("common-scale-bar"), &mut draft.show_scale_bar).show(ui));
             let shown = draft.recent_functions_shown.to_string();
             let options = [10, 15, 20].map(|count: u32| (count, count.to_string().into()));
             changed |= committed(
@@ -507,7 +487,6 @@ fn draw_camera_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands: &
                     );
                     changed |= committed(&MenuFieldBool::new(tr!("properties-invert-vertical"), &mut draft.plan_invert_vertical_look).show(ui));
                     changed |= committed(&MenuFieldBool::new(tr!("properties-invert-horizontal"), &mut draft.plan_invert_horizontal_look).show(ui));
-                    changed |= committed(&MenuFieldBool::new(tr!("properties-zoom-cursor"), &mut draft.plan_zoom_towards_cursor).show(ui));
                 });
 
             ui.add_space(4.0);

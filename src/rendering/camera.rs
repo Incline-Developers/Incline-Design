@@ -391,7 +391,6 @@ pub(crate) struct CameraController {
     rotate_sensitivity: f64,
     invert_vertical_look: bool,
     invert_horizontal_look: bool,
-    zoom_towards_cursor: bool,
     pub(crate) mouse_loc: (f32, f32),
     orbit_anchor: Option<DVec3>,
     /// The button is up but motion from before the release is still queued; the anchor holds until `update_camera` spends it.
@@ -417,7 +416,6 @@ impl CameraController {
             rotate_sensitivity,
             invert_vertical_look: false,
             invert_horizontal_look: false,
-            zoom_towards_cursor: true,
             mouse_loc: (0., 0.),
             orbit_anchor: None,
             orbit_releasing: false,
@@ -425,19 +423,11 @@ impl CameraController {
         }
     }
 
-    pub(crate) fn configure_preferences(
-        &mut self,
-        orbit_sensitivity: f64,
-        zoom_sensitivity: f64,
-        invert_vertical_look: bool,
-        invert_horizontal_look: bool,
-        zoom_towards_cursor: bool,
-    ) {
+    pub(crate) fn configure_preferences(&mut self, orbit_sensitivity: f64, zoom_sensitivity: f64, invert_vertical_look: bool, invert_horizontal_look: bool) {
         self.rotate_sensitivity = orbit_sensitivity;
         self.zoom_sensitivity = zoom_sensitivity;
         self.invert_vertical_look = invert_vertical_look;
         self.invert_horizontal_look = invert_horizontal_look;
-        self.zoom_towards_cursor = zoom_towards_cursor;
     }
 
     pub(crate) fn begin_orbit(&mut self, anchor: DVec3) {
@@ -603,11 +593,7 @@ impl CameraController {
         };
         let zoom_factor = to_target_distance_modifier * zoom_scale;
         let aspect = screen_size.0 as f64 / screen_size.1.max(1.0) as f64;
-        let zoom_lateral = if self.zoom_towards_cursor {
-            (right * mouse_loc_rel.x * aspect + up * mouse_loc_rel.y) * zoom_factor
-        } else {
-            DVec3::ZERO
-        };
+        let zoom_lateral = (right * mouse_loc_rel.x * aspect + up * mouse_loc_rel.y) * zoom_factor;
         camera.position += scrollward * zoom_factor + zoom_lateral;
         camera.target += zoom_lateral;
         self.scroll = 0.0;

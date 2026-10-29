@@ -256,6 +256,8 @@ impl<'a> App<'a> {
                     self.refresh_blast_round();
                     self.refresh_blast_hover();
                     self.refresh_object_edit_dialog();
+                    #[cfg(not(target_arch = "wasm32"))]
+                    self.refresh_missing_projects();
                     let project = self.project_view();
                     if let Some(window) = &self.window {
                         let title = project.projects.first().map_or_else(

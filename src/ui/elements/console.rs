@@ -50,7 +50,7 @@ pub(crate) fn draw_console(ui: &mut egui::Ui, min_height: f32, max_height: f32, 
     let surface_fill = ui.visuals().extreme_bg_color;
     egui::Panel::bottom(PANEL_ID)
         .resizable(true)
-        .show_separator_line(crate::ui::chrome::show_separator_line(ui))
+        .show_separator_line(false)
         .min_size(min_height)
         .max_size(max_height)
         .frame(crate::ui::chrome::region_frame(ui).fill(surface_fill).inner_margin(egui::Margin::ZERO))

@@ -33,6 +33,7 @@ menu-file-save-project-as = Save Project As...
 menu-file-new-project = New Project...
 menu-file-open-project = Open Project...
 menu-file-open-recent = Open Recent
+menu-file-recent-project-missing = Not found: { $path }
 menu-file-show-in-explorer = Show in Explorer
 menu-file-show-in-folder = Open Containing Folder
 menu-file-import = Import...
@@ -3418,7 +3419,6 @@ properties-max-clip-span = Max clip span
 properties-move-layer = Move to Layer...
 properties-near-clip-limit = Near clip limit
 properties-orbit-sensitivity = Orbit sensitivity
-properties-panel-chrome = Panel chrome
 properties-performance = Performance
 properties-plan-mode = Plan Mode
 properties-point-cloud-chunk-debug-view = Point cloud chunk debug view
@@ -3430,8 +3430,6 @@ properties-shows-live-near-far-projection = Shows the live near and far projecti
 properties-snap-polling = Snap polling
 properties-surface-chunk-debug-view = Surface chunk debug view
 properties-vertical-sync = Vertical sync
-properties-world-axis-gizmo = World axis gizmo
-properties-zoom-cursor = Zoom to cursor
 properties-zoom-sensitivity = Zoom sensitivity
 
 ## Reference strings

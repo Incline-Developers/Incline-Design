@@ -998,7 +998,6 @@ impl<'a> Graphics<'a> {
         plan_zoom_sensitivity: f64,
         plan_invert_vertical_look: bool,
         plan_invert_horizontal_look: bool,
-        plan_zoom_towards_cursor: bool,
         fly_field_of_view_degrees: f64,
         fly_mouse_look_sensitivity: f64,
         fly_invert_vertical_look: bool,
@@ -1006,13 +1005,8 @@ impl<'a> Graphics<'a> {
         fly_near_clip_limit: f64,
         fly_max_clip_span: f64,
     ) {
-        self.camera_controller.configure_preferences(
-            plan_orbit_sensitivity,
-            plan_zoom_sensitivity,
-            plan_invert_vertical_look,
-            plan_invert_horizontal_look,
-            plan_zoom_towards_cursor,
-        );
+        self.camera_controller
+            .configure_preferences(plan_orbit_sensitivity, plan_zoom_sensitivity, plan_invert_vertical_look, plan_invert_horizontal_look);
         self.fly_camera_controller
             .configure_preferences(fly_mouse_look_sensitivity, fly_invert_vertical_look, fly_invert_horizontal_look);
         self.projection.configure_perspective(fly_field_of_view_degrees, fly_near_clip_limit, fly_max_clip_span);

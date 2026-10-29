@@ -7,13 +7,13 @@
 use std::{path::PathBuf, sync::Mutex};
 
 use objc2::{
-    MainThreadMarker, MainThreadOnly, define_class, msg_send,
+    AnyThread, MainThreadMarker, MainThreadOnly, define_class, msg_send,
     rc::Retained,
     runtime::{AnyObject, Sel},
     sel,
 };
-use objc2_app_kit::{NSApplication, NSControlStateValueOff, NSControlStateValueOn, NSMenu, NSMenuItem};
-use objc2_foundation::{NSObject, NSObjectProtocol, NSString};
+use objc2_app_kit::{NSApplication, NSControlStateValueOff, NSControlStateValueOn, NSMenu, NSMenuItem, NSStrikethroughStyleAttributeName, NSUnderlineStyle};
+use objc2_foundation::{NSAttributedString, NSDictionary, NSNumber, NSObject, NSObjectProtocol, NSString};
 
 use crate::{
     i18n::tr,
@@ -64,8 +64,17 @@ struct MenuState {
     active_workspace: Workspace,
     /// The View menu's switches, in the order [`VIEW_TOGGLES`] lists them.
     view_toggles: [bool; VIEW_TOGGLES.len()],
-    /// The File > Open Recent rows, as name and the project each opens.
-    recent: Vec<(String, PathBuf)>,
+    /// The File > Open Recent rows.
+    recent: Vec<RecentRow>,
+}
+
+/// One File > Open Recent row: its name, the project it opens, and whether
+/// that project's file was found at the last look.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RecentRow {
+    name: String,
+    path: PathBuf,
+    missing: bool,
 }
 
 /// Actions emitted by AppKit and consumed by the winit application loop.
@@ -609,7 +618,10 @@ fn set_checked(root: &NSMenu, action: MacMenuAction, checked: bool) {
 /// list holds changes with every project opened, and a row's tag is its index
 /// in it. Each new item retains its own target, exactly as the fixed ones
 /// installed at startup do.
-fn rebuild_recent_menu(root: &NSMenu, recent: &[(String, PathBuf)], mtm: MainThreadMarker) {
+///
+/// A project whose file was not found is disabled and struck through, as the
+/// egui menu shows it.
+fn rebuild_recent_menu(root: &NSMenu, recent: &[RecentRow], mtm: MainThreadMarker) {
     let Some(item) = find_item(root, RECENT_SUBMENU_TAG) else {
         return;
     };
@@ -618,12 +630,26 @@ fn rebuild_recent_menu(root: &NSMenu, recent: &[(String, PathBuf)], mtm: MainThr
     };
     submenu.removeAllItems();
     let target = MenuTarget::new(mtm);
-    for (index, (name, _)) in recent.iter().enumerate() {
-        add_action(&submenu, name, "", MacMenuAction::OpenRecent(index), &target, mtm);
+    for (index, row) in recent.iter().enumerate() {
+        let item = add_action(&submenu, &row.name, "", MacMenuAction::OpenRecent(index), &target, mtm);
+        if row.missing {
+            item.setEnabled(false);
+            item.setAttributedTitle(Some(&struck_through(&row.name)));
+            item.setToolTip(Some(&NSString::from_str(&tr!("menu-file-recent-project-missing", path = row.path.display().to_string()))));
+        }
     }
     // Greyed out with nothing to offer rather than hidden, so the File menu
     // keeps its shape.
     item.setEnabled(!recent.is_empty());
+}
+
+/// `text` with a single line struck through it.
+fn struck_through(text: &str) -> Retained<NSAttributedString> {
+    let style = NSNumber::new_isize(NSUnderlineStyle::Single.0);
+    // SAFETY: the strikethrough attribute takes an NSNumber holding an
+    // NSUnderlineStyle.
+    let attributes = NSDictionary::<objc2_foundation::NSAttributedStringKey, AnyObject>::from_slices(&[unsafe { NSStrikethroughStyleAttributeName }], &[&*style as &AnyObject]);
+    unsafe { NSAttributedString::initWithString_attributes(NSAttributedString::alloc(), &NSString::from_str(text), Some(&attributes)) }
 }
 
 /// The project behind one File > Open Recent row, as the menu last showed it.
@@ -632,7 +658,7 @@ fn rebuild_recent_menu(root: &NSMenu, recent: &[(String, PathBuf)], mtm: MainThr
 /// same list the row was built from rather than against the current one.
 pub(crate) fn recent_project_path(index: usize) -> Option<PathBuf> {
     let state = last_menu_state();
-    state.as_ref()?.recent.get(index).map(|(_, path)| path.clone())
+    state.as_ref()?.recent.get(index).map(|row| row.path.clone())
 }
 
 /// Keep native checkmarks and availability aligned with the current editor.
@@ -655,7 +681,14 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         has_project_file: project.active_path.is_some(),
         active_workspace: editor.active_workspace,
         view_toggles: VIEW_TOGGLES.map(|toggle| toggle.get(editor)),
-        recent: project.recent_projects().map(|entry| (entry.name.clone(), entry.path.clone())).collect(),
+        recent: project
+            .recent_projects()
+            .map(|entry| RecentRow {
+                name: entry.name.clone(),
+                path: entry.path.clone(),
+                missing: entry.missing,
+            })
+            .collect(),
     };
     let Some(mtm) = MainThreadMarker::new() else {
         return;
