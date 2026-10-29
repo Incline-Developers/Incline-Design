@@ -484,7 +484,7 @@ fn layout_rows(plan: &SchedulePlan, extents: &[BarExtent]) -> Vec<Row> {
 /// their widget ids apart, because both pages can be laid out in the same
 /// frame.
 pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &mut EditorState, salt: &str, commands: &mut Vec<UiCommand>) {
-    use crate::ui::elements::planning_setup::{CANCEL_TINT, RUN_ALL_TINT, RUN_STEP_TINT};
+    use crate::ui::elements::planning_setup::{CANCEL_TINT, IMPROVE_TINT, RUN_ALL_TINT, RUN_STEP_TINT};
 
     let working = editor.schedule_run_working;
     let startable = !working;
@@ -519,6 +519,33 @@ pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &mut EditorSt
     {
         commands.push(UiCommand::RunAllSchedulePeriods);
     }
+    // The hourly schedule is what the buttons before it produce; this is the
+    // one that spends the solve time looking past it. Held down while it does.
+    if ui
+        .add_enabled(
+            startable,
+            ToolbarButton::new(
+                egui::Image::new(crate::ui::unthemed_icon!("improve.svg")).tint(tint(IMPROVE_TINT, startable || editor.schedule_run_improve)),
+                if editor.schedule_run_improve {
+                    tr!("schedule-improving-note")
+                } else {
+                    tr!("schedule-improve-note")
+                },
+            )
+            .button_side(side)
+            .selected(editor.schedule_run_improve)
+            .id_salt(format!("{salt}_improve")),
+        )
+        // Held while any run is working, when it still says what that is.
+        .on_disabled_hover_text(if editor.schedule_run_improve {
+            tr!("schedule-improving-note")
+        } else {
+            tr!("schedule-improve-note")
+        })
+        .clicked()
+    {
+        commands.push(UiCommand::ImproveSchedule);
+    }
     if ui
         .add_enabled(
             working,
@@ -544,23 +571,6 @@ pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &mut EditorSt
     }
     ui.spacing_mut().item_spacing.x = spacing;
     ui.add_space(6.0);
-    // The hourly schedule is what every other control produces; this is the
-    // one that spends the solve time looking past it.
-    let improve = MenuButton::new(if editor.schedule_run_improve {
-        tr!("schedule-improving")
-    } else {
-        tr!("schedule-improve")
-    })
-    .selected(editor.schedule_run_improve)
-    .enabled(startable);
-    let note = if editor.schedule_run_improve {
-        tr!("schedule-improving-note")
-    } else {
-        tr!("schedule-improve-note")
-    };
-    if ui.add(improve).on_hover_text(note).clicked() {
-        commands.push(UiCommand::ImproveSchedule);
-    }
     ui.add_space(8.0);
     let mut auto = editor.auto_run();
     if ui

@@ -333,6 +333,9 @@ pub(crate) const RUN_ALL_TINT: egui::Color32 = RUN_STEP_TINT;
 /// Cancel: a soft red, muted well below the error red the failed stages carry
 /// so it is a button rather than an alarm.
 pub(crate) const CANCEL_TINT: egui::Color32 = egui::Color32::from_rgb(0xCB, 0x63, 0x63);
+/// Improve: a soft blue, as muted as the run green, for the run that looks
+/// past the hourly schedule.
+pub(crate) const IMPROVE_TINT: egui::Color32 = egui::Color32::from_rgb(0x5B, 0x9B, 0xF0);
 
 /// What a run bar's buttons asked for this frame.
 enum RunAction {

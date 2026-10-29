@@ -1616,8 +1616,6 @@ destination-rule-sources-count = { $count ->
 # Run Period and Run All Periods - the schedule optimiser's explicit runs
 schedule-run-period-note = Run Period: schedule from hour zero through one more day than the current result (day 1 when there is none), hour by hour.
 schedule-run-whole-note = Run All Periods: schedule from hour zero through the planning end day, hour by hour.
-schedule-improve = Improve
-schedule-improving = Improving…
 schedule-improve-note = Improve: start from the hourly schedule and spend up to the solve time limit looking for a better one over the whole horizon. Stop keeps the best found so far.
 schedule-improving-note = Looking for a better schedule. Stop keeps the best found so far.
 schedule-improve-finishing = Run { $run }: finishing early with the best schedule found so far.
