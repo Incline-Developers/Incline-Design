@@ -280,11 +280,11 @@ pub(crate) fn draw_move_to_layer_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
                 .show(ui);
             menu::menu_actions(ui, |ui| {
                 let action_label = if dialog.copy { tr!("edit-copy") } else { tr!("edit-move") };
-                let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                let confirm = menu::dialog_confirmed(ui.ctx());
                 if ui.add(MenuButton::new(action_label).primary().enabled(can_apply)).clicked() || (confirm && can_apply) {
                     apply = true;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     close = true;
                 }
             });
@@ -330,8 +330,8 @@ pub(crate) fn draw_move_to_axis_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
                 ui.colored_label(egui::Color32::from_rgb(200, 70, 70), tr!("ui-invalid-axis-value", axis = axis_label));
             }
             ui.add_space(4.0);
-            let submitted = menu::dialog_confirm_pressed(ui.ctx());
-            let cancelled = menu::dialog_cancel_pressed(ui.ctx());
+            let submitted = menu::dialog_confirmed(ui.ctx());
+            let cancelled = menu::dialog_cancelled(ui.ctx());
             menu::menu_actions(ui, |ui| {
                 if (submitted || ui.add(MenuButton::new(tr!("edit-apply")).primary().enabled(can_apply)).clicked()) && can_apply {
                     apply = true;
@@ -387,8 +387,8 @@ pub(crate) fn draw_insert_point_at_elevation_dialog(ui: &mut egui::Ui, editor: &
             }
             ui.label(tr!("edit-segments-lying-elevation-ignored"));
             ui.add_space(4.0);
-            let submitted = menu::dialog_confirm_pressed(ui.ctx());
-            let cancelled = menu::dialog_cancel_pressed(ui.ctx());
+            let submitted = menu::dialog_confirmed(ui.ctx());
+            let cancelled = menu::dialog_cancelled(ui.ctx());
             menu::menu_actions(ui, |ui| {
                 if (submitted || ui.add(MenuButton::new(tr!("edit-apply")).primary().enabled(can_apply)).clicked()) && can_apply {
                     apply = true;
@@ -443,7 +443,7 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, project: &UiProjectV
         .fixed_pos(screen.min)
         .order(egui::Order::Middle)
         .show(ui.ctx(), |ui| ui.allocate_exact_size(screen.size(), egui::Sense::click()).1);
-    if backdrop.inner.clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+    if backdrop.inner.clicked() || menu::dialog_cancelled(ui.ctx()) {
         commands.push(UiCommand::CloseStartupDialog);
     }
 
@@ -792,8 +792,8 @@ pub(crate) fn draw_create_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<U
             MenuFieldText::new(tr!("edit-project-name"), &mut editor.new_project_name)
                 .hint_text(tr!("dialog-rename-field-hint"))
                 .show(ui);
-            let submitted = menu::dialog_confirm_pressed(ui.ctx());
-            let cancelled = menu::dialog_cancel_pressed(ui.ctx());
+            let submitted = menu::dialog_confirmed(ui.ctx());
+            let cancelled = menu::dialog_cancelled(ui.ctx());
             menu::menu_actions(ui, |ui| {
                 if (submitted || ui.add(MenuButton::new(tr!("edit-create-project")).primary().enabled(can_create)).clicked()) && can_create {
                     commands.push(UiCommand::CreateBrowserProject {
@@ -822,8 +822,8 @@ pub(crate) fn draw_create_layer_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiC
             MenuFieldText::new(tr!("edit-layer-name"), &mut editor.new_layer_name)
                 .hint_text(tr!("dialog-rename-field-hint"))
                 .show(ui);
-            let submitted = menu::dialog_confirm_pressed(ui.ctx());
-            let cancelled = menu::dialog_cancel_pressed(ui.ctx());
+            let submitted = menu::dialog_confirmed(ui.ctx());
+            let cancelled = menu::dialog_cancelled(ui.ctx());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let create_clicked = ui.add(MenuButton::new(tr!("common-create-layer")).primary().enabled(can_save)).clicked();
                 if (submitted || create_clicked) && can_save {
@@ -873,11 +873,11 @@ pub(crate) fn draw_rename_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand
             }
             menu::menu_actions(ui, |ui| {
                 let can_rename = !name_buf.trim().is_empty();
-                let submitted = menu::dialog_confirm_pressed(ui.ctx());
+                let submitted = menu::dialog_confirmed(ui.ctx());
                 if (submitted || ui.add(MenuButton::new(tr!("dialog-rename-submit")).primary().enabled(can_rename)).clicked()) && can_rename {
                     rename_to = Some(name_buf.trim().to_string());
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     close = true;
                 }
             });

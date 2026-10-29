@@ -103,9 +103,18 @@ impl<'a> App<'a> {
                     let result = crate::logging::with_report_scope(report_id, || self.handle_ui_command(command));
                     crate::logging::finish_command_report(report_id, result.as_ref().err());
                 }
+                // A command quiet enough to have no row of its own is most
+                // often a step of the tool in hand (Drape's Confirm), so
+                // whatever it does report goes under that tool's name.
                 None => {
-                    if let Err(err) = self.handle_ui_command(command) {
-                        userspace_error!("{}", tr!("cmd-commands-command-failed-error", error = format!("{err:#}")));
+                    let run = |app: &mut Self| {
+                        if let Err(err) = app.handle_ui_command(command) {
+                            userspace_error!("{}", tr!("cmd-commands-command-failed-error", error = format!("{err:#}")));
+                        }
+                    };
+                    match self.editor.active_tool.report_spec() {
+                        Some(spec) => crate::logging::with_deferred_report(spec, || run(self)),
+                        None => run(self),
                     }
                 }
             }

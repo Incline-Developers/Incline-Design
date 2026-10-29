@@ -2660,6 +2660,20 @@ confirmations-save-modified-project-before-exiting = Save the modified project b
 confirmations-save-to-browser-before-exit = Save the modified project to browser storage before exiting?
 confirmations-save-remove = Save and Remove
 
+## Warning and error alerts
+
+alerts-close-all = Close all
+alerts-copied = Message copied to the clipboard
+alerts-copy-details = Copy details
+alerts-details = Details
+alerts-error = Error:
+alerts-time-more-waiting =
+    { $count ->
+        [one] { $time } · { $count } more message waiting
+       *[other] { $time } · { $count } more messages waiting
+    }
+alerts-warning = Warning:
+
 ## Console strings
 
 console-copy-all = Copy all
@@ -3179,7 +3193,6 @@ logging-application-name = Application name: { $name }
 logging-application-startup = Application Startup
 logging-build-target-os-architecture = Build target: { $os }-{ $architecture }
 logging-completed = Completed
-logging-count-messages = { $count } messages
 logging-desktop-session-xdg-session-type = Desktop session: XDG_SESSION_TYPE={ $session }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
 logging-initialising-incline-design = Initialising Incline Design
 logging-locale-environment = Locale environment: LANG={ $lang }, LC_ALL={ $locale }, TZ={ $timezone }

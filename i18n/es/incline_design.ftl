@@ -1378,7 +1378,6 @@ logging-application-name = Nombre de la aplicación: { $name }
 logging-application-startup = Inicio de la aplicación
 logging-build-target-os-architecture = Destino de compilación: { $os }-{ $architecture }
 logging-completed = Completado
-logging-count-messages = { $count } mensajes
 logging-desktop-session-xdg-session-type = Sesión de escritorio: XDG_SESSION_TYPE={ $session }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
 logging-initialising-incline-design = Inicializando Incline Design
 logging-locale-environment = Entorno regional: LANG={ $lang }, LC_ALL={ $locale }, TZ={ $timezone }

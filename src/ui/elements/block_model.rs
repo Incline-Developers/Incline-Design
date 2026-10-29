@@ -183,7 +183,7 @@ pub(crate) fn draw_create_block_model_dialog(ui: &mut egui::Ui, editor: &mut Edi
                 && editor.kriging_min_samples <= editor.kriging_max_samples
                 && editor.kriging_max_samples <= 64;
             menu::menu_actions(ui, |ui| {
-                let confirm = !editing_field && menu::dialog_confirm_pressed(ui.ctx());
+                let confirm = !editing_field && menu::dialog_confirmed(ui.ctx());
                 if ui.add(MenuButton::new(tr!("common-create")).primary().enabled(ready)).clicked() || (confirm && ready) {
                     commands.push(UiCommand::ExecuteCreateBlockModel {
                         drill_hole_id: editor.kriging_drill_hole_id.unwrap(),
@@ -200,7 +200,7 @@ pub(crate) fn draw_create_block_model_dialog(ui: &mut egui::Ui, editor: &mut Edi
                         max_samples: editor.kriging_max_samples,
                     });
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     editor.block_model_create_open = false;
                 }
             });
@@ -322,7 +322,7 @@ pub(crate) fn draw_ore_triangulation_dialog(ui: &mut egui::Ui, editor: &mut Edit
                 && min.is_finite()
                 && (editor.ore_filter_mode != OreFilterMode::Between || max.is_finite());
             menu::menu_actions(ui, |ui| {
-                let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                let confirm = menu::dialog_confirmed(ui.ctx());
                 if ui.add(MenuButton::new(tr!("common-create")).primary().enabled(ready)).clicked() || (confirm && ready) {
                     commands.push(UiCommand::ExecuteCreateOreTriangulation {
                         block_model_id: editor.ore_block_model_id.unwrap(),
@@ -333,7 +333,7 @@ pub(crate) fn draw_ore_triangulation_dialog(ui: &mut egui::Ui, editor: &mut Edit
                         name: editor.ore_name_input.trim().to_owned(),
                     });
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     editor.ore_triangulation_open = false;
                 }
             });

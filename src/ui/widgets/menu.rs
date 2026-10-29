@@ -318,6 +318,7 @@ pub(crate) struct DragableMenu<'open> {
     default_pos: Option<egui::Pos2>,
     current_pos: Option<egui::Pos2>,
     movable: bool,
+    order: egui::Order,
 }
 
 impl<'open> DragableMenu<'open> {
@@ -338,6 +339,7 @@ impl<'open> DragableMenu<'open> {
             default_pos: None,
             current_pos: None,
             movable: true,
+            order: egui::Order::Foreground,
         }
     }
 
@@ -394,6 +396,13 @@ impl<'open> DragableMenu<'open> {
         self
     }
 
+    /// Raise the menu to another layer. Tool windows share the foreground;
+    /// an alert goes above them so another dialog can never hide it.
+    pub(crate) fn order(mut self, order: egui::Order) -> Self {
+        self.order = order;
+        self
+    }
+
     pub(crate) fn show<R>(self, ctx: &egui::Context, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> Option<egui::InnerResponse<R>> {
         let Self {
             id,
@@ -407,13 +416,14 @@ impl<'open> DragableMenu<'open> {
             default_pos,
             current_pos,
             movable,
+            order,
         } = self;
 
         if open.as_deref().is_some_and(|open| !open) {
             return None;
         }
 
-        let mut area = egui::Area::new(id).order(egui::Order::Foreground).movable(movable).constrain(true).fade_in(false);
+        let mut area = egui::Area::new(id).order(order).movable(movable).constrain(true).fade_in(false);
         area = if let Some(current_pos) = current_pos {
             area.pivot(egui::Align2::LEFT_TOP).current_pos(current_pos)
         } else if let Some(default_pos) = default_pos {
@@ -1595,15 +1605,68 @@ impl<'value, T: PartialEq> MenuFieldCombo<'value, T> {
 
 /// Standard dialog keyboard shortcuts.
 ///
-/// Enter confirms the dialog's primary action and Escape cancels it. Both keys
-/// are *consumed* from egui's input, so only the first dialog that asks for
-/// them in a frame reacts, and the viewport tools never see the same press
-/// (`App::handle_key_code` skips them while a modal dialog is open).
-pub(crate) fn dialog_confirm_pressed(ctx: &egui::Context) -> bool {
-    ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+/// Enter confirms the dialog's primary action and Escape cancels it, when the
+/// key is *released*, and only if the press came while a dialog was already
+/// up. A key that opens a dialog (Enter finishing a tool that then warns)
+/// therefore cannot close it too, on its press or its release. Both events
+/// are consumed from egui's input, so only the first dialog that asks for them
+/// in a frame reacts, and the viewport tools never see the same press
+/// (`App::handle_key_code` skips them while a modal dialog is open). A held
+/// key's auto-repeat never counts as a press, so holding Enter cannot run
+/// through a chain of dialogs either.
+pub(crate) fn dialog_confirmed(ctx: &egui::Context) -> bool {
+    dialog_key_released(ctx, egui::Key::Enter)
 }
 
-/// Escape half of [`dialog_confirm_pressed`].
-pub(crate) fn dialog_cancel_pressed(ctx: &egui::Context) -> bool {
-    ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+/// Escape half of [`dialog_confirmed`].
+pub(crate) fn dialog_cancelled(ctx: &egui::Context) -> bool {
+    dialog_key_released(ctx, egui::Key::Escape)
+}
+
+/// Whether dialogs have asked for a key in successive frames, and whether its
+/// press came while they had.
+#[derive(Clone, Copy, Debug, Default)]
+struct DialogKey {
+    asked_frame: Option<u64>,
+    /// Whether a dialog asked in the frame before `asked_frame`.
+    up_before: bool,
+    armed: bool,
+}
+
+fn dialog_key_released(ctx: &egui::Context, key: egui::Key) -> bool {
+    let id = egui::Id::unique(("dialog_key", key));
+    let frame = ctx.cumulative_frame_nr();
+    let mut state = ctx.data_mut(|data| data.get_temp::<DialogKey>(id)).unwrap_or_default();
+    if state.asked_frame != Some(frame) {
+        state.up_before = state.asked_frame.is_some_and(|asked| asked + 1 == frame);
+        state.asked_frame = Some(frame);
+        // A frame with no dialog asking breaks the hold: a press it never saw
+        // must not be finished by its release.
+        if !state.up_before {
+            state.armed = false;
+        }
+    }
+    let (pressed, released) = ctx.input_mut(|input| {
+        // Auto-repeat continues a press rather than making one: a key held
+        // since before the dialog opened must not arm it. Consumed all the same.
+        let pressed = input
+            .events
+            .iter()
+            .any(|event| matches!(event, egui::Event::Key { key: pressed, pressed: true, repeat: false, modifiers, .. } if *pressed == key && modifiers.matches_logically(egui::Modifiers::NONE)));
+        input.consume_key(egui::Modifiers::NONE, key);
+        let before = input.events.len();
+        input
+            .events
+            .retain(|event| !matches!(event, egui::Event::Key { key: released, pressed: false, .. } if *released == key));
+        (pressed, input.events.len() != before)
+    });
+    if pressed {
+        state.armed = state.up_before;
+    }
+    let fired = released && state.armed;
+    if released {
+        state.armed = false;
+    }
+    ctx.data_mut(|data| data.insert_temp(id, state));
+    fired
 }

@@ -18,7 +18,7 @@ pub(crate) fn draw_exit_confirm_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiC
         #[cfg(target_arch = "wasm32")]
         ui.label(tr!("confirmations-save-to-browser-before-exit"));
         menu::menu_actions(ui, |ui| {
-            if ui.add(MenuButton::new(tr!("common-save-exit")).primary()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+            if ui.add(MenuButton::new(tr!("common-save-exit")).primary()).clicked() || menu::dialog_confirmed(ui.ctx()) {
                 commands.push(UiCommand::SaveAndExit);
             }
             // Red, and mouse-only: Enter must never be the key that throws
@@ -26,7 +26,7 @@ pub(crate) fn draw_exit_confirm_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiC
             if ui.add(MenuButton::new(tr!("common-exit-without-saving")).danger()).clicked() {
                 commands.push(UiCommand::ExitWithoutSaving);
             }
-            if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+            if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                 commands.push(UiCommand::CancelExit);
             }
         });
@@ -50,13 +50,13 @@ pub(crate) fn draw_replace_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<
         .show(ui.ctx(), |ui| {
             ui.label(tr!("confirmations-save-changes-current-project-before"));
             menu::menu_actions(ui, |ui| {
-                if ui.add(MenuButton::new(tr!("confirmations-save")).primary()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("confirmations-save")).primary()).clicked() || menu::dialog_confirmed(ui.ctx()) {
                     commands.push(UiCommand::SaveAndReplaceProject);
                 }
                 if ui.add(MenuButton::new(tr!("confirmations-discard")).danger()).clicked() {
                     commands.push(UiCommand::DiscardAndReplaceProject);
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     commands.push(UiCommand::CancelProjectReplacement);
                 }
             });
@@ -84,10 +84,10 @@ pub(crate) fn draw_lossy_save_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCom
                 }
             });
             menu::menu_actions(ui, |ui| {
-                if ui.add(MenuButton::new(tr!("confirmations-save-anyway")).primary()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("confirmations-save-anyway")).primary()).clicked() || menu::dialog_confirmed(ui.ctx()) {
                     commands.push(UiCommand::ConfirmLossyProjectSave);
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     commands.push(UiCommand::CancelLossyProjectSave);
                 }
             });
@@ -111,11 +111,11 @@ pub(crate) fn draw_delete_confirm_dialog(ui: &mut egui::Ui, commands: &mut Vec<U
         .show(ui.ctx(), |ui| {
             ui.label(tr!("confirm-delete-count", count = count));
             menu::menu_actions(ui, |ui| {
-                if ui.add(MenuButton::new(tr!("confirmations-delete")).danger()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("confirmations-delete")).danger()).clicked() || menu::dialog_confirmed(ui.ctx()) {
                     commands.push(UiCommand::ConfirmDeleteSelection);
                     editor.delete_confirm_open = false;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     editor.delete_confirm_open = false;
                 }
             });
@@ -137,10 +137,10 @@ pub(crate) fn draw_delete_layer_confirm_dialog(ui: &mut egui::Ui, commands: &mut
         .show(ui.ctx(), |ui| {
             ui.label(tr!("confirm-delete-layer", name = name.clone()));
             menu::menu_actions(ui, |ui| {
-                if ui.add(MenuButton::new(tr!("common-delete-layer")).danger()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-delete-layer")).danger()).clicked() || menu::dialog_confirmed(ui.ctx()) {
                     commands.push(UiCommand::DeleteLayer(layer_id));
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     editor.pending_delete_layer = None;
                 }
             });
@@ -171,11 +171,11 @@ pub(crate) fn draw_delete_item_confirm_dialog(ui: &mut egui::Ui, commands: &mut 
                 _ => tr!("dialog-delete-confirm", name = name.clone()),
             });
             menu::menu_actions(ui, |ui| {
-                if ui.add(MenuButton::new(title.clone()).danger()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(title.clone()).danger()).clicked() || menu::dialog_confirmed(ui.ctx()) {
                     commands.push(target.remove_command());
                     editor.pending_delete_item = None;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     editor.pending_delete_item = None;
                 }
             });
@@ -199,11 +199,11 @@ pub(crate) fn draw_delete_rows_confirm_dialog(ui: &mut egui::Ui, commands: &mut 
         .show(ui.ctx(), |ui| {
             ui.label(tr!("dialog-delete-rows-confirm", count = rows.len().to_string()));
             menu::menu_actions(ui, |ui| {
-                if ui.add(MenuButton::new(title.clone()).danger()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(title.clone()).danger()).clicked() || menu::dialog_confirmed(ui.ctx()) {
                     commands.extend(rows.iter().cloned());
                     editor.pending_delete_rows = None;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     editor.pending_delete_rows = None;
                 }
             });
@@ -232,11 +232,11 @@ pub(crate) fn draw_delete_delay_product_dialog(ui: &mut egui::Ui, commands: &mut
         .show(ui.ctx(), |ui| {
             ui.label(tr!("confirm-delete-product", name = name.clone()));
             menu::menu_actions(ui, |ui| {
-                if ui.add(MenuButton::new(title.clone()).danger()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(title.clone()).danger()).clicked() || menu::dialog_confirmed(ui.ctx()) {
                     commands.push(UiCommand::DeleteDelayProduct(id));
                     editor.pending_delete_delay_product = None;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     editor.pending_delete_delay_product = None;
                 }
             });
@@ -280,7 +280,7 @@ pub(crate) fn draw_close_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<Ui
                     if ui
                         .add(MenuButton::new(if removing { tr!("confirmations-save-remove") } else { tr!("confirmations-save-close") }).primary())
                         .clicked()
-                        || menu::dialog_confirm_pressed(ui.ctx())
+                        || menu::dialog_confirmed(ui.ctx())
                     {
                         commands.push(UiCommand::SaveAndCloseProject(runtime_id));
                     }
@@ -297,7 +297,7 @@ pub(crate) fn draw_close_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<Ui
                     {
                         commands.push(UiCommand::CloseProjectForce(runtime_id));
                     }
-                    if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                    if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                         commands.push(UiCommand::CancelCloseProject);
                     }
                 });
@@ -316,14 +316,14 @@ pub(crate) fn draw_close_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<Ui
                             commands.push(UiCommand::CloseProjectForce(runtime_id));
                         }
                     } else {
-                        if ui.add(MenuButton::new(tr!("confirmations-save-close")).primary()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+                        if ui.add(MenuButton::new(tr!("confirmations-save-close")).primary()).clicked() || menu::dialog_confirmed(ui.ctx()) {
                             commands.push(UiCommand::SaveAndCloseProject(runtime_id));
                         }
                         if ui.add(MenuButton::new(tr!("confirmations-close-without-saving")).danger()).clicked() {
                             commands.push(UiCommand::CloseProjectForce(runtime_id));
                         }
                     }
-                    if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                    if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                         commands.push(UiCommand::CancelCloseProject);
                     }
                 });
@@ -355,10 +355,10 @@ pub(crate) fn draw_discard_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<
         .show(ui.ctx(), |ui| {
             ui.label(tr!("confirmations-discard-all-unsaved-changes-name", name = name.to_string()));
             menu::menu_actions(ui, |ui| {
-                if ui.add(MenuButton::new(tr!("confirmations-discard-changes")).danger()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("confirmations-discard-changes")).danger()).clicked() || menu::dialog_confirmed(ui.ctx()) {
                     commands.push(UiCommand::DiscardProjectChanges(runtime_id));
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     editor.pending_discard_project = None;
                 }
             });
@@ -383,10 +383,10 @@ pub(crate) fn draw_discard_layer_dialog(ui: &mut egui::Ui, commands: &mut Vec<Ui
         .show(ui.ctx(), |ui| {
             ui.label(tr!("confirmations-discard-all-unsaved-changes-layer", name = name.to_string()));
             menu::menu_actions(ui, |ui| {
-                if ui.add(MenuButton::new(tr!("confirmations-discard-changes")).danger()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("confirmations-discard-changes")).danger()).clicked() || menu::dialog_confirmed(ui.ctx()) {
                     commands.push(UiCommand::DiscardLayerChanges(layer_id));
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     editor.pending_discard_layer = None;
                 }
             });
