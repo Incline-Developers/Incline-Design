@@ -52,8 +52,9 @@ pub(crate) const fn default_dark_mode() -> bool {
     true
 }
 
+/// Closed: warnings and errors raise their own dialog (`ui::dialogs::alerts`).
 pub(crate) const fn default_show_console() -> bool {
-    true
+    false
 }
 
 pub(crate) const fn default_plan_orbit_sensitivity() -> f64 {
