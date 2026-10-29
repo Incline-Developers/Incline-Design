@@ -39,6 +39,45 @@ pub(crate) fn property_table_height(ui: &egui::Ui, rows: usize) -> f32 {
     TITLE_STRIP + rows as f32 * (grid_row_height(ui) + COLUMN_ROW_EXTRA)
 }
 
+/// Dress the stock controls a cell holds - a combo, a dragged number, a
+/// picker button - as the cell's own value: nothing painted behind them at
+/// rest, so they read like every other value in the table, and the rows'
+/// hover fill while the pointer is on one, so it still says it can be used.
+/// A field being typed in keeps its focus outline.
+pub(crate) fn cell_style(ui: &mut egui::Ui) {
+    let visuals = ui.visuals_mut();
+    let hover = visuals.widgets.hovered.bg_fill;
+    visuals.extreme_bg_color = egui::Color32::TRANSPARENT;
+    let widgets = &mut visuals.widgets;
+    for state in [&mut widgets.noninteractive, &mut widgets.inactive] {
+        state.bg_fill = egui::Color32::TRANSPARENT;
+        state.weak_bg_fill = egui::Color32::TRANSPARENT;
+        state.bg_stroke = egui::Stroke::NONE;
+    }
+    for state in [&mut widgets.hovered, &mut widgets.active, &mut widgets.open] {
+        state.bg_fill = hover;
+        state.weak_bg_fill = hover;
+        state.bg_stroke = egui::Stroke::NONE;
+        state.expansion = 0.0;
+    }
+}
+
+/// The arrow at a picker cell's right end, saying a click opens a list: the
+/// one a combo draws, in the same place, size and colour, so the two kinds
+/// of cell read alike.
+fn paint_picker_arrow(ui: &egui::Ui, response: &egui::Response) {
+    let side = ui.spacing().icon_width;
+    let inner = response.rect.shrink2(ui.spacing().button_padding);
+    let icon = egui::Align2::RIGHT_CENTER.align_size_within_rect(egui::vec2(side, side), inner);
+    let arrow = egui::Rect::from_center_size(icon.center(), egui::vec2(icon.width() * 0.7, icon.height() * 0.45));
+    let color = ui.style().interact(response).fg_stroke.color;
+    ui.painter().add(egui::Shape::convex_polygon(
+        vec![arrow.left_top(), arrow.right_top(), arrow.center_bottom()],
+        color,
+        egui::Stroke::NONE,
+    ));
+}
+
 /// Whether a pane given `rect` is sized to its rows rather than filling it:
 /// see [`table_stack`].
 fn fitted(rect: egui::Rect) -> bool {
@@ -290,6 +329,7 @@ pub(crate) fn grid_choice_row<T: Copy + PartialEq>(
     ui.scope_builder(egui::UiBuilder::new().id_salt(id).max_rect(cell), |ui| {
         ui.set_clip_rect(ui.clip_rect().intersect(cell));
         ui.spacing_mut().interact_size.y = cell.height();
+        cell_style(ui);
         let mut picked = false;
         egui::ComboBox::from_id_salt(id.with("combo"))
             .selected_text(selected)
@@ -322,15 +362,16 @@ pub(crate) fn grid_select_row(ui: &mut egui::Ui, id: impl std::hash::Hash + std:
     ui.scope_builder(egui::UiBuilder::new().id_salt(id).max_rect(cell), |ui| {
         ui.set_clip_rect(ui.clip_rect().intersect(cell));
         ui.spacing_mut().interact_size.y = cell.height();
-        ui.put(
+        cell_style(ui);
+        let response = ui.put(
             cell,
             // Text left, as every other value in a table reads.
             egui::Button::new((egui::RichText::new(summary), egui::Atom::grow()))
-                .fill(ui.visuals().extreme_bg_color)
-                .stroke(ui.visuals().widgets.inactive.bg_stroke)
                 .wrap_mode(egui::TextWrapMode::Truncate)
                 .min_size(cell.size()),
-        )
+        );
+        paint_picker_arrow(ui, &response);
+        response
     })
     .inner
 }
@@ -477,6 +518,7 @@ pub(crate) fn grid_cell_combo<T: Clone + PartialEq, O: Into<CellOption<T>>>(
     let mut child = ui.new_child(egui::UiBuilder::new().id_salt(id).max_rect(cell));
     child.set_clip_rect(child.clip_rect().intersect(cell));
     child.spacing_mut().interact_size.y = cell.height();
+    cell_style(&mut child);
     let mut picked = false;
     egui::ComboBox::from_id_salt(id.with("combo"))
         .selected_text(selected_text)
@@ -504,6 +546,7 @@ pub(crate) fn grid_cell_number(ui: &mut egui::Ui, id: impl std::hash::Hash + std
     }
     let mut child = ui.new_child(egui::UiBuilder::new().id_salt(egui::Id::unique(id)).max_rect(cell));
     child.set_clip_rect(child.clip_rect().intersect(cell));
+    cell_style(&mut child);
     let response = child.put(
         cell,
         egui::DragValue::new(value)
@@ -1018,6 +1061,7 @@ impl PropertyRows<'_> {
         // The combo is a button, and its natural height would overrun the
         // row rule; the cell it sits in is the height it gets.
         child.spacing_mut().interact_size.y = value_rect.height();
+        cell_style(&mut child);
         let mut response = egui::ComboBox::from_id_salt(id)
             .selected_text(selected_text)
             .width(value_rect.width())
@@ -1041,16 +1085,18 @@ impl PropertyRows<'_> {
         let (rect, split) = self.begin_row(false);
         self.paint_key(rect, split, key);
         let value_rect = self.value_rect(rect, split);
-        let visuals = self.ui.visuals().clone();
-        self.place(
+        let mut child = self.ui.new_child(egui::UiBuilder::new().max_rect(value_rect));
+        child.set_clip_rect(child.clip_rect().intersect(value_rect));
+        cell_style(&mut child);
+        let response = child.put(
             value_rect,
             // Text left, as every other value in a table reads.
             egui::Button::new((egui::RichText::new(summary), egui::Atom::grow()))
-                .fill(visuals.extreme_bg_color)
-                .stroke(visuals.widgets.inactive.bg_stroke)
                 .wrap_mode(egui::TextWrapMode::Truncate)
                 .min_size(value_rect.size()),
-        )
+        );
+        paint_picker_arrow(&child, &response);
+        response
     }
 
     /// A button on a row of its own, at the left where a key would start:

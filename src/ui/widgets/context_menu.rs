@@ -596,35 +596,8 @@ impl<'a> ChecklistRow<'a> {
                 };
                 painter.add(egui::Shape::convex_polygon(points, ui.visuals().weak_text_color(), egui::Stroke::NONE));
             }
-            let box_rect = egui::Rect::from_center_size(egui::pos2(box_left + CHECK_COLUMN / 2.0 - 2.0, rect.center().y), egui::vec2(11.0, 11.0));
-            painter.rect(
-                box_rect,
-                2.0,
-                if tick == Tick::Off {
-                    egui::Color32::TRANSPARENT
-                } else {
-                    ui.visuals().selection.bg_fill
-                },
-                egui::Stroke::new(1.0, ui.visuals().widgets.inactive.fg_stroke.color),
-                egui::StrokeKind::Inside,
-            );
-            match tick {
-                Tick::Off => {}
-                Tick::On => {
-                    let center = box_rect.center();
-                    painter.add(egui::Shape::line(
-                        vec![center + egui::vec2(-2.5, 0.0), center + egui::vec2(-0.5, 2.0), center + egui::vec2(2.5, -2.5)],
-                        egui::Stroke::new(1.4, ui.visuals().selection.stroke.color),
-                    ));
-                }
-                Tick::Mixed => {
-                    let center = box_rect.center();
-                    painter.add(egui::Shape::line(
-                        vec![center + egui::vec2(-2.5, 0.0), center + egui::vec2(2.5, 0.0)],
-                        egui::Stroke::new(1.4, ui.visuals().selection.stroke.color),
-                    ));
-                }
-            }
+            let box_rect = egui::Rect::from_center_size(egui::pos2(box_left + CHECK_COLUMN / 2.0 - 2.0, rect.center().y), egui::vec2(12.0, 12.0));
+            paint_check_box(&painter, ui.visuals(), box_rect, tick, response.hovered());
             painter.text(egui::pos2(box_rect.right() + 5.0, rect.center().y), egui::Align2::LEFT_CENTER, label, font_id, text_color);
         }
         if rect.width() + 0.5 < natural {
@@ -632,6 +605,27 @@ impl<'a> ChecklistRow<'a> {
         }
         out
     }
+}
+
+/// A check box as the house draws one: an outline while it is off, and the
+/// accent the primary buttons carry, with a white tick or dash, once it is
+/// on. Rounded as every control is.
+pub(crate) fn paint_check_box(painter: &egui::Painter, visuals: &egui::Visuals, rect: egui::Rect, tick: Tick, hovered: bool) {
+    let radius = super::toolbar::GROUP_CORNER_RADIUS;
+    if tick == Tick::Off {
+        let color = if hovered { visuals.text_color() } else { visuals.weak_text_color() };
+        painter.rect_stroke(rect, radius, egui::Stroke::new(1.0, color), egui::StrokeKind::Inside);
+        return;
+    }
+    let accent = super::menu::accent_fill(visuals);
+    painter.rect_filled(rect, radius, if hovered { super::shifted(accent, 16) } else { accent });
+    let center = rect.center();
+    let mark = egui::Stroke::new(1.6, egui::Color32::WHITE);
+    let points = match tick {
+        Tick::Mixed => vec![center + egui::vec2(-3.0, 0.0), center + egui::vec2(3.0, 0.0)],
+        _ => vec![center + egui::vec2(-3.0, 0.2), center + egui::vec2(-0.8, 2.4), center + egui::vec2(3.2, -2.4)],
+    };
+    painter.add(egui::Shape::line(points, mark));
 }
 
 /// A multiple-selection popup opened by a widget the caller drew.

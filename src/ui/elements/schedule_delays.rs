@@ -234,6 +234,7 @@ fn combo_in<T: Clone + PartialEq>(ui: &mut egui::Ui, id: egui::Id, cell: egui::R
     ui.scope_builder(egui::UiBuilder::new().id_salt(id).max_rect(cell), |ui| {
         ui.set_clip_rect(ui.clip_rect().intersect(cell));
         ui.spacing_mut().interact_size.y = cell.height();
+        crate::ui::widgets::data_grid::cell_style(ui);
         egui::ComboBox::from_id_salt(id.with("combo"))
             .selected_text(selected_text)
             .width(cell.width())
