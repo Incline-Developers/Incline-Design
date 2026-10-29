@@ -3186,6 +3186,9 @@ pub(crate) struct EditorState {
     pub(crate) gantt: GanttView,
     /// Whether the Inspector is open beside the Gantt and the Charts.
     pub(crate) gantt_inspector_open: bool,
+    /// The bar height a drag on a row's edge in the Gantt's name column is
+    /// showing, until it is let go and written to the plan.
+    pub(crate) gantt_bar_height_drag: Option<f32>,
     /// Downward scroll of the Charts page's rows, in points.
     pub(crate) schedule_charts_scroll: f32,
     /// How the Calendar's report export groups its rows.
@@ -4502,6 +4505,7 @@ impl EditorState {
             new_destination_kind: crate::model::schedule::DestinationKind::Stockpile,
             gantt: GanttView::default(),
             gantt_inspector_open: true,
+            gantt_bar_height_drag: None,
             schedule_charts_scroll: 0.0,
             schedule_report_grouping: Default::default(),
             schedule_calendar: ScheduleCalendarView::default(),

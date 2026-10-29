@@ -60,11 +60,10 @@ use crate::{
             BarNameDialog, BarWindowDialog, BlastBarDialog, DelayDrop, GanttDrag, GanttDragMode, GanttPaletteItem, GanttView, ReclaimBarDialog, ScheduleBarView, ScheduleEdit,
             ScheduleRepairTarget, ScheduleStep, UiCommand,
         },
-        themed_icon,
         widgets::{
-            context_menu::{ContextMenu, ContextMenuAction, checklist_popup, context_menu_fields, context_menu_popup, context_menu_separator},
+            context_menu::{ContextMenu, ContextMenuAction, context_menu_fields, context_menu_popup, context_menu_separator},
             island::{Island, Side},
-            menu::{MenuButton, MenuFieldF32},
+            menu::MenuButton,
             toolbar::{GROUP_CORNER_RADIUS, ToolbarButton, divider},
         },
     },
@@ -159,7 +158,7 @@ pub(crate) fn draw_details(
     // to its successor.
     let plan = project.schedule.clone();
     let session = project.active_session;
-    let layout = draw_timeline_page(ui, editor, &plan, document, Some(session), commands, |ui, timeline, editor, destinations, commands| {
+    let layout = draw_timeline_page(ui, editor, &plan, document, commands, |ui, timeline, editor, destinations, commands| {
         draw_canvas(ui, timeline, editor, &plan, destinations, session, commands);
     });
     crate::ui::dialogs::schedule::draw_bar_name_dialog(ui, editor, &plan, session, commands);
@@ -286,7 +285,8 @@ impl Layout {
     fn build(ui: &egui::Ui, editor: &EditorState, plan: &SchedulePlan, body: egui::Rect) -> Self {
         let markers = layout_markers(ui, editor, plan, body);
         let extents: Vec<BarExtent> = markers.iter().map(|marker| marker.extent).collect();
-        let mut rows = layout_rows(plan, &extents);
+        // A row edge being dragged shows its height before the plan has it.
+        let mut rows = layout_rows(plan, &extents, editor.gantt_bar_height_drag.unwrap_or(plan.bar_height()));
         if let Some(row) = rows.iter_mut().find(|row| row.blasting) {
             let lanes = firing_markers(ui, editor.schedule_result.as_deref(), editor.gantt, body)
                 .iter()
@@ -359,7 +359,7 @@ fn pack_lane(bars: &[usize], extents: &[BarExtent]) -> Vec<Vec<usize>> {
 /// a bar whose machine was deleted is still the user's work and has to be
 /// somewhere it can be seen and reassigned, but an empty lane above the fleet
 /// would be a permanent reminder of nothing.
-fn layout_rows(plan: &SchedulePlan, extents: &[BarExtent]) -> Vec<Row> {
+fn layout_rows(plan: &SchedulePlan, extents: &[BarExtent], bar_height: f32) -> Vec<Row> {
     let mut rows: Vec<Row> = Vec::with_capacity(plan.agents().len() + 1);
     // A bar counts as unassigned when it names no machine, and also when it
     // names one this plan does not hold. Load refuses such a plan and no edit
@@ -453,7 +453,7 @@ fn layout_rows(plan: &SchedulePlan, extents: &[BarExtent]) -> Vec<Row> {
             if lane.stacks.is_empty() {
                 lane.stacks.push(Vec::new());
             }
-            lane.height = (BAR_TOP + plan.bar_height() + BAR_BOTTOM) * lane.stacks.len() as f32;
+            lane.height = (BAR_TOP + bar_height + BAR_BOTTOM) * lane.stacks.len() as f32;
             lanes_height += lane.height;
         }
         // A row is never shorter than a machine's name and its class need.
@@ -624,7 +624,7 @@ fn scheduled_extent(editor: &EditorState, plan: &crate::model::schedule::Schedul
     (end > 0.0).then_some(end)
 }
 
-fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, settings: Option<u32>, commands: &mut Vec<UiCommand>) {
+fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, commands: &mut Vec<UiCommand>) {
     let mut child = ui.new_child(egui::UiBuilder::new().id_salt("gantt_toolbar").max_rect(rect));
     child.set_clip_rect(child.clip_rect().intersect(rect));
     child.horizontal_centered(|ui| {
@@ -673,9 +673,6 @@ fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, p
         // the repair.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
-            if let Some(session) = settings {
-                draw_settings(ui, plan, session, side, commands);
-            }
             if let Some(target) = editor.schedule_run_repair {
                 let label = match target {
                     ScheduleRepairTarget::Schedule(_) => tr!("schedule-open-setup"),
@@ -689,40 +686,6 @@ fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, p
                 }
             }
             draw_run_status(ui, editor);
-        });
-    });
-}
-
-/// The Gantt's own display settings, behind the gear at the toolbar's right
-/// end: how tall a dig sequence bar is drawn.
-///
-/// The height is held while it is dragged or typed and written once, when
-/// that stops, so one adjustment is one undo step rather than one per frame.
-fn draw_settings(ui: &mut egui::Ui, plan: &SchedulePlan, session: u32, side: f32, commands: &mut Vec<UiCommand>) {
-    let button = ui.add(
-        ToolbarButton::new(egui::Image::new(themed_icon!(ui, "open_preferences.svg")), tr!("gantt-settings"))
-            .id_salt("gantt_settings")
-            .button_side(side),
-    );
-    checklist_popup(&button, tr!("gantt-settings"), 280.0, |ui| {
-        context_menu_fields(ui, |ui| {
-            let id = ui.scope_id().with("gantt_bar_height");
-            let mut height = ui.data(|data| data.get_temp::<f32>(id)).unwrap_or(plan.bar_height());
-            let response = MenuFieldF32::new(
-                tr!("schedule-bar-height"),
-                &mut height,
-                crate::model::schedule::MIN_BAR_HEIGHT..=crate::model::schedule::MAX_BAR_HEIGHT,
-            )
-            .max_decimals(0)
-            .show(ui);
-            if response.dragged() || response.has_focus() {
-                ui.data_mut(|data| data.insert_temp(id, height));
-            } else {
-                ui.data_mut(|data| data.remove::<f32>(id));
-                if height != plan.bar_height() {
-                    commands.push(UiCommand::schedule(session, ScheduleEdit::SetBarHeight(height)));
-                }
-            }
         });
     });
 }
@@ -744,21 +707,19 @@ pub(super) fn toolbar_island(ui: &mut egui::Ui, id: &'static str, layout: &mut P
 
 /// A page laid out like the Gantt: the toolbar island across the top, a
 /// timeline canvas drawn by `draw` in the island under it, and the Inspector
-/// in an island of its own beside it while it is open. `settings` carries the
-/// session when the page offers the Gantt's own display settings. Returns the
-/// regions and seams it claimed, for the caller to round off.
+/// in an island of its own beside it while it is open. Returns the regions
+/// and seams it claimed, for the caller to round off.
 pub(super) fn draw_timeline_page(
     ui: &mut egui::Ui,
     editor: &mut EditorState,
     plan: &SchedulePlan,
     document: &crate::model::Document,
-    settings: Option<u32>,
     commands: &mut Vec<UiCommand>,
     draw: impl FnOnce(&mut egui::Ui, egui::Rect, &mut EditorState, &[DestinationView], &mut Vec<UiCommand>),
 ) -> PlanningLayout {
     let mut layout = PlanningLayout::default();
     toolbar_island(ui, "schedule_timeline_toolbar", &mut layout, |ui, rect| {
-        draw_toolbar(ui, rect, editor, plan, settings, commands);
+        draw_toolbar(ui, rect, editor, plan, commands);
     });
     // Names are resolved here, at draw time, by stable id: a rename relabels
     // a calculated span without recalculating it.
@@ -882,6 +843,7 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
     // ruler, which paints its own surface.
     draw_period_colors(ui, egui::Rect::from_min_size(ruler.min, egui::vec2(ruler.width(), 3.0)), editor.gantt, plan);
     draw_rows(ui, header, body, stripe, editor, &layout.rows);
+    draw_row_resize(ui, header, editor, plan, &layout.rows, session, commands);
     draw_grid(ui, body, editor.gantt);
     draw_calendar_delays(ui, body, editor.gantt, editor.gantt.row_scroll, plan, &layout.rows);
     draw_palette(ui, corner, editor);
@@ -1437,6 +1399,57 @@ fn draw_rows(ui: &mut egui::Ui, header: egui::Rect, body: egui::Rect, stripe: eg
         if hover.is_positive() {
             ui.interact(hover, ui.scope_id().with(("gantt_row", index)), egui::Sense::hover())
                 .on_hover_text(format!("{}\n{}", row.title, row.subtitle));
+        }
+    }
+}
+
+/// Height of the strip along a row's foot in the name column that takes the
+/// drag resizing it.
+const ROW_EDGE_GRAB: f32 = 6.0;
+
+/// The rows' edges in the name column, which drag to set how tall a bar is
+/// drawn - every bar's, since the plan holds one height for the Gantt - and
+/// double-click back to the default. Shown live while dragged and written
+/// once when let go, so one resize is one undo step.
+fn draw_row_resize(ui: &mut egui::Ui, header: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, rows: &[Row], session: u32, commands: &mut Vec<UiCommand>) {
+    use crate::model::schedule::{DEFAULT_BAR_HEIGHT, MAX_BAR_HEIGHT, MIN_BAR_HEIGHT};
+    let scroll = editor.gantt.row_scroll;
+    for (index, row) in rows.iter().enumerate() {
+        let bottom = header.top() + row.top - scroll + row.height;
+        if bottom < header.top() || bottom > header.bottom() {
+            continue;
+        }
+        let grab = egui::Rect::from_min_max(
+            egui::pos2(header.left(), bottom - ROW_EDGE_GRAB / 2.0),
+            egui::pos2(header.right(), bottom + ROW_EDGE_GRAB / 2.0),
+        )
+        .intersect(header);
+        let response = ui
+            .interact(grab, ui.scope_id().with(("gantt_row_edge", index)), egui::Sense::click_and_drag())
+            .on_hover_cursor(egui::CursorIcon::ResizeVertical)
+            .on_hover_text(tr!("gantt-row-resize-help"));
+        if response.hovered() || response.dragged() {
+            ui.painter()
+                .hline(header.x_range(), bottom, egui::Stroke::new(2.0, crate::ui::widgets::menu::accent_fill(ui.visuals())));
+        }
+        if response.double_clicked() {
+            editor.gantt_bar_height_drag = None;
+            if plan.bar_height() != DEFAULT_BAR_HEIGHT {
+                commands.push(UiCommand::schedule(session, ScheduleEdit::SetBarHeight(DEFAULT_BAR_HEIGHT)));
+            }
+        } else if response.dragged() {
+            // The edge follows the pointer: a row of several stacked bars
+            // grows by each of them, so the step is shared between them.
+            let stacks = row.lanes.iter().map(|lane| lane.stacks.len()).sum::<usize>().max(1) as f32;
+            let height = editor.gantt_bar_height_drag.unwrap_or(plan.bar_height());
+            editor.gantt_bar_height_drag = Some((height + response.drag_delta().y / stacks).clamp(MIN_BAR_HEIGHT, MAX_BAR_HEIGHT));
+        } else if response.drag_stopped()
+            && let Some(height) = editor.gantt_bar_height_drag.take()
+        {
+            let height = height.round();
+            if height != plan.bar_height() {
+                commands.push(UiCommand::schedule(session, ScheduleEdit::SetBarHeight(height)));
+            }
         }
     }
 }

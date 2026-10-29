@@ -85,7 +85,7 @@ pub(crate) fn draw_details(
 ) -> super::planning_setup::PlanningLayout {
     let plan = project.schedule.clone();
     let fields: Vec<(ReserveFieldId, String)> = document.reserve_fields().iter().map(|field| (field.id, field.name.clone())).collect();
-    draw_timeline_page(ui, editor, &plan, document, None, commands, |ui, rect, editor, destinations, _commands| {
+    draw_timeline_page(ui, editor, &plan, document, commands, |ui, rect, editor, destinations, _commands| {
         draw_canvas(ui, rect, editor, &plan, destinations, &fields);
     })
 }
