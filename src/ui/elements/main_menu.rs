@@ -94,7 +94,7 @@ pub(crate) fn draw_main_menu(ui: &mut egui::Ui, editor: &mut EditorState, projec
         ..frame.inner_margin
     });
     egui::Panel::top("main_menu")
-        .show_separator_line(crate::ui::chrome::show_separator_line(ui))
+        .show_separator_line(false)
         .frame(frame)
         .show(ui, |ui| {
             // Too narrow a window scrolls the row rather than clipping the

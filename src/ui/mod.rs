@@ -684,9 +684,6 @@ fn draw_ui(
 ) -> bool {
     let mut geometry_dirty = false;
 
-    // Before any panel is claimed: every region reads the preference back off
-    // the context as it is drawn. See `chrome::set_enabled`.
-    chrome::set_enabled(root_ui.ctx(), editor.panel_chrome);
     // Every schedule page writes its times through this; see
     // `schedule_periods::set_clock`.
     elements::schedule_periods::set_clock(project.schedule.periods().start_date);
@@ -729,8 +726,8 @@ fn draw_ui(
         };
         let console_rect = editor.show_console.then(|| {
             let available_height = root_ui.available_height();
-            let toolbar_height = elements::toolbars::bottom_toolbar_height(root_ui.ctx());
-            let (console_min, console_max) = chrome::panel_size_limits(root_ui.ctx(), available_height - toolbar_height);
+            let toolbar_height = elements::toolbars::bottom_toolbar_height();
+            let (console_min, console_max) = chrome::panel_size_limits(available_height - toolbar_height);
             elements::console::draw_console(root_ui, console_min, console_max, frame_context.console_snapshot)
         });
         let console = console_rect.unwrap_or(egui::Rect::NOTHING);
@@ -804,8 +801,8 @@ fn draw_ui(
     // toolbar (or the side panels drawn afterward) of layout space.
     let console_rect = editor.show_console.then(|| {
         let available_height = root_ui.available_height();
-        let toolbar_height = elements::toolbars::bottom_toolbar_height(root_ui.ctx());
-        let (console_min, console_max) = chrome::panel_size_limits(root_ui.ctx(), available_height - toolbar_height);
+        let toolbar_height = elements::toolbars::bottom_toolbar_height();
+        let (console_min, console_max) = chrome::panel_size_limits(available_height - toolbar_height);
         elements::console::draw_console(root_ui, console_min, console_max, frame_context.console_snapshot)
     });
     if console_rect.is_none() {
@@ -884,7 +881,7 @@ fn draw_ui(
         egui::pos2(root_ui.available_rect_before_wrap().left(), main_menu_rect.bottom().max(viewport_bar_rect.bottom())),
         egui::pos2(root_ui.available_rect_before_wrap().right(), canvas_bottom),
     );
-    let scene_rect = chrome::region_rect(root_ui.ctx(), scene_claimed);
+    let scene_rect = chrome::region_rect(scene_claimed);
     // The scene's own margin, claimed like the window's so a scroll over the
     // gap around the viewport reaches the interface rather than the camera.
     chrome::claim_gap(root_ui, "chrome_scene_edge", chrome::Gap::All);
@@ -1271,11 +1268,7 @@ fn draw_ui(
     if editor.slice_mode_enabled {
         dialogs::editing::draw_slice_panel(root_ui, editor, commands, canvas_rect);
         widgets::viewport::ViewportMiniMap::new("slice_minimap", canvas_rect)
-            .below_gizmo(if editor.show_world_axis_gizmo {
-                elements::cursors::orientation_gizmo_rect(canvas_rect)
-            } else {
-                egui::Rect::NOTHING
-            })
+            .below_gizmo(elements::cursors::orientation_gizmo_rect(canvas_rect))
             .show(root_ui.ctx(), editor, commands);
     }
     // Batter Berm
@@ -1392,18 +1385,16 @@ fn draw_ui(
         elements::cursors::draw_rotation_centre_marker(root_ui, cx, cy, canvas_rect);
     }
 
-    if editor.show_world_axis_gizmo {
-        let gizmo = elements::cursors::draw_orientation_gizmo(
-            root_ui,
-            egui::Id::unique("world_orientation_gizmo"),
-            canvas_rect,
-            frame_context.camera_forward,
-            frame_context.camera_up,
-            editor.slice_mode_enabled,
-        );
-        if let Some(view) = gizmo.clicked {
-            commands.push(UiCommand::SetStandardView(view));
-        }
+    let gizmo = elements::cursors::draw_orientation_gizmo(
+        root_ui,
+        egui::Id::unique("world_orientation_gizmo"),
+        canvas_rect,
+        frame_context.camera_forward,
+        frame_context.camera_up,
+        editor.slice_mode_enabled,
+    );
+    if let Some(view) = gizmo.clicked {
+        commands.push(UiCommand::SetStandardView(view));
     }
 
     if editor.is_planning_cut_step() && editor.cut_labels() {
@@ -1429,9 +1420,7 @@ fn draw_ui(
     elements::cursors::draw_tool_cursor(root_ui.ctx(), editor, canvas_rect, frame_context.camera_active);
 
     let world_per_point = frame_context.world_per_physical_pixel.map(|scale| scale * f64::from(root_ui.ctx().pixels_per_point()));
-    if editor.show_scale_bar {
-        widgets::viewport::ViewportScaleBar::new("viewport_scale_bar", canvas_rect).show(root_ui.ctx(), world_per_point, editor.renderer_background_color);
-    }
+    widgets::viewport::ViewportScaleBar::new("viewport_scale_bar", canvas_rect).show(root_ui.ctx(), world_per_point, editor.renderer_background_color);
 
     geometry_dirty |= draw_global_dialogs(root_ui, editor, document, project, block_models, drill_holes, commands);
 
@@ -1456,6 +1445,7 @@ fn draw_ui(
             scene_claimed,
         ]
         .into_iter()
+        .chain(explorer.regions)
         .chain(planning_regions),
     );
     // Centre the explorer resize grip on its full-height column.
@@ -1876,6 +1866,15 @@ fn draw_rotate_gizmo(root_ui: &egui::Ui, editor: &EditorState) {
 }
 
 /// Build an `egui::Visuals` set with selection styling applied to the given theme.
+/// The scene's clear colour in the `dark_mode` theme, as linear RGBA: the
+/// panel surface, so with the regions rounded off around it the viewport is
+/// one more island rather than a hole in the window.
+pub(crate) fn scene_background_color(dark_mode: bool) -> [f32; 4] {
+    let fill = theme_visuals(dark_mode, SELECTION_COLOR).panel_fill;
+    let linear = crate::rendering::color::byte_to_linear_rgba;
+    [linear(fill.r()), linear(fill.g()), linear(fill.b()), 1.0]
+}
+
 fn theme_visuals(dark_mode: bool, selection_color: egui::Color32) -> egui::Visuals {
     let mut visuals = if dark_mode { egui::Visuals::dark() } else { egui::Visuals::light() };
     visuals.selection.bg_fill = selection_color.gamma_multiply(0.35);

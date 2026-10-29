@@ -49,13 +49,9 @@ pub(crate) struct PreferencesDraft {
     /// [`UiCommand::SetWellLogStyle`], which comes through here so a style
     /// tweak is saved with everything else.
     pub(crate) well_log_style: crate::ui::widgets::log_traces::WellLogStyle,
-    pub(crate) renderer_background_color: [f32; 4],
     pub(crate) dark_mode: bool,
     pub(crate) show_console: bool,
-    pub(crate) panel_chrome: bool,
     pub(crate) ui_size_percent: f64,
-    pub(crate) show_world_axis_gizmo: bool,
-    pub(crate) show_scale_bar: bool,
     pub(crate) snap_poll_rate: u32,
     pub(crate) vsync_enabled: bool,
     pub(crate) frame_rate_cap: u32,
@@ -70,7 +66,6 @@ pub(crate) struct PreferencesDraft {
     pub(crate) plan_zoom_sensitivity: f64,
     pub(crate) plan_invert_vertical_look: bool,
     pub(crate) plan_invert_horizontal_look: bool,
-    pub(crate) plan_zoom_towards_cursor: bool,
     pub(crate) fly_field_of_view_degrees: f64,
     pub(crate) fly_mouse_look_sensitivity: f64,
     pub(crate) fly_invert_vertical_look: bool,
@@ -93,13 +88,9 @@ impl Default for PreferencesDraft {
         Self {
             language: crate::app::io::default_language(),
             well_log_style: crate::ui::widgets::log_traces::WellLogStyle::default(),
-            renderer_background_color: crate::app::io::default_renderer_background_color(),
             dark_mode: crate::app::io::default_dark_mode(),
             show_console: crate::app::io::default_show_console(),
-            panel_chrome: crate::app::io::default_panel_chrome(),
             ui_size_percent: crate::app::io::default_ui_size_percent(),
-            show_world_axis_gizmo: crate::app::io::default_show_world_axis_gizmo(),
-            show_scale_bar: crate::app::io::default_show_scale_bar(),
             snap_poll_rate: crate::app::io::default_snap_poll_rate(),
             vsync_enabled: crate::app::io::default_vsync_enabled(),
             frame_rate_cap: crate::app::io::default_frame_rate_cap(),
@@ -114,7 +105,6 @@ impl Default for PreferencesDraft {
             plan_zoom_sensitivity: crate::app::io::default_plan_zoom_sensitivity(),
             plan_invert_vertical_look: false,
             plan_invert_horizontal_look: false,
-            plan_zoom_towards_cursor: crate::app::io::default_plan_zoom_towards_cursor(),
             fly_field_of_view_degrees: crate::app::io::default_fly_field_of_view_degrees(),
             fly_mouse_look_sensitivity: crate::app::io::default_fly_mouse_look_sensitivity(),
             fly_invert_vertical_look: false,
@@ -2022,19 +2012,13 @@ pub(crate) struct EditorState {
     /// Colours and scales for the borehole log's trace columns. App-wide,
     /// saved with the preferences - see [`crate::ui::widgets::log_traces`].
     pub(crate) well_log_style: crate::ui::widgets::log_traces::WellLogStyle,
-    /// Dress the panels as rounded regions parted by a gap of window
-    /// background. Off, they sit flush and square: see `ui::chrome`.
-    pub(crate) panel_chrome: bool,
     pub(crate) ui_size_percent: f64,
-    /// Show the world-space axis gizmo in the top-right of the viewport.
-    pub(crate) show_world_axis_gizmo: bool,
     /// Show the construction grid on the world XY plane at Z=0. Never written
-    /// to the config; set as each project arrives instead - on for a new one,
-    /// off for one opened from storage.
+    /// to the config, and off until the user turns it on.
     pub(crate) show_xy_grid: bool,
-    /// Show the cartographic distance scale in the viewport.
-    pub(crate) show_scale_bar: bool,
-    /// Linear RGBA clear colour used behind the rendered scene.
+    /// Linear RGBA clear colour used behind the rendered scene: the panel
+    /// surface of the current theme, so the viewport reads as one more region.
+    /// Follows `dark_mode` - see [`crate::ui::scene_background_color`].
     pub(crate) renderer_background_color: [f32; 4],
     /// Whether the Preferences window is open.
     pub(crate) show_preferences: bool,
@@ -2093,7 +2077,6 @@ pub(crate) struct EditorState {
     pub(crate) plan_zoom_sensitivity: f64,
     pub(crate) plan_invert_vertical_look: bool,
     pub(crate) plan_invert_horizontal_look: bool,
-    pub(crate) plan_zoom_towards_cursor: bool,
     pub(crate) fly_field_of_view_degrees: f64,
     pub(crate) fly_mouse_look_sensitivity: f64,
     pub(crate) fly_invert_vertical_look: bool,
@@ -3885,13 +3868,9 @@ impl EditorState {
         PreferencesDraft {
             language: self.language,
             well_log_style: self.well_log_style,
-            renderer_background_color: self.renderer_background_color,
             dark_mode: self.dark_mode,
             show_console: self.show_console,
-            panel_chrome: self.panel_chrome,
             ui_size_percent: self.ui_size_percent,
-            show_world_axis_gizmo: self.show_world_axis_gizmo,
-            show_scale_bar: self.show_scale_bar,
             snap_poll_rate: self.snap_poll_rate,
             vsync_enabled: self.vsync_enabled,
             frame_rate_cap: self.frame_rate_cap,
@@ -3906,7 +3885,6 @@ impl EditorState {
             plan_zoom_sensitivity: self.plan_zoom_sensitivity,
             plan_invert_vertical_look: self.plan_invert_vertical_look,
             plan_invert_horizontal_look: self.plan_invert_horizontal_look,
-            plan_zoom_towards_cursor: self.plan_zoom_towards_cursor,
             fly_field_of_view_degrees: self.fly_field_of_view_degrees,
             fly_mouse_look_sensitivity: self.fly_mouse_look_sensitivity,
             fly_invert_vertical_look: self.fly_invert_vertical_look,
@@ -3950,12 +3928,9 @@ impl EditorState {
             borehole_inspector_tab: BoreholeInspectorTab::default(),
             borehole_log_strat_field: None,
             well_log_style: Default::default(),
-            panel_chrome: crate::app::io::default_panel_chrome(),
             ui_size_percent: crate::app::io::default_ui_size_percent(),
-            show_world_axis_gizmo: crate::app::io::default_show_world_axis_gizmo(),
             show_xy_grid: false,
-            show_scale_bar: crate::app::io::default_show_scale_bar(),
-            renderer_background_color: crate::app::io::default_renderer_background_color(),
+            renderer_background_color: crate::ui::scene_background_color(crate::app::io::default_dark_mode()),
             show_preferences: false,
             preferences_draft: None,
             snap_poll_rate: crate::app::io::default_snap_poll_rate(),
@@ -3980,7 +3955,6 @@ impl EditorState {
             plan_zoom_sensitivity: crate::app::io::default_plan_zoom_sensitivity(),
             plan_invert_vertical_look: false,
             plan_invert_horizontal_look: false,
-            plan_zoom_towards_cursor: crate::app::io::default_plan_zoom_towards_cursor(),
             fly_field_of_view_degrees: crate::app::io::default_fly_field_of_view_degrees(),
             fly_mouse_look_sensitivity: crate::app::io::default_fly_mouse_look_sensitivity(),
             fly_invert_vertical_look: false,

@@ -188,11 +188,8 @@ impl<'a> App<'a> {
         self.editor.well_log_style = preferences.well_log_style;
         self.editor.dark_mode = preferences.dark_mode;
         self.editor.show_console = preferences.show_console;
-        self.editor.panel_chrome = preferences.panel_chrome;
         self.editor.ui_size_percent = preferences.ui_size_percent;
-        self.editor.show_world_axis_gizmo = preferences.show_world_axis_gizmo;
-        self.editor.show_scale_bar = preferences.show_scale_bar;
-        self.editor.renderer_background_color = preferences.renderer_background_color;
+        self.editor.renderer_background_color = crate::ui::scene_background_color(preferences.dark_mode);
         self.editor.snap_poll_rate = preferences.snap_poll_rate;
         self.editor.vsync_enabled = preferences.vsync_enabled;
         self.editor.frame_rate_cap = preferences.frame_rate_cap;
@@ -210,7 +207,6 @@ impl<'a> App<'a> {
         self.editor.plan_zoom_sensitivity = preferences.plan_zoom_sensitivity;
         self.editor.plan_invert_vertical_look = preferences.plan_invert_vertical_look;
         self.editor.plan_invert_horizontal_look = preferences.plan_invert_horizontal_look;
-        self.editor.plan_zoom_towards_cursor = preferences.plan_zoom_towards_cursor;
         self.editor.fly_field_of_view_degrees = preferences.fly_field_of_view_degrees;
         self.editor.fly_mouse_look_sensitivity = preferences.fly_mouse_look_sensitivity;
         self.editor.fly_invert_vertical_look = preferences.fly_invert_vertical_look;
@@ -305,7 +301,6 @@ impl<'a> App<'a> {
                 self.editor.plan_zoom_sensitivity,
                 self.editor.plan_invert_vertical_look,
                 self.editor.plan_invert_horizontal_look,
-                self.editor.plan_zoom_towards_cursor,
                 self.editor.fly_field_of_view_degrees,
                 self.editor.fly_mouse_look_sensitivity,
                 self.editor.fly_invert_vertical_look,
@@ -402,11 +397,7 @@ pub(crate) fn config_from(
         well_log_style: preferences.well_log_style,
         dark_mode: preferences.dark_mode,
         show_console: preferences.show_console,
-        panel_chrome: preferences.panel_chrome,
         ui_size_percent: preferences.ui_size_percent,
-        show_world_axis_gizmo: preferences.show_world_axis_gizmo,
-        show_scale_bar: preferences.show_scale_bar,
-        renderer_background_color: preferences.renderer_background_color,
         snap_poll_rate: preferences.snap_poll_rate,
         vsync_enabled: preferences.vsync_enabled,
         frame_rate_cap: preferences.frame_rate_cap,
@@ -421,7 +412,6 @@ pub(crate) fn config_from(
         plan_zoom_sensitivity: preferences.plan_zoom_sensitivity,
         plan_invert_vertical_look: preferences.plan_invert_vertical_look,
         plan_invert_horizontal_look: preferences.plan_invert_horizontal_look,
-        plan_zoom_towards_cursor: preferences.plan_zoom_towards_cursor,
         fly_field_of_view_degrees: preferences.fly_field_of_view_degrees,
         fly_mouse_look_sensitivity: preferences.fly_mouse_look_sensitivity,
         fly_invert_vertical_look: preferences.fly_invert_vertical_look,

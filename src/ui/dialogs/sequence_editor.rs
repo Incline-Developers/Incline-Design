@@ -388,7 +388,7 @@ fn draw_view(ui: &mut egui::Ui, editor: &mut EditorState, draft: &mut SequenceDr
     // discard question is up the camera of the draft being asked about stays put.
     changed |= crate::ui::widgets::preview_navigation::navigate(ui, &response, image_rect, &mut draft.view, editor, !confirming);
     if has_run && !confirming {
-        changed |= crate::ui::widgets::preview_navigation::orientation_gizmo(ui, "sequence_editor_orientation_gizmo", image_rect, &mut draft.view, editor);
+        changed |= crate::ui::widgets::preview_navigation::orientation_gizmo(ui, "sequence_editor_orientation_gizmo", image_rect, &mut draft.view);
     }
     // A left press picks the block under it, and a left drag keeps picking as
     // it travels: one stroke takes every block it crosses. Which blocks those
