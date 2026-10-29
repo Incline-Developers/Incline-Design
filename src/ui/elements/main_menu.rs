@@ -43,8 +43,8 @@ const TAB_PADDING: f32 = 10.0;
 /// Vertical space a workspace tab claims in the bar.
 const TAB_HEIGHT: f32 = 20.0;
 /// Height of a workspace tab's fill, sat against the top of that space. Shorter
-/// than [`TAB_HEIGHT`] so the group box behind Planning keeps air below it
-/// instead of bleeding into the region under the bar.
+/// than [`TAB_HEIGHT`] so the open tab's tile keeps air below it instead of
+/// bleeding into the region under the bar.
 const TAB_FILL_HEIGHT: f32 = 17.0;
 /// Space either side of a dropdown's label in the viewport bar.
 ///
@@ -163,7 +163,12 @@ struct WorkspaceTabDrag {
 }
 
 /// Draw the run of workspace tabs, sliding neighbours out of the dragged tab's way.
+///
+/// The open workspace sits on the raised tile Planning's page tabs use
+/// (`widgets::tab_strip`), which slides to the next one picked - and travels
+/// with its tab while that is dragged. The other tabs stay on the bar itself.
 fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, bar_fill: egui::Color32) {
+    use crate::ui::widgets::tab_strip::{paint_tile, sliding_tile};
     let drag_id = ui.scope_id().with("workspace-tab-drag");
     let mut drag = ui.ctx().data_mut(|data| data.get_temp::<WorkspaceTabDrag>(drag_id));
     let font = egui::TextStyle::Button.resolve(ui.style());
@@ -214,6 +219,13 @@ fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, commands: &m
         let rect = egui::Rect::from_min_size(egui::pos2(left, strip.top()), egui::vec2(tab_width(workspace), TAB_FILL_HEIGHT));
         tabs.push((workspace, id, rect));
         x += tab_width(workspace) + spacing;
+    }
+    // The tile under the open workspace: sliding to it when one is picked,
+    // and riding with its tab, without the slide's lag, while that is held.
+    if let Some(&(_, _, target)) = tabs.iter().find(|(workspace, _, _)| *workspace == editor.active_workspace) {
+        let sliding = sliding_tile(ui.ctx(), ui.scope_id().with("workspace-tab-tile"), target);
+        let held = drag.as_ref().is_some_and(|drag| drag.workspace == editor.active_workspace);
+        paint_tile(ui.painter(), ui.visuals(), if held { target } else { sliding });
     }
     // Paint the held tab last so it travels above its sliding neighbours.
     tabs.sort_by_key(|(workspace, _, _)| drag.as_ref().is_some_and(|drag| drag.workspace == *workspace));
@@ -339,12 +351,19 @@ fn draw_workspace_tab(
     // say what state a tab is in; the sense is what stops it being clicked.
     let sense = if enabled { egui::Sense::click_and_drag() } else { egui::Sense::hover() };
     let response = ui.interact(rect, id, sense);
-    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, selected, workspace.label()));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, enabled, selected, workspace.label()));
 
     let visuals = ui.visuals();
-    ui.painter().rect_filled(rect, GROUP_CORNER_RADIUS, tab_fill(visuals, bar_fill, state, response.hovered()));
+    // The open one sits on the tile; another lifts off the bar under the
+    // pointer, the step signed by theme so "lighter" means away from the
+    // background in both.
+    if state == TabState::Inactive && response.hovered() {
+        let away = if visuals.dark_mode { 6 } else { -6 };
+        ui.painter().rect_filled(rect, GROUP_CORNER_RADIUS, crate::ui::widgets::shifted(bar_fill, away));
+    }
     let text = match state {
         TabState::Active => visuals.strong_text_color(),
+        TabState::Inactive if response.hovered() => visuals.strong_text_color(),
         TabState::Inactive => visuals.text_color(),
         TabState::Disabled => visuals.weak_text_color(),
     };
@@ -362,27 +381,6 @@ enum TabState {
     Active,
     Inactive,
     Disabled,
-}
-
-/// Fill for a workspace tab, stepped off `bar_fill` the way Blender steps its
-/// workspace tabs.
-///
-/// The open workspace's tab takes the panel surface itself - it reads as the
-/// workspace below coming up through the bar, which is exactly what Blender's
-/// active tab does. Every other tab takes the bar's own colour, so no cell
-/// outline shows around it and only its label is left on the backdrop; what
-/// separates an available workspace from one with nothing behind it yet is the
-/// text colour alone. An available tab still lights up under the pointer, and
-/// that step is signed by theme so "lighter" means away from the background in
-/// both.
-fn tab_fill(visuals: &egui::Visuals, bar_fill: egui::Color32, state: TabState, hovered: bool) -> egui::Color32 {
-    let away = if visuals.dark_mode { 1 } else { -1 };
-    let hover = i16::from(hovered && state != TabState::Disabled) * 6;
-    match state {
-        TabState::Active => crate::ui::widgets::shifted(visuals.panel_fill, away * hover),
-        TabState::Inactive => crate::ui::widgets::shifted(bar_fill, away * hover),
-        TabState::Disabled => bar_fill,
-    }
 }
 
 /// The File menu: everything about the project as a file on disk.

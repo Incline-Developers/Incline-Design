@@ -10,11 +10,34 @@ use std::hash::Hash;
 use super::{shifted, toolbar::GROUP_CORNER_RADIUS};
 
 /// Space between the track's edge and the tile inside it.
-const INSET: f32 = 2.0;
+pub(crate) const INSET: f32 = 2.0;
 /// Space either side of a tab's label.
 const PADDING: f32 = 12.0;
 /// How long the tile takes to slide to a newly picked tab.
-const SLIDE_SECONDS: f32 = 0.15;
+pub(crate) const SLIDE_SECONDS: f32 = 0.15;
+
+/// The recessed track the tabs sit in.
+pub(crate) fn track_fill(visuals: &egui::Visuals) -> egui::Color32 {
+    shifted(visuals.panel_fill, if visuals.dark_mode { -8 } else { -10 })
+}
+
+/// A closed tab's fill under the pointer: a step up off the track.
+pub(crate) fn hover_fill(visuals: &egui::Visuals) -> egui::Color32 {
+    shifted(track_fill(visuals), if visuals.dark_mode { 8 } else { -8 })
+}
+
+/// The raised tile under the open tab, at `rect`.
+pub(crate) fn paint_tile(painter: &egui::Painter, visuals: &egui::Visuals, rect: egui::Rect) {
+    let fill = shifted(visuals.panel_fill, if visuals.dark_mode { 22 } else { 12 });
+    painter.rect(rect, GROUP_CORNER_RADIUS, fill, visuals.widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
+}
+
+/// Where the tile is this frame, sliding towards `target`, the open tab.
+pub(crate) fn sliding_tile(ctx: &egui::Context, id: egui::Id, target: egui::Rect) -> egui::Rect {
+    let left = ctx.animate_value_with_time(id.with("tile_left"), target.left(), SLIDE_SECONDS);
+    let right = ctx.animate_value_with_time(id.with("tile_right"), target.right(), SLIDE_SECONDS);
+    egui::Rect::from_x_y_ranges(left..=right, target.y_range())
+}
 
 pub(crate) struct TabStrip<'a, H> {
     id_salt: H,
@@ -51,19 +74,13 @@ impl<'a, H: Hash + std::fmt::Debug> TabStrip<'a, H> {
             .collect();
 
         let visuals = ui.visuals().clone();
-        let dark = visuals.dark_mode;
-        let track_fill = shifted(visuals.panel_fill, if dark { -8 } else { -10 });
-        let tile_fill = shifted(visuals.panel_fill, if dark { 22 } else { 12 });
         let painter = ui.painter();
-        painter.rect_filled(track, GROUP_CORNER_RADIUS, track_fill);
+        painter.rect_filled(track, GROUP_CORNER_RADIUS, track_fill(&visuals));
 
         // The tile slides rather than jumping, so the eye follows it to the
         // page that opened.
         if let Some(target) = segments.get(self.selected) {
-            let left = ui.ctx().animate_value_with_time(id.with("tile_left"), target.left(), SLIDE_SECONDS);
-            let right = ui.ctx().animate_value_with_time(id.with("tile_right"), target.right(), SLIDE_SECONDS);
-            let tile = egui::Rect::from_x_y_ranges(left..=right, target.y_range());
-            painter.rect(tile, GROUP_CORNER_RADIUS, tile_fill, visuals.widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
+            paint_tile(painter, &visuals, sliding_tile(ui.ctx(), id, *target));
         }
 
         let mut clicked = None;
@@ -72,7 +89,7 @@ impl<'a, H: Hash + std::fmt::Debug> TabStrip<'a, H> {
             let response = ui.interact(segment, id.with(index), egui::Sense::click());
             response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, chosen, galley.text()));
             if response.hovered() && !chosen {
-                ui.painter().rect_filled(segment, GROUP_CORNER_RADIUS, shifted(track_fill, if dark { 8 } else { -8 }));
+                ui.painter().rect_filled(segment, GROUP_CORNER_RADIUS, hover_fill(&visuals));
             }
             let color = if chosen || response.hovered() {
                 visuals.strong_text_color()
