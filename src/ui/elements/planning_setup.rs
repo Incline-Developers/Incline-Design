@@ -347,11 +347,15 @@ enum RunAction {
 /// A pipeline's run buttons. Idle, Run Step (where the page has a step to run)
 /// and Run All; running, Stop alone in their place, so the one control that
 /// can act is the only one shown rather than sitting beside two dimmed ones.
-fn draw_run_buttons(ui: &mut egui::Ui, salt: &'static str, running: bool, run_step: bool) -> Option<RunAction> {
+///
+/// `held` while Auto is keeping the steps current, when a run by hand would
+/// only repeat it: the two are dimmed, and say so.
+fn draw_run_buttons(ui: &mut egui::Ui, salt: &'static str, running: bool, run_step: bool, held: bool) -> Option<RunAction> {
     use crate::ui::widgets::toolbar::ToolbarButton;
 
     let side = ui.available_height();
     let button = |icon: egui::ImageSource<'static>, tint: egui::Color32, tooltip: String, id: &'static str| {
+        let tint = if held { tint.gamma_multiply(0.35) } else { tint };
         ToolbarButton::new(egui::Image::new(icon).tint(tint), tooltip).button_side(side).id_salt((salt, id))
     };
     if running {
@@ -361,52 +365,54 @@ fn draw_run_buttons(ui: &mut egui::Ui, salt: &'static str, running: bool, run_st
             .then_some(RunAction::Cancel);
     }
     let mut action = None;
-    if run_step && ui.add(button(unthemed_icon!("play.svg"), RUN_STEP_TINT, tr!("stage-run-step"), "step")).clicked() {
+    if run_step
+        && ui
+            .add_enabled(!held, button(unthemed_icon!("play.svg"), RUN_STEP_TINT, tr!("stage-run-step"), "step"))
+            .on_disabled_hover_text(tr!("stage-auto-holds"))
+            .clicked()
+    {
         action = Some(RunAction::Step);
     }
-    if ui.add(button(unthemed_icon!("play_all.svg"), RUN_ALL_TINT, tr!("stage-run-all"), "all")).clicked() {
+    if ui
+        .add_enabled(!held, button(unthemed_icon!("play_all.svg"), RUN_ALL_TINT, tr!("stage-run-all"), "all"))
+        .on_disabled_hover_text(tr!("stage-auto-holds"))
+        .clicked()
+    {
         action = Some(RunAction::All);
     }
     action
 }
 
-/// One pipeline's run controls: its buttons, Auto where the pipeline has it,
-/// and its progress, with `hover` saying where it stands.
-fn run_header(
-    ui: &mut egui::Ui,
-    group: SetupGroup,
-    running: bool,
-    run_step: bool,
-    auto: Option<(&mut bool, String)>,
-    (done, total): (usize, usize),
-    hover: impl FnOnce(&mut egui::Ui),
-) -> Option<RunAction> {
-    ui.horizontal_centered(|ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        let salt = match group {
-            SetupGroup::Solids => "planning_run",
-            SetupGroup::Haulage => "haulage_run",
-            SetupGroup::Schedule => "schedule_run",
-        };
-        let action = draw_run_buttons(ui, salt, running, run_step);
-        if let Some((auto, note)) = auto {
-            ui.add_space(10.0);
-            ui.add(crate::ui::widgets::menu::SlidingToggle::new(auto).label(tr!("planning-auto"))).on_hover_text(note);
-        }
-        // Named, since the one header serves whichever group's step is open.
-        let label = tr!("setup-group-progress", group = group.label(), done = done, total = total);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            crate::ui::widgets::progress::draw_planning_progress(ui, &label, done as f32 / total as f32);
-        })
-        .response
-        .on_hover_ui(hover);
-        action
-    })
-    .inner
+/// One pipeline's run controls, in the viewport bar after the Planning tabs:
+/// its buttons, then the one Auto.
+///
+/// With Auto on, Run and Run All are held: Auto reruns what is out of date on
+/// its own. Not once a step has failed or been cancelled, which Auto does not
+/// retry until something changes - then a run by hand is the way to.
+fn run_header(ui: &mut egui::Ui, group: SetupGroup, running: bool, run_step: bool, auto: &mut bool, stuck: bool) -> Option<RunAction> {
+    ui.spacing_mut().item_spacing.x = 0.0;
+    let salt = match group {
+        SetupGroup::Solids => "planning_run",
+        SetupGroup::Haulage => "haulage_run",
+        SetupGroup::Schedule => "schedule_run",
+    };
+    let held = *auto && !stuck;
+    let action = draw_run_buttons(ui, salt, running, run_step, held);
+    ui.add_space(8.0);
+    ui.add(crate::ui::widgets::menu::SlidingToggle::new(auto).label(tr!("planning-auto")))
+        .on_hover_text(tr!("setup-auto-note"));
+    action
+}
+
+/// Whether a group has a step that failed or was cancelled: what Auto leaves
+/// alone until something changes, so Run is offered again.
+fn stuck(mut states: impl Iterator<Item = crate::app::planning_pipeline::StageState>) -> bool {
+    use crate::app::planning_pipeline::StageState;
+    states.any(|state| matches!(state, StageState::Failed | StageState::Cancelled))
 }
 
 /// Setup's run controls, for the group whose step is open: its Run and Run
-/// All, its Auto and its progress. Run All runs what the open step needs, so
+/// All, and Auto. Run All runs what the open step needs, so
 /// on a Schedule step it runs the Solids and Haulage steps too.
 pub(crate) fn draw_setup_run_controls(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
     match editor.setup_group {
@@ -440,33 +446,19 @@ fn cancel_runs(editor: &EditorState, commands: &mut Vec<UiCommand>) {
 /// The Solids group's run controls, and the Reserves view's, which shows
 /// what the Solids steps produced.
 pub(crate) fn draw_solids_run_controls(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
-    use crate::app::planning_pipeline::StageState;
-
     let step = editor.planning_solids_step;
-    let completed = editor.planning_stages.iter().filter(|stage| stage.state == StageState::Complete).count();
-    let active = SolidsStep::ALL.into_iter().find(|step| editor.planning_stages[step.index()].state == StageState::Running);
-    let reported = active.unwrap_or(if editor.is_solids_view() { SolidsStep::LAST } else { step });
-    let status = editor.planning_stages[reported.index()].clone();
-    let snapshot = editor.planning_snapshot_status.clone();
-    let mut auto = editor.auto_run();
+    // One Auto for every group: see `AutoRun::all`.
+    let mut auto = editor.auto_run().all();
     let action = run_header(
         ui,
         SetupGroup::Solids,
         any_run_active(editor),
         !editor.is_solids_view(),
-        Some((&mut auto.solids, tr!("planning-auto-note"))),
-        (completed, SolidsStep::ALL.len()),
-        |ui| {
-            ui.label(reported.label());
-            stage_tooltip(ui, &status);
-            if !snapshot.is_empty() {
-                ui.separator();
-                ui.label(&snapshot);
-            }
-        },
+        &mut auto,
+        stuck(editor.planning_stages.iter().map(|stage| stage.state)),
     );
-    if auto != editor.auto_run() {
-        commands.push(UiCommand::SetAutoRun(auto));
+    if auto != editor.auto_run().all() {
+        commands.push(UiCommand::SetAutoRun(crate::model::schedule::AutoRun::every(auto)));
     }
     match action {
         Some(RunAction::Step) => commands.push(UiCommand::RunPlanningStage(step)),
@@ -476,41 +468,25 @@ pub(crate) fn draw_solids_run_controls(ui: &mut egui::Ui, editor: &mut EditorSta
     }
 }
 
-/// The Schedule group's run controls: the same buttons and the same progress
-/// readout as the Solids group's, over its own pipeline.
+/// The Schedule group's run controls: the same buttons as the Solids
+/// group's, over its own pipeline.
 ///
-/// Its Auto is the Gantt's: one switch that reruns these steps and
-/// recalculates the schedule, shown on both pages.
+/// Its Auto is every group's and the Gantt's: one switch that keeps the
+/// lot up to date.
 fn draw_schedule_run_controls(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
-    use crate::{app::planning_pipeline::StageState, ui::state::ScheduleStep};
-
     let step = editor.schedule_setup_step;
-    let completed = editor.schedule_stages.iter().filter(|stage| stage.state == StageState::Complete).count();
-    let active = ScheduleStep::ALL.into_iter().find(|step| editor.schedule_stages[step.index()].state == StageState::Running);
-    let reported = active.unwrap_or(step);
-    let status = editor.schedule_stages[reported.index()].clone();
-    let calculation = editor.schedule_calculation_status.clone();
-    let mut auto = editor.auto_run();
+    // One Auto for every group: see `AutoRun::all`.
+    let mut auto = editor.auto_run().all();
     let action = run_header(
         ui,
         SetupGroup::Schedule,
         any_run_active(editor),
         true,
-        Some((&mut auto.schedule, tr!("schedule-setup-auto-note"))),
-        (completed, ScheduleStep::ALL.len()),
-        |ui| {
-            ui.label(reported.label());
-            stage_tooltip_parts(ui, status.state, status.blocked_by.map(ScheduleStep::label), status.message.as_deref(), &status.diagnostics);
-            // What the Gantt would be told if it asked to calculate now,
-            // where the buttons that change that answer are.
-            if !calculation.is_empty() {
-                ui.separator();
-                ui.label(&calculation);
-            }
-        },
+        &mut auto,
+        stuck(editor.schedule_stages.iter().map(|stage| stage.state)),
     );
-    if auto != editor.auto_run() {
-        commands.push(UiCommand::SetAutoRun(auto));
+    if auto != editor.auto_run().all() {
+        commands.push(UiCommand::SetAutoRun(crate::model::schedule::AutoRun::every(auto)));
     }
     match action {
         Some(RunAction::Step) => commands.push(UiCommand::RunScheduleStage(step)),
@@ -522,28 +498,19 @@ fn draw_schedule_run_controls(ui: &mut egui::Ui, editor: &mut EditorState, comma
 
 /// The Haulage group's run controls, over the Haulage pipeline.
 fn draw_haulage_run_controls(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
-    use crate::{app::planning_pipeline::StageState, ui::state::HaulageStep};
-
     let step = editor.haulage_setup_step;
-    let completed = editor.haulage_stages.iter().filter(|stage| stage.state == StageState::Complete).count();
-    let active = HaulageStep::ALL.into_iter().find(|step| editor.haulage_stages[step.index()].state == StageState::Running);
-    let reported = active.unwrap_or(step);
-    let status = editor.haulage_stages[reported.index()].clone();
-    let mut auto = editor.auto_run();
+    // One Auto for every group: see `AutoRun::all`.
+    let mut auto = editor.auto_run().all();
     let action = run_header(
         ui,
         SetupGroup::Haulage,
         any_run_active(editor),
         true,
-        Some((&mut auto.haulage, tr!("planning-auto-note"))),
-        (completed, HaulageStep::ALL.len()),
-        |ui| {
-            ui.label(reported.label());
-            stage_tooltip_parts(ui, status.state, status.blocked_by.map(HaulageStep::label), status.message.as_deref(), &status.diagnostics);
-        },
+        &mut auto,
+        stuck(editor.haulage_stages.iter().map(|stage| stage.state)),
     );
-    if auto != editor.auto_run() {
-        commands.push(UiCommand::SetAutoRun(auto));
+    if auto != editor.auto_run().all() {
+        commands.push(UiCommand::SetAutoRun(crate::model::schedule::AutoRun::every(auto)));
     }
     match action {
         Some(RunAction::Step) => commands.push(UiCommand::RunHaulageStage(step)),

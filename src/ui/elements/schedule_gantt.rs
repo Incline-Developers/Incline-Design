@@ -58,13 +58,13 @@ use crate::{
         fonts::bold,
         state::{
             BarNameDialog, BarWindowDialog, BlastBarDialog, DelayDrop, GanttDrag, GanttDragMode, GanttPaletteItem, GanttView, ReclaimBarDialog, ScheduleBarView, ScheduleEdit,
-            ScheduleRepairTarget, ScheduleStep, UiCommand,
+            ScheduleStep, UiCommand,
         },
         widgets::{
             context_menu::{ContextMenu, ContextMenuAction, context_menu_fields, context_menu_popup, context_menu_separator},
             island::{Island, Side},
             menu::MenuButton,
-            toolbar::{GROUP_CORNER_RADIUS, ToolbarButton, divider},
+            toolbar::{GROUP_CORNER_RADIUS, ToolbarButton},
         },
     },
 };
@@ -127,8 +127,6 @@ const RULER_BAND: f32 = 20.0;
 const MIN_TICK_SPACING: f32 = 72.0;
 /// How much one zoom-button press changes the visible span.
 const ZOOM_STEP: f64 = 1.5;
-/// Clear space either side of the hairlines parting the toolbar's runs.
-const TOOLBAR_DIVIDER_GAP: f32 = 6.0;
 
 fn time_of(seconds: f64) -> String {
     let into_day = seconds - (seconds / GanttView::DAY).floor() * GanttView::DAY;
@@ -475,46 +473,67 @@ fn layout_rows(plan: &SchedulePlan, extents: &[BarExtent], bar_height: f32) -> V
     rows
 }
 
-/// Run Period, Run All Periods and Cancel, as the Gantt and the Calendar
-/// both show them.
+/// Run Period, Run All Periods, Improve and Cancel, as the Gantt, the
+/// Calendar and Animate show them, with where the schedule stands - the
+/// status line and the detail behind it - on each one's hover.
 ///
 /// The run controls are the Solids page's own, in the same order and with the
 /// same icons: a schedule is run the way everything else in this project is
 /// run. One control in two places rather than two that drift: `salt` keeps
 /// their widget ids apart, because both pages can be laid out in the same
 /// frame.
-pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &mut EditorState, salt: &str, commands: &mut Vec<UiCommand>) {
+pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &mut EditorState, plan: &SchedulePlan, salt: &str, commands: &mut Vec<UiCommand>) {
     use crate::ui::elements::planning_setup::{CANCEL_TINT, IMPROVE_TINT, RUN_ALL_TINT, RUN_STEP_TINT};
 
     let working = editor.schedule_run_working;
     let startable = !working;
+    // With Auto on, a current schedule is kept current on its own, so Run and
+    // Run All are held. Without one - never run, blocked, or the last attempt
+    // failed - they are what starts it, running the Setup steps it waits on.
+    // Nor while it stops short of the horizon: Auto recalculates as far as
+    // the schedule reaches, and only a run by hand takes it further.
+    let horizon_h = f64::from(plan.experiment().planning_end_day) * crate::model::schedule::SCHEDULE_PERIOD_H;
+    let held = editor.auto_run().all() && editor.schedule_result.as_ref().is_some_and(|schedule| schedule.requested_end_h >= horizon_h - 1e-9);
+    let runnable = startable && !held;
     let tint = |color: egui::Color32, enabled: bool| if enabled { color } else { color.gamma_multiply(0.35) };
     let side = ui.available_height();
+    // Where the schedule stands goes with the buttons that change it, on
+    // hover, rather than as a line of its own along the toolbar: each one's
+    // own note first, then the status and what lies behind it.
+    let status = std::iter::once(editor.schedule_run_status.as_str())
+        .chain(editor.schedule_run_details.iter().map(String::as_str))
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let hover = |note: String| if status.is_empty() { note } else { format!("{note}\n\n{status}") };
     let spacing = std::mem::replace(&mut ui.spacing_mut().item_spacing.x, 0.0);
+    let held_note = |note: String| if held { hover(tr!("schedule-auto-holds")) } else { hover(note) };
     if ui
         .add_enabled(
-            startable,
+            runnable,
             ToolbarButton::new(
-                egui::Image::new(crate::ui::unthemed_icon!("play.svg")).tint(tint(RUN_STEP_TINT, startable)),
-                tr!("schedule-run-period-note"),
+                egui::Image::new(crate::ui::unthemed_icon!("play.svg")).tint(tint(RUN_STEP_TINT, runnable)),
+                hover(tr!("schedule-run-period-note")),
             )
             .button_side(side)
             .id_salt(format!("{salt}_run_period")),
         )
+        .on_disabled_hover_text(held_note(tr!("schedule-run-period-note")))
         .clicked()
     {
         commands.push(UiCommand::RunSchedulePeriod);
     }
     if ui
         .add_enabled(
-            startable,
+            runnable,
             ToolbarButton::new(
-                egui::Image::new(crate::ui::unthemed_icon!("play_all.svg")).tint(tint(RUN_ALL_TINT, startable)),
-                tr!("schedule-run-whole-note"),
+                egui::Image::new(crate::ui::unthemed_icon!("play_all.svg")).tint(tint(RUN_ALL_TINT, runnable)),
+                hover(tr!("schedule-run-whole-note")),
             )
             .button_side(side)
             .id_salt(format!("{salt}_run_whole")),
         )
+        .on_disabled_hover_text(held_note(tr!("schedule-run-whole-note")))
         .clicked()
     {
         commands.push(UiCommand::RunAllSchedulePeriods);
@@ -526,22 +545,22 @@ pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &mut EditorSt
             startable,
             ToolbarButton::new(
                 egui::Image::new(crate::ui::unthemed_icon!("improve.svg")).tint(tint(IMPROVE_TINT, startable || editor.schedule_run_improve)),
-                if editor.schedule_run_improve {
+                hover(if editor.schedule_run_improve {
                     tr!("schedule-improving-note")
                 } else {
                     tr!("schedule-improve-note")
-                },
+                }),
             )
             .button_side(side)
             .selected(editor.schedule_run_improve)
             .id_salt(format!("{salt}_improve")),
         )
         // Held while any run is working, when it still says what that is.
-        .on_disabled_hover_text(if editor.schedule_run_improve {
+        .on_disabled_hover_text(hover(if editor.schedule_run_improve {
             tr!("schedule-improving-note")
         } else {
             tr!("schedule-improve-note")
-        })
+        }))
         .clicked()
     {
         commands.push(UiCommand::ImproveSchedule);
@@ -551,15 +570,16 @@ pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &mut EditorSt
             working,
             ToolbarButton::new(
                 egui::Image::new(crate::ui::unthemed_icon!("stop.svg")).tint(tint(CANCEL_TINT, working)),
-                if editor.schedule_run_improving {
+                hover(if editor.schedule_run_improving {
                     tr!("schedule-run-stop-early-note")
                 } else {
                     tr!("schedule-run-cancel-note")
-                },
+                }),
             )
             .button_side(side)
             .id_salt(format!("{salt}_run_cancel")),
         )
+        .on_disabled_hover_text(hover(tr!("schedule-run-cancel-note")))
         .clicked()
     {
         // Stopping Improve keeps the best schedule it has found.
@@ -570,41 +590,17 @@ pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &mut EditorSt
         });
     }
     ui.spacing_mut().item_spacing.x = spacing;
-    ui.add_space(6.0);
     ui.add_space(8.0);
-    let mut auto = editor.auto_run();
+    // The same one Auto Setup shows: Solids, Haulage and the schedule kept
+    // up to date together.
+    let mut auto = editor.auto_run().all();
     if ui
-        .add(crate::ui::widgets::menu::SlidingToggle::new(&mut auto.schedule).label(tr!("schedule-auto")))
-        .on_hover_text(tr!("schedule-auto-note"))
+        .add(crate::ui::widgets::menu::SlidingToggle::new(&mut auto).label(tr!("planning-auto")))
+        .on_hover_text(tr!("setup-auto-note"))
         .changed()
     {
-        commands.push(UiCommand::SetAutoRun(auto));
+        commands.push(UiCommand::SetAutoRun(crate::model::schedule::AutoRun::every(auto)));
     }
-}
-
-/// The one status line the run controls carry, with the detail behind it on
-/// hover: value, bound and gap, timings, and the approximations the result
-/// rests on. Shared by the Gantt and the Calendar.
-pub(crate) fn draw_run_status(ui: &mut egui::Ui, editor: &EditorState) {
-    if editor.schedule_run_status.is_empty() {
-        return;
-    }
-    let text = egui::RichText::new(&editor.schedule_run_status);
-    // A result that leaves loaders waiting on blasts nobody works is a
-    // schedule, but not the one the planner meant: it reads as a warning.
-    let unworked = editor.schedule_result.as_ref().is_some_and(|schedule| schedule.report.unworked_blasts > 0);
-    let text = if (editor.schedule_run_stale && editor.schedule_result.is_none()) || unworked {
-        text.color(ui.visuals().warn_fg_color)
-    } else {
-        text.weak()
-    };
-    ui.add(egui::Label::new(text).truncate()).on_hover_ui(|ui| {
-        ui.set_max_width(520.0);
-        ui.label(&editor.schedule_run_status);
-        for line in &editor.schedule_run_details {
-            ui.add(egui::Label::new(egui::RichText::new(line).weak()).wrap());
-        }
-    });
 }
 
 /// How far the work on the timeline reaches, in elapsed seconds, or `None`
@@ -624,91 +620,43 @@ fn scheduled_extent(editor: &EditorState, plan: &crate::model::schedule::Schedul
     (end > 0.0).then_some(end)
 }
 
-fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, commands: &mut Vec<UiCommand>) {
-    let mut child = ui.new_child(egui::UiBuilder::new().id_salt("gantt_toolbar").max_rect(rect));
-    child.set_clip_rect(child.clip_rect().intersect(rect));
-    child.horizontal_centered(|ui| {
-        let side = ui.available_height();
-        // Three runs, parted by hairlines: running the schedule, moving
-        // along it, and what is shown beside it.
-        draw_calculation_controls(ui, editor, "gantt", commands);
-        divider(ui, side, TOOLBAR_DIVIDER_GAP);
-        ui.spacing_mut().item_spacing.x = 0.0;
-        let tool = |ui: &mut egui::Ui, icon: egui::ImageSource<'static>, tooltip: String, salt: &str, selected: bool| {
-            ui.add(
-                ToolbarButton::new(egui::Image::new(icon), tooltip)
-                    .button_side(side)
-                    .id_salt(("gantt_tool", salt))
-                    .selected(selected),
-            )
-        };
-        if tool(ui, crate::ui::unthemed_icon!("zoom_out.svg"), tr!("gantt-zoom-out"), "zoom_out", false).clicked() {
-            editor.gantt.zoom_at(1.0 / ZOOM_STEP, 0.5);
-        }
-        if tool(ui, crate::ui::unthemed_icon!("zoom_in.svg"), tr!("gantt-zoom-in"), "zoom_in", false).clicked() {
-            editor.gantt.zoom_at(ZOOM_STEP, 0.5);
-        }
-        if tool(ui, crate::ui::unthemed_icon!("zoom_to_extents.svg"), tr!("gantt-reset-view-help"), "fit", false).clicked() {
-            // Reset to what is there, not to a fixed week: a sequence running
-            // to day 45 is reset to day 45.
-            let extent = scheduled_extent(editor, plan);
-            editor.gantt.reset_to(extent);
-        }
-        divider(ui, side, TOOLBAR_DIVIDER_GAP);
-        let open = editor.gantt_inspector_open;
-        if tool(ui, crate::ui::unthemed_icon!("side_inspector.svg"), tr!("gantt-inspector-help"), "inspector", open).clicked() {
-            editor.gantt_inspector_open = !open;
-        }
-        ui.add_space(12.0);
-        ui.label(
-            egui::RichText::new(tr!(
-                "gantt-range",
-                from = instant_label(editor.gantt.start_seconds),
-                to = instant_label(editor.gantt.end_seconds())
-            ))
-            .weak(),
-        );
-        // One status names what the calculated marks mean. When it names a
-        // blocker, the adjacent action opens the exact setup step that owns
-        // the repair.
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
-            if let Some(target) = editor.schedule_run_repair {
-                let label = match target {
-                    ScheduleRepairTarget::Schedule(_) => tr!("schedule-open-setup"),
-                    ScheduleRepairTarget::Solids(_) => tr!("schedule-open-solids-setup"),
-                };
-                if ui.add(MenuButton::new(label).primary()).clicked() {
-                    match target {
-                        ScheduleRepairTarget::Schedule(step) => editor.open_schedule_step(step),
-                        ScheduleRepairTarget::Solids(step) => editor.open_solids_step(step),
-                    }
-                }
-            }
-            draw_run_status(ui, editor);
-        });
-    });
+/// Where the Gantt's and the Charts' timeline is looking, in the viewport
+/// bar's centre while either page is open.
+pub(crate) fn draw_timeline_range(ui: &mut egui::Ui, editor: &EditorState) {
+    ui.label(
+        egui::RichText::new(tr!(
+            "gantt-range",
+            from = instant_label(editor.gantt.start_seconds),
+            to = instant_label(editor.gantt.end_seconds())
+        ))
+        .weak(),
+    );
 }
 
-/// A schedule page's toolbar, as an island of its own across the top: the
-/// same height as Setup's run controls, so moving between the pages leaves
-/// the controls where they were.
-pub(super) fn toolbar_island(ui: &mut egui::Ui, id: &'static str, layout: &mut PlanningLayout, content: impl FnOnce(&mut egui::Ui, egui::Rect)) {
-    let rect = egui::Panel::top(id)
-        .resizable(false)
-        .show_separator_line(false)
-        .exact_size(super::toolbars::bottom_toolbar_height())
-        .frame(chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
-        .show(ui, |ui| content(ui, ui.available_rect_before_wrap().shrink2(egui::vec2(4.0, 0.0))))
-        .response
-        .rect;
-    layout.regions.push(rect);
+/// Zoom out, zoom in, and fit the timeline to the scheduled work, at the
+/// viewport bar's right end. Added right to left, so they read in that order.
+pub(crate) fn draw_timeline_zoom(ui: &mut egui::Ui, editor: &mut EditorState, plan: &SchedulePlan, side: f32) {
+    let tool = |ui: &mut egui::Ui, icon: egui::ImageSource<'static>, tooltip: String, salt: &str| {
+        ui.add(ToolbarButton::new(egui::Image::new(icon), tooltip).button_side(side).id_salt(("gantt_tool", salt)))
+    };
+    if tool(ui, crate::ui::unthemed_icon!("zoom_to_extents.svg"), tr!("gantt-reset-view-help"), "fit").clicked() {
+        // Reset to what is there, not to a fixed week: a sequence running to
+        // day 45 is reset to day 45.
+        let extent = scheduled_extent(editor, plan);
+        editor.gantt.reset_to(extent);
+    }
+    if tool(ui, crate::ui::unthemed_icon!("zoom_in.svg"), tr!("gantt-zoom-in"), "zoom_in").clicked() {
+        editor.gantt.zoom_at(ZOOM_STEP, 0.5);
+    }
+    if tool(ui, crate::ui::unthemed_icon!("zoom_out.svg"), tr!("gantt-zoom-out"), "zoom_out").clicked() {
+        editor.gantt.zoom_at(1.0 / ZOOM_STEP, 0.5);
+    }
 }
 
-/// A page laid out like the Gantt: the toolbar island across the top, a
-/// timeline canvas drawn by `draw` in the island under it, and the Inspector
-/// in an island of its own beside it while it is open. Returns the regions
-/// and seams it claimed, for the caller to round off.
+/// A page laid out like the Gantt: a timeline canvas drawn by `draw` in an
+/// island, with the Inspector in an island of its own beside it. Its run
+/// controls and its timeline's navigation are in the viewport bar. Returns
+/// the regions and seams it claimed, for the caller to round off.
 pub(super) fn draw_timeline_page(
     ui: &mut egui::Ui,
     editor: &mut EditorState,
@@ -718,13 +666,10 @@ pub(super) fn draw_timeline_page(
     draw: impl FnOnce(&mut egui::Ui, egui::Rect, &mut EditorState, &[DestinationView], &mut Vec<UiCommand>),
 ) -> PlanningLayout {
     let mut layout = PlanningLayout::default();
-    toolbar_island(ui, "schedule_timeline_toolbar", &mut layout, |ui, rect| {
-        draw_toolbar(ui, rect, editor, plan, commands);
-    });
     // Names are resolved here, at draw time, by stable id: a rename relabels
     // a calculated span without recalculating it.
     let destinations = crate::model::schedule::destinations::available(document.solids(), plan.routing());
-    if editor.gantt_inspector_open {
+    {
         let fields: Vec<_> = document.reserve_fields().iter().map(|field| (field.id, field.name.clone())).collect();
         let island = Island::new("schedule_inspector_island", Side::Right)
             .default_width(super::schedule_inspector::INSPECTOR_WIDTH)

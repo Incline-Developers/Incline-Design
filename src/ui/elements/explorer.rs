@@ -765,7 +765,7 @@ fn heading(ui: &mut egui::Ui, label: &str) {
 
 /// What the explorer column claimed.
 pub(crate) struct ExplorerLayout {
-    /// The regions to round off: the run controls, the step list and the tree.
+    /// The regions to round off: the step list and the tree.
     pub(crate) regions: Vec<egui::Rect>,
     /// The seam down the column's side, which drags it narrower, and the seam
     /// above each pane inside it that can be resized.
@@ -822,37 +822,10 @@ pub(crate) fn draw_explorer(
                 egui::Rect::NOTHING
             };
 
-            // Setup's controls drive the open step's group; Reserves shows
-            // what the Solids steps produced, so it carries theirs.
-            // Animate shows the schedule it plays, so it carries the Gantt's
-            // run controls, in the same place Setup carries its own.
-            let animate = editor.is_schedule_animation();
-            let show_run_controls = solids_view || setup || animate;
-            let run_controls = if show_run_controls {
-                egui::Panel::top("planning_run_controls")
-                    .resizable(false)
-                    .show_separator_line(false)
-                    .exact_size(super::toolbars::bottom_toolbar_height())
-                    .frame(crate::ui::chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
-                    .show(ui, |ui| {
-                        if animate {
-                            ui.horizontal_centered(|ui| super::schedule_gantt::draw_calculation_controls(ui, editor, "animate", commands));
-                        } else if solids_view {
-                            super::planning_setup::draw_solids_run_controls(ui, editor, commands);
-                        } else {
-                            super::planning_setup::draw_setup_run_controls(ui, editor, commands);
-                        }
-                    })
-                    .response
-                    .rect
-            } else {
-                egui::Rect::NOTHING
-            };
-
             // Blasting, Dig Strips and the Road Network frame the viewport, so
             // the step tree shares the column with what they work on: the
             // benches a cut divides, or the ground roads are drawn over. Each
-            // is a pane of its own, halving whatever the run controls left.
+            // is a pane of its own, halving the column between them.
             let steps = if viewport_step {
                 egui::Panel::top(CUT_STEPS_PANEL_ID)
                     .resizable(true)
@@ -970,7 +943,7 @@ pub(crate) fn draw_explorer(
                 .rect;
             // The panes are panels of this column, so their ids derive from its scope.
             (
-                vec![products, run_controls, steps, animation_solids, list, tree],
+                vec![products, steps, animation_solids, list, tree],
                 [steps, animation_solids, list, products],
                 ui.scope_id(),
             )

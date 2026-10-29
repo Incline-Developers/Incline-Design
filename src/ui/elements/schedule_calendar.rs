@@ -323,12 +323,9 @@ pub(crate) fn draw_details(
     };
     let destinations = destination_rows(plan, document);
     editor.schedule_calendar.visible_days = editor.schedule_calendar.visible_days.max(required_days(plan, figures.result));
-    // The same islands as the Gantt: its toolbar across the top, and the
-    // grid in the island under it.
+    // The grid in an island of its own; its run controls and its report are
+    // in the viewport bar.
     let mut layout = super::planning_setup::PlanningLayout::default();
-    super::schedule_gantt::toolbar_island(ui, "schedule_calendar_toolbar", &mut layout, |ui, rect| {
-        draw_toolbar(ui, rect, editor, plan, document, commands);
-    });
     let rect = egui::CentralPanel::default()
         .frame(chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
         .show(ui, |ui| {
@@ -347,36 +344,9 @@ pub(crate) fn draw_details(
     layout
 }
 
-/// The Calendar's own toolbar: the schedule run controls, and whatever the
-/// held result or the last edit has to say.
-///
-/// Days are reached by scrolling rather than by asking for them: the extent
-/// already covers the authored overrides, the sequenced bars and the
-/// calculated interval, so a button that added a fortnight of empty columns
-/// and a box that jumped to one were two ways of saying the same thing the
-/// scroll bar says.
-fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, document: &Document, commands: &mut Vec<UiCommand>) {
-    let mut child = ui.new_child(egui::UiBuilder::new().id_salt("schedule_calendar_toolbar").max_rect(rect));
-    child.set_clip_rect(child.clip_rect().intersect(rect));
-    child.horizontal_centered(|ui| {
-        let side = ui.available_height();
-        super::schedule_gantt::draw_calculation_controls(ui, editor, "calendar", commands);
-        crate::ui::widgets::toolbar::divider(ui, side, 6.0);
-        draw_report_menu(ui, editor, plan, document, commands);
-        // Said once, here: the alternative is repeating it in every
-        // calculated row. The same status the Gantt shows, with the same
-        // detail behind it.
-        ui.add_space(8.0);
-        super::schedule_gantt::draw_run_status(ui, editor);
-        if let Some(error) = &editor.schedule_calendar.error {
-            ui.colored_label(ui.visuals().error_fg_color, error);
-        }
-    });
-}
-
 /// The report export: how to group the rows, then copy or save. Built from
 /// the held result when asked, never per frame.
-fn draw_report_menu(ui: &mut egui::Ui, editor: &mut EditorState, plan: &SchedulePlan, document: &Document, commands: &mut Vec<UiCommand>) {
+pub(crate) fn draw_report_menu(ui: &mut egui::Ui, editor: &mut EditorState, plan: &SchedulePlan, document: &Document, commands: &mut Vec<UiCommand>) {
     use super::schedule_report::{ReportGrouping, ReportNames, build, to_text};
     let ready = editor.schedule_result.is_some();
     let button = ui

@@ -73,7 +73,7 @@ pub(crate) fn draw_inspector(
 
     let hour = editor.schedule_time_h.max(0.0);
     ui.horizontal(|ui| {
-        ui.label(bold(&instant_label(hour * GanttView::HOUR)).size(16.0));
+        ui.label(bold(&instant_label(hour * GanttView::HOUR)).size(16.0)).on_hover_text(tr!("gantt-inspector-help"));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             use crate::ui::widgets::transport::{Transport, transport_button};

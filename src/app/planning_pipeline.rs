@@ -582,13 +582,6 @@ impl crate::app::App<'_> {
             }
         });
         let running = pipeline.is_running();
-        // What a scheduler would get if it asked right now, shown where the
-        // run controls are: the readiness gate is the point of the pipeline,
-        // so it should not be invisible until something consumes it.
-        let snapshot = match self.planning_snapshot() {
-            Ok(snapshot) => tr!("planning-snapshot-ready", blocks = snapshot.blocks.len().to_string()),
-            Err(reason) => reason.describe(),
-        };
         // Run Step moves the list on to the next step once the step it ran
         // succeeds, so setup reads top to bottom. Only while the user is still
         // looking at that step: having picked another, they have moved on.
@@ -607,10 +600,9 @@ impl crate::app::App<'_> {
                 }
             }
         }
-        if self.editor.planning_stages != views || self.editor.planning_run_active != running || self.editor.planning_snapshot_status != snapshot {
+        if self.editor.planning_stages != views || self.editor.planning_run_active != running {
             self.editor.planning_stages = views;
             self.editor.planning_run_active = running;
-            self.editor.planning_snapshot_status = snapshot;
             self.redraw_requested = true;
         }
     }
@@ -786,16 +778,14 @@ impl crate::app::App<'_> {
     ///
     /// Like the schedule's Auto: at most once for one set of inputs, so a step
     /// that fails, or a run the user cancelled, is not retried until something
-    /// changes. A project with no solids has nothing to plan, and is left with
-    /// its steps not run rather than failed.
+    /// changes. It runs what Run All runs, so the two leave the steps alike.
     pub(crate) fn auto_run_planning(&mut self) {
         self.planning_auto_deadline = None;
         let Some(pipeline) = self.planning_pipeline.as_ref() else {
             self.planning_auto_settle = None;
             return;
         };
-        let has_solids = self.workspace.active_document().is_some_and(|document| !document.solids().is_empty());
-        if !self.editor.planning_auto_run || !has_solids || pipeline.is_running() {
+        if !self.editor.planning_auto_run || pipeline.is_running() {
             self.planning_auto_settle = None;
             // Switched off, edits can leave steps stale over inputs Auto has
             // already seen; switching it back on has to look again.

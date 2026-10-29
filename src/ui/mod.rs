@@ -716,7 +716,7 @@ fn draw_ui(
 
     // The bar spans the window, so it is claimed before the explorer: the
     // column, the tools and the scene all start below it.
-    let viewport_bar_rect = elements::viewport_bar::draw_viewport_bar(root_ui, editor, project, commands);
+    let viewport_bar_rect = elements::viewport_bar::draw_viewport_bar(root_ui, editor, project, document, commands);
 
     if editor.is_planning_setup() {
         let explorer = if editor.is_schedule_pane() {

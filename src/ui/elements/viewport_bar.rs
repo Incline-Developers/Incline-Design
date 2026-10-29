@@ -40,6 +40,8 @@ use crate::{
 const MENU_ROW_INSET: f32 = 6.0;
 /// Clear space kept between the centre cluster and the two beside it.
 const CENTRE_CLEARANCE: f32 = 16.0;
+/// Space either side of Planning's tab strip in the bar.
+const PLANNING_GAP: f32 = 8.0;
 /// Clear space either side of the hairline parting the view controls every
 /// workspace carries from the ones the open workspace adds - see [`divider`].
 const DIVIDER_GAP: f32 = 7.0;
@@ -66,7 +68,13 @@ const SHIFT_MODIFIER: &str = "Shift+";
 ///
 /// Its visible surface uses [`TOOL_CELL_SIZE`], the same thickness as the left
 /// and bottom toolbars; the panel claims its chrome margins around that.
-pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) -> egui::Rect {
+pub(crate) fn draw_viewport_bar(
+    ui: &mut egui::Ui,
+    editor: &mut EditorState,
+    project: &UiProjectView,
+    document: &crate::model::Document,
+    commands: &mut Vec<UiCommand>,
+) -> egui::Rect {
     let claimed = TOOL_CELL_SIZE + 2.0 * crate::ui::chrome::margin();
     egui::Panel::top("viewport_bar")
         .resizable(false)
@@ -96,8 +104,23 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
                     let left = super::cluster(ui, strip, egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         draw_project_actions(ui, editor, project, commands, side);
                         if editor.active_workspace == Workspace::Planning {
-                            divider(ui, side);
+                            // Gaps rather than hairlines: the tab strip is a
+                            // track of its own, so it already reads as apart
+                            // from the buttons either side of it.
+                            ui.add_space(PLANNING_GAP);
                             draw_planning_views(ui, editor, commands);
+                            // Every Planning page is run from here, after its
+                            // tab: Setup the open step's group, Reserves the
+                            // Solids steps it shows, and the schedule's pages
+                            // the schedule.
+                            ui.add_space(PLANNING_GAP);
+                            if editor.is_planning_view(crate::ui::state::PlanningView::Setup) {
+                                super::planning_setup::draw_setup_run_controls(ui, editor, commands);
+                            } else if editor.is_solids_view() {
+                                super::planning_setup::draw_solids_run_controls(ui, editor, commands);
+                            } else {
+                                super::schedule_gantt::draw_calculation_controls(ui, editor, &project.schedule, "viewport_bar", commands);
+                            }
                         } else {
                             main_menu::draw_workspace_menus(ui, editor, project, commands, (side - MENU_ROW_INSET).max(1.0));
                         }
@@ -105,6 +128,11 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
                     let right = super::cluster(ui, strip, egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if !editor.is_planning_setup() {
                             draw_view_tools(ui, editor, project, commands, side);
+                        }
+                        // The timeline's zoom, at the end the camera tools
+                        // take elsewhere.
+                        if editor.is_schedule_gantt() || editor.is_schedule_charts() {
+                            super::schedule_gantt::draw_timeline_zoom(ui, editor, &project.schedule, side);
                         }
                     });
 
@@ -117,7 +145,7 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
                     // Keyed by workspace: the runs are different widths, and
                     // a stale one would place the incoming run off centre for
                     // a frame after every tab switch.
-                    let width_id = ui.make_persistent_id(("viewport_bar_centre_width", editor.active_workspace.label()));
+                    let width_id = ui.make_persistent_id(("viewport_bar_centre_width", editor.active_workspace.label(), editor.planning_view));
                     let width: f32 = ui.data(|data| data.get_temp(width_id)).unwrap_or(CENTRE_WIDTH_GUESS);
                     if let Some(band) = centre_band(strip, left, right) {
                         let left_edge = (strip.center().x - width / 2.0).clamp(band.left(), (band.right() - width).max(band.left()));
@@ -126,7 +154,7 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
                         // instead of squeezing what is in it.
                         let run = egui::Rect::from_min_max(egui::pos2(left_edge, band.top()), band.max);
                         let drawn = super::cluster(ui, run, egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            draw_centre_settings(ui, editor, project);
+                            draw_centre_settings(ui, editor, project, document, commands);
                         });
                         ui.data_mut(|data| data.insert_temp(width_id, drawn.width()));
                     }
@@ -232,7 +260,22 @@ fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
 
 /// The centre run: every workspace gets the working elevation, alongside any
 /// settings belonging specifically to that workspace.
-fn draw_centre_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView) {
+fn draw_centre_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, document: &crate::model::Document, commands: &mut Vec<UiCommand>) {
+    // The Gantt and the Charts share one timeline: where it is looking. The
+    // Calendar's report goes here, with why the grid refused an edit beside
+    // it when it has.
+    if editor.is_schedule_gantt() || editor.is_schedule_charts() {
+        super::schedule_gantt::draw_timeline_range(ui, editor);
+        return;
+    }
+    if editor.is_schedule_calendar() {
+        super::schedule_calendar::draw_report_menu(ui, editor, &project.schedule, document, commands);
+        if let Some(error) = editor.schedule_calendar.error.clone() {
+            ui.add_space(CENTRE_ITEM_GAP);
+            ui.add(egui::Label::new(egui::RichText::new(error).color(ui.visuals().error_fg_color)));
+        }
+        return;
+    }
     if editor.is_planning_setup() {
         return;
     }

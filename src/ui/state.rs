@@ -2408,8 +2408,6 @@ pub(crate) struct EditorState {
     pub(crate) planning_stages: [PlanningStageView; SolidsStep::ALL.len()],
     /// Whether a run is queued or in flight, so the controls can offer Cancel.
     pub(crate) planning_run_active: bool,
-    /// What a scheduler asking for a snapshot right now would be told.
-    pub(crate) planning_snapshot_status: String,
     pub(crate) solid_view_reserves: Option<crate::model::solid_reserves::ReserveTotals>,
     pub(crate) solid_view_reserve_status: Option<String>,
     /// Why each absent reserve field is absent, so every dash in the figures
@@ -3184,8 +3182,6 @@ pub(crate) struct EditorState {
     pub(crate) new_destination_kind: crate::model::schedule::DestinationKind,
     /// Where the Gantt is looking: see [`GanttView`].
     pub(crate) gantt: GanttView,
-    /// Whether the Inspector is open beside the Gantt and the Charts.
-    pub(crate) gantt_inspector_open: bool,
     /// The bar height a drag on a row's edge in the Gantt's name column is
     /// showing, until it is let go and written to the plan.
     pub(crate) gantt_bar_height_drag: Option<f32>,
@@ -4116,7 +4112,6 @@ impl EditorState {
             solids_tree_reveal: false,
             planning_stages: Default::default(),
             planning_run_active: false,
-            planning_snapshot_status: String::new(),
             solid_view_reserves: None,
             solid_view_reserve_issues: Default::default(),
             solid_view_coverage: None,
@@ -4504,7 +4499,6 @@ impl EditorState {
             new_destination_name: String::new(),
             new_destination_kind: crate::model::schedule::DestinationKind::Stockpile,
             gantt: GanttView::default(),
-            gantt_inspector_open: true,
             gantt_bar_height_drag: None,
             schedule_charts_scroll: 0.0,
             schedule_report_grouping: Default::default(),
