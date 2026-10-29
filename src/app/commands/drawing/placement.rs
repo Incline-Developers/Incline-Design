@@ -348,6 +348,10 @@ impl<'a> App<'a> {
     /// A two-vertex stroke can only be an open polyline, so it commits directly.
     /// For MakeLine, clears the chain anchor so the next click starts a new string.
     pub(crate) fn try_finish_tool(&mut self) {
+        if self.editor.haul_draw && self.editor.is_haulage_page() {
+            self.finish_haul_road();
+            return;
+        }
         if self.editor.active_tool == ActiveTool::MakePoly && self.redraw_holds_stroke() {
             return;
         }

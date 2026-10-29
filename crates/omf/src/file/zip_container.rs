@@ -9,9 +9,8 @@ use zip::{
     write::{FullFileOptions, ZipWriter},
 };
 
-use crate::{FORMAT_NAME, error::Error};
-
 use super::{ReadAt, SubFile};
+use crate::{FORMAT_NAME, error::Error};
 
 pub(crate) const INDEX_NAME: &str = "index.json.gz";
 pub(crate) const PARQUET_EXT: &str = ".parquet";
@@ -53,12 +52,8 @@ impl<W: Write + Seek> Builder<W> {
             FileType::Png => format!("{}{PNG_EXT}", self.id()),
             FileType::Jpeg => format!("{}{JPEG_EXT}", self.id()),
         };
-        self.zip_writer.start_file(
-            name.clone(),
-            FullFileOptions::default()
-                .large_file(true)
-                .compression_method(zip::CompressionMethod::Stored),
-        )?;
+        self.zip_writer
+            .start_file(name.clone(), FullFileOptions::default().large_file(true).compression_method(zip::CompressionMethod::Stored))?;
         self.filenames.push(name.clone());
         Ok(SubFileWrite {
             name,
@@ -113,9 +108,7 @@ impl<'a, R: Read> TryFrom<ZipFile<'a, R>> for FileSpan {
 
     fn try_from(f: ZipFile<'a, R>) -> Result<Self, Error> {
         Ok(Self {
-            offset: f
-                .data_start()
-                .ok_or_else(|| Error::ZipError("member data offset is unavailable".into()))?,
+            offset: f.data_start().ok_or_else(|| Error::ZipError("member data offset is unavailable".into()))?,
             size: f.compressed_size(),
         })
     }
@@ -141,11 +134,9 @@ impl<R: ReadAt> Archive<R> {
         let mut zip_archive = ZipArchive::new(file.sub_file(0, file.len())?)?;
         let members: HashMap<_, _> = zip_archive
             .file_names()
-            .map(|name| {
-                let index = zip_archive.index_for_name(name).expect("listed member");
-                (name.to_owned(), (index, OnceLock::new()))
-            })
-            .collect();
+            .enumerate()
+            .map(|(index, name)| Ok((name?.into_owned(), (index, OnceLock::new()))))
+            .collect::<Result<_, zip::result::ZipError>>()?;
         let Some((index, _)) = members.get(INDEX_NAME) else {
             return Err(Error::ZipMemberMissing(INDEX_NAME.to_owned()));
         };
@@ -153,9 +144,7 @@ impl<R: ReadAt> Archive<R> {
         let index_span = OnceLock::new();
         _ = index_span.set(member_span(&mut zip_archive, *index)?);
         let Some((version, pre_release)) = get_version(zip_archive.comment()) else {
-            return Err(Error::NotOmf(
-                String::from_utf8_lossy(zip_archive.comment()).into_owned(),
-            ));
+            return Err(Error::NotOmf(String::from_utf8_lossy(zip_archive.comment()).into_owned()));
         };
         let mut members = members;
         if let Some(entry) = members.get_mut(INDEX_NAME) {
@@ -179,17 +168,11 @@ impl<R: ReadAt> Archive<R> {
     }
 
     pub fn span(&self, name: &str) -> Result<FileSpan, Error> {
-        let (index, span) = self
-            .members
-            .get(name)
-            .ok_or_else(|| Error::ZipMemberMissing(name.to_owned()))?;
+        let (index, span) = self.members.get(name).ok_or_else(|| Error::ZipMemberMissing(name.to_owned()))?;
         if let Some(span) = span.get() {
             return Ok(*span);
         }
-        let mut zip = self
-            .zip
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut zip = self.zip.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let found = member_span(&mut zip, *index)?;
         Ok(*span.get_or_init(|| found))
     }
@@ -211,10 +194,7 @@ fn member_span<R: Read + Seek>(zip: &mut ZipArchive<R>, index: usize) -> Result<
 
 fn get_version(comment_bytes: &[u8]) -> Option<([u32; 2], Option<String>)> {
     let comment = std::str::from_utf8(comment_bytes).ok()?;
-    let mut dash_parts = comment
-        .strip_prefix(FORMAT_NAME)?
-        .strip_prefix(' ')?
-        .split('-');
+    let mut dash_parts = comment.strip_prefix(FORMAT_NAME)?.strip_prefix(' ')?.split('-');
     let main = dash_parts.next()?;
     let pre_release = dash_parts.next().map(ToOwned::to_owned);
     let mut version_parts = main.split('.');
@@ -232,14 +212,8 @@ mod tests {
 
     #[test]
     fn versions() {
-        assert_eq!(
-            get_version("Open Mining Format 2.0".as_bytes()),
-            Some(([2, 0], None))
-        );
-        assert_eq!(
-            get_version("Open Mining Format 2.0-alpha.1".as_bytes()),
-            Some(([2, 0], Some("alpha.1".to_string())))
-        );
+        assert_eq!(get_version("Open Mining Format 2.0".as_bytes()), Some(([2, 0], None)));
+        assert_eq!(get_version("Open Mining Format 2.0-alpha.1".as_bytes()), Some(([2, 0], Some("alpha.1".to_string()))));
         assert_eq!(get_version("Something else 1.0".as_bytes()), None);
         assert_eq!(get_version(b"Something not UTF-8 \xff"), None);
     }

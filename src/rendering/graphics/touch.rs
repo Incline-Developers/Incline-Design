@@ -90,6 +90,9 @@ impl Graphics<'_> {
     /// `None` routes the contact to egui. Captured viewport contacts return
     /// `Some`, with true requesting a fresh world-space orbit anchor.
     pub(crate) fn touch_input(&mut self, touch: &Touch) -> Option<bool> {
+        if self.camera_lock.is_some() {
+            return None;
+        }
         let px = self.window_to_viewport_px((touch.location.x as f32, touch.location.y as f32));
         let screen = self.screen_size();
         let over_overlay = self.gui.overlay_at_physical_position(touch.location.x as f32, touch.location.y as f32);

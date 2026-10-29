@@ -22,7 +22,7 @@ use crate::{
     ui::{
         themed_icon,
         widgets::{
-            data_grid::group_colour,
+            editable_grid::group_colour,
             menu::{self, DragableMenu, MenuButton},
             toolbar::ToolbarButton,
         },

@@ -1,0 +1,14 @@
+[package]
+name = "minlp"
+version = "0.1.0"
+edition = "2024"
+description = "A Rust port of the SCIP mixed-integer nonlinear programming solver"
+license = "Apache-2.0"
+repository = "https://github.com/Incline-Developers/Incline-Design"
+
+[dependencies]
+solver = { path = "../solver" }
+log = "0.4"
+web-time = "1.1.0"
+# `erf`, which std lacks, in Rust rather than from the C library.
+libm = "0.2.16"
