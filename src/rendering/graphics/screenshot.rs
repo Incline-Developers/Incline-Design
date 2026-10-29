@@ -115,8 +115,8 @@ impl<'a> Graphics<'a> {
 
         #[cfg(target_arch = "wasm32")]
         {
-            let buffer = std::sync::Arc::clone(&capture.readback.buffer);
-            let callback_buffer = std::sync::Arc::clone(&buffer);
+            let buffer = Shared::clone(&capture.readback.buffer);
+            let callback_buffer = Shared::clone(&buffer);
             buffer.map_async(wgpu::MapMode::Read, .., move |result| {
                 if let Err(error) = result {
                     userspace_warn!("{}", crate::i18n::tr!("screenshot-could-not-map-viewport-screenshot", error = error.to_string()));

@@ -446,23 +446,11 @@ impl TriangleBvh {
         }
     }
 
-    /// Return triangle indices whose XY bounds overlap the supplied rectangle.
-    pub(crate) fn xy_bounds_candidate_indices(&self, _mesh: &mesh_data::Triangulation, min: DVec2, max: DVec2) -> Vec<usize> {
-        let mut result = Vec::new();
-        self.for_each_xy_bounds_candidate_index(min, max, |index| result.push(index));
-        result
-    }
-
     /// Visit triangle indices whose XY bounds overlap the supplied rectangle.
     ///
-    /// This is the allocation-free version used by clipping paths that run the
-    /// query thousands of times. It uses per-triangle XY bounds cached when the
-    /// BVH is built, so leaf filtering does not have to refetch vertices.
-    pub(crate) fn for_each_xy_bounds_candidate_index(&self, min: DVec2, max: DVec2, visit: impl FnMut(usize)) {
-        let mut stack = Vec::new();
-        self.for_each_xy_bounds_candidate_index_with_stack(min, max, &mut stack, visit);
-    }
-
+    /// Allocation-free: the caller's `stack` is reused across the thousands of
+    /// queries a clip runs. It uses per-triangle XY bounds cached when the BVH
+    /// is built, so leaf filtering does not have to refetch vertices.
     pub(crate) fn for_each_xy_bounds_candidate_index_with_stack(&self, min: DVec2, max: DVec2, stack: &mut Vec<usize>, mut visit: impl FnMut(usize)) {
         if self.nodes.is_empty() {
             return;

@@ -416,6 +416,7 @@ fn build_chunk<T: RenderPoint>(keys: &[MortonPointIndex], chunk: &[T], wrap: fn(
         |point| Vec3::from_array(point.pos()).as_dvec3() - chunk_origin,
         &[],
         chunk_origin,
+        chunk_origin,
         (bounds_max - bounds_min).as_dvec3(),
     );
     let bounds = OrientedBox {

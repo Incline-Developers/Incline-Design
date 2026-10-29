@@ -1,0 +1,8 @@
+minlp
+Copyright 2026 Leo Timmins
+
+This crate is a Rust port of SCIP 10.0.2 (https://scipopt.org), the
+Solving Constraint Integer Programs framework, licensed under the Apache
+License, Version 2.0.
+
+  Copyright 2002-2025 Zuse Institute Berlin (ZIB)

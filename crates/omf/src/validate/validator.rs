@@ -6,12 +6,8 @@ use std::{
     rc::Rc,
 };
 
-use crate::{
-    Attribute, AttributeData, Geometry, Location, SubblockMode, Vector3, array,
-    colormap::NumberRange,
-};
-
 use super::{Problems, Reason};
+use crate::{Attribute, AttributeData, Geometry, Location, SubblockMode, Vector3, array, colormap::NumberRange};
 
 pub trait Validate {
     #[doc(hidden)]
@@ -40,11 +36,7 @@ impl<T: Validate> Validate for Option<T> {
 
 fn normalise([x, y, z]: Vector3) -> Vector3 {
     let mag = (x * x + y * y + z * z).sqrt();
-    if mag == 0.0 {
-        [0.0, 0.0, 0.0]
-    } else {
-        [x / mag, y / mag, z / mag]
-    }
+    if mag == 0.0 { [0.0, 0.0, 0.0] } else { [x / mag, y / mag, z / mag] }
 }
 
 fn ortho(a: Vector3, b: Vector3) -> bool {
@@ -88,13 +80,7 @@ impl<'n> Validator<'n> {
         self.problems.take()
     }
 
-    fn push_full(
-        &mut self,
-        reason: Reason,
-        ty: &'static str,
-        field: Option<&'static str>,
-        name: Option<&str>,
-    ) {
+    fn push_full(&mut self, reason: Reason, ty: &'static str, field: Option<&'static str>, name: Option<&str>) {
         let mut problems = self.problems.borrow_mut();
         match self.limit {
             Some(limit) if problems.len() >= limit => {
@@ -150,46 +136,24 @@ impl<'n> Validator<'n> {
         self
     }
 
-    pub(crate) fn array(
-        mut self,
-        array: &mut array::Array<impl array::ArrayType>,
-        constraint: array::Constraint,
-        field: &'static str,
-    ) -> Self {
-        _ = array
-            .constrain(constraint)
-            .map_err(|reason| self.push(reason, Some(field)));
+    pub(crate) fn array(mut self, array: &mut array::Array<impl array::ArrayType>, constraint: array::Constraint, field: &'static str) -> Self {
+        _ = array.constrain(constraint).map_err(|reason| self.push(reason, Some(field)));
         for reason in array.run_write_checks() {
             self.push(reason, Some(field));
         }
         if let Some(filenames) = self.filenames.as_ref()
             && !filenames.contains(array.filename())
         {
-            self.push(
-                Reason::ZipMemberMissing(array.filename().to_owned()),
-                Some(field),
-            );
+            self.push(Reason::ZipMemberMissing(array.filename().to_owned()), Some(field));
         }
         self
     }
 
-    pub(crate) fn array_opt(
-        self,
-        array_opt: Option<&mut array::Array<impl array::ArrayType>>,
-        constraint: array::Constraint,
-        field: &'static str,
-    ) -> Self {
-        if let Some(array) = array_opt {
-            self.array(array, constraint, field)
-        } else {
-            self
-        }
+    pub(crate) fn array_opt(self, array_opt: Option<&mut array::Array<impl array::ArrayType>>, constraint: array::Constraint, field: &'static str) -> Self {
+        if let Some(array) = array_opt { self.array(array, constraint, field) } else { self }
     }
 
-    pub(crate) fn objs<'c>(
-        mut self,
-        objs: impl IntoIterator<Item = &'c mut (impl Validate + 'c)>,
-    ) -> Self {
+    pub(crate) fn objs<'c>(mut self, objs: impl IntoIterator<Item = &'c mut (impl Validate + 'c)>) -> Self {
         for obj in objs {
             self = self.obj(obj);
         }
@@ -204,11 +168,7 @@ impl<'n> Validator<'n> {
         self
     }
 
-    pub(crate) fn subblock_mode_and_count(
-        mut self,
-        mode: Option<SubblockMode>,
-        count: [u32; 3],
-    ) -> Self {
+    pub(crate) fn subblock_mode_and_count(mut self, mode: Option<SubblockMode>, count: [u32; 3]) -> Self {
         if mode == Some(SubblockMode::Octree) && !count.iter().all(|n| n.is_power_of_two()) {
             self.push(Reason::OctreeNotPowerOfTwo(count), None);
         }
@@ -222,11 +182,7 @@ impl<'n> Validator<'n> {
         self
     }
 
-    pub(crate) fn finite_seq(
-        mut self,
-        values: impl IntoIterator<Item = f64>,
-        field: &'static str,
-    ) -> Self {
+    pub(crate) fn finite_seq(mut self, values: impl IntoIterator<Item = f64>, field: &'static str) -> Self {
         for value in values {
             if !value.is_finite() {
                 self.push(Reason::NotFinite, Some(field));
@@ -276,12 +232,7 @@ impl<'n> Validator<'n> {
         self
     }
 
-    pub(crate) fn unique<T: Eq + Hash + Debug + Copy>(
-        mut self,
-        values: impl IntoIterator<Item = T>,
-        field: &'static str,
-        is_error: bool,
-    ) -> Self {
+    pub(crate) fn unique<T: Eq + Hash + Debug + Copy>(mut self, values: impl IntoIterator<Item = T>, field: &'static str, is_error: bool) -> Self {
         let mut seen = HashMap::new();
         for value in values {
             let count = seen.entry(value).or_insert(0_usize);
@@ -331,24 +282,13 @@ impl<'n> Validator<'n> {
         self
     }
 
-    pub(crate) fn array_size_opt(
-        self,
-        size_opt: Option<u64>,
-        required: u64,
-        field: &'static str,
-    ) -> Self {
-        if let Some(size) = size_opt {
-            self.array_size(size, required, field)
-        } else {
-            self
-        }
+    pub(crate) fn array_size_opt(self, size_opt: Option<u64>, required: u64, field: &'static str) -> Self {
+        if let Some(size) = size_opt { self.array_size(size, required, field) } else { self }
     }
 
     pub(crate) fn attrs_on_geometry(mut self, attrs: &Vec<Attribute>, geometry: &Geometry) -> Self {
         for attr in attrs {
-            if matches!(attr.data, AttributeData::ProjectedTexture { .. })
-                != (attr.location == Location::Projected)
-            {
+            if matches!(attr.data, AttributeData::ProjectedTexture { .. }) != (attr.location == Location::Projected) {
                 self.push_full(
                     Reason::AttrLocationWrongForAttr(attr.location, attr.data.type_name()),
                     "Attribute",
@@ -357,12 +297,7 @@ impl<'n> Validator<'n> {
                 );
             } else if let Some(geom_len) = geometry.location_len(attr.location) {
                 if geom_len != attr.len() {
-                    self.push_full(
-                        Reason::AttrLengthMismatch(attr.len(), geom_len),
-                        "Attribute",
-                        None,
-                        Some(&attr.name),
-                    );
+                    self.push_full(Reason::AttrLengthMismatch(attr.len(), geom_len), "Attribute", None, Some(&attr.name));
                 }
             } else {
                 self.push_full(
@@ -386,12 +321,7 @@ impl<'n> Validator<'n> {
                     Some(&attr.name),
                 );
             } else if attr.len() != n_categories {
-                self.push_full(
-                    Reason::AttrLengthMismatch(attr.len(), n_categories),
-                    "Attribute",
-                    None,
-                    Some(&attr.name),
-                );
+                self.push_full(Reason::AttrLengthMismatch(attr.len(), n_categories), "Attribute", None, Some(&attr.name));
             }
         }
         self
@@ -400,20 +330,14 @@ impl<'n> Validator<'n> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Array, PointSet, array_type};
-
     use super::*;
+    use crate::{Array, PointSet, array_type};
 
     /// Test that if you have only warnings the result is `Ok`.
     #[test]
     fn problems_into_result() {
         let mut problems = Problems::default();
-        problems.push(
-            Reason::SoftNotUnique("x".to_owned()),
-            "Test",
-            Some("field"),
-            None,
-        );
+        problems.push(Reason::SoftNotUnique("x".to_owned()), "Test", Some("field"), None);
         assert_eq!(problems.into_result().unwrap().len(), 1);
     }
 
@@ -425,11 +349,7 @@ mod tests {
         v = v.name("name");
         v.push(Reason::NotFinite, None);
         v.push(Reason::NotFinite, Some("field"));
-        let errors: Vec<_> = v
-            .finish()
-            .into_iter()
-            .map(|prob| prob.to_string())
-            .collect();
+        let errors: Vec<_> = v.finish().into_iter().map(|prob| prob.to_string()).collect();
         assert_eq!(
             errors,
             vec![
@@ -504,14 +424,8 @@ mod tests {
                 min: f64::NAN,
                 max: 100.0,
             })
-            .min_max(NumberRange::Float {
-                min: 100.0,
-                max: 100.0,
-            })
-            .min_max(NumberRange::Float {
-                min: 101.5,
-                max: 100.0,
-            }) // error
+            .min_max(NumberRange::Float { min: 100.0, max: 100.0 })
+            .min_max(NumberRange::Float { min: 101.5, max: 100.0 }) // error
             .unit_vector([1.0, 0.0, 0.0], "i")
             .unit_vector([0.5 * 2.0_f64.sqrt(), 0.5 * 2.0_f64.sqrt(), 0.0], "angled")
             .unit_vector([0.5, 0.0, 0.0], "short") // error
@@ -521,15 +435,8 @@ mod tests {
             .vectors_ortho2([1.0, 0.0, 0.0], [0.8, 0.2, 0.0]) // error
             .vectors_ortho3([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0])
             .vectors_ortho3([1.0, 0.001, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]) // error
-            .attrs_on_geometry(
-                &attrs,
-                &PointSet::new(Array::new("5.parquet".to_owned(), 100)).into(),
-            ) // 3 errors
-            .array(
-                &mut Array::<array_type::Text>::new("1.parquet".to_owned(), 10),
-                array::Constraint::String,
-                "fine",
-            )
+            .attrs_on_geometry(&attrs, &PointSet::new(Array::new("5.parquet".to_owned(), 100)).into()) // 3 errors
+            .array(&mut Array::<array_type::Text>::new("1.parquet".to_owned(), 10), array::Constraint::String, "fine")
             .array(
                 // error
                 &mut Array::<array_type::Text>::new("2.parquet".to_owned(), 10),

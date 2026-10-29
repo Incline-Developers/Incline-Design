@@ -2,20 +2,15 @@ use parquet::{
     basic::{Compression, Encoding, GzipLevel},
     errors::ParquetError,
     file::{
-        properties::{
-            DEFAULT_STATISTICS_ENABLED, EnabledStatistics, WriterProperties, WriterPropertiesPtr,
-            WriterVersion,
-        },
+        properties::{DEFAULT_STATISTICS_ENABLED, EnabledStatistics, WriterProperties, WriterPropertiesPtr, WriterVersion},
         writer::SerializedFileWriter,
     },
     schema::types::Type,
 };
-
 use rayon::prelude::*;
 
-use crate::error::Error;
-
 use super::{array_type::PqArrayType, source::*};
+use crate::error::Error;
 
 /// Highest level Deflate accepts; levels above this are an error, not just slower.
 const MAX_COMPRESSION_LEVEL: u32 = 9;
@@ -45,14 +40,9 @@ impl PqWriteOptions {
         WriterProperties::builder()
             .set_writer_version(WriterVersion::PARQUET_2_0)
             .set_compression(Compression::GZIP(
-                GzipLevel::try_new(self.compression_level.min(MAX_COMPRESSION_LEVEL))
-                    .expect("valid compression level"),
+                GzipLevel::try_new(self.compression_level.min(MAX_COMPRESSION_LEVEL)).expect("valid compression level"),
             ))
-            .set_statistics_enabled(if self.statistics {
-                DEFAULT_STATISTICS_ENABLED
-            } else {
-                EnabledStatistics::None
-            })
+            .set_statistics_enabled(if self.statistics { DEFAULT_STATISTICS_ENABLED } else { EnabledStatistics::None })
             .set_max_row_group_row_count(Some(self.row_group_size))
             // We don't need any fancy encodings, and not using them is faster.
             .set_dictionary_enabled(false)
@@ -81,28 +71,15 @@ impl<'a> PqArrayWriter<'a> {
         self.sources.push(Box::new(source))
     }
 
-    pub fn add<P: PqArrayType, I: IntoIterator<Item = P> + 'a>(
-        &mut self,
-        name: &str,
-        data: I,
-    ) -> Result<(), Error> {
-        self.push_source(RowSource::new(
-            &[name],
-            data.into_iter().map(|item| (item,)),
-            self.options.row_group_size,
-        )?);
+    pub fn add<P: PqArrayType, I: IntoIterator<Item = P> + 'a>(&mut self, name: &str, data: I) -> Result<(), Error> {
+        self.push_source(RowSource::new(&[name], data.into_iter().map(|item| (item,)), self.options.row_group_size)?);
         Ok(())
     }
 
-    pub fn add_nullable<P: PqArrayType, I: IntoIterator<Item = Option<P>> + 'a>(
-        &mut self,
-        name: &str,
-        data: I,
-    ) -> Result<(), Error> {
+    pub fn add_nullable<P: PqArrayType, I: IntoIterator<Item = Option<P>> + 'a>(&mut self, name: &str, data: I) -> Result<(), Error> {
         self.push_source(NullableRowSource::new_single(
             name,
-            data.into_iter()
-                .map(|opt_item| opt_item.map(|item| (item,))),
+            data.into_iter().map(|opt_item| opt_item.map(|item| (item,))),
             self.options.row_group_size,
         )?);
         Ok(())
@@ -113,53 +90,25 @@ impl<'a> PqArrayWriter<'a> {
         R: PqArrayRow,
         I: IntoIterator<Item = R> + 'a,
     {
-        self.push_source(RowSource::new(
-            names,
-            data.into_iter(),
-            self.options.row_group_size,
-        )?);
+        self.push_source(RowSource::new(names, data.into_iter(), self.options.row_group_size)?);
         Ok(())
     }
 
-    pub fn add_nullable_group<R: PqArrayRow, I: IntoIterator<Item = Option<R>> + 'a>(
-        &mut self,
-        group_name: &str,
-        field_names: &[&str],
-        data: I,
-    ) -> Result<(), Error> {
-        self.push_source(NullableRowSource::new(
-            group_name,
-            field_names,
-            data.into_iter(),
-            self.options.row_group_size,
-        )?);
+    pub fn add_nullable_group<R: PqArrayRow, I: IntoIterator<Item = Option<R>> + 'a>(&mut self, group_name: &str, field_names: &[&str], data: I) -> Result<(), Error> {
+        self.push_source(NullableRowSource::new(group_name, field_names, data.into_iter(), self.options.row_group_size)?);
         Ok(())
     }
 
     fn schema(&self) -> Result<Type, Error> {
-        let fields = self
-            .sources
-            .iter()
-            .flat_map(|s| s.types())
-            .map(Into::into)
-            .collect();
-        Type::group_type_builder("schema")
-            .with_fields(fields)
-            .build()
-            .map_err(Into::into)
+        let fields = self.sources.iter().flat_map(|s| s.types()).map(Into::into).collect();
+        Type::group_type_builder("schema").with_fields(fields).build().map_err(Into::into)
     }
 
     fn check_counts(&mut self, counts: &[u64]) -> Result<bool, Error> {
-        let (min, max) = counts
-            .iter()
-            .fold((u64::MAX, 0), |(a, b), &c| (a.min(c), b.max(c)));
+        let (min, max) = counts.iter().fold((u64::MAX, 0), |(a, b), &c| (a.min(c), b.max(c)));
         self.total_written += min;
         if min != max {
-            return Err(ParquetError::General(format!(
-                "uneven iterator lengths after {} items",
-                self.total_written
-            ))
-            .into());
+            return Err(ParquetError::General(format!("uneven iterator lengths after {} items", self.total_written)).into());
         }
         Ok(min == 0)
     }
@@ -176,11 +125,7 @@ impl<'a> PqArrayWriter<'a> {
         // vertex columns on 16 threads made 18 chunks, 16 then 2 with the pool idle.
         let threads = rayon::current_num_threads().max(1);
         let width = columns.len().max(1);
-        let batch_row_groups = if width >= threads {
-            1
-        } else {
-            threads / gcd(threads, width)
-        };
+        let batch_row_groups = if width >= threads { 1 } else { threads / gcd(threads, width) };
         let mut finished = false;
         while !finished {
             let mut row_groups = Vec::with_capacity(batch_row_groups);

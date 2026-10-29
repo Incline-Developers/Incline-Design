@@ -1,9 +1,5 @@
 //! Structured program logging and the in-app activity console.
 
-// The Windows-GNU `thread_local!` expansion triggers this lint inside the
-// standard-library macro even though the initializer is already const.
-#![cfg_attr(all(target_os = "windows", target_env = "gnu"), allow(clippy::missing_const_for_thread_local))]
-
 #[cfg(not(target_arch = "wasm32"))]
 use std::backtrace::Backtrace;
 use std::{

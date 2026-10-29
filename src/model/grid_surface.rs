@@ -149,7 +149,7 @@ impl GridSurface {
     /// Whether `at` falls on the surface in plan, its edge included.
     pub(crate) fn covers(&self, at: DVec2) -> bool {
         let mut covered = false;
-        self.spatial.for_each_xy_bounds_candidate_index(at, at, |face| {
+        self.spatial.for_each_xy_bounds_candidate_index_with_stack(at, at, &mut Vec::new(), |face| {
             if covered {
                 return;
             }

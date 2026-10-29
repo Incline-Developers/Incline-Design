@@ -2,7 +2,7 @@ cargo-features = ["profile-rustflags"]
 
 [workspace]
 resolver = "3"
-members = [".", "crates/mineflow", "crates/omf"]
+members = [".", "crates/mineflow", "crates/minlp", "crates/omf", "crates/solver"]
 default-members = ["."]
 
 [package]
@@ -10,7 +10,7 @@ name = "incline-design"
 version = "0.4.0-dev"
 edition = "2024"
 description = "Free Open Source Mine Design"
-repository = "https://github.com/Incline-Developers/Incline"
+repository = "https://github.com/Incline-Developers/Incline-Design"
 license = "MIT"
 keywords = ["mining", "cad", "design"]
 categories = ["graphics", "science"]
@@ -34,6 +34,7 @@ egui-wgpu = "0.37.0"
 egui_extras = { version = "0.37.0", default-features = false, features = ["svg"] }
 foldhash = "0.2.0"
 fontmesh = "0.7.0"
+gif = "0.14.2"
 glam = { version = "0.34.1", features = ["serde"] }
 i18n-embed = { version = "0.16.0", features = ["fluent-system"] }
 i18n-embed-fl = "0.10.1"
@@ -42,13 +43,19 @@ libm = "0.2"
 log = "0.4.34"
 lyon = "1.0.19"
 mineflow = { path = "crates/mineflow" }
+minlp = { path = "crates/minlp" }
+solver = { path = "crates/solver" }
 omf = { path = "crates/omf", default-features = false, features = ["image", "parquet", "zlib-rs"] }
 png = "0.18.1"
 # `crs-definitions` feature omitted: only `from_proj_string` is used, and enabling it
 # would pull in a second copy of the EPSG tables pinned to crs-definitions 0.5.
-proj4rs = { version = "0.2.1", default-features = false }
+proj4rs = { version = "0.3.0", default-features = false }
 crs-definitions = "0.6.0"
 csv = "1.4.0"
+# Animate's video export's AV1 encoder, pure Rust, on the shared rayon pool.
+# Its `asm` feature (about 2.7x faster on x86-64) is left off: it needs nasm
+# on every build machine.
+rav1e = { version = "0.8.1", default-features = false, features = ["threading"] }
 rayon = "1.12.0"
 rfd = { version = "0.17.2", features = ["file-handle-inner"] }
 robust = "1.2.0"
