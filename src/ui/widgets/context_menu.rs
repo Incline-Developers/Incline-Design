@@ -445,8 +445,11 @@ pub(crate) fn context_submenu<R>(ui: &mut egui::Ui, label: &str, enabled: bool, 
     let title: egui::WidgetText = label.into();
     // egui frames the nested popup from its own style, not the row's, so the
     // config carries this module's frame metrics along with the parent's
-    // close behaviour.
-    let config = egui::containers::menu::MenuConfig::find(ui).style(submenu_style);
+    // close behaviour. egui measures the gap from the row, which sits a content
+    // margin inside the frame, so that margin brings the frames edge to edge.
+    let config = egui::containers::menu::MenuConfig::find(ui)
+        .style(submenu_style)
+        .submenu_gap(f32::from(CONTENT_HORIZONTAL_MARGIN));
     egui::containers::menu::SubMenu::new()
         .config(config)
         .show(ui, &response, |ui| draw_body(ui, &title, MENU_WIDTH, add_contents))
