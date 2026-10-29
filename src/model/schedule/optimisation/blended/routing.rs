@@ -216,11 +216,15 @@ pub(crate) fn plan(input: &BlendInput, groups: &Groups, schedule: &BlendSolution
         group(input, groups, schedule, None, open).map(|grouped| grouped.dug.iter().map(|(.., options)| options.len()).filter(|&count| count > 1).sum::<usize>() as f64)
     };
     if tonnes_may_move(input) {
-        for (program, passes) in [(Program::Opening, 2), (Program::Moving, 2), (Program::Opening, 1), (Program::Moving, 1)] {
+        // Smaller windows before a narrower program: a moving program in
+        // windows of a half or a quarter the size still fits where one
+        // window would not, and moves far more than holding the piles does.
+        let tries = [(Program::Opening, 2), (Program::Moving, 2), (Program::Opening, 1), (Program::Moving, 1)];
+        for (program, passes, split) in tries.into_iter().flat_map(|(program, passes)| [1.0, 2.0, 4.0].map(move |split| (program, passes, split))) {
             let Ok(columns) = choices(program == Program::Opening) else {
                 return Reserve::default();
             };
-            let windows = (columns / WINDOW_CHOICES).ceil().max(1.0);
+            let windows = (columns / WINDOW_CHOICES * split).ceil().max(1.0);
             let each = columns / windows;
             let time = Duration::from_secs_f64(passes as f64 * (1.5 * windows * (1.9e-9 * each * each + 2.0)).max(6.0) + REPLAY_S);
             if time <= most {

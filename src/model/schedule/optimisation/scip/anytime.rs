@@ -772,7 +772,6 @@ fn reroute_window(
 }
 
 fn reroute_best(input: &BlendInput, groups: &routing::Groups, best: &mut Best, value: &mut f64, reserve: routing::Reserve, ends: Instant, cancel: &AtomicBool) -> String {
-    let stop: solver::Interrupt = Arc::new(move || Instant::now() >= ends);
     let mut notes: Vec<String> = Vec::new();
     // First keep the reserved passes' gains. A wider linearised move can
     // give a worse direction even after backtracking, so try it only in the
@@ -784,10 +783,17 @@ fn reroute_best(input: &BlendInput, groups: &routing::Groups, best: &mut Best, v
     // remainder without completing even one move. Smaller routing windows
     // keep the horizon's pile chains while giving each move time to finish.
     let windows_for = |pass| reserve.windows * if pass >= reserve.passes { 2 } else { 1 };
-    for (pass, index) in (0..passes).flat_map(|pass| (0..windows_for(pass)).map(move |index| (pass, index))) {
+    let total: usize = (0..passes).map(windows_for).sum();
+    for (done, (pass, index)) in (0..passes).flat_map(|pass| (0..windows_for(pass)).map(move |index| (pass, index))).enumerate() {
         if Instant::now() >= ends || cancel.load(Ordering::Relaxed) {
             break;
         }
+        // One window may take at most half of what is left, or twice its
+        // share when that is more, so a program that solves slowly costs
+        // that window, not every window after it.
+        let left = ends.saturating_duration_since(Instant::now());
+        let window_ends = Instant::now() + left.mul_f64(2.0 / (total - done) as f64).max(left / 2);
+        let stop: solver::Interrupt = Arc::new(move || Instant::now() >= window_ends);
         let window = routing::window(input, windows_for(pass), index);
         let extra = pass >= reserve.passes;
         let reach = if extra {
@@ -811,7 +817,7 @@ fn reroute_best(input: &BlendInput, groups: &routing::Groups, best: &mut Best, v
             false,
             extra,
             window.as_ref(),
-            stop.clone(),
+            stop,
             ends,
             cancel,
         ));
