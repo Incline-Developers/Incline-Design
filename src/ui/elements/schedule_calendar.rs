@@ -26,7 +26,7 @@ use crate::{
     },
     ui::{
         EditorState, UiProjectView, chrome,
-        state::{CalendarCellAddress, CalendarCellDraft, CalendarOwner, CalendarRow, CalendarSelection, PlanningSubpage, ScheduleEdit, ScheduleStep, UiCommand},
+        state::{CalendarCellAddress, CalendarCellDraft, CalendarOwner, CalendarRow, CalendarSelection, ScheduleEdit, ScheduleStep, UiCommand},
     },
 };
 
@@ -435,8 +435,7 @@ fn draw_empty(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState) {
             ui.vertical_centered(|ui| {
                 ui.label(tr!("schedule-calendar-empty"));
                 if ui.button(tr!("schedule-calendar-add-loader")).clicked() {
-                    editor.schedule_subpage = PlanningSubpage::Setup;
-                    editor.schedule_setup_step = ScheduleStep::LoaderAgents;
+                    editor.open_schedule_step(ScheduleStep::LoaderAgents);
                 }
             });
         });

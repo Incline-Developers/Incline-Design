@@ -1281,7 +1281,7 @@ impl<'a> App<'a> {
                         self.editor.xray_enabled,
                     )
                 });
-                // On the Haulage Layout a dig block under the cursor takes the
+                // On the Road Network a dig block under the cursor takes the
                 // menu, unless a road or node is nearer the click: it joins the
                 // selection the way a right-clicked entity does.
                 let on_network = picked.as_ref().is_some_and(|pick| {
@@ -1975,7 +1975,7 @@ pub(crate) fn drawn_surfaces<'s>(
     }
     let scene = if editor.is_schedule_animation() { schedule_animation.scene() } else { triangulations };
     // The floating sequence editor draws the same dig-block display list the
-    // Solids View page does, through the same offscreen preview - one
+    // Reserves view does, through the same offscreen preview - one
     // renderer, not two.
     let preview = if editor.is_solids_view() || editor.sequence_editor_active() || editor.blast_sequence_active() {
         solid_view_body

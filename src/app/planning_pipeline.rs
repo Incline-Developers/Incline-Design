@@ -500,7 +500,7 @@ impl crate::app::App<'_> {
             }
         }
         self.advance_planning_run();
-        if self.editor.planning_page == crate::ui::state::PlanningPage::Schedule {
+        if self.editor.is_schedule_context() {
             // The blasts drill and blast lists, refreshed as the run or the
             // project (blast names included) moves.
             let completed = self.planning_pipeline.as_ref().and_then(|p| p.status(SolidsStep::LAST).completed_inputs);
@@ -516,10 +516,15 @@ impl crate::app::App<'_> {
         let haul_page = self.editor.is_haulage_page();
         if self.editor.haul_page_drawn != haul_page {
             self.editor.haul_page_drawn = haul_page;
+            // A road half drawn over the Road Network is put down on leaving
+            // it, however it was left: a click elsewhere must not place one.
+            if !haul_page {
+                self.editor.cancel_haul_edit();
+            }
             self.invalidate_geometry();
             self.invalidate_overlay();
         }
-        if self.editor.planning_page == crate::ui::state::PlanningPage::Haulage {
+        if self.editor.is_setup_group(crate::ui::state::SetupGroup::Haulage) {
             let completed = self.planning_pipeline.as_ref().and_then(|p| p.status(SolidsStep::LAST).completed_inputs);
             // The document revision covers road, truck-class and destination
             // edits, undo included, so the connection tint and issue list

@@ -807,7 +807,10 @@ pub(crate) fn draw_explorer(
             let solids_view = editor.is_solids_view();
             let cut_step = editor.is_planning_cut_step();
             let dig_strips = editor.is_dig_strips_step();
-            let setup_steps = (editor.is_planning_setup() && !editor.is_schedule_pane()).then_some(editor.planning_page);
+            // Every Setup step, the ones over the viewport included.
+            let setup = editor.is_planning_view(crate::ui::state::PlanningView::Setup);
+            let viewport_step = editor.is_viewport_step();
+            let setup_steps = setup && !viewport_step;
             let lower = LowerPane::of(editor);
 
             // Drill & Blast's products sit under the tree, a pane of the
@@ -819,29 +822,26 @@ pub(crate) fn draw_explorer(
                 egui::Rect::NOTHING
             };
 
-            // Each Setup page's controls drive that page's own pipeline. The
-            // Schedule page has a pipeline of its own, so its island carries
-            // its own Run, Run All and Cancel rather than borrowing the Solids
-            // ones - a Cancel that stopped whichever run the page had last
-            // shown would be a button nobody could predict.
-            let setup_page = editor.is_planning_setup().then_some(editor.planning_page);
+            // Setup's controls drive the open step's group; Reserves shows
+            // what the Solids steps produced, so it carries theirs.
             // Animate shows the schedule it plays, so it carries the Gantt's
-            // run controls, in the same place the Setup pages carry theirs.
+            // run controls, in the same place Setup carries its own.
             let animate = editor.is_schedule_animation();
-            let show_run_controls = solids_view || cut_step || setup_page.is_some() || animate;
+            let show_run_controls = solids_view || setup || animate;
             let run_controls = if show_run_controls {
                 egui::Panel::top("planning_run_controls")
                     .resizable(false)
                     .show_separator_line(false)
                     .exact_size(super::toolbars::bottom_toolbar_height())
                     .frame(crate::ui::chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
-                    .show(ui, |ui| match setup_page {
-                        _ if animate => {
+                    .show(ui, |ui| {
+                        if animate {
                             ui.horizontal_centered(|ui| super::schedule_gantt::draw_calculation_controls(ui, editor, "animate", commands));
+                        } else if solids_view {
+                            super::planning_setup::draw_solids_run_controls(ui, editor, commands);
+                        } else {
+                            super::planning_setup::draw_setup_run_controls(ui, editor, commands);
                         }
-                        Some(crate::ui::state::PlanningPage::Schedule) => super::planning_setup::draw_schedule_run_controls(ui, editor, commands),
-                        Some(crate::ui::state::PlanningPage::Haulage) => super::planning_setup::draw_haulage_run_controls(ui, editor, commands),
-                        _ => super::planning_setup::draw_solids_run_controls(ui, editor, commands),
                     })
                     .response
                     .rect
@@ -849,25 +849,25 @@ pub(crate) fn draw_explorer(
                 egui::Rect::NOTHING
             };
 
-            // Blasting and Dig Strips frame the viewport, so their step tree
-            // shares the column with the benches it divides. The two are
-            // separate panes, halving between them whatever the run controls
-            // left.
-            let steps = if cut_step {
+            // Blasting, Dig Strips and the Road Network frame the viewport, so
+            // the step tree shares the column with what they work on: the
+            // benches a cut divides, or the ground roads are drawn over. Each
+            // is a pane of its own, halving whatever the run controls left.
+            let steps = if viewport_step {
                 egui::Panel::top(CUT_STEPS_PANEL_ID)
                     .resizable(true)
                     .default_size(ui.available_height() * 0.5)
                     .min_size(MIN_COLUMN_PANE)
                     .show_separator_line(false)
                     .frame(crate::ui::chrome::region_frame(ui).fill(surface).inner_margin(egui::Margin::ZERO))
-                    .show(ui, |ui| super::planning_setup::draw_steps(ui, editor, crate::ui::state::PlanningPage::Solids, commands))
+                    .show(ui, |ui| super::planning_setup::draw_steps(ui, editor, commands))
                     .response
                     .rect
             } else {
                 egui::Rect::NOTHING
             };
 
-            // Animate and the Haulage Layout each keep a Solids Navigation of
+            // Animate and the Road Network each keep a Solids Navigation of
             // their own: hiding ground to see a block, or to click the right
             // one, belongs to that page alone.
             let navigation = if editor.is_schedule_animation() {
@@ -898,7 +898,7 @@ pub(crate) fn draw_explorer(
             };
 
             // A pane under the tree above it: the list the selected step
-            // reads, or - on the View page, which has no step list - the
+            // reads, or - on the Reserves view, which has no step list - the
             // project's own objects, so the surfaces the inspector draws can
             // be loaded and hidden without leaving the page.
             //
@@ -941,7 +941,7 @@ pub(crate) fn draw_explorer(
                 .fill(surface)
                 .inner_margin(egui::Margin::ZERO)
                 .show(ui, |ui| {
-                    // The Solids View lists what the setup produced; every
+                    // The Reserves view lists what the setup produced; every
                     // other full-window planning page lists its own steps.
                     if solids_view {
                         super::solids_view::tree_heading(ui);
@@ -950,8 +950,8 @@ pub(crate) fn draw_explorer(
                     }
                     // The Gantt is not a setup step, so the column stays the
                     // project tree there: its own rows already name the fleet.
-                    if let Some(page) = setup_steps {
-                        super::planning_setup::draw_steps(ui, editor, page, commands);
+                    if setup_steps {
+                        super::planning_setup::draw_steps(ui, editor, commands);
                         return;
                     }
                     if cut_step {

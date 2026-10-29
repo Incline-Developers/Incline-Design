@@ -206,8 +206,8 @@ impl crate::app::App<'_> {
     /// asks for the selected one and the work itself lives in
     /// [`Self::request_reserve_stats`].
     pub(crate) fn sync_reserve_setup_stats(&mut self) {
-        use crate::ui::state::{PlanningPage, SolidsStep};
-        if !self.editor.is_planning_setup() || self.editor.planning_page != PlanningPage::Solids || self.editor.planning_solids_step != SolidsStep::BlockModels {
+        use crate::ui::state::{SetupGroup, SolidsStep};
+        if !self.editor.is_setup_group(SetupGroup::Solids) || self.editor.planning_solids_step != SolidsStep::BlockModels {
             return;
         }
         let Some(id) = self.editor.planning_selected_block_model else {

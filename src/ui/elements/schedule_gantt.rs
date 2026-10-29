@@ -57,8 +57,8 @@ use crate::{
         elements::schedule_calendar::format_tonnes,
         fonts::bold,
         state::{
-            BarNameDialog, BarWindowDialog, BlastBarDialog, DelayDrop, GanttDrag, GanttDragMode, GanttPaletteItem, GanttView, PlanningPage, PlanningSubpage, ReclaimBarDialog,
-            ScheduleBarView, ScheduleEdit, ScheduleRepairTarget, ScheduleStep, UiCommand,
+            BarNameDialog, BarWindowDialog, BlastBarDialog, DelayDrop, GanttDrag, GanttDragMode, GanttPaletteItem, GanttView, ReclaimBarDialog, ScheduleBarView, ScheduleEdit,
+            ScheduleRepairTarget, ScheduleStep, UiCommand,
         },
         themed_icon,
         widgets::{
@@ -657,11 +657,7 @@ fn draw_toolbar(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, p
                 if ui.button(label).clicked() {
                     match target {
                         ScheduleRepairTarget::Schedule(step) => editor.open_schedule_step(step),
-                        ScheduleRepairTarget::Solids(step) => {
-                            editor.planning_page = PlanningPage::Solids;
-                            editor.solids_subpage = PlanningSubpage::Setup;
-                            editor.planning_solids_step = step;
-                        }
+                        ScheduleRepairTarget::Solids(step) => editor.open_solids_step(step),
                     }
                 }
             }
@@ -3086,9 +3082,7 @@ fn draw_delay_drop_menu(ui: &mut egui::Ui, editor: &mut EditorState, plan: &Sche
         close = true;
     }
     if open_setup {
-        editor.planning_page = PlanningPage::Schedule;
-        editor.schedule_subpage = PlanningSubpage::Setup;
-        editor.schedule_setup_step = ScheduleStep::Delays;
+        editor.open_schedule_step(ScheduleStep::Delays);
         editor.schedule_selected_delay = Some(crate::ui::state::DelaySelection::Types);
         close = true;
     }

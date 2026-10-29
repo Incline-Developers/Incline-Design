@@ -1,4 +1,4 @@
-//! The Solids page's View subpage: everything the setup has generated.
+//! The Planning workspace's Reserves view: everything the setup has generated.
 //!
 //! Where the Setup pages configure a solid, this one is for looking through
 //! what came out - the solids grouped by what they are, each opening into its
@@ -1193,9 +1193,9 @@ fn bench_base_for(solid: &crate::model::Solid, band: BenchSelection) -> f64 {
         .map_or(f64::NAN, |bench| bench.base)
 }
 
-/// The View subpage's own layout: the tree is drawn into the explorer column,
+/// The Reserves view's own layout: the tree is drawn into the explorer column,
 /// and this fills the rest of the window with the properties beside it.
-/// The View page: what the selection is and what it holds, down the right, and
+/// The Reserves view: what the selection is and what it holds, down the right, and
 /// the inspector taking the rest.
 ///
 /// The two tables are a column of their own rather than a slice cut out of the

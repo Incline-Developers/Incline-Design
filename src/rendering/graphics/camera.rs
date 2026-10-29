@@ -1900,7 +1900,7 @@ impl<'a> Graphics<'a> {
         }
     }
 
-    /// The Haulage Layout's dig blocks are fills drawn into the document
+    /// The Road Network's dig blocks are fills drawn into the document
     /// scene, outside the bounds the clip range is fitted to; without this a
     /// camera brought close to them cuts the nearest ones off.
     pub(super) fn include_haul_blocks_in_depth(&mut self, editor: &EditorState) {

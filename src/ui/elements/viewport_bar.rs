@@ -99,7 +99,7 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
                         draw_project_actions(ui, editor, project, commands, side);
                         if editor.active_workspace == Workspace::Planning {
                             divider(ui, side);
-                            draw_planning_subpages(ui, editor, commands);
+                            draw_planning_views(ui, editor, commands);
                         } else {
                             main_menu::draw_workspace_menus(ui, editor, project, commands, (side - MENU_ROW_INSET).max(1.0));
                         }
@@ -759,33 +759,13 @@ fn draw_blast_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, project: &
     }
 }
 
-/// Planning's pages, then the chosen page's own tabs, in place of the
-/// discipline menus the other workspaces carry here.
-fn draw_planning_subpages(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
-    use crate::ui::state::PlanningPage;
-    let labels = PlanningPage::ALL.map(PlanningPage::label);
-    let selected = PlanningPage::ALL.iter().position(|page| *page == editor.planning_page).unwrap_or(0);
-    if let Some(index) = crate::ui::widgets::toolbar::segmented(ui, "planning_pages", &labels, selected) {
-        commands.push(UiCommand::SetPlanningPage(PlanningPage::ALL[index]));
-    }
-    ui.add_space(12.0);
-    for subpage in editor.planning_page.subpages().iter().copied() {
-        let label = subpage.label();
-        let selected = editor.planning_subpage() == subpage;
-        let font = egui::TextStyle::Button.resolve(ui.style());
-        let color = ui.visuals().text_color();
-        let galley = ui.painter().layout_no_wrap(label.clone(), font, color);
-        let padding = 8.0;
-        let (rect, response) = ui.allocate_exact_size(egui::vec2(galley.size().x + padding * 2.0, ui.spacing().interact_size.y), egui::Sense::click());
-        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, label.as_str()));
-        ui.painter().galley(rect.center() - galley.size() * 0.5, galley, color);
-        if selected {
-            let y = rect.bottom() - 1.0;
-            ui.painter()
-                .line_segment([egui::pos2(rect.left() + padding, y), egui::pos2(rect.right() - padding, y)], egui::Stroke::new(1.5, color));
-        }
-        if response.clicked() {
-            commands.push(UiCommand::SetPlanningSubpage(subpage));
-        }
+/// Planning's tabs, in place of the discipline menus the other workspaces
+/// carry here: Setup, then each view of what it produces.
+fn draw_planning_views(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
+    use crate::ui::state::PlanningView;
+    let labels = PlanningView::ALL.map(PlanningView::label);
+    let selected = PlanningView::ALL.iter().position(|view| *view == editor.planning_view).unwrap_or(0);
+    if let Some(index) = crate::ui::widgets::tab_strip::TabStrip::new("planning_views", &labels, selected).show(ui) {
+        commands.push(UiCommand::SetPlanningView(PlanningView::ALL[index]));
     }
 }

@@ -1,4 +1,4 @@
-//! The Schedule workspace's Setup subpage: the loader fleet.
+//! The Schedule workspace's Setup: the loader fleet.
 //!
 //! Two editable lists and a name. *Loader Classes* are machine types with a
 //! dig rate; *Loader Agents* are the machines on site, each of one class and
@@ -83,7 +83,8 @@ pub(crate) fn name_problem(name: &str, taken: impl Iterator<Item = String>) -> O
 /// the Gantt bar that works it, and is authored there; a second list of them
 /// here would be a second place the same thing could be edited.
 pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
-    let mut step = editor.schedule_setup_step;
+    let open = editor.setup_group == crate::ui::state::SetupGroup::Schedule;
+    let mut step = open.then_some(editor.schedule_setup_step);
     let mut markers = Vec::with_capacity(ScheduleStep::ALL.len());
     for entry in ScheduleStep::ALL {
         let status = &editor.schedule_stages[entry.index()];
@@ -92,7 +93,7 @@ pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: 
             let entry_response = ExplorerEntry::new(egui::Id::unique(entry.tree_id()), bold(&entry.label()))
                 .leading_icon(super::planning_setup::StepBadge::of(status.state, &status.diagnostics).icon(), egui::Color32::WHITE)
                 .header_aligned_icon()
-                .selected(step == entry)
+                .selected(step == Some(entry))
                 .show(ui);
             if let Some(rect) = entry_response.icon_rect {
                 markers.push((rect, status.state));
@@ -102,7 +103,7 @@ pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: 
                 super::planning_setup::stage_tooltip_parts(ui, status.state, status.blocked_by.map(ScheduleStep::label), status.message.as_deref(), &status.diagnostics);
             });
             if response.clicked() {
-                step = entry;
+                step = Some(entry);
             }
             super::planning_setup::draw_stage_menu(
                 &response,
@@ -114,7 +115,12 @@ pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: 
         });
     }
     super::planning_setup::paint_step_links(ui, &markers);
-    editor.schedule_setup_step = step;
+    // Set rather than opened: `open_schedule_step` sends Road Access on to
+    // what repairs it, and a click in the list means this step.
+    if let Some(step) = step.filter(|step| !open || *step != editor.schedule_setup_step) {
+        editor.setup_group = crate::ui::state::SetupGroup::Schedule;
+        editor.schedule_setup_step = step;
+    }
 }
 
 /// The Scheduling Readiness step: what the last completed run checked, and

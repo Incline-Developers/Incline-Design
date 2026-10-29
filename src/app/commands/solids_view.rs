@@ -705,9 +705,9 @@ pub(crate) fn displaying_solid_artifacts(editor: &crate::ui::state::EditorState)
 fn display_demand(editor: &crate::ui::state::EditorState) -> crate::app::planning_pipeline::GeometryDemand {
     use crate::{
         app::planning_pipeline::GeometryDemand,
-        ui::state::{PlanningPage, PlanningSubpage, SolidsStep, Workspace},
+        ui::state::{SetupGroup, SolidsStep},
     };
-    let setup = editor.active_workspace == Workspace::Planning && editor.planning_page == PlanningPage::Solids && editor.solids_subpage == PlanningSubpage::Setup;
+    let setup = editor.is_setup_group(SetupGroup::Solids);
     if !setup {
         return GeometryDemand::Partition;
     }
@@ -736,7 +736,7 @@ pub(crate) enum PickRouting {
     /// against has been replaced. Still dropped - but worth saying out loud,
     /// because the click looked perfectly good on screen.
     Superseded,
-    /// A Solids View click, free to move that page's own selection. `hit` is
+    /// A Reserves view click, free to move that page's own selection. `hit` is
     /// the block the ray reached; a miss clears the selection.
     SelectSolidsView,
     /// A sequence-editor click that passed every gate. `generation` is the
@@ -1362,7 +1362,7 @@ impl crate::app::App<'_> {
     fn rebuild_solid_view_body(&mut self, demand: crate::app::planning_pipeline::GeometryDemand) {
         use crate::app::planning_pipeline::GeometryDemand;
         // While the sequence editor owns the preview it shows the whole run:
-        // narrowing the image to the Solids View page's tree selection would
+        // narrowing the image to the Reserves view's tree selection would
         // hide ground a dig order is entitled to be built from, and that
         // selection is not even on screen to be seen or changed.
         let sequencing = self.editor.sequence_editor_active();

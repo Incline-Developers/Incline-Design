@@ -471,8 +471,7 @@ impl<'a> App<'a> {
             UiCommand::EditHaulProperties => {
                 self.editor.canvas_context_menu_open = false;
                 self.editor.active_workspace = crate::ui::state::Workspace::Planning;
-                self.editor.planning_page = crate::ui::state::PlanningPage::Haulage;
-                self.editor.haulage_subpage = crate::ui::state::PlanningSubpage::Layout;
+                self.editor.open_haulage_step(crate::ui::state::HaulageStep::Network);
                 self.refresh_haulage_view();
                 Ok(())
             }
@@ -1183,48 +1182,22 @@ impl<'a> App<'a> {
                 self.editor.survey.open_transform();
                 Ok(())
             }
-            UiCommand::SetPlanningSubpage(subpage) => {
-                if self.editor.planning_page.subpages().contains(&subpage) {
-                    match self.editor.planning_page {
-                        crate::ui::state::PlanningPage::Schedule => {
-                            if self.editor.schedule_subpage == crate::ui::state::PlanningSubpage::Calendar && subpage != crate::ui::state::PlanningSubpage::Calendar {
-                                self.editor.schedule_calendar.draft = None;
-                                self.editor.schedule_calendar.error = None;
-                            }
-                            self.editor.schedule_subpage = subpage;
-                        }
-                        crate::ui::state::PlanningPage::Solids => self.editor.solids_subpage = subpage,
-                        crate::ui::state::PlanningPage::Haulage => {
-                            self.editor.haulage_subpage = subpage;
-                            self.editor.cancel_haul_edit();
-                        }
-                    }
-                    if self.editor.is_planning_viewport() {
-                        self.editor.active_property_tab = crate::ui::state::PropertyTab::Reserves;
-                    }
-                    self.redraw_requested = true;
-                }
-                Ok(())
-            }
-            UiCommand::FocusScheduleAnimationSolid(solid) => {
-                self.focus_schedule_animation_solid(solid);
-                Ok(())
-            }
-            UiCommand::SetPlanningPage(page) => {
-                if self.editor.planning_page == crate::ui::state::PlanningPage::Schedule
-                    && self.editor.schedule_subpage == crate::ui::state::PlanningSubpage::Calendar
-                    && page != crate::ui::state::PlanningPage::Schedule
-                {
+            UiCommand::SetPlanningView(view) => {
+                use crate::ui::state::PlanningView;
+                if self.editor.planning_view == PlanningView::Calendar && view != PlanningView::Calendar {
                     self.editor.schedule_calendar.draft = None;
                     self.editor.schedule_calendar.error = None;
                 }
-                self.editor.planning_page = page;
-                self.editor.cancel_haul_edit();
+                self.editor.planning_view = view;
                 self.refresh_haulage_view();
                 if self.editor.is_planning_viewport() {
                     self.editor.active_property_tab = crate::ui::state::PropertyTab::Reserves;
                 }
                 self.redraw_requested = true;
+                Ok(())
+            }
+            UiCommand::FocusScheduleAnimationSolid(solid) => {
+                self.focus_schedule_animation_solid(solid);
                 Ok(())
             }
             UiCommand::SaveSurveyDefinition { target, definition } => {

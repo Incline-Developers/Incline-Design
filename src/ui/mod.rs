@@ -731,16 +731,16 @@ fn draw_ui(
             elements::console::draw_console(root_ui, console_min, console_max, frame_context.console_snapshot)
         });
         let console = console_rect.unwrap_or(egui::Rect::NOTHING);
-        let planning_page = editor.planning_page;
+        let setup_group = editor.setup_group;
         let mut planning_layout = elements::planning_setup::PlanningLayout::default();
         let details = if editor.is_solids_view() {
-            // The View page arranges a column of its own beside its inspector,
+            // The Reserves view arranges a column of its own beside its inspector,
             // so it hands back the same layout the Setup steps do.
             planning_layout = elements::solids_view::draw_details(root_ui, editor, project, document, commands);
             planning_layout.rect
         } else if editor.is_schedule_gantt() {
             // The Gantt owns the whole pane rather than arranging islands in
-            // it, so - like the Solids View - it hands its own rect back to be
+            // it, so - like the Reserves view - it hands its own rect back to be
             // rounded off as one region.
             elements::schedule_gantt::draw_details(root_ui, editor, project, document, commands)
         } else if editor.is_schedule_charts() {
@@ -748,7 +748,7 @@ fn draw_ui(
         } else if editor.is_schedule_calendar() {
             elements::schedule_calendar::draw_details(root_ui, editor, project, document, commands)
         } else {
-            planning_layout = elements::planning_setup::draw_details(root_ui, editor, project, document, block_models, commands, planning_page);
+            planning_layout = elements::planning_setup::draw_details(root_ui, editor, project, document, block_models, commands, setup_group);
             planning_layout.rect
         };
         dialogs::about::draw_about_dialog(root_ui, editor);
@@ -836,7 +836,7 @@ fn draw_ui(
             elements::blasting::draw_panel(root_ui, editor, document, commands)
         };
         Some((island.regions, vec![island.grip]))
-    } else if editor.is_planning_viewport() && editor.planning_page == state::PlanningPage::Haulage {
+    } else if editor.is_haulage_page() {
         let column = elements::haulage::draw_panel(root_ui, editor, document, project, commands);
         Some((column.regions, column.grips))
     } else {

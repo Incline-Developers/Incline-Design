@@ -16,6 +16,7 @@ pub(crate) mod menu;
 pub(crate) mod preview_navigation;
 pub(crate) mod progress;
 pub(crate) mod rosette_diagram;
+pub(crate) mod tab_strip;
 pub(crate) mod toast;
 pub(crate) mod toolbar;
 pub(crate) mod transport;
