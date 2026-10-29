@@ -527,18 +527,19 @@ const TRUCK_ROWS: [CalendarRow; 6] = [
 /// Dig and reclaim tonnes are two rows, never summed: reclaim moves material
 /// that was already mined.
 ///
-/// The utilisation target and incentive sit beside the scheduled utilisation
-/// they steer, under the tonnes it is worked out from.
+/// What is set first and what the schedule worked out after, as every group
+/// lists them: the inputs in one run to move through and type into, rather
+/// than broken up by figures that cannot be edited.
 const LOADER_ROWS: [CalendarRow; 9] = [
     CalendarRow::Input(CalendarField::Availability),
     CalendarRow::Input(CalendarField::Utilisation),
     CalendarRow::Input(CalendarField::Rate),
     CalendarRow::Input(CalendarField::ReclaimRate),
+    CalendarRow::Input(CalendarField::UtilisationTarget),
+    CalendarRow::Input(CalendarField::UtilisationIncentive),
     CalendarRow::DigTonnes,
     CalendarRow::ReclaimTonnes,
     CalendarRow::ScheduledUtilisation,
-    CalendarRow::Input(CalendarField::UtilisationTarget),
-    CalendarRow::Input(CalendarField::UtilisationIncentive),
 ];
 
 /// A dozer's, drill's or MPU's rows: its time and its rate, and what it got
@@ -654,6 +655,7 @@ fn draw_grid(
             commands,
         );
     }
+    draw_selection(ui, body);
     ui.painter()
         .line_segment([egui::pos2(hierarchy_head.right(), rect.top()), egui::pos2(hierarchy_head.right(), body.bottom())], stroke);
     ui.painter()
@@ -1050,13 +1052,31 @@ fn draw_cell(
         return;
     }
     let selected = selected(editor, plan, destinations, address);
-    if address.row.is_calculated() {
+    let can_edit = editable(address);
+    // Every cell that cannot be typed into reads as such, calculated or
+    // carried from elsewhere alike: one surface for all of them.
+    if !can_edit {
         ui.painter().rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
     }
     if selected {
-        ui.painter().rect_filled(rect, 0.0, ui.visuals().selection.bg_fill);
+        // Outlined as one block once the grid is drawn: see `draw_selection`.
+        ui.data_mut(|data| {
+            let bounds = data.get_temp_mut_or(selection_bounds_id(ui), egui::Rect::NOTHING);
+            *bounds = bounds.union(rect);
+        });
     }
     let response = ui.interact(rect, cell_id(ui, address), egui::Sense::click());
+    // A cell that can be typed into says so under the pointer; one that
+    // cannot stays still.
+    if can_edit && response.hovered() && !selected {
+        ui.painter().rect_stroke(
+            rect.shrink(1.5),
+            crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS,
+            egui::Stroke::new(1.0, ui.visuals().widgets.hovered.bg_stroke.color),
+            egui::StrokeKind::Inside,
+        );
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+    }
     if response.clicked() {
         if !commit_draft(editor, plan, session, commands) {
             return;
@@ -1475,6 +1495,31 @@ fn crusher_target(address: CalendarCellAddress) -> Option<StandaloneDestinationI
         DestinationId::Standalone(id) => Some(id),
         DestinationId::Solid(_) => None,
     }
+}
+
+/// Where the cells drawn this frame gather the extent of the selection.
+fn selection_bounds_id(ui: &egui::Ui) -> egui::Id {
+    ui.scope_id().with("calendar_selection_bounds")
+}
+
+/// The selection as one rounded outline round every selected cell in view,
+/// in the selection colour, rather than a fill over each.
+fn draw_selection(ui: &egui::Ui, clip: egui::Rect) {
+    let id = selection_bounds_id(ui);
+    let bounds = ui.data_mut(|data| {
+        let bounds = data.get_temp::<egui::Rect>(id);
+        data.remove::<egui::Rect>(id);
+        bounds
+    });
+    let Some(bounds) = bounds.filter(|bounds| bounds.is_positive()) else {
+        return;
+    };
+    ui.painter().with_clip_rect(clip).rect_stroke(
+        bounds.shrink(1.0),
+        crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS,
+        egui::Stroke::new(1.5, ui.visuals().selection.stroke.color),
+        egui::StrokeKind::Inside,
+    );
 }
 
 fn cell_id(ui: &egui::Ui, address: CalendarCellAddress) -> egui::Id {
