@@ -36,7 +36,11 @@ pub(crate) fn reserve_fixed_stripes(ui: &egui::Ui) -> (egui::layers::ShapeIdx, f
 /// painting one shape for the whole tree makes the pattern indifferent to
 /// which row currently sits where.
 pub(crate) fn paint_fixed_stripes(ui: &egui::Ui, slot: egui::layers::ShapeIdx, top: f32, stripe: egui::Color32) {
-    let bands = stripe_bands(ui.clip_rect().x_range(), top, ui.available_rect_before_wrap().bottom(), row_height(ui), stripe);
+    // To the foot of the pane - or, in a pane as tall as its rows (a table
+    // stack's), to the last row.
+    let bottom = ui.available_rect_before_wrap().bottom();
+    let bottom = if bottom.is_finite() { bottom } else { ui.cursor().top() };
+    let bands = stripe_bands(ui.clip_rect().x_range(), top, bottom, row_height(ui), stripe);
     ui.painter().set(slot, bands);
 }
 

@@ -17,7 +17,7 @@ use crate::{
         state::{DelayDraft, DelaySelection, ScheduleEdit, UiCommand},
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup},
-            data_grid::{DataGrid, GridRow, PropertyRows, PropertyTable, grid_add_action_row, grid_row, grid_separator_row, property_table_height},
+            data_grid::{DataGrid, GridRow, PropertyRows, PropertyTable, grid_add_action_row, grid_row, grid_separator_row, stack_slot, table_stack},
             explorer::{explorer_note, row_height},
             toolbar::GROUP_CORNER_RADIUS,
         },
@@ -366,139 +366,139 @@ fn draw_list(
         }
     }
 
-    let no_types = plan.delays().types.is_empty();
-    let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, 3 + usize::from(no_types)).min(rect.height())));
-    PropertyTable::new("schedule_delay_list_properties", table_rect, &list.title).show(ui, |rows| {
-        rows.header(&tr!("planning-property"), &tr!("planning-value"));
-        let taken = plan.delays().lists.iter().filter(|other| other.id != id).map(|other| other.title.clone());
-        let problem = super::schedule_setup::name_problem(&draft.title, taken);
-        let response = rows.field(&tr!("delay-list-title"), &mut draft.title, problem.as_deref());
-        if response.lost_focus() && problem.is_none() && draft.title.trim() != list.title {
-            edits.push(UiCommand::schedule(
-                session,
-                ScheduleEdit::RenameDelayList {
-                    list: id,
-                    title: draft.title.trim().to_owned(),
-                },
-            ));
-        }
-        let mut kind = list.kind;
-        if type_row(rows, plan, ("delay_list_type", id.0), &mut kind) {
-            edits.push(UiCommand::schedule(session, ScheduleEdit::SetDelayListType { list: id, kind }));
-        }
-    });
-    let below = egui::Rect::from_min_max(egui::pos2(rect.left(), table_rect.bottom() + ui.spacing().item_spacing.y), rect.max);
-    let fractions = [0.34, 0.27, 0.27, 0.12];
-    let (paste_label, paste_hint) = (tr!("delay-paste-rows"), tr!("delay-paste-hint"));
     let mut open_paste = false;
-    DataGrid::new("schedule_delay_list", below, &tr!("delay-entries"))
-        .title_action(&paste_label, &paste_hint, &mut open_paste)
-        .show(ui, |ui| {
-            header_row(ui, &fractions, 32.0, &[tr!("delay-machine"), tr!("delay-start"), tr!("delay-end"), tr!("delay-hours")]);
-            if list.entries.is_empty() {
-                explorer_note(ui, tr!("delay-list-empty"));
+    // The list's properties, then its entries, scrolling as one.
+    table_stack(ui, rect, "schedule_delay_list", |ui| {
+        PropertyTable::new("schedule_delay_list_properties", stack_slot(ui), &list.title).show(ui, |rows| {
+            rows.header(&tr!("planning-property"), &tr!("planning-value"));
+            let taken = plan.delays().lists.iter().filter(|other| other.id != id).map(|other| other.title.clone());
+            let problem = super::schedule_setup::name_problem(&draft.title, taken);
+            let response = rows.field(&tr!("delay-list-title"), &mut draft.title, problem.as_deref());
+            if response.lost_focus() && problem.is_none() && draft.title.trim() != list.title {
+                edits.push(UiCommand::schedule(
+                    session,
+                    ScheduleEdit::RenameDelayList {
+                        list: id,
+                        title: draft.title.trim().to_owned(),
+                    },
+                ));
             }
-            let mut remove = None;
-            for (index, entry) in list.entries.iter().enumerate() {
-                let (_, cells, end) = table_row(ui, &fractions, 32.0);
-                let mut agent = entry.agent;
-                if combo_in(
-                    ui,
-                    egui::Id::unique(("delay_entry_agent", id.0, index)),
-                    cells[0],
-                    &mut agent,
-                    agent_name(plan, entry.agent),
-                    agents.clone(),
-                ) && agent != entry.agent
-                {
-                    entries[index].agent = agent;
-                    entries_changed = true;
-                }
-                for (column, cell) in [(0usize, cells[1]), (1, cells[2])] {
-                    let Some(text) = draft.cells.get_mut(index).map(|cells| &mut cells[column]) else {
-                        continue;
-                    };
-                    let parsed = read_time(text);
-                    let response = ui.put(cell, egui::TextEdit::singleline(text).desired_width(cell.width()));
-                    if parsed.is_none() {
-                        response.clone().on_hover_text(tr!("delay-instant-hint"));
-                    }
-                    if response.lost_focus()
-                        && let Some(hours) = parsed
-                    {
-                        let mut edited = *entry;
-                        if column == 0 {
-                            edited.start_h = hours;
-                        } else {
-                            edited.end_h = hours;
-                        }
-                        if edited != *entry && edited.is_valid() {
-                            entries[index] = edited;
-                            entries_changed = true;
-                        }
-                    }
-                }
-                ui.put(
-                    cells[3],
-                    egui::Label::new(egui::RichText::new(hours_text(entry.end_h - entry.start_h)).color(ui.visuals().weak_text_color())).halign(egui::Align::Min),
-                );
-                if delete_button(ui, end, tr!("delay-delete-entry")) {
-                    remove = Some(index);
-                }
-            }
-            if let Some(index) = remove {
-                entries.remove(index);
-                entries_changed = true;
-            }
-
-            // A delay needs a machine to stop, so there is none to add until
-            // the fleet has one.
-            if !agents.is_empty() && grid_add_action_row(ui, &tr!("delay-add-entry")) {
-                // After the last row, on the same machine, for an hour: the
-                // shape the next row most likely has.
-                let previous = entries.last().copied();
-                let start_h = previous.map_or(0.0, |entry| entry.end_h);
-                entries.push(DelayEntry {
-                    agent: previous.map_or(agents[0].0, |entry| entry.agent),
-                    start_h,
-                    end_h: start_h + 1.0,
-                });
-                entries_changed = true;
-            }
-
-            if let Some(text) = draft.paste.as_mut() {
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    ui.add_space(6.0);
-                    ui.add(
-                        egui::TextEdit::multiline(text)
-                            .desired_rows(6)
-                            .desired_width(ui.available_width() - 12.0)
-                            .hint_text(tr!("delay-paste-example")),
-                    );
-                });
-                let mut close = false;
-                ui.horizontal(|ui| {
-                    ui.add_space(6.0);
-                    if ui.add(egui::Button::new(tr!("delay-paste-add")).corner_radius(GROUP_CORNER_RADIUS)).clicked() {
-                        match parse_delay_rows(text, &agents, super::schedule_periods::clock_start()) {
-                            Ok(rows) => {
-                                entries.extend(rows);
-                                entries_changed = true;
-                                close = true;
-                            }
-                            Err(problems) => paste_error = Some(problems.iter().map(|(line, problem)| problem_text(*line, problem)).collect::<Vec<_>>().join("\n")),
-                        }
-                    }
-                    if ui.add(egui::Button::new(tr!("delay-paste-cancel")).corner_radius(GROUP_CORNER_RADIUS)).clicked() {
-                        close = true;
-                    }
-                });
-                if close {
-                    draft.paste = None;
-                }
+            let mut kind = list.kind;
+            if type_row(rows, plan, ("delay_list_type", id.0), &mut kind) {
+                edits.push(UiCommand::schedule(session, ScheduleEdit::SetDelayListType { list: id, kind }));
             }
         });
+        let fractions = [0.34, 0.27, 0.27, 0.12];
+        let (paste_label, paste_hint) = (tr!("delay-paste-rows"), tr!("delay-paste-hint"));
+        DataGrid::new("schedule_delay_list", stack_slot(ui), &tr!("delay-entries"))
+            .title_action(&paste_label, &paste_hint, &mut open_paste)
+            .show(ui, |ui| {
+                header_row(ui, &fractions, 32.0, &[tr!("delay-machine"), tr!("delay-start"), tr!("delay-end"), tr!("delay-hours")]);
+                if list.entries.is_empty() {
+                    explorer_note(ui, tr!("delay-list-empty"));
+                }
+                let mut remove = None;
+                for (index, entry) in list.entries.iter().enumerate() {
+                    let (_, cells, end) = table_row(ui, &fractions, 32.0);
+                    let mut agent = entry.agent;
+                    if combo_in(
+                        ui,
+                        egui::Id::unique(("delay_entry_agent", id.0, index)),
+                        cells[0],
+                        &mut agent,
+                        agent_name(plan, entry.agent),
+                        agents.clone(),
+                    ) && agent != entry.agent
+                    {
+                        entries[index].agent = agent;
+                        entries_changed = true;
+                    }
+                    for (column, cell) in [(0usize, cells[1]), (1, cells[2])] {
+                        let Some(text) = draft.cells.get_mut(index).map(|cells| &mut cells[column]) else {
+                            continue;
+                        };
+                        let parsed = read_time(text);
+                        let response = ui.put(cell, egui::TextEdit::singleline(text).desired_width(cell.width()));
+                        if parsed.is_none() {
+                            response.clone().on_hover_text(tr!("delay-instant-hint"));
+                        }
+                        if response.lost_focus()
+                            && let Some(hours) = parsed
+                        {
+                            let mut edited = *entry;
+                            if column == 0 {
+                                edited.start_h = hours;
+                            } else {
+                                edited.end_h = hours;
+                            }
+                            if edited != *entry && edited.is_valid() {
+                                entries[index] = edited;
+                                entries_changed = true;
+                            }
+                        }
+                    }
+                    ui.put(
+                        cells[3],
+                        egui::Label::new(egui::RichText::new(hours_text(entry.end_h - entry.start_h)).color(ui.visuals().weak_text_color())).halign(egui::Align::Min),
+                    );
+                    if delete_button(ui, end, tr!("delay-delete-entry")) {
+                        remove = Some(index);
+                    }
+                }
+                if let Some(index) = remove {
+                    entries.remove(index);
+                    entries_changed = true;
+                }
+
+                // A delay needs a machine to stop, so there is none to add until
+                // the fleet has one.
+                if !agents.is_empty() && grid_add_action_row(ui, &tr!("delay-add-entry")) {
+                    // After the last row, on the same machine, for an hour: the
+                    // shape the next row most likely has.
+                    let previous = entries.last().copied();
+                    let start_h = previous.map_or(0.0, |entry| entry.end_h);
+                    entries.push(DelayEntry {
+                        agent: previous.map_or(agents[0].0, |entry| entry.agent),
+                        start_h,
+                        end_h: start_h + 1.0,
+                    });
+                    entries_changed = true;
+                }
+
+                if let Some(text) = draft.paste.as_mut() {
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(6.0);
+                        ui.add(
+                            egui::TextEdit::multiline(text)
+                                .desired_rows(6)
+                                .desired_width(ui.available_width() - 12.0)
+                                .hint_text(tr!("delay-paste-example")),
+                        );
+                    });
+                    let mut close = false;
+                    ui.horizontal(|ui| {
+                        ui.add_space(6.0);
+                        if ui.add(egui::Button::new(tr!("delay-paste-add")).corner_radius(GROUP_CORNER_RADIUS)).clicked() {
+                            match parse_delay_rows(text, &agents, super::schedule_periods::clock_start()) {
+                                Ok(rows) => {
+                                    entries.extend(rows);
+                                    entries_changed = true;
+                                    close = true;
+                                }
+                                Err(problems) => paste_error = Some(problems.iter().map(|(line, problem)| problem_text(*line, problem)).collect::<Vec<_>>().join("\n")),
+                            }
+                        }
+                        if ui.add(egui::Button::new(tr!("delay-paste-cancel")).corner_radius(GROUP_CORNER_RADIUS)).clicked() {
+                            close = true;
+                        }
+                    });
+                    if close {
+                        draft.paste = None;
+                    }
+                }
+            });
+    });
     if open_paste {
         draft.paste = Some(String::new());
     }

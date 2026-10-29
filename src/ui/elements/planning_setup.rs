@@ -29,7 +29,7 @@ use crate::{
             context_menu::{ContextMenuAction, context_menu_popup},
             data_grid::{
                 CELL_WARNING_WIDTH, CellOption, DataGrid, GridRow, grid_add_action_row, grid_add_row, grid_cell_color, grid_cell_combo, grid_cell_fixed, grid_cell_number,
-                grid_cell_warning, grid_columns_row, grid_empty_state, grid_group_row, grid_row, grid_separator_row, property_table_height,
+                grid_cell_warning, grid_columns_row, grid_empty_state, grid_group_row, grid_row, grid_separator_row, property_table_height, stack_slot, table_stack,
             },
             explorer::{ExplorerEntry, paint_fixed_stripes, reserve_fixed_stripes},
             island::{Island, Side},
@@ -1009,7 +1009,6 @@ fn stat_text(value: Option<f64>) -> String {
 /// the workspace they drive with a third of the window.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StepList {
-    Solids,
     BlockModels,
 }
 
@@ -1018,23 +1017,20 @@ pub(crate) fn step_list(editor: &EditorState) -> Option<StepList> {
         return None;
     }
     match editor.planning_solids_step {
-        SolidsStep::Solids | SolidsStep::Benching => Some(StepList::Solids),
         SolidsStep::BlockModels => Some(StepList::BlockModels),
-        SolidsStep::FieldList | SolidsStep::Blasting | SolidsStep::DigStrips | SolidsStep::Reserving => None,
+        SolidsStep::FieldList | SolidsStep::Solids | SolidsStep::Benching | SolidsStep::Blasting | SolidsStep::DigStrips | SolidsStep::Reserving => None,
     }
 }
 
-pub(crate) fn draw_step_list(
-    ui: &mut egui::Ui,
-    rect: egui::Rect,
-    list: StepList,
-    editor: &mut EditorState,
-    project: &UiProjectView,
-    document: &Document,
-    commands: &mut Vec<UiCommand>,
-) {
+/// Whether the explorer column carries the object tree under the step list:
+/// on the Solids and Benching steps, whose solids list is beside the panes it
+/// drives, the tree is what those solids are built from.
+pub(crate) fn shows_object_tree(editor: &EditorState) -> bool {
+    editor.is_planning_setup() && editor.is_setup_group(SetupGroup::Solids) && matches!(editor.planning_solids_step, SolidsStep::Solids | SolidsStep::Benching)
+}
+
+pub(crate) fn draw_step_list(ui: &mut egui::Ui, rect: egui::Rect, list: StepList, editor: &mut EditorState, project: &UiProjectView) {
     match list {
-        StepList::Solids => draw_solid_list(ui, rect, editor, document, commands),
         StepList::BlockModels => draw_block_model_list(ui, rect, editor, project),
     }
 }
@@ -1362,53 +1358,6 @@ fn island<R>(ui: &mut egui::Ui, layout: &mut PlanningLayout, id: &'static str, w
     response.inner
 }
 
-/// Least height a stacked pane may be dragged to before its neighbour stops
-/// giving way. Two rows and a title strip: below that a grid says nothing.
-const MIN_STACKED_PANE: f32 = 96.0;
-
-/// The lower half of a column of two stacked panes.
-///
-/// Vertical stacking is how a column carries two grids without the workspace
-/// paying for two columns of width, and the split between them is the user's:
-/// the seam takes a grip of its own, the same three dots every other seam
-/// here is marked with. The upper half is [`central_pane`], which takes
-/// whatever this leaves.
-fn stacked_lower<R>(ui: &mut egui::Ui, id: &'static str, content: impl FnOnce(&mut egui::Ui, egui::Rect) -> R) -> (egui::Rect, chrome::Grip) {
-    stacked_lower_share(ui, id, 0.5, 0.0, content)
-}
-
-/// [`stacked_lower`], opening at `share` of the height on offer rather than
-/// half, and never taking the `reserve` a pane claimed after it needs: for a
-/// column of more than two panes, claimed from the bottom up.
-pub(crate) fn stacked_lower_share<R>(
-    ui: &mut egui::Ui,
-    id: &'static str,
-    share: f32,
-    reserve: f32,
-    content: impl FnOnce(&mut egui::Ui, egui::Rect) -> R,
-) -> (egui::Rect, chrome::Grip) {
-    // Bounded against the height actually on offer rather than a fixed pair of
-    // limits, so a short window narrows both panes instead of letting one of
-    // them push the other off the bottom.
-    let available = ui.available_height() - reserve;
-    let max = (available - MIN_STACKED_PANE).max(MIN_STACKED_PANE);
-    let rect = egui::Panel::bottom(id)
-        .resizable(true)
-        .default_size(available * share)
-        .min_size(MIN_STACKED_PANE.min(max))
-        .max_size(max)
-        .show_separator_line(false)
-        .frame(chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
-        .show(ui, |ui| {
-            let rect = ui.available_rect_before_wrap();
-            ui.set_clip_rect(ui.clip_rect().intersect(rect));
-            content(ui, rect);
-        })
-        .response
-        .rect;
-    (rect, chrome::Grip::new(rect, chrome::Edge::Top, ui.scope_id().with(id)))
-}
-
 /// Whatever is left once the islands have taken their columns, as one pane.
 /// Returns what it claimed, for a caller that registers it itself.
 fn central_pane(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui, egui::Rect)) -> egui::Rect {
@@ -1419,25 +1368,22 @@ fn central_pane(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui, egui::Rec
         .rect
 }
 
-/// A right-hand column of two stacked panes, each a region with the seam
-/// between them marked. Used where a page reads two tables side by side down
-/// one edge rather than across the workspace.
-pub(crate) fn stacked_column(
-    ui: &mut egui::Ui,
-    layout: &mut PlanningLayout,
-    id: &'static str,
-    lower_id: &'static str,
-    upper: impl FnOnce(&mut egui::Ui, egui::Rect),
-    lower: impl FnOnce(&mut egui::Ui, egui::Rect),
-) {
-    let column = Island::new(id, Side::Right).default_width(360.0).min_width(200.0).bare().show(ui, |ui, _| {
-        let (lower_rect, seam) = stacked_lower(ui, lower_id, lower);
-        let upper_rect = central_pane(ui, upper);
-        ([upper_rect, lower_rect], seam)
-    });
-    layout.regions.extend(column.inner.0);
+/// A right-hand column of tables, one under the other in one island and
+/// scrolling together: see [`table_stack`]. `content` draws each into
+/// [`stack_slot`].
+pub(crate) fn stacked_column(ui: &mut egui::Ui, layout: &mut PlanningLayout, id: &'static str, content: impl FnOnce(&mut egui::Ui)) {
+    let column = Island::new(id, Side::Right)
+        .default_width(360.0)
+        .min_width(200.0)
+        .flush()
+        .show(ui, |ui, rect| table_stack(ui, rect, id, content));
+    layout.regions.extend(column.regions);
     layout.grips.push(column.grip);
-    layout.grips.push(column.inner.1);
+}
+
+/// Tables one under the other in the central island, scrolling together.
+fn central_stack(ui: &mut egui::Ui, layout: &mut PlanningLayout, id: &'static str, content: impl FnOnce(&mut egui::Ui)) {
+    central_island(ui, layout, |ui, rect| table_stack(ui, rect, id, content));
 }
 
 /// [`central_pane`], for a caller in another module.
@@ -1450,74 +1396,47 @@ fn central_island(ui: &mut egui::Ui, layout: &mut PlanningLayout, content: impl 
     layout.regions.push(rect);
 }
 
-/// The object tree with a second pane stacked under it.
-///
-/// The step's own figures - a solid's properties, a bench run's results - are
-/// read against the objects they describe, so they share that column and the
-/// seam between them is the user's, like every other seam here.
-fn objects_column(
+/// The solids, with what is read about the one picked among them under the
+/// list: one island down the right, scrolling as a whole. The object tree
+/// those solids are built from is in the explorer column.
+fn solids_column(
     ui: &mut egui::Ui,
     layout: &mut PlanningLayout,
     editor: &mut EditorState,
-    project: &UiProjectView,
+    document: &Document,
     commands: &mut Vec<UiCommand>,
-    lower_id: &'static str,
     lower: impl FnOnce(&mut egui::Ui, egui::Rect, &mut EditorState, &mut Vec<UiCommand>),
 ) {
-    let title = tr!("sequence-objects");
     let column = Island::new("planning_objects_island", Side::Right)
         .default_width(300.0)
         .min_width(160.0)
-        .bare()
-        .show(ui, |ui, _| {
-            // The pane below is handed the editor and the command queue rather
-            // than capturing them: the tree above needs both as well, and one
-            // closure holding them would shut the other out.
-            let (lower_rect, seam) = stacked_lower(ui, lower_id, |ui, rect| lower(ui, rect, editor, commands));
-            let tree = central_pane(ui, |ui, rect| {
-                framed_render_pane(ui, rect, &title, |ui, body| {
-                    ui.scope_builder(egui::UiBuilder::new().id_salt("planning_solid_objects").max_rect(body), |ui| {
-                        ui.set_clip_rect(ui.clip_rect().intersect(body));
-                        ui.set_min_size(body.size());
-                        ui.painter().rect_filled(body, 0.0, crate::ui::widgets::tree_row_colors(ui).0);
-                        crate::ui::elements::explorer::draw_object_tree(ui, editor, project, commands);
-                    });
-                });
+        .flush()
+        .show(ui, |ui, rect| {
+            table_stack(ui, rect, "planning_solids_column", |ui| {
+                draw_solid_list(ui, stack_slot(ui), editor, document, commands);
+                lower(ui, stack_slot(ui), editor, commands);
             });
-            ([tree, lower_rect], seam)
         });
-    layout.regions.extend(column.inner.0);
+    layout.regions.extend(column.regions);
     layout.grips.push(column.grip);
-    layout.grips.push(column.inner.1);
 }
 
 fn draw_solids_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut EditorState, project: &UiProjectView, document: &Document, commands: &mut Vec<UiCommand>) {
     let session = project.active_session;
-    // The solid list is in the explorer column under the step list; what is
-    // read *about* the solid picked there belongs beside the objects it
-    // describes, so it stacks under the object tree.
     // Open on a solid rather than an empty preview.
     if editor.planning_selected_solid.is_none_or(|id| document.solid(id).is_none()) {
         editor.planning_selected_solid = document.solids().first().map(|solid| solid.id);
     }
     let selected = editor.planning_selected_solid.and_then(|id| document.solid(id));
-    objects_column(
-        ui,
-        layout,
-        editor,
-        project,
-        commands,
-        "planning_solids_properties_island",
-        |ui, rect, _editor, commands| match selected {
-            Some(solid) => draw_solid_properties(ui, rect, project, solid, commands),
-            None => {
-                let columns = [(tr!("planning-property"), 0.4), (tr!("planning-value"), 0.6)];
-                DataGrid::new("planning_solid_properties_empty", rect, &tr!("planning-properties"))
-                    .columns(&columns)
-                    .show(ui, |_| {});
-            }
-        },
-    );
+    solids_column(ui, layout, editor, document, commands, |ui, rect, _editor, commands| match selected {
+        Some(solid) => draw_solid_properties(ui, rect, project, solid, commands),
+        None => {
+            let columns = [(tr!("planning-property"), 0.4), (tr!("planning-value"), 0.6)];
+            DataGrid::new("planning_solid_properties_empty", rect, &tr!("planning-properties"))
+                .columns(&columns)
+                .show(ui, |_| {});
+        }
+    });
     central_island(ui, layout, |ui, rect| draw_solid_render(ui, rect, editor, session, commands));
     crate::ui::dialogs::solids::draw_new_solid_dialog(ui, editor, project, commands);
     crate::ui::dialogs::solids::draw_topography_update_dialog(ui, editor, project, document.solids(), commands);
@@ -1726,7 +1645,7 @@ fn draw_flitch_styles(ui: &mut egui::Ui, rect: egui::Rect, plan: &mut BenchingPl
 /// Shares of the results grid's columns.
 const RESULT_FRACTIONS: [f32; 3] = [0.35, 0.35, 0.3];
 
-/// The Benching step's pane under the object tree: every bench the plan
+/// The Benching step's results, under the solids list: every bench the plan
 /// produces that holds some of the solid, bottom up, with its flitches beneath
 /// it, each named by its base RL as the rest of the app names them.
 ///
@@ -1798,11 +1717,9 @@ fn draw_benching_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &m
     let solid_color = selected.map_or([1.0; 4], |solid| solid.color);
     let mut plan = selected.map(|solid| solid.benching.clone()).unwrap_or_default();
     let mut changed = false;
-    // Results read against the objects they were measured from, so they take
-    // the pane under the object tree; the solid list is in the explorer
-    // column under the step list.
+    // The results of the solid picked, under the list it is picked from.
     let results = plan.clone();
-    objects_column(ui, layout, editor, project, commands, "planning_bench_results_island", |ui, rect, editor, _commands| {
+    solids_column(ui, layout, editor, document, commands, |ui, rect, editor, _commands| {
         if solid_id.is_some() {
             draw_bench_results(ui, rect, &results, editor);
         } else {
@@ -1810,37 +1727,26 @@ fn draw_benching_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &m
         }
     });
 
-    // This column arranges two panes rather than being one, so it carries no
-    // frame of its own and they halve its height between them. It still closes
-    // as a whole: the seam down its side drags both of them shut.
+    // The benching and its flitch styles, one under the other in one island
+    // that scrolls as a whole.
     let settings = Island::new("planning_bench_settings_column", Side::Left)
         .default_width(300.0)
         .min_width(140.0)
-        .bare()
-        .show(ui, |ui, _| {
-            let (flitching, seam) = stacked_lower(ui, "planning_flitching_island", |ui, rect| {
+        .flush()
+        .show(ui, |ui, rect| {
+            table_stack(ui, rect, "planning_bench_settings", |ui| {
                 if solid_id.is_some() {
-                    draw_flitch_styles(ui, rect, &mut plan, solid_color, &mut changed);
+                    draw_benching_list(ui, stack_slot(ui), &mut plan, &mut changed);
+                    draw_flitch_styles(ui, stack_slot(ui), &mut plan, solid_color, &mut changed);
                 } else {
-                    DataGrid::new("planning_flitching_empty", rect, &tr!("planning-flitch-styles")).show(ui, |_| {});
-                }
-            });
-            let benching = central_pane(ui, |ui, rect| {
-                if solid_id.is_some() {
-                    draw_benching_list(ui, rect, &mut plan, &mut changed);
-                } else {
-                    DataGrid::new("planning_benching_empty", rect, &tr!("planning-benching")).show(ui, |ui| {
+                    DataGrid::new("planning_benching_empty", stack_slot(ui), &tr!("planning-benching")).show(ui, |ui| {
                         grid_empty_state(ui, &tr!("planning-no-solid-selected"), None);
                     });
                 }
             });
-            ([flitching, benching], seam)
         });
-    // The column is not a region itself: the two panes inside it are, and the
-    // seam between them resizes the split the column's own seam cannot.
-    layout.regions.extend(settings.inner.0);
+    layout.regions.extend(settings.regions);
     layout.grips.push(settings.grip);
-    layout.grips.push(settings.inner.1);
     central_island(ui, layout, |ui, rect| draw_solid_render(ui, rect, editor, project.active_session, commands));
     crate::ui::dialogs::solids::draw_new_solid_dialog(ui, editor, project, commands);
     if let Some(solid_id) = solid_id
@@ -1920,18 +1826,10 @@ fn draw_haulage_details(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: 
             island(ui, layout, "schedule_truck_class_list_island", 320.0, |ui, rect| {
                 super::schedule_trucking::draw_class_list(ui, rect, editor, &plan, session, commands)
             });
-            // The class's figures above, its grade speeds below, with the
-            // split between them the user's. It opens with the figures' rows
-            // fitted and the bands, which run longer, taking the rest.
-            let figures = crate::ui::widgets::data_grid::property_table_height(ui, 8) + 2.0;
-            let share = (1.0 - figures / ui.available_height().max(1.0)).clamp(0.3, 0.85);
-            let (bands, seam) = stacked_lower_share(ui, "schedule_truck_grade_speeds_pane", share, 0.0, |ui, rect| {
-                super::schedule_trucking::draw_grade_speeds(ui, rect, editor, &plan, session, commands)
-            });
-            layout.regions.push(bands);
-            layout.grips.push(seam);
-            central_island(ui, layout, |ui, rect| {
-                super::schedule_trucking::draw_class_properties(ui, rect, editor, &plan, session, commands)
+            // The class's figures, then its grade speeds, scrolling as one.
+            central_stack(ui, layout, "schedule_truck_class", |ui| {
+                super::schedule_trucking::draw_class_properties(ui, stack_slot(ui), editor, &plan, session, commands);
+                super::schedule_trucking::draw_grade_speeds(ui, stack_slot(ui), editor, &plan, session, commands);
             });
         }
     }
@@ -2021,10 +1919,10 @@ fn draw_schedule_details(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor:
         }
         ScheduleStep::Haulage => {
             island(ui, layout, "schedule_haulage_steps_island", 320.0, |ui, rect| draw_haulage_summary(ui, rect, editor));
-            let (pits, seam) = stacked_lower_share(ui, "schedule_haul_pits_island", 0.3, 0.0, |ui, rect| draw_pit_connections(ui, rect, editor));
-            layout.regions.push(pits);
-            layout.grips.push(seam);
-            central_island(ui, layout, |ui, rect| draw_destination_connections(ui, rect, editor));
+            central_stack(ui, layout, "schedule_haul_connections", |ui| {
+                draw_destination_connections(ui, stack_slot(ui), editor);
+                draw_pit_connections(ui, stack_slot(ui), editor);
+            });
         }
         ScheduleStep::TruckingRules => {
             island(ui, layout, "schedule_truck_rule_list_island", 380.0, |ui, rect| {

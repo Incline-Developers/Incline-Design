@@ -21,7 +21,7 @@ use crate::{
         state::{ScheduleEdit, ScheduleExperimentDraft, UiCommand},
         widgets::{
             context_menu::{ChecklistRow, Tick, checklist_popup},
-            data_grid::{PropertyRows, PropertyTable, property_table_height},
+            data_grid::{PropertyRows, PropertyTable},
             menu,
         },
     },
@@ -135,10 +135,8 @@ pub(crate) fn draw_advanced(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut Ed
     let solve_seconds = parse_positive(&draft.solve_seconds).filter(|seconds| *seconds <= MAX_SOLVE_SECONDS);
     let relative_gap = draft.relative_gap.trim().parse::<f64>().ok().filter(|gap| gap.is_finite() && (0.0..=1.0).contains(gap));
     let invalid = crate::model::schedule::ScheduleError::InvalidExperimentSetting.message();
-    let rows_used = 4;
-    let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, rows_used).min(rect.height())));
     let mut edits = Vec::new();
-    PropertyTable::new("schedule_experiment", table_rect, &tr!("experiment-advanced")).show(ui, |rows| {
+    PropertyTable::new("schedule_experiment", rect, &tr!("experiment-advanced")).show(ui, |rows| {
         rows.header(&tr!("planning-property"), &tr!("planning-value"));
         let response = rows.field(&tr!("experiment-interval"), &mut draft.interval_h, interval_h.is_none().then_some(invalid.as_str()));
         if response.lost_focus()

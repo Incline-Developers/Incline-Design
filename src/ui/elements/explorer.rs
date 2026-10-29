@@ -748,7 +748,7 @@ enum LowerPane {
 
 impl LowerPane {
     fn of(editor: &EditorState) -> Option<Self> {
-        if editor.is_solids_view() {
+        if editor.is_solids_view() || super::planning_setup::shows_object_tree(editor) {
             return Some(Self::Objects);
         }
         super::planning_setup::step_list(editor).map(Self::StepList)
@@ -840,32 +840,23 @@ pub(crate) fn draw_explorer(
                 egui::Rect::NOTHING
             };
 
-            // Animate and the Road Network each keep a Solids Navigation of
-            // their own: hiding ground to see a block, or to click the right
-            // one, belongs to that page alone.
-            let navigation = if editor.is_schedule_animation() {
-                Some(super::solids_view::NavigationTree::Animation)
-            } else if editor.is_haulage_page() {
-                Some(super::solids_view::NavigationTree::Haulage)
-            } else {
-                None
-            };
+            // Animate keeps a Solids Navigation of its own here: hiding ground
+            // to see a block, or to click the right one, belongs to that page
+            // alone. The Road Network's is at the foot of its own column.
+            let navigation = editor.is_schedule_animation().then_some(super::solids_view::NavigationTree::Animation);
             let animation_solids = if let Some(tree) = navigation {
-                egui::Panel::top(match tree {
-                    super::solids_view::NavigationTree::Animation => "schedule_animation_solids_navigation",
-                    super::solids_view::NavigationTree::Haulage => "haulage_solids_navigation",
-                })
-                .resizable(true)
-                .default_size((ui.available_height() * 0.5).max(120.0))
-                .min_size(90.0)
-                .show_separator_line(false)
-                .frame(crate::ui::chrome::region_frame(ui).fill(surface).inner_margin(egui::Margin::ZERO))
-                .show(ui, |ui| {
-                    heading(ui, &crate::i18n::tr!("sequence-solids-navigation"));
-                    super::solids_view::draw_animation_tree(ui, editor, document, tree, commands);
-                })
-                .response
-                .rect
+                egui::Panel::top("schedule_animation_solids_navigation")
+                    .resizable(true)
+                    .default_size((ui.available_height() * 0.5).max(120.0))
+                    .min_size(90.0)
+                    .show_separator_line(false)
+                    .frame(crate::ui::chrome::region_frame(ui).fill(surface).inner_margin(egui::Margin::ZERO))
+                    .show(ui, |ui| {
+                        heading(ui, &crate::i18n::tr!("sequence-solids-navigation"));
+                        super::solids_view::draw_animation_tree(ui, editor, document, tree, commands);
+                    })
+                    .response
+                    .rect
             } else {
                 egui::Rect::NOTHING
             };
@@ -892,7 +883,7 @@ pub(crate) fn draw_explorer(
                             let rect = ui.available_rect_before_wrap();
                             ui.set_clip_rect(ui.clip_rect().intersect(rect));
                             match lower {
-                                LowerPane::StepList(list) => super::planning_setup::draw_step_list(ui, rect, list, editor, project, document, commands),
+                                LowerPane::StepList(list) => super::planning_setup::draw_step_list(ui, rect, list, editor, project),
                                 LowerPane::Objects => {
                                     heading(ui, &crate::i18n::tr!("sequence-objects"));
                                     draw_object_tree(ui, editor, project, commands);
