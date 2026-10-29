@@ -6511,10 +6511,30 @@ pub(crate) struct UiTrackedProjectEntry {
     pub(crate) name: String,
     pub(crate) is_active: bool,
     pub(crate) dirty: bool,
+    /// Its file was not found at the last look: moved or deleted since it was
+    /// opened. Shown struck through and greyed out rather than dropped, so the
+    /// list still says where it was.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) missing: bool,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) path: PathBuf,
     #[cfg(target_arch = "wasm32")]
     pub(crate) id: crate::model::project::ProjectId,
+}
+
+impl UiTrackedProjectEntry {
+    /// Whether the project can be opened from a Recent list. Browser projects
+    /// live in storage the application owns, so they are never missing.
+    pub(crate) fn is_missing(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.missing
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            false
+        }
+    }
 }
 
 impl UiProjectEntry {
