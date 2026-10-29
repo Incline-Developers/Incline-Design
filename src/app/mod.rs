@@ -430,6 +430,9 @@ pub(crate) struct App<'a> {
     /// writes one line carrying the value it settled on instead of one a frame.
     deferred_gesture_log: Option<String>,
     modifiers: ModifiersState,
+    /// Enter or Escape, pressed over the viewport and not yet let go: tools
+    /// step when it is released, as dialogs do (`handle_key_action`).
+    held_step_key: Option<winit::keyboard::KeyCode>,
     drag: Option<DragState>,
     pub(crate) gizmo_drag: Option<GizmoDragState>,
     /// Screen position where the right mouse button was pressed (physical px).
@@ -674,6 +677,7 @@ impl<'a> Default for App<'a> {
             reported_during_gesture: Vec::new(),
             deferred_gesture_log: None,
             modifiers: ModifiersState::empty(),
+            held_step_key: None,
             drag: None,
             gizmo_drag: None,
             right_press_px: None,

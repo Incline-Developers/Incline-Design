@@ -1427,7 +1427,6 @@ logging-application-name = Назва програми: { $name }
 logging-application-startup = Запуск програми
 logging-build-target-os-architecture = Цільова платформа збірки: { $os }-{ $architecture }
 logging-completed = Завершено
-logging-count-messages = Повідомлень: { $count }
 logging-desktop-session-xdg-session-type = Сеанс робочого столу: XDG_SESSION_TYPE={ $session }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
 logging-initialising-incline-design = Ініціалізація Incline Design
 logging-locale-environment = Мовне середовище: LANG={ $lang }, LC_ALL={ $locale }, TZ={ $timezone }

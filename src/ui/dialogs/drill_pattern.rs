@@ -227,7 +227,7 @@ pub(crate) fn draw_drill_pattern_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
                 && !editor.drill_pattern_name.trim().is_empty()
                 && !editor.drill_pattern_awaiting_shape_pick;
             menu::menu_actions(ui, |ui| {
-                let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                let confirm = menu::dialog_confirmed(ui.ctx());
                 if (ui.add(MenuButton::new(tr!("common-create")).primary().enabled(can_create)).clicked() || (confirm && can_create)) && can_create {
                     commands.push(UiCommand::CreateDrillPattern {
                         name: editor.drill_pattern_name.trim().to_owned(),
@@ -236,7 +236,7 @@ pub(crate) fn draw_drill_pattern_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
                         diameter: editor.drill_pattern_diameter_mm / 1_000.0,
                     });
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     close = true;
                 }
             });

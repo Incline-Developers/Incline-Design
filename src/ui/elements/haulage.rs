@@ -747,7 +747,7 @@ pub(crate) fn draw_promote_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
                 menu::MenuFieldCombo::new("haul_promote_point", tr!("haul-point"), &mut promote.point, shown, options).show(ui);
             }
             menu::menu_actions(ui, |ui| {
-                if ui.add(menu::MenuButton::new(tr!("haul-promote-apply")).primary()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+                if ui.add(menu::MenuButton::new(tr!("haul-promote-apply")).primary()).clicked() || menu::dialog_confirmed(ui.ctx()) {
                     match promote.target {
                         HaulPromoteTarget::New(kind) => commands.push(UiCommand::NewHaulDestination { node: promote.node, kind }),
                         HaulPromoteTarget::Existing(id) => {
@@ -761,7 +761,7 @@ pub(crate) fn draw_promote_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
                     }
                     close = true;
                 }
-                if ui.add(menu::MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(menu::MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     close = true;
                 }
             });

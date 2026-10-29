@@ -48,8 +48,8 @@ pub(crate) fn draw_about_dialog(ui: &mut egui::Ui, editor: &mut EditorState) {
 
             menu::menu_actions(ui, |ui| {
                 // Nothing here is confirmed or cancelled, so both keys dismiss.
-                let confirm = menu::dialog_confirm_pressed(ui.ctx());
-                let cancel = menu::dialog_cancel_pressed(ui.ctx());
+                let confirm = menu::dialog_confirmed(ui.ctx());
+                let cancel = menu::dialog_cancelled(ui.ctx());
                 if ui.add(MenuButton::new(tr!("common-close")).primary()).clicked() || confirm || cancel {
                     editor.show_about = false;
                 }

@@ -74,7 +74,7 @@ pub(crate) fn draw_charge_product_dialog(ui: &mut egui::Ui, editor: &mut EditorS
         }
         let can_save = !name.is_empty() && !clash;
         menu::menu_actions(ui, |ui| {
-            if (menu::dialog_confirm_pressed(ui.ctx()) || ui.add(MenuButton::new(tr!("confirmations-save")).primary().enabled(can_save)).clicked()) && can_save {
+            if (menu::dialog_confirmed(ui.ctx()) || ui.add(MenuButton::new(tr!("confirmations-save")).primary().enabled(can_save)).clicked()) && can_save {
                 let mut product = product.clone();
                 product.name = name.to_owned();
                 commands.push(UiCommand::SaveChargeProduct {
@@ -83,7 +83,7 @@ pub(crate) fn draw_charge_product_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                 });
                 close = true;
             }
-            if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+            if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                 close = true;
             }
         });
@@ -237,7 +237,7 @@ pub(crate) fn draw_charge_rule_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
                         reload,
                     });
                 };
-                if (menu::dialog_confirm_pressed(ui.ctx()) || ui.add(MenuButton::new(tr!("confirmations-save")).primary().enabled(can_save)).clicked()) && can_save {
+                if (menu::dialog_confirmed(ui.ctx()) || ui.add(MenuButton::new(tr!("confirmations-save")).primary().enabled(can_save)).clicked()) && can_save {
                     save(false);
                     close = true;
                 }
@@ -251,7 +251,7 @@ pub(crate) fn draw_charge_rule_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
                     save(true);
                     close = true;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     close = true;
                 }
             });
@@ -505,11 +505,11 @@ pub(crate) fn draw_delete_blast_item_dialog(ui: &mut egui::Ui, editor: &mut Edit
                 menu::menu_note(ui, note);
             }
             menu::menu_actions(ui, |ui| {
-                if ui.add(MenuButton::new(title.clone()).danger()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(title.clone()).danger()).clicked() || menu::dialog_confirmed(ui.ctx()) {
                     commands.push(UiCommand::DeleteBlastLibraryItem(item.clone()));
                     editor.pending_delete_blast_item = None;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     editor.pending_delete_blast_item = None;
                 }
             });

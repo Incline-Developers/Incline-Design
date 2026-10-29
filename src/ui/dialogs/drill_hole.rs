@@ -66,8 +66,8 @@ pub(crate) fn draw_drill_hole_color_dialog(ui: &mut egui::Ui, editor: &mut Edito
     // which is a text field under the hood - has focus, so the field gets to
     // finish its own edit instead of the dialog closing under it.
     let dismissed = {
-        let confirm = !text_field_focused && menu::dialog_confirm_pressed(ui.ctx());
-        let cancel = menu::dialog_cancel_pressed(ui.ctx());
+        let confirm = !text_field_focused && menu::dialog_confirmed(ui.ctx());
+        let cancel = menu::dialog_cancelled(ui.ctx());
         confirm || cancel
     };
     if !open || dismissed {

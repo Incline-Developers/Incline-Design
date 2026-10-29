@@ -1976,6 +1976,8 @@ pub(crate) struct EditorState {
     pub(crate) isolated_entity: Option<SceneEntityId>,
     /// Short messages fading out above the status bar (`widgets::toast`).
     pub(crate) toasts: crate::ui::widgets::toast::Toasts,
+    /// Warnings and errors raised as dialogs (`dialogs::alerts`).
+    pub(crate) alerts: crate::ui::dialogs::alerts::Alerts,
     /// Entities frozen: still visible, but excluded from editing and snapping.
     ///
     /// Derived: the union of [`Self::explicitly_frozen`] and every design
@@ -3477,7 +3479,7 @@ impl EditorState {
     /// The GUI only reports a key press as consumed when a text field holds
     /// focus, so without asking here the viewport tools would act on the same
     /// press before the dialog is drawn. Keep this in step with the dialogs
-    /// that call [`crate::ui::widgets::menu::dialog_confirm_pressed`].
+    /// that call [`crate::ui::widgets::menu::dialog_confirmed`].
     pub(crate) fn dialog_owns_confirm_key(&self) -> bool {
         if self.viewport_pick_in_progress() {
             return false;
@@ -3512,7 +3514,8 @@ impl EditorState {
 
     /// The common case: a dialog that confirms on Enter and cancels on Escape.
     fn dialog_owns_both_keys(&self) -> bool {
-        self.grid_dialog.is_some()
+        self.alerts.is_showing()
+            || self.grid_dialog.is_some()
             || self.exit_confirm_open
             || self.replace_project_confirm_open
             || self.lossy_save_confirm_open
@@ -3936,6 +3939,7 @@ impl EditorState {
             hidden_handles: HashSet::new(),
             isolated_entity: None,
             toasts: Default::default(),
+            alerts: Default::default(),
             frozen_handles: HashSet::new(),
             explicitly_frozen: HashSet::new(),
             locked_layers: HashSet::new(),
@@ -4817,6 +4821,41 @@ pub(crate) enum ActiveTool {
 }
 
 impl ActiveTool {
+    /// The console activity what the tool does reports under, opened only if
+    /// it reports something (`logging::with_deferred_report`).
+    pub(crate) fn report_spec(self) -> Option<crate::logging::CommandReportSpec> {
+        let title = match self {
+            Self::None => return None,
+            Self::MakePoint => tr!("common-create-point"),
+            Self::MakeLine => tr!("common-create-line"),
+            Self::MakePoly => tr!("common-create-polyline"),
+            Self::MakeCircle => tr!("common-create-circle"),
+            Self::MakeText => tr!("toolbars-create-text"),
+            Self::DeletePoints => tr!("toolbars-delete-points"),
+            Self::MeasureDistance => tr!("toolbars-measure-distance"),
+            Self::MeasureBatterAngle => tr!("toolbars-strike-dip"),
+            Self::Hide => tr!("toolbars-hide"),
+            Self::OffsetElement => tr!("common-offset"),
+            Self::DrapeToTopology => tr!("common-drape-topology"),
+            Self::RelimitLine => tr!("common-relimit-line"),
+            Self::ExplodePolyline => tr!("toolbars-explode-polyline-lines"),
+            Self::FuseIntoPolyline => tr!("toolbars-fuse-polylines"),
+            Self::SplitAtPoints => tr!("toolbars-split-polyline-points"),
+            Self::Move => tr!("common-move-design"),
+            Self::MoveCollar => tr!("common-move-collar"),
+            Self::RotateCollar => tr!("common-rotate-collar"),
+            Self::TieHoles => tr!("common-tie-holes"),
+            Self::SetInitiationPoint => tr!("common-set-initiation-point"),
+            Self::ChargeHoles => tr!("common-charge-holes"),
+            Self::PickRotationCentre => tr!("viewport-bar-fix-centre-rotation"),
+            Self::Chamfer => tr!("toolbars-chamfer-polyline-corners"),
+            Self::BatterBermOffset => tr!("toolbars-auto-bench"),
+            Self::Bezier => tr!("toolbars-bezier-polyline"),
+            Self::VerticalSlice => tr!("viewport-bar-vertical-slice-view"),
+        };
+        Some(crate::logging::CommandReportSpec::new(title, String::new()))
+    }
+
     /// Tools that place new design geometry on the active layer. Derived
     /// edits such as offsetting retain their source object's layer.
     pub(crate) fn requires_active_layer(self) -> bool {

@@ -121,7 +121,7 @@ pub(crate) fn draw_new_solid_dialog(ui: &mut egui::Ui, editor: &mut EditorState,
             .show(ui);
             menu::menu_actions(ui, |ui| {
                 let can_add = !editor.new_solid_name.trim().is_empty();
-                let submitted = menu::dialog_confirm_pressed(ui.ctx());
+                let submitted = menu::dialog_confirmed(ui.ctx());
                 if (submitted || ui.add(MenuButton::new(tr!("solids-add-solid")).primary().enabled(can_add)).clicked()) && can_add {
                     commands.push(UiCommand::AddSolid {
                         name: editor.new_solid_name.trim().to_owned(),
@@ -132,7 +132,7 @@ pub(crate) fn draw_new_solid_dialog(ui: &mut egui::Ui, editor: &mut EditorState,
                     });
                     close = true;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     close = true;
                 }
             });
@@ -211,7 +211,7 @@ pub(crate) fn draw_topography_update_dialog(ui: &mut egui::Ui, editor: &mut Edit
                     });
                     close = true;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     close = true;
                 }
             });

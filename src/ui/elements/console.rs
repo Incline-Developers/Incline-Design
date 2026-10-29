@@ -319,7 +319,7 @@ fn append_console_entry(text: &mut String, entry: &ConsoleEntry) {
     }
 }
 
-fn console_entry_text(entry: &ConsoleEntry) -> String {
+pub(crate) fn console_entry_text(entry: &ConsoleEntry) -> String {
     let mut text = String::new();
     append_console_entry(&mut text, entry);
     text
@@ -333,7 +333,7 @@ fn console_text(entries: &[ConsoleEntry]) -> String {
     text
 }
 
-fn severity_icon(severity: ConsoleSeverity) -> egui::ImageSource<'static> {
+pub(crate) fn severity_icon(severity: ConsoleSeverity) -> egui::ImageSource<'static> {
     match severity {
         ConsoleSeverity::Info => unthemed_icon!("console_info.svg"),
         ConsoleSeverity::Success => unthemed_icon!("console_success.svg"),

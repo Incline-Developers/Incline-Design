@@ -156,7 +156,7 @@ pub(crate) fn draw_object_edit_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
     // Escape with a cell open belongs to the cell - `TextEdit` consumes it and
     // the buffer is abandoned. With no cell open it closes the dialog, which
     // is why `EditorState::dialog_owns_cancel_key` names this dialog.
-    if editor.object_edit_dialog.as_ref().is_some_and(|dialog| dialog.editing_cell.is_none()) && menu::dialog_cancel_pressed(ui.ctx()) {
+    if editor.object_edit_dialog.as_ref().is_some_and(|dialog| dialog.editing_cell.is_none()) && menu::dialog_cancelled(ui.ctx()) {
         editor.object_edit_dialog = None;
         return;
     }

@@ -771,7 +771,7 @@ fn draw_ui(
             dialogs::editing::draw_select_project_dialog(root_ui, project, commands);
         }
         *canvas_rect_out = egui::Rect::ZERO;
-        geometry_dirty |= draw_global_dialogs(root_ui, editor, document, project, block_models, drill_holes, commands);
+        geometry_dirty |= draw_global_dialogs(root_ui, editor, document, project, block_models, drill_holes, frame_context.console_snapshot, commands);
         let ctx = root_ui.ctx();
         chrome::paint_window_background(ctx, window_background, egui::Rect::ZERO);
         let details_region = if editor.is_solids_view() || editor.is_schedule_pane() {
@@ -1433,7 +1433,7 @@ fn draw_ui(
         widgets::viewport::ViewportScaleBar::new("viewport_scale_bar", canvas_rect).show(root_ui.ctx(), world_per_point, editor.renderer_background_color);
     }
 
-    geometry_dirty |= draw_global_dialogs(root_ui, editor, document, project, block_models, drill_holes, commands);
+    geometry_dirty |= draw_global_dialogs(root_ui, editor, document, project, block_models, drill_holes, frame_context.console_snapshot, commands);
 
     // --- Window chrome ---
     // Last, so the corner masks cut back everything the regions drew into
@@ -1538,6 +1538,7 @@ fn draw_initiation_cards(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui:
 /// Draw dialogs after the workspace so modal lifecycle state is never hidden.
 /// These dialogs are global application state even when their contents refer
 /// to workspace data.
+#[allow(clippy::too_many_arguments)]
 fn draw_global_dialogs(
     root_ui: &mut egui::Ui,
     editor: &mut EditorState,
@@ -1545,9 +1546,11 @@ fn draw_global_dialogs(
     project: &UiProjectView,
     block_models: &[OpenBlockModel],
     drill_holes: &[crate::model::drill_hole::OpenDrillHoleDataset],
+    console_snapshot: &crate::logging::ConsoleSnapshot,
     commands: &mut Vec<UiCommand>,
 ) -> bool {
     let mut geometry_dirty = false;
+    dialogs::alerts::draw_alert_dialog(root_ui, editor, console_snapshot);
     // An Improve run goes on whichever page is open, and so does its card.
     elements::improve_progress::draw_improve_card(root_ui, editor, commands);
     dialogs::survey::draw_definitions_dialog(root_ui, editor, commands);

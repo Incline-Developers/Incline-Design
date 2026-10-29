@@ -1413,7 +1413,6 @@ logging-application-name = 애플리케이션 이름: { $name }
 logging-application-startup = 애플리케이션 시작
 logging-build-target-os-architecture = 빌드 대상: { $os }-{ $architecture }
 logging-completed = 완료됨
-logging-count-messages = 메시지 { $count }개
 logging-desktop-session-xdg-session-type = 데스크톱 세션: XDG_SESSION_TYPE={ $session }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
 logging-initialising-incline-design = Incline Design 초기화 중
 logging-locale-environment = 로케일 환경: LANG={ $lang }, LC_ALL={ $locale }, TZ={ $timezone }

@@ -44,11 +44,11 @@ pub(crate) fn draw_reference_surface_dialog(ui: &mut egui::Ui, editor: &mut Edit
             menu::menu_note(ui, tr!("reference-surface-triangulates-selected-points-plan-in"));
             ui.small(tr!("reference-surface-points-outside-extent-still-shape"));
             menu::menu_actions(ui, |ui| {
-                let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                let confirm = menu::dialog_confirmed(ui.ctx());
                 if ui.add(MenuButton::new(tr!("reference-points-make")).primary()).clicked() || confirm {
                     build = true;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     cancel = true;
                 }
             });
