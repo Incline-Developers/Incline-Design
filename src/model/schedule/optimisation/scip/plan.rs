@@ -1345,7 +1345,27 @@ fn solve_periods(
     };
     // Finished flags for every block a chain waits on: all of it dug by the
     // end of the day, and staying finished.
-    let waited: BTreeSet<GroundId> = (0..chains.len()).flat_map(|loader_index| orders(loader_index).map(|pair| pair[0].0)).collect();
+    // A block in two of a loader's bars is dug in either bar's order: for
+    // each bar holding it, the block before it there still to be dug, if
+    // any, and the first period the bar is open.
+    let mut either = Vec::new();
+    for &(loader_index, ground) in repeated {
+        let mut ways = Vec::new();
+        for task in authored_tasks(input, loader_index) {
+            let TaskKind::Dig { sequence } = &input.tasks[task].kind else { continue };
+            let Some(position) = sequence.iter().position(|next| *next == ground) else { continue };
+            let ahead = sequence[..position].iter().rev().find(|ahead| tonnes.contains_key(ahead)).copied();
+            let opens = (0..periods)
+                .find(|&p| prepared.day_intervals[&days[p]].iter().any(|interval| task_active(&input.tasks[task], *interval)))
+                .unwrap_or(periods);
+            ways.push((ahead, opens));
+        }
+        either.push((loader_index, ground, ways));
+    }
+    let waited: BTreeSet<GroundId> = (0..chains.len())
+        .flat_map(|loader_index| orders(loader_index).map(|pair| pair[0].0))
+        .chain(either.iter().flat_map(|(_, _, ways)| ways.iter().filter_map(|(ahead, _)| *ahead)))
+        .collect();
     let mut finished: BTreeMap<(GroundId, usize), usize> = BTreeMap::new();
     for &ground in &waited {
         let mut previous: Option<usize> = None;
@@ -1372,6 +1392,20 @@ fn solve_periods(
                 }
                 builder.row(&terms, f64::NEG_INFINITY, 0.0, &format!("order_{loader_index}_{}_{p}", next.0));
             }
+        }
+    }
+
+    for (loader_index, ground, ways) in &either {
+        for p in 0..periods {
+            let Some(&so_far) = loader_so_far.get(&(*loader_index, *ground, p)) else { continue };
+            let open: Vec<Option<GroundId>> = ways.iter().filter(|(_, opens)| *opens <= p).map(|(ahead, _)| *ahead).collect();
+            // A bar open with nothing left before the block frees it.
+            if open.iter().any(Option::is_none) {
+                continue;
+            }
+            let mut terms = vec![(so_far, 1.0)];
+            terms.extend(open.iter().flatten().filter_map(|ahead| finished.get(&(*ahead, p))).map(|flag| (*flag, -tonnes[ground])));
+            builder.row(&terms, f64::NEG_INFINITY, 0.0, &format!("either_{loader_index}_{}_{p}", ground.0));
         }
     }
 
