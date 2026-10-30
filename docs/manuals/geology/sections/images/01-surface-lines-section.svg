@@ -19,7 +19,9 @@
     <text x="30" y="84" text-anchor="end">80</text>
     <text x="30" y="164" text-anchor="end">76</text>
     <text x="30" y="244" text-anchor="end">72</text>
-    <text x="22" y="30" text-anchor="start">RL (m)</text>
+    <text x="54" y="30" text-anchor="end">RL (m)</text>
+    <text x="499" y="164" text-anchor="start">Roof</text>
+    <text x="499" y="204" text-anchor="start">Floor</text>
     <text x="70" y="262">0</text>
     <text x="280" y="262">100</text>
     <text x="490" y="262">200</text>

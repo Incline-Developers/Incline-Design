@@ -1,16 +1,18 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 400" width="540" height="400" role="img" aria-label="Section along the dip of the same seam, dipping 30 degrees: a hole drilled at 60 degrees down the dip cuts the roof and the floor 3.46 m apart along the hole, and the true thickness between those two points, square to the bedding, is still 1.73 m">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 400" width="540" height="400" role="img" aria-label="Section along the dip of the same seam: a hole at 60 degrees down the dip logs 3.46 m from roof to floor along the hole, in orange, and the true thickness, dashed grey, is still 1.73 m">
   <polygon points="60,70 420,277.8 420,377.8 60,170" stroke="#000" stroke-width="1" fill="#ccc"/>
   <line x1="140" y1="46.9" x2="311.6" y2="344.1" stroke="#000" stroke-width="1"/>
   <circle cx="200" cy="150.8" r="3" fill="#000"/>
   <circle cx="286.6" cy="300.8" r="3" fill="#000"/>
   <line x1="60" y1="70" x2="170" y2="70" stroke="#888" stroke-width="1" stroke-dasharray="4 3"/>
   <path d="M140 70 A80 80 0 0 1 129.3 110" stroke="#000" stroke-width="1" fill="none"/>
-  <line x1="286.6" y1="300.8" x2="329.9" y2="225.8" stroke="#d9622b" stroke-width="3"/>
+  <line x1="200" y1="150.8" x2="286.6" y2="300.8" stroke="#d9622b" stroke-width="3"/>
+  <line x1="286.6" y1="300.8" x2="329.9" y2="225.8" stroke="#888" stroke-width="1" stroke-dasharray="4 3"/>
   <line x1="232" y1="282" x2="262" y2="258" stroke="#000" stroke-width="1"/>
   <line x1="350" y1="204" x2="316" y2="250" stroke="#000" stroke-width="1"/>
   <g font-family="sans-serif" font-size="15" fill="#000">
     <text x="140" y="38" text-anchor="middle">Hole at 60°</text>
-    <text x="230" y="300" text-anchor="end">3.46 m along the hole</text>
+    <text x="230" y="300" text-anchor="end">3.46 m apparent</text>
+    <text x="230" y="317" text-anchor="end">thickness along the hole</text>
     <text x="345" y="198">1.73 m true thickness</text>
     <text x="112" y="90">30°</text>
     <text x="430" y="282">Roof</text>

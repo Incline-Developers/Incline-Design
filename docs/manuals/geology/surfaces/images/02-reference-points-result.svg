@@ -16,9 +16,10 @@
 <line x1="306" y1="64" x2="306" y2="50" stroke="#000" stroke-width="1"/>
 <path d="M306 49 l-3 6 l6 0 z"/>
 </g>
-<g stroke="#000" stroke-width="1" fill="#fff"><rect x="10" y="338" width="520" height="30"/></g>
+<g stroke="#000" stroke-width="1" fill="#fff"><rect x="10" y="326" width="520" height="46"/></g>
 <g font-family="sans-serif" fill="#000">
-<text x="20" y="358" font-size="13" text-anchor="start" textLength="500" lengthAdjust="spacingAndGlyphs">Reference points: 3 holes placed, 0 without &#x27;A&#x27;, 0 flagged as possible fault repeats</text>
+<text x="20" y="343" font-size="13" text-anchor="start" font-weight="bold">Build Reference Points</text>
+<text x="20" y="363" font-size="13" text-anchor="start" textLength="500" lengthAdjust="spacingAndGlyphs">Reference points: 3 holes placed, 0 without &#x27;A&#x27;, 0 flagged as possible fault repeats</text>
 <text x="340" y="60" font-size="13" text-anchor="start" >Layer</text>
 <text x="340" y="80" font-size="15" text-anchor="start" >A Roof points</text>
 <circle cx="345" cy="108" r="3" fill="#d9622b" stroke="#d9622b"/>

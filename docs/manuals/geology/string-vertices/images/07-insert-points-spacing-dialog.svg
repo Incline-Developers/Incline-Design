@@ -1,15 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 200" width="540" height="200" role="img" aria-label="Geology workspace, the Insert Point at Spacing window with Spacing 60 m, the Apply and Cancel buttons, and the line 1 polyline(s) selected.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 200" width="540" height="200" role="img" aria-label="Geology workspace, the Insert Point at Spacing window with Spacing 60 m, the Cancel and Apply buttons, and the line 1 polyline(s) selected.">
   <g stroke="#000" stroke-width="1" fill="#fff">
     <rect x="130" y="10" width="280" height="180"/>
     <line x1="130" y1="44" x2="410" y2="44"/>
     <rect x="224" y="106" width="76" height="26"/>
     <rect x="310" y="106" width="84" height="26"/>
+    <rect x="274" y="60" width="120" height="22"/>
   </g>
   <g font-family="sans-serif" fill="#000">
     <text x="146" y="34" font-size="15">Insert Point at Spacing</text>
     <g font-size="13">
-      <text x="146" y="76">Spacing</text><text x="394" y="76" text-anchor="end">60 m</text>
-      <text x="262" y="124" text-anchor="middle">Apply</text><text x="352" y="124" text-anchor="middle">Cancel</text>
+      <text x="146" y="76">Spacing</text><text x="282" y="76">60 m</text>
+      <text x="262" y="124" text-anchor="middle">Cancel</text><text x="352" y="124" text-anchor="middle">Apply</text>
       <text x="146" y="164">1 polyline(s) selected</text>
     </g>
   </g>

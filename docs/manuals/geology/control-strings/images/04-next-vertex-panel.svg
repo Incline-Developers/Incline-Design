@@ -4,20 +4,22 @@
     <line x1="130" y1="44" x2="410" y2="44"/>
     <line x1="146" y1="188" x2="394" y2="188"/>
     <rect x="310" y="132" width="84" height="26"/>
+    <rect x="274" y="54" width="120" height="22"/><rect x="274" y="80" width="120" height="22"/><rect x="274" y="106" width="120" height="22"/>
+    <rect x="274" y="200" width="120" height="22"/><rect x="274" y="230" width="120" height="22"/><rect x="274" y="260" width="120" height="22"/>
     <rect x="224" y="292" width="76" height="26"/>
     <rect x="310" y="292" width="84" height="26"/>
   </g>
   <g font-family="sans-serif" fill="#000">
     <text x="146" y="34" font-size="15">Next Vertex</text>
     <g font-size="13">
-      <text x="146" y="70">X</text><text x="394" y="70" text-anchor="end">1200</text>
-      <text x="146" y="96">Y</text><text x="394" y="96" text-anchor="end">1100</text>
-      <text x="146" y="122">Z</text><text x="394" y="122" text-anchor="end">77</text>
+      <text x="146" y="70">X</text><text x="282" y="70">1200</text>
+      <text x="146" y="96">Y</text><text x="282" y="96">1100</text>
+      <text x="146" y="122">Z</text><text x="282" y="122">77</text>
       <text x="352" y="150" text-anchor="middle">Add Vertex</text>
       <text x="146" y="182">From the last vertex</text>
-      <text x="146" y="216">Bearing</text><text x="394" y="216" text-anchor="end">90</text>
-      <text x="146" y="246">Distance</text><text x="394" y="246" text-anchor="end">100</text>
-      <text x="146" y="276">Dip</text><text x="394" y="276" text-anchor="end">0</text>
+      <text x="146" y="216">Bearing</text><text x="282" y="216">90</text>
+      <text x="146" y="246">Distance</text><text x="282" y="246">100</text>
+      <text x="146" y="276">Dip</text><text x="282" y="276">0</text>
       <text x="262" y="310" text-anchor="middle">Add Vertex</text>
       <text x="352" y="310" text-anchor="middle">Close</text>
     </g>

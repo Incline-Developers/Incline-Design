@@ -1,17 +1,23 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 250" width="540" height="250" role="img" aria-label="Geology workspace: the Thickness points table open over the plan view, three rows S1 S2 S3 with true and vertical thickness columns">
-  <polygon points="20,230 120,230 70,110" stroke="#888" stroke-width="1" stroke-dasharray="4 3" fill="none"/>
+  <polygon points="20,200 120,200 70,100" stroke="#888" stroke-width="1" fill="none"/>
   <g stroke="#000" stroke-width="1" fill="#fff">
-    <rect x="70" y="10" width="460" height="230"/>
-    <line x1="70" y1="36" x2="530" y2="36"/>
+    <circle cx="20" cy="200" r="6"/><circle cx="120" cy="200" r="6"/><circle cx="70" cy="100" r="6"/>
+    <rect x="150" y="10" width="380" height="230"/>
+    <line x1="150" y1="36" x2="530" y2="36"/>
     <rect x="460" y="204" width="60" height="26"/>
   </g>
+  <g fill="#000"><circle cx="20" cy="200" r="3"/><circle cx="120" cy="200" r="3"/><circle cx="70" cy="100" r="3"/></g>
+  <line x1="125" y1="50" x2="125" y2="20" stroke="#000" stroke-width="1"/>
+  <path d="M125 14 l-4 9 h8 z" fill="#000"/>
   <g font-family="sans-serif" font-size="13" fill="#000">
-    <text x="78" y="28" font-size="15">Thickness points: A thickness points</text>
-    <text x="78" y="56">3 point(s), measured against A Roof plane</text>
-    <text x="78" y="106">Source</text><text x="250" y="106" text-anchor="end">True thickness</text><text x="400" y="106" text-anchor="end">Vertical thickness</text><text x="500" y="106" text-anchor="end">Dip</text>
-    <text x="78" y="130">S1</text><text x="250" y="130" text-anchor="end">2.000</text><text x="400" y="130" text-anchor="end">2.000</text><text x="500" y="130" text-anchor="end">1.15</text>
-    <text x="78" y="154">S2</text><text x="250" y="154" text-anchor="end">2.000</text><text x="400" y="154" text-anchor="end">2.000</text><text x="500" y="154" text-anchor="end">1.15</text>
-    <text x="78" y="178">S3</text><text x="250" y="178" text-anchor="end">2.000</text><text x="400" y="178" text-anchor="end">2.000</text><text x="500" y="178" text-anchor="end">1.15</text>
+    <text x="20" y="222" text-anchor="middle">S1</text><text x="120" y="222" text-anchor="middle">S2</text><text x="70" y="86" text-anchor="middle">S3</text>
+    <text x="108" y="28">N</text>
+    <text x="158" y="28" font-size="15">Thickness points: A thickness points</text>
+    <text x="158" y="56">3 point(s), measured against A Roof plane</text>
+    <text x="158" y="106">Source</text><text x="315" y="106" text-anchor="end">True thickness</text><text x="450" y="106" text-anchor="end">Vertical thickness</text><text x="515" y="106" text-anchor="end">Dip</text>
+    <text x="158" y="130">S1</text><text x="315" y="130" text-anchor="end">2.000</text><text x="450" y="130" text-anchor="end">2.000</text><text x="515" y="130" text-anchor="end">1.15</text>
+    <text x="158" y="154">S2</text><text x="315" y="154" text-anchor="end">2.000</text><text x="450" y="154" text-anchor="end">2.000</text><text x="515" y="154" text-anchor="end">1.15</text>
+    <text x="158" y="178">S3</text><text x="315" y="178" text-anchor="end">2.000</text><text x="450" y="178" text-anchor="end">2.000</text><text x="515" y="178" text-anchor="end">1.15</text>
     <text x="490" y="222" text-anchor="middle">Close</text>
   </g>
 </svg>

@@ -10,6 +10,6 @@
 <text x="145.5" y="181.5" font-size="15" text-anchor="start" >S1</text>
 <text x="365.5" y="229.5" font-size="15" text-anchor="start" >S2</text>
 <text x="345.5" y="115.5" font-size="15" text-anchor="start" >S3</text>
-<text x="211.2" y="72.2" font-size="15" text-anchor="start" >A Roof</text>
+<text x="255" y="172" font-size="15" text-anchor="middle" >A Roof</text>
 </g>
 </svg>

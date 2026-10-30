@@ -14,12 +14,16 @@
 <circle cx="175" cy="100" r="1.5" fill="#000"/>
 <circle cx="160" cy="40" r="1.5" fill="#000"/>
 <circle cx="170" cy="170" r="12" fill="none" stroke="#d9622b" stroke-width="3"/>
-<rect x="192" y="158" width="190" height="80"/>
+<rect x="192" y="158" width="240" height="142"/>
+<line x1="192" y1="186" x2="432" y2="186"/>
 </g>
 <g font-family="sans-serif" fill="#000">
-<text x="200" y="177" font-size="13" text-anchor="start" >Delete vertex 3</text>
-<text x="200" y="205" font-size="13" text-anchor="start" >Show vertex 3 in the table</text>
-<text x="200" y="229" font-size="13" text-anchor="start" fill="#888" >…</text>
+<text x="200" y="178" font-size="15" text-anchor="start" >Strings 1 and 2, 6.00 m apart</text>
+<text x="200" y="206" font-size="13" text-anchor="start" >Delete vertex 3</text>
+<text x="200" y="228" font-size="13" text-anchor="start" >Show vertex 3 in the table</text>
+<text x="200" y="250" font-size="13" text-anchor="start" >Delete vertex 3</text>
+<text x="200" y="272" font-size="13" text-anchor="start" >Show vertex 3 in the table</text>
+<text x="200" y="292" font-size="13" text-anchor="start" fill="#888" >…</text>
 <text x="300" y="46" font-size="13" text-anchor="middle" >N</text>
 <line x1="300" y1="64" x2="300" y2="50" stroke="#000"/>
 <path d="M300 49 l-3 6 l6 0 z"/>

@@ -19,6 +19,6 @@
   <line x1="300" y1="104" x2="270" y2="146" stroke="#000" stroke-width="1"/>
   <g font-family="sans-serif" font-size="15" fill="#000" text-anchor="middle">
     <text x="300" y="100" text-anchor="start">A Roof plane Cut, flat at RL 77</text>
-    <text x="300" y="244">A Floor Cut, flat at RL 75</text>
+    <text x="395" y="244">A Floor Cut, flat at RL 75</text>
   </g>
 </svg>

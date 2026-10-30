@@ -5,15 +5,15 @@
     <rect x="12" y="44" width="100" height="306"/>
     <rect x="16" y="78" width="92" height="36"/>
     <rect x="262" y="76" width="80" height="22"/>
-    <rect x="216" y="113" width="62" height="22"/>
-    <rect x="216" y="229" width="62" height="22"/>
-    <rect x="124" y="140" width="410" height="90" fill="none"/>
-    <rect x="124" y="256" width="410" height="90" fill="none"/>
+    <rect x="240" y="113" width="56" height="22"/>
+    <rect x="240" y="229" width="62" height="22"/>
+    <rect x="124" y="140" width="404" height="90" fill="none"/>
+    <rect x="124" y="256" width="404" height="90" fill="none"/>
     <rect x="410" y="362" width="56" height="24"/>
     <rect x="470" y="362" width="60" height="24"/>
   </g>
   <g stroke="#d9622b" stroke-width="3" fill="none">
-    <rect x="124" y="158" width="410" height="22"/>
+    <rect x="124" y="158" width="404" height="22"/>
   </g>
   <g font-family="sans-serif" font-size="15" fill="#000">
     <text x="14" y="26">Import</text>
@@ -27,22 +27,22 @@
     <text x="270" y="92">Choose...</text>
     <text x="350" y="92">2 files selected</text>
     <text x="124" y="129" font-weight="bold">S-collars.csv</text>
-    <text x="222" y="129">Collar</text>
-    <text x="286" y="129" fill="#888">One row per hole, with coordinates</text>
+    <text x="246" y="129">Collar</text>
+    <text x="302" y="129" fill="#888">One row per hole, with coordinates</text>
     <text x="128" y="153"><tspan>HOLEID</tspan><tspan x="190">EAST</tspan><tspan x="262">NORTH</tspan><tspan x="346">RL</tspan><tspan x="446">TD</tspan></text>
     <text x="128" y="173"><tspan>DHID</tspan><tspan x="190">East / X</tspan><tspan x="262">North / Y</tspan><tspan x="346">Elevation / Z</tspan><tspan x="446">Total depth</tspan></text>
     <text x="128" y="193"><tspan>S1</tspan><tspan x="190">1000</tspan><tspan x="262">1000</tspan><tspan x="346">100</tspan><tspan x="446">60</tspan></text>
     <text x="128" y="209"><tspan>S2</tspan><tspan x="190">1200</tspan><tspan x="262">1000</tspan><tspan x="346">100</tspan><tspan x="446">60</tspan></text>
     <text x="128" y="225"><tspan>S3</tspan><tspan x="190">1100</tspan><tspan x="262">1200</tspan><tspan x="346">100</tspan><tspan x="446">60</tspan></text>
     <text x="124" y="245" font-weight="bold">S-intervals.csv</text>
-    <text x="222" y="245">Interval</text>
-    <text x="286" y="245" fill="#888">Hole, from and to</text>
+    <text x="246" y="245">Interval</text>
+    <text x="308" y="245" fill="#888">Hole, from and to</text>
     <text x="128" y="269"><tspan>HOLEID</tspan><tspan x="190">FROM</tspan><tspan x="262">TO</tspan><tspan x="346">SEAM</tspan></text>
     <text x="128" y="289"><tspan>DHID</tspan><tspan x="190">FROM</tspan><tspan x="262">TO</tspan><tspan x="346">Attribute</tspan></text>
     <text x="128" y="309"><tspan>S1</tspan><tspan x="190">20.0</tspan><tspan x="262">22.0</tspan><tspan x="346">A</tspan></text>
     <text x="128" y="325"><tspan>S1</tspan><tspan x="190">40.0</tspan><tspan x="262">41.5</tspan><tspan x="346">B</tspan></text>
     <text x="128" y="341"><tspan>S2</tspan><tspan x="190">24.0</tspan><tspan x="262">26.0</tspan><tspan x="346">A</tspan></text>
-    <text x="418" y="379">Reset</text>
-    <text x="482" y="379">Import</text>
+    <text x="438" y="379" text-anchor="middle">Reset</text>
+    <text x="500" y="379" text-anchor="middle">Import</text>
   </g>
 </svg>

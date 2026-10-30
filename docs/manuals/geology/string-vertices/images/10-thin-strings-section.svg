@@ -8,6 +8,7 @@
     <text x="190" y="220" text-anchor="middle">1050</text>
     <text x="370" y="220" text-anchor="middle">1150</text>
     <text x="60" y="14" text-anchor="middle">RL</text>
+    <text x="500" y="14" text-anchor="end">RL scale much larger than distance</text>
     <text x="280" y="220" text-anchor="middle">1100</text>
     <text x="460" y="220" text-anchor="middle">1200</text>
     <text x="280" y="242" text-anchor="middle">X along Y = 1100</text>

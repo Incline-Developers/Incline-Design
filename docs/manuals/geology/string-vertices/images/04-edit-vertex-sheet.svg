@@ -1,23 +1,25 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 250" width="540" height="250" role="img" aria-label="Geology workspace, the Edit Object window on its Vertices tab after Edit Vertex: row 2 of the string, its Z changed to 77.0, with the OK, Cancel and Apply buttons.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 250" width="540" height="250" role="img" aria-label="Geology workspace, the Edit Object window on its Vertices tab after Edit Vertex: row 2 of the string, its Z changed to 77.0, with the Apply, Cancel and OK buttons.">
   <g stroke="#000" stroke-width="1" fill="#fff">
     <rect x="90" y="10" width="360" height="230"/>
     <line x1="90" y1="44" x2="450" y2="44"/>
     <rect x="106" y="54" width="90" height="26"/>
-    <rect x="200" y="54" width="90" height="26"/>
+    <rect x="200" y="54" width="90" height="26" fill="#ccc"/>
     <line x1="106" y1="118" x2="434" y2="118"/>
-    <rect x="106" y="196" width="60" height="26"/>
-    <rect x="172" y="196" width="70" height="26"/>
-    <rect x="248" y="196" width="70" height="26"/>
+    <rect x="134" y="120" width="82" height="22"/><rect x="243" y="120" width="82" height="22"/><rect x="352" y="120" width="82" height="22"/>
+    <rect x="134" y="150" width="82" height="22"/><rect x="243" y="150" width="82" height="22"/>
+    <rect x="222" y="196" width="70" height="26"/>
+    <rect x="298" y="196" width="70" height="26"/>
+    <rect x="374" y="196" width="60" height="26"/>
   </g>
-  <rect x="352" y="148" width="82" height="26" fill="none" stroke="#d9622b" stroke-width="3"/>
+  <rect x="352" y="150" width="82" height="22" fill="#fff" stroke="#d9622b" stroke-width="3"/>
   <g font-family="sans-serif" fill="#000">
     <text x="106" y="34" font-size="15">Edit Object</text>
     <g font-size="13" text-anchor="middle">
       <text x="151" y="72">Properties</text><text x="245" y="72">Vertices</text>
-      <text x="146" y="110">X</text><text x="230" y="110">Y</text><text x="393" y="110">Z</text>
-      <text x="112" y="136" text-anchor="start">1</text><text x="132" y="136" text-anchor="start">1000.000</text><text x="230" y="136">950.000</text><text x="393" y="136">80.000</text>
-      <text x="112" y="166" text-anchor="start">2</text><text x="132" y="166" text-anchor="start">1200.000</text><text x="230" y="166">950.000</text><text x="393" y="166">77.000</text>
-      <text x="136" y="214">OK</text><text x="207" y="214">Cancel</text><text x="283" y="214">Apply</text>
+      <text x="175" y="110">X</text><text x="284" y="110">Y</text><text x="393" y="110">Z</text>
+      <text x="112" y="136" text-anchor="start">1</text><text x="142" y="136" text-anchor="start">1000.000</text><text x="251" y="136" text-anchor="start">950.000</text><text x="360" y="136" text-anchor="start">80.000</text>
+      <text x="112" y="166" text-anchor="start">2</text><text x="142" y="166" text-anchor="start">1200.000</text><text x="251" y="166" text-anchor="start">950.000</text><text x="360" y="166" text-anchor="start">77.000</text>
+      <text x="257" y="214">Apply</text><text x="333" y="214">Cancel</text><text x="404" y="214">OK</text>
     </g>
   </g>
 </svg>

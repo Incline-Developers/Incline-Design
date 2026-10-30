@@ -13,7 +13,7 @@
   </g>
   <g font-family="sans-serif" font-size="13" fill="#000">
     <text x="62" y="62">Holes</text>
-    <text x="258" y="62">3 holes from 'S-collars + 1 files'</text>
+    <text x="480" y="62" text-anchor="end">3 holes from 'S-collars + 1 files'</text>
     <text x="62" y="92">Points at</text>
     <text x="258" y="92">A logged pick</text>
     <text x="62" y="122">Working section field</text>
