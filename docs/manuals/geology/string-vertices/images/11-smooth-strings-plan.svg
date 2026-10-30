@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 350" width="540" height="350" role="img" aria-label="Geology workspace, plan view zoomed to the corner of a string at (1100, 1100), the corner in grey and the rounded string after Smooth Strings at Tolerance 0.5 m in orange.">
+  <line x1="505" y1="52" x2="505" y2="24" stroke="#000" stroke-width="1"/>
+  <path d="M505 23 l-3 6 l6 0 z" fill="#000"/>
+  <text x="505" y="16" font-family="sans-serif" font-size="13" fill="#000" text-anchor="middle">N</text>
+  <polyline points="60,90 400,90 400,330" fill="none" stroke="#888" stroke-width="1" stroke-dasharray="4 3"/>
+  <polyline points="60.0,90.0 315.1,90.0 325.4,90.3 335.0,91.3 344.0,93.0 352.3,95.3 359.9,98.3 366.9,101.9 373.2,106.2 378.8,111.2 383.8,116.8 388.1,123.1 391.7,130.1 394.7,137.7 397.0,146.0 398.7,155.0 399.7,164.6 400.0,174.8 400.0,330.0" fill="none" stroke="#d9622b" stroke-width="3"/>
+  <circle cx="400" cy="90" r="3" fill="#888"/>
+  <g fill="#000">
+    <circle cx="315.1" cy="90.0" r="3"/>
+    <circle cx="400.0" cy="174.8" r="3"/>
+    <circle cx="378.8" cy="111.2" r="3"/>
+  </g>
+  <g font-family="sans-serif" font-size="13" fill="#000">
+    <text x="410" y="82">(1100, 1100)</text>
+    <text x="255" y="80">(1098.586, 1100.000)</text>
+    <text x="390" y="191" text-anchor="end">(1100.000, 1098.586)</text>
+    <text x="249" y="141">(1099.646, 1099.646)</text>
+  </g>
+</svg>

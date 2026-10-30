@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 190" width="540" height="190" role="img" aria-label="Geology workspace, the Nudge RL panel after three presses of Raise on a vertex that started at RL 77.000: Step 0.1, Vertex RL 77.300, and the buttons Raise, Lower and Close.">
+  <rect x="120" y="10" width="300" height="170" stroke="#000" stroke-width="1" fill="#fff"/>
+  <line x1="120" y1="40" x2="420" y2="40" stroke="#000" stroke-width="1"/>
+  <g stroke="#000" stroke-width="1" fill="#fff">
+    <rect x="200" y="140" width="64" height="26"/>
+    <rect x="272" y="140" width="64" height="26"/>
+    <rect x="344" y="140" width="64" height="26"/>
+    <rect x="320" y="57" width="90" height="22"/>
+  </g>
+  <rect x="320" y="92" width="90" height="24" stroke="#d9622b" stroke-width="3" fill="#fff"/>
+  <g font-family="sans-serif" fill="#000">
+    <text x="132" y="31" font-size="15">Nudge RL</text>
+    <text x="132" y="73" font-size="13">Step</text>
+    <text x="132" y="109" font-size="13">Vertex RL</text>
+    <g font-size="13" text-anchor="middle">
+      <text x="328" y="73" text-anchor="start">0.1</text>
+      <text x="400" y="109" text-anchor="end">77.300</text>
+      <text x="232" y="158">Raise</text>
+      <text x="304" y="158">Lower</text>
+      <text x="376" y="158">Close</text>
+    </g>
+  </g>
+</svg>

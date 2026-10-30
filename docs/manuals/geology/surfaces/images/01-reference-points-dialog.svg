@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 320" width="540" height="320" role="img" aria-label="Geology workspace, plan view: the Reference Points dialog open over S1 to S3, Working section A, Side Roof, Make button visible">
+<g stroke="#000" stroke-width="1" fill="#fff" font-family="sans-serif">
+<rect x="10" y="10" width="520" height="300"/>
+<circle cx="50.0" cy="210.0" r="6"/>
+<circle cx="190.0" cy="210.0" r="6"/>
+<circle cx="120.0" cy="70.0" r="6"/>
+</g>
+<g font-family="sans-serif" fill="#000">
+<text x="60.0" y="215.0" font-size="15" text-anchor="start" >S1</text>
+<text x="200.0" y="215.0" font-size="15" text-anchor="start" >S2</text>
+<text x="130.0" y="75.0" font-size="15" text-anchor="start" >S3</text>
+<text x="500" y="34" font-size="13" text-anchor="middle" >N</text>
+<line x1="512" y1="40" x2="512" y2="24" stroke="#000" stroke-width="1"/>
+<path d="M512 23 l-3 6 l6 0 z"/>
+</g>
+<g transform="translate(-10,40)">
+<g stroke="#000" stroke-width="1" fill="#fff">
+<rect x="240" y="35" width="290" height="218"/>
+<line x1="240" y1="63" x2="530" y2="63"/>
+<rect x="400" y="93" width="120" height="22"/>
+<rect x="400" y="119" width="120" height="22"/>
+<rect x="400" y="145" width="120" height="22"/>
+<rect x="400" y="171" width="120" height="22"/>
+</g>
+<g font-family="sans-serif" fill="#000">
+<text x="248" y="55" font-size="15" text-anchor="start" >Reference Points</text>
+<text x="250" y="83" font-size="13" text-anchor="start" >Holes</text>
+<text x="520" y="83" font-size="13" text-anchor="end" >3 holes from &#x27;S-collars + 1 files&#x27;</text>
+<text x="250" y="109" font-size="13" text-anchor="start" >Points at</text>
+<text x="408" y="109" font-size="13" text-anchor="start" >A logged pick</text>
+<text x="250" y="135" font-size="13" text-anchor="start" >Working section field</text>
+<text x="408" y="135" font-size="13" text-anchor="start" >SEAM</text>
+<text x="250" y="161" font-size="13" text-anchor="start" >Working section</text>
+<text x="408" y="161" font-size="13" text-anchor="start" >A</text>
+<text x="250" y="187" font-size="13" text-anchor="start" >Side</text>
+<text x="408" y="187" font-size="13" text-anchor="start" >Roof</text>
+</g>
+<rect x="456" y="207" width="64" height="26" fill="#fff" stroke="#000" stroke-width="1"/>
+<g font-family="sans-serif"><text x="488" y="225" font-size="13" text-anchor="middle" >Make</text>
+</g>
+</g>
+</svg>

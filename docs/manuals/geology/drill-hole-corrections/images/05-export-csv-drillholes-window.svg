@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 250" width="540" height="250" role="img" aria-label="Any workspace, Export window, Mapped CSV bundle (.csv) chosen under Drill Holes: Dataset S-collars + 1 files, the note about three files, Export button.">
+  <g stroke="#000" stroke-width="1" fill="#fff">
+    <rect x="10" y="10" width="520" height="230"/>
+    <line x1="10" y1="42" x2="530" y2="42"/>
+    <rect x="20" y="52" width="124" height="178"/>
+    <rect x="26" y="88" width="112" height="36"/>
+    <rect x="260" y="82" width="180" height="24"/>
+    <rect x="400" y="200" width="50" height="24"/>
+  </g>
+  <rect x="460" y="200" width="60" height="24" fill="#fff" stroke="#d9622b" stroke-width="3"/>
+  <g font-family="sans-serif" font-size="15" fill="#000">
+    <text x="20" y="33">Export</text>
+    <text x="150" y="70">Export CSV Drillholes</text>
+  </g>
+  <g font-family="sans-serif" font-size="13" fill="#000">
+    <text x="30" y="72">Drill Holes</text>
+    <text x="29" y="103">Mapped CSV</text>
+    <text x="29" y="119">bundle (.csv)</text>
+    <text x="150" y="99">Dataset:</text>
+    <text x="268" y="99">S-collars + 1 files</text>
+    <text x="150" y="134">Writes three files beside the name you choose:</text>
+    <text x="150" y="150">collars, survey and intervals, in the columns</text>
+    <text x="150" y="166">this dialog imports.</text>
+    <text x="408" y="217">Reset</text>
+    <text x="470" y="217">Export</text>
+  </g>
+  <g font-family="sans-serif" font-size="13" fill="#888">
+    <text x="29" y="148">Corrections</text>
+    <text x="29" y="164">worksheet (.csv)</text>
+  </g>
+</svg>

@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 270" width="540" height="270" role="img" aria-label="Any workspace, Export window, Corrections worksheet (.csv) chosen under Drill Holes: Corrections 1, Worksheet lines 1, Holes touched 1, and the worksheet line for S1: boundary, from, 20 to 19.5.">
+  <g stroke="#000" stroke-width="1" fill="#fff">
+    <rect x="10" y="10" width="520" height="250"/>
+    <line x1="10" y1="42" x2="530" y2="42"/>
+    <rect x="20" y="52" width="124" height="198"/>
+    <rect x="26" y="130" width="112" height="36"/>
+    <rect x="260" y="82" width="180" height="24"/>
+    <rect x="400" y="220" width="50" height="24"/>
+    <rect x="152" y="168" width="368" height="40" fill="none"/>
+    <rect x="460" y="220" width="60" height="24"/>
+    <line x1="152" y1="188" x2="520" y2="188"/>
+  </g>
+  <rect x="152" y="188" width="368" height="20" fill="none" stroke="#d9622b" stroke-width="3"/>
+  <g font-family="sans-serif" font-size="15" fill="#000">
+    <text x="20" y="33">Export</text>
+    <text x="150" y="70">Export Corrections Worksheet</text>
+  </g>
+  <g font-family="sans-serif" font-size="13" fill="#000">
+    <text x="30" y="72">Drill Holes</text>
+    <text x="29" y="109" fill="#888">Mapped CSV</text>
+    <text x="29" y="125" fill="#888">bundle (.csv)</text>
+    <text x="29" y="145">Corrections</text>
+    <text x="29" y="161">worksheet (.csv)</text>
+    <text x="150" y="99">Dataset:</text>
+    <text x="268" y="99">S-collars + 1 files</text>
+    <text x="150" y="124">Corrections</text>
+    <text x="150" y="140">Worksheet lines</text>
+    <text x="150" y="156">Holes touched</text>
+    <text x="440" y="124" text-anchor="end">1</text>
+    <text x="440" y="140" text-anchor="end">1</text>
+    <text x="440" y="156" text-anchor="end">1</text>
+    <text x="160" y="182">LINE</text>
+    <text x="194" y="182">KIND</text>
+    <text x="262" y="182">FIELD</text>
+    <text x="312" y="182">BEFORE</text>
+    <text x="370" y="182">AFTER</text>
+    <text x="420" y="182">COUNT</text>
+    <text x="470" y="182">HOLES</text>
+    <text x="160" y="203">1</text>
+    <text x="194" y="203">boundary</text>
+    <text x="262" y="203">from</text>
+    <text x="312" y="203">20</text>
+    <text x="370" y="203">19.5</text>
+    <text x="420" y="203">1</text>
+    <text x="470" y="203">S1</text>
+    <text x="408" y="237">Reset</text>
+    <text x="470" y="237">Export</text>
+  </g>
+</svg>

@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 410" width="540" height="410" role="img" aria-label="The mine geologist's life cycle: five stages on a pentagon, clockwise from the top: 1 Publish Model, 2 Mine, 3 Measure, 4 Reconcile, 5 Refine Model, then back to 1.">
+  <defs>
+    <marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#d9622b"/>
+    </marker>
+  </defs>
+  <g stroke="#d9622b" stroke-width="3" fill="none" marker-end="url(#head)">
+    <line x1="308.1" y1="85.9" x2="434.6" y2="177.7"/>
+    <line x1="439.6" y1="193.1" x2="391.3" y2="341.9"/>
+    <line x1="378.2" y1="351.4" x2="221.8" y2="351.4"/>
+    <line x1="208.7" y1="341.9" x2="160.4" y2="193.1"/>
+    <line x1="165.4" y1="177.7" x2="291.9" y2="85.9"/>
+  </g>
+  <g stroke="#000" stroke-width="1" fill="#fff">
+    <rect x="235" y="38" width="130" height="28"/>
+    <rect x="455" y="169" width="70" height="28"/>
+    <rect x="350" y="366" width="96" height="28"/>
+    <rect x="150" y="366" width="104" height="28"/>
+    <rect x="10" y="169" width="136" height="28"/>
+  </g>
+  <g font-family="sans-serif" font-size="15" fill="#000" text-anchor="middle">
+    <text x="300" y="57">1. Publish Model</text>
+    <text x="490" y="188">2. Mine</text>
+    <text x="398" y="385">3. Measure</text>
+    <text x="202" y="385">4. Reconcile</text>
+    <text x="78" y="188">5. Refine Model</text>
+  </g>
+</svg>
