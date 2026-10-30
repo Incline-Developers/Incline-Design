@@ -295,13 +295,9 @@ pub(crate) struct PreferencesDraft {
     /// [`UiCommand::SetWellLogStyle`], which comes through here so a style
     /// tweak is saved with everything else.
     pub(crate) well_log_style: crate::ui::widgets::log_traces::WellLogStyle,
-    pub(crate) renderer_background_color: [f32; 4],
     pub(crate) dark_mode: bool,
     pub(crate) show_console: bool,
-    pub(crate) panel_chrome: bool,
     pub(crate) ui_size_percent: f64,
-    pub(crate) show_world_axis_gizmo: bool,
-    pub(crate) show_scale_bar: bool,
     pub(crate) snap_poll_rate: u32,
     pub(crate) vsync_enabled: bool,
     pub(crate) frame_rate_cap: u32,
@@ -316,7 +312,6 @@ pub(crate) struct PreferencesDraft {
     pub(crate) plan_zoom_sensitivity: f64,
     pub(crate) plan_invert_vertical_look: bool,
     pub(crate) plan_invert_horizontal_look: bool,
-    pub(crate) plan_zoom_towards_cursor: bool,
     pub(crate) fly_field_of_view_degrees: f64,
     pub(crate) fly_mouse_look_sensitivity: f64,
     pub(crate) fly_invert_vertical_look: bool,
@@ -339,13 +334,9 @@ impl Default for PreferencesDraft {
         Self {
             language: crate::app::io::default_language(),
             well_log_style: crate::ui::widgets::log_traces::WellLogStyle::default(),
-            renderer_background_color: crate::app::io::default_renderer_background_color(),
             dark_mode: crate::app::io::default_dark_mode(),
             show_console: crate::app::io::default_show_console(),
-            panel_chrome: crate::app::io::default_panel_chrome(),
             ui_size_percent: crate::app::io::default_ui_size_percent(),
-            show_world_axis_gizmo: crate::app::io::default_show_world_axis_gizmo(),
-            show_scale_bar: crate::app::io::default_show_scale_bar(),
             snap_poll_rate: crate::app::io::default_snap_poll_rate(),
             vsync_enabled: crate::app::io::default_vsync_enabled(),
             frame_rate_cap: crate::app::io::default_frame_rate_cap(),
@@ -360,7 +351,6 @@ impl Default for PreferencesDraft {
             plan_zoom_sensitivity: crate::app::io::default_plan_zoom_sensitivity(),
             plan_invert_vertical_look: false,
             plan_invert_horizontal_look: false,
-            plan_zoom_towards_cursor: crate::app::io::default_plan_zoom_towards_cursor(),
             fly_field_of_view_degrees: crate::app::io::default_fly_field_of_view_degrees(),
             fly_mouse_look_sensitivity: crate::app::io::default_fly_mouse_look_sensitivity(),
             fly_invert_vertical_look: false,
@@ -2446,6 +2436,8 @@ pub(crate) struct EditorState {
     pub(crate) isolated_entity: Option<SceneEntityId>,
     /// Short messages fading out above the status bar (`widgets::toast`).
     pub(crate) toasts: crate::ui::widgets::toast::Toasts,
+    /// Warnings and errors raised as dialogs (`dialogs::alerts`).
+    pub(crate) alerts: crate::ui::dialogs::alerts::Alerts,
     /// Entities frozen: still visible, but excluded from editing and snapping.
     ///
     /// Derived: the union of [`Self::explicitly_frozen`] and every design
@@ -2500,19 +2492,13 @@ pub(crate) struct EditorState {
     /// Colours and scales for the borehole log's trace columns. App-wide,
     /// saved with the preferences - see [`crate::ui::widgets::log_traces`].
     pub(crate) well_log_style: crate::ui::widgets::log_traces::WellLogStyle,
-    /// Dress the panels as rounded regions parted by a gap of window
-    /// background. Off, they sit flush and square: see `ui::chrome`.
-    pub(crate) panel_chrome: bool,
     pub(crate) ui_size_percent: f64,
-    /// Show the world-space axis gizmo in the top-right of the viewport.
-    pub(crate) show_world_axis_gizmo: bool,
     /// Show the construction grid on the world XY plane at Z=0. Never written
-    /// to the config; set as each project arrives instead - on for a new one,
-    /// off for one opened from storage.
+    /// to the config, and off until the user turns it on.
     pub(crate) show_xy_grid: bool,
-    /// Show the cartographic distance scale in the viewport.
-    pub(crate) show_scale_bar: bool,
-    /// Linear RGBA clear colour used behind the rendered scene.
+    /// Linear RGBA clear colour used behind the rendered scene: the panel
+    /// surface of the current theme, so the viewport reads as one more region.
+    /// Follows `dark_mode` - see [`crate::ui::scene_background_color`].
     pub(crate) renderer_background_color: [f32; 4],
     /// Whether the Preferences window is open.
     pub(crate) show_preferences: bool,
@@ -2571,7 +2557,6 @@ pub(crate) struct EditorState {
     pub(crate) plan_zoom_sensitivity: f64,
     pub(crate) plan_invert_vertical_look: bool,
     pub(crate) plan_invert_horizontal_look: bool,
-    pub(crate) plan_zoom_towards_cursor: bool,
     pub(crate) fly_field_of_view_degrees: f64,
     pub(crate) fly_mouse_look_sensitivity: f64,
     pub(crate) fly_invert_vertical_look: bool,
@@ -4073,7 +4058,7 @@ impl EditorState {
     /// The GUI only reports a key press as consumed when a text field holds
     /// focus, so without asking here the viewport tools would act on the same
     /// press before the dialog is drawn. Keep this in step with the dialogs
-    /// that call [`crate::ui::widgets::menu::dialog_confirm_pressed`].
+    /// that call [`crate::ui::widgets::menu::dialog_confirmed`].
     pub(crate) fn dialog_owns_confirm_key(&self) -> bool {
         if self.viewport_pick_in_progress() {
             return false;
@@ -4119,7 +4104,8 @@ impl EditorState {
 
     /// The common case: a dialog that confirms on Enter and cancels on Escape.
     fn dialog_owns_both_keys(&self) -> bool {
-        self.grid_dialog.is_some()
+        self.alerts.is_showing()
+            || self.grid_dialog.is_some()
             || self.exit_confirm_open
             || self.replace_project_confirm_open
             || self.lossy_save_confirm_open
@@ -4696,13 +4682,9 @@ impl EditorState {
         PreferencesDraft {
             language: self.language,
             well_log_style: self.well_log_style,
-            renderer_background_color: self.renderer_background_color,
             dark_mode: self.dark_mode,
             show_console: self.show_console,
-            panel_chrome: self.panel_chrome,
             ui_size_percent: self.ui_size_percent,
-            show_world_axis_gizmo: self.show_world_axis_gizmo,
-            show_scale_bar: self.show_scale_bar,
             snap_poll_rate: self.snap_poll_rate,
             vsync_enabled: self.vsync_enabled,
             frame_rate_cap: self.frame_rate_cap,
@@ -4717,7 +4699,6 @@ impl EditorState {
             plan_zoom_sensitivity: self.plan_zoom_sensitivity,
             plan_invert_vertical_look: self.plan_invert_vertical_look,
             plan_invert_horizontal_look: self.plan_invert_horizontal_look,
-            plan_zoom_towards_cursor: self.plan_zoom_towards_cursor,
             fly_field_of_view_degrees: self.fly_field_of_view_degrees,
             fly_mouse_look_sensitivity: self.fly_mouse_look_sensitivity,
             fly_invert_vertical_look: self.fly_invert_vertical_look,
@@ -4747,6 +4728,7 @@ impl EditorState {
             hidden_handles: HashSet::new(),
             isolated_entity: None,
             toasts: Default::default(),
+            alerts: Default::default(),
             frozen_handles: HashSet::new(),
             explicitly_frozen: HashSet::new(),
             locked_layers: HashSet::new(),
@@ -4763,12 +4745,9 @@ impl EditorState {
             borehole_log_curves: None,
             strat_checks: Vec::new(),
             well_log_style: Default::default(),
-            panel_chrome: crate::app::io::default_panel_chrome(),
             ui_size_percent: crate::app::io::default_ui_size_percent(),
-            show_world_axis_gizmo: crate::app::io::default_show_world_axis_gizmo(),
             show_xy_grid: false,
-            show_scale_bar: crate::app::io::default_show_scale_bar(),
-            renderer_background_color: crate::app::io::default_renderer_background_color(),
+            renderer_background_color: crate::ui::scene_background_color(crate::app::io::default_dark_mode()),
             show_preferences: false,
             preferences_draft: None,
             snap_poll_rate: crate::app::io::default_snap_poll_rate(),
@@ -4793,7 +4772,6 @@ impl EditorState {
             plan_zoom_sensitivity: crate::app::io::default_plan_zoom_sensitivity(),
             plan_invert_vertical_look: false,
             plan_invert_horizontal_look: false,
-            plan_zoom_towards_cursor: crate::app::io::default_plan_zoom_towards_cursor(),
             fly_field_of_view_degrees: crate::app::io::default_fly_field_of_view_degrees(),
             fly_mouse_look_sensitivity: crate::app::io::default_fly_mouse_look_sensitivity(),
             fly_invert_vertical_look: false,
@@ -5695,6 +5673,47 @@ pub(crate) enum ActiveTool {
 }
 
 impl ActiveTool {
+    /// The console activity what the tool does reports under, opened only if
+    /// it reports something (`logging::with_deferred_report`).
+    pub(crate) fn report_spec(self) -> Option<crate::logging::CommandReportSpec> {
+        let title = match self {
+            Self::None => return None,
+            Self::MakePoint => tr!("common-create-point"),
+            Self::MakeLine => tr!("common-create-line"),
+            Self::MakePoly => tr!("common-create-polyline"),
+            Self::MakeCircle => tr!("common-create-circle"),
+            Self::MakeText => tr!("toolbars-create-text"),
+            Self::DeletePoints => tr!("toolbars-delete-points"),
+            Self::MeasureDistance => tr!("toolbars-measure-distance"),
+            Self::MeasureBatterAngle => tr!("toolbars-strike-dip"),
+            Self::Hide => tr!("toolbars-hide"),
+            Self::OffsetElement => tr!("common-offset"),
+            Self::DrapeToTopology => tr!("common-drape-topology"),
+            Self::RelimitLine => tr!("common-relimit-line"),
+            Self::ExplodePolyline => tr!("toolbars-explode-polyline-lines"),
+            Self::FuseIntoPolyline => tr!("toolbars-fuse-polylines"),
+            Self::SplitAtPoints => tr!("toolbars-split-polyline-points"),
+            Self::Move => tr!("common-move-design"),
+            Self::MoveCollar => tr!("common-move-collar"),
+            Self::RotateCollar => tr!("common-rotate-collar"),
+            Self::TieHoles => tr!("common-tie-holes"),
+            Self::SetInitiationPoint => tr!("common-set-initiation-point"),
+            Self::ChargeHoles => tr!("common-charge-holes"),
+            Self::PickRotationCentre => tr!("viewport-bar-fix-centre-rotation"),
+            Self::Chamfer => tr!("toolbars-chamfer-polyline-corners"),
+            Self::BatterBermOffset => tr!("toolbars-auto-bench"),
+            Self::Bezier => tr!("toolbars-bezier-polyline"),
+            Self::VerticalSlice => tr!("viewport-bar-vertical-slice-view"),
+            Self::EditVertex => tr!("toolbars-edit-vertex"),
+            Self::InsertPoint => tr!("ws-menubar-geology-insert-point"),
+            Self::FillSegment => tr!("ws-menubar-geology-fill-segment"),
+            Self::SplitAtCrossings => tr!("ws-menubar-geology-split-at-crossings"),
+            Self::RemoveBetweenCrossings => tr!("ws-menubar-geology-remove-between-crossings"),
+            Self::ExplodePolylineToPoints => tr!("ws-menubar-geology-explode-to-points"),
+        };
+        Some(crate::logging::CommandReportSpec::new(title, String::new()))
+    }
+
     /// Tools that place new design geometry on the active layer. Derived
     /// edits such as offsetting retain their source object's layer.
     pub(crate) fn requires_active_layer(self) -> bool {
@@ -7694,10 +7713,30 @@ pub(crate) struct UiTrackedProjectEntry {
     pub(crate) name: String,
     pub(crate) is_active: bool,
     pub(crate) dirty: bool,
+    /// Its file was not found at the last look: moved or deleted since it was
+    /// opened. Shown struck through and greyed out rather than dropped, so the
+    /// list still says where it was.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) missing: bool,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) path: PathBuf,
     #[cfg(target_arch = "wasm32")]
     pub(crate) id: crate::model::project::ProjectId,
+}
+
+impl UiTrackedProjectEntry {
+    /// Whether the project can be opened from a Recent list. Browser projects
+    /// live in storage the application owns, so they are never missing.
+    pub(crate) fn is_missing(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.missing
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            false
+        }
+    }
 }
 
 impl UiProjectEntry {

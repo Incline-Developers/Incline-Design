@@ -1872,7 +1872,6 @@ logging-application-name = 应用程序名称：{ $name }
 logging-application-startup = 应用程序启动
 logging-build-target-os-architecture = 构建目标：{ $os }-{ $architecture }
 logging-completed = 已完成
-logging-count-messages = { $count } 条消息
 logging-desktop-session-xdg-session-type = 桌面会话：XDG_SESSION_TYPE={ $session }，XDG_CURRENT_DESKTOP={ $desktop }，WAYLAND_DISPLAY={ $wayland }，DISPLAY={ $display }
 logging-initialising-incline-design = 正在初始化 Incline Design
 logging-locale-environment = 区域设置环境：LANG={ $lang }，LC_ALL={ $locale }，TZ={ $timezone }
@@ -2102,7 +2101,6 @@ properties-modelling-help = 设置“构建曲面”如何绘制其网格。这�
 properties-move-layer = 移动到层...
 properties-near-clip-limit = 近裁剪限制
 properties-orbit-sensitivity = 轨道灵敏度
-properties-panel-chrome = 面板外观
 properties-performance = 性能
 properties-plan-mode = 计划模式
 properties-point-cloud-chunk-debug-view = 点云分块调试视图
@@ -2117,8 +2115,6 @@ properties-steep-pair-distance = 陡坡点对距离
 properties-steep-pair-distance-help = 在平面上比此距离更近、且坡度大于下方角度的点对，会在构建成功时列出。不会拒绝或修复。
 properties-surface-chunk-debug-view = 曲面分块调试视图
 properties-vertical-sync = 垂直同步
-properties-world-axis-gizmo = 世界坐标轴指示器
-properties-zoom-cursor = 缩放至光标
 properties-zoom-sensitivity = 缩放灵敏度
 reference-points-count-holes-from-dataset = 来自“{ $dataset }”的 { $count } 个钻孔
 reference-points-holes-from-datasets = 来自 { $datasets } 个数据集的 { $count } 个钻孔

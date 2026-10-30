@@ -1904,7 +1904,6 @@ logging-application-name = Jina la programu: { $name }
 logging-application-startup = Kuanzisha Programu
 logging-build-target-os-architecture = Lengo la ujenzi: { $os }-{ $architecture }
 logging-completed = Imekamilika
-logging-count-messages = Ujumbe { $count }
 logging-desktop-session-xdg-session-type = Kipindi cha eneo-kazi: XDG_SESSION_TYPE={ $session }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
 logging-initialising-incline-design = Inaanzisha Incline Design
 logging-locale-environment = Mazingira ya lugha: LANG={ $lang }, LC_ALL={ $locale }, TZ={ $timezone }
@@ -2134,7 +2133,6 @@ properties-modelling-help = Jinsi Jenga Uso inavyochora gridi yake. Mipangilio y
 properties-move-layer = Hamishia kwenye Tabaka...
 properties-near-clip-limit = Kikomo cha kukata karibu
 properties-orbit-sensitivity = Uelekevu wa mzunguko
-properties-panel-chrome = Mapambo ya paneli
 properties-performance = Utendaji
 properties-plan-mode = Hali ya Mpango
 properties-point-cloud-chunk-debug-view = Mwonekano wa utatuzi wa vipande vya wingu la vidokezo
@@ -2149,8 +2147,6 @@ properties-steep-pair-distance = Umbali wa jozi kali
 properties-steep-pair-distance-help = Jozi za vidokezo vilivyo karibu kuliko hii kwenye mpango, na vyenye mteremko mkali kuliko pembe iliyo chini, hutajwa ujenzi unapofanikiwa. Hazikataliwi wala kurekebishwa kamwe.
 properties-surface-chunk-debug-view = Mwonekano wa utatuzi wa vipande vya uso
 properties-vertical-sync = Usawazishaji wima
-properties-world-axis-gizmo = Kifaa cha mhimili wa dunia
-properties-zoom-cursor = Kuza kwa kishale
 properties-zoom-sensitivity = Uelekevu wa kukuza
 reference-points-count-holes-from-dataset = mashimo { $count } kutoka '{ $dataset }'
 reference-points-holes-from-datasets = mashimo { $count } kutoka seti { $datasets } za data

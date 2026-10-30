@@ -35,6 +35,18 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn handle_window_event(&mut self, event_loop: &winit::event_loop::ActiveEventLoop, window_id: winit::window::WindowId, event: WindowEvent) {
+        // A click or key while a tool is in hand is that tool at work, and
+        // what it reports belongs under the tool's name, not "System".
+        if matches!(event, WindowEvent::MouseInput { .. } | WindowEvent::KeyboardInput { .. })
+            && let Some(spec) = self.editor.active_tool.report_spec()
+        {
+            crate::logging::with_deferred_report(spec, || self.route_window_event(event_loop, window_id, event));
+        } else {
+            self.route_window_event(event_loop, window_id, event);
+        }
+    }
+
+    fn route_window_event(&mut self, event_loop: &winit::event_loop::ActiveEventLoop, window_id: winit::window::WindowId, event: WindowEvent) {
         if self.graphics.as_ref().and_then(|graphics| graphics.slice_preview_window_id()) == Some(window_id) {
             self.handle_slice_preview_event(event);
             return;
@@ -87,6 +99,8 @@ impl<'a> App<'a> {
         if let WindowEvent::Focused(focused) = &event {
             self.window_focused = *focused;
             if !focused {
+                // Its release goes to whichever window has focus now.
+                self.held_step_key = None;
                 self.finish_left_button_interactions();
                 // No release will come for a button lost mid-drag; end the orbit here.
                 self.end_right_orbit();
@@ -242,6 +256,8 @@ impl<'a> App<'a> {
                     self.refresh_blast_round();
                     self.refresh_blast_hover();
                     self.refresh_object_edit_dialog();
+                    #[cfg(not(target_arch = "wasm32"))]
+                    self.refresh_missing_projects();
                     let project = self.project_view();
                     if let Some(window) = &self.window {
                         let title = project.projects.first().map_or_else(
@@ -1575,10 +1591,20 @@ impl<'a> App<'a> {
         else {
             return;
         };
+        let step_key = matches!(key, KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape);
         match state {
-            // A held C or B is one press, so a toggle never chatters on repeat.
-            ElementState::Pressed if *repeat && matches!(key, KeyCode::KeyC | KeyCode::KeyB) => {}
+            // A held key is one press: the C and B toggles must not chatter with the key's auto-repeat.
+            ElementState::Pressed if *repeat && (step_key || matches!(key, KeyCode::KeyC | KeyCode::KeyB)) => {}
+            // Enter and Escape step a tool when let go, as they confirm and
+            // cancel dialogs (`menu::dialog_confirmed`): held, nothing moves on,
+            // and a press a dialog owns is never finished by the viewport.
+            ElementState::Pressed if step_key => self.held_step_key = (!self.dialog_owns_key(*key)).then_some(*key),
             ElementState::Pressed => self.handle_key_code(*key),
+            ElementState::Released if step_key => {
+                if self.held_step_key.take() == Some(*key) {
+                    self.handle_key_code(*key);
+                }
+            }
             ElementState::Released => {}
         }
     }
@@ -1651,17 +1677,20 @@ impl<'a> App<'a> {
         true
     }
 
+    fn dialog_owns_key(&self, key: KeyCode) -> bool {
+        match key {
+            KeyCode::Enter | KeyCode::NumpadEnter => self.editor.dialog_owns_confirm_key(),
+            KeyCode::Escape => self.editor.dialog_owns_cancel_key(),
+            _ => false,
+        }
+    }
+
     fn handle_key_code(&mut self, key: KeyCode) {
         // An open dialog owns Enter/Escape: the GUI only reports the press as
         // consumed when a text field has focus, so without this the viewport
         // tools would act on the same key before the dialog is drawn. The
         // dialog itself consumes the key from egui's queue next frame.
-        let dialog_owns_key = match key {
-            KeyCode::Enter | KeyCode::NumpadEnter => self.editor.dialog_owns_confirm_key(),
-            KeyCode::Escape => self.editor.dialog_owns_cancel_key(),
-            _ => false,
-        };
-        if dialog_owns_key {
+        if self.dialog_owns_key(key) {
             self.redraw_requested = true;
             return;
         }

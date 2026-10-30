@@ -143,7 +143,7 @@ impl Island {
             .default_size(self.default_width)
             .min_size(min_width)
             .max_size(max_width)
-            .show_separator_line(chrome::show_separator_line(ui))
+            .show_separator_line(false)
             .frame(match (self.bare, self.flush) {
                 (true, _) => egui::Frame::NONE,
                 (false, true) => frame.inner_margin(egui::Margin::ZERO),

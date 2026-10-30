@@ -1331,14 +1331,10 @@ pub(crate) fn draw_section_grid(ui: &egui::Ui, editor: &EditorState, canvas_rect
             .filter(|layer| layer.order != egui::Order::Background)
             .filter_map(|layer| memory.area_rect(layer.id))
             .collect();
-        if editor.show_scale_bar {
-            rects.extend(memory.area_rect(egui::Id::unique("viewport_scale_bar")));
-        }
+        rects.extend(memory.area_rect(egui::Id::unique("viewport_scale_bar")));
         rects
     });
-    if editor.show_world_axis_gizmo {
-        obscured_by.push(crate::ui::elements::cursors::orientation_gizmo_rect(canvas_rect));
-    }
+    obscured_by.push(crate::ui::elements::cursors::orientation_gizmo_rect(canvas_rect));
 
     let mut placed: Vec<egui::Rect> = Vec::new();
     for line in &editor.section_grid_px {

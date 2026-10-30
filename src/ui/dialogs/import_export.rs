@@ -136,8 +136,8 @@ pub(crate) fn draw_import_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
                     egui::Layout::right_to_left(egui::Align::Center),
                     |ui| {
                         let command = import_command(editor);
-                        let confirm = menu::dialog_confirm_pressed(ui.ctx());
-                        cancelled = menu::dialog_cancel_pressed(ui.ctx());
+                        let confirm = menu::dialog_confirmed(ui.ctx());
+                        cancelled = menu::dialog_cancelled(ui.ctx());
                         if (ui.add(MenuButton::new(tr!("io-import")).primary().enabled(command.is_some())).clicked() || confirm)
                             && let Some(command) = command
                         {
@@ -191,8 +191,8 @@ pub(crate) fn draw_export_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
                     egui::Layout::right_to_left(egui::Align::Center),
                     |ui| {
                         let command = export_command(editor, drill_holes);
-                        let confirm = menu::dialog_confirm_pressed(ui.ctx());
-                        cancelled = menu::dialog_cancel_pressed(ui.ctx());
+                        let confirm = menu::dialog_confirmed(ui.ctx());
+                        cancelled = menu::dialog_cancelled(ui.ctx());
                         if (ui.add(MenuButton::new(tr!("io-export")).primary().enabled(command.is_some())).clicked() || confirm)
                             && let Some(command) = command
                         {

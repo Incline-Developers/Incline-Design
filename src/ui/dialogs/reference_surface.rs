@@ -54,11 +54,11 @@ pub(crate) fn draw_reference_surface_dialog(ui: &mut egui::Ui, editor: &mut Edit
                 .show(ui);
             menu::menu_actions(ui, |ui| {
                 let ready = !draft.name.trim().is_empty();
-                let confirm = ready && menu::dialog_confirm_pressed(ui.ctx());
+                let confirm = ready && menu::dialog_confirmed(ui.ctx());
                 if ui.add(MenuButton::new(tr!("reference-points-make")).primary().enabled(ready)).clicked() || confirm {
                     build = true;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     cancel = true;
                 }
             });

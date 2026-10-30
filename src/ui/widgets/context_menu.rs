@@ -221,6 +221,7 @@ pub(crate) struct ContextMenuAction {
     submenu: bool,
     checked: Option<bool>,
     disabled_hover: Option<egui::WidgetText>,
+    strikethrough: bool,
 }
 
 impl ContextMenuAction {
@@ -232,7 +233,17 @@ impl ContextMenuAction {
             submenu: false,
             checked: None,
             disabled_hover: None,
+            strikethrough: false,
         }
+    }
+
+    /// Strike a line through the label: for a row naming something that is no
+    /// longer there, such as a recent project whose file has gone. macOS shows
+    /// Open Recent in its native menu instead.
+    #[cfg(not(target_os = "macos"))]
+    pub(crate) fn strikethrough(mut self, strikethrough: bool) -> Self {
+        self.strikethrough = strikethrough;
+        self
     }
 
     /// Mark this row as a switch rather than a command, drawing a tick at its
@@ -275,6 +286,7 @@ impl ContextMenuAction {
             submenu,
             checked,
             disabled_hover,
+            strikethrough,
         } = self;
         ui.add_enabled_ui(enabled, |ui| {
             let font_id = egui::TextStyle::Button.resolve(ui.style());
@@ -310,13 +322,16 @@ impl ContextMenuAction {
                         egui::Stroke::new(1.4, text_color),
                     ));
                 }
-                painter.text(
+                let label_rect = painter.text(
                     rect.left_center() + egui::vec2(text_left, 0.0),
                     egui::Align2::LEFT_CENTER,
                     label.text(),
                     egui::TextStyle::Button.resolve(ui.style()),
                     text_color,
                 );
+                if strikethrough {
+                    painter.hline(label_rect.x_range(), label_rect.center().y, egui::Stroke::new(1.0, text_color));
+                }
                 if let Some(shortcut) = shortcut {
                     painter.text(
                         rect.right_center() - egui::vec2(right_padding, 0.0),
@@ -453,8 +468,11 @@ pub(crate) fn context_submenu<R>(ui: &mut egui::Ui, label: &str, enabled: bool, 
     let title: egui::WidgetText = label.into();
     // egui frames the nested popup from its own style, not the row's, so the
     // config carries this module's frame metrics along with the parent's
-    // close behaviour.
-    let config = egui::containers::menu::MenuConfig::find(ui).style(submenu_style);
+    // close behaviour. egui measures the gap from the row, which sits a content
+    // margin inside the frame, so that margin brings the frames edge to edge.
+    let config = egui::containers::menu::MenuConfig::find(ui)
+        .style(submenu_style)
+        .submenu_gap(f32::from(CONTENT_HORIZONTAL_MARGIN));
     egui::containers::menu::SubMenu::new()
         .config(config)
         .show(ui, &response, |ui| draw_body(ui, &title, MENU_WIDTH, add_contents))

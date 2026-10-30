@@ -1898,7 +1898,6 @@ logging-application-name = Tên ứng dụng: { $name }
 logging-application-startup = Khởi động ứng dụng
 logging-build-target-os-architecture = Build cho: { $os }-{ $architecture }
 logging-completed = Hoàn tất
-logging-count-messages = { $count } thông báo
 logging-desktop-session-xdg-session-type = Phiên desktop: XDG_SESSION_TYPE={ $session }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
 logging-initialising-incline-design = Đang khởi tạo Incline Design
 logging-locale-environment = Môi trường ngôn ngữ: LANG={ $lang }, LC_ALL={ $locale }, TZ={ $timezone }
@@ -2128,7 +2127,6 @@ properties-modelling-help = Cách Dựng bề mặt vẽ lưới của nó. Thi�
 properties-move-layer = Di chuyển đến lớp...
 properties-near-clip-limit = Giới hạn cắt gần
 properties-orbit-sensitivity = Độ nhạy xoay quỹ đạo
-properties-panel-chrome = Khung bảng điều khiển
 properties-performance = Hiệu năng
 properties-plan-mode = Chế độ mặt bằng
 properties-point-cloud-chunk-debug-view = Khung nhìn gỡ lỗi chunk đám mây điểm
@@ -2143,8 +2141,6 @@ properties-steep-pair-distance = Khoảng cách cặp dốc
 properties-steep-pair-distance-help = Các cặp điểm gần nhau hơn mức này trong mặt bằng, và dốc hơn góc bên dưới, sẽ được nêu tên khi dựng thành công. Không bao giờ bị từ chối hay sửa.
 properties-surface-chunk-debug-view = Khung nhìn gỡ lỗi chunk bề mặt
 properties-vertical-sync = Đồng bộ dọc
-properties-world-axis-gizmo = Gizmo trục tọa độ
-properties-zoom-cursor = Thu phóng theo con trỏ
 properties-zoom-sensitivity = Độ nhạy thu phóng
 reference-points-count-holes-from-dataset = { $count } lỗ khoan từ '{ $dataset }'
 reference-points-holes-from-datasets = { $count } lỗ khoan từ { $datasets } bộ dữ liệu

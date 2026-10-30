@@ -1872,7 +1872,6 @@ logging-application-name = Nama aplikasi: { $name }
 logging-application-startup = Memulai aplikasi
 logging-build-target-os-architecture = Target kompilasi: { $os }-{ $architecture }
 logging-completed = Selesai
-logging-count-messages = { $count } pesan
 logging-desktop-session-xdg-session-type = Sesi desktop: XDG_SESSION_TYPE={ $session }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
 logging-initialising-incline-design = Menginisialisasi Incline Design
 logging-locale-environment = Lingkungan lokal: LANG={ $lang }, LC_ALL={ $locale }, TZ={ $timezone }
@@ -2102,7 +2101,6 @@ properties-modelling-help = Cara Bangun Permukaan menggambar gridnya. Pengaturan
 properties-move-layer = Pindah ke Lapisan...
 properties-near-clip-limit = Dekat batas klip
 properties-orbit-sensitivity = Sensitivitas orbit
-properties-panel-chrome = Bingkai panel
 properties-performance = Performa
 properties-plan-mode = Mode Rencana
 properties-point-cloud-chunk-debug-view = Tampilan debug chunk awan titik
@@ -2117,8 +2115,6 @@ properties-steep-pair-distance = Jarak pasangan curam
 properties-steep-pair-distance-help = Pasangan titik yang lebih dekat dari ini pada denah, dan lebih curam dari sudut di bawah, disebutkan saat pembangunan berhasil. Tidak pernah ditolak atau diperbaiki.
 properties-surface-chunk-debug-view = Tampilan debug chunk permukaan
 properties-vertical-sync = Sinkronisasi vertikal
-properties-world-axis-gizmo = Gizmo sumbu dunia
-properties-zoom-cursor = Zoom ke kursor
 properties-zoom-sensitivity = Sensitivitas zoom
 reference-points-count-holes-from-dataset = { $count } lubang dari '{ $dataset }'
 reference-points-holes-from-datasets = { $count } lubang dari { $datasets } set data

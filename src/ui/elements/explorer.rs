@@ -839,8 +839,8 @@ pub(crate) fn draw_explorer(
             let run_controls = if show_run_controls {
                 egui::Panel::top("planning_run_controls")
                     .resizable(false)
-                    .show_separator_line(crate::ui::chrome::show_separator_line(ui))
-                    .exact_size(super::toolbars::bottom_toolbar_height(ui.ctx()))
+                    .show_separator_line(false)
+                    .exact_size(super::toolbars::bottom_toolbar_height())
                     .frame(crate::ui::chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
                     .show(ui, |ui| match setup_page {
                         _ if animate => {
@@ -865,7 +865,7 @@ pub(crate) fn draw_explorer(
                     .resizable(true)
                     .default_size(ui.available_height() * 0.5)
                     .min_size(MIN_COLUMN_PANE)
-                    .show_separator_line(crate::ui::chrome::show_separator_line(ui))
+                    .show_separator_line(false)
                     .frame(crate::ui::chrome::region_frame(ui).fill(surface).inner_margin(egui::Margin::ZERO))
                     .show(ui, |ui| super::planning_setup::draw_steps(ui, editor, crate::ui::state::PlanningPage::Solids, commands))
                     .response
@@ -892,7 +892,7 @@ pub(crate) fn draw_explorer(
                 .resizable(true)
                 .default_size((ui.available_height() * 0.5).max(120.0))
                 .min_size(90.0)
-                .show_separator_line(crate::ui::chrome::show_separator_line(ui))
+                .show_separator_line(false)
                 .frame(crate::ui::chrome::region_frame(ui).fill(surface).inner_margin(egui::Margin::ZERO))
                 .show(ui, |ui| {
                     heading(ui, &crate::i18n::tr!("sequence-solids-navigation"));
@@ -920,7 +920,7 @@ pub(crate) fn draw_explorer(
                         .default_size((ui.available_height() * 0.55).max(MIN_COLUMN_PANE))
                         .min_size(MIN_COLUMN_PANE)
                         .max_size((ui.available_height() - MIN_COLUMN_PANE).max(MIN_COLUMN_PANE))
-                        .show_separator_line(crate::ui::chrome::show_separator_line(ui))
+                        .show_separator_line(false)
                         .frame(crate::ui::chrome::region_frame(ui).fill(surface).inner_margin(egui::Margin::ZERO))
                         .show(ui, |ui| {
                             let rect = ui.available_rect_before_wrap();

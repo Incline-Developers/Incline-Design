@@ -87,11 +87,11 @@ pub(crate) fn draw_thickness_points_dialog(ui: &mut egui::Ui, editor: &mut Edito
             grid_note(ui, &draft.grid);
             menu::menu_actions(ui, |ui| {
                 let ready = draft.seam.value.is_some() && draft.grid == GridCheck::Grid;
-                let confirm = ready && menu::dialog_confirm_pressed(ui.ctx());
+                let confirm = ready && menu::dialog_confirmed(ui.ctx());
                 if ui.add(MenuButton::new(tr!("reference-points-make")).primary().enabled(ready)).clicked() || confirm {
                     make = true;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     cancel = true;
                 }
             });
@@ -231,11 +231,11 @@ pub(crate) fn draw_seam_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
             grid_note(ui, &draft.grid);
             menu::menu_actions(ui, |ui| {
                 let ready = draft.grid == GridCheck::Grid;
-                let confirm = ready && menu::dialog_confirm_pressed(ui.ctx());
+                let confirm = ready && menu::dialog_confirmed(ui.ctx());
                 if ui.add(MenuButton::new(tr!("reference-points-make")).primary().enabled(ready)).clicked() || confirm {
                     make = true;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     cancel = true;
                 }
             });

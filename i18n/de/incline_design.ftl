@@ -1913,7 +1913,6 @@ logging-application-name = Anwendungsname: { $name }
 logging-application-startup = Anwendungsstart
 logging-build-target-os-architecture = Build-Ziel: { $os }-{ $architecture }
 logging-completed = Abgeschlossen
-logging-count-messages = { $count } Meldungen
 logging-desktop-session-xdg-session-type = Desktop-Sitzung: XDG_SESSION_TYPE={ $session }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
 logging-initialising-incline-design = Incline Design wird initialisiert
 logging-locale-environment = Gebietsschema-Umgebung: LANG={ $lang }, LC_ALL={ $locale }, TZ={ $timezone }
@@ -2143,7 +2142,6 @@ properties-modelling-help = Wie Oberfläche erstellen sein Raster zeichnet. Eins
 properties-move-layer = Auf Ebene verschieben...
 properties-near-clip-limit = Nahe Clip-Grenze
 properties-orbit-sensitivity = Umlaufempfindlichkeit
-properties-panel-chrome = Panel-Rahmen
 properties-performance = Leistung
 properties-plan-mode = Grundrissmodus
 properties-point-cloud-chunk-debug-view = Debug-Ansicht der Punktwolken-Chunks
@@ -2158,8 +2156,6 @@ properties-steep-pair-distance = Steilpaar-Abstand
 properties-steep-pair-distance-help = Punktepaare, die im Grundriss näher beieinander liegen als dieser Wert und steiler sind als der Winkel darunter, werden bei einem erfolgreichen Aufbau genannt. Nie abgelehnt oder repariert.
 properties-surface-chunk-debug-view = Debug-Ansicht der Oberflächen-Chunks
 properties-vertical-sync = Vertikale Synchronisierung
-properties-world-axis-gizmo = Weltachsen-Gizmo
-properties-zoom-cursor = Auf Zeiger zoomen
 properties-zoom-sensitivity = Zoomempfindlichkeit
 reference-points-count-holes-from-dataset = { $count } Bohrlöcher aus '{ $dataset }'
 reference-points-holes-from-datasets = { $count } Bohrlöcher aus { $datasets } Datensätzen

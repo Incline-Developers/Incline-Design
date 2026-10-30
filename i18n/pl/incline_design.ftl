@@ -1942,7 +1942,6 @@ logging-application-name = Nazwa aplikacji: { $name }
 logging-application-startup = Uruchamianie aplikacji
 logging-build-target-os-architecture = Platforma docelowa kompilacji: { $os }-{ $architecture }
 logging-completed = Ukończono
-logging-count-messages = { $count } wiadomości
 logging-desktop-session-xdg-session-type = Sesja pulpitu: XDG_SESSION_TYPE={ $session }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
 logging-initialising-incline-design = Inicjalizowanie Incline Design
 logging-locale-environment = Środowisko lokalizacji: LANG={ $lang }, LC_ALL={ $locale }, TZ={ $timezone }
@@ -2172,7 +2171,6 @@ properties-modelling-help = Jak Zbuduj powierzchnię rysuje swoją siatkę. Usta
 properties-move-layer = Przenieś do warstwy...
 properties-near-clip-limit = Granica bliskiego przycięcia
 properties-orbit-sensitivity = Czułość obrotu
-properties-panel-chrome = Obramowanie paneli
 properties-performance = Wydajność
 properties-plan-mode = Tryb planu
 properties-point-cloud-chunk-debug-view = Widok debugowania fragmentów chmury punktów
@@ -2187,8 +2185,6 @@ properties-steep-pair-distance = Odległość stromej pary
 properties-steep-pair-distance-help = Pary punktów bliższych niż ta odległość w rzucie i bardziej stromych niż kąt poniżej są wymieniane po udanej budowie. Nigdy nie są odrzucane ani naprawiane.
 properties-surface-chunk-debug-view = Widok debugowania fragmentów powierzchni
 properties-vertical-sync = Synchronizacja pionowa
-properties-world-axis-gizmo = Gizmo osi świata
-properties-zoom-cursor = Przybliżaj do kursora
 properties-zoom-sensitivity = Czułość przybliżania
 reference-points-count-holes-from-dataset = Otwory: { $count } z „{ $dataset }”
 reference-points-holes-from-datasets = Otwory: { $count } z { $datasets } zbiorów danych

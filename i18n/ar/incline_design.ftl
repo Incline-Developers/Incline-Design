@@ -1872,7 +1872,6 @@ logging-application-name = اسم التطبيق: { $name }
 logging-application-startup = بدء تشغيل التطبيق
 logging-build-target-os-architecture = هدف البناء: { $os }-{ $architecture }
 logging-completed = مكتمل
-logging-count-messages = { $count } رسالة
 logging-desktop-session-xdg-session-type = جلسة سطح المكتب: XDG_SESSION_TYPE={ $session }، XDG_CURRENT_DESKTOP={ $desktop }، WAYLAND_DISPLAY={ $wayland }، DISPLAY={ $display }
 logging-initialising-incline-design = جارٍ تهيئة Incline Design
 logging-locale-environment = بيئة الإعدادات المحلية: LANG={ $lang }، LC_ALL={ $locale }، TZ={ $timezone }
@@ -2102,7 +2101,6 @@ properties-modelling-help = كيف يرسم إنشاء سطح شبكته. إعد
 properties-move-layer = انتقل إلى الطبقة...
 properties-near-clip-limit = حد القطع القريب
 properties-orbit-sensitivity = حساسية المدار
-properties-panel-chrome = إطار اللوحة
 properties-performance = الأداء
 properties-plan-mode = وضع المسقط الأفقي
 properties-point-cloud-chunk-debug-view = عرض تنقيح قطع السحابة النقطية
@@ -2117,8 +2115,6 @@ properties-steep-pair-distance = مسافة الزوج الشديد الانحد
 properties-steep-pair-distance-help = تُسمّى أزواج النقاط الأقرب من هذه المسافة في المسقط الأفقي والأشد انحدارًا من الزاوية أدناه عند نجاح الإنشاء. لا تُرفض ولا تُصلح أبدًا.
 properties-surface-chunk-debug-view = عرض تنقيح قطع السطح
 properties-vertical-sync = التزامن الرأسي
-properties-world-axis-gizmo = أداة المحور العالمي
-properties-zoom-cursor = زوم إلى المؤشر
 properties-zoom-sensitivity = حساسية الزوم
 reference-points-count-holes-from-dataset = { $count } ثقب من «{ $dataset }»
 reference-points-holes-from-datasets = { $count } ثقب من { $datasets } مجموعات بيانات

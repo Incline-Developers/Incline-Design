@@ -1872,7 +1872,6 @@ logging-application-name = نام برنامه: { $name }
 logging-application-startup = راه‌اندازی برنامه
 logging-build-target-os-architecture = هدف ساخت: { $os }-{ $architecture }
 logging-completed = تکمیل شد
-logging-count-messages = { $count } پیام
 logging-desktop-session-xdg-session-type = نشست دسکتاپ: XDG_SESSION_TYPE={ $session }، XDG_CURRENT_DESKTOP={ $desktop }، WAYLAND_DISPLAY={ $wayland }، DISPLAY={ $display }
 logging-initialising-incline-design = در حال راه‌اندازی Incline Design
 logging-locale-environment = محیط محلی: LANG={ $lang }، LC_ALL={ $locale }، TZ={ $timezone }
@@ -2102,7 +2101,6 @@ properties-modelling-help = ساخت سطح چگونه شبکه خود را می
 properties-move-layer = انتقال به لایه...
 properties-near-clip-limit = حد کلیپ نزدیک
 properties-orbit-sensitivity = حساسیت مدار
-properties-panel-chrome = کروم پنل
 properties-performance = کارایی
 properties-plan-mode = حالت پلان
 properties-point-cloud-chunk-debug-view = نمای اشکال‌زدایی تکه‌های ابر نقاط
@@ -2117,8 +2115,6 @@ properties-steep-pair-distance = فاصله جفت تند
 properties-steep-pair-distance-help = جفت نقاطی که در پلان از این مقدار نزدیک‌ترند و شیبشان از زاویه زیر تندتر است، هنگام ساخت موفق نام برده می‌شوند. هرگز رد یا اصلاح نمی‌شوند.
 properties-surface-chunk-debug-view = نمای اشکال‌زدایی تکه‌های سطح
 properties-vertical-sync = همگام‌سازی عمودی
-properties-world-axis-gizmo = محور جهان
-properties-zoom-cursor = زوم به کرسر
 properties-zoom-sensitivity = حساسیت زوم
 reference-points-count-holes-from-dataset = { $count } گمانه از «{ $dataset }»
 reference-points-holes-from-datasets = { $count } گمانه از { $datasets } مجموعه‌داده

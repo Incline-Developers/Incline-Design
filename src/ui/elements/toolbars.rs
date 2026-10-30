@@ -23,8 +23,8 @@ use crate::{
 };
 
 /// Height claimed by the bottom toolbar, including its chrome margins.
-pub(crate) fn bottom_toolbar_height(ctx: &egui::Context) -> f32 {
-    TOOL_CELL_SIZE + 2.0 * crate::ui::chrome::margin(ctx)
+pub(crate) fn bottom_toolbar_height() -> f32 {
+    TOOL_CELL_SIZE + 2.0 * crate::ui::chrome::margin()
 }
 
 /// Id of the drawing toolbar's column panel.
@@ -402,7 +402,7 @@ pub(crate) fn draw_left_toolbar(
     // The run wraps into further columns rather than off the bottom of a short
     // window, and a panel claims its width before anything is drawn in it - so
     // the packing is arithmetic, every cell being one square.
-    let margins = 2.0 * crate::ui::chrome::margin(ui.ctx());
+    let margins = 2.0 * crate::ui::chrome::margin();
     // A column is filled before the next is started - ten tools in room for
     // six wrap 6-4, not 5-5 - so the toolbar only reaches as far across the
     // window as it has to. An empty run still claims the one column it would
@@ -414,7 +414,7 @@ pub(crate) fn draw_left_toolbar(
 
     egui::Panel::left(LEFT_TOOLBAR_PANEL_ID)
         .resizable(false)
-        .show_separator_line(crate::ui::chrome::show_separator_line(ui))
+        .show_separator_line(false)
         .exact_size(width)
         // No padding on the region: the square cell fills run edge to edge,
         // and the region chrome masks whichever ones reach its corners.
@@ -450,11 +450,11 @@ pub(crate) fn draw_left_toolbar(
 /// Returns the toolbar's rect and the screen x of the cursor-mode run's
 /// middle, which the console's grip lines up with.
 pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) -> (egui::Rect, f32) {
-    let claimed = bottom_toolbar_height(ui.ctx());
+    let claimed = bottom_toolbar_height();
     let mut cursor_modes_centre = ui.ctx().content_rect().center().x;
     let rect = egui::Panel::bottom("bottom_tools_strip")
         .resizable(false)
-        .show_separator_line(crate::ui::chrome::show_separator_line(ui))
+        .show_separator_line(false)
         .exact_size(claimed)
         // The cells meet the region on every side; the chrome painted after
         // them is what rounds whichever fill reaches an outer corner.
