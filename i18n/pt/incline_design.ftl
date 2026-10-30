@@ -1870,7 +1870,6 @@ logging-application-name = Nome da aplicação: { $name }
 logging-application-startup = Inicialização da aplicação
 logging-build-target-os-architecture = Destino da compilação: { $os }-{ $architecture }
 logging-completed = Concluído
-logging-count-messages = { $count } mensagens
 logging-desktop-session-xdg-session-type = Sessão do ambiente de trabalho: XDG_SESSION_TYPE={ $session }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
 logging-initialising-incline-design = A inicializar o Incline Design
 logging-locale-environment = Ambiente de localidade: LANG={ $lang }, LC_ALL={ $locale }, TZ={ $timezone }
@@ -2100,7 +2099,6 @@ properties-modelling-help = Como Construir superfície desenha a sua grelha. Con
 properties-move-layer = Mover para a camada...
 properties-near-clip-limit = Limite próximo do clip
 properties-orbit-sensitivity = Sensibilidade à órbita
-properties-panel-chrome = Moldura do painel
 properties-performance = Desempenho
 properties-plan-mode = Modo de planeamento
 properties-point-cloud-chunk-debug-view = Vista de depuração de blocos da nuvem de pontos
@@ -2115,8 +2113,6 @@ properties-steep-pair-distance = Distância de pares íngremes
 properties-steep-pair-distance-help = Os pares de pontos mais próximos do que este valor em planta e mais íngremes do que o ângulo abaixo são indicados quando uma construção tem êxito. Nunca são recusados nem reparados.
 properties-surface-chunk-debug-view = Vista de depuração de blocos da superfície
 properties-vertical-sync = Sincronização vertical
-properties-world-axis-gizmo = Gizmo do eixo mundial
-properties-zoom-cursor = Zoom para o cursor
 properties-zoom-sensitivity = Sensibilidade ao zoom
 reference-points-count-holes-from-dataset = { $count } furos de '{ $dataset }'
 reference-points-holes-from-datasets = { $count } furos de { $datasets } conjuntos de dados

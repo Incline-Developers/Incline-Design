@@ -1914,7 +1914,6 @@ logging-application-name = Nome applicazione: { $name }
 logging-application-startup = Avvio dell'applicazione
 logging-build-target-os-architecture = Target di build: { $os }-{ $architecture }
 logging-completed = Completato
-logging-count-messages = { $count } messaggi
 logging-desktop-session-xdg-session-type = Sessione desktop: XDG_SESSION_TYPE={ $session }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
 logging-initialising-incline-design = Inizializzazione di Incline Design
 logging-locale-environment = Ambiente locale: LANG={ $lang }, LC_ALL={ $locale }, TZ={ $timezone }
@@ -2144,7 +2143,6 @@ properties-modelling-help = Come Costruisci superficie disegna la sua griglia. I
 properties-move-layer = Sposta al livello...
 properties-near-clip-limit = Limite di clip vicino
 properties-orbit-sensitivity = Sensibilità di orbita
-properties-panel-chrome = Cornice pannelli
 properties-performance = Prestazioni
 properties-plan-mode = Modalità planimetria
 properties-point-cloud-chunk-debug-view = Vista di debug dei chunk della nuvola di punti
@@ -2159,8 +2157,6 @@ properties-steep-pair-distance = Distanza delle coppie ripide
 properties-steep-pair-distance-help = Le coppie di punti più vicine di questo valore in pianta e più ripide dell'angolo qui sotto vengono segnalate quando una costruzione riesce. Mai rifiutate né riparate.
 properties-surface-chunk-debug-view = Vista di debug dei chunk della superficie
 properties-vertical-sync = Sincronizzazione verticale
-properties-world-axis-gizmo = Gizmo assi del mondo
-properties-zoom-cursor = Zoom sul cursore
 properties-zoom-sensitivity = Sensibilità zoom
 reference-points-count-holes-from-dataset = { $count } fori da '{ $dataset }'
 reference-points-holes-from-datasets = { $count } fori da { $datasets } dataset

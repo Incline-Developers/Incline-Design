@@ -73,7 +73,7 @@ pub(crate) fn draw_point_cloud_join_dialog(ui: &mut egui::Ui, editor: &mut Edito
 
             menu::menu_actions(ui, |ui| {
                 let can_run = selected.len() >= 2 && !editor.point_cloud_join_name_input.trim().is_empty();
-                let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                let confirm = menu::dialog_confirmed(ui.ctx());
                 if ui.add(MenuButton::new(tr!("point-cloud-join")).primary().enabled(can_run)).clicked() || (confirm && can_run) {
                     commands.push(UiCommand::ExecutePointCloudJoin {
                         cloud_ids: selected.iter().map(|cloud| cloud.id).collect(),
@@ -82,7 +82,7 @@ pub(crate) fn draw_point_cloud_join_dialog(ui: &mut egui::Ui, editor: &mut Edito
                     });
                     editor.point_cloud_join_open = false;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     editor.point_cloud_join_open = false;
                 }
             });
@@ -238,7 +238,7 @@ pub(crate) fn draw_point_cloud_classify_dialog(ui: &mut egui::Ui, editor: &mut E
 
             menu::menu_actions(ui, |ui| {
                 let can_run = !selected.is_empty();
-                let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                let confirm = menu::dialog_confirmed(ui.ctx());
                 if ui.add(MenuButton::new(tr!("point-cloud-classify")).primary().enabled(can_run)).clicked() || (confirm && can_run) {
                     commands.push(UiCommand::ExecutePointCloudClassify {
                         cloud_ids: selected.iter().map(|cloud| cloud.id).collect(),
@@ -246,7 +246,7 @@ pub(crate) fn draw_point_cloud_classify_dialog(ui: &mut egui::Ui, editor: &mut E
                     });
                     editor.point_cloud_classify_open = false;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     editor.point_cloud_classify_open = false;
                 }
             });

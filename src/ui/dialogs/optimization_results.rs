@@ -81,7 +81,7 @@ pub(crate) fn draw_results_window(ui: &mut egui::Ui, state: &mut OptimizationSta
                                 filter = ShellFilter::Applied(shells);
                             }
                             Some(false) => filter = ShellFilter::Off,
-                            None if menu::dialog_cancel_pressed(ui.ctx()) => filter = ShellFilter::Off,
+                            None if menu::dialog_cancelled(ui.ctx()) => filter = ShellFilter::Off,
                             None => {}
                         }
                     }
@@ -122,7 +122,7 @@ pub(crate) fn draw_results_window(ui: &mut egui::Ui, state: &mut OptimizationSta
             }
             menu::menu_actions(ui, |ui| {
                 // Escape leaves choosing first; the window stays.
-                let escape = !matches!(filter, ShellFilter::Choosing(_)) && menu::dialog_cancel_pressed(ui.ctx());
+                let escape = !matches!(filter, ShellFilter::Choosing(_)) && menu::dialog_cancelled(ui.ctx());
                 if ui.add(MenuButton::new(tr!("common-close"))).clicked() || escape {
                     close = true;
                 }

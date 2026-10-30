@@ -69,10 +69,10 @@ const SHIFT_MODIFIER: &str = "Shift+";
 /// Its visible surface uses [`TOOL_CELL_SIZE`], the same thickness as the left
 /// and bottom toolbars; the panel claims its chrome margins around that.
 pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) -> egui::Rect {
-    let claimed = TOOL_CELL_SIZE + 2.0 * crate::ui::chrome::margin(ui.ctx());
+    let claimed = TOOL_CELL_SIZE + 2.0 * crate::ui::chrome::margin();
     egui::Panel::top("viewport_bar")
         .resizable(false)
-        .show_separator_line(crate::ui::chrome::show_separator_line(ui))
+        .show_separator_line(false)
         .exact_size(claimed)
         // Buttons meet the region edges so its later chrome pass can mask their
         // outer corners; explicit cluster gaps provide all the spacing needed.

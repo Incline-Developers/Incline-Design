@@ -69,7 +69,7 @@ pub(crate) fn navigate(ui: &egui::Ui, response: &egui::Response, image: egui::Re
                 .sum::<f64>()
         });
         if scroll != 0.0 {
-            match response.hover_pos().filter(|_| editor.plan_zoom_towards_cursor) {
+            match response.hover_pos() {
                 Some(pointer) => {
                     let aspect = f64::from(image.width() / image.height().max(1.0));
                     view.zoom_at(scroll, image_uv(image, pointer).map(f64::from), aspect);
@@ -87,11 +87,8 @@ pub(crate) fn navigate(ui: &egui::Ui, response: &egui::Response, image: egui::Re
 
 /// The viewport's own orientation gizmo in the top right of a preview,
 /// turning `view` to the direction an axis click names. Returns whether it
-/// did. Hidden with the main viewport's gizmo.
-pub(crate) fn orientation_gizmo(ui: &mut egui::Ui, id: &str, image: egui::Rect, view: &mut SolidPreviewView, editor: &EditorState) -> bool {
-    if !editor.show_world_axis_gizmo {
-        return false;
-    }
+/// did.
+pub(crate) fn orientation_gizmo(ui: &mut egui::Ui, id: &str, image: egui::Rect, view: &mut SolidPreviewView) -> bool {
     let (_, up) = view.screen_basis();
     let forward = view.forward();
     let gizmo = crate::ui::elements::cursors::draw_orientation_gizmo(ui, egui::Id::unique(id), image, forward.as_vec3().to_array(), up.as_vec3().to_array(), false);

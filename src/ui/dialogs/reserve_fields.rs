@@ -83,7 +83,7 @@ pub(crate) fn draw_new_reserve_field_dialog(ui: &mut egui::Ui, editor: &mut Edit
             }
             menu::menu_actions(ui, |ui| {
                 let can_add = !editor.new_reserve_field_name.trim().is_empty();
-                let submitted = menu::dialog_confirm_pressed(ui.ctx());
+                let submitted = menu::dialog_confirmed(ui.ctx());
                 if (submitted || ui.add(MenuButton::new(tr!("reserve-add-field")).primary().enabled(can_add)).clicked()) && can_add {
                     let aggregation = match editor.new_reserve_field_kind {
                         ReserveFieldKind::Sum => ReserveAggregation::Sum,
@@ -99,7 +99,7 @@ pub(crate) fn draw_new_reserve_field_dialog(ui: &mut egui::Ui, editor: &mut Edit
                     });
                     close = true;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     close = true;
                 }
             });

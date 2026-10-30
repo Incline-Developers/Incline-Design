@@ -1872,7 +1872,6 @@ logging-application-name = अनुप्रयोग नाम: { $name }
 logging-application-startup = अनुप्रयोग प्रारंभ
 logging-build-target-os-architecture = बिल्ड लक्ष्य: { $os }-{ $architecture }
 logging-completed = पूर्ण
-logging-count-messages = { $count } संदेश
 logging-desktop-session-xdg-session-type = डेस्कटॉप सत्र: XDG_SESSION_TYPE={ $session }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
 logging-initialising-incline-design = Incline Design प्रारंभ हो रहा है
 logging-locale-environment = स्थानीय परिवेश: LANG={ $lang }, LC_ALL={ $locale }, TZ={ $timezone }
@@ -2102,7 +2101,6 @@ properties-modelling-help = सतह बनाएँ अपनी ग्रि�
 properties-move-layer = लेयर पर स्थानांतरित करें...
 properties-near-clip-limit = निकट क्लिप सीमा
 properties-orbit-sensitivity = कक्षा संवेदनशीलता
-properties-panel-chrome = पैनल क्रोम
 properties-performance = प्रदर्शन
 properties-plan-mode = योजना मोड
 properties-point-cloud-chunk-debug-view = पॉइंट क्लाउड चंक डीबग दृश्य
@@ -2117,8 +2115,6 @@ properties-steep-pair-distance = तीव्र जोड़ी की दू�
 properties-steep-pair-distance-help = प्लान में इससे करीब और नीचे दिए कोण से ज़्यादा ढलान वाले बिंदुओं के जोड़े, बिल्ड सफल होने पर बताए जाते हैं। कभी अस्वीकार या ठीक नहीं किए जाते।
 properties-surface-chunk-debug-view = सतह चंक डीबग दृश्य
 properties-vertical-sync = वर्टिकल सिंक
-properties-world-axis-gizmo = विश्व अक्ष गज़्मो
-properties-zoom-cursor = कर्सर को ज़ूम करें
 properties-zoom-sensitivity = ज़ूम संवेदनशीलता
 reference-points-count-holes-from-dataset = '{ $dataset }' से { $count } होल
 reference-points-holes-from-datasets = { $datasets } डेटासेट से { $count } होल

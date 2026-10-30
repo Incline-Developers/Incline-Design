@@ -465,10 +465,10 @@ impl DataGrid {
                 response.request_focus();
                 let ready = !name.trim().is_empty();
                 menu::menu_actions(ui, |ui| {
-                    if ui.add(MenuButton::new(tr!("opt-grid-add")).primary().enabled(ready)).clicked() || (ready && menu::dialog_confirm_pressed(ui.ctx())) {
+                    if ui.add(MenuButton::new(tr!("opt-grid-add")).primary().enabled(ready)).clicked() || (ready && menu::dialog_confirmed(ui.ctx())) {
                         accept = true;
                     }
-                    if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                    if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                         cancel = true;
                     }
                 });

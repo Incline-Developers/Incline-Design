@@ -94,7 +94,7 @@ pub(crate) fn draw_main_menu(ui: &mut egui::Ui, editor: &mut EditorState, projec
         ..frame.inner_margin
     });
     egui::Panel::top("main_menu")
-        .show_separator_line(crate::ui::chrome::show_separator_line(ui))
+        .show_separator_line(false)
         .frame(frame)
         .show(ui, |ui| {
             // Too narrow a window scrolls the row rather than clipping the
@@ -508,11 +508,16 @@ fn draw_open_recent(ui: &mut egui::Ui, project: &UiProjectView, commands: &mut V
     let open_recent = tr!("menu-file-open-recent");
     context_submenu(ui, &open_recent, !recent.is_empty(), |ui| {
         for entry in recent {
-            let row = ContextMenuAction::new(entry.name.as_str()).show(ui);
+            let missing = entry.is_missing();
+            let row = ContextMenuAction::new(entry.name.as_str()).enabled(!missing).strikethrough(missing).show(ui);
             // A row is a file stem, so two remembered projects can read alike;
             // the full path tells them apart.
             #[cfg(not(target_arch = "wasm32"))]
-            let row = row.on_hover_text(entry.path.display().to_string());
+            let row = if missing {
+                row.on_disabled_hover_text(tr!("menu-file-recent-project-missing", path = entry.path.display().to_string()))
+            } else {
+                row.on_hover_text(entry.path.display().to_string())
+            };
             if row.clicked() {
                 #[cfg(not(target_arch = "wasm32"))]
                 commands.push(UiCommand::ActivateTrackedProject(entry.path.clone()));

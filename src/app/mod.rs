@@ -359,6 +359,13 @@ pub(crate) struct App<'a> {
     tracked_browser_projects: Vec<crate::app::web_storage::BrowserProjectSummary>,
     #[cfg(not(target_arch = "wasm32"))]
     tracked_project_paths: Vec<PathBuf>,
+    /// The tracked projects whose files were not there at the last look, and
+    /// when that was. Files can be moved or deleted while the application
+    /// runs, so the look is repeated rather than made once at startup.
+    #[cfg(not(target_arch = "wasm32"))]
+    missing_project_paths: Vec<PathBuf>,
+    #[cfg(not(target_arch = "wasm32"))]
+    missing_projects_checked_at: Option<Instant>,
     /// Whether each loaded dataset's linked geophysics files can be read
     /// this session, and the holes read from them lately. The links
     /// themselves are the datasets'.
@@ -450,6 +457,9 @@ pub(crate) struct App<'a> {
     /// writes one line carrying the value it settled on instead of one a frame.
     deferred_gesture_log: Option<String>,
     modifiers: ModifiersState,
+    /// Enter or Escape, pressed over the viewport and not yet let go: tools
+    /// step when it is released, as dialogs do (`handle_key_action`).
+    held_step_key: Option<winit::keyboard::KeyCode>,
     drag: Option<DragState>,
     pub(crate) gizmo_drag: Option<GizmoDragState>,
     /// Geology's Move: a vertex pressed on, dragged once the mouse moves.
@@ -656,6 +666,10 @@ impl<'a> Default for App<'a> {
             tracked_browser_projects: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             tracked_project_paths: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            missing_project_paths: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            missing_projects_checked_at: None,
             well_logs: Default::default(),
             #[cfg(target_arch = "wasm32")]
             geophysics_files: Vec::new(),
@@ -703,6 +717,7 @@ impl<'a> Default for App<'a> {
             reported_during_gesture: Vec::new(),
             deferred_gesture_log: None,
             modifiers: ModifiersState::empty(),
+            held_step_key: None,
             drag: None,
             gizmo_drag: None,
             vertex_drag: None,
@@ -926,11 +941,8 @@ impl<'a> App<'a> {
         self.editor.well_log_style = config.well_log_style.sanitized();
         self.editor.dark_mode = config.dark_mode;
         self.editor.show_console = config.show_console;
-        self.editor.panel_chrome = config.panel_chrome;
         self.editor.ui_size_percent = io::finite_clamped(config.ui_size_percent, 50.0, 200.0, io::default_ui_size_percent());
-        self.editor.show_world_axis_gizmo = config.show_world_axis_gizmo;
-        self.editor.show_scale_bar = config.show_scale_bar;
-        self.editor.renderer_background_color = config.renderer_background_color;
+        self.editor.renderer_background_color = crate::ui::scene_background_color(config.dark_mode);
         self.editor.snap_poll_rate = config.snap_poll_rate.clamp(5, 1000);
         self.editor.vsync_enabled = config.vsync_enabled;
         self.editor.frame_rate_cap = config.frame_rate_cap.clamp(20, 1000);
@@ -945,7 +957,6 @@ impl<'a> App<'a> {
         self.editor.plan_zoom_sensitivity = io::finite_clamped(config.plan_zoom_sensitivity, 0.0001, 0.05, io::default_plan_zoom_sensitivity());
         self.editor.plan_invert_vertical_look = config.plan_invert_vertical_look;
         self.editor.plan_invert_horizontal_look = config.plan_invert_horizontal_look;
-        self.editor.plan_zoom_towards_cursor = config.plan_zoom_towards_cursor;
         self.editor.fly_field_of_view_degrees = io::finite_clamped(config.fly_field_of_view_degrees, 20.0, 120.0, io::default_fly_field_of_view_degrees());
         self.editor.fly_mouse_look_sensitivity = io::finite_clamped(config.fly_mouse_look_sensitivity, 0.0001, 0.02, io::default_fly_mouse_look_sensitivity());
         self.editor.fly_invert_vertical_look = config.fly_invert_vertical_look;
@@ -1092,6 +1103,21 @@ impl<'a> App<'a> {
     fn track_project_path(&mut self, path: PathBuf) {
         self.tracked_project_paths.retain(|tracked| tracked != &path);
         self.tracked_project_paths.push(path);
+    }
+
+    /// Look again for the tracked projects' files, at most every couple of
+    /// seconds, so the Recent lists grey out a project that has been moved or
+    /// deleted - whether before startup or since.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn refresh_missing_projects(&mut self) {
+        const INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
+        let now = Instant::now();
+        if self.missing_projects_checked_at.is_some_and(|checked| now.duration_since(checked) < INTERVAL) {
+            return;
+        }
+        self.missing_projects_checked_at = Some(now);
+        self.missing_project_paths = self.tracked_project_paths.iter().filter(|path| !path.is_file()).cloned().collect();
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -2052,6 +2078,8 @@ impl<'a> App<'a> {
         self.session.tables_fingerprint().hash(&mut hasher);
         #[cfg(not(target_arch = "wasm32"))]
         self.tracked_project_paths.hash(&mut hasher);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.missing_project_paths.hash(&mut hasher);
         #[cfg(target_arch = "wasm32")]
         for project in &self.tracked_browser_projects {
             project.id.hash(&mut hasher);
@@ -2185,6 +2213,7 @@ impl<'a> App<'a> {
                         name,
                         is_active,
                         dirty: is_active && project_dirty,
+                        missing: self.missing_project_paths.contains(path),
                         path: path.clone(),
                     }
                 })
@@ -2416,6 +2445,8 @@ impl<'a> App<'a> {
         if let Some(path) = session.current_project_path.clone() {
             self.track_project_path(path);
         }
+        self.missing_projects_checked_at = None;
+        self.refresh_missing_projects();
     }
 
     #[cfg(not(target_arch = "wasm32"))]

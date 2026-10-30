@@ -55,7 +55,7 @@ pub(crate) fn draw_timeline(
 ) -> egui::Rect {
     egui::Panel::bottom(TIMELINE_PANEL_ID)
         .resizable(false)
-        .show_separator_line(chrome::show_separator_line(ui))
+        .show_separator_line(false)
         .exact_size(112.0)
         .frame(chrome::region_frame(ui).inner_margin(egui::Margin::symmetric(14, 8)))
         .show(ui, |ui| {

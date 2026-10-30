@@ -346,11 +346,11 @@ pub(crate) fn draw_move_to_layer_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
                 .show(ui);
             menu::menu_actions(ui, |ui| {
                 let action_label = if dialog.copy { tr!("edit-copy") } else { tr!("edit-move") };
-                let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                let confirm = menu::dialog_confirmed(ui.ctx());
                 if ui.add(MenuButton::new(action_label).primary().enabled(can_apply)).clicked() || (confirm && can_apply) {
                     apply = true;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     close = true;
                 }
             });
@@ -396,8 +396,8 @@ pub(crate) fn draw_move_to_axis_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
                 ui.colored_label(egui::Color32::from_rgb(200, 70, 70), tr!("ui-invalid-axis-value", axis = axis_label));
             }
             ui.add_space(4.0);
-            let submitted = menu::dialog_confirm_pressed(ui.ctx());
-            let cancelled = menu::dialog_cancel_pressed(ui.ctx());
+            let submitted = menu::dialog_confirmed(ui.ctx());
+            let cancelled = menu::dialog_cancelled(ui.ctx());
             menu::menu_actions(ui, |ui| {
                 if (submitted || ui.add(MenuButton::new(tr!("edit-apply")).primary().enabled(can_apply)).clicked()) && can_apply {
                     apply = true;
@@ -453,8 +453,8 @@ pub(crate) fn draw_insert_point_at_elevation_dialog(ui: &mut egui::Ui, editor: &
             }
             ui.label(tr!("edit-segments-lying-elevation-ignored"));
             ui.add_space(4.0);
-            let submitted = menu::dialog_confirm_pressed(ui.ctx());
-            let cancelled = menu::dialog_cancel_pressed(ui.ctx());
+            let submitted = menu::dialog_confirmed(ui.ctx());
+            let cancelled = menu::dialog_cancelled(ui.ctx());
             menu::menu_actions(ui, |ui| {
                 if (submitted || ui.add(MenuButton::new(tr!("edit-apply")).primary().enabled(can_apply)).clicked()) && can_apply {
                     apply = true;
@@ -521,8 +521,8 @@ pub(crate) fn draw_thin_strings_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
             // A tolerance changed this frame has no preview yet, so Apply
             // waits a frame for it rather than acting on one not shown.
             let can_apply = tolerance == dialog.tolerance && dialog.after < dialog.before;
-            let submitted = menu::dialog_confirm_pressed(ui.ctx());
-            let cancelled = menu::dialog_cancel_pressed(ui.ctx());
+            let submitted = menu::dialog_confirmed(ui.ctx());
+            let cancelled = menu::dialog_cancelled(ui.ctx());
             menu::menu_actions(ui, |ui| {
                 if (submitted || ui.add(MenuButton::new(tr!("edit-apply")).primary().enabled(can_apply)).clicked()) && can_apply {
                     apply = true;
@@ -573,8 +573,8 @@ pub(crate) fn draw_insert_point_at_spacing_dialog(ui: &mut egui::Ui, editor: &mu
                 .suffix(tr!("common-m"))
                 .show(ui);
             ui.add_space(4.0);
-            let submitted = menu::dialog_confirm_pressed(ui.ctx());
-            let cancelled = menu::dialog_cancel_pressed(ui.ctx());
+            let submitted = menu::dialog_confirmed(ui.ctx());
+            let cancelled = menu::dialog_cancelled(ui.ctx());
             menu::menu_actions(ui, |ui| {
                 if (submitted || ui.add(MenuButton::new(tr!("edit-apply")).primary().enabled(can_apply)).clicked()) && can_apply {
                     apply = true;
@@ -623,8 +623,8 @@ pub(crate) fn draw_smooth_strings_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                 .suffix(tr!("common-m"))
                 .show(ui);
             ui.add_space(4.0);
-            let submitted = menu::dialog_confirm_pressed(ui.ctx());
-            let cancelled = menu::dialog_cancel_pressed(ui.ctx());
+            let submitted = menu::dialog_confirmed(ui.ctx());
+            let cancelled = menu::dialog_cancelled(ui.ctx());
             menu::menu_actions(ui, |ui| {
                 if (submitted || ui.add(MenuButton::new(tr!("edit-apply")).primary().enabled(can_apply)).clicked()) && can_apply {
                     apply = true;
@@ -679,7 +679,7 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, project: &UiProjectV
         .fixed_pos(screen.min)
         .order(egui::Order::Middle)
         .show(ui.ctx(), |ui| ui.allocate_exact_size(screen.size(), egui::Sense::click()).1);
-    if backdrop.inner.clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+    if backdrop.inner.clicked() || menu::dialog_cancelled(ui.ctx()) {
         commands.push(UiCommand::CloseStartupDialog);
     }
 
@@ -900,14 +900,26 @@ fn draw_recent_projects(ui: &mut egui::Ui, recent: &[&crate::ui::state::UiTracke
                 ui.spacing_mut().item_spacing.y = 0.0;
                 for entry in recent.iter() {
                     let label = if entry.dirty { format!("{} *", entry.name) } else { entry.name.clone() };
-                    let row = select_project_action_row(
+                    // A project whose file has gone is greyed out and struck
+                    // through rather than disabled outright, so its context
+                    // menu can still take it off the list.
+                    let missing = entry.is_missing();
+                    let row = select_project_action_row_with_fill(
                         ui,
                         egui::Image::new(themed_icon!(ui, "recent_project.svg")),
                         label.clone(),
                         ui.available_width(),
                         row_height,
+                        egui::Color32::TRANSPARENT,
+                        missing,
                     );
-                    if row.clicked() {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let row = if missing {
+                        row.on_hover_text(tr!("menu-file-recent-project-missing", path = entry.path.display().to_string()))
+                    } else {
+                        row
+                    };
+                    if row.clicked() && !missing {
                         #[cfg(not(target_arch = "wasm32"))]
                         commands.push(UiCommand::ActivateTrackedProject(entry.path.clone()));
                         #[cfg(target_arch = "wasm32")]
@@ -956,10 +968,21 @@ fn select_project_action_column(ui: &mut egui::Ui, heading: impl Into<String>, w
 }
 
 fn select_project_action_row(ui: &mut egui::Ui, icon: egui::Image<'static>, label: impl Into<String>, width: f32, height: f32) -> egui::Response {
-    select_project_action_row_with_fill(ui, icon, label, width, height, egui::Color32::TRANSPARENT)
+    select_project_action_row_with_fill(ui, icon, label, width, height, egui::Color32::TRANSPARENT, false)
 }
 
-fn select_project_action_row_with_fill(ui: &mut egui::Ui, icon: egui::Image<'static>, label: impl Into<String>, width: f32, height: f32, fill: egui::Color32) -> egui::Response {
+/// `missing` greys the row out and strikes through its label, for a recent
+/// project whose file is no longer there; it takes no hover nudge either, as
+/// clicking it does nothing.
+fn select_project_action_row_with_fill(
+    ui: &mut egui::Ui,
+    icon: egui::Image<'static>,
+    label: impl Into<String>,
+    width: f32,
+    height: f32,
+    fill: egui::Color32,
+    missing: bool,
+) -> egui::Response {
     /// How far a hovered row's content steps right, in points.
     const HOVER_NUDGE: f32 = 3.0;
 
@@ -968,7 +991,7 @@ fn select_project_action_row_with_fill(ui: &mut egui::Ui, icon: egui::Image<'sta
     // The nudge is the whole hover cue - no fill behind the row. Eased in and
     // out, so sweeping the pointer down the list reads as one motion rather
     // than rows jumping.
-    let hover = ui.ctx().animate_bool_with_time(response.id.with("hover"), response.hovered(), 0.12);
+    let hover = ui.ctx().animate_bool_with_time(response.id.with("hover"), response.hovered() && !missing, 0.12);
     if fill != egui::Color32::TRANSPARENT {
         ui.painter().rect_filled(rect, egui::CornerRadius::ZERO, fill);
     }
@@ -976,13 +999,18 @@ fn select_project_action_row_with_fill(ui: &mut egui::Ui, icon: egui::Image<'sta
 
     let icon_size = egui::vec2(22.0, 22.0);
     let icon_rect = egui::Rect::from_min_size(egui::pos2(rect.left() + 2.0 + nudge, rect.center().y - icon_size.y / 2.0), icon_size);
+    let icon = if missing { icon.tint(ui.visuals().weak_text_color()) } else { icon };
     icon.fit_to_exact_size(icon_size).paint_at(ui, icon_rect);
 
     // Rows are laid out to a fixed width, so long labels truncate rather than
     // running beyond their action area.
     let text_left = rect.left() + 30.0 + nudge;
-    let text_color = ui.visuals().text_color();
-    let mut job = egui::text::LayoutJob::single_section(label.to_owned(), egui::TextFormat::simple(egui::FontId::proportional(13.0), text_color));
+    let text_color = if missing { ui.visuals().weak_text_color() } else { ui.visuals().text_color() };
+    let mut format = egui::TextFormat::simple(egui::FontId::proportional(13.0), text_color);
+    if missing {
+        format.strikethrough = egui::Stroke::new(1.0, text_color);
+    }
+    let mut job = egui::text::LayoutJob::single_section(label.to_owned(), format);
     job.wrap = egui::text::TextWrapping::truncate_at_width((rect.right() - 4.0 - text_left).max(0.0));
     let galley = ui.painter().layout_job(job);
     ui.painter().galley(egui::pos2(text_left, rect.center().y - galley.size().y / 2.0), galley, text_color);
@@ -1000,8 +1028,8 @@ pub(crate) fn draw_create_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<U
             MenuFieldText::new(tr!("edit-project-name"), &mut editor.new_project_name)
                 .hint_text(tr!("dialog-rename-field-hint"))
                 .show(ui);
-            let submitted = menu::dialog_confirm_pressed(ui.ctx());
-            let cancelled = menu::dialog_cancel_pressed(ui.ctx());
+            let submitted = menu::dialog_confirmed(ui.ctx());
+            let cancelled = menu::dialog_cancelled(ui.ctx());
             menu::menu_actions(ui, |ui| {
                 if (submitted || ui.add(MenuButton::new(tr!("edit-create-project")).primary().enabled(can_create)).clicked()) && can_create {
                     commands.push(UiCommand::CreateBrowserProject {
@@ -1030,8 +1058,8 @@ pub(crate) fn draw_create_layer_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiC
             MenuFieldText::new(tr!("edit-layer-name"), &mut editor.new_layer_name)
                 .hint_text(tr!("dialog-rename-field-hint"))
                 .show(ui);
-            let submitted = menu::dialog_confirm_pressed(ui.ctx());
-            let cancelled = menu::dialog_cancel_pressed(ui.ctx());
+            let submitted = menu::dialog_confirmed(ui.ctx());
+            let cancelled = menu::dialog_cancelled(ui.ctx());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let create_clicked = ui.add(MenuButton::new(tr!("common-create-layer")).primary().enabled(can_save)).clicked();
                 if (submitted || create_clicked) && can_save {
@@ -1081,11 +1109,11 @@ pub(crate) fn draw_rename_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand
             }
             menu::menu_actions(ui, |ui| {
                 let can_rename = !name_buf.trim().is_empty();
-                let submitted = menu::dialog_confirm_pressed(ui.ctx());
+                let submitted = menu::dialog_confirmed(ui.ctx());
                 if (submitted || ui.add(MenuButton::new(tr!("dialog-rename-submit")).primary().enabled(can_rename)).clicked()) && can_rename {
                     rename_to = Some(name_buf.trim().to_string());
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     close = true;
                 }
             });

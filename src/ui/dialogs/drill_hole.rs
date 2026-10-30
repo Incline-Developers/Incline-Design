@@ -68,8 +68,8 @@ pub(crate) fn draw_drill_hole_color_dialog(ui: &mut egui::Ui, editor: &mut Edito
     // which is a text field under the hood - has focus, so the field gets to
     // finish its own edit instead of the dialog closing under it.
     let dismissed = {
-        let confirm = !text_field_focused && menu::dialog_confirm_pressed(ui.ctx());
-        let cancel = menu::dialog_cancel_pressed(ui.ctx());
+        let confirm = !text_field_focused && menu::dialog_confirmed(ui.ctx());
+        let cancel = menu::dialog_cancelled(ui.ctx());
         confirm || cancel
     };
     if !open || dismissed {
@@ -133,11 +133,11 @@ pub(crate) fn draw_seam_rename_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
                 .show(ui);
             menu::menu_note(ui, tr!("drill-hole-rename-seam-logged-name-kept"));
             menu::menu_actions(ui, |ui| {
-                let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                let confirm = menu::dialog_confirmed(ui.ctx());
                 if (ui.add(MenuButton::new(tr!("dialog-rename-submit")).primary().enabled(can_rename)).clicked() || confirm) && can_rename {
                     rename = true;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     cancel = true;
                 }
             });
@@ -207,10 +207,10 @@ fn out_of_sequence_warning(ctx: &egui::Context, id: &str, text: String, note: St
             menu::menu_note(ui, text);
             menu::menu_note(ui, note);
             menu::menu_actions(ui, |ui| {
-                if ui.add(MenuButton::new(tr!("common-ok")).primary()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-ok")).primary()).clicked() || menu::dialog_confirmed(ui.ctx()) {
                     answer = Some(true);
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     answer = answer.or(Some(false));
                 }
             });
@@ -287,11 +287,11 @@ pub(crate) fn draw_boundary_move_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
                 _ => menu::menu_note(ui, tr!("drill-hole-move-boundary-logged-kept")),
             }
             menu::menu_actions(ui, |ui| {
-                let confirm = !text_field_focused && menu::dialog_confirm_pressed(ui.ctx());
+                let confirm = !text_field_focused && menu::dialog_confirmed(ui.ctx());
                 if (ui.add(MenuButton::new(tr!("drill-hole-move-boundary-submit")).primary().enabled(can_move)).clicked() || confirm) && can_move {
                     move_it = true;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     cancel = true;
                 }
             });
@@ -417,11 +417,11 @@ pub(crate) fn draw_interval_insert_dialog(ui: &mut egui::Ui, editor: &mut Editor
             }
             let can_insert = judged.is_ok() && named_apart.is_none() && !draft.reason.trim().is_empty();
             menu::menu_actions(ui, |ui| {
-                let confirm = !text_field_focused && menu::dialog_confirm_pressed(ui.ctx());
+                let confirm = !text_field_focused && menu::dialog_confirmed(ui.ctx());
                 if (ui.add(MenuButton::new(tr!("drill-hole-insert-interval-submit")).primary().enabled(can_insert)).clicked() || confirm) && can_insert {
                     insert = judged.ok().map(|plan| (draft.edit(end), plan));
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     cancel = true;
                 }
             });
@@ -493,11 +493,11 @@ pub(crate) fn draw_interval_delete_dialog(ui: &mut egui::Ui, editor: &mut Editor
             }
             let can_delete = still_there && !draft.reason.trim().is_empty();
             menu::menu_actions(ui, |ui| {
-                let confirm = !text_field_focused && menu::dialog_confirm_pressed(ui.ctx());
+                let confirm = !text_field_focused && menu::dialog_confirmed(ui.ctx());
                 if (ui.add(MenuButton::new(tr!("drill-hole-delete-interval-submit")).primary().enabled(can_delete)).clicked() || confirm) && can_delete {
                     delete = true;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     cancel = true;
                 }
             });
@@ -635,11 +635,11 @@ pub(crate) fn draw_name_shift_dialog(ui: &mut egui::Ui, editor: &mut EditorState
                 menu::menu_note(ui, tr!("drill-hole-shift-names-unknown-note"));
             }
             menu::menu_actions(ui, |ui| {
-                let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                let confirm = menu::dialog_confirmed(ui.ctx());
                 if (ui.add(MenuButton::new(tr!("drill-hole-shift-names-submit")).primary().enabled(can_shift)).clicked() || confirm) && can_shift {
                     shift = true;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     cancel = true;
                 }
             });

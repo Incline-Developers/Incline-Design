@@ -1239,7 +1239,7 @@ pub(crate) fn draw_solid_render(ui: &mut egui::Ui, rect: egui::Rect, editor: &mu
         // driving the preview's orbit: one gizmo in the app, not two.
         if ready {
             let mut view = editor.solid_preview_view;
-            crate::ui::widgets::preview_navigation::orientation_gizmo(ui, "solid_preview_orientation_gizmo", image_rect, &mut view, editor);
+            crate::ui::widgets::preview_navigation::orientation_gizmo(ui, "solid_preview_orientation_gizmo", image_rect, &mut view);
             editor.solid_preview_view = view;
         }
 
@@ -1366,7 +1366,7 @@ pub(crate) fn stacked_lower_share<R>(
         .default_size(available * share)
         .min_size(MIN_STACKED_PANE.min(max))
         .max_size(max)
-        .show_separator_line(chrome::show_separator_line(ui))
+        .show_separator_line(false)
         .frame(chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
         .show(ui, |ui| {
             let rect = ui.available_rect_before_wrap();

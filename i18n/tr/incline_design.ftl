@@ -1914,7 +1914,6 @@ logging-application-name = Uygulama adı: { $name }
 logging-application-startup = Uygulama Başlatma
 logging-build-target-os-architecture = Derleme hedefi: { $os }-{ $architecture }
 logging-completed = Tamamlandı
-logging-count-messages = { $count } mesaj
 logging-desktop-session-xdg-session-type = Masaüstü oturumu: XDG_SESSION_TYPE={ $session }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
 logging-initialising-incline-design = Incline Design başlatılıyor
 logging-locale-environment = Yerel ortam: LANG={ $lang }, LC_ALL={ $locale }, TZ={ $timezone }
@@ -2144,7 +2143,6 @@ properties-modelling-help = Yüzey Oluştur ağını nasıl çizer. Proje düzey
 properties-move-layer = Katmana Taşı...
 properties-near-clip-limit = Yakın kırpma sınırı
 properties-orbit-sensitivity = Yörünge duyarlılığı
-properties-panel-chrome = Panel çerçevesi
 properties-performance = Performans
 properties-plan-mode = Plan Modu
 properties-point-cloud-chunk-debug-view = Nokta bulutu parça hata ayıklama görünümü
@@ -2159,8 +2157,6 @@ properties-steep-pair-distance = Dik çift mesafesi
 properties-steep-pair-distance-help = Planda bu mesafeden yakın ve aşağıdaki açıdan daha dik nokta çiftleri, oluşturma başarılı olunca bildirilir. Asla reddedilmez veya onarılmaz.
 properties-surface-chunk-debug-view = Yüzey parça hata ayıklama görünümü
 properties-vertical-sync = Dikey eşitleme
-properties-world-axis-gizmo = Dünya ekseni göstergesi
-properties-zoom-cursor = İmleçe yakınlaştır
 properties-zoom-sensitivity = Yakınlaştırma duyarlılığı
 reference-points-count-holes-from-dataset = '{ $dataset }' içinden { $count } delik
 reference-points-holes-from-datasets = { $datasets } veri kümesinden { $count } delik

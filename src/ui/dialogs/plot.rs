@@ -518,8 +518,8 @@ pub(crate) fn draw_plot_dialog(ui: &mut egui::Ui, editor: &mut EditorState, proj
                     ui.separator();
                     let valid = layout(&dialog.spec(Vec::new())).is_ok();
                     menu::menu_actions(ui, |ui| {
-                        let confirm_key = menu::dialog_confirm_pressed(ui.ctx());
-                        let cancel_key = menu::dialog_cancel_pressed(ui.ctx());
+                        let confirm_key = menu::dialog_confirmed(ui.ctx());
+                        let cancel_key = menu::dialog_cancelled(ui.ctx());
                         export = ui.add(MenuButton::new(tr!("plot-export-png")).primary().enabled(valid)).clicked() || (confirm_key && valid);
                         cancel = ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || cancel_key;
                     });
