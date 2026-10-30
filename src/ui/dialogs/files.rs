@@ -88,8 +88,8 @@ pub(crate) fn draw_grid_options_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
                 .show(ui);
         }
         ui.add_space(10.0);
-        let confirm_from_enter = menu::dialog_confirm_pressed(ui.ctx());
-        let cancel_from_escape = menu::dialog_cancel_pressed(ui.ctx());
+        let confirm_from_enter = menu::dialog_confirmed(ui.ctx());
+        let cancel_from_escape = menu::dialog_cancelled(ui.ctx());
         menu::menu_actions(ui, |ui| {
             confirm = ui.add(MenuButton::new(tr!("files-ok")).primary()).clicked() || confirm_from_enter;
             cancel = ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || cancel_from_escape;

@@ -1923,7 +1923,6 @@ logging-application-name = Программын нэр: { $name }
 logging-application-startup = Программын эхлэл
 logging-build-target-os-architecture = Билд бай: { $os }-{ $architecture }
 logging-completed = Дууссан
-logging-count-messages = { $count } мессеж
 logging-desktop-session-xdg-session-type = Ажлын талбарын сешн: XDG_SESSION_TYPE={ $session }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
 logging-initialising-incline-design = Incline Design-г эхлүүлж байна
 logging-locale-environment = Локал орчин: LANG={ $lang }, LC_ALL={ $locale }, TZ={ $timezone }
@@ -2153,7 +2152,6 @@ properties-modelling-help = Гадаргуу бүтээх нь торыг хэр
 properties-move-layer = Давхарга руу шилжүүлэх...
 properties-near-clip-limit = Ойрын огтлолын хязгаар
 properties-orbit-sensitivity = Эргэлтийн мэдрэмж
-properties-panel-chrome = Самбарын дизайн
 properties-performance = Гүйцэтгэл
 properties-plan-mode = Төлөвлөгөөний горим
 properties-point-cloud-chunk-debug-view = Цэгэн үүлний хэсгийн дибаг харагдац
@@ -2168,8 +2166,6 @@ properties-steep-pair-distance = Эгц хосын зай
 properties-steep-pair-distance-help = Төлөвлөгөөн дээр энэ зайгаас ойр, доорх өнцгөөс эгц цэгийн хосуудыг бүтээлт амжилттай болоход нэрлэнэ. Хэзээ ч татгалзаж, засдаггүй.
 properties-surface-chunk-debug-view = Гадаргуугийн хэсгийн дибаг харагдац
 properties-vertical-sync = Босоо синхрончлол
-properties-world-axis-gizmo = Дэлхийн тэнхлэгийн гизмо
-properties-zoom-cursor = Заагч руу томруулах
 properties-zoom-sensitivity = Томруулах мэдрэмж
 reference-points-count-holes-from-dataset = '{ $dataset }'-с { $count } цооног
 reference-points-holes-from-datasets = { $datasets } өгөгдлийн багцаас { $count } цооног

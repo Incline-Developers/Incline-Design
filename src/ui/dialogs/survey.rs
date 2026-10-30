@@ -454,7 +454,7 @@ pub(crate) fn draw_definitions_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
             if let Some(row) = select {
                 state.edit_definition(row);
             }
-            if menu::dialog_cancel_pressed(ui.ctx()) {
+            if menu::dialog_cancelled(ui.ctx()) {
                 state.definitions_open = false;
             }
         });
@@ -530,7 +530,7 @@ pub(crate) fn draw_transform_dialog(ui: &mut egui::Ui, editor: &mut EditorState,
             }
             menu::menu_actions(ui, |ui| {
                 let enabled = has_project && count > 0 && plan.is_ok();
-                let submitted = menu::dialog_confirm_pressed(ui.ctx());
+                let submitted = menu::dialog_confirmed(ui.ctx());
                 if (ui.add(MenuButton::new(tr!("survey-transform-button")).primary().enabled(enabled)).clicked() || submitted) && enabled {
                     commands.push(UiCommand::TransformSurveySelection);
                     // The run is the end of the dialog's job: progress, the
@@ -541,7 +541,7 @@ pub(crate) fn draw_transform_dialog(ui: &mut egui::Ui, editor: &mut EditorState,
                 if ui.add(MenuButton::new(tr!("survey-swap"))).clicked() {
                     std::mem::swap(&mut state.source_system, &mut state.target_system);
                 }
-                if ui.add(MenuButton::new(tr!("survey-close"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("survey-close"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     state.transform_open = false;
                 }
             });

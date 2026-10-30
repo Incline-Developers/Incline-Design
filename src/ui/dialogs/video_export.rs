@@ -333,7 +333,7 @@ pub(crate) fn draw_video_export_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
                 {
                     commands.push(UiCommand::ExportVideo(request));
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || (!popup_open && menu::dialog_cancel_pressed(ui.ctx())) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || (!popup_open && menu::dialog_cancelled(ui.ctx())) {
                     close = true;
                 }
             });

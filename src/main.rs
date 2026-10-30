@@ -12,6 +12,7 @@ mod mac;
 mod model;
 mod natural_sort;
 mod rendering;
+mod system_sound;
 mod ui;
 #[cfg(target_os = "windows")]
 mod windows_trackpad;

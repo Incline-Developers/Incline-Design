@@ -56,7 +56,7 @@ pub(crate) fn draw_optimization_dialogs(ui: &mut egui::Ui, editor: &mut EditorSt
         // The Escape that cancelled the pick is still in this frame's input; it
         // must not also close the editor it returns to.
         if std::mem::take(&mut editor.optimization.pick_was_active) {
-            menu::dialog_cancel_pressed(ui.ctx());
+            menu::dialog_cancelled(ui.ctx());
         }
         draw_scenario_editor(ui, &mut editor.optimization, block_models, project, commands);
     } else if editor.optimization.list_open {
@@ -90,10 +90,10 @@ fn draw_load_prompt(ui: &mut egui::Ui, state: &mut OptimizationState, commands: 
             ui.label(tr!("opt-load-question", names = names.clone(), count = prompt.items.len()));
             menu_note(ui, tr!("opt-load-note"));
             menu::menu_actions(ui, |ui| {
-                if ui.add(MenuButton::new(tr!("opt-load")).primary()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("opt-load")).primary()).clicked() || menu::dialog_confirmed(ui.ctx()) {
                     answer = Some(true);
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     answer = Some(false);
                 }
             });
@@ -190,7 +190,7 @@ fn draw_scenarios_list(ui: &mut egui::Ui, state: &mut OptimizationState, block_m
                 if ui.add(MenuButton::new(tr!("opt-add-scenario")).primary()).clicked() {
                     actions.push(UiCommand::AddOptimizationScenario);
                 }
-                if ui.add(MenuButton::new(tr!("common-close"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-close"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     close = true;
                 }
                 // Import and export take the left of the same row.
@@ -410,7 +410,7 @@ fn draw_scenario_editor(ui: &mut egui::Ui, state: &mut OptimizationState, block_
                 close_requested |= choice.close;
             });
             // Escape closes the editor - unless a window over it wants the key.
-            if !draft.confirm_close && !value_field::picker_open(ui.ctx()) && menu::dialog_cancel_pressed(ui.ctx()) {
+            if !draft.confirm_close && !value_field::picker_open(ui.ctx()) && menu::dialog_cancelled(ui.ctx()) {
                 close_requested = true;
             }
         });
@@ -565,7 +565,7 @@ fn draw_confirm_close(ctx: &egui::Context, state: &mut OptimizationState, comman
                 if ui.add(MenuButton::new(tr!("opt-discard")).danger()).clicked() {
                     choice = Some(CloseChoice::Discard);
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     choice = Some(CloseChoice::Keep);
                 }
             });

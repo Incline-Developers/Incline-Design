@@ -1281,12 +1281,12 @@ pub(crate) fn draw_condition_dialog(
                 ui.label(egui::RichText::new(message).color(ui.visuals().error_fg_color));
             }
             menu::menu_actions(ui, |ui| {
-                let submitted = menu::dialog_confirm_pressed(ui.ctx());
+                let submitted = menu::dialog_confirmed(ui.ctx());
                 if (submitted || ui.add(MenuButton::new(tr!("common-apply")).primary().enabled(built.is_ok())).clicked()) && built.is_ok() {
                     apply = true;
                     close = true;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     close = true;
                 }
             });
@@ -1386,12 +1386,12 @@ pub(crate) fn draw_new_destination_dialog(ui: &mut egui::Ui, editor: &mut Editor
                 ui.label(egui::RichText::new(message).color(ui.visuals().error_fg_color));
             }
             menu::menu_actions(ui, |ui| {
-                let submitted = menu::dialog_confirm_pressed(ui.ctx());
+                let submitted = menu::dialog_confirmed(ui.ctx());
                 if (submitted || ui.add(MenuButton::new(tr!("common-create")).primary().enabled(error.is_none())).clicked()) && error.is_none() {
                     create = true;
                     close = true;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     close = true;
                 }
             });

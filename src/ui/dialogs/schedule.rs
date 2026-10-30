@@ -89,7 +89,7 @@ pub(crate) fn draw_reclaim_bar_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
             ui.label(egui::RichText::new(crate::model::schedule::ScheduleError::InvalidReclaimLimit.message()).color(ui.visuals().error_fg_color));
         }
         menu::menu_actions(ui, |ui| {
-            let submitted = menu::dialog_confirm_pressed(ui.ctx());
+            let submitted = menu::dialog_confirmed(ui.ctx());
             if (submitted || ui.add(MenuButton::new(tr!("common-apply")).primary().enabled(valid)).clicked())
                 && valid
                 && let Some(maximum_t) = maximum
@@ -115,7 +115,7 @@ pub(crate) fn draw_reclaim_bar_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
                 }
                 close = true;
             }
-            if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+            if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                 close = true;
             }
         });
@@ -155,11 +155,11 @@ pub(crate) fn draw_delete_agent_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
                 ui.label(tr!("schedule-delete-agent-follows", count = led));
             }
             menu::menu_actions(ui, |ui| {
-                if ui.add(MenuButton::new(title.clone()).danger()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(title.clone()).danger()).clicked() || menu::dialog_confirmed(ui.ctx()) {
                     commands.push(UiCommand::schedule(session, ScheduleEdit::DeleteAgent(agent.id)));
                     close = true;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     close = true;
                 }
             });
@@ -209,14 +209,14 @@ pub(crate) fn draw_new_loader_class_dialog(ui: &mut egui::Ui, editor: &mut Edito
                 ui.label(egui::RichText::new(tr!("schedule-error-duplicate-name", name = name.clone())).color(ui.visuals().error_fg_color));
             }
             menu::menu_actions(ui, |ui| {
-                let submitted = menu::dialog_confirm_pressed(ui.ctx());
+                let submitted = menu::dialog_confirmed(ui.ctx());
                 if (submitted || ui.add(MenuButton::new(tr!("schedule-add-class")).primary().enabled(can_add)).clicked())
                     && let Some(rate_tph) = rate.filter(|_| can_add)
                 {
                     commands.push(UiCommand::schedule(session, ScheduleEdit::AddClass { name, rate_tph, kind }));
                     close = true;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     close = true;
                 }
             });
@@ -280,14 +280,14 @@ pub(crate) fn draw_new_loader_agent_dialog(ui: &mut egui::Ui, editor: &mut Edito
                 ui.label(egui::RichText::new(tr!("schedule-error-duplicate-name", name = name.clone())).color(ui.visuals().error_fg_color));
             }
             menu::menu_actions(ui, |ui| {
-                let submitted = menu::dialog_confirm_pressed(ui.ctx());
+                let submitted = menu::dialog_confirmed(ui.ctx());
                 if (submitted || ui.add(MenuButton::new(tr!("schedule-add-agent")).primary().enabled(can_add)).clicked())
                     && let Some(class) = editor.new_loader_agent_class.filter(|_| can_add)
                 {
                     commands.push(UiCommand::schedule(session, ScheduleEdit::AddAgent { name, class }));
                     close = true;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     close = true;
                 }
             });
@@ -339,12 +339,12 @@ pub(crate) fn draw_bar_name_dialog(ui: &mut egui::Ui, editor: &mut EditorState, 
                 ui.label(egui::RichText::new(tr!("schedule-error-duplicate-name", name = name.clone())).color(ui.visuals().error_fg_color));
             }
             menu::menu_actions(ui, |ui| {
-                let submitted = menu::dialog_confirm_pressed(ui.ctx());
+                let submitted = menu::dialog_confirmed(ui.ctx());
                 if (submitted || ui.add(MenuButton::new(tr!("schedule-rename-bar")).primary().enabled(can_commit)).clicked()) && can_commit {
                     commands.push(UiCommand::schedule(session, ScheduleEdit::RenameBar { bar: target, name }));
                     close = true;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     close = true;
                 }
             });
@@ -386,14 +386,14 @@ pub(crate) fn draw_bar_window_dialog(ui: &mut egui::Ui, editor: &mut EditorState
                 ui.label(egui::RichText::new(tr!("schedule-window-invalid")).color(ui.visuals().error_fg_color));
             }
             menu::menu_actions(ui, |ui| {
-                let submitted = menu::dialog_confirm_pressed(ui.ctx());
+                let submitted = menu::dialog_confirmed(ui.ctx());
                 if (submitted || ui.add(MenuButton::new(tr!("schedule-window-apply")).primary().enabled(window.is_some())).clicked())
                     && let Some(window) = window
                 {
                     commands.push(UiCommand::schedule(session, ScheduleEdit::SetBarWindow { bar, window }));
                     close = true;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     close = true;
                 }
             });
@@ -600,7 +600,7 @@ pub(crate) fn draw_blast_bar_dialog(
             draw_blast_preview_slider(ui, &mut draft);
             let valid = (target.is_some() || draft.agent.is_some()) && !target_changed && !run_changed && !draft.members.is_empty();
             menu::menu_actions(ui, |ui| {
-                let submitted = menu::dialog_confirm_pressed(ui.ctx());
+                let submitted = menu::dialog_confirmed(ui.ctx());
                 if (submitted || ui.add(MenuButton::new(tr!("common-apply")).primary().enabled(valid)).clicked()) && valid {
                     let members = draft.members.clone();
                     match target {
@@ -621,7 +621,7 @@ pub(crate) fn draw_blast_bar_dialog(
                     }
                     close = true;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     close = true;
                 }
             });
@@ -706,7 +706,7 @@ pub(crate) fn draw_blast_window_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
             ui.colored_label(ui.visuals().error_fg_color, tr!("blast-window-invalid"));
         }
         menu::menu_actions(ui, |ui| {
-            let apply = ui.add(MenuButton::new(tr!("common-apply")).primary().enabled(window.is_some() && current)).clicked() || menu::dialog_confirm_pressed(ui.ctx());
+            let apply = ui.add(MenuButton::new(tr!("common-apply")).primary().enabled(window.is_some() && current)).clicked() || menu::dialog_confirmed(ui.ctx());
             if apply
                 && current
                 && let Some(window) = window
@@ -720,7 +720,7 @@ pub(crate) fn draw_blast_window_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
                 commands.push(UiCommand::schedule(session, ScheduleEdit::SetBlastWindows(windows)));
                 close = true;
             }
-            if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+            if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                 close = true;
             }
         });
@@ -761,7 +761,7 @@ fn draw_blast_sequence_preview(ui: &mut egui::Ui, editor: &mut EditorState, draf
     }
     crate::ui::widgets::preview_navigation::navigate(ui, &response, rect, &mut draft.view, editor, true);
     if ready {
-        crate::ui::widgets::preview_navigation::orientation_gizmo(ui, "blast_sequence_orientation_gizmo", rect, &mut draft.view, editor);
+        crate::ui::widgets::preview_navigation::orientation_gizmo(ui, "blast_sequence_orientation_gizmo", rect, &mut draft.view);
     }
     if ready
         && response.clicked()

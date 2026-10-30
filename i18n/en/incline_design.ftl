@@ -33,6 +33,7 @@ menu-file-save-project-as = Save Project As...
 menu-file-new-project = New Project...
 menu-file-open-project = Open Project...
 menu-file-open-recent = Open Recent
+menu-file-recent-project-missing = Not found: { $path }
 menu-file-show-in-explorer = Show in Explorer
 menu-file-show-in-folder = Open Containing Folder
 menu-file-import = Import...
@@ -2956,6 +2957,20 @@ confirmations-save-modified-project-before-exiting = Save the modified project b
 confirmations-save-to-browser-before-exit = Save the modified project to browser storage before exiting?
 confirmations-save-remove = Save and Remove
 
+## Warning and error alerts
+
+alerts-close-all = Close all
+alerts-copied = Message copied to the clipboard
+alerts-copy-details = Copy details
+alerts-details = Details
+alerts-error = Error:
+alerts-time-more-waiting =
+    { $count ->
+        [one] { $time } · { $count } more message waiting
+       *[other] { $time } · { $count } more messages waiting
+    }
+alerts-warning = Warning:
+
 ## Console strings
 
 console-copy-all = Copy all
@@ -3663,7 +3678,6 @@ logging-application-name = Application name: { $name }
 logging-application-startup = Application Startup
 logging-build-target-os-architecture = Build target: { $os }-{ $architecture }
 logging-completed = Completed
-logging-count-messages = { $count } messages
 logging-desktop-session-xdg-session-type = Desktop session: XDG_SESSION_TYPE={ $session }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
 logging-initialising-incline-design = Initialising Incline Design
 logging-locale-environment = Locale environment: LANG={ $lang }, LC_ALL={ $locale }, TZ={ $timezone }
@@ -3901,7 +3915,6 @@ properties-modelling-help = How Build Surface draws its grid. Project-level sett
 properties-move-layer = Move to Layer...
 properties-near-clip-limit = Near clip limit
 properties-orbit-sensitivity = Orbit sensitivity
-properties-panel-chrome = Panel chrome
 properties-performance = Performance
 properties-plan-mode = Plan Mode
 properties-point-cloud-chunk-debug-view = Point cloud chunk debug view
@@ -3916,8 +3929,6 @@ properties-steep-pair-distance = Steep-pair distance
 properties-steep-pair-distance-help = Pairs of points closer than this in plan, and steeper than the angle below, are named when a build succeeds. Never refused or repaired.
 properties-surface-chunk-debug-view = Surface chunk debug view
 properties-vertical-sync = Vertical sync
-properties-world-axis-gizmo = World axis gizmo
-properties-zoom-cursor = Zoom to cursor
 properties-zoom-sensitivity = Zoom sensitivity
 
 ## Reference strings

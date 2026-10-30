@@ -99,6 +99,12 @@ wasm-bindgen = "0.2.128"
 wasm-bindgen-futures = "0.4.78"
 wasm-bindgen-rayon = { version = "1.3.0", features = ["no-bundler"] }
 web-sys = { version = "0.3.105", features = [
+    "AudioContext",
+    "AudioDestinationNode",
+    "AudioNode",
+    "AudioParam",
+    "AudioScheduledSourceNode",
+    "BaseAudioContext",
     "BeforeUnloadEvent",
     "Blob",
     "BlobPropertyBag",
@@ -110,6 +116,7 @@ web-sys = { version = "0.3.105", features = [
     "EventTarget",
     "File",
     "FileList",
+    "GainNode",
     "HtmlCanvasElement",
     "HtmlElement",
     "HtmlInputElement",
@@ -125,6 +132,8 @@ web-sys = { version = "0.3.105", features = [
     "MediaQueryList",
     "Navigator",
     "Node",
+    "OscillatorNode",
+    "OscillatorType",
     "Response",
     "Storage",
     "TextMetrics",
@@ -134,13 +143,14 @@ web-sys = { version = "0.3.105", features = [
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.5"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSCell", "NSImage", "NSMenu", "NSMenuItem"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSData", "NSObject", "NSString"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSAttributedString", "NSCell", "NSGraphics", "NSImage", "NSMenu", "NSMenuItem"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSAttributedString", "NSData", "NSDictionary", "NSObject", "NSString", "NSValue"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.62.2", features = [
     "Win32_Graphics_DirectManipulation",
     "Win32_System_Com",
+    "Win32_System_Diagnostics_Debug",
     "Win32_UI_Input_Pointer",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",

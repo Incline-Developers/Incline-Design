@@ -1900,7 +1900,6 @@ logging-application-name = アプリケーション名: { $name }
 logging-application-startup = アプリケーション起動
 logging-build-target-os-architecture = ビルドターゲット: { $os }-{ $architecture }
 logging-completed = 完了
-logging-count-messages = { $count } 件のメッセージ
 logging-desktop-session-xdg-session-type = デスクトップセッション: XDG_SESSION_TYPE={ $session }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
 logging-initialising-incline-design = Incline Design を初期化中
 logging-locale-environment = ロケール環境: LANG={ $lang }, LC_ALL={ $locale }, TZ={ $timezone }
@@ -2130,7 +2129,6 @@ properties-modelling-help = 「曲面を構築」でグリッドをどのよう�
 properties-move-layer = レイヤーへ移動...
 properties-near-clip-limit = ニアクリップ限界
 properties-orbit-sensitivity = オービット感度
-properties-panel-chrome = パネルのフレーム
 properties-performance = パフォーマンス
 properties-plan-mode = 平面モード
 properties-point-cloud-chunk-debug-view = 点群チャンクのデバッグビュー
@@ -2145,8 +2143,6 @@ properties-steep-pair-distance = 急勾配ペアの距離
 properties-steep-pair-distance-help = 平面上でこの距離より近く、下の角度より急勾配の点のペアは、構築が成功したときに報告されます。構築が拒否されたり補正されたりすることはありません。
 properties-surface-chunk-debug-view = 曲面チャンクのデバッグビュー
 properties-vertical-sync = 垂直同期
-properties-world-axis-gizmo = ワールド軸ギズモ
-properties-zoom-cursor = カーソル位置にズーム
 properties-zoom-sensitivity = ズーム感度
 reference-points-count-holes-from-dataset = '{ $dataset }' の { $count } 孔
 reference-points-holes-from-datasets = { $datasets } 個のデータセットの { $count } 孔

@@ -1905,7 +1905,6 @@ logging-application-name = 애플리케이션 이름: { $name }
 logging-application-startup = 애플리케이션 시작
 logging-build-target-os-architecture = 빌드 대상: { $os }-{ $architecture }
 logging-completed = 완료됨
-logging-count-messages = 메시지 { $count }개
 logging-desktop-session-xdg-session-type = 데스크톱 세션: XDG_SESSION_TYPE={ $session }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
 logging-initialising-incline-design = Incline Design 초기화 중
 logging-locale-environment = 로케일 환경: LANG={ $lang }, LC_ALL={ $locale }, TZ={ $timezone }
@@ -2135,7 +2134,6 @@ properties-modelling-help = 표면 만들기가 그리드를 그리는 방식입
 properties-move-layer = 레이어로 이동...
 properties-near-clip-limit = 근접 클립 한계
 properties-orbit-sensitivity = 궤도 감도
-properties-panel-chrome = 패널 외관
 properties-performance = 성능
 properties-plan-mode = 평면 모드
 properties-point-cloud-chunk-debug-view = 포인트 클라우드 청크 디버그 뷰
@@ -2150,8 +2148,6 @@ properties-steep-pair-distance = 급경사 쌍 거리
 properties-steep-pair-distance-help = 평면상에서 이 거리보다 가깝고 아래 각도보다 급한 점 쌍은 구축이 성공할 때 표시됩니다. 거부하거나 수정하지는 않습니다.
 properties-surface-chunk-debug-view = 표면 청크 디버그 뷰
 properties-vertical-sync = 수직 동기화
-properties-world-axis-gizmo = 월드 축 표시기
-properties-zoom-cursor = 커서로 확대/축소
 properties-zoom-sensitivity = 확대/축소 감도
 reference-points-count-holes-from-dataset = '{ $dataset }'의 시추공 { $count }개
 reference-points-holes-from-datasets = 데이터 세트 { $datasets }개의 시추공 { $count }개

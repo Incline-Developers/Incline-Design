@@ -440,7 +440,7 @@ pub(crate) fn draw_constant_picker(ctx: &egui::Context) {
                 if ui.add(MenuButton::new(tr!("opt-select")).primary().enabled(ready)).clicked() {
                     choose = selected.clone();
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
                     cancel = true;
                 }
             });

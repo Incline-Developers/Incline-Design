@@ -1919,7 +1919,6 @@ logging-application-name = Назва програми: { $name }
 logging-application-startup = Запуск програми
 logging-build-target-os-architecture = Цільова платформа збірки: { $os }-{ $architecture }
 logging-completed = Завершено
-logging-count-messages = Повідомлень: { $count }
 logging-desktop-session-xdg-session-type = Сеанс робочого столу: XDG_SESSION_TYPE={ $session }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
 logging-initialising-incline-design = Ініціалізація Incline Design
 logging-locale-environment = Мовне середовище: LANG={ $lang }, LC_ALL={ $locale }, TZ={ $timezone }
@@ -2149,7 +2148,6 @@ properties-modelling-help = Як «Побудувати поверхню» бу�
 properties-move-layer = Перемістити в шар...
 properties-near-clip-limit = Ближня межа відсікання
 properties-orbit-sensitivity = Чутливість орбіти
-properties-panel-chrome = Оформлення панелі
 properties-performance = Продуктивність
 properties-plan-mode = Режим плану
 properties-point-cloud-chunk-debug-view = Налагодження фрагментів хмари точок
@@ -2164,8 +2162,6 @@ properties-steep-pair-distance = Відстань крутої пари
 properties-steep-pair-distance-help = Пари точок, які в плані ближчі за цю відстань і крутіші за кут нижче, вказуються після успішної побудови. Ніколи не відхиляються й не виправляються.
 properties-surface-chunk-debug-view = Налагодження фрагментів поверхні
 properties-vertical-sync = Вертикальна синхронізація
-properties-world-axis-gizmo = Світова вісь
-properties-zoom-cursor = Масштаб до курсора
 properties-zoom-sensitivity = Чутливість масштабування
 reference-points-count-holes-from-dataset = Свердловин із «{ $dataset }»: { $count }
 reference-points-holes-from-datasets = Свердловин із наборів ({ $datasets }): { $count }

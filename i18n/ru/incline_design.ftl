@@ -1925,7 +1925,6 @@ logging-application-name = Имя приложения: { $name }
 logging-application-startup = Запуск приложения
 logging-build-target-os-architecture = Целевая платформа сборки: { $os }-{ $architecture }
 logging-completed = Завершено
-logging-count-messages = Сообщений: { $count }
 logging-desktop-session-xdg-session-type = Сеанс рабочего стола: XDG_SESSION_TYPE={ $session }, XDG_CURRENT_DESKTOP={ $desktop }, WAYLAND_DISPLAY={ $wayland }, DISPLAY={ $display }
 logging-initialising-incline-design = Инициализация Incline Design
 logging-locale-environment = Языковая среда: LANG={ $lang }, LC_ALL={ $locale }, TZ={ $timezone }
@@ -2156,7 +2155,6 @@ properties-modelling-help = Как «Построить поверхность»
 properties-move-layer = Переместить в слой...
 properties-near-clip-limit = Ближний предел отсечения
 properties-orbit-sensitivity = Чувствительность орбиты
-properties-panel-chrome = Оформление панели
 properties-performance = Производительность
 properties-plan-mode = Режим плана
 properties-point-cloud-chunk-debug-view = Отладочный вид фрагментов облака точек
@@ -2171,8 +2169,6 @@ properties-steep-pair-distance = Расстояние крутой пары
 properties-steep-pair-distance-help = Пары точек, которые в плане ближе этого расстояния и круче угла ниже, указываются при успешном построении. Никогда не отклоняются и не исправляются.
 properties-surface-chunk-debug-view = Отладочный вид фрагментов поверхности
 properties-vertical-sync = Вертикальная синхронизация
-properties-world-axis-gizmo = Мировая ось
-properties-zoom-cursor = Масштаб к курсору
 properties-zoom-sensitivity = Чувствительность к увеличению
 reference-points-count-holes-from-dataset = Скважин: { $count } из «{ $dataset }»
 reference-points-holes-from-datasets = Скважин: { $count } из наборов: { $datasets }

@@ -184,8 +184,8 @@ pub(crate) fn draw_sequence_editor(
             // here at all: the question owns both keys, and the draft
             // under it must not be applied by a keypress meant to answer
             // a question about throwing it away.
-            let submitted = !confirming && menu::dialog_confirm_pressed(ui.ctx());
-            let cancelled = !confirming && menu::dialog_cancel_pressed(ui.ctx());
+            let submitted = !confirming && menu::dialog_confirmed(ui.ctx());
+            let cancelled = !confirming && menu::dialog_cancelled(ui.ctx());
             ui.add_enabled_ui(!confirming, |ui| {
                 if (submitted || ui.add(MenuButton::new(tr!("sequence-editor-apply")).primary().enabled(can_apply)).clicked()) && can_apply {
                     commands.push(UiCommand::schedule(
@@ -319,10 +319,7 @@ fn draw_discard_confirmation(ui: &mut egui::Ui, editor: &mut EditorState, plan: 
                 if ui.add(MenuButton::new(tr!("sequence-editor-discard")).danger()).clicked() {
                     discard = true;
                 }
-                if ui.add(MenuButton::new(tr!("sequence-editor-keep-editing")).primary()).clicked()
-                    || menu::dialog_confirm_pressed(ui.ctx())
-                    || menu::dialog_cancel_pressed(ui.ctx())
-                {
+                if ui.add(MenuButton::new(tr!("sequence-editor-keep-editing")).primary()).clicked() || menu::dialog_confirmed(ui.ctx()) || menu::dialog_cancelled(ui.ctx()) {
                     keep = true;
                 }
             });
@@ -388,7 +385,7 @@ fn draw_view(ui: &mut egui::Ui, editor: &mut EditorState, draft: &mut SequenceDr
     // discard question is up the camera of the draft being asked about stays put.
     changed |= crate::ui::widgets::preview_navigation::navigate(ui, &response, image_rect, &mut draft.view, editor, !confirming);
     if has_run && !confirming {
-        changed |= crate::ui::widgets::preview_navigation::orientation_gizmo(ui, "sequence_editor_orientation_gizmo", image_rect, &mut draft.view, editor);
+        changed |= crate::ui::widgets::preview_navigation::orientation_gizmo(ui, "sequence_editor_orientation_gizmo", image_rect, &mut draft.view);
     }
     // A left press picks the block under it, and a left drag keeps picking as
     // it travels: one stroke takes every block it crosses. Which blocks those
