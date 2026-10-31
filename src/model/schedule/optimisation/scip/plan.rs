@@ -13,11 +13,16 @@
 //! drawn, within the loader's reclaim rate on the days the bar and the pile
 //! allow it and the bar's authored cap, out of a daily pile inventory that
 //! the plan's own deliveries fill. A loader's dig and reclaim share its
-//! hours. A blend is a ratio of two decisions, so a reclaim's grade is
-//! fixed: in a window, the opening blend, or the incumbent's delivered blend
-//! over the window if the pile opens empty; over the whole horizon, for a bound, the one
-//! that suits each grade target best and every grade-conditional value
-//! earned when it pays and not when it costs.
+//! hours. A blend is a ratio of two decisions. In a window a day's reclaim
+//! carries the blend the incumbent's reclaim carried that day, and, from an
+//! unchunked pile, a first-order correction for how far the plan's
+//! deliveries move the pile's metal and tonnes from the incumbent's, so
+//! the plan prices the incumbent's grade exactly and a change to it nearly
+//! so; on a day the incumbent did not reclaim, the opening blend, or the
+//! incumbent's delivered blend over the window if the pile opens empty.
+//! Over the whole horizon, for a bound, a reclaim's grade is the one that
+//! suits each grade target best and every grade-conditional value earned
+//! when it pays and not when it costs.
 //!
 //! A loader's bars are read apart, each in its own order, and held to
 //! the authored priority as the dispatch keeps it: in a period, a loader
@@ -79,6 +84,22 @@ pub(crate) struct Window {
     /// Empty piles have no opening blend. Estimate their future reclaim
     /// across the window so moving deliveries between days keeps their grade.
     pub(crate) reclaim_blends: BTreeMap<StockpileId, Vec<f64>>,
+    /// Each pile's days within the window, in the schedule it opens from.
+    pub(crate) pile_days: BTreeMap<(StockpileId, u32), PileDay>,
+}
+
+/// A pile's day in the schedule a window opens from.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PileDay {
+    /// Mid-day tonnes and contained quantity per grade: the means of the
+    /// day's opening and closing.
+    pub(crate) tonnes_t: f64,
+    pub(crate) contained: Vec<f64>,
+    /// Tonnes reclaimed, and the blend they carried.
+    pub(crate) reclaimed_t: f64,
+    pub(crate) blend: Vec<f64>,
+    /// Tonnes reclaimed to each destination.
+    pub(crate) to: BTreeMap<DestinationId, f64>,
 }
 
 impl Window {
@@ -146,6 +167,53 @@ impl Window {
             .into_iter()
             .map(|(pile, (tonnes, quantities))| (pile, quantities.into_iter().map(|quantity| quantity / tonnes).collect()))
             .collect();
+        let mut pile_days: BTreeMap<(StockpileId, u32), PileDay> = BTreeMap::new();
+        if let Some(replay) = replay {
+            let mut closing: BTreeMap<StockpileId, (f64, Vec<f64>)> = input.piles.iter().map(|pile| (pile.id, pile.total_opening(grades))).collect();
+            let mut closed: BTreeMap<(StockpileId, u32), (f64, Vec<f64>)> = BTreeMap::new();
+            for (&(pile, interval), state) in &replay.pile_intervals {
+                let day = input.intervals[interval].day();
+                let before = closing.insert(pile, (state.closing_t, state.closing_q.clone())).unwrap_or_else(|| (0.0, vec![0.0; grades]));
+                if !(first_day..first_day + days).contains(&day) {
+                    continue;
+                }
+                closed.insert((pile, day), (state.closing_t, state.closing_q.clone()));
+                // The day's opening tonnes and metal, until its close is known.
+                let entry = pile_days.entry((pile, day)).or_insert_with(|| PileDay {
+                    tonnes_t: before.0,
+                    contained: before.1.clone(),
+                    blend: vec![0.0; grades],
+                    ..PileDay::default()
+                });
+                if state.reclaimed_t > 1e-9 && state.delivered_blend.len() == grades {
+                    entry.reclaimed_t += state.reclaimed_t;
+                    for (quantity, fraction) in entry.blend.iter_mut().zip(&state.delivered_blend) {
+                        *quantity += state.reclaimed_t * fraction;
+                    }
+                }
+            }
+            for (key, entry) in &mut pile_days {
+                let (closing_t, closing_q) = &closed[key];
+                entry.tonnes_t = 0.5 * (entry.tonnes_t + closing_t);
+                for (quantity, closed) in entry.contained.iter_mut().zip(closing_q) {
+                    *quantity = 0.5 * (*quantity + closed);
+                }
+                if entry.reclaimed_t > 1e-9 {
+                    for quantity in &mut entry.blend {
+                        *quantity /= entry.reclaimed_t;
+                    }
+                }
+            }
+            for row in &solution.movements {
+                let candidate = &input.movements[row.candidate];
+                let (Activity::Reclaim, SourceId::Stockpile(pile)) = (candidate.activity, candidate.source) else {
+                    continue;
+                };
+                if let Some(entry) = pile_days.get_mut(&(pile, input.intervals[row.interval].day())) {
+                    *entry.to.entry(candidate.destination).or_default() += row.tonnes_t;
+                }
+            }
+        }
         Self {
             first_day,
             days,
@@ -154,6 +222,7 @@ impl Window {
             piles,
             reclaimed,
             reclaim_blends,
+            pile_days,
         }
     }
 }
@@ -865,9 +934,15 @@ impl<'a> Prepared<'a> {
         ground_materials(self.input, ground)
     }
 
-    /// The grade a flow carries, for a row of `direction`: a reclaim's, over
-    /// the whole horizon, the one that adds least to it.
-    pub(super) fn carried(&self, of: Carried, grade: usize, direction: f64) -> f64 {
+    /// The grade a flow carries on `day`, for a row of `direction`: a
+    /// reclaim's, over the whole horizon, the one that adds least to it.
+    pub(super) fn carried(&self, of: Carried, grade: usize, direction: f64, day: u32) -> f64 {
+        if let Carried::Pile(pile) = of
+            && !self.optimistic
+            && let Some(entry) = self.window.and_then(|window| window.pile_days.get(&(pile, day))).filter(|entry| entry.reclaimed_t > 1e-9)
+        {
+            return entry.blend.get(grade).copied().unwrap_or(0.0);
+        }
         match of {
             Carried::Material(material) => self.input.grades.fraction(material, grade).unwrap_or(0.0),
             Carried::Pile(_) if self.optimistic => {
@@ -1170,7 +1245,7 @@ fn solve_periods(
     } = &prepared;
     let periods = prepared.periods();
     let materials = |ground: GroundId| prepared.materials(ground);
-    let carried = |of: Carried, grade: usize, direction: f64| prepared.carried(of, grade, direction);
+    let carried = |of: Carried, grade: usize, direction: f64, day: u32| prepared.carried(of, grade, direction, day);
     let before = |id: DestinationId| prepared.before(id);
 
     // ---- model ----------------------------------------------------------------
@@ -1636,6 +1711,103 @@ fn solve_periods(
             previous = Some(held);
         }
     }
+    // An unchunked pile's reclaim carries its running blend, which what the
+    // plan delivers moves. A day's reclaimed metal is the incumbent's blend
+    // that day times the tonnes, plus, to first order, k (M - b T): M and T
+    // the plan's mid-day metal and tonnes, b the incumbent's mid-day blend
+    // and k its reclaim over its mid-day tonnes. The correction is nothing
+    // for the incumbent, so the plan prices its grade exactly.
+    let mut moved: BTreeMap<(StockpileId, usize), (f64, Vec<f64>, &PileDay)> = BTreeMap::new();
+    let mut metal: BTreeMap<(StockpileId, usize, usize), usize> = BTreeMap::new();
+    let targeted: BTreeSet<usize> = input.grade_targets.iter().map(|target| target.grade).collect();
+    if let Some(window) = window.filter(|_| !prepared.optimistic)
+        && covered.iter().all(|days| days.len() == 1)
+    {
+        for pile in input.piles.iter().filter(|pile| pile.chunks.is_empty()) {
+            for (p, days) in covered.iter().enumerate() {
+                if let Some(day) = window.pile_days.get(&(pile.id, days[0]))
+                    && day.tonnes_t > UNIT
+                    && day.reclaimed_t > DUST_T
+                {
+                    moved.insert(
+                        (pile.id, p),
+                        (day.reclaimed_t / day.tonnes_t, day.contained.iter().map(|q| q / day.tonnes_t).collect(), day),
+                    );
+                }
+            }
+            if !moved.keys().any(|(id, _)| *id == pile.id) {
+                continue;
+            }
+            let deliveries: Vec<DestinationId> = input
+                .destinations
+                .iter()
+                .filter(|entry| entry.kind == DestinationKind::Stockpile(pile.id))
+                .map(|entry| entry.id)
+                .collect();
+            let (opening_t, opening_q) = pile_opening.get(&pile.id).cloned().unwrap_or_default();
+            for &grade in &targeted {
+                let opening = opening_q.get(grade).copied().unwrap_or(0.0) / UNIT;
+                let mut previous: Option<usize> = None;
+                for (p, days) in covered.iter().enumerate() {
+                    // Metal held at the end of the day, in grade-kilotonnes.
+                    let held = builder.cont(f64::INFINITY, 0.0, &format!("metal_{}_{grade}_{p}", pile.id.0));
+                    metal.insert((pile.id, grade, p), held);
+                    let reclaimed = carried(Carried::Pile(pile.id), grade, 1.0, days[0]);
+                    let mut terms: BTreeMap<usize, f64> = BTreeMap::new();
+                    let mut rhs = 0.0;
+                    *terms.entry(held).or_default() += 1.0;
+                    match previous {
+                        Some(previous) => *terms.entry(previous).or_default() -= 1.0,
+                        None => rhs += opening,
+                    }
+                    for id in &deliveries {
+                        for &(column, per_unit, of) in flows.get(&(*id, p)).into_iter().flatten() {
+                            if let Carried::Material(material) = of {
+                                *terms.entry(column).or_default() -= per_unit * input.grades.fraction(material, grade).unwrap_or(0.0);
+                            }
+                        }
+                    }
+                    for (_, column) in reclaim.iter().filter(|((_, from, at), _)| *from == pile.id && *at == p) {
+                        *terms.entry(*column).or_default() += reclaimed;
+                    }
+                    if let Some((k, blend, _)) = moved.get(&(pile.id, p)) {
+                        let b = blend.get(grade).copied().unwrap_or(0.0);
+                        *terms.entry(held).or_default() += 0.5 * k;
+                        *terms.entry(inventory[&(pile.id, p)]).or_default() -= 0.5 * k * b;
+                        match previous {
+                            Some(previous) => {
+                                *terms.entry(previous).or_default() += 0.5 * k;
+                                *terms.entry(inventory[&(pile.id, p - 1)]).or_default() -= 0.5 * k * b;
+                            }
+                            None => rhs -= 0.5 * k * (opening - b * opening_t / UNIT),
+                        }
+                    }
+                    let terms: Vec<(usize, f64)> = terms.into_iter().collect();
+                    builder.row(&terms, rhs, rhs, &format!("metal_{}_{grade}_{p}", pile.id.0));
+                    previous = Some(held);
+                }
+            }
+        }
+    }
+    // The correction a pile's reclaim to `id` on day `p` carries in `grade`,
+    // its share of k (M - b T), as terms and a constant.
+    let correction = |pile: StockpileId, id: DestinationId, grade: usize, p: usize| -> Option<(Vec<(usize, f64)>, f64)> {
+        let (k, blend, day) = moved.get(&(pile, p))?;
+        let share = day.to.get(&id).copied().unwrap_or(0.0) / day.reclaimed_t;
+        if share <= 0.0 {
+            return None;
+        }
+        let (k, b) = (share * k, blend.get(grade).copied().unwrap_or(0.0));
+        let mut terms = vec![(metal[&(pile, grade, p)], 0.5 * k), (inventory[&(pile, p)], -0.5 * k * b)];
+        let mut constant = 0.0;
+        if p > 0 {
+            terms.extend([(metal[&(pile, grade, p - 1)], 0.5 * k), (inventory[&(pile, p - 1)], -0.5 * k * b)]);
+        } else {
+            let (opening_t, opening_q) = pile_opening.get(&pile).cloned().unwrap_or_default();
+            constant += 0.5 * k * (opening_q.get(grade).copied().unwrap_or(0.0) - b * opening_t) / UNIT;
+        }
+        Some((terms, constant))
+    };
 
     // Destination room.
     let mut totals: BTreeMap<DestinationId, Vec<(usize, f64)>> = BTreeMap::new();
@@ -1678,10 +1850,9 @@ fn solve_periods(
     // Each running total and what it sums, in order, so a seed can fill
     // them in.
     let mut totals: Vec<(usize, Vec<(usize, f64)>)> = Vec::new();
-    // Only the whole horizon's targets read them: on window plans they cost
-    // trucks60 (the daily windows' tails followed worse), and on the bound
-    // they doubled long's relaxation time.
-    if window.is_none() && !bounding {
+    // Every plan the dispatch follows reads them; on the bound they doubled
+    // long's relaxation time.
+    if !bounding {
         for p in 0..periods {
             let within = prepared.released_within(p);
             if within.is_empty() {
@@ -1847,15 +2018,24 @@ fn solve_periods(
             }
             let slack = builder.cont(f64::INFINITY, -slope * UNIT, &format!("pen_{index}_{hinge}"));
             let mut terms: Vec<(usize, f64)> = Vec::with_capacity(list.len() + 1);
+            let mut piles: BTreeSet<StockpileId> = BTreeSet::new();
             for &(v, c, of) in list {
+                if let Carried::Pile(pile) = of {
+                    piles.insert(pile);
+                }
                 match contained.get(&(v, target.grade)) {
                     // A reclaim's own metal, above.
                     Some(&q) => terms.extend([(q, direction), (v, -c * direction * boundary)]),
-                    None => terms.push((v, c * direction * (carried(of, target.grade, direction) - boundary))),
+                    None => terms.push((v, c * direction * (carried(of, target.grade, direction, target.day) - boundary))),
                 }
             }
+            let mut upper = 0.0;
+            for (moved, constant) in piles.into_iter().filter_map(|pile| correction(pile, target.destination, target.grade, p)) {
+                terms.extend(moved.into_iter().map(|(column, coefficient)| (column, direction * coefficient)));
+                upper -= direction * constant;
+            }
             terms.push((slack, -1.0));
-            builder.row(&terms, f64::NEG_INFINITY, 0.0, &format!("grade_{index}_{hinge}"));
+            builder.row(&terms, f64::NEG_INFINITY, upper, &format!("grade_{index}_{hinge}"));
         }
     }
 
@@ -1932,6 +2112,39 @@ fn solve_periods(
                 values.insert(format!("inv_{}_{p}", pile.id.0), held.max(0.0));
             }
         }
+        // The seed's pile metal, from the rows above.
+        let value = |values: &HashMap<String, f64>, column: usize| values.get(&builder.names[column]).copied().unwrap_or(0.0);
+        for (&(pile, grade, p), &held) in &metal {
+            let (opening_t, opening_q) = pile_opening.get(&pile).cloned().unwrap_or_default();
+            let (previous_q, previous_t) = if p == 0 {
+                (opening_q.get(grade).copied().unwrap_or(0.0) / UNIT, opening_t / UNIT)
+            } else {
+                (value(&values, metal[&(pile, grade, p - 1)]), value(&values, inventory[&(pile, p - 1)]))
+            };
+            let mut gained = 0.0;
+            for entry in input.destinations.iter().filter(|entry| entry.kind == DestinationKind::Stockpile(pile)) {
+                for (of, tonnes) in received.get(&(entry.id, p)).into_iter().flatten() {
+                    if let Carried::Material(material) = of {
+                        gained += tonnes * input.grades.fraction(*material, grade).unwrap_or(0.0);
+                    }
+                }
+            }
+            let drawn: f64 = reclaim
+                .iter()
+                .filter(|((_, from, at), _)| *from == pile && *at == p)
+                .map(|(_, column)| value(&values, *column))
+                .sum();
+            let reclaimed = carried(Carried::Pile(pile), grade, 1.0, covered[p][0]);
+            let q = match moved.get(&(pile, p)) {
+                Some((k, blend, _)) => {
+                    let b = blend.get(grade).copied().unwrap_or(0.0);
+                    let t = value(&values, inventory[&(pile, p)]);
+                    (previous_q * (1.0 - 0.5 * k) + gained - reclaimed * drawn + 0.5 * k * b * (t + previous_t)) / (1.0 + 0.5 * k)
+                }
+                None => previous_q + gained - reclaimed * drawn,
+            };
+            values.insert(builder.names[held].clone(), q.max(0.0));
+        }
         for (&(loader_index, ground), list) in allowed {
             let Some(&first) = list.first() else { continue };
             let mut cumulative = 0.0;
@@ -1968,7 +2181,14 @@ fn solve_periods(
             let Some(p) = days.iter().position(|day| *day == target.day) else { continue };
             let list = received.get(&(target.destination, p)).map(Vec::as_slice).unwrap_or_default();
             for (hinge, (boundary, direction, slope)) in target.specification.hinges().into_iter().enumerate() {
-                let excess: f64 = list.iter().map(|(of, t)| t * direction * (carried(*of, target.grade, direction) - boundary)).sum();
+                let mut excess: f64 = list
+                    .iter()
+                    .map(|(of, t)| t * direction * (carried(*of, target.grade, direction, target.day) - boundary))
+                    .sum();
+                let piles: BTreeSet<StockpileId> = list.iter().filter_map(|(of, _)| if let Carried::Pile(pile) = of { Some(*pile) } else { None }).collect();
+                for (moved, constant) in piles.into_iter().filter_map(|pile| correction(pile, target.destination, target.grade, p)) {
+                    excess += direction * (moved.iter().map(|(column, coefficient)| coefficient * value(&values, *column)).sum::<f64>() + constant);
+                }
                 values.insert(format!("pen_{index}_{hinge}"), excess.max(0.0));
                 worth -= slope * UNIT * excess.max(0.0);
             }
