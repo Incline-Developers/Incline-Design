@@ -2040,7 +2040,6 @@ fn solve_periods(
     }
 
     // ---- the seed, in the plan's own columns ------------------------------------
-    let mut seeded = None;
     let mut seed_values: Option<Vec<f64>> = None;
     if let Some(seed) = seed {
         // Every day of a period maps to it, not just its first.
@@ -2048,7 +2047,6 @@ fn solve_periods(
         let mut values: HashMap<String, f64> = HashMap::new();
         let mut done: BTreeMap<(GroundId, usize), f64> = BTreeMap::new();
         let mut received: BTreeMap<(DestinationId, usize), Vec<(Carried, f64)>> = BTreeMap::new();
-        let mut worth = 0.0;
         for row in &seed.movements {
             let candidate = &input.movements[row.candidate];
             let (Activity::Dig, SourceId::Ground(ground)) = (candidate.activity, candidate.source) else {
@@ -2072,12 +2070,6 @@ fn solve_periods(
                 .entry((candidate.destination, p))
                 .or_default()
                 .push((Carried::Material(candidate.material), tonnes_t));
-            if let Some(outlet) = outlets
-                .get(&(ground, candidate.material))
-                .and_then(|list| list.iter().find(|outlet| outlet.destination == candidate.destination))
-            {
-                worth += outlet.value * tonnes_t;
-            }
         }
         // Reclaim, each row shared between the bars it counts against as
         // the dispatch and the replay share it.
@@ -2180,7 +2172,7 @@ fn solve_periods(
         for (index, target) in input.grade_targets.iter().enumerate() {
             let Some(p) = days.iter().position(|day| *day == target.day) else { continue };
             let list = received.get(&(target.destination, p)).map(Vec::as_slice).unwrap_or_default();
-            for (hinge, (boundary, direction, slope)) in target.specification.hinges().into_iter().enumerate() {
+            for (hinge, (boundary, direction, _)) in target.specification.hinges().into_iter().enumerate() {
                 let mut excess: f64 = list
                     .iter()
                     .map(|(of, t)| t * direction * (carried(*of, target.grade, direction, target.day) - boundary))
@@ -2190,7 +2182,6 @@ fn solve_periods(
                     excess += direction * (moved.iter().map(|(column, coefficient)| coefficient * value(&values, *column)).sum::<f64>() + constant);
                 }
                 values.insert(format!("pen_{index}_{hinge}"), excess.max(0.0));
-                worth -= slope * UNIT * excess.max(0.0);
             }
         }
         // A schedule the replay accepts clears every blast on time.
@@ -2202,7 +2193,6 @@ fn solve_periods(
             filled[*total] = terms.iter().map(|(column, coefficient)| coefficient * filled[*column]).sum();
         }
         seed_values = Some(filled);
-        seeded = Some(worth);
     }
     // ---- priority, as the dispatch keeps it: a bar has work while its
     // current block - the first of its sequence not finished - is released.
@@ -2308,6 +2298,9 @@ fn solve_periods(
         }
     }
     let seed_violations = seed_values.as_deref().map(|values| builder.violations(values));
+    // The seed's worth is the plan's own objective at it, reclaim and
+    // penalties included, so it compares with the plan's answer.
+    let seeded = seed_values.as_deref().map(|values| builder.cost.iter().zip(values).map(|(cost, value)| cost * value).sum());
 
     let build_s = started.elapsed().as_secs_f64();
     let (variables, binaries, rows) = (builder.cost.len(), builder.binaries, builder.row_lower.len());
