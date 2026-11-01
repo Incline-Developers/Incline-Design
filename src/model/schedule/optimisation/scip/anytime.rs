@@ -26,8 +26,9 @@
 //! reclaim's grade the one that suits each use of it best. Only the
 //! relaxation is read that way; every other plan sets targets and bounds
 //! nothing. The relaxation is solved in the background once the long-term
-//! plan is, beside the search rather than ahead of it: on a long horizon it
-//! can take longer than the budget. The whole horizon's plan as a
+//! plan is, beside the search rather than ahead of it: first in a single
+//! period, which bounds any horizon in seconds, then in finer periods that
+//! tighten the bound where they finish within the budget. The whole horizon's plan as a
 //! mixed-integer program is solved in the background from the start, for
 //! one more set of targets when it finishes.
 //!
@@ -633,17 +634,20 @@ struct Relaxations {
 }
 
 impl Relaxations {
-    /// Solve the whole horizon's relaxation over periods of each of
-    /// [`PERIOD_DAYS`] in turn, within `limit` in all: a coarse one proves a
-    /// bound in seconds on any horizon, and each finer one that finishes in
-    /// time tightens it.
+    /// Solve the whole horizon's relaxation in one period, then over periods
+    /// of each of [`PERIOD_DAYS`] shorter than the horizon in turn, within
+    /// `limit` in all: the single period proves a bound in seconds on any
+    /// horizon, and each finer one that finishes in time tightens it. Fourteen
+    /// days was the coarsest once, and over the long horizon's 114 days it
+    /// never finished in six minutes; in one period it took 18 s.
     fn start(input: &BlendInput, horizon_days: u32, limit: Duration, ending: &Arc<AtomicBool>) -> Option<Self> {
         let incentive = utilisation::ceiling(input);
         let (input, ending) = (input.clone(), Arc::clone(ending));
         let (sender, proved) = std::sync::mpsc::channel();
         let worker = background::spawn("schedule-relaxations", move || {
             let started = Instant::now();
-            for period in PERIOD_DAYS.into_iter().filter(|period| *period == 1 || *period < horizon_days) {
+            let whole = horizon_days.max(1);
+            for period in std::iter::once(whole).chain(PERIOD_DAYS.into_iter().filter(|period| *period < whole)) {
                 let left = limit.saturating_sub(started.elapsed());
                 if left.is_zero() || ending.load(Ordering::Relaxed) {
                     return;
@@ -683,9 +687,10 @@ impl Relaxations {
     }
 }
 
-/// The period lengths the relaxation is solved over, coarsest first; see
-/// [`plan::relaxation_bound`]. Over periods of a week, Centralia's 52 days
-/// take 14 s, by the day they take more than five minutes.
+/// The period lengths the relaxation is solved over after the whole
+/// horizon's single period, coarsest first; see [`plan::relaxation_bound`].
+/// Over periods of a week, Centralia's 52 days take 14 s, by the day they
+/// take more than five minutes.
 const PERIOD_DAYS: [u32; 5] = [14, 7, 4, 2, 1];
 
 fn relaxed(relaxations: &Option<Relaxations>, bound: &mut Option<f64>) -> Option<String> {
