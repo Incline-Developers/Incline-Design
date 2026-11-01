@@ -56,6 +56,8 @@ pub(crate) struct MipOptions {
     pub presolve: bool,
     pub presolve_reduction_limit: i64,
     pub restart_presolve_reduction_limit: i64,
+    /// Not HiGHS's: a cap on the root's separation rounds, sub-MIPs aside.
+    pub max_root_separation_rounds: Option<i64>,
 }
 
 /// HiGHS's default `mip_feasibility_tolerance`: how far a row or bound may
@@ -96,6 +98,7 @@ impl Default for MipOptions {
             presolve: true,
             presolve_reduction_limit: -1,
             restart_presolve_reduction_limit: -1,
+            max_root_separation_rounds: None,
         }
     }
 }

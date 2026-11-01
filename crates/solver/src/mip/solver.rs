@@ -589,6 +589,11 @@ impl MipSolver {
         if self.data.num_restarts == 0 {
             max_sepa_rounds = max_sepa_rounds.min((2.0 * (self.data.max_tree_size_log2 as f64).sqrt()) as i64);
         }
+        if !self.data.submip
+            && let Some(cap) = self.data.options.max_root_separation_rounds
+        {
+            max_sepa_rounds = max_sepa_rounds.min(cap);
+        }
         'restart: loop {
             if self.data.detect_symmetries {
                 self.start_symmetry_detection();

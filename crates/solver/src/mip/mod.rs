@@ -371,6 +371,9 @@ pub struct MipSettings {
     pub time_limit: f64,
     pub mip_rel_gap: f64,
     pub mip_detect_symmetry: bool,
+    /// Rounds of cuts the root separates at most, before branching; `None`
+    /// leaves HiGHS's own limit.
+    pub max_root_separation_rounds: Option<i64>,
 }
 
 impl Default for MipSettings {
@@ -380,6 +383,7 @@ impl Default for MipSettings {
             time_limit: options.time_limit,
             mip_rel_gap: options.mip_rel_gap,
             mip_detect_symmetry: options.mip_detect_symmetry,
+            max_root_separation_rounds: options.max_root_separation_rounds,
         }
     }
 }
@@ -409,6 +413,7 @@ pub fn solve_mip(problem: &crate::Problem, settings: &MipSettings, seed: Option<
         time_limit: settings.time_limit,
         mip_rel_gap: settings.mip_rel_gap,
         mip_detect_symmetry: settings.mip_detect_symmetry,
+        max_root_separation_rounds: settings.max_root_separation_rounds,
         ..data::MipOptions::default()
     };
     let num_col = problem.num_cols();

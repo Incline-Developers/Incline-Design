@@ -235,6 +235,9 @@ pub(crate) struct Settings {
     /// Solve the linear relaxation only, by HiGHS's interior point method:
     /// with no window, an upper bound on any schedule's value.
     pub(crate) relax: bool,
+    /// Rounds of cuts at the root at most, `None` for the solver's own
+    /// limit.
+    pub(crate) cut_rounds: Option<i64>,
 }
 
 /// The solved plan.
@@ -380,7 +383,13 @@ fn plan_problem(builder: &Builder, relax: bool) -> solver::Problem {
     problem
 }
 
-fn solve_plan(builder: &Builder, seed: Option<&[f64]>, time_limit: Duration, relative_gap: f64, relax: bool, stop: &Arc<AtomicBool>) -> Result<Answer, String> {
+fn solve_plan(builder: &Builder, seed: Option<&[f64]>, settings: &Settings, stop: &Arc<AtomicBool>) -> Result<Answer, String> {
+    let Settings {
+        time_limit,
+        relative_gap,
+        relax,
+        cut_rounds,
+    } = *settings;
     if relax {
         return solve_relaxation(builder, time_limit, stop);
     }
@@ -404,6 +413,7 @@ fn solve_plan(builder: &Builder, seed: Option<&[f64]>, time_limit: Duration, rel
     let settings = solver::MipSettings {
         time_limit: time_limit.as_secs_f64(),
         mip_rel_gap: relative_gap,
+        max_root_separation_rounds: cut_rounds,
         ..solver::MipSettings::default()
     };
     let stop = Arc::clone(stop);
@@ -1213,6 +1223,7 @@ pub(crate) fn relaxation_bound(input: &BlendInput, period_days: u32, time_limit:
         time_limit,
         relative_gap: 0.0,
         relax: true,
+        cut_rounds: None,
     };
     solve_periods(input, None, None, settings, period_days, true, stop)
 }
@@ -2305,7 +2316,7 @@ fn solve_periods(
     let build_s = started.elapsed().as_secs_f64();
     let (variables, binaries, rows) = (builder.cost.len(), builder.binaries, builder.row_lower.len());
     let solving = Instant::now();
-    let answer = solve_plan(&builder, seed_values.as_deref(), settings.time_limit, settings.relative_gap, settings.relax, stop)?;
+    let answer = solve_plan(&builder, seed_values.as_deref(), &settings, stop)?;
     let solve_s = solving.elapsed().as_secs_f64();
 
     // ---- read back ----------------------------------------------------------

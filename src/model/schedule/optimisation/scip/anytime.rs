@@ -521,6 +521,8 @@ const SEARCH_MIN_S: f64 = 30.0;
 const SEARCH_STALL_S: f64 = 20.0;
 const SEARCH_STALL_GAIN: f64 = 5e-4;
 const SEARCH_STALL_WINDOWS: usize = 5;
+/// Rounds of cuts at most at a window plan's root.
+const WINDOW_CUT_ROUNDS: i64 = 4;
 
 /// The gap a long-term plan stops at. Its answer is only targets, and
 /// proving it took 40% of its solve: on Centralia the optimum was found at
@@ -557,6 +559,7 @@ impl LongTerm {
                 time_limit: left,
                 relative_gap: LONG_TERM_GAP,
                 relax: false,
+                cut_rounds: None,
             };
             let _ = sender.send((period, plan::long_term(&parcelled, Some(&seed), period, settings, &ending)));
         });
@@ -1158,7 +1161,10 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
             window_values.push(value);
             let windows_quiet =
                 window_values.len() > SEARCH_STALL_WINDOWS && value - window_values[window_values.len() - 1 - SEARCH_STALL_WINDOWS] < SEARCH_STALL_GAIN * value.abs();
-            if now >= SEARCH_MIN_S && value - since < SEARCH_STALL_GAIN * value.abs() && windows_quiet {
+            // Nor before the long-term plan has come and been tried: its
+            // targets are ones no window has followed yet.
+            let awaiting = long_term.as_mut().is_some_and(|long_term| !long_term.worker.is_finished() || long_term.ready());
+            if now >= SEARCH_MIN_S && value - since < SEARCH_STALL_GAIN * value.abs() && windows_quiet && !awaiting {
                 record(value, bound, format!("search handed to the reroute at {now:.1}s"));
                 break 'passes;
             }
@@ -1196,6 +1202,11 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
                 time_limit: limit.min(left),
                 relative_gap: 1e-3,
                 relax: false,
+                // A window's plan is done at its root, where HiGHS's later
+                // rounds of cuts took most of the time and changed nothing
+                // kept: five-day plans solved 2.5 times as fast for the same
+                // objectives, leaving the search time for more windows.
+                cut_rounds: Some(WINDOW_CUT_ROUNDS),
             };
             let planned = match plan::solve(input, Some(&best.solution), Some(&window), solve, cancel) {
                 Ok(planned) => planned,
