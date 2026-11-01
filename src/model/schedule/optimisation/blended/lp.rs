@@ -75,7 +75,8 @@ impl LinearProgram {
     /// finish, stopping when `stop` says so. For one large program, where
     /// the simplex method's many degenerate pivots cost far more than the
     /// interior point method's few factorisations.
-    pub(crate) fn maximise_ipm(&mut self, stop: Option<solver::Interrupt>) -> Result<Vec<f64>, String> {
+    /// Maximise by the interior point method, stopping at `ends`.
+    pub(crate) fn maximise_ipm(&mut self, ends: web_time::Instant) -> Result<Vec<f64>, String> {
         self.tidy()?;
         #[cfg(not(target_arch = "wasm32"))]
         self.dump();
@@ -88,9 +89,15 @@ impl LinearProgram {
             solver: solver::Solver::Ipm,
             ipm_optimality_tolerance: 1e-6,
             ipm_crossover_on_no_progress: true,
+            // HiGHS sizes presolve's search for dependent equations by the
+            // time limit, and with none it may search for 1000 s: on long's
+            // first reclaim window it took 35 s of a 38 s solve, and the
+            // solve took 3 s once it knew its time.
+            time_limit: ends.saturating_duration_since(web_time::Instant::now()).as_secs_f64(),
             ..solver::Options::default()
         };
-        let solution = solver::solve_from(&self.to_solver(), &options, None, stop);
+        let stop: solver::Interrupt = std::sync::Arc::new(move || web_time::Instant::now() >= ends);
+        let solution = solver::solve_from(&self.to_solver(), &options, None, Some(stop));
         if solution.status != solver::Status::Optimal {
             return Err(format!("solver ended {:?}", solution.status));
         }

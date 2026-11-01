@@ -324,7 +324,7 @@ pub(crate) fn digging_windows(input: &BlendInput, schedule: &BlendSolution, wind
 }
 
 /// `schedule` with its dug material rerouted to the most it can earn, or an
-/// error when the LP stops (`stop`) or fails.
+/// error when the LP stops at `ends` or fails.
 #[allow(clippy::too_many_arguments, reason = "the neighbourhood's settings, each set by its caller's pass")]
 pub(crate) fn reroute(
     input: &BlendInput,
@@ -335,7 +335,7 @@ pub(crate) fn reroute(
     open_reclaim: bool,
     free_digging: bool,
     window: Option<&std::ops::Range<usize>>,
-    stop: solver::Interrupt,
+    ends: web_time::Instant,
 ) -> Result<BlendSolution, String> {
     let Grouped { dug, mut fixed, receipts } = group(input, groups, schedule, window, program == Program::Opening && tonnes_may_move(input))?;
     // A percentage box around existing draws cannot start reclaim in an
@@ -1092,7 +1092,7 @@ pub(crate) fn reroute(
         }
     }
 
-    let solution = problem.maximise_ipm(Some(stop))?;
+    let solution = problem.maximise_ipm(ends)?;
     // Each choice's tonnes, clipped at zero and scaled back to exactly what
     // was dug: a column a hair below zero would otherwise leave its excess on
     // the others.

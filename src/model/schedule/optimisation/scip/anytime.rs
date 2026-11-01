@@ -734,11 +734,11 @@ fn reroute_window(
     free_digging: bool,
     line_search: bool,
     window: Option<&std::ops::Range<usize>>,
-    stop: solver::Interrupt,
+    window_ends: Instant,
     ends: Instant,
     cancel: &AtomicBool,
 ) -> String {
-    match routing::reroute(input, groups, &best.solution, program, reach, open_reclaim, free_digging, window, stop) {
+    match routing::reroute(input, groups, &best.solution, program, reach, open_reclaim, free_digging, window, window_ends) {
         Ok(mut solution) => {
             let opening = line_search.then(|| best.solution.clone());
             let proposed = opening.as_ref().map(|_| solution.clone());
@@ -797,7 +797,6 @@ fn reroute_best(input: &BlendInput, groups: &routing::Groups, best: &mut Best, v
         // that window, not every window after it.
         let left = ends.saturating_duration_since(Instant::now());
         let window_ends = Instant::now() + left.mul_f64(2.0 / (total - done) as f64).max(left / 2);
-        let stop: solver::Interrupt = Arc::new(move || Instant::now() >= window_ends);
         let window = routing::window(input, windows_for(pass), index);
         let extra = pass >= reserve.passes;
         let reach = if extra {
@@ -821,7 +820,7 @@ fn reroute_best(input: &BlendInput, groups: &routing::Groups, best: &mut Best, v
             false,
             extra,
             window.as_ref(),
-            stop,
+            window_ends,
             ends,
             cancel,
         ));
@@ -861,7 +860,6 @@ pub(crate) fn continue_from(
 ) -> (BlendSolution, ReplayReport) {
     let started = Instant::now();
     let ends = started + until.saturating_sub(Duration::from_secs_f64(routing::REPLAY_S));
-    let stop: solver::Interrupt = Arc::new(move || Instant::now() >= ends);
     let groups = routing::Groups::new(input);
     let mut best = Best {
         solution: start.0,
@@ -898,7 +896,6 @@ pub(crate) fn continue_from(
                     let now = Instant::now();
                     now + ends.saturating_duration_since(now) / (windows - index) as u32
                 };
-                let window_stop: solver::Interrupt = if drawing { stop.clone() } else { Arc::new(move || Instant::now() >= window_ends) };
                 let note = reroute_window(
                     input,
                     &groups,
@@ -910,7 +907,7 @@ pub(crate) fn continue_from(
                     !drawing,
                     drawing,
                     window.as_ref(),
-                    window_stop,
+                    window_ends,
                     window_ends,
                     cancel,
                 );
