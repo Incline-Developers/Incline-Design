@@ -25,10 +25,11 @@
 //! bars free of one another, each blast at its earliest release, a
 //! reclaim's grade the one that suits each use of it best. Only the
 //! relaxation is read that way; every other plan sets targets and bounds
-//! nothing. The relaxation is solved in the background from the start,
-//! beside the search rather than ahead of it: on a long horizon it can take
-//! longer than the budget. So is the whole horizon's plan as a
-//! mixed-integer program, for one more set of targets when it finishes.
+//! nothing. The relaxation is solved in the background once the long-term
+//! plan is, beside the search rather than ahead of it: on a long horizon it
+//! can take longer than the budget. The whole horizon's plan as a
+//! mixed-integer program is solved in the background from the start, for
+//! one more set of targets when it finishes.
 //!
 //! When the timeline the search holds takes none of a window's tails, the
 //! tails are dispatched again with the drill and blast chain live, resumed
@@ -1004,13 +1005,21 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
     let mut bound = None;
     // Raised when the search ends, so the background plans stop with it.
     let ending = Arc::new(AtomicBool::new(false));
+    let horizon_days = input.intervals.iter().map(|interval| interval.day()).collect::<BTreeSet<_>>().len() as u32;
     // The relaxation is solved beside the search, not ahead of it: on a long
     // horizon it can take longer than the whole budget, and the search has
-    // no use for the bound until there is a gap to report.
-    let horizon_days = input.intervals.iter().map(|interval| interval.day()).collect::<BTreeSet<_>>().len() as u32;
-    let relaxation = (!cancel.load(Ordering::Relaxed))
-        .then(|| Relaxations::start(input, horizon_days, settings.budget, &ending))
-        .flatten();
+    // no use for the bound until there is a gap to report. It starts once
+    // the long-term plan is done: beside it on a core or two it starved
+    // that plan, whose targets the search follows, of the time to find them.
+    let mut relaxation: Option<Relaxations> = None;
+    let mut relaxation_started = false;
+    let mut start_relaxation = |long_term: &Option<LongTerm>, relaxation: &mut Option<Relaxations>| {
+        if relaxation_started || long_term.as_ref().is_some_and(|long_term| !long_term.worker.is_finished()) || cancel.load(Ordering::Relaxed) {
+            return;
+        }
+        relaxation_started = true;
+        *relaxation = Relaxations::start(original, horizon_days, settings.budget.saturating_sub(started.elapsed()), &ending);
+    };
     let mut long_term = (settings.background_bound && !cancel.load(Ordering::Relaxed))
         .then(|| {
             LongTerm::start(
@@ -1038,6 +1047,7 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
     'passes: loop {
         let held = adopted.clone();
         let input: &BlendInput = held.as_deref().unwrap_or(original);
+        start_relaxation(&long_term, &mut relaxation);
         if let Some(note) = relaxed(&relaxation, &mut bound) {
             record(value, bound, note);
         }
@@ -1323,6 +1333,7 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
                     ),
                 );
             }
+            start_relaxation(&long_term, &mut relaxation);
             if let Some(note) = relaxed(&relaxation, &mut bound) {
                 record(value, bound, note);
             }
