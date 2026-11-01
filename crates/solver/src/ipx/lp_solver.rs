@@ -56,7 +56,9 @@ impl LpSolver {
         let run_crossover_on = control.params.run_crossover == 1;
         let run_crossover_choose = control.params.run_crossover == -1;
         let run_crossover_not_off = run_crossover_choose || run_crossover_on;
-        let run_crossover = (self.info.status_ipm == IPX_STATUS_OPTIMAL && run_crossover_on) || (self.info.status_ipm == IPX_STATUS_IMPRECISE && run_crossover_not_off);
+        let run_crossover = (self.info.status_ipm == IPX_STATUS_OPTIMAL && run_crossover_on)
+            || (self.info.status_ipm == IPX_STATUS_IMPRECISE && run_crossover_not_off)
+            || (self.info.status_ipm == IPX_STATUS_NO_PROGRESS && run_crossover_not_off && control.params.crossover_on_no_progress && basis.is_some());
         if run_crossover {
             self.build_crossover_starting_point(model, &iterate);
             self.run_crossover(control, model, basis.as_mut().expect("crossover runs after a starting basis"));

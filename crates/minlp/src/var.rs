@@ -1830,7 +1830,12 @@ pub fn var_get_active_representatives(
     let mut activevarssize = max(10, 2 * *nvars);
     let mut activevars: CVec<VarId> = CVec::with_size(activevarssize);
     let ntotalvars = scip.stat.nvaridx;
-    let mut tmpscalars: CVec<f64> = CVec::with_size(ntotalvars);
+    // SCIP's clean buffer: kept zeroed between calls, so each call costs what
+    // it touches rather than the problem's whole variable count.
+    let mut tmpscalars = CVec(CLEAN_SCALARS.with_borrow_mut(std::mem::take));
+    if tmpscalars.0.len() < ntotalvars.max(0) as usize {
+        tmpscalars.0.resize(ntotalvars.max(0) as usize, 0.0);
+    }
 
     // To avoid unnecessary expanding of variable arrays, we first replace
     // all variables by their active representatives.
@@ -1960,7 +1965,19 @@ pub fn var_get_active_representatives(
     } else {
         *requiredsize = nactivevars;
     }
+    // Reset what was touched (the multi-aggregated entries were reset as
+    // they were resolved) and return the buffer clean.
+    for v in 0..nactivevars {
+        tmpscalars[scip.vars[activevars[v]].index] = 0.0;
+    }
+    CLEAN_SCALARS.with_borrow_mut(|clean| *clean = tmpscalars.0);
     Ok(())
+}
+
+thread_local! {
+    /// [`var_get_active_representatives`]' zeroed scratch, one slot per
+    /// variable index.
+    static CLEAN_SCALARS: std::cell::RefCell<Vec<f64>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// `SCIPvarFlattenAggregationGraph`: replaces a multi-aggregation by one

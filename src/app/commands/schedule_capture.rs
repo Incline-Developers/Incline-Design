@@ -653,6 +653,7 @@ fn capture_drill_blast(
         window_end_h: config.window_end_h,
         windows: Some(config.effective_windows()),
         fixed: None,
+        resume: None,
     })
 }
 

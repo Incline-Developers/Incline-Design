@@ -368,11 +368,13 @@ fn scatter_sub(index: &[Int], value: &[f64], temp: f64, x: &mut [f64]) {
     }
 }
 
+#[inline(always)]
 pub(crate) fn dot_column(a: &SparseMatrix, j: Int, rhs: &[f64]) -> f64 {
     let (index, value) = column(a, j);
     gather_dot(index, value, rhs)
 }
 
+#[inline(always)]
 pub(crate) fn scatter_column(a: &SparseMatrix, j: Int, alpha: f64, lhs: &mut [f64]) {
     let (index, value) = column(a, j);
     for (&i, &v) in index.iter().zip(value) {
@@ -394,14 +396,46 @@ pub(crate) fn multiply_add(a: &SparseMatrix, rhs: &[f64], alpha: f64, lhs: &mut 
     }
 }
 
+// Most nonbasic routing columns have at most four entries. Fixed lengths
+// let the compiler remove their loop control without changing summation order.
+#[inline(always)]
+fn short_normal_product<const N: usize>(index: &[Int; N], value: &[f64; N], weight: Option<f64>, rhs: &[f64], lhs: &mut [f64]) {
+    let mut temp = 0.0;
+    for k in 0..N {
+        temp += rhs[u(index[k])] * value[k];
+    }
+    if let Some(weight) = weight {
+        temp *= weight;
+    }
+    for k in 0..N {
+        lhs[u(index[k])] += temp * value[k];
+    }
+}
+
+#[inline(always)]
+pub(super) fn normal_column_product(index: &[Int], value: &[f64], weight: Option<f64>, rhs: &[f64], lhs: &mut [f64]) {
+    match index.len() {
+        1 => short_normal_product::<1>(index.try_into().unwrap(), value.try_into().unwrap(), weight, rhs, lhs),
+        2 => short_normal_product::<2>(index.try_into().unwrap(), value.try_into().unwrap(), weight, rhs, lhs),
+        3 => short_normal_product::<3>(index.try_into().unwrap(), value.try_into().unwrap(), weight, rhs, lhs),
+        4 => short_normal_product::<4>(index.try_into().unwrap(), value.try_into().unwrap(), weight, rhs, lhs),
+        _ => {
+            let mut temp = gather_dot(index, value, rhs);
+            if let Some(weight) = weight {
+                temp *= weight;
+            }
+            for (&i, &v) in index.iter().zip(value) {
+                lhs[u(i)] += temp * v;
+            }
+        }
+    }
+}
+
 /// `lhs += A * D^2 * A' * rhs`, `D` the identity if not given.
 pub(crate) fn add_normal_product(a: &SparseMatrix, d: Option<&[f64]>, rhs: &[f64], lhs: &mut [f64]) {
     for j in 0..a.cols() {
-        let mut temp = dot_column(a, j, rhs);
-        if let Some(d) = d {
-            temp *= d[u(j)] * d[u(j)];
-        }
-        scatter_column(a, j, temp, lhs);
+        let (index, value) = column(a, j);
+        normal_column_product(index, value, d.map(|d| d[u(j)] * d[u(j)]), rhs, lhs);
     }
 }
 
@@ -409,6 +443,7 @@ pub(crate) fn add_normal_product(a: &SparseMatrix, d: Option<&[f64]>, rhs: &[f64
 /// `unitdiag` when its diagonal is implicit (otherwise each column's
 /// diagonal entry is its last if upper, first if lower). Returns the
 /// number of nonzeros in the solution.
+#[inline(always)]
 pub(crate) fn triangular_solve(a: &SparseMatrix, x: &mut [f64], trans: char, upper: bool, unitdiag: bool) -> Int {
     let ncol = a.cols();
     let ap = &a.colptr;

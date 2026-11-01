@@ -158,11 +158,6 @@ impl CancelFlag {
     pub(crate) fn signal(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.0)
     }
-
-    /// A flag raised by whoever holds `signal`, not by a job's own cancel.
-    pub(crate) fn from_signal(signal: Arc<AtomicBool>) -> Self {
-        Self(signal)
-    }
 }
 
 /// A heavy operation running on a background thread.

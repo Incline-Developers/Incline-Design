@@ -11,8 +11,8 @@ use super::{
     maxvolume::Maxvolume,
     model::Model,
     sparse::{
-        IndexedVector, Int, SparseMatrix, add_normal_product, backward_solve, copy_columns, dot, dot_column, forward_solve, infnorm, inverse_perm, permute_rows, scale_column,
-        scatter_column, u,
+        IndexedVector, Int, SparseMatrix, add_normal_product, backward_solve, copy_columns, dot, dot_column, forward_solve, infnorm, inverse_perm, normal_column_product,
+        permute_rows, scale_column, scatter_column, u,
     },
 };
 
@@ -52,26 +52,13 @@ impl LinearOperator for NormalMatrix<'_> {
             }
             for j in 0..n {
                 let (index, value) = (&ai_idx[u(ap[j])..u(ap[j + 1])], &ax[u(ap[j])..u(ap[j + 1])]);
-                let mut d = 0.0;
-                for (&i, &v) in index.iter().zip(value) {
-                    d += rhs[u(i)] * v;
-                }
-                d *= w[j];
-                for (&i, &v) in index.iter().zip(value) {
-                    lhs[u(i)] += d * v;
-                }
+                normal_column_product(index, value, Some(w[j]), rhs, lhs);
             }
         } else {
             lhs[..m].fill(0.0);
             for j in 0..n {
                 let (index, value) = (&ai_idx[u(ap[j])..u(ap[j + 1])], &ax[u(ap[j])..u(ap[j + 1])]);
-                let mut d = 0.0;
-                for (&i, &v) in index.iter().zip(value) {
-                    d += rhs[u(i)] * v;
-                }
-                for (&i, &v) in index.iter().zip(value) {
-                    lhs[u(i)] += d * v;
-                }
+                normal_column_product(index, value, None, rhs, lhs);
             }
         }
         if want_dot { dot(rhs, lhs) } else { 0.0 }
@@ -174,14 +161,13 @@ impl<'c> ConjugateResiduals<'c> {
                 residual[i] = rhs[i] - residual[i];
             }
         }
+        if Self::resnorm(&residual, resscale) <= tol {
+            return;
+        }
         let mut cdot = c.apply(&residual, &mut cresidual, true);
         step.copy_from_slice(&residual);
         cstep.copy_from_slice(&cresidual);
         loop {
-            let resnorm = Self::resnorm(&residual, resscale);
-            if resnorm <= tol {
-                break;
-            }
             if self.iter == maxiter {
                 self.errflag = IPX_ERROR_CR_ITER_LIMIT;
                 break;
@@ -200,16 +186,21 @@ impl<'c> ConjugateResiduals<'c> {
                 lhs[i] += alpha * step[i];
                 residual[i] -= alpha * cstep[i];
             }
-            let cdotnew = c.apply(&residual, &mut cresidual, true);
-            let beta = cdotnew / cdot;
-            for i in 0..m {
-                step[i] = residual[i] + beta * step[i];
-                cstep[i] = cresidual[i] + beta * cstep[i];
+            // A converged residual needs no next search direction. The
+            // operator's scratch and these directions are local to this solve.
+            let converged = Self::resnorm(&residual, resscale) <= tol;
+            if !converged {
+                let cdotnew = c.apply(&residual, &mut cresidual, true);
+                let beta = cdotnew / cdot;
+                for i in 0..m {
+                    step[i] = residual[i] + beta * step[i];
+                    cstep[i] = cresidual[i] + beta * cstep[i];
+                }
+                cdot = cdotnew;
             }
-            cdot = cdotnew;
             self.iter += 1;
             self.errflag = self.control.interrupt_check();
-            if self.errflag != 0 {
+            if self.errflag != 0 || converged {
                 break;
             }
         }
@@ -246,15 +237,14 @@ impl<'c> ConjugateResiduals<'c> {
                 residual[i] = rhs[i] - residual[i];
             }
         }
+        if Self::resnorm(&residual, resscale) <= tol {
+            return;
+        }
         let mut resnorm_precond_system = p.apply(&residual, &mut sresidual, true);
         let mut cdot = c.apply(&sresidual, &mut csresidual, true);
         step.copy_from_slice(&sresidual);
         cstep.copy_from_slice(&csresidual);
         loop {
-            let resnorm = Self::resnorm(&residual, resscale);
-            if resnorm <= tol {
-                break;
-            }
             if self.iter == maxiter {
                 self.errflag = IPX_ERROR_CR_ITER_LIMIT;
                 break;
@@ -279,13 +269,16 @@ impl<'c> ConjugateResiduals<'c> {
                 residual[i] -= alpha * cstep[i];
                 sresidual[i] -= alpha * csresidual[i];
             }
-            let cdotnew = c.apply(&sresidual, &mut csresidual, true);
-            let beta = cdotnew / cdot;
-            for i in 0..m {
-                step[i] = sresidual[i] + beta * step[i];
-                cstep[i] = csresidual[i] + beta * cstep[i];
+            let converged = Self::resnorm(&residual, resscale) <= tol;
+            if !converged {
+                let cdotnew = c.apply(&sresidual, &mut csresidual, true);
+                let beta = cdotnew / cdot;
+                for i in 0..m {
+                    step[i] = sresidual[i] + beta * step[i];
+                    cstep[i] = csresidual[i] + beta * cstep[i];
+                }
+                cdot = cdotnew;
             }
-            cdot = cdotnew;
             self.iter += 1;
             if self.iter % 5 == 0 {
                 let rsdot = p.apply(&residual, &mut sresidual, true);
@@ -296,7 +289,7 @@ impl<'c> ConjugateResiduals<'c> {
                 resnorm_precond_system = rsdot;
             }
             self.errflag = self.control.interrupt_check();
-            if self.errflag != 0 {
+            if self.errflag != 0 || converged {
                 break;
             }
         }
@@ -723,8 +716,7 @@ impl KktSolver for KktSolverBasis<'_, '_, '_> {
             }
         }
         if num_free > 0 {
-            let input = work.clone();
-            self.basis.solve_dense(&input, &mut work, 'T');
+            self.basis.solve_dense_vec(&mut work, 'T');
         }
         if num_free > 0 {
             for j in 0..n + m {
@@ -744,8 +736,7 @@ impl KktSolver for KktSolverBasis<'_, '_, '_> {
                 }
             }
         }
-        let input = rhs.clone();
-        self.basis.solve_dense(&input, &mut rhs, 'N');
+        self.basis.solve_dense_vec(&mut rhs, 'N');
         self.basis.solve_dense(b, &mut work, 'N');
         for p in 0..m {
             let j = self.basis.at(p);
@@ -779,8 +770,7 @@ impl KktSolver for KktSolverBasis<'_, '_, '_> {
                 *y_p = a[u(j)];
             }
         }
-        let input = y.to_vec();
-        self.basis.solve_dense(&input, y, 'T');
+        self.basis.solve_dense_in_place(y, 'T');
         work.copy_from_slice(&b[..m]);
         for j in 0..n + m {
             let mut xj = 0.0;
@@ -791,8 +781,7 @@ impl KktSolver for KktSolverBasis<'_, '_, '_> {
             }
             x[j] = xj;
         }
-        let input = work.clone();
-        self.basis.solve_dense(&input, &mut work, 'N');
+        self.basis.solve_dense_vec(&mut work, 'N');
         for p in 0..m {
             x[u(self.basis.at(p))] = work[p];
         }
