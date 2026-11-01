@@ -1865,8 +1865,12 @@ impl<'a> App<'a> {
     /// reruns often enough that a readout would be a flicker rather than a
     /// report.
     pub(crate) fn begin_quiet_task(&mut self) -> (BackgroundTaskTicket, crate::model::progress::Progress) {
-        let ticket = self.begin_topology_load();
+        // Marked quiet before the pointer is set, or the busy pointer would
+        // show from now until the task settles.
+        let ticket = self.background_tasks.begin();
         self.background_tasks.quiet.insert(ticket);
+        self.update_background_task_cursor();
+        self.redraw_requested = true;
         (ticket, crate::model::progress::Progress::new())
     }
 

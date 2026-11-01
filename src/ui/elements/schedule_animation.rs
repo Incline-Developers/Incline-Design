@@ -105,10 +105,12 @@ pub(crate) fn draw_timeline(
                 // keeps work in flight. Warned when a block would not cut at
                 // all: the view then holds ground from an earlier instant that
                 // no later frame will replace, so the state persists rather
-                // than passing like the lag does.
+                // than passing like the lag does. Not dimmed under playback,
+                // which starts a cut almost every frame and would blink the
+                // clock at the frame rate.
                 let color = if editor.schedule_animation_degraded {
                     ui.visuals().warn_fg_color
-                } else if editor.schedule_animation_pending {
+                } else if editor.schedule_animation_pending && !editor.schedule_animation_playing {
                     ui.visuals().weak_text_color()
                 } else {
                     ui.visuals().strong_text_color()
