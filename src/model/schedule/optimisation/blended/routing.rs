@@ -28,6 +28,9 @@ use crate::model::schedule::optimisation::{Activity, DestinationId, DestinationK
 /// replay's own tolerance.
 const SLACK_T: f64 = 1e-6;
 
+/// What a tonne of a full pile's room costs a reroute that may spend it.
+const ROOM_PRICE: f64 = 1e4;
+
 /// Time kept back from a reroute's deadline for the replay that judges it.
 pub(crate) const REPLAY_S: f64 = 1.5;
 
@@ -769,11 +772,31 @@ pub(crate) fn reroute(
             // meet truck and crusher limits. The stock those cuts leave can
             // accumulate along a full pile's chain, so keep room for them
             // rather than losing the entire routing move to a few kilograms.
-            let capacity = (pile.capacity_t - (1e-6 * pile.capacity_t).max(1e-4)).max(0.0);
+            // A schedule those repairs left inside the room is no less
+            // valid, and the program must keep it as its starting point:
+            // there the room may be spent, up to what the schedule held,
+            // at a price far above anything a few kilograms earn.
+            let margin = (1e-6 * pile.capacity_t).max(1e-4);
+            let capacity = (pile.capacity_t - margin).max(0.0);
+            let add_capacity_row = |problem: &mut LinearProgram, held: f64, constant: f64, mut terms: Vec<(Col, f64)>| {
+                let over = held + 1e-3 * margin - capacity;
+                if over > 0.0 {
+                    terms.push((problem.add_column(-ROOM_PRICE, 0.0..=over), -1.0));
+                }
+                problem.add_row(..=capacity - constant, terms);
+            };
             for (at, &(col, offset)) in tonnage[&pile.id].iter().enumerate().take(intervals) {
                 let mut terms: Vec<(Col, f64)> = col.map(|col| vec![(col, 1.0)]).unwrap_or_default();
                 let mut constant = offset;
+                let mut held = stock[&pile.id][at];
                 for cell in 0..input.segments_per_interval {
+                    let held_received = receipts.get(&(pile.id, at, cell)).copied().unwrap_or(0.0);
+                    let held_drawn: f64 = fixed_by_interval[at]
+                        .iter()
+                        .map(|&index| &fixed[index])
+                        .filter(|row| row.segment == cell && input.movements[row.candidate].source == SourceId::Stockpile(pile.id))
+                        .map(|row| row.tonnes_t)
+                        .sum();
                     let into_cell =
                         |candidate: usize, _: usize, segment: usize| (segment == cell && pile_of(input, input.movements[candidate].destination) == Some(pile.id)).then_some(1.0);
                     let (received, received_constant) = expression(&[at], &into_cell);
@@ -783,7 +806,7 @@ pub(crate) fn reroute(
                         let mut before = terms.clone();
                         before.extend(received.iter().copied());
                         if !before.is_empty() {
-                            problem.add_row(..=capacity - constant - received_constant, before);
+                            add_capacity_row(&mut problem, held + held_received, constant + received_constant, before);
                         }
                     }
                     // Occupancy rises only where the pile receives: a segment
@@ -792,8 +815,9 @@ pub(crate) fn reroute(
                     terms.extend(received);
                     terms.extend(reclaimed.into_iter().map(|(col, coefficient)| (col, -coefficient)));
                     constant += received_constant - reclaimed_constant;
+                    held = (held + held_received - held_drawn).max(0.0);
                     if receives && !terms.is_empty() {
-                        problem.add_row(..=capacity - constant, terms.clone());
+                        add_capacity_row(&mut problem, held, constant, terms.clone());
                     }
                 }
             }
@@ -819,7 +843,16 @@ pub(crate) fn reroute(
             };
             let (terms, constant) = held_moved(&[at], &by_loader);
             if !terms.is_empty() {
-                problem.add_row(..=rate.reclaim_tph * duration + SLACK_T - constant, terms);
+                // Never below what the schedule reclaimed there, which the
+                // replay accepts to its own tolerance: a pile emptied at the
+                // loader's rate would otherwise leave the program without
+                // its starting point.
+                let held: f64 = fixed_by_interval[at]
+                    .iter()
+                    .map(|&index| &fixed[index])
+                    .filter_map(|row| by_loader(row).map(|_| row.tonnes_t))
+                    .sum();
+                problem.add_row(..=(rate.reclaim_tph * duration + SLACK_T).max(held) - constant, terms);
             }
         }
     }
@@ -1202,6 +1235,56 @@ pub(crate) fn reroute(
                 for &index in &reclaims {
                     reclaimed[index] *= scale;
                 }
+            }
+        }
+    }
+    // A full pile's chain meets its capacity in the LP only to the solver's
+    // tolerance, and what the reclaim gave way above stays in the pile. Past
+    // its capacity, a receipt goes to a dump its material may take instead.
+    for pile in input.piles.iter().filter(|pile| pile.capacity_t.is_finite()) {
+        // Each routed row's candidate, interval and segment, by cell.
+        type Routed = (usize, usize, usize);
+        let mut received: BTreeMap<(usize, usize), Vec<Routed>> = BTreeMap::new();
+        for &key in routed.keys() {
+            if pile_of(input, input.movements[key.0].destination) == Some(pile.id) {
+                received.entry((key.1, key.2)).or_default().push(key);
+            }
+        }
+        if received.is_empty() {
+            continue;
+        }
+        let mut drawn: BTreeMap<(usize, usize), f64> = BTreeMap::new();
+        for (row, &tonnes) in fixed.iter().zip(&reclaimed) {
+            if input.movements[row.candidate].source == SourceId::Stockpile(pile.id) {
+                *drawn.entry((row.interval, row.segment)).or_default() += tonnes;
+            }
+        }
+        let mut occupied = pile.total_opening(input.grades.count()).0;
+        for at in 0..intervals {
+            for segment in 0..input.segments_per_interval {
+                let keys = received.get(&(at, segment)).map_or(&[][..], Vec::as_slice);
+                occupied += keys.iter().map(|key| routed[key]).sum::<f64>() - drawn.get(&(at, segment)).copied().unwrap_or(0.0);
+                let mut excess = occupied - pile.capacity_t;
+                for &key in keys {
+                    if excess <= 0.0 {
+                        break;
+                    }
+                    let Some(group) = groups.of[key.0] else { continue };
+                    let Some(&dump) = groups.options[group].iter().find(|&&option| {
+                        input
+                            .destinations
+                            .iter()
+                            .any(|entry| entry.id == input.movements[option].destination && entry.kind == DestinationKind::Dump)
+                    }) else {
+                        continue;
+                    };
+                    let moved_t = routed[&key].min(excess);
+                    *routed.get_mut(&key).expect("the row is routed") -= moved_t;
+                    *routed.entry((dump, key.1, key.2)).or_default() += moved_t;
+                    excess -= moved_t;
+                    occupied -= moved_t;
+                }
+                occupied = occupied.max(0.0);
             }
         }
     }
