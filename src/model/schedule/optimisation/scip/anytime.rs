@@ -28,9 +28,9 @@
 //! nothing. The relaxation is solved in the background once the long-term
 //! plan is, beside the search rather than ahead of it: first in a single
 //! period, which bounds any horizon in seconds, then in finer periods that
-//! tighten the bound where they finish within the budget. The whole horizon's plan as a
-//! mixed-integer program is solved in the background from the start, for
-//! one more set of targets when it finishes.
+//! tighten the bound where they finish within the budget. The whole
+//! horizon's plan as a mixed-integer program is solved in the background
+//! from the start, for one more set of targets when it finishes.
 //!
 //! When the timeline the search holds takes none of a window's tails, the
 //! tails are dispatched again with the drill and blast chain live, resumed
