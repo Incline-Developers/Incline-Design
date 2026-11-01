@@ -845,12 +845,12 @@ pub(crate) struct SolidPreviewView {
 }
 
 impl Default for SolidPreviewView {
+    /// Looking straight down with north up, the whole mesh framed: where the
+    /// main viewport starts too.
     fn default() -> Self {
-        // A raised three-quarter view: a pit reads as a pit at a glance,
-        // which a plan or elevation view of the same mesh does not.
         Self {
-            yaw: -std::f64::consts::FRAC_PI_4,
-            pitch: std::f64::consts::FRAC_PI_6,
+            yaw: Self::NORTH_UP_LOOKING_DOWN,
+            pitch: Self::MAX_PITCH,
             zoom_multiplier: 1.0,
             pan: [0.0; 2],
         }
@@ -861,15 +861,10 @@ impl SolidPreviewView {
     /// Widest elevation either side of the horizon. Stopping short of
     /// straight down keeps the camera's up vector well defined.
     const MAX_PITCH: f64 = std::f64::consts::FRAC_PI_2 * 0.98;
+    /// The yaw that puts north at the top of the image looking down; looking
+    /// up, the opposite yaw does.
+    const NORTH_UP_LOOKING_DOWN: f64 = std::f64::consts::FRAC_PI_2;
 
-    /// Looking straight down with north up, the whole mesh framed.
-    pub(crate) fn plan() -> Self {
-        Self {
-            yaw: std::f64::consts::FRAC_PI_2,
-            pitch: Self::MAX_PITCH,
-            ..Self::default()
-        }
-    }
     /// Room left round the mesh at a zoom of one: the image's half-height is
     /// this many framing radii.
     pub(crate) const FRAMING_MARGIN: f64 = 1.15;
@@ -957,8 +952,8 @@ impl SolidPreviewView {
     /// camera so both cameras answer a gizmo click the same way.
     pub(crate) fn face(&mut self, view: StandardView) {
         let (yaw, pitch) = match view {
-            StandardView::Up => (self.yaw, Self::MAX_PITCH),
-            StandardView::Down => (self.yaw, -Self::MAX_PITCH),
+            StandardView::Up => (Self::NORTH_UP_LOOKING_DOWN, Self::MAX_PITCH),
+            StandardView::Down => (-Self::NORTH_UP_LOOKING_DOWN, -Self::MAX_PITCH),
             StandardView::North => (-std::f64::consts::FRAC_PI_2, 0.0),
             StandardView::South => (std::f64::consts::FRAC_PI_2, 0.0),
             StandardView::West => (0.0, 0.0),
@@ -8625,7 +8620,7 @@ impl SequenceDraft {
             // Nothing dug: the editor opens on the whole authored order, and
             // the slider walks forward through it from there.
             preview: 0,
-            view: SolidPreviewView::plan(),
+            view: SolidPreviewView::default(),
             confirming_close: false,
         }
     }
