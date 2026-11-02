@@ -439,6 +439,18 @@ impl DigBlockRef {
         self.resolve_indexed(ground, &GroundIndex::build(ground))
     }
 
+    /// The block of this run that now covers this reference's point at its
+    /// flitch base, whether or not it is the same ground. Never a match: only
+    /// a name for a member that did not resolve, so the planner can find the
+    /// ground it stood for.
+    pub(crate) fn covering(&self, ground: &[BlockGround], index: &GroundIndex) -> Option<usize> {
+        let anchor = glam::DVec2::new(self.anchor[0], self.anchor[1]);
+        index
+            .band_candidates(self.solid, self.flitch_base)
+            .into_iter()
+            .find(|&candidate| (ground[candidate].flitch_base - self.flitch_base).abs() <= FLITCH_TOLERANCE && point_in_face(&ground[candidate].outline, anchor))
+    }
+
     pub(crate) fn resolve_indexed(&self, ground: &[BlockGround], index: &GroundIndex) -> RefStatus {
         // The sources first, before any geometric question: whatever the
         // current run holds for this solid, it was cut from the current

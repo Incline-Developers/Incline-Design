@@ -758,7 +758,21 @@ impl crate::app::App<'_> {
                         let (found, unresolved, stale_pick) = match member {
                             DraftMember::Held(reference) => {
                                 let status = reference.resolve_indexed(&ground, &index);
-                                (status.resolved(), status.message(), false)
+                                // Named by the block now at its place, when there
+                                // is one: a reason alone does not say which row
+                                // to reselect.
+                                let message = status.message().map(|reason| {
+                                    match reference.covering(&ground, &index).and_then(|near| snapshot.blocks.get(near)).zip(document) {
+                                        Some((near, document)) => {
+                                            // The app's one ground path, as a resolved row reads.
+                                            let (_, bench, blast, flitch, _) = block_labels(document, near);
+                                            let path = crate::ui::elements::solids_view::ground_path(&[&near.solid_name, &bench, &blast, &flitch, &near.name]);
+                                            tr!("sequence-unresolved-at", block = path, reason = reason)
+                                        }
+                                        None => reason,
+                                    }
+                                });
+                                (status.resolved(), message, false)
                             }
                             DraftMember::Picked(pick) => {
                                 let stale = pick.generation != snapshot.generation;

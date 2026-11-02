@@ -1867,6 +1867,7 @@ sequence-not-ready = The dig blocks have not been calculated: ⁨{ $reason }⁩
 sequence-no-tonnage-field = Choose the reserve field that holds tonnes, in Configuration
 sequence-tonnage-field-missing = The chosen tonnage field is no longer in this project's Field List
 sequence-tonnage-field-not-sum = ⁨{ $field }⁩ is not a summed field, so it cannot be read as tonnes
+sequence-unresolved-at = { $block }: { $reason }
 sequence-unresolved-count = ⁨{ $count }⁩ of its dig blocks could not be found in the current run
 sequence-block-unmeasured = ⁨{ $block }⁩ has no measured tonnage: ⁨{ $reason }⁩
 sequence-block-partial = ⁨{ $block }⁩ was only partly measured, so its tonnage is incomplete
