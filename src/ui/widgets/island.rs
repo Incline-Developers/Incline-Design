@@ -3,9 +3,10 @@
 //!
 //! One place decides how wide an island may be, what surface it paints, and
 //! which region and seam it hands back to the chrome, so every column of every
-//! workspace resizes and rounds off the same way. An island is always shown:
-//! its seam narrows it to the width its content stops working at, and no
-//! further.
+//! workspace resizes and rounds off the same way. Its seam narrows it to the
+//! width its content stops working at, and no further; an island that can be
+//! closed is collapsed instead, to a strip down its edge
+//! ([`Island::show_collapsed`]) that opens it again when pressed.
 
 use crate::ui::chrome;
 
@@ -25,10 +26,19 @@ impl Side {
         }
     }
 
-    fn panel(self, id: &'static str) -> egui::Panel {
+    fn panel(self, id: impl egui::AsIdSalt) -> egui::Panel {
         match self {
             Self::Left => egui::Panel::left(id),
             Self::Right => egui::Panel::right(id),
+        }
+    }
+
+    /// Which way a collapsed strip's chevron points: out into the workspace,
+    /// the way the island opens.
+    fn opening_angle(self) -> f32 {
+        match self {
+            Self::Left => 0.0,
+            Self::Right => std::f32::consts::PI,
         }
     }
 }
@@ -175,6 +185,53 @@ impl Island {
             regions: if self.bare { Vec::new() } else { vec![rect] },
             grip: chrome::Grip::new(rect, self.side.seam(), ui.scope_id().with(self.id)),
             inner: response.inner,
+        }
+    }
+}
+
+/// What a collapsed island claimed.
+pub(crate) struct StripResponse {
+    /// The strip, for [`chrome::paint_regions`].
+    pub(crate) region: egui::Rect,
+    /// Whether it was pressed this frame, to open the island again.
+    pub(crate) clicked: bool,
+}
+
+impl Island {
+    /// Draw the island collapsed: a strip down its edge as thick as the
+    /// viewport bar, with a chevron pointing the way it opens, pressed to open
+    /// it again. A panel of its own rather than the island narrowed, so the
+    /// width the island was dragged to is still there when it opens.
+    pub(crate) fn show_collapsed(self, ui: &mut egui::Ui) -> StripResponse {
+        // Claimed as the viewport bar is: its surface plus the chrome margins
+        // either side of it.
+        let claimed = crate::ui::widgets::toolbar::TOOL_CELL_SIZE + 2.0 * chrome::margin();
+        let response = self
+            .side
+            .panel((self.id, "collapsed"))
+            .resizable(false)
+            .exact_size(claimed)
+            .show_separator_line(false)
+            .frame(chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
+            .show(ui, |ui| {
+                let rect = ui.available_rect_before_wrap();
+                let response = ui.allocate_rect(rect, egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+                if response.hovered() {
+                    ui.painter()
+                        .rect_filled(rect, crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS, ui.visuals().widgets.hovered.bg_fill);
+                }
+                // Centred in a square cell at the strip's top, the way a
+                // toolbar button sits in the viewport bar.
+                let chevron = egui::Rect::from_center_size(egui::pos2(rect.center().x, rect.top() + rect.width() / 2.0), egui::vec2(14.0, 14.0));
+                egui::Image::new(crate::ui::themed_icon!(ui, "console_chevron.svg"))
+                    .fit_to_exact_size(chevron.size())
+                    .rotate(self.side.opening_angle(), egui::Vec2::splat(0.5))
+                    .paint_at(ui, chevron);
+                response.clicked()
+            });
+        StripResponse {
+            region: response.response.rect,
+            clicked: response.inner,
         }
     }
 }

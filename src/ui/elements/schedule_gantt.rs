@@ -654,7 +654,8 @@ pub(crate) fn draw_timeline_zoom(ui: &mut egui::Ui, editor: &mut EditorState, pl
 }
 
 /// A page laid out like the Gantt: a timeline canvas drawn by `draw` in an
-/// island, with the Inspector in an island of its own beside it. Its run
+/// island, with the Inspector in an island of its own to its right, or the
+/// strip it collapses to. Its run
 /// controls and its timeline's navigation are in the viewport bar. Returns
 /// the regions and seams it claimed, for the caller to round off.
 pub(super) fn draw_timeline_page(
@@ -669,16 +670,22 @@ pub(super) fn draw_timeline_page(
     // Names are resolved here, at draw time, by stable id: a rename relabels
     // a calculated span without recalculating it.
     let destinations = crate::model::schedule::destinations::available(document.solids(), plan.routing());
-    {
+    let island = Island::new("schedule_inspector_island", Side::Right)
+        .default_width(super::schedule_inspector::INSPECTOR_WIDTH)
+        .min_width(240.0)
+        .max_width(560.0)
+        .flush();
+    if editor.show_schedule_inspector {
         let fields: Vec<_> = document.reserve_fields().iter().map(|field| (field.id, field.name.clone())).collect();
-        let island = Island::new("schedule_inspector_island", Side::Right)
-            .default_width(super::schedule_inspector::INSPECTOR_WIDTH)
-            .min_width(240.0)
-            .max_width(560.0)
-            .flush()
-            .show(ui, |ui, rect| super::schedule_inspector::draw_inspector(ui, rect, editor, plan, &destinations, &fields));
+        let island = island.show(ui, |ui, rect| super::schedule_inspector::draw_inspector(ui, rect, editor, plan, &destinations, &fields));
         layout.regions.extend(island.regions);
         layout.grips.push(island.grip);
+    } else {
+        let strip = island.show_collapsed(ui);
+        layout.regions.push(strip.region);
+        if strip.clicked {
+            editor.show_schedule_inspector = true;
+        }
     }
     let rect = egui::CentralPanel::default()
         .frame(chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))

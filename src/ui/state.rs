@@ -2007,6 +2007,9 @@ pub(crate) struct EditorState {
     /// A per-session view switch like the others on the viewport bar: not
     /// saved, and off at every launch.
     pub(crate) show_borehole_inspector: bool,
+    /// Show the Inspector down the right of the Gantt and Charts pages, rather
+    /// than the strip it collapses to. Per-session: open at every launch.
+    pub(crate) show_schedule_inspector: bool,
     /// Which tab of the Borehole Inspector panel is showing. Transient: not
     /// persisted, always starts back on [`BoreholeInspectorTab::Data`].
     pub(crate) borehole_inspector_tab: BoreholeInspectorTab,
@@ -3926,6 +3929,7 @@ impl EditorState {
             dark_mode: crate::app::io::default_dark_mode(),
             show_console: crate::app::io::default_show_console(),
             show_borehole_inspector: false,
+            show_schedule_inspector: true,
             borehole_inspector_tab: BoreholeInspectorTab::default(),
             borehole_log_strat_field: None,
             well_log_style: Default::default(),

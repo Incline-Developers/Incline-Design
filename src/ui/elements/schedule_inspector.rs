@@ -76,6 +76,16 @@ pub(crate) fn draw_inspector(
         ui.label(bold(&instant_label(hour * GanttView::HOUR)).size(16.0)).on_hover_text(tr!("gantt-inspector-help"));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
+            // Rightmost, where a panel's close belongs. It collapses the
+            // panel to a strip down the edge, pressed to open it again.
+            if ui
+                .add(egui::Button::image(crate::ui::themed_icon!(ui, "close_project.svg")).frame(false))
+                .on_hover_text(tr!("inspector-collapse"))
+                .clicked()
+            {
+                editor.show_schedule_inspector = false;
+            }
+            ui.add_space(4.0);
             use crate::ui::widgets::transport::{Transport, transport_button};
             if transport_button(ui, Transport::StepForward, tr!("inspector-next-hour")).clicked() {
                 editor.schedule_time_h = editor.schedule_time_h.floor() + 1.0;

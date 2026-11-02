@@ -1932,6 +1932,7 @@ gantt-slider-away = Bring the time slider into view
 gantt-inspector-help = What every machine, stockpile, crusher and truck fleet is doing at the time slider. Click the ruler or drag the slider to move it; ← and → step an hour, with Shift a day.
 inspector-next-hour = Next hour (→)
 inspector-previous-hour = Previous hour (←)
+inspector-collapse = Collapse the Inspector
 inspector-no-schedule = Nothing is calculated yet. This fills in once the schedule is.
 inspector-beyond = The schedule is calculated to { $end }. Move the slider back to inspect it.
 inspector-loaders = LOADERS
