@@ -1232,12 +1232,21 @@ fn destination_kind(destinations: &[DestinationRow], address: CalendarCellAddres
 fn format_figure(row: CalendarRow, value: f64) -> String {
     match row {
         CalendarRow::TruckHours | CalendarRow::TruckCycle => format_hours(value),
-        CalendarRow::TruckTonneKm => format_tonnes(value),
         CalendarRow::GradeActual(_) => trimmed_number(value),
         CalendarRow::Value => format_money(value),
         CalendarRow::ScheduledUtilisation => format!("{value:.0}%"),
-        _ => format_tonnes(value),
+        // Whole tonnes in the grid: a tenth of a tonne is noise beside a
+        // day's tens of thousands, and dropping it only where it happened to
+        // be zero left the columns ragged. The clipboard keeps the tenth.
+        _ => whole_tonnes(value),
     }
+}
+
+fn whole_tonnes(value: f64) -> String {
+    let rounded = value.round();
+    // As in `tonnes_number`: never a "-0".
+    let rounded = if rounded == 0.0 { 0.0 } else { rounded };
+    format!("{rounded:.0}").separate_with_commas()
 }
 
 /// The same figure as plain digits, for the clipboard.
