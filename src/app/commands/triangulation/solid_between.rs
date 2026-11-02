@@ -255,10 +255,13 @@ fn build_solid_local(
     let mut surfaces = Vec::with_capacity(2);
     for (result, role) in [(design_prepared, tr!("tri-solid-role-design")), (topography_prepared, tr!("tri-solid-role-topography"))] {
         let (prepared, repaired) = result?;
+        // Repaired as a matter of course, and on every Solids run of the
+        // project, so said in the console rather than as a warning: a
+        // warning opens a dialog, and these would open one on every open.
         if repaired {
-            userspace_warn!("{}", tr!("tri-solid-repaired-surface", role = role));
+            userspace_log!("{}", tr!("tri-solid-repaired-surface", role = role));
         } else if prepared.skipped_vertical_faces > 0 {
-            userspace_warn!("{}", tr!("cmd-cuts-ignored-vertical-faces", count = prepared.skipped_vertical_faces.to_string()));
+            userspace_log!("{}", tr!("cmd-cuts-ignored-vertical-faces", count = prepared.skipped_vertical_faces.to_string()));
         }
         surfaces.push(prepared);
     }
