@@ -1013,6 +1013,20 @@ pub(crate) fn draw_properties(ui: &mut egui::Ui, rect: egui::Rect, editor: &Edit
 pub(crate) fn draw_contents(ui: &mut egui::Ui, rect: egui::Rect, editor: &EditorState, document: &Document) {
     PropertyTable::new("solids_view_figures", rect, &tr!("solids-contents")).show(ui, |table| {
         table.header(&tr!("destination-condition-field"), &tr!("planning-value"));
+        // Why there is nothing to measure yet, while there is not.
+        use crate::ui::state::SolidPreviewSummary;
+        let geometry = match &editor.solid_preview_summary {
+            SolidPreviewSummary::Ready { volume: Some(_), .. } => None,
+            SolidPreviewSummary::Ready { volume: None, .. } => Some(tr!("planning-volume-unavailable")),
+            SolidPreviewSummary::NotRun => Some(tr!("planning-not-run")),
+            SolidPreviewSummary::Empty | SolidPreviewSummary::Unloaded => Some(tr!("planning-set-surface-inspect-solid")),
+            SolidPreviewSummary::Building { showing_previous: true } | SolidPreviewSummary::LoadingInputs { showing_previous: true } => Some(tr!("planning-rebuilding-solid")),
+            SolidPreviewSummary::Building { .. } | SolidPreviewSummary::LoadingInputs { .. } => Some(tr!("planning-building-solid")),
+            SolidPreviewSummary::Failed(message) => Some(message.clone()),
+        };
+        if let Some(geometry) = geometry {
+            table.readonly(&tr!("solids-view-geometry"), &geometry, None, Some(&geometry));
+        }
         let volume = match &editor.solid_preview_summary {
             crate::ui::state::SolidPreviewSummary::Ready { volume: Some(volume), .. } => format!("{volume:.1}"),
             _ => String::from("—"),
@@ -1122,35 +1136,27 @@ fn bench_base_for(solid: &crate::model::Solid, band: BenchSelection) -> f64 {
         .map_or(f64::NAN, |bench| bench.base)
 }
 
-/// The Reserves view's own layout: the tree is drawn into the explorer column,
-/// and this fills the rest of the window with the properties beside it.
-/// The Reserves view: what the selection is and what it holds, down the right, and
-/// the inspector taking the rest.
-///
-/// The two tables are a column of their own rather than a slice cut out of the
-/// pane, so the seam between them and the seam beside them both belong to the
-/// user - and the inspector gets the width the column is not using.
-pub(crate) fn draw_details(
-    ui: &mut egui::Ui,
-    editor: &mut EditorState,
-    project: &UiProjectView,
-    document: &Document,
-    commands: &mut Vec<UiCommand>,
-) -> super::planning_setup::PlanningLayout {
-    let mut layout = super::planning_setup::PlanningLayout::default();
-    let rect = egui::CentralPanel::default()
-        .frame(egui::Frame::NONE)
-        .show(ui, |ui| {
-            super::planning_setup::stacked_column(ui, &mut layout, "solids_view_column", |ui| {
-                use crate::ui::widgets::data_grid::stack_slot;
+/// The Reserves view's column down the right edge: what the selection is
+/// and what it holds, one table under the other in one island that scrolls
+/// as a whole. The tree is in the explorer column, and the dig blocks are in
+/// the viewport between them.
+pub(crate) fn draw_panel(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, document: &Document) -> super::haulage::LayoutColumn {
+    use crate::ui::widgets::{
+        data_grid::{stack_slot, table_stack},
+        island::{Island, Side},
+    };
+    let column = Island::new("solids_view_column", Side::Right)
+        .default_width(360.0)
+        .min_width(200.0)
+        .flush()
+        .show(ui, |ui, rect| {
+            table_stack(ui, rect, "solids_view_column", |ui| {
                 draw_properties(ui, stack_slot(ui), editor, project, document);
                 draw_contents(ui, stack_slot(ui), editor, document);
             });
-            super::planning_setup::central_pane_of(ui, |ui, rect| {
-                super::planning_setup::draw_solid_render(ui, rect, editor, project.active_session, commands);
-            })
-        })
-        .inner;
-    layout.rect = rect;
-    layout
+        });
+    super::haulage::LayoutColumn {
+        regions: column.regions,
+        grips: vec![column.grip],
+    }
 }

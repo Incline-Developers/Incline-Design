@@ -209,9 +209,10 @@ impl EditorState {
 
     /// Whether a Planning page that owns the whole window - rather than
     /// framing the 3D viewport - is on screen. Every Setup step but the
-    /// viewport ones is laid out that way, and so is every view but Animate.
+    /// viewport ones is laid out that way, and so is every view but Reserves
+    /// and Animate.
     pub(crate) fn is_planning_setup(&self) -> bool {
-        self.active_workspace == Workspace::Planning && self.planning_view != PlanningView::Animate && !self.is_viewport_step()
+        self.active_workspace == Workspace::Planning && !matches!(self.planning_view, PlanningView::Reserves | PlanningView::Animate) && !self.is_viewport_step()
     }
 
     pub(crate) fn is_schedule_gantt(&self) -> bool {
@@ -335,16 +336,8 @@ impl EditorState {
         }
         match request.owner {
             SolidPreviewPickOwner::SequenceEditor { bar, edition, .. } => (draft.bar == bar && draft.edition == edition && !draft.confirming_close).then_some(draft),
-            SolidPreviewPickOwner::SolidsView | SolidPreviewPickOwner::BlastSequence { .. } => None,
+            SolidPreviewPickOwner::BlastSequence { .. } => None,
         }
-    }
-
-    /// Whether a completed Reserves view pick may still move that page's
-    /// selection. The same refusal as [`Self::sequence_pick_target`], for the
-    /// pane that selects rather than edits: the pick belongs to the Reserves view,
-    /// and only while it is the page on screen.
-    pub(crate) fn solids_view_pick_target(&self, session: u32, request: &SolidPreviewPickRequest) -> bool {
-        request.owner == SolidPreviewPickOwner::SolidsView && request.session == session && self.is_solids_view()
     }
 
     /// Whether the Reserves view, of what the Solids steps generated, is showing.
@@ -608,13 +601,11 @@ pub(crate) enum SolidPick {
 
 /// Which pane a click on the shared solid preview belongs to.
 ///
-/// The Reserves view and the sequence editor draw through the same offscreen
-/// image, so the click alone cannot say who made it - and a click one pane
-/// made must never be answered into the other.
+/// The blast and dig sequence editors draw through the same offscreen image,
+/// so the click alone cannot say who made it - and a click one pane made must
+/// never be answered into the other.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SolidPreviewPickOwner {
-    /// The Reserves view's inspector pane, selecting a dig block.
-    SolidsView,
     BlastSequence {
         edition: u64,
     },

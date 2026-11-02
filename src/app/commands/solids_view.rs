@@ -736,9 +736,6 @@ pub(crate) enum PickRouting {
     /// against has been replaced. Still dropped - but worth saying out loud,
     /// because the click looked perfectly good on screen.
     Superseded,
-    /// A Reserves view click, free to move that page's own selection. `hit` is
-    /// the block the ray reached; a miss clears the selection.
-    SelectSolidsView,
     /// A sequence-editor click that passed every gate. `generation` is the
     /// run the *click* was made against - confirmed still current, and
     /// carried through rather than re-read, so the pick is answered as the
@@ -766,15 +763,6 @@ pub(crate) fn route_pick_result(
 ) -> PickRouting {
     use crate::ui::state::SolidPreviewPickOwner;
     match result.request.owner {
-        SolidPreviewPickOwner::SolidsView => {
-            // A sequence editor open behind the Gantt cannot receive a View
-            // click, exactly as a View page cannot edit a draft.
-            if editor.solids_view_pick_target(session, &result.request) {
-                PickRouting::SelectSolidsView
-            } else {
-                PickRouting::Drop
-            }
-        }
         SolidPreviewPickOwner::BlastSequence { edition } => {
             let Some(draft) = editor
                 .blast_bar_dialog
@@ -1253,11 +1241,8 @@ impl crate::app::App<'_> {
         });
     }
 
-    /// Apply a completed pick from the preview renderer.
-    ///
-    /// A completed miss is as meaningful as a hit: it clears the selection,
-    /// the way clicking empty space in the main viewport does. Nothing is
-    /// rebuilt either way - the pick only changes what is highlighted.
+    /// Apply a completed pick from the preview renderer to the sequence
+    /// editor it was made in.
     ///
     /// The decision itself is [`route_pick_result`]: the result's request
     /// must still name the project, pane, editor instance and run it was made
@@ -1273,26 +1258,17 @@ impl crate::app::App<'_> {
         let Some(session) = self.workspace.active_project().map(|project| project.runtime_id) else {
             return;
         };
-        let hit = match result.outcome {
+        let block = match result.outcome {
             crate::ui::state::SolidPick::Miss => None,
-            crate::ui::state::SolidPick::Hit(id) => self.dig_block_key_of(id),
+            crate::ui::state::SolidPick::Hit(id) => self.dig_block_key_of(id).map(|(id, _)| id),
         };
-        let block = hit.map(|(id, _)| id);
-        // Only a sequence-editor click is answered against a run: the Solids
-        // View page picks displayed geometry and has no scheduling gate.
-        let generation_now = matches!(
-            result.request.owner,
-            crate::ui::state::SolidPreviewPickOwner::SequenceEditor { .. } | crate::ui::state::SolidPreviewPickOwner::BlastSequence { .. }
-        )
-        .then(|| self.planning_snapshot().ok().map(|snapshot| snapshot.generation))
-        .flatten();
+        // Every pane that picks here edits a sequence, which is answered
+        // against the run it was made on.
+        let generation_now = self.planning_snapshot().ok().map(|snapshot| snapshot.generation);
         match route_pick_result(&self.editor, session, generation_now, &result, block) {
             PickRouting::Drop => {}
             PickRouting::Superseded => {
                 crate::userspace_warn!("{}", crate::i18n::tr!("sequence-pick-superseded"));
-            }
-            PickRouting::SelectSolidsView => {
-                self.editor.selected_dig_block = hit.map(|(_, key)| key);
             }
             PickRouting::SequenceEditor { block, generation } => {
                 let stroke = matches!(result.request.owner, crate::ui::state::SolidPreviewPickOwner::SequenceEditor { stroke: true, .. });
@@ -1345,6 +1321,55 @@ impl crate::app::App<'_> {
                     .map(|block| (block.id, block.key))
             })
             .next()
+    }
+
+    /// Assemble what the Reserves page draws: every open surface, on the
+    /// project's own visibility, with the dig blocks among them. Cloning the
+    /// list clones every mesh handle in it, so it is redone when one of those
+    /// changes rather than once a frame, and dropped off the page.
+    pub(crate) fn refresh_reserves_scene(&mut self) {
+        if !self.editor.is_solids_view() {
+            if self.reserves_scene_key.take().is_some() {
+                self.reserves_scene = Vec::new();
+            }
+            return;
+        }
+        let mut hasher = DefaultHasher::new();
+        for mesh in self.triangulations.iter().chain(&self.solid_view_body) {
+            mesh.id.hash(&mut hasher);
+            // Every edit and every style change advances the item's revision,
+            // which is what the drawn copy has to follow.
+            mesh.state.revision().hash(&mut hasher);
+            (Arc::as_ptr(&mesh.mesh) as usize).hash(&mut hasher);
+        }
+        self.workspace.composite_key().hash(&mut hasher);
+        // The display list is restyled in place of being rebuilt with new
+        // meshes - a selected block keeps its mesh - so its own key stands in
+        // for its colours.
+        self.solid_view_body_key.hash(&mut hasher);
+        let key = hasher.finish();
+        if self.reserves_scene_key == Some(key) {
+            return;
+        }
+        self.reserves_scene = self.triangulations.iter().chain(&self.solid_view_body).cloned().collect();
+        self.reserves_scene_key = Some(key);
+    }
+
+    /// A Reserves click: select the dig block under the cursor, or clear the
+    /// selection over empty ground, the way clicking empty space anywhere in
+    /// the viewport does. Only the blocks are picked, as nothing else on the
+    /// page can be selected.
+    pub(crate) fn select_reserves_block_at_cursor(&mut self) {
+        let hit = self
+            .graphics
+            .as_ref()
+            .and_then(|graphics| graphics.surface_under_cursor(&self.solid_view_body, &self.editor.hidden_handles));
+        let block = hit.and_then(|id| self.dig_block_key_of(id)).map(|(_, key)| key);
+        if self.editor.selected_dig_block != block {
+            self.editor.selected_dig_block = block;
+            self.solid_view_body_key = None;
+        }
+        self.redraw_requested = true;
     }
 
     /// The blast a preview mesh lies in, whatever flitch it was cut from.

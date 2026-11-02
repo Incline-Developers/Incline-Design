@@ -458,6 +458,11 @@ pub(crate) struct App<'a> {
     pub(crate) solid_view_cache: std::collections::HashMap<crate::model::SolidId, crate::app::commands::solids_view::ViewSolid>,
     pub(crate) solid_view_body: Vec<crate::model::triangulation::OpenTriangulation>,
     pub(crate) solid_view_body_key: Option<u64>,
+    /// What the Reserves page draws in the viewport: the open surfaces and
+    /// the dig blocks together, assembled when either changes; see
+    /// `App::refresh_reserves_scene`.
+    pub(crate) reserves_scene: Vec<crate::model::triangulation::OpenTriangulation>,
+    pub(crate) reserves_scene_key: Option<u64>,
     /// The Road Network's dig blocks as one flat surface at their flitch
     /// bases, for the orbit pivot and the rotation centre to land on. Never
     /// drawn: the blocks are filled in the document scene.
@@ -698,6 +703,8 @@ impl<'a> Default for App<'a> {
             solid_view_body: Vec::new(),
             haul_block_surface: Vec::new(),
             solid_view_body_key: None,
+            reserves_scene: Vec::new(),
+            reserves_scene_key: None,
             dig_block_identities: Default::default(),
             planning_pipeline: None,
             schedule_pipeline: None,

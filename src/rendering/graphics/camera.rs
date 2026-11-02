@@ -550,6 +550,15 @@ impl<'a> Graphics<'a> {
         (near, (far - near).normalize())
     }
 
+    /// The nearest of `triangulations` under the cursor, if the ray reaches one.
+    pub(crate) fn surface_under_cursor(&self, triangulations: &[OpenTriangulation], hidden: &HashSet<SceneEntityId>) -> Option<crate::model::triangulation::TriangulationId> {
+        let (origin, direction) = self.cursor_model_ray();
+        match SceneQuery::nearest_surface(triangulations, hidden, None, origin, direction)? {
+            (SceneEntityId::Triangulation(id), _) => Some(id),
+            _ => None,
+        }
+    }
+
     /// True (unexaggerated) world point where viewport-relative physical
     /// pixel `px` meets the current section plane, or `None` when there is
     /// no sound answer. A slice camera looks horizontally, so this unprojects

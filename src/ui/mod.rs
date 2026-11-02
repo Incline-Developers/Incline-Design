@@ -744,11 +744,7 @@ fn draw_ui(
         });
         let console = console_rect.unwrap_or(egui::Rect::NOTHING);
         let setup_group = editor.setup_group;
-        let planning_layout = if editor.is_solids_view() {
-            // The Reserves view arranges a column of its own beside its inspector,
-            // so it hands back the same layout the Setup steps do.
-            elements::solids_view::draw_details(root_ui, editor, project, document, commands)
-        } else if editor.is_schedule_gantt() {
+        let planning_layout = if editor.is_schedule_gantt() {
             // The schedule pages arrange islands as the Setup steps do: a
             // toolbar across the top and the page under it, with the Gantt's
             // Inspector beside it.
@@ -760,7 +756,6 @@ fn draw_ui(
         } else {
             elements::planning_setup::draw_details(root_ui, editor, project, document, block_models, commands, setup_group)
         };
-        let details = planning_layout.rect;
         dialogs::about::draw_about_dialog(root_ui, editor);
         elements::properties::draw_preferences(root_ui, editor, commands);
         if editor.renaming_item.is_some() {
@@ -768,7 +763,7 @@ fn draw_ui(
         }
         #[cfg(target_arch = "wasm32")]
         if editor.new_project_dialog_open {
-            dialogs::editing::draw_create_project_dialog(root_ui, commands, editor, details);
+            dialogs::editing::draw_create_project_dialog(root_ui, commands, editor, planning_layout.rect);
         }
         #[cfg(target_arch = "wasm32")]
         let naming_browser_project = editor.new_project_dialog_open;
@@ -781,14 +776,7 @@ fn draw_ui(
         geometry_dirty |= draw_global_dialogs(root_ui, editor, document, project, block_models, drill_holes, frame_context.console_snapshot, commands);
         let ctx = root_ui.ctx();
         chrome::paint_window_background(ctx, window_background, egui::Rect::ZERO);
-        let details_region = if editor.is_solids_view() { details } else { egui::Rect::NOTHING };
-        chrome::paint_regions(
-            ctx,
-            [viewport_bar_rect, console, details_region]
-                .into_iter()
-                .chain(explorer.regions)
-                .chain(planning_layout.regions),
-        );
+        chrome::paint_regions(ctx, [viewport_bar_rect, console].into_iter().chain(explorer.regions).chain(planning_layout.regions));
         chrome::paint_grips(ctx, planning_layout.grips);
         if let Some(tabs) = &planning_tabs {
             tabs.paint(ctx);
@@ -835,7 +823,8 @@ fn draw_ui(
         egui::Rect::NOTHING
     };
 
-    // The planning cut steps' panels, down the right edge. Claimed after the
+    // The planning cut steps', Road Network's and Reserves' panels, down the
+    // right edge. Claimed after the
     // two strips below it, so it stops at the bottom toolbar's top and they
     // carry on underneath it, and after the viewport bar, so it starts
     // directly under it.
@@ -850,6 +839,9 @@ fn draw_ui(
         Some((island.regions, vec![island.grip]))
     } else if editor.is_haulage_page() {
         let column = elements::haulage::draw_panel(root_ui, editor, document, project, commands);
+        Some((column.regions, column.grips))
+    } else if editor.is_solids_view() {
+        let column = elements::solids_view::draw_panel(root_ui, editor, project, document);
         Some((column.regions, column.grips))
     } else {
         None

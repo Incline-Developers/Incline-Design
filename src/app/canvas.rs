@@ -359,6 +359,11 @@ impl<'a> App<'a> {
             }
             self.invalidate_overlay();
         }
+        if !dragged && self.editor.is_solids_view() && self.editor.active_tool == ActiveTool::None {
+            self.select_reserves_block_at_cursor();
+            self.invalidate_overlay();
+            return;
+        }
         if !dragged
             && self.editor.is_dig_strips_step()
             && self.editor.active_tool == ActiveTool::None

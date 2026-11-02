@@ -67,6 +67,7 @@ impl<'a> App<'a> {
                     self.showing_solid_preview(),
                     &self.triangulations,
                     &self.solid_view_body,
+                    &self.reserves_scene,
                     &self.schedule_animation,
                     self.solid_preview.as_ref(),
                 );
@@ -295,6 +296,7 @@ impl<'a> App<'a> {
                     self.sync_blasting_bench();
                     self.sync_blasting_outlines();
                     self.sync_dig_blocks();
+                    self.refresh_reserves_scene();
                     self.sync_blasting_frame();
                     self.sync_haulage_frame();
                     let showing_solid_preview = self.showing_solid_preview();
@@ -325,6 +327,7 @@ impl<'a> App<'a> {
                             showing_solid_preview,
                             &self.triangulations,
                             &self.solid_view_body,
+                            &self.reserves_scene,
                             &self.schedule_animation,
                             self.solid_preview.as_ref(),
                         );
@@ -1457,6 +1460,7 @@ impl<'a> App<'a> {
             self.showing_solid_preview(),
             &self.triangulations,
             &self.solid_view_body,
+            &self.reserves_scene,
             &self.schedule_animation,
             self.solid_preview.as_ref(),
         );
@@ -1965,6 +1969,7 @@ pub(crate) fn drawn_surfaces<'s>(
     showing_solid_preview: bool,
     triangulations: &'s [crate::model::triangulation::OpenTriangulation],
     solid_view_body: &'s [crate::model::triangulation::OpenTriangulation],
+    reserves_scene: &'s [crate::model::triangulation::OpenTriangulation],
     schedule_animation: &'s crate::app::schedule_animation::ScheduleAnimation,
     solid_preview: Option<&'s crate::app::commands::solids::SolidPreview>,
 ) -> (&'s [crate::model::triangulation::OpenTriangulation], &'s [crate::model::triangulation::OpenTriangulation]) {
@@ -1973,11 +1978,15 @@ pub(crate) fn drawn_surfaces<'s>(
     if editor.is_planning_cut_step() {
         return (solid_view_body, &[]);
     }
+    // Reserves draws the dig blocks among the open surfaces, as Animate
+    // draws its own.
+    if editor.is_solids_view() {
+        return (reserves_scene, &[]);
+    }
     let scene = if editor.is_schedule_animation() { schedule_animation.scene() } else { triangulations };
-    // The floating sequence editor draws the same dig-block display list the
-    // Reserves view does, through the same offscreen preview - one
-    // renderer, not two.
-    let preview = if editor.is_solids_view() || editor.sequence_editor_active() || editor.blast_sequence_active() {
+    // The floating sequence editors draw the dig-block display list through
+    // the offscreen preview.
+    let preview = if editor.sequence_editor_active() || editor.blast_sequence_active() {
         solid_view_body
     } else if showing_solid_preview {
         solid_preview.map_or(&[][..], |preview| preview.meshes())

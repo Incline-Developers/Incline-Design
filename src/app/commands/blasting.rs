@@ -279,17 +279,21 @@ impl crate::app::App<'_> {
         Some(layer)
     }
 
-    /// Frame the benches that are selected, once per change of selection.
+    /// Frame the benches that are selected, once per change of selection,
+    /// on the cut steps and Reserves alike.
     ///
-    /// Framed on the bench slabs alone rather than the whole scene: the
-    /// project's other geometry is still loaded, and fitting it too would
-    /// leave the bench a speck in the middle of the pit.
+    /// Framed on the bench slabs or dig blocks alone rather than the whole
+    /// scene: the project's other geometry is still loaded, and fitting it too
+    /// would leave the bench a speck in the middle of the pit.
     pub(crate) fn sync_blasting_frame(&mut self) {
-        if !self.editor.is_planning_cut_step() {
+        let reserves = self.editor.is_solids_view();
+        if !self.editor.is_planning_cut_step() && !reserves {
             self.editor.blasting_framed_key = None;
             return;
         }
         let mut hasher = DefaultHasher::new();
+        // Each page frames what it draws, so moving between them frames again.
+        reserves.hash(&mut hasher);
         for row in &self.editor.solids_view_selection {
             row.solid.hash(&mut hasher);
             row.band.map(|band| (band.base.to_bits(), band.top.to_bits())).hash(&mut hasher);
@@ -315,7 +319,7 @@ impl crate::app::App<'_> {
         }
         self.editor.blasting_framed_key = Some(key);
         let document = &self.scene_document;
-        let triangulations = &self.solid_view_body;
+        let triangulations = if reserves { &self.reserves_scene } else { &self.solid_view_body };
         if let Some(graphics) = self.graphics.as_mut() {
             graphics.frame_bounds(
                 min,

@@ -4110,6 +4110,7 @@ solids-block-volume = Block volume
 solids-bench-rl = Bench RL
 solids-flitch-rl = Flitch RL
 solids-contents = Contents
+solids-view-geometry = Geometry
 
 ## Animate strings
 animate-calculated-solids-unavailable-run = Calculated solids are unavailable. Run Solids through Reserving.

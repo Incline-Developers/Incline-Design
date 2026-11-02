@@ -1188,7 +1188,7 @@ fn draw_solid_properties(ui: &mut egui::Ui, rect: egui::Rect, project: &UiProjec
 /// A solid with only a design surface shows that surface; one that also names
 /// a topography shows the closed volume between the two, with its enclosed
 /// volume captioned. Right drag orbits, middle drag pans, the wheel zooms.
-pub(crate) fn draw_solid_render(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, session: u32, commands: &mut Vec<UiCommand>) {
+pub(crate) fn draw_solid_render(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
     framed_render_pane(ui, rect, |ui, body| {
         let caption_height = ui.text_style_height(&egui::TextStyle::Body) + 8.0;
         let image_rect = egui::Rect::from_min_max(body.min, egui::pos2(body.right(), (body.bottom() - caption_height).max(body.top())));
@@ -1202,13 +1202,12 @@ pub(crate) fn draw_solid_render(ui: &mut egui::Ui, rect: egui::Rect, editor: &mu
         // branch painted it.
         // A rebuild keeps the solid it is replacing on screen, so the image is
         // live for that too - not only once the new one lands.
-        let ready = (editor.is_solids_view() && editor.solid_preview_texture.is_some())
-            || matches!(
-                editor.solid_preview_summary,
-                crate::ui::state::SolidPreviewSummary::Ready { .. }
-                    | crate::ui::state::SolidPreviewSummary::Building { showing_previous: true }
-                    | crate::ui::state::SolidPreviewSummary::LoadingInputs { showing_previous: true }
-            );
+        let ready = matches!(
+            editor.solid_preview_summary,
+            crate::ui::state::SolidPreviewSummary::Ready { .. }
+                | crate::ui::state::SolidPreviewSummary::Building { showing_previous: true }
+                | crate::ui::state::SolidPreviewSummary::LoadingInputs { showing_previous: true }
+        );
         match editor.solid_preview_texture {
             Some(texture_id) if ready => {
                 let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
@@ -1231,33 +1230,10 @@ pub(crate) fn draw_solid_render(ui: &mut egui::Ui, rect: egui::Rect, editor: &mu
         editor.solid_preview_size_px = size_px;
 
         // Middle drag pans, right drag orbits about the ground under the
-        // pointer and the wheel zooms, as in the main viewport. Left click
-        // selects - in View, the one page here with anything to select - and
-        // never moves the camera.
-        let selects = editor.is_solids_view();
+        // pointer and the wheel zooms, as in the main viewport.
         let mut view = editor.solid_preview_view;
         view_changed |= crate::ui::widgets::preview_navigation::navigate(ui, &response, image_rect, &mut view, editor, true);
         editor.solid_preview_view = view;
-        // A click that did not drag selects the solid under it. In View that is
-        // how a dig block, which the tree does not list, is picked out for its
-        // own figures. The click is addressed from the moment it is made - this
-        // page, this project, this image - because it is resolved frames later,
-        // and the UV is a fraction of the image: the renderer sizes its target
-        // within limits of its own, and a pane outside them is drawn at one
-        // size and would otherwise be picked against another.
-        if response.clicked()
-            && selects
-            && let Some(pointer) = response.interact_pointer_pos()
-        {
-            editor.solid_preview_pick = Some(crate::ui::state::SolidPreviewPickRequest {
-                session,
-                owner: crate::ui::state::SolidPreviewPickOwner::SolidsView,
-                generation: None,
-                image: editor.solid_preview_image_revision,
-                uv: crate::ui::widgets::preview_navigation::image_uv(image_rect, pointer),
-            });
-            ui.ctx().request_repaint();
-        }
         if view_changed {
             ui.ctx().request_repaint();
         }
@@ -1271,7 +1247,7 @@ pub(crate) fn draw_solid_render(ui: &mut egui::Ui, rect: egui::Rect, editor: &mu
 
         // A built solid is only a preview until it is asked for by name; a
         // lone surface is already in the project, so there is nothing to add.
-        let can_save = !editor.is_solids_view() && matches!(editor.solid_preview_summary, crate::ui::state::SolidPreviewSummary::Ready { volume: Some(_), .. });
+        let can_save = matches!(editor.solid_preview_summary, crate::ui::state::SolidPreviewSummary::Ready { volume: Some(_), .. });
         context_menu_popup(&response, tr!("charging-preview"), |ui| {
             if ContextMenuAction::new(tr!("planning-save-solid-project")).enabled(can_save).show(ui).clicked() {
                 commands.push(UiCommand::SaveSolidPreviewToProject);
@@ -1286,7 +1262,7 @@ pub(crate) fn draw_solid_render(ui: &mut egui::Ui, rect: egui::Rect, editor: &mu
         let caption_rect = egui::Rect::from_min_max(egui::pos2(body.left() + 8.0, image_rect.bottom()), body.max);
         let caption = match &editor.solid_preview_summary {
             crate::ui::state::SolidPreviewSummary::NotRun => tr!("planning-not-run"),
-            crate::ui::state::SolidPreviewSummary::Empty if !editor.is_solids_view() && editor.planning_selected_solid.is_none() => tr!("planning-no-solid-selected"),
+            crate::ui::state::SolidPreviewSummary::Empty if editor.planning_selected_solid.is_none() => tr!("planning-no-solid-selected"),
             crate::ui::state::SolidPreviewSummary::Empty => tr!("planning-set-surface-inspect-solid"),
             crate::ui::state::SolidPreviewSummary::Unloaded => tr!("planning-load-solid-surfaces-inspect"),
             crate::ui::state::SolidPreviewSummary::LoadingInputs { .. } => tr!("planning-loading-solid-surfaces"),
@@ -1295,7 +1271,6 @@ pub(crate) fn draw_solid_render(ui: &mut egui::Ui, rect: egui::Rect, editor: &mu
             crate::ui::state::SolidPreviewSummary::Ready { volume: Some(volume), .. } => {
                 tr!("planning-solid-volume", volume = format!("{volume:.0}").separate_with_commas())
             }
-            crate::ui::state::SolidPreviewSummary::Ready { volume: None, .. } if editor.is_solids_view() => tr!("planning-volume-unavailable"),
             crate::ui::state::SolidPreviewSummary::Ready {
                 volume: None,
                 waiting_on_unloaded: true,
@@ -1364,27 +1339,9 @@ fn central_pane(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui, egui::Rec
         .rect
 }
 
-/// A right-hand column of tables, one under the other in one island and
-/// scrolling together: see [`table_stack`]. `content` draws each into
-/// [`stack_slot`].
-pub(crate) fn stacked_column(ui: &mut egui::Ui, layout: &mut PlanningLayout, id: &'static str, content: impl FnOnce(&mut egui::Ui)) {
-    let column = Island::new(id, Side::Right)
-        .default_width(360.0)
-        .min_width(200.0)
-        .flush()
-        .show(ui, |ui, rect| table_stack(ui, rect, id, content));
-    layout.regions.extend(column.regions);
-    layout.grips.push(column.grip);
-}
-
 /// Tables one under the other in the central island, scrolling together.
 fn central_stack(ui: &mut egui::Ui, layout: &mut PlanningLayout, id: &'static str, content: impl FnOnce(&mut egui::Ui)) {
     central_island(ui, layout, |ui, rect| table_stack(ui, rect, id, content));
-}
-
-/// [`central_pane`], for a caller in another module.
-pub(crate) fn central_pane_of(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui, egui::Rect)) -> egui::Rect {
-    central_pane(ui, content)
 }
 
 fn central_island(ui: &mut egui::Ui, layout: &mut PlanningLayout, content: impl FnOnce(&mut egui::Ui, egui::Rect)) {
@@ -1418,7 +1375,6 @@ fn solids_column(
 }
 
 fn draw_solids_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut EditorState, project: &UiProjectView, document: &Document, commands: &mut Vec<UiCommand>) {
-    let session = project.active_session;
     // Open on a solid rather than an empty preview.
     if editor.planning_selected_solid.is_none_or(|id| document.solid(id).is_none()) {
         editor.planning_selected_solid = document.solids().first().map(|solid| solid.id);
@@ -1433,7 +1389,7 @@ fn draw_solids_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut
                 .show(ui, |_| {});
         }
     });
-    central_island(ui, layout, |ui, rect| draw_solid_render(ui, rect, editor, session, commands));
+    central_island(ui, layout, |ui, rect| draw_solid_render(ui, rect, editor, commands));
     crate::ui::dialogs::solids::draw_new_solid_dialog(ui, editor, project, commands);
     crate::ui::dialogs::solids::draw_topography_update_dialog(ui, editor, project, document.solids(), commands);
 }
@@ -1743,7 +1699,7 @@ fn draw_benching_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &m
         });
     layout.regions.extend(settings.regions);
     layout.grips.push(settings.grip);
-    central_island(ui, layout, |ui, rect| draw_solid_render(ui, rect, editor, project.active_session, commands));
+    central_island(ui, layout, |ui, rect| draw_solid_render(ui, rect, editor, commands));
     crate::ui::dialogs::solids::draw_new_solid_dialog(ui, editor, project, commands);
     if let Some(solid_id) = solid_id
         && changed

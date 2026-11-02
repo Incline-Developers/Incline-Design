@@ -39,6 +39,7 @@ impl<'a> App<'a> {
                 self.showing_solid_preview(),
                 &self.triangulations,
                 &self.solid_view_body,
+                &self.reserves_scene,
                 &self.schedule_animation,
                 self.solid_preview.as_ref(),
             );
