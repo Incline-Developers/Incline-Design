@@ -85,7 +85,7 @@ impl NumericTotal {
         match aggregation {
             ReserveAggregation::Sum => self.sum.is_finite().then_some(self.sum),
             ReserveAggregation::WeightedAverage { .. } | ReserveAggregation::VolumeAverage => {
-                (self.weight > 0.0 && self.weight.is_finite() && self.sum.is_finite()).then(|| self.sum / self.weight)
+                (self.weight > 0.0 && self.weight.is_finite() && self.sum.is_finite()).then_some(self.sum / self.weight)
             }
             ReserveAggregation::Category => None,
         }

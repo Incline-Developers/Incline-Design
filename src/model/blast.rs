@@ -643,7 +643,7 @@ impl BlastAnalysis {
     pub(crate) fn hole_powder_factor(&self, hole: usize) -> Option<f64> {
         let volume = *self.volume.get(hole)?;
         let mass = *self.mass_kg.get(hole)?;
-        (volume > 1.0e-9 && mass > 0.0).then(|| mass / volume)
+        (volume > 1.0e-9 && mass > 0.0).then_some(mass / volume)
     }
 
     /// Whether `hole` is left unloaded in a pattern being loaded.

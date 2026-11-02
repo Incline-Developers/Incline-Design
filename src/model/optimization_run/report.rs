@@ -192,7 +192,7 @@ impl OptimizationReport {
 
 /// Waste tonnes per ore tonne, or `None` without ore.
 pub(crate) fn strip_ratio(ore: f64, waste: f64) -> Option<f64> {
-    (ore > 0.0).then(|| waste / ore)
+    (ore > 0.0).then_some(waste / ore)
 }
 
 /// Build the report from a finished run. Runs on the worker while the values

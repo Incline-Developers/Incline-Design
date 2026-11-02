@@ -326,17 +326,12 @@ pub(crate) fn sheet_furniture(spec: &PlotSpec, layout: &PlotLayout, legend_label
         }
     });
 
-    let legend = (spec.legend.is_empty() || legend_rows == 0).then_some(()).map_or_else(
-        || {
-            Some(RectPx {
-                x: layout.map.x + inset,
-                y: layout.map.y + inset,
-                width: legend_label_width + (furniture::LEGEND_SWATCH_MM + furniture::PADDING_MM * 3.0) * millimetre,
-                height: (furniture::PADDING_MM * 2.0 + furniture::LEGEND_TITLE_MM * 1.25 + furniture::LEGEND_ROW_MM * legend_rows as f64) * millimetre,
-            })
-        },
-        |()| None,
-    );
+    let legend = (!spec.legend.is_empty() && legend_rows != 0).then_some(RectPx {
+        x: layout.map.x + inset,
+        y: layout.map.y + inset,
+        width: legend_label_width + (furniture::LEGEND_SWATCH_MM + furniture::PADDING_MM * 3.0) * millimetre,
+        height: (furniture::PADDING_MM * 2.0 + furniture::LEGEND_TITLE_MM * 1.25 + furniture::LEGEND_ROW_MM * legend_rows as f64) * millimetre,
+    });
 
     let scale_bar = spec.show_scale_bar.then(|| {
         let (_, bar_px) = scale_bar_length(layout, millimetre);
