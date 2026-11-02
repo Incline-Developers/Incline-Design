@@ -294,7 +294,7 @@ pub(crate) fn accent_fill(visuals: &egui::Visuals) -> egui::Color32 {
 }
 
 /// The fill a destructive action takes, in place of [`accent_fill`].
-fn danger_fill(visuals: &egui::Visuals) -> egui::Color32 {
+pub(crate) fn danger_fill(visuals: &egui::Visuals) -> egui::Color32 {
     if visuals.dark_mode {
         egui::Color32::from_rgb(0xC4, 0x4B, 0x4B)
     } else {

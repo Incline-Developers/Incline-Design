@@ -1,8 +1,12 @@
-//! macOS system menu bar.
+//! macOS system menu bar, and the window buttons over Incline's title bar.
 //!
 //! Incline Design's other targets draw their menu inside the egui window. On macOS,
 //! AppKit owns the equivalent commands so they appear in the global menu bar
 //! and participate in standard Command-key handling.
+//!
+//! The title bar is Incline's own on every platform (`ui/elements/title_bar.rs`),
+//! but macOS keeps its red, yellow and green buttons: [`place_window_buttons`]
+//! moves them onto the bar's row.
 
 use std::{path::PathBuf, sync::Mutex};
 
@@ -13,7 +17,7 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::{NSApplication, NSControlStateValueOff, NSControlStateValueOn, NSMenu, NSMenuItem, NSStrikethroughStyleAttributeName, NSUnderlineStyle};
-use objc2_foundation::{NSAttributedString, NSDictionary, NSNumber, NSObject, NSObjectProtocol, NSString};
+use objc2_foundation::{NSAttributedString, NSDictionary, NSNumber, NSObject, NSObjectProtocol, NSString, NSUserDefaults};
 
 use crate::{
     i18n::tr,
@@ -706,4 +710,85 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     for (index, checked) in state.view_toggles.iter().enumerate() {
         set_checked(&root, MacMenuAction::ToggleView(index), *checked);
     }
+}
+
+/// What a double-click on a title bar does, as set in System Settings >
+/// Desktop & Dock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TitleDoubleClick {
+    Zoom,
+    Minimize,
+    Nothing,
+}
+
+/// The double-click action the user has chosen for title bars.
+pub(crate) fn title_double_click() -> TitleDoubleClick {
+    let defaults = NSUserDefaults::standardUserDefaults();
+    match defaults
+        .stringForKey(&NSString::from_str("AppleActionOnDoubleClick"))
+        .map(|action| action.to_string())
+        .as_deref()
+    {
+        Some("Minimize") => TitleDoubleClick::Minimize,
+        Some("None") => TitleDoubleClick::Nothing,
+        // "Maximize" and "Fill" both zoom, as does an unset preference.
+        _ => TitleDoubleClick::Zoom,
+    }
+}
+
+/// Place the window's red, yellow and green buttons over Incline's own title
+/// bar: `left` points in from the window's left edge, centred `centre_y`
+/// points down from its top. Returns where they end, from the window's left.
+///
+/// AppKit lays its title bar out again whenever it sees fit - a resize, a
+/// change of key window, a new title - so this is called every frame, and
+/// only moves what has moved. In fullscreen the buttons belong to the menu
+/// bar that slides down, and are left alone.
+pub(crate) fn place_window_buttons(window: &winit::window::Window, centre_y: f64, left: f64) -> Option<f64> {
+    use objc2_app_kit::{NSView, NSWindowButton};
+    use objc2_foundation::{NSPoint, NSRect};
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let RawWindowHandle::AppKit(handle) = window.window_handle().ok()?.as_raw() else {
+        return None;
+    };
+    // winit hands out its content view, alive as long as the window is.
+    let view: &NSView = unsafe { handle.ns_view.cast::<NSView>().as_ref() };
+    let ns_window = view.window()?;
+    let close = ns_window.standardWindowButton(NSWindowButton::CloseButton)?;
+    let minimize = ns_window.standardWindowButton(NSWindowButton::MiniaturizeButton)?;
+    let zoom = ns_window.standardWindowButton(NSWindowButton::ZoomButton)?;
+    let spacing = minimize.frame().origin.x - close.frame().origin.x;
+    let end = left + 2.0 * spacing + zoom.frame().size.width;
+    if window.fullscreen().is_some() {
+        return Some(end);
+    }
+    // The buttons sit in the title bar view, inside a container pinned to
+    // the window's top; a bar taller than the system's grows the container to
+    // keep them in it.
+    let titlebar = unsafe { close.superview() }?;
+    let container = unsafe { titlebar.superview() }?;
+    let height = close.frame().size.height;
+    let needed = (centre_y + height / 2.0).ceil();
+    let frame = container.frame();
+    if frame.size.height < needed {
+        let window_height = ns_window.frame().size.height;
+        container.setFrame(NSRect::new(
+            NSPoint::new(frame.origin.x, window_height - needed),
+            objc2_foundation::NSSize::new(frame.size.width, needed),
+        ));
+    }
+    let titlebar_height = titlebar.frame().size.height;
+    let y = if titlebar.isFlipped() {
+        centre_y - height / 2.0
+    } else {
+        titlebar_height - centre_y - height / 2.0
+    };
+    for (index, button) in [&close, &minimize, &zoom].into_iter().enumerate() {
+        let origin = NSPoint::new(left + index as f64 * spacing, y.round());
+        if button.frame().origin != origin {
+            button.setFrameOrigin(origin);
+        }
+    }
+    Some(end)
 }

@@ -1,5 +1,6 @@
 //! Top application menu bar: the mark, the application-wide menus (File,
-//! Project) and the workspace tabs.
+//! Project) and the workspace tabs. It is the window's title bar as well, and
+//! [`title_bar`] adds the project's name and the window's buttons to it.
 //!
 //! Everything that acts on the scene rather than on the application has moved
 //! down to the viewport bar - see [`crate::ui::elements::viewport_bar`] - so
@@ -18,6 +19,7 @@ use crate::{
     model::{Axis, SceneEntityId},
     ui::{
         EditorState, UiCommand, UiProjectView,
+        elements::title_bar,
         state::{ActiveTool, Workspace},
         themed_icon,
         widgets::page_tabs::{PageTab, PageTabsPaint},
@@ -35,9 +37,12 @@ const LOGO_MARGIN: f32 = 6.0;
 /// Height of the rule parting the menus from the workspace tabs.
 #[cfg(not(target_os = "macos"))]
 const SEPARATOR_HEIGHT: f32 = 16.0;
-/// Space either side of that rule.
+/// Space between the last menu and that rule.
 #[cfg(not(target_os = "macos"))]
 const SEPARATOR_MARGIN: f32 = 8.0;
+/// Space between the run of menus and tabs and the window's buttons, at
+/// either end of the bar.
+const SEPARATOR_GAP: f32 = 8.0;
 /// How far below the row's centre the bar's labels sit - the menus, the rule
 /// after them and the workspace tabs' names - so they line up with the mark
 /// rather than riding above it. See [`lowered`].
@@ -102,36 +107,54 @@ pub(crate) fn draw_main_menu(ui: &mut egui::Ui, editor: &mut EditorState, projec
         .show_separator_line(false)
         .frame(frame)
         .show(ui, |ui| {
-            // Too narrow a window scrolls the row rather than clipping the
-            // workspace tabs off the end of it. See `elements::bar_strip`.
-            // The row is as tall as `MenuBar` makes it, which is this unless
-            // something on it is taller; the strip grows with the contents.
-            crate::ui::elements::bar_strip(ui, "main_menu_strip", ui.spacing().interact_size.y, |ui, strip| {
-                let mut used = 0.0;
-                ui.scope_builder(egui::UiBuilder::new().max_rect(strip), |ui| {
-                    egui::MenuBar::new().ui(ui, |ui| {
-                        draw_logo(ui);
+            // The bar is the window's title bar too: see `elements::title_bar`.
+            let inner = ui.max_rect();
+            let bar = inner + frame.inner_margin;
+            let row = egui::Rect::from_min_size(inner.min, egui::vec2(inner.width(), ui.spacing().interact_size.y));
+            editor.window_frame.row_centre_y = row.center().y;
+            title_bar::interact_background(ui, bar, commands);
+            let controls_left = title_bar::draw_window_controls(ui, bar, row, &mut editor.window_frame, commands);
+            let strip_rect = inner.with_max_x(inner.right().min(controls_left - SEPARATOR_GAP));
+            // Room for the system's window buttons, where they are over the
+            // bar, measured from the strip's own left so a scrolled strip
+            // keeps the same space.
+            let leading_space = (editor.window_frame.leading_inset > 0.0).then(|| (editor.window_frame.leading_inset + SEPARATOR_GAP - strip_rect.left()).max(0.0));
+            let mut tabs_right = strip_rect.right();
+            ui.scope_builder(egui::UiBuilder::new().max_rect(strip_rect), |ui| {
+                // Too narrow a window scrolls the row rather than clipping the
+                // workspace tabs off the end of it. See `elements::bar_strip`.
+                // The row is as tall as `MenuBar` makes it, which is this unless
+                // something on it is taller; the strip grows with the contents.
+                crate::ui::elements::bar_strip(ui, "main_menu_strip", ui.spacing().interact_size.y, |ui, strip| {
+                    let mut used = 0.0;
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(strip), |ui| {
+                        egui::MenuBar::new().ui(ui, |ui| {
+                            if let Some(space) = leading_space {
+                                ui.add_space(space);
+                            }
+                            draw_logo(ui);
 
-                        #[cfg(not(target_os = "macos"))]
-                        lowered(ui, |ui| {
-                            draw_file_menu(ui, editor, project, commands);
-                            draw_view_menu(ui, editor, commands);
-                            draw_separator(ui);
+                            #[cfg(not(target_os = "macos"))]
+                            lowered(ui, |ui| {
+                                draw_file_menu(ui, editor, project, commands);
+                                draw_view_menu(ui, editor, commands);
+                                draw_separator(ui);
+                            });
+
+                            tabs = Some(draw_workspace_tabs(ui, editor, commands));
+
+                            // `MenuBar` sizes itself to the whole width it is given,
+                            // so its rect says nothing about how much of the row was
+                            // used; where the next item would go does.
+                            used = ui.cursor().left() - strip.left();
                         });
-                        // The parameter is only read by the menus above.
-                        #[cfg(target_os = "macos")]
-                        let _ = project;
-
-                        tabs = Some(draw_workspace_tabs(ui, editor, commands));
-
-                        // `MenuBar` sizes itself to the whole width it is given,
-                        // so its rect says nothing about how much of the row was
-                        // used; where the next item would go does.
-                        used = ui.cursor().left() - strip.left();
                     });
+                    tabs_right = (strip.left() + used).min(strip_rect.right());
+                    used
                 });
-                used
             });
+            let title_span = egui::Rangef::new(tabs_right, controls_left);
+            title_bar::draw_title(ui, bar, title_span, row.center().y + LABEL_DROP, project);
         })
         .response
         .rect;
@@ -171,7 +194,8 @@ fn draw_separator(ui: &mut egui::Ui) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, SEPARATOR_HEIGHT), egui::Sense::hover());
     let color = ui.visuals().widgets.noninteractive.bg_stroke.color;
     ui.painter().line_segment([rect.center_top(), rect.center_bottom()], egui::Stroke::new(1.0, color));
-    ui.add_space(SEPARATOR_MARGIN);
+    // No margin after it: the open tab's surface reaches out to its edge, so
+    // the bar's item spacing alone parts the two.
 }
 
 /// A drag previews the order locally; only releasing commits it to settings.

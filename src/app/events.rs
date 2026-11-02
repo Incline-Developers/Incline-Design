@@ -56,6 +56,12 @@ impl<'a> App<'a> {
         if self.window.as_ref().map(|window| window.id()) != Some(window_id) {
             return;
         }
+        // Maximising, fullscreen and focus all arrive as one of these; the
+        // title bar reads them again on the next frame. See `window_frame`.
+        if matches!(event, WindowEvent::Resized(_) | WindowEvent::Focused(_) | WindowEvent::ScaleFactorChanged { .. }) {
+            self.window_state_stale = true;
+            self.redraw_requested = true;
+        }
         // Only viewport-owned fingers are navigation-only. UI contacts must
         // reach egui for buttons, menus, sliders and scrolling.
         if let WindowEvent::Touch(touch) = &event {
@@ -260,16 +266,7 @@ impl<'a> App<'a> {
                     #[cfg(not(target_arch = "wasm32"))]
                     self.refresh_missing_projects();
                     let project = self.project_view();
-                    if let Some(window) = &self.window {
-                        let title = project.projects.first().map_or_else(
-                            || crate::APP_NAME.to_owned(),
-                            |entry| {
-                                let name = entry.name.trim_end_matches(".omf");
-                                format!("{}: {}{}", crate::APP_NAME, name, if entry.dirty { " *" } else { "" })
-                            },
-                        );
-                        window.set_title(&title);
-                    }
+                    self.sync_window_frame(&project);
                     #[cfg(target_os = "macos")]
                     crate::mac::sync_menu_state(&self.editor, &project);
                     // The Solids Setup page's inspection mesh is rebuilt before
@@ -382,6 +379,7 @@ impl<'a> App<'a> {
                                     self.finish_topology_load();
                                 }
                                 self.set_ui_pointer_gesture_active(ui_output.pointer_gesture_active);
+                                self.place_window_frame();
                                 self.collect_video_frames();
                                 self.handle_ui_commands(ui_output.commands);
                                 self.sync_slice_preview_window(event_loop);

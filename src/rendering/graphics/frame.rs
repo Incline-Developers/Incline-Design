@@ -638,6 +638,10 @@ impl<'a> Graphics<'a> {
             self.window.request_redraw();
         }
 
+        // Last, over the UI too: see `window_corners`.
+        if let Some(corners) = &self.window_corners {
+            corners.draw(&self.queue, &mut encoder, &gui_view, [self.size.width, self.size.height]);
+        }
         self.queue.submit(std::iter::once(encoder.finish()));
         if sample_volume_feedback
             && self

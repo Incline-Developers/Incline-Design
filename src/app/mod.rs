@@ -24,6 +24,7 @@ pub(crate) mod video_export; // Animate played through the viewport into a video
 pub(crate) mod web_download;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web_storage;
+pub(crate) mod window_frame; // The window's own title bar: its state, title and actions
 
 #[cfg(target_arch = "wasm32")]
 use std::rc::Rc;
@@ -325,9 +326,17 @@ pub(crate) struct App<'a> {
     /// being discarded when there is otherwise no window activity.
     next_ui_repaint_deadline: Option<Instant>,
     window: Option<Arc<Window>>,
+    /// The title last given to the window, so it is set only when it changes.
+    window_title: String,
+    /// Whether the window may have been maximised, made fullscreen or
+    /// focused since its state was last mirrored. See `window_frame`.
+    window_state_stale: bool,
     /// Precision touchpad pan and pinch, which winit does not report on Windows.
     #[cfg(target_os = "windows")]
     trackpad: Option<crate::windows_trackpad::Trackpad>,
+    /// Snap Layouts on the title bar's maximise button.
+    #[cfg(target_os = "windows")]
+    maximize_button: Option<crate::windows_caption::MaximizeButton>,
     graphics: Option<Graphics<'static>>,
     #[cfg(target_arch = "wasm32")]
     web_graphics_state: GraphicsState,
@@ -624,8 +633,12 @@ impl<'a> Default for App<'a> {
             redraw_requested: false,
             next_ui_repaint_deadline: None,
             window: None,
+            window_title: String::new(),
+            window_state_stale: true,
             #[cfg(target_os = "windows")]
             trackpad: None,
+            #[cfg(target_os = "windows")]
+            maximize_button: None,
             graphics: None,
             #[cfg(target_arch = "wasm32")]
             web_graphics_state: GraphicsState::NotStarted,
@@ -2425,10 +2438,13 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             return;
         }
 
-        let window_attributes = Window::default_attributes()
-            .with_title(crate::APP_NAME.to_string())
-            .with_window_icon(window_icon())
-            .with_min_inner_size(winit::dpi::PhysicalSize::new(900, 500));
+        let window_attributes = window_frame::frameless(
+            Window::default_attributes()
+                .with_title(crate::APP_NAME.to_string())
+                .with_window_icon(window_icon())
+                .with_min_inner_size(winit::dpi::PhysicalSize::new(900, 500)),
+            event_loop,
+        );
 
         #[cfg(not(target_arch = "wasm32"))]
         let window_attributes = window_attributes.with_inner_size(winit::dpi::PhysicalSize::new(900, 500)).with_maximized(true);
@@ -2459,6 +2475,9 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
         {
             self.trackpad = crate::windows_trackpad::Trackpad::new(&window)
                 .inspect_err(|error| log::warn!("Precision touchpad gestures are unavailable: {error}"))
+                .ok();
+            self.maximize_button = crate::windows_caption::MaximizeButton::new(&window)
+                .inspect_err(|error| log::warn!("Snap Layouts are unavailable on the maximise button: {error}"))
                 .ok();
         }
 

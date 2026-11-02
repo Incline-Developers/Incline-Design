@@ -417,7 +417,11 @@ pub(crate) fn draw_insert_point_at_elevation_dialog(ui: &mut egui::Ui, editor: &
 /// A project is already open behind it - startup lands on an empty, never-saved
 /// one - so the splash is an offer, not a gate: Escape, a click on the backdrop,
 /// or `New project` all simply dismiss it and leave that project in place.
-pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+///
+/// Everything below `title_bar_bottom` is blocked while it is up; the title
+/// bar above stays live, so the window can still be moved, maximised or
+/// closed, and the window's edges, laid over everything, still resize it.
+pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, project: &UiProjectView, title_bar_bottom: f32, commands: &mut Vec<UiCommand>) {
     const PANEL_SIZE: f32 = 500.0;
     const COLUMN_WIDTH: f32 = 190.0;
     const ROW_HEIGHT: f32 = 22.0;
@@ -437,8 +441,9 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, project: &UiProjectV
     // The splash floats over a live window, so something has to catch the
     // clicks that dismiss it, or they would fall through to the viewport and
     // orbit the camera instead. It paints nothing: the window behind the
-    // splash reads as it always does.
-    let screen = ui.ctx().viewport_rect();
+    // splash reads as it always does. It stops at the title bar, which is the
+    // window's own and stays in reach.
+    let screen = ui.ctx().viewport_rect().with_min_y(title_bar_bottom);
     let backdrop = egui::Area::new(egui::Id::unique("select_project_backdrop"))
         .fixed_pos(screen.min)
         .order(egui::Order::Middle)

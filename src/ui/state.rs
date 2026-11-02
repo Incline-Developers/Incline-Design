@@ -2048,6 +2048,8 @@ pub(crate) struct EditorState {
     /// `App` every `memory_usage::SAMPLE_PERIOD`. `None` until the first
     /// reading, or where the platform cannot say.
     pub(crate) memory_usage: Option<crate::app::memory_usage::MemoryUsage>,
+    /// The window the UI is drawn in. See [`WindowFrame`].
+    pub(crate) window_frame: WindowFrame,
     /// Each processor core's load, `0.0..=1.0`, refreshed by `App` every
     /// `memory_usage::CPU_SAMPLE_PERIOD`. Empty until the first reading, and
     /// always on the web, where a browser does not say.
@@ -3939,6 +3941,7 @@ impl EditorState {
             downscale_raster_previews: crate::app::io::default_downscale_raster_previews(),
             measured_fps: None,
             memory_usage: None,
+            window_frame: WindowFrame::default(),
             cpu_usage: Vec::new(),
             frame_rate_window: (0, 0.0),
             debug_surface_chunks: false,
@@ -5066,8 +5069,63 @@ pub(crate) struct HaulBlockRef {
     pub(crate) probe: [f64; 2],
 }
 
+/// The window around the UI, as the title bar drawn across its top needs it.
+///
+/// Incline draws its own title bar (`elements::title_bar`). `App` mirrors the
+/// window's state in before each frame; the fields marked as the UI's are
+/// written by the bar for `App` to hand on to the platform after it.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct WindowFrame {
+    pub(crate) maximized: bool,
+    pub(crate) fullscreen: bool,
+    pub(crate) focused: bool,
+    /// Whether the UI draws the window's border: where nothing else frames
+    /// the window, and it does not fill the screen.
+    pub(crate) border: bool,
+    /// The window's corner radius in points, where the window cuts its own
+    /// corners (`rendering/graphics/window_corners.rs`) and the border must
+    /// follow them. Zero for square corners, or where the system rounds them.
+    pub(crate) corner_radius: u8,
+    /// Where the system's own window buttons end, from the window's left
+    /// edge, in points: macOS keeps its red, yellow and green buttons over
+    /// the bar, and the bar's contents start after them. Zero elsewhere.
+    pub(crate) leading_inset: f32,
+    /// Whether the pointer is over, or pressing, the maximise button. On
+    /// Windows the button is hit-tested by the system, for Snap Layouts, so
+    /// egui never sees the pointer there and these say what it would have.
+    #[cfg_attr(any(target_os = "macos", target_arch = "wasm32"), allow(dead_code))]
+    pub(crate) maximize_hovered: bool,
+    #[cfg_attr(any(target_os = "macos", target_arch = "wasm32"), allow(dead_code))]
+    pub(crate) maximize_pressed: bool,
+    /// The UI's: where it drew the maximise button this frame.
+    pub(crate) maximize_button: Option<egui::Rect>,
+    /// The UI's: the vertical centre of the bar's row, which the system's
+    /// window buttons on macOS are centred on.
+    pub(crate) row_centre_y: f32,
+}
+
+/// Something the title bar asks of the window.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum WindowAction {
+    /// Move the window with the pointer, the primary button being held.
+    Drag,
+    /// Resize the window from one of its edges or corners, likewise.
+    /// macOS resizes its own window, and has its own buttons.
+    #[cfg_attr(any(target_os = "macos", target_arch = "wasm32"), allow(dead_code))]
+    Resize(winit::window::ResizeDirection),
+    #[cfg_attr(any(target_os = "macos", target_arch = "wasm32"), allow(dead_code))]
+    Minimize,
+    #[cfg_attr(any(target_os = "macos", target_arch = "wasm32"), allow(dead_code))]
+    ToggleMaximize,
+    /// Whatever a double-click on a title bar does on this platform.
+    TitleDoubleClick,
+    /// The system's window menu, at this point in the window.
+    ShowMenu(egui::Pos2),
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum UiCommand {
+    Window(WindowAction),
     Haulage {
         project: u32,
         edit: HaulEdit,
@@ -5873,7 +5931,8 @@ impl UiCommand {
             Some(CommandReportSpec::new(title, summary))
         }
         match self {
-            Self::SetActiveTool(_)
+            Self::Window(_)
+            | Self::SetActiveTool(_)
             | Self::ToggleCreateDrillPattern
             | Self::BeginDrillPatternShapePick
             | Self::ClearSelection
@@ -6792,6 +6851,12 @@ impl UiProjectView {
     /// are ways of leaving it.
     pub(crate) fn recent_projects(&self) -> impl Iterator<Item = &UiTrackedProjectEntry> {
         self.tracked_projects.iter().filter(|entry| !entry.is_active).take(RECENT_PROJECT_LIMIT)
+    }
+
+    /// The project the window is titled after: the active one, or the first
+    /// open if none is.
+    pub(crate) fn titled_project(&self) -> Option<&UiProjectEntry> {
+        self.projects.iter().find(|entry| entry.is_active).or_else(|| self.projects.first())
     }
 }
 

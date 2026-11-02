@@ -191,6 +191,10 @@ impl<'a> App<'a> {
             anyhow::bail!("Create or open a project before importing, drawing, or generating data");
         }
         match command {
+            UiCommand::Window(action) => {
+                self.apply_window_action(action);
+                Ok(())
+            }
             UiCommand::SetActiveTool(tool) => {
                 self.set_active_tool_from_toolbar(tool);
                 Ok(())

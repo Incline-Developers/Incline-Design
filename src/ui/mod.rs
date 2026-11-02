@@ -64,6 +64,10 @@ pub(crate) struct Gui {
     last_cursor_event: Option<WindowEvent>,
     #[cfg(target_arch = "wasm32")]
     pending_pastes: Vec<String>,
+    /// The system has taken the held button to move or resize the window,
+    /// and its release will go there rather than here. See
+    /// [`Gui::release_pointer`].
+    release_pointer: bool,
 }
 
 /// The layout rect covering `screen_size` physical pixels, expressed in the
@@ -109,6 +113,7 @@ impl Gui {
             last_cursor_event: None,
             #[cfg(target_arch = "wasm32")]
             pending_pastes: Vec::new(),
+            release_pointer: false,
         }
     }
 
@@ -152,6 +157,16 @@ impl Gui {
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn reload_fonts(&self) {
         setup_custom_fonts(&self.ctx);
+    }
+
+    /// Let go of the primary button at the next frame, unless it has been
+    /// let go of by then.
+    ///
+    /// Once the window is being moved or resized the system holds the
+    /// pointer, and on most platforms the release never reaches the window:
+    /// egui would go on thinking the title bar was being dragged.
+    pub(crate) fn release_pointer(&mut self) {
+        self.release_pointer = true;
     }
 
     /// Queue text received from the browser's paste event for the next egui frame.
@@ -221,6 +236,30 @@ impl Gui {
             && let Some(surface_rect) = surface_screen_rect(window_rect, window.inner_size().width, screen_size)
         {
             raw_input.screen_rect = Some(surface_rect);
+        }
+        if std::mem::take(&mut self.release_pointer) {
+            let released = raw_input.events.iter().any(|event| {
+                matches!(
+                    event,
+                    egui::Event::PointerButton {
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        ..
+                    }
+                )
+            });
+            let (down, pos) = self.ctx.input(|input| (input.pointer.primary_down(), input.pointer.latest_pos()));
+            if down
+                && !released
+                && let Some(pos) = pos
+            {
+                raw_input.events.push(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: self.ctx.input(|input| input.modifiers),
+                });
+            }
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -694,6 +733,11 @@ fn draw_ui(
     // the end: see `chrome::paint_window_background`.
     let window_background = root_ui.painter().add(egui::Shape::Noop);
 
+    // The window's edges, over everything: Incline draws its own frame. See
+    // `elements::title_bar`.
+    elements::title_bar::draw_resize_edges(root_ui.ctx(), &editor.window_frame, commands);
+    elements::title_bar::draw_window_border(root_ui.ctx(), &editor.window_frame);
+
     // --- Panel layout: compute rects for all fixed panels ---
     let project_active = project.has_active_project;
     let editing_enabled = project.has_active_project && !editor.fly_mode_enabled;
@@ -770,7 +814,7 @@ fn draw_ui(
         #[cfg(not(target_arch = "wasm32"))]
         let naming_browser_project = false;
         if project.needs_startup_dialog && !naming_browser_project {
-            dialogs::editing::draw_select_project_dialog(root_ui, project, commands);
+            dialogs::editing::draw_select_project_dialog(root_ui, project, main_menu_rect.bottom(), commands);
         }
         *canvas_rect_out = egui::Rect::ZERO;
         geometry_dirty |= draw_global_dialogs(root_ui, editor, document, project, block_models, drill_holes, frame_context.console_snapshot, commands);
@@ -1182,7 +1226,7 @@ fn draw_ui(
     #[cfg(not(target_arch = "wasm32"))]
     let naming_browser_project = false;
     if project.needs_startup_dialog && !naming_browser_project {
-        dialogs::editing::draw_select_project_dialog(root_ui, project, commands);
+        dialogs::editing::draw_select_project_dialog(root_ui, project, main_menu_rect.bottom(), commands);
     }
     dialogs::files::draw_vertical_exaggeration_dialog(root_ui, editor, canvas_rect);
     dialogs::video_export::draw_video_export_dialog(root_ui, editor, canvas_rect, commands);

@@ -59,6 +59,7 @@ pub(crate) mod solid_preview;
 pub(crate) mod targets;
 mod touch;
 pub(crate) mod video_capture;
+pub(crate) mod window_corners;
 
 /// Shared ownership of GPU handles: `Arc` natively, where a readback finishes
 /// on another thread, and `Rc` in the browser, where wgpu's handles are not
@@ -375,6 +376,9 @@ pub(crate) struct Graphics<'a> {
     pub(super) scene_cache_key: Option<u64>,
     pub(super) scene_cache_blit_layout: wgpu::BindGroupLayout,
     pub(super) scene_cache_blit_pipeline: wgpu::RenderPipeline,
+    /// The window's corners, where it has to cut them itself. See
+    /// `window_corners`.
+    window_corners: Option<window_corners::WindowCorners>,
     /// The present mode this surface uses with vsync off, if it has one.
     no_vsync_present_mode: Option<wgpu::PresentMode>,
     pub(super) depth_texture: wgpu::Texture,
@@ -954,6 +958,29 @@ impl<'a> Graphics<'a> {
         self.gui.reload_fonts();
         self.text_system = TextSystem::new();
         self.cached_document_scene_key = None;
+    }
+
+    /// The UI's points to the window's physical pixels.
+    pub(crate) fn ui_pixels_per_point(&self) -> f32 {
+        self.gui.pixels_per_point()
+    }
+
+    /// Whether the window cuts its own corners round. See `window_corners`.
+    pub(crate) fn cuts_window_corners(&self) -> bool {
+        self.window_corners.is_some()
+    }
+
+    /// The window's corner radius in physical pixels, where it cuts its own
+    /// corners; zero leaves them square.
+    pub(crate) fn set_window_corner_radius(&mut self, radius: f32) {
+        if let Some(corners) = self.window_corners.as_mut() {
+            corners.set_radius(radius);
+        }
+    }
+
+    /// See [`crate::ui::Gui::release_pointer`].
+    pub(crate) fn release_ui_pointer(&mut self) {
+        self.gui.release_pointer();
     }
 
     #[cfg(target_arch = "wasm32")]

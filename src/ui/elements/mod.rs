@@ -41,6 +41,7 @@ pub(crate) mod schedule_setup;
 pub(crate) mod schedule_trucking;
 pub(crate) mod solids_view;
 pub(crate) mod status_bar;
+pub(crate) mod title_bar;
 pub(crate) mod toolbars;
 pub(crate) mod viewport_bar;
 

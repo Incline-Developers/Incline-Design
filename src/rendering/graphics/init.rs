@@ -208,17 +208,23 @@ impl<'a> Graphics<'a> {
             .into_iter()
             .find(|mode| surface_caps.present_modes.contains(mode));
         userspace_log!("{}", tr!("init-surface-present-mode", mode = format!("{present_mode:?}")));
-        let alpha_mode = surface_caps
-            .alpha_modes
-            .first()
-            .copied()
-            .ok_or_else(|| anyhow!("Surface reports no supported alpha modes"))?;
+        // Blended by its alpha only where the window cuts its own corners.
+        let corners_alpha_mode = window_corners::WindowCorners::alpha_mode(&window, &surface_caps);
+        let alpha_mode = match corners_alpha_mode {
+            Some(mode) => mode,
+            None => surface_caps
+                .alpha_modes
+                .first()
+                .copied()
+                .ok_or_else(|| anyhow!("Surface reports no supported alpha modes"))?,
+        };
         // Scene shaders output linear colour and therefore render through an
         // sRGB view. egui applies gamma itself and renders through the base
         // unorm view of the same surface texture.
         let scene_format = surface_format.add_srgb_suffix();
         let gui_format = surface_format.remove_srgb_suffix();
         let view_formats = vec![if surface_format.is_srgb() { gui_format } else { scene_format }];
+        let window_corners = corners_alpha_mode.map(|_| window_corners::WindowCorners::new(&device, gui_format));
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
@@ -819,6 +825,7 @@ impl<'a> Graphics<'a> {
             scene_cache,
             scene_cache_blit_layout,
             scene_cache_blit_pipeline,
+            window_corners,
             no_vsync_present_mode,
             scene_cache_key: None,
             depth_texture,

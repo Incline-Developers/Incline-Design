@@ -15,6 +15,8 @@ mod rendering;
 mod system_sound;
 mod ui;
 #[cfg(target_os = "windows")]
+mod windows_caption;
+#[cfg(target_os = "windows")]
 mod windows_trackpad;
 
 #[cfg(not(target_arch = "wasm32"))]
