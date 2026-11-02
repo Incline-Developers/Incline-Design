@@ -11,7 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::input::BlendInput;
+use super::{input::BlendInput, replay::BlendSolution};
 use crate::model::schedule::optimisation::{Activity, DestinationId, Interval};
 
 /// A route a plan sets a target for: a loader digging or reclaiming to a
@@ -29,6 +29,9 @@ pub(crate) struct PlanTargets {
     pub(crate) overrun: f64,
     /// Relative route values on days still guided by the long-term plan.
     pub(crate) values: BTreeMap<(usize, DestinationId, u32), f64>,
+    /// Cumulative deliveries at the incumbent's interval ends. Outside a
+    /// planned window, preserve when its routes can actually be worked.
+    pub(crate) timing: BTreeMap<Route, Vec<(f64, f64)>>,
     /// Start and end hour of each day the horizon touches.
     days: BTreeMap<u32, (f64, f64)>,
     /// Days the plan covers. Any other day is worked as if there were no
@@ -50,6 +53,7 @@ impl PlanTargets {
             follow,
             overrun,
             values: BTreeMap::new(),
+            timing: BTreeMap::new(),
             days,
             planned,
         }
@@ -61,7 +65,47 @@ impl PlanTargets {
         let mut rebased = Self::new(input, self.routes.clone(), self.follow, self.overrun);
         rebased.planned = self.planned.clone();
         rebased.values = self.values.clone();
+        rebased.timing = self.timing.clone();
         rebased
+    }
+
+    pub(crate) fn timed(mut self, input: &BlendInput, solution: &BlendSolution) -> Self {
+        let loaders: BTreeMap<_, _> = input.loaders.iter().enumerate().map(|(index, loader)| (loader.id, index)).collect();
+        let mut routes = BTreeMap::<Route, BTreeMap<usize, f64>>::new();
+        for row in &solution.movements {
+            let movement = &input.movements[row.candidate];
+            if let Some(&loader) = loaders.get(&movement.loader) {
+                let day = input.intervals[row.interval].day();
+                *routes
+                    .entry((loader, movement.activity, movement.destination, day))
+                    .or_default()
+                    .entry(row.interval)
+                    .or_default() += row.tonnes_t;
+            }
+        }
+        for (route, intervals) in routes {
+            let mut total = 0.0;
+            let curve = intervals
+                .into_iter()
+                .map(|(interval, tonnes)| {
+                    total += tonnes;
+                    (input.intervals[interval].end_h, total)
+                })
+                .collect();
+            self.timing.insert(route, curve);
+        }
+        self
+    }
+
+    /// The plan's daily routes remain evenly paced. Continuation routes
+    /// instead become due when the incumbent delivered them, without turning
+    /// its within-day ordering into a hard constraint.
+    pub(crate) fn due_today(&self, loader: usize, activity: Activity, destination: DestinationId, interval: Interval, tonnes: f64) -> f64 {
+        if let Some(curve) = self.timing.get(&(loader, activity, destination, interval.day())) {
+            let end = curve.partition_point(|&(hour, _)| hour <= interval.end_h);
+            return end.checked_sub(1).map_or(0.0, |last| curve[last].1);
+        }
+        tonnes * self.paced(interval)
     }
 
     /// Weekly plans have more freedom than the hourly dispatch. When their
@@ -108,6 +152,12 @@ impl PlanTargets {
                 .iter()
                 .filter(|((_, _, day), _)| !days.contains(day))
                 .map(|(key, value)| (*key, *value))
+                .collect(),
+            timing: self
+                .timing
+                .iter()
+                .filter(|(route, _)| !days.contains(&route.3))
+                .map(|(route, curve)| (*route, curve.clone()))
                 .collect(),
             days: self.days.clone(),
             planned,

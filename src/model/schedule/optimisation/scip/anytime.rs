@@ -171,6 +171,12 @@ fn targets_fingerprint(targets: &PlanTargets) -> u64 {
         (key, value.to_bits()).hash(&mut hasher);
     }
     targets.planned.hash(&mut hasher);
+    for (route, curve) in &targets.timing {
+        route.hash(&mut hasher);
+        for (hour, tonnes) in curve {
+            (hour.to_bits(), tonnes.to_bits()).hash(&mut hasher);
+        }
+    }
     hasher.finish()
 }
 
@@ -1251,6 +1257,7 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
             log::debug!("window tail anchor at day {first_day}: {changed} incumbent routes differ outside the window");
             let mut anchored = PlanTargets::new(input, routes, spread, spread).valued(input);
             anchored.planned.extend(days.iter().copied());
+            let timed = anchored.clone().timed(input, &best.solution);
             // Each weight is dispatched at once, side by side; the first of the
             // best is chosen, as it would be one after another. A round is
             // the tails after the best schedule's hours on the timeline the
@@ -1266,7 +1273,12 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
                 let found: Vec<_> = WEIGHTS
                     .par_iter()
                     .map(|&(follow, overrun)| {
-                        let candidate = anchored.replacing(&covered, &planned.routes, follow * spread, overrun * spread);
+                        // Compare timing with the ordinary daily guidance,
+                        // rather than forcing every tail to repeat the
+                        // incumbent's hours. The middle weighting explores
+                        // that ordering between the two ordinary extremes.
+                        let anchor = if follow == 1.0 && overrun == 1.0 { &timed } else { &anchored };
+                        let candidate = anchor.replacing(&covered, &planned.routes, follow * spread, overrun * spread);
                         let found = if live_round {
                             redispatch_live(input, live.as_ref()?, &best, from, opening.as_ref(), &candidate, timing, cancel)
                         } else {
@@ -1339,6 +1351,7 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
                 kept += 1;
                 tally.kept += 1;
                 log::debug!("window tail anchor kept at day {first_day}: {changed} routes changed outside the window");
+                log::debug!("window timing trial kept at day {first_day}: {} timed routes", targets.timing.len());
                 record(
                     value,
                     bound,

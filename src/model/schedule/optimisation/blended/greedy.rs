@@ -189,6 +189,11 @@ fn dispatch(input: &BlendInput, original: &BlendInput, plan: Option<&PlanTargets
         state.guidance.calculations.get(),
         state.guidance.days
     );
+    log::debug!(
+        "incumbent timing: {} route calculations, {} differ from even pacing",
+        state.guidance.timed.get(),
+        state.guidance.retimed.get()
+    );
     Ok(Some(state.finish()))
 }
 
@@ -385,6 +390,8 @@ struct DailyGuidance {
     uses: Cell<usize>,
     calculations: Cell<usize>,
     days: usize,
+    timed: Cell<usize>,
+    retimed: Cell<usize>,
     interval: RefCell<IntervalGuidance>,
 }
 
@@ -1360,13 +1367,23 @@ impl<'a> State<'a> {
                         delivered += today;
                     }
                     let paced = plan.paced(interval);
-                    let due = (earlier + planned * paced - delivered).max(0.0);
+                    let today = plan.due_today(loader, activity, destination, interval, planned);
+                    if plan.timing.contains_key(&(loader, activity, destination, day)) {
+                        self.guidance.timed.set(self.guidance.timed.get() + 1);
+                        if (today - planned * paced).abs() > NEGLIGIBLE_T {
+                            self.guidance.retimed.set(self.guidance.retimed.get() + 1);
+                        }
+                    }
+                    let due = (earlier + today - delivered).max(0.0);
                     // Reclaim gets its paced target and the room digging has
                     // missed, retaining the ore still owed later today.
                     let room =
                         (activity == Activity::Reclaim && input.destinations.iter().any(|entry| entry.id == destination && entry.kind == DestinationKind::Crusher)).then(|| {
                             let spare = self.destination_room(destination, interval) - owed.get(&destination).copied().unwrap_or(0.0);
-                            (due + behind.get(&destination).copied().unwrap_or(0.0)).max(spare * paced)
+                            // Timing steers the objective, while reclaim
+                            // keeps the headroom of the ordinary daily plan.
+                            let reclaim_due = (earlier + planned * paced - delivered).max(0.0);
+                            (reclaim_due + behind.get(&destination).copied().unwrap_or(0.0)).max(spare * paced)
                         });
                     (follow, overrun, due, room)
                 });
