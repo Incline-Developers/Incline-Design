@@ -22,6 +22,11 @@ use crate::{
 /// system's own height.
 #[cfg(target_os = "macos")]
 const MAC_BUTTONS_LEFT: f64 = 9.0;
+/// Frames drawn after the window enters or leaves fullscreen on macOS, with
+/// nothing else asking for them: AppKit lays its title bar out again once the
+/// change is done, which puts its buttons back where it keeps them.
+#[cfg(target_os = "macos")]
+const FULLSCREEN_SETTLE_FRAMES: u8 = 3;
 
 /// The window's corner radius where it cuts its own corners, in the window's
 /// logical pixels: Breeze's, so the window sits among KDE's own. This is the
@@ -120,6 +125,31 @@ impl App<'_> {
         if let Some(button) = &self.maximize_button {
             frame.maximize_hovered = button.hovered();
             frame.maximize_pressed = button.pressed();
+        }
+        #[cfg(target_os = "macos")]
+        if self.fullscreen_settling > 0 {
+            self.fullscreen_settling -= 1;
+            self.redraw_requested = true;
+        }
+    }
+
+    /// Notice the window entering or leaving fullscreen on macOS, before the
+    /// event loop waits.
+    ///
+    /// Neither comes with an event: winit marks the window fullscreen as it
+    /// starts entering and not as it finishes leaving, and the resizes in
+    /// between come before the second. Left to them, the bar would keep room
+    /// for the system's buttons a few frames into fullscreen, and keep none
+    /// after it until something else drew a frame.
+    #[cfg(target_os = "macos")]
+    pub(super) fn watch_fullscreen(&mut self) {
+        let Some(window) = self.window.as_ref() else {
+            return;
+        };
+        if window.fullscreen().is_some() != self.editor.window_frame.fullscreen {
+            self.window_state_stale = true;
+            self.fullscreen_settling = FULLSCREEN_SETTLE_FRAMES;
+            self.redraw_requested = true;
         }
     }
 

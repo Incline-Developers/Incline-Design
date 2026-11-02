@@ -337,6 +337,9 @@ pub(crate) struct App<'a> {
     /// Snap Layouts on the title bar's maximise button.
     #[cfg(target_os = "windows")]
     maximize_button: Option<crate::windows_caption::MaximizeButton>,
+    /// Frames still to draw after a fullscreen change. See `window_frame`.
+    #[cfg(target_os = "macos")]
+    fullscreen_settling: u8,
     graphics: Option<Graphics<'static>>,
     #[cfg(target_arch = "wasm32")]
     web_graphics_state: GraphicsState,
@@ -639,6 +642,8 @@ impl<'a> Default for App<'a> {
             trackpad: None,
             #[cfg(target_os = "windows")]
             maximize_button: None,
+            #[cfg(target_os = "macos")]
+            fullscreen_settling: 0,
             graphics: None,
             #[cfg(target_arch = "wasm32")]
             web_graphics_state: GraphicsState::NotStarted,
@@ -2508,8 +2513,11 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
         #[cfg(target_arch = "wasm32")]
         crate::app::web_storage::set_dirty(self.has_unsaved_changes_for_exit());
         #[cfg(target_os = "macos")]
-        for action in crate::mac::drain_actions() {
-            self.handle_mac_menu_action(action);
+        {
+            for action in crate::mac::drain_actions() {
+                self.handle_mac_menu_action(action);
+            }
+            self.watch_fullscreen();
         }
 
         // Background writers must be observed before honoring an exit request;
