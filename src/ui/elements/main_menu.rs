@@ -38,20 +38,15 @@ const LOGO_SIZE: f32 = 18.0;
 /// first menu.
 #[cfg(not(target_os = "macos"))]
 const LOGO_MARGIN: f32 = 6.0;
-/// Height of the rule parting the menus from the workspace tabs.
-#[cfg(not(target_os = "macos"))]
-const SEPARATOR_HEIGHT: f32 = 16.0;
-/// Space between the last menu's label text and that rule. A little more
-/// than the bar's item spacing that parts the rule from the open tab, which
-/// is the space it measures to on the other side: beside a tab's filled
-/// shape, bare text reads as closer than it is.
-#[cfg(not(target_os = "macos"))]
-const SEPARATOR_LEADING_GAP: f32 = 10.0;
 /// Space between the run of menus and tabs and the window's buttons, at
 /// either end of the bar.
-const SEPARATOR_GAP: f32 = 8.0;
+const WINDOW_BUTTONS_GAP: f32 = 8.0;
+/// Space between the last menu and the workspace tabs, on top of the bar's
+/// item spacing, so the two runs read as two rather than one.
+#[cfg(not(target_os = "macos"))]
+const MENUS_TABS_GAP: f32 = 2.0;
 /// How far below the row's centre the bar's contents sit - the mark, the
-/// menus, the rule after them and the workspace tabs' names. Centred on the
+/// menus and the workspace tabs' names. Centred on the
 /// row they ride high, the bar's top padding being only the window's edge.
 /// See [`lowered`].
 const LABEL_DROP: f32 = 2.0;
@@ -121,11 +116,11 @@ pub(crate) fn draw_main_menu(ui: &mut egui::Ui, editor: &mut EditorState, projec
             let row = egui::Rect::from_min_size(inner.min, egui::vec2(inner.width(), ui.spacing().interact_size.y));
             title_bar::interact_background(ui, bar, commands);
             let controls_left = title_bar::draw_window_controls(ui, bar, row, &mut editor.window_frame, commands);
-            let strip_rect = inner.with_max_x(inner.right().min(controls_left - SEPARATOR_GAP));
+            let strip_rect = inner.with_max_x(inner.right().min(controls_left - WINDOW_BUTTONS_GAP));
             // Room for the system's window buttons, where they are over the
             // bar, measured from the strip's own left so a scrolled strip
             // keeps the same space.
-            let leading_space = (editor.window_frame.leading_inset > 0.0).then(|| (editor.window_frame.leading_inset + SEPARATOR_GAP - strip_rect.left()).max(0.0));
+            let leading_space = (editor.window_frame.leading_inset > 0.0).then(|| (editor.window_frame.leading_inset + WINDOW_BUTTONS_GAP - strip_rect.left()).max(0.0));
             let mut tabs_right = strip_rect.right();
             ui.scope_builder(egui::UiBuilder::new().max_rect(strip_rect), |ui| {
                 // Too narrow a window scrolls the row rather than clipping the
@@ -145,7 +140,7 @@ pub(crate) fn draw_main_menu(ui: &mut egui::Ui, editor: &mut EditorState, projec
                                 draw_logo(ui);
                                 draw_file_menu(ui, editor, project, commands);
                                 draw_view_menu(ui, editor, commands);
-                                draw_separator(ui);
+                                ui.add_space(MENUS_TABS_GAP);
                             });
 
                             tabs = Some(draw_workspace_tabs(ui, editor, commands));
@@ -191,19 +186,6 @@ fn draw_logo(ui: &mut egui::Ui) {
     let (rect, _) = ui.allocate_exact_size(egui::Vec2::splat(LOGO_SIZE), egui::Sense::hover());
     egui::Image::new(themed_icon!(ui, "logo.svg")).fit_to_exact_size(rect.size()).paint_at(ui, rect);
     ui.add_space(LOGO_MARGIN);
-}
-
-/// Part the menus from the workspace tabs with a short vertical rule.
-///
-/// [`SEPARATOR_LEADING_GAP`] from the last menu's label text, counting the
-/// label's button padding and the bar's item spacing; the item spacing alone
-/// parts it from the open tab's edge.
-#[cfg(not(target_os = "macos"))]
-fn draw_separator(ui: &mut egui::Ui) {
-    ui.add_space(SEPARATOR_LEADING_GAP - ui.spacing().button_padding.x - ui.spacing().item_spacing.x);
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, SEPARATOR_HEIGHT), egui::Sense::hover());
-    let color = ui.visuals().widgets.noninteractive.bg_stroke.color;
-    ui.painter().line_segment([rect.center_top(), rect.center_bottom()], egui::Stroke::new(1.0, color));
 }
 
 /// Draw the run of workspace tabs, always in [`Workspace::ALL`]'s order.
