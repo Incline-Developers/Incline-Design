@@ -603,7 +603,7 @@ pub(crate) fn reroute(
                 return None;
             };
             let held = stock[&pile][row.interval];
-            (held > 1e-9).then(|| (pile, row.tonnes_t / held))
+            (held > 1e-9).then_some((pile, row.tonnes_t / held))
         })
         .collect();
     // The fraction of each pile's opening stock drawn in each interval.

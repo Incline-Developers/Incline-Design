@@ -419,7 +419,7 @@ fn dxf_entity_alpha(raw: i32) -> Option<f32> {
     let raw = raw as u32;
     // 0 means no explicit transparency. Method byte 0x02 carries a direct
     // alpha value in the low byte (0 transparent, 255 opaque).
-    ((raw & 0xff00_0000) == 0x0200_0000).then(|| (raw & 0xff) as f32 / 255.0)
+    ((raw & 0xff00_0000) == 0x0200_0000).then_some((raw & 0xff) as f32 / 255.0)
 }
 
 fn import_entities<'e>(entities: impl IntoIterator<Item = &'e Entity>, ctx: &mut ImportCtx<'_>, transform: &Transform, scope: BlockScope<'_>) {
