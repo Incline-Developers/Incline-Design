@@ -104,9 +104,10 @@ impl LinearOperator for DiagonalPrecond<'_> {
         let count = self.diagonal.len();
         assert!(rhs.len() >= count && lhs.len() >= count);
         let mut rldot = 0.0;
-        let mut i = 0;
+        // Two entries at a time where SSE2 is baseline, the rest one by one.
         #[cfg(target_arch = "x86_64")]
-        {
+        let start = {
+            let mut i = 0;
             use std::arch::x86_64::{_mm_div_pd, _mm_loadu_pd, _mm_mul_pd, _mm_storeu_pd};
             while i + 1 < count {
                 let mut products = [0.0; 2];
@@ -124,8 +125,11 @@ impl LinearOperator for DiagonalPrecond<'_> {
                 rldot += products[1];
                 i += 2;
             }
-        }
-        for j in i..count {
+            i
+        };
+        #[cfg(not(target_arch = "x86_64"))]
+        let start = 0;
+        for j in start..count {
             lhs[j] = rhs[j] / self.diagonal[j];
             rldot += lhs[j] * rhs[j];
         }

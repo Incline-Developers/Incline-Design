@@ -666,14 +666,10 @@ pub(crate) fn scaled_infnorm(x: &[f64], scale: Option<&[f64]>) -> f64 {
     if let Some(scale) = scale {
         assert!(scale.len() >= x.len());
     }
-    let mut norm: f64;
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        norm = 0.0;
-    }
-    let mut i = 0;
+    // Four entries at a time where SSE2 is baseline, the rest one by one.
     #[cfg(target_arch = "x86_64")]
-    {
+    let (mut norm, start) = {
+        let mut i = 0;
         use std::arch::x86_64::{_mm_andnot_pd, _mm_loadu_pd, _mm_max_pd, _mm_mul_pd, _mm_set1_pd, _mm_setzero_pd, _mm_storeu_pd};
         // SAFETY: SSE2 is baseline on x86-64. Each iteration has four
         // entries in x and, when present, in the checked scale slice.
@@ -700,10 +696,12 @@ pub(crate) fn scaled_infnorm(x: &[f64], scale: Option<&[f64]>) -> f64 {
             }
             let mut lanes = [0.0; 2];
             _mm_storeu_pd(lanes.as_mut_ptr(), _mm_max_pd(first, second));
-            norm = lanes[0].max(lanes[1]);
+            (lanes[0].max(lanes[1]), i)
         }
-    }
-    for j in i..x.len() {
+    };
+    #[cfg(not(target_arch = "x86_64"))]
+    let (mut norm, start) = (0.0, 0);
+    for j in start..x.len() {
         let v = scale.map_or(x[j], |scale| scale[j] * x[j]).abs();
         if norm < v {
             norm = v;
