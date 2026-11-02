@@ -1237,7 +1237,11 @@ fn draw_ui(
     dialogs::object_edit::draw_object_edit_dialog(root_ui, editor, commands);
     dialogs::about::draw_about_dialog(root_ui, editor);
     elements::properties::draw_preferences(root_ui, editor, commands);
-    elements::properties::draw_block_model_controls(root_ui, editor, block_models, commands, canvas_rect);
+    // Laid out before the block-model card, which decides whether it keeps
+    // its place along the bottom edge; drawn below, with the other overlays.
+    let world_per_point = frame_context.world_per_physical_pixel.map(|scale| scale * f64::from(root_ui.ctx().pixels_per_point()));
+    let scale_bar = widgets::viewport::ViewportScaleBar::new("viewport_scale_bar", canvas_rect).layout(root_ui.ctx(), world_per_point, editor.renderer_background_color);
+    let scale_bar_shown = elements::properties::draw_block_model_controls(root_ui, editor, block_models, commands, canvas_rect, scale_bar.as_ref().map(|bar| bar.rect()));
 
     // --- Canvas right-click context menu ---
     if editor.canvas_context_menu_open
@@ -1470,8 +1474,9 @@ fn draw_ui(
     // cursor egui reports for the frame is whoever asked last.
     elements::cursors::draw_tool_cursor(root_ui.ctx(), editor, canvas_rect, frame_context.camera_active);
 
-    let world_per_point = frame_context.world_per_physical_pixel.map(|scale| scale * f64::from(root_ui.ctx().pixels_per_point()));
-    widgets::viewport::ViewportScaleBar::new("viewport_scale_bar", canvas_rect).show(root_ui.ctx(), world_per_point, editor.renderer_background_color);
+    if scale_bar_shown && let Some(scale_bar) = scale_bar {
+        scale_bar.show(root_ui.ctx());
+    }
 
     geometry_dirty |= draw_global_dialogs(root_ui, editor, document, project, block_models, drill_holes, frame_context.console_snapshot, commands);
 

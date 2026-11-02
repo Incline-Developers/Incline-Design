@@ -9,10 +9,26 @@ use crate::{
     },
 };
 
-/// Room the bottom-left tool panels are given: their usual widest plus the
-/// margin they sit in. Anything else along the viewport's bottom edge keeps
-/// clear of it, so a tool opening never lands on top of it.
-pub(crate) const DOCK_PANEL_RESERVED_WIDTH: f32 = 340.0 + 10.0;
+/// Where the tool panels open in the viewport's bottom-left corner reach to,
+/// and the pass they were drawn in. See [`docked_left_edge`].
+fn docked_left_id() -> egui::Id {
+    egui::Id::unique("viewport_docked_left_edge")
+}
+
+/// The right edge of the tool panels open in the viewport's bottom-left
+/// corner, or `None` while none is.
+///
+/// Anything else along the viewport's bottom edge keeps clear of this rather
+/// than of the corner as a whole, so it can use the corner while no tool is
+/// open. The panels and what keeps clear of them are drawn in either order,
+/// so this pass's panels or the last pass's count: a panel opening later in
+/// the frame is seen a frame late, and one closing is still seen for a frame.
+pub(crate) fn docked_left_edge(ctx: &egui::Context) -> Option<f32> {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data(|data| data.get_temp::<(u64, f32)>(docked_left_id()))
+        .filter(|(drawn, _)| drawn + 1 >= pass)
+        .map(|(_, right)| right)
+}
 
 /// A compact tool panel pinned inside the 3D viewport.
 ///
@@ -91,11 +107,12 @@ impl ViewportDockPanel {
     /// it is painted: handed the bar's rect and the card's surface. It runs
     /// after `add_contents`, which settles the card's width.
     pub(crate) fn show_with_heading<R>(self, ctx: &egui::Context, heading: impl FnOnce(&mut egui::Ui, egui::Rect, egui::Color32), add_contents: impl FnOnce(&mut egui::Ui) -> R) {
+        let docked_left = self.anchor.is_none();
         let (pivot, pos) = self.anchor.unwrap_or((
             egui::Align2::LEFT_BOTTOM,
             egui::pos2(self.viewport_rect.left() + self.margin.x, self.viewport_rect.bottom() - self.margin.y),
         ));
-        egui::Area::new(self.id).order(self.order).pivot(pivot).fixed_pos(pos).show(ctx, |ui| {
+        let shown = egui::Area::new(self.id).order(self.order).pivot(pivot).fixed_pos(pos).show(ctx, |ui| {
             // The same card as a floating menu, minus the drag bar's close
             // button: a docked tool panel is one of the menu family, and
             // the fields inside it are the menu fields.
@@ -124,6 +141,17 @@ impl ViewportDockPanel {
                 })
                 .inner
         });
+        if docked_left {
+            let pass = ctx.cumulative_pass_nr();
+            let right = shown.response.rect.right();
+            ctx.data_mut(|data| {
+                let edge = data
+                    .get_temp::<(u64, f32)>(docked_left_id())
+                    .filter(|(drawn, _)| *drawn == pass)
+                    .map_or(right, |(_, edge)| edge.max(right));
+                data.insert_temp(docked_left_id(), (pass, edge));
+            });
+        }
     }
 }
 
@@ -1193,13 +1221,14 @@ impl ViewportScaleBar {
         }
     }
 
-    pub(crate) fn show(self, ctx: &egui::Context, world_per_point: Option<f64>, viewport_background: [f32; 4]) {
-        let Some(world_per_point) = world_per_point.filter(|value| value.is_finite() && *value > 0.0) else {
-            return;
-        };
+    /// Lay the bar out for this view without drawing it, so what shares the
+    /// viewport's bottom edge can see where it would go first. `None` where
+    /// there is no scale to show.
+    pub(crate) fn layout(self, ctx: &egui::Context, world_per_point: Option<f64>, viewport_background: [f32; 4]) -> Option<ScaleBarLayout> {
+        let world_per_point = world_per_point.filter(|value| value.is_finite() && *value > 0.0)?;
         let max_width = SCALE_BAR_MAX_WIDTH.min(self.viewport_rect.width() - SCALE_BAR_VIEWPORT_MARGIN * 2.0 - SCALE_BAR_LABEL_ALLOWANCE);
         if max_width <= 0.0 {
-            return;
+            return None;
         }
         let distance = round_down_to_nice(world_per_point * f64::from(max_width));
         let bar_width = (distance / world_per_point) as f32;
@@ -1238,14 +1267,59 @@ impl ViewportScaleBar {
             self.viewport_rect.right() - SCALE_BAR_VIEWPORT_MARGIN,
             self.viewport_rect.bottom() - SCALE_BAR_VIEWPORT_MARGIN,
         ) - block_size;
-        egui::Area::new(self.id)
+        Some(ScaleBarLayout {
+            id: self.id,
+            rect: egui::Rect::from_min_size(top_left, block_size),
+            left,
+            bar_width,
+            placed,
+            galleys,
+            ink,
+            outline,
+        })
+    }
+}
+
+/// A scale bar laid out by [`ViewportScaleBar::layout`], to be drawn or
+/// left out.
+pub(crate) struct ScaleBarLayout {
+    id: egui::Id,
+    rect: egui::Rect,
+    /// How far the outermost label overhangs the bar's left end.
+    left: f32,
+    bar_width: f32,
+    placed: Vec<(usize, egui::Rangef)>,
+    galleys: Vec<std::sync::Arc<egui::Galley>>,
+    ink: egui::Color32,
+    outline: egui::Color32,
+}
+
+impl ScaleBarLayout {
+    /// Where the bar and its labels would be drawn.
+    pub(crate) fn rect(&self) -> egui::Rect {
+        self.rect
+    }
+
+    pub(crate) fn show(self, ctx: &egui::Context) {
+        let Self {
+            id,
+            rect,
+            left,
+            bar_width,
+            placed,
+            galleys,
+            ink,
+            outline,
+        } = self;
+        let tick_x = |index: usize| bar_width * SCALE_BAR_SEGMENT_FRACTIONS[index] as f32;
+        egui::Area::new(id)
             .order(egui::Order::Background)
             // Read-only, like the tool label: kept out of `layer_id_at` so the
             // drawn cursor survives crossing it.
             .interactable(false)
-            .fixed_pos(top_left)
+            .fixed_pos(rect.min)
             .show(ctx, |ui| {
-                let (rect, _) = ui.allocate_exact_size(block_size, egui::Sense::hover());
+                let (rect, _) = ui.allocate_exact_size(rect.size(), egui::Sense::hover());
                 let painter = ui.painter();
 
                 let bar_rect = egui::Rect::from_min_size(rect.min + egui::vec2(-left, 1.0), egui::vec2(bar_width, SCALE_BAR_THICKNESS));
@@ -1323,16 +1397,16 @@ pub(crate) fn draw_section_grid(ui: &egui::Ui, editor: &EditorState, canvas_rect
 
     // A label under a floating panel is dropped rather than drawn unreadable; panel areas are
     // collected as a set rather than by name, since the dock alone is a dozen panels.
+    // The scale bar is a background area, and is counted only while it is
+    // drawn: it gives way to the block-model card when the edge is short.
     let mut obscured_by: Vec<egui::Rect> = ui.ctx().memory(|memory| {
-        let mut rects: Vec<egui::Rect> = memory
+        memory
             .areas()
             .visible_layer_ids()
             .into_iter()
-            .filter(|layer| layer.order != egui::Order::Background)
+            .filter(|layer| layer.order != egui::Order::Background || layer.id == egui::Id::unique("viewport_scale_bar"))
             .filter_map(|layer| memory.area_rect(layer.id))
-            .collect();
-        rects.extend(memory.area_rect(egui::Id::unique("viewport_scale_bar")));
-        rects
+            .collect()
     });
     obscured_by.push(crate::ui::elements::cursors::orientation_gizmo_rect(canvas_rect));
 
