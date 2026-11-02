@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 230" width="540" height="230" role="img" aria-label="Geology workspace, plan view, a click on the string from (1000, 950, 80.0) to (1200, 950, 76.0) puts a new vertex on it at (1100, 950, 78.00), and the string keeps its shape.">
+  <polyline points="70,150 470,150" fill="none" stroke="#000" stroke-width="1"/>
+  <g fill="#000"><circle cx="70" cy="150" r="3"/><circle cx="470" cy="150" r="3"/></g>
+  <circle cx="270" cy="150" r="3" fill="#d9622b"/>
+  <circle cx="270" cy="150" r="9" fill="none" stroke="#d9622b" stroke-width="1"/>
+  <line x1="505" y1="52" x2="505" y2="24" stroke="#000" stroke-width="1"/>
+  <path d="M505 23 l-3 6 l6 0 z" fill="#000"/>
+  <text x="505" y="16" font-family="sans-serif" font-size="13" fill="#000" text-anchor="middle">N</text>
+  <g font-family="sans-serif" font-size="13" fill="#000" text-anchor="middle">
+    <text x="70" y="132">(1000, 950, 80.0)</text>
+    <text x="470" y="132">(1200, 950, 76.0)</text>
+    <text x="270" y="186">(1100, 950, 78.00)</text>
+  </g>
+</svg>

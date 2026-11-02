@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 250" width="540" height="250" role="img" aria-label="Geology workspace, section view along the string, five vertices before thinning in grey and the four vertices left after Thin Strings at Tolerance 0.1 m in orange.">
+  <line x1="60" y1="20" x2="60" y2="200" stroke="#000" stroke-width="1"/>
+  <line x1="60" y1="200" x2="500" y2="200" stroke="#000" stroke-width="1"/>
+  <g font-family="sans-serif" font-size="13" fill="#000">
+    <text x="54" y="164" text-anchor="end">78.00</text>
+    <text x="54" y="44" text-anchor="end">78.30</text>
+    <text x="100" y="220" text-anchor="middle">1000</text>
+    <text x="190" y="220" text-anchor="middle">1050</text>
+    <text x="370" y="220" text-anchor="middle">1150</text>
+    <text x="60" y="14" text-anchor="middle">RL</text>
+    <text x="500" y="14" text-anchor="end">RL scale much larger than distance</text>
+    <text x="280" y="220" text-anchor="middle">1100</text>
+    <text x="460" y="220" text-anchor="middle">1200</text>
+    <text x="280" y="242" text-anchor="middle">X along Y = 1100</text>
+  </g>
+  <polyline points="100,160 190,140 280,160 370,40 460,160" fill="none" stroke="#888" stroke-width="1" stroke-dasharray="4 3"/>
+  <polyline points="100,160 280,160 370,40 460,160" fill="none" stroke="#d9622b" stroke-width="3"/>
+  <g fill="#000">
+    <circle cx="100" cy="160" r="3"/>
+    <circle cx="280" cy="160" r="3"/>
+    <circle cx="370" cy="40" r="3"/>
+    <circle cx="460" cy="160" r="3"/>
+  </g>
+  <circle cx="190" cy="140" r="3" fill="#888"/>
+</svg>

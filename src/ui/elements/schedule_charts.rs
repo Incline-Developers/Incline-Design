@@ -544,7 +544,7 @@ fn draw_chart(
             for x in xs {
                 let value = column_hours(view, plot, x, end_h).and_then(|(from, to)| {
                     let (tonnes, contained) = sum_over(receipts, Some(grade), from, to);
-                    (tonnes > 1e-6).then(|| contained / tonnes)
+                    (tonnes > 1e-6).then_some(contained / tonnes)
                 });
                 match value {
                     Some(value) => run.push(egui::pos2(x + COLUMN_W / 2.0, y_of(plot, value, low, high))),

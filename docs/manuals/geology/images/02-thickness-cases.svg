@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 245" width="540" height="245" role="img" aria-label="Four holes through a seam, the length each logs in orange and, where it differs, the true thickness dashed grey; the seam dips 20 degrees and the inclined hole is 20 degrees off vertical: a vertical hole through a seam dipping 20 degrees logs about 6% more, a hole 20 degrees off vertical through a flat seam logs about 6% more, the same hole leaning straight up-dip through the dipping seam crosses it square on and logs the true thickness, and leaning straight down-dip, 40 degrees off square, it logs about 30% more.">
+  <g stroke="#000" stroke-width="1" fill="#ccc">
+    <polygon points="8,80 127,123.3 127,151 8,107.7"/>
+    <polygon points="143,95 262,95 262,121 143,121"/>
+    <polygon points="278,80 397,123.3 397,151 278,107.7"/>
+    <polygon points="413,80 532,123.3 532,151 413,107.7"/>
+  </g>
+  <g stroke="#000" stroke-width="1">
+    <line x1="67.5" y1="20" x2="67.5" y2="175"/>
+    <line x1="175" y1="20" x2="231.4" y2="175"/>
+    <line x1="375.7" y1="20" x2="319.3" y2="175"/>
+    <line x1="427.6" y1="20" x2="484" y2="175"/>
+  </g>
+  <g stroke="#888" stroke-width="1" stroke-dasharray="4 3">
+    <line x1="30" y1="88" x2="21.1" y2="112.4"/>
+    <line x1="160" y1="95" x2="160" y2="121"/>
+    <line x1="435" y1="88" x2="426.1" y2="112.4"/>
+  </g>
+  <g stroke="#d9622b" stroke-width="3">
+    <line x1="67.5" y1="101.7" x2="67.5" y2="129.3"/>
+    <line x1="202.3" y1="95" x2="211.7" y2="121"/>
+    <line x1="345" y1="104.4" x2="336.1" y2="128.8"/>
+    <line x1="455" y1="95.3" x2="466.6" y2="127.2"/>
+  </g>
+  <g font-family="sans-serif" fill="#000" text-anchor="middle">
+    <g font-size="15">
+      <text x="67.5" y="195">vertical hole,</text>
+      <text x="67.5" y="212">dipping seam</text>
+      <text x="202.5" y="195">inclined hole,</text>
+      <text x="202.5" y="212">flat seam</text>
+      <text x="337.5" y="195">up-dip,</text>
+      <text x="337.5" y="212">square on</text>
+      <text x="472.5" y="195">down-dip,</text>
+      <text x="472.5" y="212">40° off square</text>
+    </g>
+    <g font-size="13">
+      <text x="105" y="170">dip 20°</text>
+      <text x="200" y="45">20°</text>
+      <text x="372" y="170">dip 20°</text>
+      <text x="440" y="170">dip 20°</text>
+      <text x="67.5" y="232">about 6% more</text>
+      <text x="202.5" y="232">about 6% more</text>
+      <text x="337.5" y="232">true thickness</text>
+      <text x="472.5" y="232">about 30% more</text>
+    </g>
+  </g>
+</svg>

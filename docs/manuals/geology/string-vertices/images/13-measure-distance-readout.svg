@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 210" width="540" height="210" role="img" aria-label="Geology workspace, plan view, Measure Distance armed over string 1 of layer Seam A roof, the segment under the cursor lit orange and the readout message in the banner at the top of the view.">
+  <rect x="10" y="4" width="520" height="202" stroke="#888" stroke-width="1" fill="none"/>
+  <rect x="80" y="14" width="380" height="58" stroke="#000" stroke-width="1" fill="#fff"/>
+  <line x1="505" y1="72" x2="505" y2="44" stroke="#000" stroke-width="1"/>
+  <path d="M505 43 l-3 6 l6 0 z" fill="#000"/>
+  <text x="505" y="36" font-family="sans-serif" font-size="13" fill="#000" text-anchor="middle">N</text>
+  <line x1="70" y1="150" x2="470" y2="150" stroke="#d9622b" stroke-width="3"/>
+  <g fill="#000">
+    <circle cx="70" cy="150" r="3"/>
+    <circle cx="470" cy="150" r="3"/>
+  </g>
+  <g font-family="sans-serif" font-size="13" fill="#000">
+    <text x="270" y="38" text-anchor="middle">200.010 meters · 200.000 m plan · -2.000 m rise ·</text>
+    <text x="270" y="60" text-anchor="middle">090.00° bearing · -0.57° grade (-1.0%)</text>
+    <text x="70" y="176">(1000, 1100, 79.0)</text>
+    <text x="470" y="176" text-anchor="end">(1200, 1100, 77.0)</text>
+  </g>
+</svg>

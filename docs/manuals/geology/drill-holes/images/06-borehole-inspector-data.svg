@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 390" width="540" height="390" role="img" aria-label="Geology workspace, S1 picked, Borehole Inspector open on the Data tab: Summary rows and the two interval rows A and B.">
+  <g stroke="#000" stroke-width="1" fill="#fff">
+    <rect x="70" y="5" width="400" height="380"/>
+    <rect x="78" y="12" width="50" height="22"/>
+    <rect x="130" y="12" width="50" height="22" stroke="#888"/>
+    <rect x="182" y="12" width="62" height="22" stroke="#888"/>
+    <rect x="76" y="84" width="388" height="172"/>
+    <rect x="76" y="264" width="388" height="104"/>
+    <rect x="86" y="290" width="368" height="60"/>
+    <line x1="86" y1="310" x2="454" y2="310"/>
+  </g>
+  <rect x="86" y="310" width="368" height="40" fill="none" stroke="#d9622b" stroke-width="3"/>
+  <text x="80" y="56" font-family="sans-serif" font-size="15" font-weight="bold" fill="#000">S1</text>
+  <g font-family="sans-serif" font-size="13" fill="#000">
+    <text x="87" y="28">Data</text>
+    <text x="139" y="28" fill="#888">Log</text>
+    <text x="191" y="28" fill="#888">Column</text>
+    <text x="80" y="74" fill="#888">S-collars + 1 files</text>
+    <text x="86" y="101" font-weight="bold">Summary</text>
+    <text x="86" y="122">Easting</text>
+    <text x="86" y="140">Northing</text>
+    <text x="86" y="158">Elevation</text>
+    <text x="86" y="176">Trace extent</text>
+    <text x="86" y="194">Total depth</text>
+    <text x="86" y="212">Orientation</text>
+    <text x="86" y="230">Orientation source</text>
+    <text x="86" y="248">Intervals</text>
+    <g text-anchor="end">
+      <text x="454" y="122">1000.00</text>
+      <text x="454" y="140">1000.00</text>
+      <text x="454" y="158">100.00</text>
+      <text x="454" y="176">0.00 to 41.50</text>
+      <text x="454" y="194">60.00</text>
+      <text x="454" y="212">Azimuth 0.0, dip -90.0</text>
+      <text x="454" y="230">Unknown</text>
+      <text x="454" y="248">2</text>
+    </g>
+    <text x="86" y="281" font-weight="bold">Interval data</text>
+    <text x="94" y="305"><tspan>From</tspan><tspan x="174">To</tspan><tspan x="262">SEAM</tspan></text>
+    <text x="94" y="325"><tspan>20.00</tspan><tspan x="174">22.00</tspan><tspan x="262">A</tspan></text>
+    <text x="94" y="345"><tspan>40.00</tspan><tspan x="174">41.50</tspan><tspan x="262">B</tspan></text>
+  </g>
+</svg>
