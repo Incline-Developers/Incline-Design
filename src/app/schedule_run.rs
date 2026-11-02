@@ -528,13 +528,16 @@ impl crate::app::App<'_> {
                 let semantic = self.schedule_semantic_key();
                 self.schedule_run_serial += 1;
                 let serial = self.schedule_run_serial;
-                self.record_attempt(ScheduleAttempt {
-                    serial,
-                    semantic,
-                    outcome: AttemptOutcome::Refused,
-                    repair: problems.iter().find_map(|problem| problem.repair),
-                    messages: problems.iter().map(schedule_capture::CaptureDiagnostic::describe).collect(),
-                });
+                self.record_attempt(
+                    ScheduleAttempt {
+                        serial,
+                        semantic,
+                        outcome: AttemptOutcome::Refused,
+                        repair: problems.iter().find_map(|problem| problem.repair),
+                        messages: problems.iter().map(schedule_capture::CaptureDiagnostic::describe).collect(),
+                    },
+                    auto,
+                );
                 return;
             }
         };
@@ -713,25 +716,31 @@ impl crate::app::App<'_> {
                         if showing_early {
                             app.settle_early_schedule(serial, DayByDayRole::Kept);
                         }
-                        app.record_attempt(ScheduleAttempt {
-                            serial,
-                            semantic,
-                            outcome,
-                            messages,
-                            repair,
-                        })
+                        app.record_attempt(
+                            ScheduleAttempt {
+                                serial,
+                                semantic,
+                                outcome,
+                                messages,
+                                repair,
+                            },
+                            auto,
+                        )
                     }
                     Err(error) => {
                         if showing_early {
                             app.settle_early_schedule(serial, DayByDayRole::Kept);
                         }
-                        app.record_attempt(ScheduleAttempt {
-                            serial,
-                            semantic,
-                            outcome: AttemptOutcome::Failed,
-                            messages: vec![format!("{error:#}")],
-                            repair: None,
-                        })
+                        app.record_attempt(
+                            ScheduleAttempt {
+                                serial,
+                                semantic,
+                                outcome: AttemptOutcome::Failed,
+                                messages: vec![format!("{error:#}")],
+                                repair: None,
+                            },
+                            auto,
+                        )
                     }
                 }
                 app.redraw_requested = true;
@@ -816,22 +825,27 @@ impl crate::app::App<'_> {
     }
 
     /// Publish nothing, keep whatever was held, and say why.
-    fn record_attempt(&mut self, attempt: ScheduleAttempt) {
+    ///
+    /// `auto` is a recalculation nobody pressed for. One that cannot start
+    /// says nothing in the console - a warning there opens a dialog, and
+    /// edits refuse a project that is not ready yet after every one of them -
+    /// but its reasons stay where the run controls, the Inspector and
+    /// Scheduling Readiness read them. A run someone pressed for answers
+    /// every time, even with the reason it gave before.
+    fn record_attempt(&mut self, attempt: ScheduleAttempt, auto: bool) {
         self.schedule_auto_attempted = Some(self.auto_key());
-        // Edits recalculate automatically, so a project that is not ready yet
-        // is refused for the same reason after every one of them. The status
-        // line already holds that reason; the console says it once.
-        let repeated = attempt.outcome == AttemptOutcome::Refused
-            && self
-                .schedule_run_diagnostics
-                .as_ref()
-                .is_some_and(|held| held.outcome == AttemptOutcome::Refused && held.messages == attempt.messages);
         let headline = attempt_headline(&attempt);
-        if !repeated {
-            crate::userspace_warn!("{headline}");
+        if auto && attempt.outcome == AttemptOutcome::Refused {
+            log::info!("schedule recalculation refused: {headline}");
+        } else {
+            // One warning, so one dialog: the reasons beneath the headline
+            // rather than a dialog for each.
+            let mut text = headline.clone();
             for message in attempt.messages.iter().filter(|message| !headline.contains(message.as_str())) {
-                crate::userspace_warn!("{message}");
+                text.push('\n');
+                text.push_str(message);
             }
+            crate::userspace_warn!("{text}");
         }
         self.schedule_run_diagnostics = Some(attempt);
         self.redraw_requested = true;
@@ -849,13 +863,16 @@ impl crate::app::App<'_> {
                 crate::userspace_log!("{}", tr!("schedule-run-stopped-early", run = serial.to_string()));
                 return;
             }
-            self.record_attempt(ScheduleAttempt {
-                serial,
-                semantic,
-                outcome: AttemptOutcome::Cancelled,
-                messages: Vec::new(),
-                repair: None,
-            });
+            self.record_attempt(
+                ScheduleAttempt {
+                    serial,
+                    semantic,
+                    outcome: AttemptOutcome::Cancelled,
+                    messages: Vec::new(),
+                    repair: None,
+                },
+                false,
+            );
         }
     }
 

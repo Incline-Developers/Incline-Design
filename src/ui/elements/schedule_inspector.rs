@@ -99,6 +99,14 @@ pub(crate) fn draw_inspector(
 
     let Some(schedule) = editor.schedule_result.clone() else {
         note(ui, tr!("inspector-no-schedule"));
+        // Why there is none: a recalculation nobody pressed for that cannot
+        // start says so here, not in a dialog.
+        if !editor.schedule_run_status.is_empty() {
+            note(ui, editor.schedule_run_status.clone());
+            for detail in &editor.schedule_run_details {
+                note(ui, detail.clone());
+            }
+        }
         return;
     };
     if hour >= schedule.requested_end_h {

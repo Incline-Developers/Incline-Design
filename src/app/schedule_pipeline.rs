@@ -645,9 +645,17 @@ impl crate::app::App<'_> {
         // What the Gantt would be told if it asked to calculate right now.
         // Held where the run controls are as well as on the Gantt, so an unmet
         // prerequisite is visible from the page that can fix it.
-        let calculation = match self.schedule_run_inputs() {
-            Ok(_) => tr!("schedule-calculation-ready"),
-            Err(reason) => tr!("schedule-calculation-blocked", reason = reason.describe()),
+        // The Setup steps passing is not the whole answer: a run can still be
+        // refused as it captures (a bar whose dig blocks the Solids run no
+        // longer holds). Until the inputs change, that refusal is the answer.
+        let refused = self
+            .schedule_run_diagnostics
+            .as_ref()
+            .filter(|attempt| attempt.outcome == super::schedule_run::AttemptOutcome::Refused && attempt.semantic == self.schedule_semantic_key());
+        let calculation = match (self.schedule_run_inputs(), refused) {
+            (Ok(_), Some(attempt)) if !attempt.messages.is_empty() => tr!("schedule-calculation-blocked", reason = attempt.messages.join("; ")),
+            (Ok(_), _) => tr!("schedule-calculation-ready"),
+            (Err(reason), _) => tr!("schedule-calculation-blocked", reason = reason.describe()),
         };
         // As on Solids: a step run on its own that succeeds moves the list on.
         if let Some(step) = self.schedule_advance_after
