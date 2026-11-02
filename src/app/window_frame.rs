@@ -141,7 +141,7 @@ impl App<'_> {
         {
             // AppKit's points per UI point: the UI has its own size setting.
             let points = f64::from(pixels_per_point) / window.scale_factor();
-            let end = crate::mac::place_window_buttons(window, f64::from(frame.row_centre_y) * points, MAC_BUTTONS_LEFT);
+            let end = crate::mac::place_window_buttons(window, f64::from(frame.buttons_centre_y) * points, MAC_BUTTONS_LEFT);
             frame.leading_inset = match end {
                 Some(end) if !frame.fullscreen => (end / points) as f32,
                 _ => 0.0,

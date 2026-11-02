@@ -246,7 +246,6 @@ impl<'a> App<'a> {
         // the draft and the editor disagreeing.
         crate::app::io::save_config(&config_from(
             &preferences,
-            self.editor.workspace_order,
             self.editor.delay_products.iter().map(DelayProduct::to_stored).collect(),
             self.editor.blast_library.clone(),
             self.editor.survey.definitions.clone(),
@@ -265,7 +264,6 @@ impl<'a> App<'a> {
         }
         crate::app::io::save_config(&config_from(
             &self.editor.current_preferences(),
-            self.editor.workspace_order,
             self.editor.delay_products.iter().map(DelayProduct::to_stored).collect(),
             self.editor.blast_library.clone(),
             self.editor.survey.definitions.clone(),
@@ -381,12 +379,9 @@ impl<'a> App<'a> {
 /// whole: a save that left a field out of the literal would drop whatever the
 /// last one had put there. The products are passed in rather than read off the
 /// draft because they are not a preference the settings tabs edit - the
-/// palette owns them. The workspace order is passed separately for the same
-/// reason, so saving preferences or products preserves the tab arrangement.
-/// Mine-grid definitions are also carried through every config write.
+/// palette owns them. Mine-grid definitions are also carried through every config write.
 pub(crate) fn config_from(
     preferences: &crate::ui::state::PreferencesDraft,
-    workspace_order: [crate::ui::state::Workspace; 5],
     delay_products: Vec<crate::app::io::StoredDelayProduct>,
     blast_library: crate::model::blast::BlastLibrary,
     coordinate_systems: Vec<crate::model::survey::SystemDefinition>,
@@ -423,7 +418,6 @@ pub(crate) fn config_from(
         blast_library,
         coordinate_systems,
         mine_coordinate_system,
-        workspace_order: workspace_order.to_vec(),
         recent_functions_shown: preferences.recent_functions_shown,
         recent_design_functions,
     }

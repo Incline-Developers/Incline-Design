@@ -67,7 +67,6 @@ impl App<'_> {
         let products = self.editor.delay_products.iter().map(DelayProduct::to_stored).collect();
         if let Err(error) = crate::app::io::save_config(&config_from(
             &preferences,
-            self.editor.workspace_order,
             products,
             self.editor.blast_library.clone(),
             self.editor.survey.definitions.clone(),

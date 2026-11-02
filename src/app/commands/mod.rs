@@ -1227,29 +1227,6 @@ impl<'a> App<'a> {
                 result
             }
             UiCommand::TransformSurveySelection => self.transform_survey_selection(),
-            UiCommand::ReorderWorkspace { workspace, before } => {
-                let mut order = self.editor.workspace_order.to_vec();
-                if before != Some(workspace) {
-                    order.retain(|item| *item != workspace);
-                    let index = before.and_then(|target| order.iter().position(|item| *item == target)).unwrap_or(order.len());
-                    order.insert(index, workspace);
-                    let order = order.try_into().expect("reordering preserves all workspaces");
-                    if self.editor.workspace_order != order {
-                        let config = view::config_from(
-                            &self.editor.current_preferences(),
-                            order,
-                            self.editor.delay_products.iter().map(crate::ui::state::DelayProduct::to_stored).collect(),
-                            self.editor.blast_library.clone(),
-                            self.editor.survey.definitions.clone(),
-                            self.editor.survey.local_system.clone(),
-                            self.editor.recent_design_functions.clone(),
-                        );
-                        crate::app::io::save_config(&config)?;
-                        self.editor.workspace_order = order;
-                    }
-                }
-                Ok(())
-            }
             UiCommand::OpenPreferences => {
                 self.editor.show_preferences = true;
                 Ok(())

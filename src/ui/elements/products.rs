@@ -85,7 +85,6 @@ pub(crate) fn draw_product_sections(ui: &mut egui::Ui, editor: &mut EditorState,
     let (toggle, header, _) = ExplorerHeader::new(egui::Id::unique("charge_products_collapse"), tr!("products-charge-products"))
         .icon(unthemed_icon!("charge_products.svg"))
         .color(HEADER_CHARGE)
-        .default_open(false)
         .show(ui, |ui| draw_charge_products(ui, editor));
     context_menu_popup(&toggle.union(header.inner), tr!("products-charge-products"), |ui| {
         if ContextMenuAction::new(tr!("common-new-product")).show(ui).clicked() {

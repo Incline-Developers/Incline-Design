@@ -113,7 +113,6 @@ impl App<'_> {
         let preferences = self.editor.current_preferences();
         if let Err(error) = crate::app::io::save_config(&crate::app::commands::view::config_from(
             &preferences,
-            self.editor.workspace_order,
             self.editor.delay_products.iter().map(crate::ui::state::DelayProduct::to_stored).collect(),
             self.editor.blast_library.clone(),
             self.editor.survey.definitions.clone(),

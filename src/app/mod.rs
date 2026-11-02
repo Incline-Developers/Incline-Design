@@ -887,14 +887,6 @@ impl<'a> App<'a> {
     }
 
     fn apply_config(&mut self, config: io::Config) {
-        let mut order = Vec::new();
-        for workspace in config.workspace_order.iter().chain(crate::ui::state::Workspace::ALL.iter()) {
-            if !order.contains(workspace) {
-                order.push(*workspace);
-            }
-        }
-        self.editor.workspace_order = order.try_into().expect("all workspaces appear exactly once");
-        self.editor.active_workspace = self.editor.workspace_order[0];
         // A definition naming a parent that is not in the list, or itself,
         // cannot be resolved and would fail on every use; it is dropped on the
         // way in so the rest of the list still works.

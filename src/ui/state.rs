@@ -2013,7 +2013,7 @@ pub(crate) struct EditorState {
     pub(crate) well_log_style: crate::ui::widgets::log_traces::WellLogStyle,
     pub(crate) ui_size_percent: f64,
     /// Show the construction grid on the world XY plane at Z=0. Never written
-    /// to the config, and off until the user turns it on.
+    /// to the config, and on at launch.
     pub(crate) show_xy_grid: bool,
     /// Linear RGBA clear colour used behind the rendered scene: the panel
     /// surface of the current theme, so the viewport reads as one more region.
@@ -3181,7 +3181,6 @@ pub(crate) struct EditorState {
     /// Haulage step last found it.
     pub(crate) schedule_haul_connections: Option<crate::app::commands::haulage::HaulConnections>,
     pub(crate) survey: crate::ui::dialogs::survey::SurveyState,
-    pub(crate) workspace_order: [Workspace; 5],
     /// Production's recent functions by [`DesignRow::key`], newest last.
     pub(crate) recent_design_functions: Vec<String>,
     pub(crate) recent_functions_shown: u32,
@@ -3927,7 +3926,7 @@ impl EditorState {
             borehole_log_strat_field: None,
             well_log_style: Default::default(),
             ui_size_percent: crate::app::io::default_ui_size_percent(),
-            show_xy_grid: false,
+            show_xy_grid: true,
             renderer_background_color: crate::ui::scene_background_color(crate::app::io::default_dark_mode()),
             show_preferences: false,
             preferences_draft: None,
@@ -4493,7 +4492,6 @@ impl EditorState {
             schedule_report_grouping: Default::default(),
             schedule_calendar: ScheduleCalendarView::default(),
             schedule_haul_connections: None,
-            workspace_order: Workspace::ALL,
             recent_design_functions: Vec::new(),
             recent_functions_shown: crate::app::io::default_recent_functions_shown(),
             survey: Default::default(),
@@ -5099,9 +5097,9 @@ pub(crate) struct WindowFrame {
     pub(crate) maximize_pressed: bool,
     /// The UI's: where it drew the maximise button this frame.
     pub(crate) maximize_button: Option<egui::Rect>,
-    /// The UI's: the vertical centre of the bar's row, which the system's
-    /// window buttons on macOS are centred on.
-    pub(crate) row_centre_y: f32,
+    /// The UI's: the height the workspace tabs' names are centred at, which
+    /// the system's window buttons on macOS are centred at too.
+    pub(crate) buttons_centre_y: f32,
 }
 
 /// Something the title bar asks of the window.
@@ -5451,10 +5449,6 @@ pub(crate) enum UiCommand {
     /// two. The tools that run on a selection are reached this way as well as
     /// from the viewport.
     SelectExplorerRow(ExplorerRow),
-    ReorderWorkspace {
-        workspace: Workspace,
-        before: Option<Workspace>,
-    },
     /// Switch the UI language from the status bar's picker. Applied live and
     /// saved into the config, exactly as any other preference is.
     SetLanguage(crate::i18n::LanguageChoice),
@@ -5956,7 +5950,6 @@ impl UiCommand {
             | Self::SetSurveyLocalSystem(_)
             | Self::SelectExplorerRow(_)
             | Self::TransformSurveySelection
-            | Self::ReorderWorkspace { .. }
             | Self::ToggleViewOption(_)
             | Self::SetInitiation { .. }
             | Self::ChargeSelectedHoles { .. }

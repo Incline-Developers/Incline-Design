@@ -54,13 +54,12 @@ pub(crate) struct PageTabsPaint {
 
 impl PageTabsPaint {
     /// `tabs` as laid out this frame, with `selected` open. The open tab slides
-    /// to a newly picked slot, unless it is `held` - moving with the pointer -
-    /// when it stays under the pointer instead. Stands on the bottom of the row
-    /// until [`Self::standing_on`] says otherwise.
-    pub(crate) fn new(ui: &egui::Ui, id: egui::Id, tabs: Vec<PageTab>, selected: Option<usize>, held: bool) -> Self {
+    /// to a newly picked slot. Stands on the bottom of the row until
+    /// [`Self::standing_on`] says otherwise.
+    pub(crate) fn new(ui: &egui::Ui, id: egui::Id, tabs: Vec<PageTab>, selected: Option<usize>) -> Self {
         let target = selected.and_then(|index| tabs.get(index)).map_or(Rect::NOTHING, |tab| tab.rect);
         let sliding = super::tab_strip::sliding_tile(ui.ctx(), id, target);
-        let open = if held { target.x_range() } else { sliding.x_range() };
+        let open = sliding.x_range();
         let base = tabs.iter().map(|tab| tab.rect.bottom()).fold(f32::NEG_INFINITY, f32::max);
         Self {
             tabs,

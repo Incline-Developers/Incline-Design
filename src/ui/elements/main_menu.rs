@@ -8,10 +8,12 @@
 //! Blender's topbar does.
 
 // The dropdowns below are all in the system menu bar on macOS (`mac.rs`), and
-// nothing this module still draws there needs any of this.
+// the mark gives way to the system's window buttons there, so nothing this
+// module still draws there needs any of this.
 #[cfg(not(target_os = "macos"))]
 use crate::ui::{
     state::{UiProjectEntry, ViewToggle},
+    themed_icon,
     widgets::context_menu::{ContextMenuAction, MenuBarMenu, context_menu_separator, context_submenu},
 };
 use crate::{
@@ -21,7 +23,6 @@ use crate::{
         EditorState, UiCommand, UiProjectView,
         elements::title_bar,
         state::{ActiveTool, Workspace},
-        themed_icon,
         widgets::page_tabs::{PageTab, PageTabsPaint},
     },
 };
@@ -29,23 +30,30 @@ use crate::{
 /// Extra space above the bar's contents, on top of the panel frame's own
 /// margin, so the menus and tabs are not pinned to the window's top edge.
 const TOP_PADDING: i8 = 3;
-/// Side of the application mark at the left of the bar.
+/// Side of the application mark at the left of the bar. Not on macOS, where
+/// the system's window buttons stand at the head of the bar instead.
+#[cfg(not(target_os = "macos"))]
 const LOGO_SIZE: f32 = 18.0;
 /// Space either side of the mark, so it reads as a mark rather than as the
 /// first menu.
+#[cfg(not(target_os = "macos"))]
 const LOGO_MARGIN: f32 = 6.0;
 /// Height of the rule parting the menus from the workspace tabs.
 #[cfg(not(target_os = "macos"))]
 const SEPARATOR_HEIGHT: f32 = 16.0;
-/// Space between the last menu and that rule.
+/// Space between the last menu's label text and that rule. A little more
+/// than the bar's item spacing that parts the rule from the open tab, which
+/// is the space it measures to on the other side: beside a tab's filled
+/// shape, bare text reads as closer than it is.
 #[cfg(not(target_os = "macos"))]
-const SEPARATOR_MARGIN: f32 = 8.0;
+const SEPARATOR_LEADING_GAP: f32 = 10.0;
 /// Space between the run of menus and tabs and the window's buttons, at
 /// either end of the bar.
 const SEPARATOR_GAP: f32 = 8.0;
-/// How far below the row's centre the bar's labels sit - the menus, the rule
-/// after them and the workspace tabs' names - so they line up with the mark
-/// rather than riding above it. See [`lowered`].
+/// How far below the row's centre the bar's contents sit - the mark, the
+/// menus, the rule after them and the workspace tabs' names. Centred on the
+/// row they ride high, the bar's top padding being only the window's edge.
+/// See [`lowered`].
 const LABEL_DROP: f32 = 2.0;
 /// Space either side of a workspace tab's label.
 const TAB_PADDING: f32 = 10.0;
@@ -111,7 +119,6 @@ pub(crate) fn draw_main_menu(ui: &mut egui::Ui, editor: &mut EditorState, projec
             let inner = ui.max_rect();
             let bar = inner + frame.inner_margin;
             let row = egui::Rect::from_min_size(inner.min, egui::vec2(inner.width(), ui.spacing().interact_size.y));
-            editor.window_frame.row_centre_y = row.center().y;
             title_bar::interact_background(ui, bar, commands);
             let controls_left = title_bar::draw_window_controls(ui, bar, row, &mut editor.window_frame, commands);
             let strip_rect = inner.with_max_x(inner.right().min(controls_left - SEPARATOR_GAP));
@@ -132,10 +139,10 @@ pub(crate) fn draw_main_menu(ui: &mut egui::Ui, editor: &mut EditorState, projec
                             if let Some(space) = leading_space {
                                 ui.add_space(space);
                             }
-                            draw_logo(ui);
 
                             #[cfg(not(target_os = "macos"))]
                             lowered(ui, |ui| {
+                                draw_logo(ui);
                                 draw_file_menu(ui, editor, project, commands);
                                 draw_view_menu(ui, editor, commands);
                                 draw_separator(ui);
@@ -164,10 +171,8 @@ pub(crate) fn draw_main_menu(ui: &mut egui::Ui, editor: &mut EditorState, projec
 /// Lay `add_contents` out along the bar [`LABEL_DROP`] lower than the row
 /// centres it, taking the same room in the row as if it had not moved.
 ///
-/// The menus' labels centred on the row sit high beside the mark, whose
-/// glyph fills its box where the text leaves room for descenders under it.
-/// Moving the row down would move the mark and the bar's height with it, so
-/// only the labels are lowered.
+/// Moving the row itself down would move the bar's height with it, so its
+/// contents are lowered within it instead.
 #[cfg(not(target_os = "macos"))]
 fn lowered(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
     let drop = egui::vec2(0.0, LABEL_DROP);
@@ -180,6 +185,7 @@ fn lowered(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
 /// Paint the application mark at the head of the bar.
 ///
 /// Flat and one-coloured: beside the menu labels it is a glyph, not artwork.
+#[cfg(not(target_os = "macos"))]
 fn draw_logo(ui: &mut egui::Ui) {
     ui.add_space(LOGO_MARGIN);
     let (rect, _) = ui.allocate_exact_size(egui::Vec2::splat(LOGO_SIZE), egui::Sense::hover());
@@ -188,121 +194,44 @@ fn draw_logo(ui: &mut egui::Ui) {
 }
 
 /// Part the menus from the workspace tabs with a short vertical rule.
+///
+/// [`SEPARATOR_LEADING_GAP`] from the last menu's label text, counting the
+/// label's button padding and the bar's item spacing; the item spacing alone
+/// parts it from the open tab's edge.
 #[cfg(not(target_os = "macos"))]
 fn draw_separator(ui: &mut egui::Ui) {
-    ui.add_space(SEPARATOR_MARGIN);
+    ui.add_space(SEPARATOR_LEADING_GAP - ui.spacing().button_padding.x - ui.spacing().item_spacing.x);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, SEPARATOR_HEIGHT), egui::Sense::hover());
     let color = ui.visuals().widgets.noninteractive.bg_stroke.color;
     ui.painter().line_segment([rect.center_top(), rect.center_bottom()], egui::Stroke::new(1.0, color));
-    // No margin after it: the open tab's surface reaches out to its edge, so
-    // the bar's item spacing alone parts the two.
 }
 
-/// A drag previews the order locally; only releasing commits it to settings.
-#[derive(Clone)]
-struct WorkspaceTabDrag {
-    workspace: Workspace,
-    order: [Workspace; 5],
-    grab_offset: f32,
-}
-
-/// Draw the run of workspace tabs, sliding neighbours out of the dragged tab's way.
+/// Draw the run of workspace tabs, always in [`Workspace::ALL`]'s order.
 ///
 /// The open workspace stands up out of the bar onto the viewport bar under it,
-/// a browser's open tab (`widgets::page_tabs`), sliding to the next one picked,
-/// and travelling with its tab while that is dragged. The other tabs are
-/// labels on the bar itself. They are laid out and take their clicks here, and
-/// are painted once the regions are, since the open one reaches down to them.
+/// a browser's open tab (`widgets::page_tabs`), sliding to the next one picked.
+/// The other tabs are labels on the bar itself. They are laid out and take
+/// their clicks here, and are painted once the regions are, since the open one
+/// reaches down to them.
 fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) -> PageTabsPaint {
-    let drag_id = ui.scope_id().with("workspace-tab-drag");
-    let mut drag = ui.ctx().data_mut(|data| data.get_temp::<WorkspaceTabDrag>(drag_id));
     let spacing = ui.spacing().item_spacing.x;
     let font = egui::TextStyle::Button.resolve(ui.style());
     let widths = Workspace::ALL.map(|workspace| ui.painter().layout_no_wrap(workspace.label(), font.clone(), egui::Color32::PLACEHOLDER).size().x + TAB_PADDING * 2.0);
-    let tab_width = |workspace| widths[Workspace::ALL.iter().position(|item| *item == workspace).unwrap()];
     let total_width = widths.iter().sum::<f32>() + spacing * (Workspace::ALL.len() - 1) as f32;
     let (strip, _) = ui.allocate_exact_size(egui::vec2(total_width, TAB_HEIGHT), egui::Sense::hover());
-    let pointer = ui.input(|input| input.pointer.interact_pos());
-    let cancelled = ui.input(|input| input.key_pressed(egui::Key::Escape));
-    if cancelled {
-        drag = None;
-    }
-    if let Some(drag) = &mut drag
-        && let Some(pointer) = pointer
-    {
-        let center = pointer.x - drag.grab_offset + tab_width(drag.workspace) / 2.0;
-        let mut index = drag.order.iter().position(|item| *item == drag.workspace).unwrap();
-        let mut x = strip.left();
-        let centers = drag.order.map(|workspace| {
-            let center = x + tab_width(workspace) / 2.0;
-            x += tab_width(workspace) + spacing;
-            center
-        });
-        while index > 0 && center < centers[index - 1] {
-            drag.order.swap(index, index - 1);
-            index -= 1;
-        }
-        while index + 1 < drag.order.len() && center > centers[index + 1] {
-            drag.order.swap(index, index + 1);
-            index += 1;
-        }
-    }
-    let order = drag.as_ref().map_or(editor.workspace_order, |drag| drag.order);
+    // The line the tabs' names are centred on, which the system's window
+    // buttons on macOS are centred on too. See `PageTabsPaint::label_offset`.
+    editor.window_frame.buttons_centre_y = strip.top() + TAB_CELL_HEIGHT / 2.0 + LABEL_DROP;
     let mut x = strip.left();
-    let mut tabs = Vec::new();
-    for workspace in order {
+    let mut painted = Vec::with_capacity(Workspace::ALL.len());
+    for (workspace, width) in Workspace::ALL.into_iter().zip(widths) {
         let id = ui.scope_id().with(("workspace-tab", workspace));
-        let animated_x = ui.ctx().animate_value_with_time(id.with("position"), x, 0.12);
-        let left = if let Some(drag) = &drag
-            && drag.workspace == workspace
-            && let Some(pointer) = pointer
-        {
-            (pointer.x - drag.grab_offset).clamp(strip.left(), strip.right() - tab_width(workspace))
-        } else {
-            animated_x
-        };
-        let rect = egui::Rect::from_min_size(egui::pos2(left, strip.top()), egui::vec2(tab_width(workspace), TAB_CELL_HEIGHT));
-        tabs.push((workspace, id, rect));
-        x += tab_width(workspace) + spacing;
+        let rect = egui::Rect::from_min_size(egui::pos2(x, strip.top()), egui::vec2(width, TAB_CELL_HEIGHT));
+        painted.push(draw_workspace_tab(ui, editor, commands, workspace, id, rect));
+        x += width + spacing;
     }
-    // The open tab slides to a newly picked workspace, and rides with its tab,
-    // without the slide's lag, while that is held.
-    let held = drag.as_ref().is_some_and(|drag| drag.workspace == editor.active_workspace);
-    let selected = tabs.iter().position(|(workspace, _, _)| *workspace == editor.active_workspace);
-    let mut painted = Vec::with_capacity(tabs.len());
-    for (workspace, id, rect) in tabs {
-        let (response, tab) = draw_workspace_tab(ui, editor, commands, workspace, id, rect);
-        painted.push(tab);
-        if response.drag_started() && !cancelled {
-            let press = ui.input(|input| input.pointer.press_origin()).unwrap_or(rect.center());
-            drag = Some(WorkspaceTabDrag {
-                workspace,
-                order,
-                grab_offset: press.x - rect.left(),
-            });
-        }
-    }
-    if ui.input(|input| input.pointer.any_released()) {
-        if let Some(drag) = drag.take()
-            && drag.order != editor.workspace_order
-        {
-            let index = drag.order.iter().position(|item| *item == drag.workspace).unwrap();
-            commands.push(UiCommand::ReorderWorkspace {
-                workspace: drag.workspace,
-                before: drag.order.get(index + 1).copied(),
-            });
-        }
-    } else if !ui.input(|input| input.pointer.primary_down()) {
-        drag = None;
-    }
-    ui.ctx().data_mut(|data| {
-        if let Some(drag) = drag {
-            data.insert_temp(drag_id, drag);
-        } else {
-            data.remove::<WorkspaceTabDrag>(drag_id);
-        }
-    });
-    PageTabsPaint::new(ui, ui.scope_id().with("workspace-tab-tile"), painted, selected, held).label_offset(LABEL_DROP)
+    let selected = Workspace::ALL.iter().position(|workspace| *workspace == editor.active_workspace);
+    PageTabsPaint::new(ui, ui.scope_id().with("workspace-tab-tile"), painted, selected).label_offset(LABEL_DROP)
 }
 
 /// Open `workspace`, putting down anything the tools it does not carry had
@@ -362,38 +291,30 @@ fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, wor
     }
 }
 
-/// One workspace tab: its cell's response, and the tab to paint.
+/// One workspace tab, taking its click, and the tab to paint.
 ///
 /// A tab for a workspace that has nothing behind it yet is drawn as bare text
 /// on the bar rather than left off it, so the shape of the application is
 /// visible before all of it is built.
-fn draw_workspace_tab(
-    ui: &mut egui::Ui,
-    editor: &mut EditorState,
-    commands: &mut Vec<UiCommand>,
-    workspace: Workspace,
-    id: egui::Id,
-    rect: egui::Rect,
-) -> (egui::Response, PageTab) {
+fn draw_workspace_tab(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, workspace: Workspace, id: egui::Id, rect: egui::Rect) -> PageTab {
     let enabled = workspace.implemented();
     let selected = editor.active_workspace == workspace;
     let font = egui::TextStyle::Button.resolve(ui.style());
     let galley = ui.painter().layout_no_wrap(workspace.label(), font, egui::Color32::PLACEHOLDER);
     // The weak text colour is the whole of what a disabled tab says about
     // itself; the sense is what stops it being clicked.
-    let sense = if enabled { egui::Sense::click_and_drag() } else { egui::Sense::hover() };
+    let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
     let response = ui.interact(rect, id, sense);
     response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, enabled, selected, workspace.label()));
     if response.clicked() {
         select_workspace(editor, commands, workspace);
     }
-    let tab = PageTab {
+    PageTab {
         rect,
         galley,
         hovered: response.hovered(),
         enabled,
-    };
-    (response, tab)
+    }
 }
 
 /// The File menu: everything about the project as a file on disk.
