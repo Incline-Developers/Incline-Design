@@ -90,7 +90,7 @@
 //! face rather than digging in behind it.
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::{BTreeMap, BTreeSet},
     sync::atomic::{AtomicBool, Ordering},
 };
@@ -183,6 +183,12 @@ fn dispatch(input: &BlendInput, original: &BlendInput, plan: Option<&PlanTargets
     if state.cancelled() {
         return Ok(None);
     }
+    log::debug!(
+        "daily guidance: {} route uses, {} interval calculations, {} days",
+        state.guidance.uses.get(),
+        state.guidance.calculations.get(),
+        state.guidance.days
+    );
     Ok(Some(state.finish()))
 }
 
@@ -346,13 +352,109 @@ struct State<'a> {
     /// Targets to follow, and the dug tonnes each (loader, destination, day)
     /// has delivered so far.
     plan: Option<&'a PlanTargets>,
-    followed: BTreeMap<super::plan::Route, f64>,
+    followed: Followed,
+    guidance: DailyGuidance,
     /// Where the interval programs start from; see [`WarmStarts`].
     warm: RefCell<WarmStarts>,
     /// Each dig bar's current block, by position in its sequence, as the
     /// latest interval opened: ground only goes down, so it only moves on.
     cursor: RefCell<BTreeMap<usize, usize>>,
     cancel: &'a AtomicBool,
+}
+
+// Days arrive in order. A route's latest delivery is today's total; its
+// completed days retain the original summation order without another tree.
+type Followed = BTreeMap<(usize, Activity, DestinationId), Vec<(u32, f64)>>;
+
+fn delivered_today(followed: &Followed, loader: usize, activity: Activity, destination: DestinationId, day: u32) -> Option<f64> {
+    followed
+        .get(&(loader, activity, destination))?
+        .last()
+        .filter(|(at, _)| *at == day)
+        .map(|(_, tonnes)| *tonnes)
+}
+
+/// Targets and completed days cannot change while the dispatch works a day.
+/// Keep their sums in the same route/day order as the hourly calculation.
+/// Missed tonnes remain due across midnight; rebased tails start fresh.
+#[derive(Default)]
+struct DailyGuidance {
+    day: Option<u32>,
+    routes: BTreeMap<(usize, Activity, DestinationId), (f64, f64, f64)>,
+    digging: Vec<(usize, DestinationId, f64)>,
+    uses: Cell<usize>,
+    calculations: Cell<usize>,
+    days: usize,
+    interval: RefCell<IntervalGuidance>,
+}
+
+// Trials change topology, but apply updates deliveries only after choosing
+// the interval's plan. Retain buffers while resetting their accounting.
+#[derive(Default)]
+struct IntervalGuidance {
+    prepared: bool,
+    behind: BTreeMap<DestinationId, f64>,
+    owed: BTreeMap<DestinationId, f64>,
+    routes: BTreeMap<(usize, Activity, DestinationId), GuidedFlow>,
+}
+
+#[derive(Default)]
+struct GuidedFlow {
+    columns: Vec<Col>,
+    account: Option<(f64, f64, f64, Option<f64>)>,
+}
+
+impl IntervalGuidance {
+    fn reset(&mut self) {
+        self.prepared = false;
+        self.behind.clear();
+        self.owed.clear();
+        for flow in self.routes.values_mut() {
+            flow.columns.clear();
+            flow.account = None;
+        }
+    }
+}
+
+impl DailyGuidance {
+    fn open(&mut self, input: &BlendInput, plan: &PlanTargets, followed: &Followed, day: u32) {
+        if self.day == Some(day) {
+            return;
+        }
+        self.day = Some(day);
+        self.days += 1;
+        self.routes.clear();
+        self.digging.clear();
+        let first = input.intervals.first().map_or(day, |interval| interval.day());
+        for (loader, activity, destination) in plan
+            .routes
+            .keys()
+            .map(|&(loader, activity, destination, _)| (loader, activity, destination))
+            .chain(followed.keys().copied())
+        {
+            self.routes.entry((loader, activity, destination)).or_insert_with(|| {
+                let planned = plan.routes.get(&(loader, activity, destination, day)).copied().unwrap_or(0.0);
+                let earlier = plan
+                    .routes
+                    .range((loader, activity, destination, first)..(loader, activity, destination, day))
+                    .map(|(_, tonnes)| tonnes)
+                    .sum();
+                let delivered = followed
+                    .get(&(loader, activity, destination))
+                    .into_iter()
+                    .flatten()
+                    .filter(|(at, _)| *at >= first && *at < day && plan.planned.contains(at))
+                    .map(|(_, tonnes)| tonnes)
+                    .sum();
+                (planned, earlier, delivered)
+            });
+        }
+        for (&(loader, activity, destination, target_day), &tonnes) in &plan.routes {
+            if activity == Activity::Dig && target_day == day {
+                self.digging.push((loader, destination, tonnes));
+            }
+        }
+    }
 }
 
 /// A chunked pile's cells, as they open an interval.
@@ -545,6 +647,7 @@ impl<'a> State<'a> {
             now_h: 0.0,
             plan: None,
             followed: BTreeMap::new(),
+            guidance: DailyGuidance::default(),
             warm: RefCell::default(),
             cursor: RefCell::default(),
             cancel,
@@ -558,6 +661,10 @@ impl<'a> State<'a> {
     fn work(&mut self, interval: Interval) -> Result<(), String> {
         let input = self.input;
         let k = interval.index;
+        if let Some(plan) = self.plan.filter(|plan| plan.planned.contains(&interval.day())) {
+            self.guidance.open(input, plan, &self.followed, interval.day());
+            self.guidance.interval.get_mut().reset();
+        }
         // Ground stays at its opening state throughout planning: only apply
         // changes it, after all topologies have been evaluated. Readiness and
         // shared-block ordering therefore need no separate copy of the map.
@@ -1216,69 +1323,74 @@ impl<'a> State<'a> {
         // paced through the day. Never money.
         if let Some(plan) = self.plan.filter(|_| priced).filter(|plan| plan.planned.contains(&interval.day())) {
             let day = interval.day();
-            let paced = plan.paced(interval);
-            let mut flows: BTreeMap<(usize, Activity, DestinationId), Vec<Col>> = BTreeMap::new();
+            // All trial topologies see the same opening deliveries. Reuse
+            // both the accounting and each route's column buffer until apply.
+            let mut guidance = self.guidance.interval.borrow_mut();
+            if !guidance.prepared {
+                let paced = plan.paced(interval);
+                for &(loader, destination, tonnes) in &self.guidance.digging {
+                    let delivered = delivered_today(&self.followed, loader, Activity::Dig, destination, day).unwrap_or(0.0);
+                    *guidance.behind.entry(destination).or_default() += (tonnes * paced - delivered).max(0.0);
+                    *guidance.owed.entry(destination).or_default() += (tonnes - delivered).max(0.0);
+                }
+                guidance.prepared = true;
+            }
+            for flow in guidance.routes.values_mut() {
+                flow.columns.clear();
+            }
             for &(index, _, col) in &columns {
                 let candidate = &input.movements[index];
                 if let Some(loader) = input_loader(input, candidate.loader) {
-                    flows.entry((loader, candidate.activity, candidate.destination)).or_default().push(col);
+                    guidance.routes.entry((loader, candidate.activity, candidate.destination)).or_default().columns.push(col);
                 }
             }
-            // How far the day's digging to each destination is behind its
-            // paced targets so far, and what it is still owed for the day:
-            // crusher room reclaim may fill is what the digging has missed
-            // and what it will not need.
-            let mut behind: BTreeMap<DestinationId, f64> = BTreeMap::new();
-            let mut owed: BTreeMap<DestinationId, f64> = BTreeMap::new();
-            for (&(loader, activity, destination, target_day), &tonnes) in &plan.routes {
-                if activity == Activity::Dig && target_day == day {
-                    let delivered = self.followed.get(&(loader, Activity::Dig, destination, day)).copied().unwrap_or(0.0);
-                    *behind.entry(destination).or_default() += (tonnes * paced - delivered).max(0.0);
-                    *owed.entry(destination).or_default() += (tonnes - delivered).max(0.0);
+            let IntervalGuidance { behind, owed, routes, .. } = &mut *guidance;
+            for (&(loader, activity, destination), flow) in routes {
+                let cols = &flow.columns;
+                if cols.is_empty() {
+                    continue;
                 }
-            }
-            for ((loader, activity, destination), cols) in flows {
-                let value = plan.values.get(&(loader, destination, day)).copied().unwrap_or(1.0);
-                let follow = plan.follow * value;
-                let overrun = plan.overrun * value;
-                let planned = plan.routes.get(&(loader, activity, destination, day)).copied().unwrap_or(0.0);
-                // A late release can postpone a route's work across midnight.
-                // Keep its missed tonnes due, but do not pull future days'
-                // work forward. A rebased tail starts with no earlier debt.
-                let first = input.intervals.first().map_or(day, |interval| interval.day());
-                let earlier: f64 = plan
-                    .routes
-                    .range((loader, activity, destination, first)..(loader, activity, destination, day))
-                    .map(|(_, tonnes)| tonnes)
-                    .sum();
-                let delivered: f64 = self
-                    .followed
-                    .range((loader, activity, destination, first)..=(loader, activity, destination, day))
-                    .filter(|((_, _, _, day), _)| plan.planned.contains(day))
-                    .map(|(_, tonnes)| tonnes)
-                    .sum();
-                let due = (earlier + planned * paced - delivered).max(0.0);
-                // A crusher's day is shared as the plan shares it: reclaim
-                // takes its own paced target, whatever the digging falls
-                // behind and, paced through the day, any room the digging is
-                // not owed; never the room
-                // dug ore is still owed, or it fills the budget by morning and
-                // sends the day's ore to the piles.
-                if activity == Activity::Reclaim && input.destinations.iter().any(|entry| entry.id == destination && entry.kind == DestinationKind::Crusher) {
-                    let spare = self.destination_room(destination, interval) - owed.get(&destination).copied().unwrap_or(0.0);
-                    let room = (due + behind.get(&destination).copied().unwrap_or(0.0)).max(spare * paced);
+                let (follow, overrun, due, reclaim_room) = *flow.account.get_or_insert_with(|| {
+                    self.guidance.calculations.set(self.guidance.calculations.get() + 1);
+                    let value = plan.values.get(&(loader, destination, day)).copied().unwrap_or(1.0);
+                    let follow = plan.follow * value;
+                    let overrun = plan.overrun * value;
+                    let (planned, earlier, mut delivered) = self.guidance.routes.get(&(loader, activity, destination)).copied().unwrap_or_default();
+                    if let Some(today) = delivered_today(&self.followed, loader, activity, destination, day) {
+                        delivered += today;
+                    }
+                    let paced = plan.paced(interval);
+                    let due = (earlier + planned * paced - delivered).max(0.0);
+                    // Reclaim gets its paced target and the room digging has
+                    // missed, retaining the ore still owed later today.
+                    let room =
+                        (activity == Activity::Reclaim && input.destinations.iter().any(|entry| entry.id == destination && entry.kind == DestinationKind::Crusher)).then(|| {
+                            let spare = self.destination_room(destination, interval) - owed.get(&destination).copied().unwrap_or(0.0);
+                            (due + behind.get(&destination).copied().unwrap_or(0.0)).max(spare * paced)
+                        });
+                    (follow, overrun, due, room)
+                });
+                self.guidance.uses.set(self.guidance.uses.get() + 1);
+                if let Some(room) = reclaim_room {
                     problem.add_row(..=room, cols.iter().map(|col| (*col, 1.0)).collect());
                 }
-                let mut over: Vec<(Col, f64)> = cols.iter().map(|col| (*col, 1.0)).collect();
-                if due > NEGLIGIBLE_T && follow > 0.0 {
+                let kept = if due > NEGLIGIBLE_T && follow > 0.0 {
                     let kept = problem.add_column(follow, 0.0..=due);
                     incentive.push((kept, follow));
-                    let mut row = vec![(kept, 1.0)];
+                    let mut row = Vec::with_capacity(cols.len() + 1);
+                    row.push((kept, 1.0));
                     row.extend(cols.iter().map(|col| (*col, -1.0)));
                     problem.add_row(..=0.0, row);
-                    over.push((kept, -1.0));
-                }
+                    Some(kept)
+                } else {
+                    None
+                };
                 if overrun > 0.0 {
+                    let mut over = Vec::with_capacity(cols.len() + 2);
+                    over.extend(cols.iter().map(|col| (*col, 1.0)));
+                    if let Some(kept) = kept {
+                        over.push((kept, -1.0));
+                    }
                     let past = problem.add_column(-overrun, 0.0..);
                     incentive.push((past, -overrun));
                     over.push((past, -1.0));
@@ -1484,7 +1596,12 @@ impl<'a> State<'a> {
             for (index, _, tonnes) in &rows {
                 let candidate = &input.movements[*index];
                 if let Some(loader) = input_loader(input, candidate.loader) {
-                    *self.followed.entry((loader, candidate.activity, candidate.destination, interval.day())).or_default() += tonnes;
+                    let days = self.followed.entry((loader, candidate.activity, candidate.destination)).or_default();
+                    if let Some((_, delivered)) = days.last_mut().filter(|(day, _)| *day == interval.day()) {
+                        *delivered += tonnes;
+                    } else {
+                        days.push((interval.day(), 0.0 + tonnes));
+                    }
                 }
             }
         }

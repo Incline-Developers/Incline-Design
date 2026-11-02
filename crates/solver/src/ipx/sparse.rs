@@ -657,9 +657,54 @@ pub(crate) fn twonorm(x: &[f64]) -> f64 {
 
 /// `std::max` over |x|, which keeps the larger unless NaN comes second.
 pub(crate) fn infnorm(x: &[f64]) -> f64 {
-    let mut norm: f64 = 0.0;
-    for xi in x {
-        let v = xi.abs();
+    scaled_infnorm(x, None)
+}
+
+/// Infinity norms ignore NaNs. Independent lane maxima therefore preserve
+/// the scalar result, including its positive zero for an all-zero vector.
+pub(crate) fn scaled_infnorm(x: &[f64], scale: Option<&[f64]>) -> f64 {
+    if let Some(scale) = scale {
+        assert!(scale.len() >= x.len());
+    }
+    let mut norm: f64;
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        norm = 0.0;
+    }
+    let mut i = 0;
+    #[cfg(target_arch = "x86_64")]
+    {
+        use std::arch::x86_64::{_mm_andnot_pd, _mm_loadu_pd, _mm_max_pd, _mm_mul_pd, _mm_set1_pd, _mm_setzero_pd, _mm_storeu_pd};
+        // SAFETY: SSE2 is baseline on x86-64. Each iteration has four
+        // entries in x and, when present, in the checked scale slice.
+        unsafe {
+            let sign = _mm_set1_pd(-0.0);
+            let mut first = _mm_setzero_pd();
+            let mut second = _mm_setzero_pd();
+            if let Some(scale) = scale {
+                while i + 3 < x.len() {
+                    let a = _mm_mul_pd(_mm_loadu_pd(scale.as_ptr().add(i)), _mm_loadu_pd(x.as_ptr().add(i)));
+                    let b = _mm_mul_pd(_mm_loadu_pd(scale.as_ptr().add(i + 2)), _mm_loadu_pd(x.as_ptr().add(i + 2)));
+                    // Keep the accumulated maximum second: MAXPD then
+                    // ignores a NaN input just as `norm < abs` does.
+                    first = _mm_max_pd(_mm_andnot_pd(sign, a), first);
+                    second = _mm_max_pd(_mm_andnot_pd(sign, b), second);
+                    i += 4;
+                }
+            } else {
+                while i + 3 < x.len() {
+                    first = _mm_max_pd(_mm_andnot_pd(sign, _mm_loadu_pd(x.as_ptr().add(i))), first);
+                    second = _mm_max_pd(_mm_andnot_pd(sign, _mm_loadu_pd(x.as_ptr().add(i + 2))), second);
+                    i += 4;
+                }
+            }
+            let mut lanes = [0.0; 2];
+            _mm_storeu_pd(lanes.as_mut_ptr(), _mm_max_pd(first, second));
+            norm = lanes[0].max(lanes[1]);
+        }
+    }
+    for j in i..x.len() {
+        let v = scale.map_or(x[j], |scale| scale[j] * x[j]).abs();
         if norm < v {
             norm = v;
         }

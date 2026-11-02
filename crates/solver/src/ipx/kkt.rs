@@ -12,7 +12,7 @@ use super::{
     model::Model,
     sparse::{
         IndexedVector, Int, NormalProduct, SparseMatrix, backward_solve, copy_columns, dot, dot_column, forward_solve, infnorm, inverse_perm, permute_rows, scale_column,
-        scatter_column, u,
+        scaled_infnorm, scatter_column, u,
     },
 };
 
@@ -146,19 +146,18 @@ impl<'c> ConjugateResiduals<'c> {
     }
 
     fn resnorm(residual: &[f64], resscale: Option<&[f64]>) -> f64 {
-        match resscale {
-            Some(resscale) => {
-                let mut resnorm: f64 = 0.0;
-                for i in 0..residual.len() {
-                    let v = (resscale[i] * residual[i]).abs();
-                    if resnorm < v {
-                        resnorm = v;
-                    }
-                }
-                resnorm
+        static DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *DEBUG.get_or_init(|| std::env::var("PLAYGROUND_LOG").is_ok_and(|level| level == "debug")) {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static CALLS: AtomicU64 = AtomicU64::new(0);
+            static GROUPS: AtomicU64 = AtomicU64::new(0);
+            let calls = CALLS.fetch_add(1, Ordering::Relaxed) + 1;
+            let groups = GROUPS.fetch_add((residual.len() / 4) as u64, Ordering::Relaxed) + (residual.len() / 4) as u64;
+            if calls.is_power_of_two() {
+                eprintln!("IPX paired residual norms: {calls} scans, {groups} groups of four entries");
             }
-            None => infnorm(residual),
         }
+        scaled_infnorm(residual, resscale)
     }
 
     /// Solve `C lhs = rhs` from `lhs` as given.

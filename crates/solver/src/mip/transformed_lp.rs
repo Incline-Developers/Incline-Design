@@ -31,11 +31,54 @@ struct ColumnBounds {
     bound_dist: f64,
     bound_type: BoundType,
     integral: bool,
+    vub: usize,
+    vlb: usize,
+}
+
+// Most columns have no selected variable bound. Their indices share one
+// empty record; selected records alone need space in these pools.
+struct VariableBounds {
+    entries: Vec<(Option<usize>, VarBound)>,
+}
+
+impl VariableBounds {
+    fn new() -> Self {
+        Self {
+            entries: vec![(None, VarBound::default())],
+        }
+    }
+
+    fn insert(&mut self, bound: (Option<usize>, VarBound)) -> usize {
+        if bound.0.is_none() {
+            return 0;
+        }
+        let at = self.entries.len();
+        self.entries.push(bound);
+        at
+    }
+}
+
+impl std::ops::Index<usize> for VariableBounds {
+    type Output = (Option<usize>, VarBound);
+
+    #[inline(always)]
+    fn index(&self, at: usize) -> &Self::Output {
+        &self.entries[at]
+    }
+}
+
+impl std::ops::IndexMut<usize> for VariableBounds {
+    #[inline(always)]
+    fn index_mut(&mut self, at: usize) -> &mut Self::Output {
+        // Cleanup only mutates a selected bound; the empty record is shared.
+        assert_ne!(at, 0);
+        &mut self.entries[at]
+    }
 }
 
 pub(crate) struct TransformedLp {
-    best_vub: Vec<(Option<usize>, VarBound)>,
-    best_vlb: Vec<(Option<usize>, VarBound)>,
+    best_vub: VariableBounds,
+    best_vlb: VariableBounds,
     bounds: Vec<ColumnBounds>,
     vectorsum: SparseVectorSum,
 }
@@ -46,8 +89,8 @@ impl TransformedLp {
     pub fn new(lp: &LpRelaxation, data: &mut MipData) -> Self {
         let num_transformed_col = lp.num_cols() + lp.num_rows();
         let mut this = Self {
-            best_vub: vec![(None, VarBound::default()); num_transformed_col],
-            best_vlb: vec![(None, VarBound::default()); num_transformed_col],
+            best_vub: VariableBounds::new(),
+            best_vlb: VariableBounds::new(),
             // Column and row integrality stays fixed throughout this separation
             // round. Keep it with the distances read for each transformed term.
             bounds: (0..num_transformed_col)
@@ -84,13 +127,17 @@ impl TransformedLp {
             if this.bounds[col].simple_ub_dist <= feastol {
                 this.bounds[col].simple_ub_dist = 0.0;
             }
-            this.best_vub[col] = data.implications.get_best_vub(col, &col_value, &col_dual, &mut bestub, globaldom, &nodequeue, feastol);
+            this.bounds[col].vub = this
+                .best_vub
+                .insert(data.implications.get_best_vub(col, &col_value, &col_dual, &mut bestub, globaldom, &nodequeue, feastol));
             let mut bestlb = globaldom.col_lower[col];
             this.bounds[col].simple_lb_dist = col_value[col] - bestlb;
             if this.bounds[col].simple_lb_dist <= feastol {
                 this.bounds[col].simple_lb_dist = 0.0;
             }
-            this.best_vlb[col] = data.implications.get_best_vlb(col, &col_value, &col_dual, &mut bestlb, globaldom, &nodequeue, feastol);
+            this.bounds[col].vlb = this
+                .best_vlb
+                .insert(data.implications.get_best_vlb(col, &col_value, &col_dual, &mut bestlb, globaldom, &nodequeue, feastol));
             this.bounds[col].lb_dist = col_value[col] - bestlb;
             if this.bounds[col].lb_dist <= feastol {
                 this.bounds[col].lb_dist = 0.0;
@@ -121,8 +168,12 @@ impl TransformedLp {
             if simple_bnd_dist > 0.0 && (nearest_integer(col_value[col]) as f64 - col_value[col]).abs() < feastol {
                 let globaldom = &data.domain;
                 let nodequeue = data.nodequeue.borrow();
-                this.best_vub[col] = data.implications.get_best_vub(col, &col_value, &col_dual, &mut bestub, globaldom, &nodequeue, feastol);
-                this.best_vlb[col] = data.implications.get_best_vlb(col, &col_value, &col_dual, &mut bestlb, globaldom, &nodequeue, feastol);
+                this.bounds[col].vub = this
+                    .best_vub
+                    .insert(data.implications.get_best_vub(col, &col_value, &col_dual, &mut bestub, globaldom, &nodequeue, feastol));
+                this.bounds[col].vlb = this
+                    .best_vlb
+                    .insert(data.implications.get_best_vlb(col, &col_value, &col_dual, &mut bestlb, globaldom, &nodequeue, feastol));
                 this.bounds[col].lb_dist = col_value[col] - bestlb;
                 if this.bounds[col].lb_dist <= feastol {
                     this.bounds[col].lb_dist = 0.0;
@@ -136,8 +187,8 @@ impl TransformedLp {
                     this.bounds[col].lb_dist = this.bounds[col].simple_lb_dist;
                     this.bounds[col].ub_dist = this.bounds[col].simple_ub_dist;
                     this.bounds[col].bound_dist = simple_bnd_dist;
-                    this.best_vub[col].0 = None;
-                    this.best_vlb[col].0 = None;
+                    this.bounds[col].vub = 0;
+                    this.bounds[col].vlb = 0;
                 }
             } else {
                 this.bounds[col].lb_dist = this.bounds[col].simple_lb_dist;
@@ -166,6 +217,14 @@ impl TransformedLp {
             }
             this.bounds[slack_index].simple_ub_dist = this.bounds[slack_index].ub_dist;
             this.bounds[slack_index].bound_dist = this.bounds[slack_index].lb_dist.min(this.bounds[slack_index].ub_dist);
+        }
+        if std::env::var("PLAYGROUND_LOG").as_deref() == Ok("debug") {
+            eprintln!(
+                "cut bounds: {} columns, {} upper and {} lower records",
+                num_transformed_col,
+                this.best_vub.entries.len() - 1,
+                this.best_vlb.entries.len() - 1
+            );
         }
         this
     }
@@ -235,25 +294,25 @@ impl TransformedLp {
             // Tighten the best variable bounds against bounds found since.
             // A variable bound made redundant is dropped, falling back to
             // the simple bound (HiGHS #3177).
-            if self.best_vub[col].0.is_some()
-                && self.best_vub[col].1.max_value() > ub + feastol
+            if self.bounds[col].vub != 0
+                && self.best_vub[self.bounds[col].vub].1.max_value() > ub + feastol
                 && matches!(
-                    Implications::cleanup_vub(self.best_vub[col].0, &mut self.best_vub[col].1, ub, feastol, data.epsilon),
+                    Implications::cleanup_vub(self.best_vub[self.bounds[col].vub].0, &mut self.best_vub[self.bounds[col].vub].1, ub, feastol, data.epsilon),
                     Cleanup::Redundant
                 )
             {
-                self.best_vub[col].0 = None;
+                self.bounds[col].vub = 0;
                 self.bounds[col].ub_dist = self.bounds[col].simple_ub_dist;
                 self.bounds[col].bound_dist = self.bounds[col].lb_dist.min(self.bounds[col].ub_dist);
             }
-            if self.best_vlb[col].0.is_some()
-                && self.best_vlb[col].1.min_value() < lb - feastol
+            if self.bounds[col].vlb != 0
+                && self.best_vlb[self.bounds[col].vlb].1.min_value() < lb - feastol
                 && matches!(
-                    Implications::cleanup_vlb(self.best_vlb[col].0, &mut self.best_vlb[col].1, lb, feastol, data.epsilon),
+                    Implications::cleanup_vlb(self.best_vlb[self.bounds[col].vlb].0, &mut self.best_vlb[self.bounds[col].vlb].1, lb, feastol, data.epsilon),
                     Cleanup::Redundant
                 )
             {
-                self.best_vlb[col].0 = None;
+                self.bounds[col].vlb = 0;
                 self.bounds[col].lb_dist = self.bounds[col].simple_lb_dist;
                 self.bounds[col].bound_dist = self.bounds[col].lb_dist.min(self.bounds[col].ub_dist);
             }
@@ -272,9 +331,9 @@ impl TransformedLp {
                     i += 1;
                     continue;
                 }
-                self.bounds[col].bound_type = if self.best_vlb[col].0.is_none() || self.bounds[col].ub_dist < self.bounds[col].lb_dist - feastol {
+                self.bounds[col].bound_type = if self.bounds[col].vlb == 0 || self.bounds[col].ub_dist < self.bounds[col].lb_dist - feastol {
                     BoundType::VariableUb
-                } else if self.best_vub[col].0.is_none() || self.bounds[col].lb_dist < self.bounds[col].ub_dist - feastol {
+                } else if self.bounds[col].vub == 0 || self.bounds[col].lb_dist < self.bounds[col].ub_dist - feastol {
                     BoundType::VariableLb
                 } else if vals[i] > 0.0 {
                     BoundType::VariableUb
@@ -283,7 +342,7 @@ impl TransformedLp {
                 };
             } else {
                 self.bounds[col].bound_type = if self.bounds[col].lb_dist < self.bounds[col].ub_dist - feastol {
-                    if self.best_vlb[col].0.is_none() {
+                    if self.bounds[col].vlb == 0 {
                         BoundType::SimpleLb
                     } else if prefer_vbds || vals[i] > 0.0 || self.bounds[col].simple_lb_dist > self.bounds[col].lb_dist + feastol {
                         BoundType::VariableLb
@@ -291,7 +350,7 @@ impl TransformedLp {
                         BoundType::SimpleLb
                     }
                 } else if self.bounds[col].ub_dist < self.bounds[col].lb_dist - feastol {
-                    if self.best_vub[col].0.is_none() {
+                    if self.bounds[col].vub == 0 {
                         BoundType::SimpleUb
                     } else if prefer_vbds || vals[i] < 0.0 || self.bounds[col].simple_ub_dist > self.bounds[col].ub_dist + feastol {
                         BoundType::VariableUb
@@ -299,16 +358,16 @@ impl TransformedLp {
                         BoundType::SimpleUb
                     }
                 } else if vals[i] > 0.0 {
-                    if self.best_vlb[col].0.is_some() {
+                    if self.bounds[col].vlb != 0 {
                         BoundType::VariableLb
-                    } else if prefer_vbds && self.best_vub[col].0.is_some() {
+                    } else if prefer_vbds && self.bounds[col].vub != 0 {
                         BoundType::VariableUb
                     } else {
                         BoundType::SimpleLb
                     }
-                } else if self.best_vub[col].0.is_some() {
+                } else if self.bounds[col].vub != 0 {
                     BoundType::VariableUb
-                } else if prefer_vbds && self.best_vlb[col].0.is_some() {
+                } else if prefer_vbds && self.bounds[col].vlb != 0 {
                     BoundType::VariableLb
                 } else {
                     BoundType::SimpleUb
@@ -332,7 +391,7 @@ impl TransformedLp {
                     }
                 }
                 BoundType::VariableLb => {
-                    let (vlb_col, vlb) = self.best_vlb[col];
+                    let (vlb_col, vlb) = self.best_vlb[self.bounds[col].vlb];
                     tmp_rhs -= vlb.constant * vals[i];
                     self.vectorsum.add(vlb_col.expect("a variable lower bound"), vals[i] * vlb.coef);
                     if vals[i] > 0.0 {
@@ -342,7 +401,7 @@ impl TransformedLp {
                     }
                 }
                 BoundType::VariableUb => {
-                    let (vub_col, vub) = self.best_vub[col];
+                    let (vub_col, vub) = self.best_vub[self.bounds[col].vub];
                     tmp_rhs -= vub.constant * vals[i];
                     self.vectorsum.add(vub_col.expect("a variable upper bound"), vals[i] * vub.coef);
                     vals[i] = -vals[i];
@@ -442,13 +501,13 @@ impl TransformedLp {
             let col = inds[i];
             match self.bounds[col].bound_type {
                 BoundType::VariableLb => {
-                    let (vlb_col, vlb) = self.best_vlb[col];
+                    let (vlb_col, vlb) = self.best_vlb[self.bounds[col].vlb];
                     tmp_rhs += vlb.constant * vals[i];
                     self.vectorsum.add(vlb_col.expect("a variable lower bound"), -vals[i] * vlb.coef);
                     self.vectorsum.add(col, vals[i]);
                 }
                 BoundType::VariableUb => {
-                    let (vub_col, vub) = self.best_vub[col];
+                    let (vub_col, vub) = self.best_vub[self.bounds[col].vub];
                     tmp_rhs -= vub.constant * vals[i];
                     self.vectorsum.add(vub_col.expect("a variable upper bound"), vals[i] * vub.coef);
                     self.vectorsum.add(col, -vals[i]);
