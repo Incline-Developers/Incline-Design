@@ -1231,6 +1231,26 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
             };
             tally.plan(&planned);
             let covered: BTreeSet<u32> = (first_day..first_day + length).collect();
+            // A window changes a local plan, not the route pattern the best
+            // schedule has already earned beyond it. Guide its continuation
+            // with those actual deliveries rather than stale coarse targets.
+            let loaders: BTreeMap<_, _> = input.loaders.iter().enumerate().map(|(index, loader)| (loader.id, index)).collect();
+            let mut routes: BTreeMap<Route, f64> = BTreeMap::new();
+            for row in &best.solution.movements {
+                let movement = &input.movements[row.candidate];
+                if let Some(&loader) = loaders.get(&movement.loader) {
+                    *routes
+                        .entry((loader, movement.activity, movement.destination, input.intervals[row.interval].day()))
+                        .or_default() += row.tonnes_t;
+                }
+            }
+            let changed = routes
+                .iter()
+                .filter(|(route, tonnes)| !covered.contains(&route.3) && targets.routes.get(route).is_none_or(|held| (held - **tonnes).abs() > 1e-3))
+                .count();
+            log::debug!("window tail anchor at day {first_day}: {changed} incumbent routes differ outside the window");
+            let mut anchored = PlanTargets::new(input, routes, spread, spread).valued(input);
+            anchored.planned.extend(days.iter().copied());
             // Each weight is dispatched at once, side by side; the first of the
             // best is chosen, as it would be one after another. A round is
             // the tails after the best schedule's hours on the timeline the
@@ -1246,7 +1266,7 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
                 let found: Vec<_> = WEIGHTS
                     .par_iter()
                     .map(|&(follow, overrun)| {
-                        let candidate = targets.replacing(&covered, &planned.routes, follow * spread, overrun * spread);
+                        let candidate = anchored.replacing(&covered, &planned.routes, follow * spread, overrun * spread);
                         let found = if live_round {
                             redispatch_live(input, live.as_ref()?, &best, from, opening.as_ref(), &candidate, timing, cancel)
                         } else {
@@ -1318,6 +1338,7 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
                 improved = true;
                 kept += 1;
                 tally.kept += 1;
+                log::debug!("window tail anchor kept at day {first_day}: {changed} routes changed outside the window");
                 record(
                     value,
                     bound,
