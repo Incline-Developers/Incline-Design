@@ -717,6 +717,16 @@ fn draw_ui(
     // The bar spans the window, so it is claimed before the explorer: the
     // column, the tools and the scene all start below it.
     let viewport_bar_rect = elements::viewport_bar::draw_viewport_bar(root_ui, editor, project, document, commands);
+    // Planning's page tabs, across the window under the bar and over every
+    // page, so they are claimed before anything below them too.
+    let planning_tabs = (editor.active_workspace == state::Workspace::Planning).then(|| elements::planning_tabs::draw_planning_tabs(root_ui, editor, commands));
+    if planning_tabs.is_none() {
+        // `Panel::show` creates one direct child of `root_ui`. Keep the root
+        // auto-id sequence identical in the workspaces without this row, or
+        // every panel drawn after it receives a different unique id.
+        root_ui.skip_ahead_auto_ids(1);
+    }
+    let planning_tabs_bottom = planning_tabs.as_ref().map_or(f32::NEG_INFINITY, |tabs| tabs.rect.bottom());
 
     if editor.is_planning_setup() {
         let explorer = if editor.is_schedule_pane() {
@@ -778,6 +788,9 @@ fn draw_ui(
                 .chain(planning_layout.regions),
         );
         chrome::paint_grips(ctx, planning_layout.grips);
+        if let Some(tabs) = &planning_tabs {
+            tabs.paint(ctx);
+        }
         chrome::paint_grips(
             ctx,
             explorer
@@ -872,7 +885,10 @@ fn draw_ui(
     // What is left of the root ui is the canvas, so its edges are already
     // inside the window-edge gap the chrome claimed.
     let scene_claimed = egui::Rect::from_min_max(
-        egui::pos2(root_ui.available_rect_before_wrap().left(), main_menu_rect.bottom().max(viewport_bar_rect.bottom())),
+        egui::pos2(
+            root_ui.available_rect_before_wrap().left(),
+            main_menu_rect.bottom().max(viewport_bar_rect.bottom()).max(planning_tabs_bottom),
+        ),
         egui::pos2(root_ui.available_rect_before_wrap().right(), canvas_bottom),
     );
     let scene_rect = chrome::region_rect(scene_claimed);
@@ -1457,6 +1473,11 @@ fn draw_ui(
             // of the right-edge panels the workspace drew.
             .chain(planning_grips),
     );
+    // Over the regions' chrome: the open tab reaches down through the gap to
+    // the regions under it.
+    if let Some(tabs) = &planning_tabs {
+        tabs.paint(&ctx);
+    }
 
     geometry_dirty
 }

@@ -383,7 +383,7 @@ fn draw_run_buttons(ui: &mut egui::Ui, salt: &'static str, running: bool, run_st
     action
 }
 
-/// One pipeline's run controls, in the viewport bar after the Planning tabs:
+/// One pipeline's run controls, in the viewport bar's left cluster:
 /// its buttons, then the one Auto.
 ///
 /// With Auto on, Run and Run All are held: Auto reruns what is out of date on

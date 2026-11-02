@@ -13,6 +13,7 @@ pub(crate) mod explorer;
 pub(crate) mod island;
 pub(crate) mod log_traces;
 pub(crate) mod menu;
+pub(crate) mod page_tabs;
 pub(crate) mod preview_navigation;
 pub(crate) mod progress;
 pub(crate) mod rosette_diagram;

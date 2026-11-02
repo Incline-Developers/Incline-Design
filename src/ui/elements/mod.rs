@@ -20,6 +20,7 @@ pub(crate) mod haulage;
 pub(crate) mod improve_progress;
 pub(crate) mod main_menu;
 pub(crate) mod planning_setup;
+pub(crate) mod planning_tabs;
 pub(crate) mod products;
 pub(crate) mod properties;
 pub(crate) mod schedule_animation;

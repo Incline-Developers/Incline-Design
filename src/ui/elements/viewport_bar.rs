@@ -40,7 +40,7 @@ use crate::{
 const MENU_ROW_INSET: f32 = 6.0;
 /// Clear space kept between the centre cluster and the two beside it.
 const CENTRE_CLEARANCE: f32 = 16.0;
-/// Space either side of Planning's tab strip in the bar.
+/// Space between the project actions and Planning's run controls.
 const PLANNING_GAP: f32 = 8.0;
 /// Clear space either side of the hairline parting the view controls every
 /// workspace carries from the ones the open workspace adds - see [`divider`].
@@ -104,15 +104,13 @@ pub(crate) fn draw_viewport_bar(
                     let left = super::cluster(ui, strip, egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         draw_project_actions(ui, editor, project, commands, side);
                         if editor.active_workspace == Workspace::Planning {
-                            // Gaps rather than hairlines: the tab strip is a
-                            // track of its own, so it already reads as apart
-                            // from the buttons either side of it.
-                            ui.add_space(PLANNING_GAP);
-                            draw_planning_views(ui, editor, commands);
-                            // Every Planning page is run from here, after its
-                            // tab: Setup the open step's group, Reserves the
+                            // Every Planning page is run from here, in place
+                            // of the discipline menus the other workspaces
+                            // carry: Setup the open step's group, Reserves the
                             // Solids steps it shows, and the schedule's pages
-                            // the schedule.
+                            // the schedule. The pages' own tabs are in a row
+                            // of their own under the bar - see
+                            // `elements::planning_tabs`.
                             ui.add_space(PLANNING_GAP);
                             if editor.is_planning_view(crate::ui::state::PlanningView::Setup) {
                                 super::planning_setup::draw_setup_run_controls(ui, editor, commands);
@@ -787,16 +785,5 @@ fn draw_blast_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, project: &
     );
     if relief.clicked() {
         review.relief = !review.relief;
-    }
-}
-
-/// Planning's tabs, in place of the discipline menus the other workspaces
-/// carry here: Setup, then each view of what it produces.
-fn draw_planning_views(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
-    use crate::ui::state::PlanningView;
-    let labels = PlanningView::ALL.map(PlanningView::label);
-    let selected = PlanningView::ALL.iter().position(|view| *view == editor.planning_view).unwrap_or(0);
-    if let Some(index) = crate::ui::widgets::tab_strip::TabStrip::new("planning_views", &labels, selected).show(ui) {
-        commands.push(UiCommand::SetPlanningView(PlanningView::ALL[index]));
     }
 }

@@ -164,9 +164,9 @@ struct WorkspaceTabDrag {
 
 /// Draw the run of workspace tabs, sliding neighbours out of the dragged tab's way.
 ///
-/// The open workspace sits on the raised tile Planning's page tabs use
-/// (`widgets::tab_strip`), which slides to the next one picked - and travels
-/// with its tab while that is dragged. The other tabs stay on the bar itself.
+/// The open workspace sits on a raised tile (`widgets::tab_strip`), which
+/// slides to the next one picked - and travels with its tab while that is
+/// dragged. The other tabs stay on the bar itself.
 fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, bar_fill: egui::Color32) {
     use crate::ui::widgets::tab_strip::{paint_tile, sliding_tile};
     let drag_id = ui.scope_id().with("workspace-tab-drag");
