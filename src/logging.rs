@@ -285,6 +285,12 @@ pub(crate) fn init() -> LoggingGuard {
     let _ = runtime_log();
 
     let logs_dir = crate::app::io::data_path("logs").ok();
+    // The appender prunes old files by reading the folder as it is built,
+    // before its first write creates it: on a first launch that printed
+    // "Error reading the log directory/files".
+    if let Some(logs_dir) = &logs_dir {
+        let _ = std::fs::create_dir_all(logs_dir);
+    }
     let (file_layer, file_writer_guard) = if let Some(logs_dir) = logs_dir {
         let appender = tracing_appender::rolling::RollingFileAppender::builder()
             .rotation(tracing_appender::rolling::Rotation::DAILY)
