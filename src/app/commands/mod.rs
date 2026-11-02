@@ -1190,9 +1190,6 @@ impl<'a> App<'a> {
                 }
                 self.editor.planning_view = view;
                 self.refresh_haulage_view();
-                if self.editor.is_planning_viewport() {
-                    self.editor.active_property_tab = crate::ui::state::PropertyTab::Reserves;
-                }
                 self.redraw_requested = true;
                 Ok(())
             }

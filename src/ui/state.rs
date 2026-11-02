@@ -207,10 +207,6 @@ impl EditorState {
         self.is_planning_cut_step() || self.is_haulage_page()
     }
 
-    pub(crate) fn is_planning_viewport(&self) -> bool {
-        self.is_planning_view(PlanningView::Animate) || self.is_viewport_step()
-    }
-
     /// Whether a Planning page that owns the whole window - rather than
     /// framing the 3D viewport - is on screen. Every Setup step but the
     /// viewport ones is laid out that way, and so is every view but Animate.
@@ -9245,7 +9241,6 @@ pub(crate) fn builtin_delay_products() -> Vec<DelayProduct> {
 /// A section of the Preferences window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PropertyTab {
-    Reserves,
     Interface,
     Camera,
     Performance,
