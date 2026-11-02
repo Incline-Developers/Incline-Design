@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use glam::{DMat4, DQuat, DVec2, DVec3, dcamera};
+use glam::{DMat3, DMat4, DQuat, DVec2, DVec3, dcamera};
 use winit::{
     dpi::PhysicalPosition,
     event::{MouseButton, MouseScrollDelta},
@@ -467,12 +467,11 @@ impl CameraController {
     /// (`Graphics::set_slice_standard_view`), over this same duration, so
     /// clicking the gizmo reads as one gesture in either view.
     pub(crate) fn begin_view_transition(&mut self, camera: &Camera, forward: DVec3, up_hint: DVec3, target_distance: f64) {
-        let end_forward = forward.normalize_or(camera.forward());
-        let end_up = orthonormal_up(end_forward, up_hint);
+        let start_forward = camera.forward();
+        let end_forward = forward.normalize_or(start_forward);
         self.view_transition = Some(ViewTransition {
-            start_forward: camera.forward(),
-            end_forward,
-            end_up,
+            start: view_rotation(start_forward, orthonormal_up(start_forward, camera.up())),
+            end: view_rotation(end_forward, orthonormal_up(end_forward, up_hint)),
             target: camera.target(),
             distance: target_distance.max(MIN_ORTHO_ZOOM),
             elapsed: Duration::ZERO,
@@ -493,8 +492,12 @@ impl CameraController {
         let duration = transition.duration.as_secs_f64().max(f64::EPSILON);
         let linear_t = (transition.elapsed.as_secs_f64() / duration).clamp(0.0, 1.0);
         let t = ease_out_cubic(linear_t);
-        let forward = slerp_unit_with_axis_hint(transition.start_forward, transition.end_forward, transition.end_up, t);
-        let up = orthonormal_up(forward, transition.end_up);
+        // The whole orientation turns as one, so the heading on screen eases
+        // round with the tilt rather than jumping to the end view's on the
+        // first frame.
+        let rotation = transition.start.slerp(transition.end, t);
+        let forward = rotation * DVec3::NEG_Z;
+        let up = rotation * DVec3::Y;
 
         camera.target = transition.target;
         camera.position = transition.target - forward * transition.distance;
@@ -649,9 +652,9 @@ impl CameraController {
 
 #[derive(Debug)]
 struct ViewTransition {
-    start_forward: DVec3,
-    end_forward: DVec3,
-    end_up: DVec3,
+    /// The camera's orientation at either end; see [`view_rotation`].
+    start: DQuat,
+    end: DQuat,
     target: DVec3,
     distance: f64,
     elapsed: Duration,
@@ -660,6 +663,12 @@ struct ViewTransition {
 
 pub(super) fn ease_out_cubic(t: f64) -> f64 {
     1.0 - (1.0 - t).powi(3)
+}
+
+/// The rotation taking the camera's own axes - looking down -Z with +Y up -
+/// to `forward` and `up`, which must be orthonormal.
+fn view_rotation(forward: DVec3, up: DVec3) -> DQuat {
+    DQuat::from_mat3(&DMat3::from_cols(forward.cross(up), up, -forward)).normalize()
 }
 
 fn orthonormal_up(forward: DVec3, up_hint: DVec3) -> DVec3 {
@@ -675,41 +684,6 @@ fn orthonormal_up(forward: DVec3, up_hint: DVec3) -> DVec3 {
     right.cross(forward).normalize_or(up_hint)
 }
 
-fn slerp_unit(from: DVec3, to: DVec3, t: f64) -> DVec3 {
-    let from = from.normalize_or_zero();
-    let to = to.normalize_or(from);
-    let dot = from.dot(to).clamp(-1.0, 1.0);
-
-    if dot > 0.9995 {
-        return from.lerp(to, t).normalize_or(to);
-    }
-
-    if dot < -0.9995 {
-        let axis = from.cross(if from.z.abs() < 0.9 { DVec3::Z } else { DVec3::Y }).normalize_or(DVec3::X);
-        return DQuat::from_axis_angle(axis, std::f64::consts::PI * t).mul_vec3(from).normalize_or(to);
-    }
-
-    let theta = dot.acos();
-    let sin_theta = theta.sin();
-    let a = ((1.0 - t) * theta).sin() / sin_theta;
-    let b = (t * theta).sin() / sin_theta;
-    (from * a + to * b).normalize_or(to)
-}
-
-fn slerp_unit_with_axis_hint(from: DVec3, to: DVec3, axis_hint: DVec3, t: f64) -> DVec3 {
-    let from = from.normalize_or_zero();
-    let to = to.normalize_or(from);
-    let dot = from.dot(to).clamp(-1.0, 1.0);
-
-    if dot >= -0.9995 {
-        return slerp_unit(from, to, t);
-    }
-
-    let hinted_axis = axis_hint.reject_from(from);
-    let fallback_axis = from.cross(if from.z.abs() < 0.9 { DVec3::Z } else { DVec3::Y }).normalize_or(DVec3::X);
-    let axis = hinted_axis.normalize_or(fallback_axis);
-    DQuat::from_axis_angle(axis, std::f64::consts::PI * t).mul_vec3(from).normalize_or(to)
-}
 #[derive(Debug)]
 pub(crate) struct FlyCameraController {
     forward: bool,
