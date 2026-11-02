@@ -1150,7 +1150,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         };
         let capture = &held.capture;
         let Some(tonnage_position) = capture.position(source.tonnage_field) else {
-            problems.push(CaptureDiagnostic::new(block.name.clone(), tr!("schedule-capture-block-no-tonnes")));
+            problems.push(CaptureDiagnostic::new(block.name.clone(), tr!("schedule-capture-block-no-tonnage-field")));
             continue;
         };
         let id = GroundId(ground.len() as u32);
