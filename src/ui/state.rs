@@ -2196,11 +2196,13 @@ pub(crate) struct EditorState {
     /// Where the machines drawn as models are labelled; set with the icons.
     pub(crate) animation_machine_labels: Vec<crate::rendering::machines::MachineLabel>,
     pub(crate) haul_route: Option<crate::model::haulage::routing::RouteCheck>,
-    /// Browser-only viewport prompt shown before creating a named project.
+    /// The never-saved browser project whose first Save is asking for its
+    /// name: a browser has no file dialog to name it in. See
+    /// `dialogs::editing::draw_name_browser_project_dialog`.
     #[cfg(target_arch = "wasm32")]
-    pub(crate) new_project_dialog_open: bool,
+    pub(crate) naming_browser_project: Option<u32>,
     #[cfg(target_arch = "wasm32")]
-    pub(crate) new_project_name: String,
+    pub(crate) browser_project_name: String,
     pub(crate) new_layer_dialog_open: bool,
     pub(crate) new_layer_name: String,
     /// Active explorer rename: (target, name_buffer).
@@ -3538,7 +3540,7 @@ impl EditorState {
             || {
                 #[cfg(target_arch = "wasm32")]
                 {
-                    self.new_project_dialog_open
+                    self.naming_browser_project.is_some()
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 {
@@ -3644,7 +3646,7 @@ impl EditorState {
         self.active_tool = ActiveTool::None;
         #[cfg(target_arch = "wasm32")]
         {
-            self.new_project_dialog_open = false;
+            self.naming_browser_project = None;
         }
         self.new_layer_dialog_open = false;
         self.renaming_item = None;
@@ -4018,9 +4020,9 @@ impl EditorState {
             animation_machine_labels: Vec::new(),
             haul_route: None,
             #[cfg(target_arch = "wasm32")]
-            new_project_dialog_open: false,
+            naming_browser_project: None,
             #[cfg(target_arch = "wasm32")]
-            new_project_name: String::new(),
+            browser_project_name: String::new(),
             new_layer_dialog_open: false,
             new_layer_name: tr!("ws-menubar-design"),
             renaming_item: None,
@@ -5167,10 +5169,16 @@ pub(crate) enum UiCommand {
     #[cfg(not(target_arch = "wasm32"))]
     SetSlicePreviewDetached(bool),
     NewProject,
+    /// Save a never-saved browser project under `name`, from the dialog its
+    /// first Save opened.
     #[cfg(target_arch = "wasm32")]
-    CreateBrowserProject {
+    SaveBrowserProjectAs {
+        runtime_id: u32,
         name: String,
     },
+    /// Close that dialog without saving, and drop what was waiting on the save.
+    #[cfg(target_arch = "wasm32")]
+    CancelBrowserProjectSave,
     OpenProject,
     #[cfg(not(target_arch = "wasm32"))]
     ActivateTrackedProject(PathBuf),
@@ -6063,7 +6071,10 @@ impl UiCommand {
             Self::SetSlicePreviewDetached(detached) => report(tr!("state-slice-preview"), if *detached { tr!("state-detached") } else { tr!("state-docked") }),
             Self::NewProject => report(tr!("state-create-project"), tr!("state-untitled-project")),
             #[cfg(target_arch = "wasm32")]
-            Self::CreateBrowserProject { name } => report(tr!("state-create-project"), name.clone()),
+            #[cfg(target_arch = "wasm32")]
+            Self::SaveBrowserProjectAs { name, .. } => report(tr!("state-save-project"), name.clone()),
+            #[cfg(target_arch = "wasm32")]
+            Self::CancelBrowserProjectSave => None,
             Self::OpenProject => report(tr!("state-open-project"), tr!("state-choose-one-more-files")),
             #[cfg(not(target_arch = "wasm32"))]
             Self::ActivateTrackedProject(path) => report(tr!("state-activate-project"), path.display().to_string()),

@@ -806,11 +806,7 @@ fn draw_ui(
             dialogs::editing::draw_rename_dialog(root_ui, commands, editor);
         }
         #[cfg(target_arch = "wasm32")]
-        if editor.new_project_dialog_open {
-            dialogs::editing::draw_create_project_dialog(root_ui, commands, editor, planning_layout.rect);
-        }
-        #[cfg(target_arch = "wasm32")]
-        let naming_browser_project = editor.new_project_dialog_open;
+        let naming_browser_project = editor.naming_browser_project.is_some();
         #[cfg(not(target_arch = "wasm32"))]
         let naming_browser_project = false;
         if project.needs_startup_dialog && !naming_browser_project {
@@ -1222,7 +1218,7 @@ fn draw_ui(
 
     // --- Startup & global dialogs ---
     #[cfg(target_arch = "wasm32")]
-    let naming_browser_project = editor.new_project_dialog_open;
+    let naming_browser_project = editor.naming_browser_project.is_some();
     #[cfg(not(target_arch = "wasm32"))]
     let naming_browser_project = false;
     if project.needs_startup_dialog && !naming_browser_project {
@@ -1257,12 +1253,6 @@ fn draw_ui(
     // --- Tool-specific dialogs ---
 
     geometry_dirty |= draw_circle_radius_input(root_ui, editor, commands, canvas_rect);
-
-    // Browser project creation
-    #[cfg(target_arch = "wasm32")]
-    if editor.new_project_dialog_open {
-        crate::ui::dialogs::editing::draw_create_project_dialog(root_ui, commands, editor, canvas_rect);
-    }
 
     dialogs::products::draw_new_product_dialog(root_ui, editor, commands);
     dialogs::products::draw_initiation_dialog(root_ui, editor, commands);
@@ -1606,6 +1596,8 @@ fn draw_global_dialogs(
 ) -> bool {
     let mut geometry_dirty = false;
     dialogs::alerts::draw_alert_dialog(root_ui, editor, console_snapshot);
+    #[cfg(target_arch = "wasm32")]
+    dialogs::editing::draw_name_browser_project_dialog(root_ui, commands, editor);
     // An Improve run goes on whichever page is open, and so does its card.
     elements::improve_progress::draw_improve_card(root_ui, editor, commands);
     dialogs::survey::draw_definitions_dialog(root_ui, editor, commands);

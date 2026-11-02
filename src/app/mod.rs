@@ -966,6 +966,11 @@ impl<'a> App<'a> {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => userspace_warn!("{}", crate::i18n::tr!("app-browser-preferences-load-failed", error = error.to_string())),
         }
+        // As on the desktop, there is always a project to draw into: the
+        // welcome splash sits over this one until it is dismissed, and its
+        // name titles the window from the start.
+        app.start_untitled_project()?;
+        app.startup_dialog_dismissed = false;
         crate::app::web_storage::install_dirty_guard();
         crate::app::web_storage::install_paste_listener(event_loop_proxy.clone());
         {

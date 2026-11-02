@@ -240,7 +240,13 @@ impl<'a> App<'a> {
                 Ok(())
             }
             #[cfg(target_arch = "wasm32")]
-            UiCommand::CreateBrowserProject { name } => self.create_browser_project(name),
+            #[cfg(target_arch = "wasm32")]
+            UiCommand::SaveBrowserProjectAs { runtime_id, name } => self.save_browser_project_as(runtime_id, name),
+            #[cfg(target_arch = "wasm32")]
+            UiCommand::CancelBrowserProjectSave => {
+                self.cancel_browser_project_save();
+                Ok(())
+            }
             UiCommand::OpenProject => {
                 self.choose_open_project();
                 Ok(())

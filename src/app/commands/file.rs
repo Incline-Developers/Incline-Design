@@ -116,9 +116,8 @@ fn mesh_format_mime_type(format: MeshFormat) -> &'static str {
 #[derive(Debug)]
 // On wasm the native variants are compiled out, leaving only the `Web`-prefixed ones.
 pub(crate) enum FileDialogAction {
-    /// Start a new, never-saved project. It carries no path until the first
-    /// Save asks for one.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Start a new, never-saved project. It carries no path, or browser
+    /// record, until the first Save asks for one.
     NewProject,
     #[cfg(not(target_arch = "wasm32"))]
     OpenProject(Vec<PathBuf>),
@@ -128,8 +127,6 @@ pub(crate) enum FileDialogAction {
     WebOpenProject(Vec<std::result::Result<crate::model::input::InputFile, String>>),
     #[cfg(target_arch = "wasm32")]
     WebStoredProject(crate::model::project::ProjectId),
-    #[cfg(target_arch = "wasm32")]
-    WebNewProject(String),
     /// Import DXF files into the active project.
     #[cfg(not(target_arch = "wasm32"))]
     ImportDxfInto { paths: Vec<PathBuf>, as_roads: bool },
@@ -496,7 +493,7 @@ impl<'a> App<'a> {
         #[cfg(target_arch = "wasm32")]
         let replaces_project = matches!(
             &action,
-            FileDialogAction::WebNewProject(_) | FileDialogAction::WebOpenProject(_) | FileDialogAction::WebStoredProject(_)
+            FileDialogAction::NewProject | FileDialogAction::WebOpenProject(_) | FileDialogAction::WebStoredProject(_)
         );
         #[cfg(target_arch = "wasm32")]
         if replaces_project && !self.browser_project_loads_pending.is_empty() {
@@ -523,7 +520,6 @@ impl<'a> App<'a> {
         }
         self.project_replacement_bypass = false;
         match action {
-            #[cfg(not(target_arch = "wasm32"))]
             FileDialogAction::NewProject => {
                 self.start_untitled_project()?;
                 userspace_log!("{}", tr!("cmd-file-created-new-project"));
@@ -572,16 +568,6 @@ impl<'a> App<'a> {
                     let result = crate::app::web_storage::load_project(project_id).await;
                     let _ = proxy.send_event(crate::app::AppEvent::BrowserProjectLoaded { project_id, ticket, result });
                 });
-                Ok(())
-            }
-            #[cfg(target_arch = "wasm32")]
-            FileDialogAction::WebNewProject(name) => {
-                let mut project_file = project::new_empty(None);
-                project_file.metadata.name = sanitize_project_name(&name);
-                let project = project::open_project(None, project_file)?;
-                self.set_active_project(project);
-                self.fit_view_to_extents();
-                userspace_log!("{}", tr!("cmd-file-created-new-browser-project"));
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -1300,12 +1286,6 @@ impl<'a> App<'a> {
     /// A dirty project still routes through the save/discard/cancel prompt
     /// before it is replaced.
     pub(crate) fn choose_new_project(&mut self) {
-        #[cfg(target_arch = "wasm32")]
-        {
-            self.editor.new_project_name.clear();
-            self.editor.new_project_dialog_open = true;
-        }
-        #[cfg(not(target_arch = "wasm32"))]
         if let Err(error) = self.execute_file_dialog_action(FileDialogAction::NewProject) {
             userspace_warn!("{}", tr!("cmd-file-could-not-create-new-project", error = format!("{error:#}")));
         }
@@ -1331,9 +1311,32 @@ impl<'a> App<'a> {
         Ok(())
     }
 
+    /// Name a never-saved browser project and save it, the first Save's
+    /// naming dialog having been confirmed.
+    ///
+    /// The name is the project's from here on, as a desktop Save As names it
+    /// after the file: should the save fail, the next Save offers it again.
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn create_browser_project(&mut self, name: String) -> Result<()> {
-        self.execute_file_dialog_action(FileDialogAction::WebNewProject(name))
+    pub(crate) fn save_browser_project_as(&mut self, runtime_id: u32, name: String) -> Result<()> {
+        self.editor.naming_browser_project = None;
+        let index = self.workspace.project_index_for_runtime_id(runtime_id).context("The selected project is no longer open")?;
+        self.workspace.projects[index].project.metadata.name = sanitize_project_name(&name);
+        self.save_browser_project(runtime_id)
+    }
+
+    /// Close the first Save's naming dialog unsaved, and let go of whatever
+    /// was waiting on the save, as a desktop Save As dialog's Cancel does.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn cancel_browser_project_save(&mut self) {
+        self.editor.naming_browser_project = None;
+        if self.project_replacement_after_save {
+            self.project_replacement_after_save = false;
+            self.editor.replace_project_confirm_open = true;
+        }
+        if self.exit_after_pending_saves {
+            self.cancel_exit_request();
+        }
+        self.cancel_close_project();
     }
 
     pub(crate) fn continue_project_replacement(&mut self) -> Result<()> {
@@ -2297,6 +2300,14 @@ impl<'a> App<'a> {
         self.ensure_project_has_no_pending_text_edit(index)?;
         #[cfg(target_arch = "wasm32")]
         {
+            // Never saved: ask for its name first, where a desktop build asks
+            // for its file. A first save already running reports itself below.
+            if project_needs_first_save(&self.workspace.projects[index]) && !self.browser_saves_pending.contains(&runtime_id) {
+                self.editor.browser_project_name = self.workspace.projects[index].project.metadata.name.trim_end_matches(".omf").to_owned();
+                self.editor.naming_browser_project = Some(runtime_id);
+                self.redraw_requested = true;
+                return Ok(());
+            }
             self.save_browser_project(runtime_id)
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -3034,9 +3045,11 @@ impl<'a> App<'a> {
     }
 }
 
-/// Normalize a browser project name to a portable filename with one `.omf`
-/// extension. The viewport prompt rejects blank input, while the fallback
-/// also keeps this helper safe for programmatic callers.
+/// Normalize a browser project's name to a portable file stem, with any
+/// `.omf` typed after it taken off: a project is named as a desktop one is
+/// after its file, without the extension, which is added only where a file is
+/// written. The naming dialog rejects blank input; the fallback keeps this
+/// safe for other callers.
 #[cfg(target_arch = "wasm32")]
 fn sanitize_project_name(name: &str) -> String {
     let mut stem = name.trim();
@@ -3050,8 +3063,7 @@ fn sanitize_project_name(name: &str) -> String {
         }
         stem = stem.get(..suffix_start).unwrap_or_default().trim_end();
     }
-    let stem = if stem.is_empty() { tr!("common-project") } else { sanitize_file_stem(stem) };
-    format!("{stem}.omf")
+    if stem.is_empty() { tr!("common-project") } else { sanitize_file_stem(stem) }
 }
 
 /// Replace characters that are invalid in filenames across Windows, macOS, and
