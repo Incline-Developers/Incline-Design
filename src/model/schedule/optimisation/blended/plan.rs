@@ -29,8 +29,8 @@ pub(crate) struct PlanTargets {
     pub(crate) overrun: f64,
     /// Relative route values on days still guided by the long-term plan.
     pub(crate) values: BTreeMap<(usize, DestinationId, u32), f64>,
-    /// Cumulative deliveries at the incumbent's interval ends. Outside a
-    /// planned window, preserve when its routes can actually be worked.
+    /// Cumulative hourly guidance from the incumbent's route deliveries,
+    /// scaled and blended with even pacing inside a planned window.
     pub(crate) timing: BTreeMap<Route, Vec<(f64, f64)>>,
     /// Start and end hour of each day the horizon touches.
     days: BTreeMap<u32, (f64, f64)>,
@@ -97,9 +97,48 @@ impl PlanTargets {
         self
     }
 
-    /// The plan's daily routes remain evenly paced. Continuation routes
-    /// instead become due when the incumbent delivered them, without turning
-    /// its within-day ordering into a hard constraint.
+    /// A daily plan changes route totals, but the incumbent's hourly shares
+    /// still show when each route can work. Use those shares as soft guidance.
+    pub(crate) fn time_window(&mut self, input: &BlendInput, incumbent: &Self, days: &BTreeSet<u32>) {
+        let mut hours = BTreeMap::<u32, Vec<Interval>>::new();
+        for &interval in &input.intervals {
+            if days.contains(&interval.day()) {
+                hours.entry(interval.day()).or_default().push(interval);
+            }
+        }
+        let mut changed = 0;
+        let mut count = 0;
+        for (route, &tonnes) in &self.routes {
+            if !days.contains(&route.3) {
+                continue;
+            }
+            let Some(curve) = incumbent.timing.get(route) else { continue };
+            let Some(&(_, total)) = curve.last() else { continue };
+            if total <= 1e-6 {
+                continue;
+            }
+            let ratio = tonnes / total;
+            let scaled = hours
+                .get(&route.3)
+                .into_iter()
+                .flatten()
+                .map(|&interval| {
+                    let end = curve.partition_point(|&(hour, _)| hour <= interval.end_h);
+                    let cumulative = end.checked_sub(1).map_or(0.0, |last| curve[last].1);
+                    // The old route's peaks may not fit its changed total.
+                    // Retain half of the daily plan's freedom to move work.
+                    (interval.end_h, 0.5 * cumulative * ratio + 0.5 * tonnes * self.paced(interval))
+                })
+                .collect();
+            self.timing.insert(*route, scaled);
+            count += 1;
+            changed += usize::from((tonnes - total).abs() > 1e-3);
+        }
+        log::debug!("window timing shaped {count} routes, {changed} with changed daily tonnes");
+    }
+
+    /// Timed routes become due at the incumbent's hours, scaled to new
+    /// window totals where present. Other routes retain even daily pacing.
     pub(crate) fn due_today(&self, loader: usize, activity: Activity, destination: DestinationId, interval: Interval, tonnes: f64) -> f64 {
         if let Some(curve) = self.timing.get(&(loader, activity, destination, interval.day())) {
             let end = curve.partition_point(|&(hour, _)| hour <= interval.end_h);

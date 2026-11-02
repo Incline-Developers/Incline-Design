@@ -1278,7 +1278,10 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
                         // incumbent's hours. The middle weighting explores
                         // that ordering between the two ordinary extremes.
                         let anchor = if follow == 1.0 && overrun == 1.0 { &timed } else { &anchored };
-                        let candidate = anchor.replacing(&covered, &planned.routes, follow * spread, overrun * spread);
+                        let mut candidate = anchor.replacing(&covered, &planned.routes, follow * spread, overrun * spread);
+                        if follow == 1.0 && overrun == 1.0 {
+                            candidate.time_window(input, &timed, &covered);
+                        }
                         let found = if live_round {
                             redispatch_live(input, live.as_ref()?, &best, from, opening.as_ref(), &candidate, timing, cancel)
                         } else {
@@ -1351,7 +1354,11 @@ pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), s
                 kept += 1;
                 tally.kept += 1;
                 log::debug!("window tail anchor kept at day {first_day}: {changed} routes changed outside the window");
-                log::debug!("window timing trial kept at day {first_day}: {} timed routes", targets.timing.len());
+                log::debug!(
+                    "window timing trial kept at day {first_day}: {} timed routes, {} inside the window",
+                    targets.timing.len(),
+                    targets.timing.keys().filter(|route| covered.contains(&route.3)).count()
+                );
                 record(
                     value,
                     bound,
