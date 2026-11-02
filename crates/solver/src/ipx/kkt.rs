@@ -101,10 +101,33 @@ impl<'a> DiagonalPrecond<'a> {
 
 impl LinearOperator for DiagonalPrecond<'_> {
     fn apply(&mut self, rhs: &[f64], lhs: &mut [f64], _want_dot: bool) -> f64 {
+        let count = self.diagonal.len();
+        assert!(rhs.len() >= count && lhs.len() >= count);
         let mut rldot = 0.0;
-        for i in 0..self.diagonal.len() {
-            lhs[i] = rhs[i] / self.diagonal[i];
-            rldot += lhs[i] * rhs[i];
+        let mut i = 0;
+        #[cfg(target_arch = "x86_64")]
+        {
+            use std::arch::x86_64::{_mm_div_pd, _mm_loadu_pd, _mm_mul_pd, _mm_storeu_pd};
+            while i + 1 < count {
+                let mut products = [0.0; 2];
+                // SAFETY: SSE2 is baseline on x86-64 and the loop bound
+                // and dimension checks provide two entries in each slice.
+                unsafe {
+                    let r = _mm_loadu_pd(rhs.as_ptr().add(i));
+                    let x = _mm_div_pd(r, _mm_loadu_pd(self.diagonal.as_ptr().add(i)));
+                    _mm_storeu_pd(lhs.as_mut_ptr().add(i), x);
+                    _mm_storeu_pd(products.as_mut_ptr(), _mm_mul_pd(x, r));
+                }
+                // Keep the scalar reduction order even though the two
+                // independent quotients and products are evaluated together.
+                rldot += products[0];
+                rldot += products[1];
+                i += 2;
+            }
+        }
+        for j in i..count {
+            lhs[j] = rhs[j] / self.diagonal[j];
+            rldot += lhs[j] * rhs[j];
         }
         rldot
     }
@@ -380,6 +403,10 @@ impl KktSolver for KktSolverDiag<'_, '_> {
         y.fill(0.0);
         let mut cr = ConjugateResiduals::new(self.control);
         cr.solve_preconditioned(&mut self.normal_matrix, &mut self.precond, &rhs, tol, Some(&self.resscale), self.maxiter, y);
+        static DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *DEBUG.get_or_init(|| std::env::var("PLAYGROUND_LOG").is_ok_and(|level| level == "debug")) {
+            eprintln!("IPX paired preconditioning: {m} rows, {} completed CR iterations", cr.iter);
+        }
         info.errflag = cr.errflag;
         info.kktiter1 += cr.iter;
         self.iter += cr.iter;
