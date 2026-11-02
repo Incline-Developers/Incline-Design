@@ -11,8 +11,8 @@ use super::{
     maxvolume::Maxvolume,
     model::Model,
     sparse::{
-        IndexedVector, Int, SparseMatrix, add_normal_product, backward_solve, copy_columns, dot, dot_column, forward_solve, infnorm, inverse_perm, normal_column_product,
-        permute_rows, scale_column, scatter_column, u,
+        IndexedVector, Int, NormalProduct, SparseMatrix, backward_solve, copy_columns, dot, dot_column, forward_solve, infnorm, inverse_perm, permute_rows, scale_column,
+        scatter_column, u,
     },
 };
 
@@ -28,11 +28,16 @@ pub(crate) trait LinearOperator {
 pub(crate) struct NormalMatrix<'a> {
     model: &'a Model,
     w: Option<Vec<f64>>,
+    product: NormalProduct<'a>,
 }
 
 impl<'a> NormalMatrix<'a> {
     pub fn new(model: &'a Model) -> Self {
-        Self { model, w: None }
+        Self {
+            model,
+            w: None,
+            product: NormalProduct::borrowed(model.ai(), model.cols()),
+        }
     }
 
     pub fn prepare(&mut self, w: Option<&[f64]>) {
@@ -44,22 +49,14 @@ impl LinearOperator for NormalMatrix<'_> {
     fn apply(&mut self, rhs: &[f64], lhs: &mut [f64], want_dot: bool) -> f64 {
         let m = u(self.model.rows());
         let n = u(self.model.cols());
-        let ai = self.model.ai();
-        let (ap, ai_idx, ax) = (&ai.colptr, &ai.rowidx, &ai.values);
         if let Some(w) = &self.w {
             for i in 0..m {
                 lhs[i] = rhs[i] * w[n + i];
             }
-            for j in 0..n {
-                let (index, value) = (&ai_idx[u(ap[j])..u(ap[j + 1])], &ax[u(ap[j])..u(ap[j + 1])]);
-                normal_column_product(index, value, Some(w[j]), rhs, lhs);
-            }
+            self.product.add(Some(w), rhs, lhs);
         } else {
             lhs[..m].fill(0.0);
-            for j in 0..n {
-                let (index, value) = (&ai_idx[u(ap[j])..u(ap[j + 1])], &ax[u(ap[j])..u(ap[j + 1])]);
-                normal_column_product(index, value, None, rhs, lhs);
-            }
+            self.product.add(None, rhs, lhs);
         }
         if want_dot { dot(rhs, lhs) } else { 0.0 }
     }
@@ -408,7 +405,7 @@ pub(crate) struct SplittedNormalMatrix<'a> {
     model: &'a Model,
     l: SparseMatrix,
     uf: SparseMatrix,
-    n: SparseMatrix,
+    product: NormalProduct<'static>,
     free_positions: Vec<Int>,
     pub colperm: Vec<Int>,
     rowperm_inv: Vec<Int>,
@@ -422,7 +419,7 @@ impl<'a> SplittedNormalMatrix<'a> {
             model,
             l: SparseMatrix::default(),
             uf: SparseMatrix::default(),
-            n: SparseMatrix::default(),
+            product: NormalProduct::owned(SparseMatrix::default()),
             free_positions: Vec::new(),
             colperm: vec![0; m],
             rowperm_inv: vec![0; m],
@@ -434,7 +431,6 @@ impl<'a> SplittedNormalMatrix<'a> {
         let m = u(self.model.rows());
         let n = u(self.model.cols());
         let ai = self.model.ai();
-        self.n.clear();
         let (l, uf, rowperm, colperm) = basis.get_lu_factors();
         self.l = l;
         self.uf = uf;
@@ -448,11 +444,12 @@ impl<'a> SplittedNormalMatrix<'a> {
             }
         }
         let nonbasic_vars: Vec<Int> = (0..(n + m) as Int).filter(|&j| basis.status_of(j) == BasicStatus::Nonbasic).collect();
-        self.n = copy_columns(ai, &nonbasic_vars);
-        permute_rows(&mut self.n, &self.rowperm_inv);
+        let mut nonbasic = copy_columns(ai, &nonbasic_vars);
+        permute_rows(&mut nonbasic, &self.rowperm_inv);
         for (k, &j) in nonbasic_vars.iter().enumerate() {
-            scale_column(&mut self.n, k as Int, colscale[u(j)]);
+            scale_column(&mut nonbasic, k as Int, colscale[u(j)]);
         }
+        self.product = NormalProduct::owned(nonbasic);
         self.free_positions.clear();
         for k in 0..m {
             let p = u(self.colperm[k]);
@@ -469,7 +466,7 @@ impl LinearOperator for SplittedNormalMatrix<'_> {
         self.work.copy_from_slice(rhs);
         backward_solve(&self.l, &self.uf, &mut self.work);
         lhs.fill(0.0);
-        add_normal_product(&self.n, None, &self.work, lhs);
+        self.product.add(None, &self.work, lhs);
         forward_solve(&self.l, &self.uf, lhs);
         for i in 0..lhs.len() {
             lhs[i] += rhs[i];

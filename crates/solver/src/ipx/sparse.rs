@@ -4,6 +4,8 @@
 //! IPX's `Int` is HiGHS's `HighsInt`, 32 bits (BASICLU's `lu_int` too),
 //! signed since its index arrays carry negative markers.
 
+use std::borrow::Cow;
+
 use crate::pdqsort::pdqsort;
 
 pub(crate) type Int = i32;
@@ -399,43 +401,87 @@ pub(crate) fn multiply_add(a: &SparseMatrix, rhs: &[f64], alpha: f64, lhs: &mut 
 // Most nonbasic routing columns have at most four entries. Fixed lengths
 // let the compiler remove their loop control without changing summation order.
 #[inline(always)]
-fn short_normal_product<const N: usize>(index: &[Int; N], value: &[f64; N], weight: Option<f64>, rhs: &[f64], lhs: &mut [f64]) {
+unsafe fn short_normal_product<const N: usize>(index: &[Int; N], value: &[f64; N], weight: Option<f64>, rhs: &[f64], lhs: &mut [f64]) {
     let mut temp = 0.0;
     for k in 0..N {
-        temp += rhs[u(index[k])] * value[k];
+        // SAFETY: the prepared product validates every row and both vectors.
+        temp += unsafe { *rhs.get_unchecked(u(index[k])) } * value[k];
     }
     if let Some(weight) = weight {
         temp *= weight;
     }
     for k in 0..N {
-        lhs[u(index[k])] += temp * value[k];
+        // SAFETY: each mutable access ends before the next, even for repeated rows.
+        unsafe { *lhs.get_unchecked_mut(u(index[k])) += temp * value[k] };
     }
 }
 
-#[inline(always)]
-pub(super) fn normal_column_product(index: &[Int], value: &[f64], weight: Option<f64>, rhs: &[f64], lhs: &mut [f64]) {
-    match index.len() {
-        1 => short_normal_product::<1>(index.try_into().unwrap(), value.try_into().unwrap(), weight, rhs, lhs),
-        2 => short_normal_product::<2>(index.try_into().unwrap(), value.try_into().unwrap(), weight, rhs, lhs),
-        3 => short_normal_product::<3>(index.try_into().unwrap(), value.try_into().unwrap(), weight, rhs, lhs),
-        4 => short_normal_product::<4>(index.try_into().unwrap(), value.try_into().unwrap(), weight, rhs, lhs),
-        _ => {
-            let mut temp = gather_dot(index, value, rhs);
-            if let Some(weight) = weight {
-                temp *= weight;
-            }
-            for (&i, &v) in index.iter().zip(value) {
-                lhs[u(i)] += temp * v;
+/// A normal product keeps its matrix immutable after validating the row
+/// indices. Repeated Krylov products then check vector sizes once instead
+/// of checking each sparse gather and scatter.
+pub(crate) struct NormalProduct<'a> {
+    matrix: Cow<'a, SparseMatrix>,
+    rows: usize,
+    cols: Int,
+}
+
+impl<'a> NormalProduct<'a> {
+    fn new(matrix: Cow<'a, SparseMatrix>, cols: Int) -> Self {
+        assert!(cols >= 0 && cols <= matrix.cols());
+        let rows = u(matrix.rows());
+        let pointers = &matrix.colptr[..=u(cols)];
+        assert!(pointers[0] >= 0 && pointers.windows(2).all(|pair| pair[0] <= pair[1]));
+        let end = u(pointers[u(cols)]);
+        assert!(end <= matrix.rowidx.len() && end <= matrix.values.len());
+        assert!(matrix.rowidx[..end].iter().all(|&row| u(row) < rows));
+        Self { matrix, rows, cols }
+    }
+
+    pub fn borrowed(matrix: &'a SparseMatrix, cols: Int) -> Self {
+        Self::new(Cow::Borrowed(matrix), cols)
+    }
+
+    pub fn owned(matrix: SparseMatrix) -> Self {
+        let cols = matrix.cols();
+        Self::new(Cow::Owned(matrix), cols)
+    }
+
+    #[inline(always)]
+    pub fn add(&self, weights: Option<&[f64]>, rhs: &[f64], lhs: &mut [f64]) {
+        assert!(rhs.len() >= self.rows && lhs.len() >= self.rows);
+        let a = &self.matrix;
+        if let Some(weights) = weights {
+            assert!(weights.len() >= u(self.cols));
+        }
+        for (j, pointers) in a.colptr[..=u(self.cols)].windows(2).enumerate() {
+            // SAFETY: construction checks that these pointers are ordered,
+            // nonnegative and within both arrays. The immutable matrix keeps
+            // those ranges and row indices valid; vector sizes are checked above.
+            unsafe {
+                let range = u(pointers[0])..u(pointers[1]);
+                let index = a.rowidx.get_unchecked(range.clone());
+                let value = a.values.get_unchecked(range);
+                let weight = weights.map(|w| *w.get_unchecked(j));
+                match index.len() {
+                    1 => short_normal_product::<1>(index.try_into().unwrap(), value.try_into().unwrap(), weight, rhs, lhs),
+                    2 => short_normal_product::<2>(index.try_into().unwrap(), value.try_into().unwrap(), weight, rhs, lhs),
+                    3 => short_normal_product::<3>(index.try_into().unwrap(), value.try_into().unwrap(), weight, rhs, lhs),
+                    4 => short_normal_product::<4>(index.try_into().unwrap(), value.try_into().unwrap(), weight, rhs, lhs),
+                    _ => {
+                        let mut temp = 0.0;
+                        for (&i, &v) in index.iter().zip(value) {
+                            temp += *rhs.get_unchecked(u(i)) * v;
+                        }
+                        if let Some(weight) = weight {
+                            temp *= weight;
+                        }
+                        for (&i, &v) in index.iter().zip(value) {
+                            *lhs.get_unchecked_mut(u(i)) += temp * v;
+                        }
+                    }
+                }
             }
         }
-    }
-}
-
-/// `lhs += A * D^2 * A' * rhs`, `D` the identity if not given.
-pub(crate) fn add_normal_product(a: &SparseMatrix, d: Option<&[f64]>, rhs: &[f64], lhs: &mut [f64]) {
-    for j in 0..a.cols() {
-        let (index, value) = column(a, j);
-        normal_column_product(index, value, d.map(|d| d[u(j)] * d[u(j)]), rhs, lhs);
     }
 }
 
