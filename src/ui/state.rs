@@ -1791,7 +1791,7 @@ pub(crate) fn segment_readout(start: DVec3, end: DVec3, bulge: f64) -> Option<Se
             if bearing >= 360.0 { 0.0 } else { bearing + 0.0 }
         }),
         grade_degrees: chord.z.atan2(plan).to_degrees(),
-        grade_percent: (!vertical).then(|| 100.0 * chord.z / plan),
+        grade_percent: (!vertical).then_some(100.0 * chord.z / plan),
     })
 }
 

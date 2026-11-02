@@ -512,7 +512,7 @@ impl Sample<'_> {
                 passed += usize::from(result);
             }
         }
-        (judged > 0).then(|| passed as f64 / judged as f64)
+        (judged > 0).then_some(passed as f64 / judged as f64)
     }
 
     /// Never negative and never falling within a hole, as a depth is.
