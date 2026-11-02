@@ -1,172 +1,145 @@
-//! A row of browser-style tabs across the top of a workspace: the open page
-//! stands up out of the content under it, the way a browser's open tab does,
-//! and the others sit flat on the window behind.
+//! Browser-style tabs: the open one stands up out of the content under it,
+//! the way a browser's open tab does, and the others sit flat on the window
+//! behind. The workspace tabs in the menu bar are drawn this way, standing on
+//! the viewport bar.
 //!
 //! The open tab is a raised surface with rounded shoulders and two small
 //! flared feet, outlined in the regions' own hairline so its outline runs on
 //! into the top edge of whatever region is under it. The closed tabs are just
-//! labels, parted by short rules that give way around the open tab and the
-//! one under the pointer. A closed tab under the pointer takes the open tab's
-//! shape in a weaker fill, without its outline. Picking another tab slides the
+//! labels. A closed tab under the pointer takes the open tab's shape in a
+//! weaker fill, without its outline. Picking another tab slides the
 //! open one across to it.
 //!
-//! The row is not a region. Its open tab reaches down through the gap below it
-//! to meet the regions, so it has to be painted over their chrome: [`show`]
-//! lays the row out and takes its clicks, and the [`PageTabsPaint`] it returns
-//! is painted after `chrome::paint_regions`.
-//!
-//! [`show`]: PageTabs::show
+//! The caller lays the tabs out and takes their clicks, so a row can space,
+//! reorder or disable its tabs as it likes, and hands them to
+//! [`PageTabsPaint::new`]. The open tab reaches down through the gap below the
+//! row to meet the regions, so it has to be painted over their chrome: the
+//! [`PageTabsPaint`] is stood on the regions' top edge once that is known
+//! ([`PageTabsPaint::standing_on`]) and painted after `chrome::paint_regions`.
 
-use std::{hash::Hash, sync::Arc};
+use std::sync::Arc;
 
 use egui::{Color32, Pos2, Rect, Shape, Stroke, pos2, vec2};
 
 use super::{shifted, toolbar::GROUP_CORNER_RADIUS};
 use crate::ui::chrome;
 
-/// The widest a tab grows: past this the labels would float in empty tabs.
-const MAX_TAB_WIDTH: f32 = 150.0;
-/// Space either side of a label, kept even when the row is squeezed.
-const LABEL_PADDING: f32 = 10.0;
-/// How far the separators stand off the tab's top and bottom, so they sit
-/// inside the row rather than running its full height.
-const RULE_INSET: f32 = 6.0;
-
-/// The tabs over one workspace's pages.
-pub(crate) struct PageTabs<'a, H> {
-    id_salt: H,
-    labels: &'a [String],
-    selected: usize,
+/// One tab as its row laid it out this frame.
+pub(crate) struct PageTab {
+    /// The tab's cell in the row, which its label is centred in. The open
+    /// tab's surface runs on below it down to the regions.
+    pub(crate) rect: Rect,
+    pub(crate) galley: Arc<egui::Galley>,
+    pub(crate) hovered: bool,
+    /// A tab with nothing behind it yet: its label in the weak text colour,
+    /// and no hover.
+    pub(crate) enabled: bool,
 }
 
-/// One closed or open tab, ready to paint.
-struct Tab {
-    rect: Rect,
-    galley: Arc<egui::Galley>,
-    hovered: bool,
-}
-
-/// What [`PageTabs::show`] laid out, for painting once the regions are done.
+/// A row of tabs ready to paint once the regions are done.
 pub(crate) struct PageTabsPaint {
-    tabs: Vec<Tab>,
-    selected: usize,
-    /// The open tab's rect this frame, sliding towards its slot.
-    open: Rect,
+    tabs: Vec<PageTab>,
+    selected: Option<usize>,
+    /// The open tab's span this frame, sliding towards its slot.
+    open: egui::Rangef,
     /// Where the regions under the row start: the line the open tab stands on.
     base: f32,
+    /// Across, the row's clip, so a row scrolled sideways stays inside its
+    /// bar; down, nothing, since the open tab reaches past the row.
+    clip: Rect,
+    /// How far below its cell's centre each label sits.
+    label_offset: f32,
     visuals: egui::Visuals,
 }
 
-impl<'a, H: Hash + std::fmt::Debug> PageTabs<'a, H> {
-    pub(crate) fn new(id_salt: H, labels: &'a [String], selected: usize) -> Self {
-        Self { id_salt, labels, selected }
-    }
-
-    /// Lay the tabs out across `row`, standing on `base` - the top of the
-    /// regions' fills under it - and take their clicks. Returns the index
-    /// clicked this frame, and what to paint after the regions.
-    pub(crate) fn show(self, ui: &mut egui::Ui, row: Rect, base: f32) -> (Option<usize>, PageTabsPaint) {
-        let id = ui.scope_id().with(&self.id_salt);
-        let font = egui::TextStyle::Button.resolve(ui.style());
-        let galleys: Vec<_> = self
-            .labels
-            .iter()
-            .map(|label| ui.painter().layout_no_wrap(label.clone(), font.clone(), Color32::PLACEHOLDER))
-            .collect();
-        // Every tab one width, as a browser's are: they shrink together when
-        // the window does, down to the widest label.
-        let widest = galleys.iter().map(|galley| galley.size().x).fold(0.0, f32::max) + 2.0 * LABEL_PADDING;
-        let count = self.labels.len().max(1) as f32;
-        // The feet reach a radius past the end tabs; keep them inside the row.
-        let feet = f32::from(GROUP_CORNER_RADIUS);
-        let width = ((row.width() - 2.0 * feet) / count).clamp(widest, MAX_TAB_WIDTH.max(widest));
-        let left = row.left() + feet;
-
-        let mut clicked = None;
-        let tabs: Vec<Tab> = galleys
-            .into_iter()
-            .enumerate()
-            .map(|(index, galley)| {
-                let rect = Rect::from_min_max(pos2(left + width * index as f32, row.top()), pos2(left + width * (index + 1) as f32, base));
-                // Clicks only over the row itself: the strip the open tab
-                // reaches down through belongs to the region margins below.
-                let response = ui.interact(rect.intersect(row), id.with(index), egui::Sense::click());
-                let chosen = index == self.selected;
-                response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, chosen, galley.text()));
-                if response.clicked() && !chosen {
-                    clicked = Some(index);
-                }
-                Tab {
-                    rect,
-                    galley,
-                    hovered: response.hovered(),
-                }
-            })
-            .collect();
-
-        let target = tabs.get(self.selected).map_or(Rect::NOTHING, |tab| tab.rect);
-        let open = super::tab_strip::sliding_tile(ui.ctx(), id, target);
-        let paint = PageTabsPaint {
+impl PageTabsPaint {
+    /// `tabs` as laid out this frame, with `selected` open. The open tab slides
+    /// to a newly picked slot, unless it is `held` - moving with the pointer -
+    /// when it stays under the pointer instead. Stands on the bottom of the row
+    /// until [`Self::standing_on`] says otherwise.
+    pub(crate) fn new(ui: &egui::Ui, id: egui::Id, tabs: Vec<PageTab>, selected: Option<usize>, held: bool) -> Self {
+        let target = selected.and_then(|index| tabs.get(index)).map_or(Rect::NOTHING, |tab| tab.rect);
+        let sliding = super::tab_strip::sliding_tile(ui.ctx(), id, target);
+        let open = if held { target.x_range() } else { sliding.x_range() };
+        let base = tabs.iter().map(|tab| tab.rect.bottom()).fold(f32::NEG_INFINITY, f32::max);
+        Self {
             tabs,
-            selected: self.selected,
+            selected,
             open,
             base,
+            clip: Rect::from_x_y_ranges(ui.clip_rect().x_range(), egui::Rangef::EVERYTHING),
+            label_offset: 0.0,
             visuals: ui.visuals().clone(),
-        };
-        (clicked, paint)
+        }
     }
-}
 
-impl PageTabsPaint {
+    /// Stand the open tab on `base`, the top of the regions' fills under the row.
+    pub(crate) fn standing_on(mut self, base: f32) -> Self {
+        self.base = base;
+        self
+    }
+
+    /// Sit each label `offset` below its cell's centre, to line it up with
+    /// whatever else its row carries. The tabs' shapes stay where they are.
+    pub(crate) fn label_offset(mut self, offset: f32) -> Self {
+        self.label_offset = offset;
+        self
+    }
+
     /// Paint the row. Call after `chrome::paint_regions`, so the open tab
     /// covers the gap between its row and the regions under it.
     pub(crate) fn paint(&self, ctx: &egui::Context) {
-        let painter = ctx.layer_painter(egui::LayerId::background());
+        let painter = ctx.layer_painter(egui::LayerId::background()).with_clip_rect(self.clip);
         let visuals = &self.visuals;
         let rule = chrome::region_stroke(visuals);
         // Partway from the window to the open tab's fill.
         let hover_fill = shifted(chrome::window_fill(visuals), if visuals.dark_mode { 6 } else { 9 });
-
-        // The rules between closed tabs: one at each inner seam, unless the
-        // open tab or the one under the pointer is on either side of it - a
-        // browser drops them there, so the lit tab reads as one shape.
-        let open_span = self.open.x_range();
-        for pair in self.tabs.windows(2) {
-            let x = pair[0].rect.right();
-            let beside_open = (open_span.min - 1.0..=open_span.max + 1.0).contains(&x);
-            if beside_open || pair[0].hovered || pair[1].hovered {
-                continue;
-            }
-            let top = pair[0].rect.top() + RULE_INSET;
-            let bottom = self.base - RULE_INSET;
-            if bottom > top {
-                painter.line_segment([pos2(x, top), pos2(x, bottom)], Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color));
-            }
-        }
+        let surface = |tab: &PageTab, span: egui::Rangef| Rect::from_x_y_ranges(span, tab.rect.top()..=self.base);
 
         // Under the open tab, so it stays whole while it slides across.
         for (index, tab) in self.tabs.iter().enumerate() {
-            if tab.hovered && index != self.selected {
-                let outline = tab_outline(tab.rect, self.base);
-                fill_tab(&painter, &outline, self.base, hover_fill);
+            if tab.hovered && tab.enabled && Some(index) != self.selected {
+                // A pixel short of the base, clear of the region's top edge:
+                // the edge stroke would darken that hairline where the feet
+                // meet it, and the fill is the window's colour near enough
+                // that the gap does not show.
+                let base = self.base - 1.0;
+                let outline = tab_outline(Rect::from_x_y_ranges(tab.rect.x_range(), tab.rect.top()..=base), base);
+                fill_tab(&painter, &outline, base, hover_fill);
                 // Edged in its own colour, which smooths the mesh's edges.
                 painter.add(Shape::line(outline, Stroke::new(1.0, hover_fill)));
             }
         }
 
-        if self.open.is_positive() {
-            let outline = tab_outline(self.open, self.base);
+        if let Some(open) = self.selected.and_then(|index| self.tabs.get(index))
+            && self.open.span() > 0.0
+        {
+            let outline = tab_outline(surface(open, self.open), self.base);
             fill_tab(&painter, &outline, self.base, visuals.panel_fill);
-            // Not stroked along the base: the region's own top edge runs on
-            // under the tab, so the tab reads as standing on whatever is below
-            // it, scene or panel.
+            // The region's own top edge, under the tab from one foot to the
+            // other, painted out in the tab's fill: the two are one surface,
+            // and the edge runs up into the feet and over the tab instead.
+            // The hairline is drawn inside the region, so it is the pixel row
+            // just under the base; half a pixel either side takes its
+            // feathering too.
+            if let (Some(first), Some(last)) = (outline.first(), outline.last()) {
+                let seam = Rect::from_x_y_ranges(first.x..=last.x, self.base - 0.5..=self.base + 1.5);
+                painter.rect_filled(seam, 0.0, visuals.panel_fill);
+            }
+            // Stroked along everything but the base, over that.
             painter.add(Shape::line(outline, rule));
         }
 
         for (index, tab) in self.tabs.iter().enumerate() {
-            let chosen = index == self.selected;
-            let color = if chosen || tab.hovered { visuals.strong_text_color() } else { visuals.text_color() };
-            painter.galley(tab.rect.center() - tab.galley.size() / 2.0, tab.galley.clone(), color);
+            let color = if !tab.enabled {
+                visuals.weak_text_color()
+            } else if Some(index) == self.selected || tab.hovered {
+                visuals.strong_text_color()
+            } else {
+                visuals.text_color()
+            };
+            let at = tab.rect.center() - tab.galley.size() / 2.0 + vec2(0.0, self.label_offset);
+            painter.galley(at, tab.galley.clone(), color);
         }
     }
 }

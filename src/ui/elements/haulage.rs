@@ -140,7 +140,7 @@ pub(crate) fn draw_panel(ui: &mut egui::Ui, editor: &mut EditorState, document: 
                 issues(ui, stack_slot(ui), editor, network, &destinations, commands);
                 draw_network_settings(ui, stack_slot(ui), network, session, commands);
                 DataGrid::new("haulage_solids_navigation", stack_slot(ui), &tr!("sequence-solids-navigation")).show(ui, |ui| {
-                    super::solids_view::draw_navigation_rows(ui, editor, document, super::solids_view::NavigationTree::Haulage, commands);
+                    super::solids_view::draw_rows(ui, editor, document, super::solids_view::SolidsTree::Haulage, commands);
                 });
             });
         });

@@ -791,11 +791,6 @@ impl<'a> App<'a> {
                 self.editor.show_export = true;
                 None
             }
-            MacMenuAction::DrawHaulRoad => Some(UiCommand::StartHaulRoad),
-            MacMenuAction::ConvertHaulSelection => Some(UiCommand::ConvertHaulSelection),
-            MacMenuAction::ImportHaulRoads => Some(UiCommand::OpenHaulImport),
-            MacMenuAction::ExportHaulRoads => Some(UiCommand::ExportHaulRoads),
-            MacMenuAction::EditHaulProperties => Some(UiCommand::EditHaulProperties),
             MacMenuAction::ExportViewportImage => Some(UiCommand::ExportViewportImage),
             MacMenuAction::OpenPlotDialog => Some(UiCommand::OpenPlotDialog),
             MacMenuAction::OpenPreferences => Some(UiCommand::OpenPreferences),

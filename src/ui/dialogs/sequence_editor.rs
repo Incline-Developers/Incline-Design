@@ -262,7 +262,7 @@ pub(crate) fn draw_navigation_column(ui: &mut egui::Ui, editor: &mut EditorState
         ui.push_id("solids_navigation", |ui| {
             ui.allocate_ui(egui::vec2(ui.available_width(), half), |ui| {
                 ui.label(egui::RichText::new(tr!("sequence-solids-navigation")).strong());
-                crate::ui::elements::solids_view::draw_sequence_tree(ui, editor, document, commands);
+                crate::ui::elements::solids_view::draw_tree(ui, editor, document, crate::ui::elements::solids_view::SolidsTree::Sequence, commands);
             });
         });
         ui.separator();

@@ -29,7 +29,7 @@ use crate::{
             context_menu::{ContextMenuAction, context_menu_popup},
             data_grid::{
                 CELL_WARNING_WIDTH, CellOption, DataGrid, GridRow, grid_add_action_row, grid_add_row, grid_cell_color, grid_cell_combo, grid_cell_fixed, grid_cell_number,
-                grid_cell_warning, grid_columns_row, grid_empty_state, grid_group_row, grid_row, grid_separator_row, property_table_height, stack_slot, table_stack,
+                grid_cell_warning, grid_columns_row, grid_empty_state, grid_group_row, grid_row, grid_separator_row, stack_slot, table_stack,
             },
             explorer::{ExplorerEntry, paint_fixed_stripes, reserve_fixed_stripes},
             island::{Island, Side},
@@ -1189,8 +1189,7 @@ fn draw_solid_properties(ui: &mut egui::Ui, rect: egui::Rect, project: &UiProjec
 /// a topography shows the closed volume between the two, with its enclosed
 /// volume captioned. Right drag orbits, middle drag pans, the wheel zooms.
 pub(crate) fn draw_solid_render(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, session: u32, commands: &mut Vec<UiCommand>) {
-    let title = tr!("charging-preview");
-    framed_render_pane(ui, rect, &title, |ui, body| {
+    framed_render_pane(ui, rect, |ui, body| {
         let caption_height = ui.text_style_height(&egui::TextStyle::Body) + 8.0;
         let image_rect = egui::Rect::from_min_max(body.min, egui::pos2(body.right(), (body.bottom() - caption_height).max(body.top())));
         if !image_rect.is_positive() {
@@ -1273,7 +1272,7 @@ pub(crate) fn draw_solid_render(ui: &mut egui::Ui, rect: egui::Rect, editor: &mu
         // A built solid is only a preview until it is asked for by name; a
         // lone surface is already in the project, so there is nothing to add.
         let can_save = !editor.is_solids_view() && matches!(editor.solid_preview_summary, crate::ui::state::SolidPreviewSummary::Ready { volume: Some(_), .. });
-        context_menu_popup(&response, &title, |ui| {
+        context_menu_popup(&response, tr!("charging-preview"), |ui| {
             if ContextMenuAction::new(tr!("planning-save-solid-project")).enabled(can_save).show(ui).clicked() {
                 commands.push(UiCommand::SaveSolidPreviewToProject);
                 ui.close();
@@ -1316,18 +1315,15 @@ pub(crate) fn draw_solid_render(ui: &mut egui::Ui, rect: egui::Rect, editor: &mu
     });
 }
 
-/// The bordered, titled frame the render pane shares with the grids beside
-/// it, handing its body rect to `content` instead of laying rows out.
-fn framed_render_pane(ui: &mut egui::Ui, rect: egui::Rect, title: &str, content: impl FnOnce(&mut egui::Ui, egui::Rect)) {
-    ui.scope_builder(egui::UiBuilder::new().id_salt(("planning_framed_pane", title.to_owned())).max_rect(rect), |ui| {
+/// The bordered frame the render pane shares with the grids beside it,
+/// handing its rect to `content` instead of laying rows out. Untitled: what
+/// it shows is the solid itself, which says what it is.
+fn framed_render_pane(ui: &mut egui::Ui, rect: egui::Rect, content: impl FnOnce(&mut egui::Ui, egui::Rect)) {
+    ui.scope_builder(egui::UiBuilder::new().id_salt("planning_framed_pane").max_rect(rect), |ui| {
         ui.set_clip_rect(ui.clip_rect().intersect(rect));
         ui.painter().rect_filled(rect, 0.0, crate::ui::widgets::tree_row_colors(ui).1);
-        let title_height = property_table_height(ui, 0);
-        let title_rect = egui::Rect::from_min_size(rect.min + egui::vec2(8.0, 0.0), egui::vec2((rect.width() - 8.0).max(0.0), title_height));
-        ui.put(title_rect, egui::Label::new(bold(title)).truncate().halign(egui::Align::Min));
-        let body = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() + title_height), rect.max);
-        if body.is_positive() {
-            content(ui, body);
+        if rect.is_positive() {
+            content(ui, rect);
         }
         ui.painter().rect_stroke(rect, 0.0, ui.visuals().widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
     });

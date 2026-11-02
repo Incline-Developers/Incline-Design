@@ -701,7 +701,7 @@ fn draw_ui(
     // On macOS the File and Project dropdowns are in the system menu bar
     // (`mac.rs`) instead, but the bar itself is still drawn: the mark and the
     // workspace tabs have nowhere else to go.
-    let main_menu_rect = crate::ui::elements::main_menu::draw_main_menu(root_ui, editor, project, commands);
+    let (main_menu_rect, workspace_tabs) = crate::ui::elements::main_menu::draw_main_menu(root_ui, editor, project, commands);
 
     // --- Draw all toolbar panels ---
     // The status bar spans the window, so it is claimed first.
@@ -717,6 +717,8 @@ fn draw_ui(
     // The bar spans the window, so it is claimed before the explorer: the
     // column, the tools and the scene all start below it.
     let viewport_bar_rect = elements::viewport_bar::draw_viewport_bar(root_ui, editor, project, document, commands);
+    // The open workspace tab stands on the bar's top edge.
+    let workspace_tabs = workspace_tabs.map(|tabs| tabs.standing_on(chrome::region_rect(viewport_bar_rect).top()));
     // Planning's page tabs, across the window under the bar and over every
     // page, so they are claimed before anything below them too.
     let planning_tabs = (editor.active_workspace == state::Workspace::Planning).then(|| elements::planning_tabs::draw_planning_tabs(root_ui, editor, commands));
@@ -789,6 +791,9 @@ fn draw_ui(
         );
         chrome::paint_grips(ctx, planning_layout.grips);
         if let Some(tabs) = &planning_tabs {
+            tabs.paint(ctx);
+        }
+        if let Some(tabs) = &workspace_tabs {
             tabs.paint(ctx);
         }
         chrome::paint_grips(
@@ -1473,9 +1478,13 @@ fn draw_ui(
             // of the right-edge panels the workspace drew.
             .chain(planning_grips),
     );
-    // Over the regions' chrome: the open tab reaches down through the gap to
-    // the regions under it.
+    // Over the regions' chrome: the open workspace tab reaches down through
+    // the gap to the viewport bar under it, and Planning's tabs sit in the
+    // gap between two regions, whose seam bands would square their tiles off.
     if let Some(tabs) = &planning_tabs {
+        tabs.paint(&ctx);
+    }
+    if let Some(tabs) = &workspace_tabs {
         tabs.paint(&ctx);
     }
 

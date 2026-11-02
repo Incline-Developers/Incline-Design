@@ -221,7 +221,6 @@ planning-block-models = Block Models
 planning-solids = Solids
 planning-benching = Benching
 planning-blasting = Blasting
-planning-benches = Benches
 preferences-title = Preferences
 
 context-text-colour = Text colour

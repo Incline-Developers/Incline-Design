@@ -755,14 +755,6 @@ impl LowerPane {
     }
 }
 
-/// A pane's own heading, so the column says what each of its lists is.
-fn heading(ui: &mut egui::Ui, label: &str) {
-    ui.horizontal(|ui| {
-        ui.add_space(ui.spacing().indent);
-        ui.label(crate::ui::fonts::bold(label));
-    });
-}
-
 /// What the explorer column claimed.
 pub(crate) struct ExplorerLayout {
     /// The regions to round off: the step list and the tree.
@@ -843,7 +835,7 @@ pub(crate) fn draw_explorer(
             // Animate keeps a Solids Navigation of its own here: hiding ground
             // to see a block, or to click the right one, belongs to that page
             // alone. The Road Network's is at the foot of its own column.
-            let navigation = editor.is_schedule_animation().then_some(super::solids_view::NavigationTree::Animation);
+            let navigation = editor.is_schedule_animation().then_some(super::solids_view::SolidsTree::Animation);
             let animation_solids = if let Some(tree) = navigation {
                 egui::Panel::top("schedule_animation_solids_navigation")
                     .resizable(true)
@@ -852,8 +844,7 @@ pub(crate) fn draw_explorer(
                     .show_separator_line(false)
                     .frame(crate::ui::chrome::region_frame(ui).fill(surface).inner_margin(egui::Margin::ZERO))
                     .show(ui, |ui| {
-                        heading(ui, &crate::i18n::tr!("sequence-solids-navigation"));
-                        super::solids_view::draw_animation_tree(ui, editor, document, tree, commands);
+                        super::solids_view::draw_tree(ui, editor, document, tree, commands);
                     })
                     .response
                     .rect
@@ -884,10 +875,7 @@ pub(crate) fn draw_explorer(
                             ui.set_clip_rect(ui.clip_rect().intersect(rect));
                             match lower {
                                 LowerPane::StepList(list) => super::planning_setup::draw_step_list(ui, rect, list, editor, project),
-                                LowerPane::Objects => {
-                                    heading(ui, &crate::i18n::tr!("sequence-objects"));
-                                    draw_object_tree(ui, editor, project, commands);
-                                }
+                                LowerPane::Objects => draw_object_tree(ui, editor, project, commands),
                             }
                         })
                         .response
@@ -908,8 +896,7 @@ pub(crate) fn draw_explorer(
                     // The Reserves view lists what the setup produced; every
                     // other full-window planning page lists its own steps.
                     if solids_view {
-                        super::solids_view::tree_heading(ui);
-                        super::solids_view::draw_tree(ui, editor, document, commands);
+                        super::solids_view::draw_tree(ui, editor, document, super::solids_view::SolidsTree::Reserves, commands);
                         return;
                     }
                     // The Gantt is not a setup step, so the column stays the
@@ -919,11 +906,10 @@ pub(crate) fn draw_explorer(
                         return;
                     }
                     if cut_step {
-                        super::solids_view::bench_tree_heading(ui);
                         if dig_strips {
                             super::solids_view::draw_flitch_tree(ui, editor, document);
                         } else {
-                            super::solids_view::draw_bench_tree(ui, editor, document, commands);
+                            super::solids_view::draw_tree(ui, editor, document, super::solids_view::SolidsTree::Benches, commands);
                         }
                         return;
                     }
