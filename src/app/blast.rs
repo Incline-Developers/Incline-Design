@@ -193,7 +193,7 @@ impl App<'_> {
     }
 
     /// Load or unload the selected holes of the active dataset, from the
-    /// products panel's rule menu.
+    /// Charge Rules section's menu.
     pub(crate) fn charge_selected_holes(&mut self, rule: Option<String>) {
         let Some(id) = self.editor.active_drill_hole else {
             return;

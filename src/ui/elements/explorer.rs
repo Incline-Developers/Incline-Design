@@ -805,15 +805,6 @@ pub(crate) fn draw_explorer(
             let setup_steps = setup && !viewport_step;
             let lower = LowerPane::of(editor);
 
-            // Drill & Blast's products sit under the tree, a pane of the
-            // column like the planning lists.
-            let products = if editor.active_workspace == crate::ui::state::Workspace::DrillAndBlast {
-                super::products::draw_products_panel(ui, editor, commands)
-            } else {
-                ui.skip_ahead_auto_ids(1);
-                egui::Rect::NOTHING
-            };
-
             // Blasting, Dig Strips and the Road Network frame the viewport, so
             // the step tree shares the column with what they work on: the
             // benches a cut divides, or the ground roads are drawn over. Each
@@ -919,11 +910,7 @@ pub(crate) fn draw_explorer(
                 .response
                 .rect;
             // The panes are panels of this column, so their ids derive from its scope.
-            (
-                vec![products, steps, animation_solids, list, tree],
-                [steps, animation_solids, list, products],
-                ui.scope_id(),
-            )
+            (vec![steps, animation_solids, list, tree], [steps, animation_solids, list], ui.scope_id())
         });
 
     // The panes are the regions; the column itself carries no frame. Every
@@ -936,7 +923,6 @@ pub(crate) fn draw_explorer(
                 (seams[0], CUT_STEPS_PANEL_ID, crate::ui::chrome::Edge::Bottom),
                 (seams[1], "schedule_animation_solids_navigation", crate::ui::chrome::Edge::Bottom),
                 (seams[2], STEP_LIST_PANEL_ID, crate::ui::chrome::Edge::Top),
-                (seams[3], super::products::PANEL_ID, crate::ui::chrome::Edge::Top),
             ]
             .into_iter()
             .filter(|(rect, _, _)| rect.is_positive())
@@ -964,18 +950,6 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
     // What a right-click on any selected row acts on, gathered once rather
     // than per row.
     let selection = explorer_selection(editor, project);
-    // The tree only reads editor state. Destructuring here keeps the
-    // row closures below from capturing `editor` mutably, which the
-    // borrow checker would otherwise reject against these shared reads.
-    let EditorState {
-        selected_handles,
-        locked_layers,
-        locked_rasters,
-        frozen_handles,
-        selected_layers,
-        ..
-    } = &*editor;
-
     // Keep the scroll area's contents as wide as the side panel even
     // when every section is collapsed. `ScrollArea` otherwise shrinks
     // horizontally to the headers' intrinsic width; a visible
@@ -985,6 +959,18 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
     // Vertical shrinking is off so the banding below the last row has
     // the full panel height to run into: see `paint_fixed_stripes`.
     egui::ScrollArea::vertical().auto_shrink([false; 2]).min_scrolled_height(0.0).show(ui, |ui| {
+        // The project's sections only read editor state. Destructuring here
+        // keeps the row closures below from capturing `editor` mutably, which
+        // the borrow checker would otherwise reject against these shared
+        // reads; the borrows end before the products, which edit it.
+        let EditorState {
+            selected_handles,
+            locked_layers,
+            locked_rasters,
+            frozen_handles,
+            selected_layers,
+            ..
+        } = &*editor;
         // Empty-state messages should behave like explorer entries at
         // narrow widths: stay on one line and end with an ellipsis.
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
@@ -1598,6 +1584,11 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
             tagged_count(&project.drill_holes, SectionKind::DrillHoles),
             commands,
         );
+
+        // Drill & Blast's products, in its own workspace only.
+        if editor.active_workspace == crate::ui::state::Workspace::DrillAndBlast {
+            super::products::draw_product_sections(ui, editor, commands);
+        }
 
         paint_fixed_stripes(ui, stripes_slot, stripes_top, stripe);
     });

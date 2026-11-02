@@ -214,8 +214,8 @@ pub(crate) enum Edge {
 ///
 /// `claimed` is the rect the drag resizes, as its panel claimed it - so its
 /// named edge *is* the seam. That is not always one region: the explorer's
-/// column is dragged as a whole, so its grip is centred on the tree and the
-/// products island together.
+/// column is dragged as a whole, so its grip is centred on every pane in it
+/// together.
 #[derive(Clone, Copy)]
 pub(crate) struct Grip {
     claimed: Rect,

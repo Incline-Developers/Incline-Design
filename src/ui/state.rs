@@ -3206,7 +3206,7 @@ pub(crate) struct EditorState {
     /// World point under the pointer that the screen-space snap corridor ends
     /// at. The preview paints the whole corridor, not only the holes it found.
     pub(crate) tie_path_end_world: Option<DVec3>,
-    /// What the active dataset's tie-in adds up to, for the products panel.
+    /// What the active dataset's tie-in adds up to, for the product sections.
     pub(crate) blast_round: BlastRoundSummary,
     /// The dataset and revision [`Self::blast_round`] was worked out from, so
     /// a pattern is only walked again when its content has moved on.
@@ -4770,7 +4770,7 @@ pub(crate) enum ActiveTool {
     /// Lay a product along the visible screen-space corridor between collars.
     TieHoles,
     /// Drill & Blast's initiation tool: a click puts the point a round starts
-    /// at on the hole under the cursor, at the delay the products panel holds.
+    /// at on the hole under the cursor, at the delay the product sections hold.
     SetInitiationPoint,
     /// Load holes with the active charge rule: click one, or drag a box over
     /// several. Shift unloads instead.
@@ -9043,7 +9043,7 @@ impl DelayProduct {
     }
 }
 
-/// What the active dataset's tie-in adds up to, as the products panel reads
+/// What the active dataset's tie-in adds up to, as the product sections read
 /// it back.
 ///
 /// Derived from the dataset rather than stored: it is recomputed by
