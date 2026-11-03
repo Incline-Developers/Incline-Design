@@ -1575,8 +1575,18 @@ impl crate::app::App<'_> {
                     self.editor.solid_view_reserve_status = Some(crate::i18n::tr!("planning-reserve-capacity-only"));
                 }
             }
+            // Only measured ground adds to the totals. A dump with no model
+            // carries no fields at all, and merged in it would leave the
+            // selection with none - every tonnage and grade a dash - while
+            // its volume still counts against the model's coverage.
             let reserves = (demand == GeometryDemand::Partition && !blast_sequencing)
-                .then(|| cache.reserves.product().map(|product| &product.totals))
+                .then(|| {
+                    cache
+                        .reserves
+                        .product()
+                        .filter(|product| product.availability == ReserveAvailability::Measured)
+                        .map(|product| &product.totals)
+                })
                 .flatten();
             for (index, part) in parts.iter().enumerate() {
                 if !selected(&view_selection, solid.id, Some(part.band.selection)) {

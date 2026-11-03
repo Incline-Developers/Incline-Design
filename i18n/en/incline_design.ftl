@@ -2102,6 +2102,7 @@ stage-cancel = Cancel Run
 stage-diagnostics = Diagnostics
 planning-reserve-coverage = Model coverage
 planning-reserve-coverage-note = Block-model volume measured into the shown geometry, as a share of its geometric volume
+planning-reserve-coverage-partial = The block model reaches only this share of the shown ground, so the tonnes and grades below are for that part.
 stage-block-not-closed = Dig block { $block } ({ $area } m²) did not come out closed, so it has no volume
 stage-volume-mismatch = { $blocks } dig blocks total { $children } m³ against the bench's own { $parent } m³
 stage-duplicate-block-id = Two dig blocks share identity { $id }

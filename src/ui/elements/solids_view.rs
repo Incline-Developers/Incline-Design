@@ -1035,24 +1035,24 @@ pub(crate) fn draw_contents(ui: &mut egui::Ui, rect: egui::Rect, editor: &Editor
         // Geometric volume and block-model coverage are separate figures: a
         // solid the model only partly reaches must not read as fully measured.
         if let Some(coverage) = editor.solid_view_coverage {
-            table.readonly(
-                &tr!("planning-reserve-coverage"),
-                &format!("{:.1}", coverage * 100.0),
-                Some("%"),
-                Some(&tr!("planning-reserve-coverage-note")),
-            );
+            let label = tr!("planning-reserve-coverage");
+            let value = format!("{:.1}", coverage * 100.0);
+            // Below full coverage the figures beneath are for part of the
+            // ground only, which is worth a mark; at full, the row is plain.
+            if coverage < 0.9995 {
+                table.readonly_warning(&label, &value, Some("%"), Some(&tr!("planning-reserve-coverage-partial")));
+            } else {
+                table.readonly(&label, &value, Some("%"), None).on_hover_text(tr!("planning-reserve-coverage-note"));
+            }
         }
         if let Some(status) = &editor.solid_view_reserve_status {
             table.readonly(&tr!("planning-reserve-status"), status, None, None);
         }
         let reserves = editor.solid_view_reserves.as_ref();
         if let Some(reserves) = reserves {
-            table.readonly(
-                &tr!("planning-reserve-blocks"),
-                &reserve_number(reserves.all.equivalent_blocks),
-                None,
-                Some(&tr!("planning-reserve-method")),
-            );
+            table
+                .readonly(&tr!("planning-reserve-blocks"), &reserve_number(reserves.all.equivalent_blocks), None, None)
+                .on_hover_text(tr!("planning-reserve-method"));
             table.readonly(&tr!("planning-reserve-scope"), &tr!("planning-reserve-method"), None, None);
         }
         for field in document.reserve_fields() {
@@ -1067,7 +1067,14 @@ pub(crate) fn draw_contents(ui: &mut egui::Ui, rect: egui::Rect, editor: &Editor
                 if let Some(groups) = groups {
                     for (category, group) in groups {
                         let label = format!("{} · {}", field.name, category);
-                        table.readonly(&label, &reserve_number(group.equivalent_blocks), Some(&tr!("planning-reserve-blocks")), None);
+                        // Named in the label rather than as a unit: a unit
+                        // that long leaves the figure no room.
+                        table.readonly(
+                            &format!("{label} · {}", tr!("planning-reserve-blocks")),
+                            &reserve_number(group.equivalent_blocks),
+                            None,
+                            None,
+                        );
                         for value_field in document
                             .reserve_fields()
                             .iter()
@@ -1090,20 +1097,29 @@ pub(crate) fn draw_contents(ui: &mut egui::Ui, rect: egui::Rect, editor: &Editor
                 // only some of the ground contributed to says so too. An
                 // absent number is not a zero, and a partial one is not a
                 // total; a reader should not have to guess which they have.
-                let note = match (value, total) {
-                    (None, _) => editor
-                        .solid_view_reserve_issues
-                        .get(&field.id)
-                        .cloned()
-                        .or_else(|| total.map(|total| tr!("planning-reserve-none-contributed", missing = total.missing.to_string()))),
-                    (Some(_), Some(total)) if total.is_partial() => Some(tr!(
-                        "planning-reserve-partial",
-                        contributed = total.contributions.to_string(),
-                        missing = (total.missing + total.unusable_weights).to_string()
-                    )),
-                    _ => None,
-                };
-                table.readonly(&field.name, &value.map_or_else(|| String::from("—"), reserve_number), None, note.as_deref());
+                let shown = value.map_or_else(|| String::from("—"), reserve_number);
+                match (value, total) {
+                    (None, _) => {
+                        let reason = editor
+                            .solid_view_reserve_issues
+                            .get(&field.id)
+                            .cloned()
+                            .or_else(|| total.map(|total| tr!("planning-reserve-none-contributed", missing = total.missing.to_string())));
+                        table.readonly(&field.name, &shown, None, reason.as_deref());
+                    }
+                    // A figure some blocks could not add to stands, marked.
+                    (Some(_), Some(total)) if total.is_partial() => {
+                        let partial = tr!(
+                            "planning-reserve-partial",
+                            contributed = total.contributions.to_string(),
+                            missing = (total.missing + total.unusable_weights).to_string()
+                        );
+                        table.readonly_warning(&field.name, &shown, None, Some(&partial));
+                    }
+                    _ => {
+                        table.readonly(&field.name, &shown, None, None);
+                    }
+                }
             }
         }
     });
