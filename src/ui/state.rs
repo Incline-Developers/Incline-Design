@@ -207,6 +207,15 @@ impl EditorState {
         self.is_planning_cut_step() || self.is_haulage_page()
     }
 
+    /// Whether viewport clicks leave the project's items alone. Animate and
+    /// the Road Network show the site to be watched or drawn over, where a
+    /// click selecting the terrain under it would only paint its wireframe
+    /// across the view. Roads and nodes stay pickable, and the production
+    /// views are not affected.
+    pub(crate) fn scene_items_locked(&self) -> bool {
+        self.is_schedule_animation() || self.is_haulage_page()
+    }
+
     /// Whether a Planning page that owns the whole window - rather than
     /// framing the 3D viewport - is on screen. Every Setup step but the
     /// viewport ones is laid out that way, and so is every view but Reserves

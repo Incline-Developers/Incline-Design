@@ -538,12 +538,12 @@ impl<'a> App<'a> {
             })
             .unwrap_or_default();
         let active_object_ids = self.active_project_object_ids();
+        // Animate and the Road Network marquee only roads and nodes - see
+        // `EditorState::scene_items_locked`.
+        let locked = self.editor.scene_items_locked();
         enclosed.retain(|handle| match handle {
-            SceneEntityId::Object(object_id) => active_object_ids.contains(object_id),
-            SceneEntityId::Triangulation(_) => !objects_only,
-            SceneEntityId::BlockModel(_) => !objects_only,
-            SceneEntityId::DrillHole(_) => !objects_only,
-            SceneEntityId::PointCloud(_) => !objects_only,
+            SceneEntityId::Object(object_id) => !locked && active_object_ids.contains(object_id),
+            SceneEntityId::Triangulation(_) | SceneEntityId::BlockModel(_) | SceneEntityId::DrillHole(_) | SceneEntityId::PointCloud(_) => !objects_only && !locked,
             // Nothing to enclose: a raster is painted onto a surface rather
             // than occupying the scene, so a marquee never produces one.
             SceneEntityId::Raster(_) => false,
@@ -556,7 +556,7 @@ impl<'a> App<'a> {
         let holes = self
             .graphics
             .as_ref()
-            .filter(|_| !objects_only)
+            .filter(|_| !objects_only && !locked)
             .map(|graphics| graphics.drill_hole_collars_in_screen_rect(&self.drill_holes, start, end, &self.editor.hidden_handles, &self.editor.frozen_handles))
             .unwrap_or_default();
         // The Layout's dig blocks ride the same box, by their outlines.
@@ -819,6 +819,9 @@ impl<'a> App<'a> {
     /// stand uselessly over. A tool that selects for its own reasons, and
     /// plain picking, take anything.
     fn tool_accepts_pick(&self, pick: &crate::rendering::graphics::camera::ScenePick) -> bool {
+        if self.editor.scene_items_locked() && !matches!(pick.entity, SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_)) {
+            return false;
+        }
         match self.editor.active_tool {
             ActiveTool::Move => matches!(pick.entity, SceneEntityId::Object(_)),
             ActiveTool::MoveCollar | ActiveTool::RotateCollar => pick.hole.is_some(),
