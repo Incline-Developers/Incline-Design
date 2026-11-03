@@ -636,6 +636,7 @@ impl crate::app::App<'_> {
                         message: status.message.clone(),
                         diagnostics: status.diagnostics.clone(),
                         last_success: status.last_success.clone(),
+                        last_seen: status.last_seen,
                         blocked_by: pipeline.blocked_by(step),
                     }
                 });

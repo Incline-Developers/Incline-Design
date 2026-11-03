@@ -214,6 +214,7 @@ impl<S: PipelineStep> StepPipeline<S> {
                 status.diagnostics = diagnostics;
                 status.run_generation = generation;
                 status.message = None;
+                status.last_seen = Some(entities);
                 if blocking > 0 {
                     status.state = StageState::Failed;
                     status.message = Some(tr!("stage-failed-count", count = blocking));

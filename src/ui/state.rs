@@ -7534,6 +7534,8 @@ pub(crate) struct SetupStageView<S> {
     pub(crate) message: Option<String>,
     pub(crate) diagnostics: Vec<crate::app::planning_pipeline::StageDiagnostic>,
     pub(crate) last_success: Option<crate::app::planning_pipeline::StageSummary>,
+    /// How many entities its latest settled run saw, failed or not.
+    pub(crate) last_seen: Option<usize>,
     /// The earlier step that has to run first, when this one cannot.
     pub(crate) blocked_by: Option<S>,
 }
@@ -7545,6 +7547,7 @@ impl<S> Default for SetupStageView<S> {
             message: None,
             diagnostics: Vec::new(),
             last_success: None,
+            last_seen: None,
             blocked_by: None,
         }
     }

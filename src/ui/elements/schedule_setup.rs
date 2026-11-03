@@ -195,9 +195,9 @@ pub(crate) fn draw_readiness(ui: &mut egui::Ui, rect: egui::Rect, editor: &Edito
 /// beneath.
 pub(crate) fn draw_solids_tonnage(ui: &mut egui::Ui, rect: egui::Rect, editor: &EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
     let status = &editor.schedule_stages[ScheduleStep::Solids.index()];
-    let blocks = status.last_success.as_ref().map_or_else(|| String::from("—"), |summary| summary.entities.to_string());
+    let blocks = status.last_seen.map_or_else(|| String::from("—"), |count| count.to_string());
     let counted = plan.unmeasured_as_zero() && status.last_success.is_some();
-    let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, 3 + usize::from(counted)).min(rect.height())));
+    let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, 2 + usize::from(counted)).min(rect.height())));
     PropertyTable::new("schedule_solids", table_rect, &tr!("schedule-solids-tonnage")).show(ui, |rows| {
         rows.readonly(&tr!("schedule-readiness-blocks"), &blocks, None, None);
         let mut zero = plan.unmeasured_as_zero();
@@ -207,7 +207,6 @@ pub(crate) fn draw_solids_tonnage(ui: &mut egui::Ui, rect: egui::Rect, editor: &
         if counted {
             rows.readonly(&tr!("schedule-blocks-zero"), &editor.schedule_zero_blocks.to_string(), None, None);
         }
-        rows.note(&tr!("schedule-unmeasured-as-zero-help"));
     });
     let body = egui::Rect::from_min_max(egui::pos2(rect.left() + 8.0, table_rect.bottom() + 8.0), egui::pos2(rect.right() - 8.0, rect.bottom()));
     if !body.is_positive() {

@@ -115,6 +115,8 @@ pub(crate) struct StageStatus {
     pub(crate) diagnostics: Vec<StageDiagnostic>,
     /// How many entities the stage covered when it last completed.
     pub(crate) last_success: Option<StageSummary>,
+    /// How many entities its latest settled run saw, failed or not.
+    pub(crate) last_seen: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
