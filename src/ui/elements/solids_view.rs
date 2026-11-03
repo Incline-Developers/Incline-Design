@@ -989,7 +989,7 @@ pub(crate) fn draw_properties(ui: &mut egui::Ui, rect: egui::Rect, editor: &Edit
             table.readonly(&tr!("solids-flitch"), &format!("{:.2}", block.flitch.base), Some("RL"), None);
             table.readonly(
                 &tr!("solids-block-volume"),
-                &block.volume.map_or_else(|| String::from("—"), |volume| format!("{volume:.1}")),
+                &block.volume.map_or_else(|| String::from("—"), reserve_number),
                 Some("m³"),
                 None,
             );
@@ -1028,7 +1028,7 @@ pub(crate) fn draw_contents(ui: &mut egui::Ui, rect: egui::Rect, editor: &Editor
             table.readonly(&tr!("solids-view-geometry"), &geometry, None, Some(&geometry));
         }
         let volume = match &editor.solid_preview_summary {
-            crate::ui::state::SolidPreviewSummary::Ready { volume: Some(volume), .. } => format!("{volume:.1}"),
+            crate::ui::state::SolidPreviewSummary::Ready { volume: Some(volume), .. } => reserve_number(*volume),
             _ => String::from("—"),
         };
         table.readonly(&tr!("tri-volume"), &volume, Some("m³"), None);
@@ -1049,7 +1049,7 @@ pub(crate) fn draw_contents(ui: &mut egui::Ui, rect: egui::Rect, editor: &Editor
         if let Some(reserves) = reserves {
             table.readonly(
                 &tr!("planning-reserve-blocks"),
-                &format!("{:.3}", reserves.all.equivalent_blocks),
+                &reserve_number(reserves.all.equivalent_blocks),
                 None,
                 Some(&tr!("planning-reserve-method")),
             );
@@ -1067,7 +1067,7 @@ pub(crate) fn draw_contents(ui: &mut egui::Ui, rect: egui::Rect, editor: &Editor
                 if let Some(groups) = groups {
                     for (category, group) in groups {
                         let label = format!("{} · {}", field.name, category);
-                        table.readonly(&label, &format!("{:.3}", group.equivalent_blocks), Some(&tr!("planning-reserve-blocks")), None);
+                        table.readonly(&label, &reserve_number(group.equivalent_blocks), Some(&tr!("planning-reserve-blocks")), None);
                         for value_field in document
                             .reserve_fields()
                             .iter()
@@ -1076,7 +1076,7 @@ pub(crate) fn draw_contents(ui: &mut egui::Ui, rect: egui::Rect, editor: &Editor
                             let value = group.numeric.get(&value_field.id).and_then(|total| total.value(value_field.aggregation));
                             table.readonly(
                                 &format!("{label} · {}", value_field.name),
-                                &value.map_or_else(|| String::from("—"), |value| format!("{value:.3}")),
+                                &value.map_or_else(|| String::from("—"), reserve_number),
                                 None,
                                 None,
                             );
@@ -1103,10 +1103,25 @@ pub(crate) fn draw_contents(ui: &mut egui::Ui, rect: egui::Rect, editor: &Editor
                     )),
                     _ => None,
                 };
-                table.readonly(&field.name, &value.map_or_else(|| String::from("—"), |value| format!("{value:.3}")), None, note.as_deref());
+                table.readonly(&field.name, &value.map_or_else(|| String::from("—"), reserve_number), None, note.as_deref());
             }
         }
     });
+}
+
+/// A reserve figure as the table shows it: whole numbers with separators
+/// from a thousand up, where decimals are noise beside the digits before
+/// them; three decimals, trimmed, below that, where a grade needs them.
+fn reserve_number(value: f64) -> String {
+    use thousands::Separable;
+
+    if value.abs() >= 1000.0 {
+        let rounded = value.round();
+        return format!("{:.0}", if rounded == 0.0 { 0.0 } else { rounded }).separate_with_commas();
+    }
+    let text = format!("{value:.3}");
+    let text = text.trim_end_matches('0').trim_end_matches('.');
+    if text == "-0" { String::from("0") } else { text.to_owned() }
 }
 
 /// The RL column for a set of slices: blank where a row has none, and
