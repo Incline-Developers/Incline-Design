@@ -2262,7 +2262,7 @@ fn closed_volume(mesh: &OpenTriangulation, solid: &str, band: &CutBand) -> Optio
     match super::triangulation::solid_between::open_edge_report(mesh.mesh.vertices(), &faces) {
         None => Some(mesh_volume(&mesh.mesh)),
         Some((count, length, at)) => {
-            crate::userspace_warn!(
+            crate::userspace_log!(
                 "{}",
                 crate::i18n::tr!(
                     "planning-reserve-open-piece",

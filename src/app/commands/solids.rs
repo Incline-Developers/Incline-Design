@@ -454,7 +454,7 @@ impl crate::app::App<'_> {
                         preview.bands = bands;
                     }
                     Err(error) => {
-                        crate::userspace_error!("{}", error);
+                        crate::userspace_log!("{}", error);
                     }
                 }
             },

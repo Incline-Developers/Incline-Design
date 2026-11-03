@@ -477,12 +477,14 @@ impl crate::app::App<'_> {
                 // request that will never land.
                 self.cancel_jobs(|job| matches!(job, crate::app::jobs::JobKey::SolidArtifact { .. }));
                 self.discard_incomplete_solid_requests();
-                // Said out loud, and naming the stage whose inputs moved: a run
-                // that ends by itself part way through otherwise looks like a
-                // button that only does one step. An Auto run is simply started
-                // again once the edits settle, so it goes unremarked.
+                // Noted in the console, naming the stage whose inputs moved: a
+                // run that ends by itself part way through otherwise looks like
+                // a button that only does one step. Not a dialog: the edit that
+                // stopped it was the user's own, and Run starts it again. An
+                // Auto run is simply started again once the edits settle, so it
+                // goes unremarked.
                 if !self.planning_pipeline.as_ref().is_some_and(|pipeline| pipeline.auto_run) {
-                    crate::userspace_warn!("{}", tr!("stage-run-stopped-by-edit", stage = stage.label()));
+                    crate::userspace_log!("{}", tr!("stage-run-stopped-by-edit", stage = stage.label()));
                 }
             }
         }

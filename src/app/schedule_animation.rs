@@ -1319,7 +1319,7 @@ impl crate::app::App<'_> {
                         // fails, which during a drag is all of them.
                         Cut::Failed(error) => {
                             if turned {
-                                crate::userspace_warn!("{}", error);
+                                crate::userspace_log!("{}", error);
                             }
                         }
                     }

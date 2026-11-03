@@ -240,7 +240,7 @@ impl crate::app::App<'_> {
         if let Some(step) = earliest_change
             && pipeline.invalidate_from(step)
         {
-            crate::userspace_warn!("{}", tr!("schedule-run-stopped-by-edit", step = step.label()));
+            crate::userspace_log!("{}", tr!("schedule-run-stopped-by-edit", step = step.label()));
         }
         self.schedule_pipeline.as_mut().expect("just ensured").mark_stale();
         self.advance_schedule_run();
@@ -734,10 +734,11 @@ impl crate::app::App<'_> {
                     let outcome = self.evaluate_schedule_step(step);
                     let Some(pipeline) = self.schedule_pipeline.as_mut() else { return };
                     match pipeline.settle(step, outcome, generation) {
-                        // Said out loud: a run that quietly discards its own
-                        // answer looks like a button that did nothing.
+                        // Noted in the console: a run that quietly discards
+                        // its own answer looks like a button that did nothing.
+                        // Not a dialog, as the next run follows by itself.
                         Err(_) => {
-                            crate::userspace_warn!("{}", tr!("schedule-result-superseded"));
+                            crate::userspace_log!("{}", tr!("schedule-result-superseded"));
                             return;
                         }
                         Ok(true) => return,
@@ -774,7 +775,7 @@ impl crate::app::App<'_> {
             blocks,
         });
         if published.is_err() {
-            crate::userspace_warn!("{}", tr!("schedule-result-superseded"));
+            crate::userspace_log!("{}", tr!("schedule-result-superseded"));
         }
     }
 

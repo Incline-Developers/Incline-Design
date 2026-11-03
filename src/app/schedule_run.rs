@@ -688,7 +688,7 @@ impl crate::app::App<'_> {
                 pending.feed.end(if published { ImproveEnd::Published } else { ImproveEnd::NotPublished });
                 if superseded {
                     if !auto {
-                        crate::userspace_warn!("{}", tr!("schedule-run-superseded"));
+                        crate::userspace_log!("{}", tr!("schedule-run-superseded"));
                     }
                     app.redraw_requested = true;
                     return;
@@ -979,7 +979,7 @@ impl crate::app::App<'_> {
             // A recalculation overtaken by an edit is simply started again
             // once the edits settle; only a run someone asked for is reported.
             if !auto {
-                crate::userspace_warn!("{}", tr!("schedule-run-superseded"));
+                crate::userspace_log!("{}", tr!("schedule-run-superseded"));
             }
             return;
         }
