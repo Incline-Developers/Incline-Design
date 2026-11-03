@@ -96,6 +96,7 @@ pub(crate) fn draw_inspector(
         });
     });
     let hour = editor.schedule_time_h.max(0.0);
+    selected_bar(ui, editor, plan);
 
     let Some(schedule) = editor.schedule_result.clone() else {
         note(ui, tr!("inspector-no-schedule"));
@@ -215,6 +216,60 @@ fn drill_blast_idle_detail(
     let waiting = result.first_needing(open.iter().flat_map(|bar| schedule.bar_blasts(bar)), activity, hour)?;
     let (short, _) = super::schedule_gantt::blast_hold_text(result, waiting, hour)?;
     Some(format!("{} · {short}", super::schedule_gantt::blast_title(&result.blasts[waiting])))
+}
+
+/// The one bar selected on the Gantt: what it is, who works it and when, the
+/// work in it, what a current run dug of it, and anything stopping it. Shown
+/// with or without a calculated schedule - a bar's own facts do not wait on a
+/// run - and kept to those, since its hover says the rest.
+fn selected_bar(ui: &mut egui::Ui, editor: &EditorState, plan: &SchedulePlan) {
+    let mut selected = editor.schedule_selected_bars.iter();
+    let (Some(id), None) = (selected.next(), selected.next()) else { return };
+    let Some(bar) = plan.bar(*id) else { return };
+    let report = editor.schedule_bar_reports.iter().find(|report| report.bar == bar.id);
+    section(ui, tr!("inspector-bar-section"));
+    let window = match bar.window.end_h {
+        Some(end) => tr!(
+            "schedule-gantt-window-span",
+            from = instant_label(bar.window.start_h * GanttView::HOUR),
+            to = instant_label(end * GanttView::HOUR)
+        ),
+        None => tr!("schedule-gantt-window-open", from = instant_label(bar.window.start_h * GanttView::HOUR)),
+    };
+    let machine = bar.agent.and_then(|agent| plan.agent(agent));
+    draw_entry(
+        ui,
+        &Entry {
+            name: super::schedule_gantt::bar_label(bar, report, Some(plan)),
+            value: machine.map_or_else(|| tr!("schedule-bar-unassigned"), |agent| agent.name.clone()),
+            value_weak: machine.is_none(),
+            detail: Some(window),
+            ..Entry::default()
+        },
+    );
+    let mut lines = Vec::new();
+    if let Some(order) = bar.blast_order() {
+        lines.push(tr!("inspector-bar-blasts", count = order.members.len().to_string()));
+    } else if bar.reclaim().is_some() {
+        if let Some(report) = report.filter(|report| !report.reclaim_sources.is_empty()) {
+            lines.push(tr!("reclaim-sources-tooltip", stockpiles = report.reclaim_sources.join(", ")));
+        }
+    } else if bar.dig_order().is_some() {
+        let count = bar.members().len().to_string();
+        lines.push(match report.and_then(|report| report.tonnes) {
+            Some(tonnes) => tr!("inspector-bar-blocks-tonnes", count = count, tonnes = format_tonnes(tonnes)),
+            None => tr!("inspector-bar-blocks", count = count),
+        });
+        if let Some(schedule) = editor.schedule_result.as_ref() {
+            lines.push(tr!("schedule-bar-worked", tonnes = format_tonnes(schedule.bar_tonnes(bar.id))));
+        }
+    }
+    for line in lines {
+        ui.label(egui::RichText::new(line).weak());
+    }
+    for problem in report.map_or(&[][..], |report| &report.problems) {
+        ui.label(egui::RichText::new(problem).color(ui.visuals().warn_fg_color));
+    }
 }
 
 fn note(ui: &mut egui::Ui, text: String) {

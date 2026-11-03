@@ -1417,13 +1417,46 @@ pub(crate) fn bar_display_name(editor: &EditorState, bar: &ScheduleBar) -> Strin
     bar_label(bar, editor.schedule_bar_reports.iter().find(|report| report.bar == bar.id), None)
 }
 
+/// The blast editor opened on an existing drill and blast bar.
+fn blast_bar_dialog(session: u32, bar: &ScheduleBar, order: &crate::model::schedule::BlastOrder) -> BlastBarDialog {
+    BlastBarDialog {
+        session,
+        edition: crate::ui::state::SequenceDraft::next_edition(),
+        generation: None,
+        opened_from: order.members.clone(),
+        view: crate::ui::state::SolidPreviewView::default(),
+        target: Some(bar.id),
+        members: order.members.clone(),
+        agent: bar.agent,
+        priority: bar.priority,
+        insert_lane: false,
+        start_h: bar.window.start_h,
+        end_h: bar.window.end_h.unwrap_or(bar.window.start_h + crate::model::schedule::SCHEDULE_PERIOD_H),
+        preview: 0,
+    }
+}
+
+/// The reclaim editor opened on an existing reclaim bar.
+fn reclaim_bar_dialog(bar: &ScheduleBar, work: &crate::model::schedule::ReclaimWork) -> ReclaimBarDialog {
+    ReclaimBarDialog {
+        target: Some(bar.id),
+        sources: work.sources.clone(),
+        agent: bar.agent,
+        priority: bar.priority,
+        insert_lane: false,
+        start: bar.window.start_h.to_string(),
+        end: bar.window.end_h.map(|value| value.to_string()).unwrap_or_default(),
+        maximum: work.maximum_t.map(|value| value.to_string()).unwrap_or_default(),
+    }
+}
+
 /// What one bar's marker says.
 ///
 /// A bar the user has named says that name and nothing else. An unnamed one
 /// borrows the ground-derived label the readiness report built from its
 /// members' pit, bench and blast. Neither carries tonnes or a block count:
 /// the marker names the work, and the figures belong in the hover.
-fn bar_label(bar: &ScheduleBar, report: Option<&ScheduleBarView>, plan: Option<&SchedulePlan>) -> String {
+pub(super) fn bar_label(bar: &ScheduleBar, report: Option<&ScheduleBarView>, plan: Option<&SchedulePlan>) -> String {
     // A delay is named by its type unless the user named it.
     if let Some(work) = bar.delay() {
         return if bar.has_custom_name() {
@@ -2324,6 +2357,20 @@ fn draw_bars(
                             selected.insert(bar.id);
                         }
                     }
+                    // A double click opens the bar's own editor - its dig
+                    // order, its blasts or its piles - the first entry of its
+                    // menu.
+                    if response.double_clicked() {
+                        if bar.dig_order().is_some() {
+                            open_editor = Some(crate::ui::state::SequenceDraft::open(session, bar.id, bar.members()));
+                            editor.solids_view_selection.clear();
+                            editor.selected_blast = None;
+                        } else if let Some(order) = bar.blast_order() {
+                            open_blast = Some(blast_bar_dialog(session, bar, order));
+                        } else if let Some(work) = bar.reclaim() {
+                            open_reclaim = Some(reclaim_bar_dialog(bar, work));
+                        }
+                    }
                     // Primary only: the middle button pans the timeline and the
                     // secondary one opens this bar's menu.
                     if response.drag_started_by(egui::PointerButton::Primary) {
@@ -2395,36 +2442,13 @@ fn draw_bars(
                         if let Some(order) = bar.blast_order()
                             && ContextMenuAction::new(tr!("blast-edit-bar")).show(ui).clicked()
                         {
-                            open_blast = Some(BlastBarDialog {
-                                session,
-                                edition: crate::ui::state::SequenceDraft::next_edition(),
-                                generation: None,
-                                opened_from: order.members.clone(),
-                                view: crate::ui::state::SolidPreviewView::default(),
-                                target: Some(bar.id),
-                                members: order.members.clone(),
-                                agent: bar.agent,
-                                priority: bar.priority,
-                                insert_lane: false,
-                                start_h: bar.window.start_h,
-                                end_h: bar.window.end_h.unwrap_or(bar.window.start_h + crate::model::schedule::SCHEDULE_PERIOD_H),
-                                preview: 0,
-                            });
+                            open_blast = Some(blast_bar_dialog(session, bar, order));
                             ui.close();
                         }
                         if let Some(work) = bar.reclaim()
                             && ContextMenuAction::new(tr!("reclaim-edit-bar")).show(ui).clicked()
                         {
-                            open_reclaim = Some(ReclaimBarDialog {
-                                target: Some(bar.id),
-                                sources: work.sources.clone(),
-                                agent: bar.agent,
-                                priority: bar.priority,
-                                insert_lane: false,
-                                start: bar.window.start_h.to_string(),
-                                end: bar.window.end_h.map(|value| value.to_string()).unwrap_or_default(),
-                                maximum: work.maximum_t.map(|value| value.to_string()).unwrap_or_default(),
-                            });
+                            open_reclaim = Some(reclaim_bar_dialog(bar, work));
                             ui.close();
                         }
                         // Dragging an edge is quick and imprecise; a real

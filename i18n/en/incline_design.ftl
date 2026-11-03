@@ -1876,6 +1876,22 @@ sequence-tonnage-field-missing = The chosen tonnage field is no longer in this p
 sequence-tonnage-field-not-sum = ⁨{ $field }⁩ is not a summed field, so it cannot be read as tonnes
 sequence-unresolved-at = { $block }: { $reason }
 blasting-recut-since-saved = This version cuts the blasts in { $solids } differently from the one that saved the project, so their outlines were updated. Save to keep them.
+inspector-bar-section = Selected bar
+inspector-bar-blocks =
+    { $count ->
+        [one] 1 block
+       *[other] { $count } blocks
+    }
+inspector-bar-blocks-tonnes =
+    { $count ->
+        [one] 1 block · { $tonnes } t
+       *[other] { $count } blocks · { $tonnes } t
+    }
+inspector-bar-blasts =
+    { $count ->
+        [one] 1 blast
+       *[other] { $count } blasts
+    }
 sequence-carried-over =
     { $count ->
         [one] The Solids run cut 1 dig order block differently, so it now uses the block there.
