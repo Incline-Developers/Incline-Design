@@ -923,6 +923,12 @@ fn draw_row(
                         crate::ui::fonts::bold_font(egui::TextStyle::Body.resolve(ui.style()).size),
                         ui.visuals().text_color(),
                     );
+                    // Money is shortened in the cell; the exact figure is a
+                    // hover away, as on every day's cell.
+                    if kind == CalendarRow::Value {
+                        ui.interact(total_rect, ui.scope_id().with(("schedule_calendar_total", owner)), egui::Sense::hover())
+                            .on_hover_text(crate::model::schedule::cashflow::money_exact(total));
+                    }
                 }
             }
             for period in periods {
@@ -1241,13 +1247,13 @@ fn destination_kind(destinations: &[DestinationRow], address: CalendarCellAddres
     destinations.iter().find(|entry| entry.id == id).map(|entry| entry.kind)
 }
 
-/// A calculated figure as the grid paints it: tonnes and money with
-/// separators, hours with one decimal.
+/// A calculated figure as the grid paints it: tonnes with separators, money
+/// shortened (the exact sum on hover), hours with one decimal.
 fn format_figure(row: CalendarRow, value: f64) -> String {
     match row {
         CalendarRow::TruckHours | CalendarRow::TruckCycle => format_hours(value),
         CalendarRow::GradeActual(_) => trimmed_number(value),
-        CalendarRow::Value => format_money(value),
+        CalendarRow::Value => crate::model::schedule::cashflow::money_text(value),
         CalendarRow::ScheduledUtilisation => format!("{value:.0}%"),
         // Whole tonnes in the grid: a tenth of a tonne is noise beside a
         // day's tens of thousands, and dropping it only where it happened to
@@ -1355,8 +1361,11 @@ fn hover_text(plan: &SchedulePlan, destinations: &[DestinationRow], agent: Optio
         }
         row => {
             let kind = destination_kind(destinations, address);
-            let (_, partial) = figures.figure(address, kind)?;
+            let (value, partial) = figures.figure(address, kind)?;
             let mut lines = Vec::new();
+            if row == CalendarRow::Value {
+                lines.push(crate::model::schedule::cashflow::money_exact(value));
+            }
             if partial {
                 let covered = figures.result.map_or(0.0, |result| result.periods.coverage_end_h());
                 lines.push(tr!("schedule-calendar-tonnes-partial", hours = trimmed_number(covered)));

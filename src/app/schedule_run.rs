@@ -1211,25 +1211,21 @@ fn result_details(calculation: &CalculatedSchedule) -> Vec<String> {
         extracted = format_tonnes(started - remaining),
         remaining = format_tonnes(remaining)
     )];
-    lines.push(tr!(
-        "schedule-detail-value",
-        value = crate::ui::elements::schedule_calendar::format_money(report.objective),
-        currency = crate::model::schedule::cashflow::currency_symbol()
-    ));
+    lines.push(tr!("schedule-detail-value", value = crate::model::schedule::cashflow::money_text(report.objective)));
     lines.push(match (report.bound, report.gap) {
         // A bound more than twice the schedule says nothing useful about it.
         (Some(_), Some(gap)) if gap > 1.0 => tr!("schedule-detail-bound-weak"),
         (Some(bound), Some(gap)) if report.bound_source == BoundSource::Relaxation => tr!(
             "schedule-detail-bound-relaxation",
-            bound = crate::ui::elements::schedule_calendar::format_money(bound),
+            bound = crate::model::schedule::cashflow::money_text(bound),
             gap = format!("{:.3}", gap * 100.0)
         ),
         (Some(bound), Some(gap)) => tr!(
             "schedule-detail-bound",
-            bound = crate::ui::elements::schedule_calendar::format_money(bound),
+            bound = crate::model::schedule::cashflow::money_text(bound),
             gap = format!("{:.3}", gap * 100.0)
         ),
-        (Some(bound), None) => tr!("schedule-detail-bound-no-gap", bound = crate::ui::elements::schedule_calendar::format_money(bound)),
+        (Some(bound), None) => tr!("schedule-detail-bound-no-gap", bound = crate::model::schedule::cashflow::money_text(bound)),
         _ => tr!("schedule-detail-no-bound"),
     });
     // Improve moves the mining, not the blasts: it works with the blast
@@ -1247,7 +1243,7 @@ fn result_details(calculation: &CalculatedSchedule) -> Vec<String> {
         };
         lines.push(match (start.value, start.failure.as_ref()) {
             (Some(value), _) => {
-                let value = crate::ui::elements::schedule_calendar::format_money(value);
+                let value = crate::model::schedule::cashflow::money_text(value);
                 match start.role {
                     DayByDayRole::Improved => tr!("schedule-detail-start-improved", start = method, seconds = seconds, value = value),
                     DayByDayRole::Kept => tr!("schedule-detail-start-kept", start = method, seconds = seconds, value = value),

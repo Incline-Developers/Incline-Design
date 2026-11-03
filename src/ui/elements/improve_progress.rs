@@ -99,7 +99,7 @@ fn draw_folded(ui: &mut egui::Ui, editor: &mut EditorState, progress: &ImprovePr
         ring(ui, FOLDED_RING, progress.ended.map(|_| 1.0));
         ui.label(bold(&clock(progress.elapsed_s())));
         if let Some(best) = progress.best() {
-            ui.label(money(best.value));
+            ui.label(money(best.value)).on_hover_text(crate::model::schedule::cashflow::money_exact(best.value));
             if let Some(text) = gain_text(progress) {
                 ui.label(egui::RichText::new(text).color(ring_fill(ui.visuals())));
             }
@@ -128,7 +128,8 @@ fn draw_full(ui: &mut egui::Ui, editor: &mut EditorState, progress: &ImproveProg
                     ui.label(egui::RichText::new(tr!("improve-card-best")).weak().small());
                     match progress.best() {
                         Some(best) => {
-                            ui.label(egui::RichText::new(money(best.value)).font(bold_font(18.0)));
+                            ui.label(egui::RichText::new(money(best.value)).font(bold_font(18.0)))
+                                .on_hover_text(crate::model::schedule::cashflow::money_exact(best.value));
                             match gain_text(progress) {
                                 Some(text) => ui.label(egui::RichText::new(text).color(ring_fill(ui.visuals()))),
                                 None => ui.label(egui::RichText::new(tr!("improve-card-no-gain")).weak().small()),
@@ -444,20 +445,6 @@ fn percent(share: f64) -> String {
     format!("{share:.decimals$}%")
 }
 
-/// Money to two decimals of its unit, which is fine enough to see a search's
-/// gains on a schedule worth hundreds of millions.
 fn money(value: f64) -> String {
-    let symbol = tr!("common-currency-symbol");
-    let size = value.abs();
-    let (scaled, suffix) = if size >= 1e9 {
-        (value / 1e9, "B")
-    } else if size >= 1e6 {
-        (value / 1e6, "M")
-    } else if size >= 1e3 {
-        (value / 1e3, "k")
-    } else {
-        (value, "")
-    };
-    let sign = if scaled < 0.0 { "-" } else { "" };
-    format!("{sign}{symbol}{:.2}{suffix}", scaled.abs())
+    crate::model::schedule::cashflow::money_text(value)
 }
