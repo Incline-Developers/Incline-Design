@@ -477,6 +477,11 @@ impl crate::app::App<'_> {
     /// Returns the number of solids whose plan changed.
     pub(crate) fn commit_blast_names(&mut self) -> usize {
         let solids = self.workspace.active_document().map(|document| document.solids().to_vec()).unwrap_or_default();
+        // A project with nothing unsaved has had no edit the new names could
+        // follow from: its blasts were cut differently by this version than
+        // by the one that saved it.
+        let was_saved = self.workspace.active_project().is_some_and(|project| !self.project_content_is_dirty(project.runtime_id));
+        let mut renamed = Vec::new();
         let mut named = Vec::new();
         for solid in &solids {
             // Committing names is the Blasting stage's own work, so it reads
@@ -529,6 +534,7 @@ impl crate::app::App<'_> {
             }
             if plan_changed {
                 named.push((solid.id, SolidEdit::Blasting(plan)));
+                renamed.push(solid.name.clone());
             }
             if exclusions != solid.exclusions {
                 named.push((solid.id, SolidEdit::Exclusions(exclusions)));
@@ -541,6 +547,9 @@ impl crate::app::App<'_> {
         if count > 0 {
             self.editor.blasting_outlines_key = None;
             self.redraw_requested = true;
+        }
+        if was_saved && !renamed.is_empty() {
+            crate::userspace_warn!("{}", crate::i18n::tr!("blasting-recut-since-saved", solids = renamed.join(", ")));
         }
         count
     }
