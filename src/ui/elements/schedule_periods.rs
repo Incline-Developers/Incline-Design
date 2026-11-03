@@ -74,6 +74,20 @@ pub(crate) fn day_label(period: u32) -> String {
     }
 }
 
+/// A date's weekday, abbreviated: "Sat".
+pub(crate) fn weekday_text(date: NaiveDate) -> String {
+    use chrono::Datelike;
+    match date.weekday() {
+        chrono::Weekday::Mon => tr!("weekday-short-mon"),
+        chrono::Weekday::Tue => tr!("weekday-short-tue"),
+        chrono::Weekday::Wed => tr!("weekday-short-wed"),
+        chrono::Weekday::Thu => tr!("weekday-short-thu"),
+        chrono::Weekday::Fri => tr!("weekday-short-fri"),
+        chrono::Weekday::Sat => tr!("weekday-short-sat"),
+        chrono::Weekday::Sun => tr!("weekday-short-sun"),
+    }
+}
+
 /// A time as it is typed into a cell: the date and time once there is a
 /// start date, "Day 3, 06:00" before.
 pub(crate) fn editable_time(hours: f64) -> String {

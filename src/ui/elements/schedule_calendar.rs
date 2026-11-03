@@ -36,7 +36,7 @@ const DEFAULT_W: f32 = 100.0;
 /// the Default column so it stays in view while the days scroll.
 const TOTAL_W: f32 = 112.0;
 const PERIOD_W: f32 = 112.0;
-const HEADER_H: f32 = 30.0;
+const HEADER_H: f32 = 42.0;
 const OVERSCAN: i32 = 1;
 /// Height of the day scroll bar along the bottom of the period columns.
 const SCROLLBAR_H: f32 = 12.0;
@@ -617,21 +617,21 @@ fn draw_grid(
     for period in first_period..last_period {
         let x = period_left + period as f32 * PERIOD_W - editor.schedule_calendar.scroll_x;
         let cell = egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(PERIOD_W, HEADER_H)).intersect(period_view);
-        paint_header(
-            ui,
-            cell,
-            tr!("schedule-calendar-day", day = period.saturating_add(1).to_string()),
-            Some(
-                match crate::ui::elements::schedule_periods::clock_start().and_then(|start| start.checked_add_signed(chrono::Duration::days(i64::from(period)))) {
-                    Some(date) => crate::model::schedule::periods::date_text(date),
-                    None => tr!(
-                        "schedule-calendar-hours",
-                        start = format!("{:.0}", f64::from(period) * SCHEDULE_PERIOD_H),
-                        end = format!("{:.0}", f64::from(period.saturating_add(1)) * SCHEDULE_PERIOD_H)
-                    ),
-                },
+        // The day and, under it, its date, as a planner reads a roster; the
+        // hours it spans before the schedule has a start date.
+        let when = match crate::ui::elements::schedule_periods::clock_start().and_then(|start| start.checked_add_signed(chrono::Duration::days(i64::from(period)))) {
+            Some(date) => tr!(
+                "schedule-calendar-weekday-date",
+                weekday = crate::ui::elements::schedule_periods::weekday_text(date),
+                date = crate::model::schedule::periods::date_text(date)
             ),
-        );
+            None => tr!(
+                "schedule-calendar-hours",
+                start = format!("{:.0}", f64::from(period) * SCHEDULE_PERIOD_H),
+                end = format!("{:.0}", f64::from(period.saturating_add(1)) * SCHEDULE_PERIOD_H)
+            ),
+        };
+        paint_day_header(ui, cell, tr!("schedule-calendar-day", day = period.saturating_add(1).to_string()), when);
     }
 
     let first_row = ((editor.schedule_calendar.scroll_y / row_h).floor() as i32 - OVERSCAN).max(0) as usize;
@@ -729,6 +729,20 @@ fn paint_header(ui: &mut egui::Ui, rect: egui::Rect, text: String, hover: Option
     if let Some(hover) = hover {
         response.on_hover_text(hover);
     }
+}
+
+/// A day's heading: its number in bold over its date.
+fn paint_day_header(ui: &mut egui::Ui, rect: egui::Rect, day: String, when: String) {
+    if !rect.is_positive() {
+        return;
+    }
+    ui.painter().rect_filled(rect, 0.0, super::schedule_gantt::ruler_fill(ui.visuals()));
+    let inner = rect.shrink2(egui::vec2(5.0, 3.0));
+    let half = inner.height() / 2.0;
+    let top = egui::Rect::from_min_size(inner.min, egui::vec2(inner.width(), half));
+    let bottom = egui::Rect::from_min_size(egui::pos2(inner.left(), inner.top() + half), egui::vec2(inner.width(), half));
+    ui.put(top, egui::Label::new(crate::ui::fonts::bold(&day)).truncate());
+    ui.put(bottom, egui::Label::new(egui::RichText::new(when).weak()).truncate());
 }
 
 #[allow(clippy::too_many_arguments)]
