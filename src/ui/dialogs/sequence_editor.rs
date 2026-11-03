@@ -546,6 +546,12 @@ fn draw_order_rows(ui: &mut egui::Ui, editor: &mut EditorState, draft: &Sequence
     for index in 0..draft.members.len() {
         let view = editor.sequence_members.get(index);
         let (rect, response) = ui.allocate_exact_size(egui::vec2(width, row_height), egui::Sense::click_and_drag());
+        // A reason too long for the row is cut short there, and read in full
+        // on hover.
+        let response = match view.and_then(|view| view.unresolved.as_ref()) {
+            Some(reason) => response.on_hover_text(reason),
+            None => response,
+        };
         rows.push(rect);
         let is_selected = selected.contains(&index);
         let visuals = ui.visuals();
@@ -568,7 +574,10 @@ fn draw_order_rows(ui: &mut egui::Ui, editor: &mut EditorState, draft: &Sequence
             egui::Vec2::splat(REMOVE_CROSS),
         );
         let text_width = (cross.left() - rect.left() - 12.0).max(1.0);
-        let galley = ui.painter().layout(member_label(view), font.clone(), color, text_width);
+        // One line, truncated: a wrapped second line would not fit the row.
+        let mut job = egui::text::LayoutJob::simple_singleline(member_label(view), font.clone(), color);
+        job.wrap = egui::text::TextWrapping::truncate_at_width(text_width);
+        let galley = ui.painter().layout_job(job);
         let painter = ui.painter().with_clip_rect(rect);
         // The rows being carried are dimmed where they still are, so the list
         // shows what is moving as well as where it would land; so are the rows
