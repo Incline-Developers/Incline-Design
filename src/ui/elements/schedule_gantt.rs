@@ -609,7 +609,7 @@ pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &mut EditorSt
 /// Both what was authored and what was calculated: a bar left open-ended has
 /// no end of its own, and the run is the only thing that knows where its work
 /// actually finished.
-fn scheduled_extent(editor: &EditorState, plan: &crate::model::schedule::SchedulePlan) -> Option<f64> {
+pub(super) fn scheduled_extent(editor: &EditorState, plan: &crate::model::schedule::SchedulePlan) -> Option<f64> {
     let mut end = 0.0_f64;
     for bar in plan.bars() {
         end = end.max(bar.window.end_h.unwrap_or(bar.window.start_h) * GanttView::HOUR);
@@ -770,6 +770,7 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
     // The zoom first, then the frame: whether the ruler carries a band of
     // days depends on the zoom, and a frame laid out from last frame's zoom
     // stays on screen when nothing repaints after the wheel stops.
+    editor.gantt.follow_extent(scheduled_extent(editor, plan));
     let (over_canvas, rows_scroll, canvas) = navigate(ui, rect, TimelineFrame::new(rect).body, editor, "gantt_canvas");
     let TimelineFrame { header, ruler, body, corner } = TimelineFrame::new(rect);
     editor.gantt.row_scroll += rows_scroll;
@@ -1335,9 +1336,11 @@ fn draw_rows(ui: &mut egui::Ui, header: egui::Rect, body: egui::Rect, stripe: eg
         painter.galley(egui::pos2(name_cell.left() + 8.0, name_cell.top() + 4.0 + ROW_HEIGHT * 0.45), detail, weak);
         // Which lane is which, in the header beside the lanes themselves, so a
         // bar's priority can be read off the Gantt rather than out of a menu.
+        // Counted down the row rather than by priority, which can skip
+        // numbers once bars move between lanes.
         if row.lanes.len() > 1 {
-            for lane in &row.lanes {
-                let label = tr!("schedule-bar-lane", lane = lane.priority.to_string());
+            for (number, lane) in row.lanes.iter().enumerate() {
+                let label = tr!("schedule-bar-lane", lane = (number + 1).to_string());
                 painter.text(
                     egui::pos2(name_cell.right() - 6.0, top + lane.offset + lane.height * 0.5),
                     egui::Align2::RIGHT_CENTER,

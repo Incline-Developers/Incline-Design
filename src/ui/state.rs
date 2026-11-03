@@ -8937,6 +8937,9 @@ pub(crate) struct GanttView {
     pub(crate) span_seconds: f64,
     /// Downward row scroll, in points.
     pub(crate) row_scroll: f32,
+    /// Whether the planner has zoomed or panned since the project opened.
+    /// Until then the timeline keeps itself framed on the whole schedule.
+    pub(crate) moved: bool,
 }
 
 impl Default for GanttView {
@@ -8945,6 +8948,7 @@ impl Default for GanttView {
             start_seconds: 0.0,
             span_seconds: Self::DEFAULT_SPAN_SECONDS,
             row_scroll: 0.0,
+            moved: false,
         }
     }
 }
@@ -8952,7 +8956,7 @@ impl Default for GanttView {
 impl GanttView {
     pub(crate) const HOUR: f64 = 3600.0;
     pub(crate) const DAY: f64 = 24.0 * Self::HOUR;
-    /// The span a Gantt opens at, and returns to on Reset View.
+    /// The span shown while there is no work to frame.
     pub(crate) const DEFAULT_SPAN_SECONDS: f64 = 7.0 * Self::DAY;
     /// Closest it zooms in, and furthest out. An hour is the finest window a
     /// tonnes-per-hour schedule says anything useful over; a year is past the
@@ -8995,8 +8999,18 @@ impl GanttView {
             start_seconds: 0.0,
             span_seconds: span,
             row_scroll: self.row_scroll,
+            moved: self.moved,
         };
         self.clamp();
+    }
+
+    /// Frame the whole schedule until the planner moves the view, so it
+    /// opens on everything rather than the first week, and a run that
+    /// reaches further is still all in view.
+    pub(crate) fn follow_extent(&mut self, extent_seconds: Option<f64>) {
+        if !self.moved {
+            self.reset_to(extent_seconds);
+        }
     }
 
     /// Hold the window inside its limits: a span between an hour and a year,
@@ -9045,6 +9059,7 @@ impl GanttView {
         let anchor = anchor.clamp(0.0, 1.0);
         let pinned = self.start_seconds + anchor * self.span_seconds;
         let span = (self.span_seconds / factor).clamp(Self::MIN_SPAN_SECONDS, Self::MAX_SPAN_SECONDS);
+        self.moved = true;
         self.span_seconds = span;
         self.start_seconds = pinned - anchor * span;
         self.clamp();
@@ -9056,6 +9071,7 @@ impl GanttView {
             return;
         }
         self.start_seconds += delta;
+        self.moved = true;
         self.clamp();
     }
 
