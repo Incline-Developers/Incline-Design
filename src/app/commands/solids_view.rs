@@ -2907,9 +2907,15 @@ impl crate::app::App<'_> {
         }
         // Excluded ground is not dug, so nothing that reads the run - the
         // schedule, haulage, the sequence editors - is handed it as ground.
-        let (blocks, excluded): (Vec<_>, Vec<_>) = self.planning_dig_blocks()?.into_iter().partition(|block| !block.excluded);
-        // Unavailable material is not a schedulable quantity. Capacity-only
-        // and no-schema are deliberate answers and pass.
+        // Nor is a dump or stockpile with no block model: it is room to fill,
+        // with no material in it to dig.
+        let (blocks, excluded): (Vec<_>, Vec<_>) = self
+            .planning_dig_blocks()?
+            .into_iter()
+            .filter(|block| !matches!(block.material, MaterialState::CapacityOnly))
+            .partition(|block| !block.excluded);
+        // Unavailable material is not a schedulable quantity. No-schema is a
+        // deliberate answer and passes.
         if let Some(block) = blocks.iter().find(|block| matches!(block.material, MaterialState::Unavailable)) {
             return Err(PlanningNotReady::Failed {
                 solid: block.solid_name.clone(),
