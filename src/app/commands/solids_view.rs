@@ -1779,8 +1779,13 @@ fn build_solid_envelope(
     cancel: &crate::app::jobs::CancelFlag,
     progress: &crate::model::progress::Progress,
 ) -> anyhow::Result<OpenTriangulation> {
-    let (vertices, faces, _) =
-        super::triangulation::solid_between::build_solid_between_surfaces(design, topo, crate::ui::state::SolidRegion::of_solid(solid.kind), &progress.phase(0.0, 0.9))?;
+    let (vertices, faces, _) = super::triangulation::solid_between::build_solid_between_surfaces(
+        design,
+        topo,
+        crate::ui::state::SolidRegion::of_solid(solid.kind),
+        &solid.name,
+        &progress.phase(0.0, 0.9),
+    )?;
     anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
     let generated = super::triangulation::session::build_generated_triangulation(
         solid.name.clone(),

@@ -764,6 +764,12 @@ impl crate::app::App<'_> {
             .active_document()
             .and_then(|document| document.solid(key.solid))
             .map_or_else(crate::model::default_solid_color, |solid| solid.color);
+        let solid_name = self
+            .workspace
+            .active_document()
+            .and_then(|document| document.solid(key.solid))
+            .map(|solid| solid.name.clone())
+            .unwrap_or_default();
         let name = surface.name.clone();
         let color = solid_color;
         let line_color = surface.line_color;
@@ -775,7 +781,8 @@ impl crate::app::App<'_> {
         let compute = move |cancel: &crate::app::jobs::CancelFlag,
                             progress: &crate::model::progress::Progress|
               -> anyhow::Result<(crate::model::triangulation::GeneratedTriangulation, f64)> {
-            let (vertices, faces, volume) = super::triangulation::solid_between::build_solid_between_surfaces(&surface_mesh, &topography_mesh, region, &progress.phase(0.0, 0.85))?;
+            let (vertices, faces, volume) =
+                super::triangulation::solid_between::build_solid_between_surfaces(&surface_mesh, &topography_mesh, region, &solid_name, &progress.phase(0.0, 0.85))?;
             if cancel.is_cancelled() {
                 anyhow::bail!("Cancelled");
             }

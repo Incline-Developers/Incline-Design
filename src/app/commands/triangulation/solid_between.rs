@@ -119,10 +119,14 @@ fn build_envelopes(design: &PreparedReferenceSurface, topography: &PreparedRefer
 /// cubic model units. Errors when there is nothing to enclose: surfaces whose
 /// XY footprints miss each other, or a design that never runs on the wanted
 /// side of the ground.
+///
+/// `label` names what is being built, a solid's name, for the console notes
+/// about repaired surfaces; empty where there is nothing to call it.
 pub(crate) fn build_solid_between_surfaces(
     design: &mesh_data::Triangulation,
     topography: &mesh_data::Triangulation,
     region: SolidRegion,
+    label: &str,
     progress: &crate::model::progress::Phase,
 ) -> Result<(Vec<mesh_data::Vertex>, Vec<[u32; 3]>, f64)> {
     // The same pair is built more than once - the Setup page's inspection
@@ -134,7 +138,19 @@ pub(crate) fn build_solid_between_surfaces(
         progress.set_fraction(1.0);
         return Ok((built.0.clone(), built.1.clone(), built.2));
     }
-    let built = build_solid_between_surfaces_uncached(design, topography, region, progress)?;
+    let mut notes = Vec::new();
+    let built = build_solid_between_surfaces_uncached(design, topography, region, progress, &mut notes)?;
+    // Once per pair of surfaces: the Setup preview and the Solids stage can
+    // build the same pair at once, and the second would repeat the first.
+    if first_report(key) {
+        for note in notes {
+            if label.is_empty() {
+                userspace_log!("{note}");
+            } else {
+                userspace_log!("{label}: {note}");
+            }
+        }
+    }
     let mut recent = recent_builds();
     recent.retain(|(recent, _)| *recent != key);
     if recent.len() >= RECENT_BUILDS {
@@ -156,6 +172,18 @@ fn recent_builds() -> std::sync::MutexGuard<'static, RecentBuilds> {
     // A build that panicked mid-update leaves nothing worse than a stale
     // list, which is still a list of finished builds.
     RECENT.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Whether this pair of surfaces has not had its repairs reported yet this
+/// session, marking it reported.
+fn first_report(key: (u64, u64, bool)) -> bool {
+    static REPORTED: std::sync::Mutex<Vec<(u64, u64, bool)>> = std::sync::Mutex::new(Vec::new());
+    let mut reported = REPORTED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if reported.contains(&key) {
+        return false;
+    }
+    reported.push(key);
+    true
 }
 
 /// A hash of a mesh's every point and face, so two meshes with the same
@@ -208,6 +236,7 @@ fn build_solid_between_surfaces_uncached(
     topography: &mesh_data::Triangulation,
     region: SolidRegion,
     progress: &crate::model::progress::Phase,
+    notes: &mut Vec<String>,
 ) -> Result<BuiltSolid> {
     // Surface intersections must be computed near the origin: line and
     // barycentric arithmetic on mine eastings/northings loses enough precision
@@ -223,7 +252,7 @@ fn build_solid_between_surfaces_uncached(
         )
         .map_err(|error| anyhow::anyhow!("{error}"))
     };
-    let (mut vertices, faces, volume) = build_solid_local(&local(design)?, &local(topography)?, region, progress)?;
+    let (mut vertices, faces, volume) = build_solid_local(&local(design)?, &local(topography)?, region, progress, notes)?;
     for v in &mut vertices {
         v.x += origin.x;
         v.y += origin.y;
@@ -237,6 +266,7 @@ fn build_solid_local(
     topography: &mesh_data::Triangulation,
     region: SolidRegion,
     progress: &crate::model::progress::Phase,
+    notes: &mut Vec<String>,
 ) -> Result<(Vec<mesh_data::Vertex>, Vec<[u32; 3]>, f64)> {
     // The two surfaces share the ground beyond the crest when one was built
     // from the other, and points rounding moved a hair apart are made one.
@@ -259,9 +289,9 @@ fn build_solid_local(
         // project, so said in the console rather than as a warning: a
         // warning opens a dialog, and these would open one on every open.
         if repaired {
-            userspace_log!("{}", tr!("tri-solid-repaired-surface", role = role));
+            notes.push(tr!("tri-solid-repaired-surface", role = role));
         } else if prepared.skipped_vertical_faces > 0 {
-            userspace_log!("{}", tr!("cmd-cuts-ignored-vertical-faces", count = prepared.skipped_vertical_faces.to_string()));
+            notes.push(tr!("cmd-cuts-ignored-vertical-faces", count = prepared.skipped_vertical_faces.to_string()));
         }
         surfaces.push(prepared);
     }
@@ -496,7 +526,7 @@ impl App<'_> {
         };
 
         let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> Result<crate::model::triangulation::GeneratedTriangulationLog> {
-            let (vertices, faces, volume) = build_solid_between_surfaces(&design_mesh, &topography_mesh, region, &progress.phase(0.0, 0.85))?;
+            let (vertices, faces, volume) = build_solid_between_surfaces(&design_mesh, &topography_mesh, region, "", &progress.phase(0.0, 0.85))?;
             if cancel.is_cancelled() {
                 anyhow::bail!("Cancelled");
             }
