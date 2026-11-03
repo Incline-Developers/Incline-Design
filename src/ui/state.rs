@@ -8801,6 +8801,7 @@ impl CalendarRow {
         matches!(
             self,
             Self::DigTonnes
+                | Self::BlastWork
                 | Self::ReclaimTonnes
                 | Self::ScheduledUtilisation
                 | Self::TruckHours
