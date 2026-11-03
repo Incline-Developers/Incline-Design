@@ -42,7 +42,7 @@ use crate::{
         Document, ReserveAggregation, ReserveFieldId,
         schedule::{
             BarId, DigBlockPick,
-            sequence::{BlockGround, GroundIndex},
+            sequence::{BlockGround, GroundIndex, RefStatus},
         },
         solid_reserves::ReserveTotals,
     },
@@ -453,6 +453,101 @@ impl crate::app::App<'_> {
             "schedule report cache rebuilt {block_count} blocks / {report_count} bars in {:?}",
             rebuild_started.elapsed()
         );
+        if self.carry_over_recut_members() {
+            self.ensure_schedule_report_cache();
+        }
+    }
+
+    /// Replace dig-order members whose ground this run cut differently with
+    /// the blocks standing there now, and say so once. Returns whether the
+    /// plan changed.
+    ///
+    /// A new Solids release, a re-benched solid or an edited surface leaves
+    /// every saved reference to the old ground unresolved, and reselecting
+    /// them one by one is not a fair ask. Each such member gives way, in its
+    /// place, to [`crate::model::schedule::DigBlockRef::successors`]; ground
+    /// the order already holds is not added twice. A member nothing stands
+    /// in for - its ground cut away, or its solid gone - stays, unresolved.
+    ///
+    /// Written to the plan directly rather than as an undo step: undoing it
+    /// would only restore references the next rebuild replaces again, and
+    /// would trap the undo history behind it. The project is still marked
+    /// unsaved, as the plan it would save has changed.
+    fn carry_over_recut_members(&mut self) -> bool {
+        let Some(cache) = self.schedule_report_cache.as_ref() else {
+            return false;
+        };
+        let Some(snapshot) = cache.snapshot.clone() else {
+            return false;
+        };
+        if !cache.reports.iter().any(|report| report.members.iter().any(|member| member.unresolved.is_some())) {
+            return false;
+        }
+        let (ground, index, excluded) = (Arc::clone(&cache.ground), Arc::clone(&cache.index), Arc::clone(&cache.excluded));
+        let Some(document) = self.workspace.active_document() else {
+            return false;
+        };
+        let mut plan = document.schedule().clone();
+        let mut carried = 0_usize;
+        let mut orders = Vec::new();
+        for bar in plan.bars() {
+            let mut members: Vec<crate::model::schedule::DigBlockRef> = Vec::with_capacity(bar.members().len());
+            let mut changed = false;
+            let keep = |members: &mut Vec<crate::model::schedule::DigBlockRef>, reference: crate::model::schedule::DigBlockRef| {
+                if members.iter().any(|held| held.ground_identity() == reference.ground_identity()) {
+                    false
+                } else {
+                    members.push(reference);
+                    true
+                }
+            };
+            for member in bar.members() {
+                let status = member.resolve_indexed(&ground, &index);
+                let stays = status.resolved().is_some()
+                    || matches!(status, RefStatus::SolidMissing | RefStatus::GroundAmbiguous(_))
+                    || member.resolve_indexed(&excluded.0, &excluded.1).resolved().is_some();
+                let mut successors: Vec<&DigBlockRecord> = if stays {
+                    Vec::new()
+                } else {
+                    member
+                        .successors(&ground, &index)
+                        .into_iter()
+                        .map(|found| &snapshot.blocks[found])
+                        .chain(member.successors(&excluded.0, &excluded.1).into_iter().map(|found| &snapshot.excluded[found]))
+                        .collect()
+                };
+                if successors.is_empty() {
+                    changed |= !keep(&mut members, *member);
+                    continue;
+                }
+                successors.sort_by(|a, b| b.flitch.top.total_cmp(&a.flitch.top));
+                carried += 1;
+                changed = true;
+                for block in successors {
+                    keep(&mut members, self.dig_block_reference(block));
+                }
+            }
+            if changed {
+                orders.push((bar.id, members));
+            }
+        }
+        if carried == 0 {
+            return false;
+        }
+        for (bar, members) in orders {
+            if let Err(error) = plan.set_bar_members(bar, members) {
+                log::warn!("re-cut dig order members not carried over: {}", error.message());
+                return false;
+            }
+        }
+        let Some(document) = self.workspace.active_document_mut() else {
+            return false;
+        };
+        document.set_schedule(plan);
+        self.invalidate_geometry();
+        self.redraw_requested = true;
+        crate::userspace_warn!("{}", tr!("sequence-carried-over", count = carried.to_string()));
+        true
     }
 
     /// The cached snapshot the reports were measured against, so run

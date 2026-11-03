@@ -39,10 +39,14 @@
 //! Resolving, in order: is the solid still there; are the sources still the
 //! sources (stamp comparison); and then does exactly one block of this solid,
 //! in this band, cover the stored point with this footprint and this volume?
-//! Only an unqualified yes resolves. Every other answer keeps the member in
-//! place and unresolved, with the most specific true reason. Nothing is ever
-//! dropped, renamed, matched by display name, or rebound through a `replaces`
-//! lineage.
+//! Only an unqualified yes resolves. Every other answer has the most specific
+//! true reason, and nothing is ever matched by display name.
+//!
+//! Resolving never substitutes. Carrying a member over to re-cut ground is a
+//! separate, explicit step: [`DigBlockRef::successors`] names the blocks of a
+//! run that now stand at a member's point, and the app replaces the member
+//! with them in the plan and says so. A member nothing stands in for stays,
+//! unresolved, with its reason.
 //!
 //! Every field of a reference is required. Scheduling is in development and
 //! carries no backwards compatibility: a reference is captured whole by
@@ -361,9 +365,8 @@ pub(crate) struct GroundIdentity {
 
 /// What a current run says about one stored reference.
 ///
-/// Everything but [`Self::Resolved`] keeps the member in the sequence and
-/// explains itself; none of them removes it, guesses a replacement, or
-/// substitutes a tonnage.
+/// Everything but [`Self::Resolved`] explains itself; none of them guesses a
+/// replacement or substitutes a tonnage.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum RefStatus {
     /// Index into the ground list this was resolved against.
@@ -449,6 +452,32 @@ impl DigBlockRef {
             .band_candidates(self.solid, self.flitch_base)
             .into_iter()
             .find(|&candidate| (ground[candidate].flitch_base - self.flitch_base).abs() <= FLITCH_TOLERANCE && point_in_face(&ground[candidate].outline, anchor))
+    }
+
+    /// The blocks of this run standing where this reference's ground stood:
+    /// those of its solid whose band overlaps its band and whose footprint
+    /// holds its point, top band first. What a member whose ground was cut
+    /// differently - by a re-bench, a surface edit or a change to the cutting
+    /// itself - is carried over to.
+    ///
+    /// The old footprint is known only by its digest, so the point is the one
+    /// place known to have been inside it: ground the old block covered away
+    /// from that point, after a split, is not found here.
+    pub(crate) fn successors(&self, ground: &[BlockGround], index: &GroundIndex) -> Vec<usize> {
+        let anchor = glam::DVec2::new(self.anchor[0], self.anchor[1]);
+        let mut found: Vec<usize> = index
+            .by_solid
+            .get(&self.solid)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|&candidate| {
+                let block = &ground[candidate];
+                block.flitch_top.min(self.flitch_top) - block.flitch_base.max(self.flitch_base) > FLITCH_TOLERANCE && point_in_face(&block.outline, anchor)
+            })
+            .collect();
+        found.sort_by(|a, b| ground[*b].flitch_top.total_cmp(&ground[*a].flitch_top));
+        found
     }
 
     pub(crate) fn resolve_indexed(&self, ground: &[BlockGround], index: &GroundIndex) -> RefStatus {
