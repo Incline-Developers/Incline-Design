@@ -1892,6 +1892,7 @@ inspector-bar-blasts =
         [one] 1 blast
        *[other] { $count } blasts
     }
+schedule-blocks-show-unmeasured = Show them in 3D
 sequence-carried-over =
     { $count ->
         [one] The Solids run cut 1 dig order block differently, so it now uses the block there.
@@ -4129,6 +4130,11 @@ solids-no-solids-yet-add = No solids yet - add one in Setup
 solids-multiple = Multiple…
 solids-selection = Selection
 solids-select-solid-bench-flitch = Select a solid, bench or flitch
+solids-showing-unmeasured =
+    { $count ->
+        [one] Showing the 1 block with no tonnage
+       *[other] Showing the { $count } blocks with no tonnage
+    }
 solids-blast = Blast
 solids-plan-area = Plan area
 solids-dig-block = Dig block

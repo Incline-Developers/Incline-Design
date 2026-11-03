@@ -2936,6 +2936,14 @@ pub(crate) struct EditorState {
     pub(crate) schedule_calculation_status: String,
     /// How many dig blocks Schedule Setup's Solids step last counted as 0 t.
     pub(crate) schedule_zero_blocks: usize,
+    /// The dig blocks that step last found with no tonnage, so its page can
+    /// show where they are.
+    pub(crate) schedule_unmeasured_blocks: Vec<crate::model::DigBlockId>,
+    /// Dig blocks the Reserves view marks out - the ones the Blocks step
+    /// could not measure - until a selection there replaces them.
+    pub(crate) solids_view_marked: Vec<crate::model::DigBlockId>,
+    /// Frame the marked blocks once they are drawn.
+    pub(crate) solids_view_frame_marked: bool,
     /// What the current Solids run still mines, while a tree that picks
     /// ground to dig is on screen; `None` elsewhere, and before a run.
     pub(crate) mined_ground: Option<std::sync::Arc<MinedGround>>,
@@ -4401,6 +4409,9 @@ impl EditorState {
             haulage_auto_run: true,
             schedule_calculation_status: String::new(),
             schedule_zero_blocks: 0,
+            schedule_unmeasured_blocks: Vec::new(),
+            solids_view_marked: Vec::new(),
+            solids_view_frame_marked: false,
             mined_ground: None,
             mined_ground_key: None,
             schedule_experiment_draft: None,

@@ -1464,6 +1464,7 @@ impl crate::app::App<'_> {
             }
         }
         let mut unmeasured = 0;
+        let mut unmeasured_blocks = Vec::new();
         let mut counted_zero = 0;
         let mut negative = 0;
         let grades: Vec<ReserveFieldId> = document.schedule().experiment().grades.iter().map(|(grade, _)| *grade).collect();
@@ -1490,7 +1491,10 @@ impl crate::app::App<'_> {
                     blocking: true,
                 }),
                 Err(_) if zero && super::commands::schedule_readiness::block_tonnes_for_stage(block, field, true).is_ok() => counted_zero += 1,
-                Err(_) => unmeasured += 1,
+                Err(_) => {
+                    unmeasured += 1;
+                    unmeasured_blocks.push(block.id);
+                }
             }
         }
         if unmeasured > 0 {
@@ -1525,6 +1529,10 @@ impl crate::app::App<'_> {
         }
         // Shown on the step's page rather than as a warning: the planner
         // chose it.
+        if self.editor.schedule_unmeasured_blocks != unmeasured_blocks {
+            self.editor.schedule_unmeasured_blocks = unmeasured_blocks;
+            self.redraw_requested = true;
+        }
         if self.editor.schedule_zero_blocks != counted_zero {
             self.editor.schedule_zero_blocks = counted_zero;
             self.redraw_requested = true;

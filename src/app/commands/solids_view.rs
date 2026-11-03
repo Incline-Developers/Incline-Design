@@ -289,6 +289,10 @@ pub(crate) enum ReserveAvailability {
     NoSchema,
 }
 
+/// The colour the Reserves view marks blocks out in: the ones the Blocks step
+/// could not measure.
+const MARKED_COLOR: [f32; 4] = [0.92, 0.36, 0.22, 1.0];
+
 pub(crate) struct ViewSolid {
     /// The Solids stage: what the closed body is built from. The cache entry's
     /// own identity, so it is not inside a [`Stage`] like the rest.
@@ -1365,6 +1369,12 @@ impl crate::app::App<'_> {
             .as_ref()
             .and_then(|graphics| graphics.surface_under_cursor(&self.solid_view_body, &self.editor.hidden_handles));
         let block = hit.and_then(|id| self.dig_block_key_of(id)).map(|(_, key)| key);
+        // Any click ends a marking: picking one of the blocks selects it among
+        // the rest, and clicking off them brings the rest back.
+        if !self.editor.solids_view_marked.is_empty() {
+            self.editor.solids_view_marked.clear();
+            self.solid_view_body_key = None;
+        }
         if self.editor.selected_dig_block != block {
             self.editor.selected_dig_block = block;
             self.solid_view_body_key = None;
@@ -1413,6 +1423,18 @@ impl crate::app::App<'_> {
         let dug_through = self.editor.sequence_editor.as_ref().filter(|_| sequencing).map_or(0, |draft| draft.preview);
         let benches_only = demand == GeometryDemand::Blasting;
         let runtime = self.workspace.active_project().map(|project| project.runtime_id);
+        // Blocks marked from the Blocks step stand until the planner picks
+        // something of their own in the view.
+        if !self.editor.solids_view_selection.is_empty() || self.editor.selected_dig_block.is_some() {
+            self.editor.solids_view_marked.clear();
+            self.editor.solids_view_frame_marked = false;
+        }
+        let marked: std::collections::HashSet<DigBlockId> = if editing {
+            Default::default()
+        } else {
+            self.editor.solids_view_marked.iter().copied().collect()
+        };
+        let mut marked_bounds: Option<(glam::DVec3, glam::DVec3)> = None;
 
         let mut hasher = DefaultHasher::new();
         runtime.hash(&mut hasher);
@@ -1429,6 +1451,8 @@ impl crate::app::App<'_> {
             }
         }
         dug_through.hash(&mut hasher);
+        self.editor.solids_view_marked.hash(&mut hasher);
+        self.editor.solids_view_frame_marked.hash(&mut hasher);
         // Sorted before hashing: a hash map's iteration order is not stable,
         // and an unstable key would rebuild the display list every frame.
         let mut order_key: Vec<(DigBlockId, usize)> = order.iter().map(|(block, position)| (*block, *position)).collect();
@@ -1649,6 +1673,24 @@ impl crate::app::App<'_> {
                     mesh.color = blended(mesh.color, crate::ui::SELECTION_COLOR_F32, 0.55);
                     mesh.flitch_style = None;
                 }
+                // While blocks are marked they are all the view shows: the
+                // ground around them would hide most of them, and the
+                // Contents then read for them alone.
+                let is_marked = part.block.as_ref().is_some_and(|piece| marked.contains(&piece.id));
+                if !marked.is_empty() && !is_marked {
+                    continue;
+                }
+                if is_marked {
+                    mesh.flitch_style = None;
+                    mesh.line_color = MARKED_COLOR;
+                    mesh.color = blended(mesh.color, MARKED_COLOR, 0.75);
+                    let bounds = part.mesh.mesh.bounds();
+                    let (min, max) = (
+                        glam::DVec3::new(bounds.min.x, bounds.min.y, bounds.min.z),
+                        glam::DVec3::new(bounds.max.x, bounds.max.y, bounds.max.z),
+                    );
+                    marked_bounds = Some(marked_bounds.map_or((min, max), |(low, high)| (low.min(min), high.max(max))));
+                }
                 // The sequence editor's own three states, which stand in for
                 // the single selected block above while it owns the preview:
                 // in this bar's order and already dug at the slider's
@@ -1710,6 +1752,12 @@ impl crate::app::App<'_> {
         }
         if !reserve_complete || pending || !errors.is_empty() {
             self.editor.solid_view_reserves = None;
+        }
+        if self.editor.solids_view_frame_marked
+            && let Some((low, high)) = marked_bounds
+        {
+            self.editor.solids_view_frame_marked = false;
+            self.frame_haul(low, high);
         }
         // Coverage says how much of the shown ground the block model actually
         // reaches, so a partly covered solid cannot read as fully measured.

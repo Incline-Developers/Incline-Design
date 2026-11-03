@@ -932,7 +932,14 @@ pub(crate) fn draw_properties(ui: &mut egui::Ui, rect: egui::Rect, editor: &Edit
     if rows.is_empty() {
         PropertyTable::new("solids_view_properties", rect, &title).show(ui, |table| {
             table.header(&tr!("planning-property"), &tr!("planning-value"));
-            table.readonly(&tr!("solids-selection"), &tr!("solids-select-solid-bench-flitch"), None, None);
+            // Blocks marked from the Blocks step are all the view shows
+            // until something is picked, which this says.
+            let selection = if editor.solids_view_marked.is_empty() {
+                tr!("solids-select-solid-bench-flitch")
+            } else {
+                tr!("solids-showing-unmeasured", count = editor.solids_view_marked.len().to_string())
+            };
+            table.readonly(&tr!("solids-selection"), &selection, None, None);
         });
         return;
     }

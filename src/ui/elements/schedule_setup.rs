@@ -193,7 +193,7 @@ pub(crate) fn draw_readiness(ui: &mut egui::Ui, rect: egui::Rect, editor: &Edito
 /// The Solids step's settings: how many dig blocks the run made, and whether
 /// those no block model reaches count as 0 t. What the step found is listed
 /// beneath.
-pub(crate) fn draw_solids_tonnage(ui: &mut egui::Ui, rect: egui::Rect, editor: &EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
+pub(crate) fn draw_solids_tonnage(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, session: u32, commands: &mut Vec<UiCommand>) {
     let status = &editor.schedule_stages[ScheduleStep::Solids.index()];
     let blocks = status.last_seen.map_or_else(|| String::from("—"), |count| count.to_string());
     let counted = plan.unmeasured_as_zero() && status.last_success.is_some();
@@ -225,6 +225,19 @@ pub(crate) fn draw_solids_tonnage(ui: &mut egui::Ui, rect: egui::Rect, editor: &
                 };
                 let color = if entry.blocking { ui.visuals().error_fg_color } else { ui.visuals().weak_text_color() };
                 ui.add(egui::Label::new(egui::RichText::new(text).color(color)).wrap());
+            }
+            // A count says how many; the ground says which. Reserves shows
+            // the whole site with these blocks marked and the view on them.
+            if !editor.schedule_unmeasured_blocks.is_empty() {
+                ui.add_space(6.0);
+                if ui.add(crate::ui::widgets::menu::MenuButton::new(tr!("schedule-blocks-show-unmeasured"))).clicked() {
+                    editor.solids_view_marked = editor.schedule_unmeasured_blocks.clone();
+                    editor.solids_view_frame_marked = true;
+                    editor.solids_view_selection.clear();
+                    editor.selected_dig_block = None;
+                    editor.selected_blast = None;
+                    commands.push(UiCommand::SetPlanningView(crate::ui::state::PlanningView::Reserves));
+                }
             }
         });
     });
