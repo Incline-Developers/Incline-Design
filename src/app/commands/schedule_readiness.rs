@@ -697,11 +697,27 @@ impl crate::app::App<'_> {
             return;
         }
         let draft = draft.clone();
-        let (snapshot, ground, index, unavailable) = self
+        let (snapshot, ground, index, excluded, unavailable) = self
             .schedule_report_cache
             .as_ref()
-            .map(|cache| (cache.snapshot.clone(), cache.ground.clone(), cache.index.clone(), cache.unavailable.clone()))
-            .unwrap_or_else(|| (None, Arc::default(), Arc::new(GroundIndex::build(&[])), None));
+            .map(|cache| {
+                (
+                    cache.snapshot.clone(),
+                    cache.ground.clone(),
+                    cache.index.clone(),
+                    cache.excluded.clone(),
+                    cache.unavailable.clone(),
+                )
+            })
+            .unwrap_or_else(|| {
+                (
+                    None,
+                    Arc::default(),
+                    Arc::new(GroundIndex::build(&[])),
+                    Arc::new((Vec::new(), GroundIndex::build(&[]))),
+                    None,
+                )
+            });
         let generation = snapshot.as_ref().map(|snapshot| snapshot.generation);
         let members = match snapshot.as_deref() {
             // No finished run: every member keeps its place and its number,
@@ -758,6 +774,28 @@ impl crate::app::App<'_> {
                         let (found, unresolved, stale_pick) = match member {
                             DraftMember::Held(reference) => {
                                 let status = reference.resolve_indexed(&ground, &index);
+                                // Ground taken out of mining is passed over by
+                                // the bar, as its report says, not missing.
+                                if status.resolved().is_none()
+                                    && let Some(block) = reference
+                                        .resolve_indexed(&excluded.0, &excluded.1)
+                                        .resolved()
+                                        .and_then(|found| snapshot.excluded.get(found))
+                                {
+                                    let labels = document.map(|document| block_labels(document, block));
+                                    return SequenceMemberView {
+                                        name: Some(tr!("planning-excluded-label", name = block.name.clone())),
+                                        solid_name: Some(block.solid_name.clone()),
+                                        solid_type: labels.as_ref().map(|labels| labels.0.clone()),
+                                        bench: labels.as_ref().map(|labels| labels.1.clone()),
+                                        blast: labels.as_ref().map(|labels| labels.2.clone()),
+                                        flitch: labels.as_ref().map(|labels| labels.3.clone()),
+                                        unresolved: None,
+                                        tonnes: Some(0.0),
+                                        stale_pick: false,
+                                        block: None,
+                                    };
+                                }
                                 // Named by the block now at its place, when there
                                 // is one: a reason alone does not say which row
                                 // to reselect.
