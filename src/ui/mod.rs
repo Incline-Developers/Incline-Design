@@ -274,6 +274,7 @@ impl Gui {
         // egui may run the UI closure more than once while resolving layout.
         // Keep console rows identical across those passes, even if a warning is
         // logged while the frame is being built.
+        crate::logging::set_console_scope(if project.has_active_project { project.active_session } else { 0 });
         let console_snapshot = crate::logging::console_snapshot();
         let frame_context = UiFrameContext {
             orbit_marker,

@@ -82,6 +82,10 @@ pub(crate) struct ConsoleEntry {
     pub(crate) summary: String,
     pub(crate) details: Vec<String>,
     pub(crate) state: ConsoleEntryState,
+    /// The open project it was logged under, by runtime id; zero before any.
+    scope: u32,
+    /// The console frame it was last written in; see `RuntimeLog::frame`.
+    written: u64,
     #[cfg(not(target_arch = "wasm32"))]
     started_at: web_time::Instant,
     dispatch_complete: bool,
@@ -103,6 +107,15 @@ struct RuntimeLog {
     revision: u64,
     next_id: u64,
     snapshot: Option<(u64, Arc<[ConsoleEntry]>)>,
+    /// The active project's runtime id, which new entries are logged under
+    /// and the console shows; zero while none is open.
+    scope: u32,
+    /// Every project the console has shown, so one appearing for the first
+    /// time can take the activity that opened it.
+    seen_scopes: Vec<u32>,
+    /// How many frames the console has looked at its scope in; zero before
+    /// the first. Entries carry the count they were last written in.
+    frame: u64,
 }
 
 impl RuntimeLog {
@@ -113,7 +126,33 @@ impl RuntimeLog {
             revision: 0,
             next_id: 1,
             snapshot: None,
+            scope: 0,
+            seen_scopes: Vec::new(),
+            frame: 0,
         }
+    }
+
+    /// Show `scope`'s entries from now on. A project shown for the first time
+    /// takes the activities still in progress and what was written since the
+    /// last frame - an opening finishes just before its project appears -
+    /// which is how the activity that opened it moves with it. What was logged
+    /// before the first frame is the app's own, and stays.
+    fn set_scope(&mut self, scope: u32) {
+        let previous = self.frame;
+        self.frame += 1;
+        if scope == self.scope {
+            return;
+        }
+        if scope != 0 && !self.seen_scopes.contains(&scope) {
+            self.seen_scopes.push(scope);
+            for entry in &mut self.entries {
+                if entry.state == ConsoleEntryState::Pending || (previous > 0 && entry.written >= previous) {
+                    entry.scope = scope;
+                }
+            }
+        }
+        self.scope = scope;
+        self.changed();
     }
 
     fn next_id(&mut self) -> ConsoleEntryId {
@@ -122,7 +161,8 @@ impl RuntimeLog {
         id
     }
 
-    fn push(&mut self, entry: ConsoleEntry) {
+    fn push(&mut self, mut entry: ConsoleEntry) {
+        entry.written = self.frame;
         self.bytes += entry.byte_len();
         self.entries.push_back(entry);
         self.trim();
@@ -135,6 +175,7 @@ impl RuntimeLog {
         };
         let old_len = self.entries[index].byte_len();
         update(&mut self.entries[index]);
+        self.entries[index].written = self.frame;
         let new_len = self.entries[index].byte_len();
         self.bytes = self.bytes.saturating_sub(old_len).saturating_add(new_len);
         self.trim();
@@ -160,7 +201,9 @@ impl RuntimeLog {
         {
             return Arc::clone(snapshot);
         }
-        let snapshot: Arc<[ConsoleEntry]> = self.entries.iter().cloned().collect();
+        // Entries logged before any project was open belong to the app and
+        // stay; another project's do not.
+        let snapshot: Arc<[ConsoleEntry]> = self.entries.iter().filter(|entry| entry.scope == self.scope || entry.scope == 0).cloned().collect();
         self.snapshot = Some((self.revision, Arc::clone(&snapshot)));
         snapshot
     }
@@ -242,6 +285,8 @@ fn append_record(message: String, severity: ConsoleSeverity, target: Option<&str
                 summary,
                 details,
                 state: ConsoleEntryState::Complete,
+                scope: log.scope,
+                written: 0,
                 #[cfg(not(target_arch = "wasm32"))]
                 started_at: web_time::Instant::now(),
                 dispatch_complete: true,
@@ -386,6 +431,8 @@ pub(crate) fn begin_command_report(spec: CommandReportSpec) -> ConsoleEntryId {
             summary: spec.summary,
             details: Vec::new(),
             state: ConsoleEntryState::Pending,
+            scope: log.scope,
+            written: 0,
             #[cfg(not(target_arch = "wasm32"))]
             started_at: web_time::Instant::now(),
             dispatch_complete: false,
@@ -672,6 +719,11 @@ pub(crate) fn retain_current_report() -> Option<ConsoleReportHandle> {
         log.update(id, |entry| entry.pending_children = entry.pending_children.saturating_add(1));
     });
     Some(ConsoleReportHandle { id, cancelled: false })
+}
+
+/// Show the console for the project with this runtime id (zero for none).
+pub(crate) fn set_console_scope(scope: u32) {
+    with_runtime_log(|log| log.set_scope(scope));
 }
 
 /// Immutable revision-cached data for the UI.
