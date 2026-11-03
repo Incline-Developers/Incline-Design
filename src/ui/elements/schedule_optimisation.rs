@@ -32,6 +32,13 @@ fn parse_positive(text: &str) -> Option<f64> {
     (value.is_finite() && value > 0.0).then_some(value)
 }
 
+/// A fraction written as a percentage, to six places at most, so 0.0001
+/// reads 0.01 rather than 0.010000000000000002.
+fn percent_text(fraction: f64) -> String {
+    let text = format!("{:.6}", fraction * 100.0);
+    text.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
 /// The typed text of every setting here, refreshed whenever the plan's own
 /// values change underneath it.
 fn draft<'a>(editor: &'a mut EditorState, plan: &SchedulePlan) -> &'a mut ScheduleExperimentDraft {
@@ -49,7 +56,7 @@ fn draft<'a>(editor: &'a mut EditorState, plan: &SchedulePlan) -> &'a mut Schedu
             end_day: experiment.planning_end_day.to_string(),
             interval_h: experiment.interval_h.to_string(),
             solve_seconds: experiment.solve_seconds.to_string(),
-            relative_gap: experiment.relative_gap.to_string(),
+            relative_gap: percent_text(experiment.relative_gap),
         });
     }
     editor.schedule_experiment_draft.as_mut().expect("just ensured")
@@ -133,7 +140,15 @@ pub(crate) fn draw_advanced(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut Ed
     let draft = draft(editor, plan);
     let interval_h = parse_positive(&draft.interval_h).filter(|hours| *hours >= MIN_INTERVAL_H);
     let solve_seconds = parse_positive(&draft.solve_seconds).filter(|seconds| *seconds <= MAX_SOLVE_SECONDS);
-    let relative_gap = draft.relative_gap.trim().parse::<f64>().ok().filter(|gap| gap.is_finite() && (0.0..=1.0).contains(gap));
+    let relative_gap = draft
+        .relative_gap
+        .trim()
+        .trim_end_matches('%')
+        .trim_end()
+        .parse::<f64>()
+        .ok()
+        .filter(|percent| percent.is_finite() && (0.0..=100.0).contains(percent))
+        .map(|percent| percent / 100.0);
     let invalid = crate::model::schedule::ScheduleError::InvalidExperimentSetting.message();
     let mut edits = Vec::new();
     PropertyTable::new("schedule_experiment", rect, &tr!("experiment-advanced")).show(ui, |rows| {
@@ -161,7 +176,7 @@ pub(crate) fn draw_advanced(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut Ed
         let response = rows.field(&tr!("experiment-relative-gap"), &mut draft.relative_gap, relative_gap.is_none().then_some(invalid.as_str()));
         if (limit_committed || response.lost_focus())
             && let (Some(seconds), Some(relative_gap)) = (solve_seconds, relative_gap)
-            && (seconds != experiment.solve_seconds || relative_gap != experiment.relative_gap)
+            && (seconds != experiment.solve_seconds || percent_text(relative_gap) != percent_text(experiment.relative_gap))
         {
             edits.push(UiCommand::schedule(session, ScheduleEdit::SetExperimentSolveLimits { seconds, relative_gap }));
         }
