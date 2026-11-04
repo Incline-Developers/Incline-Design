@@ -84,7 +84,7 @@ impl<'a> App<'a> {
                         overlay,
                         &self.drill_holes,
                         &self.editor.hidden_handles,
-                        &self.editor.frozen_handles,
+                        &self.editor.snap_frozen,
                         &self.scene_document,
                         &self.snap_index,
                         self.editor.z_level,
@@ -297,6 +297,7 @@ impl<'a> App<'a> {
                     self.sync_blasting_frame();
                     self.sync_haulage_frame();
                     self.sync_animation_frame();
+                    self.sync_page_locks();
                     let showing_solid_preview = self.showing_solid_preview();
                     let completing_topology_load = self.topology_uploads_pending();
                     let applied_resize = self.take_resize_to_apply(now);
@@ -603,7 +604,7 @@ impl<'a> App<'a> {
                             let nearest = crate::rendering::pick::pick_nearest_vertex(
                                 &self.scene_document,
                                 &self.editor.hidden_handles,
-                                &self.editor.frozen_handles,
+                                &self.editor.snap_frozen,
                                 &vp,
                                 screen,
                                 graphics.window_to_viewport_px(cursor_px),
@@ -1147,7 +1148,7 @@ impl<'a> App<'a> {
             &self.snap_index,
             &self.triangulations,
             &self.editor.hidden_handles,
-            &self.editor.frozen_handles,
+            &self.editor.snap_frozen,
             &self.editor.cursor_mode,
             self.editor.xray_enabled,
         );
@@ -1159,7 +1160,7 @@ impl<'a> App<'a> {
         }
         if self.editor.cursor_mode == crate::ui::state::CursorMode::SnapToSurface {
             return graphics
-                .pick_triangulation_at_cursor(&self.haul_block_surface, &self.editor.hidden_handles, &self.editor.frozen_handles)
+                .pick_triangulation_at_cursor(&self.haul_block_surface, &self.editor.hidden_handles, &self.editor.snap_frozen)
                 .map(|(_, point)| point)
                 .or(found);
         }
@@ -1272,7 +1273,7 @@ impl<'a> App<'a> {
                 self.cancel_active_tool();
                 self.redraw_requested = true;
             } else if is_quick_press && self.editor.active_tool == ActiveTool::None && !self.editor.selection_locked_by_tool() {
-                let frozen = &self.editor.frozen_handles;
+                let frozen = &self.editor.pick_frozen;
                 let picked = self.graphics.as_ref().and_then(|g| {
                     g.pick_scene_entity_at_cursor(
                         crate::app::PICK_THRESHOLD_PX,
@@ -1474,7 +1475,7 @@ impl<'a> App<'a> {
             overlay,
             &self.drill_holes,
             &self.editor.hidden_handles,
-            &self.editor.frozen_handles,
+            &self.editor.snap_frozen,
             &self.scene_document,
             &self.snap_index,
             self.editor.z_level,

@@ -70,7 +70,7 @@ pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: 
 /// The badge a group's heading carries: its most pressing step's.
 fn group_badge(editor: &EditorState, group: SetupGroup) -> StepBadge {
     let badges: Vec<StepBadge> = match group {
-        SetupGroup::Solids => editor.planning_stages.iter().map(|status| StepBadge::of(status.state, &status.diagnostics)).collect(),
+        SetupGroup::Solids => editor.planning_stages.iter().map(StepBadge::of_solids_stage).collect(),
         SetupGroup::Haulage => editor.haulage_stages.iter().map(|status| StepBadge::of(status.state, &status.diagnostics)).collect(),
         SetupGroup::Schedule => editor.schedule_stages.iter().map(|status| StepBadge::of(status.state, &status.diagnostics)).collect(),
     };
@@ -264,18 +264,26 @@ fn draw_solids_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
     let mut markers = Vec::with_capacity(SolidsStep::ALL.len());
     for entry in SolidsStep::ALL {
         let status = &editor.planning_stages[entry.index()];
+        let empty = solids_stage_empty(status);
         ui.horizontal(|ui| {
             ui.add_space(ui.spacing().indent);
             let entry_response = ExplorerEntry::new(egui::Id::unique(entry.tree_id()), bold(&entry.label()))
-                .leading_icon(StepBadge::of(status.state, &status.diagnostics).icon(), egui::Color32::WHITE)
+                .leading_icon(StepBadge::of_solids_stage(status).icon(), egui::Color32::WHITE)
                 .header_aligned_icon()
                 .selected(step == Some(entry))
                 .show(ui);
             if let Some(rect) = entry_response.icon_rect {
-                markers.push((rect, status.state));
+                markers.push((rect, if empty { crate::app::planning_pipeline::StageState::NotRun } else { status.state }));
             }
             // The badge's reason, where the badge is.
-            let response = entry_response.response.on_hover_ui(|ui| stage_tooltip(ui, status));
+            let response = entry_response.response.on_hover_ui(|ui| {
+                if empty {
+                    ui.label(bold(&tr!("stage-state-empty")));
+                    ui.label(tr!("stage-empty-hint"));
+                } else {
+                    stage_tooltip(ui, status);
+                }
+            });
             if response.clicked() {
                 step = Some(entry);
             }
@@ -546,6 +554,17 @@ impl StepBadge {
         }
     }
 
+    /// A Solids step's badge: as [`Self::of`], but grey where the step ran
+    /// with nothing to work on - no fields, no solids, no dig blocks - since
+    /// green there would read as done.
+    pub(crate) fn of_solids_stage(status: &crate::ui::state::PlanningStageView) -> Self {
+        if solids_stage_empty(status) {
+            Self::NotRun
+        } else {
+            Self::of(status.state, &status.diagnostics)
+        }
+    }
+
     pub(crate) fn icon(self) -> egui::ImageSource<'static> {
         match self {
             Self::NotRun => unthemed_icon!("step_not_run.svg"),
@@ -555,6 +574,11 @@ impl StepBadge {
             Self::Error => unthemed_icon!("step_error.svg"),
         }
     }
+}
+
+/// Whether a Solids step completed with nothing in it to have worked on.
+fn solids_stage_empty(status: &crate::ui::state::PlanningStageView) -> bool {
+    status.state == crate::app::planning_pipeline::StageState::Complete && status.diagnostics.is_empty() && status.last_success.as_ref().is_some_and(|run| run.entities == 0)
 }
 
 /// The Reserving step's page: what its last run found, one row each.

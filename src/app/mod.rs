@@ -432,6 +432,8 @@ pub(crate) struct App<'a> {
     /// `EditorState::locked_layers` onto `EditorState::frozen_handles`, so
     /// invalidation only walks the document when one of the two changed.
     layer_lock_key: Option<(u64, u64)>,
+    /// What [`App::sync_page_locks`] last built its sets from.
+    page_lock_key: Option<u64>,
     /// Selection + composite fingerprint behind `EditorState::selection_has_intersections`,
     /// so the intersection scan only reruns when the selection or the documents change.
     intersection_availability_key: Option<u64>,
@@ -705,6 +707,7 @@ impl<'a> Default for App<'a> {
             snap_index_dirty: false,
             scene_document_key: None,
             layer_lock_key: None,
+            page_lock_key: None,
             intersection_availability_key: None,
             history: crate::model::History::new(),
             ui_pointer_gesture_active: false,

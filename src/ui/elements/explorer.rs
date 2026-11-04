@@ -337,7 +337,7 @@ impl RowState {
 /// containers rather than entities, through `EditorState::selected_layers`.
 fn explorer_selection(editor: &EditorState, project: &UiProjectView) -> Vec<RowState> {
     let selected = |entity: SceneEntityId| editor.selected_handles.contains(&entity);
-    let frozen = |entity: SceneEntityId| editor.frozen_handles.contains(&entity);
+    let frozen = |entity: SceneEntityId| editor.shows_locked(entity);
     let mut rows = Vec::new();
     if let Some(entry) = project.projects.first() {
         rows.extend(entry.layers.iter().filter(|layer| editor.selected_layers.contains(&layer.id)).map(|layer| RowState {
@@ -967,7 +967,7 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
             selected_handles,
             locked_layers,
             locked_rasters,
-            frozen_handles,
+            pick_frozen: frozen_handles,
             selected_layers,
             ..
         } = &*editor;

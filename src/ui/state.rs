@@ -207,13 +207,19 @@ impl EditorState {
         self.is_planning_cut_step() || self.is_haulage_page()
     }
 
-    /// Whether viewport clicks leave the project's items alone. Animate and
-    /// the Road Network show the site to be watched or drawn over, where a
-    /// click selecting the terrain under it would only paint its wireframe
-    /// across the view. Roads and nodes stay pickable, and the production
-    /// views are not affected.
-    pub(crate) fn scene_items_locked(&self) -> bool {
+    /// Whether this page locks the project's items until they are unlocked
+    /// on it. Animate and the Road Network show the site to be watched or
+    /// drawn over, where a click selecting the terrain under it would only
+    /// paint its wireframe across the view. The lock is the page's own - see
+    /// [`Self::page_unlocked`] - and leaves the production views alone.
+    pub(crate) fn page_locks_items(&self) -> bool {
         self.is_schedule_animation() || self.is_haulage_page()
+    }
+
+    /// Whether `entity` shows as locked in the trees: on a page that locks
+    /// items, its own lock; anywhere else, the item's.
+    pub(crate) fn shows_locked(&self, entity: SceneEntityId) -> bool {
+        self.pick_frozen.contains(&entity)
     }
 
     /// Whether a Planning page that owns the whole window - rather than
@@ -432,6 +438,17 @@ impl EditorState {
         } else {
             self.explicitly_frozen.remove(&handle);
             self.frozen_handles.remove(&handle);
+        }
+    }
+
+    /// Lock or unlock one entity on the page that locks items by default,
+    /// leaving its lock in the production views alone.
+    pub(crate) fn set_page_locked(&mut self, handle: SceneEntityId, locked: bool) {
+        if locked {
+            self.page_unlocked.remove(&handle);
+            self.selected_handles.remove(&handle);
+        } else {
+            self.page_unlocked.insert(handle);
         }
     }
 
@@ -1981,6 +1998,20 @@ pub(crate) struct EditorState {
     /// Entities the user froze by name: Display > Freeze Selection, or the
     /// explorer's per-row padlock.
     pub(crate) explicitly_frozen: HashSet<SceneEntityId>,
+    /// Entities unlocked on the pages that lock every item by default -
+    /// Animate and the Road Network ([`Self::page_locks_items`]). Their
+    /// padlocks set this, not [`Self::frozen_handles`], so locking or
+    /// unlocking there leaves the production views as they were.
+    pub(crate) page_unlocked: HashSet<SceneEntityId>,
+    /// Derived each frame: what a click or a marquee may not select. Off the
+    /// locking pages, [`Self::frozen_handles`]; on them, every item but those
+    /// unlocked there.
+    pub(crate) pick_frozen: HashSet<SceneEntityId>,
+    /// Derived each frame: what the cursor may not snap to. A page's own lock
+    /// only keeps clicks from selecting, so on the locking pages a road node
+    /// still snaps onto the ground; an item locked by name stays out unless
+    /// it is unlocked there.
+    pub(crate) snap_frozen: HashSet<SceneEntityId>,
     /// Design layers locked against selection and editing.
     pub(crate) locked_layers: HashSet<LayerId>,
     /// Rasters locked against draping and deletion. Rasters are not scene
@@ -3655,6 +3686,9 @@ impl EditorState {
         self.hidden_handles.clear();
         self.frozen_handles.clear();
         self.explicitly_frozen.clear();
+        self.page_unlocked.clear();
+        self.pick_frozen.clear();
+        self.snap_frozen.clear();
         self.locked_layers.clear();
         self.locked_rasters.clear();
         self.translucent_handles.clear();
@@ -3935,6 +3969,9 @@ impl EditorState {
             alerts: Default::default(),
             frozen_handles: HashSet::new(),
             explicitly_frozen: HashSet::new(),
+            page_unlocked: HashSet::new(),
+            pick_frozen: HashSet::new(),
+            snap_frozen: HashSet::new(),
             locked_layers: HashSet::new(),
             locked_rasters: HashSet::new(),
             translucent_handles: HashSet::new(),

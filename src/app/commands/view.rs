@@ -326,6 +326,70 @@ impl<'a> App<'a> {
         }
     }
 
+    /// Work out what clicks and snaps skip this frame: [`EditorState::pick_frozen`]
+    /// and [`EditorState::snap_frozen`]. Rebuilt only when the page, the
+    /// locks or the project's items change.
+    pub(crate) fn sync_page_locks(&mut self) {
+        use std::hash::{Hash, Hasher};
+
+        use crate::model::SceneEntityId;
+        let page = self.editor.page_locks_items();
+        // Summed per entry: the sets do not iterate in a stable order.
+        let unordered = |set: &std::collections::HashSet<SceneEntityId>| {
+            set.iter().fold(set.len() as u64, |sum, entity| {
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                entity.hash(&mut hasher);
+                sum.wrapping_add(hasher.finish())
+            })
+        };
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        page.hash(&mut hasher);
+        unordered(&self.editor.frozen_handles).hash(&mut hasher);
+        unordered(&self.editor.page_unlocked).hash(&mut hasher);
+        if page {
+            self.workspace
+                .active_project()
+                .map(|project| (project.runtime_id, project.project.document.revision()))
+                .hash(&mut hasher);
+            (self.triangulations.len(), self.block_models.len(), self.drill_holes.len(), self.point_clouds.len()).hash(&mut hasher);
+        }
+        let key = hasher.finish();
+        if self.page_lock_key == Some(key) {
+            return;
+        }
+        self.page_lock_key = Some(key);
+        if !page {
+            self.editor.pick_frozen = self.editor.frozen_handles.clone();
+            self.editor.snap_frozen = self.editor.frozen_handles.clone();
+            return;
+        }
+        let unlocked = &self.editor.page_unlocked;
+        let objects = self
+            .workspace
+            .active_project()
+            .map(|project| {
+                project
+                    .project
+                    .document
+                    .objects()
+                    .iter()
+                    .map(|object| SceneEntityId::Object(object.id()))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let every = self
+            .triangulations
+            .iter()
+            .map(|item| SceneEntityId::Triangulation(item.id))
+            .chain(self.block_models.iter().map(|item| SceneEntityId::BlockModel(item.id)))
+            .chain(self.drill_holes.iter().map(|item| SceneEntityId::DrillHole(item.id)))
+            .chain(self.point_clouds.iter().map(|item| SceneEntityId::PointCloud(item.id)))
+            .chain(objects)
+            .chain(self.editor.frozen_handles.iter().copied());
+        self.editor.pick_frozen = every.filter(|entity| !unlocked.contains(entity)).collect();
+        self.editor.snap_frozen = self.editor.frozen_handles.iter().copied().filter(|entity| !unlocked.contains(entity)).collect();
+    }
+
     /// Open Animate on the whole site: once per project, and again whenever
     /// a page that frames what it draws - Reserves, Blasting, Dig Strips, the
     /// Road Network or another workspace - has had the camera since. Moving

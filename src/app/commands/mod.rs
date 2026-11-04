@@ -736,6 +736,12 @@ impl<'a> App<'a> {
                 self.set_section_locked(section, locked);
                 Ok(())
             }
+            UiCommand::ToggleEntityLocked(handle) if self.editor.page_locks_items() => {
+                let locked = !self.editor.shows_locked(handle);
+                self.editor.set_page_locked(handle, locked);
+                self.invalidate_geometry();
+                Ok(())
+            }
             UiCommand::ToggleEntityLocked(handle) => {
                 let locked = !self.editor.frozen_handles.contains(&handle);
                 self.editor.set_entity_locked(handle, locked);
