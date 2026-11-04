@@ -525,43 +525,47 @@ fn issues(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, network
                 grid_empty_state(ui, &tr!("haul-no-issues"), None);
                 return;
             }
-            for (index, issue) in list.iter().enumerate() {
-                let subject = if issue.blocks.is_empty() {
-                    issue
-                        .road
-                        .and_then(|id| network.road(id).map(|r| r.name.clone()))
-                        .or(issue.node.map(|id| node_label(network, destinations, id)))
-                        .unwrap_or_default()
-                } else {
-                    tr!("haul-blocks-in", area = issue.area.clone(), count = issue.blocks.len())
-                };
-                let entity = issue.road.map(SceneEntityId::HaulRoad).or(issue.node.map(SceneEntityId::HaulNode));
-                let selected = if issue.blocks.is_empty() {
-                    entity.is_some_and(|e| editor.selected_handles.len() == 1 && editor.selected_handles.contains(&e))
-                } else {
-                    editor.haul_selected_blocks == issue.blocks
-                };
-                let help = issue_help(issue.kind);
-                let (response, cells) = grid_columns_row(ui, &ISSUE_FRACTIONS, &[&issue.kind.label(), &subject], selected);
-                grid_cell_warning(ui, ("haul_issue_mark", index), cells[1], &help);
-                if response.on_hover_text(help).clicked() {
-                    editor.selected_handles.clear();
-                    editor.selected_handles.extend(entity);
-                    editor.haul_selected_blocks = issue.blocks.clone();
-                    let points = if issue.blocks.is_empty() {
-                        issue.road.and_then(|id| network.road(id)).map(|r| network.points(r)).unwrap_or_else(|| vec![issue.pos])
+            // A network being drawn can list hundreds, which would otherwise
+            // push the settings and navigation below them out of reach.
+            egui::ScrollArea::vertical().id_salt("haul_issues_rows").max_height(ISSUES_MAX_HEIGHT).show(ui, |ui| {
+                for (index, issue) in list.iter().enumerate() {
+                    let subject = if issue.blocks.is_empty() {
+                        issue
+                            .road
+                            .and_then(|id| network.road(id).map(|r| r.name.clone()))
+                            .or(issue.node.map(|id| node_label(network, destinations, id)))
+                            .unwrap_or_default()
                     } else {
-                        editor
-                            .haul_blocks
-                            .iter()
-                            .filter(|b| issue.blocks.contains(&b.id))
-                            .flat_map(|b| b.rings.iter().flatten().copied())
-                            .collect()
+                        tr!("haul-blocks-in", area = issue.area.clone(), count = issue.blocks.len())
                     };
-                    let (min, max) = bounds(&points);
-                    commands.push(UiCommand::FrameHaul(min, max));
+                    let entity = issue.road.map(SceneEntityId::HaulRoad).or(issue.node.map(SceneEntityId::HaulNode));
+                    let selected = if issue.blocks.is_empty() {
+                        entity.is_some_and(|e| editor.selected_handles.len() == 1 && editor.selected_handles.contains(&e))
+                    } else {
+                        editor.haul_selected_blocks == issue.blocks
+                    };
+                    let help = issue_help(issue.kind);
+                    let (response, cells) = grid_columns_row(ui, &ISSUE_FRACTIONS, &[&issue.kind.label(), &subject], selected);
+                    grid_cell_warning(ui, ("haul_issue_mark", index), cells[1], &help);
+                    if response.on_hover_text(help).clicked() {
+                        editor.selected_handles.clear();
+                        editor.selected_handles.extend(entity);
+                        editor.haul_selected_blocks = issue.blocks.clone();
+                        let points = if issue.blocks.is_empty() {
+                            issue.road.and_then(|id| network.road(id)).map(|r| network.points(r)).unwrap_or_else(|| vec![issue.pos])
+                        } else {
+                            editor
+                                .haul_blocks
+                                .iter()
+                                .filter(|b| issue.blocks.contains(&b.id))
+                                .flat_map(|b| b.rings.iter().flatten().copied())
+                                .collect()
+                        };
+                        let (min, max) = bounds(&points);
+                        commands.push(UiCommand::FrameHaul(min, max));
+                    }
                 }
-            }
+            });
         });
 }
 
@@ -575,6 +579,9 @@ fn issue_help(kind: IssueKind) -> String {
         IssueKind::OutOfReach => tr!("haul-out-of-reach-help"),
     }
 }
+
+/// How tall the Issues list grows before it scrolls on its own: about eight rows.
+const ISSUES_MAX_HEIGHT: f32 = 250.0;
 
 /// Shares of the Road Network grid's columns: the setting, then its value.
 const SETTING_FRACTIONS: [f32; 2] = [0.6, 0.4];

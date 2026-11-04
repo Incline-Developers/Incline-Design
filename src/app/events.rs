@@ -1696,6 +1696,9 @@ impl<'a> App<'a> {
                     self.editor.solids_view_selection.clear();
                     self.editor.selected_dig_block = None;
                     self.invalidate_geometry();
+                } else if !self.editor.haul_selected_blocks.is_empty() {
+                    self.editor.haul_selected_blocks.clear();
+                    self.invalidate_geometry();
                 }
             }
             // C: the centre of rotation, on and off, the same as its toolbar button.
