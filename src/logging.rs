@@ -269,12 +269,14 @@ fn append_record(message: String, severity: ConsoleSeverity, target: Option<&str
         if let Some(id) = active {
             log.update(id, |entry| {
                 entry.severity = entry.severity.escalate(severity);
-                entry.summary = concise(&message);
+                entry.summary = concise(message.lines().next().unwrap_or_default());
                 entry.details.push(message);
             });
         } else {
             let id = log.next_id();
-            let summary = concise(&message);
+            // A message of several lines is summed up by its first: the
+            // rest is detail, unfolded beneath it.
+            let summary = concise(message.lines().next().unwrap_or_default());
             // Keep the whole message when the summary had to shorten or flatten it.
             let details = if summary == message { Vec::new() } else { vec![message] };
             log.push(ConsoleEntry {

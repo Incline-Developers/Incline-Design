@@ -748,8 +748,11 @@ schedule-error-wrong-machine = That machine cannot do this work: loaders dig and
 schedule-error-kind-in-use = Machines of this class hold bars the new kind cannot work: { $bars }
 drill-blast-unclearable = Never clear: ground above these blasts, within the buffer, is in no dig bar: { $blasts }
 drill-blast-missing = { $bar }: { $count } blast(s) in this bar are not in the planning run
-drill-blast-unworked = Loaders wait on these blasts all horizon: they are dug by a bar, but no machine bar works the step named, and they do not start Fired. Add them to a blast bar on that kind of machine, or set their starting stage in Setup → Drill & Blast: { $blasts }
 drill-blast-unworked-entry = { $blast } ({ $step })
+schedule-bar-unworked-blasts = { $count ->
+    [one] Its ground in { $blasts } is never dug: no machine bar works that step. Add the blast to a blast bar on that kind of machine, or start it further on in Setup → Drill & Blast.
+   *[other] Its ground in { $blasts } is never dug: no machine bar works those steps. Add the blasts to blast bars on those kinds of machine, or start them further on in Setup → Drill & Blast.
+}
 idle-waiting-on-blast = Waiting on blast
 idle-waiting-on-blast-note = The bar's next block is in a blast that has not fired yet.
 idle-waiting-on-blast-named = Waiting on blast { $blast }
@@ -1733,12 +1736,6 @@ schedule-run-kept-better = Schedule run { $run } found nothing worth more than r
 schedule-run-first = Scheduled through day { $day }
 schedule-run-optimal = Scheduled through day { $day } · optimal
 schedule-run-limited-no-gap = Scheduled through day { $day }
-schedule-run-suffix-event-budget = {" "}· event budget capped
-schedule-run-suffix-unworked-blasts =
-    { $count ->
-        [one] {" "}· 1 blast has no machine to work it
-       *[other] {" "}· { $count } blasts have no machine to work them
-    }
 schedule-run-no-bars = Drag Dig from the palette onto a loader to start the schedule.
 schedule-run-empty-bars = Add dig blocks to a bar to start the schedule: right-click it, then Edit Sequence.
 schedule-run-stale = Run { $run } is out of date. The calculated work is hidden until the schedule is run again.

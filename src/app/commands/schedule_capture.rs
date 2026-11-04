@@ -185,6 +185,10 @@ pub(crate) struct CaptureIdentities {
     /// the machine each chain agent is.
     pub(crate) blasts: Vec<CapturedBlast>,
     pub(crate) blast_agents: Vec<LoaderAgentId>,
+    /// Each dig bar's ground in a blast no machine bar will prep, drill or
+    /// charge, so its loader waits on it all horizon: the bar, and the
+    /// blast with the step nobody works.
+    pub(crate) unworked_blasts: Vec<(BarId, String)>,
 }
 
 /// One blast the run sequences, as the results draw it.
@@ -209,9 +213,6 @@ pub(crate) struct CaptureStats {
     pub(crate) ground_sources: usize,
     /// Whether the derived event budget hit [`SEGMENT_CEILING`].
     pub(crate) event_budget_restricted: bool,
-    /// Blasts a dig bar needs that no machine bar will prep, drill or charge,
-    /// so their loaders wait all horizon. Named in the notes.
-    pub(crate) unworked_blasts: usize,
 }
 
 /// A finished capture: the model, what its ids mean, and one semantic key.
@@ -1842,21 +1843,28 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         return Err(Vec::new());
     }
     // A dig bar on ground whose blast no machine works waits for it all
-    // horizon. The run is still a valid schedule, so it is a note and a
-    // warning on the status rather than a refusal.
-    let unworked = drill_blast.as_ref().map(|input| input.unworked()).unwrap_or_default();
-    if !unworked.is_empty() {
-        let blasts = unworked
-            .iter()
-            .filter_map(|(index, activity)| {
-                identities.blasts.get(*index).map(|blast| {
-                    let label = crate::ui::elements::solids_view::blast_path(&blast.solid_name, blast.bench.base, &blast.name);
-                    tr!("drill-blast-unworked-entry", blast = label, step = activity.label())
-                })
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        notes.push(tr!("drill-blast-unworked", blasts = blasts));
+    // horizon. The run is still a valid schedule, so it is not a refusal:
+    // the Gantt marks the bars that dig such ground, and says why.
+    if let Some(input) = drill_blast.as_ref() {
+        for (index, activity) in input.unworked() {
+            let (Some(blast), Some(chain)) = (identities.blasts.get(index), input.blasts.get(index)) else {
+                continue;
+            };
+            let label = crate::ui::elements::solids_view::blast_path(&blast.solid_name, blast.bench.base, &blast.name);
+            let entry = tr!("drill-blast-unworked-entry", blast = label, step = activity.label());
+            let blocks: Vec<crate::model::DigBlockId> = chain.releases.iter().filter_map(|ground| identities.ground_blocks.get(ground).copied()).collect();
+            let bars: Vec<BarId> = identities
+                .bar_blocks
+                .iter()
+                .filter(|(_, held)| held.iter().any(|block| blocks.contains(block)))
+                .map(|(bar, _)| *bar)
+                .collect();
+            for bar in bars {
+                if !identities.unworked_blasts.iter().any(|(held, named)| *held == bar && *named == entry) {
+                    identities.unworked_blasts.push((bar, entry.clone()));
+                }
+            }
+        }
     }
 
     haul.report(&identities, &mut notes, &mut problems);
@@ -1890,7 +1898,6 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         candidates: input.movements.len(),
         ground_sources: input.ground.len(),
         event_budget_restricted,
-        unworked_blasts: unworked.len(),
     };
     let fingerprint = fingerprint(source, &input);
     Ok(BlendCapture {

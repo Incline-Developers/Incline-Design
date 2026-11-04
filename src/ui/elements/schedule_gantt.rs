@@ -498,13 +498,9 @@ pub(crate) fn draw_calculation_controls(ui: &mut egui::Ui, editor: &mut EditorSt
     let tint = |color: egui::Color32, enabled: bool| if enabled { color } else { color.gamma_multiply(0.35) };
     let side = ui.available_height();
     // Where the schedule stands goes with the buttons that change it, on
-    // hover, rather than as a line of its own along the toolbar: each one's
-    // own note first, then the status and what lies behind it.
-    let status = std::iter::once(editor.schedule_run_status.as_str())
-        .chain(editor.schedule_run_details.iter().map(String::as_str))
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n");
+    // hover: each one's own note, then the one line of status. What lies
+    // behind a run - its value, bound and working - is in the console.
+    let status = editor.schedule_run_status.as_str();
     let hover = |note: String| if status.is_empty() { note } else { format!("{note}\n\n{status}") };
     let spacing = std::mem::replace(&mut ui.spacing_mut().item_spacing.x, 0.0);
     let held_note = |note: String| if held { hover(tr!("schedule-auto-holds")) } else { hover(note) };
@@ -1545,6 +1541,19 @@ fn bar_tooltip(bar: &ScheduleBar, report: Option<&ScheduleBarView>, window: Work
     lines.join("\n")
 }
 
+/// Why some of a dig bar's ground is never dug, when it lies in a blast no
+/// machine bar works: the blasts, the step each lacks, and what to do.
+pub(super) fn unworked_text(schedule: &CalculatedSchedule, bar: crate::model::schedule::BarId) -> Option<String> {
+    let blasts: Vec<&str> = schedule
+        .report
+        .unworked_blasts
+        .iter()
+        .filter(|(held, _)| *held == bar)
+        .map(|(_, blast)| blast.as_str())
+        .collect();
+    (!blasts.is_empty()).then(|| tr!("schedule-bar-unworked-blasts", count = blasts.len(), blasts = blasts.join(", ")))
+}
+
 /// Where a span of project time falls, as a rectangle of the given band.
 fn span_rect(view: GanttView, body: egui::Rect, start_h: f64, end_h: f64, top: f32, height: f32) -> egui::Rect {
     let left = view.x_of(start_h * GanttView::HOUR, body.left(), body.width());
@@ -2298,6 +2307,15 @@ fn draw_bars(
                             marker.galley.clone(),
                             text,
                         );
+                        // Beside the name, a dig bar with ground in a blast
+                        // no machine works, which is never dug; why on hover.
+                        if let Some(why) = schedule.and_then(|schedule| unworked_text(schedule, bar.id)) {
+                            let mark = egui::Rect::from_center_size(egui::pos2(rect.left() + 6.0 + marker.galley.size().x + 12.0, rect.center().y), egui::Vec2::splat(14.0));
+                            if rect.intersect(body).contains_rect(mark) {
+                                egui::Image::new(crate::ui::unthemed_icon!("step_warning.svg")).paint_at(ui, mark);
+                                ui.interact(mark, ui.scope_id().with(("gantt_unworked", bar.id)), egui::Sense::hover()).on_hover_text(why);
+                            }
+                        }
                     }
                     // The calculated work, in the band above the bar. Drawn
                     // only from a current run: the moment anything it was

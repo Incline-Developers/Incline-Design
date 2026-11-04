@@ -267,6 +267,9 @@ fn selected_bar(ui: &mut egui::Ui, editor: &EditorState, plan: &SchedulePlan) {
     for line in lines {
         ui.label(egui::RichText::new(line).weak());
     }
+    if let Some(text) = editor.schedule_result.as_ref().and_then(|schedule| super::schedule_gantt::unworked_text(schedule, bar.id)) {
+        ui.label(egui::RichText::new(text).color(ui.visuals().warn_fg_color));
+    }
     for problem in report.map_or(&[][..], |report| &report.problems) {
         ui.label(egui::RichText::new(problem).color(ui.visuals().warn_fg_color));
     }

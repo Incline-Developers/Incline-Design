@@ -606,9 +606,9 @@ pub(crate) struct SolveReport {
     /// The derived execution-event budget hit its ceiling, so some source
     /// transitions inside an interval may have been unavailable.
     pub(crate) event_budget_restricted: bool,
-    /// Blasts a dig bar needs that no machine bar works, so their loaders
-    /// wait on them all horizon.
-    pub(crate) unworked_blasts: usize,
+    /// Each dig bar's ground in a blast no machine bar works, so its loader
+    /// waits on it all horizon: the bar, and the blast with its unworked step.
+    pub(crate) unworked_blasts: Vec<(super::BarId, String)>,
     pub(crate) grade_margin: f64,
     pub(crate) boundary_rows: usize,
     pub(crate) boundary_tonnes_t: f64,

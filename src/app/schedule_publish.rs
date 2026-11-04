@@ -55,7 +55,7 @@ pub(crate) struct PublishMeta<'a> {
     pub(crate) candidates: usize,
     pub(crate) ground_sources: usize,
     pub(crate) event_budget_restricted: bool,
-    pub(crate) unworked_blasts: usize,
+    pub(crate) unworked_blasts: Vec<(crate::model::schedule::BarId, String)>,
     pub(crate) notes: Vec<String>,
 }
 

@@ -630,7 +630,7 @@ impl crate::app::App<'_> {
                         candidates: capture.stats.candidates,
                         ground_sources: capture.stats.ground_sources,
                         event_budget_restricted: capture.stats.event_budget_restricted,
-                        unworked_blasts: capture.stats.unworked_blasts,
+                        unworked_blasts: capture.identities.unworked_blasts.clone(),
                         notes: notes.clone(),
                     };
                     publish(&input, solution, replay, &capture.identities, meta, cancel)
@@ -700,8 +700,18 @@ impl crate::app::App<'_> {
                         app.schedule_run_diagnostics = None;
                     }
                     Ok(RunOutcome::Published(schedule)) => {
-                        let finished = tr!("schedule-run-finished", run = serial.to_string(), day = day_of(schedule.requested_end_h).to_string());
-                        if auto {
+                        // What lies behind the run - its value, bound,
+                        // timings and notes - beneath the line saying it
+                        // finished, for the console to unfold. An Auto
+                        // recalculation after every edit would bury the
+                        // console, so it says so there only when its event
+                        // budget was capped.
+                        let mut finished = tr!("schedule-run-finished", run = serial.to_string(), day = day_of(schedule.requested_end_h).to_string());
+                        for line in result_details(&schedule) {
+                            finished.push('\n');
+                            finished.push_str(&line);
+                        }
+                        if auto && !schedule.report.event_budget_restricted {
                             log::info!("{finished}");
                         } else {
                             crate::userspace_log!("{finished}");
@@ -1074,9 +1084,6 @@ impl crate::app::App<'_> {
         if let (Some(held), Some(calculation)) = (held_detail, self.schedule_calculation.as_ref()) {
             details.push(tr!("schedule-run-still-showing", run = calculation.run.to_string(), status = held));
         }
-        if let Some(calculation) = self.schedule_calculation.as_ref().filter(|_| current) {
-            details.extend(result_details(calculation));
-        }
         let stale = !current && self.schedule_calculation.is_some() && !recalculating;
         let repair = if running.is_some() {
             None
@@ -1177,29 +1184,22 @@ fn attempt_headline(attempt: &ScheduleAttempt) -> String {
 fn result_status(calculation: &CalculatedSchedule) -> String {
     // Only what a planner acts on: how far the schedule reaches and whether
     // it can still be improved. The value, the run number and the solver's
-    // working are in the details on hover.
+    // working are in the console, beneath the line the run finished with.
     let day = day_of(calculation.requested_end_h).to_string();
     let report = &calculation.report;
     let first_only = report.day_by_day.as_ref().is_some_and(|start| start.role == DayByDayRole::Only);
-    let mut status = match (report.quality, report.gap) {
+    match (report.quality, report.gap) {
         _ if first_only => tr!("schedule-run-first", day = day),
         (Some(SolveQuality::Optimal), _) => tr!("schedule-run-optimal", day = day),
         // The gap is a solver figure, and on a long horizon often measures
-        // how loose the bound is rather than the schedule: it is on hover.
+        // how loose the bound is rather than the schedule: it is in the
+        // console.
         _ => tr!("schedule-run-limited-no-gap", day = day),
-    };
-    // A restriction that can hold production back is said where the status
-    // is read, not only in the details.
-    if report.event_budget_restricted {
-        status.push_str(&tr!("schedule-run-suffix-event-budget"));
     }
-    if report.unworked_blasts > 0 {
-        status.push_str(&tr!("schedule-run-suffix-unworked-blasts", count = report.unworked_blasts));
-    }
-    status
 }
 
-/// Everything the status tooltip says about a held result.
+/// What lies behind a published run - its value, bound, timings and notes -
+/// for the console entry it finished with.
 fn result_details(calculation: &CalculatedSchedule) -> Vec<String> {
     use crate::ui::elements::schedule_calendar::format_tonnes;
     let report = &calculation.report;
