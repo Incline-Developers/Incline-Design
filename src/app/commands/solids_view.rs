@@ -1422,6 +1422,7 @@ impl crate::app::App<'_> {
             .collect();
         let dug_through = self.editor.sequence_editor.as_ref().filter(|_| sequencing).map_or(0, |draft| draft.preview);
         let benches_only = demand == GeometryDemand::Blasting;
+        let dig_strips = demand == GeometryDemand::Body && self.editor.is_dig_strips_step();
         let runtime = self.workspace.active_project().map(|project| project.runtime_id);
         // Blocks marked from the Blocks step stand until the planner picks
         // something of their own in the view.
@@ -1441,6 +1442,7 @@ impl crate::app::App<'_> {
         selected_block.hash(&mut hasher);
         selected_blast.hash(&mut hasher);
         benches_only.hash(&mut hasher);
+        dig_strips.hash(&mut hasher);
         demand.hash(&mut hasher);
         sequencing.hash(&mut hasher);
         blast_sequencing.hash(&mut hasher);
@@ -1624,6 +1626,11 @@ impl crate::app::App<'_> {
                 if (demand == GeometryDemand::Partition || blast_sequencing) && cache.excludes(solid, part) {
                     continue;
                 }
+                // Dig Strips comes before the flitches are cut apart, so a
+                // flitch with excluded blasts in its bench is drawn as the
+                // ground it still has to dig, flat in plan as the step is
+                // viewed.
+                let ground = dig_strips.then(|| in_mining_ground(solid, cache, part)).flatten();
                 // Selecting a blast narrows what is shown, not what is built.
                 if !benches_only
                     && let Some(blast) = selected_blast.filter(|blast| blast.solid == solid.id)
@@ -1645,7 +1652,13 @@ impl crate::app::App<'_> {
                     });
                 }
                 let counted = selected_block.is_none() || is_selected_block;
-                let mut mesh = part.mesh.clone();
+                let mut mesh = match &ground {
+                    Some(faces) => match flat_ground(&part.mesh, faces, part.band.selection.top) {
+                        Some(mesh) => mesh,
+                        None => continue,
+                    },
+                    None => part.mesh.clone(),
+                };
                 if blast_sequencing {
                     // Whole blasts, bench high: a flitch's hatching would
                     // stripe across them and say nothing about the blast.
@@ -2288,6 +2301,72 @@ fn carve_level(level: &Level, old_parts: &mut [Option<SolidPart>], cancel: &crat
         carved[index] = Some(piece);
     }
     Ok(carved)
+}
+
+/// The ground of a flitch part still in mining, where its bench has blasts
+/// out of mining - taken out by hand, under the minimum blast size, or with
+/// the whole bench. `None` when nothing of it is excluded, or the blasts are
+/// not worked out yet, and the part is drawn as it stands.
+fn in_mining_ground(solid: &Solid, cache: &ViewSolid, part: &SolidPart) -> Option<Vec<Face>> {
+    let exclusions = &solid.exclusions;
+    let bench = part.bench.base;
+    if exclusions.bench_excluded(bench) {
+        return Some(Vec::new());
+    }
+    let excluded: Vec<&BlastFace> = cache
+        .blast_faces()?
+        .iter()
+        .filter(|face| (face.bench.base - bench).abs() < 1e-6 && exclusions.blast_face_excluded(face.bench.base, &face.face))
+        .collect();
+    if excluded.is_empty() {
+        return None;
+    }
+    let footprint = cache.flitch_footprints()?.get(&part.band.selection.base.to_bits())?;
+    let cuts = solid.blasting.bench(bench).map(|entry| arrangement::cut_lines(&entry.cuts)).unwrap_or_default();
+    Some(
+        arrangement::subdivide(footprint, &cuts)
+            .into_iter()
+            .filter(|face| arrangement::representative_point(face).is_some_and(|point| !excluded.iter().any(|blast| arrangement::point_in_face(&blast.face, point))))
+            .collect(),
+    )
+}
+
+/// Plan faces as one flat, outlined mesh at `z`, in `source`'s colours.
+fn flat_ground(source: &OpenTriangulation, faces: &[Face], z: f64) -> Option<OpenTriangulation> {
+    let origin = faces.iter().flatten().flatten().next().copied()?;
+    let mut vertices = Vec::new();
+    let mut triangles: Vec<[u32; 3]> = Vec::new();
+    let mut edges = Vec::new();
+    for face in faces {
+        let base = vertices.len();
+        let mut points: Vec<DVec2> = Vec::new();
+        let mut holes = Vec::new();
+        for ring in face.iter().filter(|ring| ring.len() >= 3) {
+            if !points.is_empty() {
+                holes.push(points.len());
+            }
+            let start = base + points.len();
+            edges.extend((0..ring.len()).map(|i| [(start + i) as u32, (start + (i + 1) % ring.len()) as u32]));
+            points.extend(ring.iter().copied());
+        }
+        let mut indices: Vec<usize> = Vec::new();
+        earcut::Earcut::new().earcut(points.iter().map(|point| [point.x - origin.x, point.y - origin.y]), &holes, &mut indices);
+        for &[a, b, c] in indices.as_chunks::<3>().0 {
+            // Facing up, so a view culling back faces still shows it.
+            let up = (points[b] - points[a]).perp_dot(points[c] - points[a]) >= 0.0;
+            let [a, b, c] = [a, b, c].map(|index| (base + index) as u32);
+            triangles.push(if up { [a, b, c] } else { [a, c, b] });
+        }
+        vertices.extend(points.iter().map(|point| crate::model::formats::mesh_data::Vertex { x: point.x, y: point.y, z }));
+    }
+    let mesh = Arc::new(Triangulation::from_vertices_and_faces(vertices, triangles).ok()?);
+    let spatial = Arc::new(crate::model::spatial::TriangleBvh::build(&mesh));
+    let order = Arc::new(crate::model::triangulation::spatial_surface_face_order(&mesh));
+    let mut flat = preview_triangulation(source.name.clone(), mesh, spatial, edges, order, source.color, source.line_color);
+    flat.always_show_edges = source.always_show_edges;
+    flat.line_weight = source.line_weight;
+    flat.id = next_view_id();
+    Some(flat)
 }
 
 /// One piece of a bench or flitch, drawn as its own outlined body in the
