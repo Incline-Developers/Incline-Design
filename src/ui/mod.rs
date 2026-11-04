@@ -425,12 +425,13 @@ impl VideoOverlay {
         };
         raw_input.viewports.entry(egui::ViewportId::ROOT).or_default().native_pixels_per_point = Some(pixels_per_point);
         let output = self.ctx.run_ui(raw_input, |ui| {
+            let mut space = LabelSpace::new(rect, machine_icon_rects(ui, editor));
             if labels.destinations {
-                draw_haul_pin_labels(ui, editor, project, document, rect);
+                draw_haul_pin_labels(ui, editor, project, document, rect, &mut space);
             }
             draw_machine_icons(ui, editor, rect);
             if labels.machines {
-                draw_machine_labels(ui, editor, &project.schedule, rect);
+                draw_machine_labels(ui, editor, &project.schedule, rect, &mut space);
             }
         });
         for (id, deltas) in &output.textures_delta.set {
@@ -1411,10 +1412,11 @@ fn draw_ui(
             painter.galley(rect.min + egui::vec2(6.0, 4.0), galley, root_ui.visuals().text_color());
         }
     }
-    draw_haul_pin_labels(root_ui, editor, project, document, canvas_rect);
+    let mut space = LabelSpace::new(canvas_rect, machine_icon_rects(root_ui, editor));
+    draw_haul_pin_labels(root_ui, editor, project, document, canvas_rect, &mut space);
     // Under the flows' read-out, which is what the pointer is asking for.
     draw_machine_icons(root_ui, editor, canvas_rect);
-    draw_machine_labels(root_ui, editor, &project.schedule, canvas_rect);
+    draw_machine_labels(root_ui, editor, &project.schedule, canvas_rect, &mut space);
     draw_haul_flows(root_ui, editor, canvas_rect);
     if editor.is_schedule_animation()
         && let Some(frame) = editor.video_export_frame
@@ -1997,12 +1999,51 @@ fn draw_video_frame_marker(ui: &egui::Ui, (width, height): (u32, u32), canvas_re
     );
 }
 
+/// Where Animate's labels go. Each takes the first of the places offered
+/// for it that is on the canvas and clear of the machine icons and of every
+/// label already placed, so labels move aside for one another rather than
+/// stacking; one with nowhere clear near its point is left out.
+struct LabelSpace {
+    canvas: egui::Rect,
+    taken: Vec<egui::Rect>,
+}
+
+impl LabelSpace {
+    fn new(canvas: egui::Rect, obstacles: Vec<egui::Rect>) -> Self {
+        Self { canvas, taken: obstacles }
+    }
+
+    fn place(&mut self, places: impl IntoIterator<Item = egui::Rect>) -> Option<egui::Rect> {
+        let rect = places
+            .into_iter()
+            .find(|rect| self.canvas.contains_rect(*rect) && !self.taken.iter().any(|taken| taken.intersects(*rect)))?;
+        self.taken.push(rect);
+        Some(rect)
+    }
+}
+
+/// Places for a label of `size` beside an obstacle `around`, nearest first:
+/// below it, above it, to its right and left, then a label's height further
+/// down and up.
+fn label_places(around: egui::Rect, size: egui::Vec2) -> [egui::Rect; 6] {
+    const GAP: f32 = 2.0;
+    let centred = |top: f32| egui::Rect::from_min_size(egui::pos2(around.center().x - size.x / 2.0, top), size);
+    let beside = |left: f32| egui::Rect::from_min_size(egui::pos2(left, around.center().y - size.y / 2.0), size);
+    [
+        centred(around.bottom() + GAP),
+        centred(around.top() - GAP - size.y),
+        beside(around.right() + GAP),
+        beside(around.left() - GAP - size.x),
+        centred(around.bottom() + 2.0 * GAP + size.y),
+        centred(around.top() - 2.0 * GAP - 2.0 * size.y),
+    ]
+}
+
 /// Destination points: the name, and what trucks do there, on a pill that
-/// stays legible over pale ground. Zoomed out, a label that would land on one
-/// already drawn gives way rather than stacking illegibly.
-fn draw_haul_pin_labels(ui: &egui::Ui, editor: &EditorState, project: &UiProjectView, document: &Document, canvas_rect: egui::Rect) {
+/// stays legible over pale ground, tied to its point by a leader. A label is
+/// moved round its point to keep clear of the others.
+fn draw_haul_pin_labels(ui: &egui::Ui, editor: &EditorState, project: &UiProjectView, document: &Document, canvas_rect: egui::Rect, space: &mut LabelSpace) {
     let scale = ui.ctx().pixels_per_point();
-    let mut placed: Vec<egui::Rect> = Vec::new();
     for ((x, y), role) in &editor.haul_pins {
         use crate::model::{haulage::NodeRole, schedule::DestinationKind};
         let (name, kind) = match role.destination() {
@@ -2025,12 +2066,25 @@ fn draw_haul_pin_labels(ui: &egui::Ui, editor: &EditorState, project: &UiProject
         job.append(&what, 6.0, egui::TextFormat::simple(egui::FontId::proportional(11.0), visuals.weak_text_color()));
         let galley = painter.layout_job(job);
         let anchor = egui::pos2(x / scale, y / scale);
-        let rect = egui::Rect::from_min_size(anchor + egui::vec2(10.0, -galley.size().y - 14.0), galley.size() + egui::vec2(12.0, 6.0));
-        if placed.iter().any(|other| other.intersects(rect)) {
-            continue;
-        }
-        placed.push(rect);
-        painter.line_segment([anchor, rect.left_bottom()], egui::Stroke::new(1.0, visuals.weak_text_color()));
+        let size = galley.size() + egui::vec2(12.0, 6.0);
+        // Up and to the right, as it always was where there is room; then
+        // round the point, and further up.
+        let (rise, reach) = (14.0, 10.0);
+        let places = [
+            egui::vec2(reach, -size.y - rise),
+            egui::vec2(-size.x - reach, -size.y - rise),
+            egui::vec2(reach, rise),
+            egui::vec2(-size.x - reach, rise),
+            egui::vec2(reach, -2.0 * size.y - rise - 4.0),
+            egui::vec2(-size.x - reach, -2.0 * size.y - rise - 4.0),
+        ]
+        .map(|offset| egui::Rect::from_min_size(anchor + offset, size));
+        let Some(rect) = space.place(places) else { continue };
+        let corner = [rect.left_top(), rect.right_top(), rect.left_bottom(), rect.right_bottom()]
+            .into_iter()
+            .min_by(|a, b| a.distance_sq(anchor).total_cmp(&b.distance_sq(anchor)))
+            .unwrap_or(rect.left_bottom());
+        painter.line_segment([anchor, corner], egui::Stroke::new(1.0, visuals.weak_text_color()));
         painter.rect(
             rect,
             widgets::toolbar::GROUP_CORNER_RADIUS,
@@ -2064,26 +2118,55 @@ fn machine_icon_groups(editor: &EditorState, scale: f32) -> Vec<(egui::Pos2, Vec
     groups
 }
 
-fn draw_machine_icons(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect) {
+/// One job's machine icons as drawn: the job's anchor, its machines, and
+/// each icon with where it goes.
+type IconGroup<'a> = (egui::Pos2, Vec<&'a crate::rendering::machines::MachineIcon>, Vec<(egui::TextureHandle, egui::Rect)>);
+
+/// Each icon group's icons, side by side and centred on the job they stand
+/// on.
+fn machine_icon_layout<'a>(ui: &egui::Ui, editor: &'a EditorState) -> Vec<IconGroup<'a>> {
     const GAP: f32 = 1.0;
+    machine_icon_groups(editor, ui.ctx().pixels_per_point())
+        .into_iter()
+        .map(|(at, members)| {
+            let badges: Vec<_> = members
+                .iter()
+                .filter_map(|icon| {
+                    let texture = machine_icon_texture(ui.ctx(), icon.model, icon.working)?;
+                    let size = texture.size_vec2();
+                    Some((texture, MACHINE_ICON_HEIGHT * size.x / size.y.max(1.0)))
+                })
+                .collect();
+            let width = badges.iter().map(|badge| badge.1 + GAP).sum::<f32>() - GAP;
+            let mut left = at.x - width / 2.0;
+            let placed = badges
+                .into_iter()
+                .map(|(texture, icon_width)| {
+                    let rect = egui::Rect::from_min_size(egui::pos2(left, at.y - MACHINE_ICON_HEIGHT / 2.0), egui::vec2(icon_width, MACHINE_ICON_HEIGHT));
+                    left += icon_width + GAP;
+                    (texture, rect)
+                })
+                .collect();
+            (at, members, placed)
+        })
+        .collect()
+}
+
+/// Where the machine icons stand, for labels to keep clear of.
+fn machine_icon_rects(ui: &egui::Ui, editor: &EditorState) -> Vec<egui::Rect> {
+    machine_icon_layout(ui, editor)
+        .into_iter()
+        .flat_map(|(.., icons)| icons.into_iter().map(|(_, rect)| rect))
+        .collect()
+}
+
+fn draw_machine_icons(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect) {
     if editor.animation_machine_icons.is_empty() {
         return;
     }
     let painter = ui.painter().with_clip_rect(canvas_rect);
-    for (at, members) in machine_icon_groups(editor, ui.ctx().pixels_per_point()) {
-        let badges: Vec<_> = members
-            .iter()
-            .filter_map(|icon| {
-                let texture = machine_icon_texture(ui.ctx(), icon.model, icon.working)?;
-                let size = texture.size_vec2();
-                Some((texture, MACHINE_ICON_HEIGHT * size.x / size.y.max(1.0)))
-            })
-            .collect();
-        let width = badges.iter().map(|badge| badge.1 + GAP).sum::<f32>() - GAP;
-        let mut left = at.x - width / 2.0;
-        for (texture, icon_width) in badges {
-            let rect = egui::Rect::from_min_size(egui::pos2(left, at.y - MACHINE_ICON_HEIGHT / 2.0), egui::vec2(icon_width, MACHINE_ICON_HEIGHT));
-            left += icon_width + GAP;
+    for (.., icons) in machine_icon_layout(ui, editor) {
+        for (texture, rect) in icons {
             if canvas_rect.intersects(rect) {
                 painter.image(texture.id(), rect, egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
             }
@@ -2093,35 +2176,43 @@ fn draw_machine_icons(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Re
 
 /// Each machine's name: under the model of one drawn close up, and under
 /// the icons of the rest - one line naming every machine on a job, in the
-/// order its icons run. Like the destination labels, one that would land on
-/// a label already drawn gives way.
-fn draw_machine_labels(ui: &egui::Ui, editor: &EditorState, plan: &crate::model::schedule::SchedulePlan, canvas_rect: egui::Rect) {
+/// order its icons run. A label that would land on another is moved round
+/// its machine, above or beside it, and is left out only when nothing near
+/// is clear.
+fn draw_machine_labels(ui: &egui::Ui, editor: &EditorState, plan: &crate::model::schedule::SchedulePlan, canvas_rect: egui::Rect, space: &mut LabelSpace) {
     let scale = ui.ctx().pixels_per_point();
     let name = |agent| plan.agent(agent).map(|agent| agent.name.as_str()).unwrap_or_default();
-    let mut lines: Vec<(egui::Pos2, String)> = editor
+    // What each label is placed round: a close-up model's point, or a job's
+    // row of icons.
+    let mut lines: Vec<(egui::Rect, String)> = editor
         .animation_machine_labels
         .iter()
-        .map(|label| (egui::pos2(label.at.0 / scale, label.at.1 / scale + 10.0), name(label.agent).to_owned()))
+        .map(|label| {
+            let at = egui::pos2(label.at.0 / scale, label.at.1 / scale);
+            (egui::Rect::from_center_size(at, egui::vec2(0.0, 16.0)), name(label.agent).to_owned())
+        })
         .collect();
     // Those at work last among the icons, as drawn, so they win a clash -
     // reversed here because the first label placed is the one kept.
-    for (at, members) in machine_icon_groups(editor, scale).into_iter().rev() {
+    for (at, members, icons) in machine_icon_layout(ui, editor).into_iter().rev() {
         let names: Vec<&str> = members.iter().map(|icon| name(icon.agent)).filter(|name| !name.is_empty()).collect();
-        lines.push((egui::pos2(at.x, at.y + MACHINE_ICON_HEIGHT / 2.0 + 2.0), names.join(" · ")));
+        let around = icons
+            .iter()
+            .map(|(_, rect)| *rect)
+            .reduce(egui::Rect::union)
+            .unwrap_or_else(|| egui::Rect::from_center_size(at, egui::Vec2::ZERO));
+        lines.push((around, names.join(" · ")));
     }
     let painter = ui.painter().with_clip_rect(canvas_rect);
     let visuals = ui.visuals();
-    let mut placed: Vec<egui::Rect> = Vec::new();
-    for (top_centre, text) in lines {
+    for (around, text) in lines {
         if text.is_empty() {
             continue;
         }
         let galley = painter.layout_no_wrap(text, egui::FontId::proportional(11.0), visuals.strong_text_color());
-        let rect = egui::Rect::from_min_size(top_centre - egui::vec2(galley.size().x / 2.0 + 5.0, 0.0), galley.size() + egui::vec2(10.0, 4.0));
-        if !canvas_rect.intersects(rect) || placed.iter().any(|other| other.intersects(rect)) {
+        let Some(rect) = space.place(label_places(around, galley.size() + egui::vec2(10.0, 4.0))) else {
             continue;
-        }
-        placed.push(rect);
+        };
         painter.rect_filled(rect, widgets::toolbar::GROUP_CORNER_RADIUS, visuals.window_fill().gamma_multiply(0.85));
         painter.galley(rect.min + egui::vec2(5.0, 2.0), galley, visuals.strong_text_color());
     }
