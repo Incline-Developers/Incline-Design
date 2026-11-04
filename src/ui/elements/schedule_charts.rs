@@ -238,6 +238,44 @@ fn scale_label(ui: &egui::Ui, pos: egui::Pos2, align: egui::Align2, text: String
     ui.painter().galley(rect.min, galley, color);
 }
 
+/// The step between a scale's marks: the smallest round number (a power of
+/// ten times 1, 2, 2.5, 3, 4 or 5) that puts no more than `marks` under `top`.
+fn scale_step(top: f64, marks: f64) -> f64 {
+    let mut exponent = (top / marks).log10().floor() as i32 - 1;
+    loop {
+        for multiple in [1.0, 2.0, 2.5, 3.0, 4.0, 5.0] {
+            let step = multiple * 10f64.powi(exponent);
+            if (top / step).floor() <= marks {
+                return step;
+            }
+        }
+        exponent += 1;
+    }
+}
+
+/// A light scale up a chart from zero: two or three round values, as many as
+/// its height parts clearly, each with a faint rule across, so a reading can
+/// be judged between them. A mark within
+/// a label's height of `avoid` (a line already labelled) is left out.
+fn draw_scale(ui: &egui::Ui, plot: egui::Rect, high: f64, avoid: Option<f32>, label: impl Fn(f64) -> String) {
+    if !(high.is_finite() && high > 0.0) {
+        return;
+    }
+    let rule = egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color.gamma_multiply(0.6));
+    ui.painter().hline(plot.x_range(), plot.bottom(), rule);
+    let marks = (plot.height() / 28.0).floor().clamp(2.0, 3.0);
+    let step = scale_step(high, f64::from(marks));
+    let mut value = step;
+    while value <= high * 0.97 {
+        let y = y_of(plot, value, 0.0, high);
+        if avoid.is_none_or(|avoid| (avoid - y).abs() > 14.0) {
+            ui.painter().hline(plot.x_range(), y, rule);
+            scale_label(ui, egui::pos2(plot.left() + 4.0, y - 1.0), egui::Align2::LEFT_BOTTOM, label(value));
+        }
+        value += step;
+    }
+}
+
 #[allow(clippy::too_many_arguments, reason = "one chart's whole context, passed once")]
 fn draw_chart(
     ui: &mut egui::Ui,
@@ -371,6 +409,8 @@ fn draw_chart(
                     );
                 }
             }
+            let capacity_y = chart.capacity.map(|capacity| y_of(plot, capacity, 0.0, high));
+            draw_scale(ui, plot, high, capacity_y, |value| tr!("inspector-tonnes", tonnes = format_tonnes(value)));
             let mut mesh = egui::Mesh::default();
             let mut line = Vec::new();
             for x in xs {
@@ -401,13 +441,6 @@ fn draw_chart(
                     egui::Align2::LEFT_BOTTOM,
                     tr!("charts-capacity", tonnes = format_tonnes(capacity.round())),
                 );
-            } else {
-                scale_label(
-                    ui,
-                    egui::pos2(plot.left() + 4.0, plot.top() - 2.0),
-                    egui::Align2::LEFT_BOTTOM,
-                    tr!("inspector-tonnes", tonnes = format_tonnes(peak.round())),
-                );
             }
             if let Some(hour) = pointer_h.filter(|hour| (0.0..end_h).contains(hour)) {
                 let mut lines = vec![bold_line(&chart.name, hour)];
@@ -424,7 +457,7 @@ fn draw_chart(
                 hover_lines = Some(lines);
             }
         }
-        ChartKind::Feed | ChartKind::Received if receipts.tonnes.iter().all(|tonnes| *tonnes <= 1e-6) => {
+        ChartKind::Received if receipts.tonnes.iter().all(|tonnes| *tonnes <= 1e-6) => {
             // A flat line at zero with a made-up scale says less than this.
             painter.text(
                 plot.center(),
@@ -435,7 +468,43 @@ fn draw_chart(
             );
         }
         ChartKind::Feed => {
-            let high = receipts.tonnes.iter().copied().fold(0.0, f64::max).max(1.0) * 1.08;
+            // Each day's limit, as the rate that would meet it over the day:
+            // a dashed line the feed is read against, so a day the crusher
+            // stands idle shows what it was to have taken.
+            let limit_of = |day: u32| match chart.destination {
+                DestinationId::Standalone(id) => plan.routing().crusher(id).and_then(|calendar| calendar.limit_at(CalendarPeriod(day))),
+                _ => None,
+            };
+            let days = (end_h / SCHEDULE_PERIOD_H).ceil().max(0.0) as u32;
+            let target_peak = (0..days).filter_map(limit_of).fold(0.0, f64::max) / SCHEDULE_PERIOD_H;
+            let fed = receipts.tonnes.iter().any(|tonnes| *tonnes > 1e-6);
+            let high = receipts.tonnes.iter().copied().fold(0.0, f64::max).max(target_peak).max(1.0) * 1.08;
+            if fed || target_peak > 0.0 {
+                draw_scale(ui, plot, high, None, |value| tr!("inspector-rate", rate = format_tonnes(value)));
+            }
+            let first_day = (view.start_seconds / GanttView::DAY).floor().max(0.0) as u32;
+            let last_day = ((view.end_seconds() / GanttView::DAY).ceil().max(0.0) as u32).min(days);
+            let target_stroke = egui::Stroke::new(1.25, strong.gamma_multiply(0.7));
+            for day in first_day..last_day {
+                let Some(limit) = limit_of(day).filter(|limit| *limit > 0.0) else { continue };
+                let left = view.x_of(f64::from(day) * GanttView::DAY, plot.left(), plot.width()).max(plot.left());
+                let right = view
+                    .x_of((f64::from(day + 1) * GanttView::DAY).min(end_h * GanttView::HOUR), plot.left(), plot.width())
+                    .min(plot.right());
+                if right > left {
+                    let y = y_of(plot, limit / SCHEDULE_PERIOD_H, 0.0, high);
+                    painter.add(egui::Shape::dashed_line(&[egui::pos2(left, y), egui::pos2(right, y)], target_stroke, 6.0, 4.0));
+                }
+            }
+            if !fed {
+                painter.text(
+                    plot.center(),
+                    egui::Align2::CENTER_CENTER,
+                    tr!("charts-nothing-received"),
+                    egui::FontId::proportional(12.0),
+                    weak,
+                );
+            }
             let mut mesh = egui::Mesh::default();
             for x in xs {
                 let Some((from, to)) = column_hours(view, plot, x, end_h) else { continue };
@@ -450,21 +519,12 @@ fn draw_chart(
                 );
             }
             painter.add(egui::Shape::mesh(mesh));
-            scale_label(
-                ui,
-                egui::pos2(plot.left() + 4.0, plot.top() - 2.0),
-                egui::Align2::LEFT_BOTTOM,
-                tr!("inspector-rate", rate = format_tonnes((high / 1.08).round())),
-            );
             if let Some(hour) = pointer_h.filter(|hour| (0.0..end_h).contains(hour)) {
                 let start = hour.floor();
                 let day = (hour / SCHEDULE_PERIOD_H).floor();
                 let day_start = day * SCHEDULE_PERIOD_H;
                 let (day_tonnes, _) = sum_over(receipts, None, day_start, (day_start + SCHEDULE_PERIOD_H).min(end_h));
-                let limit = match chart.destination {
-                    DestinationId::Standalone(id) => plan.routing().crusher(id).and_then(|calendar| calendar.limit_at(CalendarPeriod(day as u32))),
-                    _ => None,
-                };
+                let limit = limit_of(day as u32);
                 let mut lines = vec![
                     bold_line(&chart.name, hour),
                     tr!("charts-feed-hour", rate = format_tonnes(sum_over(receipts, None, start, start + 1.0).0.round())),
@@ -617,6 +677,7 @@ fn draw_chart(
         ChartKind::Received => {
             let total = receipts.tonnes.iter().sum::<f64>().max(1.0);
             let high = total * 1.08;
+            draw_scale(ui, plot, high, None, |value| tr!("inspector-tonnes", tonnes = format_tonnes(value)));
             let mut mesh = egui::Mesh::default();
             let mut line = Vec::new();
             // Running total from hour zero to each column's end; the columns
@@ -637,12 +698,6 @@ fn draw_chart(
             }
             painter.add(egui::Shape::mesh(mesh));
             painter.add(egui::Shape::line(line, egui::Stroke::new(1.5, RECEIVED_COLOR)));
-            scale_label(
-                ui,
-                egui::pos2(plot.left() + 4.0, plot.top() - 2.0),
-                egui::Align2::LEFT_BOTTOM,
-                tr!("inspector-tonnes", tonnes = format_tonnes(total.round())),
-            );
             if let Some(hour) = pointer_h.filter(|hour| (0.0..end_h).contains(hour)) {
                 hover_lines = Some(vec![
                     bold_line(&chart.name, hour),
@@ -672,6 +727,15 @@ fn draw_chart(
                 }
             }
         });
+    }
+}
+
+/// A count on a scale: whole, or to one place where the step is a half.
+fn trimmed(value: f64) -> String {
+    if (value - value.round()).abs() < 1e-9 {
+        format!("{value:.0}")
+    } else {
+        format!("{value:.1}")
     }
 }
 
@@ -742,6 +806,7 @@ fn draw_trucks(
         })
         .collect();
     let high = samples.iter().map(|(_, busy, fleet)| busy.max(*fleet)).fold(1.0, f64::max) * 1.1;
+    draw_scale(ui, plot, high, None, |value| tr!("charts-trucks-scale", trucks = trimmed(value)));
     for pair in samples.windows(2) {
         let [(x0, b0, f0), (x1, b1, f1)] = [pair[0], pair[1]];
         for (before, after, color, width) in [(b0, b1, INVENTORY_COLOR, 2.0), (f0, f1, ui.visuals().weak_text_color(), 1.0)] {
