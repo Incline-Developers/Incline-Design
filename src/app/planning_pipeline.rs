@@ -4,7 +4,10 @@
 //! The pipeline is *explicitly executed*. Opening a page, selecting a blast or
 //! moving a camera never finishes a calculation; Run to Step, Run All, and the
 //! Auto switch (which reruns stale steps once edits settle, see
-//! [`crate::app::App::auto_run_planning`]) do. What a page does is show the
+//! [`crate::app::App::auto_run_planning`]) do. The one exception is an edit
+//! to the blast or strip cuts, which runs Blasting and Dig Strips at once
+//! whether Auto is on or not: a cut has to show what it makes as soon as it
+//! is drawn. What a page does is show the
 //! stage status and the artifacts that are already there, so a scheduler can
 //! consume a completed run without any page having been opened at all.
 //!
@@ -281,6 +284,16 @@ impl PlanningPipeline {
         true
     }
 
+    /// Whether `stage` can run by itself now: nothing else is running, and
+    /// every stage before it is current for the inputs it has now.
+    fn can_run_alone(&self, stage: SolidsStep) -> bool {
+        !self.is_running()
+            && SolidsStep::ALL
+                .into_iter()
+                .take(stage.index())
+                .all(|earlier| self.stages[earlier.index()].state.is_current() && self.stage_inputs_match(earlier))
+    }
+
     /// The stage that has to run before `stage` can, if any.
     pub(crate) fn blocked_by(&self, stage: SolidsStep) -> Option<SolidsStep> {
         SolidsStep::ALL
@@ -502,6 +515,15 @@ impl crate::app::App<'_> {
             if !pipeline.is_running() {
                 pipeline.demand = None;
             }
+        }
+        // A cut is drawn to be seen, and the blasts and strips it makes are
+        // quick to work out in plan, so an edit that reaches no further back
+        // than the cuts runs Blasting and Dig Strips straight away, Auto or
+        // not. Auto is for Reserving, which cuts and measures every block.
+        if let Some(stage) = earliest_change.filter(|stage| matches!(stage, SolidsStep::Blasting | SolidsStep::DigStrips))
+            && self.planning_pipeline.as_ref().is_some_and(|pipeline| pipeline.can_run_alone(stage))
+        {
+            self.resume_planning_stages(SolidsStep::DigStrips);
         }
         self.advance_planning_run();
         if self.editor.is_schedule_context() {
