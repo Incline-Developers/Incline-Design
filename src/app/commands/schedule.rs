@@ -32,6 +32,7 @@ impl crate::app::App<'_> {
         match edit {
             ScheduleEdit::DeleteClass(id) => plan.class(*id).map(|class| class.name.clone()),
             ScheduleEdit::DeleteAgent(id) => plan.agent(*id).map(|agent| agent.name.clone()),
+            ScheduleEdit::DeleteCalendarView(id) => plan.calendar_views().view(*id).map(|view| view.name.clone()),
             ScheduleEdit::CopyBar(id) => plan.bar(*id).map(|bar| bar.name().to_owned()),
             ScheduleEdit::DeleteBars(ids) => Some(ids.iter().filter_map(|id| plan.bar(*id)).map(|bar| bar.name().to_owned()).collect::<Vec<_>>().join(", ")),
             ScheduleEdit::DuplicateOpeningLot { destination, lot: id } | ScheduleEdit::DeleteOpeningLot { destination, lot: id } => {
@@ -80,6 +81,32 @@ impl crate::app::App<'_> {
             ScheduleEdit::RenameAgent { agent, name } => self.rename_loader_agent(agent, name),
             ScheduleEdit::SetAgentClass { agent, class } => self.set_loader_agent_class(agent, class),
             ScheduleEdit::DeleteAgent(agent) => self.delete_loader_agent(agent),
+            ScheduleEdit::AddCalendarView(view) => {
+                let mut added = None;
+                self.edit_schedule(|plan| {
+                    added = Some(plan.calendar_views_mut().add(view));
+                    Ok(())
+                });
+                // Saving the Calendar's own view as a view of its own is
+                // what makes the changes made to it that view's.
+                if added.is_some() {
+                    self.editor.schedule_calendar.view = added;
+                    self.editor.schedule_calendar.unsaved_view = None;
+                }
+            }
+            ScheduleEdit::SetCalendarView(view) => self.edit_schedule(|plan| {
+                plan.calendar_views_mut().replace(view);
+                Ok(())
+            }),
+            ScheduleEdit::DeleteCalendarView(id) => {
+                self.edit_schedule(|plan| {
+                    plan.calendar_views_mut().remove(id);
+                    Ok(())
+                });
+                if self.editor.schedule_calendar.view == Some(id) {
+                    self.editor.schedule_calendar.view = None;
+                }
+            }
             ScheduleEdit::MoveMachineGroup { kind, before } => self.edit_schedule(|plan| {
                 plan.move_machine_group(kind, before);
                 Ok(())

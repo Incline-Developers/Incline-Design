@@ -18,7 +18,9 @@ use crate::{
         Document,
         schedule::{
             CalendarCell, CalendarCellEdit, CalendarField, CalendarPeriod, CrusherCell, CrusherCellEdit, CrusherOverride, DestinationId, DestinationKind, LoaderAgent,
-            SCHEDULE_PERIOD_H, SchedulePlan, StandaloneDestinationId, TruckCellEdit, TruckField, destinations,
+            LoaderAgentId, MachineKind, SCHEDULE_PERIOD_H, SchedulePlan, StandaloneDestinationId, TruckCellEdit, TruckField,
+            calendar_views::{CalendarView, CalendarViewId, Owner, RowKind, RowSet, Section},
+            destinations,
             grade_targets::{GradeTargetCellEdit, GradeTargetInput, GradeTargetValue},
             result::CalculatedSchedule,
             stockpile_operation::{PileMode, PileModeCellEdit},
@@ -53,7 +55,7 @@ const NEST_INDENT: f32 = 16.0;
 #[derive(Clone, Copy)]
 enum Row {
     Schedule,
-    Loaders,
+    Machines(MachineKind),
     Trucks,
     Destinations,
     Group(CalendarOwner),
@@ -266,18 +268,6 @@ fn destination_rows(plan: &SchedulePlan, document: &Document) -> Vec<Destination
         .collect()
 }
 
-/// The rows one destination group shows, which depend on what it does with what
-/// it receives.
-fn destination_row_kinds(kind: DestinationKind) -> &'static [CalendarRow] {
-    match kind {
-        // A crusher has no storage, so it has no inventory to report - and it
-        // has an editable daily budget and grade inputs beneath its receipts.
-        DestinationKind::Crusher => &[CalendarRow::CrusherLimit, CalendarRow::Received],
-        DestinationKind::Stockpile => &[CalendarRow::PileMode, CalendarRow::Received, CalendarRow::Reclaimed, CalendarRow::Cumulative],
-        DestinationKind::Dump => &[CalendarRow::Received, CalendarRow::Cumulative],
-    }
-}
-
 pub(crate) fn draw_details(
     ui: &mut egui::Ui,
     editor: &mut EditorState,
@@ -323,9 +313,27 @@ pub(crate) fn draw_details(
     };
     let destinations = destination_rows(plan, document);
     editor.schedule_calendar.visible_days = editor.schedule_calendar.visible_days.max(required_days(plan, figures.result));
-    // The grid in an island of its own; its run controls and its report are
-    // in the viewport bar.
+    // The grid in an island of its own, with the rows it shows chosen in one
+    // to its right; its run controls and its report are in the viewport bar.
     let mut layout = super::planning_setup::PlanningLayout::default();
+    let island = crate::ui::widgets::island::Island::new("schedule_calendar_rows_island", crate::ui::widgets::island::Side::Right)
+        .default_width(280.0)
+        .min_width(220.0)
+        .max_width(480.0)
+        .flush();
+    if editor.schedule_calendar.show_rows {
+        let island = island.show(ui, |ui, rect| {
+            draw_rows_panel(ui, rect, editor, plan, &destinations, &figures, project.active_session, commands)
+        });
+        layout.regions.extend(island.regions);
+        layout.grips.push(island.grip);
+    } else {
+        let strip = island.show_collapsed(ui);
+        layout.regions.push(strip.region);
+        if strip.clicked {
+            editor.schedule_calendar.show_rows = true;
+        }
+    }
     let rect = egui::CentralPanel::default()
         .frame(chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
         .show(ui, |ui| {
@@ -342,6 +350,254 @@ pub(crate) fn draw_details(
     layout.regions.push(rect);
     layout.rect = rect;
     layout
+}
+
+/// What a drag on the Rows panel holds: a machine group or a machine, which
+/// move in the fleet's own order, or a kind of row, which moves in the view.
+#[derive(Clone, Copy, PartialEq)]
+enum RowsDrag {
+    Group(MachineKind),
+    Machine(LoaderAgentId),
+    Row(RowSet, RowKind),
+}
+
+/// The Rows panel: which view the grid shows, and the headings, machines,
+/// trucks, destinations and kinds of row in it, each shown or not and the
+/// machines and rows dragged into order.
+///
+/// Changes to the Calendar's own view are held until saved as a view of their
+/// own; a saved view is changed in place.
+#[allow(clippy::too_many_arguments)]
+fn draw_rows_panel(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    editor: &mut EditorState,
+    plan: &SchedulePlan,
+    destinations: &[DestinationRow],
+    figures: &Figures<'_>,
+    session: u32,
+    commands: &mut Vec<UiCommand>,
+) {
+    use crate::ui::widgets::data_grid::{DataGrid, GridDrag, grid_choice_row, grid_named_row, grid_toggle_row};
+    if editor.schedule_calendar.view.is_some_and(|id| plan.calendar_views().view(id).is_none()) {
+        editor.schedule_calendar.view = None;
+    }
+    let saved = editor.schedule_calendar.view;
+    let mut view = active_view(editor, plan);
+    let before = view.clone();
+    let (mut close, mut save, mut delete) = (false, false, false);
+    let title = tr!("calendar-rows");
+    let (close_help, save_label, save_help, delete_label) = (
+        tr!("inspector-collapse"),
+        tr!("calendar-view-save"),
+        tr!("calendar-view-save-help"),
+        tr!("calendar-view-delete"),
+    );
+    let mut grid = DataGrid::new("schedule_calendar_rows", rect, &title).title_close(&close_help, &mut close);
+    grid = match saved {
+        Some(_) => grid.title_action(&delete_label, &delete_label, &mut delete),
+        None => grid.title_action(&save_label, &save_help, &mut save),
+    };
+    let mut moved = None;
+    let mut switched = false;
+    grid.show(ui, |ui| {
+        let everything = tr!("calendar-view-everything");
+        let unsaved = editor.schedule_calendar.unsaved_view.is_some();
+        let mut choice = saved;
+        let options: Vec<Option<CalendarViewId>> = std::iter::once(None).chain(plan.calendar_views().views().iter().map(|view| Some(view.id))).collect();
+        let name = |id: Option<CalendarViewId>| match id.and_then(|id| plan.calendar_views().view(id)) {
+            Some(view) => view.name.clone(),
+            None if unsaved => tr!("calendar-view-unsaved", view = everything.clone()),
+            None => everything.clone(),
+        };
+        if grid_choice_row(ui, "schedule_calendar_view", &tr!("calendar-view"), &mut choice, options, name, 0) {
+            editor.schedule_calendar.view = choice;
+            editor.schedule_calendar.unsaved_view = None;
+            view = active_view(editor, plan);
+            switched = true;
+        }
+        if saved.is_some() {
+            view_name_row(ui, &mut view, grid_named_row);
+        }
+
+        const GROUPS: u8 = 0;
+        let mut drag = GridDrag::new(ui, "schedule_calendar_rows_drag");
+        let mut shown = view.shows_section(Section::Value);
+        if grid_toggle_row(ui, &tr!("calendar-rows-value"), &mut shown, 0, true, false).0 {
+            view.set_section_shown(Section::Value, shown);
+        }
+        let ordered = plan.ordered_agents();
+        for (index, kind) in (0u8..).zip(plan.machine_groups()) {
+            let agents: Vec<_> = ordered.iter().filter(|agent| machine_kind(plan, agent.id) == kind).collect();
+            if agents.is_empty() {
+                continue;
+            }
+            let mut shown = view.shows_section(Section::Machines(kind));
+            let (flipped, heading) = grid_toggle_row(ui, &kind.group_label(), &mut shown, 0, true, true);
+            if flipped {
+                view.set_section_shown(Section::Machines(kind), shown);
+            }
+            let mut span = heading.rect;
+            if shown {
+                for agent in agents {
+                    let mut on = view.shows_owner(Owner::Machine(agent.id));
+                    let (flipped, response) = grid_toggle_row(ui, &agent.name, &mut on, 1, false, true);
+                    if flipped {
+                        view.set_owner_shown(Owner::Machine(agent.id), on);
+                    }
+                    drag.row(RowsDrag::Machine(agent.id), 1 + index, response.rect, &response);
+                    span = span.union(response.rect);
+                }
+                let set = RowSet::Machines(kind);
+                span = span.union(draw_row_kinds(ui, &mut view, &mut drag, set, 10 + index, None, figures));
+            }
+            drag.row(RowsDrag::Group(kind), GROUPS, span, &heading);
+        }
+        if !plan.trucks().classes.is_empty() {
+            let mut shown = view.shows_section(Section::Trucks);
+            if grid_toggle_row(ui, &tr!("schedule-calendar-trucks"), &mut shown, 0, true, false).0 {
+                view.set_section_shown(Section::Trucks, shown);
+            }
+            if shown {
+                for class in &plan.trucks().classes {
+                    let mut on = view.shows_owner(Owner::Truck(class.id));
+                    if grid_toggle_row(ui, &class.name, &mut on, 1, false, false).0 {
+                        view.set_owner_shown(Owner::Truck(class.id), on);
+                    }
+                }
+                draw_row_kinds(ui, &mut view, &mut drag, RowSet::Trucks, 20, None, figures);
+            }
+        }
+        if !destinations.is_empty() {
+            let mut shown = view.shows_section(Section::Destinations);
+            if grid_toggle_row(ui, &tr!("destination-destinations"), &mut shown, 0, true, false).0 {
+                view.set_section_shown(Section::Destinations, shown);
+            }
+            if shown {
+                for destination in destinations {
+                    let mut on = view.shows_owner(Owner::Destination(destination.id));
+                    let label = format!("{} · {}", destination.name, destination.kind.label());
+                    if grid_toggle_row(ui, &label, &mut on, 1, false, false).0 {
+                        view.set_owner_shown(Owner::Destination(destination.id), on);
+                    }
+                }
+                for (index, kind) in (0u8..).zip([DestinationKind::Stockpile, DestinationKind::Crusher, DestinationKind::Dump]) {
+                    if destinations.iter().any(|entry| entry.kind == kind) {
+                        draw_row_kinds(ui, &mut view, &mut drag, RowSet::Destinations(kind), 30 + index, Some(kind), figures);
+                    }
+                }
+            }
+        }
+        moved = drag.finish(ui);
+    });
+    match moved {
+        Some((RowsDrag::Group(kind), before)) => {
+            let before = match before {
+                Some(RowsDrag::Group(before)) => Some(before),
+                _ => None,
+            };
+            commands.push(UiCommand::schedule(session, ScheduleEdit::MoveMachineGroup { kind, before }));
+        }
+        Some((RowsDrag::Machine(agent), before)) => {
+            let before = match before {
+                Some(RowsDrag::Machine(before)) => Some(before),
+                _ => None,
+            };
+            commands.push(UiCommand::schedule(session, ScheduleEdit::MoveMachine { agent, before }));
+        }
+        Some((RowsDrag::Row(set, kind), before)) => {
+            let before = match before {
+                Some(RowsDrag::Row(_, before)) => Some(before),
+                _ => None,
+            };
+            view.move_row(set, kind, before, designed_rows(set));
+        }
+        None => {}
+    }
+    if close {
+        editor.schedule_calendar.show_rows = false;
+    }
+    // Showing another view is not an edit to the one that was showing.
+    if switched {
+        return;
+    }
+    if delete && let Some(id) = saved {
+        commands.push(UiCommand::schedule(session, ScheduleEdit::DeleteCalendarView(id)));
+        return;
+    }
+    if save {
+        let name = crate::model::schedule::suggested_name(&tr!("calendar-view-default-name"), plan.calendar_views().views().iter().map(|view| view.name.clone()));
+        let mut added = CalendarView::default().with_layout_of(&view);
+        added.name = name;
+        commands.push(UiCommand::schedule(session, ScheduleEdit::AddCalendarView(added)));
+        return;
+    }
+    if view != before {
+        if saved.is_some() {
+            commands.push(UiCommand::schedule(session, ScheduleEdit::SetCalendarView(view)));
+        } else {
+            editor.schedule_calendar.unsaved_view = (!view.shows_everything()).then_some(view);
+        }
+    }
+}
+
+/// A saved view's name, typed in place and kept once the field is left.
+fn view_name_row(ui: &mut egui::Ui, view: &mut CalendarView, named_row: fn(&mut egui::Ui, &str, usize) -> (egui::Rect, egui::Response)) {
+    let (cell, _) = named_row(ui, &tr!("calendar-view-name"), 0);
+    if !cell.is_positive() {
+        return;
+    }
+    let id = ui.make_persistent_id(("schedule_calendar_view_name", view.id));
+    let mut text = ui.data(|data| data.get_temp::<String>(id)).unwrap_or_else(|| view.name.clone());
+    let response = ui.put(cell, egui::TextEdit::singleline(&mut text));
+    if response.changed() {
+        ui.data_mut(|data| data.insert_temp(id, text.clone()));
+    }
+    if response.lost_focus() {
+        ui.data_mut(|data| data.remove::<String>(id));
+        let name = text.trim();
+        if !name.is_empty() {
+            view.name = name.to_owned();
+        }
+    }
+}
+
+/// One set's kinds of row under a heading of their own, each shown or not and
+/// dragged into order. The rect they took.
+fn draw_row_kinds(
+    ui: &mut egui::Ui,
+    view: &mut CalendarView,
+    drag: &mut crate::ui::widgets::data_grid::GridDrag<RowsDrag>,
+    set: RowSet,
+    run: u8,
+    destination: Option<DestinationKind>,
+    figures: &Figures<'_>,
+) -> egui::Rect {
+    let heading = match destination {
+        Some(kind) => tr!("calendar-rows-of", kind = kind.label()),
+        None => tr!("calendar-rows-section-rows"),
+    };
+    let top = ui.cursor().top();
+    crate::ui::widgets::data_grid::grid_separator_row(ui, &heading, 1);
+    for kind in view.ordered(set, designed_rows(set)) {
+        let label = match calendar_row(kind) {
+            Some(row) => {
+                let machine = match set {
+                    RowSet::Machines(kind) => Some(kind),
+                    _ => None,
+                };
+                owned_row_label(row, machine, destination, figures)
+            }
+            None => tr!("calendar-rows-grades"),
+        };
+        let mut on = view.shows_row(set, kind);
+        let (flipped, response) = crate::ui::widgets::data_grid::grid_toggle_row(ui, &label, &mut on, 2, false, true);
+        if flipped {
+            view.set_row_shown(set, kind, on);
+        }
+        drag.row(RowsDrag::Row(set, kind), run, response.rect, &response);
+    }
+    egui::Rect::from_min_max(egui::pos2(ui.max_rect().left(), top), egui::pos2(ui.max_rect().right(), ui.cursor().top()))
 }
 
 /// The report export: how to group the rows, then copy or save. Built from
@@ -457,37 +713,81 @@ fn required_days(plan: &SchedulePlan, result: Option<&CalculatedSchedule>) -> u3
     14_u32.max(override_day).max(bar_day).max(calculated_day)
 }
 
-fn rows(plan: &SchedulePlan, destinations: &[DestinationRow], editor: &EditorState) -> Vec<Row> {
-    let mut rows = vec![Row::Schedule, Row::Field(CalendarOwner::Schedule, CalendarRow::Value), Row::Loaders];
-    for agent in plan.ordered_agents() {
-        let owner = CalendarOwner::Loader(agent.id);
-        rows.push(Row::Group(owner));
-        if !editor.schedule_calendar.collapsed.contains(&owner) {
-            rows.extend(machine_rows(plan, agent.id).iter().map(|row| Row::Field(owner, *row)));
-        }
+/// The view the grid shows: changes to the Calendar's own not yet saved, a
+/// saved view, or the Calendar's own, which shows everything.
+fn active_view(editor: &EditorState, plan: &SchedulePlan) -> CalendarView {
+    if let Some(view) = &editor.schedule_calendar.unsaved_view {
+        return view.clone();
     }
-    if !plan.trucks().classes.is_empty() {
-        rows.push(Row::Trucks);
-        for class in &plan.trucks().classes {
-            let owner = CalendarOwner::Truck(class.id);
+    editor.schedule_calendar.view.and_then(|id| plan.calendar_views().view(id)).cloned().unwrap_or_default()
+}
+
+fn machine_kind(plan: &SchedulePlan, agent: LoaderAgentId) -> MachineKind {
+    plan.agent_kind(agent).unwrap_or_default()
+}
+
+/// The rows the grid draws, headings and groups among them, in the order and
+/// with the rows the view in use shows.
+fn rows(plan: &SchedulePlan, destinations: &[DestinationRow], editor: &EditorState) -> Vec<Row> {
+    let view = active_view(editor, plan);
+    let mut rows = Vec::new();
+    if view.shows_section(Section::Value) {
+        rows.extend([Row::Schedule, Row::Field(CalendarOwner::Schedule, CalendarRow::Value)]);
+    }
+    let ordered = plan.ordered_agents();
+    for kind in plan.machine_groups() {
+        let agents: Vec<_> = ordered
+            .iter()
+            .filter(|agent| machine_kind(plan, agent.id) == kind && view.shows_owner(Owner::Machine(agent.id)))
+            .collect();
+        if agents.is_empty() || !view.shows_section(Section::Machines(kind)) {
+            continue;
+        }
+        rows.push(Row::Machines(kind));
+        let fields = shown_rows(&view, RowSet::Machines(kind));
+        for agent in agents {
+            let owner = CalendarOwner::Loader(agent.id);
             rows.push(Row::Group(owner));
             if !editor.schedule_calendar.collapsed.contains(&owner) {
-                rows.extend(TRUCK_ROWS.iter().map(|row| Row::Field(owner, *row)));
+                rows.extend(fields.iter().filter_map(|kind| calendar_row(*kind)).map(|row| Row::Field(owner, row)));
             }
         }
     }
-    if !destinations.is_empty() {
-        rows.push(Row::Destinations);
-        for destination in destinations {
-            let owner = CalendarOwner::Destination(destination.id);
+    let classes: Vec<_> = plan.trucks().classes.iter().filter(|class| view.shows_owner(Owner::Truck(class.id))).collect();
+    if !classes.is_empty() && view.shows_section(Section::Trucks) {
+        rows.push(Row::Trucks);
+        let fields = shown_rows(&view, RowSet::Trucks);
+        for class in classes {
+            let owner = CalendarOwner::Truck(class.id);
             rows.push(Row::Group(owner));
             if !editor.schedule_calendar.collapsed.contains(&owner) {
-                rows.extend(destination_row_kinds(destination.kind).iter().map(|row| Row::Field(owner, *row)));
-                rows.extend(destination_grade_rows(plan, destination, editor).into_iter().map(|row| Row::Field(owner, row)));
+                rows.extend(fields.iter().filter_map(|kind| calendar_row(*kind)).map(|row| Row::Field(owner, row)));
+            }
+        }
+    }
+    let shown: Vec<_> = destinations.iter().filter(|entry| view.shows_owner(Owner::Destination(entry.id))).collect();
+    if !shown.is_empty() && view.shows_section(Section::Destinations) {
+        rows.push(Row::Destinations);
+        for destination in shown {
+            let owner = CalendarOwner::Destination(destination.id);
+            rows.push(Row::Group(owner));
+            if editor.schedule_calendar.collapsed.contains(&owner) {
+                continue;
+            }
+            for kind in shown_rows(&view, RowSet::Destinations(destination.kind)) {
+                match calendar_row(kind) {
+                    Some(row) => rows.push(Row::Field(owner, row)),
+                    None => rows.extend(destination_grade_rows(plan, destination, editor).into_iter().map(|row| Row::Field(owner, row))),
+                }
             }
         }
     }
     rows
+}
+
+/// `set`'s rows the view shows, in its order.
+fn shown_rows(view: &CalendarView, set: RowSet) -> Vec<RowKind> {
+    view.ordered(set, designed_rows(set)).into_iter().filter(|kind| view.shows_row(set, *kind)).collect()
 }
 
 /// A crusher's grade rows, shared by drawing, keyboard navigation and
@@ -509,13 +809,13 @@ fn destination_grade_rows(plan: &SchedulePlan, destination: &DestinationRow, edi
 
 /// The rows one truck class shows, in drawn order: three authored, and the
 /// truck-hours a calculated schedule used beneath them.
-const TRUCK_ROWS: [CalendarRow; 6] = [
-    CalendarRow::Truck(TruckField::Units),
-    CalendarRow::Truck(TruckField::Availability),
-    CalendarRow::Truck(TruckField::Utilisation),
-    CalendarRow::TruckHours,
-    CalendarRow::TruckCycle,
-    CalendarRow::TruckTonneKm,
+const TRUCK_ROWS: [RowKind; 6] = [
+    RowKind::TruckUnits,
+    RowKind::TruckAvailability,
+    RowKind::TruckUtilisation,
+    RowKind::TruckHours,
+    RowKind::TruckCycle,
+    RowKind::TruckTonneKm,
 ];
 
 /// The rows one loader group shows, in drawn order.
@@ -530,34 +830,63 @@ const TRUCK_ROWS: [CalendarRow; 6] = [
 /// What is set first and what the schedule worked out after, as every group
 /// lists them: the inputs in one run to move through and type into, rather
 /// than broken up by figures that cannot be edited.
-const LOADER_ROWS: [CalendarRow; 9] = [
-    CalendarRow::Input(CalendarField::Availability),
-    CalendarRow::Input(CalendarField::Utilisation),
-    CalendarRow::Input(CalendarField::Rate),
-    CalendarRow::Input(CalendarField::ReclaimRate),
-    CalendarRow::Input(CalendarField::UtilisationTarget),
-    CalendarRow::Input(CalendarField::UtilisationIncentive),
-    CalendarRow::DigTonnes,
-    CalendarRow::ReclaimTonnes,
-    CalendarRow::ScheduledUtilisation,
+const LOADER_ROWS: [RowKind; 9] = [
+    RowKind::Availability,
+    RowKind::Utilisation,
+    RowKind::Rate,
+    RowKind::ReclaimRate,
+    RowKind::UtilisationTarget,
+    RowKind::UtilisationIncentive,
+    RowKind::DigTonnes,
+    RowKind::ReclaimTonnes,
+    RowKind::ScheduledUtilisation,
 ];
 
 /// A dozer's, drill's or MPU's rows: its time and its rate, and what it got
 /// done each day. It neither digs nor reclaims.
-const DRILL_BLAST_ROWS: [CalendarRow; 4] = [
-    CalendarRow::Input(CalendarField::Availability),
-    CalendarRow::Input(CalendarField::Utilisation),
-    CalendarRow::Input(CalendarField::Rate),
-    CalendarRow::BlastWork,
-];
+const DRILL_BLAST_ROWS: [RowKind; 4] = [RowKind::Availability, RowKind::Utilisation, RowKind::Rate, RowKind::BlastWork];
 
-/// The rows one machine's group shows.
-fn machine_rows(plan: &SchedulePlan, agent: crate::model::schedule::LoaderAgentId) -> &'static [CalendarRow] {
-    if plan.agent_kind(agent).is_some_and(crate::model::schedule::MachineKind::is_drill_blast) {
-        &DRILL_BLAST_ROWS
-    } else {
-        &LOADER_ROWS
+/// The rows a set has, in the Calendar's own order. A destination's depend
+/// on what it does with what it receives: a crusher has no storage, so no
+/// inventory to report, but an editable daily budget and grade rows.
+fn designed_rows(set: RowSet) -> &'static [RowKind] {
+    match set {
+        RowSet::Machines(kind) if kind.is_drill_blast() => &DRILL_BLAST_ROWS,
+        RowSet::Machines(_) => &LOADER_ROWS,
+        RowSet::Trucks => &TRUCK_ROWS,
+        RowSet::Destinations(DestinationKind::Crusher) => &[RowKind::CrusherLimit, RowKind::Received, RowKind::Grades],
+        RowSet::Destinations(DestinationKind::Stockpile) => &[RowKind::PileMode, RowKind::Received, RowKind::Reclaimed, RowKind::Cumulative],
+        RowSet::Destinations(DestinationKind::Dump) => &[RowKind::Received, RowKind::Cumulative],
     }
+}
+
+/// The grid row a kind of row is, or `None` for a crusher's grades, which
+/// are a row per tracked grade.
+fn calendar_row(kind: RowKind) -> Option<CalendarRow> {
+    Some(match kind {
+        RowKind::Availability => CalendarRow::Input(CalendarField::Availability),
+        RowKind::Utilisation => CalendarRow::Input(CalendarField::Utilisation),
+        RowKind::Rate => CalendarRow::Input(CalendarField::Rate),
+        RowKind::ReclaimRate => CalendarRow::Input(CalendarField::ReclaimRate),
+        RowKind::UtilisationTarget => CalendarRow::Input(CalendarField::UtilisationTarget),
+        RowKind::UtilisationIncentive => CalendarRow::Input(CalendarField::UtilisationIncentive),
+        RowKind::DigTonnes => CalendarRow::DigTonnes,
+        RowKind::ReclaimTonnes => CalendarRow::ReclaimTonnes,
+        RowKind::ScheduledUtilisation => CalendarRow::ScheduledUtilisation,
+        RowKind::BlastWork => CalendarRow::BlastWork,
+        RowKind::TruckUnits => CalendarRow::Truck(TruckField::Units),
+        RowKind::TruckAvailability => CalendarRow::Truck(TruckField::Availability),
+        RowKind::TruckUtilisation => CalendarRow::Truck(TruckField::Utilisation),
+        RowKind::TruckHours => CalendarRow::TruckHours,
+        RowKind::TruckCycle => CalendarRow::TruckCycle,
+        RowKind::TruckTonneKm => CalendarRow::TruckTonneKm,
+        RowKind::CrusherLimit => CalendarRow::CrusherLimit,
+        RowKind::PileMode => CalendarRow::PileMode,
+        RowKind::Received => CalendarRow::Received,
+        RowKind::Reclaimed => CalendarRow::Reclaimed,
+        RowKind::Cumulative => CalendarRow::Cumulative,
+        RowKind::Grades => return None,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -769,7 +1098,7 @@ fn draw_row(
     // in that level's own colour. Unbroken down the column, so a loader's
     // three settings read as being inside the loader, which is inside Loaders.
     let depth = match row {
-        Row::Schedule | Row::Loaders | Row::Trucks | Row::Destinations => 0,
+        Row::Schedule | Row::Machines(_) | Row::Trucks | Row::Destinations => 0,
         Row::Group(_) | Row::Field(CalendarOwner::Schedule, _) => 1,
         Row::Field(_, CalendarRow::GradeInput(..)) => 3,
         Row::Field(..) => 2,
@@ -784,10 +1113,10 @@ fn draw_row(
     let indent = depth as f32 * NEST_INDENT;
     let label_start = hierarchy.left() + indent;
     match row {
-        Row::Schedule | Row::Loaders | Row::Trucks | Row::Destinations => {
+        Row::Schedule | Row::Machines(_) | Row::Trucks | Row::Destinations => {
             let label = match row {
                 Row::Schedule => tr!("schedule-calendar-schedule"),
-                Row::Loaders => tr!("schedule-calendar-loaders"),
+                Row::Machines(kind) => kind.group_label(),
                 Row::Trucks => tr!("schedule-calendar-trucks"),
                 _ => tr!("destination-destinations"),
             };
@@ -856,11 +1185,7 @@ fn draw_row(
                 CalendarOwner::Loader(agent) => plan.agent_kind(agent).filter(|kind| kind.is_drill_blast()),
                 _ => None,
             };
-            let label = match (kind, machine) {
-                (CalendarRow::Input(CalendarField::Rate), Some(machine)) => tr!("machine-work-rate", unit = machine.rate_unit()),
-                (CalendarRow::BlastWork, Some(machine)) => tr!("schedule-calendar-blast-work", unit = machine.activity().map_or("", |activity| activity.unit())),
-                _ => row_label(kind, destination_kind, &figures.currency, figures),
-            };
+            let label = owned_row_label(kind, machine, destination_kind, figures);
             if let (CalendarRow::GradeActual(field), CalendarOwner::Destination(destination)) = (kind, owner) {
                 // The received grade heads its target's inputs, which fold
                 // away beneath it: the grade is the summary, the band detail.
@@ -958,6 +1283,16 @@ fn draw_row(
 
 /// What one row is called. A crusher's receipts are what it *processed*, and a
 /// stockpile's balance is its closing inventory, opening stock included.
+/// A row's label under its owner: a dozer's, drill's or MPU's rate and work
+/// in that machine's own unit, any other row as [`row_label`] has it.
+fn owned_row_label(row: CalendarRow, machine: Option<MachineKind>, destination: Option<DestinationKind>, figures: &Figures<'_>) -> String {
+    match (row, machine.filter(|kind| kind.is_drill_blast())) {
+        (CalendarRow::Input(CalendarField::Rate), Some(machine)) => tr!("machine-work-rate", unit = machine.rate_unit()),
+        (CalendarRow::BlastWork, Some(machine)) => tr!("schedule-calendar-blast-work", unit = machine.activity().map_or("", |activity| activity.unit())),
+        _ => row_label(row, destination, &figures.currency, figures),
+    }
+}
+
 fn row_label(row: CalendarRow, destination: Option<DestinationKind>, currency: &str, figures: &Figures<'_>) -> String {
     match row {
         CalendarRow::Input(CalendarField::Availability) => tr!("schedule-calendar-availability"),
@@ -2096,34 +2431,17 @@ enum Nav {
     Down,
 }
 
-/// Every row a loader group shows, in drawn order - the calculated row
+/// Every row of cells the grid draws, in drawn order - the calculated rows
 /// included. Row numbers are what a pasted rectangle is measured against, so
-/// leaving it out here would land pasted values on the wrong loader.
+/// leaving one out here would land pasted values on the wrong loader.
 fn grid_rows(plan: &SchedulePlan, destinations: &[DestinationRow], editor: &EditorState) -> Vec<(CalendarOwner, CalendarRow)> {
-    let mut rows = vec![(CalendarOwner::Schedule, CalendarRow::Value)];
-    for agent in plan.ordered_agents() {
-        let owner = CalendarOwner::Loader(agent.id);
-        if editor.schedule_calendar.collapsed.contains(&owner) {
-            continue;
-        }
-        rows.extend(machine_rows(plan, agent.id).iter().map(|row| (owner, *row)));
-    }
-    for class in &plan.trucks().classes {
-        let owner = CalendarOwner::Truck(class.id);
-        if editor.schedule_calendar.collapsed.contains(&owner) {
-            continue;
-        }
-        rows.extend(TRUCK_ROWS.iter().map(|row| (owner, *row)));
-    }
-    for destination in destinations {
-        let owner = CalendarOwner::Destination(destination.id);
-        if editor.schedule_calendar.collapsed.contains(&owner) {
-            continue;
-        }
-        rows.extend(destination_row_kinds(destination.kind).iter().map(|row| (owner, *row)));
-        rows.extend(destination_grade_rows(plan, destination, editor).into_iter().map(|row| (owner, row)));
-    }
-    rows
+    rows(plan, destinations, editor)
+        .into_iter()
+        .filter_map(|row| match row {
+            Row::Field(owner, row) => Some((owner, row)),
+            _ => None,
+        })
+        .collect()
 }
 
 fn address_index(editor: &EditorState, plan: &SchedulePlan, destinations: &[DestinationRow], address: CalendarCellAddress) -> Option<(usize, u32)> {

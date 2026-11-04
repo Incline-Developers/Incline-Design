@@ -112,6 +112,12 @@ fn framed_pane<R>(ui: &mut egui::Ui, id: &str, rect: egui::Rect, title: &str, ex
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(4.0);
+                if let Some((tooltip, clicked)) = extras.close {
+                    *clicked |= ui
+                        .add(egui::Button::image(crate::ui::themed_icon!(ui, "close_project.svg")).frame(false))
+                        .on_hover_text(tooltip)
+                        .clicked();
+                }
                 if let Some((tooltip, clicked)) = extras.add {
                     *clicked |= add_button(ui, (id, "title_add"), tooltip).clicked();
                 }
@@ -177,6 +183,9 @@ struct TitleExtras<'a> {
     toggle: Option<(&'a str, &'a mut bool)>,
     /// A button at the right that acts on the whole pane, with its tooltip.
     action: Option<(&'a str, &'a str, &'a mut bool)>,
+    /// A close button at the far right, for a pane in a panel that folds
+    /// away, with its tooltip.
+    close: Option<(&'a str, &'a mut bool)>,
 }
 
 /// One row in a [`DataGrid`].
@@ -330,6 +339,43 @@ pub(crate) fn grid_checkbox_row(ui: &mut egui::Ui, label: &str, value: &mut bool
     }
     let box_rect = egui::Rect::from_min_max(cell.min, egui::pos2((cell.left() + 24.0).min(cell.right()), cell.bottom()));
     ui.put(box_rect, egui::Checkbox::without_text(value)).changed()
+}
+
+/// One thing that is shown or not: a box and its name, indented by `depth`,
+/// the name bold for a heading. A click anywhere on the row flips it; with
+/// `draggable`, the row can also be dragged, for a [`GridDrag`]. Returns
+/// whether it was flipped, and the row's response.
+pub(crate) fn grid_toggle_row(ui: &mut egui::Ui, label: &str, shown: &mut bool, depth: usize, heading: bool, draggable: bool) -> (bool, egui::Response) {
+    let height = grid_row_height(ui);
+    let sense = if draggable { egui::Sense::click_and_drag() } else { egui::Sense::click() };
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), sense);
+    let (fill, stroke, color) = {
+        let visuals = ui.visuals();
+        let fill = if response.hovered() {
+            visuals.widgets.hovered.bg_fill
+        } else if heading {
+            visuals.widgets.noninteractive.bg_fill
+        } else {
+            super::tree_row_colors(ui).1
+        };
+        let color = if *shown { visuals.text_color() } else { visuals.weak_text_color() };
+        (fill, visuals.widgets.noninteractive.bg_stroke, color)
+    };
+    ui.painter().rect_filled(rect, 0.0, fill);
+    ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], stroke);
+    let left = rect.left() + 8.0 + SUB_INDENT * depth as f32;
+    let box_rect = egui::Rect::from_min_size(egui::pos2(left, rect.top()), egui::vec2(20.0, height));
+    let mut flipped = ui.put(box_rect, egui::Checkbox::without_text(shown)).changed();
+    if response.clicked() {
+        *shown = !*shown;
+        flipped = true;
+    }
+    let name_rect = egui::Rect::from_min_max(egui::pos2(box_rect.right() - 4.0, rect.top()), rect.max);
+    if name_rect.is_positive() {
+        let text = if heading { bold(label) } else { egui::RichText::new(label) };
+        paint_cell_text(ui, name_rect, text, color);
+    }
+    (flipped, response)
 }
 
 /// One named choice from a fixed set of options.
@@ -959,6 +1005,13 @@ impl<'a> DataGrid<'a> {
     /// the pane; `clicked` is set when it is pressed.
     pub(crate) fn title_action(mut self, label: &'a str, tooltip: &'a str, clicked: &'a mut bool) -> Self {
         self.extras.action = Some((label, tooltip, clicked));
+        self
+    }
+
+    /// A close button at the far right of the title strip; `clicked` is set
+    /// when it is pressed.
+    pub(crate) fn title_close(mut self, tooltip: &'a str, clicked: &'a mut bool) -> Self {
+        self.extras.close = Some((tooltip, clicked));
         self
     }
 

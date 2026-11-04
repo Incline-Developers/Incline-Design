@@ -6158,6 +6158,8 @@ impl UiCommand {
                 ScheduleEdit::DeleteClass(_) => report(tr!("schedule-delete-class"), String::new()),
                 ScheduleEdit::AddAgent { name, .. } => report(tr!("schedule-new-agent"), name.clone()),
                 ScheduleEdit::DeleteAgent(_) => report(tr!("schedule-delete-agent"), String::new()),
+                ScheduleEdit::AddCalendarView(view) => report(tr!("calendar-view-save"), view.name.clone()),
+                ScheduleEdit::DeleteCalendarView(_) => report(tr!("calendar-view-delete"), String::new()),
                 ScheduleEdit::SetCalendarCells { edits } => report(tr!("schedule-calendar-edit"), tr!("schedule-calendar-cells-updated", count = edits.len().to_string())),
                 ScheduleEdit::AddBar { name, .. } => report(tr!("schedule-new-bar"), name.clone()),
                 ScheduleEdit::AddReclaimBar { name, .. } => report(tr!("reclaim-add-bar"), name.clone()),
@@ -6222,6 +6224,7 @@ impl UiCommand {
                 | ScheduleEdit::SetAgentClass { .. }
                 | ScheduleEdit::MoveMachineGroup { .. }
                 | ScheduleEdit::MoveMachine { .. }
+                | ScheduleEdit::SetCalendarView(_)
                 | ScheduleEdit::RenameBar { .. }
                 | ScheduleEdit::SetTonnageField(_)
                 | ScheduleEdit::SetUnmeasuredAsZero(_)
@@ -7776,6 +7779,11 @@ pub(crate) enum ScheduleEdit {
         class: crate::model::schedule::LoaderClassId,
     },
     DeleteAgent(crate::model::schedule::LoaderAgentId),
+    /// Save a Calendar view under its name, and show it.
+    AddCalendarView(crate::model::schedule::calendar_views::CalendarView),
+    /// Replace a saved Calendar view.
+    SetCalendarView(crate::model::schedule::calendar_views::CalendarView),
+    DeleteCalendarView(crate::model::schedule::calendar_views::CalendarViewId),
     /// Move a group of machines to just before another group, or to the end.
     MoveMachineGroup {
         kind: crate::model::schedule::MachineKind,
@@ -8932,6 +8940,13 @@ pub(crate) struct ScheduleCalendarView {
     /// A cell to scroll into view on the next frame, once its row is laid
     /// out.
     pub(crate) reveal: Option<CalendarCellAddress>,
+    /// The saved view the grid shows, or the Calendar's own (everything).
+    pub(crate) view: Option<crate::model::schedule::calendar_views::CalendarViewId>,
+    /// Changes made to the Calendar's own view, not yet saved as a view of
+    /// their own. Saved views are edited in place.
+    pub(crate) unsaved_view: Option<crate::model::schedule::calendar_views::CalendarView>,
+    /// Whether the Rows panel is open rather than folded to its strip.
+    pub(crate) show_rows: bool,
 }
 
 impl Default for ScheduleCalendarView {
@@ -8948,6 +8963,9 @@ impl Default for ScheduleCalendarView {
             mode_menu: None,
             error: None,
             reveal: None,
+            view: None,
+            unsaved_view: None,
+            show_rows: true,
         }
     }
 }

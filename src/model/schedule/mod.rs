@@ -14,6 +14,7 @@
 
 pub(crate) mod animation;
 pub(crate) mod calendar;
+pub(crate) mod calendar_views;
 pub(crate) mod cashflow;
 pub(crate) mod delays;
 pub(crate) mod destinations;
@@ -829,6 +830,9 @@ pub(crate) struct SchedulePlan {
     /// The order the fleet is listed in; see [`MachineOrder`].
     #[serde(default)]
     machine_order: MachineOrder,
+    /// The Calendar's saved views; see [`calendar_views`].
+    #[serde(default)]
+    calendar_views: calendar_views::CalendarViews,
 }
 
 /// The order the fleet is listed in: machine kinds as groups, and machines
@@ -911,6 +915,7 @@ impl Default for SchedulePlan {
             periods: periods::SchedulePeriods::default(),
             auto_run: AutoRun::default(),
             machine_order: MachineOrder::default(),
+            calendar_views: calendar_views::CalendarViews::default(),
         }
     }
 }
@@ -961,6 +966,7 @@ impl SchedulePlan {
             && self.drill_blast.is_pristine()
             && self.periods == periods::SchedulePeriods::default()
             && self.machine_order == MachineOrder::default()
+            && self.calendar_views.is_empty()
     }
 
     /// No visible content or retired identities to preserve in a save/import.
@@ -2014,6 +2020,14 @@ impl SchedulePlan {
         classes
     }
 
+    pub(crate) fn calendar_views(&self) -> &calendar_views::CalendarViews {
+        &self.calendar_views
+    }
+
+    pub(crate) fn calendar_views_mut(&mut self) -> &mut calendar_views::CalendarViews {
+        &mut self.calendar_views
+    }
+
     /// Move a group of machines to just before `before`, or to the end.
     pub(crate) fn move_machine_group(&mut self, kind: MachineKind, before: Option<MachineKind>) {
         let mut groups = self.machine_groups();
@@ -2314,6 +2328,7 @@ impl SchedulePlan {
         // Display only, but saved: a start date or a colour is unsaved work.
         self.periods.hash(hasher);
         self.machine_order.hash(hasher);
+        self.calendar_views.hash(hasher);
         self.drill_blast.hash_content(hasher);
         for bar in &self.bars {
             bar.id.hash(hasher);
