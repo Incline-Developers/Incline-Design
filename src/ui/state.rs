@@ -8861,6 +8861,9 @@ pub(crate) struct ScheduleNameDraft {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum CalendarRow {
     Input(crate::model::schedule::CalendarField),
+    /// What the crushers' grade bands cost that day, which the schedule's value
+    /// on Improve and the report is net of and the movement value is not.
+    GradePenalty,
     /// Tonnes a loader dug out of the ground in the period.
     DigTonnes,
     /// Tonnes a loader reclaimed from stockpiles in the period. Kept apart
@@ -8928,6 +8931,7 @@ impl CalendarRow {
                 | Self::Cumulative
                 | Self::GradeActual(_)
                 | Self::Value
+                | Self::GradePenalty
         )
     }
 

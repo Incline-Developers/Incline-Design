@@ -1815,6 +1815,7 @@ video-export-already-recording = A video is already recording.
 video-export-needs-animate = Open Animate with a calculated schedule to record a video.
 video-export-left-animate = Video recording stopped: Animate was left or its schedule changed.
 schedule-calendar-value = Movement value ({ $currency })
+schedule-calendar-grade-penalty = Grade penalties ({ $currency })
 schedule-calendar-dig-tonnes = Dug (t)
 schedule-calendar-reclaim-tonnes = Reclaimed (t)
 schedule-calendar-scheduled-utilisation = Scheduled utilisation (%)

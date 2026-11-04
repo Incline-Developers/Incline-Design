@@ -155,6 +155,15 @@ impl Figures<'_> {
                 periods.received_grade(address.destination()?, period, grade)?
             }
             CalendarRow::Value => periods.value(period)?,
+            CalendarRow::GradePenalty => {
+                periods.value(period)?;
+                self.result?
+                    .grade_targets
+                    .iter()
+                    .filter(|target| target.period == period)
+                    .map(|target| target.penalty)
+                    .sum()
+            }
             CalendarRow::BlastWork => {
                 let day = f64::from(period) * crate::model::schedule::SCHEDULE_PERIOD_H;
                 self.result?
@@ -213,6 +222,17 @@ impl Figures<'_> {
             CalendarRow::Received => sum(&|period| periods.received(owner.destination()?, period)),
             CalendarRow::Reclaimed => sum(&|period| periods.reclaimed(owner.destination()?, period)),
             CalendarRow::Value => sum(&|period| periods.value(period)),
+            CalendarRow::GradePenalty => sum(&|period| {
+                periods.value(period)?;
+                Some(
+                    self.result?
+                        .grade_targets
+                        .iter()
+                        .filter(|target| target.period == period)
+                        .map(|target| target.penalty)
+                        .sum(),
+                )
+            }),
             CalendarRow::Cumulative => match kind {
                 Some(DestinationKind::Stockpile) => periods.closing(owner.destination()?, covered - 1)?.0,
                 _ => periods.cumulative(owner.destination()?, covered - 1)?,
@@ -733,6 +753,9 @@ fn rows(plan: &SchedulePlan, destinations: &[DestinationRow], editor: &EditorSta
     let mut rows = Vec::new();
     if view.shows_section(Section::Value) {
         rows.extend([Row::Schedule, Row::Field(CalendarOwner::Schedule, CalendarRow::Value)]);
+        if !plan.crusher_grade_calendars().is_empty() {
+            rows.push(Row::Field(CalendarOwner::Schedule, CalendarRow::GradePenalty));
+        }
     }
     let ordered = plan.ordered_agents();
     for kind in plan.machine_groups() {
@@ -1250,8 +1273,8 @@ fn draw_row(
                     );
                     // Money is shortened in the cell; the exact figure is a
                     // hover away, as on every day's cell.
-                    if kind == CalendarRow::Value {
-                        ui.interact(total_rect, ui.scope_id().with(("schedule_calendar_total", owner)), egui::Sense::hover())
+                    if matches!(kind, CalendarRow::Value | CalendarRow::GradePenalty) {
+                        ui.interact(total_rect, ui.scope_id().with(("schedule_calendar_total", owner, kind)), egui::Sense::hover())
                             .on_hover_text(crate::model::schedule::cashflow::money_exact(total));
                     }
                 }
@@ -1327,6 +1350,7 @@ fn row_label(row: CalendarRow, destination: Option<DestinationKind>, currency: &
         CalendarRow::GradeInput(_, input) => input.label(),
         CalendarRow::GradeActual(field) => figures.field_name(field),
         CalendarRow::Value => tr!("schedule-calendar-value", currency = currency.to_owned()),
+        CalendarRow::GradePenalty => tr!("schedule-calendar-grade-penalty", currency = currency.to_owned()),
     }
 }
 
@@ -1593,7 +1617,7 @@ fn format_figure(row: CalendarRow, value: f64) -> String {
     match row {
         CalendarRow::TruckHours | CalendarRow::TruckCycle => format_hours(value),
         CalendarRow::GradeActual(_) => trimmed_number(value),
-        CalendarRow::Value => crate::model::schedule::cashflow::money_text(value),
+        CalendarRow::Value | CalendarRow::GradePenalty => crate::model::schedule::cashflow::money_text(value),
         CalendarRow::ScheduledUtilisation => format!("{value:.0}%"),
         // Whole tonnes in the grid: a tenth of a tonne is noise beside a
         // day's tens of thousands, and dropping it only where it happened to
@@ -1613,7 +1637,7 @@ fn whole_tonnes(value: f64) -> String {
 fn raw_figure(row: CalendarRow, value: f64) -> String {
     match row {
         CalendarRow::GradeActual(_) => trimmed_number(value),
-        CalendarRow::Value => format!("{:.2}", if value == 0.0 { 0.0 } else { value }),
+        CalendarRow::Value | CalendarRow::GradePenalty => format!("{:.2}", if value == 0.0 { 0.0 } else { value }),
         CalendarRow::ScheduledUtilisation => format!("{value:.1}"),
         _ => tonnes_number(value),
     }
@@ -1703,7 +1727,7 @@ fn hover_text(plan: &SchedulePlan, destinations: &[DestinationRow], agent: Optio
             let kind = destination_kind(destinations, address);
             let (value, partial) = figures.figure(address, kind)?;
             let mut lines = Vec::new();
-            if row == CalendarRow::Value {
+            if matches!(row, CalendarRow::Value | CalendarRow::GradePenalty) {
                 lines.push(crate::model::schedule::cashflow::money_exact(value));
             }
             if partial {
@@ -1917,7 +1941,8 @@ fn editable(address: CalendarCellAddress) -> bool {
         | CalendarRow::Reclaimed
         | CalendarRow::Cumulative
         | CalendarRow::GradeActual(_)
-        | CalendarRow::Value => false,
+        | CalendarRow::Value
+        | CalendarRow::GradePenalty => false,
     }
 }
 
