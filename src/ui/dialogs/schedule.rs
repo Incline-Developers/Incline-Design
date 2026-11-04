@@ -70,8 +70,8 @@ pub(crate) fn draw_reclaim_bar_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
             draft.maximum.trim().parse::<f64>().ok().filter(|value| value.is_finite() && *value > 0.0).map(Some)
         };
         let window = if target.is_none() {
-            let start = draft.start.trim().parse::<f64>().ok();
-            let end = draft.end.trim().parse::<f64>().ok();
+            let start = crate::ui::elements::schedule_delays::read_time(&draft.start);
+            let end = crate::ui::elements::schedule_delays::read_time(&draft.end);
             start
                 .zip(end)
                 .map(|(start_h, end_h)| WorkWindow { start_h, end_h: Some(end_h) })

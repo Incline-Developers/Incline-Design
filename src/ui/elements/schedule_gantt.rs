@@ -1440,8 +1440,8 @@ fn reclaim_bar_dialog(bar: &ScheduleBar, work: &crate::model::schedule::ReclaimW
         agent: bar.agent,
         priority: bar.priority,
         insert_lane: false,
-        start: bar.window.start_h.to_string(),
-        end: bar.window.end_h.map(|value| value.to_string()).unwrap_or_default(),
+        start: super::schedule_delays::instant_text(bar.window.start_h),
+        end: bar.window.end_h.map(super::schedule_delays::instant_text).unwrap_or_default(),
         maximum: work.maximum_t.map(|value| value.to_string()).unwrap_or_default(),
     }
 }
@@ -2815,8 +2815,8 @@ fn draw_row_menus(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorState,
                         agent: row.agent,
                         priority,
                         insert_lane: false,
-                        start: start_h.to_string(),
-                        end: new_bar_end_h(plan, GanttPaletteItem::Reclaim, start_h).to_string(),
+                        start: super::schedule_delays::instant_text(start_h),
+                        end: super::schedule_delays::instant_text(new_bar_end_h(plan, GanttPaletteItem::Reclaim, start_h)),
                         maximum: String::new(),
                     });
                     ui.close();
@@ -3081,8 +3081,8 @@ fn draw_palette_drop(ui: &mut egui::Ui, body: egui::Rect, editor: &mut EditorSta
                 agent: placement.agent,
                 priority: placement.priority,
                 insert_lane: placement.insert,
-                start: start_h.to_string(),
-                end: (new_bar_end_h(plan, item, start_h)).to_string(),
+                start: super::schedule_delays::instant_text(start_h),
+                end: super::schedule_delays::instant_text(new_bar_end_h(plan, item, start_h)),
                 maximum: String::new(),
             });
         }

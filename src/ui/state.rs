@@ -8599,8 +8599,8 @@ impl BarWindowDialog {
     pub(crate) fn of(bar: crate::model::schedule::BarId, window: crate::model::schedule::WorkWindow) -> Self {
         Self {
             bar,
-            start: format!("{:.2}", window.start_h),
-            end: window.end_h.map(|end| format!("{end:.2}")).unwrap_or_default(),
+            start: crate::ui::elements::schedule_delays::instant_text(window.start_h),
+            end: window.end_h.map(crate::ui::elements::schedule_delays::instant_text).unwrap_or_default(),
         }
     }
 
@@ -8608,10 +8608,10 @@ impl BarWindowDialog {
     /// one. An empty end is open-ended and is not an error; anything else that
     /// does not parse is.
     pub(crate) fn window(&self) -> Option<crate::model::schedule::WorkWindow> {
-        let start_h = self.start.trim().parse::<f64>().ok()?;
+        let start_h = crate::ui::elements::schedule_delays::read_time(&self.start)?;
         let end_h = match self.end.trim() {
             "" => None,
-            text => Some(text.parse::<f64>().ok()?),
+            text => Some(crate::ui::elements::schedule_delays::read_time(text)?),
         };
         let window = crate::model::schedule::WorkWindow { start_h, end_h };
         window.is_valid().then_some(window)

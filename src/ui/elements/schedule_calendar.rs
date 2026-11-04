@@ -1432,6 +1432,11 @@ fn draw_cell(
         );
         ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
     }
+    // A clicked cell takes the keyboard from whatever had it, or typing would
+    // silently go nowhere: handle_keyboard leaves keys to a focused widget.
+    if response.clicked() {
+        response.request_focus();
+    }
     if response.clicked() {
         if !commit_draft(editor, plan, session, commands) {
             return;
