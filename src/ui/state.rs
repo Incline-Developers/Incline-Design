@@ -6154,7 +6154,7 @@ impl UiCommand {
             // `schedule_report_subject`, which can still read it), but not renames or rate edits: those are cell edits
             // and a console line per keystroke-commit would bury the log.
             Self::Schedule { edit, .. } => match edit {
-                ScheduleEdit::AddClass { name, rate_tph, kind } => report(tr!("schedule-new-class"), format!("{name} · {rate_tph} {}", if kind.is_drill_blast() { kind.rate_unit() } else { "tph" })),
+                ScheduleEdit::AddClass { name, rate_tph, kind } => report(tr!("schedule-new-class"), format!("{name} · {rate_tph} {}", kind.rate_unit())),
                 ScheduleEdit::DeleteClass(_) => report(tr!("schedule-delete-class"), String::new()),
                 ScheduleEdit::AddAgent { name, .. } => report(tr!("schedule-new-agent"), name.clone()),
                 ScheduleEdit::DeleteAgent(_) => report(tr!("schedule-delete-agent"), String::new()),
@@ -6220,6 +6220,8 @@ impl UiCommand {
                 | ScheduleEdit::SetClassRate { .. }
                 | ScheduleEdit::RenameAgent { .. }
                 | ScheduleEdit::SetAgentClass { .. }
+                | ScheduleEdit::MoveMachineGroup { .. }
+                | ScheduleEdit::MoveMachine { .. }
                 | ScheduleEdit::RenameBar { .. }
                 | ScheduleEdit::SetTonnageField(_)
                 | ScheduleEdit::SetUnmeasuredAsZero(_)
@@ -7774,6 +7776,16 @@ pub(crate) enum ScheduleEdit {
         class: crate::model::schedule::LoaderClassId,
     },
     DeleteAgent(crate::model::schedule::LoaderAgentId),
+    /// Move a group of machines to just before another group, or to the end.
+    MoveMachineGroup {
+        kind: crate::model::schedule::MachineKind,
+        before: Option<crate::model::schedule::MachineKind>,
+    },
+    /// Move a machine to just before another of its group, or to its end.
+    MoveMachine {
+        agent: crate::model::schedule::LoaderAgentId,
+        before: Option<crate::model::schedule::LoaderAgentId>,
+    },
     /// Apply one atomic calendar edit or rectangular paste/clear batch.
     SetCalendarCells {
         edits: Vec<crate::model::schedule::CalendarCellEdit>,

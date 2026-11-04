@@ -180,8 +180,8 @@ pub(crate) fn build(schedule: &CalculatedSchedule, plan: &SchedulePlan, names: &
         let mut rows = Vec::new();
         for group in &groups {
             for agent in plan
-                .agents()
-                .iter()
+                .ordered_agents()
+                .into_iter()
                 .filter(|agent| plan.agent_kind(agent.id).is_some_and(crate::model::schedule::MachineKind::is_drill_blast))
             {
                 let kind = plan.agent_kind(agent.id).expect("filtered above");
@@ -523,8 +523,8 @@ fn loaders(schedule: &CalculatedSchedule, plan: &SchedulePlan, groups: &[Group],
     let mut used = [false; REASONS.len()];
     for group in groups {
         for agent in plan
-            .agents()
-            .iter()
+            .ordered_agents()
+            .into_iter()
             .filter(|agent| !plan.agent_kind(agent.id).is_some_and(crate::model::schedule::MachineKind::is_drill_blast))
         {
             let mut time = Time {

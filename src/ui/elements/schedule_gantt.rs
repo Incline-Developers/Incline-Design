@@ -377,7 +377,7 @@ fn layout_rows(plan: &SchedulePlan, extents: &[BarExtent], bar_height: f32) -> V
             height: 0.0,
         });
     }
-    for agent in plan.agents() {
+    for agent in plan.ordered_agents() {
         let subtitle = match plan.class(agent.class_id) {
             Some(class) => format!(
                 "{} · {} {}",
@@ -847,7 +847,7 @@ fn draw_canvas(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, pl
             }
         }
     } else if plan.bars().is_empty()
-        && let Some(agent) = plan.agents().first()
+        && let Some(agent) = plan.ordered_agents().first().copied()
     {
         // A single empty-state action remains reachable even when the fleet's
         // empty rows fill the viewport.
@@ -2537,8 +2537,8 @@ fn draw_bars(
                         // Only machines that can do this work: a dig bar goes to
                         // loaders, a blast bar to dozers, drills and MPUs.
                         for agent in plan
-                            .agents()
-                            .iter()
+                            .ordered_agents()
+                            .into_iter()
                             .filter(|agent| plan.agent_kind(agent.id).is_some_and(|kind| crate::model::schedule::work_fits(&bar.work, kind)))
                         {
                             if ContextMenuAction::new(agent.name.clone()).checked(bar.agent == Some(agent.id)).show(ui).clicked() {
@@ -3171,8 +3171,8 @@ fn draw_delay_drop_menu(ui: &mut egui::Ui, editor: &mut EditorState, plan: &Sche
 /// of its own type, so a follower adds to work it actually does. On an
 /// unassigned lane, any drill and blast machine.
 fn follow_leaders(plan: &SchedulePlan, agent: Option<crate::model::schedule::LoaderAgentId>) -> Vec<&crate::model::schedule::LoaderAgent> {
-    plan.agents()
-        .iter()
+    plan.ordered_agents()
+        .into_iter()
         .filter(|leader| crate::model::schedule::follow_fits(agent, leader.id, |id| plan.agent_kind(id)))
         .collect()
 }

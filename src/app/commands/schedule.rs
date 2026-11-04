@@ -80,6 +80,11 @@ impl crate::app::App<'_> {
             ScheduleEdit::RenameAgent { agent, name } => self.rename_loader_agent(agent, name),
             ScheduleEdit::SetAgentClass { agent, class } => self.set_loader_agent_class(agent, class),
             ScheduleEdit::DeleteAgent(agent) => self.delete_loader_agent(agent),
+            ScheduleEdit::MoveMachineGroup { kind, before } => self.edit_schedule(|plan| {
+                plan.move_machine_group(kind, before);
+                Ok(())
+            }),
+            ScheduleEdit::MoveMachine { agent, before } => self.edit_schedule(|plan| plan.move_machine(agent, before)),
             ScheduleEdit::SetCalendarCells { edits } => self.set_calendar_cells(edits),
             ScheduleEdit::SetTonnageField(field) => self.set_tonnage_field(field),
             ScheduleEdit::SetUnmeasuredAsZero(zero) => self.edit_schedule(|plan| {

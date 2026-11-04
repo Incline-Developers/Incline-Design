@@ -459,7 +459,7 @@ fn required_days(plan: &SchedulePlan, result: Option<&CalculatedSchedule>) -> u3
 
 fn rows(plan: &SchedulePlan, destinations: &[DestinationRow], editor: &EditorState) -> Vec<Row> {
     let mut rows = vec![Row::Schedule, Row::Field(CalendarOwner::Schedule, CalendarRow::Value), Row::Loaders];
-    for agent in plan.agents() {
+    for agent in plan.ordered_agents() {
         let owner = CalendarOwner::Loader(agent.id);
         rows.push(Row::Group(owner));
         if !editor.schedule_calendar.collapsed.contains(&owner) {
@@ -2101,7 +2101,7 @@ enum Nav {
 /// leaving it out here would land pasted values on the wrong loader.
 fn grid_rows(plan: &SchedulePlan, destinations: &[DestinationRow], editor: &EditorState) -> Vec<(CalendarOwner, CalendarRow)> {
     let mut rows = vec![(CalendarOwner::Schedule, CalendarRow::Value)];
-    for agent in plan.agents() {
+    for agent in plan.ordered_agents() {
         let owner = CalendarOwner::Loader(agent.id);
         if editor.schedule_calendar.collapsed.contains(&owner) {
             continue;

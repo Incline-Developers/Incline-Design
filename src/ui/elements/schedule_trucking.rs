@@ -382,6 +382,10 @@ pub(crate) fn draw_rule_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut E
                 });
             }
         });
+    // The page opens on the first rule rather than on an empty pane.
+    if selected.is_none_or(|id| trucks.rule(id).is_none()) {
+        selected = trucks.rules.first().map(|rule| rule.id);
+    }
     if editor.schedule_selected_truck_rule != selected {
         editor.schedule_truck_rule_draft = None;
     }

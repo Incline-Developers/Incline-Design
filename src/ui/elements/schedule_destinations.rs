@@ -143,6 +143,11 @@ pub(crate) fn draw_destination_list(
             open_dialog = true;
         }
     });
+    // The page opens on one of its own destinations rather than on an
+    // empty pane, or on one another page selected.
+    if selected.is_none_or(|id| !entries.iter().any(|entry| entry.id == id)) {
+        selected = entries.first().map(|entry| entry.id);
+    }
     if editor.schedule_selected_destination != selected {
         editor.schedule_destination_draft = None;
     }
@@ -769,6 +774,10 @@ pub(crate) fn draw_rule_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut E
                 });
             }
         });
+    // The page opens on the first rule rather than on an empty pane.
+    if selected.is_none_or(|id| routing.rule(id).is_none()) {
+        selected = routing.rules.first().map(|rule| rule.id);
+    }
     if editor.schedule_selected_rule != selected {
         editor.schedule_rule_draft = None;
         editor.schedule_condition_draft = None;

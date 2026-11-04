@@ -184,6 +184,7 @@ pub(crate) struct GridRow<'a> {
     label: &'a str,
     selected: bool,
     header: bool,
+    draggable: bool,
     error: Option<&'a str>,
 }
 
@@ -194,6 +195,7 @@ impl<'a> GridRow<'a> {
             label,
             selected: false,
             header: false,
+            draggable: false,
             error: None,
         }
     }
@@ -204,8 +206,15 @@ impl<'a> GridRow<'a> {
             label,
             selected: false,
             header: true,
+            draggable: false,
             error: None,
         }
+    }
+
+    /// A row that can also be dragged, for a [`GridDrag`].
+    pub(crate) fn draggable(mut self) -> Self {
+        self.draggable = true;
+        self
     }
 
     pub(crate) fn selected(mut self, selected: bool) -> Self {
@@ -223,9 +232,22 @@ impl<'a> GridRow<'a> {
 
 /// Draw a single spreadsheet-style row into the current grid body.
 pub(crate) fn grid_row(ui: &mut egui::Ui, row: GridRow<'_>) -> egui::Response {
-    let GridRow { label, selected, header, error } = row;
+    let GridRow {
+        label,
+        selected,
+        header,
+        draggable,
+        error,
+    } = row;
     let height = grid_row_height(ui);
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), if header { egui::Sense::hover() } else { egui::Sense::click() });
+    let sense = if header {
+        egui::Sense::hover()
+    } else if draggable {
+        egui::Sense::click_and_drag()
+    } else {
+        egui::Sense::click()
+    };
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), sense);
     let visuals = ui.visuals();
     let fill = if header {
         visuals.widgets.noninteractive.bg_fill
@@ -667,9 +689,19 @@ pub(crate) fn grid_group_row(ui: &mut egui::Ui, id: impl std::hash::Hash + std::
 /// [`grid_group_row`], with the heading's response for a menu or tooltip
 /// that acts on the whole group.
 pub(crate) fn grid_group_row_response(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, label: &str, detail: &str, depth: usize) -> (bool, egui::Response) {
+    group_row(ui, id, label, detail, depth, egui::Sense::click())
+}
+
+/// [`grid_group_row_response`] for a group that can be dragged, for a
+/// [`GridDrag`].
+pub(crate) fn grid_group_row_draggable(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, label: &str, detail: &str) -> (bool, egui::Response) {
+    group_row(ui, id, label, detail, 0, egui::Sense::click_and_drag())
+}
+
+fn group_row(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, label: &str, detail: &str, depth: usize, sense: egui::Sense) -> (bool, egui::Response) {
     let id = ui.make_persistent_id(id);
     let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true);
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), grid_row_height(ui)), egui::Sense::click());
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), grid_row_height(ui)), sense);
     if response.clicked() {
         state.toggle(ui);
     }
@@ -706,6 +738,85 @@ pub(crate) fn grid_group_row_response(ui: &mut egui::Ui, id: impl std::hash::Has
     ui.painter()
         .galley(egui::pos2(text_rect.left() + 8.0, rect.center().y - galley.size().y * 0.5), galley, color);
     (open, response)
+}
+
+/// Rows put in order by dragging them, as the Gantt's bars are dragged.
+///
+/// Each row that can move is handed to [`GridDrag::row`] with the run it
+/// belongs to - a machine with its group, a group with the other groups -
+/// and is only ever dropped among the rows of its own run. A row may stand
+/// for more than its own line: a group passes the span of its heading and
+/// its rows. While one is dragged a line marks where it would land, and
+/// [`GridDrag::finish`] reports the move once it is dropped somewhere new.
+pub(crate) struct GridDrag<K> {
+    id: egui::Id,
+    dragged: Option<K>,
+    dropped: bool,
+    rows: Vec<(K, u8, egui::Rect)>,
+}
+
+impl<K: Clone + PartialEq + Send + Sync + 'static> GridDrag<K> {
+    pub(crate) fn new(ui: &egui::Ui, id: impl std::hash::Hash + std::fmt::Debug) -> Self {
+        let id = ui.make_persistent_id(id);
+        let dragged = ui.ctx().data(|data| data.get_temp::<K>(id));
+        Self {
+            id,
+            dragged,
+            dropped: false,
+            rows: Vec::new(),
+        }
+    }
+
+    /// One row that can be dragged, in `run`, filling `rect`; `response` is
+    /// the part of it that is grabbed.
+    pub(crate) fn row(&mut self, key: K, run: u8, rect: egui::Rect, response: &egui::Response) {
+        if response.drag_started() {
+            self.dragged = Some(key.clone());
+            self.dropped = false;
+        }
+        if response.drag_stopped() && self.dragged.as_ref() == Some(&key) {
+            self.dropped = true;
+        }
+        self.rows.push((key, run, rect));
+    }
+
+    /// Mark where the dragged row would land, and once it is dropped the row
+    /// and the row it now goes before (`None`: the end of its run). Nothing
+    /// when it is dropped back where it was.
+    pub(crate) fn finish(self, ui: &egui::Ui) -> Option<(K, Option<K>)> {
+        let Self { id, dragged, dropped, rows } = self;
+        let dragged = dragged?;
+        let Some(&(_, run, _)) = rows.iter().find(|(key, ..)| *key == dragged) else {
+            ui.ctx().data_mut(|data| data.remove::<K>(id));
+            return None;
+        };
+        let pointer = ui.ctx().pointer_latest_pos();
+        let run: Vec<&(K, u8, egui::Rect)> = rows.iter().filter(|(_, row_run, _)| *row_run == run).collect();
+        let others: Vec<&(K, u8, egui::Rect)> = run.iter().copied().filter(|(key, ..)| *key != dragged).collect();
+        let at = pointer.map_or(0, |pointer| others.iter().filter(|(.., rect)| rect.center().y < pointer.y).count());
+        let before = others.get(at).map(|(key, ..)| key.clone());
+        if dropped {
+            ui.ctx().data_mut(|data| data.remove::<K>(id));
+            let was = run
+                .iter()
+                .position(|(key, ..)| *key == dragged)
+                .and_then(|index| run.get(index + 1))
+                .map(|(key, ..)| key.clone());
+            return (before != was).then_some((dragged, before));
+        }
+        ui.ctx().data_mut(|data| data.insert_temp(id, dragged));
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        let y = others
+            .get(at)
+            .map_or_else(|| others.last().map_or(f32::NAN, |(.., rect)| rect.bottom()), |(.., rect)| rect.top());
+        if let Some((.., rect)) = run.first()
+            && y.is_finite()
+        {
+            let stroke = egui::Stroke::new(2.0, ui.visuals().selection.stroke.color);
+            ui.painter().hline(rect.left()..=rect.right(), y, stroke);
+        }
+        None
+    }
 }
 
 /// One row offered for adding elsewhere: its name, a weak detail, and a +

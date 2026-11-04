@@ -18,7 +18,9 @@ use crate::{
         state::{ScheduleAgentDraft, ScheduleClassDraft, ScheduleEdit, ScheduleNameDraft, ScheduleStep, UiCommand},
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup},
-            data_grid::{DataGrid, GridRow, PropertyTable, grid_add_action_row, grid_empty_state, grid_row, property_table_height},
+            data_grid::{
+                DataGrid, GridDrag, GridRow, PropertyTable, grid_add_action_row, grid_empty_state, grid_group_row, grid_group_row_draggable, grid_row, property_table_height,
+            },
             explorer::ExplorerEntry,
         },
     },
@@ -329,32 +331,47 @@ pub(crate) fn draw_class_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut 
             if plan.classes().is_empty() {
                 return grid_empty_state(ui, &tr!("schedule-no-class-list"), Some(&new_class));
             }
-            for class in plan.classes() {
-                let rate = if class.kind.is_drill_blast() {
-                    format!("{} {}", rate_text(class.default_dig_rate_tph), class.kind.rate_unit())
-                } else {
-                    rate_with_unit(class.default_dig_rate_tph)
-                };
-                let label = format!("{} · {}", class.name, rate);
-                let response = grid_row(ui, GridRow::new(&label).selected(selected == Some(class.id))).on_hover_text(&label);
-                if response.clicked() {
-                    selected = Some(class.id);
+            // Grouped as the machines are, so a class sits with the
+            // machines it makes.
+            for kind in plan.machine_groups() {
+                let classes: Vec<_> = plan.ordered_classes().into_iter().filter(|class| class.kind == kind).collect();
+                if classes.is_empty() {
+                    continue;
                 }
-                // Offered but greyed while machines use it, with the reason:
-                // deleting would leave them without a class.
-                let users: Vec<String> = plan.agents_of(class.id).map(|agent| agent.name.clone()).collect();
-                context_menu_popup(&response, &class.name, |ui| {
-                    let delete = ContextMenuAction::new(tr!("schedule-delete-class")).enabled(users.is_empty()).show(ui);
-                    if delete.clicked() {
-                        commands.push(UiCommand::schedule(session, ScheduleEdit::DeleteClass(class.id)));
-                        ui.close();
+                if !grid_group_row(ui, ("schedule_class_group", kind), &kind.group_label(), &classes.len().to_string(), 0) {
+                    continue;
+                }
+                for class in classes {
+                    let rate = if class.kind.is_drill_blast() {
+                        format!("{} {}", rate_text(class.default_dig_rate_tph), class.kind.rate_unit())
+                    } else {
+                        rate_with_unit(class.default_dig_rate_tph)
+                    };
+                    let label = format!("{} · {}", class.name, rate);
+                    let response = grid_row(ui, GridRow::new(&label).selected(selected == Some(class.id))).on_hover_text(&label);
+                    if response.clicked() {
+                        selected = Some(class.id);
                     }
-                    delete.on_disabled_hover_text(tr!("schedule-error-class-in-use", agents = users.join(", ")));
-                });
+                    // Offered but greyed while machines use it, with the
+                    // reason: deleting would leave them without a class.
+                    let users: Vec<String> = plan.agents_of(class.id).map(|agent| agent.name.clone()).collect();
+                    context_menu_popup(&response, &class.name, |ui| {
+                        let delete = ContextMenuAction::new(tr!("schedule-delete-class")).enabled(users.is_empty()).show(ui);
+                        if delete.clicked() {
+                            commands.push(UiCommand::schedule(session, ScheduleEdit::DeleteClass(class.id)));
+                            ui.close();
+                        }
+                        delete.on_disabled_hover_text(tr!("schedule-error-class-in-use", agents = users.join(", ")));
+                    });
+                }
             }
             grid_add_action_row(ui, &new_class)
         });
     let open_dialog = add || added;
+    // The page opens on a class rather than on an empty pane.
+    if selected.is_none_or(|id| plan.class(id).is_none()) {
+        selected = plan.ordered_classes().first().map(|class| class.id);
+    }
     if editor.schedule_selected_class != selected {
         // A different class is being edited; its cells replace whatever was
         // half-typed into the previous one.
@@ -505,34 +522,74 @@ pub(crate) fn draw_agent_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut 
         } else if plan.agents().is_empty() {
             return grid_empty_state(ui, &tr!("schedule-no-agents"), Some(&new_agent));
         }
-        for agent in plan.agents() {
-            let class = plan
-                .class(agent.class_id)
-                .map(|class| class.name.clone())
-                .unwrap_or_else(|| tr!("schedule-error-unknown-class"));
-            let label = format!("{} · {}", agent.name, class);
-            let response = grid_row(ui, GridRow::new(&label).selected(selected == Some(agent.id))).on_hover_text(&label);
-            if response.clicked() {
-                selected = Some(agent.id);
+        // Grouped by kind, and put in order by dragging: a machine within
+        // its group, a group by its heading. The Gantt and the Calendar list
+        // the fleet in the same order.
+        const GROUPS: u8 = 0;
+        let mut drag = GridDrag::new(ui, "schedule_agent_list_drag");
+        let ordered = plan.ordered_agents();
+        for (run, kind) in (1u8..).zip(plan.machine_groups()) {
+            let agents: Vec<_> = ordered.iter().filter(|agent| plan.agent_kind(agent.id) == Some(kind)).collect();
+            if agents.is_empty() {
+                continue;
             }
-            context_menu_popup(&response, &agent.name, |ui| {
-                if ContextMenuAction::new(tr!("schedule-delete-agent")).show(ui).clicked() {
-                    // Work it holds would be stranded, so that is asked
-                    // first; a machine with none just goes.
-                    if crate::ui::dialogs::schedule::agent_delete_impact(plan, agent.id) == (0, 0) {
-                        commands.push(UiCommand::schedule(session, ScheduleEdit::DeleteAgent(agent.id)));
-                    } else {
-                        confirm_delete = Some(agent.id);
+            let (open, heading) = grid_group_row_draggable(ui, ("schedule_agent_group", kind), &kind.group_label(), &agents.len().to_string());
+            let mut span = heading.rect;
+            if open {
+                for agent in agents {
+                    let class = plan
+                        .class(agent.class_id)
+                        .map(|class| class.name.clone())
+                        .unwrap_or_else(|| tr!("schedule-error-unknown-class"));
+                    let label = format!("{} · {}", agent.name, class);
+                    let response = grid_row(ui, GridRow::new(&label).selected(selected == Some(agent.id)).draggable()).on_hover_text(&label);
+                    span = span.union(response.rect);
+                    drag.row(MachineDrag::Machine(agent.id), run, response.rect, &response);
+                    if response.clicked() {
+                        selected = Some(agent.id);
                     }
-                    ui.close();
+                    context_menu_popup(&response, &agent.name, |ui| {
+                        if ContextMenuAction::new(tr!("schedule-delete-agent")).show(ui).clicked() {
+                            // Work it holds would be stranded, so that is
+                            // asked first; a machine with none just goes.
+                            if crate::ui::dialogs::schedule::agent_delete_impact(plan, agent.id) == (0, 0) {
+                                commands.push(UiCommand::schedule(session, ScheduleEdit::DeleteAgent(agent.id)));
+                            } else {
+                                confirm_delete = Some(agent.id);
+                            }
+                            ui.close();
+                        }
+                    });
                 }
-            });
+            }
+            drag.row(MachineDrag::Group(kind), GROUPS, span, &heading);
+        }
+        match drag.finish(ui) {
+            Some((MachineDrag::Group(kind), before)) => {
+                let before = match before {
+                    Some(MachineDrag::Group(before)) => Some(before),
+                    _ => None,
+                };
+                commands.push(UiCommand::schedule(session, ScheduleEdit::MoveMachineGroup { kind, before }));
+            }
+            Some((MachineDrag::Machine(agent), before)) => {
+                let before = match before {
+                    Some(MachineDrag::Machine(before)) => Some(before),
+                    _ => None,
+                };
+                commands.push(UiCommand::schedule(session, ScheduleEdit::MoveMachine { agent, before }));
+            }
+            None => {}
         }
         grid_add_action_row(ui, &new_agent)
     });
     let open_dialog = has_classes && (add || added);
     if confirm_delete.is_some() {
         editor.pending_delete_agent = confirm_delete;
+    }
+    // The page opens on a machine rather than on an empty pane.
+    if selected.is_none_or(|id| plan.agent(id).is_none()) {
+        selected = plan.ordered_agents().first().map(|agent| agent.id);
     }
     if editor.schedule_selected_agent != selected {
         editor.schedule_agent_draft = None;
@@ -543,6 +600,13 @@ pub(crate) fn draw_agent_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut 
         editor.new_loader_agent_class = plan.classes().first().map(|class| class.id);
         editor.new_loader_agent_open = true;
     }
+}
+
+/// What a drag on the Machines list holds.
+#[derive(Clone, Copy, PartialEq)]
+enum MachineDrag {
+    Group(crate::model::schedule::MachineKind),
+    Machine(crate::model::schedule::LoaderAgentId),
 }
 
 /// The selected agent's cells: its name, its class, and the rate that class

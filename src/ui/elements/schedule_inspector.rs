@@ -137,8 +137,8 @@ fn drill_blast(ui: &mut egui::Ui, plan: &SchedulePlan, schedule: &CalculatedSche
     use crate::model::schedule::BlastStage;
     let Some(result) = schedule.drill_blast.as_ref() else { return };
     let machines: Vec<_> = plan
-        .agents()
-        .iter()
+        .ordered_agents()
+        .into_iter()
         .filter(|agent| plan.agent_kind(agent.id).is_some_and(crate::model::schedule::MachineKind::is_drill_blast))
         .collect();
     section(ui, tr!("inspector-drill-blast"));
@@ -289,8 +289,8 @@ fn loaders(ui: &mut egui::Ui, editor: &EditorState, plan: &SchedulePlan, destina
     }
     section(ui, tr!("inspector-loaders"));
     for agent in plan
-        .agents()
-        .iter()
+        .ordered_agents()
+        .into_iter()
         .filter(|agent| !plan.agent_kind(agent.id).is_some_and(crate::model::schedule::MachineKind::is_drill_blast))
     {
         let mut entry = Entry {
