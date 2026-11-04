@@ -775,6 +775,7 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: przed scaleniem z
 cmd-omf-crs-differs = { $source_name }: układ współrzędnych „{ $source_crs }” różni się od układu projektu „{ $target_crs }”; współrzędne scalono bez przeliczenia
 cmd-omf-source-name-units-source-units = { $source_name }: jednostki „{ $source_units }” różnią się od jednostek projektu „{ $target_units }”; współrzędne scalono bez przeliczenia
 cmd-omf-source-name-warning = { $source_name }: { $warning }
+cmd-omf-prismoid-grids-not-exported = { $count } siatk(i) prizmoidów pozostaje w pliku projektu i nie zostało wyeksportowanych
 cmd-omf-there-no-open-incline-design = Brak otwartych danych Incline Design do wyeksportowania
 cmd-placement-2-vertices = 2 wierzchołki
 cmd-placement-count-vertices = { $count } wierzchołków
@@ -2024,6 +2025,7 @@ omf-project-description-not-retained = Opis projektu nie jest zachowywany
 omf-unsupported-metadata-keys = Projekt zawiera nieobsługiwane klucze metadanych: { $keys }
 omf-skipped-drillhole-data-saved-older = Pominięto dane otworów wiertniczych zapisane w starszym układzie ({ $names }); zaimportuj je ponownie z plików źródłowych
 omf-modelling-settings-unreadable = Nie udało się odczytać ustawień modelowania projektu; użyto wartości domyślnych
+omf-prismoid-grid-not-kept = Nie można odczytać siatki prizmoidów '{ $name }'; nie zostanie zachowana: { $error }
 
 ## Plot strings
 

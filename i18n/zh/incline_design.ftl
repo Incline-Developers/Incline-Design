@@ -705,6 +705,7 @@ cmd-omf-source-name-applied-project-origin = { $source_name }：合并前已应�
 cmd-omf-crs-differs = { $source_name }：坐标参考系“{ $source_crs }”与项目 CRS“{ $target_crs }”不同；坐标未经重投影即合并
 cmd-omf-source-name-units-source-units = { $source_name }：单位“{ $source_units }”与项目单位“{ $target_units }”不同；坐标未经转换即合并
 cmd-omf-source-name-warning = { $source_name }：{ $warning }
+cmd-omf-prismoid-grids-not-exported = { $count } 个拟柱体网格保留在项目文件中，未导出
 cmd-omf-there-no-open-incline-design = 没有可导出的已打开 Incline Design 数据
 cmd-placement-2-vertices = 2 个顶点
 cmd-placement-count-vertices = { $count } 个顶点
@@ -1954,6 +1955,7 @@ omf-project-description-not-retained = 不保留项目描述
 omf-unsupported-metadata-keys = 项目含有不支持的元数据键：{ $keys }
 omf-skipped-drillhole-data-saved-older = 已跳过以旧版布局保存的钻孔数据（{ $names }）；请从源文件重新导入
 omf-modelling-settings-unreadable = 无法读取项目建模设置；将使用默认值
+omf-prismoid-grid-not-kept = 无法读取拟柱体网格“{ $name }”，将不予保留：{ $error }
 
 ## Plot strings
 

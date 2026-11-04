@@ -733,6 +733,7 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: 統合前にプ�
 cmd-omf-crs-differs = { $source_name }: 座標参照系「{ $source_crs }」がプロジェクトの座標参照系「{ $target_crs }」と異なります。座標は再投影せずに統合されました
 cmd-omf-source-name-units-source-units = { $source_name }: 単位「{ $source_units }」がプロジェクトの単位「{ $target_units }」と異なります。座標は変換せずに統合されました
 cmd-omf-source-name-warning = { $source_name }: { $warning }
+cmd-omf-prismoid-grids-not-exported = { $count } 個のプリズモイドグリッドはプロジェクトファイルに残り、エクスポートされませんでした
 cmd-omf-there-no-open-incline-design = エクスポートする Incline Design のデータが開かれていません
 cmd-placement-2-vertices = 頂点2個
 cmd-placement-count-vertices = { $count } 個の頂点
@@ -1982,6 +1983,7 @@ omf-project-description-not-retained = プロジェクトの説明は保持さ�
 omf-unsupported-metadata-keys = プロジェクトにサポート対象外のメタデータキーがあります: { $keys }
 omf-skipped-drillhole-data-saved-older = 古いレイアウトで保存された削孔データをスキップしました（{ $names }）。元のソースファイルから再度インポートしてください
 omf-modelling-settings-unreadable = プロジェクトのモデリング設定を読み込めませんでした。既定値を使用します
+omf-prismoid-grid-not-kept = プリズモイドグリッド '{ $name }' を読み込めなかったため、保持されません: { $error }
 
 ## Plot strings
 

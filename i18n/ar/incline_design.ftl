@@ -705,6 +705,7 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: طُبّق أصل
 cmd-omf-crs-differs = { $source_name }: يختلف نظام الإسناد «{ $source_crs }» عن نظام المشروع «{ $target_crs }»؛ دُمجت الإحداثيات بلا إعادة إسقاط
 cmd-omf-source-name-units-source-units = { $source_name }: تختلف الوحدات «{ $source_units }» عن وحدات المشروع «{ $target_units }»؛ دُمجت الإحداثيات بلا تحويل
 cmd-omf-source-name-warning = { $source_name }: { $warning }
+cmd-omf-prismoid-grids-not-exported = { $count } من شبكات شبه المنشورات تبقى في ملف المشروع ولم تُصدَّر
 cmd-omf-there-no-open-incline-design = لا توجد بيانات Incline Design مفتوحة لتصديرها
 cmd-placement-2-vertices = رأسان
 cmd-placement-count-vertices = { $count } رأس
@@ -1954,6 +1955,7 @@ omf-project-description-not-retained = لا يُحتفظ بوصف المشروع
 omf-unsupported-metadata-keys = يحتوي المشروع على مفاتيح بيانات وصفية غير مدعومة: { $keys }
 omf-skipped-drillhole-data-saved-older = تم تخطي بيانات ثقوب حفر محفوظة بتخطيط أقدم ({ $names })؛ استوردها مرة أخرى من ملفات المصدر
 omf-modelling-settings-unreadable = تعذرت قراءة إعدادات النمذجة للمشروع؛ تُستخدم الإعدادات الافتراضية
+omf-prismoid-grid-not-kept = تعذّرت قراءة شبكة شبه المنشورات '{ $name }' ولن يُحتفظ بها: { $error }
 
 ## Plot strings
 

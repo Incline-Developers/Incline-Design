@@ -747,6 +747,7 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: birleştirmeden �
 cmd-omf-crs-differs = { $source_name }: koordinat referans sistemi '{ $source_crs }', proje CRS'sinden '{ $target_crs }' farklı; koordinatlar yeniden izdüşümlenmeden birleştirildi
 cmd-omf-source-name-units-source-units = { $source_name }: birimler '{ $source_units }', proje birimlerinden '{ $target_units }' farklı; koordinatlar dönüştürülmeden birleştirildi
 cmd-omf-source-name-warning = { $source_name }: { $warning }
+cmd-omf-prismoid-grids-not-exported = { $count } prizmoid ızgarası proje dosyasında kalır ve dışa aktarılmadı
 cmd-omf-there-no-open-incline-design = Dışa aktarılacak açık Incline Design verisi yok
 cmd-placement-2-vertices = 2 köşe
 cmd-placement-count-vertices = { $count } köşe
@@ -1996,6 +1997,7 @@ omf-project-description-not-retained = Proje açıklaması korunmaz
 omf-unsupported-metadata-keys = Proje desteklenmeyen meta veri anahtarları içeriyor: { $keys }
 omf-skipped-drillhole-data-saved-older = Eski bir düzende kaydedilmiş sondaj deliği verileri atlandı ({ $names }); kaynak dosyalarından yeniden içe aktarın
 omf-modelling-settings-unreadable = Projenin modelleme ayarları okunamadı; varsayılanlar kullanılıyor
+omf-prismoid-grid-not-kept = Prizmoid ızgarası '{ $name }' okunamadı ve korunmayacak: { $error }
 
 ## Plot strings
 

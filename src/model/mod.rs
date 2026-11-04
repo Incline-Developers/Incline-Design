@@ -31,6 +31,7 @@ pub(crate) mod optimization_run;
 pub(crate) mod plot;
 pub(crate) mod point_cloud;
 pub(crate) mod point_features;
+pub(crate) mod prismoid_grid;
 pub(crate) mod progress;
 pub(crate) mod project;
 pub(crate) mod raster;

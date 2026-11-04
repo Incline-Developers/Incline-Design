@@ -1486,6 +1486,7 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: applied project o
 cmd-omf-crs-differs = { $source_name }: coordinate reference system '{ $source_crs }' differs from project CRS '{ $target_crs }'; coordinates were merged without reprojection
 cmd-omf-source-name-units-source-units = { $source_name }: units '{ $source_units }' differ from project units '{ $target_units }'; coordinates were merged without conversion
 cmd-omf-source-name-warning = { $source_name }: { $warning }
+cmd-omf-prismoid-grids-not-exported = { $count } prismoid grid(s) stay in the project file and were not exported
 cmd-omf-there-no-open-incline-design = There is no open Incline Design data to export
 cmd-placement-2-vertices = 2 vertices
 cmd-placement-count-vertices = { $count } vertices
@@ -3765,6 +3766,7 @@ omf-unsupported-metadata-keys = Project has unsupported metadata keys: { $keys }
 omf-optimization-scenarios-unreadable = The project's optimization scenarios could not be read and were left out: { $error }
 omf-skipped-drillhole-data-saved-older = Skipped drillhole data saved in an older layout ({ $names }); import it again from its source files
 omf-modelling-settings-unreadable = Project modelling settings could not be read; the defaults are used
+omf-prismoid-grid-not-kept = Prismoid grid '{ $name }' could not be read and will not be kept: { $error }
 
 ## Plot strings
 

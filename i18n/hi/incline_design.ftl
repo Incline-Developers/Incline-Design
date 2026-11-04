@@ -705,6 +705,7 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: मर्ज स�
 cmd-omf-crs-differs = { $source_name }: निर्देशांक संदर्भ प्रणाली “{ $source_crs }” प्रोजेक्ट CRS “{ $target_crs }” से अलग है; निर्देशांक पुनः प्रक्षेपण के बिना मर्ज हुए
 cmd-omf-source-name-units-source-units = { $source_name }: इकाइयाँ “{ $source_units }” प्रोजेक्ट इकाइयों “{ $target_units }” से अलग हैं; निर्देशांक रूपांतरण के बिना मर्ज हुए
 cmd-omf-source-name-warning = { $source_name }: { $warning }
+cmd-omf-prismoid-grids-not-exported = { $count } प्रिज़्मॉइड ग्रिड प्रोजेक्ट फ़ाइल में रहते हैं और निर्यात नहीं किए गए
 cmd-omf-there-no-open-incline-design = निर्यात करने के लिए कोई खुला Incline Design डेटा नहीं है
 cmd-placement-2-vertices = 2 शीर्ष
 cmd-placement-count-vertices = { $count } शीर्ष
@@ -1954,6 +1955,7 @@ omf-project-description-not-retained = परियोजना का विव
 omf-unsupported-metadata-keys = परियोजना में असमर्थित मेटाडेटा कुंजियाँ हैं: { $keys }
 omf-skipped-drillhole-data-saved-older = पुराने लेआउट में सहेजा गया ड्रिल होल डेटा छोड़ा गया ({ $names }); इसे स्रोत फ़ाइलों से फिर से आयात करें
 omf-modelling-settings-unreadable = प्रोजेक्ट की मॉडलिंग सेटिंग्स पढ़ी नहीं जा सकीं; डिफ़ॉल्ट उपयोग किए जाते हैं
+omf-prismoid-grid-not-kept = प्रिज़्मॉइड ग्रिड '{ $name }' पढ़ा नहीं जा सका और रखा नहीं जाएगा: { $error }
 
 ## Plot strings
 

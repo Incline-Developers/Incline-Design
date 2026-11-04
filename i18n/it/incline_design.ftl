@@ -747,6 +747,7 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: applicata l'origi
 cmd-omf-crs-differs = { $source_name }: il sistema di riferimento delle coordinate '{ $source_crs }' differisce dal CRS del progetto '{ $target_crs }'; le coordinate sono state unite senza riproiezione
 cmd-omf-source-name-units-source-units = { $source_name }: le unità '{ $source_units }' differiscono dalle unità del progetto '{ $target_units }'; le coordinate sono state unite senza conversione
 cmd-omf-source-name-warning = { $source_name }: { $warning }
+cmd-omf-prismoid-grids-not-exported = { $count } griglia/e di prismoidi restano nel file del progetto e non sono state esportate
 cmd-omf-there-no-open-incline-design = Non ci sono dati di Incline Design aperti da esportare
 cmd-placement-2-vertices = 2 vertici
 cmd-placement-count-vertices = { $count } vertici
@@ -1996,6 +1997,7 @@ omf-project-description-not-retained = La descrizione del progetto non viene man
 omf-unsupported-metadata-keys = Il progetto ha chiavi di metadati non supportate: { $keys }
 omf-skipped-drillhole-data-saved-older = Saltati i dati dei fori di sondaggio salvati in un layout precedente ({ $names }); importali di nuovo dai file sorgente
 omf-modelling-settings-unreadable = Le impostazioni di modellazione del progetto non sono state lette; vengono usati i valori predefiniti
+omf-prismoid-grid-not-kept = Impossibile leggere la griglia di prismoidi '{ $name }', che non verrà conservata: { $error }
 
 ## Plot strings
 

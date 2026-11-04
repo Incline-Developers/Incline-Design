@@ -738,6 +738,7 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: 병합 전에 프
 cmd-omf-crs-differs = { $source_name }: 좌표 참조계 '{ $source_crs }'이(가) 프로젝트 CRS '{ $target_crs }'와(과) 다릅니다. 좌표를 재투영 없이 병합했습니다
 cmd-omf-source-name-units-source-units = { $source_name }: 단위 '{ $source_units }'이(가) 프로젝트 단위 '{ $target_units }'와(과) 다릅니다. 좌표를 변환 없이 병합했습니다
 cmd-omf-source-name-warning = { $source_name }: { $warning }
+cmd-omf-prismoid-grids-not-exported = 프리즈모이드 격자 { $count }개는 프로젝트 파일에 남아 있으며 내보내지 않았습니다
 cmd-omf-there-no-open-incline-design = 내보낼 수 있는 열린 Incline Design 데이터가 없습니다
 cmd-placement-2-vertices = 정점 2개
 cmd-placement-count-vertices = 정점 { $count }개
@@ -1987,6 +1988,7 @@ omf-project-description-not-retained = 프로젝트 설명은 유지되지 않�
 omf-unsupported-metadata-keys = 프로젝트에 지원되지 않는 메타데이터 키가 있습니다: { $keys }
 omf-skipped-drillhole-data-saved-older = 이전 레이아웃으로 저장된 시추공 데이터({ $names })를 건너뛰었습니다. 원본 파일에서 다시 가져오세요
 omf-modelling-settings-unreadable = 프로젝트 모델링 설정을 읽을 수 없어 기본값을 사용합니다
+omf-prismoid-grid-not-kept = 프리즈모이드 격자 '{ $name }'을(를) 읽을 수 없어 유지하지 않습니다: { $error }
 
 ## Plot strings
 

@@ -731,6 +731,7 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: đã áp dụng g
 cmd-omf-crs-differs = { $source_name }: hệ quy chiếu tọa độ '{ $source_crs }' khác với CRS của dự án '{ $target_crs }'; tọa độ đã được gộp mà không chiếu lại
 cmd-omf-source-name-units-source-units = { $source_name }: đơn vị '{ $source_units }' khác với đơn vị của dự án '{ $target_units }'; tọa độ đã được gộp mà không chuyển đổi
 cmd-omf-source-name-warning = { $source_name }: { $warning }
+cmd-omf-prismoid-grids-not-exported = { $count } lưới prismoid vẫn nằm trong tệp dự án và không được xuất
 cmd-omf-there-no-open-incline-design = Không có dữ liệu Incline Design nào đang mở để xuất
 cmd-placement-2-vertices = 2 đỉnh
 cmd-placement-count-vertices = { $count } đỉnh
@@ -1980,6 +1981,7 @@ omf-project-description-not-retained = Mô tả dự án không được giữ l
 omf-unsupported-metadata-keys = Dự án có các khóa siêu dữ liệu không được hỗ trợ: { $keys }
 omf-skipped-drillhole-data-saved-older = Đã bỏ qua dữ liệu lỗ khoan được lưu theo bố cục cũ hơn ({ $names }); hãy nhập lại từ các tệp nguồn của nó
 omf-modelling-settings-unreadable = Không thể đọc thiết lập mô hình hóa của dự án; dùng giá trị mặc định
+omf-prismoid-grid-not-kept = Không thể đọc lưới prismoid '{ $name }' và lưới này sẽ không được giữ lại: { $error }
 
 ## Plot strings
 

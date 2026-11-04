@@ -746,6 +746,7 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: Projektursprung {
 cmd-omf-crs-differs = { $source_name }: Koordinatenreferenzsystem '{ $source_crs }' unterscheidet sich vom Projekt-KRS '{ $target_crs }'; Koordinaten wurden ohne Umprojektion zusammengeführt
 cmd-omf-source-name-units-source-units = { $source_name }: Einheiten '{ $source_units }' unterscheiden sich von den Projekteinheiten '{ $target_units }'; Koordinaten wurden ohne Umrechnung zusammengeführt
 cmd-omf-source-name-warning = { $source_name }: { $warning }
+cmd-omf-prismoid-grids-not-exported = { $count } Prismoidgitter bleiben in der Projektdatei und wurden nicht exportiert
 cmd-omf-there-no-open-incline-design = Es gibt keine offenen Incline-Design-Daten zum Exportieren
 cmd-placement-2-vertices = 2 Eckpunkte
 cmd-placement-count-vertices = { $count } Eckpunkte
@@ -1995,6 +1996,7 @@ omf-project-description-not-retained = Projektbeschreibung wird nicht beibehalte
 omf-unsupported-metadata-keys = Projekt enthält nicht unterstützte Metadatenschlüssel: { $keys }
 omf-skipped-drillhole-data-saved-older = Bohrlochdaten in einem älteren Layout übersprungen ({ $names }); importieren Sie sie erneut aus den Quelldateien
 omf-modelling-settings-unreadable = Die Modellierungseinstellungen des Projekts konnten nicht gelesen werden; die Standardwerte werden verwendet
+omf-prismoid-grid-not-kept = Prismoidgitter '{ $name }' konnte nicht gelesen werden und wird nicht übernommen: { $error }
 
 ## Plot strings
 

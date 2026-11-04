@@ -420,6 +420,8 @@ pub(crate) struct App<'a> {
     next_point_cloud_id: u64,
     raster_textures: Vec<OpenRasterTexture>,
     next_raster_texture_id: u64,
+    /// Kept through open, save and merge; not yet listed or drawn.
+    prismoid_grids: Vec<crate::model::prismoid_grid::OpenPrismoidGrid>,
     empty_document: Document,
     scene_document: Document,
     /// Layers of `scene_document` with at least one object on them, rebuilt
@@ -703,6 +705,7 @@ impl<'a> Default for App<'a> {
             next_point_cloud_id: 0,
             raster_textures: Vec::new(),
             next_raster_texture_id: 0,
+            prismoid_grids: Vec::new(),
             empty_document: Document::new(),
             scene_document: Document::new(),
             populated_layers: std::collections::HashSet::new(),
@@ -1577,6 +1580,7 @@ impl<'a> App<'a> {
         self.next_point_cloud_id = 0;
         self.raster_textures.clear();
         self.next_raster_texture_id = 0;
+        self.prismoid_grids.clear();
         self.project_asset_baseline = SaveToken::default();
         self.clear_editor_transient_state();
         // Scenarios, runs and results belong to the outgoing project; the next

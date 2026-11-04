@@ -757,6 +757,7 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: перед объ
 cmd-omf-crs-differs = { $source_name }: система координат «{ $source_crs }» отличается от системы координат проекта «{ $target_crs }»; координаты объединены без перепроецирования
 cmd-omf-source-name-units-source-units = { $source_name }: единицы «{ $source_units }» отличаются от единиц проекта «{ $target_units }»; координаты объединены без преобразования
 cmd-omf-source-name-warning = { $source_name }: { $warning }
+cmd-omf-prismoid-grids-not-exported = Сетки призмоидов ({ $count }) остаются в файле проекта и не были экспортированы
 cmd-omf-there-no-open-incline-design = Нет открытых данных Incline Design для экспорта
 cmd-placement-2-vertices = 2 вершины
 cmd-placement-count-vertices = { $count } вершин
@@ -2008,6 +2009,7 @@ omf-unsupported-metadata-keys = В проекте есть неподдержи�
 omf-optimization-scenarios-unreadable = Не удалось прочитать сценарии оптимизации проекта, они пропущены: { $error }
 omf-skipped-drillhole-data-saved-older = Пропущены данные скважин, сохранённые в старом формате ({ $names }); импортируйте их заново из исходных файлов
 omf-modelling-settings-unreadable = Настройки моделирования проекта не удалось прочитать; используются значения по умолчанию
+omf-prismoid-grid-not-kept = Не удалось прочитать сетку призмоидов '{ $name }', она не будет сохранена: { $error }
 
 ## Plot strings
 

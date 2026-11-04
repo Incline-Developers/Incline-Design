@@ -705,6 +705,7 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: titik asal proyek
 cmd-omf-crs-differs = { $source_name }: sistem referensi “{ $source_crs }” berbeda dari CRS proyek “{ $target_crs }”; koordinat digabung tanpa proyeksi ulang
 cmd-omf-source-name-units-source-units = { $source_name }: satuan “{ $source_units }” berbeda dari satuan proyek “{ $target_units }”; koordinat digabung tanpa konversi
 cmd-omf-source-name-warning = { $source_name }: { $warning }
+cmd-omf-prismoid-grids-not-exported = { $count } grid prismoid tetap di berkas proyek dan tidak diekspor
 cmd-omf-there-no-open-incline-design = Tidak ada data Incline Design terbuka untuk diekspor
 cmd-placement-2-vertices = 2 verteks
 cmd-placement-count-vertices = { $count } verteks
@@ -1954,6 +1955,7 @@ omf-project-description-not-retained = Deskripsi proyek tidak dipertahankan
 omf-unsupported-metadata-keys = Proyek memiliki kunci metadata yang tidak didukung: { $keys }
 omf-skipped-drillhole-data-saved-older = Data lubang bor yang disimpan dalam tata letak lama dilewati ({ $names }); impor lagi dari file sumbernya
 omf-modelling-settings-unreadable = Pengaturan pemodelan proyek tidak dapat dibaca; nilai bawaan digunakan
+omf-prismoid-grid-not-kept = Grid prismoid '{ $name }' tidak dapat dibaca dan tidak akan disimpan: { $error }
 
 ## Plot strings
 

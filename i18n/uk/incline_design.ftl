@@ -752,6 +752,7 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: перед об'�
 cmd-omf-crs-differs = { $source_name }: система координат «{ $source_crs }» відрізняється від системи координат проекту «{ $target_crs }»; координати об'єднано без перепроєктування
 cmd-omf-source-name-units-source-units = { $source_name }: одиниці «{ $source_units }» відрізняються від одиниць проекту «{ $target_units }»; координати об'єднано без перетворення
 cmd-omf-source-name-warning = { $source_name }: { $warning }
+cmd-omf-prismoid-grids-not-exported = Сітки призмоїдів ({ $count }) залишаються у файлі проєкту й не були експортовані
 cmd-omf-there-no-open-incline-design = Немає відкритих даних Incline Design для експорту
 cmd-placement-2-vertices = 2 вершини
 cmd-placement-count-vertices = { $count } вершин
@@ -2001,6 +2002,7 @@ omf-project-description-not-retained = Опис проекту не зберіг
 omf-unsupported-metadata-keys = У проекті є непідтримувані ключі метаданих: { $keys }
 omf-skipped-drillhole-data-saved-older = Пропущено дані свердловин, збережені в старішому форматі ({ $names }); імпортуйте їх ще раз із вихідних файлів
 omf-modelling-settings-unreadable = Налаштування моделювання проекту не вдалося прочитати; використано типові значення
+omf-prismoid-grid-not-kept = Не вдалося прочитати сітку призмоїдів '{ $name }', її не буде збережено: { $error }
 
 ## Plot strings
 

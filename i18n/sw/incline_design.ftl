@@ -737,6 +737,7 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: chanzo cha mradi 
 cmd-omf-crs-differs = { $source_name }: mfumo wa marejeleo wa kuratibu '{ $source_crs }' unatofautiana na CRS ya mradi '{ $target_crs }'; kuratibu ziliunganishwa bila kuoanisha upya makadirio
 cmd-omf-source-name-units-source-units = { $source_name }: vipimo '{ $source_units }' vinatofautiana na vipimo vya mradi '{ $target_units }'; kuratibu ziliunganishwa bila kubadilisha
 cmd-omf-source-name-warning = { $source_name }: { $warning }
+cmd-omf-prismoid-grids-not-exported = Gridi { $count } za prismoidi zinabaki kwenye faili la mradi na hazikuhamishwa
 cmd-omf-there-no-open-incline-design = Hakuna data ya Incline Design iliyofunguliwa ya kuhamisha
 cmd-placement-2-vertices = vipeo 2
 cmd-placement-count-vertices = vipeo { $count }
@@ -1986,6 +1987,7 @@ omf-project-description-not-retained = Maelezo ya mradi hayahifadhiwi
 omf-unsupported-metadata-keys = Mradi una funguo za metadata zisizotumika: { $keys }
 omf-skipped-drillhole-data-saved-older = Data ya mashimo ya uchimbaji iliyohifadhiwa katika mpangilio wa zamani imerukwa ({ $names }); iingize tena kutoka faili zake za chanzo
 omf-modelling-settings-unreadable = Mipangilio ya uundaji wa mifano ya mradi haikuweza kusomwa; chaguo-msingi zinatumika
+omf-prismoid-grid-not-kept = Gridi ya prismoidi '{ $name }' haikuweza kusomwa na haitahifadhiwa: { $error }
 
 ## Plot strings
 

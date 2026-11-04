@@ -756,6 +756,7 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: нэгтгэхи�
 cmd-omf-crs-differs = { $source_name }: координатын лавлагаа систем '{ $source_crs }' нь төслийн '{ $target_crs }' системээс ялгаатай байна; координатыг дахин проекцлолгүй нэгтгэлээ
 cmd-omf-source-name-units-source-units = { $source_name }: нэгж '{ $source_units }' нь төслийн '{ $target_units }' нэгжээс ялгаатай байна; координатыг хөрвүүлэлгүй нэгтгэлээ
 cmd-omf-source-name-warning = { $source_name }: { $warning }
+cmd-omf-prismoid-grids-not-exported = { $count } призмоид тор төслийн файлд үлдэж, экспортлогдсонгүй
 cmd-omf-there-no-open-incline-design = Экспортлох Incline Design өгөгдөл нээлттэй байхгүй байна
 cmd-placement-2-vertices = 2 орой цэг
 cmd-placement-count-vertices = { $count } орой цэг
@@ -2005,6 +2006,7 @@ omf-project-description-not-retained = Төслийн тайлбар хадга�
 omf-unsupported-metadata-keys = Төсөл дэмжигдээгүй метаөгөгдлийн түлхүүр агуулж байна: { $keys }
 omf-skipped-drillhole-data-saved-older = Хуучин бүтэцтэй хадгалсан цооногийн өгөгдлийг алгаслаа ({ $names }); эх файлуудаас нь дахин импортлоно уу
 omf-modelling-settings-unreadable = Төслийн загварчлалын тохиргоог уншиж чадсангүй; үндсэн утгуудыг ашиглаж байна
+omf-prismoid-grid-not-kept = Призмоид тор '{ $name }'-г уншиж чадсангүй, хадгалагдахгүй: { $error }
 
 ## Plot strings
 

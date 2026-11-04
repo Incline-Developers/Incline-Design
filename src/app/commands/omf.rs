@@ -188,8 +188,12 @@ impl<'a> App<'a> {
             drill_holes: self.drill_holes.iter().filter(|item| selection.drill_holes.includes(item.id)).cloned().collect(),
             point_clouds: self.point_clouds.iter().filter(|item| selection.point_clouds.includes(item.id)).cloned().collect(),
             rasters: self.raster_textures.iter().filter(|item| selection.rasters.includes(item.id)).cloned().collect(),
+            prismoid_grids: Vec::new(),
             optimization: None,
         };
+        if scope == FolderScope::Whole {
+            snapshot.prismoid_grids = self.prismoid_grids.clone();
+        }
         if scope == FolderScope::Whole
             && let Some(project) = self.workspace.active_project()
             && !project.project.optimization.scenarios.is_empty()
@@ -205,6 +209,9 @@ impl<'a> App<'a> {
         // otherwise slip past this guard.
         if snapshot.item_count() == 0 {
             anyhow::bail!(tr!("cmd-omf-there-no-open-incline-design"));
+        }
+        if scope == FolderScope::Referenced && !self.prismoid_grids.is_empty() {
+            userspace_log!("{}", tr!("cmd-omf-prismoid-grids-not-exported", count = self.prismoid_grids.len().to_string()));
         }
         Ok(snapshot)
     }
@@ -240,6 +247,7 @@ impl<'a> App<'a> {
             drill_holes,
             point_clouds,
             rasters,
+            prismoid_grids,
             warnings: _,
             folders,
             modelling,
@@ -296,6 +304,7 @@ impl<'a> App<'a> {
         }
 
         self.install_bundle_items(BundleIds::Preserve, &folder_map, rasters, triangulations, block_models, drill_holes, point_clouds);
+        self.prismoid_grids = prismoid_grids;
 
         // Every membership above came from `folder_map`, so it already
         // resolves in the project's (just-installed) folder registry; no
@@ -392,7 +401,8 @@ impl<'a> App<'a> {
                 && self.block_models.is_empty()
                 && self.drill_holes.is_empty()
                 && self.point_clouds.is_empty()
-                && self.raster_textures.is_empty();
+                && self.raster_textures.is_empty()
+                && self.prismoid_grids.is_empty();
             let count = bundle.item_count();
             if count == 0 {
                 userspace_warn!("{}", tr!("cmd-omf-project-source-name-contains-no", source_name = source_name.clone().to_string()));
@@ -418,6 +428,7 @@ impl<'a> App<'a> {
                 drill_holes,
                 point_clouds,
                 rasters,
+                prismoid_grids,
                 warnings: _,
                 folders,
                 // A merge brings data in, not the other project's way of
@@ -493,6 +504,14 @@ impl<'a> App<'a> {
             }
 
             self.install_bundle_items(BundleIds::Fresh, &folder_map, rasters, triangulations, block_models, drill_holes, point_clouds);
+            let any_prismoid_grids = !prismoid_grids.is_empty();
+            for mut prismoid_grid in prismoid_grids {
+                prismoid_grid.name = project::unique_item_name(prismoid_grid.name, self.prismoid_grids.iter().map(|item| item.name.as_str()));
+                self.prismoid_grids.push(prismoid_grid);
+            }
+            if any_prismoid_grids {
+                self.touch_active_project_content();
+            }
             imported_items += count;
             userspace_log!(
                 "{}",

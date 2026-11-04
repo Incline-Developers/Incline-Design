@@ -705,6 +705,7 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: مبدأ پروژ
 cmd-omf-crs-differs = { $source_name }: دستگاه مختصات «{ $source_crs }» با CRS پروژه «{ $target_crs }» تفاوت دارد؛ مختصات بدون بازفرافکنی ادغام شدند
 cmd-omf-source-name-units-source-units = { $source_name }: واحدهای «{ $source_units }» با واحدهای پروژه «{ $target_units }» تفاوت دارند؛ مختصات بدون تبدیل ادغام شدند
 cmd-omf-source-name-warning = { $source_name }: { $warning }
+cmd-omf-prismoid-grids-not-exported = { $count } شبکه منشورگون در فایل پروژه می‌ماند و صادر نشد
 cmd-omf-there-no-open-incline-design = داده‌ای باز از Incline Design برای صادر کردن وجود ندارد
 cmd-placement-2-vertices = ۲ رأس
 cmd-placement-count-vertices = { $count } رأس
@@ -1954,6 +1955,7 @@ omf-project-description-not-retained = توضیحات پروژه نگه‌دار
 omf-unsupported-metadata-keys = پروژه دارای کلیدهای فرادادهٔ پشتیبانی‌نشده است: { $keys }
 omf-skipped-drillhole-data-saved-older = داده گمانه ذخیره‌شده در چیدمان قدیمی‌تر ({ $names }) رد شد؛ آن را از فایل‌های منبع دوباره وارد کنید
 omf-modelling-settings-unreadable = تنظیمات مدل‌سازی پروژه خوانده نشد؛ مقادیر پیش‌فرض استفاده می‌شوند
+omf-prismoid-grid-not-kept = شبکه منشورگون '{ $name }' خوانده نشد و نگه داشته نمی‌شود: { $error }
 
 ## Plot strings
 
