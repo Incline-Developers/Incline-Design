@@ -925,6 +925,8 @@ impl crate::app::App<'_> {
         } else {
             self.cancel_solid_jobs(solid.id, None);
             self.editor.solid_view_bands.remove(&solid.id);
+            // New inputs: a failure of theirs is news even if it reads the same.
+            self.solid_failures_warned.retain(|(warned, _)| *warned != solid.id);
             self.solid_view_cache.insert(
                 solid.id,
                 ViewSolid {
@@ -986,9 +988,14 @@ impl crate::app::App<'_> {
                     return;
                 };
                 cache.stamp = stamp;
+                let name = cache.solid.name.clone();
                 match result {
                     Ok(envelope) => cache.envelope.settle(Arc::new(envelope)),
-                    Err(error) => cache.envelope.fail(format!("{error:#}")),
+                    Err(error) => {
+                        let message = format!("{error:#}");
+                        cache.envelope.fail(message.clone());
+                        app.warn_solid_failed(id, &name, &message);
+                    }
                 }
                 app.solid_view_body_key = None;
             },
@@ -1047,9 +1054,14 @@ impl crate::app::App<'_> {
                 let Some(cache) = app.accepting_solid(runtime, id, SolidArtifact::Body, token) else {
                     return;
                 };
+                let name = cache.solid.name.clone();
                 match result {
                     Ok(body) => cache.body.settle(Arc::new(body)),
-                    Err(error) => cache.body.fail(format!("{error:#}")),
+                    Err(error) => {
+                        let message = format!("{error:#}");
+                        cache.body.fail(message.clone());
+                        app.warn_solid_failed(id, &name, &message);
+                    }
                 }
                 app.solid_view_body_key = None;
             },
@@ -1081,9 +1093,14 @@ impl crate::app::App<'_> {
                 let Some(cache) = app.accepting_solid(runtime, id, SolidArtifact::Blasting, token) else {
                     return;
                 };
+                let name = cache.solid.name.clone();
                 match result {
                     Ok(blasting) => cache.blasting.settle(Arc::new(blasting)),
-                    Err(error) => cache.blasting.fail(format!("{error:#}")),
+                    Err(error) => {
+                        let message = format!("{error:#}");
+                        cache.blasting.fail(message.clone());
+                        app.warn_solid_failed(id, &name, &message);
+                    }
                 }
                 app.solid_view_body_key = None;
             },
@@ -1122,11 +1139,26 @@ impl crate::app::App<'_> {
                         app.solid_view_cache.get_mut(&id).expect("checked above").partition.settle(partition);
                         app.record_dig_block_identities(id);
                     }
-                    Err(error) => app.solid_view_cache.get_mut(&id).expect("checked above").partition.fail(format!("{error:#}")),
+                    Err(error) => {
+                        let message = format!("{error:#}");
+                        let cache = app.solid_view_cache.get_mut(&id).expect("checked above");
+                        cache.partition.fail(message.clone());
+                        let name = cache.solid.name.clone();
+                        app.warn_solid_failed(id, &name, &message);
+                    }
                 }
                 app.solid_view_body_key = None;
             },
         );
+    }
+
+    /// Say in a dialog that part of a solid could not be built: nothing after
+    /// it can run until that is put right. Once per failure, since the Setup
+    /// preview and the Solids step build the same surfaces side by side.
+    pub(crate) fn warn_solid_failed(&mut self, solid: SolidId, name: &str, message: &str) {
+        if message != "Cancelled" && self.solid_failures_warned.insert((solid, message.to_owned())) {
+            crate::userspace_warn!("{}", crate::i18n::tr!("solid-build-failed", solid = name.to_owned(), reason = message.to_owned()));
+        }
     }
 
     /// The cache entry for a result that is still wanted, or `None` when the

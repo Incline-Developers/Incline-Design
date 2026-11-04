@@ -778,6 +778,7 @@ impl crate::app::App<'_> {
 
         self.solid_preview = Some(SolidPreview::carrying(key, built_from, SolidPreviewStatus::Building { previous }, carried));
 
+        let failed_name = solid_name.clone();
         let compute = move |cancel: &crate::app::jobs::CancelFlag,
                             progress: &crate::model::progress::Progress|
               -> anyhow::Result<(crate::model::triangulation::GeneratedTriangulation, f64)> {
@@ -820,7 +821,11 @@ impl crate::app::App<'_> {
                         volume: Some(volume),
                     }
                 }
-                Err(error) => SolidPreviewStatus::Failed(format!("{error:#}")),
+                Err(error) => {
+                    let message = format!("{error:#}");
+                    app.warn_solid_failed(key.solid, &failed_name, &message);
+                    SolidPreviewStatus::Failed(message)
+                }
             };
             // The outgoing cut stays on screen until the incoming mesh has
             // been cut in its turn: `body_key` names the mesh it came from, so

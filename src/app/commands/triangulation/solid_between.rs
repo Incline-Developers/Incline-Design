@@ -296,15 +296,14 @@ fn build_solid_local(
         surfaces.push(prepared);
     }
     let SolidEnvelopes { lower, upper } = build_envelopes(&surfaces[0], &surfaces[1], region, progress);
-    if lower.1.is_empty() || upper.1.is_empty() {
-        anyhow::bail!(
-            "The two surfaces enclose no {} volume: the design surface is nowhere {} the topography within the area they share",
-            region.label().to_lowercase(),
-            match region {
-                SolidRegion::Cut => "below",
-                SolidRegion::Fill => "above",
-            }
-        );
+    // By plan area, not face count: a topography with a hole cut out where the
+    // design surface lies meets it only along the hole's rim, and the slivers
+    // that leaves there cover nothing and weld away to no faces at all.
+    if plan_area(&lower) < MIN_SOLID_PLAN_AREA || plan_area(&upper) < MIN_SOLID_PLAN_AREA {
+        anyhow::bail!(match region {
+            SolidRegion::Cut => tr!("tri-solid-no-volume-cut"),
+            SolidRegion::Fill => tr!("tri-solid-no-volume-fill"),
+        });
     }
 
     let volume = volume_between(&lower, &upper);
@@ -347,6 +346,22 @@ fn build_solid_local(
     }
 
     Ok((vertices, faces, volume))
+}
+
+/// The least plan area, in square model units, two sheets must share to bound
+/// a solid; anything less is what rounding leaves along a line.
+const MIN_SOLID_PLAN_AREA: f64 = 1.0e-3;
+
+/// The area a sheet covers in plan.
+fn plan_area(sheet: &(Vec<mesh_data::Vertex>, Vec<[u32; 3]>)) -> f64 {
+    sheet
+        .1
+        .iter()
+        .map(|face| {
+            let [a, b, c] = face.map(|index| sheet.0[index as usize]);
+            0.5 * ((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y)).abs()
+        })
+        .sum()
 }
 
 /// The volume between the two sheets, by integrating their height difference

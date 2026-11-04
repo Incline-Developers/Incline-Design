@@ -432,6 +432,9 @@ pub(crate) struct App<'a> {
     /// `EditorState::locked_layers` onto `EditorState::frozen_handles`, so
     /// invalidation only walks the document when one of the two changed.
     layer_lock_key: Option<(u64, u64)>,
+    /// The solid build failures already raised in a dialog; see
+    /// [`App::warn_solid_failed`].
+    solid_failures_warned: std::collections::HashSet<(crate::model::SolidId, String)>,
     /// What [`App::sync_page_locks`] last built its sets from.
     page_lock_key: Option<u64>,
     /// Selection + composite fingerprint behind `EditorState::selection_has_intersections`,
@@ -707,6 +710,7 @@ impl<'a> Default for App<'a> {
             snap_index_dirty: false,
             scene_document_key: None,
             layer_lock_key: None,
+            solid_failures_warned: Default::default(),
             page_lock_key: None,
             intersection_availability_key: None,
             history: crate::model::History::new(),
