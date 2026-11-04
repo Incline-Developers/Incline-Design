@@ -791,6 +791,23 @@ impl HaulBlock {
     }
 }
 
+/// What the Copy To dialog of a cut step has ticked: benches or flitches, by
+/// solid and the bit pattern of their base RL.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CopyCutsDialog {
+    pub(crate) targets: std::collections::HashSet<(crate::model::SolidId, u64)>,
+}
+
+impl CopyCutsDialog {
+    pub(crate) fn set(&mut self, solid: crate::model::SolidId, base: f64, on: bool) {
+        if on {
+            self.targets.insert((solid, base.to_bits()));
+        } else {
+            self.targets.remove(&(solid, base.to_bits()));
+        }
+    }
+}
+
 /// A row of the Benching step's results: one bench, or one flitch inside it.
 /// Selecting a row picks that slice of the solid out in the preview.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -2408,6 +2425,8 @@ pub(crate) struct EditorState {
     /// Strips (flitch strips) or Blasting (bench blast lines): each pastes
     /// only into the step it was copied from.
     pub(crate) cut_clipboard: (bool, Vec<crate::model::Object>),
+    /// The open Copy To dialog of a cut step.
+    pub(crate) copy_cuts_dialog: Option<CopyCutsDialog>,
     pub(crate) selected_blast: Option<BlastShapeRef>,
     pub(crate) scroll_to_blast: bool,
     pub(crate) blast_labels: Vec<(String, (f32, f32), bool)>,
@@ -3544,6 +3563,7 @@ impl EditorState {
     /// The common case: a dialog that confirms on Enter and cancels on Escape.
     fn dialog_owns_both_keys(&self) -> bool {
         self.alerts.is_showing()
+            || self.copy_cuts_dialog.is_some()
             || self.grid_dialog.is_some()
             || self.exit_confirm_open
             || self.replace_project_confirm_open
@@ -4148,6 +4168,7 @@ impl EditorState {
             solid_preview_image_revision: 0,
             selected_dig_block_info: None,
             cut_clipboard: (false, Vec::new()),
+            copy_cuts_dialog: None,
             selected_blast: None,
             scroll_to_blast: false,
             blast_labels: Vec::new(),
@@ -5226,6 +5247,8 @@ pub(crate) enum UiCommand {
     /// the discipline it was made in, and the tabs are not a way of carrying
     /// one across.
     ClearSelection,
+    /// Copy the cut lines selected on a cut step to these benches or flitches.
+    CopyCutsTo(Vec<(crate::model::SolidId, BenchSelection)>),
     SetFlyModeEnabled(bool),
     SetSliceModeEnabled(bool),
     #[cfg(not(target_arch = "wasm32"))]
@@ -6000,6 +6023,7 @@ impl UiCommand {
             | Self::ToggleCreateDrillPattern
             | Self::BeginDrillPatternShapePick
             | Self::ClearSelection
+            | Self::CopyCutsTo(_)
             | Self::CloseStartupDialog
             | Self::CancelCloseProject
             | Self::CancelExit

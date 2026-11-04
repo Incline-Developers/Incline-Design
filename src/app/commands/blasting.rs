@@ -75,6 +75,7 @@ impl crate::app::App<'_> {
         if !self.editor.is_planning_cut_step() {
             self.editor.blasting_bench_key = None;
             self.editor.planning_cut_name = None;
+            self.editor.copy_cuts_dialog = None;
             return;
         }
         let bench = self.editor.planning_cut_target();
@@ -90,6 +91,7 @@ impl crate::app::App<'_> {
         self.cancel_active_tool();
         self.editor.tool_highlight_id = None;
         self.editor.blasting_bench_key = Some(key);
+        self.editor.copy_cuts_dialog = None;
         self.editor.selected_blast = None;
         self.editor.selected_dig_block = None;
         self.editor.selected_handles.clear();
@@ -257,10 +259,58 @@ impl crate::app::App<'_> {
         self.invalidate_geometry();
     }
 
+    /// Copy the lines selected on this cut step to other benches or flitches,
+    /// at each one's top, as one undo. The selection stays where it is.
+    pub(crate) fn copy_cuts_to(&mut self, targets: &[(SolidId, BenchSelection)]) {
+        if !self.editor.is_planning_cut_step() {
+            return;
+        }
+        let lines: Vec<Object> = self
+            .scene_document
+            .objects()
+            .iter()
+            .filter(|object| self.editor.selected_handles.contains(&SceneEntityId::Object(object.id())))
+            .filter(|object| matches!(object, Object::Polyline { .. }))
+            .cloned()
+            .collect();
+        if lines.is_empty() {
+            return;
+        }
+        let mut commands = Vec::new();
+        for (solid, band) in targets {
+            let Some(layer) = self.cut_layer_for(*solid, *band) else { continue };
+            let Some(document) = self.workspace.active_document_mut() else { return };
+            for source in &lines {
+                let id = document.allocate_object_id();
+                let mut object = source.with_id_and_layer(id, layer);
+                if let Object::Polyline { verts, .. } = &mut object {
+                    for vertex in verts {
+                        vertex.pos.z = band.top;
+                    }
+                }
+                commands.push(Command::AddObject(object));
+            }
+        }
+        self.execute_edit(Command::Batch(commands));
+        self.invalidate_geometry();
+        let done = if self.editor.is_dig_strips_step() {
+            crate::i18n::tr!("planning-copy-cuts-done-flitches", lines = lines.len(), targets = targets.len())
+        } else {
+            crate::i18n::tr!("planning-copy-cuts-done-benches", lines = lines.len(), targets = targets.len())
+        };
+        crate::userspace_log!("{done}");
+    }
+
     pub(crate) fn ensure_bench_cut_layer(&mut self) -> Option<LayerId> {
         let (solid, band) = self.editor.planning_cut_target()?;
+        let layer = self.cut_layer_for(solid, band)?;
+        self.editor.active_layer = Some(layer);
+        Some(layer)
+    }
+
+    /// The layer one bench's or flitch's cut lines go on, created if it has none.
+    fn cut_layer_for(&mut self, solid: SolidId, band: BenchSelection) -> Option<LayerId> {
         if let Some(layer) = self.bench_cut_layer(solid, band.base) {
-            self.editor.active_layer = Some(layer);
             return Some(layer);
         }
         let layer = self.workspace.active_project_mut()?.project.document.allocate_layer_id();
@@ -281,7 +331,6 @@ impl crate::app::App<'_> {
             section: crate::model::SectionKind::natural_layer(),
         });
         self.update_solid(solid, SolidEdit::Blasting(plan));
-        self.editor.active_layer = Some(layer);
         self.editor.blasting_outlines_key = None;
         Some(layer)
     }

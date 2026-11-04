@@ -2037,6 +2037,29 @@ planning-min-strip-area-help = Dig blocks smaller than this are left out of mini
 planning-blasts-empty = Select a bench to see its blasts
 planning-blasts-one-bench = Select one bench to draw cuts
 planning-dig-one-flitch = Select one flitch to draw strips
+planning-blast-count-under =
+    { $count ->
+        [one] { $count } blast
+       *[other] { $count } blasts
+    } · { $under } too small
+planning-copy-cuts-button =
+    { $count ->
+        [one] Copy { $count } line to…
+       *[other] Copy { $count } lines to…
+    }
+planning-copy-cuts-title-benches = Copy lines to benches
+planning-copy-cuts-title-flitches = Copy lines to flitches
+planning-copy-cuts-confirm = Copy to { $count }
+planning-copy-cuts-done-benches =
+    { $targets ->
+        [one] Copied { $lines } lines to { $targets } bench
+       *[other] Copied { $lines } lines to { $targets } benches
+    }
+planning-copy-cuts-done-flitches =
+    { $targets ->
+        [one] Copied { $lines } lines to { $targets } flitch
+       *[other] Copied { $lines } lines to { $targets } flitches
+    }
 planning-blast-count =
     { $count ->
         [one] { $count } blast
@@ -3837,6 +3860,9 @@ tri-weld-retry = Weld & Retry
 tri-when-enabled-generate-contours-only = When enabled, generate contours only between the specified minimum and maximum elevations.
 tri-solid-role-design = design
 tri-solid-role-topography = topography
+tri-solid-no-volume-cut = These surfaces enclose nothing to dig: the design surface is nowhere below the topography. Check the topography has ground over the design surface; one with a hole cut out there leaves nothing above it.
+tri-solid-no-volume-fill = These surfaces enclose nothing to fill: the design surface is nowhere above the topography. Check the topography has ground under the design surface; one with a hole cut out there leaves nothing below it.
+solid-build-failed = { $solid } could not be built. { $reason }
 tri-solid-repaired-surface = The { $role } surface folds over itself in plan or has hairline cracks between its faces, so the solid was built from a repaired copy of it: points less than 0.001 apart in plan were joined, edges were split where points of the surface lie on them, and wherever it folds the sheet on the outside of the solid was kept.
 tri-solid-open-along-edge = Solid is open along { $count } edge(s): the two surfaces do not meet all the way round, so this is a shell between them rather than a closed solid. Its volume is still exact.
 tri-built-solid-between = Built { $region } solid between '{ $design }' and '{ $topography }' · { $volume } m³
@@ -3860,9 +3886,6 @@ ui-click-circle-centre = Click the circle centre
 ui-click-closed-polyline-use-blast = Click a closed polyline to use as the blast shape
 ui-click-collar-add-edit-initiation = Click a collar to add or edit an initiation point
 ui-click-first-point-slice-line = Click the first point of the slice line
-tri-solid-no-volume-cut = These surfaces enclose nothing to dig: the design surface is nowhere below the topography. Check the topography has ground over the design surface; one with a hole cut out there leaves nothing above it.
-tri-solid-no-volume-fill = These surfaces enclose nothing to fill: the design surface is nowhere above the topography. Check the topography has ground under the design surface; one with a hole cut out there leaves nothing below it.
-solid-build-failed = { $solid } could not be built. { $reason }
 ui-click-first-vertex = Click first vertex
 ui-click-perimeter-point-type-radius = Click a perimeter point or type a radius
 ui-click-second-point-slice-line = Click the second point of the slice line

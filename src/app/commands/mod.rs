@@ -217,6 +217,10 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::CreateDrillPattern { name, collars, depth, diameter } => self.create_drill_pattern(name, collars, depth, diameter),
+            UiCommand::CopyCutsTo(targets) => {
+                self.copy_cuts_to(&targets);
+                Ok(())
+            }
             UiCommand::ClearSelection => {
                 self.editor.clear_scene_selection();
                 self.active_triangulation = None;

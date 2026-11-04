@@ -897,6 +897,7 @@ pub(crate) fn draw_explorer(
                         return;
                     }
                     if cut_step {
+                        ui.push_id("copy_cuts", |ui| super::blasting::draw_copy_cuts(ui, editor, document, commands));
                         if dig_strips {
                             super::solids_view::draw_flitch_tree(ui, editor, document);
                         } else {
