@@ -718,6 +718,8 @@ pub(crate) fn draw_rule_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut E
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
+                let no_target = rule.destinations.is_empty();
+                let target = if no_target { tr!("destination-rule-no-target") } else { target };
                 let label = format!("{}. {} → {}", (position + 1), rule.name, target);
                 let summary = rule.summary(
                     |agent| plan.agent(agent).map(|agent| agent.name.clone()).unwrap_or_else(|| tr!("schedule-error-unknown-agent")),
@@ -734,7 +736,8 @@ pub(crate) fn draw_rule_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut E
                 // the order the user is reading, and hiding it would make the
                 // numbering jump.
                 let disabled = (!rule.enabled).then(|| tr!("destination-rule-disabled"));
-                let row = GridRow::new(&label).error(disabled.as_deref());
+                let unrouted = no_target.then(|| tr!("destination-rule-no-target-warning"));
+                let row = GridRow::new(&label).error(disabled.as_deref()).warning(unrouted.as_deref());
                 let response = grid_row(ui, row.selected(selected == Some(rule.id))).on_hover_text(format!("{}\n{}", label, summary));
                 if response.clicked() {
                     selected = Some(rule.id);
@@ -783,15 +786,9 @@ pub(crate) fn draw_rule_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut E
         editor.schedule_condition_draft = None;
     }
     editor.schedule_selected_rule = selected;
-    if new_rule && let Some(first) = destinations::available(document.solids(), routing).first() {
+    if new_rule {
         let name = crate::model::schedule::suggested_name(&tr!("destination-rule-default"), routing.rules.iter().map(|rule| rule.name.clone()));
-        commands.push(UiCommand::schedule(
-            session,
-            ScheduleEdit::AddRule {
-                name,
-                destinations: vec![first.id],
-            },
-        ));
+        commands.push(UiCommand::schedule(session, ScheduleEdit::AddRule { name, destinations: Vec::new() }));
     }
 }
 
@@ -827,13 +824,14 @@ pub(crate) fn draw_rule_editor(
     let categories = editor.schedule_category_values.clone();
     let mut edits = Vec::new();
     let taken: Vec<String> = routing.rules.iter().filter(|other| other.id != rule.id).map(|other| other.name.clone()).collect();
+    let ground_only = tests_a_category(editor, document, ConditionOwner::Routing(rule.id), &rule.conditions);
     let draft = editor.schedule_rule_draft.as_mut().expect("just ensured");
     let name_error = name_problem(&draft.name, taken.iter().cloned());
     let mut condition_action = None;
     // Cloned for the frame: the grid holds the draft mutably while it draws, and
     // the folded set is small enough that a clone is cheaper than splitting the
     // editor borrow.
-    let mut collapsed = editor.schedule_source_collapsed.clone();
+    let mut expanded = editor.schedule_source_expanded.clone();
     DataGrid::new("schedule_rule_editor", rect, &rule.name)
         .column_header(&tr!("destination-rule"))
         .show(ui, |ui| {
@@ -907,10 +905,7 @@ pub(crate) fn draw_rule_editor(
                         }
                     }
                 });
-                // An empty list is not a state a rule can hold - it would match
-                // material and have nowhere to put it - so the last tick stays
-                // until another is put in its place.
-                if !chosen.is_empty() && chosen != rule.destinations {
+                if chosen != rule.destinations {
                     edits.push(UiCommand::schedule(
                         session,
                         ScheduleEdit::SetRuleDestinations {
@@ -992,7 +987,8 @@ pub(crate) fn draw_rule_editor(
                 &rule.sources,
                 &source_views,
                 &stockpiles,
-                &mut collapsed,
+                ground_only,
+                &mut expanded,
             ) && sources != rule.sources
             {
                 edits.push(UiCommand::schedule(session, ScheduleEdit::SetRuleSources { rule: rule.id, sources }));
@@ -1047,7 +1043,7 @@ pub(crate) fn draw_rule_editor(
                 });
             }
         });
-    editor.schedule_source_collapsed = collapsed;
+    editor.schedule_source_expanded = expanded;
     match condition_action {
         None => {}
         Some(ConditionAction::Add) => {
@@ -1092,7 +1088,14 @@ pub(crate) fn draw_rule_editor(
         }
         Some(ConditionAction::Delete(field)) => {
             let conditions = rule.conditions.iter().filter(|condition| condition.field != field).cloned().collect();
-            edits.push(UiCommand::schedule(session, ScheduleEdit::SetRuleConditions { rule: rule.id, conditions }));
+            edits.push(UiCommand::schedule(
+                session,
+                ScheduleEdit::SetRuleConditions {
+                    rule: rule.id,
+                    conditions,
+                    sources: None,
+                },
+            ));
         }
     }
     commands.append(&mut edits);
@@ -1192,8 +1195,9 @@ pub(crate) fn draw_condition_dialog(
     if editor.schedule_condition_draft.as_ref().is_some_and(|draft| draft.rule != shown) {
         editor.schedule_condition_draft = None;
     }
-    let Some(draft) = editor.schedule_condition_draft.as_mut() else { return };
-    let owner = draft.rule;
+    let Some(owner) = editor.schedule_condition_draft.as_ref().map(|draft| draft.rule) else {
+        return;
+    };
     // Whichever kind of rule it belongs to, a condition is the same statement
     // about the same field variable, so one dialog writes both.
     let held: Option<Vec<FieldCondition>> = match owner {
@@ -1204,15 +1208,22 @@ pub(crate) fn draw_condition_dialog(
         editor.schedule_condition_draft = None;
         return;
     };
-    // The sources this rule names decide whether a category can be tested at
-    // all - the blended pile keeps tonnes and grade and discards categories.
-    // The field is offered and the values are shown, so the planner can see
-    // what the rule would have said; only committing it is refused, with the
-    // reason beside the button rather than after the edit.
-    let categories_available = match owner {
-        ConditionOwner::Routing(id) => plan.routing().rule(id).is_some_and(|rule| destinations::category_conditions_available(&rule.sources)),
-        ConditionOwner::Cashflow(id) => plan.cashflow().rule(id).is_some_and(|rule| destinations::category_conditions_available(&rule.sources)),
-    };
+    // A blended pile keeps tonnes and grade and discards categories, so a
+    // category narrows the rule to its ground. That is said in the dialog and
+    // done with the condition; only a rule with no ground left is refused.
+    let held_sources = match owner {
+        ConditionOwner::Routing(id) => plan.routing().rule(id).map(|rule| rule.sources.clone()),
+        ConditionOwner::Cashflow(id) => plan.cashflow().rule(id).map(|rule| rule.sources.clone()),
+    }
+    .unwrap_or_default();
+    let pits: Vec<MovementSourceScope> = editor
+        .schedule_routing_sources
+        .iter()
+        .filter(|view| view.depth == 0)
+        .map(|view| MovementSourceScope::Ground(view.scope))
+        .collect();
+    let narrowed = destinations::sources_for_category(&held_sources, pits);
+    let Some(draft) = editor.schedule_condition_draft.as_mut() else { return };
     let mut open = true;
     let mut close = false;
     let mut apply = false;
@@ -1280,12 +1291,15 @@ pub(crate) fn draw_condition_dialog(
                 ui.checkbox(&mut draft.upper_inclusive, tr!("destination-condition-upper-inclusive"));
             }
             let built = build_condition(draft, categorical).and_then(|condition| {
-                if categorical && !categories_available {
+                if categorical && narrowed.is_none() {
                     Err(tr!("destination-condition-category-blocked"))
                 } else {
                     Ok(condition)
                 }
             });
+            if categorical && narrowed.as_ref().is_some_and(|narrowed| *narrowed != held_sources) {
+                menu::menu_note(ui, tr!("destination-condition-category-narrows"));
+            }
             if let Err(message) = &built {
                 ui.label(egui::RichText::new(message).color(ui.visuals().error_fg_color));
             }
@@ -1303,8 +1317,9 @@ pub(crate) fn draw_condition_dialog(
     if apply
         && let Some(draft) = editor.schedule_condition_draft.as_ref()
         && let Ok(condition) = build_condition(draft, categorical)
-        && (!categorical || categories_available)
+        && (!categorical || narrowed.is_some())
     {
+        let sources = narrowed.filter(|narrowed| categorical && *narrowed != held_sources);
         let replacing = draft.replacing;
         let mut conditions = existing.clone();
         match replacing.and_then(|field| conditions.iter().position(|held| held.field == field)) {
@@ -1314,14 +1329,27 @@ pub(crate) fn draw_condition_dialog(
         commands.push(UiCommand::schedule(
             session,
             match owner {
-                ConditionOwner::Routing(rule) => ScheduleEdit::SetRuleConditions { rule, conditions },
-                ConditionOwner::Cashflow(rule) => ScheduleEdit::SetCashflowRuleConditions { rule, conditions },
+                ConditionOwner::Routing(rule) => ScheduleEdit::SetRuleConditions { rule, conditions, sources },
+                ConditionOwner::Cashflow(rule) => ScheduleEdit::SetCashflowRuleConditions { rule, conditions, sources },
             },
         ));
     }
     if close || !open {
         editor.schedule_condition_draft = None;
     }
+}
+
+/// Whether a rule tests a category, or is about to in the open Condition
+/// dialog. Its Sources then lists ground only.
+pub(crate) fn tests_a_category(editor: &EditorState, document: &Document, owner: ConditionOwner, conditions: &[FieldCondition]) -> bool {
+    conditions.iter().any(|condition| matches!(condition.test, ConditionTest::Category { .. }))
+        || editor
+            .schedule_condition_draft
+            .as_ref()
+            .filter(|draft| draft.rule == owner)
+            .and_then(|draft| draft.field)
+            .and_then(|id| document.reserve_fields().iter().find(|field| field.id == id))
+            .is_some_and(|field| field.aggregation == ReserveAggregation::Category)
 }
 
 /// Turn the draft into a condition, or say what is wrong with it.
@@ -1496,6 +1524,7 @@ fn tonnes_per_day(value: f64) -> String {
 /// does nothing, because an empty list matches nothing and reading it as All
 /// would widen the rule at the moment the user narrowed it most. Returns the
 /// new selection, or `None` when nothing was chosen this frame.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn movement_sources_row(
     ui: &mut egui::Ui,
     id: (&'static str, u64),
@@ -1503,7 +1532,8 @@ pub(crate) fn movement_sources_row(
     held: &MovementSourceSelection,
     sources: &[SourceScopeView],
     stockpiles: &[destinations::DestinationView],
-    collapsed: &mut Vec<(u64, u64, u64)>,
+    ground_only: bool,
+    expanded: &mut Vec<(u64, u64, u64)>,
 ) -> Option<MovementSourceSelection> {
     let all = matches!(held, MovementSourceSelection::All);
     let chosen: Vec<MovementSourceScope> = match held {
@@ -1537,7 +1567,7 @@ pub(crate) fn movement_sources_row(
             .iter()
             .filter(|view| view.depth == 0)
             .map(|view| MovementSourceScope::Ground(view.scope))
-            .chain(stockpiles.iter().map(|entry| MovementSourceScope::Stockpile(entry.id)))
+            .chain(stockpiles.iter().filter(|_| !ground_only).map(|entry| MovementSourceScope::Stockpile(entry.id)))
             .collect()
     };
     let toggle = |scope: MovementSourceScope, picked: bool| -> Option<MovementSourceSelection> {
@@ -1552,24 +1582,28 @@ pub(crate) fn movement_sources_row(
     let response = grid_select_row(ui, id, label, &summary, 0);
     let mut next: Option<MovementSourceSelection> = None;
     checklist_popup(&response, label.to_owned(), 260.0, |ui| {
-        if ChecklistRow::new(&tr!("destination-rule-all-sources"), Tick::of(all, false)).show(ui).toggled {
-            next = Some(if all {
-                match everything() {
-                    scopes if scopes.is_empty() => MovementSourceSelection::All,
-                    scopes => MovementSourceSelection::Only(scopes),
-                }
-            } else {
-                MovementSourceSelection::All
-            });
+        // Testing a category rules out All. A rule saved holding it can still
+        // untick it, which is how it gets repaired.
+        if !ground_only || all {
+            if ChecklistRow::new(&tr!("destination-rule-all-sources"), Tick::of(all, false)).show(ui).toggled {
+                next = Some(if all {
+                    match everything() {
+                        scopes if scopes.is_empty() => MovementSourceSelection::All,
+                        scopes => MovementSourceSelection::Only(scopes),
+                    }
+                } else {
+                    MovementSourceSelection::All
+                });
+            }
+            context_menu_separator(ui);
         }
-        context_menu_separator(ui);
         menu::panel_section(ui, tr!("truck-rule-ground"));
         if sources.is_empty() {
             menu::menu_note(ui, tr!("destination-no-sources"));
         }
         let ground: Vec<SourceScope> = chosen.iter().filter_map(|scope| scope.ground()).collect();
         for (index, view) in sources.iter().enumerate() {
-            if !visible(sources, index, collapsed) {
+            if !visible(sources, index, expanded) {
                 continue;
             }
             let scope = MovementSourceScope::Ground(view.scope);
@@ -1578,15 +1612,15 @@ pub(crate) fn movement_sources_row(
             let descendant = !picked && descendant_selected(sources, index, &ground);
             let acted = ChecklistRow::new(&view.label, Tick::of(picked, descendant))
                 .depth(view.depth)
-                .disclosure(children.then(|| !collapsed.contains(&scope_key(view.scope))))
+                .disclosure(children.then(|| expanded.contains(&scope_key(view.scope))))
                 .show(ui);
             if acted.expanded {
                 let key = scope_key(view.scope);
-                match collapsed.iter().position(|folded| *folded == key) {
+                match expanded.iter().position(|open| *open == key) {
                     Some(position) => {
-                        collapsed.remove(position);
+                        expanded.remove(position);
                     }
-                    None => collapsed.push(key),
+                    None => expanded.push(key),
                 }
             }
             if acted.toggled {
@@ -1595,12 +1629,18 @@ pub(crate) fn movement_sources_row(
         }
         context_menu_separator(ui);
         menu::panel_section(ui, tr!("truck-rule-stockpiles"));
-        if stockpiles.is_empty() {
+        if ground_only {
+            menu::menu_note(ui, tr!("destination-sources-category-note"));
+        } else if stockpiles.is_empty() {
             menu::menu_note(ui, tr!("destination-no-stockpiles"));
         }
         for entry in stockpiles {
             let scope = MovementSourceScope::Stockpile(entry.id);
             let picked = all || chosen.contains(&scope);
+            // Only one the rule already holds, so it can be unticked.
+            if ground_only && !(chosen.contains(&scope)) {
+                continue;
+            }
             if ChecklistRow::new(&entry.name, Tick::of(picked, false)).depth(1).show(ui).toggled {
                 next = toggle(scope, picked);
             }
@@ -1631,11 +1671,11 @@ pub(crate) fn movement_sources_row(
     next
 }
 
-pub(crate) fn visible(sources: &[SourceScopeView], index: usize, collapsed: &[(u64, u64, u64)]) -> bool {
+pub(crate) fn visible(sources: &[SourceScopeView], index: usize, expanded: &[(u64, u64, u64)]) -> bool {
     let mut depth = sources[index].depth;
     for above in sources[..index].iter().rev() {
         if above.depth < depth {
-            if collapsed.contains(&scope_key(above.scope)) {
+            if !expanded.contains(&scope_key(above.scope)) {
                 return false;
             }
             depth = above.depth;

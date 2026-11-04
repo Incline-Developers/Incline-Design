@@ -10,7 +10,7 @@
 //! negative value, and a movement expensive enough should be able to make
 //! idling the better answer.
 
-use super::schedule_destinations::{ConditionAction, condition_note, descendant_selected, draw_condition_dialog, open_condition_draft, scope_key, visible};
+use super::schedule_destinations::{ConditionAction, condition_note, descendant_selected, draw_condition_dialog, open_condition_draft, scope_key, tests_a_category, visible};
 use crate::{
     i18n::tr,
     model::{
@@ -125,7 +125,8 @@ pub(crate) fn draw_rule_editor(
         .collect();
     let sources = editor.schedule_routing_sources.clone();
     let categories = editor.schedule_category_values.clone();
-    let mut collapsed = editor.schedule_source_collapsed.clone();
+    let ground_only = tests_a_category(editor, document, ConditionOwner::Cashflow(rule.id), &rule.conditions);
+    let mut expanded = editor.schedule_source_expanded.clone();
     let taken: Vec<String> = plan.cashflow().rules.iter().filter(|other| other.id != rule.id).map(|other| other.name.clone()).collect();
     let mut edits = Vec::new();
     let mut condition_action = None;
@@ -279,7 +280,7 @@ pub(crate) fn draw_rule_editor(
                         .iter()
                         .filter(|view| view.depth == 0)
                         .map(|view| MovementSourceScope::Ground(view.scope))
-                        .chain(stockpiles.iter().map(|entry| MovementSourceScope::Stockpile(entry.id)))
+                        .chain(stockpiles.iter().filter(|_| !ground_only).map(|entry| MovementSourceScope::Stockpile(entry.id)))
                         .collect()
                 };
                 let toggle = |held: &[MovementSourceScope], scope: MovementSourceScope, picked: bool| -> Option<MovementSourceSelection> {
@@ -292,23 +293,25 @@ pub(crate) fn draw_rule_editor(
                     (!list.is_empty()).then_some(MovementSourceSelection::Only(list))
                 };
                 checklist_popup(&response, tr!("cashflow-rule-sources"), 260.0, |ui| {
-                    if ChecklistRow::new(&tr!("destination-rule-all-sources"), Tick::of(all, false)).show(ui).toggled {
-                        next = Some(if all {
-                            match everything() {
-                                scopes if scopes.is_empty() => MovementSourceSelection::All,
-                                scopes => MovementSourceSelection::Only(scopes),
-                            }
-                        } else {
-                            MovementSourceSelection::All
-                        });
+                    if !ground_only || all {
+                        if ChecklistRow::new(&tr!("destination-rule-all-sources"), Tick::of(all, false)).show(ui).toggled {
+                            next = Some(if all {
+                                match everything() {
+                                    scopes if scopes.is_empty() => MovementSourceSelection::All,
+                                    scopes => MovementSourceSelection::Only(scopes),
+                                }
+                            } else {
+                                MovementSourceSelection::All
+                            });
+                        }
+                        context_menu_separator(ui);
                     }
-                    context_menu_separator(ui);
                     menu::panel_section(ui, tr!("truck-rule-ground"));
                     if sources.is_empty() {
                         menu::menu_note(ui, tr!("destination-no-sources"));
                     }
                     for (index, view) in sources.iter().enumerate() {
-                        if !visible(&sources, index, &collapsed) {
+                        if !visible(&sources, index, &expanded) {
                             continue;
                         }
                         let scope = MovementSourceScope::Ground(view.scope);
@@ -324,15 +327,15 @@ pub(crate) fn draw_rule_editor(
                         let descendant = !picked && descendant_selected(&sources, index, &ground);
                         let acted = ChecklistRow::new(&view.label, Tick::of(picked, descendant))
                             .depth(view.depth)
-                            .disclosure(children.then(|| !collapsed.contains(&scope_key(view.scope))))
+                            .disclosure(children.then(|| expanded.contains(&scope_key(view.scope))))
                             .show(ui);
                         if acted.expanded {
                             let key = scope_key(view.scope);
-                            match collapsed.iter().position(|held| *held == key) {
+                            match expanded.iter().position(|held| *held == key) {
                                 Some(position) => {
-                                    collapsed.remove(position);
+                                    expanded.remove(position);
                                 }
-                                None => collapsed.push(key),
+                                None => expanded.push(key),
                             }
                         }
                         if acted.toggled {
@@ -341,12 +344,17 @@ pub(crate) fn draw_rule_editor(
                     }
                     context_menu_separator(ui);
                     menu::panel_section(ui, tr!("truck-rule-stockpiles"));
-                    if stockpiles.is_empty() {
+                    if ground_only {
+                        menu::menu_note(ui, tr!("destination-sources-category-note"));
+                    } else if stockpiles.is_empty() {
                         menu::menu_note(ui, tr!("destination-no-stockpiles"));
                     }
                     for entry in &stockpiles {
                         let scope = MovementSourceScope::Stockpile(entry.id);
                         let picked = all || held.contains(&scope);
+                        if ground_only && !held.contains(&scope) {
+                            continue;
+                        }
                         if ChecklistRow::new(&entry.name, Tick::of(picked, false)).depth(1).show(ui).toggled {
                             next = toggle(if all { &[] } else { &held }, scope, picked);
                         }
@@ -465,11 +473,18 @@ pub(crate) fn draw_rule_editor(
                 });
             }
         });
-    editor.schedule_source_collapsed = collapsed;
+    editor.schedule_source_expanded = expanded;
     if let Some(action) = condition_action {
         if let ConditionAction::Delete(field) = action {
             let conditions = rule.conditions.iter().filter(|condition| condition.field != field).cloned().collect();
-            edits.push(UiCommand::schedule(session, ScheduleEdit::SetCashflowRuleConditions { rule: rule.id, conditions }));
+            edits.push(UiCommand::schedule(
+                session,
+                ScheduleEdit::SetCashflowRuleConditions {
+                    rule: rule.id,
+                    conditions,
+                    sources: None,
+                },
+            ));
         }
         open_condition_draft(editor, document, ConditionOwner::Cashflow(rule.id), &rule.conditions, action);
     }

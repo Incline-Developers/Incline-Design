@@ -654,9 +654,9 @@ impl crate::app::App<'_> {
             .as_ref()
             .filter(|attempt| attempt.outcome == super::schedule_run::AttemptOutcome::Refused && attempt.semantic == self.schedule_semantic_key());
         let calculation = match (self.schedule_run_inputs(), refused) {
-            (Ok(_), Some(attempt)) if !attempt.messages.is_empty() => tr!("schedule-calculation-blocked", reason = attempt.messages.join("; ")),
-            (Ok(_), _) => tr!("schedule-calculation-ready"),
-            (Err(reason), _) => tr!("schedule-calculation-blocked", reason = reason.describe()),
+            (Ok(_), Some(attempt)) if !attempt.messages.is_empty() => Some(attempt.messages.join("; ")),
+            (Ok(_), _) => None,
+            (Err(reason), _) => Some(reason.describe()),
         };
         // As on Solids: a step run on its own that succeeds moves the list on.
         if let Some(step) = self.schedule_advance_after
@@ -671,10 +671,10 @@ impl crate::app::App<'_> {
                 self.redraw_requested = true;
             }
         }
-        if self.editor.schedule_stages != views || self.editor.schedule_run_active != running || self.editor.schedule_calculation_status != calculation {
+        if self.editor.schedule_stages != views || self.editor.schedule_run_active != running || self.editor.schedule_calculation_blocked != calculation {
             self.editor.schedule_stages = views;
             self.editor.schedule_run_active = running;
-            self.editor.schedule_calculation_status = calculation;
+            self.editor.schedule_calculation_blocked = calculation;
             self.redraw_requested = true;
         }
     }
@@ -1257,7 +1257,7 @@ impl crate::app::App<'_> {
         let plan = document.schedule();
         let routing = plan.routing();
         let mut diagnostics = Vec::new();
-        if routing.rules.iter().all(|rule| !rule.enabled) {
+        if routing.rules.iter().all(|rule| !rule.enabled || rule.destinations.is_empty()) {
             diagnostics.push(StageDiagnostic {
                 entity: None,
                 message: tr!("destination-stage-no-rules"),
@@ -1265,6 +1265,13 @@ impl crate::app::App<'_> {
             });
         }
         for rule in routing.rules.iter().filter(|rule| rule.enabled) {
+            if rule.destinations.is_empty() {
+                diagnostics.push(StageDiagnostic {
+                    entity: Some(rule.name.clone()),
+                    message: tr!("destination-rule-no-target-warning"),
+                    blocking: false,
+                });
+            }
             for destination in &rule.destinations {
                 if let Err(problem) = destinations::resolve(*destination, document.solids(), routing) {
                     diagnostics.push(StageDiagnostic {

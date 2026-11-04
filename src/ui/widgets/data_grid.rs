@@ -195,6 +195,7 @@ pub(crate) struct GridRow<'a> {
     header: bool,
     draggable: bool,
     error: Option<&'a str>,
+    warning: Option<&'a str>,
 }
 
 impl<'a> GridRow<'a> {
@@ -206,6 +207,7 @@ impl<'a> GridRow<'a> {
             header: false,
             draggable: false,
             error: None,
+            warning: None,
         }
     }
 
@@ -217,6 +219,7 @@ impl<'a> GridRow<'a> {
             header: true,
             draggable: false,
             error: None,
+            warning: None,
         }
     }
 
@@ -237,6 +240,12 @@ impl<'a> GridRow<'a> {
         self.error = message;
         self
     }
+
+    /// Marks the row amber, with `message` on hover. An error outranks it.
+    pub(crate) fn warning(mut self, message: Option<&'a str>) -> Self {
+        self.warning = message;
+        self
+    }
 }
 
 /// Draw a single spreadsheet-style row into the current grid body.
@@ -247,6 +256,7 @@ pub(crate) fn grid_row(ui: &mut egui::Ui, row: GridRow<'_>) -> egui::Response {
         header,
         draggable,
         error,
+        warning,
     } = row;
     let height = grid_row_height(ui);
     let sense = if header {
@@ -281,16 +291,20 @@ pub(crate) fn grid_row(ui: &mut egui::Ui, row: GridRow<'_>) -> egui::Response {
             egui::Stroke::NONE,
         ));
     }
-    if let Some(message) = error {
+    let mark = error
+        .map(|message| (unthemed_icon!("step_error.svg"), message))
+        .or(warning.map(|message| (unthemed_icon!("step_warning.svg"), message)));
+    let marked = mark.is_some();
+    if let Some((icon, message)) = mark {
         let icon_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - 12.0, rect.center().y), egui::vec2(16.0, 16.0));
-        egui::Image::new(unthemed_icon!("step_error.svg")).paint_at(ui, icon_rect);
+        egui::Image::new(icon).paint_at(ui, icon_rect);
         ui.interact(icon_rect, response.id.with("error_hint"), egui::Sense::hover()).on_hover_text(message);
     }
     let text = if header { bold(label) } else { egui::RichText::new(label) }.color(text_color);
     let galley = egui::WidgetText::from(text).into_galley(
         ui,
         Some(egui::TextWrapMode::Truncate),
-        (rect.right() - gutter - 16.0 - if error.is_some() { 20.0 } else { 0.0 }).max(0.0),
+        (rect.right() - gutter - 16.0 - if marked { 20.0 } else { 0.0 }).max(0.0),
         egui::TextStyle::Body,
     );
     ui.painter().galley(egui::pos2(gutter + 8.0, rect.center().y - galley.size().y * 0.5), galley, text_color);

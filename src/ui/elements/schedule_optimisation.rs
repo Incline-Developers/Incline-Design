@@ -105,15 +105,22 @@ pub(crate) fn grades_row(rows: &mut PropertyRows<'_>, plan: &SchedulePlan, docum
         .filter(|field| experiment.grade_unit(field.id).is_some())
         .map(|field| field.name.as_str())
         .collect();
+    // Grades are averaged by tonnes, so until that field is chosen there is
+    // nothing to offer, however many averages the Field List holds.
+    let no_grades = if plan.tonnage_field().is_none() {
+        tr!("experiment-grades-choose-tonnage")
+    } else {
+        tr!("experiment-no-grade-fields")
+    };
     let summary = match carried.as_slice() {
-        _ if candidates.is_empty() => tr!("experiment-no-grade-fields"),
+        _ if candidates.is_empty() => no_grades.clone(),
         [] => tr!("experiment-grades-none"),
         names => names.join(", "),
     };
     let response = rows.select(&tr!("experiment-grades"), &summary).on_hover_text(tr!("experiment-grade-units-help"));
     checklist_popup(&response, tr!("experiment-grades"), 260.0, |ui| {
         if candidates.is_empty() {
-            menu::menu_note(ui, tr!("experiment-no-grade-fields"));
+            menu::menu_note(ui, no_grades.clone());
         }
         for field in &candidates {
             let tracked = experiment.grade_unit(field.id).is_some();

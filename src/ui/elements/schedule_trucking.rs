@@ -428,7 +428,7 @@ pub(crate) fn draw_rule_editor(
         .cloned()
         .collect();
     let sources = editor.schedule_routing_sources.clone();
-    let mut collapsed = editor.schedule_source_collapsed.clone();
+    let mut expanded = editor.schedule_source_expanded.clone();
     let taken: Vec<String> = trucks.rules.iter().filter(|other| other.id != rule.id).map(|other| other.name.clone()).collect();
     let classes = trucks.classes.clone();
     let mut edits = Vec::new();
@@ -580,7 +580,7 @@ pub(crate) fn draw_rule_editor(
                         menu::menu_note(ui, tr!("destination-no-sources"));
                     }
                     for (index, view) in sources.iter().enumerate() {
-                        if !visible(&sources, index, &collapsed) {
+                        if !visible(&sources, index, &expanded) {
                             continue;
                         }
                         let scope = MovementSourceScope::Ground(view.scope);
@@ -596,15 +596,15 @@ pub(crate) fn draw_rule_editor(
                         let descendant = !picked && descendant_selected(&sources, index, &ground);
                         let acted = ChecklistRow::new(&view.label, Tick::of(picked, descendant))
                             .depth(view.depth)
-                            .disclosure(children.then(|| !collapsed.contains(&scope_key(view.scope))))
+                            .disclosure(children.then(|| expanded.contains(&scope_key(view.scope))))
                             .show(ui);
                         if acted.expanded {
                             let key = scope_key(view.scope);
-                            match collapsed.iter().position(|held| *held == key) {
+                            match expanded.iter().position(|held| *held == key) {
                                 Some(position) => {
-                                    collapsed.remove(position);
+                                    expanded.remove(position);
                                 }
-                                None => collapsed.push(key),
+                                None => expanded.push(key),
                             }
                         }
                         if acted.toggled {
@@ -741,7 +741,7 @@ pub(crate) fn draw_rule_editor(
                 }
             }
         });
-    editor.schedule_source_collapsed = collapsed;
+    editor.schedule_source_expanded = expanded;
     commands.append(&mut edits);
 }
 

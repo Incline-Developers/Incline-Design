@@ -876,7 +876,11 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             .iter()
             .any(|bar| bar.agent.is_some() && bar.blast_order().is_some_and(|order| !order.members.is_empty()));
     if scoped.iter().all(|bar| matches!(bar.work, ScopedWork::Delay)) && !has_blast_work && problems.is_empty() {
-        problems.push(CaptureDiagnostic::global(tr!("schedule-capture-no-work")));
+        problems.push(CaptureDiagnostic::global(if plan.bars().is_empty() {
+            tr!("schedule-capture-no-bars")
+        } else {
+            tr!("schedule-capture-no-work")
+        }));
     }
 
     // ---- grades ------------------------------------------------------------

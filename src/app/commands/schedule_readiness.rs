@@ -1446,15 +1446,28 @@ impl crate::app::App<'_> {
             Some(snapshot) => {
                 let names: std::collections::HashMap<crate::model::SolidId, String> = snapshot.blocks.iter().map(|block| (block.solid, block.solid_name.clone())).collect();
                 let rl = crate::ui::elements::solids_view::format_rl;
-                // Distinct bands in the order the blocks list them, so the
-                // page reads bottom-up per solid exactly as the Solids tree
-                // does rather than in a hashed order.
+                // Distinct bands, top bench first within each solid, the way
+                // the navigator lists them.
                 let mut sources: Vec<crate::ui::state::SourceScopeView> = Vec::new();
                 let mut seen_solids: Vec<crate::model::SolidId> = Vec::new();
                 let mut seen_benches: Vec<(crate::model::SolidId, u64, u64)> = Vec::new();
                 let mut seen_flitches: Vec<(crate::model::SolidId, u64, u64)> = Vec::new();
                 let bits = |value: f64| if value == 0.0 { 0.0_f64.to_bits() } else { value.to_bits() };
+                let mut solid_order: Vec<crate::model::SolidId> = Vec::new();
                 for block in &snapshot.blocks {
+                    if !solid_order.contains(&block.solid) {
+                        solid_order.push(block.solid);
+                    }
+                }
+                let solid_rank = |solid: crate::model::SolidId| solid_order.iter().position(|entry| *entry == solid);
+                let mut ordered: Vec<_> = snapshot.blocks.iter().collect();
+                ordered.sort_by(|a, b| {
+                    solid_rank(a.solid)
+                        .cmp(&solid_rank(b.solid))
+                        .then(b.bench.base.total_cmp(&a.bench.base))
+                        .then(b.flitch.base.total_cmp(&a.flitch.base))
+                });
+                for block in ordered {
                     let name = names.get(&block.solid).cloned().unwrap_or_default();
                     if !seen_solids.contains(&block.solid) {
                         seen_solids.push(block.solid);

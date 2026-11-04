@@ -72,7 +72,10 @@ fn group_badge(editor: &EditorState, group: SetupGroup) -> StepBadge {
     let badges: Vec<StepBadge> = match group {
         SetupGroup::Solids => editor.planning_stages.iter().map(StepBadge::of_solids_stage).collect(),
         SetupGroup::Haulage => editor.haulage_stages.iter().map(|status| StepBadge::of(status.state, &status.diagnostics)).collect(),
-        SetupGroup::Schedule => editor.schedule_stages.iter().map(|status| StepBadge::of(status.state, &status.diagnostics)).collect(),
+        SetupGroup::Schedule => crate::ui::state::ScheduleStep::ALL
+            .into_iter()
+            .map(|step| StepBadge::of_schedule_step(editor, step))
+            .collect(),
     };
     let urgency = |badge: StepBadge| match badge {
         StepBadge::Complete => 0,
@@ -551,6 +554,18 @@ impl StepBadge {
             // Blocked is waiting on an earlier step rather than wrong itself:
             // that step carries the red.
             StageState::NotRun | StageState::Blocked | StageState::Queued | StageState::Running => Self::NotRun,
+        }
+    }
+
+    /// A Schedule step's badge: as [`Self::of`], but Readiness is amber while
+    /// its checks pass and the Gantt still could not calculate.
+    pub(crate) fn of_schedule_step(editor: &EditorState, step: crate::ui::state::ScheduleStep) -> Self {
+        use crate::app::planning_pipeline::StageState;
+        let status = &editor.schedule_stages[step.index()];
+        if step == crate::ui::state::ScheduleStep::Readiness && status.state == StageState::Complete && editor.schedule_calculation_blocked.is_some() {
+            Self::Warning
+        } else {
+            Self::of(status.state, &status.diagnostics)
         }
     }
 

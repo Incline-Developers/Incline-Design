@@ -93,7 +93,7 @@ pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: 
         ui.horizontal(|ui| {
             ui.add_space(ui.spacing().indent);
             let entry_response = ExplorerEntry::new(egui::Id::unique(entry.tree_id()), bold(&entry.label()))
-                .leading_icon(super::planning_setup::StepBadge::of(status.state, &status.diagnostics).icon(), egui::Color32::WHITE)
+                .leading_icon(super::planning_setup::StepBadge::of_schedule_step(editor, entry).icon(), egui::Color32::WHITE)
                 .header_aligned_icon()
                 .selected(step == Some(entry))
                 .show(ui);
@@ -132,7 +132,7 @@ pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: 
 /// edit retires it, labelled as belonging to the run that produced it - a
 /// result that vanished on the first edit would leave the page with nothing to
 /// say about what was checked.
-pub(crate) fn draw_readiness(ui: &mut egui::Ui, rect: egui::Rect, editor: &EditorState, plan: &SchedulePlan, document: &Document) {
+pub(crate) fn draw_readiness(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, plan: &SchedulePlan, document: &Document) {
     use crate::app::planning_pipeline::StageState;
 
     let status = &editor.schedule_stages[ScheduleStep::Readiness.index()];
@@ -147,25 +147,26 @@ pub(crate) fn draw_readiness(ui: &mut egui::Ui, rect: egui::Rect, editor: &Edito
                 .map_or_else(|| tr!("sequence-tonnage-field-missing"), |field| field_option_label(document, field))
         })
         .unwrap_or_else(|| tr!("schedule-tonnage-field-none"));
-    let result = match summary {
-        None => tr!("schedule-readiness-never-run"),
-        Some(_) if status.state == StageState::Complete => tr!("schedule-readiness-result-current"),
-        Some(_) => tr!("schedule-readiness-result-stale"),
+    let calculation = if editor.schedule_calculation_blocked.is_some() {
+        tr!("schedule-readiness-not-ready")
+    } else {
+        tr!("schedule-readiness-ready")
     };
+    // Every step passed, so what is left to do is on the Gantt.
+    let checks_passed = status.state == StageState::Complete;
     let blocks = summary.map_or_else(|| String::from("—"), |summary| summary.entities.to_string());
 
-    let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, 5).min(rect.height())));
+    let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, 4).min(rect.height())));
     PropertyTable::new("schedule_readiness", table_rect, &ScheduleStep::Readiness.label()).show(ui, |rows| {
         rows.header(&tr!("planning-property"), &tr!("planning-value"));
-        rows.readonly(&tr!("schedule-readiness-state"), &status.state.label(), None, None);
-        rows.readonly(&tr!("schedule-readiness-last-run"), &result, None, None);
+        rows.readonly(&tr!("schedule-readiness-calculation"), &calculation, None, None);
         rows.readonly(&tr!("schedule-readiness-tonnage-field"), &field, None, None);
         rows.readonly(&tr!("schedule-readiness-blocks"), &blocks, None, None);
     });
 
-    // Everything the step had to say, in full, and then the one sentence the
-    // Gantt would show. Both are statements about a completed run, so neither
-    // is offered as something to press.
+    // Everything the step had to say, in full, and then why the Gantt would
+    // not calculate.
+    let mut open_gantt = false;
     let body = egui::Rect::from_min_max(egui::pos2(rect.left() + 8.0, table_rect.bottom() + 8.0), egui::pos2(rect.right() - 8.0, rect.bottom()));
     if !body.is_positive() {
         return;
@@ -184,12 +185,19 @@ pub(crate) fn draw_readiness(ui: &mut egui::Ui, rect: egui::Rect, editor: &Edito
                 let color = if entry.blocking { ui.visuals().error_fg_color } else { ui.visuals().weak_text_color() };
                 ui.add(egui::Label::new(egui::RichText::new(text).color(color)).wrap());
             }
-            if !editor.schedule_calculation_status.is_empty() {
+            if let Some(reason) = &editor.schedule_calculation_blocked {
                 ui.add_space(8.0);
-                ui.add(egui::Label::new(bold(&editor.schedule_calculation_status)).wrap());
+                ui.add(egui::Label::new(bold(reason)).wrap());
+                if checks_passed {
+                    ui.add_space(6.0);
+                    open_gantt = ui.add(crate::ui::widgets::menu::MenuButton::new(tr!("schedule-readiness-open-gantt"))).clicked();
+                }
             }
         });
     });
+    if open_gantt {
+        editor.planning_view = crate::ui::state::PlanningView::Gantt;
+    }
 }
 
 /// The Solids step's settings: how many dig blocks the run made, and whether
@@ -306,7 +314,15 @@ fn draw_general_table(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorSt
             &tr!("schedule-tonnage-field"),
             &mut tonnage,
             &selected_text,
-            std::iter::once((None, tr!("schedule-tonnage-field-none"))).chain(document.reserve_fields().iter().map(|field| (Some(field.id), field_option_label(document, field)))),
+            std::iter::once((None, tr!("schedule-tonnage-field-none"))).chain(
+                document
+                    .reserve_fields()
+                    .iter()
+                    // Tonnes add up. One already chosen stays listed so the box
+                    // can show what the plan holds.
+                    .filter(|field| field.aggregation == crate::model::ReserveAggregation::Sum || Some(field.id) == plan.tonnage_field())
+                    .map(|field| (Some(field.id), field_option_label(document, field))),
+            ),
         );
         if response.changed() && tonnage != plan.tonnage_field() {
             edits.push(UiCommand::schedule(session, ScheduleEdit::SetTonnageField(tonnage)));

@@ -2987,7 +2987,7 @@ pub(crate) struct EditorState {
     /// while a current Schedule Setup run stands, and otherwise the one unmet
     /// prerequisite, named. Inspection never consults it - only calculation is
     /// gated.
-    pub(crate) schedule_calculation_status: String,
+    pub(crate) schedule_calculation_blocked: Option<String>,
     /// How many dig blocks Schedule Setup's Solids step last counted as 0 t.
     pub(crate) schedule_zero_blocks: usize,
     /// The dig blocks that step last found with no tonnage, so its page can
@@ -3044,7 +3044,7 @@ pub(crate) struct EditorState {
     /// itself rather than by its row: the list is rebuilt from the run every
     /// time it opens, and a row index would fold a different bench each time
     /// the ground changed.
-    pub(crate) schedule_source_collapsed: Vec<(u64, u64, u64)>,
+    pub(crate) schedule_source_expanded: Vec<(u64, u64, u64)>,
     /// The source scopes a rule can name, as the last completed Solids run
     /// describes them: every pit, its benches, and their flitches. Mirrored
     /// out of the run rather than read from the document, because which bands
@@ -3800,7 +3800,7 @@ impl EditorState {
         self.schedule_selected_rule = None;
         self.schedule_rule_draft = None;
         self.schedule_condition_draft = None;
-        self.schedule_source_collapsed.clear();
+        self.schedule_source_expanded.clear();
         self.schedule_routing_sources = Default::default();
         self.schedule_category_values = Default::default();
         self.new_destination_open = false;
@@ -4470,7 +4470,7 @@ impl EditorState {
             haulage_stages: Default::default(),
             haulage_run_active: false,
             haulage_auto_run: true,
-            schedule_calculation_status: String::new(),
+            schedule_calculation_blocked: None,
             schedule_zero_blocks: 0,
             schedule_unmeasured_blocks: Vec::new(),
             solids_view_marked: Vec::new(),
@@ -4494,7 +4494,7 @@ impl EditorState {
             schedule_selected_rule: None,
             schedule_rule_draft: None,
             schedule_condition_draft: None,
-            schedule_source_collapsed: Vec::new(),
+            schedule_source_expanded: Vec::new(),
             schedule_routing_sources: Default::default(),
             schedule_category_values: Default::default(),
             schedule_agent_draft: None,
@@ -8041,10 +8041,12 @@ pub(crate) enum ScheduleEdit {
         rule: crate::model::schedule::RuleId,
         sources: crate::model::schedule::MovementSourceSelection,
     },
-    /// Replace one rule's whole condition list, validated as a set.
+    /// Replace one rule's whole condition list, validated as a set. `sources`
+    /// goes with it when a category narrows what the rule can read, one undo.
     SetRuleConditions {
         rule: crate::model::schedule::RuleId,
         conditions: Vec<crate::model::schedule::FieldCondition>,
+        sources: Option<crate::model::schedule::MovementSourceSelection>,
     },
     /// Move a rule one place along the priority order. `later` is down.
     MoveRule {
@@ -8155,6 +8157,7 @@ pub(crate) enum ScheduleEdit {
     SetCashflowRuleConditions {
         rule: crate::model::schedule::CashflowRuleId,
         conditions: Vec<crate::model::schedule::FieldCondition>,
+        sources: Option<crate::model::schedule::MovementSourceSelection>,
     },
     /// Signed, and never clamped: a cost is a negative value.
     SetCashflowRuleValue {

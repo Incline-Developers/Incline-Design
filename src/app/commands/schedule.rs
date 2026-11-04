@@ -167,7 +167,12 @@ impl crate::app::App<'_> {
             ScheduleEdit::SetRuleDestinations { rule, destinations } => self.edit_routing(|routing| routing.set_rule_destinations(rule, destinations)),
             ScheduleEdit::SetRuleLoaders { rule, loaders } => self.edit_routing(|routing| routing.set_rule_loaders(rule, loaders)),
             ScheduleEdit::SetRuleSources { rule, sources } => self.edit_routing(|routing| routing.set_rule_sources(rule, sources)),
-            ScheduleEdit::SetRuleConditions { rule, conditions } => self.edit_routing(|routing| routing.set_rule_conditions(rule, conditions)),
+            ScheduleEdit::SetRuleConditions { rule, conditions, sources } => self.edit_routing(|routing| {
+                if let Some(sources) = sources {
+                    routing.set_rule_sources(rule, sources)?;
+                }
+                routing.set_rule_conditions(rule, conditions)
+            }),
             ScheduleEdit::MoveRule { rule, later } => self.edit_routing(|routing| routing.move_rule(rule, later)),
             ScheduleEdit::AddTruckClass { name } => self.add_truck_class(name),
             ScheduleEdit::DuplicateTruckClass(class) => self.duplicate_truck_class(class),
@@ -202,7 +207,12 @@ impl crate::app::App<'_> {
             ScheduleEdit::SetCashflowRuleLoaders { rule, loaders } => self.edit_cashflow(|cashflow| cashflow.set_rule_loaders(rule, loaders)),
             ScheduleEdit::SetCashflowRuleSources { rule, sources } => self.edit_cashflow(|cashflow| cashflow.set_rule_sources(rule, sources)),
             ScheduleEdit::SetCashflowRuleDestinations { rule, destinations } => self.edit_cashflow(|cashflow| cashflow.set_rule_destinations(rule, destinations)),
-            ScheduleEdit::SetCashflowRuleConditions { rule, conditions } => self.edit_cashflow(|cashflow| cashflow.set_rule_conditions(rule, conditions)),
+            ScheduleEdit::SetCashflowRuleConditions { rule, conditions, sources } => self.edit_cashflow(|cashflow| {
+                if let Some(sources) = sources {
+                    cashflow.set_rule_sources(rule, sources)?;
+                }
+                cashflow.set_rule_conditions(rule, conditions)
+            }),
             ScheduleEdit::SetCashflowRuleValue { rule, value_per_tonne } => self.edit_cashflow(|cashflow| cashflow.set_rule_value(rule, value_per_tonne)),
             ScheduleEdit::SetClassReclaimRate { class, rate_tph } => self.edit_schedule(|plan| plan.set_class_reclaim_rate(class, rate_tph)),
             ScheduleEdit::SetClassKind { class, kind } => self.edit_schedule(|plan| plan.set_class_kind(class, kind)),
