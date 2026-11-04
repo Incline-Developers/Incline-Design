@@ -249,7 +249,7 @@ fn selected_bar(ui: &mut egui::Ui, editor: &EditorState, plan: &SchedulePlan) {
     );
     let mut lines = Vec::new();
     if let Some(order) = bar.blast_order() {
-        lines.push(tr!("inspector-bar-blasts", count = order.members.len().to_string()));
+        lines.push(tr!("inspector-bar-blasts", count = order.members.len()));
     } else if bar.reclaim().is_some() {
         if let Some(report) = report.filter(|report| !report.reclaim_sources.is_empty()) {
             lines.push(tr!("reclaim-sources-tooltip", stockpiles = report.reclaim_sources.join(", ")));

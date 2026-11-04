@@ -937,7 +937,7 @@ pub(crate) fn draw_properties(ui: &mut egui::Ui, rect: egui::Rect, editor: &Edit
             let selection = if editor.solids_view_marked.is_empty() {
                 tr!("solids-select-solid-bench-flitch")
             } else {
-                tr!("solids-showing-unmeasured", count = editor.solids_view_marked.len().to_string())
+                tr!("solids-showing-unmeasured", count = editor.solids_view_marked.len())
             };
             table.readonly(&tr!("solids-selection"), &selection, None, None);
         });

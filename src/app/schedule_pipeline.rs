@@ -1023,7 +1023,7 @@ impl crate::app::App<'_> {
         if orphans > 0 {
             diagnostics.push(StageDiagnostic {
                 entity: None,
-                message: tr!("destination-stage-retained", count = orphans.to_string()),
+                message: tr!("destination-stage-retained", count = orphans),
                 blocking: false,
             });
         }

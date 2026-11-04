@@ -1470,7 +1470,7 @@ impl DestinationRule {
         }
         match &self.sources {
             MovementSourceSelection::All => {}
-            MovementSourceSelection::Only(scopes) => parts.push(tr!("destination-rule-sources-count", count = scopes.len().to_string())),
+            MovementSourceSelection::Only(scopes) => parts.push(tr!("destination-rule-sources-count", count = scopes.len())),
         }
         for condition in &self.conditions {
             parts.push(condition.summary(&field_name(condition.field)));

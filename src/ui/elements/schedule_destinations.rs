@@ -499,7 +499,7 @@ pub(crate) fn draw_stockpile(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut E
         let mode = if differing == 0 {
             operation.default_mode.label()
         } else {
-            tr!("pile-daily-mode-overrides", mode = operation.default_mode.label(), days = differing.to_string())
+            tr!("pile-daily-mode-overrides", mode = operation.default_mode.label(), days = differing)
         };
         rows.readonly(&tr!("pile-daily-mode"), &mode, None, None);
         open_calendar = rows.action_row(&tr!("pile-open-calendar")).clicked();

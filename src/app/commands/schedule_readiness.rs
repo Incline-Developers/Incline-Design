@@ -546,7 +546,7 @@ impl crate::app::App<'_> {
         document.set_schedule(plan);
         self.invalidate_geometry();
         self.redraw_requested = true;
-        crate::userspace_warn!("{}", tr!("sequence-carried-over", count = carried.to_string()));
+        crate::userspace_warn!("{}", tr!("sequence-carried-over", count = carried));
         true
     }
 

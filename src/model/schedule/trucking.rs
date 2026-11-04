@@ -537,7 +537,9 @@ impl TruckFleetConfig {
             loaded_speed_kph: DEFAULT_LOADED_KPH,
             unloaded_speed_kph: DEFAULT_UNLOADED_KPH,
             grade_speeds: default_grade_speeds(),
-            maximum_speed_kph: 50.0,
+            // The fastest the default grade speeds go, so a new class starts
+            // with none of them capped.
+            maximum_speed_kph: 60.0,
             maximum_grade: 0.1,
             dump_time_s: 60.0,
             calendar: TruckCalendar::default(),

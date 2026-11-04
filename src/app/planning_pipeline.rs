@@ -1073,8 +1073,11 @@ impl crate::app::App<'_> {
                 };
                 diagnostics.extend(self.reconcile_dig_blocks(&records));
                 let _ = entities;
+                // Excluded ground is measured so the blocks still add back up
+                // to their benches, but it is not dig blocks to anyone reading
+                // the count: the Schedule's Blocks step leaves it out too.
                 StageOutcome::Settled {
-                    entities: records.len(),
+                    entities: records.iter().filter(|record| !record.excluded).count(),
                     diagnostics,
                 }
             }

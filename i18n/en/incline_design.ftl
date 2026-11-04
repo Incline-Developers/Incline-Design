@@ -295,6 +295,7 @@ schedule-calendar-duplicate-cell = A calendar edit contains the same cell more t
 schedule-calendar-period-overflow = The calendar period is too large
 schedule-calendar-effective-rate = The effective production rate is too small or large to represent
 schedule-calendar-edit = Edit loader calendar
+schedule-truck-calendar-edit = Edit truck calendar
 schedule-calendar-cells-updated =
     { $count ->
         [one] 1 cell updated

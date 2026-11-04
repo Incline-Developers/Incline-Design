@@ -293,7 +293,7 @@ impl CashflowRule {
             LoaderSelection::Only(agents) => parts.push(agents.iter().copied().map(loader_name).collect::<Vec<_>>().join(" / ")),
         }
         if let MovementSourceSelection::Only(scopes) = &self.sources {
-            parts.push(tr!("destination-rule-sources-count", count = scopes.len().to_string()));
+            parts.push(tr!("destination-rule-sources-count", count = scopes.len()));
         }
         if let DestinationSelection::Only(ids) = &self.destinations {
             parts.push(tr!("cashflow-rule-destinations-count", count = ids.len().to_string()));
