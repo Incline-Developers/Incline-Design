@@ -210,11 +210,18 @@ impl crate::app::App<'_> {
         if !self.editor.is_planning_cut_step() {
             return;
         }
+        // With nothing selected, every line on the open bench or flitch: the
+        // step's scene holds only that one's cuts.
+        let any_selected = self
+            .scene_document
+            .objects()
+            .iter()
+            .any(|object| self.editor.selected_handles.contains(&SceneEntityId::Object(object.id())));
         let lines = self
             .scene_document
             .objects()
             .iter()
-            .filter(|object| self.editor.selected_handles.contains(&SceneEntityId::Object(object.id())))
+            .filter(|object| !any_selected || self.editor.selected_handles.contains(&SceneEntityId::Object(object.id())))
             .filter(|object| matches!(object, Object::Polyline { .. }))
             .cloned()
             .collect();
