@@ -97,3 +97,43 @@ pub(crate) fn orientation_gizmo(ui: &mut egui::Ui, id: &str, image: egui::Rect, 
     ui.ctx().request_repaint();
     true
 }
+
+/// The main viewport's two ways back to the whole view, in the top left of a
+/// preview: zoom to extents, keeping the angle, and reset to plan view.
+/// Returns whether either moved `view`.
+pub(crate) fn view_buttons(ui: &mut egui::Ui, id: &str, image: egui::Rect, view: &mut SolidPreviewView) -> bool {
+    use crate::ui::{unthemed_icon, widgets::toolbar::ToolbarButton};
+    let side = crate::ui::widgets::toolbar::TOOL_CELL_SIZE;
+    let top_left = image.min + egui::vec2(8.0, 8.0);
+    let extents = egui::Rect::from_min_size(top_left, egui::Vec2::splat(side));
+    let reset = extents.translate(egui::vec2(side + 2.0, 0.0));
+    if !image.contains_rect(reset) {
+        return false;
+    }
+    let mut changed = false;
+    let zoom = ui.put(
+        extents,
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("zoom_to_extents.svg")), crate::i18n::tr!("common-zoom-extents"))
+            .button_side(side)
+            .id_salt((id, "zoom_to_extents")),
+    );
+    if zoom.clicked() {
+        view.zoom_multiplier = 1.0;
+        view.pan = [0.0; 2];
+        changed = true;
+    }
+    let home = ui.put(
+        reset,
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("reset_view.svg")), crate::i18n::tr!("common-reset-view"))
+            .button_side(side)
+            .id_salt((id, "reset_view")),
+    );
+    if home.clicked() {
+        *view = SolidPreviewView::default();
+        changed = true;
+    }
+    if changed {
+        ui.ctx().request_repaint();
+    }
+    changed
+}

@@ -326,6 +326,45 @@ impl<'a> App<'a> {
         }
     }
 
+    /// Open Animate on the whole site: once per project, and again whenever
+    /// a page that frames what it draws - Reserves, Blasting, Dig Strips, the
+    /// Road Network or another workspace - has had the camera since. Moving
+    /// between Animate and the pages with no 3D view keeps the user's view.
+    pub(crate) fn sync_animation_frame(&mut self) {
+        let elsewhere = self.editor.active_workspace != crate::ui::state::Workspace::Planning || self.editor.is_solids_view() || self.editor.is_viewport_step();
+        if elsewhere {
+            self.editor.animation_framed_key = None;
+            return;
+        }
+        if !self.editor.is_schedule_animation() {
+            return;
+        }
+        let Some(runtime) = self.workspace.active_project().map(|project| project.runtime_id) else {
+            return;
+        };
+        if self.editor.animation_framed_key == Some(runtime) {
+            return;
+        }
+        // Wait for the scene, and for any swing of the view to land: a frame
+        // taken before either would be undone.
+        if self.schedule_animation.scene().is_empty() || self.graphics.as_ref().is_some_and(|graphics| graphics.view_transition_running()) {
+            return;
+        }
+        self.editor.animation_framed_key = Some(runtime);
+        let triangulations = self.framed_triangulations().to_vec();
+        if let Some(graphics) = self.graphics.as_mut() {
+            graphics.zoom_to_extents(
+                &self.scene_document,
+                &triangulations,
+                &self.block_models,
+                &self.drill_holes,
+                &self.point_clouds,
+                &self.editor.hidden_handles,
+            );
+            self.redraw_requested = true;
+        }
+    }
+
     /// Reset the camera to a plan view that fits all visible content.
     pub(crate) fn reset_view(&mut self) {
         // Cloned before borrowing graphics mutably: the surfaces may come

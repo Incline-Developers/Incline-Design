@@ -296,6 +296,7 @@ impl<'a> App<'a> {
                     self.refresh_reserves_scene();
                     self.sync_blasting_frame();
                     self.sync_haulage_frame();
+                    self.sync_animation_frame();
                     let showing_solid_preview = self.showing_solid_preview();
                     let completing_topology_load = self.topology_uploads_pending();
                     let applied_resize = self.take_resize_to_apply(now);
@@ -1682,6 +1683,18 @@ impl<'a> App<'a> {
                     }
                 } else if !self.editor.pending_stroke.is_empty() || self.editor.active_tool != ActiveTool::None {
                     self.discard_stroke();
+                } else if !self.editor.selected_handles.is_empty() || !self.editor.selected_drill_holes.is_empty() || !self.editor.selected_tie_ins.is_empty() {
+                    // With nothing left to cancel, Escape lets go of what is
+                    // selected, as it does in the trees.
+                    self.editor.clear_scene_selection();
+                    self.active_triangulation = None;
+                    self.invalidate_geometry();
+                } else if (self.editor.is_schedule_animation() || self.editor.is_solids_view())
+                    && (!self.editor.solids_view_selection.is_empty() || self.editor.selected_dig_block.is_some())
+                {
+                    self.editor.solids_view_selection.clear();
+                    self.editor.selected_dig_block = None;
+                    self.invalidate_geometry();
                 }
             }
             // C: the centre of rotation, on and off, the same as its toolbar button.

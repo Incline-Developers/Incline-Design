@@ -1242,6 +1242,7 @@ pub(crate) fn draw_solid_render(ui: &mut egui::Ui, rect: egui::Rect, editor: &mu
         if ready {
             let mut view = editor.solid_preview_view;
             crate::ui::widgets::preview_navigation::orientation_gizmo(ui, "solid_preview_orientation_gizmo", image_rect, &mut view);
+            crate::ui::widgets::preview_navigation::view_buttons(ui, "solid_preview_view_buttons", image_rect, &mut view);
             editor.solid_preview_view = view;
         }
 

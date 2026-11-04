@@ -2387,6 +2387,10 @@ pub(crate) struct EditorState {
     /// The project the Road Network was last framed on, so it fits the
     /// network once when opened rather than fighting the user's pan.
     pub(crate) haulage_framed_key: Option<u32>,
+    /// The project Animate last framed the whole site for. Cleared when
+    /// another page that frames what it draws takes the camera, so Animate
+    /// opens on the site again rather than on a bench or a road.
+    pub(crate) animation_framed_key: Option<u32>,
     /// What the Blasting step took over on entry and puts back on leaving, so
     /// popping in to check a bench costs the user neither the view nor the
     /// drawing settings they had set up.
@@ -4113,6 +4117,7 @@ impl EditorState {
             blasting_outlines_key: None,
             haulage_framed_key: None,
             blasting_framed_key: None,
+            animation_framed_key: None,
             blasting_restore: None,
             blasting_bench_key: None,
             planning_cut_name: None,

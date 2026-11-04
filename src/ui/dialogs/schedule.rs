@@ -765,6 +765,7 @@ fn draw_blast_sequence_preview(ui: &mut egui::Ui, editor: &mut EditorState, draf
     crate::ui::widgets::preview_navigation::navigate(ui, &response, rect, &mut draft.view, editor, true);
     if ready {
         crate::ui::widgets::preview_navigation::orientation_gizmo(ui, "blast_sequence_orientation_gizmo", rect, &mut draft.view);
+        crate::ui::widgets::preview_navigation::view_buttons(ui, "blast_sequence_view_buttons", rect, &mut draft.view);
     }
     if ready
         && response.clicked()
