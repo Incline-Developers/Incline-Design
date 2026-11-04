@@ -221,6 +221,10 @@ impl<'a> App<'a> {
                 self.copy_cuts_to(&targets);
                 Ok(())
             }
+            UiCommand::AddToSequence { rows, blast } => {
+                self.add_to_sequence(&rows, blast);
+                Ok(())
+            }
             UiCommand::ClearSelection => {
                 self.editor.clear_scene_selection();
                 self.active_triangulation = None;
@@ -636,12 +640,12 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::UpdateSolid { solid, edit } => {
-                self.update_solid(solid, edit);
+                self.edit_solid(solid, edit);
                 Ok(())
             }
             UiCommand::SetSolidsTopography { solids, topography } => {
                 for solid in solids {
-                    self.update_solid(solid, crate::model::SolidEdit::Topography(topography));
+                    self.edit_solid(solid, crate::model::SolidEdit::Topography(topography));
                 }
                 Ok(())
             }

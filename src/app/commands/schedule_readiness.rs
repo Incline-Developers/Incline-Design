@@ -959,6 +959,67 @@ impl crate::app::App<'_> {
     ///
     /// `stroke` says the pick came from a drag stroke, which may have ended
     /// since: it is bounded by that stroke's flitch all the same.
+    pub(crate) fn add_to_sequence(&mut self, rows: &[crate::ui::state::SolidsViewRow], blast: Option<crate::ui::state::BlastShapeRef>) {
+        let snapshot = match self.planning_snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(reason) => {
+                crate::userspace_warn!("{}", reason.describe());
+                return;
+            }
+        };
+        let hidden = self.editor.sequence_hidden.clone();
+        let in_rows = |solid, band| super::solids_view::selected(rows, solid, Some(band));
+        if self.editor.blast_bar_dialog.is_some() {
+            // Blasts of the rows, top bench first, in the list's own order.
+            let mut found: Vec<crate::model::schedule::BlastRef> = Vec::new();
+            for block in &snapshot.blocks {
+                let Some(shape) = block.blast else { continue };
+                if !in_rows(block.solid, block.bench) || blast.is_some_and(|only| only != shape) || hidden.hides(block.solid, block.bench, block.flitch, Some(shape)) {
+                    continue;
+                }
+                let reference = crate::model::schedule::BlastRef {
+                    solid: shape.solid,
+                    bench: shape.bench_base(),
+                    anchor: shape.anchor(),
+                };
+                if let Some(entry) = self.editor.schedule_blasts.iter().find(|entry| entry.holds(&reference)).map(|entry| entry.reference)
+                    && !found.iter().any(|held| held.same(&entry))
+                {
+                    found.push(entry);
+                }
+            }
+            found.sort_by(|a, b| b.bench.total_cmp(&a.bench));
+            if let Some(draft) = self.editor.blast_bar_dialog.as_mut() {
+                for entry in found {
+                    if !draft.members.iter().any(|member| member.same(&entry)) {
+                        let at = draft.preview.min(draft.members.len());
+                        draft.members.insert(at, entry);
+                        draft.preview = at + 1;
+                    }
+                }
+            }
+        } else {
+            let ground = ground_of(&snapshot.blocks);
+            let mut found: Vec<usize> = (0..snapshot.blocks.len())
+                .filter(|index| {
+                    let block = &snapshot.blocks[*index];
+                    in_rows(block.solid, block.flitch) && blast.is_none_or(|only| block.blast == Some(only)) && !hidden.hides(block.solid, block.bench, block.flitch, block.blast)
+                })
+                .collect();
+            // Top flitch first, as ground is dug; within one, as the run lists them.
+            found.sort_by(|a, b| snapshot.blocks[*b].flitch.base.total_cmp(&snapshot.blocks[*a].flitch.base));
+            if let Some(draft) = self.editor.sequence_editor.as_mut() {
+                for index in found {
+                    let block = snapshot.blocks[index].id;
+                    if !draft_holds(draft, block, index, snapshot.generation, &ground) {
+                        insert_or_select(draft, block, index, snapshot.generation, &ground);
+                    }
+                }
+            }
+        }
+        self.redraw_requested = true;
+    }
+
     pub(crate) fn pick_into_sequence_draft(&mut self, block: Option<crate::model::DigBlockId>, generation: u64, stroke: bool) {
         // A stroke that ran off the ground has not finished: the pointer is
         // still down and will cross more blocks. Only a click clears.
@@ -1311,6 +1372,16 @@ fn ground_of(blocks: &[DigBlockRecord]) -> Vec<BlockGround> {
 /// application: a completed pick adds exactly one member, carrying the run it
 /// was made against, and moves or selects - never duplicates - ground the
 /// draft already holds, whatever anchor that ground was captured with.
+/// Whether the draft's order already digs this block.
+fn draft_holds(draft: &crate::ui::state::SequenceDraft, block: crate::model::DigBlockId, index: usize, generation: u64, ground: &[BlockGround]) -> bool {
+    use crate::ui::state::DraftMember;
+
+    draft.members.iter().any(|member| match member {
+        DraftMember::Held(reference) => reference.resolve(ground).resolved() == Some(index),
+        DraftMember::Picked(pick) => pick.block == block && pick.generation == generation,
+    })
+}
+
 pub(crate) fn insert_or_select(draft: &mut crate::ui::state::SequenceDraft, block: crate::model::DigBlockId, index: usize, generation: u64, ground: &[BlockGround]) {
     use crate::ui::state::DraftMember;
 

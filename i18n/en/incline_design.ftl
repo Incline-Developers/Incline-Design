@@ -1951,6 +1951,8 @@ sequence-applied-blocks = ⁨{ $count }⁩ dig blocks
 sequence-pick-superseded = Picked against an earlier Solids run
 sequence-target-changed = This bar's dig order changed while the sequence editor was open, so the older draft was refused rather than written over it
 sequence-solids-navigation = Solids Navigation
+sequence-add-to-dig-order = Add to Dig Order
+sequence-add-to-blast-order = Add to Blast Order
 sequence-objects = Objects
 
 ## Schedule → Gantt

@@ -894,7 +894,7 @@ impl BenchingPlan {
 const MAX_BENCHES_PER_RANGE: f64 = 10_000.0;
 
 /// One field of a [`Solid`], as the Solids step's property table edits it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) enum SolidEdit {
     Kind(SolidKind),
     Color([f32; 4]),
@@ -2124,6 +2124,22 @@ impl Document {
     /// Apply one edit from the Solids step's property table. Returns whether
     /// anything actually changed, so a per-frame combo that hands back its
     /// unchanged value does not dirty the project.
+    /// The edit that would put back what `edit` is about to replace on this
+    /// solid. `None` when the solid has gone.
+    pub(crate) fn solid_edit_undo(&self, id: SolidId, edit: &SolidEdit) -> Option<SolidEdit> {
+        let solid = self.solids.iter().find(|solid| solid.id == id)?;
+        Some(match edit {
+            SolidEdit::Kind(_) => SolidEdit::Kind(solid.kind),
+            SolidEdit::Color(_) => SolidEdit::Color(solid.color),
+            SolidEdit::Benching(_) => SolidEdit::Benching(solid.benching.clone()),
+            SolidEdit::Surface(_) => SolidEdit::Surface(solid.surface),
+            SolidEdit::Topography(_) => SolidEdit::Topography(solid.topography),
+            SolidEdit::BlockModel(_) => SolidEdit::BlockModel(solid.block_model),
+            SolidEdit::Blasting(_) => SolidEdit::Blasting(solid.blasting.clone()),
+            SolidEdit::Exclusions(_) => SolidEdit::Exclusions(solid.exclusions.clone()),
+        })
+    }
+
     pub(crate) fn update_solid(&mut self, id: SolidId, edit: SolidEdit) -> bool {
         let Some(solid) = self.solids.iter_mut().find(|solid| solid.id == id) else {
             return false;
@@ -3497,6 +3513,13 @@ pub(crate) enum Command {
     /// handful of names and rates, and swapping it whole is what guarantees
     /// undo restores the same ids - which every Gantt row and, later, every
     /// block assignment is keyed by.
+    /// One field of one solid, as the planner set it. Only that field: blast
+    /// names and the rest of the solid follow from a run, not from history.
+    EditSolid {
+        solid: SolidId,
+        before: Box<SolidEdit>,
+        after: Box<SolidEdit>,
+    },
     SetHaulNetwork {
         before: Box<haulage::HaulNetwork>,
         after: Box<haulage::HaulNetwork>,
@@ -3582,6 +3605,7 @@ impl Command {
                 Command::SetItemStyle { before, after, .. } => before.estimated_bytes().saturating_add(after.estimated_bytes()),
                 Command::SetSchedulePlan { before, after } => before.estimated_bytes().saturating_add(after.estimated_bytes()),
                 Command::SetHaulNetwork { before, after } => before.estimated_bytes().saturating_add(after.estimated_bytes()),
+                Command::EditSolid { .. } => size_of::<SolidEdit>().saturating_mul(2),
                 Command::RenameItem { before, after, .. } => before.len().saturating_add(after.len()),
                 Command::SetTieIns { before, after, .. } => before
                     .iter()
@@ -3762,6 +3786,7 @@ impl Command {
             | Command::RenameFolder { .. }
             | Command::SetLayerPlacement { .. }
             | Command::SetHaulNetwork { .. }
+            | Command::EditSolid { .. }
             | Command::SetSchedulePlan { .. } => {}
         }
     }
@@ -3893,6 +3918,10 @@ impl Command {
             }
             Command::SetObjectHidden { id, after, .. } => {
                 target.document.set_object_hidden(*id, *after);
+                target.effects.document_changed = true;
+            }
+            Command::EditSolid { solid, after, .. } => {
+                target.document.update_solid(*solid, (**after).clone());
                 target.effects.document_changed = true;
             }
             Command::SetHaulNetwork { after, .. } => {
@@ -4050,6 +4079,10 @@ impl Command {
             }
             Command::SetObjectHidden { id, before, .. } => {
                 target.document.set_object_hidden(*id, *before);
+                target.effects.document_changed = true;
+            }
+            Command::EditSolid { solid, before, .. } => {
+                target.document.update_solid(*solid, (**before).clone());
                 target.effects.document_changed = true;
             }
             Command::SetHaulNetwork { before, .. } => {

@@ -533,10 +533,12 @@ impl crate::app::App<'_> {
     /// Returns the number of solids whose plan changed.
     pub(crate) fn commit_blast_names(&mut self) -> usize {
         let solids = self.workspace.active_document().map(|document| document.solids().to_vec()).unwrap_or_default();
-        // A project with nothing unsaved has had no edit the new names could
-        // follow from: its blasts were cut differently by this version than
-        // by the one that saved it.
-        let was_saved = self.workspace.active_project().is_some_and(|project| !self.project_content_is_dirty(project.runtime_id));
+        // A project with nothing unsaved and nothing to undo or redo has had no
+        // edit the new names could follow from: its blasts were cut differently
+        // by this version than by the one that saved it. Undoing back to the
+        // save is an edit like any other.
+        let was_saved =
+            !self.history.can_undo() && !self.history.can_redo() && self.workspace.active_project().is_some_and(|project| !self.project_content_is_dirty(project.runtime_id));
         let mut renamed = Vec::new();
         let mut named = Vec::new();
         for solid in &solids {

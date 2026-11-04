@@ -5247,6 +5247,12 @@ pub(crate) enum UiCommand {
     /// the discipline it was made in, and the tabs are not a way of carrying
     /// one across.
     ClearSelection,
+    /// Add the ground of these Solids Navigation rows to the open dig order or
+    /// blast order, narrowed to one blast when there is one.
+    AddToSequence {
+        rows: Vec<SolidsViewRow>,
+        blast: Option<BlastShapeRef>,
+    },
     /// Copy the cut lines selected on a cut step to these benches or flitches.
     CopyCutsTo(Vec<(crate::model::SolidId, BenchSelection)>),
     SetFlyModeEnabled(bool),
@@ -6023,6 +6029,7 @@ impl UiCommand {
             | Self::ToggleCreateDrillPattern
             | Self::BeginDrillPatternShapePick
             | Self::ClearSelection
+            | Self::AddToSequence { .. }
             | Self::CopyCutsTo(_)
             | Self::CloseStartupDialog
             | Self::CancelCloseProject

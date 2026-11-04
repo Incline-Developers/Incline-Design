@@ -353,6 +353,9 @@ impl<'a> TreePass<'a> {
                 self.bench(ui, solid, occupied, bench, row, &bench_rows, visible, commands);
             }
         });
+        if tree_adds_to_order(self.tree) {
+            row_menu(&heading.inner, &solid.name, editor, solid, None, Some((rows.clone(), None)), commands);
+        }
         if heading.inner.clicked() {
             self.clicked = Some((rows, None));
             self.framed = Some(solid.id);
@@ -421,7 +424,8 @@ impl<'a> TreePass<'a> {
             leaf_row(ui, id, bench_icon(), label, selected, visible)
         };
         if tree.is_solids_page() {
-            exclusion_menu(&response, &text, solid, target, commands);
+            let add = tree_adds_to_order(tree).then(|| (group.clone(), None));
+            row_menu(&response, &text, editor, solid, Some(target), add, commands);
         }
         if response.clicked() {
             self.clicked = Some((group, None));
@@ -477,6 +481,10 @@ impl<'a> TreePass<'a> {
                 let label = self.reach_label(format_rl(flitch.base), |b| b.blast == Some(shape) && b.flitch.base == flitch.base);
                 let id = self.id(("flitch", solid.id.0, bench_base.to_bits(), index, flitch.base.to_bits()));
                 let (response, visibility_clicked) = leaf_row(ui, id, flitch_icon(), label, flitch_selected, flitch_visible);
+                // A flitch is a level of a blast, which a blast order cannot name.
+                if tree_adds_to_order(tree) && editor.blast_bar_dialog.is_none() {
+                    row_menu(&response, &format_rl(flitch.base), editor, solid, None, Some((vec![row], Some(shape))), commands);
+                }
                 if response.clicked() {
                     self.clicked = Some((vec![row], tree.is_solids_page().then_some(shape)));
                 }
@@ -486,7 +494,8 @@ impl<'a> TreePass<'a> {
             }
         });
         if tree.is_solids_page() {
-            exclusion_menu(&response, &text, solid, target, commands);
+            let add = tree_adds_to_order(tree).then(|| (bench_group.to_vec(), Some(shape)));
+            row_menu(&response, &text, editor, solid, Some(target), add, commands);
             if response.clicked() {
                 self.clicked = Some((bench_group.to_vec(), Some(shape)));
             }
@@ -861,16 +870,50 @@ fn exclusion_label(label: &str, excluded: bool) -> String {
     }
 }
 
-/// The row's menu: take this ground out of mining, or put it back.
-fn exclusion_menu(response: &egui::Response, title: &str, solid: &crate::model::Solid, target: crate::model::ExclusionTarget, commands: &mut Vec<UiCommand>) {
-    let excluded = solid.exclusions.is_target_excluded(target);
+/// Whether a tree's rows can be added to an order: the sequence editors'.
+fn tree_adds_to_order(tree: SolidsTree) -> bool {
+    tree == SolidsTree::Sequence
+}
+
+/// A row's menu, as one menu: a popup belongs to its row, so two on one row
+/// would draw over each other and a click could land on the one underneath.
+///
+/// `add` puts everything under the row on the open sequence editor's order.
+/// What the tree has hidden stays out, and what is in the order stays put.
+/// `target` takes the row's ground out of mining, or puts it back.
+fn row_menu(
+    response: &egui::Response,
+    title: &str,
+    editor: &EditorState,
+    solid: &crate::model::Solid,
+    target: Option<crate::model::ExclusionTarget>,
+    add: Option<(Vec<SolidsViewRow>, Option<BlastShapeRef>)>,
+    commands: &mut Vec<UiCommand>,
+) {
     context_menu_popup(response, title, |ui| {
-        if ContextMenuAction::new(tr!("planning-exclude-from-mining")).checked(excluded).show(ui).clicked() {
-            commands.push(UiCommand::UpdateSolid {
-                solid: solid.id,
-                edit: crate::model::SolidEdit::Exclusions(solid.exclusions.with(target, !excluded)),
-            });
-            ui.close();
+        if let Some((rows, blast)) = &add {
+            let label = if editor.blast_bar_dialog.is_some() {
+                tr!("sequence-add-to-blast-order")
+            } else {
+                tr!("sequence-add-to-dig-order")
+            };
+            if ContextMenuAction::new(label).show(ui).clicked() {
+                commands.push(UiCommand::AddToSequence {
+                    rows: rows.clone(),
+                    blast: *blast,
+                });
+                ui.close();
+            }
+        }
+        if let Some(target) = target {
+            let excluded = solid.exclusions.is_target_excluded(target);
+            if ContextMenuAction::new(tr!("planning-exclude-from-mining")).checked(excluded).show(ui).clicked() {
+                commands.push(UiCommand::UpdateSolid {
+                    solid: solid.id,
+                    edit: crate::model::SolidEdit::Exclusions(solid.exclusions.with(target, !excluded)),
+                });
+                ui.close();
+            }
         }
     });
 }

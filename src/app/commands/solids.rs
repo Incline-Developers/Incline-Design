@@ -53,6 +53,23 @@ impl crate::app::App<'_> {
     /// Apply one property-table edit to a solid. The table hands its value
     /// back every frame, so an edit that changes nothing is dropped here
     /// rather than dirtying the project.
+    /// A change the planner made to a solid: one Ctrl-Z. [`Self::update_solid`]
+    /// is for what a run works out, which undo has no business replaying.
+    pub(crate) fn edit_solid(&mut self, id: SolidId, edit: SolidEdit) {
+        let Some(before) = self.workspace.active_document().and_then(|document| document.solid_edit_undo(id, &edit)) else {
+            return;
+        };
+        if before == edit {
+            return;
+        }
+        self.execute_edit(crate::model::Command::EditSolid {
+            solid: id,
+            before: Box::new(before),
+            after: Box::new(edit),
+        });
+        self.invalidate_geometry();
+    }
+
     pub(crate) fn update_solid(&mut self, id: SolidId, edit: SolidEdit) {
         let Some(document) = self.workspace.active_document_mut() else {
             return;
