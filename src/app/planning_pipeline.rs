@@ -745,7 +745,9 @@ impl crate::app::App<'_> {
                         (bench.base.to_bits(), bench.cuts.iter().map(crate::model::Object::geometry_hash).collect::<Vec<_>>(), names)
                     })
                     .collect();
-                (solid.id.0, cuts)
+                // A blast under the minimum takes no name, and naming is this
+                // stage's work.
+                (solid.id.0, cuts, solid.exclusions.min_blast_area.to_bits())
             })
             .collect();
         let blasting_stage = hash_of((benching_stage, blasting));
