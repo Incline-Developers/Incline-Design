@@ -791,10 +791,6 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         // A bar with no machine is parked on the Gantt's Unassigned row: left
         // out until it is given one, as drill and blast's bars are.
         let Some(agent) = bar.agent else {
-            // An unassigned delay holds no machine, so it is not a fault.
-            if bar.is_reclaim() || !bar.members().is_empty() {
-                problems.push(CaptureDiagnostic::new(label.clone(), tr!("schedule-capture-bar-unassigned")));
-            }
             continue;
         };
         // Dozers, drills and MPUs are not loaders: their bars, delays
@@ -2302,6 +2298,29 @@ fn portion_name(identities: &CaptureIdentities, ground: GroundId, portion: usize
     }
 }
 
+/// Hashes a `usize` the same on every build, so a schedule saved on the desktop
+/// is recognised in the browser, whose `usize` is half the width.
+#[derive(Default)]
+struct WidthFreeHasher(DefaultHasher);
+
+impl Hasher for WidthFreeHasher {
+    fn finish(&self) -> u64 {
+        self.0.finish()
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        self.0.write(bytes);
+    }
+
+    fn write_usize(&mut self, value: usize) {
+        self.0.write_u64(value as u64);
+    }
+
+    fn write_isize(&mut self, value: isize) {
+        self.0.write_i64(value as i64);
+    }
+}
+
 /// The complete experimental-run identity.
 ///
 /// Everything that can change feasibility, the objective or the encoded
@@ -2315,7 +2334,7 @@ fn portion_name(identities: &CaptureIdentities, ground: GroundId, portion: usize
 /// produced it are folded in beside, so two projects that happen to build the
 /// same model are still two runs.
 fn stable_fingerprint(source: &CaptureSnapshot, input: &BlendInput) -> u64 {
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = WidthFreeHasher::default();
     source.tonnage_field.0.hash(&mut hasher);
     source.haulage.hash_content(&mut hasher);
     // The model itself. `BlendInput` derives `PartialEq` over exactly the
