@@ -344,6 +344,7 @@ impl<'a> App<'a> {
         };
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         page.hash(&mut hasher);
+        self.editor.is_schedule_animation().hash(&mut hasher);
         unordered(&self.editor.frozen_handles).hash(&mut hasher);
         unordered(&self.editor.page_unlocked).hash(&mut hasher);
         if page {
@@ -364,9 +365,12 @@ impl<'a> App<'a> {
             return;
         }
         let unlocked = &self.editor.page_unlocked;
+        // Design lines stay pickable on the Road Network: Convert Selection
+        // turns them into roads, and they have no padlock of their own.
         let objects = self
             .workspace
             .active_project()
+            .filter(|_| self.editor.is_schedule_animation())
             .map(|project| {
                 project
                     .project

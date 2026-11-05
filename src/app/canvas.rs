@@ -333,7 +333,9 @@ impl<'a> App<'a> {
             let on_network = pending_selection_click.is_some_and(|p| matches!(p.entity, SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_)));
             let toggle = self.modifiers.shift_key();
             let add = self.modifiers.control_key();
-            let block = (!on_network).then(|| self.haul_block_at_cursor()).flatten();
+            // A design line over a block is what Convert Selection wants.
+            let on_object = pending_selection_click.is_some_and(|p| matches!(p.entity, SceneEntityId::Object(_)));
+            let block = (!on_network && !on_object).then(|| self.haul_block_at_cursor()).flatten();
             if let Some(id) = block {
                 let selected = &mut self.editor.haul_selected_blocks;
                 if toggle && let Some(index) = selected.iter().position(|b| *b == id) {
