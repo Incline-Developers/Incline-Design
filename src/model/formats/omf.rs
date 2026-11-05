@@ -1923,6 +1923,10 @@ pub(crate) fn from_bytes(source_name: &str, bytes: Vec<u8>, progress: &Phase) ->
     progress.set_fraction(0.0);
     reject_omf1(&bytes).with_context(|| format!("read OMF container {source_name}"))?;
     let backing = crate::model::asset_storage::Backing::write(&bytes)?;
+    read_container(source_name, bytes, backing, progress).context(tr!("omf-damaged"))
+}
+
+fn read_container(source_name: &str, bytes: Vec<u8>, backing: crate::model::asset_storage::Backing, progress: &Phase) -> Result<ImportBundle> {
     let mut reader = omf_crate::file::Reader::new(bytes).context("open OMF archive")?;
     reader.set_limits(reader_limits());
     let (project, problems) = reader.project().context("read project index")?;

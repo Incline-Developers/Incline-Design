@@ -3363,6 +3363,7 @@ omf-element-name-has-count-unreadable = Element '{ $name }' has { $count } unrea
 omf-element-unsupported-section = Element '{ $name }' names section '{ $section }' which cannot show this kind of item in this build
 omf-element-name-names-unknown-section = Element '{ $name }' names an unknown section '{ $section }'
 omf-ignoring-colour-map-omf-attribute = Ignoring the colour map on OMF attribute '{ $attribute }': { $error }
+omf-damaged = This file is damaged or is not an Incline project
 omf-mining-data-exported-incline = Mining data exported by Incline
 omf-import = OMF import
 omf-texture = OMF texture
