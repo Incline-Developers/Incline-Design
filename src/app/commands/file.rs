@@ -323,6 +323,10 @@ impl<'a> App<'a> {
         let Some(index) = self.workspace.project_index_for_runtime_id(runtime_id) else {
             return;
         };
+        if as_roads {
+            self.apply_dxf_as_roads(runtime_id, index, &parsed);
+            return;
+        }
         let document = &self.workspace.projects[index].project.document;
         let needed: Vec<_> = parsed
             .iter()
@@ -334,25 +338,6 @@ impl<'a> App<'a> {
             self.restore_layers_for(needed, move |app| app.apply_dxf_imports(runtime_id, parsed, as_roads));
             return;
         }
-        let strings: Vec<_> = if as_roads {
-            parsed
-                .iter()
-                .flat_map(|(name, doc)| {
-                    doc.objects().iter().filter_map(|o| match o {
-                        crate::model::Object::Polyline { verts, closed, .. } => {
-                            let mut points = crate::model::geometry::tessellate_polyline_bulges(verts, *closed);
-                            if *closed && let Some(&first) = points.first() {
-                                points.push(first);
-                            }
-                            Some((name.clone(), points))
-                        }
-                        _ => None,
-                    })
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
         let project = &mut self.workspace.projects[index];
         let existing: std::collections::HashSet<_> = project.project.document.layers().iter().map(|layer| layer.id).collect();
         let mut total = 0;
@@ -367,24 +352,58 @@ impl<'a> App<'a> {
         if let Some(layer) = project.project.document.layers().iter().find(|layer| layer.loaded && !existing.contains(&layer.id)) {
             self.editor.active_layer = Some(layer.id);
         }
-        if as_roads && let Some(document) = self.workspace.projects.get(index).map(|p| &p.project.document) {
-            let before = document.haulage().clone();
-            let mut after = before.clone();
-            match after.convert(&strings).and_then(|()| after.validate()) {
-                Ok(()) => self.execute_edit_for(
-                    runtime_id,
-                    crate::model::Command::SetHaulNetwork {
-                        before: Box::new(before),
-                        after: Box::new(after),
-                    },
-                ),
-                Err(error) => userspace_warn!("{error:#}"),
-            }
-        }
         self.evict_unloaded_layers();
         self.invalidate_geometry();
         self.fit_view_to_extents();
         userspace_log!("{}", tr!("cmd-file-imported-total-dxf-object-s", total = total.to_string()));
+    }
+
+    /// Haulage's own DXF import: each polyline becomes a road, in one undoable
+    /// edit, and nothing joins the design layers. A road already there along
+    /// the same points is left alone, so importing a file twice adds nothing.
+    fn apply_dxf_as_roads(&mut self, runtime_id: u32, index: usize, parsed: &[(String, crate::model::Document)]) {
+        let Some(before) = self.workspace.projects.get(index).map(|project| project.project.document.haulage().clone()) else {
+            return;
+        };
+        let polylines: Vec<_> = parsed
+            .iter()
+            .flat_map(|(_, document)| document.objects())
+            .filter_map(|object| match object {
+                crate::model::Object::Polyline { verts, closed, .. } => {
+                    let mut points = crate::model::geometry::tessellate_polyline_bulges(verts, *closed);
+                    if *closed && let Some(&first) = points.first() {
+                        points.push(first);
+                    }
+                    Some(points)
+                }
+                _ => None,
+            })
+            .collect();
+        let total = polylines.len();
+        let fresh: Vec<_> = polylines.into_iter().filter(|points| !super::haulage::road_already_there(&before, points)).collect();
+        let added = fresh.len();
+        if added == 0 {
+            userspace_log!("{}", tr!("haul-import-nothing", total = total));
+            return;
+        }
+        let mut after = before.clone();
+        let strings = super::haulage::name_road_strings(&after, fresh);
+        match after.convert(&strings).and_then(|()| after.validate()) {
+            Ok(()) => self.execute_edit_for(
+                runtime_id,
+                crate::model::Command::SetHaulNetwork {
+                    before: Box::new(before),
+                    after: Box::new(after),
+                },
+            ),
+            Err(error) => {
+                userspace_warn!("{error:#}");
+                return;
+            }
+        }
+        let skipped = total - added;
+        userspace_log!("{}", tr!("haul-import-done", added = added, skipped = skipped));
+        self.invalidate_geometry();
     }
 
     /// Register an async file dialog that was created on the main thread. The

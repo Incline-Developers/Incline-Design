@@ -665,6 +665,21 @@ haul-draw-help = Click points in the viewport; each becomes a road node. They si
 haul-convert = Convert selection to roads
 haul-import = Import DXF as roads…
 haul-import-heading = Import DXF as Haul Roads
+haul-import-done =
+    { $added ->
+        [one] Imported 1 road
+       *[other] Imported { $added } roads
+    }{ $skipped ->
+        [0] .
+        [one] ; 1 was already on the network.
+       *[other] ; { $skipped } were already on the network.
+    }
+haul-import-nothing =
+    { $total ->
+        [0] The file has no polylines to import as roads.
+        [one] Its 1 polyline is already on the network.
+       *[other] All { $total } polylines are already on the network.
+    }
 haul-export = Export roads as DXF…
 haul-dead-end = Dead end
 haul-near-miss = Near miss

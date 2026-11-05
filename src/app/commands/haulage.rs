@@ -255,15 +255,7 @@ impl crate::app::App<'_> {
                         _ => None,
                     })
                     .collect();
-                let mut names: Vec<String> = after.roads.iter().map(|r| r.name.clone()).collect();
-                let strings: Vec<_> = strings
-                    .into_iter()
-                    .map(|points| {
-                        let name = crate::model::schedule::suggested_name(&tr!("haul-road"), names.iter().cloned());
-                        names.push(name.clone());
-                        (name, points)
-                    })
-                    .collect();
+                let strings = name_road_strings(after, strings);
                 after.convert(&strings)?;
             }
             HaulEdit::MoveNode(id, pos) => after.move_node(id, pos)?,
@@ -883,4 +875,27 @@ pub(crate) fn haul_destinations(document: &crate::model::Document) -> Vec<Destin
 /// judged against.
 pub(crate) fn max_grade(trucks: &crate::model::schedule::TruckFleetConfig) -> f64 {
     trucks.classes.iter().map(|c| c.maximum_grade).reduce(f64::min).unwrap_or(0.1)
+}
+
+/// Give strings becoming roads the next free road names.
+pub(crate) fn name_road_strings(network: &crate::model::haulage::network::HaulNetwork, strings: Vec<Vec<DVec3>>) -> Vec<(String, Vec<DVec3>)> {
+    let mut names: Vec<String> = network.roads.iter().map(|road| road.name.clone()).collect();
+    strings
+        .into_iter()
+        .map(|points| {
+            let name = crate::model::schedule::suggested_name(&tr!("haul-road"), names.iter().cloned());
+            names.push(name.clone());
+            (name, points)
+        })
+        .collect()
+}
+
+/// Whether `network` already has a road along exactly `points`, either way.
+pub(crate) fn road_already_there(network: &crate::model::haulage::network::HaulNetwork, points: &[DVec3]) -> bool {
+    let tolerance = network.settings.join_tolerance_m;
+    let same = |a: &DVec3, b: &DVec3| a.distance(*b) <= tolerance;
+    network.roads.iter().any(|road| {
+        let held = network.points(road);
+        held.len() == points.len() && (held.iter().zip(points).all(|(a, b)| same(a, b)) || held.iter().rev().zip(points).all(|(a, b)| same(a, b)))
+    })
 }
