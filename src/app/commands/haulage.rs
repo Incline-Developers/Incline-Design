@@ -409,10 +409,14 @@ impl crate::app::App<'_> {
         self.invalidate_overlay();
     }
     pub(crate) fn place_haul_point(&mut self) {
-        if let Some(point) = self.haul_cursor_point(self.editor.z_level, true)
-            && self.editor.haul_points.last().is_none_or(|last| last.distance(point) > 1e-6)
-        {
-            self.editor.haul_points.push(point);
+        match self.haul_cursor_point(self.editor.z_level, true) {
+            Some(point) => {
+                if self.editor.haul_points.last().is_none_or(|last| last.distance(point) > 1e-6) {
+                    self.editor.haul_points.push(point);
+                }
+            }
+            None if self.editor.snapping_active() => crate::userspace_log!("{}", tr!("haul-point-no-snap")),
+            None => {}
         }
         self.invalidate_overlay();
     }

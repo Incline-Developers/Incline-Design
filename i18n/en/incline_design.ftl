@@ -946,6 +946,7 @@ haul-dump-and-reclaim = Dump & reclaim
 haul-pin-stockpile-dump = Stockpile · dump point
 haul-pin-stockpile-reclaim = Stockpile · reclaim point
 haul-link-missed = Click a node or a road to join the blocks to it.
+haul-point-no-snap = Nothing to snap to here. Items stay locked on this page until you unlock them with their padlock.
 haul-block-joined = Chosen nodes · { $length } m
 haul-block-nearest = Nearest node · { $length } m
 haul-block-far = Nearest node is { $length } m away, beyond the auto-join distance

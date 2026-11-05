@@ -2020,15 +2020,15 @@ pub(crate) struct EditorState {
     /// padlocks set this, not [`Self::frozen_handles`], so locking or
     /// unlocking there leaves the production views as they were.
     pub(crate) page_unlocked: HashSet<SceneEntityId>,
-    /// Derived each frame: what a click or a marquee may not select. Off the
-    /// locking pages, [`Self::frozen_handles`]; on them, every item but those
+    /// Derived each frame: what a click or a marquee may not select and the
+    /// cursor may not snap to. Off the locking pages, [`Self::frozen_handles`]; on them, every item but those
     /// unlocked there.
     pub(crate) pick_frozen: HashSet<SceneEntityId>,
-    /// Derived each frame: what the cursor may not snap to. A page's own lock
-    /// only keeps clicks from selecting, so on the locking pages a road node
-    /// still snaps onto the ground; an item locked by name stays out unless
-    /// it is unlocked there.
-    pub(crate) snap_frozen: HashSet<SceneEntityId>,
+    /// Derived each frame: what the camera may not orbit about. A page's own
+    /// lock leaves that alone, so the view still turns about the ground on
+    /// the locking pages; an item locked by name stays out unless it is
+    /// unlocked there.
+    pub(crate) orbit_frozen: HashSet<SceneEntityId>,
     /// Design layers locked against selection and editing.
     pub(crate) locked_layers: HashSet<LayerId>,
     /// Rasters locked against draping and deletion. Rasters are not scene
@@ -3708,7 +3708,7 @@ impl EditorState {
         self.explicitly_frozen.clear();
         self.page_unlocked.clear();
         self.pick_frozen.clear();
-        self.snap_frozen.clear();
+        self.orbit_frozen.clear();
         self.locked_layers.clear();
         self.locked_rasters.clear();
         self.translucent_handles.clear();
@@ -3991,7 +3991,7 @@ impl EditorState {
             explicitly_frozen: HashSet::new(),
             page_unlocked: HashSet::new(),
             pick_frozen: HashSet::new(),
-            snap_frozen: HashSet::new(),
+            orbit_frozen: HashSet::new(),
             locked_layers: HashSet::new(),
             locked_rasters: HashSet::new(),
             translucent_handles: HashSet::new(),

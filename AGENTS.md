@@ -93,7 +93,7 @@ winit event → App::window_event (app/mod.rs) → app/events.rs (input, redraw)
 - **`EditorState`** (`ui/state.rs`) — transient: active tool, `selected_handles`, hidden/frozen sets, dialog flags. Small changes inline; larger transitions via `EditorState::apply_action(EditorAction)`, which returns whether geometry must rebuild — propagate it.
 - **`UiProjectView`** — derived from `App` each frame, cached behind an allocation-free fingerprint (`ui_project_view_cache`).
 
-Animate and the Road Network lock every item by default (`EditorState::page_locks_items`): their padlocks set `page_unlocked`, not the production views' `frozen_handles`, and `App::sync_page_locks` derives `pick_frozen` (clicks, marquees) and `snap_frozen` (snapping, which a page lock does not block) each frame.
+Animate and the Road Network lock every item by default (`EditorState::page_locks_items`): their padlocks set `page_unlocked`, not the production views' `frozen_handles`, and `App::sync_page_locks` derives `pick_frozen` (clicks, marquees, snapping) and `orbit_frozen` (the camera's pivot, which a page lock does not block) each frame.
 
 Selection is uniform via `SceneEntityId` (`Object` / `Triangulation` / `BlockModel` / `DrillHole` / `PointCloud`); `rendering/query.rs` and `rendering/pick.rs` return one, so viewport features match on the variant rather than consulting per-kind lists.
 

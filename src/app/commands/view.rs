@@ -326,8 +326,8 @@ impl<'a> App<'a> {
         }
     }
 
-    /// Work out what clicks and snaps skip this frame: [`EditorState::pick_frozen`]
-    /// and [`EditorState::snap_frozen`]. Rebuilt only when the page, the
+    /// Work out what clicks, snaps and the orbit pivot skip this frame:
+    /// [`EditorState::pick_frozen`] and [`EditorState::orbit_frozen`]. Rebuilt only when the page, the
     /// locks or the project's items change.
     pub(crate) fn sync_page_locks(&mut self) {
         use std::hash::{Hash, Hasher};
@@ -360,7 +360,7 @@ impl<'a> App<'a> {
         self.page_lock_key = Some(key);
         if !page {
             self.editor.pick_frozen = self.editor.frozen_handles.clone();
-            self.editor.snap_frozen = self.editor.frozen_handles.clone();
+            self.editor.orbit_frozen = self.editor.frozen_handles.clone();
             return;
         }
         let unlocked = &self.editor.page_unlocked;
@@ -387,7 +387,7 @@ impl<'a> App<'a> {
             .chain(objects)
             .chain(self.editor.frozen_handles.iter().copied());
         self.editor.pick_frozen = every.filter(|entity| !unlocked.contains(entity)).collect();
-        self.editor.snap_frozen = self.editor.frozen_handles.iter().copied().filter(|entity| !unlocked.contains(entity)).collect();
+        self.editor.orbit_frozen = self.editor.frozen_handles.iter().copied().filter(|entity| !unlocked.contains(entity)).collect();
     }
 
     /// Open Animate on the whole site: once per project, and again whenever

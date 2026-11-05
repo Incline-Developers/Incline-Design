@@ -84,7 +84,7 @@ impl<'a> App<'a> {
                         overlay,
                         &self.drill_holes,
                         &self.editor.hidden_handles,
-                        &self.editor.snap_frozen,
+                        &self.editor.orbit_frozen,
                         &self.scene_document,
                         &self.snap_index,
                         self.editor.z_level,
@@ -604,7 +604,7 @@ impl<'a> App<'a> {
                             let nearest = crate::rendering::pick::pick_nearest_vertex(
                                 &self.scene_document,
                                 &self.editor.hidden_handles,
-                                &self.editor.snap_frozen,
+                                &self.editor.pick_frozen,
                                 &vp,
                                 screen,
                                 graphics.window_to_viewport_px(cursor_px),
@@ -1148,7 +1148,7 @@ impl<'a> App<'a> {
             &self.snap_index,
             &self.triangulations,
             &self.editor.hidden_handles,
-            &self.editor.snap_frozen,
+            &self.editor.pick_frozen,
             &self.editor.cursor_mode,
             self.editor.xray_enabled,
         );
@@ -1160,7 +1160,7 @@ impl<'a> App<'a> {
         }
         if self.editor.cursor_mode == crate::ui::state::CursorMode::SnapToSurface {
             return graphics
-                .pick_triangulation_at_cursor(&self.haul_block_surface, &self.editor.hidden_handles, &self.editor.snap_frozen)
+                .pick_triangulation_at_cursor(&self.haul_block_surface, &self.editor.hidden_handles, &self.editor.pick_frozen)
                 .map(|(_, point)| point)
                 .or(found);
         }
@@ -1475,7 +1475,7 @@ impl<'a> App<'a> {
             overlay,
             &self.drill_holes,
             &self.editor.hidden_handles,
-            &self.editor.snap_frozen,
+            &self.editor.orbit_frozen,
             &self.scene_document,
             &self.snap_index,
             self.editor.z_level,
