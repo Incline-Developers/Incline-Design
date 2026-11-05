@@ -1300,9 +1300,10 @@ pub(crate) fn draw_condition_dialog(
             if categorical && narrowed.as_ref().is_some_and(|narrowed| *narrowed != held_sources) {
                 menu::menu_note(ui, tr!("destination-condition-category-narrows"));
             }
-            if let Err(message) = &built {
-                ui.label(egui::RichText::new(message).color(ui.visuals().error_fg_color));
-            }
+            // Always a line, even empty: the dialog is centred, so one that came
+            // and went would move the checkboxes while they are being ticked.
+            let message = built.as_ref().err().map_or(" ", String::as_str);
+            ui.label(egui::RichText::new(message).color(ui.visuals().error_fg_color));
             menu::menu_actions(ui, |ui| {
                 let submitted = menu::dialog_confirmed(ui.ctx());
                 if (submitted || ui.add(MenuButton::new(tr!("common-apply")).primary().enabled(built.is_ok())).clicked()) && built.is_ok() {
