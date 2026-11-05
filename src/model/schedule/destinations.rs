@@ -802,6 +802,15 @@ fn checked_capacity(value: f64) -> ScheduleResult<f64> {
 }
 
 impl RoutingConfig {
+    /// Clear a reserve field gone from the project off every opening stock.
+    pub(crate) fn forget_field(&mut self, field: ReserveFieldId) {
+        let solids = self.solids.iter_mut().map(|entry| &mut entry.inventory);
+        let standalone = self.standalone.iter_mut().map(|entry| &mut entry.inventory);
+        for portion in solids.chain(standalone).flat_map(|inventory| &mut inventory.lots).flat_map(|lot| &mut lot.portions) {
+            portion.values.retain(|(held, _)| *held != field);
+        }
+    }
+
     /// Whether nothing here has ever been configured, so an untouched project
     /// is not reported as holding routing setup.
     pub(crate) fn is_pristine(&self) -> bool {

@@ -3239,6 +3239,10 @@ pub(crate) struct EditorState {
     /// A machine waiting on the delete confirmation, asked only when
     /// deleting it would strand Gantt work.
     pub(crate) pending_delete_agent: Option<crate::model::schedule::LoaderAgentId>,
+    /// The reserve field whose Delete is being confirmed.
+    pub(crate) pending_delete_field: Option<crate::model::ReserveFieldId>,
+    /// The solid whose Delete is being confirmed.
+    pub(crate) pending_delete_solid: Option<crate::model::SolidId>,
     /// The periods selected on the Periods step (Day 1 is 0), and the one a
     /// Shift-click extends from. A colour picked on any selected row marks
     /// them all.
@@ -3839,6 +3843,8 @@ impl EditorState {
         self.new_loader_agent_open = false;
         self.new_loader_agent_class = None;
         self.pending_delete_agent = None;
+        self.pending_delete_field = None;
+        self.pending_delete_solid = None;
         self.schedule_selected_periods.clear();
         self.schedule_period_anchor = None;
         self.new_loader_agent_name.clear();
@@ -4576,6 +4582,8 @@ impl EditorState {
             new_loader_agent_name: String::new(),
             new_loader_agent_class: None,
             pending_delete_agent: None,
+            pending_delete_field: None,
+            pending_delete_solid: None,
             schedule_selected_periods: std::collections::BTreeSet::new(),
             schedule_period_anchor: None,
             new_destination_open: false,
@@ -5385,6 +5393,7 @@ pub(crate) enum UiCommand {
         name: String,
         aggregation: crate::model::ReserveAggregation,
     },
+    RequestDeleteReserveField(crate::model::ReserveFieldId),
     DeleteReserveField(crate::model::ReserveFieldId),
     /// Add a field named after a block model column, mapped onto that column
     /// in every block model that has one by that name.
@@ -6230,6 +6239,7 @@ impl UiCommand {
             Self::CreateLayer { name } => report(tr!("common-create-layer"), name.clone()),
             Self::AddReserveField { name, .. } => report(tr!("reserve-add-field"), name.clone()),
             Self::AddReserveFieldFromColumn { column, .. } => report(tr!("reserve-add-field"), column.clone()),
+            Self::RequestDeleteReserveField(_) => report(tr!("planning-delete-field"), String::new()),
             Self::DeleteReserveField(_) => report(tr!("planning-delete-field"), String::new()),
             Self::AddSolid { name, .. } => report(tr!("solids-add-solid"), name.clone()),
             // The fleet editors report additions and deletions, which are

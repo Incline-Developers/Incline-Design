@@ -156,6 +156,7 @@ impl<'a> App<'a> {
                 | UiCommand::AddReserveField { .. }
                 | UiCommand::AddReserveFieldFromColumn { .. }
                 | UiCommand::SetReserveFieldAggregation { .. }
+                | UiCommand::RequestDeleteReserveField(_)
                 | UiCommand::DeleteReserveField(_)
                 | UiCommand::SetReserveMapping { .. }
                 | UiCommand::SetReserveModelIncluded { .. }
@@ -455,6 +456,10 @@ impl<'a> App<'a> {
             }
             UiCommand::SetReserveFieldAggregation { field, aggregation } => {
                 self.set_reserve_field_aggregation(field, aggregation);
+                Ok(())
+            }
+            UiCommand::RequestDeleteReserveField(id) => {
+                self.request_delete_reserve_field(id);
                 Ok(())
             }
             UiCommand::DeleteReserveField(id) => {

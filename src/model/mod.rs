@@ -1979,6 +1979,7 @@ impl Document {
                     field.aggregation = ReserveAggregation::Sum;
                 }
             }
+            self.schedule.forget_field(id);
             self.touch();
         }
         removed

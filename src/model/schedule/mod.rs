@@ -1394,6 +1394,28 @@ impl SchedulePlan {
     }
 
     pub(crate) fn bar(&self, id: BarId) -> Option<&ScheduleBar> {
+    /// What in the plan reads a reserve field, by name.
+    pub(crate) fn field_users(&self, field: ReserveFieldId) -> Vec<String> {
+        let mut users = Vec::new();
+        if self.tonnage_field == Some(field) {
+            users.push(tr!("reserve-field-used-tonnage"));
+        }
+        if self.experiment.grades.iter().any(|(grade, _)| *grade == field) {
+            users.push(tr!("reserve-field-used-grades"));
+        }
+        let tests = |conditions: &[destinations::FieldCondition]| conditions.iter().any(|condition| condition.field == field);
+        users.extend(self.routing.rules.iter().filter(|rule| tests(&rule.conditions)).map(|rule| rule.name.clone()));
+        users.extend(self.cashflow.rules.iter().filter(|rule| tests(&rule.conditions)).map(|rule| rule.name.clone()));
+        users
+    }
+
+    /// Drop what only described a reserve field now gone: grade targets and
+    /// opening stock's values, neither of which means anything without it.
+    pub(crate) fn forget_field(&mut self, field: ReserveFieldId) {
+        self.crusher_grade_calendars.retain(|calendar| calendar.field != field);
+        self.routing.forget_field(field);
+    }
+
         self.bars.iter().find(|bar| bar.id == id)
     }
 

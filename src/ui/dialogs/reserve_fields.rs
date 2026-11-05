@@ -111,3 +111,60 @@ pub(crate) fn draw_new_reserve_field_dialog(ui: &mut egui::Ui, editor: &mut Edit
         editor.new_reserve_field_weight_field = None;
     }
 }
+
+/// Ask before deleting an unused reserve field, which cannot be undone.
+pub(crate) fn draw_delete_reserve_field_dialog(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document, commands: &mut Vec<UiCommand>) {
+    let Some(field) = editor.pending_delete_field.and_then(|id| document.reserve_fields().iter().find(|field| field.id == id)) else {
+        editor.pending_delete_field = None;
+        return;
+    };
+    let mut open = true;
+    let mut close = false;
+    DragableMenu::new("delete_reserve_field_dialog", tr!("reserve-field-delete-title", name = field.name.clone()))
+        .open(&mut open)
+        .min_width(320.0)
+        .show(ui.ctx(), |ui| {
+            ui.label(tr!("reserve-field-delete-note"));
+            menu::menu_actions(ui, |ui| {
+                if ui.add(MenuButton::new(tr!("planning-delete-field")).danger()).clicked() || menu::dialog_confirmed(ui.ctx()) {
+                    commands.push(UiCommand::DeleteReserveField(field.id));
+                    close = true;
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    close = true;
+                }
+            });
+        });
+    if close || !open {
+        editor.pending_delete_field = None;
+    }
+}
+
+/// Ask before deleting a solid, which takes its benches, cut lines and dig
+/// order references with it and cannot be undone.
+pub(crate) fn draw_delete_solid_dialog(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document, commands: &mut Vec<UiCommand>) {
+    let Some(solid) = editor.pending_delete_solid.and_then(|id| document.solids().iter().find(|solid| solid.id == id)) else {
+        editor.pending_delete_solid = None;
+        return;
+    };
+    let mut open = true;
+    let mut close = false;
+    DragableMenu::new("delete_solid_dialog", tr!("planning-delete-solid-title", name = solid.name.clone()))
+        .open(&mut open)
+        .min_width(320.0)
+        .show(ui.ctx(), |ui| {
+            ui.label(tr!("planning-delete-solid-note"));
+            menu::menu_actions(ui, |ui| {
+                if ui.add(MenuButton::new(tr!("planning-delete-solid")).danger()).clicked() || menu::dialog_confirmed(ui.ctx()) {
+                    commands.push(UiCommand::DeleteSolid(solid.id));
+                    close = true;
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    close = true;
+                }
+            });
+        });
+    if close || !open {
+        editor.pending_delete_solid = None;
+    }
+}

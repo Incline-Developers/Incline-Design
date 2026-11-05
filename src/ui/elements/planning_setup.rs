@@ -828,7 +828,7 @@ fn draw_field_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState
                     ui.close();
                 }
                 if ContextMenuAction::new(tr!("planning-delete-field")).show(ui).clicked() {
-                    commands.push(UiCommand::DeleteReserveField(field.id));
+                    commands.push(UiCommand::RequestDeleteReserveField(field.id));
                     ui.close();
                 }
             });
@@ -839,6 +839,7 @@ fn draw_field_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState
         editor.new_reserve_field_open = true;
     }
     crate::ui::dialogs::reserve_fields::draw_new_reserve_field_dialog(ui, editor, document, commands);
+    crate::ui::dialogs::reserve_fields::draw_delete_reserve_field_dialog(ui, editor, document, commands);
 }
 
 /// The Block Models step's left column: the project's block models, with
@@ -1132,7 +1133,7 @@ fn draw_solid_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState
                         ui.close();
                     }
                     if ContextMenuAction::new(tr!("planning-delete-solid")).show(ui).clicked() {
-                        commands.push(UiCommand::DeleteSolid(solid.id));
+                        editor.pending_delete_solid = Some(solid.id);
                         ui.close();
                     }
                 });
@@ -1440,6 +1441,7 @@ fn solids_column(
 }
 
 fn draw_solids_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut EditorState, project: &UiProjectView, document: &Document, commands: &mut Vec<UiCommand>) {
+    crate::ui::dialogs::reserve_fields::draw_delete_solid_dialog(ui, editor, document, commands);
     // Open on a solid rather than an empty preview.
     if editor.planning_selected_solid.is_none_or(|id| document.solid(id).is_none()) {
         editor.planning_selected_solid = document.solids().first().map(|solid| solid.id);
