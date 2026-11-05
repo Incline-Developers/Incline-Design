@@ -1155,7 +1155,12 @@ impl crate::app::App<'_> {
             }
         }
         if let (Some(held), Some(calculation)) = (held_detail, self.schedule_calculation.as_ref()) {
-            details.push(tr!("schedule-run-still-showing", run = calculation.run.to_string(), status = held));
+            // An out-of-date run is hidden, and says so itself.
+            details.push(if current {
+                tr!("schedule-run-still-showing", run = calculation.run.to_string(), status = held)
+            } else {
+                held
+            });
         }
         let stale = !current && self.schedule_calculation.is_some() && !recalculating;
         let repair = if running.is_some() {
