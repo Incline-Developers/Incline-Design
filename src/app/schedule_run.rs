@@ -519,12 +519,15 @@ impl crate::app::App<'_> {
         let end_h = self.planning_end_h();
         let held_end_h = self.schedule_calculation.as_ref().map(|held| held.requested_end_h.min(end_h));
         // With nothing on screen, what the project was saved with may still
-        // answer it; the fingerprint decides, once the model is captured.
+        // answer it, and an Auto recalculation may find nothing the schedule
+        // reads has changed, as when an unrelated block model comes in: the
+        // fingerprint decides, once the model is captured, so Improve's work
+        // is not thrown away for it.
         let saved = self
             .workspace
             .active_document()
             .and_then(|document| document.saved_schedule().cloned())
-            .filter(|_| self.schedule_calculation.is_none() && mode != ScheduleRunMode::Improve)
+            .filter(|_| mode != ScheduleRunMode::Improve && (self.schedule_calculation.is_none() || mode == ScheduleRunMode::Auto))
             .filter(|saved| saved.requested_end_h <= end_h + 1e-9);
         let restore_only = mode == ScheduleRunMode::Auto && !self.editor.schedule_auto_recalculate;
         let requested_end_h = match mode {
@@ -748,7 +751,9 @@ impl crate::app::App<'_> {
                             finished.push('\n');
                             finished.push_str(&line);
                         }
-                        if schedule.report.restored {
+                        // Nothing on screen is an opening; otherwise the
+                        // schedule simply stayed as it was.
+                        if schedule.report.restored && app.schedule_calculation.is_none() {
                             crate::userspace_log!(
                                 "{}",
                                 tr!("schedule-run-restored", value = crate::model::schedule::cashflow::money_text(schedule.report.objective))
