@@ -2321,6 +2321,17 @@ impl Hasher for WidthFreeHasher {
     }
 }
 
+/// A measured quantity as the fingerprint sees it: to about seven figures.
+///
+/// Tonnes, shares and cycle times come out of the geometry, and platforms round
+/// the last few bits of that arithmetic differently, so hashing them exactly
+/// would retire a schedule whenever a project moved between them. Opening
+/// replays the schedule against the model anyway, so nothing is lost by not
+/// telling apart two figures this close.
+fn measured(value: f64) -> u32 {
+    (value as f32).to_bits()
+}
+
 /// The complete experimental-run identity.
 ///
 /// Everything that can change feasibility, the objective or the encoded
@@ -2400,10 +2411,10 @@ fn stable_fingerprint(source: &CaptureSnapshot, input: &BlendInput) -> u64 {
     }
     for entry in &input.ground {
         entry.id.0.hash(&mut hasher);
-        entry.tonnes_t.to_bits().hash(&mut hasher);
+        measured(entry.tonnes_t).hash(&mut hasher);
         for share in &entry.material {
             share.material.0.hash(&mut hasher);
-            share.fraction.to_bits().hash(&mut hasher);
+            measured(share.fraction).hash(&mut hasher);
             for grade in 0..input.grades.count() {
                 input.grades.fraction(share.material, grade).map(f64::to_bits).hash(&mut hasher);
             }
@@ -2430,7 +2441,7 @@ fn stable_fingerprint(source: &CaptureSnapshot, input: &BlendInput) -> u64 {
         candidate.material.0.hash(&mut hasher);
         candidate.destination.0.hash(&mut hasher);
         candidate.truck.0.hash(&mut hasher);
-        candidate.truck_hours_per_tonne.to_bits().hash(&mut hasher);
+        measured(candidate.truck_hours_per_tonne).hash(&mut hasher);
         candidate.routing_rule.0.hash(&mut hasher);
         candidate.routing_preference.hash(&mut hasher);
         for contribution in &candidate.cashflow {
