@@ -142,11 +142,14 @@ pub(crate) fn draw_copy_cuts(ui: &mut egui::Ui, editor: &mut EditorState, docume
         .iter()
         .filter(|handle| matches!(handle, crate::model::SceneEntityId::Object(_)))
         .count();
-    if lines > 0 && editor.planning_cut_target().is_some() {
+    // There, disabled, before anything is selected: appearing on selection
+    // would push the navigator down under the cursor.
+    if editor.planning_cut_target().is_some() {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.add_space(8.0);
-            if ui.add(crate::ui::widgets::menu::MenuButton::new(tr!("planning-copy-cuts-button", count = lines))).clicked() {
+            let button = crate::ui::widgets::menu::MenuButton::new(tr!("planning-copy-cuts-button", count = lines)).enabled(lines > 0);
+            if ui.add(button).clicked() {
                 editor.copy_cuts_dialog = Some(Default::default());
             }
         });
