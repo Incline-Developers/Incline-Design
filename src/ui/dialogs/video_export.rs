@@ -325,6 +325,8 @@ pub(crate) fn draw_video_export_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
                 None => tr!("video-export-invalid-speed"),
             };
             menu::menu_note(ui, summary);
+            // The browser has no save dialog to choose in: it downloads an MP4.
+            #[cfg(not(target_arch = "wasm32"))]
             menu::menu_note(ui, tr!("video-export-format-note"));
             menu::menu_actions(ui, |ui| {
                 let ready = enabled && request.is_some();
