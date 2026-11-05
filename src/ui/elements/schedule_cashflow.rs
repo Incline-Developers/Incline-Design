@@ -433,9 +433,9 @@ pub(crate) fn draw_rule_editor(
             // Conditions, ANDed, read against the same contributing material
             // the destination rules match on.
             grid_separator_row(ui, &tr!("cashflow-rule-conditions"), 0);
-            if rule.conditions.is_empty() {
-                explorer_note(ui, tr!("destination-no-conditions"));
-            }
+            // The note stands where the first condition would, so it offers
+            // the same menu as the space below it.
+            let note = rule.conditions.is_empty().then(|| explorer_note(ui, tr!("destination-no-conditions")));
             // The same policy, from the same helper, as the destination rules.
             super::schedule_destinations::category_conflict_note(ui, document, &rule.sources, &rule.conditions);
             for condition in &rule.conditions {
@@ -459,6 +459,10 @@ pub(crate) fn draw_rule_editor(
                 });
             }
             let body = ui.available_rect_before_wrap();
+            let body = match &note {
+                Some(note) => body.union(note.rect),
+                None => body,
+            };
             if body.is_positive() {
                 let response = ui.interact(body, ui.scope_id().with(("new_cashflow_condition_space", rule.id.0)), egui::Sense::click());
                 context_menu_popup(&response, tr!("cashflow-rule-conditions"), |ui| {
