@@ -22,7 +22,7 @@ use crate::{
         state::{ConditionOwner, ScheduleCashflowDraft, ScheduleEdit, UiCommand},
         widgets::{
             context_menu::{ChecklistRow, ContextMenuAction, Tick, checklist_popup, context_menu_popup, context_menu_separator},
-            data_grid::{DataGrid, GridRow, PropertyTable, grid_checkbox_row, grid_choice_row, grid_named_row, grid_row, grid_select_row, grid_separator_row},
+            data_grid::{DataGrid, GridRow, PropertyTable, grid_add_action_row, grid_checkbox_row, grid_choice_row, grid_named_row, grid_row, grid_select_row, grid_separator_row},
             explorer::explorer_note,
             menu,
         },
@@ -36,9 +36,6 @@ pub(crate) fn draw_rule_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut E
     DataGrid::new("schedule_cashflow_list", rect, &tr!("cashflow"))
         .column_header(&tr!("planning-name"))
         .show(ui, |ui| {
-            if rules.rules.is_empty() {
-                explorer_note(ui, tr!("cashflow-no-rules"));
-            }
             for rule in &rules.rules {
                 let label = format!("{} · {}", rule.name, cashflow::format_value(rule.value_per_tonne));
                 let summary = rule.summary(
@@ -68,16 +65,9 @@ pub(crate) fn draw_rule_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut E
                     }
                 });
             }
-            let body = ui.available_rect_before_wrap();
-            if body.is_positive() {
-                let response = ui.interact(body, ui.scope_id().with("new_cashflow_rule_space"), egui::Sense::click());
-                context_menu_popup(&response, tr!("cashflow"), |ui| {
-                    if ContextMenuAction::new(tr!("cashflow-new-rule")).show(ui).clicked() {
-                        let name = crate::model::schedule::suggested_name(&tr!("cashflow-default-rule-name"), rules.rules.iter().map(|rule| rule.name.clone()));
-                        commands.push(UiCommand::schedule(session, ScheduleEdit::AddCashflowRule { name }));
-                        ui.close();
-                    }
-                });
+            if grid_add_action_row(ui, &tr!("cashflow-new-rule")) {
+                let name = crate::model::schedule::suggested_name(&tr!("cashflow-default-rule-name"), rules.rules.iter().map(|rule| rule.name.clone()));
+                commands.push(UiCommand::schedule(session, ScheduleEdit::AddCashflowRule { name }));
             }
         });
     // The page opens on the first rule rather than on an empty pane.

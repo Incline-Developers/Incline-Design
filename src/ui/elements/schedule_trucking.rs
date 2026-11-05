@@ -30,7 +30,6 @@ use crate::{
                 DataGrid, GridRow, PropertyTable, grid_add_action_row, grid_cell_entry, grid_cell_entry_flagged, grid_cell_fixed, grid_checkbox_row, grid_columns_row,
                 grid_empty_state, grid_named_row, grid_row, grid_select_row, grid_separator_row,
             },
-            explorer::explorer_note,
             menu,
         },
     },
@@ -339,9 +338,6 @@ pub(crate) fn draw_rule_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut E
     DataGrid::new("schedule_truck_rule_list", rect, &tr!("truck-rules"))
         .column_header(&tr!("planning-name"))
         .show(ui, |ui| {
-            if trucks.rules.is_empty() {
-                explorer_note(ui, tr!("truck-no-rules"));
-            }
             for rule in &trucks.rules {
                 let classes: Vec<String> = rule
                     .classes
@@ -365,21 +361,13 @@ pub(crate) fn draw_rule_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut E
                     }
                 });
             }
-            let body = ui.available_rect_before_wrap();
-            if body.is_positive() {
-                let response = ui.interact(body, ui.scope_id().with("new_trucking_rule_space"), egui::Sense::click());
-                context_menu_popup(&response, tr!("truck-rules"), |ui| {
-                    // A rule has to permit at least one class, so there is
-                    // nothing to add until there is a class to permit.
-                    let first = trucks.classes.first().map(|class| class.id);
-                    if ContextMenuAction::new(tr!("truck-new-rule")).enabled(first.is_some()).show(ui).clicked() {
-                        if let Some(first) = first {
-                            let name = crate::model::schedule::suggested_name(&tr!("truck-default-rule-name"), trucks.rules.iter().map(|rule| rule.name.clone()));
-                            commands.push(UiCommand::schedule(session, ScheduleEdit::AddTruckingRule { name, classes: vec![first] }));
-                        }
-                        ui.close();
-                    }
-                });
+            // A rule has to permit at least one class, so there is nothing to
+            // add until there is a class to permit.
+            if let Some(first) = trucks.classes.first().map(|class| class.id)
+                && grid_add_action_row(ui, &tr!("truck-new-rule"))
+            {
+                let name = crate::model::schedule::suggested_name(&tr!("truck-default-rule-name"), trucks.rules.iter().map(|rule| rule.name.clone()));
+                commands.push(UiCommand::schedule(session, ScheduleEdit::AddTruckingRule { name, classes: vec![first] }));
             }
         });
     // The page opens on the first rule rather than on an empty pane.

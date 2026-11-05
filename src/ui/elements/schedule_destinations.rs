@@ -765,16 +765,8 @@ pub(crate) fn draw_rule_list(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut E
                     }
                 });
             }
-            let body = ui.available_rect_before_wrap();
-            if body.is_positive() {
-                let response = ui.interact(body, ui.scope_id().with("new_rule_space"), egui::Sense::click());
-                context_menu_popup(&response, tr!("destination-destinations"), |ui| {
-                    let available = !destinations::available(document.solids(), routing).is_empty();
-                    if ContextMenuAction::new(tr!("destination-new-rule")).enabled(available).show(ui).clicked() {
-                        new_rule = true;
-                        ui.close();
-                    }
-                });
+            if !destinations::available(document.solids(), routing).is_empty() && grid_add_action_row(ui, &tr!("destination-new-rule")) {
+                new_rule = true;
             }
         });
     // The page opens on the first rule rather than on an empty pane.
