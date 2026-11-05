@@ -2308,6 +2308,7 @@ impl SchedulePlan {
             class.default_reclaim_rate_tph.to_bits().hash(hasher);
             class.spot_time_s.to_bits().hash(hasher);
             class.kind.hash(hasher);
+            class.loader_type.hash(hasher);
         }
         for agent in &self.agents {
             agent.id.hash(hasher);
