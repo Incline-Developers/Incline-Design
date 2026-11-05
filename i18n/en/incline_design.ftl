@@ -764,7 +764,7 @@ drill-blast-error-reference = A blast reference could not describe any blast.
 schedule-error-wrong-machine = That machine cannot do this work: loaders dig and reclaim, dozers, drills and MPUs work blasts.
 schedule-error-kind-in-use = Machines of this class hold bars the new kind cannot work: { $bars }
 drill-blast-unclearable = Never clear: ground above these blasts, within the buffer, is in no dig bar: { $blasts }
-drill-blast-missing = { $bar }: { $count } blast(s) in this bar are not in the planning run
+drill-blast-missing = { $bar }: { $count } of its blasts could not be found in the current run
 drill-blast-unworked-entry = { $blast } ({ $step })
 schedule-bar-unworked-blasts = { $count ->
     [one] Its ground in { $blasts } is never dug: no machine bar works that step. Add the blast to a blast bar on that kind of machine, or start it further on in Setup → Drill & Blast.

@@ -624,7 +624,8 @@ fn capture_drill_blast(
             }
         }
         if missing > 0 {
-            notes.push(tr!("drill-blast-missing", bar = bar.name().to_owned(), count = missing.to_string()));
+            let name = if bar.name().is_empty() { tr!("blast-bar-default-empty") } else { bar.name().to_owned() };
+            notes.push(tr!("drill-blast-missing", bar = name, count = missing.to_string()));
         }
         if let Some(leader) = bar.follow().and_then(|work| work.leader) {
             leaders.push((tasks.len(), leader));
