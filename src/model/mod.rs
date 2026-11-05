@@ -1417,6 +1417,11 @@ pub(crate) struct Document {
     schedule: schedule::SchedulePlan,
     #[serde(default)]
     haulage: haulage::HaulNetwork,
+    /// The latest calculated schedule, kept with the project when it is saved.
+    /// Not part of its content: recalculating does not make a project unsaved,
+    /// and the one run that should says so itself.
+    #[serde(skip)]
+    saved_schedule: Option<std::sync::Arc<schedule::optimisation::blended::saved::SavedSchedule>>,
     #[serde(skip)]
     revision: u64,
     /// Document revision at which each object was last mutated. Lets the
@@ -2014,6 +2019,14 @@ impl Document {
         &self.schedule
     }
 
+    pub(crate) fn saved_schedule(&self) -> Option<&std::sync::Arc<schedule::optimisation::blended::saved::SavedSchedule>> {
+        self.saved_schedule.as_ref()
+    }
+
+    pub(crate) fn set_saved_schedule(&mut self, saved: Option<std::sync::Arc<schedule::optimisation::blended::saved::SavedSchedule>>) {
+        self.saved_schedule = saved;
+    }
+
     /// Swap in a whole schedule plan, as one undoable edit.
     ///
     /// The plan is small and edited a cell at a time, so a snapshot either
@@ -2045,6 +2058,9 @@ impl Document {
     pub(crate) fn merge_schedule_from(&mut self, source: &Document) {
         if self.schedule.is_pristine() && !source.schedule.is_pristine() {
             self.schedule = source.schedule.clone();
+        }
+        if self.saved_schedule.is_none() {
+            self.saved_schedule.clone_from(&source.saved_schedule);
         }
     }
 

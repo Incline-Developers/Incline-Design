@@ -67,7 +67,10 @@ use crate::{
     i18n::tr,
     model::schedule::{
         SCHEDULE_PERIOD_H,
-        optimisation::progress::{ImproveEnd, ImproveEvent, ImproveProgress, ImproveStage},
+        optimisation::{
+            blended::saved::SavedSchedule,
+            progress::{ImproveEnd, ImproveEvent, ImproveProgress, ImproveStage},
+        },
         result::{BoundSource, CalculatedSchedule, DayByDayRole, SolveQuality, StartMethod},
     },
     ui::state::{ScheduleRepairTarget, ScheduleStep},
@@ -254,6 +257,9 @@ pub(crate) struct ScheduleAttempt {
 /// What the worker hands back.
 enum RunOutcome {
     Published(Arc<CalculatedSchedule>),
+    /// Auto is off and the schedule saved with the project no longer answers
+    /// it. Nothing went wrong, and nothing is calculated until someone asks.
+    SavedOutOfDate,
     NotPublished {
         outcome: AttemptOutcome,
         messages: Vec<String>,
@@ -501,6 +507,9 @@ impl crate::app::App<'_> {
                 // asked for does not repeat it in the console.
                 if auto {
                     log::info!("schedule recalculation blocked: {}", reason.describe());
+                } else if matches!(reason, ScheduleNotReady::Running(_)) {
+                    // Nothing is wrong: pressing Run again in a moment works.
+                    crate::userspace_log!("{}", tr!("schedule-run-blocked", reason = reason.describe()));
                 } else {
                     crate::userspace_warn!("{}", tr!("schedule-run-blocked", reason = reason.describe()));
                 }
@@ -509,9 +518,18 @@ impl crate::app::App<'_> {
         };
         let end_h = self.planning_end_h();
         let held_end_h = self.schedule_calculation.as_ref().map(|held| held.requested_end_h.min(end_h));
+        // With nothing on screen, what the project was saved with may still
+        // answer it; the fingerprint decides, once the model is captured.
+        let saved = self
+            .workspace
+            .active_document()
+            .and_then(|document| document.saved_schedule().cloned())
+            .filter(|_| self.schedule_calculation.is_none() && mode != ScheduleRunMode::Improve)
+            .filter(|saved| saved.requested_end_h <= end_h + 1e-9);
+        let restore_only = mode == ScheduleRunMode::Auto && !self.editor.schedule_auto_recalculate;
         let requested_end_h = match mode {
             ScheduleRunMode::All => end_h,
-            ScheduleRunMode::Auto => held_end_h.unwrap_or(end_h),
+            ScheduleRunMode::Auto => held_end_h.or(saved.as_ref().map(|saved| saved.requested_end_h)).unwrap_or(end_h),
             ScheduleRunMode::Improve => held_end_h.filter(|_| self.schedule_calculation_is_current()).unwrap_or(end_h),
             ScheduleRunMode::Period => match self.schedule_calculation.as_ref().filter(|_| self.schedule_calculation_is_current()) {
                 Some(held) if held.requested_end_h >= end_h - 1e-9 => {
@@ -615,6 +633,7 @@ impl crate::app::App<'_> {
                 if capture.stats.event_budget_restricted {
                     notes.push(tr!("schedule-note-event-budget", positions = input.segments_per_interval.to_string()));
                 }
+                let stable_fingerprint = capture.stable_fingerprint;
                 let publish_completion = |completion: &super::schedule_solve::ScheduleCompletion| {
                     let (Some(solution), Some(replay)) = (completion.solution.as_ref(), completion.replay.as_ref()) else {
                         return Err("the run holds no replayed schedule".to_owned());
@@ -633,8 +652,26 @@ impl crate::app::App<'_> {
                         unworked_blasts: capture.identities.unworked_blasts.clone(),
                         notes: notes.clone(),
                     };
-                    publish(&input, solution, replay, &capture.identities, meta, cancel)
+                    publish(&input, solution, replay, &capture.identities, meta, cancel).map(|mut schedule| {
+                        schedule.saved = Some(Arc::new(SavedSchedule {
+                            fingerprint: stable_fingerprint,
+                            requested_end_h,
+                            solution: Arc::clone(solution),
+                        }));
+                        schedule
+                    })
                 };
+                if let Some(saved) = saved
+                    .as_ref()
+                    .filter(|saved| saved.fingerprint == stable_fingerprint && (saved.requested_end_h - requested_end_h).abs() <= 1e-9)
+                    && let Some(completion) = super::schedule_solve::restore_saved(&input, identity, options, saved, cancel)
+                    && let Ok(schedule) = publish_completion(&completion)
+                {
+                    return Ok(RunOutcome::Published(Arc::new(schedule)));
+                }
+                if restore_only {
+                    return Ok(RunOutcome::SavedOutOfDate);
+                }
                 let early = |completion: &super::schedule_solve::ScheduleCompletion| {
                     if !completion.usable() {
                         return;
@@ -711,13 +748,25 @@ impl crate::app::App<'_> {
                             finished.push('\n');
                             finished.push_str(&line);
                         }
-                        if auto && !schedule.report.event_budget_restricted {
+                        if schedule.report.restored {
+                            crate::userspace_log!(
+                                "{}",
+                                tr!("schedule-run-restored", value = crate::model::schedule::cashflow::money_text(schedule.report.objective))
+                            );
+                        } else if auto && !schedule.report.event_budget_restricted {
                             log::info!("{finished}");
                         } else {
                             crate::userspace_log!("{finished}");
                         }
                         app.schedule_run_diagnostics = None;
+                        // A result Improve worked for is the project's to lose,
+                        // so closing asks first. A recalculation gives the same
+                        // answer again, and asks nothing.
+                        app.keep_schedule_for_saving(&schedule, pending.improve);
                         app.schedule_calculation = Some(schedule);
+                    }
+                    Ok(RunOutcome::SavedOutOfDate) => {
+                        app.schedule_auto_attempted = Some(app.auto_key());
                     }
                     Ok(RunOutcome::NotPublished { outcome, messages, repair }) => {
                         // The day-by-day schedule already on screen was
@@ -779,7 +828,15 @@ impl crate::app::App<'_> {
     /// something changes.
     pub(crate) fn auto_recalculate_schedule(&mut self) {
         self.schedule_auto_deadline = None;
-        if !self.editor.schedule_auto_recalculate || self.workspace.active_project().is_none() || self.pending_schedule_run.is_some() || self.schedule_calculation_is_current() {
+        // Auto off still shows what the project was saved with, once the steps
+        // it was calculated from have run; the run stops there if that no
+        // longer answers the project, since Auto off never calculates.
+        let saved_waiting = self.schedule_calculation.is_none() && self.workspace.active_document().is_some_and(|document| document.saved_schedule().is_some());
+        if !(self.editor.schedule_auto_recalculate || saved_waiting)
+            || self.workspace.active_project().is_none()
+            || self.pending_schedule_run.is_some()
+            || self.schedule_calculation_is_current()
+        {
             self.schedule_auto_settle = None;
             return;
         }
@@ -954,6 +1011,17 @@ impl crate::app::App<'_> {
         }
     }
 
+    /// Have the project file keep this schedule the next time it is saved.
+    fn keep_schedule_for_saving(&mut self, schedule: &CalculatedSchedule, unsaved_work: bool) {
+        let saved = schedule.saved.clone();
+        if let Some(document) = self.workspace.active_document_mut() {
+            document.set_saved_schedule(saved);
+        }
+        if unsaved_work {
+            self.touch_active_project_content();
+        }
+    }
+
     /// Say what became of a run's day-by-day schedule once no whole-horizon
     /// solve is looking for a better one.
     fn settle_early_schedule(&mut self, serial: u64, role: DayByDayRole) {
@@ -1004,6 +1072,7 @@ impl crate::app::App<'_> {
                 tr!("schedule-run-early", run = serial.to_string(), day = day_of(schedule.requested_end_h).to_string())
             );
             self.schedule_run_diagnostics = None;
+            self.keep_schedule_for_saving(&schedule, false);
             self.schedule_calculation = Some(schedule);
             if let Some(pending) = self.pending_schedule_run.as_mut() {
                 pending.showing_early = true;

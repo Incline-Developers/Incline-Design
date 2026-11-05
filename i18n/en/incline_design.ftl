@@ -1737,6 +1737,7 @@ schedule-solver-crashed = The solver stopped unexpectedly ({ $status }). The pro
 schedule-run-finished = Schedule run { $run } calculated through day { $day }
 schedule-run-kept-better = Schedule run { $run } found nothing worth more than run { $held }, which is kept
 schedule-run-first = Scheduled through day { $day }
+schedule-run-restored = Opened the schedule saved with this project, worth { $value }, and checked it against the project.
 schedule-run-optimal = Scheduled through day { $day } · optimal
 schedule-run-limited-no-gap = Scheduled through day { $day }
 schedule-run-no-bars = Drag Dig from the palette onto a loader to start the schedule.

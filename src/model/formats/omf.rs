@@ -87,6 +87,9 @@ const META_SOLIDS: &str = "incline:solids";
 /// deliberately rather than guessed at.
 const META_HAULAGE: &str = "incline:haulage";
 const META_SCHEDULE: &str = "incline:schedule";
+/// The latest calculated schedule's decisions: see
+/// [`crate::model::schedule::optimisation::blended::saved`].
+const META_SCHEDULE_RESULT: &str = "incline:schedule_result";
 /// Payload version written into [`META_SCHEDULE`], and the only one this
 /// build reads.
 ///
@@ -130,6 +133,7 @@ const KNOWN_ELEMENT_METADATA: &[&str] = &[
     META_RESERVE_FIELDS,
     META_SOLIDS,
     META_SCHEDULE,
+    META_SCHEDULE_RESULT,
     META_HAULAGE,
 ];
 const MAX_ARRAY_ITEMS: u64 = 200_000_000;
@@ -736,6 +740,9 @@ fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
             META_SCHEDULE,
             serde_json::json!({ "version": SCHEDULE_METADATA_VERSION, "plan": serde_json::to_value(schedule)? }),
         );
+        if let Some(saved) = document.saved_schedule() {
+            put(&mut element, META_SCHEDULE_RESULT, saved.to_value()?);
+        }
     }
     Ok(element)
 }
@@ -2582,6 +2589,9 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 Ok(schedule) => document.restore_schedule(schedule),
                 Err(reason) => unreadable("a schedule", reason),
             }
+        }
+        if let Some(value) = element.metadata.get(META_SCHEDULE_RESULT).cloned() {
+            document.set_saved_schedule(crate::model::schedule::optimisation::blended::saved::SavedSchedule::from_value(value).map(std::sync::Arc::new));
         }
         // Files written before circles were their own variant store them as
         // closed two-vertex bulged polylines. Upgrade on load so no tool

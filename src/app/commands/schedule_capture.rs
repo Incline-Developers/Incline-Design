@@ -222,6 +222,9 @@ pub(crate) struct BlendCapture {
     /// Everything that can change feasibility, the objective or the encoded
     /// model, hashed. Presentation names are deliberately excluded.
     pub(crate) fingerprint: u64,
+    /// The same without what only means something in this session, so a
+    /// schedule saved in a project can tell whether it still answers it.
+    pub(crate) stable_fingerprint: u64,
     pub(crate) stats: CaptureStats,
     /// Stated approximations this capture applied. Never a silent adaptation.
     pub(crate) notes: Vec<String>,
@@ -1903,11 +1906,20 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         ground_sources: input.ground.len(),
         event_budget_restricted,
     };
-    let fingerprint = fingerprint(source, &input);
+    let stable_fingerprint = stable_fingerprint(source, &input);
+    let fingerprint = {
+        let mut hasher = DefaultHasher::new();
+        source.runtime.hash(&mut hasher);
+        source.generation.hash(&mut hasher);
+        source.plan_revision.hash(&mut hasher);
+        stable_fingerprint.hash(&mut hasher);
+        hasher.finish()
+    };
     Ok(BlendCapture {
         input,
         identities,
         fingerprint,
+        stable_fingerprint,
         stats,
         notes,
     })
@@ -2300,11 +2312,8 @@ fn portion_name(identities: &CaptureIdentities, ground: GroundId, portion: usize
 /// is no input a separate list could forget. The project identities that
 /// produced it are folded in beside, so two projects that happen to build the
 /// same model are still two runs.
-fn fingerprint(source: &CaptureSnapshot, input: &BlendInput) -> u64 {
+fn stable_fingerprint(source: &CaptureSnapshot, input: &BlendInput) -> u64 {
     let mut hasher = DefaultHasher::new();
-    source.runtime.hash(&mut hasher);
-    source.generation.hash(&mut hasher);
-    source.plan_revision.hash(&mut hasher);
     source.tonnage_field.0.hash(&mut hasher);
     source.haulage.hash_content(&mut hasher);
     // The model itself. `BlendInput` derives `PartialEq` over exactly the

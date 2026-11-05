@@ -580,6 +580,9 @@ pub(crate) struct SolveReport {
     /// boundaries applied.
     pub(crate) objective: f64,
     pub(crate) raw_objective: Option<f64>,
+    /// Read back from the project file rather than calculated, and checked by
+    /// the replay on the way.
+    pub(crate) restored: bool,
     pub(crate) bound: Option<f64>,
     pub(crate) gap: Option<f64>,
     pub(crate) bound_source: BoundSource,
@@ -891,6 +894,8 @@ pub(crate) struct CalculatedSchedule {
     /// Drill and blast, when the project sequences it.
     pub(crate) drill_blast: Option<DrillBlastResult>,
     pub(crate) periods: PeriodTotals,
+    /// What a project file keeps of this schedule.
+    pub(crate) saved: Option<std::sync::Arc<super::optimisation::blended::saved::SavedSchedule>>,
     by_bar: HashMap<BarId, Vec<usize>>,
     by_block: HashMap<DigBlockId, usize>,
     inventory: HashMap<DestinationId, Vec<InventoryKnot>>,
@@ -998,6 +1003,7 @@ impl CalculatedSchedule {
             grade_targets: parts.grade_targets,
             report: parts.report,
             drill_blast: parts.drill_blast,
+            saved: None,
             periods,
             by_bar,
             by_block,

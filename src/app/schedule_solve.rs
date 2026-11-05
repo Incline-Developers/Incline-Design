@@ -127,6 +127,8 @@ pub(crate) struct ScheduleCompletion {
     pub(crate) interrupt_calls: u64,
     /// Present when the horizon was first solved day by day.
     pub(crate) day_by_day: Option<DayByDaySummary>,
+    /// Read back from the project file; see [`restore_saved`].
+    pub(crate) restored: bool,
 }
 
 impl ScheduleCompletion {
@@ -155,6 +157,7 @@ impl ScheduleCompletion {
             event_callbacks: 0,
             interrupt_calls: 0,
             day_by_day: None,
+            restored: false,
         }
     }
 
@@ -727,6 +730,40 @@ pub(crate) fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, o
 /// before an Improve run starts its whole-horizon solve, so a caller can show
 /// it while the rest of the run looks for a better one. It is called at most
 /// once, and never for a run that stops at the first schedule.
+/// A schedule saved with the project, checked against the model just captured.
+/// `None` when the replay will not have it: the caller then calculates, so a
+/// saved schedule can never be what stops a project having one.
+pub(crate) fn restore_saved(
+    input: &Arc<BlendInput>,
+    identity: ScheduleRunIdentity,
+    options: ScheduleSolveOptions,
+    saved: &crate::model::schedule::optimisation::blended::saved::SavedSchedule,
+    cancel: &CancelFlag,
+) -> Option<ScheduleCompletion> {
+    let started = Instant::now();
+    // The rows were worked against this timeline; every solve fixes its own.
+    let mut worked = (**input).clone();
+    if let (Some(chain), Some(timeline)) = (worked.drill_blast.as_mut(), saved.solution.drill_blast.as_ref()) {
+        chain.fixed = Some(timeline.clone());
+    }
+    let mut solution = (*saved.solution).clone();
+    let stop = AtomicBool::new(cancel.is_cancelled());
+    let Some(report) = replay_as_published(&worked, &mut solution, &stop).filter(ReplayReport::is_valid) else {
+        log::info!("schedule run {}: the saved schedule did not replay on this model, so it was calculated", identity.run_id);
+        return None;
+    };
+    let mut out = ScheduleCompletion::new(identity, options, Arc::new(worked));
+    out.termination = SolveTermination::FeasibleLimit;
+    out.restored = true;
+    out.raw_objective = Some(solution.reported_objective);
+    out.published_objective = Some(report.replayed_objective);
+    out.adjustments = Some(solution.adjustments);
+    out.replay = Some(Arc::new(report));
+    out.solution = Some(Arc::new(solution));
+    out.timings.replay = started.elapsed();
+    Some(out)
+}
+
 pub(crate) fn execute_schedule(
     input: Arc<BlendInput>,
     identity: ScheduleRunIdentity,

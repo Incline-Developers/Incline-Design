@@ -464,6 +464,7 @@ pub(crate) fn publish(
         }),
         objective: replay.replayed_objective,
         raw_objective: completion.raw_objective,
+        restored: completion.restored,
         bound: completion.primary_bound,
         gap: completion.primary_gap,
         bound_source: completion.bound_source,
