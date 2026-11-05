@@ -319,7 +319,8 @@ pub(crate) fn grid_row(ui: &mut egui::Ui, row: GridRow<'_>) -> egui::Response {
 /// the whole of how these lists show their nesting.
 pub(crate) fn grid_named_row(ui: &mut egui::Ui, label: &str, depth: usize) -> (egui::Rect, egui::Response) {
     let height = grid_row_height(ui);
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::click());
+    // Clicks only: as a Tab stop the row would come between its field and the next.
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::CLICK);
     let (fill, stroke, label_color) = {
         let visuals = ui.visuals();
         let fill = if response.hovered() {

@@ -1605,14 +1605,14 @@ impl crate::app::App<'_> {
         choices
     }
 
-    /// Mirror the routing choices into the editor state the Destinations page
-    /// reads, and take them off every other page.
+    /// Mirror the routing choices into the editor state the pages offering
+    /// them read, and take them off every other page.
     ///
     /// Off the page they are dropped for the same reason the Gantt's reports
     /// are: a list of bands that outlived the run it came from would offer a
     /// rule ground that is not there.
     pub(crate) fn mirror_routing_choices(&mut self) {
-        if !self.editor.is_schedule_destinations() {
+        if !self.editor.shows_routing_choices() {
             let dropped = !self.editor.schedule_routing_sources.is_empty() || !self.editor.schedule_category_values.is_empty();
             if dropped {
                 self.editor.schedule_routing_sources = Default::default();

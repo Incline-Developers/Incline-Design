@@ -250,8 +250,14 @@ impl EditorState {
 
     /// Whether the Schedule Setup page is showing the Destinations step, the
     /// one page whose choices are drawn from the Solids run's own bands.
-    pub(crate) fn is_schedule_destinations(&self) -> bool {
-        self.is_setup_group(SetupGroup::Schedule) && self.schedule_setup_step == ScheduleStep::Destinations
+    /// Whether the page on screen offers the ground and category values rules
+    /// and opening chunks choose from.
+    pub(crate) fn shows_routing_choices(&self) -> bool {
+        self.is_setup_group(SetupGroup::Schedule)
+            && matches!(
+                self.schedule_setup_step,
+                ScheduleStep::Stockpiles | ScheduleStep::Destinations | ScheduleStep::TruckingRules | ScheduleStep::Cashflow
+            )
     }
 
     pub(crate) fn is_schedule_animation(&self) -> bool {
