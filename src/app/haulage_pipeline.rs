@@ -132,7 +132,11 @@ impl crate::app::App<'_> {
             }
             return;
         }
-        let key = self.haulage_fingerprints();
+        // The inputs the pipeline holds, not the ones as they stand: the
+        // Solids run can move them after this frame's sync, and remembering
+        // those would mark them tried before the steps had seen them stale.
+        let mut key = [0; HaulageStep::ALL.len()];
+        key.copy_from_slice(pipeline.fingerprints());
         if self.haulage_auto_attempted == Some(key) {
             return;
         }

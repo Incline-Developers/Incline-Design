@@ -85,6 +85,11 @@ impl<S: PipelineStep> StepPipeline<S> {
         self.running.is_some() || !self.queue.is_empty()
     }
 
+    /// The inputs as last taken.
+    pub(crate) fn fingerprints(&self) -> &[u64] {
+        &self.fingerprints
+    }
+
     pub(crate) fn step_inputs_match(&self, step: S) -> bool {
         self.steps[step.index()].completed_inputs == Some(self.fingerprints[step.index()])
     }
