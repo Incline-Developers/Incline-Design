@@ -27,6 +27,7 @@ use crate::{
         },
         optimization::OptimizationScenario,
         point_cloud::PointCloudId,
+        prismoid_grid::{PrismoidGridId, PrismoidGridSummary},
         raster::RasterTextureId,
         triangulation::TriangulationId,
     },
@@ -2250,6 +2251,7 @@ pub(crate) enum RenameTarget {
     Raster(RasterTextureId),
     PointCloud(PointCloudId),
     BlockModel(BlockModelId),
+    PrismoidGrid(PrismoidGridId),
     DrillHole(DrillHoleId),
     /// A Solids Reserves setup Field List entry. Not undoable, like the rest
     /// of that config - see `App::rename_reserve_field`.
@@ -2334,6 +2336,7 @@ impl RenameTarget {
             Self::Raster(_) => tr!("ws-menubar-raster"),
             Self::PointCloud(_) => tr!("ws-menubar-point-cloud"),
             Self::BlockModel(_) => tr!("ws-menubar-block-model"),
+            Self::PrismoidGrid(_) => tr!("common-prismoid-grid"),
             Self::DrillHole(_) => tr!("ws-menubar-drillholes"),
             Self::ReserveField(_) => tr!("destination-condition-field"),
             Self::Solid(_) => tr!("tri-type-solid-closed"),
@@ -2351,6 +2354,7 @@ impl RenameTarget {
             Self::Raster(id) => UiCommand::RemoveRaster(id),
             Self::PointCloud(id) => UiCommand::RemovePointCloud(id),
             Self::BlockModel(id) => UiCommand::RemoveBlockModel(id),
+            Self::PrismoidGrid(id) => UiCommand::RemovePrismoidGrid(id),
             Self::DrillHole(id) => UiCommand::RemoveDrillHole(id),
             Self::ReserveField(id) => UiCommand::DeleteReserveField(id),
             Self::Solid(id) => UiCommand::DeleteSolid(id),
@@ -3942,6 +3946,7 @@ pub(crate) struct OmfExportSelection {
     pub(crate) rasters: OmfExportSection<RasterTextureId>,
     pub(crate) point_clouds: OmfExportSection<PointCloudId>,
     pub(crate) block_models: OmfExportSection<BlockModelId>,
+    pub(crate) prismoid_grids: OmfExportSection<PrismoidGridId>,
     pub(crate) drill_holes: OmfExportSection<crate::model::drill_hole::DrillHoleId>,
 }
 
@@ -3953,6 +3958,7 @@ impl OmfExportSelection {
             && self.rasters.is_empty()
             && self.point_clouds.is_empty()
             && self.block_models.is_empty()
+            && self.prismoid_grids.is_empty()
             && self.drill_holes.is_empty()
     }
 }
@@ -6444,6 +6450,9 @@ pub(crate) enum UiCommand {
     LoadBlockModel(BlockModelId),
     CloseBlockModel(BlockModelId),
     RemoveBlockModel(BlockModelId),
+    LoadPrismoidGrid(PrismoidGridId),
+    ClosePrismoidGrid(PrismoidGridId),
+    RemovePrismoidGrid(PrismoidGridId),
     SetBlockModelColorVariable {
         id: BlockModelId,
         variable: String,
@@ -7485,6 +7494,9 @@ impl UiCommand {
             Self::LoadBlockModel(id) => report(tr!("state-load-block-model"), format!("{id:?}")),
             Self::CloseBlockModel(id) => report(tr!("state-unload-block-model"), format!("{id:?}")),
             Self::RemoveBlockModel(id) => report(tr!("state-remove-block-model"), format!("{id:?}")),
+            Self::LoadPrismoidGrid(id) => report(tr!("state-load-prismoid-grid"), format!("{id:?}")),
+            Self::ClosePrismoidGrid(id) => report(tr!("state-unload-prismoid-grid"), format!("{id:?}")),
+            Self::RemovePrismoidGrid(id) => report(tr!("state-remove-prismoid-grid"), format!("{id:?}")),
             Self::SetBlockModelColorVariable { variable, .. } => report(tr!("state-set-block-model-variable"), variable.clone()),
             Self::ImportDrillHole(source) => report(tr!("state-import-drillholes"), source.display_name()),
             Self::CreateDrillPattern { name, collars, .. } => report(
@@ -7769,6 +7781,7 @@ pub(crate) enum ExplorerSection {
     Rasters,
     PointClouds,
     BlockModels,
+    PrismoidGrids,
     DrillHoles,
 }
 
@@ -7781,6 +7794,7 @@ impl ExplorerSection {
             Self::Rasters => tr!("common-rasters"),
             Self::PointClouds => tr!("common-point-clouds"),
             Self::BlockModels => tr!("common-block-models"),
+            Self::PrismoidGrids => tr!("common-prismoid-grids"),
             Self::DrillHoles => tr!("ws-menubar-drillholes"),
         }
     }
@@ -7794,6 +7808,7 @@ impl ExplorerSection {
             Self::Rasters => SectionKind::Rasters,
             Self::PointClouds => SectionKind::PointClouds,
             Self::BlockModels => SectionKind::BlockModels,
+            Self::PrismoidGrids => SectionKind::PrismoidGrids,
             Self::DrillHoles => SectionKind::DrillHoles,
         }
     }
@@ -7807,6 +7822,7 @@ impl ExplorerSection {
             SectionKind::Rasters => Self::Rasters,
             SectionKind::PointClouds => Self::PointClouds,
             SectionKind::BlockModels => Self::BlockModels,
+            SectionKind::PrismoidGrids => Self::PrismoidGrids,
             SectionKind::DrillHoles => Self::DrillHoles,
         }
     }
@@ -7884,6 +7900,22 @@ pub(crate) struct UiBlockModelEntry {
     pub(crate) section: SectionKind,
 }
 
+/// One project-owned prismoid grid shown in the explorer tree.
+#[derive(Clone, Debug)]
+pub(crate) struct UiPrismoidGridEntry {
+    pub(crate) id: PrismoidGridId,
+    pub(crate) name: String,
+    pub(crate) source_name: Option<String>,
+    pub(crate) is_loaded: bool,
+    /// Loaded but kept out of the viewport by the explorer's eye.
+    pub(crate) is_hidden: bool,
+    pub(crate) dirty: bool,
+    pub(crate) summary: PrismoidGridSummary,
+    /// Folder the grid sits in, or `None` for the section root.
+    pub(crate) folder: Option<FolderId>,
+    pub(crate) section: SectionKind,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct UiDrillHoleEntry {
     pub(crate) id: crate::model::drill_hole::DrillHoleId,
@@ -7913,11 +7945,13 @@ pub(crate) struct UiProjectView {
     pub(crate) drill_holes: Vec<UiDrillHoleEntry>,
     pub(crate) point_clouds: Vec<UiPointCloudEntry>,
     pub(crate) raster_textures: Vec<UiRasterTextureEntry>,
+    pub(crate) prismoid_grids: Vec<UiPrismoidGridEntry>,
     pub(crate) triangulations_membership_dirty: bool,
     pub(crate) block_models_membership_dirty: bool,
     pub(crate) drill_holes_membership_dirty: bool,
     pub(crate) point_clouds_membership_dirty: bool,
     pub(crate) rasters_membership_dirty: bool,
+    pub(crate) prismoid_grids_membership_dirty: bool,
     pub(crate) has_active_project: bool,
     pub(crate) needs_startup_dialog: bool,
     /// Full filesystem path of the currently active project, if any.

@@ -183,6 +183,7 @@ status-clip = Cắt gần/xa/Δ: { $near } / { $far } / { $delta } m
 status-points = Điểm: { $drawn } / { $target } trên { $total } ({ $drawn_chunks }/{ $total_chunks } chunk)
 
 explorer-no-rasters = Không có ảnh raster
+explorer-no-prismoid-grids = Không có lưới prismoid
 slice-viewport-gestures = kéo nút giữa: di chuyển · kéo nút phải: xoay quỹ đạo · Shift+lăn chuột: đi bộ · W/S: di chuyển lớp cắt · Q/E: xoay · Esc: thoát
 
 ## Startup environment details
@@ -235,6 +236,7 @@ survey-scale = Hệ số tỷ lệ XYZ đồng nhất
 survey-invalid-transform = Gốc tọa độ, góc và tọa độ kết quả phải là hữu hạn.
 survey-invalid-scale = Tỷ lệ phải là một số dương hữu hạn có nghịch đảo hữu hạn.
 survey-empty-selection = Chọn ít nhất một mục được hỗ trợ để chuyển đổi.
+survey-prismoid-grid-selection = Lưới prismoid chưa thể di chuyển giữa các hệ tọa độ; hãy bỏ chúng khỏi vùng chọn.
 survey-unavailable = Một mục đã chọn bị thiếu hoặc chưa được tải. Hãy tải nó trước khi chuyển đổi.
 survey-wrong-project = Chỉ chọn thiết kế từ dự án đang hoạt động.
 survey-name-required = Nhập tên hệ tọa độ.
@@ -731,7 +733,6 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: đã áp dụng g
 cmd-omf-crs-differs = { $source_name }: hệ quy chiếu tọa độ '{ $source_crs }' khác với CRS của dự án '{ $target_crs }'; tọa độ đã được gộp mà không chiếu lại
 cmd-omf-source-name-units-source-units = { $source_name }: đơn vị '{ $source_units }' khác với đơn vị của dự án '{ $target_units }'; tọa độ đã được gộp mà không chuyển đổi
 cmd-omf-source-name-warning = { $source_name }: { $warning }
-cmd-omf-prismoid-grids-not-exported = { $count } lưới prismoid vẫn nằm trong tệp dự án và không được xuất
 cmd-omf-there-no-open-incline-design = Không có dữ liệu Incline Design nào đang mở để xuất
 cmd-placement-2-vertices = 2 đỉnh
 cmd-placement-count-vertices = { $count } đỉnh
@@ -1145,6 +1146,8 @@ common-point-clouds = Đám mây điểm
 common-polyline = Đường đa tuyến
 common-polyline-layer = Đường đa tuyến trên '{ $layer }'
 common-project = Dự án
+common-prismoid-grids = Lưới prismoid
+common-prismoid-grid = Lưới prismoid
 common-rasters = Ảnh raster
 common-redo = Làm lại
 common-reference-points = Điểm tham chiếu...
@@ -1698,6 +1701,10 @@ explorer-raster-id =
     { $driver } · { $width } × { $height }
     { $projection }
 explorer-id-triangulation-id-source = ID: triangulation:{ $id }{ $source }
+explorer-prismoid-grid-id =
+    ID: prismoid_grid:{ $id }{ $source }
+    { $columns } × { $rows } ô, { $active } ô đang hoạt động
+explorer-prismoid-grid-thickness = Độ dày theo phương đứng từ { $min } đến { $max }
 explorer-load = Tải
 explorer-lock = Khóa
 explorer-new-collection = Bộ sưu tập mới
@@ -2272,6 +2279,7 @@ state-load-drillholes = Tải lỗ khoan
 state-load-layer = Tải lớp
 state-load-point-cloud = Tải đám mây điểm
 state-load-raster = Tải ảnh raster
+state-load-prismoid-grid = Tải lưới prismoid
 state-load-triangulation = Tải lưới tam giác
 state-locked-count-object-s = Đã khóa { $count } đối tượng
 state-major-minor = Chính { $major } · phụ { $minor }
@@ -2301,6 +2309,7 @@ state-remove-block-model = Gỡ mô hình khối
 state-remove-drillholes = Gỡ lỗ khoan
 state-remove-point-cloud = Gỡ đám mây điểm
 state-remove-raster = Gỡ ảnh raster
+state-remove-prismoid-grid = Gỡ lưới prismoid
 state-remove-triangulation = Gỡ lưới tam giác
 state-removed-from-active-triangulation = Đã gỡ khỏi lưới tam giác đang hoạt động
 state-removed-from-every-triangulation = Đã gỡ khỏi mọi lưới tam giác
@@ -2365,6 +2374,7 @@ state-unload-drillholes = Gỡ lỗ khoan
 state-unload-layer = Gỡ lớp
 state-unload-point-cloud = Gỡ đám mây điểm
 state-unload-raster = Gỡ tải ảnh raster
+state-unload-prismoid-grid = Gỡ tải lưới prismoid
 state-unload-triangulation = Gỡ tải lưới tam giác
 state-untitled-project = Dự án chưa đặt tên
 state-use-typed-radius = Dùng bán kính đã nhập

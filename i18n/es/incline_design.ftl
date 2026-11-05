@@ -148,6 +148,7 @@ tri-count-objects =
 ## Reused existing project translations
 
 explorer-no-rasters = No hay rásteres
+explorer-no-prismoid-grids = No hay mallas de prismoides
 slice-viewport-gestures = arrastrar con botón central: desplazar · arrastrar con botón derecho: orbitar · Mayús+rueda: caminar · W/S: mover losa · Q/E: rotar · Esc: salir
 
 ## Detalles del entorno de inicio
@@ -206,6 +207,7 @@ survey-scale = Factor de escala uniforme XYZ
 survey-invalid-transform = Los orígenes, el ángulo y las coordenadas resultantes deben ser finitos.
 survey-invalid-scale = La escala debe ser un número positivo finito con recíproco finito.
 survey-empty-selection = Seleccione al menos un elemento compatible para transformar.
+survey-prismoid-grid-selection = Las mallas de prismoides aún no se pueden mover entre sistemas de coordenadas; déjelas fuera de la selección.
 survey-unavailable = Falta un elemento seleccionado o no está cargado. Cárguelo antes de transformar.
 survey-wrong-project = Seleccione diseños solo del proyecto activo.
 survey-name-required = Introduzca un nombre para el sistema de coordenadas.
@@ -703,7 +705,6 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: se aplicó el ori
 cmd-omf-crs-differs = { $source_name }: el sistema de referencia «{ $source_crs }» difiere del SRC del proyecto «{ $target_crs }»; las coordenadas se fusionaron sin reproyección
 cmd-omf-source-name-units-source-units = { $source_name }: las unidades «{ $source_units }» difieren de las unidades del proyecto «{ $target_units }»; las coordenadas se fusionaron sin conversión
 cmd-omf-source-name-warning = { $source_name }: { $warning }
-cmd-omf-prismoid-grids-not-exported = { $count } malla(s) de prismoides permanecen en el archivo del proyecto y no se exportaron
 cmd-omf-there-no-open-incline-design = No hay datos abiertos de Incline Design para exportar
 cmd-placement-2-vertices = 2 vértices
 cmd-placement-count-vertices = { $count } vértices
@@ -1117,6 +1118,8 @@ common-point-clouds = Nubes de puntos
 common-polyline = Polilínea
 common-polyline-layer = Polilínea en «{ $layer }»
 common-project = Proyecto
+common-prismoid-grids = Mallas de prismoides
+common-prismoid-grid = Malla de prismoides
 common-rasters = Rásteres
 common-redo = Rehacer
 common-reference-points = Puntos de referencia...
@@ -1670,6 +1673,10 @@ explorer-raster-id =
     { $driver } · { $width } × { $height }
     { $projection }
 explorer-id-triangulation-id-source = ID: triangulación:{ $id }{ $source }
+explorer-prismoid-grid-id =
+    ID: prismoid_grid:{ $id }{ $source }
+    { $columns } × { $rows } celdas, { $active } activas
+explorer-prismoid-grid-thickness = Espesor vertical de { $min } a { $max }
 explorer-load = Cargar
 explorer-lock = Bloquear
 explorer-new-collection = Colección nueva
@@ -2244,6 +2251,7 @@ state-load-drillholes = Cargar sondajes
 state-load-layer = Cargar capa
 state-load-point-cloud = Cargar nube de puntos
 state-load-raster = Cargar ráster
+state-load-prismoid-grid = Cargar malla de prismoides
 state-load-triangulation = Cargar triangulación
 state-locked-count-object-s = { $count } objeto(s) bloqueado(s)
 state-major-minor = Mayor { $major } · menor { $minor }
@@ -2273,6 +2281,7 @@ state-remove-block-model = Eliminar el modelo de bloques
 state-remove-drillholes = Eliminar los sondajes
 state-remove-point-cloud = Eliminar la nube de puntos
 state-remove-raster = Eliminar el ráster
+state-remove-prismoid-grid = Eliminar malla de prismoides
 state-remove-triangulation = Eliminar la triangulación
 state-removed-from-active-triangulation = Quitado de la triangulación activa
 state-removed-from-every-triangulation = Quitado de todas las triangulaciones
@@ -2337,6 +2346,7 @@ state-unload-drillholes = Descargar sondajes
 state-unload-layer = Descargar capa
 state-unload-point-cloud = Descargar nube de puntos
 state-unload-raster = Descargar ráster
+state-unload-prismoid-grid = Descargar malla de prismoides
 state-unload-triangulation = Descargar triangulación
 state-untitled-project = Proyecto sin título
 state-use-typed-radius = Usar el radio escrito

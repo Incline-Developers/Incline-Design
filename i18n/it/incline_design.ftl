@@ -192,6 +192,7 @@ status-clip = Clip vicino/lontano/Δ: { $near } / { $far } / { $delta } m
 status-points = Punti: { $drawn } / { $target } di { $total } ({ $drawn_chunks }/{ $total_chunks } chunk)
 
 explorer-no-rasters = Nessun raster
+explorer-no-prismoid-grids = Nessuna griglia di prismoidi
 slice-viewport-gestures = trascina con tasto centrale: pan · trascina con tasto destro: orbita · Maiusc+rotella: cammina · W/S: sposta lastra · Q/E: ruota · Esc: esci
 
 ## Startup environment details
@@ -250,6 +251,7 @@ survey-scale = Fattore di scala uniforme XYZ
 survey-invalid-transform = Le origini, l'angolo e le coordinate risultanti devono essere finiti.
 survey-invalid-scale = La scala deve essere un numero positivo finito con reciproco finito.
 survey-empty-selection = Seleziona almeno un elemento supportato da trasformare.
+survey-prismoid-grid-selection = Le griglie di prismoidi non possono ancora essere spostate tra sistemi di coordinate; escludile dalla selezione.
 survey-unavailable = Un elemento selezionato è mancante o non caricato. Caricalo prima di trasformare.
 survey-wrong-project = Seleziona progetti solo dal progetto attivo.
 survey-name-required = Inserisci un nome per il sistema di coordinate.
@@ -747,7 +749,6 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: applicata l'origi
 cmd-omf-crs-differs = { $source_name }: il sistema di riferimento delle coordinate '{ $source_crs }' differisce dal CRS del progetto '{ $target_crs }'; le coordinate sono state unite senza riproiezione
 cmd-omf-source-name-units-source-units = { $source_name }: le unità '{ $source_units }' differiscono dalle unità del progetto '{ $target_units }'; le coordinate sono state unite senza conversione
 cmd-omf-source-name-warning = { $source_name }: { $warning }
-cmd-omf-prismoid-grids-not-exported = { $count } griglia/e di prismoidi restano nel file del progetto e non sono state esportate
 cmd-omf-there-no-open-incline-design = Non ci sono dati di Incline Design aperti da esportare
 cmd-placement-2-vertices = 2 vertici
 cmd-placement-count-vertices = { $count } vertici
@@ -1161,6 +1162,8 @@ common-point-clouds = Nuvole di punti
 common-polyline = Polilinea
 common-polyline-layer = Polilinea su '{ $layer }'
 common-project = Progetto
+common-prismoid-grids = Griglie di prismoidi
+common-prismoid-grid = Griglia di prismoidi
 common-rasters = Raster
 common-redo = Ripeti
 common-reference-points = Punti di riferimento...
@@ -1714,6 +1717,10 @@ explorer-raster-id =
     { $driver } · { $width } × { $height }
     { $projection }
 explorer-id-triangulation-id-source = ID: triangulation:{ $id }{ $source }
+explorer-prismoid-grid-id =
+    ID: prismoid_grid:{ $id }{ $source }
+    { $columns } × { $rows } celle, { $active } attive
+explorer-prismoid-grid-thickness = Spessore verticale da { $min } a { $max }
 explorer-load = Carica
 explorer-lock = Blocca
 explorer-new-collection = Nuova raccolta
@@ -2288,6 +2295,7 @@ state-load-drillholes = Carica fori di sondaggio
 state-load-layer = Carica livello
 state-load-point-cloud = Carica nuvola di punti
 state-load-raster = Carica raster
+state-load-prismoid-grid = Carica griglia di prismoidi
 state-load-triangulation = Carica triangolazione
 state-locked-count-object-s = Bloccato/i { $count } oggetto/i
 state-major-minor = Principale { $major } · secondario { $minor }
@@ -2317,6 +2325,7 @@ state-remove-block-model = Rimuovi modello a blocchi
 state-remove-drillholes = Rimuovi fori di sondaggio
 state-remove-point-cloud = Rimuovi nuvola di punti
 state-remove-raster = Rimuovi raster
+state-remove-prismoid-grid = Rimuovi griglia di prismoidi
 state-remove-triangulation = Rimuovi triangolazione
 state-removed-from-active-triangulation = Rimosso dalla triangolazione attiva
 state-removed-from-every-triangulation = Rimosso da ogni triangolazione
@@ -2381,6 +2390,7 @@ state-unload-drillholes = Scarica fori di sondaggio
 state-unload-layer = Scarica livello
 state-unload-point-cloud = Scarica nuvola di punti
 state-unload-raster = Scarica raster
+state-unload-prismoid-grid = Scarica griglia di prismoidi
 state-unload-triangulation = Scarica triangolazione
 state-untitled-project = Progetto senza titolo
 state-use-typed-radius = Usa raggio digitato

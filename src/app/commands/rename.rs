@@ -47,6 +47,7 @@ impl<'a> App<'a> {
                 SceneEntityId::PointCloud(id) => RenameTarget::PointCloud(id),
                 SceneEntityId::BlockModel(id) => RenameTarget::BlockModel(id),
                 SceneEntityId::DrillHole(id) => RenameTarget::DrillHole(id),
+                SceneEntityId::PrismoidGrid(id) => RenameTarget::PrismoidGrid(id),
                 _ => return,
             },
             _ => return,
@@ -68,6 +69,7 @@ impl<'a> App<'a> {
             RenameTarget::PointCloud(id) => self.point_clouds.iter().find(|item| item.id == id).map(|item| item.name.clone()),
             RenameTarget::BlockModel(id) => self.block_models.iter().find(|item| item.id == id).map(|item| item.name.clone()),
             RenameTarget::DrillHole(id) => self.drill_holes.iter().find(|item| item.id == id).map(|item| item.name.clone()),
+            RenameTarget::PrismoidGrid(id) => self.prismoid_grids.iter().find(|item| item.id == id).map(|item| item.name.clone()),
             RenameTarget::ReserveField(id) => self
                 .workspace
                 .active_document()
@@ -130,6 +132,7 @@ impl<'a> App<'a> {
             RenameTarget::PointCloud(id) => sibling_names!(self.point_clouds, id),
             RenameTarget::BlockModel(id) => sibling_names!(self.block_models, id),
             RenameTarget::DrillHole(id) => sibling_names!(self.drill_holes, id),
+            RenameTarget::PrismoidGrid(id) => sibling_names!(self.prismoid_grids, id),
         };
         let name = unique_item_name(requested.clone(), siblings.iter().map(String::as_str));
         let item = match target {
@@ -139,6 +142,7 @@ impl<'a> App<'a> {
             RenameTarget::PointCloud(id) => ItemRef::PointCloud(id),
             RenameTarget::BlockModel(id) => ItemRef::BlockModel(id),
             RenameTarget::DrillHole(id) => ItemRef::DrillHole(id),
+            RenameTarget::PrismoidGrid(id) => ItemRef::PrismoidGrid(id),
         };
         self.execute_edit(Command::RenameItem {
             item,

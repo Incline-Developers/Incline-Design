@@ -7,6 +7,11 @@ use std::sync::Arc;
 use anyhow::{Result, bail};
 use glam::{DVec2, DVec3};
 
+use crate::model::project::ProjectItemState;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct PrismoidGridId(pub(crate) u64);
+
 /// A plan lattice: an origin, two horizontal unit axes and the cell sizes
 /// along each.
 #[derive(Clone, Debug, PartialEq)]
@@ -164,12 +169,79 @@ impl PrismoidGrid {
         }
         (vertices, triangles)
     }
+
+    /// The lattice size, the active cells, and the range of roof minus floor
+    /// over every corner of an active cell.
+    pub(crate) fn summary(&self) -> PrismoidGridSummary {
+        let (columns, rows) = (self.lattice.columns(), self.lattice.rows());
+        let mut thickness: Option<(f64, f64)> = None;
+        let mut active_cells = 0;
+        for (cell, _) in self.active.iter().enumerate().filter(|(_, active)| **active) {
+            active_cells += 1;
+            let (column, row) = (cell % columns, cell / columns);
+            for corner in [
+                row * (columns + 1) + column,
+                row * (columns + 1) + column + 1,
+                (row + 1) * (columns + 1) + column,
+                (row + 1) * (columns + 1) + column + 1,
+            ] {
+                let height = self.roof[corner] - self.floor[corner];
+                thickness = Some(thickness.map_or((height, height), |(min, max)| (min.min(height), max.max(height))));
+            }
+        }
+        PrismoidGridSummary {
+            columns,
+            rows,
+            cells: columns * rows,
+            active_cells,
+            vertical_thickness: thickness,
+        }
+    }
+
+    /// Bytes held by the heights, the mask and the cell values.
+    pub(crate) fn estimated_bytes(&self) -> usize {
+        let values: usize = self
+            .cell_values
+            .iter()
+            .map(|cell_values| cell_values.name.len() + cell_values.values.len() * size_of::<Option<f64>>())
+            .sum();
+        (self.roof.len() + self.floor.len()) * size_of::<f64>() + self.active.len() + values
+    }
+}
+
+/// What a prismoid grid's row reports about it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PrismoidGridSummary {
+    pub(crate) columns: usize,
+    pub(crate) rows: usize,
+    pub(crate) cells: usize,
+    pub(crate) active_cells: usize,
+    /// Roof minus floor, smallest and largest; `None` with no active cell.
+    pub(crate) vertical_thickness: Option<(f64, f64)>,
 }
 
 /// A prismoid grid open in the project.
 #[derive(Clone, Debug)]
 pub(crate) struct OpenPrismoidGrid {
+    pub(crate) id: PrismoidGridId,
+    pub(crate) state: ProjectItemState,
     pub(crate) name: String,
     pub(crate) color: [f32; 4],
     pub(crate) grid: Arc<PrismoidGrid>,
+    /// Computed once: `grid` is an immutable `Arc`, so it cannot go stale.
+    pub(crate) summary: PrismoidGridSummary,
+}
+
+impl OpenPrismoidGrid {
+    pub(crate) fn entity_id(&self) -> crate::model::SceneEntityId {
+        crate::model::SceneEntityId::PrismoidGrid(self.id)
+    }
+}
+
+/// A prismoid grid read from a file, before the project gives it an id.
+pub(crate) struct LoadedPrismoidGrid {
+    pub(crate) name: String,
+    pub(crate) color: [f32; 4],
+    pub(crate) grid: Arc<PrismoidGrid>,
+    pub(crate) summary: PrismoidGridSummary,
 }

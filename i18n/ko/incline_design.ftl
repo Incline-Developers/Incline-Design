@@ -183,6 +183,7 @@ status-clip = 클립 근/원/Δ: { $near } / { $far } / { $delta } m
 status-points = 점: { $drawn } / { $target } (전체 { $total }, 청크 { $drawn_chunks }/{ $total_chunks })
 
 explorer-no-rasters = 래스터 없음
+explorer-no-prismoid-grids = 프리즈모이드 격자 없음
 slice-viewport-gestures = 가운데 버튼 드래그로 이동 · 오른쪽 버튼 드래그로 궤도 회전 · Shift+휠로 걷기 · W/S로 슬래브 이동 · Q/E로 회전 · Esc로 종료
 
 ## Startup environment details
@@ -241,6 +242,7 @@ survey-scale = 균일 XYZ 축척 비율
 survey-invalid-transform = 원점, 각도 및 결과 좌표는 모두 유한한 값이어야 합니다.
 survey-invalid-scale = 축척은 유한한 양수여야 하며, 그 역수도 유한해야 합니다.
 survey-empty-selection = 변환하려면 지원되는 항목을 하나 이상 선택하세요.
+survey-prismoid-grid-selection = 프리즈모이드 격자는 아직 좌표계 간에 이동할 수 없습니다. 선택에서 제외하세요.
 survey-unavailable = 선택한 항목이 없거나 언로드되었습니다. 변환하기 전에 불러오세요.
 survey-wrong-project = 활성 프로젝트의 설계만 선택하세요.
 survey-name-required = 좌표계 이름을 입력하세요.
@@ -738,7 +740,6 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: 병합 전에 프
 cmd-omf-crs-differs = { $source_name }: 좌표 참조계 '{ $source_crs }'이(가) 프로젝트 CRS '{ $target_crs }'와(과) 다릅니다. 좌표를 재투영 없이 병합했습니다
 cmd-omf-source-name-units-source-units = { $source_name }: 단위 '{ $source_units }'이(가) 프로젝트 단위 '{ $target_units }'와(과) 다릅니다. 좌표를 변환 없이 병합했습니다
 cmd-omf-source-name-warning = { $source_name }: { $warning }
-cmd-omf-prismoid-grids-not-exported = 프리즈모이드 격자 { $count }개는 프로젝트 파일에 남아 있으며 내보내지 않았습니다
 cmd-omf-there-no-open-incline-design = 내보낼 수 있는 열린 Incline Design 데이터가 없습니다
 cmd-placement-2-vertices = 정점 2개
 cmd-placement-count-vertices = 정점 { $count }개
@@ -1152,6 +1153,8 @@ common-point-clouds = 포인트 클라우드
 common-polyline = 폴리라인
 common-polyline-layer = '{ $layer }'의 폴리라인
 common-project = 프로젝트
+common-prismoid-grids = 프리즈모이드 격자
+common-prismoid-grid = 프리즈모이드 격자
 common-rasters = 래스터
 common-redo = 다시 실행
 common-reference-points = 기준점...
@@ -1705,6 +1708,10 @@ explorer-raster-id =
     { $driver } · { $width } × { $height }
     { $projection }
 explorer-id-triangulation-id-source = ID: triangulation:{ $id }{ $source }
+explorer-prismoid-grid-id =
+    ID: prismoid_grid:{ $id }{ $source }
+    { $columns } × { $rows } 셀, { $active }개 활성
+explorer-prismoid-grid-thickness = 수직 두께 { $min }에서 { $max }
 explorer-load = 불러오기
 explorer-lock = 잠금
 explorer-new-collection = 새 컬렉션
@@ -2279,6 +2286,7 @@ state-load-drillholes = 시추공 불러오기
 state-load-layer = 레이어 불러오기
 state-load-point-cloud = 포인트 클라우드 불러오기
 state-load-raster = 래스터 불러오기
+state-load-prismoid-grid = 프리즈모이드 격자 불러오기
 state-load-triangulation = 삼각망 불러오기
 state-locked-count-object-s = 객체 { $count }개를 잠갔습니다
 state-major-minor = 주 간격 { $major } · 부 간격 { $minor }
@@ -2308,6 +2316,7 @@ state-remove-block-model = 블록 모델 제거
 state-remove-drillholes = 시추공 제거
 state-remove-point-cloud = 포인트 클라우드 제거
 state-remove-raster = 래스터 제거
+state-remove-prismoid-grid = 프리즈모이드 격자 제거
 state-remove-triangulation = 삼각망 제거
 state-removed-from-active-triangulation = 활성 삼각망에서 제거됨
 state-removed-from-every-triangulation = 모든 삼각망에서 제거됨
@@ -2372,6 +2381,7 @@ state-unload-drillholes = 시추공 언로드
 state-unload-layer = 레이어 언로드
 state-unload-point-cloud = 포인트 클라우드 언로드
 state-unload-raster = 래스터 언로드
+state-unload-prismoid-grid = 프리즈모이드 격자 언로드
 state-unload-triangulation = 삼각망 언로드
 state-untitled-project = 제목 없는 프로젝트
 state-use-typed-radius = 입력한 반지름 사용

@@ -150,6 +150,7 @@ tri-count-objects =
 
 ## Traductions locales restantes de l’interface
 explorer-no-rasters = Aucun raster
+explorer-no-prismoid-grids = Aucune grille de prismoïdes
 slice-viewport-gestures = glisser bouton central : panoramique · glisser bouton droit : orbite · Maj+molette : avancer · W/S : déplacer la tranche · Q/E : pivoter · Échap : quitter
 
 ## Détails de l’environnement de démarrage
@@ -208,6 +209,7 @@ survey-scale = Facteur d'échelle XYZ uniforme
 survey-invalid-transform = Les origines, l'angle et les coordonnées résultantes doivent être finis.
 survey-invalid-scale = L'échelle doit être un nombre positif fini avec un inverse fini.
 survey-empty-selection = Sélectionnez au moins un élément pris en charge à transformer.
+survey-prismoid-grid-selection = Les grilles de prismoïdes ne peuvent pas encore être déplacées entre systèmes de coordonnées ; excluez-les de la sélection.
 survey-unavailable = Un élément sélectionné est manquant ou non chargé. Chargez-le avant de transformer.
 survey-wrong-project = Sélectionnez des conceptions du projet actif uniquement.
 survey-name-required = Saisissez un nom de système de coordonnées.
@@ -705,7 +707,6 @@ cmd-omf-source-name-applied-project-origin = { $source_name } : origine du proje
 cmd-omf-crs-differs = { $source_name } : le système de référence « { $source_crs } » diffère du SCR du projet « { $target_crs } » ; coordonnées fusionnées sans reprojection
 cmd-omf-source-name-units-source-units = { $source_name } : les unités « { $source_units } » diffèrent de celles du projet « { $target_units } » ; coordonnées fusionnées sans conversion
 cmd-omf-source-name-warning = { $source_name } : { $warning }
-cmd-omf-prismoid-grids-not-exported = { $count } grille(s) de prismoïdes restent dans le fichier du projet et n'ont pas été exportées
 cmd-omf-there-no-open-incline-design = Aucune donnée Incline Design ouverte à exporter
 cmd-placement-2-vertices = 2 sommets
 cmd-placement-count-vertices = { $count } sommets
@@ -1119,6 +1120,8 @@ common-point-clouds = Nuages de points
 common-polyline = Polyligne
 common-polyline-layer = Polyligne sur « { $layer } »
 common-project = Projet
+common-prismoid-grids = Grilles de prismoïdes
+common-prismoid-grid = Grille de prismoïdes
 common-rasters = Rasters
 common-redo = Rétablir
 common-reference-points = Points de référence...
@@ -1672,6 +1675,10 @@ explorer-raster-id =
     { $driver } · { $width } × { $height }
     { $projection }
 explorer-id-triangulation-id-source = ID : triangulation:{ $id }{ $source }
+explorer-prismoid-grid-id =
+    ID : prismoid_grid:{ $id }{ $source }
+    { $columns } × { $rows } cellules, { $active } actives
+explorer-prismoid-grid-thickness = Épaisseur verticale de { $min } à { $max }
 explorer-load = Charger
 explorer-lock = Verrouillage
 explorer-new-collection = Nouvelle collection
@@ -2246,6 +2253,7 @@ state-load-drillholes = Charger les trous de forage
 state-load-layer = Charger le calque
 state-load-point-cloud = Charger le nuage de points
 state-load-raster = Charger le raster
+state-load-prismoid-grid = Charger la grille de prismoïdes
 state-load-triangulation = Charger la triangulation
 state-locked-count-object-s = { $count } objet(s) verrouillé(s)
 state-major-minor = Principale { $major } · secondaire { $minor }
@@ -2275,6 +2283,7 @@ state-remove-block-model = Supprimer le modèle de blocs
 state-remove-drillholes = Supprimer les trous de forage
 state-remove-point-cloud = Supprimer le nuage de points
 state-remove-raster = Supprimer le raster
+state-remove-prismoid-grid = Supprimer la grille de prismoïdes
 state-remove-triangulation = Supprimer la triangulation
 state-removed-from-active-triangulation = Supprimé de la triangulation active
 state-removed-from-every-triangulation = Supprimé de toutes les triangulations
@@ -2339,6 +2348,7 @@ state-unload-drillholes = Décharger les trous de forage
 state-unload-layer = Décharger le calque
 state-unload-point-cloud = Décharger le nuage de points
 state-unload-raster = Déchargement de raster
+state-unload-prismoid-grid = Décharger la grille de prismoïdes
 state-unload-triangulation = Déchargement de triangulation
 state-untitled-project = Projet sans titre
 state-use-typed-radius = Utiliser le rayon saisi

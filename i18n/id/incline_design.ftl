@@ -150,6 +150,7 @@ tri-count-objects =
 
 ## Terjemahan antarmuka yang dilengkapi secara manual
 explorer-no-rasters = Tidak ada raster
+explorer-no-prismoid-grids = Tidak ada grid prismoid
 slice-viewport-gestures = seret tombol tengah: geser · seret tombol kanan: orbit · Shift+roda: berjalan · W/S: pindahkan lempeng · Q/E: putar · Esc: keluar
 
 ## Detail lingkungan awal
@@ -208,6 +209,7 @@ survey-scale = Faktor skala XYZ seragam
 survey-invalid-transform = Titik asal, sudut, dan koordinat hasil harus terhingga.
 survey-invalid-scale = Skala harus berupa angka positif terhingga dengan kebalikan yang juga terhingga.
 survey-empty-selection = Pilih setidaknya satu item yang didukung untuk ditransformasikan.
+survey-prismoid-grid-selection = Grid prismoid belum dapat dipindahkan antar sistem koordinat; keluarkan dari pilihan.
 survey-unavailable = Item yang dipilih hilang atau belum dimuat. Muat terlebih dahulu sebelum mentransformasikan.
 survey-wrong-project = Pilih desain hanya dari proyek aktif.
 survey-name-required = Masukkan nama sistem koordinat.
@@ -705,7 +707,6 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: titik asal proyek
 cmd-omf-crs-differs = { $source_name }: sistem referensi “{ $source_crs }” berbeda dari CRS proyek “{ $target_crs }”; koordinat digabung tanpa proyeksi ulang
 cmd-omf-source-name-units-source-units = { $source_name }: satuan “{ $source_units }” berbeda dari satuan proyek “{ $target_units }”; koordinat digabung tanpa konversi
 cmd-omf-source-name-warning = { $source_name }: { $warning }
-cmd-omf-prismoid-grids-not-exported = { $count } grid prismoid tetap di berkas proyek dan tidak diekspor
 cmd-omf-there-no-open-incline-design = Tidak ada data Incline Design terbuka untuk diekspor
 cmd-placement-2-vertices = 2 verteks
 cmd-placement-count-vertices = { $count } verteks
@@ -1119,6 +1120,8 @@ common-point-clouds = Awan titik
 common-polyline = Poligaris
 common-polyline-layer = Poligaris pada '{ $layer }'
 common-project = Proyek
+common-prismoid-grids = Grid prismoid
+common-prismoid-grid = Grid prismoid
 common-rasters = Raster
 common-redo = Ulangi
 common-reference-points = Titik Referensi...
@@ -1672,6 +1675,10 @@ explorer-raster-id =
     { $driver } · { $width } × { $height }
     { $projection }
 explorer-id-triangulation-id-source = ID: triangulation:{ $id }{ $source }
+explorer-prismoid-grid-id =
+    ID: prismoid_grid:{ $id }{ $source }
+    { $columns } × { $rows } sel, { $active } aktif
+explorer-prismoid-grid-thickness = Ketebalan vertikal { $min } hingga { $max }
 explorer-load = Muat
 explorer-lock = Kunci
 explorer-new-collection = Koleksi Baru
@@ -2246,6 +2253,7 @@ state-load-drillholes = Muat lubang bor
 state-load-layer = Muat Lapisan
 state-load-point-cloud = Muat awan titik
 state-load-raster = Muat raster
+state-load-prismoid-grid = Muat grid prismoid
 state-load-triangulation = Muat triangulasi
 state-locked-count-object-s = { $count } objek terkunci
 state-major-minor = Mayor { $major } · minor { $minor }
@@ -2275,6 +2283,7 @@ state-remove-block-model = Hapus model blok
 state-remove-drillholes = Hapus lubang bor
 state-remove-point-cloud = Hapus awan titik
 state-remove-raster = Hapus raster
+state-remove-prismoid-grid = Hapus grid prismoid
 state-remove-triangulation = Hapus triangulasi
 state-removed-from-active-triangulation = Dihapus dari triangulasi aktif
 state-removed-from-every-triangulation = Dihapus dari setiap triangulasi
@@ -2339,6 +2348,7 @@ state-unload-drillholes = Bongkar Lubang Bor
 state-unload-layer = Bongkar Lapisan
 state-unload-point-cloud = Bongkar Awan Titik
 state-unload-raster = Bongkar raster
+state-unload-prismoid-grid = Bongkar grid prismoid
 state-unload-triangulation = Bongkar triangulasi
 state-untitled-project = Proyek tanpa judul
 state-use-typed-radius = Gunakan radius yang diketik

@@ -282,7 +282,7 @@ enum PendingSaveKind {
         runtime_id: u32,
         snapshot_hash: u64,
         snapshot_layer_hashes: std::collections::HashMap<u64, u64>,
-        asset_token: crate::model::project::SaveToken,
+        asset_token: Box<crate::model::project::SaveToken>,
         /// Close once this write finishes. Set when a close request arrives
         /// after the worker has already started and can no longer be stopped.
         close_after: bool,
@@ -890,7 +890,7 @@ impl<'a> App<'a> {
                     runtime_id: project_runtime_id,
                     snapshot_hash,
                     snapshot_layer_hashes,
-                    asset_token,
+                    asset_token: Box::new(asset_token),
                     close_after: false,
                     save_as_previous_name: Some(previous_name),
                 };
@@ -2471,7 +2471,7 @@ impl<'a> App<'a> {
                 runtime_id,
                 snapshot_hash,
                 snapshot_layer_hashes,
-                asset_token,
+                asset_token: Box::new(asset_token),
                 close_after: false,
                 save_as_previous_name: None,
             };

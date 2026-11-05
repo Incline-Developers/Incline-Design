@@ -190,6 +190,7 @@ status-clip = Ближня/дальня площина/Δ: { $near } / { $far } 
 status-points = Точки: { $drawn } / { $target } із { $total } (фрагментів: { $drawn_chunks }/{ $total_chunks })
 
 explorer-no-rasters = Немає растрів
+explorer-no-prismoid-grids = Немає сіток призмоїдів
 slice-viewport-gestures = перетягування середньою кнопкою: панорамування · перетягування правою кнопкою: орбіта · Shift+колесо: рух · W/S: зсув шару · Q/E: обертання · Esc: вихід
 
 ## Startup environment details
@@ -254,6 +255,7 @@ survey-scale = Єдиний коефіцієнт масштабу XYZ
 survey-invalid-transform = Початки координат, кут і результуючі координати мають бути скінченними.
 survey-invalid-scale = Масштаб має бути скінченним додатним числом зі скінченною оберненою величиною.
 survey-empty-selection = Виберіть щонайменше один підтримуваний елемент для перетворення.
+survey-prismoid-grid-selection = Сітки призмоїдів поки не можна переносити між системами координат; виключіть їх із вибору.
 survey-unavailable = Вибраний елемент відсутній або не завантажений. Завантажте його перед перетворенням.
 survey-wrong-project = Вибирайте проєкти лише з активного проєкту.
 survey-name-required = Введіть назву системи координат.
@@ -752,7 +754,6 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: перед об'�
 cmd-omf-crs-differs = { $source_name }: система координат «{ $source_crs }» відрізняється від системи координат проекту «{ $target_crs }»; координати об'єднано без перепроєктування
 cmd-omf-source-name-units-source-units = { $source_name }: одиниці «{ $source_units }» відрізняються від одиниць проекту «{ $target_units }»; координати об'єднано без перетворення
 cmd-omf-source-name-warning = { $source_name }: { $warning }
-cmd-omf-prismoid-grids-not-exported = Сітки призмоїдів ({ $count }) залишаються у файлі проєкту й не були експортовані
 cmd-omf-there-no-open-incline-design = Немає відкритих даних Incline Design для експорту
 cmd-placement-2-vertices = 2 вершини
 cmd-placement-count-vertices = { $count } вершин
@@ -1166,6 +1167,8 @@ common-point-clouds = Хмари точок
 common-polyline = Полілінія
 common-polyline-layer = Полілінія на шарі «{ $layer }»
 common-project = Проект
+common-prismoid-grids = Сітки призмоїдів
+common-prismoid-grid = Сітка призмоїдів
 common-rasters = Растри
 common-redo = Повторити
 common-reference-points = Опорні точки...
@@ -1719,6 +1722,10 @@ explorer-raster-id =
     { $driver } · { $width } × { $height }
     { $projection }
 explorer-id-triangulation-id-source = ID: triangulation:{ $id }{ $source }
+explorer-prismoid-grid-id =
+    ID: prismoid_grid:{ $id }{ $source }
+    { $columns } × { $rows } комірок, активних: { $active }
+explorer-prismoid-grid-thickness = Вертикальна потужність від { $min } до { $max }
 explorer-load = Завантажити
 explorer-lock = Заблокувати
 explorer-new-collection = Нова колекція
@@ -2293,6 +2300,7 @@ state-load-drillholes = Завантажити свердловини
 state-load-layer = Завантажити шар
 state-load-point-cloud = Завантажити хмару точок
 state-load-raster = Завантажити растр
+state-load-prismoid-grid = Завантажити сітку призмоїдів
 state-load-triangulation = Завантажити тріангуляцію
 state-locked-count-object-s = Заблоковано об'єктів: { $count }
 state-major-minor = Основний { $major } · допоміжний { $minor }
@@ -2322,6 +2330,7 @@ state-remove-block-model = Видалити блочну модель
 state-remove-drillholes = Видалити свердловини
 state-remove-point-cloud = Видалити хмару точок
 state-remove-raster = Видалити растр
+state-remove-prismoid-grid = Видалити сітку призмоїдів
 state-remove-triangulation = Видалити тріангуляцію
 state-removed-from-active-triangulation = Видалено з активної тріангуляції
 state-removed-from-every-triangulation = Видалено з усіх тріангуляцій
@@ -2386,6 +2395,7 @@ state-unload-drillholes = Вивантажити свердловини
 state-unload-layer = Вивантажити шар
 state-unload-point-cloud = Вивантажити хмару точок
 state-unload-raster = Вивантажити растр
+state-unload-prismoid-grid = Вивантажити сітку призмоїдів
 state-unload-triangulation = Вивантажити тріангуляцію
 state-untitled-project = Проект без назви
 state-use-typed-radius = Використати введений радіус

@@ -6,7 +6,10 @@ use crate::{
     ui::{
         EditorState, UiCommand, UiProjectView,
         fonts::bold,
-        state::{ExplorerRow, ExplorerSection, RenameTarget, UiBlockModelEntry, UiDrillHoleEntry, UiLayerEntry, UiPointCloudEntry, UiProjectEntry, UiRasterTextureEntry},
+        state::{
+            ExplorerRow, ExplorerSection, RenameTarget, UiBlockModelEntry, UiDrillHoleEntry, UiLayerEntry, UiPointCloudEntry, UiPrismoidGridEntry, UiProjectEntry,
+            UiRasterTextureEntry, Workspace,
+        },
         unthemed_icon,
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup, context_menu_separator, context_submenu},
@@ -32,6 +35,7 @@ const HEADER_RASTERS: egui::Color32 = egui::Color32::from_rgb(0x2F, 0x91, 0x99);
 const HEADER_POINT_CLOUDS: egui::Color32 = egui::Color32::from_rgb(0xC9, 0x3B, 0x2C);
 const HEADER_BLOCK_MODELS: egui::Color32 = egui::Color32::from_rgb(0x69, 0x8F, 0x3F);
 const HEADER_DRILL_HOLES: egui::Color32 = egui::Color32::from_rgb(0xDB, 0x5F, 0x58);
+const HEADER_PRISMOID_GRIDS: egui::Color32 = egui::Color32::from_rgb(0xB0, 0x8A, 0x3E);
 
 /// What every dragged explorer row has in common: the folder member it
 /// stands for, tag and all.
@@ -57,7 +61,7 @@ macro_rules! drag_payload {
         )*
     };
 }
-drag_payload!(LayerDrag, TriangulationDrag, RasterDrag, PointCloudDrag, BlockModelDrag, DrillHoleDrag);
+drag_payload!(LayerDrag, TriangulationDrag, RasterDrag, PointCloudDrag, BlockModelDrag, PrismoidGridDrag, DrillHoleDrag);
 
 /// Whether a zone of `section` would take `member`.
 ///
@@ -154,6 +158,7 @@ fn kind_badge(section: SectionKind, kind: MemberKind) -> Option<(egui::ImageSour
         MemberKind::Raster => (unthemed_icon!("raster.svg"), HEADER_RASTERS),
         MemberKind::PointCloud => (unthemed_icon!("section_point_clouds.svg"), HEADER_POINT_CLOUDS),
         MemberKind::BlockModel => (unthemed_icon!("section_block_models.svg"), HEADER_BLOCK_MODELS),
+        MemberKind::PrismoidGrid => (unthemed_icon!("section_grid.svg"), HEADER_PRISMOID_GRIDS),
         MemberKind::DrillHole => (unthemed_icon!("drill_hole.svg"), HEADER_DRILL_HOLES),
     })
 }
@@ -196,6 +201,7 @@ section_entry!(
     UiRasterTextureEntry,
     UiPointCloudEntry,
     UiBlockModelEntry,
+    UiPrismoidGridEntry,
     UiDrillHoleEntry
 );
 
@@ -280,6 +286,8 @@ impl RowTarget {
             (Self::Item(ItemRef::PointCloud(id)), false) => UiCommand::ClosePointCloud(id),
             (Self::Item(ItemRef::BlockModel(id)), true) => UiCommand::LoadBlockModel(id),
             (Self::Item(ItemRef::BlockModel(id)), false) => UiCommand::CloseBlockModel(id),
+            (Self::Item(ItemRef::PrismoidGrid(id)), true) => UiCommand::LoadPrismoidGrid(id),
+            (Self::Item(ItemRef::PrismoidGrid(id)), false) => UiCommand::ClosePrismoidGrid(id),
             (Self::Item(ItemRef::DrillHole(id)), true) => UiCommand::LoadDrillHole(id),
             (Self::Item(ItemRef::DrillHole(id)), false) => UiCommand::CloseDrillHole(id),
         }
@@ -299,6 +307,7 @@ impl RowTarget {
             Self::Item(ItemRef::Triangulation(id)) => UiCommand::ToggleEntityLocked(SceneEntityId::Triangulation(id)),
             Self::Item(ItemRef::PointCloud(id)) => UiCommand::ToggleEntityLocked(SceneEntityId::PointCloud(id)),
             Self::Item(ItemRef::BlockModel(id)) => UiCommand::ToggleEntityLocked(SceneEntityId::BlockModel(id)),
+            Self::Item(ItemRef::PrismoidGrid(id)) => UiCommand::ToggleEntityLocked(SceneEntityId::PrismoidGrid(id)),
             Self::Item(ItemRef::DrillHole(id)) => UiCommand::ToggleEntityLocked(SceneEntityId::DrillHole(id)),
         }
     }
@@ -311,6 +320,7 @@ impl RowTarget {
             Self::Item(ItemRef::Raster(id)) => RenameTarget::Raster(id).remove_command(),
             Self::Item(ItemRef::PointCloud(id)) => RenameTarget::PointCloud(id).remove_command(),
             Self::Item(ItemRef::BlockModel(id)) => RenameTarget::BlockModel(id).remove_command(),
+            Self::Item(ItemRef::PrismoidGrid(id)) => RenameTarget::PrismoidGrid(id).remove_command(),
             Self::Item(ItemRef::DrillHole(id)) => RenameTarget::DrillHole(id).remove_command(),
         }
     }
@@ -384,6 +394,17 @@ fn explorer_selection(editor: &EditorState, project: &UiProjectView) -> Vec<RowS
         if selected(entity) {
             rows.push(RowState {
                 target: RowTarget::Item(ItemRef::BlockModel(item.id)),
+                loaded: item.is_loaded,
+                hidden: item.is_hidden,
+                locked: frozen(entity),
+            });
+        }
+    }
+    for item in &project.prismoid_grids {
+        let entity = SceneEntityId::PrismoidGrid(item.id);
+        if selected(entity) {
+            rows.push(RowState {
+                target: RowTarget::Item(ItemRef::PrismoidGrid(item.id)),
                 loaded: item.is_loaded,
                 hidden: item.is_hidden,
                 locked: frozen(entity),
@@ -1030,6 +1051,7 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
         locked_rasters,
         frozen_handles,
         selected_layers,
+        active_workspace,
         ..
     } = &*editor;
     let (thickness_tables, seam_tables) = (&project.thickness_table_layers, &project.seam_table_surfaces);
@@ -1554,6 +1576,120 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
             tagged_count(&project.block_models, SectionKind::BlockModels),
             commands,
         );
+
+        if *active_workspace == Workspace::Geology {
+            let prismoid_grids_dirty = project.prismoid_grids_membership_dirty || project.prismoid_grids.iter().any(|item| item.dirty);
+            let (prismoid_grids_header_toggle, prismoid_grids_header, _) = ExplorerHeader::new(egui::Id::unique("prismoid_grids_collapse"), tr!("common-prismoid-grids"))
+                .icon(unthemed_icon!("section_grid.svg"))
+                .color(HEADER_PRISMOID_GRIDS)
+                .dirty(prismoid_grids_dirty)
+                .show(ui, |ui| {
+                    let prismoid_grid_folders = project.folders.folders(SectionKind::PrismoidGrids);
+                    if tagged_count(&project.prismoid_grids, SectionKind::PrismoidGrids) == 0 && prismoid_grid_folders.is_empty() {
+                        explorer_note(ui, tr!("explorer-no-prismoid-grids"));
+                    }
+                    let render_prismoid_grid_entry = |ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, rows: &mut Vec<ExplorerRow>, grid: &UiPrismoidGridEntry| {
+                        let grid_label = if grid.dirty { format!("{} *", grid.name) } else { grid.name.clone() };
+                        let label = entry_label(&grid_label, grid.is_loaded);
+                        let source_suffix = grid
+                            .source_name
+                            .as_deref()
+                            .map(|name| format!("\n{}", tr!("explorer-source-name", name = name.to_string())))
+                            .unwrap_or_default();
+                        let details = tr!(
+                            "explorer-prismoid-grid-id",
+                            id = grid.id.0.to_string(),
+                            source = source_suffix.to_string(),
+                            columns = grid.summary.columns.to_string(),
+                            rows = grid.summary.rows.to_string(),
+                            active = grid.summary.active_cells.to_string()
+                        );
+                        let details = match grid.summary.vertical_thickness {
+                            Some((min, max)) => format!(
+                                "{details}\n{}",
+                                tr!("explorer-prismoid-grid-thickness", min = format!("{min:.2}"), max = format!("{max:.2}"))
+                            ),
+                            None => details,
+                        };
+                        let grid_handle = SceneEntityId::PrismoidGrid(grid.id);
+                        rows.push(ExplorerRow::Entity(grid_handle));
+                        let grid_locked = frozen_handles.contains(&grid_handle);
+                        let row = ExplorerEntry::new(egui::Id::unique(("explorer_prismoid_grid", grid.id)), label)
+                            .dimmed(!grid.is_loaded)
+                            .selected(selected_handles.contains(&grid_handle))
+                            .draggable(rows_draggable)
+                            .toggles(EntryToggles {
+                                visible: grid.is_loaded && !grid.is_hidden,
+                                locked: grid_locked,
+                            });
+                        let row = with_kind_badge(row, grid.section, MemberKind::PrismoidGrid).show(ui);
+                        if row.visibility_clicked {
+                            commands.push(UiCommand::SetItemVisible(ItemRef::PrismoidGrid(grid.id), !(grid.is_loaded && !grid.is_hidden)));
+                        }
+                        // Double-clicking loads and unloads; the eye only hides and shows.
+                        if row.response.double_clicked() {
+                            commands.push(if grid.is_loaded {
+                                UiCommand::ClosePrismoidGrid(grid.id)
+                            } else {
+                                UiCommand::LoadPrismoidGrid(grid.id)
+                            });
+                        }
+                        if row.lock_clicked {
+                            commands.push(UiCommand::ToggleEntityLocked(grid_handle));
+                        }
+                        let response = row.response.on_hover_text(&details);
+                        response.dnd_set_drag_payload(PrismoidGridDrag(FolderMember::item(grid.section, ItemRef::PrismoidGrid(grid.id))));
+                        if response.dragged() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                        }
+                        if response.clicked() {
+                            commands.push(UiCommand::SelectExplorerRow(ExplorerRow::Entity(grid_handle)));
+                        }
+
+                        let row_state = RowState {
+                            target: RowTarget::Item(ItemRef::PrismoidGrid(grid.id)),
+                            loaded: grid.is_loaded,
+                            hidden: grid.is_hidden,
+                            locked: grid_locked,
+                        };
+                        context_menu_popup(&response, row_menu_title(grid.name.as_str(), row_state, &selection), |ui| {
+                            row_menu_head(ui, commands, row_state, &selection);
+                            if ContextMenuAction::new(tr!("dialog-rename-submit")).enabled(!grid_locked).show(ui).clicked() {
+                                commands.push(UiCommand::BeginRenameItem(RenameTarget::PrismoidGrid(grid.id)));
+                                ui.close();
+                            }
+                            move_to_folder_submenu(
+                                ui,
+                                &project.folders,
+                                grid.folder,
+                                FolderMember::item(grid.section, ItemRef::PrismoidGrid(grid.id)),
+                                commands,
+                            );
+                            row_menu_delete(ui, commands, row_state, &selection, UiCommand::RequestDeleteItem(RenameTarget::PrismoidGrid(grid.id)));
+                        });
+                    };
+                    let mut prismoid_grids_source = Rows {
+                        items: &project.prismoid_grids,
+                        draw: render_prismoid_grid_entry,
+                    };
+                    draw_section_body::<(PrismoidGridDrag,)>(
+                        ui,
+                        SectionKind::PrismoidGrids,
+                        prismoid_grid_folders,
+                        commands,
+                        &mut rows,
+                        &mut [&mut prismoid_grids_source],
+                    );
+                });
+            let prismoid_grids_row = prismoid_grids_header_toggle.union(prismoid_grids_header.inner);
+            attach_header_drop::<(PrismoidGridDrag,)>(ui, &prismoid_grids_row, SectionKind::PrismoidGrids, commands);
+            section_heading_menu(
+                &prismoid_grids_row,
+                ExplorerSection::PrismoidGrids,
+                tagged_count(&project.prismoid_grids, SectionKind::PrismoidGrids),
+                commands,
+            );
+        }
 
         let drill_holes_dirty = project.drill_holes_membership_dirty || project.drill_holes.iter().any(|item| item.dirty);
         let (drill_holes_header_toggle, drill_holes_header, _) = ExplorerHeader::new(egui::Id::unique("drill_holes_collapse"), tr!("ws-menubar-drillholes"))

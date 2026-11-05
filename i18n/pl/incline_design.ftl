@@ -202,6 +202,7 @@ status-points = Punkty: { $drawn } / { $target } z { $total } ({ $drawn_chunks }
 ## Dodatkowe literały źródłowe
 
 explorer-no-rasters = Brak rastrów
+explorer-no-prismoid-grids = Brak siatek prizmoidów
 slice-viewport-gestures = przeciąganie środkowym przyciskiem: przesuwanie · przeciąganie prawym przyciskiem: orbita · Shift+kółko: chodzenie · W/S: przesuń warstwę · Q/E: obrót · Esc: wyjście
 
 ## Szczegóły środowiska uruchomieniowego
@@ -276,6 +277,7 @@ survey-scale = Jednolity współczynnik skali XYZ
 survey-invalid-transform = Początki, kąt i wynikowe współrzędne muszą być skończone.
 survey-invalid-scale = Skala musi być skończoną liczbą dodatnią o skończonej odwrotności.
 survey-empty-selection = Wybierz co najmniej jeden obsługiwany element do przekształcenia.
+survey-prismoid-grid-selection = Siatek prizmoidów nie można jeszcze przenosić między układami współrzędnych; pomiń je w zaznaczeniu.
 survey-unavailable = Wybrany element brakuje lub nie jest wczytany. Wczytaj go przed przekształceniem.
 survey-wrong-project = Wybieraj projekty tylko z aktywnego projektu.
 survey-name-required = Wprowadź nazwę układu współrzędnych.
@@ -775,7 +777,6 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: przed scaleniem z
 cmd-omf-crs-differs = { $source_name }: układ współrzędnych „{ $source_crs }” różni się od układu projektu „{ $target_crs }”; współrzędne scalono bez przeliczenia
 cmd-omf-source-name-units-source-units = { $source_name }: jednostki „{ $source_units }” różnią się od jednostek projektu „{ $target_units }”; współrzędne scalono bez przeliczenia
 cmd-omf-source-name-warning = { $source_name }: { $warning }
-cmd-omf-prismoid-grids-not-exported = { $count } siatk(i) prizmoidów pozostaje w pliku projektu i nie zostało wyeksportowanych
 cmd-omf-there-no-open-incline-design = Brak otwartych danych Incline Design do wyeksportowania
 cmd-placement-2-vertices = 2 wierzchołki
 cmd-placement-count-vertices = { $count } wierzchołków
@@ -1189,6 +1190,8 @@ common-point-clouds = Chmury punktów
 common-polyline = Polilinia
 common-polyline-layer = Polilinia na „{ $layer }”
 common-project = Projekt
+common-prismoid-grids = Siatki prizmoidów
+common-prismoid-grid = Siatka prizmoidów
 common-rasters = Rastry
 common-redo = Ponów
 common-reference-points = Punkty odniesienia...
@@ -1742,6 +1745,10 @@ explorer-raster-id =
     { $driver } · { $width } × { $height }
     { $projection }
 explorer-id-triangulation-id-source = ID: triangulation:{ $id }{ $source }
+explorer-prismoid-grid-id =
+    ID: prismoid_grid:{ $id }{ $source }
+    { $columns } × { $rows } komórek, { $active } aktywnych
+explorer-prismoid-grid-thickness = Miąższość pionowa od { $min } do { $max }
 explorer-load = Wczytaj
 explorer-lock = Zablokuj
 explorer-new-collection = Nowa kolekcja
@@ -2316,6 +2323,7 @@ state-load-drillholes = Wczytaj otwory wiertnicze
 state-load-layer = Wczytaj warstwę
 state-load-point-cloud = Wczytaj chmurę punktów
 state-load-raster = Wczytaj raster
+state-load-prismoid-grid = Wczytaj siatkę prizmoidów
 state-load-triangulation = Wczytaj triangulację
 state-locked-count-object-s = Zablokowano { $count } obiektów
 state-major-minor = Główna { $major } · podrzędna { $minor }
@@ -2345,6 +2353,7 @@ state-remove-block-model = Usuń model blokowy
 state-remove-drillholes = Usuń otwory wiertnicze
 state-remove-point-cloud = Usuń chmurę punktów
 state-remove-raster = Usuń raster
+state-remove-prismoid-grid = Usuń siatkę prizmoidów
 state-remove-triangulation = Usuń triangulację
 state-removed-from-active-triangulation = Usunięto z aktywnej triangulacji
 state-removed-from-every-triangulation = Usunięto z każdej triangulacji
@@ -2409,6 +2418,7 @@ state-unload-drillholes = Wyładuj otwory wiertnicze
 state-unload-layer = Wyładuj warstwę
 state-unload-point-cloud = Wyładuj chmurę punktów
 state-unload-raster = Wyładuj raster
+state-unload-prismoid-grid = Wyładuj siatkę prizmoidów
 state-unload-triangulation = Wyładuj triangulację
 state-untitled-project = Projekt bez nazwy
 state-use-typed-radius = Użyj wpisanego promienia

@@ -251,6 +251,7 @@ pub(crate) struct SaveToken {
     pub(crate) drill_holes: Vec<(u64, u64)>,
     pub(crate) point_clouds: Vec<(u64, u64)>,
     pub(crate) rasters: Vec<(u64, u64)>,
+    pub(crate) prismoid_grids: Vec<(u64, u64)>,
 }
 
 pub(crate) const PROJECT_FORMAT_VERSION: u32 = 2;

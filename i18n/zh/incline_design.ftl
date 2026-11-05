@@ -150,6 +150,7 @@ tri-count-objects =
 
 ## 手工补全的界面翻译
 explorer-no-rasters = 没有栅格
+explorer-no-prismoid-grids = 没有拟柱体网格
 slice-viewport-gestures = 中键拖动平移 · 右键拖动环绕 · Shift+滚轮 步进 · W/S 移动切片 · Q/E 旋转 · Esc 退出
 
 ## 启动环境详情
@@ -208,6 +209,7 @@ survey-scale = XYZ 统一缩放系数
 survey-invalid-transform = 原点、角度和转换结果坐标都必须是有限值。
 survey-invalid-scale = 比例必须是一个有限的正数，且其倒数也必须有限。
 survey-empty-selection = 请至少选择一个受支持的项目进行转换。
+survey-prismoid-grid-selection = 拟柱体网格暂时无法在坐标系之间移动；请将其从选择中排除。
 survey-unavailable = 所选项目缺失或未加载。请先加载再进行转换。
 survey-wrong-project = 请仅选择当前活动项目中的设计。
 survey-name-required = 请输入坐标系名称。
@@ -705,7 +707,6 @@ cmd-omf-source-name-applied-project-origin = { $source_name }：合并前已应�
 cmd-omf-crs-differs = { $source_name }：坐标参考系“{ $source_crs }”与项目 CRS“{ $target_crs }”不同；坐标未经重投影即合并
 cmd-omf-source-name-units-source-units = { $source_name }：单位“{ $source_units }”与项目单位“{ $target_units }”不同；坐标未经转换即合并
 cmd-omf-source-name-warning = { $source_name }：{ $warning }
-cmd-omf-prismoid-grids-not-exported = { $count } 个拟柱体网格保留在项目文件中，未导出
 cmd-omf-there-no-open-incline-design = 没有可导出的已打开 Incline Design 数据
 cmd-placement-2-vertices = 2 个顶点
 cmd-placement-count-vertices = { $count } 个顶点
@@ -1119,6 +1120,8 @@ common-point-clouds = 点云
 common-polyline = 多段线
 common-polyline-layer = “{ $layer }”上的折线
 common-project = 项目
+common-prismoid-grids = 拟柱体网格
+common-prismoid-grid = 拟柱体网格
 common-rasters = 栅格
 common-redo = 重做
 common-reference-points = 参考点...
@@ -1672,6 +1675,10 @@ explorer-raster-id =
     { $driver } · { $width } × { $height }
     { $projection }
 explorer-id-triangulation-id-source = ID：triangulation:{ $id }{ $source }
+explorer-prismoid-grid-id =
+    ID：prismoid_grid:{ $id }{ $source }
+    { $columns } × { $rows } 个单元，{ $active } 个有效
+explorer-prismoid-grid-thickness = 垂直厚度 { $min } 至 { $max }
 explorer-load = 加载
 explorer-lock = 锁
 explorer-new-collection = 新建集合
@@ -2246,6 +2253,7 @@ state-load-drillholes = 加载钻孔
 state-load-layer = 加载图层
 state-load-point-cloud = 加载点云
 state-load-raster = 加载栅格
+state-load-prismoid-grid = 加载拟柱体网格
 state-load-triangulation = 加载三角网
 state-locked-count-object-s = 已锁定 { $count } 个对象
 state-major-minor = 主间隔 { $major } · 次间隔 { $minor }
@@ -2275,6 +2283,7 @@ state-remove-block-model = 删除块体模型
 state-remove-drillholes = 删除钻孔
 state-remove-point-cloud = 删除点云
 state-remove-raster = 删除栅格
+state-remove-prismoid-grid = 删除拟柱体网格
 state-remove-triangulation = 删除三角网
 state-removed-from-active-triangulation = 已从活动三角网中移除
 state-removed-from-every-triangulation = 已从所有三角网中移除
@@ -2339,6 +2348,7 @@ state-unload-drillholes = 卸载钻孔
 state-unload-layer = 卸载图层
 state-unload-point-cloud = 卸载点云
 state-unload-raster = 卸载栅格
+state-unload-prismoid-grid = 卸载拟柱体网格
 state-unload-triangulation = 卸载三角网
 state-untitled-project = 未命名项目
 state-use-typed-radius = 使用输入的半径

@@ -35,11 +35,20 @@ pub(crate) enum SectionKind {
     Rasters,
     PointClouds,
     BlockModels,
+    PrismoidGrids,
     DrillHoles,
 }
 
 impl SectionKind {
-    pub(crate) const ALL: [Self; 6] = [Self::Designs, Self::Triangulations, Self::Rasters, Self::PointClouds, Self::BlockModels, Self::DrillHoles];
+    pub(crate) const ALL: [Self; 7] = [
+        Self::Designs,
+        Self::Triangulations,
+        Self::Rasters,
+        Self::PointClouds,
+        Self::BlockModels,
+        Self::PrismoidGrids,
+        Self::DrillHoles,
+    ];
 
     /// Stable key this section's folder list is written under. Never
     /// translated and never renamed: it is file content.
@@ -50,6 +59,7 @@ impl SectionKind {
             Self::Rasters => "rasters",
             Self::PointClouds => "point_clouds",
             Self::BlockModels => "block_models",
+            Self::PrismoidGrids => "prismoid_grids",
             Self::DrillHoles => "drill_holes",
         }
     }
@@ -65,6 +75,7 @@ impl SectionKind {
             Self::Rasters => 2,
             Self::PointClouds => 3,
             Self::BlockModels => 4,
+            Self::PrismoidGrids => 6,
             Self::DrillHoles => 5,
         }
     }
@@ -77,6 +88,7 @@ impl SectionKind {
             MemberKind::Raster => Self::Rasters,
             MemberKind::PointCloud => Self::PointClouds,
             MemberKind::BlockModel => Self::BlockModels,
+            MemberKind::PrismoidGrid => Self::PrismoidGrids,
             MemberKind::DrillHole => Self::DrillHoles,
         }
     }
@@ -94,6 +106,7 @@ impl SectionKind {
             Self::Rasters => &[MemberKind::Raster],
             Self::PointClouds => &[MemberKind::PointCloud],
             Self::BlockModels => &[MemberKind::BlockModel],
+            Self::PrismoidGrids => &[MemberKind::PrismoidGrid],
             Self::DrillHoles => &[MemberKind::DrillHole],
         }
     }
@@ -154,6 +167,7 @@ pub(crate) enum MemberKind {
     Raster,
     PointCloud,
     BlockModel,
+    PrismoidGrid,
     DrillHole,
 }
 

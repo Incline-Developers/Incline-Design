@@ -104,6 +104,7 @@ pub(crate) enum SceneEntityId {
     /// surface is picked. Everything downstream that works on a selection can
     /// then reach it like any other entity.
     Raster(raster::RasterTextureId),
+    PrismoidGrid(prismoid_grid::PrismoidGridId),
     HaulRoad(haulage::RoadId),
     HaulNode(haulage::NodeId),
 }
@@ -2509,7 +2510,7 @@ impl Document {
 
 /// A project-owned item that is not part of the design document: the things
 /// the explorer lists under Triangulations, Block Models, Drillholes, Point
-/// Clouds and Rasters.
+/// Clouds, Rasters and Prismoid Grids.
 ///
 /// [`SceneEntityId`] cannot serve here - rasters are project content but not
 /// scene entities, and design objects are document content rather than items -
@@ -2521,6 +2522,7 @@ pub(crate) enum ItemRef {
     DrillHole(drill_hole::DrillHoleId),
     PointCloud(point_cloud::PointCloudId),
     Raster(raster::RasterTextureId),
+    PrismoidGrid(prismoid_grid::PrismoidGridId),
 }
 
 impl ItemRef {
@@ -2531,6 +2533,7 @@ impl ItemRef {
             Self::DrillHole(_) => MemberKind::DrillHole,
             Self::PointCloud(_) => MemberKind::PointCloud,
             Self::Raster(_) => MemberKind::Raster,
+            Self::PrismoidGrid(_) => MemberKind::PrismoidGrid,
         }
     }
 
@@ -2542,6 +2545,7 @@ impl ItemRef {
             SceneEntityId::DrillHole(id) => Some(Self::DrillHole(id)),
             SceneEntityId::PointCloud(id) => Some(Self::PointCloud(id)),
             SceneEntityId::Raster(id) => Some(Self::Raster(id)),
+            SceneEntityId::PrismoidGrid(id) => Some(Self::PrismoidGrid(id)),
             SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_) => None,
         }
     }
@@ -2585,6 +2589,10 @@ pub(crate) enum ItemStyle {
         point_size: f32,
     },
     Raster {
+        loaded: bool,
+        hidden: bool,
+    },
+    PrismoidGrid {
         loaded: bool,
         hidden: bool,
     },
@@ -2639,13 +2647,21 @@ impl ItemStyle {
         }
     }
 
+    pub(crate) fn of_prismoid_grid(item: &prismoid_grid::OpenPrismoidGrid) -> Self {
+        Self::PrismoidGrid {
+            loaded: item.state.loaded,
+            hidden: item.state.hidden,
+        }
+    }
+
     pub(crate) fn loaded(&self) -> bool {
         match self {
             Self::Triangulation { loaded, .. }
             | Self::BlockModel { loaded, .. }
             | Self::DrillHole { loaded, .. }
             | Self::PointCloud { loaded, .. }
-            | Self::Raster { loaded, .. } => *loaded,
+            | Self::Raster { loaded, .. }
+            | Self::PrismoidGrid { loaded, .. } => *loaded,
         }
     }
 
@@ -2657,7 +2673,8 @@ impl ItemStyle {
             | Self::BlockModel { loaded, .. }
             | Self::DrillHole { loaded, .. }
             | Self::PointCloud { loaded, .. }
-            | Self::Raster { loaded, .. } => *loaded = value,
+            | Self::Raster { loaded, .. }
+            | Self::PrismoidGrid { loaded, .. } => *loaded = value,
         }
         self
     }
@@ -2668,7 +2685,8 @@ impl ItemStyle {
             | Self::BlockModel { hidden, .. }
             | Self::DrillHole { hidden, .. }
             | Self::PointCloud { hidden, .. }
-            | Self::Raster { hidden, .. } => *hidden,
+            | Self::Raster { hidden, .. }
+            | Self::PrismoidGrid { hidden, .. } => *hidden,
         }
     }
 
@@ -2680,17 +2698,18 @@ impl ItemStyle {
             | Self::BlockModel { hidden, .. }
             | Self::DrillHole { hidden, .. }
             | Self::PointCloud { hidden, .. }
-            | Self::Raster { hidden, .. } => *hidden = value,
+            | Self::Raster { hidden, .. }
+            | Self::PrismoidGrid { hidden, .. } => *hidden = value,
         }
         self
     }
 
     /// The same style with only its base colour changed. A raster has none:
-    /// its colours are its pixels.
+    /// its colours are its pixels. Nor has a prismoid grid yet.
     pub(crate) fn with_color(mut self, value: [f32; 4]) -> Self {
         match &mut self {
             Self::Triangulation { color, .. } | Self::BlockModel { color, .. } | Self::PointCloud { color, .. } => *color = value,
-            Self::DrillHole { .. } | Self::Raster { .. } => {}
+            Self::DrillHole { .. } | Self::Raster { .. } | Self::PrismoidGrid { .. } => {}
         }
         self
     }
@@ -2760,6 +2779,7 @@ pub(crate) enum OpenItem {
     DrillHole(Box<drill_hole::OpenDrillHoleDataset>),
     PointCloud(Box<point_cloud::OpenPointCloud>),
     Raster(Box<raster::OpenRasterTexture>),
+    PrismoidGrid(Box<prismoid_grid::OpenPrismoidGrid>),
 }
 
 impl OpenItem {
@@ -2770,6 +2790,7 @@ impl OpenItem {
             Self::DrillHole(item) => ItemRef::DrillHole(item.id),
             Self::PointCloud(item) => ItemRef::PointCloud(item.id),
             Self::Raster(item) => ItemRef::Raster(item.id),
+            Self::PrismoidGrid(item) => ItemRef::PrismoidGrid(item.id),
         }
     }
 
@@ -2795,6 +2816,7 @@ impl OpenItem {
                     + item.colors.as_ref().map_or(0, |colors| colors.len() * size_of::<u32>())
             }
             Self::Raster(item) => size_of::<raster::OpenRasterTexture>() + item.name.len() + item.full_rgba.len() + item.rgba.len(),
+            Self::PrismoidGrid(item) => size_of::<prismoid_grid::OpenPrismoidGrid>() + item.name.len() + item.grid.estimated_bytes(),
         }
     }
 }
@@ -2845,6 +2867,7 @@ pub(crate) struct EditTarget<'a> {
     pub(crate) drill_holes: &'a mut Vec<drill_hole::OpenDrillHoleDataset>,
     pub(crate) point_clouds: &'a mut Vec<point_cloud::OpenPointCloud>,
     pub(crate) rasters: &'a mut Vec<raster::OpenRasterTexture>,
+    pub(crate) prismoid_grids: &'a mut Vec<prismoid_grid::OpenPrismoidGrid>,
     /// Accumulated by `apply`/`revert`; drained by the caller once the whole
     /// step is done, so one batch invalidates once.
     pub(crate) effects: StepEffects,
@@ -2885,10 +2908,17 @@ impl EditTarget<'_> {
     pub(crate) fn all_item_refs(&self) -> Vec<ItemRef> {
         let triangulations = self.triangulations.iter().map(|entry| ItemRef::Triangulation(entry.id));
         let rasters = self.rasters.iter().map(|entry| ItemRef::Raster(entry.id));
+        let prismoid_grids = self.prismoid_grids.iter().map(|entry| ItemRef::PrismoidGrid(entry.id));
         let point_clouds = self.point_clouds.iter().map(|entry| ItemRef::PointCloud(entry.id));
         let block_models = self.block_models.iter().map(|entry| ItemRef::BlockModel(entry.id));
         let drill_holes = self.drill_holes.iter().map(|entry| ItemRef::DrillHole(entry.id));
-        triangulations.chain(rasters).chain(point_clouds).chain(block_models).chain(drill_holes).collect()
+        triangulations
+            .chain(rasters)
+            .chain(prismoid_grids)
+            .chain(point_clouds)
+            .chain(block_models)
+            .chain(drill_holes)
+            .collect()
     }
 
     fn item_folder(&self, item: ItemRef) -> Option<FolderId> {
@@ -2946,6 +2976,7 @@ impl EditTarget<'_> {
             ItemRef::DrillHole(id) => self.drill_holes.iter().find(|entry| entry.id == id).map(|entry| &entry.state),
             ItemRef::PointCloud(id) => self.point_clouds.iter().find(|entry| entry.id == id).map(|entry| &entry.state),
             ItemRef::Raster(id) => self.rasters.iter().find(|entry| entry.id == id).map(|entry| &entry.state),
+            ItemRef::PrismoidGrid(id) => self.prismoid_grids.iter().find(|entry| entry.id == id).map(|entry| &entry.state),
         }
     }
 
@@ -2986,6 +3017,7 @@ impl EditTarget<'_> {
             ItemRef::DrillHole(id) => self.drill_holes.iter_mut().find(|entry| entry.id == id).map(|entry| &mut entry.state),
             ItemRef::PointCloud(id) => self.point_clouds.iter_mut().find(|entry| entry.id == id).map(|entry| &mut entry.state),
             ItemRef::Raster(id) => self.rasters.iter_mut().find(|entry| entry.id == id).map(|entry| &mut entry.state),
+            ItemRef::PrismoidGrid(id) => self.prismoid_grids.iter_mut().find(|entry| entry.id == id).map(|entry| &mut entry.state),
         }
     }
 
@@ -3031,6 +3063,7 @@ impl EditTarget<'_> {
             ItemRef::DrillHole(id) => self.drill_holes.iter().find(|entry| entry.id == id).map(ItemStyle::of_drill_hole),
             ItemRef::PointCloud(id) => self.point_clouds.iter().find(|entry| entry.id == id).map(ItemStyle::of_point_cloud),
             ItemRef::Raster(id) => self.rasters.iter().find(|entry| entry.id == id).map(ItemStyle::of_raster),
+            ItemRef::PrismoidGrid(id) => self.prismoid_grids.iter().find(|entry| entry.id == id).map(ItemStyle::of_prismoid_grid),
         }
     }
 
@@ -3121,6 +3154,12 @@ impl EditTarget<'_> {
                     changed = true;
                 }
             }
+            (ItemRef::PrismoidGrid(id), ItemStyle::PrismoidGrid { loaded, .. }) => {
+                if let Some(entry) = self.prismoid_grids.iter_mut().find(|entry| entry.id == id) {
+                    entry.state.loaded = *loaded;
+                    changed = true;
+                }
+            }
             _ => {}
         }
         if changed {
@@ -3145,6 +3184,7 @@ impl EditTarget<'_> {
             ItemRef::DrillHole(id) => self.drill_holes.iter_mut().find(|entry| entry.id == id).map(|entry| &mut entry.name),
             ItemRef::PointCloud(id) => self.point_clouds.iter_mut().find(|entry| entry.id == id).map(|entry| &mut entry.name),
             ItemRef::Raster(id) => self.rasters.iter_mut().find(|entry| entry.id == id).map(|entry| &mut entry.name),
+            ItemRef::PrismoidGrid(id) => self.prismoid_grids.iter_mut().find(|entry| entry.id == id).map(|entry| &mut entry.name),
         };
         let Some(target) = target else {
             return;
@@ -3182,6 +3222,10 @@ impl EditTarget<'_> {
             ItemRef::Raster(id) => {
                 let index = self.rasters.iter().position(|entry| entry.id == id);
                 take(self.rasters, index).map(|(index, entry)| (index, OpenItem::Raster(Box::new(entry))))
+            }
+            ItemRef::PrismoidGrid(id) => {
+                let index = self.prismoid_grids.iter().position(|entry| entry.id == id);
+                take(self.prismoid_grids, index).map(|(index, entry)| (index, OpenItem::PrismoidGrid(Box::new(entry))))
             }
         };
         if taken.is_some() {
@@ -3319,6 +3363,7 @@ impl EditTarget<'_> {
             OpenItem::DrillHole(entry) => self.drill_holes.insert(index.min(self.drill_holes.len()), *entry),
             OpenItem::PointCloud(entry) => self.point_clouds.insert(index.min(self.point_clouds.len()), *entry),
             OpenItem::Raster(entry) => self.rasters.insert(index.min(self.rasters.len()), *entry),
+            OpenItem::PrismoidGrid(entry) => self.prismoid_grids.insert(index.min(self.prismoid_grids.len()), *entry),
         }
         // The restored item keeps the epoch it was deleted with, so undoing a
         // delete of never-edited content leaves the project exactly as clean

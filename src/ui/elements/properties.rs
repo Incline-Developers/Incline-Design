@@ -126,7 +126,7 @@ pub(crate) fn draw_selection_appearance(
             SceneEntityId::DrillHole(_) => 5,
             SceneEntityId::PointCloud(_) => 6,
             SceneEntityId::Raster(_) => 7,
-            SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_) => continue,
+            SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_) | SceneEntityId::PrismoidGrid(_) => continue,
         };
         selected_types[kind] = true;
     }

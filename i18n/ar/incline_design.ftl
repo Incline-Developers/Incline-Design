@@ -150,6 +150,7 @@ tri-count-objects =
 
 ## ترجمات الواجهة المكتملة يدويًا
 explorer-no-rasters = لا توجد بيانات نقطية
+explorer-no-prismoid-grids = لا توجد شبكات شبه منشورات
 slice-viewport-gestures = سحب بالزر الأوسط: تحريك · سحب بالزر الأيمن: مدار · Shift+عجلة: مشي · W/S: تحريك الشريحة · Q/E: تدوير · Esc: خروج
 
 ## تفاصيل بيئة بدء التشغيل
@@ -208,6 +209,7 @@ survey-scale = عامل مقياس XYZ موحّد
 survey-invalid-transform = يجب أن تكون نقاط الأصل والزاوية والإحداثيات الناتجة محدودة القيمة.
 survey-invalid-scale = يجب أن يكون المقياس رقمًا موجبًا محدودًا وله مقلوب محدود.
 survey-empty-selection = اختر عنصرًا مدعومًا واحدًا على الأقل للتحويل.
+survey-prismoid-grid-selection = لا يمكن نقل شبكات شبه المنشورات بين أنظمة الإحداثيات بعد؛ استبعدها من التحديد.
 survey-unavailable = عنصر محدد مفقود أو غير محمّل. حمّله قبل التحويل.
 survey-wrong-project = اختر تصاميم من المشروع النشط فقط.
 survey-name-required = أدخل اسم نظام الإحداثيات.
@@ -705,7 +707,6 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: طُبّق أصل
 cmd-omf-crs-differs = { $source_name }: يختلف نظام الإسناد «{ $source_crs }» عن نظام المشروع «{ $target_crs }»؛ دُمجت الإحداثيات بلا إعادة إسقاط
 cmd-omf-source-name-units-source-units = { $source_name }: تختلف الوحدات «{ $source_units }» عن وحدات المشروع «{ $target_units }»؛ دُمجت الإحداثيات بلا تحويل
 cmd-omf-source-name-warning = { $source_name }: { $warning }
-cmd-omf-prismoid-grids-not-exported = { $count } من شبكات شبه المنشورات تبقى في ملف المشروع ولم تُصدَّر
 cmd-omf-there-no-open-incline-design = لا توجد بيانات Incline Design مفتوحة لتصديرها
 cmd-placement-2-vertices = رأسان
 cmd-placement-count-vertices = { $count } رأس
@@ -1119,6 +1120,8 @@ common-point-clouds = سحب نقطية
 common-polyline = خط متعدد
 common-polyline-layer = خط متعدد على «{ $layer }»
 common-project = المشروع
+common-prismoid-grids = شبكات شبه المنشورات
+common-prismoid-grid = شبكة شبه المنشورات
 common-rasters = بيانات نقطية
 common-redo = إعادة
 common-reference-points = نقاط مرجعية...
@@ -1672,6 +1675,10 @@ explorer-raster-id =
     { $driver } · { $width } × { $height }
     { $projection }
 explorer-id-triangulation-id-source = المعرّف: triangulation:{ $id }{ $source }
+explorer-prismoid-grid-id =
+    المعرّف: prismoid_grid:{ $id }{ $source }
+    { $columns } × { $rows } خلية، { $active } نشطة
+explorer-prismoid-grid-thickness = السماكة الرأسية من { $min } إلى { $max }
 explorer-load = تحميل
 explorer-lock = قفل
 explorer-new-collection = مجموعة جديدة
@@ -2246,6 +2253,7 @@ state-load-drillholes = تحميل ثقوب الحفر
 state-load-layer = تحميل الطبقة
 state-load-point-cloud = تحميل سحابة نقطية
 state-load-raster = تحميل البيانات النقطية
+state-load-prismoid-grid = تحميل شبكة شبه المنشورات
 state-load-triangulation = تحميل شبكة مثلثية
 state-locked-count-object-s = { $count } كائن مقفل
 state-major-minor = الرئيسي { $major } · الثانوي { $minor }
@@ -2275,6 +2283,7 @@ state-remove-block-model = إزالة نموذج الكتل
 state-remove-drillholes = إزالة ثقوب الحفر
 state-remove-point-cloud = إزالة سحابة نقطية
 state-remove-raster = إزالة بيانات نقطية
+state-remove-prismoid-grid = إزالة شبكة شبه المنشورات
 state-remove-triangulation = إزالة شبكة مثلثية
 state-removed-from-active-triangulation = تمت الإزالة من التثليث النشط
 state-removed-from-every-triangulation = تمت الإزالة من كل تثليث
@@ -2339,6 +2348,7 @@ state-unload-drillholes = إلغاء تحميل ثقوب الحفر
 state-unload-layer = إلغاء تحميل الطبقة
 state-unload-point-cloud = إلغاء تحميل سحابة النقاط
 state-unload-raster = إلغاء تحميل البيانات النقطية
+state-unload-prismoid-grid = إلغاء تحميل شبكة شبه المنشورات
 state-unload-triangulation = إلغاء تحميل الشبكة المثلثية
 state-untitled-project = مشروع بلا عنوان
 state-use-typed-radius = استخدام نصف القطر المكتوب

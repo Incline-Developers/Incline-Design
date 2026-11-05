@@ -12,6 +12,7 @@ pub(crate) mod omf; // Whole-project Open Mining Format interchange.
 pub(crate) mod optimization; // Handles pit optimization's scenario list, editor and scenarios file.
 pub(crate) mod plot; // Handles printable plot sheets
 pub(crate) mod point_cloud; // Handles importing/loading point clouds, etc. commands
+pub(crate) mod prismoid_grid;
 pub(crate) mod products; // Handles the Drill & Blast workspace's stored products.
 pub(crate) mod property; // Handles changing colors, fills, etc. commands
 pub(crate) mod raster; // Handles georeferenced image textures.
@@ -392,6 +393,18 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::ClearActiveTriangulationRaster => self.clear_active_triangulation_raster(),
+            UiCommand::LoadPrismoidGrid(id) => {
+                self.set_item_loaded(crate::model::ItemRef::PrismoidGrid(id), true);
+                Ok(())
+            }
+            UiCommand::ClosePrismoidGrid(id) => {
+                self.set_item_loaded(crate::model::ItemRef::PrismoidGrid(id), false);
+                Ok(())
+            }
+            UiCommand::RemovePrismoidGrid(id) => {
+                self.remove_prismoid_grid(id);
+                Ok(())
+            }
             UiCommand::LoadPointCloud(id) => {
                 self.set_item_loaded(crate::model::ItemRef::PointCloud(id), true);
                 Ok(())

@@ -150,6 +150,7 @@ tri-count-objects =
 
 ## स्वयं पूर्ण किए गए इंटरफ़ेस अनुवाद
 explorer-no-rasters = कोई रास्टर नहीं
+explorer-no-prismoid-grids = कोई प्रिज़्मॉइड ग्रिड नहीं
 slice-viewport-gestures = मध्य बटन खींचें: पैन · दायाँ बटन खींचें: ऑर्बिट · Shift+व्हील: चलना · W/S: स्लैब हिलाएँ · Q/E: घुमाएँ · Esc: बाहर निकलें
 
 ## प्रारंभिक परिवेश विवरण
@@ -208,6 +209,7 @@ survey-scale = एकसमान XYZ स्केल कारक
 survey-invalid-transform = मूल बिंदु, कोण और परिणामी निर्देशांक परिमित होने चाहिए।
 survey-invalid-scale = स्केल एक परिमित धनात्मक संख्या होनी चाहिए जिसका व्युत्क्रम भी परिमित हो।
 survey-empty-selection = परिवर्तित करने के लिए कम से कम एक समर्थित आइटम चुनें।
+survey-prismoid-grid-selection = प्रिज़्मॉइड ग्रिड को अभी निर्देशांक प्रणालियों के बीच नहीं ले जाया जा सकता; उन्हें चयन से बाहर रखें।
 survey-unavailable = चयनित आइटम गायब है या लोड नहीं है। परिवर्तित करने से पहले इसे लोड करें।
 survey-wrong-project = केवल सक्रिय प्रोजेक्ट से डिज़ाइन चुनें।
 survey-name-required = निर्देशांक तंत्र का नाम दर्ज करें।
@@ -705,7 +707,6 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: मर्ज स�
 cmd-omf-crs-differs = { $source_name }: निर्देशांक संदर्भ प्रणाली “{ $source_crs }” प्रोजेक्ट CRS “{ $target_crs }” से अलग है; निर्देशांक पुनः प्रक्षेपण के बिना मर्ज हुए
 cmd-omf-source-name-units-source-units = { $source_name }: इकाइयाँ “{ $source_units }” प्रोजेक्ट इकाइयों “{ $target_units }” से अलग हैं; निर्देशांक रूपांतरण के बिना मर्ज हुए
 cmd-omf-source-name-warning = { $source_name }: { $warning }
-cmd-omf-prismoid-grids-not-exported = { $count } प्रिज़्मॉइड ग्रिड प्रोजेक्ट फ़ाइल में रहते हैं और निर्यात नहीं किए गए
 cmd-omf-there-no-open-incline-design = निर्यात करने के लिए कोई खुला Incline Design डेटा नहीं है
 cmd-placement-2-vertices = 2 शीर्ष
 cmd-placement-count-vertices = { $count } शीर्ष
@@ -1119,6 +1120,8 @@ common-point-clouds = पॉइंट क्लाउड
 common-polyline = पॉलीलाइन
 common-polyline-layer = '{ $layer }' पर पॉलीलाइन
 common-project = परियोजना
+common-prismoid-grids = प्रिज़्मॉइड ग्रिड
+common-prismoid-grid = प्रिज़्मॉइड ग्रिड
 common-rasters = रास्टर
 common-redo = रेडो
 common-reference-points = संदर्भ बिंदु...
@@ -1672,6 +1675,10 @@ explorer-raster-id =
     { $driver } · { $width } × { $height }
     { $projection }
 explorer-id-triangulation-id-source = ID: triangulation:{ $id }{ $source }
+explorer-prismoid-grid-id =
+    ID: prismoid_grid:{ $id }{ $source }
+    { $columns } × { $rows } सेल, { $active } सक्रिय
+explorer-prismoid-grid-thickness = ऊर्ध्वाधर मोटाई { $min } से { $max }
 explorer-load = लोड करें
 explorer-lock = ताला
 explorer-new-collection = नया संग्रह
@@ -2246,6 +2253,7 @@ state-load-drillholes = लोड ड्रिल होल
 state-load-layer = लेयर लोड करें
 state-load-point-cloud = लोड पॉइंट क्लाउड
 state-load-raster = लोड रास्टर
+state-load-prismoid-grid = प्रिज़्मॉइड ग्रिड लोड करें
 state-load-triangulation = लोड त्रिभुजीकरण
 state-locked-count-object-s = { $count } ऑब्जेक्ट लॉक हैं
 state-major-minor = प्रमुख { $major } · गौण { $minor }
@@ -2275,6 +2283,7 @@ state-remove-block-model = ब्लॉक मॉडल निकालें
 state-remove-drillholes = ड्रिल होल निकालें
 state-remove-point-cloud = पॉइंट क्लाउड निकालें
 state-remove-raster = रास्टर निकालें
+state-remove-prismoid-grid = प्रिज़्मॉइड ग्रिड निकालें
 state-remove-triangulation = त्रिभुजीकरण निकालें
 state-removed-from-active-triangulation = सक्रिय त्रिकोणन से हटाया गया
 state-removed-from-every-triangulation = प्रत्येक त्रिकोणन से हटाया गया
@@ -2339,6 +2348,7 @@ state-unload-drillholes = ड्रिल होल अनलोड करें
 state-unload-layer = लेयर अनलोड करें
 state-unload-point-cloud = पॉइंट क्लाउड अनलोड करें
 state-unload-raster = रास्टर अनलोड करें
+state-unload-prismoid-grid = प्रिज़्मॉइड ग्रिड अनलोड करें
 state-unload-triangulation = त्रिभुजीकरण अनलोड करें
 state-untitled-project = शीर्षकहीन प्रोजेक्ट
 state-use-typed-radius = दर्ज त्रिज्या उपयोग करें

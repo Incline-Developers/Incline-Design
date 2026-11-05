@@ -150,6 +150,7 @@ tri-count-objects =
 
 ## ترجمه‌های رابط کاربری تکمیل‌شده به‌صورت دستی
 explorer-no-rasters = رستری وجود ندارد
+explorer-no-prismoid-grids = شبکه منشورگونی وجود ندارد
 slice-viewport-gestures = کشیدن با دکمه میانی: پن · کشیدن با دکمه راست: چرخش مداری · Shift+چرخ: راه رفتن · W/S: جابه‌جایی برش · Q/E: چرخاندن · Esc: خروج
 
 ## جزئیات محیط راه‌اندازی
@@ -208,6 +209,7 @@ survey-scale = ضریب مقیاس یکنواخت XYZ
 survey-invalid-transform = مبداها، زاویه و مختصات حاصل باید متناهی باشند.
 survey-invalid-scale = مقیاس باید عددی مثبت و متناهی با معکوس متناهی باشد.
 survey-empty-selection = حداقل یک مورد پشتیبانی‌شده برای تبدیل انتخاب کنید.
+survey-prismoid-grid-selection = شبکه‌های منشورگون هنوز بین سامانه‌های مختصات قابل جابه‌جایی نیستند؛ آن‌ها را از انتخاب خارج کنید.
 survey-unavailable = یک مورد انتخاب‌شده گم شده یا بارگذاری نشده است. پیش از تبدیل، آن را بارگذاری کنید.
 survey-wrong-project = فقط طرح‌ها را از پروژه فعال انتخاب کنید.
 survey-name-required = نامی برای سامانه مختصات وارد کنید.
@@ -705,7 +707,6 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: مبدأ پروژ
 cmd-omf-crs-differs = { $source_name }: دستگاه مختصات «{ $source_crs }» با CRS پروژه «{ $target_crs }» تفاوت دارد؛ مختصات بدون بازفرافکنی ادغام شدند
 cmd-omf-source-name-units-source-units = { $source_name }: واحدهای «{ $source_units }» با واحدهای پروژه «{ $target_units }» تفاوت دارند؛ مختصات بدون تبدیل ادغام شدند
 cmd-omf-source-name-warning = { $source_name }: { $warning }
-cmd-omf-prismoid-grids-not-exported = { $count } شبکه منشورگون در فایل پروژه می‌ماند و صادر نشد
 cmd-omf-there-no-open-incline-design = داده‌ای باز از Incline Design برای صادر کردن وجود ندارد
 cmd-placement-2-vertices = ۲ رأس
 cmd-placement-count-vertices = { $count } رأس
@@ -1119,6 +1120,8 @@ common-point-clouds = ابرهای نقاط
 common-polyline = چندخطی
 common-polyline-layer = چندخطی روی «{ $layer }»
 common-project = پروژه
+common-prismoid-grids = شبکه‌های منشورگون
+common-prismoid-grid = شبکه منشورگون
 common-rasters = رسترها
 common-redo = ازنو
 common-reference-points = نقاط مرجع...
@@ -1672,6 +1675,10 @@ explorer-raster-id =
     { $driver } · { $width } × { $height }
     { $projection }
 explorer-id-triangulation-id-source = شناسه: triangulation:{ $id }{ $source }
+explorer-prismoid-grid-id =
+    شناسه: prismoid_grid:{ $id }{ $source }
+    { $columns } × { $rows } سلول، { $active } فعال
+explorer-prismoid-grid-thickness = ضخامت عمودی از { $min } تا { $max }
 explorer-load = بارگذاری
 explorer-lock = قفل
 explorer-new-collection = مجموعه جدید
@@ -2246,6 +2253,7 @@ state-load-drillholes = بارگذاری گمانه‌ها
 state-load-layer = بارگذاری لایه
 state-load-point-cloud = بارگذاری ابر نقاط
 state-load-raster = بارگذاری رستر
+state-load-prismoid-grid = بارگذاری شبکه منشورگون
 state-load-triangulation = بارگذاری مثلث‌بندی
 state-locked-count-object-s = { $count } شیء قفل‌شده
 state-major-minor = اصلی { $major } · فرعی { $minor }
@@ -2275,6 +2283,7 @@ state-remove-block-model = حذف مدل بلوکی
 state-remove-drillholes = حذف گمانه‌ها
 state-remove-point-cloud = حذف ابر نقاط
 state-remove-raster = حذف رستر
+state-remove-prismoid-grid = حذف شبکه منشورگون
 state-remove-triangulation = حذف مثلث‌بندی
 state-removed-from-active-triangulation = از مثلث‌بندی فعال حذف شد
 state-removed-from-every-triangulation = از همه مثلث‌بندی‌ها حذف شد
@@ -2339,6 +2348,7 @@ state-unload-drillholes = تخلیه گمانه‌ها
 state-unload-layer = تخلیه لایه
 state-unload-point-cloud = تخلیه ابر نقاط
 state-unload-raster = تخلیه رستر
+state-unload-prismoid-grid = تخلیه شبکه منشورگون
 state-unload-triangulation = تخلیه مثلث‌بندی
 state-untitled-project = پروژه بدون عنوان
 state-use-typed-radius = استفاده از شعاع واردشده

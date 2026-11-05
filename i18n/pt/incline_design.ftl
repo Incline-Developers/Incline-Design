@@ -148,6 +148,7 @@ tri-count-objects =
 ## Reused existing project translations
 
 explorer-no-rasters = Nenhum raster
+explorer-no-prismoid-grids = Nenhuma grade de prismoides
 slice-viewport-gestures = arrastar botão do meio: deslocar · arrastar botão direito: orbitar · Shift+roda: caminhar · W/S: mover fatia · Q/E: rodar · Esc: sair
 
 ## Detalhes do ambiente de inicialização
@@ -206,6 +207,7 @@ survey-scale = Fator de escala XYZ uniforme
 survey-invalid-transform = As origens, o ângulo e as coordenadas resultantes devem ser finitos.
 survey-invalid-scale = A escala deve ser um número positivo finito com recíproco finito.
 survey-empty-selection = Selecione pelo menos um item suportado para transformar.
+survey-prismoid-grid-selection = As grades de prismoides ainda não podem ser movidas entre sistemas de coordenadas; deixe-as fora da seleção.
 survey-unavailable = Um item selecionado está em falta ou não carregado. Carregue-o antes de transformar.
 survey-wrong-project = Selecione desenhos apenas do projeto ativo.
 survey-name-required = Introduza um nome para o sistema de coordenadas.
@@ -703,7 +705,6 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: a origem do proje
 cmd-omf-crs-differs = { $source_name }: o sistema de referência «{ $source_crs }» difere do SRC do projeto «{ $target_crs }»; as coordenadas foram combinadas sem reprojeção
 cmd-omf-source-name-units-source-units = { $source_name }: as unidades «{ $source_units }» diferem das unidades do projeto «{ $target_units }»; as coordenadas foram combinadas sem conversão
 cmd-omf-source-name-warning = { $source_name }: { $warning }
-cmd-omf-prismoid-grids-not-exported = { $count } grade(s) de prismoides permanecem no arquivo do projeto e não foram exportadas
 cmd-omf-there-no-open-incline-design = Não há dados abertos do Incline Design para exportar
 cmd-placement-2-vertices = 2 vértices
 cmd-placement-count-vertices = { $count } vértices
@@ -1117,6 +1118,8 @@ common-point-clouds = Nuvens de pontos
 common-polyline = Polilinha
 common-polyline-layer = Polilinha em '{ $layer }'
 common-project = Projeto
+common-prismoid-grids = Grades de prismoides
+common-prismoid-grid = Grade de prismoides
 common-rasters = Rasters
 common-redo = Refazer
 common-reference-points = Pontos de referência...
@@ -1670,6 +1673,10 @@ explorer-raster-id =
     { $driver } · { $width } × { $height }
     { $projection }
 explorer-id-triangulation-id-source = ID: triangulação:{ $id }{ $source }
+explorer-prismoid-grid-id =
+    ID: prismoid_grid:{ $id }{ $source }
+    { $columns } × { $rows } células, { $active } ativas
+explorer-prismoid-grid-thickness = Espessura vertical de { $min } a { $max }
 explorer-load = Carregar
 explorer-lock = Bloquear
 explorer-new-collection = Nova coleção
@@ -2244,6 +2251,7 @@ state-load-drillholes = Carregar furos de sondagem
 state-load-layer = Carregar camada
 state-load-point-cloud = Carregar nuvem de pontos
 state-load-raster = Carregar raster
+state-load-prismoid-grid = Carregar grade de prismoides
 state-load-triangulation = Carregar triangulação
 state-locked-count-object-s = { $count } objeto(s) bloqueado(s)
 state-major-minor = Principal { $major } · secundário { $minor }
@@ -2273,6 +2281,7 @@ state-remove-block-model = Remover o modelo de blocos
 state-remove-drillholes = Remover furos de sondagem
 state-remove-point-cloud = Remover a nuvem de pontos
 state-remove-raster = Remover o raster
+state-remove-prismoid-grid = Remover a grade de prismoides
 state-remove-triangulation = Remover a triangulação
 state-removed-from-active-triangulation = Removido da triangulação ativa
 state-removed-from-every-triangulation = Removido de todas as triangulações
@@ -2337,6 +2346,7 @@ state-unload-drillholes = Descarregar furos de sondagem
 state-unload-layer = Descarregar camada
 state-unload-point-cloud = Descarregar nuvem de pontos
 state-unload-raster = Descarregar raster
+state-unload-prismoid-grid = Descarregar grade de prismoides
 state-unload-triangulation = Descarregar triangulação
 state-untitled-project = Projeto sem título
 state-use-typed-radius = Usar o raio introduzido

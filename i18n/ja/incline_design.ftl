@@ -185,6 +185,7 @@ status-clip = クリップ near/far/Δ: { $near } / { $far } / { $delta } m
 status-points = 点: { $drawn } / { $target }（全 { $total }、チャンク { $drawn_chunks }/{ $total_chunks }）
 
 explorer-no-rasters = ラスターがありません
+explorer-no-prismoid-grids = プリズモイドグリッドがありません
 slice-viewport-gestures = 中ボタンドラッグ：パン · 右ボタンドラッグ：オービット · Shift+ホイール：歩行 · W/S：スラブ移動 · Q/E：回転 · Esc：終了
 
 ## Startup environment details
@@ -237,6 +238,7 @@ survey-scale = 均一XYZスケール係数
 survey-invalid-transform = 原点、角度、および結果の座標は有限でなければなりません。
 survey-invalid-scale = スケールは有限の正の数で、逆数も有限でなければなりません。
 survey-empty-selection = 変換する対応アイテムを少なくとも1つ選択してください。
+survey-prismoid-grid-selection = プリズモイドグリッドはまだ座標系間で移動できません。選択から外してください。
 survey-unavailable = 選択したアイテムが見つからないか、読み込まれていません。変換前に読み込んでください。
 survey-wrong-project = アクティブなプロジェクトからのみデザインを選択してください。
 survey-name-required = 座標系の名前を入力してください。
@@ -733,7 +735,6 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: 統合前にプ�
 cmd-omf-crs-differs = { $source_name }: 座標参照系「{ $source_crs }」がプロジェクトの座標参照系「{ $target_crs }」と異なります。座標は再投影せずに統合されました
 cmd-omf-source-name-units-source-units = { $source_name }: 単位「{ $source_units }」がプロジェクトの単位「{ $target_units }」と異なります。座標は変換せずに統合されました
 cmd-omf-source-name-warning = { $source_name }: { $warning }
-cmd-omf-prismoid-grids-not-exported = { $count } 個のプリズモイドグリッドはプロジェクトファイルに残り、エクスポートされませんでした
 cmd-omf-there-no-open-incline-design = エクスポートする Incline Design のデータが開かれていません
 cmd-placement-2-vertices = 頂点2個
 cmd-placement-count-vertices = { $count } 個の頂点
@@ -1147,6 +1148,8 @@ common-point-clouds = 点群
 common-polyline = ポリライン
 common-polyline-layer = ポリライン（レイヤー「{ $layer }」）
 common-project = プロジェクト
+common-prismoid-grids = プリズモイドグリッド
+common-prismoid-grid = プリズモイドグリッド
 common-rasters = ラスター
 common-redo = やり直し
 common-reference-points = 基準点...
@@ -1700,6 +1703,10 @@ explorer-raster-id =
     { $driver } · { $width } × { $height }
     { $projection }
 explorer-id-triangulation-id-source = ID: triangulation:{ $id }{ $source }
+explorer-prismoid-grid-id =
+    ID: prismoid_grid:{ $id }{ $source }
+    { $columns } × { $rows } セル、{ $active } 個が有効
+explorer-prismoid-grid-thickness = 鉛直厚さ { $min } から { $max }
 explorer-load = 読み込み
 explorer-lock = ロック
 explorer-new-collection = 新しいコレクション
@@ -2274,6 +2281,7 @@ state-load-drillholes = 削孔データを読み込み
 state-load-layer = レイヤーを読み込み
 state-load-point-cloud = 点群を読み込み
 state-load-raster = ラスターを読み込み
+state-load-prismoid-grid = プリズモイドグリッドを読み込み
 state-load-triangulation = 三角網を読み込み
 state-locked-count-object-s = { $count } 個のオブジェクトをロックしました
 state-major-minor = 主 { $major } · 副 { $minor }
@@ -2303,6 +2311,7 @@ state-remove-block-model = ブロックモデルを削除
 state-remove-drillholes = 削孔データを削除
 state-remove-point-cloud = 点群を削除
 state-remove-raster = ラスターを削除
+state-remove-prismoid-grid = プリズモイドグリッドを削除
 state-remove-triangulation = 三角網を削除
 state-removed-from-active-triangulation = アクティブな三角網から削除しました
 state-removed-from-every-triangulation = すべての三角網から削除しました
@@ -2367,6 +2376,7 @@ state-unload-drillholes = 削孔データを解放
 state-unload-layer = レイヤーを解放
 state-unload-point-cloud = 点群を解放
 state-unload-raster = ラスターをアンロード
+state-unload-prismoid-grid = プリズモイドグリッドをアンロード
 state-unload-triangulation = 三角網をアンロード
 state-untitled-project = 無題のプロジェクト
 state-use-typed-radius = 入力した半径を使用

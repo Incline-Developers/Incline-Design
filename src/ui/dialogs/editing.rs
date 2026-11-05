@@ -70,6 +70,7 @@ fn canvas_context_menu_title(editor: &EditorState, document: &Document) -> Strin
             SceneEntityId::DrillHole(_) => (tr!("edit-drill-hole"), false),
             SceneEntityId::PointCloud(_) => (tr!("ws-menubar-point-cloud"), false),
             SceneEntityId::Raster(_) => (tr!("ws-menubar-raster"), false),
+            SceneEntityId::PrismoidGrid(_) => (tr!("common-prismoid-grid"), false),
             SceneEntityId::HaulRoad(_) => (tr!("haul-road"), false),
             SceneEntityId::HaulNode(_) => (tr!("haul-node"), false),
         };

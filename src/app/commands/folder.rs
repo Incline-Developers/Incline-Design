@@ -136,6 +136,7 @@ impl<'a> App<'a> {
                 ItemRef::BlockModel(id) => SceneEntityId::BlockModel(id),
                 ItemRef::DrillHole(id) => SceneEntityId::DrillHole(id),
                 ItemRef::Raster(id) => SceneEntityId::Raster(id),
+                ItemRef::PrismoidGrid(id) => SceneEntityId::PrismoidGrid(id),
             };
             self.editor.selected_handles.remove(&entity);
             self.editor.hidden_handles.remove(&entity);
@@ -181,8 +182,15 @@ impl<'a> App<'a> {
         let rasters = self.raster_textures.iter().filter(|item| in_folder(&item.state)).map(|item| ItemRef::Raster(item.id));
         let point_clouds = self.point_clouds.iter().filter(|item| in_folder(&item.state)).map(|item| ItemRef::PointCloud(item.id));
         let block_models = self.block_models.iter().filter(|item| in_folder(&item.state)).map(|item| ItemRef::BlockModel(item.id));
+        let prismoid_grids = self.prismoid_grids.iter().filter(|item| in_folder(&item.state)).map(|item| ItemRef::PrismoidGrid(item.id));
         let drill_holes = self.drill_holes.iter().filter(|item| in_folder(&item.state)).map(|item| ItemRef::DrillHole(item.id));
-        triangulations.chain(rasters).chain(point_clouds).chain(block_models).chain(drill_holes).collect()
+        triangulations
+            .chain(rasters)
+            .chain(point_clouds)
+            .chain(block_models)
+            .chain(prismoid_grids)
+            .chain(drill_holes)
+            .collect()
     }
 
     /// Rename an explorer folder through the undo history. Blank names and a

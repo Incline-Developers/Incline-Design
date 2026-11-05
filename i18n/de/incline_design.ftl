@@ -191,6 +191,7 @@ status-clip = Clip nah/fern/Δ: { $near } / { $far } / { $delta } m
 status-points = Punkte: { $drawn } / { $target } von { $total } ({ $drawn_chunks }/{ $total_chunks } Chunks)
 
 explorer-no-rasters = Keine Raster
+explorer-no-prismoid-grids = Keine Prismoidgitter
 slice-viewport-gestures = Mittlere Taste ziehen: Schwenken · Rechte Taste ziehen: Orbit · Umschalt+Rad: Gehen · W/S: Schicht bewegen · Q/E: Drehen · Esc: Beenden
 
 ## Startumgebungsdetails
@@ -249,6 +250,7 @@ survey-scale = Einheitlicher XYZ-Skalierungsfaktor
 survey-invalid-transform = Ursprünge, Winkel und resultierende Koordinaten müssen endlich sein.
 survey-invalid-scale = Der Maßstab muss eine endliche positive Zahl mit endlichem Kehrwert sein.
 survey-empty-selection = Mindestens ein unterstütztes Element zum Transformieren auswählen.
+survey-prismoid-grid-selection = Prismoidgitter können noch nicht zwischen Koordinatensystemen verschoben werden; nehmen Sie sie aus der Auswahl heraus.
 survey-unavailable = Ein ausgewähltes Element fehlt oder ist nicht geladen. Vor der Transformation laden.
 survey-wrong-project = Nur Designs aus dem aktiven Projekt auswählen.
 survey-name-required = Namen für das Koordinatensystem eingeben.
@@ -746,7 +748,6 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: Projektursprung {
 cmd-omf-crs-differs = { $source_name }: Koordinatenreferenzsystem '{ $source_crs }' unterscheidet sich vom Projekt-KRS '{ $target_crs }'; Koordinaten wurden ohne Umprojektion zusammengeführt
 cmd-omf-source-name-units-source-units = { $source_name }: Einheiten '{ $source_units }' unterscheiden sich von den Projekteinheiten '{ $target_units }'; Koordinaten wurden ohne Umrechnung zusammengeführt
 cmd-omf-source-name-warning = { $source_name }: { $warning }
-cmd-omf-prismoid-grids-not-exported = { $count } Prismoidgitter bleiben in der Projektdatei und wurden nicht exportiert
 cmd-omf-there-no-open-incline-design = Es gibt keine offenen Incline-Design-Daten zum Exportieren
 cmd-placement-2-vertices = 2 Eckpunkte
 cmd-placement-count-vertices = { $count } Eckpunkte
@@ -1160,6 +1161,8 @@ common-point-clouds = Punktwolken
 common-polyline = Polylinie
 common-polyline-layer = Polylinie auf '{ $layer }'
 common-project = Projekt
+common-prismoid-grids = Prismoidgitter
+common-prismoid-grid = Prismoidgitter
 common-rasters = Raster
 common-redo = Wiederholen
 common-reference-points = Referenzpunkte...
@@ -1713,6 +1716,10 @@ explorer-raster-id =
     { $driver } · { $width } × { $height }
     { $projection }
 explorer-id-triangulation-id-source = ID: triangulation:{ $id }{ $source }
+explorer-prismoid-grid-id =
+    ID: prismoid_grid:{ $id }{ $source }
+    { $columns } × { $rows } Zellen, { $active } aktiv
+explorer-prismoid-grid-thickness = Vertikale Mächtigkeit { $min } bis { $max }
 explorer-load = Laden
 explorer-lock = Sperren
 explorer-new-collection = Neue Sammlung
@@ -2287,6 +2294,7 @@ state-load-drillholes = Bohrlöcher laden
 state-load-layer = Ebene laden
 state-load-point-cloud = Punktwolke laden
 state-load-raster = Raster laden
+state-load-prismoid-grid = Prismoidgitter laden
 state-load-triangulation = Triangulation laden
 state-locked-count-object-s = { $count } Objekt(e) gesperrt
 state-major-minor = Hauptlinie { $major } · Nebenlinie { $minor }
@@ -2316,6 +2324,7 @@ state-remove-block-model = Blockmodell entfernen
 state-remove-drillholes = Bohrlöcher entfernen
 state-remove-point-cloud = Punktwolke entfernen
 state-remove-raster = Raster entfernen
+state-remove-prismoid-grid = Prismoidgitter entfernen
 state-remove-triangulation = Triangulation entfernen
 state-removed-from-active-triangulation = Aus aktiver Triangulation entfernt
 state-removed-from-every-triangulation = Aus jeder Triangulation entfernt
@@ -2380,6 +2389,7 @@ state-unload-drillholes = Bohrlöcher entladen
 state-unload-layer = Ebene entladen
 state-unload-point-cloud = Punktwolke entladen
 state-unload-raster = Raster entladen
+state-unload-prismoid-grid = Prismoidgitter entladen
 state-unload-triangulation = Triangulation entladen
 state-untitled-project = Unbenanntes Projekt
 state-use-typed-radius = Eingegebenen Radius verwenden

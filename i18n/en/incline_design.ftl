@@ -202,6 +202,7 @@ status-clip = Clip near/far/Δ: { $near } / { $far } / { $delta } m
 status-points = Points: { $drawn } / { $target } of { $total } ({ $drawn_chunks }/{ $total_chunks } chunks)
 
 explorer-no-rasters = No rasters
+explorer-no-prismoid-grids = No prismoid grids
 slice-viewport-gestures = middle-drag pan · right-drag orbit · Shift+wheel walk · W/S move slab · Q/E rotate · Esc exit
 
 ## Startup environment details
@@ -681,6 +682,7 @@ haul-node = Node
 haul-invalid-position = Enter a finite road position.
 haul-missing-road = This road or shape point no longer exists.
 haul-survey-selection = Select design geometry for coordinate transformation; haul roads are edited in Haulage.
+survey-prismoid-grid-selection = Prismoid grids cannot be moved between coordinate systems yet; leave them out of the selection.
 haul-new-stockpile = New stockpile here
 haul-new-dump = New dump here
 haul-new-crusher = New crusher here
@@ -1486,7 +1488,6 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: applied project o
 cmd-omf-crs-differs = { $source_name }: coordinate reference system '{ $source_crs }' differs from project CRS '{ $target_crs }'; coordinates were merged without reprojection
 cmd-omf-source-name-units-source-units = { $source_name }: units '{ $source_units }' differ from project units '{ $target_units }'; coordinates were merged without conversion
 cmd-omf-source-name-warning = { $source_name }: { $warning }
-cmd-omf-prismoid-grids-not-exported = { $count } prismoid grid(s) stay in the project file and were not exported
 cmd-omf-there-no-open-incline-design = There is no open Incline Design data to export
 cmd-placement-2-vertices = 2 vertices
 cmd-placement-count-vertices = { $count } vertices
@@ -2887,6 +2888,8 @@ common-point-clouds = Point Clouds
 common-polyline = Polyline
 common-polyline-layer = Polyline on '{ $layer }'
 common-project = Project
+common-prismoid-grids = Prismoid Grids
+common-prismoid-grid = Prismoid Grid
 common-rasters = Rasters
 common-redo = Redo
 common-reference-points = Reference Points...
@@ -3459,6 +3462,10 @@ explorer-raster-id =
     { $driver } · { $width } × { $height }
     { $projection }
 explorer-id-triangulation-id-source = ID: triangulation:{ $id }{ $source }
+explorer-prismoid-grid-id =
+    ID: prismoid_grid:{ $id }{ $source }
+    { $columns } × { $rows } cells, { $active } active
+explorer-prismoid-grid-thickness = Vertical thickness { $min } to { $max }
 explorer-hide = Hide
 explorer-load = Load
 explorer-lock = Lock
@@ -4061,6 +4068,7 @@ state-load-drillholes = Load Drillholes
 state-load-layer = Load Layer
 state-load-point-cloud = Load Point Cloud
 state-load-raster = Load Raster
+state-load-prismoid-grid = Load Prismoid Grid
 state-load-triangulation = Load Triangulation
 state-locked-count-object-s = Locked { $count } object(s)
 state-major-minor = Major { $major } · minor { $minor }
@@ -4090,6 +4098,7 @@ state-remove-block-model = Remove Block Model
 state-remove-drillholes = Remove Drillholes
 state-remove-point-cloud = Remove Point Cloud
 state-remove-raster = Remove Raster
+state-remove-prismoid-grid = Remove Prismoid Grid
 state-remove-triangulation = Remove Triangulation
 state-removed-from-active-triangulation = Removed from active triangulation
 state-removed-from-every-triangulation = Removed from every triangulation
@@ -4156,6 +4165,7 @@ state-unload-drillholes = Unload Drillholes
 state-unload-layer = Unload Layer
 state-unload-point-cloud = Unload Point Cloud
 state-unload-raster = Unload Raster
+state-unload-prismoid-grid = Unload Prismoid Grid
 state-unload-triangulation = Unload Triangulation
 state-untitled-project = Untitled project
 state-use-typed-radius = Use typed radius

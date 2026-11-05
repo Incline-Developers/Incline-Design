@@ -192,6 +192,7 @@ status-points = Noktalar: { $drawn } / { $target } (toplam { $total }) ({ $drawn
 ## Kaynak sabit metinler
 
 explorer-no-rasters = Raster yok
+explorer-no-prismoid-grids = Prizmoid ızgarası yok
 slice-viewport-gestures = orta tuşla sürükle: kaydır · sağ tuşla sürükle: döndür · Shift+tekerlek: yürü · W/S: dilimi taşı · Q/E: döndür · Esc: çık
 
 ## Startup environment details
@@ -250,6 +251,7 @@ survey-scale = Tekdüze XYZ ölçek faktörü
 survey-invalid-transform = Başlangıç noktaları, açı ve sonuçtaki koordinatlar sonlu olmalıdır.
 survey-invalid-scale = Ölçek, sonlu tersi olan sonlu bir pozitif sayı olmalıdır.
 survey-empty-selection = Dönüştürmek için en az bir desteklenen öge seçin.
+survey-prismoid-grid-selection = Prizmoid ızgaraları henüz koordinat sistemleri arasında taşınamaz; bunları seçimin dışında bırakın.
 survey-unavailable = Seçilen bir öge eksik veya yüklenmemiş. Dönüştürmeden önce yükleyin.
 survey-wrong-project = Yalnızca etkin projeden tasarım seçin.
 survey-name-required = Bir koordinat sistemi adı girin.
@@ -747,7 +749,6 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: birleştirmeden �
 cmd-omf-crs-differs = { $source_name }: koordinat referans sistemi '{ $source_crs }', proje CRS'sinden '{ $target_crs }' farklı; koordinatlar yeniden izdüşümlenmeden birleştirildi
 cmd-omf-source-name-units-source-units = { $source_name }: birimler '{ $source_units }', proje birimlerinden '{ $target_units }' farklı; koordinatlar dönüştürülmeden birleştirildi
 cmd-omf-source-name-warning = { $source_name }: { $warning }
-cmd-omf-prismoid-grids-not-exported = { $count } prizmoid ızgarası proje dosyasında kalır ve dışa aktarılmadı
 cmd-omf-there-no-open-incline-design = Dışa aktarılacak açık Incline Design verisi yok
 cmd-placement-2-vertices = 2 köşe
 cmd-placement-count-vertices = { $count } köşe
@@ -1161,6 +1162,8 @@ common-point-clouds = Nokta Bulutları
 common-polyline = Çoklu çizgi
 common-polyline-layer = '{ $layer }' üzerindeki çoklu çizgi
 common-project = Proje
+common-prismoid-grids = Prizmoid Izgaraları
+common-prismoid-grid = Prizmoid Izgarası
 common-rasters = Rasterler
 common-redo = Yinele
 common-reference-points = Referans Noktaları...
@@ -1714,6 +1717,10 @@ explorer-raster-id =
     { $driver } · { $width } × { $height }
     { $projection }
 explorer-id-triangulation-id-source = ID: triangulation:{ $id }{ $source }
+explorer-prismoid-grid-id =
+    ID: prismoid_grid:{ $id }{ $source }
+    { $columns } × { $rows } hücre, { $active } etkin
+explorer-prismoid-grid-thickness = Dikey kalınlık { $min } ile { $max } arası
 explorer-load = Yükle
 explorer-lock = Kilitle
 explorer-new-collection = Yeni Koleksiyon
@@ -2288,6 +2295,7 @@ state-load-drillholes = Sondaj Deliklerini Yükle
 state-load-layer = Katman Yükle
 state-load-point-cloud = Nokta Bulutu Yükle
 state-load-raster = Raster Yükle
+state-load-prismoid-grid = Prizmoid Izgarasını Yükle
 state-load-triangulation = Üçgenleme Yükle
 state-locked-count-object-s = { $count } nesne kilitlendi
 state-major-minor = Ana { $major } · ara { $minor }
@@ -2317,6 +2325,7 @@ state-remove-block-model = Blok Modeli Kaldır
 state-remove-drillholes = Sondaj Deliklerini Kaldır
 state-remove-point-cloud = Nokta Bulutunu Kaldır
 state-remove-raster = Rasteri Kaldır
+state-remove-prismoid-grid = Prizmoid Izgarasını Kaldır
 state-remove-triangulation = Üçgenlemeyi Kaldır
 state-removed-from-active-triangulation = Etkin üçgenlemeden kaldırıldı
 state-removed-from-every-triangulation = Tüm üçgenlemelerden kaldırıldı
@@ -2381,6 +2390,7 @@ state-unload-drillholes = Sondaj Deliklerini Kaldır
 state-unload-layer = Katmanı Kaldır
 state-unload-point-cloud = Nokta Bulutunu Kaldır
 state-unload-raster = Rasteri Kaldır
+state-unload-prismoid-grid = Prizmoid Izgarasını Boşalt
 state-unload-triangulation = Üçgenlemeyi Kaldır
 state-untitled-project = Adsız proje
 state-use-typed-radius = Girilen yarıçapı kullan

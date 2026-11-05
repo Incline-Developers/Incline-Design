@@ -551,6 +551,7 @@ impl<'a> App<'a> {
             // Nothing to enclose: a raster is painted onto a surface rather
             // than occupying the scene, so a marquee never produces one.
             SceneEntityId::Raster(_) => false,
+            SceneEntityId::PrismoidGrid(_) => false,
             SceneEntityId::HaulRoad(id) => !objects_only && self.workspace.active_document().is_some_and(|d| d.haulage().road(*id).is_some()),
             SceneEntityId::HaulNode(id) => !objects_only && self.workspace.active_document().is_some_and(|d| d.haulage().node(*id).is_some()),
         });

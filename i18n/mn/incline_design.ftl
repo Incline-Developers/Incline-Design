@@ -197,6 +197,7 @@ status-points = Цэгүүд: { $drawn } / { $target } ({ $total }-с) ({ $drawn
 ## Нэмэлт эх кодын шууд мөрүүд
 
 explorer-no-rasters = Растер алга
+explorer-no-prismoid-grids = Призмоид тор алга
 slice-viewport-gestures = дунд товч чирж зөөх · баруун товч чирж тойрох · Shift+хулганы дугуй алхах · W/S давхарга зөөх · Q/E эргүүлэх · Esc гарах
 
 ## Эхлэлийн орчны дэлгэрэнгүй
@@ -259,6 +260,7 @@ survey-scale = Нэгдсэн XYZ масштабын коэффициент
 survey-invalid-transform = Эх цэг, өнцөг болон гарсан координатууд төгсгөлөг байх ёстой.
 survey-invalid-scale = Масштаб нь төгсгөлөг эерэг тоо байх ёстой бөгөөд түүний урвуу тоо ч төгсгөлөг байх ёстой.
 survey-empty-selection = Хувиргах дор хаяж нэг дэмжигдсэн зүйлийг сонгоно уу.
+survey-prismoid-grid-selection = Призмоид торыг координатын систем хооронд зөөх боломж хараахан алга; сонголтоос хасна уу.
 survey-unavailable = Сонгосон зүйл алга байна эсвэл ачаалагдаагүй байна. Хувиргахаас өмнө ачаална уу.
 survey-wrong-project = Зөвхөн идэвхтэй төслөөс зураг төсөл сонгоно уу.
 survey-name-required = Координатын системийн нэрийг оруулна уу.
@@ -756,7 +758,6 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: нэгтгэхи�
 cmd-omf-crs-differs = { $source_name }: координатын лавлагаа систем '{ $source_crs }' нь төслийн '{ $target_crs }' системээс ялгаатай байна; координатыг дахин проекцлолгүй нэгтгэлээ
 cmd-omf-source-name-units-source-units = { $source_name }: нэгж '{ $source_units }' нь төслийн '{ $target_units }' нэгжээс ялгаатай байна; координатыг хөрвүүлэлгүй нэгтгэлээ
 cmd-omf-source-name-warning = { $source_name }: { $warning }
-cmd-omf-prismoid-grids-not-exported = { $count } призмоид тор төслийн файлд үлдэж, экспортлогдсонгүй
 cmd-omf-there-no-open-incline-design = Экспортлох Incline Design өгөгдөл нээлттэй байхгүй байна
 cmd-placement-2-vertices = 2 орой цэг
 cmd-placement-count-vertices = { $count } орой цэг
@@ -1170,6 +1171,8 @@ common-point-clouds = Цэгэн үүлүүд
 common-polyline = Полилиниа
 common-polyline-layer = '{ $layer }' дээрх полилиниа
 common-project = Төсөл
+common-prismoid-grids = Призмоид торууд
+common-prismoid-grid = Призмоид тор
 common-rasters = Растерууд
 common-redo = Дахин хийх
 common-reference-points = Лавлах цэгүүд...
@@ -1723,6 +1726,10 @@ explorer-raster-id =
     { $driver } · { $width } × { $height }
     { $projection }
 explorer-id-triangulation-id-source = ID: triangulation:{ $id }{ $source }
+explorer-prismoid-grid-id =
+    ID: prismoid_grid:{ $id }{ $source }
+    { $columns } × { $rows } нүд, { $active } идэвхтэй
+explorer-prismoid-grid-thickness = Босоо зузаан { $min }-аас { $max }
 explorer-load = Ачаалах
 explorer-lock = Түгжих
 explorer-new-collection = Шинэ цуглуулга
@@ -2297,6 +2304,7 @@ state-load-drillholes = Цооног ачаалах
 state-load-layer = Давхарга ачаалах
 state-load-point-cloud = Цэгэн үүл ачаалах
 state-load-raster = Растер ачаалах
+state-load-prismoid-grid = Призмоид тор ачаалах
 state-load-triangulation = Триангуляц ачаалах
 state-locked-count-object-s = { $count } объектыг түгжлээ
 state-major-minor = Гол { $major } · туслах { $minor }
@@ -2326,6 +2334,7 @@ state-remove-block-model = Блокийн загвар устгах
 state-remove-drillholes = Цооног устгах
 state-remove-point-cloud = Цэгэн үүл устгах
 state-remove-raster = Растер устгах
+state-remove-prismoid-grid = Призмоид тор устгах
 state-remove-triangulation = Триангуляц устгах
 state-removed-from-active-triangulation = Идэвхтэй триангуляцаас устгагдсан
 state-removed-from-every-triangulation = Бүх триангуляцаас устгагдсан
@@ -2390,6 +2399,7 @@ state-unload-drillholes = Цооногуудыг буулгах
 state-unload-layer = Давхаргыг буулгах
 state-unload-point-cloud = Цэгэн үүлийг буулгах
 state-unload-raster = Растерыг буулгах
+state-unload-prismoid-grid = Призмоид торыг буулгах
 state-unload-triangulation = Триангуляцыг буулгах
 state-untitled-project = Нэргүй төсөл
 state-use-typed-radius = Бичсэн радиусыг ашиглах

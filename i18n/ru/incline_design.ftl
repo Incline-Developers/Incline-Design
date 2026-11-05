@@ -193,6 +193,7 @@ status-points = Точки: { $drawn } / { $target } из { $total } (фрагм
 
 ## Переводы интерфейса, выполненные вручную
 explorer-no-rasters = Нет растров
+explorer-no-prismoid-grids = Нет сеток призмоидов
 slice-viewport-gestures = перетаскивание средней кнопкой: панорама · перетаскивание правой кнопкой: орбита · Shift+колесо: перемещение · W/S: сдвиг слоя · Q/E: поворот · Esc: выход
 
 ## Сведения о среде запуска
@@ -259,6 +260,7 @@ survey-scale = Единый масштабный коэффициент XYZ
 survey-invalid-transform = Начала координат, угол и результирующие координаты должны быть конечными.
 survey-invalid-scale = Масштаб должен быть конечным положительным числом с конечной обратной величиной.
 survey-empty-selection = Выберите хотя бы один поддерживаемый элемент для преобразования.
+survey-prismoid-grid-selection = Сетки призмоидов пока нельзя переносить между системами координат; исключите их из выбора.
 survey-unavailable = Выбранный элемент отсутствует или не загружен. Загрузите его перед преобразованием.
 survey-wrong-project = Выбирайте проекты только из активного проекта.
 survey-name-required = Введите название системы координат.
@@ -757,7 +759,6 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: перед объ
 cmd-omf-crs-differs = { $source_name }: система координат «{ $source_crs }» отличается от системы координат проекта «{ $target_crs }»; координаты объединены без перепроецирования
 cmd-omf-source-name-units-source-units = { $source_name }: единицы «{ $source_units }» отличаются от единиц проекта «{ $target_units }»; координаты объединены без преобразования
 cmd-omf-source-name-warning = { $source_name }: { $warning }
-cmd-omf-prismoid-grids-not-exported = Сетки призмоидов ({ $count }) остаются в файле проекта и не были экспортированы
 cmd-omf-there-no-open-incline-design = Нет открытых данных Incline Design для экспорта
 cmd-placement-2-vertices = 2 вершины
 cmd-placement-count-vertices = { $count } вершин
@@ -1172,6 +1173,8 @@ common-point-clouds = Облака точек
 common-polyline = Полилиния
 common-polyline-layer = Полилиния на слое «{ $layer }»
 common-project = Проект
+common-prismoid-grids = Сетки призмоидов
+common-prismoid-grid = Сетка призмоидов
 common-rasters = Растры
 common-redo = Повторить
 common-reference-points = Опорные точки...
@@ -1725,6 +1728,10 @@ explorer-raster-id =
     { $driver } · { $width } × { $height }
     { $projection }
 explorer-id-triangulation-id-source = ID: triangulation:{ $id }{ $source }
+explorer-prismoid-grid-id =
+    ID: prismoid_grid:{ $id }{ $source }
+    { $columns } × { $rows } ячеек, активных: { $active }
+explorer-prismoid-grid-thickness = Вертикальная мощность от { $min } до { $max }
 explorer-load = Загрузить
 explorer-lock = Заблокировать
 explorer-new-collection = Новая коллекция
@@ -2300,6 +2307,7 @@ state-load-drillholes = Загрузить скважины
 state-load-layer = Загрузить слой
 state-load-point-cloud = Загрузить облако точек
 state-load-raster = Загрузить растр
+state-load-prismoid-grid = Загрузить сетку призмоидов
 state-load-triangulation = Загрузить триангуляцию
 state-locked-count-object-s = Заблокировано объектов: { $count }
 state-major-minor = Основной { $major } · вспомогательный { $minor }
@@ -2329,6 +2337,7 @@ state-remove-block-model = Удалить блочную модель
 state-remove-drillholes = Удалить скважины
 state-remove-point-cloud = Удалить облако точек
 state-remove-raster = Удалить растр
+state-remove-prismoid-grid = Удалить сетку призмоидов
 state-remove-triangulation = Удалить триангуляцию
 state-removed-from-active-triangulation = Удалено из активной триангуляции
 state-removed-from-every-triangulation = Удалено из всех триангуляций
@@ -2393,6 +2402,7 @@ state-unload-drillholes = Выгрузить скважины
 state-unload-layer = Выгрузить слой
 state-unload-point-cloud = Выгрузить облако точек
 state-unload-raster = Выгрузить растр
+state-unload-prismoid-grid = Выгрузить сетку призмоидов
 state-unload-triangulation = Выгрузить триангуляцию
 state-untitled-project = Проект без названия
 state-use-typed-radius = Использовать введённый радиус

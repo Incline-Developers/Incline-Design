@@ -35,7 +35,7 @@ use crate::{
             mesh_data::{Triangulation, Vertex},
         },
         point_cloud::{LoadedPointCloud, OpenPointCloud, prepare_for_render},
-        prismoid_grid::{CellValues, Lattice, OpenPrismoidGrid, PrismoidGrid},
+        prismoid_grid::{CellValues, Lattice, LoadedPrismoidGrid, OpenPrismoidGrid, PrismoidGrid},
         progress::Phase,
         project::{self, ModellingSettings, ProjectFile, ProjectMetadata},
         raster::{LoadedRasterTexture, OpenRasterTexture},
@@ -160,8 +160,6 @@ pub(crate) struct ProjectSnapshot {
     pub(crate) drill_holes: Vec<OpenDrillHoleDataset>,
     pub(crate) point_clouds: Vec<OpenPointCloud>,
     pub(crate) rasters: Vec<OpenRasterTexture>,
-    /// Only a save of the whole project carries them, until they have an
-    /// explorer row an export could tick.
     pub(crate) prismoid_grids: Vec<OpenPrismoidGrid>,
     /// Every explorer folder in the project, for every section. The single
     /// source of truth for export: `designs`'s own `ProjectFile::folders` is
@@ -306,6 +304,17 @@ pub(crate) struct ImportedRaster {
     pub(crate) section: SectionKind,
 }
 
+pub(crate) struct ImportedPrismoidGrid {
+    pub(crate) preferred_id: Option<u64>,
+    pub(crate) source_name: Option<String>,
+    pub(crate) source_format: Option<String>,
+    pub(crate) loaded: LoadedPrismoidGrid,
+    pub(crate) is_loaded: bool,
+    pub(crate) folder: Option<FolderId>,
+    /// The section this item is shown under, as its element recorded it.
+    pub(crate) section: SectionKind,
+}
+
 #[derive(Default)]
 pub(crate) struct ImportBundle {
     pub(crate) project_name: String,
@@ -318,7 +327,7 @@ pub(crate) struct ImportBundle {
     pub(crate) drill_holes: Vec<ImportedDrillHoles>,
     pub(crate) point_clouds: Vec<ImportedPointCloud>,
     pub(crate) rasters: Vec<ImportedRaster>,
-    pub(crate) prismoid_grids: Vec<OpenPrismoidGrid>,
+    pub(crate) prismoid_grids: Vec<ImportedPrismoidGrid>,
     /// Every explorer folder decoded so far, for every section. Populated
     /// from the OMF project record before any element is walked, so
     /// per-element membership below always resolves against it, and grown by
@@ -511,7 +520,10 @@ fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, compre
         progress.set_items(complete, total);
     }
     for prismoid_grid in &snapshot.prismoid_grids {
-        elements.push(write_prismoid_grid(&mut writer, prismoid_grid)?);
+        let mut element = write_prismoid_grid(&mut writer, prismoid_grid)?;
+        tag_folder(&mut element, &snapshot.folders, prismoid_grid.state.section, prismoid_grid.state.folder);
+        tag_section(&mut element, MemberKind::PrismoidGrid, prismoid_grid.state.section);
+        elements.push(element);
         complete += 1;
         progress.set_items(complete, total);
     }
@@ -1370,7 +1382,14 @@ fn write_prismoid_grid<W: Write + Seek + Send>(writer: &mut omf_crate::file::Wri
     let mut element = Element::new(open.name.clone(), omf_crate::Composite::new(parts));
     element.color = color;
     put(&mut element, META_KIND, "prismoid_grid");
-    put(&mut element, META_STYLE, json!({ "color": open.color }));
+    put_item_identity(
+        &mut element,
+        open.id.0,
+        open.state.source_name.as_deref(),
+        open.state.source_format.as_deref(),
+        "prismoid_grid",
+    );
+    put(&mut element, META_STYLE, json!({ "loaded": open.state.is_visible(), "color": open.color }));
     Ok(element)
 }
 
@@ -2223,8 +2242,18 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             }
             // One that breaks a rule opens as the plain surfaces it is made of.
             Some("prismoid_grid") => match self.read_prismoid_grid(element) {
-                Ok(prismoid_grid) => {
-                    self.bundle.prismoid_grids.push(prismoid_grid);
+                Ok(loaded) => {
+                    let section = self.element_section(element, MemberKind::PrismoidGrid);
+                    let folder = self.element_folder(element, section);
+                    self.bundle.prismoid_grids.push(ImportedPrismoidGrid {
+                        preferred_id: element_id(element),
+                        source_name: element_source_name(element),
+                        source_format: element_source_format(element),
+                        loaded,
+                        is_loaded: style_loaded(element.metadata.get(META_STYLE)),
+                        folder,
+                        section,
+                    });
                     return Ok(());
                 }
                 Err(error) => self
@@ -3416,7 +3445,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
 
     /// Rebuild a prismoid grid written by [`write_prismoid_grid`] from its
     /// roof, floor and mask; the outline is derived, so it is not read.
-    fn read_prismoid_grid(&mut self, element: &omf_crate::Element) -> Result<OpenPrismoidGrid> {
+    fn read_prismoid_grid(&mut self, element: &omf_crate::Element) -> Result<LoadedPrismoidGrid> {
         let name = element_name(element);
         let omf_crate::Geometry::Composite(composite) = &element.geometry else {
             bail!("Prismoid grid '{name}' is not a composite");
@@ -3475,9 +3504,10 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         };
         grid.check().with_context(|| format!("Prismoid grid '{name}'"))?;
         let style = element.metadata.get(META_STYLE);
-        Ok(OpenPrismoidGrid {
+        Ok(LoadedPrismoidGrid {
             name: name.to_owned(),
             color: style_value(style, "color").unwrap_or_else(|| element_color(element, [0.72, 0.72, 0.75, 1.0])),
+            summary: grid.summary(),
             grid: Arc::new(grid),
         })
     }

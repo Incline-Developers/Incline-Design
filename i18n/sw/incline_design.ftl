@@ -182,6 +182,7 @@ status-clip = Kata karibu/mbali/Δ: { $near } / { $far } / { $delta } m
 status-points = Vidokezo: { $drawn } / { $target } kati ya { $total } (vipande { $drawn_chunks }/{ $total_chunks })
 
 explorer-no-rasters = Hakuna rasta
+explorer-no-prismoid-grids = Hakuna gridi za prismoidi
 slice-viewport-gestures = buruta-katikati sogeza · buruta-kulia zunguka · Shift+gurudumu tembea · W/S hamisha bamba · Q/E zungusha · Esc toka
 
 ## Startup environment details
@@ -240,6 +241,7 @@ survey-scale = Kigezo cha kipimo sawia cha XYZ
 survey-invalid-transform = Vitovu, pembe na kuratibu zinazotokana lazima ziwe kamili.
 survey-invalid-scale = Kipimo lazima kiwe nambari chanya kamili yenye kigezo tishio kamili.
 survey-empty-selection = Chagua angalau kitu kimoja kinachotumika ili kubadilisha.
+survey-prismoid-grid-selection = Gridi za prismoidi bado haziwezi kuhamishwa kati ya mifumo ya kuratibu; ziache nje ya uteuzi.
 survey-unavailable = Kitu kilichochaguliwa hakipo au hakijapakiwa. Kipakie kabla ya kubadilisha.
 survey-wrong-project = Chagua miundo kutoka mradi hai tu.
 survey-name-required = Weka jina la mfumo wa kuratibu.
@@ -737,7 +739,6 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: chanzo cha mradi 
 cmd-omf-crs-differs = { $source_name }: mfumo wa marejeleo wa kuratibu '{ $source_crs }' unatofautiana na CRS ya mradi '{ $target_crs }'; kuratibu ziliunganishwa bila kuoanisha upya makadirio
 cmd-omf-source-name-units-source-units = { $source_name }: vipimo '{ $source_units }' vinatofautiana na vipimo vya mradi '{ $target_units }'; kuratibu ziliunganishwa bila kubadilisha
 cmd-omf-source-name-warning = { $source_name }: { $warning }
-cmd-omf-prismoid-grids-not-exported = Gridi { $count } za prismoidi zinabaki kwenye faili la mradi na hazikuhamishwa
 cmd-omf-there-no-open-incline-design = Hakuna data ya Incline Design iliyofunguliwa ya kuhamisha
 cmd-placement-2-vertices = vipeo 2
 cmd-placement-count-vertices = vipeo { $count }
@@ -1151,6 +1152,8 @@ common-point-clouds = Mawingu ya Vidokezo
 common-polyline = Mstari wa Pointi Nyingi
 common-polyline-layer = Mstari wa pointi nyingi kwenye '{ $layer }'
 common-project = Mradi
+common-prismoid-grids = Gridi za Prismoidi
+common-prismoid-grid = Gridi ya Prismoidi
 common-rasters = Rasta
 common-redo = Rudia
 common-reference-points = Vidokezo vya Marejeo...
@@ -1704,6 +1707,10 @@ explorer-raster-id =
     { $driver } · { $width } × { $height }
     { $projection }
 explorer-id-triangulation-id-source = ID: triangulation:{ $id }{ $source }
+explorer-prismoid-grid-id =
+    ID: prismoid_grid:{ $id }{ $source }
+    Seli { $columns } × { $rows }, { $active } zinatumika
+explorer-prismoid-grid-thickness = Unene wima kutoka { $min } hadi { $max }
 explorer-load = Pakia
 explorer-lock = Funga
 explorer-new-collection = Mkusanyiko Mpya
@@ -2278,6 +2285,7 @@ state-load-drillholes = Pakia Mashimo ya Uchimbaji
 state-load-layer = Pakia Tabaka
 state-load-point-cloud = Pakia Wingu la Vidokezo
 state-load-raster = Pakia Rasta
+state-load-prismoid-grid = Pakia Gridi ya Prismoidi
 state-load-triangulation = Pakia Utatuzi
 state-locked-count-object-s = Vitu { $count } vimefungwa
 state-major-minor = Kuu { $major } · ndogo { $minor }
@@ -2307,6 +2315,7 @@ state-remove-block-model = Ondoa Mfano wa Vitalu
 state-remove-drillholes = Ondoa Mashimo ya Uchimbaji
 state-remove-point-cloud = Ondoa Wingu la Vidokezo
 state-remove-raster = Ondoa Rasta
+state-remove-prismoid-grid = Ondoa Gridi ya Prismoidi
 state-remove-triangulation = Ondoa Utatuzi
 state-removed-from-active-triangulation = Imeondolewa kwenye utatuzi hai
 state-removed-from-every-triangulation = Imeondolewa kwenye utatuzi wote
@@ -2371,6 +2380,7 @@ state-unload-drillholes = Ondoa Mashimo ya Uchimbaji
 state-unload-layer = Ondoa Tabaka
 state-unload-point-cloud = Ondoa Wingu la Vidokezo
 state-unload-raster = Ondoa Rasta
+state-unload-prismoid-grid = Ondoa Gridi ya Prismoidi kwenye Kumbukumbu
 state-unload-triangulation = Ondoa Utatuzi
 state-untitled-project = Mradi usio na jina
 state-use-typed-radius = Tumia radiasi iliyoandikwa

@@ -51,6 +51,7 @@ impl<'a> App<'a> {
                 ItemRef::PointCloud(id) => Some(SceneEntityId::PointCloud(id)),
                 ItemRef::BlockModel(id) => Some(SceneEntityId::BlockModel(id)),
                 ItemRef::DrillHole(id) => Some(SceneEntityId::DrillHole(id)),
+                ItemRef::PrismoidGrid(id) => Some(SceneEntityId::PrismoidGrid(id)),
                 ItemRef::Raster(_) => None,
             })
             .collect()

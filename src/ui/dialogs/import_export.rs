@@ -381,6 +381,14 @@ fn draw_export_omf(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProj
         );
         checklist_section(
             ui,
+            "omf_export_prismoid_grids",
+            &tr!("common-prismoid-grids"),
+            &mut selection.prismoid_grids,
+            project.prismoid_grids.iter().map(|entry| (entry.id, entry.name.clone())).collect(),
+            &tr!("explorer-no-prismoid-grids"),
+        );
+        checklist_section(
+            ui,
             "omf_export_drill_holes",
             &tr!("ws-menubar-drillholes"),
             &mut selection.drill_holes,
