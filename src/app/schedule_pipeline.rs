@@ -1150,6 +1150,11 @@ impl crate::app::App<'_> {
             if rule.classes.iter().any(|class| trucks.class(*class).is_none()) {
                 report(tr!("truck-rule-class-missing"));
             }
+            // Worth saying: a block is dug whole, so material only this rule
+            // could haul holds up every block it is in.
+            if rule.classes.iter().all(|class| trucks.class(*class).is_some_and(|class| class.calendar.never_has_units())) {
+                report(tr!("truck-rule-no-fleet"));
+            }
         }
         StageOutcome::Settled {
             diagnostics,

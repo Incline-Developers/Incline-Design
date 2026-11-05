@@ -917,8 +917,8 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
         // waste having room does not let the ore out. A source is open when
         // each of its materials has a candidate with room.
         let roomy: Vec<_> = candidates.iter().copied().filter(|movement| has_room(movement.destination)).collect();
-        let open_source = |source: SourceId| {
-            let materials: Vec<_> = match source {
+        let materials_of = |source: SourceId| -> Vec<_> {
+            match source {
                 SourceId::Ground(ground) => input
                     .ground
                     .iter()
@@ -926,7 +926,10 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
                     .map(|found| found.material.iter().filter(|share| share.fraction > 0.0).map(|share| share.material).collect())
                     .unwrap_or_default(),
                 SourceId::Stockpile(_) => candidates.iter().filter(|movement| movement.source == source).map(|movement| movement.material).collect(),
-            };
+            }
+        };
+        let open_source = |source: SourceId| {
+            let materials = materials_of(source);
             !materials.is_empty()
                 && materials
                     .iter()
@@ -969,7 +972,16 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
             let used = sum_within(lookup.trucks.get(&truck).and_then(|project| hauled.get(project)), start_h, end_h);
             available - used <= 1e-6 * available.max(1.0)
         };
-        if roomy.iter().all(|movement| trucks_spent(movement.truck)) {
+        // Dug whole again: one material with no truck left holds the block, so
+        // a truck free for the waste does not make this a question of value.
+        let can_haul = |source: SourceId| {
+            materials_of(source).iter().all(|material| {
+                roomy
+                    .iter()
+                    .any(|movement| movement.source == source && movement.material == *material && !trucks_spent(movement.truck))
+            })
+        };
+        if !open_sources.iter().any(|source| can_haul(*source)) {
             return (IdleReason::NoTrucks, Vec::new());
         }
         (IdleReason::NotWorthIt, Vec::new())

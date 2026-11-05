@@ -142,6 +142,11 @@ impl TruckFleet {
 }
 
 impl TruckCalendar {
+    /// Whether no day of this calendar has a truck in it.
+    pub(crate) fn never_has_units(&self) -> bool {
+        self.default_units == 0 && self.periods.values().all(|period| period.units.unwrap_or(0) == 0)
+    }
+
     pub(crate) fn validate(&self) -> ScheduleResult {
         checked_percentage(self.default_availability)?;
         checked_percentage(self.default_utilisation)?;

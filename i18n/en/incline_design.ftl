@@ -2222,6 +2222,7 @@ truck-rule-no-classes = Add a truck class first.
 truck-rule-class-missing = A truck class this rule names is gone.
 truck-rule-destination-missing = A destination this rule names is gone.
 truck-stage-no-classes = No truck classes are configured. Trucks do not constrain this schedule.
+truck-rule-no-fleet = This rule's truck classes have no trucks, so nothing can be hauled under it.
 truck-stage-no-rules = No trucking rules are configured, so no truck class is permitted anywhere.
 schedule-calendar-trucks = Trucks
 truck-calendar-units = Units
