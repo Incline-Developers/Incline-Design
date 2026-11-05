@@ -71,7 +71,7 @@ pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: 
 fn group_badge(editor: &EditorState, group: SetupGroup) -> StepBadge {
     let badges: Vec<StepBadge> = match group {
         SetupGroup::Solids => editor.planning_stages.iter().map(StepBadge::of_solids_stage).collect(),
-        SetupGroup::Haulage => editor.haulage_stages.iter().map(|status| StepBadge::of(status.state, &status.diagnostics)).collect(),
+        SetupGroup::Haulage => editor.haulage_stages.iter().map(StepBadge::of_haulage_stage).collect(),
         SetupGroup::Schedule => crate::ui::state::ScheduleStep::ALL
             .into_iter()
             .map(|step| StepBadge::of_schedule_step(editor, step))
@@ -224,16 +224,9 @@ fn draw_haulage_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mu
         let status = &editor.haulage_stages[entry.index()];
         ui.horizontal(|ui| {
             ui.add_space(ui.spacing().indent);
-            // Truck Classes with no classes is grey, not amber: its note says
-            // what is missing, and nothing has gone wrong. Road Network always
-            // has its settings, and no roads is fine - destinations then haul
-            // their fixed distances.
-            let empty = entry == HaulageStep::TruckClasses
-                && status.state == crate::app::planning_pipeline::StageState::Complete
-                && status.last_success.as_ref().is_some_and(|run| run.entities == 0);
-            let badge = if empty { StepBadge::NotRun } else { StepBadge::of(status.state, &status.diagnostics) };
+            let empty = haulage_stage_empty(status);
             let entry_response = ExplorerEntry::new(egui::Id::unique(("haulage_step", entry as u8)), bold(&entry.label()))
-                .leading_icon(badge.icon(), egui::Color32::WHITE)
+                .leading_icon(StepBadge::of_haulage_stage(status).icon(), egui::Color32::WHITE)
                 .header_aligned_icon()
                 .selected(step == Some(entry))
                 .show(ui);
@@ -241,7 +234,12 @@ fn draw_haulage_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mu
                 markers.push((rect, if empty { crate::app::planning_pipeline::StageState::NotRun } else { status.state }));
             }
             let response = entry_response.response.on_hover_ui(|ui| {
-                stage_tooltip_parts(ui, status.state, status.blocked_by.map(HaulageStep::label), status.message.as_deref(), &status.diagnostics);
+                if empty {
+                    ui.label(bold(&tr!("stage-state-empty")));
+                    ui.label(tr!("stage-empty-hint"));
+                } else {
+                    stage_tooltip_parts(ui, status.state, status.blocked_by.map(HaulageStep::label), status.message.as_deref(), &status.diagnostics);
+                }
             });
             if response.clicked() {
                 step = Some(entry);
@@ -562,7 +560,9 @@ impl StepBadge {
     pub(crate) fn of_schedule_step(editor: &EditorState, step: crate::ui::state::ScheduleStep) -> Self {
         use crate::app::planning_pipeline::StageState;
         let status = &editor.schedule_stages[step.index()];
-        if step == crate::ui::state::ScheduleStep::Readiness && status.state == StageState::Complete && editor.schedule_calculation_blocked.is_some() {
+        if schedule_stage_empty(editor, step) {
+            Self::NotRun
+        } else if step == crate::ui::state::ScheduleStep::Readiness && status.state == StageState::Complete && editor.schedule_calculation_blocked.is_some() {
             Self::Warning
         } else {
             Self::of(status.state, &status.diagnostics)
@@ -574,6 +574,17 @@ impl StepBadge {
     /// green there would read as done.
     pub(crate) fn of_solids_stage(status: &crate::ui::state::PlanningStageView) -> Self {
         if solids_stage_empty(status) {
+            Self::NotRun
+        } else {
+            Self::of(status.state, &status.diagnostics)
+        }
+    }
+
+    /// A Haulage step's badge: grey with no roads or truck classes yet. A
+    /// project can run with no roads, hauling fixed distances, and a class
+    /// missing is said on its page; neither has gone wrong or is done.
+    pub(crate) fn of_haulage_stage(status: &crate::ui::state::HaulageStageView) -> Self {
+        if haulage_stage_empty(status) {
             Self::NotRun
         } else {
             Self::of(status.state, &status.diagnostics)
@@ -596,6 +607,20 @@ fn solids_stage_empty(status: &crate::ui::state::PlanningStageView) -> bool {
     status.state == crate::app::planning_pipeline::StageState::Complete && status.diagnostics.is_empty() && status.last_success.as_ref().is_some_and(|run| run.entities == 0)
 }
 
+/// Whether a Haulage step completed with nothing in it to have worked on.
+fn haulage_stage_empty(status: &crate::ui::state::HaulageStageView) -> bool {
+    status.state == crate::app::planning_pipeline::StageState::Complete && status.last_success.as_ref().is_some_and(|run| run.entities == 0)
+}
+
+/// Whether a Schedule step only stands as it does because the project has
+/// nothing in it yet: Configuration cannot choose a tonnage field before there
+/// are any fields, which is where a new project starts, not a problem with it.
+pub(crate) fn schedule_stage_empty(editor: &EditorState, step: crate::ui::state::ScheduleStep) -> bool {
+    step == crate::ui::state::ScheduleStep::Configuration
+        && editor.schedule_no_fields
+        && editor.schedule_stages[step.index()].state == crate::app::planning_pipeline::StageState::Failed
+}
+
 /// The Reserving step's page: what its last run found, one row each.
 ///
 /// The blocks themselves are inspected in Reserves view; this says whether the
@@ -609,10 +634,10 @@ fn draw_reserving(ui: &mut egui::Ui, rect: egui::Rect, editor: &EditorState) {
     DataGrid::new("planning_reserving", rect, &SolidsStep::Reserving.label()).columns(&columns).show(ui, |ui| {
         if status.diagnostics.is_empty() {
             let message = match status.state {
-                StageState::Complete => tr!(
-                    "planning-reserving-complete",
-                    blocks = status.last_success.as_ref().map_or(0, |run| run.entities).to_string()
-                ),
+                StageState::Complete => match status.last_success.as_ref().map_or(0, |run| run.entities) {
+                    0 => tr!("planning-reserving-empty"),
+                    blocks => tr!("planning-reserving-complete", blocks = blocks.to_string()),
+                },
                 StageState::Queued | StageState::Running => status.message.clone().unwrap_or_else(|| status.state.label()),
                 StageState::Stale => tr!("planning-reserving-stale"),
                 _ => tr!("planning-reserving-not-run"),
@@ -1793,7 +1818,12 @@ fn draw_solids_details(
                     draw_block_model_mapping(ui, rect, document, model, blocks, commands);
                 } else {
                     DataGrid::new("reserve_block_model_mapping_empty", rect, &tr!("planning-block-models")).show(ui, |ui| {
-                        grid_empty_state(ui, &tr!("planning-no-block-models-project"), None);
+                        if grid_empty_state(ui, &tr!("planning-no-block-models-project"), Some(&tr!("planning-import-block-model"))) {
+                            editor.show_import = true;
+                            editor.show_export = false;
+                            editor.import_as_haul_roads = false;
+                            editor.data_menu = crate::ui::state::DataMenu::CsvBlockModel;
+                        }
                     });
                 }
             });

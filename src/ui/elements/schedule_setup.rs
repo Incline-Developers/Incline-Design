@@ -90,6 +90,7 @@ pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: 
     let mut markers = Vec::with_capacity(ScheduleStep::ALL.len());
     for entry in ScheduleStep::ALL {
         let status = &editor.schedule_stages[entry.index()];
+        let empty = super::planning_setup::schedule_stage_empty(editor, entry);
         ui.horizontal(|ui| {
             ui.add_space(ui.spacing().indent);
             let entry_response = ExplorerEntry::new(egui::Id::unique(entry.tree_id()), bold(&entry.label()))
@@ -98,11 +99,16 @@ pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: 
                 .selected(step == Some(entry))
                 .show(ui);
             if let Some(rect) = entry_response.icon_rect {
-                markers.push((rect, status.state));
+                markers.push((rect, if empty { crate::app::planning_pipeline::StageState::NotRun } else { status.state }));
             }
             // The badge's reason, where the badge is.
             let response = entry_response.response.on_hover_ui(|ui| {
-                super::planning_setup::stage_tooltip_parts(ui, status.state, status.blocked_by.map(ScheduleStep::label), status.message.as_deref(), &status.diagnostics);
+                if empty {
+                    ui.label(bold(&tr!("stage-state-empty")));
+                    ui.label(tr!("stage-empty-hint"));
+                } else {
+                    super::planning_setup::stage_tooltip_parts(ui, status.state, status.blocked_by.map(ScheduleStep::label), status.message.as_deref(), &status.diagnostics);
+                }
             });
             if response.clicked() {
                 step = Some(entry);

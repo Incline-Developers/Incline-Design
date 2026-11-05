@@ -2982,6 +2982,9 @@ pub(crate) struct EditorState {
     pub(crate) schedule_stages: [ScheduleStageView; ScheduleStep::ALL.len()],
     /// The Haulage Setup pipeline's steps, mirrored like the Schedule ones.
     pub(crate) haulage_stages: [HaulageStageView; HaulageStep::ALL.len()],
+    /// Whether the project has no reserve fields yet, mirrored with the
+    /// Schedule stages: its first step then waits rather than fails.
+    pub(crate) schedule_no_fields: bool,
     pub(crate) haulage_run_active: bool,
     /// Rerun the Haulage steps on their own once edits settle. Mirrored
     /// from the project's [`crate::model::schedule::AutoRun`] each frame.
@@ -4481,6 +4484,7 @@ impl EditorState {
             schedule_unmeasured_blocks: Vec::new(),
             solids_view_marked: Vec::new(),
             solids_view_frame_marked: false,
+            schedule_no_fields: false,
             mined_ground: None,
             mined_ground_key: None,
             schedule_experiment_draft: None,

@@ -626,6 +626,8 @@ impl crate::app::App<'_> {
     fn mirror_schedule_stages(&mut self) {
         use crate::ui::state::ScheduleStageView;
 
+        self.editor.schedule_no_fields = self.workspace.active_document().is_some_and(|document| document.reserve_fields().is_empty());
+
         let (views, running) = match self.schedule_pipeline.as_ref() {
             None => (Default::default(), false),
             Some(pipeline) => {
