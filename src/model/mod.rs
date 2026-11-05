@@ -3939,6 +3939,9 @@ impl Command {
             }
             Command::EditSolid { solid, after, .. } => {
                 target.document.update_solid(*solid, (**after).clone());
+                // Solids are not in the content hash: the epoch is what makes
+                // this unsaved work, and undo puts it back.
+                target.content.touch();
                 target.effects.document_changed = true;
             }
             Command::SetHaulNetwork { after, .. } => {
