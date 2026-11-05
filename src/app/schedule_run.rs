@@ -904,6 +904,10 @@ impl crate::app::App<'_> {
         let headline = attempt_headline(&attempt);
         if auto && attempt.outcome == AttemptOutcome::Refused {
             log::info!("schedule recalculation refused: {headline}");
+        } else if attempt.outcome == AttemptOutcome::Cancelled {
+            // Someone stopped it, and the schedule on screen stands: a note,
+            // not a warning to dismiss.
+            crate::userspace_log!("{headline}");
         } else {
             // One warning, so one dialog: the reasons beneath the headline
             // rather than a dialog for each.

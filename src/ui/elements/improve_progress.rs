@@ -31,6 +31,8 @@ const CARD_WIDTH: f32 = 380.0;
 const RING: f32 = 40.0;
 const FOLDED_RING: f32 = 16.0;
 const CHART_HEIGHT: f32 = 128.0;
+/// The label, value and gain at the top right of the card.
+const VALUE_HEIGHT: f32 = 58.0;
 /// The time strip: how the run's time has gone, stage by stage, against its
 /// limit.
 const STRIP_HEIGHT: f32 = 8.0;
@@ -124,6 +126,9 @@ fn draw_full(ui: &mut egui::Ui, editor: &mut EditorState, progress: &ImproveProg
             ui.add_space(6.0);
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
+                // As tall as it gets, so the buttons below stay put when a gain
+                // first appears: see `draw_standing`.
+                ui.set_min_height(VALUE_HEIGHT);
                 ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
                     ui.label(egui::RichText::new(tr!("improve-card-best")).weak().small());
                     match progress.best() {
@@ -343,8 +348,10 @@ fn draw_standing(ui: &mut egui::Ui, progress: &ImproveProgress) {
         }
     });
     // A loose bound reads like a shortfall, so the card says what a bound is
-    // where it shows one, not on hover alone.
-    if progress.gap().is_some() {
+    // where it shows one, not on hover alone. Held while the run looks for one
+    // too: the card is centred on nothing, and a line arriving mid-run would
+    // move Discard and Stop out from under the pointer.
+    if progress.gap().is_some() || progress.ended.is_none() {
         ui.label(egui::RichText::new(tr!("improve-card-bound-optimistic")).weak().small());
     }
 }
