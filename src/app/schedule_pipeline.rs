@@ -618,6 +618,16 @@ impl crate::app::App<'_> {
                     .err()
                     .map(|_| ScheduleNotReady::NotRun(ScheduleStep::Solids))
             }
+            // Blocks fails while it has no dig blocks to read, and the thing to
+            // do about that is run Solids.
+            ScheduleNotReady::Failed { step: ScheduleStep::Solids, .. }
+                if self
+                    .planning_pipeline
+                    .as_ref()
+                    .is_none_or(|pipeline| pipeline.readiness(&self.planning_fingerprints()).is_err()) =>
+            {
+                Some(ScheduleNotReady::NotRun(ScheduleStep::Solids))
+            }
             reason => Some(reason),
         }
     }

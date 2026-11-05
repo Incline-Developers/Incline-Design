@@ -200,7 +200,6 @@ impl<'a> App<'a> {
     }
 
     pub(super) fn add_loaded_block_model(&mut self, loaded: LoadedBlockModel) {
-        let dims = loaded.model.metadata.dims;
         let name = crate::model::project::unique_item_name(loaded.name, self.block_models.iter().map(|item| item.name.as_str()));
         userspace_log!(
             "{}",
@@ -208,10 +207,6 @@ impl<'a> App<'a> {
                 "cmd-block-model-loaded-block-model-name-blocks",
                 name = name.clone().to_string(),
                 blocks = loaded.model.metadata.n_blocks.to_string(),
-                renderable = loaded.renderable_block_indices.len().to_string(),
-                dimx = dims[0].to_string(),
-                dimy = dims[1].to_string(),
-                dimz = dims[2].to_string(),
                 variables = loaded.model.metadata.variables.len().to_string()
             )
         );
