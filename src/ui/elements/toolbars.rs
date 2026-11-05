@@ -70,7 +70,13 @@ fn left_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, projec
         let blocked_by_section = editor.slice_mode_enabled && tool.section_refuses();
         LeftTool {
             icon: egui::Image::new(icon),
-            hint: (blocked_by_section && editing_enabled && layer_ok).then(|| tr!("toolbars-tool-not-available-section-view", tool = tooltip.as_str().to_string())),
+            hint: if !editing_enabled {
+                None
+            } else if !layer_ok {
+                Some(tr!("toolbars-tool-needs-layer", tool = tooltip.as_str().to_string()))
+            } else {
+                blocked_by_section.then(|| tr!("toolbars-tool-not-available-section-view", tool = tooltip.as_str().to_string()))
+            },
             tooltip,
             action: LeftToolAction::Tool(tool),
             enabled: editing_enabled && layer_ok && !blocked_by_section,

@@ -3772,6 +3772,7 @@ toolbars-strike-dip = Strike and Dip
 toolbars-hide = Hide
 toolbars-show-all-hidden = Show All Hidden
 toolbars-tool-not-available-section-view = { $tool } - not available in the section view
+toolbars-tool-needs-layer = { $tool } - make a layer first
 
 ## Tri strings
 

@@ -248,6 +248,9 @@ fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, wor
     editor.end_tie_chain();
     editor.initiation_dialog = None;
     editor.cancel_haul_edit();
+    // The finish menu belongs to the stroke, which stays behind on its page.
+    editor.poly_finish_dialog = false;
+    editor.poly_finish_dialog_px = None;
     // Survey consumes the same entity selection as the design workspaces.
     // Keep it when entering/leaving Survey so users can select data first.
     // Drill & Blast's individual-hole selection still has different semantics.
