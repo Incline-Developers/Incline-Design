@@ -22,6 +22,10 @@ impl crate::app::App<'_> {
         let name = crate::model::project::unique_item_name(name, document.solids().iter().map(|solid| solid.name.as_str()));
         let id = document.add_solid(name, kind, surface, topography, block_model);
         self.editor.planning_selected_solid = Some(id);
+        // Choosing a model for a solid is choosing to reserve from it.
+        if let Some(block_model) = block_model {
+            self.set_reserve_model_included(block_model, true);
+        }
         self.touch_active_project_content();
         self.invalidate_geometry();
     }
@@ -61,6 +65,9 @@ impl crate::app::App<'_> {
         };
         if before == edit {
             return;
+        }
+        if let SolidEdit::BlockModel(Some(block_model)) = edit {
+            self.set_reserve_model_included(block_model, true);
         }
         self.execute_edit(crate::model::Command::EditSolid {
             solid: id,
