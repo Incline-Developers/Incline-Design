@@ -1662,6 +1662,7 @@ improve-card-gain = +{ $gain } ({ $percent })
 improve-card-no-gain = No better schedule yet
 improve-card-gap = { $gap } below the bound
 improve-card-gap-note = The bound is the most any schedule could be worth. The gap closing to zero proves the schedule is the best there is.
+improve-card-bound-optimistic = Bounds are optimistic: a real schedule may never reach one.
 improve-card-no-bound = No bound proved yet
 improve-card-no-bound-ended = No bound proved
 improve-card-last-gain = Last better schedule { $ago } ago

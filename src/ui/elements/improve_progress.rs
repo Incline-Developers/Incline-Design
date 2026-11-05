@@ -342,6 +342,11 @@ fn draw_standing(ui: &mut egui::Ui, progress: &ImproveProgress) {
             });
         }
     });
+    // A loose bound reads like a shortfall, so the card says what a bound is
+    // where it shows one, not on hover alone.
+    if progress.gap().is_some() {
+        ui.label(egui::RichText::new(tr!("improve-card-bound-optimistic")).weak().small());
+    }
 }
 
 fn draw_controls(ui: &mut egui::Ui, editor: &mut EditorState, progress: &ImproveProgress, commands: &mut Vec<UiCommand>) {
