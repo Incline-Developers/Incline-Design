@@ -1414,6 +1414,10 @@ impl TriangulationGpuCache {
         // the explorer and the main viewport both read - having to carry a
         // mesh that is not a project item.
         solid_preview: &[OpenTriangulation],
+        // Not drawn this frame, but kept if already here: a solid's thousands
+        // of block meshes take a second to upload, and the pages that show
+        // them are left and come back to all the time.
+        retained: &HashSet<TriangulationId>,
         rasters: &[OpenRasterTexture],
         editor: &EditorState,
         surface_style_layout: &wgpu::BindGroupLayout,
@@ -1428,7 +1432,7 @@ impl TriangulationGpuCache {
         // cost six vertices per edge, several times the surface itself.
         let barycentrics = device.features().contains(wgpu::Features::SHADER_BARYCENTRICS);
         let loaded: HashSet<_> = triangulations.iter().chain(solid_preview).filter(|tri| tri.state.loaded).map(|tri| tri.id).collect();
-        self.meshes.retain(|id, _| loaded.contains(id));
+        self.meshes.retain(|id, _| loaded.contains(id) || retained.contains(id));
         for triangulation in triangulations.iter().chain(solid_preview) {
             if !triangulation.state.loaded {
                 continue;

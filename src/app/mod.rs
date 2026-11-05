@@ -480,6 +480,10 @@ pub(crate) struct App<'a> {
     /// `App::refresh_reserves_scene`.
     pub(crate) reserves_scene: Vec<crate::model::triangulation::OpenTriangulation>,
     pub(crate) reserves_scene_key: Option<u64>,
+    /// Every mesh of the solids' cached cuts, kept on the GPU between visits
+    /// to the pages that draw them. `App::refresh_solid_view_retained`.
+    pub(crate) solid_view_retained: std::collections::HashSet<crate::model::triangulation::TriangulationId>,
+    solid_view_retained_key: Option<u64>,
     /// The Road Network's dig blocks as one flat surface at their flitch
     /// bases, for the orbit pivot and the rotation centre to land on. Never
     /// drawn: the blocks are filled in the document scene.
@@ -730,6 +734,8 @@ impl<'a> Default for App<'a> {
             solid_view_body_key: None,
             reserves_scene: Vec::new(),
             reserves_scene_key: None,
+            solid_view_retained: std::collections::HashSet::new(),
+            solid_view_retained_key: None,
             dig_block_identities: Default::default(),
             planning_pipeline: None,
             schedule_pipeline: None,

@@ -111,6 +111,8 @@ pub(crate) struct RenderInput<'frame> {
     /// The Solids Setup page's inspection meshes: the solid as one, or one
     /// closed mesh per flitch once it has a benching plan.
     pub(crate) solid_preview: &'frame [OpenTriangulation],
+    /// Surfaces to keep on the GPU though not drawn; see `TriangulationGpuCache::sync`.
+    pub(crate) retained_surfaces: &'frame std::collections::HashSet<crate::model::triangulation::TriangulationId>,
     pub(crate) project: &'frame UiProjectView,
 }
 
@@ -126,6 +128,7 @@ impl<'a> Graphics<'a> {
             point_clouds,
             rasters,
             solid_preview,
+            retained_surfaces,
             project,
         } = input;
         // Acquire before any queue writes: a hidden/unavailable surface can fail
@@ -250,6 +253,10 @@ impl<'a> Graphics<'a> {
         let gpu_work_was_pending = self.point_cloud_gpu.has_pending_uploads() || self.block_model_gpu.has_pending_builds();
         self.raster_gpu
             .sync(&self.device, &self.queue, self.scene_origin, rasters, &self.raster_surface_bind_group_layout);
+        // A section builds a cut texture for every mesh in the cache, so while
+        // one is up only what is drawn stays.
+        let no_surfaces = std::collections::HashSet::new();
+        let retained = if self.section_slab().is_some() { &no_surfaces } else { retained_surfaces };
         self.triangulation_gpu.sync(
             &self.device,
             &self.queue,
@@ -257,6 +264,7 @@ impl<'a> Graphics<'a> {
             scale_factor,
             triangulations,
             solid_preview,
+            retained,
             rasters,
             editor,
             &self.surface_style_bind_group_layout,

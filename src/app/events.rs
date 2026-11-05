@@ -293,6 +293,7 @@ impl<'a> App<'a> {
                     self.sync_blasting_bench();
                     self.sync_blasting_outlines();
                     self.sync_dig_blocks();
+                    self.refresh_solid_view_retained();
                     self.refresh_reserves_scene();
                     self.sync_blasting_frame();
                     self.sync_haulage_frame();
@@ -340,6 +341,7 @@ impl<'a> App<'a> {
                             point_clouds: &self.point_clouds,
                             rasters: &self.raster_textures,
                             solid_preview: drawn.1,
+                            retained_surfaces: &self.solid_view_retained,
                             project: &project,
                         }) {
                             Ok(ui_output) => {

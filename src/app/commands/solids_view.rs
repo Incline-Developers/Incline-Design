@@ -1363,6 +1363,35 @@ impl crate::app::App<'_> {
     /// project's own visibility, with the dig blocks among them. Cloning the
     /// list clones every mesh handle in it, so it is redone when one of those
     /// changes rather than once a frame, and dropped off the page.
+    /// Name every mesh of the solids' cached cuts for the renderer to keep,
+    /// following the cache rather than the page: a rerun's old meshes drop out
+    /// here, whichever page it finished on.
+    pub(crate) fn refresh_solid_view_retained(&mut self) {
+        let key: u64 = self
+            .solid_view_cache
+            .iter()
+            .map(|(id, cache)| {
+                let mut entry = DefaultHasher::new();
+                (id, cache.key, cache.fingerprint()).hash(&mut entry);
+                entry.finish()
+            })
+            .fold(self.solid_view_cache.len() as u64, u64::wrapping_add);
+        if self.solid_view_retained_key == Some(key) {
+            return;
+        }
+        self.solid_view_retained_key = Some(key);
+        self.solid_view_retained = self
+            .solid_view_cache
+            .values()
+            .flat_map(|cache| {
+                let body = cache.display_parts(crate::app::planning_pipeline::GeometryDemand::Body).unwrap_or_default();
+                let blocks = cache.display_parts(crate::app::planning_pipeline::GeometryDemand::Partition).unwrap_or_default();
+                let blasts = cache.blast_parts().unwrap_or_default();
+                body.iter().chain(blocks).chain(blasts).map(|part| part.mesh.id)
+            })
+            .collect();
+    }
+
     pub(crate) fn refresh_reserves_scene(&mut self) {
         if !self.editor.is_solids_view() {
             if self.reserves_scene_key.take().is_some() {
