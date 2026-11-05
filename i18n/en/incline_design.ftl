@@ -3773,6 +3773,7 @@ toolbars-hide = Hide
 toolbars-show-all-hidden = Show All Hidden
 toolbars-tool-not-available-section-view = { $tool } - not available in the section view
 toolbars-tool-needs-layer = { $tool } - make a layer first
+web-startup-no-graphics = This browser could not use your graphics card through WebGPU. Try a current version of Chrome or Edge with hardware acceleration on, or the desktop app from inclinedesign.net.
 
 ## Tri strings
 

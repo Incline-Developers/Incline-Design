@@ -2663,9 +2663,8 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                         }
                     }
                     Some(Err(error)) => {
-                        let err = format!("failed to initialize WebGPU: {error:#}");
-                        userspace_error!("{err}");
-                        crate::show_web_startup_error(&err);
+                        userspace_error!("failed to initialize WebGPU: {error:#}");
+                        crate::show_web_startup_error(&crate::i18n::tr!("web-startup-no-graphics"));
                         self.web_graphics_state = GraphicsState::Failed;
                         self.close_requested = true;
                     }
