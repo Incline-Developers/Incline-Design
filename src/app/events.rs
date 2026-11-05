@@ -1722,7 +1722,12 @@ impl<'a> App<'a> {
             }
             KeyCode::Enter | KeyCode::NumpadEnter if !self.editor.text_editing_enabled => {
                 if self.editor.haul_draw {
+                    // Roads usually come several at a time: Enter ends this
+                    // one and the next click starts another. With nothing
+                    // drawn, as Escape does, it leaves the tool.
+                    let more = !self.editor.haul_points.is_empty();
                     self.finish_haul_road();
+                    self.editor.haul_draw = more;
                 } else if self.editor.haul_link_pick && !self.editor.haul_link_points.is_empty() {
                     let at = std::mem::take(&mut self.editor.haul_link_points);
                     self.link_haul_blocks(at);

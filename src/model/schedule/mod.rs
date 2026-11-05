@@ -1390,6 +1390,10 @@ impl SchedulePlan {
     }
 
     pub(crate) fn bar(&self, id: BarId) -> Option<&ScheduleBar> {
+        self.bars.iter().find(|bar| bar.id == id)
+    }
+
+    /// Which reserve field this schedule reads as tonnes, if one was chosen.
     /// What in the plan reads a reserve field, by name.
     pub(crate) fn field_users(&self, field: ReserveFieldId) -> Vec<String> {
         let mut users = Vec::new();
@@ -1412,10 +1416,6 @@ impl SchedulePlan {
         self.routing.forget_field(field);
     }
 
-        self.bars.iter().find(|bar| bar.id == id)
-    }
-
-    /// Which reserve field this schedule reads as tonnes, if one was chosen.
     pub(crate) fn tonnage_field(&self) -> Option<ReserveFieldId> {
         self.tonnage_field
     }
