@@ -1043,7 +1043,6 @@ haul-match-short = Trucks to match loader
 haul-loaded-distance = Loaded distance
 haul-return-distance = Return distance
 haul-rise-short = Rise
-schedule-capture-bar-unassigned = this bar is not assigned to a machine
 schedule-capture-bar-block-unmeasured = a dig block in this bar has no measured tonnage
 schedule-capture-bar-machine-missing = this bar's machine is no longer in the project
 schedule-capture-machine-class-missing = this machine's class is no longer in the project

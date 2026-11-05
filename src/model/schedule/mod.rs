@@ -383,10 +383,6 @@ impl ScheduleBar {
             _ => None,
         }
     }
-
-    pub(crate) fn is_reclaim(&self) -> bool {
-        matches!(self.work, BarWork::Reclaim(_))
-    }
 }
 
 /// A machine type: what it is called, how fast it digs, and how fast it

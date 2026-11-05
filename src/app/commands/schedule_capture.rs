@@ -788,6 +788,8 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         } else {
             super::schedule_readiness::default_bar_name(report.members.iter().filter_map(|member| member.area_name.as_deref()))
         };
+        // A bar with no machine is parked on the Gantt's Unassigned row: left
+        // out until it is given one, as drill and blast's bars are.
         let Some(agent) = bar.agent else {
             // An unassigned delay holds no machine, so it is not a fault.
             if bar.is_reclaim() || !bar.members().is_empty() {
