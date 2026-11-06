@@ -1534,7 +1534,7 @@ impl TriangulationGpuCache {
                 }
 
                 if geometry_dirty {
-                    cached.surface_chunks = build_surface_chunks(device, scene_origin, triangulation, surface_style_layout, surface_chunk_layout);
+                    cached.surface_chunks = build_surface_chunks(device, queue, scene_origin, triangulation, surface_style_layout, surface_chunk_layout);
                     cached.edge_chunks.clear();
                     cached.mesh = triangulation.mesh.clone();
                 }
@@ -1561,7 +1561,7 @@ impl TriangulationGpuCache {
                     cached.edge_chunks.clear();
                 }
                 if (edge_geom_dirty || geometry_dirty) && instanced_edges && cached.edge_chunks.is_empty() {
-                    cached.edge_chunks = build_edge_chunks(device, scene_origin, triangulation);
+                    cached.edge_chunks = build_edge_chunks(device, queue, scene_origin, triangulation);
                 }
 
                 if edge_style_dirty || edge_geom_dirty {
@@ -1575,7 +1575,7 @@ impl TriangulationGpuCache {
                     cached.edge_width = edge_width;
                 }
             } else {
-                let surface_chunks = build_surface_chunks(device, scene_origin, triangulation, surface_style_layout, surface_chunk_layout);
+                let surface_chunks = build_surface_chunks(device, queue, scene_origin, triangulation, surface_style_layout, surface_chunk_layout);
                 if surface_chunks.is_empty() {
                     continue;
                 }
@@ -1583,11 +1583,7 @@ impl TriangulationGpuCache {
                     chunk.write_debug_style(queue, &surface_style);
                 }
 
-                let surface_style_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Surface Style Uniform"),
-                    contents: bytemuck::bytes_of(&surface_style),
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                });
+                let surface_style_buffer = buffer_with_contents(device, queue, "Surface Style Uniform", wgpu::BufferUsages::UNIFORM, bytemuck::bytes_of(&surface_style));
                 let surface_style_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     layout: surface_style_layout,
                     entries: &[wgpu::BindGroupEntry {
@@ -1598,7 +1594,7 @@ impl TriangulationGpuCache {
                 });
 
                 let edge_chunks = if instanced_edges {
-                    build_edge_chunks(device, scene_origin, triangulation)
+                    build_edge_chunks(device, queue, scene_origin, triangulation)
                 } else {
                     Vec::new()
                 };
@@ -1607,11 +1603,7 @@ impl TriangulationGpuCache {
                     width: edge_width,
                     _pad: [0.0; 3],
                 };
-                let edge_style_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Edge Style Uniform"),
-                    contents: bytemuck::bytes_of(&edge_style),
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                });
+                let edge_style_buffer = buffer_with_contents(device, queue, "Edge Style Uniform", wgpu::BufferUsages::UNIFORM, bytemuck::bytes_of(&edge_style));
                 let edge_style_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     layout: edge_style_layout,
                     entries: &[wgpu::BindGroupEntry {
@@ -1660,6 +1652,7 @@ impl TriangulationGpuCache {
 /// uniform for the chunk-debug view).
 fn build_surface_chunks(
     device: &wgpu::Device,
+    queue: &wgpu::Queue,
     scene_origin: DVec3,
     triangulation: &OpenTriangulation,
     surface_style_layout: &wgpu::BindGroupLayout,
@@ -1715,15 +1708,23 @@ fn build_surface_chunks(
         // chunk sits from the scene origin.
         let mut world_min = DVec3::splat(f64::INFINITY);
         let mut world_max = DVec3::splat(f64::NEG_INFINITY);
-        for &face_index in run {
-            let Some(face) = mesh.face_vertex_indices(face_index as usize) else {
-                continue;
-            };
-            for global_index in face {
-                if let Some(point) = source.get(global_index) {
-                    let pos = DVec3::new(point.x, point.y, point.z);
-                    world_min = world_min.min(pos);
-                    world_max = world_max.max(pos);
+        if triangulation.cull_back_faces && run.len() == face_count {
+            // The whole mesh, whose bounds it already keeps; its origin is the
+            // scene's, so these are only ever a culling box.
+            let bounds = mesh.bounds();
+            world_min = DVec3::new(bounds.min.x, bounds.min.y, bounds.min.z);
+            world_max = DVec3::new(bounds.max.x, bounds.max.y, bounds.max.z);
+        } else {
+            for &face_index in run {
+                let Some(face) = mesh.face_vertex_indices(face_index as usize) else {
+                    continue;
+                };
+                for global_index in face {
+                    if let Some(point) = source.get(global_index) {
+                        let pos = DVec3::new(point.x, point.y, point.z);
+                        world_min = world_min.min(pos);
+                        world_max = world_max.max(pos);
+                    }
                 }
             }
         }
@@ -1783,17 +1784,25 @@ fn build_surface_chunks(
             provoking_claimed[provoking] = true;
             indices.extend_from_slice(&local);
         }
-        let mean_normal = vertices.iter().map(|vertex| Vec3::from_array(vertex.normal).as_dvec3()).sum::<DVec3>().normalize_or_zero();
-        let (world_box_center, axes, half_extents) = super::bounds::fit_chunk_box(
-            &vertices,
-            |vertex| Vec3::from_array(vertex.pos).as_dvec3(),
-            &[mean_normal],
-            chunk_origin,
-            (world_min + world_max) * 0.5,
-            world_max - world_min,
-        );
+        // A dig block is small in view and one of thousands uploaded in a frame,
+        // so it is not worth the orientation search: the axis-aligned box culls
+        // as much, and the search would be most of the upload.
+        let (world_box_center, axes, half_extents) = if triangulation.always_show_edges {
+            super::bounds::axis_aligned_chunk_box((world_min + world_max) * 0.5, world_max - world_min)
+        } else {
+            let mean_normal = vertices.iter().map(|vertex| Vec3::from_array(vertex.normal).as_dvec3()).sum::<DVec3>().normalize_or_zero();
+            super::bounds::fit_chunk_box(
+                &vertices,
+                |vertex| Vec3::from_array(vertex.pos).as_dvec3(),
+                &[mean_normal],
+                chunk_origin,
+                (world_min + world_max) * 0.5,
+                world_max - world_min,
+            )
+        };
         if let Some(chunk) = upload_surface_chunk(
             device,
+            queue,
             &vertices,
             &indices,
             (world_box_center, axes, half_extents, chunk_origin),
@@ -1854,9 +1863,24 @@ fn surface_vertex(point: mesh_data::Vertex, chunk_origin: DVec3, normal: [f32; 3
     }
 }
 
+/// A buffer holding `contents`. `create_buffer_init` zeroes a staging buffer
+/// and then copies over it, which a block's many buffers feel; `write_buffer`
+/// only copies. The contents must be whole multiples of four bytes.
+fn buffer_with_contents(device: &wgpu::Device, queue: &wgpu::Queue, label: &str, usage: wgpu::BufferUsages, contents: &[u8]) -> wgpu::Buffer {
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size: contents.len() as u64,
+        usage: usage | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    queue.write_buffer(&buffer, 0, contents);
+    buffer
+}
+
 #[allow(clippy::too_many_arguments)]
 fn upload_surface_chunk(
     device: &wgpu::Device,
+    queue: &wgpu::Queue,
     vertices: &[SurfaceVertex],
     indices: &[u32],
     (world_box_center, axes, half_extents, world_origin): (DVec3, [Vec3; 3], Vec3, DVec3),
@@ -1883,18 +1907,22 @@ fn upload_surface_chunk(
         );
         return None;
     }
-    let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Cached Triangulation Surface Vertices"),
-        contents: bytemuck::cast_slice(vertices),
+    let vertex_buffer = buffer_with_contents(
+        device,
+        queue,
+        "Cached Triangulation Surface Vertices",
         // Copied into the section cut texture while a 2D section is up.
-        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_SRC,
-    });
-    let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Cached Triangulation Surface Indices"),
-        contents: bytemuck::cast_slice(indices),
+        wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_SRC,
+        bytemuck::cast_slice(vertices),
+    );
+    let index_buffer = buffer_with_contents(
+        device,
+        queue,
+        "Cached Triangulation Surface Indices",
         // Also read as per-triangle instances by the section cut pipeline.
-        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::VERTEX,
-    });
+        wgpu::BufferUsages::INDEX | wgpu::BufferUsages::VERTEX,
+        bytemuck::cast_slice(indices),
+    );
     // Per-chunk debug colour uniform; the bind group keeps the buffer alive.
     let debug_color = chunk_debug_color(chunk_index);
     let debug_style = SurfaceStyleUniform {
@@ -1905,11 +1933,7 @@ fn upload_surface_chunk(
         pattern: [0.0; 4],
         cut: [0.0; 4],
     };
-    let debug_style_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Chunk Debug Style Uniform"),
-        contents: bytemuck::bytes_of(&debug_style),
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-    });
+    let debug_style_buffer = buffer_with_contents(device, queue, "Chunk Debug Style Uniform", wgpu::BufferUsages::UNIFORM, bytemuck::bytes_of(&debug_style));
     let debug_style_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         layout: surface_style_layout,
         entries: &[wgpu::BindGroupEntry {
@@ -1919,11 +1943,13 @@ fn upload_surface_chunk(
         label: Some("Chunk Debug Style Bind Group"),
     });
     // Scene-origin-relative rebase offset re-added in the vertex shader.
-    let chunk_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Surface Chunk Offset Uniform"),
-        contents: bytemuck::bytes_of(&chunk_offset_uniform(world_origin, scene_origin)),
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-    });
+    let chunk_buffer = buffer_with_contents(
+        device,
+        queue,
+        "Surface Chunk Offset Uniform",
+        wgpu::BufferUsages::UNIFORM,
+        bytemuck::bytes_of(&chunk_offset_uniform(world_origin, scene_origin)),
+    );
     let chunk_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         layout: surface_chunk_layout,
         entries: &[wgpu::BindGroupEntry {
@@ -1985,7 +2011,7 @@ impl CachedSurfaceChunk {
     }
 }
 
-fn build_edge_chunks(device: &wgpu::Device, scene_origin: DVec3, triangulation: &OpenTriangulation) -> Vec<CachedEdgeChunk> {
+fn build_edge_chunks(device: &wgpu::Device, queue: &wgpu::Queue, scene_origin: DVec3, triangulation: &OpenTriangulation) -> Vec<CachedEdgeChunk> {
     const TARGET_CHUNK_BYTES: usize = 64 * 1024 * 1024;
     let buffer_limit = (device.limits().max_buffer_size as usize).min(TARGET_CHUNK_BYTES);
     let edges_per_chunk = (buffer_limit / size_of::<EdgeInstance>()).max(1);
@@ -2005,14 +2031,14 @@ fn build_edge_chunks(device: &wgpu::Device, scene_origin: DVec3, triangulation: 
                 }
             })
             .collect::<Vec<_>>();
-        if let Some(chunk) = upload_edge_chunk(device, &instances) {
+        if let Some(chunk) = upload_edge_chunk(device, queue, &instances) {
             chunks.push(chunk);
         }
     }
     chunks
 }
 
-fn upload_edge_chunk(device: &wgpu::Device, instances: &[EdgeInstance]) -> Option<CachedEdgeChunk> {
+fn upload_edge_chunk(device: &wgpu::Device, queue: &wgpu::Queue, instances: &[EdgeInstance]) -> Option<CachedEdgeChunk> {
     if instances.is_empty() {
         return None;
     }
@@ -2025,11 +2051,13 @@ fn upload_edge_chunk(device: &wgpu::Device, instances: &[EdgeInstance]) -> Optio
         );
         return None;
     }
-    let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Cached Triangulation Edge Instances"),
-        contents: bytemuck::cast_slice(instances),
-        usage: wgpu::BufferUsages::VERTEX,
-    });
+    let instance_buffer = buffer_with_contents(
+        device,
+        queue,
+        "Cached Triangulation Edge Instances",
+        wgpu::BufferUsages::VERTEX,
+        bytemuck::cast_slice(instances),
+    );
     Some(CachedEdgeChunk {
         instance_buffer,
         instance_count: instances.len() as u32,
