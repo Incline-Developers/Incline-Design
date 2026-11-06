@@ -150,17 +150,6 @@ impl<'c> ConjugateResiduals<'c> {
     }
 
     fn resnorm(residual: &[f64], resscale: Option<&[f64]>) -> f64 {
-        static DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        if *DEBUG.get_or_init(|| std::env::var("PLAYGROUND_LOG").is_ok_and(|level| level == "debug")) {
-            use std::sync::atomic::{AtomicU64, Ordering};
-            static CALLS: AtomicU64 = AtomicU64::new(0);
-            static GROUPS: AtomicU64 = AtomicU64::new(0);
-            let calls = CALLS.fetch_add(1, Ordering::Relaxed) + 1;
-            let groups = GROUPS.fetch_add((residual.len() / 4) as u64, Ordering::Relaxed) + (residual.len() / 4) as u64;
-            if calls.is_power_of_two() {
-                eprintln!("IPX paired residual norms: {calls} scans, {groups} groups of four entries");
-            }
-        }
         scaled_infnorm(residual, resscale)
     }
 
@@ -406,10 +395,6 @@ impl KktSolver for KktSolverDiag<'_, '_> {
         y.fill(0.0);
         let mut cr = ConjugateResiduals::new(self.control);
         cr.solve_preconditioned(&mut self.normal_matrix, &mut self.precond, &rhs, tol, Some(&self.resscale), self.maxiter, y);
-        static DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        if *DEBUG.get_or_init(|| std::env::var("PLAYGROUND_LOG").is_ok_and(|level| level == "debug")) {
-            eprintln!("IPX paired preconditioning: {m} rows, {} completed CR iterations", cr.iter);
-        }
         info.errflag = cr.errflag;
         info.kktiter1 += cr.iter;
         self.iter += cr.iter;

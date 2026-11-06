@@ -218,14 +218,6 @@ impl TransformedLp {
             this.bounds[slack_index].simple_ub_dist = this.bounds[slack_index].ub_dist;
             this.bounds[slack_index].bound_dist = this.bounds[slack_index].lb_dist.min(this.bounds[slack_index].ub_dist);
         }
-        if std::env::var("PLAYGROUND_LOG").as_deref() == Ok("debug") {
-            eprintln!(
-                "cut bounds: {} columns, {} upper and {} lower records",
-                num_transformed_col,
-                this.best_vub.entries.len() - 1,
-                this.best_vlb.entries.len() - 1
-            );
-        }
         this
     }
 
