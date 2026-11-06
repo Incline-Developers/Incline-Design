@@ -10,10 +10,10 @@ const LOAD_READ_SHARE: f32 = 0.6;
 /// Build the derived structures a loaded mesh needs for picking, wireframes
 /// and draw order, stepping `progress` as each finishes.
 pub(super) fn build_triangulation_indexes(
-    mesh: &mesh_data::Triangulation,
+    mesh: &std::sync::Arc<mesh_data::Triangulation>,
     progress: &Phase,
 ) -> (std::sync::Arc<crate::model::spatial::TriangleBvh>, Vec<[u32; 2]>, std::sync::Arc<Vec<u32>>) {
-    let spatial = std::sync::Arc::new(crate::model::spatial::TriangleBvh::build(mesh));
+    let spatial = std::sync::Arc::new(crate::model::spatial::TriangleBvh::for_surface(mesh));
     progress.set_fraction(0.6);
     let edges = crate::model::triangulation::unique_edges(mesh);
     progress.set_fraction(0.8);
@@ -44,11 +44,12 @@ impl<'a> App<'a> {
                 // large browser source before building its derived structures.
                 drop(bytes);
                 drop(reservation);
+                let mesh = std::sync::Arc::new(mesh);
                 let (spatial, edges, surface_face_order) = build_triangulation_indexes(&mesh, &progress.phase(LOAD_READ_SHARE, 1.0));
                 Ok(LoadedTriangulation {
                     path: std::path::PathBuf::from(&source_name),
                     name,
-                    mesh: std::sync::Arc::new(mesh),
+                    mesh,
                     spatial,
                     edges,
                     surface_face_order,
@@ -136,11 +137,12 @@ impl<'a> App<'a> {
                             face_count = mesh.face_count().to_string()
                         )
                     );
+                    let mesh = std::sync::Arc::new(mesh);
                     let (spatial, edges, surface_face_order) = build_triangulation_indexes(&mesh, &progress.phase(LOAD_READ_SHARE, 1.0));
                     Ok(LoadedTriangulation {
                         name,
                         path,
-                        mesh: std::sync::Arc::new(mesh),
+                        mesh,
                         spatial,
                         edges,
                         surface_face_order,

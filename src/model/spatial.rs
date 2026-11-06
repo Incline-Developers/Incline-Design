@@ -254,24 +254,61 @@ fn bbox_valid(min: DVec3, max: DVec3) -> bool {
 /// walks its triangles, and only a query that needs the tree builds it.
 #[derive(Clone, Debug)]
 pub(crate) struct TriangleBvh {
-    tree: std::sync::OnceLock<TriangleTree>,
+    tree: std::sync::Arc<std::sync::OnceLock<TriangleTree>>,
     /// What to build the tree from. `None` for one built up front.
     deferred: Option<std::sync::Arc<mesh_data::Triangulation>>,
+    /// Whether a query has already asked for a background build.
+    building: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
+
+/// Surfaces with at least this many faces have no tree until something asks.
+/// The tree costs about 60 bytes a triangle, and a survey's topography can go
+/// through a whole planning session with only the solids built from it picked.
+const DEFER_SURFACE_TREE_FACES: usize = 1_000_000;
 
 impl TriangleBvh {
     pub(crate) fn build(mesh: &mesh_data::Triangulation) -> Self {
         Self {
-            tree: std::sync::OnceLock::from(TriangleTree::build(mesh)),
+            tree: std::sync::Arc::new(std::sync::OnceLock::from(TriangleTree::build(mesh))),
             deferred: None,
+            building: std::sync::Arc::default(),
         }
     }
 
     pub(crate) fn deferred(mesh: std::sync::Arc<mesh_data::Triangulation>) -> Self {
         Self {
-            tree: std::sync::OnceLock::new(),
+            tree: std::sync::Arc::default(),
             deferred: Some(mesh),
+            building: std::sync::Arc::default(),
         }
+    }
+
+    /// The tree for a surface in the project: up front when it is quick and
+    /// small, otherwise when first asked for.
+    pub(crate) fn for_surface(mesh: &std::sync::Arc<mesh_data::Triangulation>) -> Self {
+        if mesh.face_count() >= DEFER_SURFACE_TREE_FACES {
+            Self::deferred(mesh.clone())
+        } else {
+            Self::build(mesh)
+        }
+    }
+
+    /// Whether the tree can answer now. If not, one is started in the
+    /// background, so a viewport hovering over a big surface asks and carries on.
+    fn built_or_start_building(&self) -> bool {
+        if self.tree.get().is_some() {
+            return true;
+        }
+        if !self.building.swap(true, std::sync::atomic::Ordering::Relaxed)
+            && let Some(mesh) = self.deferred.clone()
+        {
+            let tree = self.tree.clone();
+            crate::app::jobs::spawn_pool_task(move || {
+                let built = TriangleTree::build(&mesh);
+                let _ = tree.set(built);
+            });
+        }
+        false
     }
 
     /// Built outside the cell, which must not stay locked across the build: a
@@ -307,7 +344,14 @@ impl TriangleBvh {
     pub(crate) fn ray_hit_details_where(&self, mesh: &mesh_data::Triangulation, origin: DVec3, direction: DVec3, accept: impl Fn(DVec3) -> bool) -> Option<TriangleHit> {
         match self.tree.get() {
             Some(tree) => tree.ray_hit_details_where(mesh, origin, direction, accept),
-            None => ray_hit_without_tree(mesh, origin, direction, accept),
+            None => {
+                // Answered by walking the faces meanwhile, as this is one click
+                // on a piece, or the first of many on a large surface.
+                if mesh.face_count() >= DEFER_SURFACE_TREE_FACES {
+                    self.built_or_start_building();
+                }
+                ray_hit_without_tree(mesh, origin, direction, accept)
+            }
         }
     }
 
@@ -325,6 +369,11 @@ impl TriangleBvh {
         threshold: f32,
         visit: impl FnMut([DVec3; 3]),
     ) {
+        // Snapping is asked for every frame on the UI thread, and goes without
+        // on a large surface for the moment its tree takes to arrive.
+        if mesh.face_count() >= DEFER_SURFACE_TREE_FACES && !self.built_or_start_building() {
+            return;
+        }
         self.tree().for_each_screen_candidate(mesh, view_projection, screen, cursor, threshold, visit);
     }
 

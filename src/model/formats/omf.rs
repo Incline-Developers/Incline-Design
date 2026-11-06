@@ -2930,8 +2930,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
 
     fn push_triangulation(&mut self, element: &omf_crate::Element, vertices: Vec<Vertex>, faces: Vec<[u32; 3]>) -> Result<()> {
         let geometry = element_geometry(element);
-        let mesh = Triangulation::from_vertices_and_faces(vertices, faces).with_context(|| format!("build OMF surface '{}'", element.name))?;
-        let spatial = Arc::new(crate::model::spatial::TriangleBvh::build(&mesh));
+        let mesh = Arc::new(Triangulation::from_vertices_and_faces(vertices, faces).with_context(|| format!("build OMF surface '{}'", element.name))?);
+        let spatial = Arc::new(crate::model::spatial::TriangleBvh::for_surface(&mesh));
         let edges = unique_edges(&mesh);
         let surface_face_order = Arc::new(spatial_surface_face_order(&mesh));
         let style = element.metadata.get(META_STYLE);
@@ -2947,7 +2947,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             loaded: LoadedTriangulation {
                 name: element_name(element).to_owned(),
                 path: virtual_path(self.source_name, element_name(element), "obj"),
-                mesh: Arc::new(mesh),
+                mesh,
                 spatial,
                 edges,
                 surface_face_order,

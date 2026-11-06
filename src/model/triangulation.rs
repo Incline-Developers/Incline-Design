@@ -261,5 +261,9 @@ pub(crate) fn unique_edges(mesh: &mesh_data::Triangulation) -> Vec<[u32; 2]> {
     packed.par_sort_unstable();
     packed.dedup();
 
-    packed.into_iter().map(|e| [(e >> 32) as u32, e as u32]).collect()
+    // Collected in place, so it would keep the room for every face's three
+    // sides, about twice what is left once the shared ones are gone.
+    let mut edges: Vec<[u32; 2]> = packed.into_iter().map(|e| [(e >> 32) as u32, e as u32]).collect();
+    edges.shrink_to_fit();
+    edges
 }
