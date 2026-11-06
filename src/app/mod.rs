@@ -8,7 +8,7 @@ pub(crate) mod geophysics_web;
 pub(crate) mod haulage_pipeline; // The Haulage workspace's Setup run/invalidation model
 pub(crate) mod io; /* Handles session serialisation */
 pub(crate) mod jobs; // Reusable background-compute job queue
-pub(crate) mod memory; // Browser address-space budgeting for large allocations
+pub(crate) mod memory; // Allocator settings, and browser address-space budgeting for large allocations
 pub(crate) mod memory_usage; // The status bar's memory and per-core CPU readouts
 pub(crate) mod planning_pipeline; // The Solids workspace's six-stage run/invalidation model
 pub(crate) mod schedule_animation; // Schedule Animate's derived, scrubbed geometry

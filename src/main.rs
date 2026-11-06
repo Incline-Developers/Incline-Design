@@ -40,6 +40,7 @@ pub(crate) const APP_RELEASE: &str = env!("CARGO_PKG_VERSION");
 /// Desktop main function
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> Result<()> {
+    app::memory::tune_allocator();
     let _logging_guard = logging::init();
     (|| {
         let event_loop = EventLoop::new()?;

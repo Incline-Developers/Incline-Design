@@ -505,6 +505,11 @@ impl<'a> App<'a> {
             self.evict_unloaded_items();
             self.evict_unloaded_layers();
         }
+        // Everything is done, so what the jobs built and threw away can go.
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.pending_jobs.is_empty() {
+            crate::app::memory::release_free_memory();
+        }
         // The status bar is driven from the ticket registry (see
         // `App::refresh_status_message`), which each job joined when it began.
     }
