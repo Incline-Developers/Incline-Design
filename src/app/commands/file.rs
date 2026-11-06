@@ -476,10 +476,8 @@ impl<'a> App<'a> {
                 anyhow::bail!("Cancelled");
             }
             progress.set_fraction(0.0);
-            let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
-            progress.set_fraction(0.1);
             let source_name = file_name(&path);
-            let bundle = formats::omf::from_bytes(&source_name, bytes, &progress.phase(0.1, 1.0))?;
+            let bundle = formats::omf::from_path(&source_name, &path, &progress.phase(0.0, 1.0))?;
             Ok((path, source_name, bundle))
         };
         let apply = move |app: &mut App, result: Result<(PathBuf, String, formats::omf::ImportBundle)>| {
@@ -2647,9 +2645,8 @@ impl<'a> App<'a> {
             if cancel.is_cancelled() {
                 anyhow::bail!("Cancelled");
             }
-            let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
             let source_name = file_name(&path);
-            let bundle = formats::omf::from_bytes(&source_name, bytes, &progress.phase(0.0, 1.0))?;
+            let bundle = formats::omf::from_path(&source_name, &path, &progress.phase(0.0, 1.0))?;
             Ok((path, source_name, bundle))
         };
         let apply = move |app: &mut App, result: Result<(PathBuf, String, formats::omf::ImportBundle)>| {
@@ -2790,10 +2787,9 @@ impl<'a> App<'a> {
             if cancel.is_cancelled() {
                 anyhow::bail!("Cancelled");
             }
-            let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
             let source_name = file_name(&path);
             let progress = crate::model::progress::Progress::new();
-            let bundle = formats::omf::from_bytes(&source_name, bytes, &progress.phase(0.0, 1.0))?;
+            let bundle = formats::omf::from_path(&source_name, &path, &progress.phase(0.0, 1.0))?;
             let mut design = project::new_empty(Some(path.clone()));
             design.metadata.name = bundle.project_name;
             // The live registry, not the file's, decides which folders exist:

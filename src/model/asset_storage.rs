@@ -27,19 +27,36 @@ struct BackingFile {
 }
 
 impl Backing {
+    /// A new backing file for `write` to fill, without its contents ever being
+    /// in memory whole.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn write_with(write: impl FnOnce(&mut std::fs::File) -> Result<()>) -> Result<Self> {
+        use std::io::Write;
+        // /tmp is commonly a RAM-backed filesystem. Put evicted data in
+        // the application cache so unloading does not merely move it into
+        // tmpfs and keep the same system-memory pressure.
+        let directory = dirs::cache_dir().context("locate asset cache directory")?.join("Incline_Design").join("unloaded-assets");
+        std::fs::create_dir_all(&directory).context("create asset cache directory")?;
+        let mut file = tempfile::Builder::new().prefix("asset-").tempfile_in(directory).context("create asset backing file")?;
+        write(file.as_file_mut())?;
+        file.flush().context("flush asset backing file")?;
+        Ok(Self(Arc::new(BackingFile { path: file.into_temp_path() })))
+    }
+
+    /// A private copy of the file at `path`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn copy_of(path: &std::path::Path) -> Result<Self> {
+        Self::write_with(|file| {
+            std::io::copy(&mut std::fs::File::open(path).with_context(|| format!("read {}", path.display()))?, file).with_context(|| format!("read {}", path.display()))?;
+            Ok(())
+        })
+    }
+
     pub(crate) fn write(bytes: &[u8]) -> Result<Self> {
         #[cfg(not(target_arch = "wasm32"))]
         {
             use std::io::Write;
-            // /tmp is commonly a RAM-backed filesystem. Put evicted data in
-            // the application cache so unloading does not merely move it into
-            // tmpfs and keep the same system-memory pressure.
-            let directory = dirs::cache_dir().context("locate asset cache directory")?.join("Incline_Design").join("unloaded-assets");
-            std::fs::create_dir_all(&directory).context("create asset cache directory")?;
-            let mut file = tempfile::Builder::new().prefix("asset-").tempfile_in(directory).context("create asset backing file")?;
-            file.write_all(bytes).context("write asset backing file")?;
-            file.flush().context("flush asset backing file")?;
-            Ok(Self(Arc::new(BackingFile { path: file.into_temp_path() })))
+            Self::write_with(|file| file.write_all(bytes).context("write asset backing file"))
         }
         #[cfg(target_arch = "wasm32")]
         {

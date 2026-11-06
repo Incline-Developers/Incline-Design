@@ -7,7 +7,6 @@ use anyhow::{Context, Result};
 
 use super::{
     OpenItem,
-    asset_storage::Backing,
     formats::omf::{self, DeferredAsset, ProjectSnapshot},
     progress::Phase,
 };
@@ -51,8 +50,7 @@ impl OpenItem {
             Self::PointCloud(item) => snapshot.point_clouds.push((**item).clone()),
             Self::Raster(item) => snapshot.rasters.push((**item).clone()),
         }
-        let bytes = omf::to_bytes(snapshot, omf::Compression::Scratch, progress)?;
-        let backing = Backing::write(&bytes)?;
+        let backing = omf::to_backing(snapshot, omf::Compression::Scratch, progress)?;
         self.state_mut().deferred = Some(DeferredAsset::new(backing, vec![0]));
         self.release_payload();
         Ok(self)

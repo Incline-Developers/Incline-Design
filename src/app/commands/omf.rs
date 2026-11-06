@@ -2,8 +2,6 @@
 
 use std::path::PathBuf;
 
-#[cfg(not(target_arch = "wasm32"))]
-use anyhow::Context;
 use anyhow::Result;
 
 use crate::{
@@ -327,14 +325,13 @@ impl<'a> App<'a> {
                     if cancel.is_cancelled() {
                         anyhow::bail!("Cancelled");
                     }
-                    let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
                     let name = path
                         .file_name()
                         .and_then(|name| name.to_str())
                         .map(ToOwned::to_owned)
                         .unwrap_or_else(|| format!("{}.omf", tr!("common-untitled")));
                     let phase = progress.phase(index as f32 / total, (index + 1) as f32 / total);
-                    decoded.push((name.clone(), omf::from_bytes(&name, bytes, &phase)?));
+                    decoded.push((name.clone(), omf::from_path(&name, &path, &phase)?));
                 }
                 Ok(decoded)
             },

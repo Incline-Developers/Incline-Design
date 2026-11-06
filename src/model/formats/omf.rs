@@ -9,7 +9,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    io::{Cursor, Seek, Write},
+    io::{Seek, Write},
     path::{Path, PathBuf},
     sync::{Arc, OnceLock},
 };
@@ -356,8 +356,21 @@ pub(crate) fn write_path(snapshot: ProjectSnapshot, path: &Path, progress: &Phas
     })
 }
 
+/// Write `snapshot` straight into a new temporary backing file.
+pub(crate) fn to_backing(snapshot: ProjectSnapshot, compression: Compression, progress: &Phase) -> Result<crate::model::asset_storage::Backing> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::model::asset_storage::Backing::write_with(|file| write_to(snapshot, file, compression, progress).map(drop))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        crate::model::asset_storage::Backing::write(&to_bytes(snapshot, compression, progress)?)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
 pub(crate) fn to_bytes(snapshot: ProjectSnapshot, compression: Compression, progress: &Phase) -> Result<Vec<u8>> {
-    let cursor = write_to(snapshot, Cursor::new(Vec::new()), compression, progress)?;
+    let cursor = write_to(snapshot, std::io::Cursor::new(Vec::new()), compression, progress)?;
     Ok(cursor.into_inner())
 }
 
@@ -1926,8 +1939,22 @@ pub(crate) fn from_bytes(source_name: &str, bytes: Vec<u8>, progress: &Phase) ->
     read_container(source_name, bytes, backing, progress).context(tr!("omf-damaged"))
 }
 
-fn read_container(source_name: &str, bytes: Vec<u8>, backing: crate::model::asset_storage::Backing, progress: &Phase) -> Result<ImportBundle> {
-    let mut reader = omf_crate::file::Reader::new(bytes).context("open OMF archive")?;
+/// Open a project file. The archive is read from a private copy of the file as
+/// each element needs it, so it is never held in memory whole.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn from_path(source_name: &str, path: &Path, progress: &Phase) -> Result<ImportBundle> {
+    use std::io::Read;
+    progress.set_fraction(0.0);
+    let mut head = Vec::with_capacity(36);
+    std::fs::File::open(path)?.take(36).read_to_end(&mut head)?;
+    reject_omf1(&head).with_context(|| format!("read OMF container {source_name}"))?;
+    let backing = crate::model::asset_storage::Backing::copy_of(path)?;
+    let archive = backing.open()?;
+    read_container(source_name, archive, backing, progress).context(tr!("omf-damaged"))
+}
+
+fn read_container<R: omf_crate::file::ReadAt>(source_name: &str, archive: R, backing: crate::model::asset_storage::Backing, progress: &Phase) -> Result<ImportBundle> {
+    let mut reader = omf_crate::file::Reader::new(archive).context("open OMF archive")?;
     reader.set_limits(reader_limits());
     let (project, problems) = reader.project().context("read project index")?;
     let mut bundle = ImportBundle {
