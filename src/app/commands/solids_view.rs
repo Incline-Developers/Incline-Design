@@ -2725,6 +2725,7 @@ impl crate::app::App<'_> {
             };
             let fields = fields.clone();
             let capture_material = scope == ReserveScope::Dig;
+            self.scanned_model_kept_until = Some(web_time::Instant::now() + SCANNED_MODEL_KEPT);
             self.spawn_job_reporting_progress(
                 crate::i18n::tr!("planning-computing-reserves"),
                 vec![artifact_job(id, scope.artifact(), token)],
@@ -2753,6 +2754,9 @@ impl crate::app::App<'_> {
         }
     }
 }
+
+/// How long a hidden block model stays loaded after a reserve scan used it.
+const SCANNED_MODEL_KEPT: std::time::Duration = std::time::Duration::from_secs(180);
 
 /// Commit a measurement, and keep the dig blocks' for the next one to build on.
 fn settle_reserves(cache: &mut ViewSolid, scope: ReserveScope, outcome: ReserveOutcome, measured_with: u64, meshes: Vec<Arc<Triangulation>>) {

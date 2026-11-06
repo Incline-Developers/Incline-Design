@@ -583,6 +583,10 @@ pub(crate) struct App<'a> {
     /// Whether a Setup run was keeping unloaded items resident last frame;
     /// see [`Self::release_pipeline_residency`].
     pub(crate) residency_held_by_pipeline: bool,
+    /// Until when a hidden block model read back for a reserve scan stays
+    /// loaded. Edits come in runs, and reading a large model back takes far
+    /// longer than the scan that needs it.
+    pub(crate) scanned_model_kept_until: Option<Instant>,
     pub(crate) schedule_animation: crate::app::schedule_animation::ScheduleAnimation,
     pub(crate) solid_preview_restore_requested: Option<crate::app::commands::solids::SolidPreviewKey>,
     slice_preview_cursor_px: Option<(f64, f64)>,
@@ -775,6 +779,7 @@ impl<'a> Default for App<'a> {
             improve_progress: None,
             improve_progress_seen: None,
             residency_held_by_pipeline: false,
+            scanned_model_kept_until: None,
             schedule_animation: Default::default(),
             solid_preview_restore_requested: None,
             slice_preview_cursor_px: None,
@@ -2745,6 +2750,10 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                 graphics.request_slice_preview_redraw();
             }
         }
+        if self.scanned_model_kept_until.is_some_and(|until| until <= now) {
+            self.scanned_model_kept_until = None;
+            self.evict_unloaded_items();
+        }
         let continuous_redraw = self.graphics.as_ref().is_some_and(Graphics::needs_continuous_redraw);
         if self.redraw_requested || continuous_redraw {
             self.frame_demanded_at.get_or_insert(now);
@@ -2781,6 +2790,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             .chain(self.schedule_auto_deadline)
             .chain(self.planning_auto_deadline)
             .chain(self.haulage_auto_deadline)
+            .chain(self.scanned_model_kept_until)
             .chain(trackpad_deadline)
             .min();
         if let Some(deadline) = wake_deadline {

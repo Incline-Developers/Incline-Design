@@ -1613,7 +1613,10 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             TaskKind::Dig { sequence } => {
                 for &source in sequence {
                     // Every portion of the block, because they move together.
-                    let portions: Vec<MaterialId> = context.range((source, MaterialId(u32::MIN))..=(source, MaterialId(u32::MAX))).map(|((_, material), _)| *material).collect();
+                    let portions: Vec<MaterialId> = context
+                        .range((source, MaterialId(u32::MIN))..=(source, MaterialId(u32::MAX)))
+                        .map(|((_, material), _)| *material)
+                        .collect();
                     for material in portions {
                         let Some(held) = context.get(&(source, material)) else { continue };
                         let route = RouteSource::Ground {

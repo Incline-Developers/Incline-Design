@@ -136,6 +136,7 @@ impl<'a> App<'a> {
             self.set_item_style(item, style);
         }
         if !loaded {
+            self.scanned_model_kept_until = None;
             self.evict_unloaded_items();
             self.evict_unloaded_layers();
         }
@@ -246,6 +247,7 @@ impl<'a> App<'a> {
             .chain(self.point_clouds.iter().map(|item| ItemRef::PointCloud(item.id)))
             .chain(self.raster_textures.iter().map(|item| ItemRef::Raster(item.id)))
             .filter(|item| self.project_item_state(*item).is_some_and(|state| !state.loaded && state.deferred.is_none()))
+            .filter(|item| !(matches!(item, ItemRef::BlockModel(_)) && self.scanned_model_kept_until.is_some()))
             .collect();
         for item in items {
             let Some(snapshot) = self.clone_project_item(item) else {
