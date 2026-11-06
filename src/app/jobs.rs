@@ -122,6 +122,8 @@ pub(crate) enum JobKey {
         runtime_id: u32,
     },
     Raster(crate::model::raster::RasterTextureId),
+    /// The drawing of the prismoid grid with this id.
+    PrismoidGrid(crate::model::prismoid_grid::PrismoidGridId),
     Project {
         runtime_id: u32,
         document_revision: u64,
@@ -292,6 +294,7 @@ impl<'a> App<'a> {
             JobKey::Geophysics { dataset, generation } => self.well_logs.generation(dataset) == Some(generation),
             JobKey::DrillHoleLoad { runtime_id, .. } => self.workspace.active_project().is_some_and(|project| project.runtime_id == runtime_id),
             JobKey::Raster(id) => self.raster_textures.iter().any(|item| item.id == id),
+            JobKey::PrismoidGrid(id) => self.prismoid_grids.iter().any(|item| item.id == id),
             // Its result is a finished video, wanted whatever moved.
             JobKey::VideoExport => true,
             JobKey::Project { runtime_id, document_revision } => self

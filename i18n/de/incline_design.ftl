@@ -782,6 +782,9 @@ cmd-point-cloud-tin-filtered-ground = Gelände-TIN: auf { $ground } Bodenpunkte 
 cmd-point-cloud-tin-subsampled = Gelände-TIN: { $sampled } von { $total } Punkten räumlich unterabgetastet
 cmd-point-cloud-tin-triangulated = Gelände-TIN: { $vertex_count } eindeutige XY-Punkte zu { $face_count } Flächen trianguliert{ $suffix }
 cmd-prismoid-grid-building = Prismoidgitter wird erstellt…
+cmd-prismoid-grid-mesh-failed = Die Geometrie des Prismoidgitters '{ $name }' konnte nicht erstellt werden
+cmd-prismoid-grid-preparing = Prismoidgitter wird vorbereitet…
+cmd-prismoid-grid-too-large-to-draw = Prismoidgitter '{ $name }' hat { $corners } Eckpunkte, mehr als das Budget von { $budget }, und wird nicht gezeichnet. Es bleibt aufgeführt und gespeichert.
 cmd-prismoid-grid-built = Prismoidgitter '{ $name }' erstellt: { $columns } × { $rows } Zellen, { $active } aktiv, vertikale Mächtigkeit { $min } bis { $max }
 cmd-prismoid-grid-crossed =
     { $count ->

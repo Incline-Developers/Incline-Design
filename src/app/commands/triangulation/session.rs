@@ -79,6 +79,7 @@ impl<'a> App<'a> {
                         always_show_edges: false,
                         depth_shade: None,
                         pattern_from: None,
+                        prismoid_grid: None,
                     });
                     app.touch_active_project_content();
                     if should_fit {
@@ -193,6 +194,7 @@ impl<'a> App<'a> {
                         always_show_edges: false,
                         depth_shade: None,
                         pattern_from: None,
+                        prismoid_grid: None,
                     });
                     self.touch_active_project_content();
                     if should_fit {
@@ -409,6 +411,7 @@ impl<'a> App<'a> {
             always_show_edges: false,
             depth_shade: None,
             pattern_from: None,
+            prismoid_grid: None,
         });
         self.touch_active_project_content();
         userspace_log!(

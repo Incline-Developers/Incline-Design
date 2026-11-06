@@ -86,7 +86,7 @@ impl<'a> App<'a> {
             graphics
                 .pick_scene_entity_at_cursor(
                     PICK_THRESHOLD_PX,
-                    &self.triangulations,
+                    crate::app::commands::prismoid_grid::with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
                     &self.drill_holes,
                     &self.editor.hidden_handles,
                     frozen,

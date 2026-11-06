@@ -162,6 +162,7 @@ impl<'a> App<'a> {
                 (ItemRef::PointCloud(id), JobKey::PointCloud(job)) => id == *job,
                 (ItemRef::BlockModel(id), JobKey::BlockModel(job)) => id == *job,
                 (ItemRef::DrillHole(id), JobKey::DrillHole(job)) => id == *job,
+                (ItemRef::PrismoidGrid(id), JobKey::PrismoidGrid(job)) => id == *job,
                 _ => false,
             })
         });

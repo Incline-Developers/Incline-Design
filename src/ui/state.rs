@@ -7936,6 +7936,9 @@ pub(crate) struct UiPrismoidGridEntry {
     pub(crate) is_hidden: bool,
     pub(crate) dirty: bool,
     pub(crate) summary: PrismoidGridSummary,
+    /// Whether the lattice has one column size and one row size, so its
+    /// thickness can be drawn as colour.
+    pub(crate) regular: bool,
     /// Folder the grid sits in, or `None` for the section root.
     pub(crate) folder: Option<FolderId>,
     pub(crate) section: SectionKind,

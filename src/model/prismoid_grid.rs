@@ -10,6 +10,8 @@ use glam::{DVec2, DVec3};
 use crate::{
     app::jobs::CancelFlag,
     model::{
+        drill_hole::DrillColorPreset,
+        formats::mesh_data,
         grid_surface::{GridSurface, HEIGHT_TOLERANCE, NODE_TOLERANCE},
         progress::Phase,
         project::ProjectItemState,
@@ -21,6 +23,9 @@ pub(crate) struct PrismoidGridId(pub(crate) u64);
 
 /// The grey a built prismoid grid starts in.
 pub(crate) const DEFAULT_PRISMOID_GRID_COLOR: [f32; 4] = [0.72, 0.72, 0.75, 1.0];
+
+/// The ramp vertical thickness is drawn on, thin blue to thick red.
+pub(crate) const THICKNESS_RAMP: DrillColorPreset = DrillColorPreset::Rainbow;
 
 /// Why two grid surfaces make no prismoid grid.
 #[derive(Debug)]
@@ -344,6 +349,99 @@ impl PrismoidGrid {
         (vertices, triangles)
     }
 
+    /// The closed body of the active cells: roof, floor facing down, and
+    /// [`Self::outline_walls`] less the triangles a closed corner flattens.
+    /// `None` with no active cell.
+    pub(crate) fn closed_mesh(&self) -> Option<PrismoidMesh> {
+        const UNSET: u32 = u32::MAX;
+        let columns = self.lattice.columns();
+        let plan = self.lattice.corners();
+        let mut vertices = Vec::new();
+        let mut roof_at = vec![UNSET; plan.len()];
+        let mut floor_at = vec![UNSET; plan.len()];
+        let mut place = |at: &mut [u32], heights: &[f64], corner: usize| {
+            if at[corner] == UNSET {
+                at[corner] = vertices.len() as u32;
+                vertices.push(mesh_vertex(plan[corner].extend(heights[corner])));
+            }
+            at[corner]
+        };
+        let mut faces = Vec::new();
+        for (cell, _) in self.active.iter().enumerate().filter(|(_, active)| **active) {
+            let a = (cell / columns) * (columns + 1) + cell % columns;
+            let d = a + columns + 1;
+            let corners = [a, a + 1, d + 1, d];
+            let [ra, rb, rc, rd] = corners.map(|corner| place(&mut roof_at, &self.roof, corner));
+            let [fa, fb, fc, fd] = corners.map(|corner| place(&mut floor_at, &self.floor, corner));
+            faces.extend([[ra, rb, rc], [ra, rc, rd], [fa, fc, fb], [fa, fd, fc]]);
+        }
+        if faces.is_empty() {
+            return None;
+        }
+        let (walls, wall_faces) = self.outline_walls();
+        let offset = vertices.len() as u32;
+        vertices.extend(walls.iter().map(|position| mesh_vertex(*position)));
+        faces.extend(
+            wall_faces
+                .into_iter()
+                .filter(|face| {
+                    let [a, b, c] = face.map(|index| walls[index as usize]);
+                    a != b && b != c && a != c
+                })
+                .map(|face| face.map(|index| index + offset)),
+        );
+        // Each wall quad runs from-roof, from-floor, to-roof, to-floor.
+        let outline = (0..walls.len() as u32 / 4)
+            .flat_map(|quad| {
+                let first = offset + 4 * quad;
+                [[first, first + 2], [first + 1, first + 3]]
+            })
+            .collect();
+        Some(PrismoidMesh { vertices, faces, outline })
+    }
+
+    /// Thickness at every corner as a position from 0 to 1 across `range`,
+    /// 0.5 where the range is flat. `None` unless the lattice is regular: the
+    /// map to the texture is affine, and a tensor lattice's corners are not
+    /// evenly spaced.
+    pub(crate) fn thickness_map(&self, (min, max): (f64, f64), max_side: u32) -> Option<ThicknessMap> {
+        let lattice = &self.lattice;
+        if !lattice.is_regular() {
+            return None;
+        }
+        // A side too long for a texture keeps every `step`-th corner, its
+        // last texel clamped to the last corner.
+        let fit = |side: usize| {
+            let step = (side - 1).div_ceil(max_side as usize - 1);
+            (step, (side - 1).div_ceil(step) + 1)
+        };
+        let (columns, rows) = (lattice.columns() + 1, lattice.rows() + 1);
+        let ((column_step, width), (row_step, height)) = (fit(columns), fit(rows));
+        let position = |corner: usize| {
+            if (max - min).abs() <= HEIGHT_TOLERANCE {
+                0.5
+            } else {
+                ((self.roof[corner] - self.floor[corner] - min) / (max - min)).clamp(0.0, 1.0) as f32
+            }
+        };
+        let positions = (0..height)
+            .flat_map(|row| (0..width).map(move |column| (column, row)))
+            .map(|(column, row)| position((row * row_step).min(rows - 1) * columns + (column * column_step).min(columns - 1)))
+            .collect();
+        // Texel centres on the corners kept.
+        let along = |axis: DVec2, size: f64, step: usize, count: usize| {
+            let (spacing, count) = (size * step as f64, count as f64);
+            [axis.x / (spacing * count), axis.y / (spacing * count), (0.5 - lattice.origin.dot(axis) / spacing) / count]
+        };
+        let [a, b, c] = along(lattice.u, lattice.u_sizes[0], column_step, width);
+        let [d, e, f] = along(lattice.v, lattice.v_sizes[0], row_step, height);
+        Some(ThicknessMap {
+            size: [width as u32, height as u32],
+            positions,
+            world_to_uv: [a, b, c, d, e, f],
+        })
+    }
+
     /// The lattice size, the active cells, and the range of roof minus floor
     /// over every corner of an active cell.
     pub(crate) fn summary(&self) -> PrismoidGridSummary {
@@ -381,6 +479,25 @@ impl PrismoidGrid {
             .sum();
         (self.roof.len() + self.floor.len()) * size_of::<f64>() + self.active.len() + values
     }
+}
+
+/// A prismoid grid as one closed mesh, with the line round its roof and floor.
+pub(crate) struct PrismoidMesh {
+    pub(crate) vertices: Vec<mesh_data::Vertex>,
+    pub(crate) faces: Vec<[u32; 3]>,
+    pub(crate) outline: Vec<[u32; 2]>,
+}
+
+/// A grid's vertical thickness as positions on [`THICKNESS_RAMP`], row by
+/// row, with the map from world XY to their texture coordinates.
+pub(crate) struct ThicknessMap {
+    pub(crate) size: [u32; 2],
+    pub(crate) positions: Vec<f32>,
+    pub(crate) world_to_uv: [f64; 6],
+}
+
+fn mesh_vertex(position: DVec3) -> mesh_data::Vertex {
+    mesh_data::Vertex::new(position.x, position.y, position.z)
 }
 
 /// What a prismoid grid's row reports about it.

@@ -6,7 +6,14 @@ use winit::{
     keyboard::{KeyCode, PhysicalKey},
 };
 
-use crate::{app::App, i18n::tr, logging::CommandReportSpec, rendering::graphics::RenderSurfaceError, ui::state::ActiveTool, userspace_error, userspace_warn};
+use crate::{
+    app::{App, commands::prismoid_grid::with_prismoid_scene},
+    i18n::tr,
+    logging::CommandReportSpec,
+    rendering::graphics::RenderSurfaceError,
+    ui::state::ActiveTool,
+    userspace_error, userspace_warn,
+};
 
 /// Right-press-to-drag threshold, in logical points, scaled by the window's scale factor before use.
 const RIGHT_CLICK_DRAG_THRESHOLD_PT: f32 = 3.0;
@@ -65,7 +72,7 @@ impl<'a> App<'a> {
                 let drawn = drawn_surfaces(
                     &self.editor,
                     self.showing_solid_preview(),
-                    &self.triangulations,
+                    with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
                     &self.solid_view_body,
                     &self.schedule_animation,
                     self.solid_preview.as_ref(),
@@ -289,6 +296,7 @@ impl<'a> App<'a> {
                     self.pick_entry_ground();
                     self.sync_solid_preview();
                     self.sync_schedule_animation();
+                    self.sync_prismoid_drawing();
                     self.drive_video_recording();
                     self.sync_reserve_setup_stats();
                     self.sync_blasting_view();
@@ -325,7 +333,7 @@ impl<'a> App<'a> {
                         let drawn = drawn_surfaces(
                             &self.editor,
                             showing_solid_preview,
-                            &self.triangulations,
+                            with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
                             &self.solid_view_body,
                             &self.schedule_animation,
                             self.solid_preview.as_ref(),
@@ -338,7 +346,7 @@ impl<'a> App<'a> {
                             drill_holes: &self.drill_holes,
                             well_logs: &self.well_logs,
                             point_clouds: &self.point_clouds,
-                            rasters: &self.raster_textures,
+                            rasters: with_prismoid_scene(&self.raster_textures, &self.prismoid_rasters),
                             solid_preview: drawn.1,
                             project: &project,
                         }) {
@@ -388,7 +396,7 @@ impl<'a> App<'a> {
                                     graphics.request_slice_preview_redraw_if_scene_changed(
                                         &self.editor,
                                         &self.scene_document,
-                                        &self.triangulations,
+                                        with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
                                         &self.block_models,
                                         &self.drill_holes,
                                         &self.point_clouds,
@@ -958,7 +966,7 @@ impl<'a> App<'a> {
                 let result = self.graphics.as_mut().map(|graphics| {
                     graphics.render_slice_preview(
                         &self.scene_document,
-                        &self.triangulations,
+                        with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
                         &self.block_models,
                         &self.drill_holes,
                         &self.point_clouds,
@@ -1225,7 +1233,7 @@ impl<'a> App<'a> {
         let found = graphics.snap_cursor(
             document,
             &self.snap_index,
-            &self.triangulations,
+            with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
             &self.editor.hidden_handles,
             &self.editor.frozen_handles,
             &self.editor.cursor_mode,
@@ -1360,7 +1368,7 @@ impl<'a> App<'a> {
                 let picked = self.graphics.as_ref().filter(|_| ring.is_none()).and_then(|g| {
                     g.pick_scene_entity_at_cursor(
                         crate::app::PICK_THRESHOLD_PX,
-                        &self.triangulations,
+                        with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
                         &self.drill_holes,
                         &self.editor.hidden_handles,
                         frozen,
@@ -1550,7 +1558,7 @@ impl<'a> App<'a> {
         let drawn = drawn_surfaces(
             &self.editor,
             self.showing_solid_preview(),
-            &self.triangulations,
+            with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
             &self.solid_view_body,
             &self.schedule_animation,
             self.solid_preview.as_ref(),

@@ -741,6 +741,9 @@ cmd-point-cloud-tin-filtered-ground = TIN التضاريس: رُشّحت { $grou
 cmd-point-cloud-tin-subsampled = TIN للتضاريس: تم أخذ عينة مكانية من { $sampled } نقطة من أصل { $total }
 cmd-point-cloud-tin-triangulated = TIN التضاريس: ثُلثت { $vertex_count } نقطة XY فريدة إلى { $face_count } وجه{ $suffix }
 cmd-prismoid-grid-building = جارٍ بناء شبكة شبه المنشورات…
+cmd-prismoid-grid-mesh-failed = تعذر بناء هندسة شبكة شبه المنشورات '{ $name }'
+cmd-prismoid-grid-preparing = جارٍ تجهيز شبكة شبه المنشورات…
+cmd-prismoid-grid-too-large-to-draw = شبكة شبه المنشورات '{ $name }' عدد أركانها { $corners }، وهو يتجاوز الحد البالغ { $budget }، ولذلك لا تُرسم. تظل مدرجة ومحفوظة.
 cmd-prismoid-grid-built = تم بناء شبكة شبه المنشورات '{ $name }': { $columns } × { $rows } خلية، { $active } نشطة، السماكة الرأسية من { $min } إلى { $max }
 cmd-prismoid-grid-crossed =
     { $count ->

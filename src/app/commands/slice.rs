@@ -150,7 +150,7 @@ impl<'a> App<'a> {
             // Squared up first, so the fit measures the section as it will be seen.
             graphics.zoom_to_extents(
                 &self.scene_document,
-                &self.triangulations,
+                crate::app::commands::prismoid_grid::with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
                 &self.block_models,
                 &self.drill_holes,
                 &self.point_clouds,
@@ -237,12 +237,13 @@ impl<'a> App<'a> {
             return;
         };
         let slab = graphics.section_slab();
-        let key = section_surface_lines_key(&self.editor, slab, &self.triangulations);
+        let scene = crate::app::commands::prismoid_grid::with_prismoid_scene(&self.triangulations, &self.prismoid_scene);
+        let key = section_surface_lines_key(&self.editor, slab, scene);
         if key != self.section_surface_lines_key {
             self.section_surface_lines_key = key;
             let mut surfaces = Vec::new();
             if let (Some(_), Some(slab)) = (key, slab) {
-                for triangulation in shown_surfaces(&self.editor, &self.triangulations) {
+                for triangulation in shown_surfaces(&self.editor, scene) {
                     let lines = crate::app::commands::triangulation::section_surface_lines(&triangulation.mesh, &triangulation.spatial, &slab);
                     surfaces.push(SurfaceLines {
                         lines,
@@ -253,7 +254,7 @@ impl<'a> App<'a> {
             self.section_surface_colors = surfaces.iter().map(|surface| surface.color).collect();
             graphics.set_section_surface_lines(surfaces);
         } else if key.is_some() {
-            let shown = || shown_surfaces(&self.editor, &self.triangulations).map(surface_line_color);
+            let shown = || shown_surfaces(&self.editor, scene).map(surface_line_color);
             if !shown().eq(self.section_surface_colors.iter().copied()) {
                 self.section_surface_colors = shown().collect();
                 graphics.recolor_section_surface_lines(self.section_surface_colors.iter().copied());

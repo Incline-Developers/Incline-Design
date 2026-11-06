@@ -811,6 +811,9 @@ cmd-point-cloud-tin-filtered-ground = TIN terenu: odfiltrowano do { $ground } pu
 cmd-point-cloud-tin-subsampled = TIN terenu: przestrzennie podpróbkowano { $sampled } z { $total } punktów
 cmd-point-cloud-tin-triangulated = TIN terenu: przetriangulowano { $vertex_count } unikatowych punktów XY na { $face_count } ścianek{ $suffix }
 cmd-prismoid-grid-building = Budowanie siatki prizmoidów…
+cmd-prismoid-grid-mesh-failed = Nie można zbudować geometrii siatki prizmoidów '{ $name }'
+cmd-prismoid-grid-preparing = Przygotowywanie siatki prizmoidów…
+cmd-prismoid-grid-too-large-to-draw = Siatka prizmoidów '{ $name }' ma { $corners } narożników, ponad limit { $budget }, i nie jest rysowana. Pozostaje na liście i jest zapisywana.
 cmd-prismoid-grid-built = Zbudowano siatkę prizmoidów '{ $name }': { $columns } × { $rows } komórek, aktywne: { $active }, grubość pionowa od { $min } do { $max }
 cmd-prismoid-grid-crossed =
     { $count ->

@@ -333,6 +333,7 @@ pub(crate) fn preview_triangulation(
         always_show_edges: false,
         depth_shade: None,
         pattern_from: None,
+        prismoid_grid: None,
     }
 }
 

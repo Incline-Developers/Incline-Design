@@ -421,6 +421,16 @@ pub(crate) struct App<'a> {
     raster_textures: Vec<OpenRasterTexture>,
     next_raster_texture_id: u64,
     prismoid_grids: Vec<crate::model::prismoid_grid::OpenPrismoidGrid>,
+    /// What the view draws of each grid; kept off Geology.
+    prismoid_drawn: Vec<commands::prismoid_grid::DrawnPrismoidGrid>,
+    /// The project's surfaces and the drawn grids, or empty when none is
+    /// drawn: read through `with_prismoid_scene`.
+    prismoid_scene: Vec<crate::model::triangulation::OpenTriangulation>,
+    /// The same for rasters: the project's and the thickness maps.
+    prismoid_rasters: Vec<OpenRasterTexture>,
+    prismoid_scene_key: Option<u64>,
+    /// Grids that will not be drawn this session: one warning each.
+    prismoid_refused: std::collections::HashSet<crate::model::prismoid_grid::PrismoidGridId>,
     next_prismoid_grid_id: u64,
     empty_document: Document,
     scene_document: Document,
@@ -706,6 +716,11 @@ impl<'a> Default for App<'a> {
             raster_textures: Vec::new(),
             next_raster_texture_id: 0,
             prismoid_grids: Vec::new(),
+            prismoid_drawn: Vec::new(),
+            prismoid_scene: Vec::new(),
+            prismoid_rasters: Vec::new(),
+            prismoid_scene_key: None,
+            prismoid_refused: std::collections::HashSet::new(),
             next_prismoid_grid_id: 0,
             empty_document: Document::new(),
             scene_document: Document::new(),
@@ -1050,7 +1065,7 @@ impl<'a> App<'a> {
     pub(crate) fn pick_under_cursor(&self) -> Option<(SceneEntityId, DVec3)> {
         self.graphics.as_ref()?.pick_at_cursor(
             PICK_THRESHOLD_PX,
-            &self.triangulations,
+            crate::app::commands::prismoid_grid::with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
             &self.editor.hidden_handles,
             &self.editor.frozen_handles,
             self.editor.xray_enabled,
@@ -1601,6 +1616,11 @@ impl<'a> App<'a> {
         self.raster_textures.clear();
         self.next_raster_texture_id = 0;
         self.prismoid_grids.clear();
+        self.prismoid_drawn.clear();
+        self.prismoid_scene.clear();
+        self.prismoid_rasters.clear();
+        self.prismoid_scene_key = None;
+        self.prismoid_refused.clear();
         self.next_prismoid_grid_id = 0;
         self.project_asset_baseline = SaveToken::default();
         self.clear_editor_transient_state();
@@ -2005,7 +2025,7 @@ impl<'a> App<'a> {
         if let Some(graphics) = self.graphics.as_mut() {
             graphics.fit_to_extents(
                 &self.scene_document,
-                &self.triangulations,
+                crate::app::commands::prismoid_grid::with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
                 &self.block_models,
                 &self.drill_holes,
                 &self.point_clouds,
@@ -2031,6 +2051,7 @@ impl<'a> App<'a> {
             || self.drill_holes.iter().any(|item| item.state.loaded)
             || self.point_clouds.iter().any(|item| item.state.loaded)
             || self.raster_textures.iter().any(|item| item.state.loaded)
+            || !self.prismoid_scene.is_empty()
     }
 
     /// Apply what a precision touchpad gesture moved since the last loop
@@ -2526,6 +2547,7 @@ fn prismoid_grid_entry(grid: &crate::model::prismoid_grid::OpenPrismoidGrid) -> 
         is_hidden: grid.state.hidden,
         dirty: grid.state.is_dirty(),
         summary: grid.summary,
+        regular: grid.grid.lattice.is_regular(),
         folder: grid.state.folder,
         section: grid.state.section,
     }

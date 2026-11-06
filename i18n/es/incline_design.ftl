@@ -739,6 +739,9 @@ cmd-point-cloud-tin-filtered-ground = TIN del terreno: se filtraron { $ground } 
 cmd-point-cloud-tin-subsampled = TIN de terreno: se submuestrearon espacialmente { $sampled } de { $total } puntos
 cmd-point-cloud-tin-triangulated = TIN del terreno: se triangularon { $vertex_count } puntos XY únicos en { $face_count } caras{ $suffix }
 cmd-prismoid-grid-building = Creando malla de prismoides…
+cmd-prismoid-grid-mesh-failed = No se pudo crear la geometría de la malla de prismoides '{ $name }'
+cmd-prismoid-grid-preparing = Preparando malla de prismoides…
+cmd-prismoid-grid-too-large-to-draw = La malla de prismoides '{ $name }' tiene { $corners } esquinas, más que el límite de { $budget }, y no se dibuja. Sigue en la lista y guardada.
 cmd-prismoid-grid-built = Malla de prismoides '{ $name }' creada: { $columns } × { $rows } celdas, { $active } activas, espesor vertical de { $min } a { $max }
 cmd-prismoid-grid-crossed =
     { $count ->

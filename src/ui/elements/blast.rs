@@ -21,7 +21,7 @@ use crate::{
             menu,
             toolbar::GROUP_CORNER_RADIUS,
             transport::{Transport, transport_button},
-            viewport::ViewportDockPanel,
+            viewport::{ViewportDockPanel, color_ramp_bar},
         },
     },
 };
@@ -380,18 +380,8 @@ fn draw_relief_legend(ui: &egui::Ui, editor: &mut EditorState, analysis: &BlastA
             // The ramp's stops on the scale, cut off at its end.
             let mut stops: Vec<(f64, [f32; 3])> = crate::model::blast::relief_ramp(*limits).into_iter().filter(|(value, _)| *value < top).collect();
             stops.push((top, crate::model::blast::relief_color(top, *limits)));
-            let mut mesh = egui::Mesh::default();
-            for pair in stops.windows(2) {
-                let ((from_value, from), (to_value, to)) = (pair[0], pair[1]);
-                let base = mesh.vertices.len() as u32;
-                for (value, color) in [(from_value, from), (to_value, to)] {
-                    mesh.colored_vertex(egui::pos2(x(value), bar.top()), color32(color));
-                    mesh.colored_vertex(egui::pos2(x(value), bar.bottom()), color32(color));
-                }
-                mesh.add_triangle(base, base + 1, base + 2);
-                mesh.add_triangle(base + 1, base + 2, base + 3);
-            }
-            ui.painter().add(egui::Shape::mesh(mesh));
+            let ramp: Vec<_> = stops.iter().map(|(value, color)| ((*value / top).clamp(0.0, 1.0) as f32, color32(*color))).collect();
+            color_ramp_bar(ui.painter(), bar, &ramp);
             let tick = egui::Stroke::new(2.0, ui.visuals().strong_text_color());
             for value in [limits.low, limits.high] {
                 ui.painter().line_segment([egui::pos2(x(value), row.top()), egui::pos2(x(value), row.bottom())], tick);

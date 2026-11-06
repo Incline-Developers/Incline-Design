@@ -783,6 +783,9 @@ cmd-point-cloud-tin-filtered-ground = TIN del terreno: filtrati { $ground } punt
 cmd-point-cloud-tin-subsampled = TIN del terreno: sottocampionati spazialmente { $sampled } di { $total } punti
 cmd-point-cloud-tin-triangulated = TIN del terreno: triangolati { $vertex_count } punti XY unici in { $face_count } facce{ $suffix }
 cmd-prismoid-grid-building = Creazione della griglia di prismoidi…
+cmd-prismoid-grid-mesh-failed = Impossibile creare la geometria della griglia di prismoidi '{ $name }'
+cmd-prismoid-grid-preparing = Preparazione della griglia di prismoidi…
+cmd-prismoid-grid-too-large-to-draw = La griglia di prismoidi '{ $name }' ha { $corners } vertici, oltre il limite di { $budget }, e non viene disegnata. Resta elencata e salvata.
 cmd-prismoid-grid-built = Griglia di prismoidi '{ $name }' creata: { $columns } × { $rows } celle, { $active } attive, spessore verticale da { $min } a { $max }
 cmd-prismoid-grid-crossed =
     { $count ->

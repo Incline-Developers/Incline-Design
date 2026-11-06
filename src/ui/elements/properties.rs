@@ -5,17 +5,18 @@ use crate::{
     model::{
         Document, FillStyle, ObjectColor, ObjectId, SceneEntityId,
         block_model::{BlockModelId, OpenBlockModel},
+        prismoid_grid::THICKNESS_RAMP,
         project::ModellingSettings,
     },
     rendering::color::{color32_to_rgba, rgba_to_color32},
     ui::{
         UiCommand, UiProjectView,
-        state::{EditorState, PreferencesDraft, PropertyTab},
+        state::{EditorState, PreferencesDraft, PropertyTab, Workspace},
         widgets::{
             collapsible_section::CollapsibleSection,
             context_menu::{FIELD_WIDTH, context_menu_fields},
             menu::{self, MenuFieldBool, MenuFieldColor32, MenuFieldCombo, MenuFieldF32, MenuFieldF64, MenuFieldU32, committed, menu_field_label},
-            viewport::{BlockModelProperties, ViewportDockPanel},
+            viewport::{BlockModelProperties, ViewportDockPanel, color_ramp_bar},
         },
     },
 };
@@ -208,6 +209,71 @@ pub(crate) fn draw_selection_appearance(
     if has_appearance {
         crate::ui::widgets::context_menu::context_menu_separator(ui);
     }
+}
+
+/// Width of the prismoid grid's key in the viewport.
+const PRISMOID_LEGEND_WIDTH: f32 = 240.0;
+const PRISMOID_LEGEND_BAR_HEIGHT: f32 = 14.0;
+
+/// The key to one selected prismoid grid's colours: the ramp, with the
+/// grid's own vertical thickness range at its ends.
+pub(crate) fn draw_prismoid_grid_legend(ui: &egui::Ui, editor: &EditorState, project: &UiProjectView, models: &[OpenBlockModel], canvas: egui::Rect) {
+    if editor.active_workspace != Workspace::Geology {
+        return;
+    }
+    let mut shown = project.prismoid_grids.iter().filter(|grid| {
+        let entity = SceneEntityId::PrismoidGrid(grid.id);
+        grid.is_loaded && editor.selected_handles.contains(&entity) && !editor.hidden_handles.contains(&entity)
+    });
+    let (Some(grid), None) = (shown.next(), shown.next()) else {
+        return;
+    };
+    let Some((min, max)) = grid.summary.vertical_thickness.filter(|_| grid.regular) else {
+        return;
+    };
+    // Along the bottom edge clear of the tool panels' corner, as the
+    // block-model card is, and above that card while it is up. Not drawn once
+    // it would reach the scale bar. A dock panel hashes the id it is handed.
+    let card_id = egui::Id::unique(egui::Id::unique("block_model_viewport_controls"));
+    let (card, scale_bar) = ui
+        .ctx()
+        .memory(|memory| (memory.area_rect(card_id), memory.area_rect(egui::Id::unique("viewport_scale_bar"))));
+    let left = canvas.left() + crate::ui::widgets::viewport::DOCK_PANEL_RESERVED_WIDTH + BLOCK_MODEL_CARD_GAP;
+    if left + PRISMOID_LEGEND_WIDTH + 20.0 > scale_bar.map_or(canvas.right(), |rect| rect.left()) - BLOCK_MODEL_CARD_GAP {
+        return;
+    }
+    let card_up = models.iter().any(|model| Some(model.id) == editor.viewport_block_model_id && model.state.loaded);
+    let bottom = card.filter(|_| card_up).map_or(canvas.bottom(), |card| card.top());
+    let stops: Vec<_> = THICKNESS_RAMP
+        .stops()
+        .iter()
+        .map(|stop| {
+            let [red, green, blue] = stop.color;
+            (stop.t, rgba_to_color32([red, green, blue, 1.0]))
+        })
+        .collect();
+    ViewportDockPanel::new("prismoid_grid_legend", tr!("thickness-points-column-vertical"), canvas)
+        .anchor(egui::Align2::LEFT_BOTTOM, egui::pos2(left, bottom - BLOCK_MODEL_CARD_GAP))
+        .order(egui::Order::Middle)
+        .min_width(PRISMOID_LEGEND_WIDTH + 20.0)
+        .max_width(PRISMOID_LEGEND_WIDTH + 20.0)
+        .show(ui.ctx(), |ui| {
+            ui.set_width(PRISMOID_LEGEND_WIDTH);
+            let weak = ui.visuals().weak_text_color();
+            let font = egui::TextStyle::Small.resolve(ui.style());
+            let low = ui.painter().layout_no_wrap(format!("{min:.2}"), font.clone(), weak);
+            let high = ui.painter().layout_no_wrap(format!("{max:.2}"), font, weak);
+            let (row, _) = ui.allocate_exact_size(egui::vec2(PRISMOID_LEGEND_WIDTH, PRISMOID_LEGEND_BAR_HEIGHT + 8.0), egui::Sense::hover());
+            let gap = 6.0;
+            let bar = egui::Rect::from_x_y_ranges(
+                row.left() + low.size().x + gap..=row.right() - high.size().x - gap,
+                row.center().y - PRISMOID_LEGEND_BAR_HEIGHT / 2.0..=row.center().y + PRISMOID_LEGEND_BAR_HEIGHT / 2.0,
+            );
+            color_ramp_bar(ui.painter(), bar, &stops);
+            let (low_at, high_at) = (row.center().y - low.size().y / 2.0, row.right() - high.size().x);
+            ui.painter().galley(egui::pos2(row.left(), low_at), low, weak);
+            ui.painter().galley(egui::pos2(high_at, low_at), high, weak);
+        });
 }
 
 /// Width of the block-model card in the viewport.

@@ -137,11 +137,17 @@ pub(crate) struct OpenTriangulation {
     /// with `[x, y]` reaches the third value, in world coordinates. Runtime
     /// only, for Animate's blasts, whose hatching prep clears away.
     pub(crate) pattern_from: Option<[f64; 3]>,
+    /// Runtime only: the grid this mesh draws, which selection and visibility
+    /// go by.
+    pub(crate) prismoid_grid: Option<crate::model::prismoid_grid::PrismoidGridId>,
 }
 
 impl OpenTriangulation {
     pub(crate) fn entity_id(&self) -> crate::model::SceneEntityId {
-        crate::model::SceneEntityId::Triangulation(self.id)
+        match self.prismoid_grid {
+            Some(grid) => crate::model::SceneEntityId::PrismoidGrid(grid),
+            None => crate::model::SceneEntityId::Triangulation(self.id),
+        }
     }
 }
 

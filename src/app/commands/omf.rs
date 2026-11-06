@@ -624,6 +624,7 @@ impl<'a> App<'a> {
                 always_show_edges: false,
                 depth_shade: None,
                 pattern_from: None,
+                prismoid_grid: None,
             });
             if let Some(open) = self.triangulations.last_mut() {
                 open.state.payload_source = PayloadSource::for_triangulation(imported.payload_source, open);

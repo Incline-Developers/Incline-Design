@@ -793,6 +793,9 @@ cmd-point-cloud-tin-filtered-ground = TIN рельефа: отфильтрова
 cmd-point-cloud-tin-subsampled = TIN рельефа: пространственная выборка { $sampled } из { $total } точек
 cmd-point-cloud-tin-triangulated = ЦМР: триангулировано уникальных точек XY: { $vertex_count }; создано граней: { $face_count }{ $suffix }
 cmd-prismoid-grid-building = Построение сетки призмоидов…
+cmd-prismoid-grid-mesh-failed = Не удалось построить геометрию сетки призмоидов '{ $name }'
+cmd-prismoid-grid-preparing = Подготовка сетки призмоидов…
+cmd-prismoid-grid-too-large-to-draw = В сетке призмоидов '{ $name }' { $corners } узлов, это больше лимита { $budget }, поэтому она не отображается. Она остаётся в списке и сохраняется.
 cmd-prismoid-grid-built = Построена сетка призмоидов '{ $name }': { $columns } × { $rows } ячеек, активных { $active }, вертикальная мощность от { $min } до { $max }
 cmd-prismoid-grid-crossed =
     { $count ->

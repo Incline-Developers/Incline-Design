@@ -44,7 +44,7 @@ impl<'a> App<'a> {
     fn visible_scene_extents(&self) -> Option<(DVec3, DVec3)> {
         self.graphics.as_ref()?.scene_extents(
             &self.scene_document,
-            &self.triangulations,
+            crate::app::commands::prismoid_grid::with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
             &self.block_models,
             &self.drill_holes,
             &self.point_clouds,
@@ -124,7 +124,7 @@ impl<'a> App<'a> {
             request,
             &self.scene_document,
             &self.editor,
-            &self.triangulations,
+            crate::app::commands::prismoid_grid::with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
             &self.block_models,
             &self.drill_holes,
             &self.point_clouds,

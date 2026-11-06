@@ -1,27 +1,48 @@
-//! Prismoid grid commands: building one from two surfaces, and removing
-//! one from the explorer.
+//! Prismoid grid commands: building one from two surfaces, removing one
+//! from the explorer, and preparing what the view draws of each.
 
-use std::sync::Arc;
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+    sync::Arc,
+};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::{
     app::{
         App,
-        commands::thickness_points::not_a_grid_reason,
+        commands::{raster::MAX_RASTER_PREVIEW_DIMENSION, solids::preview_triangulation, solids_view::next_view_id, thickness_points::not_a_grid_reason},
         jobs::{CancelFlag, JobKey},
     },
     i18n::tr,
     model::{
         ItemRef, MemberKind, SceneEntityId, SectionKind,
+        formats::mesh_data::Triangulation,
         grid_surface::GridSurface,
-        prismoid_grid::{BuildRefusal, DEFAULT_PRISMOID_GRID_COLOR, OpenPrismoidGrid, PrismoidBuild, PrismoidGrid, PrismoidGridId},
+        prismoid_grid::{BuildRefusal, DEFAULT_PRISMOID_GRID_COLOR, OpenPrismoidGrid, PrismoidBuild, PrismoidGrid, PrismoidGridId, THICKNESS_RAMP, ThicknessMap},
         progress::Progress,
         project::{ProjectItemState, unique_item_name},
-        triangulation::TriangulationId,
+        raster::{OpenRasterTexture, RasterTextureId},
+        rbf::NODE_BUDGET,
+        spatial::TriangleBvh,
+        triangulation::{OpenTriangulation, TriangulationId, spatial_surface_face_order},
     },
+    rendering::{color::linear_to_srgb_byte, scene::drill_hole_cache::evaluate_stops},
+    ui::state::Workspace,
     userspace_error, userspace_log, userspace_warn,
 };
+
+/// The dark line round a drawn grid's roof and floor.
+const PRISMOID_OUTLINE_COLOR: [f32; 4] = [0.05, 0.06, 0.08, 1.0];
+
+/// A prismoid grid as the view draws it, for as long as `source` stands.
+pub(crate) struct DrawnPrismoidGrid {
+    source: Arc<PrismoidGrid>,
+    surface: OpenTriangulation,
+    /// `None` on a tensor lattice, which draws in the grid's flat colour.
+    thickness: Option<OpenRasterTexture>,
+}
 
 impl App<'_> {
     /// Remove a prismoid grid from the project as one undoable step.
@@ -32,6 +53,7 @@ impl App<'_> {
         self.editor.explicitly_frozen.remove(&entity);
         self.editor.frozen_handles.remove(&entity);
         self.editor.translucent_handles.remove(&entity);
+        self.cancel_jobs(|key| *key == JobKey::PrismoidGrid(id));
         self.delete_project_item(ItemRef::PrismoidGrid(id));
     }
 
@@ -142,4 +164,173 @@ impl App<'_> {
         self.invalidate_geometry();
         id
     }
+
+    /// Keep the view's meshes in step with the open grids, in Geology. Runs
+    /// each frame; nothing is prepared or rebuilt unless a grid or the
+    /// surfaces beside it moved.
+    pub(crate) fn sync_prismoid_drawing(&mut self) {
+        if self.editor.active_workspace == Workspace::Geology {
+            let grids = &self.prismoid_grids;
+            self.prismoid_drawn.retain(|drawn| {
+                grids
+                    .iter()
+                    .any(|item| Some(item.id) == drawn.surface.prismoid_grid && item.state.loaded && Arc::ptr_eq(&item.grid, &drawn.source))
+            });
+            let wanted: Vec<_> = grids
+                .iter()
+                .filter(|item| item.state.loaded && item.summary.active_cells > 0)
+                .map(|item| item.id)
+                .filter(|id| !self.prismoid_refused.contains(id))
+                .filter(|id| !self.prismoid_drawn.iter().any(|drawn| drawn.surface.prismoid_grid == Some(*id)))
+                .filter(|id| !self.job_pending(&JobKey::PrismoidGrid(*id)))
+                .collect();
+            for id in wanted {
+                self.spawn_prismoid_drawing(id);
+            }
+        }
+        self.refresh_prismoid_scene();
+    }
+
+    /// Prepare a grid's mesh on the job queue. A grid over the node budget is
+    /// refused, not drawn; only a file can hold one.
+    fn spawn_prismoid_drawing(&mut self, id: PrismoidGridId) {
+        let Some(item) = self.prismoid_grids.iter().find(|item| item.id == id) else {
+            return;
+        };
+        let (grid, name, color, range) = (Arc::clone(&item.grid), item.name.clone(), item.color, item.summary.vertical_thickness);
+        let corners = grid.lattice.corner_count();
+        if corners > NODE_BUDGET {
+            self.prismoid_refused.insert(id);
+            userspace_warn!(
+                "{}",
+                tr!(
+                    "cmd-prismoid-grid-too-large-to-draw",
+                    name = name,
+                    corners = corners.to_string(),
+                    budget = NODE_BUDGET.to_string()
+                )
+            );
+            return;
+        }
+        let compute = move |cancel: &CancelFlag, progress: &Progress| -> Result<DrawnPrismoidGrid> {
+            let phase = progress.phase(0.0, 1.0);
+            let proceed = || -> Result<()> {
+                if cancel.is_cancelled() {
+                    anyhow::bail!("{}", tr!("common-cancelled"));
+                }
+                Ok(())
+            };
+            let failed = || tr!("cmd-prismoid-grid-mesh-failed", name = name.clone());
+            let closed = grid.closed_mesh().with_context(failed)?;
+            let mesh = Triangulation::from_vertices_and_faces(closed.vertices, closed.faces).with_context(failed)?;
+            phase.set_fraction(0.3);
+            proceed()?;
+            let spatial = Arc::new(TriangleBvh::build(&mesh));
+            phase.set_fraction(0.6);
+            proceed()?;
+            let order = Arc::new(spatial_surface_face_order(&mesh));
+            phase.set_fraction(0.8);
+            proceed()?;
+            let thickness = range
+                .and_then(|range| grid.thickness_map(range, MAX_RASTER_PREVIEW_DIMENSION))
+                .map(|map| thickness_raster(id, &name, map));
+            let mut surface = preview_triangulation(name, Arc::new(mesh), spatial, closed.outline, order, color, PRISMOID_OUTLINE_COLOR);
+            surface.id = next_view_id();
+            surface.raster_texture = thickness.as_ref().map(|raster| raster.id);
+            surface.always_show_edges = true;
+            surface.prismoid_grid = Some(id);
+            phase.finish();
+            Ok(DrawnPrismoidGrid { source: grid, surface, thickness })
+        };
+        let apply = move |app: &mut App, result: Result<DrawnPrismoidGrid>| match result {
+            Ok(drawn) => {
+                let should_fit = !app.scene_has_renderables();
+                app.prismoid_drawn.push(drawn);
+                app.refresh_prismoid_scene();
+                if should_fit {
+                    app.fit_view_to_extents();
+                }
+                app.invalidate_topology_bounds_and_redraw();
+            }
+            // A second try would meet the same fault, every frame.
+            Err(fault) => {
+                app.prismoid_refused.insert(id);
+                userspace_error!("{fault:#}");
+            }
+        };
+        self.spawn_job_reporting_progress(tr!("cmd-prismoid-grid-preparing"), vec![JobKey::PrismoidGrid(id)], compute, apply);
+    }
+
+    /// What the merged surface list is made of, so it is put together when
+    /// one of those things moves rather than once a frame.
+    fn prismoid_scene_key(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        for mesh in &self.triangulations {
+            mesh.id.0.hash(&mut hasher);
+            mesh.state.revision().hash(&mut hasher);
+            (Arc::as_ptr(&mesh.mesh) as usize).hash(&mut hasher);
+        }
+        for raster in &self.raster_textures {
+            raster.id.hash(&mut hasher);
+            raster.state.revision().hash(&mut hasher);
+        }
+        for drawn in &self.prismoid_drawn {
+            drawn.surface.prismoid_grid.hash(&mut hasher);
+            (Arc::as_ptr(&drawn.surface.mesh) as usize).hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
+    /// Put the project's surfaces and rasters and the drawn grids into one
+    /// list each. Empty off Geology and with nothing drawn, so every reader
+    /// falls back to the project's own.
+    fn refresh_prismoid_scene(&mut self) {
+        if self.editor.active_workspace != Workspace::Geology || self.prismoid_drawn.is_empty() {
+            self.prismoid_scene.clear();
+            self.prismoid_rasters.clear();
+            self.prismoid_scene_key = None;
+            return;
+        }
+        let key = self.prismoid_scene_key();
+        if self.prismoid_scene_key == Some(key) {
+            return;
+        }
+        self.prismoid_scene = self.triangulations.iter().chain(self.prismoid_drawn.iter().map(|drawn| &drawn.surface)).cloned().collect();
+        let maps = self.prismoid_drawn.iter().filter_map(|drawn| drawn.thickness.as_ref());
+        self.prismoid_rasters = self.raster_textures.iter().chain(maps).cloned().collect();
+        self.prismoid_scene_key = Some(key);
+    }
+}
+
+/// A thickness map in the ramp's colours, as a raster the drape can draw. Its
+/// id counts down from the top, clear of the project's.
+fn thickness_raster(id: PrismoidGridId, name: &str, map: ThicknessMap) -> OpenRasterTexture {
+    let stops = THICKNESS_RAMP.stops();
+    let rgba = map
+        .positions
+        .iter()
+        .flat_map(|position| {
+            let [red, green, blue] = evaluate_stops(*position, &stops, THICKNESS_RAMP.smooth()).map(linear_to_srgb_byte);
+            [red, green, blue, u8::MAX]
+        })
+        .collect();
+    let rgba = Arc::new(rgba);
+    OpenRasterTexture {
+        id: RasterTextureId(u64::MAX - id.0),
+        state: ProjectItemState::dirty(MemberKind::Raster, None).with_loaded(true),
+        name: name.to_owned(),
+        source_size: map.size,
+        preview_size: map.size,
+        full_rgba: Arc::clone(&rgba),
+        rgba,
+        world_to_uv: map.world_to_uv,
+        projection: String::new(),
+        driver_name: String::new(),
+    }
+}
+
+/// `merged` unless it is empty. A free function on the two fields, because
+/// its answer is held across borrows of the editor and the renderer.
+pub(crate) fn with_prismoid_scene<'s, T>(own: &'s [T], merged: &'s [T]) -> &'s [T] {
+    if merged.is_empty() { own } else { merged }
 }

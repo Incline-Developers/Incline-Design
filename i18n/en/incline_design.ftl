@@ -1522,6 +1522,9 @@ cmd-point-cloud-tin-filtered-ground = Terrain TIN: filtered to { $ground } groun
 cmd-point-cloud-tin-subsampled = Terrain TIN: spatially subsampled { $sampled } of { $total } points
 cmd-point-cloud-tin-triangulated = Terrain TIN: triangulated { $vertex_count } unique XY points into { $face_count } faces{ $suffix }
 cmd-prismoid-grid-building = Building prismoid grid…
+cmd-prismoid-grid-mesh-failed = Could not build the mesh of prismoid grid '{ $name }'
+cmd-prismoid-grid-preparing = Preparing prismoid grid…
+cmd-prismoid-grid-too-large-to-draw = Prismoid grid '{ $name }' has { $corners } corners, over the budget of { $budget }, and is not drawn. It is still listed and saved.
 cmd-prismoid-grid-built = Built prismoid grid '{ $name }': { $columns } × { $rows } cells, { $active } active, vertical thickness { $min } to { $max }
 cmd-prismoid-grid-crossed =
     { $count ->
