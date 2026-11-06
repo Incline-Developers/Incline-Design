@@ -19,11 +19,54 @@ pub(crate) type BackingData = Vec<u8>;
 #[derive(Debug)]
 struct BackingFile {
     #[cfg(not(target_arch = "wasm32"))]
-    path: tempfile::TempPath,
+    file: NativeFile,
     #[cfg(target_arch = "wasm32")]
     key: String,
     #[cfg(target_arch = "wasm32")]
     len: usize,
+}
+
+/// A project's archives are few and large: held open with no name, so the
+/// system reclaims them however the app ends. History steps and unloaded
+/// layers can be numerous enough to run out of file handles, and are small, so
+/// they keep a name; [`backing_directory`] clears any a crash leaves behind.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug)]
+enum NativeFile {
+    Unnamed(std::fs::File),
+    Named(tempfile::TempPath),
+}
+
+/// /tmp is commonly a RAM-backed filesystem. Evicted data goes in the
+/// application cache so unloading does not merely move it into tmpfs and keep
+/// the same system-memory pressure.
+#[cfg(not(target_arch = "wasm32"))]
+fn backing_directory() -> Result<std::path::PathBuf> {
+    static CLEARED: std::sync::Once = std::sync::Once::new();
+    let directory = dirs::cache_dir().context("locate asset cache directory")?.join("Incline_Design").join("unloaded-assets");
+    std::fs::create_dir_all(&directory).context("create asset cache directory")?;
+    let leftovers = directory.clone();
+    CLEARED.call_once(|| {
+        std::thread::spawn(move || remove_leftovers(&leftovers));
+    });
+    Ok(directory)
+}
+
+/// Remove named files an earlier run did not get to remove. A day's grace
+/// leaves any other instance's recent files alone.
+#[cfg(not(target_arch = "wasm32"))]
+fn remove_leftovers(directory: &std::path::Path) {
+    const GRACE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+    let Ok(entries) = std::fs::read_dir(directory) else { return };
+    for entry in entries.flatten() {
+        let old = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .is_ok_and(|modified| modified.elapsed().is_ok_and(|age| age > GRACE));
+        if old && entry.file_name().to_string_lossy().starts_with("asset-") {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 impl Backing {
@@ -31,16 +74,9 @@ impl Backing {
     /// in memory whole.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn write_with(write: impl FnOnce(&mut std::fs::File) -> Result<()>) -> Result<Self> {
-        use std::io::Write;
-        // /tmp is commonly a RAM-backed filesystem. Put evicted data in
-        // the application cache so unloading does not merely move it into
-        // tmpfs and keep the same system-memory pressure.
-        let directory = dirs::cache_dir().context("locate asset cache directory")?.join("Incline_Design").join("unloaded-assets");
-        std::fs::create_dir_all(&directory).context("create asset cache directory")?;
-        let mut file = tempfile::Builder::new().prefix("asset-").tempfile_in(directory).context("create asset backing file")?;
-        write(file.as_file_mut())?;
-        file.flush().context("flush asset backing file")?;
-        Ok(Self(Arc::new(BackingFile { path: file.into_temp_path() })))
+        let mut file = tempfile::tempfile_in(backing_directory()?).context("create asset backing file")?;
+        write(&mut file)?;
+        Ok(Self(Arc::new(BackingFile { file: NativeFile::Unnamed(file) })))
     }
 
     /// A private copy of the file at `path`.
@@ -56,7 +92,15 @@ impl Backing {
         #[cfg(not(target_arch = "wasm32"))]
         {
             use std::io::Write;
-            Self::write_with(|file| file.write_all(bytes).context("write asset backing file"))
+            let mut file = tempfile::Builder::new()
+                .prefix("asset-")
+                .tempfile_in(backing_directory()?)
+                .context("create asset backing file")?;
+            file.write_all(bytes).context("write asset backing file")?;
+            file.flush().context("flush asset backing file")?;
+            Ok(Self(Arc::new(BackingFile {
+                file: NativeFile::Named(file.into_temp_path()),
+            })))
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -72,7 +116,10 @@ impl Backing {
     pub(crate) fn open(&self) -> Result<BackingData> {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            std::fs::File::open(&self.0.path).context("open unloaded asset")
+            match &self.0.file {
+                NativeFile::Unnamed(file) => file.try_clone().context("open unloaded asset"),
+                NativeFile::Named(path) => std::fs::File::open(path).context("open unloaded asset"),
+            }
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -88,7 +135,14 @@ impl Backing {
     pub(crate) fn read(&self) -> Result<Vec<u8>> {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            std::fs::read(&self.0.path).context("read unloaded asset")
+            use std::io::{Read, Seek};
+            // An unnamed copy's handles share a position, so it starts from
+            // the top. Those copies are otherwise read by position only.
+            let mut file = self.open()?;
+            let mut bytes = Vec::new();
+            file.rewind().context("read unloaded asset")?;
+            file.read_to_end(&mut bytes).context("read unloaded asset")?;
+            Ok(bytes)
         }
         #[cfg(target_arch = "wasm32")]
         {
