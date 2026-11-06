@@ -42,6 +42,15 @@ impl OpenItem {
         if self.state().deferred.is_some() {
             return Ok(self);
         }
+        // Read back for a moment and not changed since: what it was read from
+        // still holds it. Writing a model out again costs far more than reading it.
+        if let Some((asset, identity)) = self.state_mut().restored_from.take()
+            && identity.same(&self.resident_identity())
+        {
+            self.state_mut().deferred = Some(asset);
+            self.release_payload();
+            return Ok(self);
+        }
         let mut snapshot = ProjectSnapshot::default();
         match &self {
             Self::Triangulation(item) => snapshot.triangulations.push((**item).clone()),
@@ -54,6 +63,17 @@ impl OpenItem {
         self.state_mut().deferred = Some(DeferredAsset::new(backing, vec![0]));
         self.release_payload();
         Ok(self)
+    }
+
+    /// The payload allocations this item holds, of whatever kind.
+    fn resident_identity(&self) -> omf::PayloadIdentity {
+        match self {
+            Self::Triangulation(item) => omf::PayloadIdentity::triangulation(item),
+            Self::BlockModel(item) => omf::PayloadIdentity::block_model(item),
+            Self::DrillHole(item) => omf::PayloadIdentity::DrillHole(Arc::downgrade(&item.dataset)),
+            Self::PointCloud(item) => omf::PayloadIdentity::point_cloud(item),
+            Self::Raster(item) => omf::PayloadIdentity::raster(item),
+        }
     }
 
     /// The payload allocations a [`omf::PayloadSource`] tracks, for the kinds
@@ -181,6 +201,8 @@ impl OpenItem {
         }
         self.state_mut().deferred = None;
         self.state_mut().summary = None;
+        let identity = self.resident_identity();
+        self.state_mut().restored_from = Some((deferred, identity));
         let payload_source = self
             .state_mut()
             .payload_source

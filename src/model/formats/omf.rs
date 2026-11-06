@@ -1710,9 +1710,21 @@ pub(crate) enum PayloadIdentity {
         classifications: Option<std::sync::Weak<Vec<u8>>>,
     },
     Raster(std::sync::Weak<Vec<u8>>),
+    BlockModel {
+        blocks: std::sync::Weak<BlockBoundsSource>,
+        columns: Vec<std::sync::Weak<BlockColumn>>,
+    },
+    DrillHole(std::sync::Weak<crate::model::drill_hole::DrillHoleDataset>),
 }
 
 impl PayloadIdentity {
+    pub(crate) fn block_model(item: &OpenBlockModel) -> Self {
+        Self::BlockModel {
+            blocks: Arc::downgrade(&item.blocks),
+            columns: item.model.column_identities(),
+        }
+    }
+
     pub(crate) fn triangulation(item: &OpenTriangulation) -> Self {
         Self::Triangulation(Arc::downgrade(&item.mesh))
     }
@@ -1729,7 +1741,7 @@ impl PayloadIdentity {
         Self::Raster(Arc::downgrade(&item.full_rgba))
     }
 
-    fn same(&self, other: &Self) -> bool {
+    pub(crate) fn same(&self, other: &Self) -> bool {
         fn same_optional<T>(a: &Option<std::sync::Weak<T>>, b: &Option<std::sync::Weak<T>>) -> bool {
             match (a, b) {
                 (None, None) => true,
@@ -1752,6 +1764,10 @@ impl PayloadIdentity {
                 },
             ) => a.ptr_eq(b) && same_optional(a_colors, b_colors) && same_optional(a_classes, b_classes),
             (Self::Raster(a), Self::Raster(b)) => a.ptr_eq(b),
+            (Self::BlockModel { blocks: a, columns: a_columns }, Self::BlockModel { blocks: b, columns: b_columns }) => {
+                a.ptr_eq(b) && a_columns.len() == b_columns.len() && a_columns.iter().zip(b_columns).all(|(a, b)| a.ptr_eq(b))
+            }
+            (Self::DrillHole(a), Self::DrillHole(b)) => a.ptr_eq(b),
             _ => false,
         }
     }

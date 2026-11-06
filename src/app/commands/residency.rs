@@ -17,6 +17,7 @@ fn preserve_state(current: &ProjectItemState, replacement: &mut ProjectItemState
     let mut state = current.clone();
     state.deferred = replacement.deferred.take();
     state.summary = replacement.summary.take();
+    state.restored_from = replacement.restored_from.take();
     *replacement = state;
 }
 

@@ -286,6 +286,12 @@ impl BlockModelData {
         Ok(())
     }
 
+    /// Which allocation holds each column, in name order. A column is replaced
+    /// rather than edited in place, so these tell whether any has changed.
+    pub(crate) fn column_identities(&self) -> Vec<std::sync::Weak<BlockColumn>> {
+        self.numeric_values.values().map(Arc::downgrade).collect()
+    }
+
     pub(crate) fn shared_numeric_values(&self, name: &str) -> Option<Arc<BlockColumn>> {
         self.numeric_values.get(name).map(Arc::clone)
     }
