@@ -2514,6 +2514,15 @@ fn clip_half(piece: &CutPiece, a: glam::DVec2, b: glam::DVec2, on_boundary: bool
     let mut clipped_wall = Vec::with_capacity(keep);
     let mut clipped_internal = Vec::with_capacity(keep);
     for (index, indices) in slab.1.iter().enumerate() {
+        // Half of a big piece lies wholly on the discarded side, and most of
+        // the rest wholly on the kept one: neither needs clipping.
+        let beyond = |index: u32| {
+            let p = &slab.0[index as usize];
+            (glam::DVec3::new(p.x, p.y, p.z) - origin).dot(normal) < -1e-8
+        };
+        if indices.iter().all(|&index| beyond(index)) {
+            continue;
+        }
         let triangle = indices.map(|index| local(&slab.0[index as usize]));
         // A coplanar face with material on the discarded side is not
         // a zero-thickness part of the retained volume.
@@ -2522,15 +2531,20 @@ fn clip_half(piece: &CutPiece, a: glam::DVec2, b: glam::DVec2, on_boundary: bool
         {
             continue;
         }
-        for tri in super::cuts::clip_triangle_z(triangle, 0.0, high) {
+        let mut keep = |tri: [mesh_data::Vertex; 3]| {
             if collapsed(&tri) {
-                continue;
+                return;
             }
             let start = clipped.0.len() as u32;
             clipped.0.extend(tri);
             clipped.1.push([start, start + 1, start + 2]);
             clipped_wall.push(wall[index]);
             clipped_internal.push(internal[index]);
+        };
+        if triangle.iter().all(|p| p.z >= 0.0 && p.z <= high) {
+            keep(triangle);
+        } else {
+            super::cuts::clip_triangle_z(triangle, 0.0, high).into_iter().for_each(&mut keep);
         }
     }
     if !clipped.1.is_empty() {
