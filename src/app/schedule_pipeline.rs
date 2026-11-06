@@ -257,286 +257,42 @@ impl crate::app::App<'_> {
     /// The authored bars are deliberately absent: they are the Gantt's to
     /// author and checkpoint C's Run Schedule to consume, and a Setup run that
     /// went stale every time a bar moved would say nothing about the setup.
+    ///
+    /// Read every frame, and the plan and road network behind it can be large,
+    /// so it is worked out again only when the document or the Solids run moves.
     pub(crate) fn schedule_fingerprints(&self) -> [u64; ScheduleStep::ALL.len()] {
         let Some(document) = self.workspace.active_document() else {
             return [0; ScheduleStep::ALL.len()];
         };
-        let plan = document.schedule();
-
-        // The chosen field *and* how it aggregates: re-aggregating a field
-        // away from Sum is exactly the edit that makes a completed run wrong
-        // without changing the choice itself.
-        let field = plan.tonnage_field().and_then(|id| {
-            document
-                .reserve_fields()
-                .iter()
-                .find(|field| field.id == id)
-                .map(|field| (id.0, format!("{:?}", field.aggregation)))
-        });
-        let configuration = hash_of((plan.tonnage_field().map(|id| id.0), field));
-
-        let classes: Vec<_> = plan.classes().iter().map(|class| (class.id.0, class.default_dig_rate_tph.to_bits(), class.kind)).collect();
-        let classes_step = hash_of((configuration, classes));
-
-        let agents: Vec<_> = plan
-            .agents()
-            .iter()
-            .map(|agent| {
-                let periods: Vec<_> = agent
-                    .calendar
-                    .periods
-                    .iter()
-                    .map(|(period, value)| {
-                        (
-                            period.0,
-                            value.availability.map(f64::to_bits),
-                            value.utilisation.map(f64::to_bits),
-                            value.rate_tph.map(f64::to_bits),
-                        )
-                    })
-                    .collect();
-                (
-                    agent.id.0,
-                    agent.class_id.0,
-                    agent.calendar.default_availability.to_bits(),
-                    agent.calendar.default_utilisation.to_bits(),
-                    periods,
-                )
-            })
-            .collect();
-        let agents_step = hash_of((classes_step, agents));
-        // Delays are checked as each is edited, so the step has nothing to
-        // re-validate and a delay edit must not send Setup back to be run:
-        // planners edit delays all the time. A calculated schedule still
-        // retires on one, through `App::schedule_semantic_key`.
-        let delays_step = hash_of((agents_step, "delays"));
-
-        // Transport inputs hang off the fleet and go no further in the Setup
-        // chain. A calculated schedule's own currentness reads them through
-        // `App::schedule_semantic_key`, which is where a truck edit retires
-        // it.
-        let trucks = plan.trucks();
-        let truck_classes: Vec<_> = trucks
-            .classes
-            .iter()
-            .map(|class| {
-                let periods: Vec<_> = class
-                    .calendar
-                    .periods
-                    .iter()
-                    .map(|(period, value)| (period.0, value.units, value.availability.map(f64::to_bits), value.utilisation.map(f64::to_bits)))
-                    .collect();
-                (
-                    class.id.0,
-                    class.name.clone(),
-                    class.payload_t.to_bits(),
-                    class.loaded_speed_kph.to_bits(),
-                    class.unloaded_speed_kph.to_bits(),
-                    class.calendar.default_units,
-                    class.calendar.default_availability.to_bits(),
-                    class.calendar.default_utilisation.to_bits(),
-                    periods,
-                )
-            })
-            .collect();
-        let mut haul_hash = std::collections::hash_map::DefaultHasher::new();
-        trucks.hash_content(&mut haul_hash);
-        let truck_classes_step = hash_of((agents_step, truck_classes, std::hash::Hasher::finish(&haul_hash)));
-
-        // Destinations are fingerprinted in the three groups the pages edit,
-        // each chained onto the last, so editing a crusher's budget does not
-        // retire the stockpile step - and the solids the stockpile and dump
-        // pages *expose* are part of their inputs, because a solid renamed or
-        // retyped in Solids changes what those pages list.
-        let routing = plan.routing();
-        let solid_destinations: Vec<_> = document
-            .solids()
-            .iter()
-            .filter_map(|solid| {
-                crate::model::schedule::DestinationKind::of_solid(solid.kind).map(|kind| {
-                    (
-                        solid.id.0,
-                        solid.name.clone(),
-                        kind,
-                        routing.capacity_t(crate::model::schedule::DestinationId::Solid(solid.id)).map(f64::to_bits),
-                    )
-                })
-            })
-            .collect();
-        let standalone = |kind: crate::model::schedule::DestinationKind| {
-            routing
-                .standalone
-                .iter()
-                .filter(move |entry| entry.kind == kind)
-                .map(|entry| (entry.id.0, entry.name.clone(), entry.capacity_t.map(f64::to_bits)))
-                .collect::<Vec<_>>()
-        };
-        let by_kind = |kind: crate::model::schedule::DestinationKind| solid_destinations.iter().filter(|(_, _, solid_kind, _)| *solid_kind == kind).cloned().collect::<Vec<_>>();
-        // Which piles are used, and how each is represented: a used pile has
-        // to have a representation. Only the reclaim bars' sources, so moving
-        // a bar does not send Setup back to be run.
-        let pile_use: Vec<_> = crate::model::schedule::destinations::available(document.solids(), routing)
-            .iter()
-            .filter(|entry| entry.kind == crate::model::schedule::DestinationKind::Stockpile)
-            .map(|entry| {
-                (
-                    format!("{:?}", entry.id),
-                    format!("{:?}", plan.experiment().representation(entry.id)),
-                    routing.rules.iter().any(|rule| rule.enabled && rule.destinations.contains(&entry.id))
-                        || plan.bars().iter().any(|bar| bar.reclaim().is_some_and(|reclaim| reclaim.sources.contains(&entry.id))),
-                )
-            })
-            .collect();
-        let stockpiles_step = hash_of((
-            agents_step,
-            by_kind(crate::model::schedule::DestinationKind::Stockpile),
-            standalone(crate::model::schedule::DestinationKind::Stockpile),
-            pile_use,
-        ));
-        let dumps_step = hash_of((
-            stockpiles_step,
-            by_kind(crate::model::schedule::DestinationKind::Dump),
-            standalone(crate::model::schedule::DestinationKind::Dump),
-        ));
-        let crushers: Vec<_> = routing
-            .standalone
-            .iter()
-            .filter(|entry| entry.kind == crate::model::schedule::DestinationKind::Crusher)
-            .map(|entry| {
-                let periods: Vec<_> = entry.crusher.periods.iter().map(|(period, value)| (period.0, value.tonnes().map(f64::to_bits))).collect();
-                (entry.id.0, entry.name.clone(), entry.crusher.default_tpd.map(f64::to_bits), periods)
-            })
-            .collect();
-        let crushers_step = hash_of((dumps_step, crushers));
-        let rules = {
-            let mut hasher = DefaultHasher::new();
-            crushers_step.hash(&mut hasher);
-            // The rules' own content hash, which already covers every field a
-            // match depends on, including the fields the conditions name.
-            for rule in &routing.rules {
-                let mut rule_hasher = DefaultHasher::new();
-                rule.hash_content_public(&mut rule_hasher);
-                rule_hasher.finish().hash(&mut hasher);
-            }
-            // A condition reads a field through its definition, so
-            // re-aggregating or deleting one is an input change.
-            for field in document.reserve_fields() {
-                field.id.0.hash(&mut hasher);
-                field.name.hash(&mut hasher);
-                format!("{:?}", field.aggregation).hash(&mut hasher);
-            }
-            hasher.finish()
-        };
-        let destinations_step = rules;
-
-        let trucking_rules = {
-            let mut hasher = DefaultHasher::new();
-            truck_classes_step.hash(&mut hasher);
-            for rule in &trucks.rules {
-                let mut rule_hasher = DefaultHasher::new();
-                rule.hash_content_public(&mut rule_hasher);
-                rule_hasher.finish().hash(&mut hasher);
-            }
-            // What the rule's selectors can resolve against, so a destination
-            // or loader that disappears is an input change here too.
-            for entry in crate::model::schedule::destinations::available(document.solids(), plan.routing()) {
-                format!("{:?}", entry.id).hash(&mut hasher);
-            }
-            for agent in plan.agents() {
-                agent.id.0.hash(&mut hasher);
-            }
-            hasher.finish()
-        };
-        let trucking_rules_step = trucking_rules;
-
-        // Cashflow hangs off the transport chain and, like it, reaches no
-        // further: editing what a movement is worth must not retire a dig-only
-        // calculation that never consulted a value. Only the coefficients are
-        // folded in - a rule renamed is unsaved work, not a different number.
-        let cashflow_step = {
-            let mut hasher = DefaultHasher::new();
-            trucking_rules_step.hash(&mut hasher);
-            plan.cashflow().hash_content(&mut hasher);
-            for field in document.reserve_fields() {
-                field.id.0.hash(&mut hasher);
-                format!("{:?}", field.aggregation).hash(&mut hasher);
-            }
-            // Include reclaim rates and opening inventory in readiness identity;
-            // normal optimisation consumes these inputs as well as digging.
-            for class in plan.classes() {
-                class.id.0.hash(&mut hasher);
-                class.default_reclaim_rate_tph.to_bits().hash(&mut hasher);
-            }
-            for agent in plan.agents() {
-                agent.id.0.hash(&mut hasher);
-                for (period, value) in &agent.calendar.periods {
-                    period.0.hash(&mut hasher);
-                    value.reclaim_rate_tph.map(f64::to_bits).hash(&mut hasher);
-                }
-            }
-            for entry in crate::model::schedule::destinations::available(document.solids(), plan.routing()) {
-                format!("{:?}", entry.id).hash(&mut hasher);
-                if let Some(inventory) = plan.routing().inventory(entry.id) {
-                    inventory.hash_content(&mut hasher);
-                }
-            }
-            hasher.finish()
-        };
-
         // Where the Solids run stands, not what it produced: a status is
         // cheap, and it moves exactly when a schedule's ground does.
         let solids = match self.planning_snapshot_status() {
             Ok(generation) => (0_u8, generation, String::new()),
             Err(reason) => (1, 0, reason.describe()),
         };
-        // Exclusions decide which blocks have to be measured at all.
-        let exclusions = {
-            let mut hasher = DefaultHasher::new();
-            for solid in document.solids() {
-                solid.id.0.hash(&mut hasher);
-                solid.exclusions.hash_content(&mut hasher);
-            }
-            hasher.finish()
-        };
-        let solids_step = hash_of((cashflow_step, solids, plan.unmeasured_as_zero(), exclusions));
-        // Haulage checks the destinations and the Solids run's dig blocks
-        // against the roads, so all three are its inputs.
-        let haulage_step = {
-            let mut hasher = DefaultHasher::new();
-            (truck_classes_step, crushers_step, solids_step).hash(&mut hasher);
-            document.haulage().hash_content(&mut hasher);
-            hasher.finish()
-        };
-        let readiness_step = hash_of((destinations_step, solids_step, haulage_step));
-        let drill_blast_step = {
-            let mut hasher = DefaultHasher::new();
-            delays_step.hash(&mut hasher);
-            plan.drill_blast().hash_content(&mut hasher);
-            hasher.finish()
-        };
+        let key = self.document_inputs_key(&solids);
+        if let Some((cached_key, fingerprints)) = self.schedule_fingerprint_cache.get()
+            && cached_key == key
+        {
+            return fingerprints;
+        }
+        let fingerprints = compute_schedule_fingerprints(document, solids);
+        self.schedule_fingerprint_cache.set(Some((key, fingerprints)));
+        fingerprints
+    }
 
-        // Dates and colours name the days; they change nothing a run reads.
-        // The horizon they show is the experiment's, which a calculated
-        // schedule's currentness already reads.
-        let periods_step = hash_of((configuration, "periods"));
-
-        [
-            configuration,
-            periods_step,
-            classes_step,
-            agents_step,
-            delays_step,
-            drill_blast_step,
-            stockpiles_step,
-            dumps_step,
-            crushers_step,
-            destinations_step,
-            trucking_rules_step,
-            cashflow_step,
-            solids_step,
-            haulage_step,
-            readiness_step,
-        ]
+    /// What a fingerprint read from the document depends on, cheaply: the
+    /// project, its document revision, and `run`, which says where the Solids
+    /// run stands. The solids' allocation tells a document rebuilt in place (a
+    /// revert) from the one it replaced, should their revision counters coincide.
+    pub(crate) fn document_inputs_key(&self, run: &impl Hash) -> u64 {
+        let project = self.workspace.active_project();
+        let document = project.map(|project| &project.project.document);
+        hash_of((
+            project.map(|project| project.runtime_id),
+            document.map(|document| (document.revision(), document.solids().as_ptr() as usize, document.solids().len())),
+            run,
+        ))
     }
 
     /// Where the Solids pipeline stands, without collecting its dig blocks.
@@ -1609,4 +1365,278 @@ pub(crate) fn stockpile_problems(
         }
     }
     problems
+}
+
+/// [`App::schedule_fingerprints`] worked out: `solids` is where the Solids run stands.
+fn compute_schedule_fingerprints(document: &crate::model::Document, solids: (u8, u64, String)) -> [u64; ScheduleStep::ALL.len()] {
+    let plan = document.schedule();
+
+    // The chosen field *and* how it aggregates: re-aggregating a field
+    // away from Sum is exactly the edit that makes a completed run wrong
+    // without changing the choice itself.
+    let field = plan.tonnage_field().and_then(|id| {
+        document
+            .reserve_fields()
+            .iter()
+            .find(|field| field.id == id)
+            .map(|field| (id.0, format!("{:?}", field.aggregation)))
+    });
+    let configuration = hash_of((plan.tonnage_field().map(|id| id.0), field));
+
+    let classes: Vec<_> = plan.classes().iter().map(|class| (class.id.0, class.default_dig_rate_tph.to_bits(), class.kind)).collect();
+    let classes_step = hash_of((configuration, classes));
+
+    let agents: Vec<_> = plan
+        .agents()
+        .iter()
+        .map(|agent| {
+            let periods: Vec<_> = agent
+                .calendar
+                .periods
+                .iter()
+                .map(|(period, value)| {
+                    (
+                        period.0,
+                        value.availability.map(f64::to_bits),
+                        value.utilisation.map(f64::to_bits),
+                        value.rate_tph.map(f64::to_bits),
+                    )
+                })
+                .collect();
+            (
+                agent.id.0,
+                agent.class_id.0,
+                agent.calendar.default_availability.to_bits(),
+                agent.calendar.default_utilisation.to_bits(),
+                periods,
+            )
+        })
+        .collect();
+    let agents_step = hash_of((classes_step, agents));
+    // Delays are checked as each is edited, so the step has nothing to
+    // re-validate and a delay edit must not send Setup back to be run:
+    // planners edit delays all the time. A calculated schedule still
+    // retires on one, through `App::schedule_semantic_key`.
+    let delays_step = hash_of((agents_step, "delays"));
+
+    // Transport inputs hang off the fleet and go no further in the Setup
+    // chain. A calculated schedule's own currentness reads them through
+    // `App::schedule_semantic_key`, which is where a truck edit retires
+    // it.
+    let trucks = plan.trucks();
+    let truck_classes: Vec<_> = trucks
+        .classes
+        .iter()
+        .map(|class| {
+            let periods: Vec<_> = class
+                .calendar
+                .periods
+                .iter()
+                .map(|(period, value)| (period.0, value.units, value.availability.map(f64::to_bits), value.utilisation.map(f64::to_bits)))
+                .collect();
+            (
+                class.id.0,
+                class.name.clone(),
+                class.payload_t.to_bits(),
+                class.loaded_speed_kph.to_bits(),
+                class.unloaded_speed_kph.to_bits(),
+                class.calendar.default_units,
+                class.calendar.default_availability.to_bits(),
+                class.calendar.default_utilisation.to_bits(),
+                periods,
+            )
+        })
+        .collect();
+    let mut haul_hash = std::collections::hash_map::DefaultHasher::new();
+    trucks.hash_content(&mut haul_hash);
+    let truck_classes_step = hash_of((agents_step, truck_classes, std::hash::Hasher::finish(&haul_hash)));
+
+    // Destinations are fingerprinted in the three groups the pages edit,
+    // each chained onto the last, so editing a crusher's budget does not
+    // retire the stockpile step - and the solids the stockpile and dump
+    // pages *expose* are part of their inputs, because a solid renamed or
+    // retyped in Solids changes what those pages list.
+    let routing = plan.routing();
+    let solid_destinations: Vec<_> = document
+        .solids()
+        .iter()
+        .filter_map(|solid| {
+            crate::model::schedule::DestinationKind::of_solid(solid.kind).map(|kind| {
+                (
+                    solid.id.0,
+                    solid.name.clone(),
+                    kind,
+                    routing.capacity_t(crate::model::schedule::DestinationId::Solid(solid.id)).map(f64::to_bits),
+                )
+            })
+        })
+        .collect();
+    let standalone = |kind: crate::model::schedule::DestinationKind| {
+        routing
+            .standalone
+            .iter()
+            .filter(move |entry| entry.kind == kind)
+            .map(|entry| (entry.id.0, entry.name.clone(), entry.capacity_t.map(f64::to_bits)))
+            .collect::<Vec<_>>()
+    };
+    let by_kind = |kind: crate::model::schedule::DestinationKind| solid_destinations.iter().filter(|(_, _, solid_kind, _)| *solid_kind == kind).cloned().collect::<Vec<_>>();
+    // Which piles are used, and how each is represented: a used pile has
+    // to have a representation. Only the reclaim bars' sources, so moving
+    // a bar does not send Setup back to be run.
+    let pile_use: Vec<_> = crate::model::schedule::destinations::available(document.solids(), routing)
+        .iter()
+        .filter(|entry| entry.kind == crate::model::schedule::DestinationKind::Stockpile)
+        .map(|entry| {
+            (
+                format!("{:?}", entry.id),
+                format!("{:?}", plan.experiment().representation(entry.id)),
+                routing.rules.iter().any(|rule| rule.enabled && rule.destinations.contains(&entry.id))
+                    || plan.bars().iter().any(|bar| bar.reclaim().is_some_and(|reclaim| reclaim.sources.contains(&entry.id))),
+            )
+        })
+        .collect();
+    let stockpiles_step = hash_of((
+        agents_step,
+        by_kind(crate::model::schedule::DestinationKind::Stockpile),
+        standalone(crate::model::schedule::DestinationKind::Stockpile),
+        pile_use,
+    ));
+    let dumps_step = hash_of((
+        stockpiles_step,
+        by_kind(crate::model::schedule::DestinationKind::Dump),
+        standalone(crate::model::schedule::DestinationKind::Dump),
+    ));
+    let crushers: Vec<_> = routing
+        .standalone
+        .iter()
+        .filter(|entry| entry.kind == crate::model::schedule::DestinationKind::Crusher)
+        .map(|entry| {
+            let periods: Vec<_> = entry.crusher.periods.iter().map(|(period, value)| (period.0, value.tonnes().map(f64::to_bits))).collect();
+            (entry.id.0, entry.name.clone(), entry.crusher.default_tpd.map(f64::to_bits), periods)
+        })
+        .collect();
+    let crushers_step = hash_of((dumps_step, crushers));
+    let rules = {
+        let mut hasher = DefaultHasher::new();
+        crushers_step.hash(&mut hasher);
+        // The rules' own content hash, which already covers every field a
+        // match depends on, including the fields the conditions name.
+        for rule in &routing.rules {
+            let mut rule_hasher = DefaultHasher::new();
+            rule.hash_content_public(&mut rule_hasher);
+            rule_hasher.finish().hash(&mut hasher);
+        }
+        // A condition reads a field through its definition, so
+        // re-aggregating or deleting one is an input change.
+        for field in document.reserve_fields() {
+            field.id.0.hash(&mut hasher);
+            field.name.hash(&mut hasher);
+            format!("{:?}", field.aggregation).hash(&mut hasher);
+        }
+        hasher.finish()
+    };
+    let destinations_step = rules;
+
+    let trucking_rules = {
+        let mut hasher = DefaultHasher::new();
+        truck_classes_step.hash(&mut hasher);
+        for rule in &trucks.rules {
+            let mut rule_hasher = DefaultHasher::new();
+            rule.hash_content_public(&mut rule_hasher);
+            rule_hasher.finish().hash(&mut hasher);
+        }
+        // What the rule's selectors can resolve against, so a destination
+        // or loader that disappears is an input change here too.
+        for entry in crate::model::schedule::destinations::available(document.solids(), plan.routing()) {
+            format!("{:?}", entry.id).hash(&mut hasher);
+        }
+        for agent in plan.agents() {
+            agent.id.0.hash(&mut hasher);
+        }
+        hasher.finish()
+    };
+    let trucking_rules_step = trucking_rules;
+
+    // Cashflow hangs off the transport chain and, like it, reaches no
+    // further: editing what a movement is worth must not retire a dig-only
+    // calculation that never consulted a value. Only the coefficients are
+    // folded in - a rule renamed is unsaved work, not a different number.
+    let cashflow_step = {
+        let mut hasher = DefaultHasher::new();
+        trucking_rules_step.hash(&mut hasher);
+        plan.cashflow().hash_content(&mut hasher);
+        for field in document.reserve_fields() {
+            field.id.0.hash(&mut hasher);
+            format!("{:?}", field.aggregation).hash(&mut hasher);
+        }
+        // Include reclaim rates and opening inventory in readiness identity;
+        // normal optimisation consumes these inputs as well as digging.
+        for class in plan.classes() {
+            class.id.0.hash(&mut hasher);
+            class.default_reclaim_rate_tph.to_bits().hash(&mut hasher);
+        }
+        for agent in plan.agents() {
+            agent.id.0.hash(&mut hasher);
+            for (period, value) in &agent.calendar.periods {
+                period.0.hash(&mut hasher);
+                value.reclaim_rate_tph.map(f64::to_bits).hash(&mut hasher);
+            }
+        }
+        for entry in crate::model::schedule::destinations::available(document.solids(), plan.routing()) {
+            format!("{:?}", entry.id).hash(&mut hasher);
+            if let Some(inventory) = plan.routing().inventory(entry.id) {
+                inventory.hash_content(&mut hasher);
+            }
+        }
+        hasher.finish()
+    };
+
+    // Exclusions decide which blocks have to be measured at all.
+    let exclusions = {
+        let mut hasher = DefaultHasher::new();
+        for solid in document.solids() {
+            solid.id.0.hash(&mut hasher);
+            solid.exclusions.hash_content(&mut hasher);
+        }
+        hasher.finish()
+    };
+    let solids_step = hash_of((cashflow_step, solids, plan.unmeasured_as_zero(), exclusions));
+    // Haulage checks the destinations and the Solids run's dig blocks
+    // against the roads, so all three are its inputs.
+    let haulage_step = {
+        let mut hasher = DefaultHasher::new();
+        (truck_classes_step, crushers_step, solids_step).hash(&mut hasher);
+        document.haulage().hash_content(&mut hasher);
+        hasher.finish()
+    };
+    let readiness_step = hash_of((destinations_step, solids_step, haulage_step));
+    let drill_blast_step = {
+        let mut hasher = DefaultHasher::new();
+        delays_step.hash(&mut hasher);
+        plan.drill_blast().hash_content(&mut hasher);
+        hasher.finish()
+    };
+
+    // Dates and colours name the days; they change nothing a run reads.
+    // The horizon they show is the experiment's, which a calculated
+    // schedule's currentness already reads.
+    let periods_step = hash_of((configuration, "periods"));
+
+    [
+        configuration,
+        periods_step,
+        classes_step,
+        agents_step,
+        delays_step,
+        drill_blast_step,
+        stockpiles_step,
+        dumps_step,
+        crushers_step,
+        destinations_step,
+        trucking_rules_step,
+        cashflow_step,
+        solids_step,
+        haulage_step,
+        readiness_step,
+    ]
 }

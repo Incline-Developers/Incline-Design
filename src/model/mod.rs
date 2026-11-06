@@ -1918,6 +1918,7 @@ impl Document {
     /// called once after the whole document is loaded.
     pub(crate) fn restore_reserve_fields(&mut self, reserve_fields: Vec<ReserveField>) {
         self.reserve_fields = reserve_fields;
+        self.touch();
     }
 
     pub(crate) fn reserve_field(&self, id: ReserveFieldId) -> Option<&ReserveField> {
@@ -2003,16 +2004,19 @@ impl Document {
 
     pub(crate) fn restore_haulage(&mut self, network: haulage::HaulNetwork) {
         self.haulage = network;
+        self.touch();
     }
 
     pub(crate) fn append_haulage_from(&mut self, source: &Document) {
         self.haulage.nodes.extend(source.haulage.nodes.iter().cloned());
         self.haulage.roads.extend(source.haulage.roads.iter().cloned());
+        self.touch();
     }
 
     pub(crate) fn merge_haulage_from(&mut self, source: &Document) {
         if self.haulage.nodes.is_empty() {
             self.haulage = source.haulage.clone();
+            self.touch();
         }
     }
 
@@ -2050,6 +2054,7 @@ impl Document {
     pub(crate) fn restore_schedule(&mut self, mut schedule: schedule::SchedulePlan) {
         schedule.raise_allocator_to(&self.schedule);
         self.schedule = schedule;
+        self.touch();
     }
 
     /// Take `source`'s schedule if this document has none. Used when opening
@@ -2059,6 +2064,7 @@ impl Document {
     pub(crate) fn merge_schedule_from(&mut self, source: &Document) {
         if self.schedule.is_pristine() && !source.schedule.is_pristine() {
             self.schedule = source.schedule.clone();
+            self.touch();
         }
         if self.saved_schedule.is_none() {
             self.saved_schedule.clone_from(&source.saved_schedule);
@@ -2093,6 +2099,7 @@ impl Document {
     /// `next_solid_id` is re-derived by [`Document::recompute_id_counters`].
     pub(crate) fn restore_solids(&mut self, solids: Vec<Solid>) {
         self.solids = solids;
+        self.touch();
     }
 
     pub(crate) fn add_solid(

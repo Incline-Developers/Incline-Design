@@ -171,8 +171,9 @@ pub(crate) fn spatial_surface_face_order(mesh: &mesh_data::Triangulation) -> Vec
     use rayon::prelude::*;
 
     let face_count = mesh.face_count();
-    if face_count == 0 {
-        return Vec::new();
+    // One chunk has nothing to partition, so the faces stay in their order.
+    if face_count <= SURFACE_CHUNK_FACES {
+        return (0..face_count as u32).collect();
     }
     let vertices = mesh.vertices();
     // Relative to the mesh minimum so `f32` holds plenty of precision for

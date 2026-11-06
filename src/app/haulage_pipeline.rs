@@ -75,20 +75,20 @@ impl crate::app::App<'_> {
         let Some(document) = self.workspace.active_document() else {
             return [0; HaulageStep::ALL.len()];
         };
-        let trucks = document.schedule().trucks();
-        let mut hasher = DefaultHasher::new();
-        document.haulage().hash_content(&mut hasher);
-        format!("{:?}", super::commands::haulage::haul_destinations(document)).hash(&mut hasher);
-        super::commands::haulage::max_grade(trucks).to_bits().hash(&mut hasher);
         // Where the Solids run stands, not what it produced: dead ends are
         // judged against its dig blocks, and a status moves exactly when they do.
-        self.planning_snapshot_status().ok().hash(&mut hasher);
-        let network = hasher.finish();
-
-        let mut hasher = DefaultHasher::new();
-        network.hash(&mut hasher);
-        trucks.hash_classes(&mut hasher);
-        [network, hasher.finish()]
+        let run = self.planning_snapshot_status().ok();
+        // Read every frame, and a road network can be large, so it is hashed
+        // again only when the document or the Solids run moves.
+        let key = self.document_inputs_key(&run);
+        if let Some((cached_key, fingerprints)) = self.haulage_fingerprint_cache.get()
+            && cached_key == key
+        {
+            return fingerprints;
+        }
+        let fingerprints = compute_haulage_fingerprints(document, run);
+        self.haulage_fingerprint_cache.set(Some((key, fingerprints)));
+        fingerprints
     }
 
     /// Reset the pipeline and run from its first step through the selected
@@ -389,4 +389,19 @@ fn node_name(network: &HaulNetwork, id: crate::model::haulage::network::NodeId) 
         .iter()
         .find(|road| road.from == id || road.to == id)
         .map_or_else(|| tr!("haul-node"), |road| tr!("haul-node-on", road = road.name.clone()))
+}
+
+fn compute_haulage_fingerprints(document: &crate::model::Document, run: Option<u64>) -> [u64; HaulageStep::ALL.len()] {
+    let trucks = document.schedule().trucks();
+    let mut hasher = DefaultHasher::new();
+    document.haulage().hash_content(&mut hasher);
+    format!("{:?}", super::commands::haulage::haul_destinations(document)).hash(&mut hasher);
+    super::commands::haulage::max_grade(trucks).to_bits().hash(&mut hasher);
+    run.hash(&mut hasher);
+    let network = hasher.finish();
+
+    let mut hasher = DefaultHasher::new();
+    network.hash(&mut hasher);
+    trucks.hash_classes(&mut hasher);
+    [network, hasher.finish()]
 }

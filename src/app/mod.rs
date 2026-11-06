@@ -535,6 +535,10 @@ pub(crate) struct App<'a> {
     pub(crate) schedule_report_key_cache: std::cell::Cell<Option<(u32, u64, u64, u64)>>,
     /// [`App::planning_fingerprints`], with the key it was computed for.
     pub(crate) planning_fingerprint_cache: std::cell::Cell<Option<(u64, [u64; crate::ui::state::SolidsStep::ALL.len()])>>,
+    /// See [`App::schedule_fingerprints`].
+    pub(crate) schedule_fingerprint_cache: std::cell::Cell<Option<(u64, [u64; crate::ui::state::ScheduleStep::ALL.len()])>>,
+    /// See [`App::haulage_fingerprints`].
+    pub(crate) haulage_fingerprint_cache: std::cell::Cell<Option<(u64, [u64; crate::ui::state::HaulageStep::ALL.len()])>>,
     /// The last snapshot handed out, by what it was assembled from. Building
     /// one copies every dig block's ground and reserves, and it is asked for
     /// several times a frame; see [`App::planning_snapshot`].
@@ -753,6 +757,8 @@ impl<'a> Default for App<'a> {
             schedule_semantic_cache: std::cell::Cell::new(None),
             schedule_report_key_cache: std::cell::Cell::new(None),
             planning_fingerprint_cache: std::cell::Cell::new(None),
+            schedule_fingerprint_cache: std::cell::Cell::new(None),
+            haulage_fingerprint_cache: std::cell::Cell::new(None),
             planning_snapshot_cache: std::cell::RefCell::new(None),
             schedule_run_serial: 0,
             schedule_auto_attempted: None,
