@@ -1433,7 +1433,19 @@ impl TriangulationGpuCache {
         let barycentrics = device.features().contains(wgpu::Features::SHADER_BARYCENTRICS);
         let loaded: HashSet<_> = triangulations.iter().chain(solid_preview).filter(|tri| tri.state.loaded).map(|tri| tri.id).collect();
         self.meshes.retain(|id, _| loaded.contains(id) || retained.contains(id));
-        for triangulation in triangulations.iter().chain(solid_preview) {
+        // Every surface whose geometry is not on the GPU yet, built together
+        // so a solid's thousands of blocks can share the cores.
+        let (stale_at, stale): (Vec<usize>, Vec<&OpenTriangulation>) = triangulations
+            .iter()
+            .chain(solid_preview)
+            .enumerate()
+            .filter(|(_, tri)| tri.state.loaded && self.meshes.get(&tri.id).is_none_or(|cached| !std::sync::Arc::ptr_eq(&cached.mesh, &tri.mesh)))
+            .unzip();
+        let mut built: HashMap<usize, Vec<CachedSurfaceChunk>> = stale_at
+            .into_iter()
+            .zip(build_surface_chunks(device, queue, scene_origin, &stale, surface_style_layout, surface_chunk_layout))
+            .collect();
+        for (position, triangulation) in triangulations.iter().chain(solid_preview).enumerate() {
             if !triangulation.state.loaded {
                 continue;
             }
@@ -1534,7 +1546,7 @@ impl TriangulationGpuCache {
                 }
 
                 if geometry_dirty {
-                    cached.surface_chunks = build_surface_chunks(device, queue, scene_origin, triangulation, surface_style_layout, surface_chunk_layout);
+                    cached.surface_chunks = built.remove(&position).unwrap_or_default();
                     cached.edge_chunks.clear();
                     cached.mesh = triangulation.mesh.clone();
                 }
@@ -1575,7 +1587,7 @@ impl TriangulationGpuCache {
                     cached.edge_width = edge_width;
                 }
             } else {
-                let surface_chunks = build_surface_chunks(device, queue, scene_origin, triangulation, surface_style_layout, surface_chunk_layout);
+                let surface_chunks = built.remove(&position).unwrap_or_default();
                 if surface_chunks.is_empty() {
                     continue;
                 }
@@ -1642,6 +1654,31 @@ impl TriangulationGpuCache {
     }
 }
 
+/// Below this many faces in a frame the upload stays on the calling thread:
+/// starting threads would cost more than they save, and a cut landing is here.
+const SHARED_UPLOAD_MIN_FACES: usize = 200_000;
+const SHARED_UPLOAD_MAX_THREADS: usize = 8;
+
+/// One chunk's geometry, ready to go into GPU buffers.
+struct SurfaceChunkGeometry {
+    vertices: Vec<SurfaceVertex>,
+    indices: Vec<u32>,
+    /// World box centre, axes, half extents and the chunk's local origin.
+    placement: (DVec3, [Vec3; 3], Vec3, DVec3),
+}
+
+/// What a thread reuses from chunk to chunk.
+struct SurfaceChunkScratch {
+    /// `remap[global] == u32::MAX` means "not yet in this chunk". Only the
+    /// entries in `touched` are reset between chunks.
+    remap: Vec<u32>,
+    touched: Vec<usize>,
+    /// Flat shading takes the normal from the triangle's provoking (first)
+    /// vertex, so each face needs a first vertex no other face uses. Tracks,
+    /// per local vertex, whether a face has already claimed it.
+    provoking_claimed: Vec<bool>,
+}
+
 /// Upload indexed surface geometry as spatially-coherent chunks, walking faces
 /// in the precomputed kd order (`triangulation.surface_face_order`, built
 /// off-thread) so each chunk covers a compact box with a tight AABB the
@@ -1650,32 +1687,19 @@ impl TriangulationGpuCache {
 /// mesh's first upload doesn't hitch the render thread. Colour is NOT baked in;
 /// it lives in a per-draw SurfaceStyle uniform (plus a per-chunk debug-colour
 /// uniform for the chunk-debug view).
+///
+/// Returns each surface's chunks, in the order the surfaces came. A large
+/// upload builds its chunks on threads of its own, not the rayon pool, which a
+/// background job can hold for as long as this frame would wait. The browser
+/// cannot wait on a thread from its main thread, so it builds every chunk here.
 fn build_surface_chunks(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     scene_origin: DVec3,
-    triangulation: &OpenTriangulation,
+    triangulations: &[&OpenTriangulation],
     surface_style_layout: &wgpu::BindGroupLayout,
     surface_chunk_layout: &wgpu::BindGroupLayout,
-) -> Vec<CachedSurfaceChunk> {
-    let mesh = &triangulation.mesh;
-    let source = mesh.vertices();
-    let face_count = mesh.face_count();
-    if source.is_empty() || face_count == 0 || source.len() > u32::MAX as usize {
-        if source.len() > u32::MAX as usize {
-            log::error!(
-                "{}",
-                crate::i18n::tr!(
-                    "gpu-cache-triangulation-too-many-vertices",
-                    name = triangulation.name.to_string(),
-                    count = source.len().to_string()
-                )
-            );
-        }
-        return Vec::new();
-    }
-    let order = &triangulation.surface_face_order;
-
+) -> Vec<Vec<CachedSurfaceChunk>> {
     // Chunk size: the target, capped so a chunk's vertex/index buffers fit the
     // device limit and local indices stay within u32. The order's leaves are
     // exactly `SURFACE_CHUNK_FACES` long, so only the uncapped size gets its
@@ -1686,150 +1710,235 @@ fn build_surface_chunks(
     let faces_cap = (max_indices / 3).min(max_vertices / 3).min(u32::MAX as usize / 3).max(1);
     let faces_per_chunk = crate::model::triangulation::SURFACE_CHUNK_FACES.min(faces_cap).max(1);
 
-    let mut chunks = Vec::new();
-    // Dense sentinel remap reused across chunks: remap[global] == u32::MAX means
-    // "not yet in this chunk". Reset only touched entries between chunks.
-    let mut remap = vec![u32::MAX; source.len()];
-    let mut dirty: Vec<usize> = Vec::new();
-    let mut vertices: Vec<SurfaceVertex> = Vec::new();
-    // Flat shading takes the normal from the triangle's provoking (first)
-    // vertex, so each face needs a first vertex no other face uses. Tracks,
-    // per local vertex, whether a face has already claimed it.
-    let mut provoking_claimed: Vec<bool> = Vec::new();
-    let mut indices: Vec<u32> = Vec::new();
+    let mut work: Vec<(usize, usize, &[u32])> = Vec::new();
+    for (surface, triangulation) in triangulations.iter().enumerate() {
+        let vertex_count = triangulation.mesh.vertex_count();
+        if vertex_count > u32::MAX as usize {
+            log::error!(
+                "{}",
+                crate::i18n::tr!(
+                    "gpu-cache-triangulation-too-many-vertices",
+                    name = triangulation.name.to_string(),
+                    count = vertex_count.to_string()
+                )
+            );
+        } else if vertex_count > 0 {
+            work.extend(
+                triangulation
+                    .surface_face_order
+                    .chunks(faces_per_chunk)
+                    .enumerate()
+                    .map(|(chunk, run)| (surface, chunk, run)),
+            );
+        }
+    }
 
-    for (chunk_index, run) in order.chunks(faces_per_chunk).enumerate() {
-        vertices.clear();
-        provoking_claimed.clear();
-        indices.clear();
-
-        // First pass: world-space AABB in f64. Its centre becomes the chunk's
-        // local origin so vertex magnitudes stay small no matter how far the
-        // chunk sits from the scene origin.
-        let mut world_min = DVec3::splat(f64::INFINITY);
-        let mut world_max = DVec3::splat(f64::NEG_INFINITY);
-        if triangulation.cull_back_faces && run.len() == face_count {
-            // The whole mesh, whose bounds it already keeps; its origin is the
-            // scene's, so these are only ever a culling box.
-            let bounds = mesh.bounds();
-            world_min = DVec3::new(bounds.min.x, bounds.min.y, bounds.min.z);
-            world_max = DVec3::new(bounds.max.x, bounds.max.y, bounds.max.z);
+    let largest = triangulations
+        .iter()
+        .map(|triangulation| triangulation.mesh.vertex_count())
+        .filter(|&count| count <= u32::MAX as usize)
+        .max()
+        .unwrap_or(0);
+    let new_scratch = || SurfaceChunkScratch {
+        remap: vec![u32::MAX; largest],
+        touched: Vec::new(),
+        provoking_claimed: Vec::new(),
+    };
+    let build_chunk = |(surface, chunk, run): (usize, usize, &[u32]), scratch: &mut SurfaceChunkScratch| {
+        let geometry = prepare_surface_chunk(triangulations[surface], run, scene_origin, scratch)?;
+        let uploaded = upload_surface_chunk(
+            device,
+            queue,
+            &geometry.vertices,
+            &geometry.indices,
+            geometry.placement,
+            scene_origin,
+            chunk,
+            surface_style_layout,
+            surface_chunk_layout,
+        )?;
+        Some((surface, chunk, uploaded))
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let finished: Vec<(usize, usize, CachedSurfaceChunk)> = {
+        let faces: usize = work.iter().map(|(_, _, run)| run.len()).sum();
+        let threads = if faces < SHARED_UPLOAD_MIN_FACES {
+            1
         } else {
-            for &face_index in run {
-                let Some(face) = mesh.face_vertex_indices(face_index as usize) else {
-                    continue;
-                };
-                for global_index in face {
-                    if let Some(point) = source.get(global_index) {
-                        let pos = DVec3::new(point.x, point.y, point.z);
-                        world_min = world_min.min(pos);
-                        world_max = world_max.max(pos);
-                    }
-                }
+            std::thread::available_parallelism().map_or(1, usize::from).min(SHARED_UPLOAD_MAX_THREADS)
+        };
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let run_thread = || {
+            let mut scratch = new_scratch();
+            let mut finished = Vec::new();
+            while let Some(&item) = work.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
+                finished.extend(build_chunk(item, &mut scratch));
             }
+            finished
+        };
+        if threads > 1 {
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = (0..threads).map(|_| scope.spawn(run_thread)).collect();
+                handles.into_iter().flat_map(|handle| handle.join().expect("a surface upload thread panicked")).collect()
+            })
+        } else if work.is_empty() {
+            Vec::new()
+        } else {
+            run_thread()
         }
-        if !world_min.x.is_finite() {
-            continue;
-        }
-        // Adjacent generated slabs share boundary vertices. Give them the same
-        // rebasing origin, so those vertices follow identical f64 -> f32 paths
-        // rather than rounding differently on opposite sides of a flitch seam.
-        let chunk_origin = if triangulation.cull_back_faces { scene_origin } else { (world_min + world_max) * 0.5 };
+    };
+    #[cfg(target_arch = "wasm32")]
+    let finished: Vec<(usize, usize, CachedSurfaceChunk)> = {
+        let mut scratch = new_scratch();
+        work.iter().filter_map(|&item| build_chunk(item, &mut scratch)).collect()
+    };
 
+    let mut built: Vec<Vec<(usize, CachedSurfaceChunk)>> = triangulations.iter().map(|_| Vec::new()).collect();
+    for (surface, chunk, uploaded) in finished {
+        built[surface].push((chunk, uploaded));
+    }
+
+    built
+        .into_iter()
+        .zip(triangulations)
+        .map(|(mut chunks, triangulation)| {
+            chunks.sort_unstable_by_key(|(index, _)| *index);
+            if chunks.len() > 1 {
+                log::info!(
+                    "{}",
+                    crate::i18n::tr!(
+                        "gpu-cache-triangulation-uploaded",
+                        name = triangulation.name.to_string(),
+                        chunks = chunks.len().to_string(),
+                        faces = triangulation.mesh.face_count().to_string()
+                    )
+                );
+            }
+            chunks.into_iter().map(|(_, chunk)| chunk).collect()
+        })
+        .collect()
+}
+
+/// One chunk's local vertices, indices and box, from a run of the surface's
+/// faces. `None` when the run has no valid face.
+fn prepare_surface_chunk(triangulation: &OpenTriangulation, run: &[u32], scene_origin: DVec3, scratch: &mut SurfaceChunkScratch) -> Option<SurfaceChunkGeometry> {
+    let mesh = &triangulation.mesh;
+    let source = mesh.vertices();
+    let SurfaceChunkScratch {
+        remap,
+        touched,
+        provoking_claimed,
+    } = scratch;
+    provoking_claimed.clear();
+    let mut vertices: Vec<SurfaceVertex> = Vec::with_capacity(run.len());
+    let mut indices: Vec<u32> = Vec::with_capacity(run.len() * 3);
+
+    // First pass: world-space AABB in f64. Its centre becomes the chunk's
+    // local origin so vertex magnitudes stay small no matter how far the
+    // chunk sits from the scene origin.
+    let mut world_min = DVec3::splat(f64::INFINITY);
+    let mut world_max = DVec3::splat(f64::NEG_INFINITY);
+    if triangulation.cull_back_faces && run.len() == mesh.face_count() {
+        // The whole mesh, whose bounds it already keeps; its origin is the
+        // scene's, so these are only ever a culling box.
+        let bounds = mesh.bounds();
+        world_min = DVec3::new(bounds.min.x, bounds.min.y, bounds.min.z);
+        world_max = DVec3::new(bounds.max.x, bounds.max.y, bounds.max.z);
+    } else {
         for &face_index in run {
             let Some(face) = mesh.face_vertex_indices(face_index as usize) else {
                 continue;
             };
-            let [Some(pa), Some(pb), Some(pc)] = face.map(|index| source.get(index).map(|point| DVec3::new(point.x, point.y, point.z))) else {
-                continue;
-            };
-            // Flat face normal in f64; oriented z >= 0 to match the two-sided
-            // surface lighting (previously done per-fragment in the shader).
-            let mut face_normal = (pb - pa).cross(pc - pa).normalize_or_zero();
-            if face_normal.z < 0.0 {
-                face_normal = -face_normal;
-            }
-            let normal = face_normal.as_vec3().to_array();
-
-            let mut local = [0u32; 3];
-            for (slot, global_index) in face.into_iter().enumerate() {
-                local[slot] = if remap[global_index] != u32::MAX {
-                    remap[global_index]
-                } else {
-                    let point = source[global_index];
-                    let index = vertices.len() as u32;
-                    vertices.push(surface_vertex(point, chunk_origin, normal));
-                    provoking_claimed.push(false);
-                    remap[global_index] = index;
-                    dirty.push(global_index);
-                    index
-                };
-            }
-            // Rotate the face (winding-preserving) so an unclaimed vertex
-            // provokes it; duplicate one vertex only when all three are taken.
-            match (0..3).find(|&i| !provoking_claimed[local[i] as usize]) {
-                Some(i) => local.rotate_left(i),
-                None => {
-                    let duplicate = SurfaceVertex {
-                        pos: vertices[local[0] as usize].pos,
-                        normal,
-                    };
-                    local[0] = vertices.len() as u32;
-                    vertices.push(duplicate);
-                    provoking_claimed.push(false);
+            for global_index in face {
+                if let Some(point) = source.get(global_index) {
+                    let pos = DVec3::new(point.x, point.y, point.z);
+                    world_min = world_min.min(pos);
+                    world_max = world_max.max(pos);
                 }
             }
-            let provoking = local[0] as usize;
-            vertices[provoking].normal = normal;
-            provoking_claimed[provoking] = true;
-            indices.extend_from_slice(&local);
         }
-        // A dig block is small in view and one of thousands uploaded in a frame,
-        // so it is not worth the orientation search: the axis-aligned box culls
-        // as much, and the search would be most of the upload.
-        let (world_box_center, axes, half_extents) = if triangulation.always_show_edges {
-            super::bounds::axis_aligned_chunk_box((world_min + world_max) * 0.5, world_max - world_min)
-        } else {
-            let mean_normal = vertices.iter().map(|vertex| Vec3::from_array(vertex.normal).as_dvec3()).sum::<DVec3>().normalize_or_zero();
-            super::bounds::fit_chunk_box(
-                &vertices,
-                |vertex| Vec3::from_array(vertex.pos).as_dvec3(),
-                &[mean_normal],
-                chunk_origin,
-                (world_min + world_max) * 0.5,
-                world_max - world_min,
-            )
+    }
+    if !world_min.x.is_finite() {
+        return None;
+    }
+    // Adjacent generated slabs share boundary vertices. Give them the same
+    // rebasing origin, so those vertices follow identical f64 -> f32 paths
+    // rather than rounding differently on opposite sides of a flitch seam.
+    let chunk_origin = if triangulation.cull_back_faces { scene_origin } else { (world_min + world_max) * 0.5 };
+
+    for &face_index in run {
+        let Some(face) = mesh.face_vertex_indices(face_index as usize) else {
+            continue;
         };
-        if let Some(chunk) = upload_surface_chunk(
-            device,
-            queue,
+        let [Some(pa), Some(pb), Some(pc)] = face.map(|index| source.get(index).map(|point| DVec3::new(point.x, point.y, point.z))) else {
+            continue;
+        };
+        // Flat face normal in f64; oriented z >= 0 to match the two-sided
+        // surface lighting (previously done per-fragment in the shader).
+        let mut face_normal = (pb - pa).cross(pc - pa).normalize_or_zero();
+        if face_normal.z < 0.0 {
+            face_normal = -face_normal;
+        }
+        let normal = face_normal.as_vec3().to_array();
+
+        let mut local = [0u32; 3];
+        for (slot, global_index) in face.into_iter().enumerate() {
+            local[slot] = if remap[global_index] != u32::MAX {
+                remap[global_index]
+            } else {
+                let point = source[global_index];
+                let index = vertices.len() as u32;
+                vertices.push(surface_vertex(point, chunk_origin, normal));
+                provoking_claimed.push(false);
+                remap[global_index] = index;
+                touched.push(global_index);
+                index
+            };
+        }
+        // Rotate the face (winding-preserving) so an unclaimed vertex
+        // provokes it; duplicate one vertex only when all three are taken.
+        match (0..3).find(|&i| !provoking_claimed[local[i] as usize]) {
+            Some(i) => local.rotate_left(i),
+            None => {
+                let duplicate = SurfaceVertex {
+                    pos: vertices[local[0] as usize].pos,
+                    normal,
+                };
+                local[0] = vertices.len() as u32;
+                vertices.push(duplicate);
+                provoking_claimed.push(false);
+            }
+        }
+        let provoking = local[0] as usize;
+        vertices[provoking].normal = normal;
+        provoking_claimed[provoking] = true;
+        indices.extend_from_slice(&local);
+    }
+    for &global_index in touched.iter() {
+        remap[global_index] = u32::MAX;
+    }
+    touched.clear();
+    // A dig block is small in view and one of thousands uploaded in a frame,
+    // so it is not worth the orientation search: the axis-aligned box culls
+    // as much, and the search would be most of the upload.
+    let (world_box_center, axes, half_extents) = if triangulation.always_show_edges {
+        super::bounds::axis_aligned_chunk_box((world_min + world_max) * 0.5, world_max - world_min)
+    } else {
+        let mean_normal = vertices.iter().map(|vertex| Vec3::from_array(vertex.normal).as_dvec3()).sum::<DVec3>().normalize_or_zero();
+        super::bounds::fit_chunk_box(
             &vertices,
-            &indices,
-            (world_box_center, axes, half_extents, chunk_origin),
-            scene_origin,
-            chunk_index,
-            surface_style_layout,
-            surface_chunk_layout,
-        ) {
-            chunks.push(chunk);
-        }
-        for &global_index in &dirty {
-            remap[global_index] = u32::MAX;
-        }
-        dirty.clear();
-    }
-    if chunks.len() > 1 {
-        log::info!(
-            "{}",
-            crate::i18n::tr!(
-                "gpu-cache-triangulation-uploaded",
-                name = triangulation.name.to_string(),
-                chunks = chunks.len().to_string(),
-                faces = face_count.to_string()
-            )
-        );
-    }
-    chunks
+            |vertex| Vec3::from_array(vertex.pos).as_dvec3(),
+            &[mean_normal],
+            chunk_origin,
+            (world_min + world_max) * 0.5,
+            world_max - world_min,
+        )
+    };
+    Some(SurfaceChunkGeometry {
+        vertices,
+        indices,
+        placement: (world_box_center, axes, half_extents, chunk_origin),
+    })
 }
 
 /// A distinct, well-spread debug colour per chunk index (golden-ratio hue).
