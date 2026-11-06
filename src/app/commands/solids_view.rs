@@ -2432,8 +2432,8 @@ fn flat_ground(source: &OpenTriangulation, faces: &[Face], z: f64) -> Option<Ope
 
 /// One piece of a bench or flitch, drawn as its own outlined body in the
 /// source's colours.
-fn piece_preview(source: &OpenTriangulation, slab: super::triangulation::solid_between::Slab, edges: Vec<[u32; 2]>) -> anyhow::Result<OpenTriangulation> {
-    let (vertices, faces) = slab;
+fn piece_preview(source: &OpenTriangulation, slab: super::triangulation::solid_between::Slab, mut edges: Vec<[u32; 2]>) -> anyhow::Result<OpenTriangulation> {
+    let (vertices, faces) = merge_coincident_vertices(slab, &mut edges);
     let mesh = Arc::new(Triangulation::from_vertices_and_faces(vertices, faces)?);
     let spatial = Arc::new(crate::model::spatial::TriangleBvh::build(&mesh));
     let order = Arc::new(crate::model::triangulation::spatial_surface_face_order(&mesh));
@@ -2443,6 +2443,28 @@ fn piece_preview(source: &OpenTriangulation, slab: super::triangulation::solid_b
     piece.line_weight = Some(1.5);
     piece.id = next_view_id();
     Ok(piece)
+}
+
+/// One vertex per position. Cutting leaves a piece with about five times the
+/// vertices it has places, and a solid has thousands of pieces to hold in
+/// memory and on the GPU. Only bit-identical positions merge, and faces keep
+/// their order, so the geometry and everything measured from it are unchanged.
+fn merge_coincident_vertices((vertices, mut faces): super::triangulation::solid_between::Slab, edges: &mut [[u32; 2]]) -> super::triangulation::solid_between::Slab {
+    let mut merged = Vec::with_capacity(vertices.len() / 2);
+    let mut seen: HashMap<[u64; 3], u32> = HashMap::with_capacity(vertices.len() / 2);
+    let remap: Vec<u32> = vertices
+        .iter()
+        .map(|vertex| {
+            *seen.entry([vertex.x.to_bits(), vertex.y.to_bits(), vertex.z.to_bits()]).or_insert_with(|| {
+                merged.push(*vertex);
+                (merged.len() - 1) as u32
+            })
+        })
+        .collect();
+    for index in faces.iter_mut().flatten().chain(edges.iter_mut().flatten()) {
+        *index = remap[*index as usize];
+    }
+    (merged, faces)
 }
 
 /// The source's outline edges that lie wholly on a split piece, renumbered
