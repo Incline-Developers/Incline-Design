@@ -7,7 +7,7 @@
 //! result. Selecting a blast used to rebuild the whole body, which is exactly
 //! what the pipeline is meant to make impossible.
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     hash::{DefaultHasher, Hash, Hasher},
     sync::{
         Arc,
@@ -268,7 +268,7 @@ fn restore_decision(attempted: bool, pending: bool) -> RestoreDecision {
 /// What one completed reserve measurement produced.
 pub(crate) struct ReserveProduct {
     /// Totals per entry of the partition it measured.
-    totals: Vec<crate::model::solid_reserves::ReserveTotals>,
+    totals: Arc<Vec<crate::model::solid_reserves::ReserveTotals>>,
     resolution: Option<crate::model::solid_reserves::ReserveResolution>,
     availability: ReserveAvailability,
     /// What each piece is made of, when the scan was asked to retain it - the
@@ -276,6 +276,18 @@ pub(crate) struct ReserveProduct {
     /// than cloned: the records that carry it to a scheduler are rebuilt
     /// whenever the snapshot is, and a capture is the size of the model's
     /// intersections with the partition.
+    material: Option<Arc<crate::model::solid_reserves::MaterialCapture>>,
+}
+
+/// The last dig-block measurement, so the next one can keep the pieces a new
+/// partition leaves as they are.
+struct MeasuredReserves {
+    /// What it was measured with, the partition aside.
+    config: u64,
+    /// The mesh each slot measured.
+    meshes: Vec<Arc<Triangulation>>,
+    totals: Arc<Vec<crate::model::solid_reserves::ReserveTotals>>,
+    resolution: crate::model::solid_reserves::ReserveResolution,
     material: Option<Arc<crate::model::solid_reserves::MaterialCapture>>,
 }
 
@@ -319,6 +331,7 @@ pub(crate) struct ViewSolid {
     /// the dig-block figures, so the two can be reconciled against each other.
     bench_reserves: Stage<ReserveProduct>,
     reserves: Stage<ReserveProduct>,
+    measured: Option<Arc<MeasuredReserves>>,
 }
 
 impl ViewSolid {
@@ -940,6 +953,7 @@ impl crate::app::App<'_> {
                     blasting: Stage::default(),
                     partition: Stage::default(),
                     carved: None,
+                    measured: None,
                     bench_reserves: Stage::default(),
                     reserves: Stage::default(),
                 },
@@ -1071,6 +1085,7 @@ impl crate::app::App<'_> {
         cache.blasting = Stage::default();
         cache.partition = Stage::default();
         cache.carved = None;
+        cache.measured = None;
         cache.bench_reserves = Stage::default();
         cache.reserves = Stage::default();
         let snapshot = solid.clone();
@@ -2578,8 +2593,6 @@ impl crate::app::App<'_> {
             let included = model.is_some_and(|model| model.included_in_reserves);
             let resident = model.is_some_and(|model| model.blocks.len() == model.model.metadata.n_blocks);
             let mut config = DefaultHasher::new();
-            scope.hash_into(&mut config);
-            scope.source_key(cache).hash(&mut config);
             solid.block_model.hash(&mut config);
             included.hash(&mut config);
             serde_json::to_vec(&fields).unwrap_or_default().hash(&mut config);
@@ -2587,6 +2600,11 @@ impl crate::app::App<'_> {
                 serde_json::to_vec(&model.reserve_mapping).unwrap_or_default().hash(&mut config);
                 self.model_content_version(model).hash(&mut config);
             }
+            let measured_with = config.finish();
+            let mut config = DefaultHasher::new();
+            scope.hash_into(&mut config);
+            scope.source_key(cache).hash(&mut config);
+            measured_with.hash(&mut config);
             let key = config.finish();
             let slots = parts.len();
             // As for the envelope: an attempt waiting on a restore keeps the
@@ -2606,7 +2624,7 @@ impl crate::app::App<'_> {
                 let stage = scope.slot(self.solid_view_cache.get_mut(&id).unwrap());
                 stage.begin(key);
                 stage.settle(ReserveProduct {
-                    totals: vec![Default::default(); slots],
+                    totals: Arc::new(vec![Default::default(); slots]),
                     resolution: None,
                     availability: ReserveAvailability::NoSchema,
                     material: None,
@@ -2629,15 +2647,43 @@ impl crate::app::App<'_> {
             } else {
                 None
             };
-            let inputs = model
-                .filter(|_| resident && included && error.is_none())
-                .map(|model| (model.model.clone(), model.blocks.clone(), model.reserve_mapping.clone(), reserve_partition(parts)));
+            // Only the pieces this measurement has not already got figures for.
+            let measured = cache
+                .measured
+                .clone()
+                .filter(|measured| scope == ReserveScope::Dig && measured.config == measured_with && error.is_none());
+            let earlier_resolution = measured.as_ref().map(|measured| measured.resolution.clone()).unwrap_or_default();
+            let earlier_fields = measured.as_ref().and_then(|measured| measured.material.as_ref()).map(|material| material.fields.clone());
+            let kept_slots: Vec<(usize, usize)> = measured.as_ref().map_or_else(Vec::new, |measured| {
+                let earlier: HashMap<*const Triangulation, usize> = measured.meshes.iter().enumerate().map(|(slot, mesh)| (Arc::as_ptr(mesh), slot)).collect();
+                parts
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(slot, part)| Some((slot, *earlier.get(&Arc::as_ptr(&part.mesh.mesh))?)))
+                    .collect()
+            });
+            let kept = measured.filter(|_| !kept_slots.is_empty()).map(|measured| crate::model::solid_reserves::KeptMeasures {
+                slots: kept_slots,
+                totals: measured.totals.clone(),
+                material: measured.material.clone(),
+            });
+            let unchanged: HashSet<usize> = kept.iter().flat_map(|kept| kept.slots.iter().map(|&(slot, _)| slot)).collect();
+            let everything_kept = unchanged.len() == parts.len();
+            let inputs = model.filter(|_| resident && included && error.is_none() && !everything_kept).map(|model| {
+                (
+                    model.model.clone(),
+                    model.blocks.clone(),
+                    model.reserve_mapping.clone(),
+                    reserve_partition(parts, &unchanged),
+                )
+            });
+            let meshes: Vec<Arc<Triangulation>> = parts.iter().map(|part| part.mesh.mesh.clone()).collect();
             let runtime = cache.runtime;
             self.cancel_solid_jobs(id, Some(scope.artifact()));
             let token = scope.slot(self.solid_view_cache.get_mut(&id).unwrap()).begin(key);
             if capacity_only {
                 scope.slot(self.solid_view_cache.get_mut(&id).unwrap()).settle(ReserveProduct {
-                    totals: vec![Default::default(); slots],
+                    totals: Arc::new(vec![Default::default(); slots]),
                     resolution: None,
                     availability: ReserveAvailability::CapacityOnly,
                     material: None,
@@ -2646,6 +2692,23 @@ impl crate::app::App<'_> {
             }
             if let Some(error) = error {
                 scope.slot(self.solid_view_cache.get_mut(&id).unwrap()).fail(error);
+                continue;
+            }
+            // Nothing to scan, so nothing the model has to be loaded for.
+            if everything_kept && let Some(kept) = &kept {
+                let mut outcome = ReserveOutcome {
+                    totals: vec![Default::default(); slots],
+                    resolution: earlier_resolution,
+                    material: earlier_fields.map(|fields| crate::model::solid_reserves::MaterialCapture {
+                        fields,
+                        labels: Vec::new(),
+                        portions: vec![Arc::default(); slots],
+                    }),
+                };
+                outcome.keep(kept);
+                let cache = self.solid_view_cache.get_mut(&id).unwrap();
+                settle_reserves(cache, scope, outcome, measured_with, meshes);
+                self.solid_view_body_key = None;
                 continue;
             }
             let Some((model, blocks, mapping, partition)) = inputs else {
@@ -2668,26 +2731,48 @@ impl crate::app::App<'_> {
                 // Routing needs to know what each dig block is made of, which
                 // its totals cannot say; whole benches are reported, never
                 // routed, so theirs is not retained.
-                move |cancel, progress| crate::model::solid_reserves::compute(&model, &blocks, &mapping, &fields, &partition, capture_material, cancel, progress),
+                move |cancel, progress| {
+                    let mut outcome = crate::model::solid_reserves::compute(&model, &blocks, &mapping, &fields, &partition, capture_material, cancel, progress)?;
+                    if let Some(kept) = &kept {
+                        outcome.keep(kept);
+                    }
+                    Ok(outcome)
+                },
                 move |app, result: anyhow::Result<ReserveOutcome>| {
                     if app.accepting_solid(runtime, id, scope.artifact(), token).is_none() {
                         return;
                     }
-                    let stage = scope.slot(app.solid_view_cache.get_mut(&id).expect("checked above"));
+                    let cache = app.solid_view_cache.get_mut(&id).expect("checked above");
                     match result {
-                        Ok(outcome) => stage.settle(ReserveProduct {
-                            totals: outcome.totals,
-                            resolution: Some(outcome.resolution),
-                            availability: ReserveAvailability::Measured,
-                            material: outcome.material.map(Arc::new),
-                        }),
-                        Err(error) => stage.fail(format!("{error:#}")),
+                        Ok(outcome) => settle_reserves(cache, scope, outcome, measured_with, meshes),
+                        Err(error) => scope.slot(cache).fail(format!("{error:#}")),
                     }
                     app.solid_view_body_key = None;
                 },
             );
         }
     }
+}
+
+/// Commit a measurement, and keep the dig blocks' for the next one to build on.
+fn settle_reserves(cache: &mut ViewSolid, scope: ReserveScope, outcome: ReserveOutcome, measured_with: u64, meshes: Vec<Arc<Triangulation>>) {
+    let totals = Arc::new(outcome.totals);
+    let material = outcome.material.map(Arc::new);
+    if scope == ReserveScope::Dig {
+        cache.measured = Some(Arc::new(MeasuredReserves {
+            config: measured_with,
+            meshes,
+            totals: totals.clone(),
+            resolution: outcome.resolution.clone(),
+            material: material.clone(),
+        }));
+    }
+    scope.slot(cache).settle(ReserveProduct {
+        totals,
+        resolution: Some(outcome.resolution),
+        availability: ReserveAvailability::Measured,
+        material,
+    });
 }
 
 /// Which partition of a solid a reserve measurement covers.
@@ -2886,7 +2971,7 @@ pub(crate) struct BlockPortions {
 
 impl BlockPortions {
     pub(crate) fn portions(&self) -> &[crate::model::solid_reserves::MaterialPortion] {
-        self.capture.portions.get(self.slot).map_or(&[][..], Vec::as_slice)
+        self.capture.portions.get(self.slot).map_or(&[][..], |portions| portions.as_slice())
     }
 }
 
@@ -3197,9 +3282,12 @@ impl BlastRecord {
 /// flitch share that flitch's elevations exactly, so they can never be
 /// flattened into one ordered, non-overlapping list. They are pieces of one
 /// band instead, and the band carries the ordering.
-fn reserve_partition(parts: &[SolidPart]) -> ReservePartition {
+fn reserve_partition(parts: &[SolidPart], leave_out: &HashSet<usize>) -> ReservePartition {
     let mut bands: Vec<ReserveBand> = Vec::new();
     for (slot, part) in parts.iter().enumerate() {
+        if leave_out.contains(&slot) {
+            continue;
+        }
         let piece = ReservePiece {
             mesh: part.mesh.mesh.clone(),
             // Its own tree, gone with the scan: the part rarely needs one again.

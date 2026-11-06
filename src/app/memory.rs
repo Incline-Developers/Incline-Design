@@ -63,8 +63,10 @@ pub(crate) fn tune_allocator() {
 pub(crate) fn release_free_memory() {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     {
-        use std::sync::Mutex;
-        use std::time::{Duration, Instant};
+        use std::{
+            sync::Mutex,
+            time::{Duration, Instant},
+        };
         static LAST: Mutex<Option<Instant>> = Mutex::new(None);
         {
             let mut last = LAST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);

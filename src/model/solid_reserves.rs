@@ -195,8 +195,9 @@ pub(crate) struct MaterialCapture {
     pub(crate) fields: Vec<CapturedField>,
     /// Category labels, referenced by index from a portion's values.
     pub(crate) labels: Vec<String>,
-    /// Per result slot, its portions in first-seen row order.
-    pub(crate) portions: Vec<Vec<MaterialPortion>>,
+    /// Per result slot, its portions in first-seen row order. Shared, so a
+    /// later scan can keep the slots it did not have to measure again.
+    pub(crate) portions: Vec<Arc<Vec<MaterialPortion>>>,
 }
 
 impl MaterialCapture {
@@ -333,6 +334,78 @@ pub(crate) struct ReserveOutcome {
     pub(crate) resolution: ReserveResolution,
     /// What each piece is made of, when the scan was asked to retain it.
     pub(crate) material: Option<MaterialCapture>,
+}
+
+/// What an earlier scan of the same model and fields measured, for the pieces of
+/// a new partition that are the very meshes it measured. A piece's figures do
+/// not depend on the pieces around it, so they are the ones a full scan would
+/// give, to the bit, and only the changed ground has to be scanned.
+pub(crate) struct KeptMeasures {
+    /// Each kept slot in the new partition, and in the scan it comes from.
+    pub(crate) slots: Vec<(usize, usize)>,
+    pub(crate) totals: Arc<Vec<ReserveTotals>>,
+    pub(crate) material: Option<Arc<MaterialCapture>>,
+}
+
+impl ReserveOutcome {
+    /// Fill in the slots this scan was not asked to measure.
+    pub(crate) fn keep(&mut self, kept: &KeptMeasures) {
+        for &(slot, old) in &kept.slots {
+            self.totals[slot] = kept.totals[old].clone();
+        }
+        // This scan's material joins the earlier scan's label table, as a
+        // portion names its categories by their place in it.
+        if let (Some(material), Some(earlier)) = (self.material.as_mut(), kept.material.as_ref()) {
+            let mut labels = earlier.labels.clone();
+            let moved: Vec<f64> = material
+                .labels
+                .iter()
+                .map(|label| {
+                    let place = labels.iter().position(|known| known == label).unwrap_or_else(|| {
+                        labels.push(label.clone());
+                        labels.len() - 1
+                    });
+                    place as f64
+                })
+                .collect();
+            let categorical: Vec<usize> = (0..material.fields.len()).filter(|position| material.is_categorical(*position)).collect();
+            for portions in &mut material.portions {
+                if !categorical.is_empty() && !portions.is_empty() {
+                    for portion in Arc::make_mut(portions) {
+                        for &position in &categorical {
+                            let value = portion.values[position];
+                            if value.is_finite() {
+                                portion.values[position] = moved[value as usize];
+                            }
+                        }
+                    }
+                }
+            }
+            material.labels = labels;
+            for &(slot, old) in &kept.slots {
+                material.portions[slot] = earlier.portions[old].clone();
+            }
+        }
+        // "Every value is missing" was worked out from what this scan saw.
+        self.resolution.issues.retain(|(_, issue)| !matches!(issue, ReserveFieldIssue::AllValuesMissing));
+        let mut totals = self.totals.iter();
+        let Some(first) = totals.next() else { return };
+        let numeric: Vec<ReserveFieldId> = first.all.numeric.keys().copied().collect();
+        for field in numeric {
+            let tally = |pick: fn(&NumericTotal) -> u64| self.totals.iter().filter_map(|total| total.all.numeric.get(&field)).map(pick).sum::<u64>();
+            if tally(|total| total.contributions) == 0 && tally(|total| total.missing) > 0 {
+                self.resolution.issues.push((field, ReserveFieldIssue::AllValuesMissing));
+            }
+        }
+        let empty = crate::i18n::tr!("planning-empty-category");
+        let categories: Vec<ReserveFieldId> = first.categories.keys().copied().collect();
+        for field in categories {
+            let mut groups = self.totals.iter().filter_map(|total| total.categories.get(&field)).flat_map(BTreeMap::keys).peekable();
+            if groups.peek().is_some() && groups.all(|label| *label == empty) {
+                self.resolution.issues.push((field, ReserveFieldIssue::AllValuesMissing));
+            }
+        }
+    }
 }
 
 /// Resolve one field's mapping onto a model's own columns, reporting why it
@@ -517,7 +590,7 @@ pub(crate) fn compute(
     let mut material = capture.then(|| MaterialCapture {
         fields: captured_fields.clone(),
         labels: Vec::new(),
-        portions: vec![Vec::new(); partition.slots],
+        portions: vec![Arc::default(); partition.slots],
     });
     if partition.is_empty() {
         return Ok(ReserveOutcome { totals, resolution, material });
@@ -724,7 +797,7 @@ pub(crate) fn compute(
     resolution.unusable_weights = counters.unusable_weights;
     resolution.unmapped_labels = counters.unmapped_labels;
     if let Some(material) = material.as_mut() {
-        material.portions = slots.into_iter().map(|slot| slot.portions).collect();
+        material.portions = slots.into_iter().map(|slot| Arc::new(slot.portions)).collect();
     }
     Ok(ReserveOutcome { totals, resolution, material })
 }
