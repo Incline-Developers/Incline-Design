@@ -1684,7 +1684,10 @@ impl TriangulationGpuCache {
 
 /// Below this many faces in a frame the upload stays on the calling thread:
 /// starting threads would cost more than they save, and a cut landing is here.
+/// The browser uploads on its one thread, so these are desktop-only.
+#[cfg(not(target_arch = "wasm32"))]
 const SHARED_UPLOAD_MIN_FACES: usize = 200_000;
+#[cfg(not(target_arch = "wasm32"))]
 const SHARED_UPLOAD_MAX_THREADS: usize = 8;
 
 /// One chunk's geometry, ready to go into GPU buffers.

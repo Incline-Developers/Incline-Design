@@ -70,12 +70,16 @@ unic-langid = { version = "0.9.6", features = ["macros"] }
 uuid = { version = "1.29.0", features = ["js", "serde", "v4"] }
 web-time = "1.1.0"
 wgpu = "30.0.1"
-winit = "0.30.13"
+# winit's defaults less `wayland-csd-adwaita`: the window draws its own title bar, so
+# the Adwaita frame winit would build (hidden) only spawned dbus-send at startup
+# and warned about button layouts it can't read.
+winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 dirs = "7.0.0"
 egui_system_font_provider = "0.37.0"
-egui-winit = "0.37.0"
+# Its defaults less `winit/default`, which would bring back the Adwaita frame (see `winit`).
+egui-winit = { version = "0.37.0", default-features = false, features = ["clipboard", "links", "wayland", "x11"] }
 i18n-embed = { version = "0.16.0", features = ["desktop-requester"] }
 memmap2 = "0.9.12"
 pollster = "1.0.1"
