@@ -221,6 +221,13 @@ pub(crate) enum SolidPreviewStatus {
     WaitingForInputs {
         previous: Option<Box<OpenTriangulation>>,
     },
+    /// A run's Solids stage is building this solid, and the preview waits
+    /// for it rather than building the same volume beside it: the stage's
+    /// result is kept for these surfaces, so the build that follows takes it
+    /// rather than repeating it. Re-examined every frame, as a restore is.
+    WaitingForStage {
+        previous: Option<Box<OpenTriangulation>>,
+    },
     /// Ready to inspect. Carries the enclosed volume for a built solid; a
     /// lone surface encloses nothing, so it has none.
     Ready {
@@ -245,7 +252,7 @@ impl SolidPreview {
     pub(crate) fn whole_mesh(&self) -> Option<&OpenTriangulation> {
         match &self.status {
             SolidPreviewStatus::Ready { mesh, .. } => Some(mesh),
-            SolidPreviewStatus::Building { previous } | SolidPreviewStatus::WaitingForInputs { previous } => previous.as_deref(),
+            SolidPreviewStatus::Building { previous } | SolidPreviewStatus::WaitingForInputs { previous } | SolidPreviewStatus::WaitingForStage { previous } => previous.as_deref(),
             SolidPreviewStatus::Failed(_) => None,
         }
     }
@@ -253,7 +260,7 @@ impl SolidPreview {
     /// Whether this preview is only holding a place until geometry arrives,
     /// and so has to be reconsidered rather than left alone.
     fn is_waiting(&self) -> bool {
-        matches!(self.status, SolidPreviewStatus::WaitingForInputs { .. })
+        matches!(self.status, SolidPreviewStatus::WaitingForInputs { .. } | SolidPreviewStatus::WaitingForStage { .. })
     }
 
     /// Replace a preview, carrying its cut body across.
@@ -295,7 +302,7 @@ impl SolidPreview {
     fn take_mesh(&mut self) -> Option<Box<OpenTriangulation>> {
         match std::mem::replace(&mut self.status, SolidPreviewStatus::Building { previous: None }) {
             SolidPreviewStatus::Ready { mesh, .. } => Some(mesh),
-            SolidPreviewStatus::Building { previous } | SolidPreviewStatus::WaitingForInputs { previous } => previous,
+            SolidPreviewStatus::Building { previous } | SolidPreviewStatus::WaitingForInputs { previous } | SolidPreviewStatus::WaitingForStage { previous } => previous,
             SolidPreviewStatus::Failed(_) => None,
         }
     }
@@ -451,6 +458,12 @@ impl crate::app::App<'_> {
         if preview.body_key == Some(key) {
             return;
         }
+        // A run cutting this solid into the same flitches leaves slabs this
+        // takes rather than cutting a second set beside them; asked again
+        // next frame.
+        if self.solid_body_job_pending(preview.key.solid) {
+            return;
+        }
 
         // The finest division the plan describes: a bench with flitches is cut
         // into them, and one without is a band of its own. Each band carries
@@ -511,7 +524,7 @@ impl crate::app::App<'_> {
         if let Some(preview) = self.solid_preview.as_mut() {
             match &mut preview.status {
                 SolidPreviewStatus::Ready { mesh, .. } => mesh.color = color,
-                SolidPreviewStatus::Building { previous } | SolidPreviewStatus::WaitingForInputs { previous } => {
+                SolidPreviewStatus::Building { previous } | SolidPreviewStatus::WaitingForInputs { previous } | SolidPreviewStatus::WaitingForStage { previous } => {
                     if let Some(mesh) = previous {
                         mesh.color = color;
                     }
@@ -595,7 +608,7 @@ impl crate::app::App<'_> {
         self.editor.solid_preview_summary = match self.solid_preview.as_ref().map(|preview| &preview.status) {
             None if nothing_loaded => crate::ui::state::SolidPreviewSummary::Unloaded,
             None => crate::ui::state::SolidPreviewSummary::Empty,
-            Some(SolidPreviewStatus::Building { previous }) => crate::ui::state::SolidPreviewSummary::Building {
+            Some(SolidPreviewStatus::Building { previous } | SolidPreviewStatus::WaitingForStage { previous }) => crate::ui::state::SolidPreviewSummary::Building {
                 showing_previous: previous.is_some(),
             },
             Some(SolidPreviewStatus::WaitingForInputs { previous }) => crate::ui::state::SolidPreviewSummary::LoadingInputs {
@@ -662,6 +675,11 @@ impl crate::app::App<'_> {
         }
 
         match (key.surface.zip(available.surface), key.topography.zip(available.topography)) {
+            // Both surfaces on hand, but a run is building this solid: one
+            // build of a large pair is all the memory there is for.
+            (Some(_), Some(_)) if self.solid_envelope_job_pending(key.solid) => {
+                self.solid_preview = Some(SolidPreview::carrying(key, available, SolidPreviewStatus::WaitingForStage { previous }, carried));
+            }
             // Both surfaces on hand: build the volume between them.
             (Some((surface, _)), Some((topography, _))) => self.spawn_solid_preview_build(key, available, key.kind, surface, topography, previous, carried),
             // One of them: show it as it is. There is no volume to enclose
@@ -803,46 +821,28 @@ impl crate::app::App<'_> {
         self.solid_preview = Some(SolidPreview::carrying(key, built_from, SolidPreviewStatus::Building { previous }, carried));
 
         let failed_name = solid_name.clone();
-        let compute = move |cancel: &crate::app::jobs::CancelFlag,
-                            progress: &crate::model::progress::Progress|
-              -> anyhow::Result<(crate::model::triangulation::GeneratedTriangulation, f64)> {
-            let (vertices, faces, volume) =
-                super::triangulation::solid_between::build_solid_between_surfaces(&surface_mesh, &topography_mesh, region, &solid_name, &progress.phase(0.0, 0.85))?;
+        let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> anyhow::Result<super::triangulation::solid_between::SolidMesh> {
+            let solid = super::triangulation::solid_between::build_solid_mesh(&surface_mesh, &topography_mesh, region, &solid_name, &progress.phase(0.0, 1.0))?;
             if cancel.is_cancelled() {
                 anyhow::bail!("Cancelled");
             }
-            let generated = super::triangulation::session::build_generated_triangulation(
-                name,
-                vertices,
-                faces,
-                crate::ui::state::TriSurfaceType::SolidClosed,
-                crate::model::triangulation::unique_edges,
-            )?;
-            Ok((generated, volume))
+            Ok(solid)
         };
-        let apply = move |app: &mut crate::app::App, result: anyhow::Result<(crate::model::triangulation::GeneratedTriangulation, f64)>| {
+        let apply = move |app: &mut crate::app::App, result: anyhow::Result<super::triangulation::solid_between::SolidMesh>| {
             // The selection may have moved on while the build ran; only the
             // preview this job was started for accepts its result.
             if app.solid_preview.as_ref().is_none_or(|preview| preview.key != key || preview.built_from != built_from) {
                 return;
             }
             let status = match result {
-                Ok((generated, volume)) => {
-                    let mut mesh = preview_triangulation(
-                        generated.name,
-                        generated.mesh,
-                        generated.spatial,
-                        generated.edges,
-                        generated.surface_face_order,
-                        color,
-                        line_color,
-                    );
+                Ok(solid) => {
+                    let mut mesh = preview_triangulation(name, solid.mesh, solid.spatial, solid.edges, solid.surface_face_order, color, line_color);
                     // Crosshatched as Benching draws a flitch: in one flat
                     // colour the solid's faces run together.
                     mesh.flitch_style = Some(crate::model::FlitchStyle::default_for(color, 0, 1));
                     SolidPreviewStatus::Ready {
                         mesh: Box::new(mesh),
-                        volume: Some(volume),
+                        volume: Some(solid.volume),
                     }
                 }
                 Err(error) => {
@@ -971,36 +971,147 @@ pub(super) fn build_bench_body(
 ) -> anyhow::Result<(Vec<OpenTriangulation>, Vec<CutBand>)> {
     let name = source.name.clone();
     let line_color = source.line_color;
-    let mut body = Vec::new();
-    let mut cut_bands = Vec::new();
     if bands.is_empty() {
-        body.push(source.clone());
-    } else {
-        let ranges: Vec<(f64, f64)> = bands.iter().map(|band| (band.selection.base, band.selection.top)).collect();
-        let slabs = super::triangulation::solid_between::slabs_between_elevations(&source.mesh, &ranges, Some(cancel))?;
-        for (band, slab) in bands.into_iter().zip(slabs) {
-            if cancel.is_cancelled() {
-                anyhow::bail!("Cancelled");
-            }
-            if slab.1.is_empty() {
-                continue;
-            }
-            let Ok(mesh) = crate::model::formats::mesh_data::Triangulation::from_vertices_and_faces(slab.0, slab.1) else {
-                continue;
-            };
-            let mesh = Arc::new(mesh);
-            let spatial = Arc::new(crate::model::spatial::TriangleBvh::build(&mesh));
-            let edges = crate::model::triangulation::unique_edges(&mesh);
-            let order = Arc::new(crate::model::triangulation::spatial_surface_face_order(&mesh));
-            let mut item = preview_triangulation(name.clone(), mesh, spatial, edges, order, [1.0; 4], line_color);
-            // Each flitch needs an id of its own for the renderer's
-            // per-surface cache, counted down from the preview's own.
-            item.id = TriangulationId(SOLID_PREVIEW_ID.0 - 1 - cut_bands.len() as u64);
-            item.cull_back_faces = cull_back_faces;
-            body.push(item);
-            cut_bands.push(band);
+        return Ok((vec![source.clone()], Vec::new()));
+    }
+    let ranges: Vec<(f64, f64)> = bands.iter().map(|band| (band.selection.base, band.selection.top)).collect();
+    // The Setup page's preview and a run's Benching stage cut the same solid
+    // into the same flitches: the second takes the first's slabs while those
+    // are still held, rather than a copy of them.
+    let slabs = match recent_slabs(&source.mesh, &ranges) {
+        Some(slabs) => slabs,
+        None => {
+            let slabs = cut_slabs(&source.mesh, bands, &ranges, cancel)?;
+            remember_slabs(&source.mesh, ranges, &slabs);
+            slabs
         }
+    };
+    let mut body = Vec::with_capacity(slabs.len());
+    let mut cut_bands = Vec::with_capacity(slabs.len());
+    for (slab, band) in slabs {
+        let mut item = preview_triangulation(name.clone(), slab.mesh, slab.spatial, slab.edges, slab.surface_face_order, [1.0; 4], line_color);
+        // Each flitch needs an id of its own for the renderer's
+        // per-surface cache, counted down from the preview's own.
+        item.id = TriangulationId(SOLID_PREVIEW_ID.0 - 1 - cut_bands.len() as u64);
+        item.cull_back_faces = cull_back_faces;
+        body.push(item);
+        cut_bands.push(band);
     }
 
     Ok((body, cut_bands))
+}
+
+/// One slab of a solid, with what drawing and picking it need; every part
+/// shared, so two holders of a slab hold one.
+#[derive(Clone)]
+struct Slab {
+    mesh: Arc<crate::model::formats::mesh_data::Triangulation>,
+    spatial: Arc<crate::model::spatial::TriangleBvh>,
+    edges: Arc<Vec<[u32; 2]>>,
+    surface_face_order: Arc<Vec<u32>>,
+}
+
+/// Cut `mesh` into the slabs `bands` describe, leaving out the bands it has
+/// no material in.
+fn cut_slabs(
+    mesh: &crate::model::formats::mesh_data::Triangulation,
+    bands: Vec<CutBand>,
+    ranges: &[(f64, f64)],
+    cancel: &crate::app::jobs::CancelFlag,
+) -> anyhow::Result<Vec<(Slab, CutBand)>> {
+    let slabs = super::triangulation::solid_between::slabs_between_elevations(mesh, ranges, Some(cancel))?;
+    let mut cut = Vec::new();
+    for (band, slab) in bands.into_iter().zip(slabs) {
+        if cancel.is_cancelled() {
+            anyhow::bail!("Cancelled");
+        }
+        if slab.1.is_empty() {
+            continue;
+        }
+        let Ok(mesh) = crate::model::formats::mesh_data::Triangulation::from_vertices_and_faces(slab.0, slab.1) else {
+            continue;
+        };
+        let spatial = Arc::new(crate::model::spatial::TriangleBvh::build(&mesh));
+        let edges = Arc::new(crate::model::triangulation::unique_edges(&mesh));
+        let surface_face_order = Arc::new(crate::model::triangulation::spatial_surface_face_order(&mesh));
+        let slab = Slab {
+            mesh: Arc::new(mesh),
+            spatial,
+            edges,
+            surface_face_order,
+        };
+        cut.push((slab, band));
+    }
+    Ok(cut)
+}
+
+/// A set of slabs cut recently, held only by whatever is still using them.
+struct RecentSlabs {
+    source: std::sync::Weak<crate::model::formats::mesh_data::Triangulation>,
+    ranges: Vec<(f64, f64)>,
+    slabs: Vec<(WeakSlab, CutBand)>,
+}
+
+struct WeakSlab {
+    mesh: std::sync::Weak<crate::model::formats::mesh_data::Triangulation>,
+    spatial: std::sync::Weak<crate::model::spatial::TriangleBvh>,
+    edges: std::sync::Weak<Vec<[u32; 2]>>,
+    surface_face_order: std::sync::Weak<Vec<u32>>,
+}
+
+impl WeakSlab {
+    fn upgrade(&self) -> Option<Slab> {
+        Some(Slab {
+            mesh: self.mesh.upgrade()?,
+            spatial: self.spatial.upgrade()?,
+            edges: self.edges.upgrade()?,
+            surface_face_order: self.surface_face_order.upgrade()?,
+        })
+    }
+}
+
+/// How many sets of slabs are remembered at once.
+const RECENT_SLAB_SETS: usize = 8;
+
+fn recent_slab_sets() -> std::sync::MutexGuard<'static, Vec<RecentSlabs>> {
+    static RECENT: std::sync::Mutex<Vec<RecentSlabs>> = std::sync::Mutex::new(Vec::new());
+    // A cut that panicked mid-update leaves nothing worse than a stale list,
+    // and every entry in it is checked before it is used.
+    RECENT.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The slabs `source` was last cut into for exactly these `ranges`, if every
+/// one of them is still held somewhere.
+fn recent_slabs(source: &Arc<crate::model::formats::mesh_data::Triangulation>, ranges: &[(f64, f64)]) -> Option<Vec<(Slab, CutBand)>> {
+    let recent = recent_slab_sets();
+    let set = recent
+        .iter()
+        .find(|set| set.ranges == ranges && set.source.upgrade().is_some_and(|held| Arc::ptr_eq(&held, source)))?;
+    set.slabs.iter().map(|(slab, band)| Some((slab.upgrade()?, *band))).collect()
+}
+
+fn remember_slabs(source: &Arc<crate::model::formats::mesh_data::Triangulation>, ranges: Vec<(f64, f64)>, slabs: &[(Slab, CutBand)]) {
+    let mut recent = recent_slab_sets();
+    // A set none of whose holders is left is only taking a place.
+    recent.retain(|set| set.source.strong_count() > 0 && set.slabs.iter().all(|(slab, _)| slab.mesh.strong_count() > 0));
+    recent.retain(|set| !(set.ranges == ranges && set.source.upgrade().is_some_and(|held| Arc::ptr_eq(&held, source))));
+    if recent.len() >= RECENT_SLAB_SETS {
+        recent.remove(0);
+    }
+    recent.push(RecentSlabs {
+        source: Arc::downgrade(source),
+        ranges,
+        slabs: slabs
+            .iter()
+            .map(|(slab, band)| {
+                let weak = WeakSlab {
+                    mesh: Arc::downgrade(&slab.mesh),
+                    spatial: Arc::downgrade(&slab.spatial),
+                    edges: Arc::downgrade(&slab.edges),
+                    surface_face_order: Arc::downgrade(&slab.surface_face_order),
+                };
+                (weak, *band)
+            })
+            .collect(),
+    });
 }

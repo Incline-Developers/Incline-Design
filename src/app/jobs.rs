@@ -453,7 +453,12 @@ impl<'a> App<'a> {
     /// Whether any pending job lists `key` among its dependencies. Lets a
     /// caller refuse to start a second job for a source already in flight.
     pub(crate) fn job_pending(&self, key: &JobKey) -> bool {
-        self.pending_jobs.iter().any(|job| job.keys.contains(key))
+        self.any_job_pending(|job| job == key)
+    }
+
+    /// Whether any pending job lists a dependency `matches` accepts.
+    pub(crate) fn any_job_pending(&self, matches: impl Fn(&JobKey) -> bool) -> bool {
+        self.pending_jobs.iter().any(|job| job.keys.iter().any(&matches))
     }
 
     /// Drain finished background jobs, running their apply closures on the UI

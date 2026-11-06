@@ -968,6 +968,18 @@ impl crate::app::App<'_> {
             }
             return;
         };
+        // One solid's volume is built once at a time. The Setup page's
+        // preview may be building it already, and two builds of a large pair
+        // at once hold twice the memory; its result is kept for these
+        // surfaces, so the build started once it lands takes it rather than
+        // repeating it. Waiting, so the run neither fails nor forgets to ask
+        // again.
+        if self.job_pending(&crate::app::jobs::JobKey::SolidPreview(solid.id)) {
+            let cache = self.solid_view_cache.get_mut(&solid.id).expect("just inserted");
+            cache.envelope.begin(key);
+            cache.envelope.await_inputs();
+            return;
+        }
         let id = solid.id;
         // Captured here, from the inputs this job is about to read - never
         // re-derived at land time from whatever the document then holds. The
@@ -1002,6 +1014,16 @@ impl crate::app::App<'_> {
         );
     }
 
+    /// Whether a run's Benching stage is cutting `solid` into its slabs.
+    pub(crate) fn solid_body_job_pending(&self, solid: crate::model::SolidId) -> bool {
+        self.any_job_pending(|job| matches!(job, crate::app::jobs::JobKey::SolidArtifact { solid: job_solid, kind: SolidArtifact::Body, .. } if *job_solid == solid))
+    }
+
+    /// Whether a run's Solids stage is building `solid`'s volume.
+    pub(crate) fn solid_envelope_job_pending(&self, solid: crate::model::SolidId) -> bool {
+        self.any_job_pending(|job| matches!(job, crate::app::jobs::JobKey::SolidArtifact { solid: job_solid, kind: SolidArtifact::Envelope, .. } if *job_solid == solid))
+    }
+
     /// Ask for this request's deferred inputs, at most once.
     ///
     /// Re-deciding a waiting attempt every pass is what lets a restore that
@@ -1033,6 +1055,12 @@ impl crate::app::App<'_> {
         let Some(envelope) = cache.envelope.product().cloned() else { return };
         let key = body_key(cache.key, solid);
         if cache.body.is_current(key) {
+            return;
+        }
+        // The Setup page's preview may be cutting this solid into the same
+        // flitches; its slabs are taken once it lands, rather than a second
+        // set cut beside them. Not begun, so the run waits and asks again.
+        if self.job_pending(&crate::app::jobs::JobKey::SolidPreview(solid.id)) {
             return;
         }
         let id = solid.id;
@@ -1911,27 +1939,16 @@ fn build_solid_envelope(
     cancel: &crate::app::jobs::CancelFlag,
     progress: &crate::model::progress::Progress,
 ) -> anyhow::Result<OpenTriangulation> {
-    let (vertices, faces, _) = super::triangulation::solid_between::build_solid_between_surfaces(
-        design,
-        topo,
-        crate::ui::state::SolidRegion::of_solid(solid.kind),
-        &solid.name,
-        &progress.phase(0.0, 0.9),
-    )?;
+    // The same mesh as the Setup page's preview of this solid, when it has
+    // built one, rather than a copy of it.
+    let built = super::triangulation::solid_between::build_solid_mesh(design, topo, crate::ui::state::SolidRegion::of_solid(solid.kind), &solid.name, &progress.phase(0.0, 1.0))?;
     anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
-    let generated = super::triangulation::session::build_generated_triangulation(
-        solid.name.clone(),
-        vertices,
-        faces,
-        crate::ui::state::TriSurfaceType::SolidClosed,
-        crate::model::triangulation::unique_edges,
-    )?;
     Ok(preview_triangulation(
         solid.name.clone(),
-        generated.mesh,
-        generated.spatial,
-        generated.edges,
-        generated.surface_face_order,
+        built.mesh,
+        built.spatial,
+        built.edges,
+        built.surface_face_order,
         solid.color,
         [0.0, 0.0, 0.0, 1.0],
     ))
