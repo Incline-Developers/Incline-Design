@@ -137,6 +137,9 @@ const KNOWN_ELEMENT_METADATA: &[&str] = &[
     META_SCHEDULE_RESULT,
     META_HAULAGE,
 ];
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_ARRAY_ITEMS: u64 = u32::MAX as u64;
+#[cfg(target_arch = "wasm32")]
 const MAX_ARRAY_ITEMS: u64 = 200_000_000;
 
 /// Owned, cheaply-cloned state captured before OMF encoding moves to a worker.
