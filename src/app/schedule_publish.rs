@@ -13,7 +13,7 @@
 //! Back-to-back dig sources divide their cell in authored order, proportional
 //! to their tonnes, so the timeline represents one block at a time per loader.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::{
     app::{commands::schedule_capture::CaptureIdentities, jobs::CancelFlag, schedule_solve::ScheduleCompletion},
@@ -630,6 +630,50 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
     }
     let (dug, received, hauled) = (Spans::index(dug), Spans::index(received), Spans::index(hauled));
     let sum_within = |spans: Option<&Spans>, from_h: f64, to_h: f64| spans.map_or(0.0, |spans| spans.within(from_h, to_h));
+    // Every idle span in every interval asks these, of inputs that can run to
+    // thousands of blocks and tens of thousands of movements.
+    let ground_by_id: HashMap<_, _> = input.ground.iter().map(|source| (source.id, source)).collect();
+    let pile_by_id: HashMap<_, _> = input.piles.iter().map(|pile| (pile.id, pile)).collect();
+    let destination_by_id: HashMap<_, _> = input.destinations.iter().map(|destination| (destination.id, destination)).collect();
+    let mut tasks_of: HashMap<LoaderId, Vec<_>> = HashMap::new();
+    for task in &input.tasks {
+        tasks_of.entry(task.loader).or_default().push(task);
+    }
+    let mut movements_of: HashMap<(LoaderId, SourceId), Vec<_>> = HashMap::new();
+    for movement in &input.movements {
+        movements_of.entry((movement.loader, movement.source)).or_default().push(movement);
+    }
+    let mut deliveries_to: HashMap<ProjectDestinationId, Vec<_>> = HashMap::new();
+    for delivery in &schedule.deliveries {
+        deliveries_to
+            .entry(delivery.destination)
+            .or_default()
+            .push((delivery.tonnes, delivery.start_h, delivery.end_h));
+    }
+    let mut reclaims_from: HashMap<ProjectDestinationId, Vec<_>> = HashMap::new();
+    for execution in &schedule.executions {
+        if let WorkSource::Stockpile(pile) = execution.source {
+            reclaims_from.entry(pile).or_default().push((execution.tonnes, execution.start_h, execution.end_h));
+        }
+    }
+    let no_tasks = Vec::new();
+    // The place each dig bar has reached in its sequence. What a block has
+    // left only falls with time, so asking at a later time need not start over.
+    let reached = std::cell::RefCell::new(HashMap::<_, (f64, usize)>::new());
+    let next_in_sequence = |task: &crate::model::schedule::optimisation::Task, sequence: &[crate::model::schedule::optimisation::GroundId], start_h: f64| {
+        let mut reached = reached.borrow_mut();
+        let from = reached.get(&task.id).filter(|(asked_h, _)| *asked_h <= start_h).map_or(0, |(_, place)| *place);
+        let place = sequence[from..]
+            .iter()
+            .position(|ground| {
+                let Some(block) = lookup.identities.ground_blocks.get(ground) else { return false };
+                let total = ground_by_id.get(ground).map_or(0.0, |source| source.tonnes_t);
+                total - sum_within(dug.get(block), f64::NEG_INFINITY, start_h) > IDLE_NEGLIGIBLE_T
+            })
+            .map(|offset| from + offset);
+        reached.insert(task.id, (start_h, place.unwrap_or(sequence.len())));
+        place.map(|place| sequence[place])
+    };
 
     // Which chunked piles release something in each interval: the cell
     // holding material next in the pile's order, once its last delivery has
@@ -687,10 +731,12 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
         }
         let loader = *loaders.get(&agent)?;
         let start_h = input.intervals[position].start_h;
-        let mut open: Vec<_> = input
-            .tasks
+        let mut open: Vec<_> = tasks_of
+            .get(&loader)
+            .unwrap_or(&no_tasks)
             .iter()
-            .filter(|task| task.loader == loader && task.window_start_h <= start_h + 1e-9 && task.window_end_h > start_h + 1e-9)
+            .copied()
+            .filter(|task| task.window_start_h <= start_h + 1e-9 && task.window_end_h > start_h + 1e-9)
             .collect();
         open.sort_by(|left, right| {
             (left.priority, left.window_start_h, left.id)
@@ -699,18 +745,15 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
         });
         for task in open {
             let TaskKind::Dig { sequence } = &task.kind else { return None };
-            let next = sequence.iter().find(|ground| {
-                let Some(block) = lookup.identities.ground_blocks.get(ground) else { return false };
-                let total = input.ground.iter().find(|source| source.id == **ground).map_or(0.0, |source| source.tonnes_t);
-                total - sum_within(dug.get(block), f64::NEG_INFINITY, start_h) > IDLE_NEGLIGIBLE_T
-            });
-            if let Some(ground) = next {
-                return releases.get(ground).filter(|(at, _)| *at > start_h + 1e-9).map(|(_, blast)| *blast);
+            if let Some(ground) = next_in_sequence(task, sequence, start_h) {
+                return releases.get(&ground).filter(|(at, _)| *at > start_h + 1e-9).map(|(_, blast)| *blast);
             }
         }
         None
     };
     let explain = |schedule: &CalculatedSchedule, agent: LoaderAgentId, position: usize| {
+        use std::collections::HashSet;
+
         let Some(&loader) = loaders.get(&agent) else {
             return (IdleReason::NoWork, Vec::new());
         };
@@ -733,10 +776,12 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
         if dig_tph <= 0.0 && reclaim_tph <= 0.0 {
             return (IdleReason::Unavailable, Vec::new());
         }
-        let open: Vec<_> = input
-            .tasks
+        let open: Vec<_> = tasks_of
+            .get(&loader)
+            .unwrap_or(&no_tasks)
             .iter()
-            .filter(|task| task.loader == loader && task.window_start_h < end_h - 1e-9 && task.window_end_h > start_h + 1e-9)
+            .copied()
+            .filter(|task| task.window_start_h < end_h - 1e-9 && task.window_end_h > start_h + 1e-9)
             .collect();
         if open.is_empty() {
             return (IdleReason::NoWork, Vec::new());
@@ -746,7 +791,7 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
             TaskKind::Reclaim { .. } => reclaim_tph,
             TaskKind::Delay => 0.0,
         };
-        let pile_entry = |pile: StockpileId| input.piles.iter().find(|entry| entry.id == pile);
+        let pile_entry = |pile: StockpileId| pile_by_id.get(&pile).copied();
         let project_pile = |pile: StockpileId| lookup.piles.get(&pile).copied();
         // An unchunked pile with a rest is not reclaimable while anything it
         // received is still resting.
@@ -754,12 +799,10 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
             let Some(entry) = pile_entry(pile).filter(|entry| entry.rest_h > 0.0 && entry.chunks.is_empty()) else {
                 return false;
             };
-            let project = project_pile(pile);
-            schedule.deliveries.iter().any(|delivery| {
-                Some(delivery.destination) == project
-                    && delivery.tonnes > IDLE_NEGLIGIBLE_T
-                    && delivery.start_h < start_h - 1e-9
-                    && !entry.rested(delivery.end_h.min(start_h), interval)
+            project_pile(pile).and_then(|project| deliveries_to.get(&project)).is_some_and(|deliveries| {
+                deliveries
+                    .iter()
+                    .any(|&(tonnes, from_h, to_h)| tonnes > IDLE_NEGLIGIBLE_T && from_h < start_h - 1e-9 && !entry.rested(to_h.min(start_h), interval))
             })
         };
         // A chunked pile releases nothing while its chunks are filling or
@@ -768,12 +811,10 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
         let reclaims = |pile: StockpileId| pile_entry(pile).is_none_or(|entry| entry.reclaims(interval)) && !resting(pile) && !unreleased(pile);
         // A pile that may not build and reclaim at once, reclaimed here.
         let reclaimed_here = |pile: StockpileId| {
-            let project = project_pile(pile);
-            schedule.executions.iter().any(|execution| {
-                matches!(execution.source, WorkSource::Stockpile(source) if Some(source) == project)
-                    && execution.tonnes > IDLE_NEGLIGIBLE_T
-                    && execution.start_h < end_h - 1e-9
-                    && execution.end_h > start_h + 1e-9
+            project_pile(pile).and_then(|project| reclaims_from.get(&project)).is_some_and(|reclaims| {
+                reclaims
+                    .iter()
+                    .any(|&(tonnes, from_h, to_h)| tonnes > IDLE_NEGLIGIBLE_T && from_h < end_h - 1e-9 && to_h > start_h + 1e-9)
             })
         };
         let builds = |pile: StockpileId| pile_entry(pile).is_none_or(|entry| entry.builds(interval) && !(entry.exclusive && reclaimed_here(pile)));
@@ -784,12 +825,7 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
                 // Ground is dug in order: what the machine could be on is the
                 // first block of the sequence that still holds any.
                 TaskKind::Dig { sequence } => {
-                    let next = sequence.iter().find(|ground| {
-                        let Some(block) = lookup.identities.ground_blocks.get(ground) else { return false };
-                        let total = input.ground.iter().find(|source| source.id == **ground).map_or(0.0, |source| source.tonnes_t);
-                        total - sum_within(dug.get(block), f64::NEG_INFINITY, start_h) > IDLE_NEGLIGIBLE_T
-                    });
-                    sources.extend(next.map(|ground| SourceId::Ground(*ground)));
+                    sources.extend(next_in_sequence(task, sequence, start_h).map(SourceId::Ground));
                 }
                 TaskKind::Reclaim { approved_sources, .. } => {
                     for pile in approved_sources {
@@ -864,26 +900,28 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
             }
             return (IdleReason::WorkFinished, Vec::new());
         }
-        let candidates: Vec<_> = input
-            .movements
-            .iter()
-            .filter(|movement| movement.loader == loader && sources.contains(&movement.source))
-            .collect();
+        let mut sources = sources;
+        sources.sort_unstable();
+        sources.dedup();
+        let candidates: Vec<_> = sources.iter().filter_map(|source| movements_of.get(&(loader, *source))).flatten().copied().collect();
+        let routes: HashSet<_> = candidates.iter().map(|movement| (movement.source, movement.material)).collect();
         let routed = |source: SourceId| match source {
-            SourceId::Ground(ground) => input.ground.iter().find(|found| found.id == ground).is_some_and(|found| {
+            SourceId::Ground(ground) => ground_by_id.get(&ground).is_some_and(|found| {
                 found
                     .material
                     .iter()
                     .filter(|share| share.fraction > 0.0)
-                    .all(|share| candidates.iter().any(|movement| movement.source == source && movement.material == share.material))
+                    .all(|share| routes.contains(&(source, share.material)))
             }),
-            SourceId::Stockpile(_) => candidates.iter().any(|movement| movement.source == source),
+            SourceId::Stockpile(_) => movements_of.get(&(loader, source)).is_some_and(|movements| !movements.is_empty()),
         };
         if !sources.iter().any(|source| routed(*source)) {
             return (IdleReason::NoRoute, Vec::new());
         }
-        let has_room = |destination: DestinationId| {
-            let Some(found) = input.destinations.iter().find(|candidate| candidate.id == destination) else {
+        // Asked per movement, of far fewer destinations.
+        let room = std::cell::RefCell::new(HashMap::<DestinationId, bool>::new());
+        let work_out_room = |destination: DestinationId| {
+            let Some(found) = destination_by_id.get(&destination) else {
                 return false;
             };
             let project = lookup.destinations.get(&destination);
@@ -912,6 +950,7 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
                 }),
             }
         };
+        let has_room = |destination: DestinationId| *room.borrow_mut().entry(destination).or_insert_with(|| work_out_room(destination));
         // Ground is dug whole, its materials in proportion, so a block can be
         // dug only while every material in it has somewhere to go - the
         // waste having room does not let the ore out. A source is open when
@@ -919,21 +958,17 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
         let roomy: Vec<_> = candidates.iter().copied().filter(|movement| has_room(movement.destination)).collect();
         let materials_of = |source: SourceId| -> Vec<_> {
             match source {
-                SourceId::Ground(ground) => input
-                    .ground
-                    .iter()
-                    .find(|found| found.id == ground)
+                SourceId::Ground(ground) => ground_by_id
+                    .get(&ground)
                     .map(|found| found.material.iter().filter(|share| share.fraction > 0.0).map(|share| share.material).collect())
                     .unwrap_or_default(),
-                SourceId::Stockpile(_) => candidates.iter().filter(|movement| movement.source == source).map(|movement| movement.material).collect(),
+                SourceId::Stockpile(_) => movements_of.get(&(loader, source)).into_iter().flatten().map(|movement| movement.material).collect(),
             }
         };
+        let roomy_routes: HashSet<_> = roomy.iter().map(|movement| (movement.source, movement.material)).collect();
         let open_source = |source: SourceId| {
             let materials = materials_of(source);
-            !materials.is_empty()
-                && materials
-                    .iter()
-                    .all(|material| roomy.iter().any(|movement| movement.source == source && movement.material == *material))
+            !materials.is_empty() && materials.iter().all(|material| roomy_routes.contains(&(source, *material)))
         };
         let open_sources: Vec<_> = sources.iter().copied().filter(|source| open_source(*source)).collect();
         if open_sources.is_empty() {
@@ -948,7 +983,7 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
             // setting, so it is the reason given, before any full one.
             let mut closed: Vec<_> = candidates
                 .iter()
-                .filter_map(|movement| match input.destinations.iter().find(|found| found.id == movement.destination)?.kind {
+                .filter_map(|movement| match destination_by_id.get(&movement.destination)?.kind {
                     DestinationKind::Stockpile(pile) if !builds(pile) => lookup.destinations.get(&movement.destination).copied(),
                     _ => None,
                 })
@@ -974,13 +1009,14 @@ fn explain_idle(schedule: &mut CalculatedSchedule, input: &BlendInput, solution:
         };
         // Dug whole again: one material with no truck left holds the block, so
         // a truck free for the waste does not make this a question of value.
-        let can_haul = |source: SourceId| {
-            materials_of(source).iter().all(|material| {
-                roomy
-                    .iter()
-                    .any(|movement| movement.source == source && movement.material == *material && !trucks_spent(movement.truck))
-            })
-        };
+        let spent = std::cell::RefCell::new(HashMap::<TruckClassId, bool>::new());
+        let spent_now = |truck: TruckClassId| *spent.borrow_mut().entry(truck).or_insert_with(|| trucks_spent(truck));
+        let haulable: HashSet<_> = roomy
+            .iter()
+            .filter(|movement| !spent_now(movement.truck))
+            .map(|movement| (movement.source, movement.material))
+            .collect();
+        let can_haul = |source: SourceId| materials_of(source).iter().all(|material| haulable.contains(&(source, *material)));
         if !open_sources.iter().any(|source| can_haul(*source)) {
             return (IdleReason::NoTrucks, Vec::new());
         }
