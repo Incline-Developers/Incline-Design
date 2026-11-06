@@ -772,6 +772,16 @@ cmd-point-cloud-tin-point-cloud-tin-failed-error = TIN ya wingu la vidokezo imes
 cmd-point-cloud-tin-filtered-ground = TIN ya ardhi: imechujwa hadi vidokezo { $ground } vya ardhi kati ya { $total }
 cmd-point-cloud-tin-subsampled = TIN ya ardhi: sampuli za anga { $sampled } kati ya vidokezo { $total }
 cmd-point-cloud-tin-triangulated = TIN ya ardhi: vidokezo { $vertex_count } vya kipekee vya XY vimetatuliwa kuwa nyuso { $face_count }{ $suffix }
+cmd-prismoid-grid-building = Inajenga Gridi ya Prismoidi…
+cmd-prismoid-grid-built = Gridi ya Prismoidi '{ $name }' imejengwa: seli { $columns } × { $rows }, { $active } hai, unene wima { $min } hadi { $max }
+cmd-prismoid-grid-crossed = { $count } seli za mwingiliano wa { $roof } na { $floor } zimeachwa mahali sakafu iko juu ya paa
+cmd-prismoid-grid-holes = { $count } seli za mwingiliano wa { $roof } na { $floor } zimeachwa mahali paa au sakafu haina kimo au pembetatu
+cmd-prismoid-grid-not-a-grid = { $name } haiwezi kutengeneza gridi ya prismoidi: { $reason }
+cmd-prismoid-grid-not-one-lattice = { $roof } na { $floor } haziko kwenye gridi moja: chagua paa na sakafu zilizojengwa kwa nafasi sawa, kama Jenga Uso na Nyuso za Unene zinavyozitengeneza
+cmd-prismoid-grid-no-overlap = { $roof } na { $floor } hazina seli inayofunikwa na zote mbili
+cmd-prismoid-grid-roof-below = { $roof } iko chini ya { $floor } popote zinapokatana: zichague kinyume
+cmd-prismoid-grid-no-thickness = { $roof } na { $floor } zinakutana popote zote zinapofunika: hakuna seli yenye unene
+cmd-prismoid-grid-same-surface = Paa na sakafu lazima ziwe nyuso mbili tofauti
 cmd-products-added-product-delay-ms-ms = Umeongeza bidhaa { $delay_ms } ms { $name }
 cmd-products-deleted-product-delay-ms-ms = Umefuta bidhaa { $delay_ms } ms { $name }
 cmd-products-failed-save-products-error = Imeshindwa kuhifadhi bidhaa: { $error }
@@ -1055,6 +1065,7 @@ common-block-models = Mifano ya Vitalu
 common-borehole-inspector = Kikaguzi cha Shimo la Uchimbaji
 common-build-surface = Jenga Uso
 common-build-surface-ellipsis = Jenga Uso...
+common-build-prismoid-grid-ellipsis = Jenga Gridi ya Prismoidi...
 common-cancelled = Imeghairiwa
 common-chamfer = Kingo iliyopunguzwa (Chamfer)
 common-choose = Chagua...
@@ -2615,6 +2626,12 @@ tri-vertex-count = Idadi ya vipeo
 tri-vertices-within-5-cm-xy = Vipeo vilivyo ndani ya sentimita 5 kwenye XY na Z vitashiriki nafasi moja kwa utatuzi huu. Hii inaweza kuhamisha uso uliozalishwa kwa kiasi cha hadi sentimita 5 kwa eneo hilo; mistari ya chanzo ya pointi nyingi haibadiliki.
 tri-weld-retry = Unga na Ujaribu Tena
 tri-when-enabled-generate-contours-only = Ikiwashwa, zalisha mistari ya mwinuko kati ya vimo vya chini na vya juu vilivyoainishwa tu.
+tri-build-prismoid-grid = Jenga Gridi ya Prismoidi
+tri-build-prismoid-grid-help = Hujenga gridi ya prismoidi kati ya paa na sakafu kwenye gridi moja, kama Jenga Uso na Nyuso za Unene zinavyozitengeneza. Seli ambapo moja haina kimo au pembetatu, au sakafu iko juu ya paa, zinaachwa.
+tri-prismoid-roof-help = Uso wa juu wa kipindi: paa la tabaka au sehemu ya tabaka.
+tri-prismoid-floor-help = Uso wa chini wa kipindi, kwenye gridi ileile ya paa.
+tri-name-assigned-prismoid-grid = Jina la gridi mpya ya prismoidi.
+tri-prismoid-grid-name-hint = gridi ya tabaka la juu
 
 ## Ui strings
 

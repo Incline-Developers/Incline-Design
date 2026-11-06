@@ -773,6 +773,16 @@ cmd-point-cloud-tin-point-cloud-tin-failed-error = 포인트 클라우드 TIN �
 cmd-point-cloud-tin-filtered-ground = 지형 TIN: 전체 { $total }개 중 지면 점 { $ground }개로 필터링했습니다
 cmd-point-cloud-tin-subsampled = 지형 TIN: 전체 { $total }개 점 중 { $sampled }개를 공간적으로 서브샘플링했습니다
 cmd-point-cloud-tin-triangulated = 지형 TIN: 고유 XY 점 { $vertex_count }개를 면 { $face_count }개로 삼각화했습니다{ $suffix }
+cmd-prismoid-grid-building = 프리즈모이드 격자 작성 중…
+cmd-prismoid-grid-built = 프리즈모이드 격자 '{ $name }' 작성됨: { $columns } × { $rows } 셀, 활성 { $active }, 수직 두께 { $min }에서 { $max }
+cmd-prismoid-grid-crossed = { $count } 셀 ({ $roof }, { $floor } 겹침)을 하반이 상반 위에 있는 곳에서 제외했습니다
+cmd-prismoid-grid-holes = { $count } 셀 ({ $roof }, { $floor } 겹침)을 상반이나 하반에 높이나 삼각형이 없는 곳에서 제외했습니다
+cmd-prismoid-grid-not-a-grid = { $name }(으)로 프리즈모이드 격자를 만들 수 없습니다: { $reason }
+cmd-prismoid-grid-not-one-lattice = { $roof }, { $floor }이(가) 한 격자에 있지 않습니다: 곡면 작성과 두께 곡면이 만드는 것처럼 같은 간격으로 작성된 상반과 하반을 선택하세요
+cmd-prismoid-grid-no-overlap = { $roof }, { $floor }이(가) 함께 덮는 셀이 없습니다
+cmd-prismoid-grid-roof-below = 교차하는 모든 곳에서 { $roof }이(가) { $floor } 아래에 있습니다: 반대로 선택하세요
+cmd-prismoid-grid-no-thickness = 함께 덮는 모든 곳에서 { $roof }, { $floor }이(가) 맞닿습니다: 두께가 있는 셀이 없습니다
+cmd-prismoid-grid-same-surface = 상반과 하반은 서로 다른 곡면이어야 합니다
 cmd-products-added-product-delay-ms-ms = 제품을 추가했습니다: { $delay_ms } ms { $name }
 cmd-products-deleted-product-delay-ms-ms = 제품을 삭제했습니다: { $delay_ms } ms { $name }
 cmd-products-failed-save-products-error = 제품을 저장하지 못했습니다: { $error }
@@ -1056,6 +1066,7 @@ common-block-models = 블록 모델
 common-borehole-inspector = 시추공 검사기
 common-build-surface = 표면 만들기
 common-build-surface-ellipsis = 표면 만들기...
+common-build-prismoid-grid-ellipsis = 프리즈모이드 격자 작성...
 common-cancelled = 취소됨
 common-chamfer = 모따기
 common-choose = 선택...
@@ -2616,6 +2627,12 @@ tri-vertex-count = 정점 수
 tri-vertices-within-5-cm-xy = 이 삼각망에서는 XY와 Z 방향으로 5cm 이내에 있는 정점들이 하나의 위치를 공유합니다. 이로 인해 생성된 표면이 국소적으로 최대 5cm까지 이동할 수 있습니다. 원본 폴리라인은 변경되지 않습니다.
 tri-weld-retry = 결합 후 재시도
 tri-when-enabled-generate-contours-only = 활성화하면 지정된 최소 및 최대 표고 사이에서만 등고선을 생성합니다.
+tri-build-prismoid-grid = 프리즈모이드 격자 작성
+tri-build-prismoid-grid-help = 곡면 작성과 두께 곡면이 만드는 것처럼 한 격자에 있는 상반과 하반 사이에 프리즈모이드 격자를 작성합니다. 어느 쪽이든 높이나 삼각형이 없는 셀, 또는 하반이 상반 위에 있는 셀은 제외됩니다.
+tri-prismoid-roof-help = 구간의 위쪽 곡면: 탄층 또는 분층의 상반.
+tri-prismoid-floor-help = 구간의 아래쪽 곡면으로, 상반과 같은 격자에 있습니다.
+tri-name-assigned-prismoid-grid = 새 프리즈모이드 격자의 이름.
+tri-prismoid-grid-name-hint = 상부 탄층 격자
 
 ## Ui strings
 

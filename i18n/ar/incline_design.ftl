@@ -740,6 +740,24 @@ cmd-point-cloud-tin-point-cloud-tin-failed-error = فشل إنشاء TIN لسح�
 cmd-point-cloud-tin-filtered-ground = TIN التضاريس: رُشّحت { $ground } نقطة أرضية من أصل { $total }
 cmd-point-cloud-tin-subsampled = TIN للتضاريس: تم أخذ عينة مكانية من { $sampled } نقطة من أصل { $total }
 cmd-point-cloud-tin-triangulated = TIN التضاريس: ثُلثت { $vertex_count } نقطة XY فريدة إلى { $face_count } وجه{ $suffix }
+cmd-prismoid-grid-building = جارٍ بناء شبكة شبه المنشورات…
+cmd-prismoid-grid-built = تم بناء شبكة شبه المنشورات '{ $name }': { $columns } × { $rows } خلية، { $active } نشطة، السماكة الرأسية من { $min } إلى { $max }
+cmd-prismoid-grid-crossed =
+    { $count ->
+        [one] { $count } خلية
+       *[other] { $count } خلايا
+    } من التداخل بين { $roof } و{ $floor } استُبعدت حيث تقع الأرضية فوق السقف
+cmd-prismoid-grid-holes =
+    { $count ->
+        [one] { $count } خلية
+       *[other] { $count } خلايا
+    } من التداخل بين { $roof } و{ $floor } استُبعدت حيث لا يوجد للسقف أو الأرضية ارتفاع أو مثلثات
+cmd-prismoid-grid-not-a-grid = لا يمكن لـ { $name } إنشاء شبكة شبه منشورات: { $reason }
+cmd-prismoid-grid-not-one-lattice = { $roof } و{ $floor } ليسا على شبكة واحدة: اختر سقفًا وأرضية مبنيين بالتباعد نفسه، كما ينشئهما بناء السطح وأسطح السماكة
+cmd-prismoid-grid-no-overlap = لا يشترك { $roof } و{ $floor } في أي خلية شبكية يغطيها كلاهما
+cmd-prismoid-grid-roof-below = يقع { $roof } تحت { $floor } حيثما تقاطعا: اخترهما بالترتيب المعاكس
+cmd-prismoid-grid-no-thickness = يلتقي { $roof } و{ $floor } حيثما غطّى كلاهما: لا توجد خلية ذات سماكة
+cmd-prismoid-grid-same-surface = يجب أن يكون السقف والأرضية سطحين مختلفين
 cmd-products-added-product-delay-ms-ms = تمت إضافة المنتج { $delay_ms } مللي ثانية { $name }
 cmd-products-deleted-product-delay-ms-ms = تم حذف المنتج { $delay_ms } مللي ثانية { $name }
 cmd-products-failed-save-products-error = تعذر حفظ المنتجات: { $error }
@@ -1023,6 +1041,7 @@ common-block-models = نماذج الكتل
 common-borehole-inspector = مفتش الثقوب
 common-build-surface = إنشاء سطح
 common-build-surface-ellipsis = إنشاء سطح...
+common-build-prismoid-grid-ellipsis = بناء شبكة شبه المنشورات...
 common-cancelled = ملغى
 common-chamfer = شطفة
 common-choose = اختر...
@@ -2583,6 +2602,12 @@ tri-vertex-count = عدد الرؤوس
 tri-vertices-within-5-cm-xy = ستشترك الرؤوس التي تقع ضمن 5 سم في XY وZ في موضع واحد لهذا التثليث. قد يؤدي ذلك إلى إزاحة السطح الناتج محليًا بما يصل إلى 5 سم؛ ولا تتغير الخطوط المتعددة المصدرية.
 tri-weld-retry = اللحام وإعادة المحاولة
 tri-when-enabled-generate-contours-only = عند التمكين، تُنشأ خطوط الكنتور فقط بين الارتفاعين الأدنى والأقصى المحددين.
+tri-build-prismoid-grid = بناء شبكة شبه المنشورات
+tri-build-prismoid-grid-help = يبني شبكة شبه منشورات بين سقف وأرضية على شبكة واحدة، كما ينشئهما بناء السطح وأسطح السماكة. تُستبعد الخلايا التي لا يوجد فيها ارتفاع أو مثلثات لأي منهما، أو تقع فيها الأرضية فوق السقف.
+tri-prismoid-roof-help = السطح العلوي للفاصل: سقف الطبقة أو الشريحة.
+tri-prismoid-floor-help = السطح السفلي للفاصل، على الشبكة نفسها التي عليها السقف.
+tri-name-assigned-prismoid-grid = الاسم المعطى لشبكة شبه المنشورات الجديدة.
+tri-prismoid-grid-name-hint = شبكة الطبقة العليا
 
 ## Ui strings
 

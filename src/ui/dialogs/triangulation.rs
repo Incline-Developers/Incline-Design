@@ -1058,6 +1058,108 @@ pub(crate) fn draw_build_solid_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
     }
 }
 
+/// The Build Prismoid Grid tool: pick a roof and a floor on one grid and get
+/// the cells between them.
+pub(crate) fn draw_build_prismoid_grid_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    if !editor.tri_prismoid_open || editor.triangulation_pick_target.is_some() {
+        return;
+    }
+
+    let mut open = true;
+    DragableMenu::new("build_prismoid_grid_dialog", tr!("tri-build-prismoid-grid"))
+        .open(&mut open)
+        .min_width(PICKER_DIALOG_MIN_WIDTH)
+        .max_width(PICKER_DIALOG_MAX_WIDTH)
+        .show(ui.ctx(), |ui| {
+            let loaded: Vec<(TriangulationId, &str)> = project
+                .triangulations
+                .iter()
+                .filter(|entry| entry.is_loaded)
+                .map(|entry| (entry.id, entry.name.as_str()))
+                .collect();
+            let loaded_name = |id: Option<TriangulationId>| id.and_then(|id| loaded.iter().find(|(loaded_id, _)| *loaded_id == id).map(|(_, name)| *name));
+
+            tool_help_panel(ui, tr!("tri-build-prismoid-grid-help"));
+
+            let floor_id = editor.tri_prismoid_floor_id;
+            let roof_label = loaded_name(editor.tri_prismoid_roof_id).map_or_else(|| tr!("tri-select"), str::to_owned);
+            let old_roof = editor.tri_prismoid_roof_id;
+            if triangulation_picker_field(
+                ui,
+                "build_prismoid_roof",
+                tr!("drill-hole-roof"),
+                &mut editor.tri_prismoid_roof_id,
+                roof_label,
+                loaded.iter().filter(|(id, _)| Some(*id) != floor_id).map(|(id, name)| (Some(*id), (*name).into())),
+                tr!("tri-prismoid-roof-help"),
+                project,
+            ) {
+                editor.triangulation_pick_target = Some(TriangulationPickTarget::PrismoidRoof);
+            }
+
+            let roof_id = editor.tri_prismoid_roof_id;
+            let floor_label = loaded_name(editor.tri_prismoid_floor_id).map_or_else(|| tr!("tri-select"), str::to_owned);
+            if triangulation_picker_field(
+                ui,
+                "build_prismoid_floor",
+                tr!("drill-hole-floor"),
+                &mut editor.tri_prismoid_floor_id,
+                floor_label,
+                loaded.iter().filter(|(id, _)| Some(*id) != roof_id).map(|(id, name)| (Some(*id), (*name).into())),
+                tr!("tri-prismoid-floor-help"),
+                project,
+            ) {
+                editor.triangulation_pick_target = Some(TriangulationPickTarget::PrismoidFloor);
+            }
+
+            if editor.tri_prismoid_roof_id != old_roof
+                && editor.tri_prismoid_name_auto
+                && let Some(name) = loaded_name(editor.tri_prismoid_roof_id)
+            {
+                editor.tri_prismoid_name_input = crate::app::canvas::derived_triangulation_name(name, &tr!("common-prismoid-grid"));
+            }
+
+            ui.add_space(4.0);
+
+            if MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.tri_prismoid_name_input)
+                .help_text(tr!("tri-name-assigned-prismoid-grid"))
+                .width(picker_control_width(ui))
+                .hint_text(tr!("tri-prismoid-grid-name-hint"))
+                .show(ui)
+                .changed()
+            {
+                editor.tri_prismoid_name_auto = false;
+            }
+
+            ui.add_space(6.0);
+            ui.separator();
+
+            let can_run = loaded_name(editor.tri_prismoid_roof_id).is_some()
+                && loaded_name(editor.tri_prismoid_floor_id).is_some()
+                && editor.tri_prismoid_roof_id != editor.tri_prismoid_floor_id
+                && !editor.tri_prismoid_name_input.trim().is_empty();
+            menu::menu_actions(ui, |ui| {
+                let confirm = menu::dialog_confirmed(ui.ctx());
+                if (ui.add(MenuButton::new(tr!("tri-build")).primary().enabled(can_run)).clicked() || (confirm && can_run))
+                    && let (Some(roof_id), Some(floor_id)) = (editor.tri_prismoid_roof_id, editor.tri_prismoid_floor_id)
+                {
+                    commands.push(UiCommand::ExecuteBuildPrismoidGrid {
+                        roof_id,
+                        floor_id,
+                        name: editor.tri_prismoid_name_input.trim().to_owned(),
+                    });
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    editor.tri_prismoid_open = false;
+                }
+            });
+        });
+
+    if !open {
+        editor.tri_prismoid_open = false;
+    }
+}
+
 pub(crate) fn draw_cut_topology_to_pit_shell_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
     if !editor.tri_cut_pitshell_open || editor.triangulation_pick_target.is_some() {
         return;

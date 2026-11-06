@@ -22,10 +22,10 @@ const WINDOW_HALF: i64 = 2;
 
 /// How far a coordinate may sit from a whole number of spacings and still
 /// be a node, as a fraction of the spacing.
-const NODE_TOLERANCE: f64 = 1e-6;
+pub(crate) const NODE_TOLERANCE: f64 = 1e-6;
 
 /// Heights two vertices at one node may differ by, in metres.
-const HEIGHT_TOLERANCE: f64 = 1e-6;
+pub(crate) const HEIGHT_TOLERANCE: f64 = 1e-6;
 
 /// Why a surface cannot be read as one regular grid.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,6 +122,11 @@ impl GridSurface {
 
     pub(crate) fn spacing(&self) -> f64 {
         self.spacing
+    }
+
+    /// The first node, lowest x and y, and the node columns and rows.
+    pub(crate) fn lattice(&self) -> (DVec2, usize, usize) {
+        (self.origin, self.columns, self.rows)
     }
 
     pub(crate) fn mesh(&self) -> &mesh_data::Triangulation {

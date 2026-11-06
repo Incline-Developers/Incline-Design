@@ -787,6 +787,24 @@ cmd-point-cloud-tin-point-cloud-tin-failed-error = Помилка створен
 cmd-point-cloud-tin-filtered-ground = TIN рельєфу: відфільтровано до точок ґрунту: { $ground } із { $total }
 cmd-point-cloud-tin-subsampled = TIN рельєфу: просторова вибірка { $sampled } із { $total } точок
 cmd-point-cloud-tin-triangulated = ЦМР: тріангульовано унікальних точок XY: { $vertex_count }; створено граней: { $face_count }{ $suffix }
+cmd-prismoid-grid-building = Побудова сітки призмоїдів…
+cmd-prismoid-grid-built = Побудовано сітку призмоїдів '{ $name }': { $columns } × { $rows } комірок, активних { $active }, вертикальна потужність від { $min } до { $max }
+cmd-prismoid-grid-crossed =
+    { $count ->
+        [one] { $count } комірка
+       *[other] { $count } комірок
+    } із перекриття { $roof } і { $floor } вилучено там, де підошва лежить вище покрівлі
+cmd-prismoid-grid-holes =
+    { $count ->
+        [one] { $count } комірка
+       *[other] { $count } комірок
+    } із перекриття { $roof } і { $floor } вилучено там, де покрівля чи підошва не має висоти або трикутників
+cmd-prismoid-grid-not-a-grid = { $name } не може дати сітку призмоїдів: { $reason }
+cmd-prismoid-grid-not-one-lattice = { $roof } і { $floor } не на одній сітці: виберіть покрівлю й підошву з однаковим кроком, як їх створюють Побудувати поверхню та Поверхні потужності
+cmd-prismoid-grid-no-overlap = { $roof } і { $floor } не мають комірки, покритої обома
+cmd-prismoid-grid-roof-below = { $roof } лежить нижче { $floor } скрізь, де вони перетинаються: виберіть їх навпаки
+cmd-prismoid-grid-no-thickness = { $roof } і { $floor } сходяться скрізь, де покривають обидві: жодна комірка не має потужності
+cmd-prismoid-grid-same-surface = Покрівля й підошва мають бути двома різними поверхнями
 cmd-products-added-product-delay-ms-ms = Додано засіб { $delay_ms } мс { $name }
 cmd-products-deleted-product-delay-ms-ms = Видалено засіб { $delay_ms } мс { $name }
 cmd-products-failed-save-products-error = Не вдалося зберегти засоби: { $error }
@@ -1070,6 +1088,7 @@ common-block-models = Блочні моделі
 common-borehole-inspector = Інспектор свердловини
 common-build-surface = Побудувати поверхню
 common-build-surface-ellipsis = Побудувати поверхню...
+common-build-prismoid-grid-ellipsis = Побудувати сітку призмоїдів...
 common-cancelled = Скасовано
 common-chamfer = Фаска
 common-choose = Виберіть...
@@ -2630,6 +2649,12 @@ tri-vertex-count = Кількість вершин
 tri-vertices-within-5-cm-xy = Вершини, розташовані в межах 5 см за XY і Z, отримають одну позицію в цій тріангуляції. Це може локально змістити утворювану поверхню на величину до 5 см; вихідні полілінії не зміняться.
 tri-weld-retry = Зварити та повторити
 tri-when-enabled-generate-contours-only = Якщо ввімкнено, горизонталі створюються лише між заданими мінімальною та максимальною позначками.
+tri-build-prismoid-grid = Побудувати сітку призмоїдів
+tri-build-prismoid-grid-help = Будує сітку призмоїдів між покрівлею та підошвою на одній сітці, як їх створюють Побудувати поверхню та Поверхні потужності. Комірки, де одна з них не має висоти чи трикутників або підошва лежить вище покрівлі, вилучаються.
+tri-prismoid-roof-help = Верхня поверхня інтервалу: покрівля пласта чи пачки.
+tri-prismoid-floor-help = Нижня поверхня інтервалу, на тій самій сітці, що й покрівля.
+tri-name-assigned-prismoid-grid = Назва нової сітки призмоїдів.
+tri-prismoid-grid-name-hint = сітка верхнього пласта
 
 ## Ui strings
 

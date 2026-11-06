@@ -740,6 +740,16 @@ cmd-point-cloud-tin-point-cloud-tin-failed-error = TIN ابر نقاط نامو�
 cmd-point-cloud-tin-filtered-ground = TIN زمین: به { $ground } نقطه زمین از { $total } فیلتر شد
 cmd-point-cloud-tin-subsampled = TIN زمین: از { $total } نقطه، { $sampled } نقطه به‌صورت مکانی زیرنمونه‌برداری شد
 cmd-point-cloud-tin-triangulated = TIN زمین: { $vertex_count } نقطهٔ یکتای XY به { $face_count } وجه مثلث‌بندی شد{ $suffix }
+cmd-prismoid-grid-building = در حال ساخت شبکه منشورگون…
+cmd-prismoid-grid-built = شبکه منشورگون '{ $name }' ساخته شد: { $columns } × { $rows } سلول، { $active } فعال، ضخامت عمودی از { $min } تا { $max }
+cmd-prismoid-grid-crossed = { $count } سلول از همپوشانی { $roof } و { $floor } کنار گذاشته شد، جایی که کف بالاتر از سقف است
+cmd-prismoid-grid-holes = { $count } سلول از همپوشانی { $roof } و { $floor } کنار گذاشته شد، جایی که سقف یا کف ارتفاع یا مثلث ندارد
+cmd-prismoid-grid-not-a-grid = { $name } نمی‌تواند شبکه منشورگون بسازد: { $reason }
+cmd-prismoid-grid-not-one-lattice = { $roof } و { $floor } روی یک شبکه نیستند: سقف و کفی با فاصله یکسان انتخاب کنید، همان‌طور که ساخت سطح و سطوح ضخامت می‌سازند
+cmd-prismoid-grid-no-overlap = { $roof } و { $floor } هیچ سلولی ندارند که هر دو آن را بپوشانند
+cmd-prismoid-grid-roof-below = { $roof } هر جا که متقاطع‌اند زیر { $floor } است: آن‌ها را برعکس انتخاب کنید
+cmd-prismoid-grid-no-thickness = { $roof } و { $floor } هر جا که هر دو پوشش دارند به هم می‌رسند: هیچ سلولی ضخامت ندارد
+cmd-prismoid-grid-same-surface = سقف و کف باید دو سطح متفاوت باشند
 cmd-products-added-product-delay-ms-ms = محصول { $delay_ms } میلی‌ثانیه { $name } افزوده شد
 cmd-products-deleted-product-delay-ms-ms = محصول { $delay_ms } میلی‌ثانیه { $name } حذف شد
 cmd-products-failed-save-products-error = ذخیره محصولات ناموفق بود: { $error }
@@ -1023,6 +1033,7 @@ common-block-models = مدل‌های بلوکی
 common-borehole-inspector = بازرس گمانه
 common-build-surface = ساخت سطح
 common-build-surface-ellipsis = ساخت سطح...
+common-build-prismoid-grid-ellipsis = ساخت شبکه منشورگون...
 common-cancelled = لغو شد
 common-chamfer = پخ
 common-choose = انتخاب کن...
@@ -2583,6 +2594,12 @@ tri-vertex-count = تعداد رأس‌ها
 tri-vertices-within-5-cm-xy = رأس‌هایی که در XY و Z در فاصله ۵ سانتی‌متری قرار دارند، برای این مثلث‌بندی یک موقعیت مشترک خواهند داشت. این کار می‌تواند سطح تولیدشده را به‌طور موضعی تا ۵ سانتی‌متر جابه‌جا کند؛ چندخطی‌های مبدأ تغییر نمی‌کنند.
 tri-weld-retry = جوش و تکرار
 tri-when-enabled-generate-contours-only = در صورت فعال‌بودن، منحنی‌های میزان فقط میان کمینه و بیشینهٔ ارتفاع مشخص‌شده ایجاد می‌شوند.
+tri-build-prismoid-grid = ساخت شبکه منشورگون
+tri-build-prismoid-grid-help = یک شبکه منشورگون بین سقف و کف روی یک شبکه می‌سازد، همان‌طور که ساخت سطح و سطوح ضخامت می‌سازند. سلول‌هایی که یکی از آن‌ها ارتفاع یا مثلث ندارد، یا کف بالاتر از سقف است، کنار گذاشته می‌شوند.
+tri-prismoid-roof-help = سطح بالایی بازه: سقف لایه یا زیرلایه.
+tri-prismoid-floor-help = سطح پایینی بازه، روی همان شبکه سقف.
+tri-name-assigned-prismoid-grid = نام شبکه منشورگون جدید.
+tri-prismoid-grid-name-hint = شبکه لایه بالایی
 
 ## Ui strings
 

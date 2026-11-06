@@ -740,6 +740,24 @@ cmd-point-cloud-tin-point-cloud-tin-failed-error = Échec du TIN du nuage de poi
 cmd-point-cloud-tin-filtered-ground = TIN de terrain : filtré sur { $ground } points de sol sur { $total }
 cmd-point-cloud-tin-subsampled = TIN du terrain : { $sampled } points sur { $total } sous-échantillonnés spatialement
 cmd-point-cloud-tin-triangulated = TIN de terrain : { $vertex_count } points XY uniques triangulés en { $face_count } faces{ $suffix }
+cmd-prismoid-grid-building = Création de la grille de prismoïdes…
+cmd-prismoid-grid-built = Grille de prismoïdes '{ $name }' créée : { $columns } × { $rows } cellules, { $active } actives, épaisseur verticale de { $min } à { $max }
+cmd-prismoid-grid-crossed =
+    { $count ->
+        [one] { $count } cellule
+       *[other] { $count } cellules
+    } du recouvrement entre { $roof } et { $floor } écartées là où le mur passe au-dessus du toit
+cmd-prismoid-grid-holes =
+    { $count ->
+        [one] { $count } cellule
+       *[other] { $count } cellules
+    } du recouvrement entre { $roof } et { $floor } écartées là où le toit ou le mur n'a ni hauteur ni triangles
+cmd-prismoid-grid-not-a-grid = { $name } ne peut pas former une grille de prismoïdes : { $reason }
+cmd-prismoid-grid-not-one-lattice = { $roof } et { $floor } ne sont pas sur une même grille : choisissez un toit et un mur créés au même pas, comme les produisent Créer une surface et Surfaces d'épaisseur
+cmd-prismoid-grid-no-overlap = { $roof } et { $floor } n'ont aucune cellule couverte par les deux
+cmd-prismoid-grid-roof-below = { $roof } passe sous { $floor } partout où ils se croisent : choisissez-les dans l'autre sens
+cmd-prismoid-grid-no-thickness = { $roof } et { $floor } se touchent partout où les deux couvrent : aucune cellule n'a d'épaisseur
+cmd-prismoid-grid-same-surface = Le toit et le mur doivent être deux surfaces différentes
 cmd-products-added-product-delay-ms-ms = Produit ajouté : { $delay_ms } ms { $name }
 cmd-products-deleted-product-delay-ms-ms = Produit supprimé : { $delay_ms } ms { $name }
 cmd-products-failed-save-products-error = Échec de l’enregistrement des produits : { $error }
@@ -1023,6 +1041,7 @@ common-block-models = Modèles de blocs
 common-borehole-inspector = Inspecteur de sondage
 common-build-surface = Construire une surface
 common-build-surface-ellipsis = Construire une surface...
+common-build-prismoid-grid-ellipsis = Créer une grille de prismoïdes...
 common-cancelled = Annulé
 common-chamfer = chanfrein
 common-choose = Choisissez...
@@ -2583,6 +2602,12 @@ tri-vertex-count = Nombre de sommets
 tri-vertices-within-5-cm-xy = Les sommets distants de moins de 5 cm en XY et Z partageront une position. Cela peut déplacer localement la surface générée de 5 cm ; les polylignes sources restent inchangées.
 tri-weld-retry = Soudage et retraitement
 tri-when-enabled-generate-contours-only = Si activé, génère les courbes uniquement entre les altitudes minimale et maximale indiquées.
+tri-build-prismoid-grid = Créer une grille de prismoïdes
+tri-build-prismoid-grid-help = Crée une grille de prismoïdes entre un toit et un mur sur une même grille, comme les produisent Créer une surface et Surfaces d'épaisseur. Les cellules où l'un d'eux n'a ni hauteur ni triangles, ou où le mur passe au-dessus du toit, sont écartées.
+tri-prismoid-roof-help = La surface supérieure de l'intervalle : le toit de la veine ou du lit.
+tri-prismoid-floor-help = La surface inférieure de l'intervalle, sur la même grille que le toit.
+tri-name-assigned-prismoid-grid = Nom donné à la nouvelle grille de prismoïdes.
+tri-prismoid-grid-name-hint = grille de la veine supérieure
 
 ## Ui strings
 

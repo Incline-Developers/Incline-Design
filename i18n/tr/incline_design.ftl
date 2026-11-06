@@ -782,6 +782,16 @@ cmd-point-cloud-tin-point-cloud-tin-failed-error = Nokta bulutu TIN işlemi baş
 cmd-point-cloud-tin-filtered-ground = Arazi TIN: { $total } noktadan { $ground } zemin noktasına filtrelendi
 cmd-point-cloud-tin-subsampled = Arazi TIN: { $total } noktadan { $sampled } tanesi konumsal olarak alt örneklendi
 cmd-point-cloud-tin-triangulated = Arazi TIN: { $vertex_count } benzersiz XY noktası { $face_count } yüzeye üçgenlendi{ $suffix }
+cmd-prismoid-grid-building = Prizmoid Izgarası oluşturuluyor…
+cmd-prismoid-grid-built = Prizmoid Izgarası '{ $name }' oluşturuldu: { $columns } × { $rows } hücre, { $active } etkin, düşey kalınlık { $min } ile { $max } arası
+cmd-prismoid-grid-crossed = { $count } hücre ({ $roof } ve { $floor } örtüşmesinden) tabanın tavanın üstünde olduğu yerlerde dışarıda bırakıldı
+cmd-prismoid-grid-holes = { $count } hücre ({ $roof } ve { $floor } örtüşmesinden) tavanın veya tabanın yüksekliği ya da üçgeni olmayan yerlerde dışarıda bırakıldı
+cmd-prismoid-grid-not-a-grid = { $name } prizmoid ızgarası oluşturamaz: { $reason }
+cmd-prismoid-grid-not-one-lattice = { $roof } ve { $floor } aynı ızgarada değil: Yüzey Oluştur ve Kalınlık Yüzeyleri'nin yaptığı gibi aynı aralıkla oluşturulmuş bir tavan ve taban seçin
+cmd-prismoid-grid-no-overlap = { $roof } ve { $floor } için ikisinin de kapladığı hücre yok
+cmd-prismoid-grid-roof-below = { $roof } kesiştikleri her yerde { $floor } altında: ters sırayla seçin
+cmd-prismoid-grid-no-thickness = { $roof } ve { $floor } ikisinin de kapladığı her yerde birleşiyor: hiçbir hücrenin kalınlığı yok
+cmd-prismoid-grid-same-surface = Tavan ve taban iki farklı yüzey olmalıdır
 cmd-products-added-product-delay-ms-ms = { $delay_ms } ms { $name } ürünü eklendi
 cmd-products-deleted-product-delay-ms-ms = { $delay_ms } ms { $name } ürünü silindi
 cmd-products-failed-save-products-error = Ürünler kaydedilemedi: { $error }
@@ -1065,6 +1075,7 @@ common-block-models = Blok Modeller
 common-borehole-inspector = Sondaj Deliği Denetçisi
 common-build-surface = Yüzey Oluştur
 common-build-surface-ellipsis = Yüzey Oluştur...
+common-build-prismoid-grid-ellipsis = Prizmoid Izgarası Oluştur...
 common-cancelled = İptal edildi
 common-chamfer = Pah
 common-choose = Seç...
@@ -2625,6 +2636,12 @@ tri-vertex-count = Köşe sayısı
 tri-vertices-within-5-cm-xy = XY ve Z'de 5 cm içindeki köşeler bu üçgenleme için tek bir konumu paylaşacak. Bu, oluşturulan yüzeyi yerel olarak 5 cm'ye kadar kaydırabilir; kaynak çoklu çizgiler değişmez.
 tri-weld-retry = Kaynakla ve Yeniden Dene
 tri-when-enabled-generate-contours-only = Etkinleştirildiğinde, yalnızca belirtilen minimum ve maksimum kotlar arasında kontur oluşturur.
+tri-build-prismoid-grid = Prizmoid Izgarası Oluştur
+tri-build-prismoid-grid-help = Yüzey Oluştur ve Kalınlık Yüzeyleri'nin yaptığı gibi aynı ızgaradaki bir tavan ile taban arasında prizmoid ızgarası oluşturur. Birinde yükseklik veya üçgen olmayan ya da tabanın tavanın üstünde olduğu hücreler dışarıda bırakılır.
+tri-prismoid-roof-help = Aralığın üst yüzeyi: damarın veya katmanın tavanı.
+tri-prismoid-floor-help = Aralığın alt yüzeyi, tavanla aynı ızgarada.
+tri-name-assigned-prismoid-grid = Yeni prizmoid ızgarasına verilen ad.
+tri-prismoid-grid-name-hint = üst damar ızgarası
 
 ## Ui strings
 

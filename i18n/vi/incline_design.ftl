@@ -766,6 +766,16 @@ cmd-point-cloud-tin-point-cloud-tin-failed-error = Tạo TIN đám mây điểm 
 cmd-point-cloud-tin-filtered-ground = TIN địa hình: đã lọc còn { $ground } điểm mặt đất trên { $total }
 cmd-point-cloud-tin-subsampled = TIN địa hình: đã lấy mẫu không gian { $sampled } trong tổng { $total } điểm
 cmd-point-cloud-tin-triangulated = TIN địa hình: đã tạo lưới tam giác từ { $vertex_count } điểm XY duy nhất thành { $face_count } mặt{ $suffix }
+cmd-prismoid-grid-building = Đang tạo lưới prismoid…
+cmd-prismoid-grid-built = Đã tạo lưới prismoid '{ $name }': { $columns } × { $rows } ô, { $active } ô hoạt động, chiều dày thẳng đứng từ { $min } đến { $max }
+cmd-prismoid-grid-crossed = { $count } ô trong phần chồng lấn giữa { $roof } và { $floor } bị bỏ qua nơi nền nằm trên nóc
+cmd-prismoid-grid-holes = { $count } ô trong phần chồng lấn giữa { $roof } và { $floor } bị bỏ qua nơi nóc hoặc nền không có độ cao hoặc tam giác
+cmd-prismoid-grid-not-a-grid = { $name } không thể tạo lưới prismoid: { $reason }
+cmd-prismoid-grid-not-one-lattice = { $roof } và { $floor } không ở trên cùng một lưới: hãy chọn nóc và nền tạo với cùng bước lưới, như Tạo bề mặt và Bề mặt chiều dày tạo ra
+cmd-prismoid-grid-no-overlap = { $roof } và { $floor } không có ô nào cả hai cùng phủ
+cmd-prismoid-grid-roof-below = { $roof } nằm dưới { $floor } ở mọi nơi chúng cắt nhau: hãy chọn ngược lại
+cmd-prismoid-grid-no-thickness = { $roof } và { $floor } gặp nhau ở mọi nơi cả hai cùng phủ: không ô nào có chiều dày
+cmd-prismoid-grid-same-surface = Nóc và nền phải là hai bề mặt khác nhau
 cmd-products-added-product-delay-ms-ms = Đã thêm sản phẩm { $delay_ms } ms { $name }
 cmd-products-deleted-product-delay-ms-ms = Đã xóa sản phẩm { $delay_ms } ms { $name }
 cmd-products-failed-save-products-error = Lưu sản phẩm thất bại: { $error }
@@ -1049,6 +1059,7 @@ common-block-models = Mô hình khối
 common-borehole-inspector = Trình kiểm tra lỗ khoan
 common-build-surface = Dựng bề mặt
 common-build-surface-ellipsis = Dựng bề mặt...
+common-build-prismoid-grid-ellipsis = Tạo lưới prismoid...
 common-cancelled = Đã hủy
 common-chamfer = Vát góc
 common-choose = Chọn...
@@ -2609,6 +2620,12 @@ tri-vertex-count = Số đỉnh
 tri-vertices-within-5-cm-xy = Các đỉnh trong phạm vi 5 cm theo XY và Z sẽ dùng chung một vị trí cho lưới tam giác này. Điều này có thể làm dịch bề mặt được tạo ra cục bộ tới 5 cm; các đường đa tuyến nguồn không thay đổi.
 tri-weld-retry = Hàn & Thử lại
 tri-when-enabled-generate-contours-only = Khi bật, chỉ tạo đường đồng mức giữa các cao độ tối thiểu và tối đa đã chỉ định.
+tri-build-prismoid-grid = Tạo lưới prismoid
+tri-build-prismoid-grid-help = Tạo lưới prismoid giữa nóc và nền trên cùng một lưới, như Tạo bề mặt và Bề mặt chiều dày tạo ra. Các ô mà một trong hai không có độ cao hoặc tam giác, hoặc nền nằm trên nóc, sẽ bị bỏ qua.
+tri-prismoid-roof-help = Bề mặt trên của khoảng: nóc của vỉa hoặc lớp.
+tri-prismoid-floor-help = Bề mặt dưới của khoảng, trên cùng lưới với nóc.
+tri-name-assigned-prismoid-grid = Tên đặt cho lưới prismoid mới.
+tri-prismoid-grid-name-hint = lưới vỉa trên
 
 ## Ui strings
 

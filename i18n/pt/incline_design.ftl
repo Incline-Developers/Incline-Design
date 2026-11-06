@@ -738,6 +738,24 @@ cmd-point-cloud-tin-point-cloud-tin-failed-error = Falha no TIN da nuvem de pont
 cmd-point-cloud-tin-filtered-ground = TIN do terreno: filtrado para { $ground } pontos de terreno de { $total }
 cmd-point-cloud-tin-subsampled = TIN do terreno: amostrados espacialmente { $sampled } de { $total } pontos
 cmd-point-cloud-tin-triangulated = TIN do terreno: { $vertex_count } pontos XY únicos triangulados em { $face_count } faces{ $suffix }
+cmd-prismoid-grid-building = Criando grade de prismoides…
+cmd-prismoid-grid-built = Grade de prismoides '{ $name }' criada: { $columns } × { $rows } células, { $active } ativas, espessura vertical de { $min } a { $max }
+cmd-prismoid-grid-crossed =
+    { $count ->
+        [one] { $count } célula
+       *[other] { $count } células
+    } da sobreposição entre { $roof } e { $floor } omitidas onde a lapa fica acima do teto
+cmd-prismoid-grid-holes =
+    { $count ->
+        [one] { $count } célula
+       *[other] { $count } células
+    } da sobreposição entre { $roof } e { $floor } omitidas onde o teto ou a lapa não tem altura ou triângulos
+cmd-prismoid-grid-not-a-grid = { $name } não pode formar uma grade de prismoides: { $reason }
+cmd-prismoid-grid-not-one-lattice = { $roof } e { $floor } não estão em uma mesma grade: escolha um teto e uma lapa criados com o mesmo espaçamento, como Criar superfície e Superfícies de espessura os produzem
+cmd-prismoid-grid-no-overlap = { $roof } e { $floor } não têm nenhuma célula coberta por ambos
+cmd-prismoid-grid-roof-below = { $roof } fica abaixo de { $floor } onde quer que se cruzem: escolha-os ao contrário
+cmd-prismoid-grid-no-thickness = { $roof } e { $floor } se tocam onde quer que ambos cubram: nenhuma célula tem espessura
+cmd-prismoid-grid-same-surface = O teto e a lapa devem ser duas superfícies diferentes
 cmd-products-added-product-delay-ms-ms = Produto adicionado: { $delay_ms } ms { $name }
 cmd-products-deleted-product-delay-ms-ms = Produto eliminado: { $delay_ms } ms { $name }
 cmd-products-failed-save-products-error = Falha ao guardar os produtos: { $error }
@@ -1021,6 +1039,7 @@ common-block-models = Modelos de blocos
 common-borehole-inspector = Inspetor de furos de sondagem
 common-build-surface = Construir superfície
 common-build-surface-ellipsis = Construir superfície...
+common-build-prismoid-grid-ellipsis = Criar grade de prismoides...
 common-cancelled = Cancelado
 common-chamfer = Chanfro
 common-choose = Escolha...
@@ -2581,6 +2600,12 @@ tri-vertex-count = Contagem de vértices
 tri-vertices-within-5-cm-xy = Os vértices a até 5 cm em XY e Z partilharão uma posição nesta triangulação. Isto pode deslocar localmente a superfície gerada até 5 cm; as polilinhas de origem não são alteradas.
 tri-weld-retry = Soldar e repetir
 tri-when-enabled-generate-contours-only = Quando ativado, gera contornos apenas entre as elevações mínima e máxima indicadas.
+tri-build-prismoid-grid = Criar grade de prismoides
+tri-build-prismoid-grid-help = Cria uma grade de prismoides entre um teto e uma lapa em uma mesma grade, como Criar superfície e Superfícies de espessura os produzem. Células em que algum deles não tem altura ou triângulos, ou em que a lapa fica acima do teto, são omitidas.
+tri-prismoid-roof-help = A superfície superior do intervalo: o teto da camada ou leito.
+tri-prismoid-floor-help = A superfície inferior do intervalo, na mesma grade do teto.
+tri-name-assigned-prismoid-grid = Nome dado à nova grade de prismoides.
+tri-prismoid-grid-name-hint = grade da camada superior
 
 ## Ui strings
 

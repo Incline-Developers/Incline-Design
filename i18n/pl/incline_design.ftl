@@ -810,6 +810,24 @@ cmd-point-cloud-tin-point-cloud-tin-failed-error = TIN chmury punktów nie powi�
 cmd-point-cloud-tin-filtered-ground = TIN terenu: odfiltrowano do { $ground } punktów gruntu z { $total }
 cmd-point-cloud-tin-subsampled = TIN terenu: przestrzennie podpróbkowano { $sampled } z { $total } punktów
 cmd-point-cloud-tin-triangulated = TIN terenu: przetriangulowano { $vertex_count } unikatowych punktów XY na { $face_count } ścianek{ $suffix }
+cmd-prismoid-grid-building = Budowanie siatki prizmoidów…
+cmd-prismoid-grid-built = Zbudowano siatkę prizmoidów '{ $name }': { $columns } × { $rows } komórek, aktywne: { $active }, grubość pionowa od { $min } do { $max }
+cmd-prismoid-grid-crossed =
+    { $count ->
+        [one] { $count } komórka
+       *[other] { $count } komórek
+    } z nakładania { $roof } i { $floor } pominięto tam, gdzie spąg leży nad stropem
+cmd-prismoid-grid-holes =
+    { $count ->
+        [one] { $count } komórka
+       *[other] { $count } komórek
+    } z nakładania { $roof } i { $floor } pominięto tam, gdzie strop lub spąg nie ma wysokości ani trójkątów
+cmd-prismoid-grid-not-a-grid = { $name } nie może utworzyć siatki prizmoidów: { $reason }
+cmd-prismoid-grid-not-one-lattice = { $roof } i { $floor } nie leżą na jednej siatce: wybierz strop i spąg zbudowane z tym samym odstępem, jak robią to Zbuduj powierzchnię i Powierzchnie grubości
+cmd-prismoid-grid-no-overlap = { $roof } i { $floor } nie mają komórki pokrytej przez obie
+cmd-prismoid-grid-roof-below = { $roof } leży pod { $floor } wszędzie, gdzie się przecinają: wybierz je odwrotnie
+cmd-prismoid-grid-no-thickness = { $roof } i { $floor } stykają się wszędzie, gdzie obie pokrywają: żadna komórka nie ma grubości
+cmd-prismoid-grid-same-surface = Strop i spąg muszą być dwiema różnymi powierzchniami
 cmd-products-added-product-delay-ms-ms = Dodano produkt { $delay_ms } ms { $name }
 cmd-products-deleted-product-delay-ms-ms = Usunięto produkt { $delay_ms } ms { $name }
 cmd-products-failed-save-products-error = Nie udało się zapisać produktów: { $error }
@@ -1093,6 +1111,7 @@ common-block-models = Modele blokowe
 common-borehole-inspector = Inspektor otworów wiertniczych
 common-build-surface = Zbuduj powierzchnię
 common-build-surface-ellipsis = Zbuduj powierzchnię...
+common-build-prismoid-grid-ellipsis = Zbuduj siatkę prizmoidów...
 common-cancelled = Anulowano
 common-chamfer = Fazowanie
 common-choose = Wybierz...
@@ -2653,6 +2672,12 @@ tri-vertex-count = Liczba wierzchołków
 tri-vertices-within-5-cm-xy = Wierzchołki znajdujące się w promieniu 5 cm w XY i Z będą współdzielić jedną pozycję na potrzeby tej triangulacji. Może to lokalnie przesunąć wygenerowaną powierzchnię o maks. 5 cm; polilinie źródłowe pozostają bez zmian.
 tri-weld-retry = Zespól i spróbuj ponownie
 tri-when-enabled-generate-contours-only = Gdy włączone, generuj poziomice tylko między podaną minimalną a maksymalną wysokością.
+tri-build-prismoid-grid = Zbuduj siatkę prizmoidów
+tri-build-prismoid-grid-help = Buduje siatkę prizmoidów między stropem a spągiem na jednej siatce, jak robią to Zbuduj powierzchnię i Powierzchnie grubości. Komórki, w których którakolwiek nie ma wysokości ani trójkątów lub spąg leży nad stropem, są pomijane.
+tri-prismoid-roof-help = Górna powierzchnia interwału: strop pokładu lub warstwy.
+tri-prismoid-floor-help = Dolna powierzchnia interwału, na tej samej siatce co strop.
+tri-name-assigned-prismoid-grid = Nazwa nowej siatki prizmoidów.
+tri-prismoid-grid-name-hint = siatka górnego pokładu
 
 ## Ui strings
 

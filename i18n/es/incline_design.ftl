@@ -738,6 +738,24 @@ cmd-point-cloud-tin-point-cloud-tin-failed-error = El TIN de nube de puntos fall
 cmd-point-cloud-tin-filtered-ground = TIN del terreno: se filtraron { $ground } puntos de suelo de { $total }
 cmd-point-cloud-tin-subsampled = TIN de terreno: se submuestrearon espacialmente { $sampled } de { $total } puntos
 cmd-point-cloud-tin-triangulated = TIN del terreno: se triangularon { $vertex_count } puntos XY únicos en { $face_count } caras{ $suffix }
+cmd-prismoid-grid-building = Creando malla de prismoides…
+cmd-prismoid-grid-built = Malla de prismoides '{ $name }' creada: { $columns } × { $rows } celdas, { $active } activas, espesor vertical de { $min } a { $max }
+cmd-prismoid-grid-crossed =
+    { $count ->
+        [one] { $count } celda
+       *[other] { $count } celdas
+    } del solape entre { $roof } y { $floor } omitidas donde el piso queda sobre el techo
+cmd-prismoid-grid-holes =
+    { $count ->
+        [one] { $count } celda
+       *[other] { $count } celdas
+    } del solape entre { $roof } y { $floor } omitidas donde el techo o el piso no tiene altura o triángulos
+cmd-prismoid-grid-not-a-grid = { $name } no puede formar una malla de prismoides: { $reason }
+cmd-prismoid-grid-not-one-lattice = { $roof } y { $floor } no están en una misma malla: elija un techo y un piso creados con el mismo espaciado, como los producen Crear superficie y Superficies de espesor
+cmd-prismoid-grid-no-overlap = { $roof } y { $floor } no comparten ninguna celda que ambos cubran
+cmd-prismoid-grid-roof-below = { $roof } queda bajo { $floor } dondequiera que se cruzan: elíjalos al revés
+cmd-prismoid-grid-no-thickness = { $roof } y { $floor } se tocan dondequiera que ambos cubren: ninguna celda tiene espesor
+cmd-prismoid-grid-same-surface = El techo y el piso deben ser dos superficies distintas
 cmd-products-added-product-delay-ms-ms = Se añadió el producto { $delay_ms } ms { $name }
 cmd-products-deleted-product-delay-ms-ms = Se eliminó el producto { $delay_ms } ms { $name }
 cmd-products-failed-save-products-error = No se pudieron guardar los productos: { $error }
@@ -1021,6 +1039,7 @@ common-block-models = Modelos de bloques
 common-borehole-inspector = Inspector de sondajes
 common-build-surface = Construir superficie
 common-build-surface-ellipsis = Construir superficie...
+common-build-prismoid-grid-ellipsis = Crear malla de prismoides...
 common-cancelled = Cancelado
 common-chamfer = Chaflán
 common-choose = Elija...
@@ -2581,6 +2600,12 @@ tri-vertex-count = Número de vértices
 tri-vertices-within-5-cm-xy = Los vértices separados hasta 5 cm en XY y Z compartirán una posición en esta triangulación. Esto puede desplazar localmente la superficie generada hasta 5 cm; las polilíneas de origen no cambian.
 tri-weld-retry = Soldar y reintentar
 tri-when-enabled-generate-contours-only = Cuando está activado, genera curvas de nivel solo entre las elevaciones mínima y máxima indicadas.
+tri-build-prismoid-grid = Crear malla de prismoides
+tri-build-prismoid-grid-help = Crea una malla de prismoides entre un techo y un piso en una misma malla, como los producen Crear superficie y Superficies de espesor. Se omiten las celdas donde alguno no tiene altura o triángulos, o donde el piso queda sobre el techo.
+tri-prismoid-roof-help = La superficie superior del intervalo: el techo del manto o capa.
+tri-prismoid-floor-help = La superficie inferior del intervalo, en la misma malla que el techo.
+tri-name-assigned-prismoid-grid = Nombre de la nueva malla de prismoides.
+tri-prismoid-grid-name-hint = malla del manto superior
 
 ## Ui strings
 

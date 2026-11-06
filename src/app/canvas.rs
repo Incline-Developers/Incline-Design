@@ -230,6 +230,24 @@ impl<'a> App<'a> {
                     self.editor.tri_solid_design_id = None;
                 }
             }
+            TriangulationPickTarget::PrismoidRoof => {
+                self.editor.tri_prismoid_roof_id = Some(id);
+                if self.editor.tri_prismoid_floor_id == Some(id) {
+                    self.editor.tri_prismoid_floor_id = None;
+                }
+                update_auto_derived_name(
+                    &mut self.editor.tri_prismoid_name_input,
+                    self.editor.tri_prismoid_name_auto,
+                    name,
+                    &tr!("common-prismoid-grid"),
+                );
+            }
+            TriangulationPickTarget::PrismoidFloor => {
+                self.editor.tri_prismoid_floor_id = Some(id);
+                if self.editor.tri_prismoid_roof_id == Some(id) {
+                    self.editor.tri_prismoid_roof_id = None;
+                }
+            }
             TriangulationPickTarget::CutPitTopology => {
                 self.editor.tri_cut_pitshell_topology_id = Some(id);
                 if self.editor.tri_cut_pitshell_pitshell_id == Some(id) {

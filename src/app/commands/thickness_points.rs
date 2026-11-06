@@ -693,12 +693,16 @@ fn pairs_bytes(file: &PairsFile) -> Result<Arc<[u8]>> {
 
 /// Why `name` cannot be read as one regular grid, in words.
 pub(super) fn not_a_grid(name: &str, problem: NotAGrid) -> String {
-    let reason = match problem {
+    tr!("cmd-thickness-not-a-grid", name = name.to_owned(), reason = not_a_grid_reason(problem))
+}
+
+/// Why a surface is not a grid, in words that follow a surface's name.
+pub(super) fn not_a_grid_reason(problem: NotAGrid) -> String {
+    match problem {
         NotAGrid::NoCells => tr!("cmd-thickness-not-a-grid-cells"),
         NotAGrid::TwoHeights => tr!("cmd-thickness-not-a-grid-heights"),
         NotAGrid::TooLarge => tr!("cmd-thickness-not-a-grid-large", budget = crate::model::rbf::NODE_BUDGET.to_string()),
-    };
-    tr!("cmd-thickness-not-a-grid", name = name.to_owned(), reason = reason)
+    }
 }
 
 fn pairs_error(name: &str, error: PairsError) -> String {

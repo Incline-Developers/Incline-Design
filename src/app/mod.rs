@@ -859,6 +859,7 @@ impl<'a> App<'a> {
             MacMenuAction::OpenCutTopologyByPitShell => Some(UiCommand::OpenCutTopologyByPitShell),
             MacMenuAction::OpenIncludeSolidInTopology => Some(UiCommand::OpenIncludeSolidInTopology),
             MacMenuAction::OpenBuildSolidFromSurfaces => Some(UiCommand::OpenBuildSolidFromSurfaces),
+            MacMenuAction::OpenBuildPrismoidGrid => Some(UiCommand::OpenBuildPrismoidGrid),
             MacMenuAction::OpenContourTriangulation => Some(UiCommand::OpenContourTriangulation),
             MacMenuAction::OpenPointCloudTin => Some(UiCommand::OpenPointCloudTin),
             MacMenuAction::OpenPointCloudJoin => Some(UiCommand::OpenPointCloudJoin),

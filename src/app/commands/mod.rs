@@ -199,6 +199,8 @@ impl<'a> App<'a> {
                 | UiCommand::MakeSeamSurface { .. }
                 | UiCommand::OpenCutTriangulationToSurface
                 | UiCommand::ExecuteCutTriangulationToSurface { .. }
+                | UiCommand::OpenBuildPrismoidGrid
+                | UiCommand::ExecuteBuildPrismoidGrid { .. }
                 | UiCommand::BuildCollarPoints { .. }
                 | UiCommand::SetModellingSettings(_)
                 | UiCommand::BuildReferencePoints { .. }
@@ -1969,6 +1971,21 @@ impl<'a> App<'a> {
                 let result = self.create_solid_from_surfaces(design_id, topography_id, region, name);
                 if result.is_ok() {
                     self.editor.tri_solid_open = false;
+                }
+                result
+            }
+            UiCommand::OpenBuildPrismoidGrid => {
+                self.editor.tri_prismoid_open = true;
+                self.editor.tri_prismoid_roof_id = None;
+                self.editor.tri_prismoid_floor_id = None;
+                self.editor.tri_prismoid_name_input.clear();
+                self.editor.tri_prismoid_name_auto = true;
+                Ok(())
+            }
+            UiCommand::ExecuteBuildPrismoidGrid { roof_id, floor_id, name } => {
+                let result = self.build_prismoid_grid(roof_id, floor_id, name);
+                if result.is_ok() {
+                    self.editor.tri_prismoid_open = false;
                 }
                 result
             }

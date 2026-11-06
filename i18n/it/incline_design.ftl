@@ -782,6 +782,24 @@ cmd-point-cloud-tin-point-cloud-tin-failed-error = TIN da nuvola di punti non ri
 cmd-point-cloud-tin-filtered-ground = TIN del terreno: filtrati { $ground } punti di terreno su { $total }
 cmd-point-cloud-tin-subsampled = TIN del terreno: sottocampionati spazialmente { $sampled } di { $total } punti
 cmd-point-cloud-tin-triangulated = TIN del terreno: triangolati { $vertex_count } punti XY unici in { $face_count } facce{ $suffix }
+cmd-prismoid-grid-building = Creazione della griglia di prismoidi…
+cmd-prismoid-grid-built = Griglia di prismoidi '{ $name }' creata: { $columns } × { $rows } celle, { $active } attive, spessore verticale da { $min } a { $max }
+cmd-prismoid-grid-crossed =
+    { $count ->
+        [one] { $count } cella
+       *[other] { $count } celle
+    } della sovrapposizione tra { $roof } e { $floor } escluse dove il letto sta sopra il tetto
+cmd-prismoid-grid-holes =
+    { $count ->
+        [one] { $count } cella
+       *[other] { $count } celle
+    } della sovrapposizione tra { $roof } e { $floor } escluse dove il tetto o il letto non ha quota o triangoli
+cmd-prismoid-grid-not-a-grid = { $name } non può formare una griglia di prismoidi: { $reason }
+cmd-prismoid-grid-not-one-lattice = { $roof } e { $floor } non sono su una stessa griglia: scegli un tetto e un letto creati con lo stesso passo, come li producono Crea superficie e Superfici di spessore
+cmd-prismoid-grid-no-overlap = { $roof } e { $floor } non hanno alcuna cella coperta da entrambi
+cmd-prismoid-grid-roof-below = { $roof } sta sotto { $floor } ovunque si incrociano: sceglili al contrario
+cmd-prismoid-grid-no-thickness = { $roof } e { $floor } si toccano ovunque entrambi coprono: nessuna cella ha spessore
+cmd-prismoid-grid-same-surface = Il tetto e il letto devono essere due superfici diverse
 cmd-products-added-product-delay-ms-ms = Aggiunto prodotto { $delay_ms } ms { $name }
 cmd-products-deleted-product-delay-ms-ms = Eliminato prodotto { $delay_ms } ms { $name }
 cmd-products-failed-save-products-error = Salvataggio dei prodotti non riuscito: { $error }
@@ -1065,6 +1083,7 @@ common-block-models = Modelli a blocchi
 common-borehole-inspector = Ispettore fori di sondaggio
 common-build-surface = Costruisci superficie
 common-build-surface-ellipsis = Costruisci superficie...
+common-build-prismoid-grid-ellipsis = Crea griglia di prismoidi...
 common-cancelled = Annullato
 common-chamfer = Smusso
 common-choose = Scegli...
@@ -2625,6 +2644,12 @@ tri-vertex-count = Numero di vertici
 tri-vertices-within-5-cm-xy = I vertici entro 5 cm in XY e Z condivideranno un'unica posizione per questa triangolazione. Questo può spostare localmente la superficie generata fino a 5 cm; le polilinee sorgente non vengono modificate.
 tri-weld-retry = Salda e riprova
 tri-when-enabled-generate-contours-only = Se attivato, genera curve di livello solo tra le quote minima e massima specificate.
+tri-build-prismoid-grid = Crea griglia di prismoidi
+tri-build-prismoid-grid-help = Crea una griglia di prismoidi tra un tetto e un letto su una stessa griglia, come li producono Crea superficie e Superfici di spessore. Le celle in cui uno dei due non ha quota o triangoli, o il letto sta sopra il tetto, vengono escluse.
+tri-prismoid-roof-help = La superficie superiore dell'intervallo: il tetto dello strato o del livello.
+tri-prismoid-floor-help = La superficie inferiore dell'intervallo, sulla stessa griglia del tetto.
+tri-name-assigned-prismoid-grid = Nome assegnato alla nuova griglia di prismoidi.
+tri-prismoid-grid-name-hint = griglia dello strato superiore
 
 ## Ui strings
 

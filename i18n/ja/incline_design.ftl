@@ -768,6 +768,16 @@ cmd-point-cloud-tin-point-cloud-tin-failed-error = 点群TINの生成に失敗�
 cmd-point-cloud-tin-filtered-ground = 地形TIN: { $total } 点のうち地表の { $ground } 点にフィルターしました
 cmd-point-cloud-tin-subsampled = 地形TIN: { $total } 点中 { $sampled } 点を空間的に間引きしました
 cmd-point-cloud-tin-triangulated = 地形TIN: { $vertex_count } 個の一意なXY点を { $face_count } 個の面に三角網化しました{ $suffix }
+cmd-prismoid-grid-building = プリズモイドグリッドを構築中…
+cmd-prismoid-grid-built = プリズモイドグリッド '{ $name }' を構築しました: { $columns } × { $rows } セル、アクティブ { $active }、鉛直厚さ { $min } から { $max }
+cmd-prismoid-grid-crossed = { $count } セル ({ $roof } と { $floor } の重なり) を下盤が上盤より上にある箇所で除外しました
+cmd-prismoid-grid-holes = { $count } セル ({ $roof } と { $floor } の重なり) を上盤または下盤に高さか三角形がない箇所で除外しました
+cmd-prismoid-grid-not-a-grid = { $name } からプリズモイドグリッドを作れません: { $reason }
+cmd-prismoid-grid-not-one-lattice = { $roof } と { $floor } は同じグリッド上にありません: 曲面を構築と厚さ曲面が作るように、同じ間隔で作られた上盤と下盤を選んでください
+cmd-prismoid-grid-no-overlap = { $roof } と { $floor } の両方が覆うセルはありません
+cmd-prismoid-grid-roof-below = { $roof } は交差する箇所すべてで { $floor } より下にあります: 逆に選んでください
+cmd-prismoid-grid-no-thickness = { $roof } と { $floor } は両方が覆う箇所すべてで接しています: 厚さのあるセルはありません
+cmd-prismoid-grid-same-surface = 上盤と下盤は別々の曲面にしてください
 cmd-products-added-product-delay-ms-ms = 製品を追加しました: { $delay_ms } ms { $name }
 cmd-products-deleted-product-delay-ms-ms = 製品を削除しました: { $delay_ms } ms { $name }
 cmd-products-failed-save-products-error = 製品の保存に失敗しました: { $error }
@@ -1051,6 +1061,7 @@ common-block-models = ブロックモデル
 common-borehole-inspector = 削孔インスペクター
 common-build-surface = 曲面を構築
 common-build-surface-ellipsis = 曲面を構築...
+common-build-prismoid-grid-ellipsis = プリズモイドグリッドを構築...
 common-cancelled = キャンセル済み
 common-chamfer = 面取り
 common-choose = 選択...
@@ -2611,6 +2622,12 @@ tri-vertex-count = 頂点数
 tri-vertices-within-5-cm-xy = XYおよびZで5cm以内にある頂点は、この三角網化において1つの位置にまとめられます。これにより生成される曲面が局所的に最大5cmずれることがありますが、元のポリラインは変更されません。
 tri-weld-retry = 溶接して再試行
 tri-when-enabled-generate-contours-only = 有効にすると、指定した最小・最大標高の間でのみコンターを生成します。
+tri-build-prismoid-grid = プリズモイドグリッドを構築
+tri-build-prismoid-grid-help = 曲面を構築と厚さ曲面が作るような同じグリッド上の上盤と下盤の間にプリズモイドグリッドを構築します。どちらかに高さか三角形がないセル、または下盤が上盤より上にあるセルは除外されます。
+tri-prismoid-roof-help = 区間の上面: 炭層または分層の上盤。
+tri-prismoid-floor-help = 区間の下面: 上盤と同じグリッド上にあります。
+tri-name-assigned-prismoid-grid = 新しいプリズモイドグリッドに付ける名前。
+tri-prismoid-grid-name-hint = 上部炭層グリッド
 
 ## Ui strings
 

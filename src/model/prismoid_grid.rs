@@ -7,10 +7,54 @@ use std::sync::Arc;
 use anyhow::{Result, bail};
 use glam::{DVec2, DVec3};
 
-use crate::model::project::ProjectItemState;
+use crate::{
+    app::jobs::CancelFlag,
+    model::{
+        grid_surface::{GridSurface, HEIGHT_TOLERANCE, NODE_TOLERANCE},
+        progress::Phase,
+        project::ProjectItemState,
+    },
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct PrismoidGridId(pub(crate) u64);
+
+/// The grey a built prismoid grid starts in.
+pub(crate) const DEFAULT_PRISMOID_GRID_COLOR: [f32; 4] = [0.72, 0.72, 0.75, 1.0];
+
+/// Why two grid surfaces make no prismoid grid.
+#[derive(Debug)]
+pub(crate) enum BuildRefusal {
+    /// Different spacings, or nodes that do not line up.
+    NotOneLattice,
+    /// Fewer than two node columns or rows in common, or no cell in
+    /// common that both cover.
+    NoOverlap,
+    /// No active cell, and more cells crossed than closed.
+    RoofBelow,
+    /// No active cell: roof and floor meet wherever both cover.
+    NoThickness,
+    Cancelled,
+    /// The built grid failed [`PrismoidGrid::check`].
+    Malformed(anyhow::Error),
+}
+
+/// A prismoid grid built between two surfaces, with the cells of the
+/// overlap left out for a crossing and for a missing height or triangle.
+#[derive(Debug)]
+pub(crate) struct PrismoidBuild {
+    pub(crate) grid: PrismoidGrid,
+    pub(crate) crossed: usize,
+    pub(crate) holes: usize,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Corner {
+    Missing,
+    Crossed,
+    Closed,
+    Open,
+}
 
 /// A plan lattice: an origin, two horizontal unit axes and the cell sizes
 /// along each.
@@ -124,6 +168,136 @@ impl PrismoidGrid {
             bail!("has {} '{}' values for {cells} cells", values.values.len(), values.name);
         }
         Ok(())
+    }
+
+    /// The prismoids between `roof` and `floor` over the cells both cover.
+    /// A cell is active where both surfaces have triangles over it, none of
+    /// its corners lacks a height or has the floor above the roof, and at
+    /// least one has thickness.
+    pub(crate) fn between(roof: &GridSurface, floor: &GridSurface, cancel: &CancelFlag, progress: &Phase) -> Result<PrismoidBuild, BuildRefusal> {
+        let spacing = roof.spacing();
+        if (spacing - floor.spacing()).abs() > spacing * NODE_TOLERANCE {
+            return Err(BuildRefusal::NotOneLattice);
+        }
+        let (roof_origin, roof_columns, roof_rows) = roof.lattice();
+        let (floor_origin, floor_columns, floor_rows) = floor.lattice();
+        let offset = (floor_origin - roof_origin) / spacing;
+        let whole = offset.round();
+        if (offset - whole).abs().max_element() > NODE_TOLERANCE {
+            return Err(BuildRefusal::NotOneLattice);
+        }
+        // The shared node box, in roof node indices.
+        let span = |shift: f64, roof_count: usize, floor_count: usize| {
+            let shift = shift as i64;
+            let low = shift.max(0);
+            let high = (shift + floor_count as i64).min(roof_count as i64);
+            (low, high - low, shift)
+        };
+        let (low_column, columns, shift_column) = span(whole.x, roof_columns, floor_columns);
+        let (low_row, rows, shift_row) = span(whole.y, roof_rows, floor_rows);
+        if columns < 2 || rows < 2 {
+            return Err(BuildRefusal::NoOverlap);
+        }
+        let (columns, rows) = (columns as usize, rows as usize);
+        let (low_column, low_row) = (low_column as usize, low_row as usize);
+        let origin = roof_origin + DVec2::new(low_column as f64, low_row as f64) * spacing;
+        // Roof and floor heights at every node of the box, NaN where missing.
+        let heights: Vec<(f64, f64)> = (0..rows)
+            .flat_map(|row| (0..columns).map(move |column| (column, row)))
+            .map(|(column, row)| {
+                let (roof_column, roof_row) = (low_column + column, low_row + row);
+                let floor_column = (roof_column as i64 - shift_column) as usize;
+                let floor_row = (roof_row as i64 - shift_row) as usize;
+                let height = |surface: &GridSurface, column: usize, row: usize| surface.height(column, row).unwrap_or(f64::NAN);
+                (height(roof, roof_column, roof_row), height(floor, floor_column, floor_row))
+            })
+            .collect();
+        if cancel.is_cancelled() {
+            return Err(BuildRefusal::Cancelled);
+        }
+        progress.set_fraction(0.3);
+        // A point inside each of the cell's two triangles, whichever way its
+        // diagonal runs.
+        let covered = |column: usize, row: usize| {
+            [0.25, 0.75].into_iter().all(|across| {
+                let at = origin + DVec2::new(column as f64 + across, row as f64 + 0.5) * spacing;
+                roof.covers(at) && floor.covers(at)
+            })
+        };
+        let (cell_columns, cell_rows) = (columns - 1, rows - 1);
+        let (mut crossed, mut holes, mut closed) = (0, 0, 0);
+        let mut active = vec![false; cell_columns * cell_rows];
+        // The smallest box of cells holding every active cell.
+        let mut kept: Option<[usize; 4]> = None;
+        for row in 0..cell_rows {
+            if cancel.is_cancelled() {
+                return Err(BuildRefusal::Cancelled);
+            }
+            for column in 0..cell_columns {
+                let at = [
+                    row * columns + column,
+                    row * columns + column + 1,
+                    (row + 1) * columns + column,
+                    (row + 1) * columns + column + 1,
+                ]
+                .map(|index| corner(heights[index]));
+                if at.contains(&Corner::Crossed) {
+                    crossed += 1;
+                } else if at.contains(&Corner::Missing) || !covered(column, row) {
+                    holes += 1;
+                } else if at.contains(&Corner::Open) {
+                    active[row * cell_columns + column] = true;
+                    kept = Some(kept.map_or([column, row, column, row], |[c0, r0, c1, r1]| [c0.min(column), r0.min(row), c1.max(column), r1.max(row)]));
+                } else {
+                    closed += 1;
+                }
+            }
+        }
+        let Some([first_column, first_row, last_column, last_row]) = kept else {
+            return Err(if crossed == 0 && closed == 0 {
+                BuildRefusal::NoOverlap
+            } else if crossed > closed {
+                BuildRefusal::RoofBelow
+            } else {
+                BuildRefusal::NoThickness
+            });
+        };
+        progress.set_fraction(0.6);
+        let (kept_columns, kept_rows) = (last_column - first_column + 1, last_row - first_row + 1);
+        let (corner_columns, corner_rows) = (kept_columns + 1, kept_rows + 1);
+        let (mut roof_heights, mut floor_heights): (Vec<f64>, Vec<f64>) = (first_row..=last_row + 1)
+            .flat_map(|row| (first_column..=last_column + 1).map(move |column| row * columns + column))
+            .map(|index| heights[index])
+            .unzip();
+        for values in [&mut roof_heights, &mut floor_heights] {
+            fill_missing(values, corner_columns, corner_rows);
+        }
+        // Every corner of an active cell is closed or open, so this moves
+        // only a closed corner's floor, by at most the tolerance, and the
+        // corners no active cell reads.
+        for (top, bottom) in roof_heights.iter().zip(&mut floor_heights) {
+            *bottom = bottom.min(*top);
+        }
+        let active = (first_row..=last_row)
+            .flat_map(|row| (first_column..=last_column).map(move |column| row * cell_columns + column))
+            .map(|cell| active[cell])
+            .collect();
+        let grid = PrismoidGrid {
+            lattice: Lattice {
+                origin: origin + DVec2::new(first_column as f64, first_row as f64) * spacing,
+                u: DVec2::X,
+                v: DVec2::Y,
+                u_sizes: vec![spacing; kept_columns],
+                v_sizes: vec![spacing; kept_rows],
+            },
+            roof: roof_heights,
+            floor: floor_heights,
+            active,
+            cell_values: Vec::new(),
+        };
+        grid.check().map_err(BuildRefusal::Malformed)?;
+        progress.set_fraction(1.0);
+        Ok(PrismoidBuild { grid, crossed, holes })
     }
 
     /// The vertical walls along every edge of an active cell whose neighbour
@@ -244,4 +418,39 @@ pub(crate) struct LoadedPrismoidGrid {
     pub(crate) color: [f32; 4],
     pub(crate) grid: Arc<PrismoidGrid>,
     pub(crate) summary: PrismoidGridSummary,
+}
+
+/// How a node's roof and floor stand, from their heights (NaN where
+/// missing).
+fn corner((top, bottom): (f64, f64)) -> Corner {
+    if top.is_nan() || bottom.is_nan() {
+        Corner::Missing
+    } else if top - bottom < -HEIGHT_TOLERANCE {
+        Corner::Crossed
+    } else if top - bottom <= HEIGHT_TOLERANCE {
+        Corner::Closed
+    } else {
+        Corner::Open
+    }
+}
+
+/// Give every NaN the value of the nearest known one in steps across the
+/// lattice, breadth first from every known value at once.
+fn fill_missing(values: &mut [f64], columns: usize, rows: usize) {
+    let mut queue: std::collections::VecDeque<usize> = (0..values.len()).filter(|&index| !values[index].is_nan()).collect();
+    while let Some(index) = queue.pop_front() {
+        let (column, row) = (index % columns, index / columns);
+        let neighbours = [
+            column.checked_sub(1).map(|column| row * columns + column),
+            (column + 1 < columns).then(|| row * columns + column + 1),
+            row.checked_sub(1).map(|row| row * columns + column),
+            (row + 1 < rows).then(|| (row + 1) * columns + column),
+        ];
+        for next in neighbours.into_iter().flatten() {
+            if values[next].is_nan() {
+                values[next] = values[index];
+                queue.push_back(next);
+            }
+        }
+    }
 }

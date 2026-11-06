@@ -740,6 +740,16 @@ cmd-point-cloud-tin-point-cloud-tin-failed-error = पॉइंट क्ला�
 cmd-point-cloud-tin-filtered-ground = भूभाग TIN: { $total } में से { $ground } ग्राउंड बिंदुओं तक फ़िल्टर किया गया
 cmd-point-cloud-tin-subsampled = भूभाग TIN: { $total } बिंदुओं में से { $sampled } का स्थानिक उप-नमूना लिया गया
 cmd-point-cloud-tin-triangulated = टेरेन TIN: { $vertex_count } अद्वितीय XY पॉइंट को { $face_count } फ़ेस में त्रिभुजित किया गया{ $suffix }
+cmd-prismoid-grid-building = प्रिज़्मॉइड ग्रिड बनाया जा रहा है…
+cmd-prismoid-grid-built = प्रिज़्मॉइड ग्रिड '{ $name }' बनाया गया: { $columns } × { $rows } सेल, { $active } सक्रिय, ऊर्ध्वाधर मोटाई { $min } से { $max }
+cmd-prismoid-grid-crossed = { $count } सेल { $roof } और { $floor } के ओवरलैप से छोड़ी गईं, जहाँ तल छत के ऊपर है
+cmd-prismoid-grid-holes = { $count } सेल { $roof } और { $floor } के ओवरलैप से छोड़ी गईं, जहाँ छत या तल की ऊँचाई या त्रिभुज नहीं हैं
+cmd-prismoid-grid-not-a-grid = { $name } से प्रिज़्मॉइड ग्रिड नहीं बन सकता: { $reason }
+cmd-prismoid-grid-not-one-lattice = { $roof } और { $floor } एक ग्रिड पर नहीं हैं: समान अंतराल पर बनी छत और तल चुनें, जैसे सतह बनाएँ और मोटाई सतहें बनाते हैं
+cmd-prismoid-grid-no-overlap = { $roof } और { $floor } का ऐसा कोई सेल नहीं है जिसे दोनों ढकते हों
+cmd-prismoid-grid-roof-below = { $roof } जहाँ भी काटता है { $floor } के नीचे है: उन्हें उलटे क्रम में चुनें
+cmd-prismoid-grid-no-thickness = { $roof } और { $floor } जहाँ दोनों ढकते हैं वहाँ मिलते हैं: किसी सेल में मोटाई नहीं है
+cmd-prismoid-grid-same-surface = छत और तल दो अलग सतहें होनी चाहिए
 cmd-products-added-product-delay-ms-ms = उत्पाद { $delay_ms } मि.से. { $name } जोड़ा गया
 cmd-products-deleted-product-delay-ms-ms = उत्पाद { $delay_ms } मि.से. { $name } हटाया गया
 cmd-products-failed-save-products-error = उत्पाद सहेजे नहीं जा सके: { $error }
@@ -1023,6 +1033,7 @@ common-block-models = ब्लॉक मॉडल
 common-borehole-inspector = बोरहोल इंस्पेक्टर
 common-build-surface = सतह बनाएँ
 common-build-surface-ellipsis = सतह बनाएँ...
+common-build-prismoid-grid-ellipsis = प्रिज़्मॉइड ग्रिड बनाएँ...
 common-cancelled = रद्द
 common-chamfer = चैम्फर
 common-choose = चुनें ...
@@ -2583,6 +2594,12 @@ tri-vertex-count = वर्टेक्स गिनती
 tri-vertices-within-5-cm-xy = XY और Z में 5 सेमी के भीतर के शीर्ष इस त्रिकोणन के लिए एक स्थान साझा करेंगे। इससे बनी सतह स्थानीय रूप से 5 सेमी तक खिसक सकती है; स्रोत पॉलीलाइन अपरिवर्तित रहेंगी।
 tri-weld-retry = वेल्ड और पुनः प्रयास
 tri-when-enabled-generate-contours-only = सक्षम होने पर केवल निर्दिष्ट न्यूनतम और अधिकतम ऊँचाई के बीच कंटूर बनाए जाते हैं।
+tri-build-prismoid-grid = प्रिज़्मॉइड ग्रिड बनाएँ
+tri-build-prismoid-grid-help = एक ग्रिड पर छत और तल के बीच प्रिज़्मॉइड ग्रिड बनाता है, जैसे सतह बनाएँ और मोटाई सतहें बनाते हैं। जिन सेल में किसी की ऊँचाई या त्रिभुज नहीं हैं, या तल छत के ऊपर है, वे छोड़ दिए जाते हैं।
+tri-prismoid-roof-help = अंतराल की ऊपरी सतह: सीम या परत की छत।
+tri-prismoid-floor-help = अंतराल की निचली सतह, छत वाले ग्रिड पर।
+tri-name-assigned-prismoid-grid = नए प्रिज़्मॉइड ग्रिड को दिया गया नाम।
+tri-prismoid-grid-name-hint = ऊपरी सीम ग्रिड
 
 ## Ui strings
 

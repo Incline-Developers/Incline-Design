@@ -140,6 +140,8 @@ pub(crate) enum MacMenuAction {
     /// The Triangulation menu's row that opens the same dialog, beside the
     /// other cuts.
     OpenCutTriangulationToSurface,
+    /// The Modelling menu's row that opens the build prismoid grid dialog.
+    OpenBuildPrismoidGrid,
     /// The Block Model menu's row that opens the pit optimization scenarios.
     OpenOptimizationScenarios,
     /// One row of File > Open Recent, by its index in the recent list the menu
@@ -236,6 +238,7 @@ impl MacMenuAction {
         Self::OpenSeamSurface,
         Self::OpenModellingClipToSurface,
         Self::OpenCutTriangulationToSurface,
+        Self::OpenBuildPrismoidGrid,
         Self::OpenOptimizationScenarios,
     ];
 
@@ -625,6 +628,15 @@ pub(crate) fn install_menu_bar() {
         &tr!("common-clip-to-surface-ellipsis"),
         "",
         MacMenuAction::OpenModellingClipToSurface,
+        &target,
+        mtm,
+    );
+    add_separator(&modelling_menu, mtm);
+    add_action(
+        &modelling_menu,
+        &tr!("common-build-prismoid-grid-ellipsis"),
+        "",
+        MacMenuAction::OpenBuildPrismoidGrid,
         &target,
         mtm,
     );

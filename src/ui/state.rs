@@ -1386,6 +1386,10 @@ pub(crate) enum TriangulationPickTarget {
     SolidDesign,
     /// The topography half of the Build Solid tool.
     SolidTopography,
+    /// The roof half of the Build Prismoid Grid tool.
+    PrismoidRoof,
+    /// The floor half of the Build Prismoid Grid tool.
+    PrismoidFloor,
 }
 
 impl TriangulationPickTarget {
@@ -1396,7 +1400,7 @@ impl TriangulationPickTarget {
             Self::IncludeShape => tr!("state-click-pit-stockpile-solid-viewport"),
             Self::SolidDesign => tr!("state-click-design-surface-viewport"),
             Self::SolidTopography => tr!("state-click-topography-viewport"),
-            Self::TrimSurface | Self::ClipToUpper | Self::ClipToLower => tr!("state-click-surface-viewport"),
+            Self::TrimSurface | Self::ClipToUpper | Self::ClipToLower | Self::PrismoidRoof | Self::PrismoidFloor => tr!("state-click-surface-viewport"),
         }
     }
 }
@@ -3240,6 +3244,11 @@ pub(crate) struct EditorState {
     pub(crate) tri_solid_region: SolidRegion,
     pub(crate) tri_solid_name_input: String,
     pub(crate) tri_solid_name_auto: bool,
+    pub(crate) tri_prismoid_open: bool,
+    pub(crate) tri_prismoid_roof_id: Option<TriangulationId>,
+    pub(crate) tri_prismoid_floor_id: Option<TriangulationId>,
+    pub(crate) tri_prismoid_name_input: String,
+    pub(crate) tri_prismoid_name_auto: bool,
     pub(crate) tri_cut_surface_unload_source: bool,
 
     // Clip to Surface: the seam's roof and floor selected at open, and its limits
@@ -4158,6 +4167,7 @@ impl EditorState {
             || self.tri_cut_z_open
             || self.tri_cut_surface_open
             || self.tri_solid_open
+            || self.tri_prismoid_open
             || self.tri_cut_pitshell_open
             || self.tri_include_solid_open
             || self.tri_contour_open
@@ -5103,6 +5113,11 @@ impl EditorState {
             tri_solid_region: SolidRegion::Cut,
             tri_solid_name_input: String::new(),
             tri_solid_name_auto: true,
+            tri_prismoid_open: false,
+            tri_prismoid_roof_id: None,
+            tri_prismoid_floor_id: None,
+            tri_prismoid_name_input: String::new(),
+            tri_prismoid_name_auto: true,
             tri_cut_surface_unload_source: true,
             tri_cut_to_open: false,
             tri_cut_to_targets: Vec::new(),
@@ -6880,6 +6895,14 @@ pub(crate) enum UiCommand {
     OpenCutTriangulationBySurface,
     /// Open the Build Solid from Surfaces tool.
     OpenBuildSolidFromSurfaces,
+    /// Open the Build Prismoid Grid tool.
+    OpenBuildPrismoidGrid,
+    /// Build a prismoid grid between a roof surface and a floor surface.
+    ExecuteBuildPrismoidGrid {
+        roof_id: TriangulationId,
+        floor_id: TriangulationId,
+        name: String,
+    },
     /// Build a closed solid from a design surface and the topography it meets.
     ExecuteBuildSolidFromSurfaces {
         design_id: TriangulationId,
@@ -7082,6 +7105,7 @@ impl UiCommand {
             | Self::OpenCutTriangulationByZ
             | Self::OpenCutTriangulationBySurface
             | Self::OpenBuildSolidFromSurfaces
+            | Self::OpenBuildPrismoidGrid
             | Self::OpenCutTopologyByPitShell
             | Self::OpenIncludeSolidInTopology
             | Self::OpenContourTriangulation
@@ -7630,6 +7654,7 @@ impl UiCommand {
             ),
             Self::ExecuteCutTriangulationBySurface { name, .. } => report(tr!("state-trim-triangulation-surface"), name.clone()),
             Self::ExecuteBuildSolidFromSurfaces { name, .. } => report(tr!("tri-build-solid-surfaces"), name.clone()),
+            Self::ExecuteBuildPrismoidGrid { name, .. } => report(tr!("tri-build-prismoid-grid"), name.clone()),
             Self::ExecuteCutTopologyByPitShell { name, .. } => report(tr!("state-cut-topology-pit-shell"), name.clone()),
             Self::ExecuteIncludeSolidInTopology { name, .. } => report(tr!("common-merge-shell-into-topology"), name.clone()),
             Self::Undo => report(tr!("common-undo"), tr!("state-previous-edit")),

@@ -35,7 +35,7 @@ use crate::{
             mesh_data::{Triangulation, Vertex},
         },
         point_cloud::{LoadedPointCloud, OpenPointCloud, prepare_for_render},
-        prismoid_grid::{CellValues, Lattice, LoadedPrismoidGrid, OpenPrismoidGrid, PrismoidGrid},
+        prismoid_grid::{CellValues, DEFAULT_PRISMOID_GRID_COLOR, Lattice, LoadedPrismoidGrid, OpenPrismoidGrid, PrismoidGrid},
         progress::Phase,
         project::{self, ModellingSettings, ProjectFile, ProjectMetadata},
         raster::{LoadedRasterTexture, OpenRasterTexture},
@@ -3506,7 +3506,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         let style = element.metadata.get(META_STYLE);
         Ok(LoadedPrismoidGrid {
             name: name.to_owned(),
-            color: style_value(style, "color").unwrap_or_else(|| element_color(element, [0.72, 0.72, 0.75, 1.0])),
+            color: style_value(style, "color").unwrap_or_else(|| element_color(element, DEFAULT_PRISMOID_GRID_COLOR)),
             summary: grid.summary(),
             grid: Arc::new(grid),
         })

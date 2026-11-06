@@ -792,6 +792,24 @@ cmd-point-cloud-tin-point-cloud-tin-failed-error = Ошибка создания
 cmd-point-cloud-tin-filtered-ground = TIN рельефа: отфильтровано до { $ground } точек земли из { $total }
 cmd-point-cloud-tin-subsampled = TIN рельефа: пространственная выборка { $sampled } из { $total } точек
 cmd-point-cloud-tin-triangulated = ЦМР: триангулировано уникальных точек XY: { $vertex_count }; создано граней: { $face_count }{ $suffix }
+cmd-prismoid-grid-building = Построение сетки призмоидов…
+cmd-prismoid-grid-built = Построена сетка призмоидов '{ $name }': { $columns } × { $rows } ячеек, активных { $active }, вертикальная мощность от { $min } до { $max }
+cmd-prismoid-grid-crossed =
+    { $count ->
+        [one] { $count } ячейка
+       *[other] { $count } ячеек
+    } из перекрытия { $roof } и { $floor } исключено там, где почва лежит выше кровли
+cmd-prismoid-grid-holes =
+    { $count ->
+        [one] { $count } ячейка
+       *[other] { $count } ячеек
+    } из перекрытия { $roof } и { $floor } исключено там, где у кровли или почвы нет высоты или треугольников
+cmd-prismoid-grid-not-a-grid = { $name } не может дать сетку призмоидов: { $reason }
+cmd-prismoid-grid-not-one-lattice = { $roof } и { $floor } не на одной сетке: выберите кровлю и почву с одинаковым шагом, как их создают Построить поверхность и Поверхности мощности
+cmd-prismoid-grid-no-overlap = У { $roof } и { $floor } нет ячейки, покрытой обеими
+cmd-prismoid-grid-roof-below = { $roof } лежит ниже { $floor } везде, где они пересекаются: выберите их наоборот
+cmd-prismoid-grid-no-thickness = { $roof } и { $floor } смыкаются везде, где покрывают обе: ни одна ячейка не имеет мощности
+cmd-prismoid-grid-same-surface = Кровля и почва должны быть двумя разными поверхностями
 cmd-products-added-product-delay-ms-ms = Добавлен продукт { $delay_ms } мс { $name }
 cmd-products-deleted-product-delay-ms-ms = Удалён продукт { $delay_ms } мс { $name }
 cmd-products-failed-save-products-error = Не удалось сохранить продукты: { $error }
@@ -1076,6 +1094,7 @@ common-block-models = Блочные модели
 common-borehole-inspector = Инспектор скважин
 common-build-surface = Построить поверхность
 common-build-surface-ellipsis = Построить поверхность...
+common-build-prismoid-grid-ellipsis = Построить сетку призмоидов...
 common-cancelled = Отменено
 common-chamfer = Фаска
 common-choose = Выберите...
@@ -2637,6 +2656,12 @@ tri-vertex-count = Количество вершин
 tri-vertices-within-5-cm-xy = Вершины, расположенные в пределах 5 см по XY и Z, получат одну позицию в этой триангуляции. Это может локально сместить создаваемую поверхность на величину до 5 см; исходные полилинии не изменятся.
 tri-weld-retry = Сварить и повторить
 tri-when-enabled-generate-contours-only = Если включено, горизонтали создаются только между указанными минимальной и максимальной отметками.
+tri-build-prismoid-grid = Построить сетку призмоидов
+tri-build-prismoid-grid-help = Строит сетку призмоидов между кровлей и почвой на одной сетке, как их создают Построить поверхность и Поверхности мощности. Ячейки, где у одной из них нет высоты или треугольников либо почва лежит выше кровли, исключаются.
+tri-prismoid-roof-help = Верхняя поверхность интервала: кровля пласта или пачки.
+tri-prismoid-floor-help = Нижняя поверхность интервала, на той же сетке, что и кровля.
+tri-name-assigned-prismoid-grid = Имя новой сетки призмоидов.
+tri-prismoid-grid-name-hint = сетка верхнего пласта
 
 ## Ui strings
 

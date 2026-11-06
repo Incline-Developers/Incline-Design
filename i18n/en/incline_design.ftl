@@ -1521,6 +1521,24 @@ cmd-point-cloud-tin-point-cloud-tin-failed-error = Point cloud TIN failed: { $er
 cmd-point-cloud-tin-filtered-ground = Terrain TIN: filtered to { $ground } ground points of { $total }
 cmd-point-cloud-tin-subsampled = Terrain TIN: spatially subsampled { $sampled } of { $total } points
 cmd-point-cloud-tin-triangulated = Terrain TIN: triangulated { $vertex_count } unique XY points into { $face_count } faces{ $suffix }
+cmd-prismoid-grid-building = Building prismoid grid…
+cmd-prismoid-grid-built = Built prismoid grid '{ $name }': { $columns } × { $rows } cells, { $active } active, vertical thickness { $min } to { $max }
+cmd-prismoid-grid-crossed =
+    { $count ->
+        [one] { $count } cell
+       *[other] { $count } cells
+    } of the overlap between { $roof } and { $floor } left out where the floor lies above the roof
+cmd-prismoid-grid-holes =
+    { $count ->
+        [one] { $count } cell
+       *[other] { $count } cells
+    } of the overlap between { $roof } and { $floor } left out where the roof or floor has no height or no triangles
+cmd-prismoid-grid-not-a-grid = { $name } cannot make a prismoid grid: { $reason }
+cmd-prismoid-grid-not-one-lattice = { $roof } and { $floor } are not on one grid: pick a roof and floor built at the same spacing, as Build Surface and Thickness Surfaces make them
+cmd-prismoid-grid-no-overlap = { $roof } and { $floor } share no grid cell that both cover
+cmd-prismoid-grid-roof-below = { $roof } lies below { $floor } wherever they cross: pick them the other way round
+cmd-prismoid-grid-no-thickness = { $roof } and { $floor } meet wherever both cover: no cell has any thickness
+cmd-prismoid-grid-same-surface = The roof and floor must be two different surfaces
 cmd-products-added-product-delay-ms-ms = Added product { $delay_ms } ms { $name }
 cmd-products-deleted-product-delay-ms-ms = Deleted product { $delay_ms } ms { $name }
 cmd-products-failed-save-products-error = Failed to save products: { $error }
@@ -1798,6 +1816,7 @@ common-block-models = Block Models
 common-borehole-inspector = Borehole Inspector
 common-build-surface = Build Surface
 common-build-surface-ellipsis = Build Surface...
+common-build-prismoid-grid-ellipsis = Build Prismoid Grid...
 common-cancelled = Cancelled
 common-chamfer = Chamfer
 common-choose = Choose...
@@ -4410,6 +4429,12 @@ tri-solid-open-along-edge = Solid is open along { $count } edge(s): the two surf
 tri-built-solid-between = Built { $region } solid between '{ $design }' and '{ $topography }' · { $volume } m³
 tri-building-solid-surfaces = Building solid from surfaces…
 tri-build-solid-surfaces = Build Solid from Surfaces
+tri-build-prismoid-grid = Build Prismoid Grid
+tri-build-prismoid-grid-help = Builds a prismoid grid between a roof and a floor on one grid, as Build Surface and Thickness Surfaces make them. Cells where either has no height or no triangles, or the floor lies above the roof, are left out.
+tri-prismoid-roof-help = The upper surface of the interval: the roof of the seam or ply.
+tri-prismoid-floor-help = The lower surface of the interval, on the same grid as the roof.
+tri-name-assigned-prismoid-grid = Name given to the new prismoid grid.
+tri-prismoid-grid-name-hint = upper seam grid
 tri-design-surface = Design Surface
 tri-pit-shell-dump-design = The pit shell, dump design or stockpile design bounding the volume.
 tri-ground-design-measured-against = The ground the design is measured against. Both surfaces are left intact.

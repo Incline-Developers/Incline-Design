@@ -781,6 +781,24 @@ cmd-point-cloud-tin-point-cloud-tin-failed-error = Punktwolken-TIN fehlgeschlage
 cmd-point-cloud-tin-filtered-ground = Gelände-TIN: auf { $ground } Bodenpunkte von { $total } gefiltert
 cmd-point-cloud-tin-subsampled = Gelände-TIN: { $sampled } von { $total } Punkten räumlich unterabgetastet
 cmd-point-cloud-tin-triangulated = Gelände-TIN: { $vertex_count } eindeutige XY-Punkte zu { $face_count } Flächen trianguliert{ $suffix }
+cmd-prismoid-grid-building = Prismoidgitter wird erstellt…
+cmd-prismoid-grid-built = Prismoidgitter '{ $name }' erstellt: { $columns } × { $rows } Zellen, { $active } aktiv, vertikale Mächtigkeit { $min } bis { $max }
+cmd-prismoid-grid-crossed =
+    { $count ->
+        [one] { $count } Zelle
+       *[other] { $count } Zellen
+    } der Überlappung von { $roof } und { $floor } ausgelassen, wo das Liegende über dem Hangenden liegt
+cmd-prismoid-grid-holes =
+    { $count ->
+        [one] { $count } Zelle
+       *[other] { $count } Zellen
+    } der Überlappung von { $roof } und { $floor } ausgelassen, wo Hangendes oder Liegendes keine Höhe oder keine Dreiecke hat
+cmd-prismoid-grid-not-a-grid = { $name } kann kein Prismoidgitter ergeben: { $reason }
+cmd-prismoid-grid-not-one-lattice = { $roof } und { $floor } liegen nicht auf einem Gitter: Wählen Sie Hangendes und Liegendes mit gleichem Abstand, wie Oberfläche erstellen und Mächtigkeitsflächen sie erzeugen
+cmd-prismoid-grid-no-overlap = { $roof } und { $floor } haben keine Gitterzelle, die beide abdecken
+cmd-prismoid-grid-roof-below = { $roof } liegt überall dort unter { $floor }, wo sie sich kreuzen: Wählen Sie sie andersherum
+cmd-prismoid-grid-no-thickness = { $roof } und { $floor } treffen sich überall, wo beide abdecken: Keine Zelle hat eine Mächtigkeit
+cmd-prismoid-grid-same-surface = Hangendes und Liegendes müssen zwei verschiedene Flächen sein
 cmd-products-added-product-delay-ms-ms = Produkt { $delay_ms } ms { $name } hinzugefügt
 cmd-products-deleted-product-delay-ms-ms = Produkt { $delay_ms } ms { $name } gelöscht
 cmd-products-failed-save-products-error = Produkte konnten nicht gespeichert werden: { $error }
@@ -1064,6 +1082,7 @@ common-block-models = Blockmodelle
 common-borehole-inspector = Bohrloch-Inspektor
 common-build-surface = Oberfläche erstellen
 common-build-surface-ellipsis = Oberfläche erstellen...
+common-build-prismoid-grid-ellipsis = Prismoidgitter erstellen...
 common-cancelled = Abgebrochen
 common-chamfer = Fase
 common-choose = Wählen...
@@ -2624,6 +2643,12 @@ tri-vertex-count = Eckpunktzahl
 tri-vertices-within-5-cm-xy = Eckpunkte innerhalb von 5 cm in XY und Z teilen sich für diese Triangulation eine Position. Dies kann die erzeugte Oberfläche lokal um bis zu 5 cm verschieben; die Quellpolylinien bleiben unverändert.
 tri-weld-retry = Verschweißen & Erneut versuchen
 tri-when-enabled-generate-contours-only = Wenn aktiviert, werden Höhenlinien nur zwischen den angegebenen Mindest- und Höchst-Höhenkoten erzeugt.
+tri-build-prismoid-grid = Prismoidgitter erstellen
+tri-build-prismoid-grid-help = Erstellt ein Prismoidgitter zwischen Hangendem und Liegendem auf einem Gitter, wie Oberfläche erstellen und Mächtigkeitsflächen sie erzeugen. Zellen, in denen eine Fläche keine Höhe oder keine Dreiecke hat oder das Liegende über dem Hangenden liegt, werden ausgelassen.
+tri-prismoid-roof-help = Die obere Fläche des Intervalls: das Hangende des Flözes oder der Lage.
+tri-prismoid-floor-help = Die untere Fläche des Intervalls, auf demselben Gitter wie das Hangende.
+tri-name-assigned-prismoid-grid = Name des neuen Prismoidgitters.
+tri-prismoid-grid-name-hint = Gitter oberes Flöz
 
 ## Ui strings
 

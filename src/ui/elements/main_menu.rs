@@ -1212,6 +1212,11 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                     commands.push(UiCommand::OpenCutTriangulationToSurface);
                     ui.close();
                 }
+                context_menu_separator(ui);
+                if ContextMenuAction::new(tr!("common-build-prismoid-grid-ellipsis")).show(ui).clicked() {
+                    commands.push(UiCommand::OpenBuildPrismoidGrid);
+                    ui.close();
+                }
             });
             return;
         }

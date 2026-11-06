@@ -791,6 +791,16 @@ cmd-point-cloud-tin-point-cloud-tin-failed-error = Цэгэн үүлийн TIN �
 cmd-point-cloud-tin-filtered-ground = Рельефийн TIN: { $total } цэгээс { $ground } газрын цэгээр шүүв
 cmd-point-cloud-tin-subsampled = Рельефийн TIN: орон зайгаар дэд-түүвэрлэсэн { $total } цэгээс { $sampled }
 cmd-point-cloud-tin-triangulated = Рельефийн TIN: { $vertex_count } давхцаагүй XY цэгийг { $face_count } тал болгож триангуляцлав{ $suffix }
+cmd-prismoid-grid-building = Призмоид тор бүтээж байна…
+cmd-prismoid-grid-built = Призмоид тор '{ $name }' бүтээгдлээ: { $columns } × { $rows } нүд, { $active } идэвхтэй, босоо зузаан { $min }-с { $max }
+cmd-prismoid-grid-crossed = { $count } нүд ({ $roof } ба { $floor }-ын давхцал) улын гадаргуу дээврээс дээш байгаа газарт хасагдлаа
+cmd-prismoid-grid-holes = { $count } нүд ({ $roof } ба { $floor }-ын давхцал) дээвэр эсвэл улд өндөр эсвэл гурвалжин байхгүй газарт хасагдлаа
+cmd-prismoid-grid-not-a-grid = { $name }-аас призмоид тор бүтээх боломжгүй: { $reason }
+cmd-prismoid-grid-not-one-lattice = { $roof } ба { $floor } нэг торон дээр биш: Гадаргуу бүтээх болон Зузааны гадаргуу бүтээдэгтэй адил ижил алхамтай дээвэр, ул сонгоно уу
+cmd-prismoid-grid-no-overlap = { $roof } ба { $floor } хоёулаа хамарсан нүд байхгүй
+cmd-prismoid-grid-roof-below = { $roof } огтлолцох бүх газарт { $floor }-с доор байна: эсрэгээр сонгоно уу
+cmd-prismoid-grid-no-thickness = { $roof } ба { $floor } хоёулаа хамарсан бүх газарт нийлж байна: зузаантай нүд алга
+cmd-prismoid-grid-same-surface = Дээвэр ба ул нь хоёр өөр гадаргуу байх ёстой
 cmd-products-added-product-delay-ms-ms = { $delay_ms } мс { $name } бүтээгдэхүүнийг нэмлээ
 cmd-products-deleted-product-delay-ms-ms = { $delay_ms } мс { $name } бүтээгдэхүүнийг устгалаа
 cmd-products-failed-save-products-error = Бүтээгдэхүүнийг хадгалж чадсангүй: { $error }
@@ -1074,6 +1084,7 @@ common-block-models = Блокийн загварууд
 common-borehole-inspector = Цооногийн шалгагч
 common-build-surface = Гадаргуу бүтээх
 common-build-surface-ellipsis = Гадаргуу бүтээх...
+common-build-prismoid-grid-ellipsis = Призмоид тор бүтээх...
 common-cancelled = Цуцлагдсан
 common-chamfer = Фаск
 common-choose = Сонгох...
@@ -2634,6 +2645,12 @@ tri-vertex-count = Орой цэгийн тоо
 tri-vertices-within-5-cm-xy = XY болон Z чиглэлд 5 см-ийн дотор байгаа орой цэгүүд энэ триангуляцын хувьд нэг байрлалыг хуваалцана. Энэ нь үүсгэсэн гадаргууг орон нутгийн хэмжээнд 5 см хүртэл шилжүүлж болно; эх полилиниа өөрчлөгдөхгүй.
 tri-weld-retry = Гагнаад дахин оролдох
 tri-when-enabled-generate-contours-only = Идэвхжүүлсэн үед зөвхөн заасан доод болон дээд өндөрлөгийн хооронд изолиниа үүсгэнэ.
+tri-build-prismoid-grid = Призмоид тор бүтээх
+tri-build-prismoid-grid-help = Гадаргуу бүтээх болон Зузааны гадаргуу бүтээдэгтэй адил нэг торон дээрх дээвэр ба улын хооронд призмоид тор бүтээнэ. Аль нэгэнд нь өндөр эсвэл гурвалжин байхгүй, эсвэл ул дээврээс дээш байгаа нүдийг хасна.
+tri-prismoid-roof-help = Завсрын дээд гадаргуу: давхарга эсвэл үеийн дээвэр.
+tri-prismoid-floor-help = Завсрын доод гадаргуу, дээвэртэй ижил торон дээр.
+tri-name-assigned-prismoid-grid = Шинэ призмоид торны нэр.
+tri-prismoid-grid-name-hint = дээд давхаргын тор
 
 ## Ui strings
 

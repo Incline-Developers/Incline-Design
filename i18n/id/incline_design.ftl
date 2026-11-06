@@ -740,6 +740,16 @@ cmd-point-cloud-tin-point-cloud-tin-failed-error = TIN awan titik gagal: { $erro
 cmd-point-cloud-tin-filtered-ground = TIN medan: disaring menjadi { $ground } titik tanah dari { $total }
 cmd-point-cloud-tin-subsampled = TIN medan: { $sampled } dari { $total } titik disubsampel secara spasial
 cmd-point-cloud-tin-triangulated = TIN medan: { $vertex_count } titik XY unik ditriangulasi menjadi { $face_count } sisi{ $suffix }
+cmd-prismoid-grid-building = Membuat grid prismoid…
+cmd-prismoid-grid-built = Grid prismoid '{ $name }' dibuat: { $columns } × { $rows } sel, { $active } aktif, ketebalan vertikal { $min } hingga { $max }
+cmd-prismoid-grid-crossed = { $count } sel dari tumpang tindih { $roof } dan { $floor } dikecualikan di tempat lantai berada di atas atap
+cmd-prismoid-grid-holes = { $count } sel dari tumpang tindih { $roof } dan { $floor } dikecualikan di tempat atap atau lantai tidak punya ketinggian atau segitiga
+cmd-prismoid-grid-not-a-grid = { $name } tidak dapat membentuk grid prismoid: { $reason }
+cmd-prismoid-grid-not-one-lattice = { $roof } dan { $floor } tidak berada pada satu grid: pilih atap dan lantai yang dibuat dengan jarak yang sama, seperti yang dibuat Buat Permukaan dan Permukaan Ketebalan
+cmd-prismoid-grid-no-overlap = { $roof } dan { $floor } tidak memiliki sel yang tercakup oleh keduanya
+cmd-prismoid-grid-roof-below = { $roof } berada di bawah { $floor } di mana pun keduanya bersilangan: pilih sebaliknya
+cmd-prismoid-grid-no-thickness = { $roof } dan { $floor } bertemu di mana pun keduanya mencakup: tidak ada sel yang memiliki ketebalan
+cmd-prismoid-grid-same-surface = Atap dan lantai harus dua permukaan yang berbeda
 cmd-products-added-product-delay-ms-ms = Produk { $delay_ms } md { $name } telah ditambahkan
 cmd-products-deleted-product-delay-ms-ms = Produk { $delay_ms } md { $name } telah dihapus
 cmd-products-failed-save-products-error = Gagal menyimpan produk: { $error }
@@ -1023,6 +1033,7 @@ common-block-models = Model blok
 common-borehole-inspector = Inspektur Lubang Bor
 common-build-surface = Bangun Permukaan
 common-build-surface-ellipsis = Bangun Permukaan...
+common-build-prismoid-grid-ellipsis = Buat Grid Prismoid...
 common-cancelled = Dibatalkan
 common-chamfer = Chamfer
 common-choose = Pilihlah...
@@ -2583,6 +2594,12 @@ tri-vertex-count = Jumlah puncak
 tri-vertices-within-5-cm-xy = Verteks yang berjarak maksimal 5 cm dalam XY dan Z akan berbagi satu posisi untuk triangulasi ini. Hal ini dapat menggeser permukaan yang dihasilkan secara lokal hingga 5 cm; poligaris sumber tidak berubah.
 tri-weld-retry = Las & Coba lagi
 tri-when-enabled-generate-contours-only = Jika diaktifkan, buat kontur hanya di antara elevasi minimum dan maksimum yang ditentukan.
+tri-build-prismoid-grid = Buat Grid Prismoid
+tri-build-prismoid-grid-help = Membuat grid prismoid di antara atap dan lantai pada satu grid, seperti yang dibuat Buat Permukaan dan Permukaan Ketebalan. Sel yang salah satunya tidak punya ketinggian atau segitiga, atau lantainya di atas atap, dikecualikan.
+tri-prismoid-roof-help = Permukaan atas interval: atap lapisan atau bagian lapisan.
+tri-prismoid-floor-help = Permukaan bawah interval, pada grid yang sama dengan atap.
+tri-name-assigned-prismoid-grid = Nama yang diberikan untuk grid prismoid baru.
+tri-prismoid-grid-name-hint = grid lapisan atas
 
 ## Ui strings
 

@@ -740,6 +740,16 @@ cmd-point-cloud-tin-point-cloud-tin-failed-error = 点云 TIN 生成失败：{ $
 cmd-point-cloud-tin-filtered-ground = 地形 TIN：已从 { $total } 个点中筛选出 { $ground } 个地面点
 cmd-point-cloud-tin-subsampled = 地形 TIN：已从 { $total } 个点中进行空间降采样，得到 { $sampled } 个点
 cmd-point-cloud-tin-triangulated = 地形 TIN：将 { $vertex_count } 个唯一 XY 点三角剖分为 { $face_count } 个面{ $suffix }
+cmd-prismoid-grid-building = 正在构建拟柱体网格…
+cmd-prismoid-grid-built = 已构建拟柱体网格 '{ $name }': { $columns } × { $rows } 个单元,{ $active } 个有效,垂直厚度 { $min } 至 { $max }
+cmd-prismoid-grid-crossed = { $count } 个单元 ({ $roof } 与 { $floor } 的重叠区) 在底板高于顶板处被排除
+cmd-prismoid-grid-holes = { $count } 个单元 ({ $roof } 与 { $floor } 的重叠区) 在顶板或底板无高程或无三角形处被排除
+cmd-prismoid-grid-not-a-grid = { $name } 无法生成拟柱体网格: { $reason }
+cmd-prismoid-grid-not-one-lattice = { $roof } 和 { $floor } 不在同一网格上: 请选择以相同间距构建的顶板和底板,如构建曲面和厚度曲面所生成的
+cmd-prismoid-grid-no-overlap = { $roof } 和 { $floor } 没有共同覆盖的网格单元
+cmd-prismoid-grid-roof-below = { $roof } 在所有交叉处都低于 { $floor }: 请反过来选择
+cmd-prismoid-grid-no-thickness = { $roof } 和 { $floor } 在共同覆盖处全部相接: 没有单元具有厚度
+cmd-prismoid-grid-same-surface = 顶板和底板必须是两个不同的曲面
 cmd-products-added-product-delay-ms-ms = 已添加产品 { $delay_ms } 毫秒 { $name }
 cmd-products-deleted-product-delay-ms-ms = 已删除产品 { $delay_ms } 毫秒 { $name }
 cmd-products-failed-save-products-error = 无法保存产品：{ $error }
@@ -1023,6 +1033,7 @@ common-block-models = 块体模型
 common-borehole-inspector = 钻孔检查器
 common-build-surface = 构建曲面
 common-build-surface-ellipsis = 构建曲面...
+common-build-prismoid-grid-ellipsis = 构建拟柱体网格...
 common-cancelled = 已取消
 common-chamfer = 倒角
 common-choose = 选择...
@@ -2583,6 +2594,12 @@ tri-vertex-count = 顶点数量
 tri-vertices-within-5-cm-xy = 对于此三角剖分，XY 和 Z 方向相距 5 厘米以内的顶点将共用一个位置。这可能使生成的表面局部偏移最多 5 厘米；源多段线不会更改。
 tri-weld-retry = 焊接并重试
 tri-when-enabled-generate-contours-only = 启用后，仅在指定的最低与最高高程之间生成等高线。
+tri-build-prismoid-grid = 构建拟柱体网格
+tri-build-prismoid-grid-help = 在同一网格上的顶板和底板之间构建拟柱体网格,如构建曲面和厚度曲面所生成的。任一方无高程或无三角形,或底板高于顶板的单元将被排除。
+tri-prismoid-roof-help = 区间的上表面: 煤层或分层的顶板。
+tri-prismoid-floor-help = 区间的下表面,与顶板在同一网格上。
+tri-name-assigned-prismoid-grid = 新拟柱体网格的名称。
+tri-prismoid-grid-name-hint = 上部煤层网格
 
 ## Ui strings
 
