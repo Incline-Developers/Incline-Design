@@ -2250,13 +2250,25 @@ fn carve_level(level: &Level, old_parts: &mut [Option<SolidPart>], cancel: &crat
                 mesh.cull_back_faces = true;
                 mesh
             }
+            // The bench itself, outlined where it turns a corner rather than
+            // copied to be: a bench of one blast is all of the blast, and a
+            // copy of a bench cut from a survey topography runs to gigabytes.
+            // The outline is found by position, so its ends are the bench's
+            // own points.
             Outline::Crease => {
                 let slab = (
                     source.mesh.vertices().to_vec(),
                     source.mesh.face_vertex_indices_iter().map(|f| f.map(|i| i as u32)).collect(),
                 );
                 let edges = super::triangulation::solid_between::crease_outline(&slab, &vec![false; slab.1.len()], BLAST_CREASE_ANGLE);
-                piece_preview(source, slab, edges)?
+                drop(slab);
+                let mut mesh = source.clone();
+                mesh.edges = Arc::new(edges);
+                mesh.cull_back_faces = true;
+                mesh.always_show_edges = true;
+                mesh.line_weight = Some(1.5);
+                mesh.id = next_view_id();
+                mesh
             }
         };
         return Ok(vec![Some(Carved { mesh, volume: level.volume })]);
