@@ -2233,9 +2233,9 @@ impl Narrowing<'_> {
         } else {
             here = members;
         }
-        let side = |keep_low: bool, members: Vec<usize>| -> Result<Vec<(usize, ClippedSolid)>> {
+        let cut_half = |keep_low: bool, members: &[usize]| {
             if members.is_empty() {
-                return Ok(Vec::new());
+                return None;
             }
             let edge = if keep_low { middle + 2.0 * NARROW_MARGIN } else { middle - 2.0 * NARROW_MARGIN };
             let half = keep_side(&piece, area, axis, edge, keep_low, self.floor);
@@ -2245,10 +2245,10 @@ impl Narrowing<'_> {
             } else {
                 half_area.0[axis] = edge;
             }
-            self.share(half, half_area, members)
+            Some((half, half_area))
         };
-        let ((low, high), here) = rayon::join(
-            || rayon::join(|| side(true, low), || side(false, high)),
+        let ((low_half, high_half), here) = rayon::join(
+            || rayon::join(|| cut_half(true, &low), || cut_half(false, &high)),
             || {
                 here.into_par_iter()
                     .map(|index| -> Result<(usize, ClippedSolid)> {
@@ -2280,9 +2280,19 @@ impl Narrowing<'_> {
                     .collect::<Result<Vec<_>>>()
             },
         );
+        let here = here?;
+        // Everything from here on is cut from the halves. Kept until they
+        // finished, each level of the halving would hold the whole of its piece,
+        // which adds up to the body once for every level.
+        drop(piece);
+        let finish = |half: Option<(CutPiece, (glam::DVec2, glam::DVec2))>, members: Vec<usize>| match half {
+            Some((half, area)) => self.share(half, area, members),
+            None => Ok(Vec::new()),
+        };
+        let (low, high) = rayon::join(|| finish(low_half, low), || finish(high_half, high));
         let mut clipped = low?;
         clipped.extend(high?);
-        clipped.extend(here?);
+        clipped.extend(here);
         Ok(clipped)
     }
 }
