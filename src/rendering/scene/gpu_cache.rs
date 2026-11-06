@@ -2494,6 +2494,10 @@ fn build_block_model_surface_chunks(
                     bounds_max = bounds_max.max(scene_rel);
                 }
             }
+            // Sized for every block in the chunk, of which culling leaves few,
+            // and kept for recolouring.
+            instances.shrink_to_fit();
+            block_indices.shrink_to_fit();
             (!instances.is_empty()).then_some(SurfaceChunkCpu {
                 instances,
                 block_indices,
