@@ -2429,26 +2429,32 @@ fn clip_region(piece: CutPiece, region: Vec<Vec<glam::DVec2>>, face: &[Vec<glam:
         }
         drop(piece);
         let (left_cells, right_cells) = rayon::join(
-            || -> Result<Vec<Cell>> {
-                let mut cells = Vec::new();
-                for part in left {
-                    cells.extend(clip_region(left_piece.clone(), part, face, floor, depth + 1, cancel)?);
-                }
-                Ok(cells)
-            },
-            || -> Result<Vec<Cell>> {
-                let mut cells = Vec::new();
-                for part in right {
-                    cells.extend(clip_region(right_piece.clone(), part, face, floor, depth + 1, cancel)?);
-                }
-                Ok(cells)
-            },
+            || clip_parts(left_piece, left, face, floor, depth, cancel),
+            || clip_parts(right_piece, right, face, floor, depth, cancel),
         );
         let mut cells = left_cells?;
         cells.extend(right_cells?);
         return Ok(cells);
     }
     clip_cells(&piece, &region, face, floor, cancel)
+}
+
+/// Cut `piece` to each of `parts`, in order. The last takes the piece itself
+/// rather than a copy: as most halves have one part, a copy would hold each
+/// level of the recursion's mesh twice over all the way down.
+fn clip_parts(piece: CutPiece, parts: Vec<Vec<Vec<glam::DVec2>>>, face: &[Vec<glam::DVec2>], floor: f64, depth: usize, cancel: &crate::app::jobs::CancelFlag) -> Result<Vec<Cell>> {
+    let mut cells = Vec::new();
+    let mut piece = Some(piece);
+    let count = parts.len();
+    for (index, part) in parts.into_iter().enumerate() {
+        let own = if index + 1 == count {
+            piece.take().expect("the last part is the only one to take it")
+        } else {
+            piece.clone().expect("it is taken only by the last part")
+        };
+        cells.extend(clip_region(own, part, face, floor, depth + 1, cancel)?);
+    }
+    Ok(cells)
 }
 
 /// Split a region along a line through the middle of its longer side: the
@@ -2495,21 +2501,20 @@ fn clip_half(piece: &CutPiece, a: glam::DVec2, b: glam::DVec2, on_boundary: bool
     let tangent = glam::DVec3::new(edge.x, edge.y, 0.0);
     let normal = glam::DVec3::new(-edge.y, edge.x, 0.0);
     let origin = glam::DVec3::new(a.x, a.y, floor);
-    let local: Vec<_> = slab
-        .0
-        .iter()
-        .map(|p| {
-            let delta = glam::DVec3::new(p.x, p.y, p.z) - origin;
-            let distance = delta.dot(normal);
-            mesh_data::Vertex::new(delta.z, delta.dot(tangent), if distance.abs() < 1e-8 { 0.0 } else { distance })
-        })
-        .collect();
-    let high = local.iter().map(|p| p.z).fold(0.0, f64::max) + 1.0;
-    let mut clipped: Slab = (Vec::new(), Vec::new());
-    let mut clipped_wall = Vec::new();
-    let mut clipped_internal = Vec::new();
+    let local = |p: &mesh_data::Vertex| {
+        let delta = glam::DVec3::new(p.x, p.y, p.z) - origin;
+        let distance = delta.dot(normal);
+        mesh_data::Vertex::new(delta.z, delta.dot(tangent), if distance.abs() < 1e-8 { 0.0 } else { distance })
+    };
+    let high = slab.0.iter().map(|p| local(p).z).fold(0.0, f64::max) + 1.0;
+    // Room for the half of it most cuts keep, so these are not grown by
+    // doubling and left with twice what they hold while the cutting goes on.
+    let keep = slab.1.len() / 2 + 64;
+    let mut clipped: Slab = (Vec::with_capacity(keep * 3), Vec::with_capacity(keep));
+    let mut clipped_wall = Vec::with_capacity(keep);
+    let mut clipped_internal = Vec::with_capacity(keep);
     for (index, indices) in slab.1.iter().enumerate() {
-        let triangle = indices.map(|index| local[index as usize]);
+        let triangle = indices.map(|index| local(&slab.0[index as usize]));
         // A coplanar face with material on the discarded side is not
         // a zero-thickness part of the retained volume.
         if triangle.iter().all(|p| p.z == 0.0)
@@ -2539,6 +2544,10 @@ fn clip_half(piece: &CutPiece, a: glam::DVec2, b: glam::DVec2, on_boundary: bool
         let world = origin + glam::DVec3::Z * p.x + tangent * p.y + normal * p.z;
         *p = mesh_data::Vertex::new(world.x, world.y, world.z);
     }
+    clipped.0.shrink_to_fit();
+    clipped.1.shrink_to_fit();
+    clipped_wall.shrink_to_fit();
+    clipped_internal.shrink_to_fit();
     (clipped, clipped_wall, clipped_internal)
 }
 
@@ -2558,14 +2567,16 @@ fn clip_cells(piece: &CutPiece, region: &[Vec<glam::DVec2>], face: &[Vec<glam::D
     earcut::Earcut::new().earcut(points.iter().map(|p| [p.x, p.y]), &holes, &mut triangles);
     let clip_cell = |cell: &Vec<usize>| -> Result<Option<Cell>> {
         anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
-        let mut cut = piece.clone();
+        // Not a copy of the whole piece per cell: the first cut reads it.
+        let mut cut: Option<CutPiece> = None;
         for (a, b, on_boundary) in cell_edges(&points, cell, face) {
-            if cut.0.1.is_empty() {
+            let current = cut.as_ref().unwrap_or(piece);
+            if current.0.1.is_empty() {
                 break;
             }
-            cut = clip_half(&cut, a, b, on_boundary, floor);
+            cut = Some(clip_half(current, a, b, on_boundary, floor));
         }
-        let (mut slab, wall, internal) = cut;
+        let (mut slab, wall, internal) = cut.unwrap_or_else(|| piece.clone());
         if slab.1.is_empty() {
             return Ok(None);
         }
