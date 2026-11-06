@@ -69,7 +69,7 @@ impl<'a> App<'a> {
                 loaded_block_model_from_bytes(bytes, model_name, source)
             },
             |app, result| match result {
-                Ok(loaded) => app.add_loaded_block_model(loaded),
+                Ok(loaded) => app.add_as_one_step(|app| app.add_loaded_block_model(loaded)),
                 Err(error) => userspace_warn!("{}", tr!("cmd-block-model-failed-load-block-model-error", error = format!("{error:#}"))),
             },
         );
@@ -177,7 +177,7 @@ impl<'a> App<'a> {
             let complete = || match result {
                 Ok(Ok(loaded)) => {
                     self.finish_background_task(ticket, true);
-                    self.add_loaded_block_model(loaded);
+                    self.add_as_one_step(|app| app.add_loaded_block_model(loaded));
                 }
                 Ok(Err(error)) => {
                     userspace_warn!("{}", tr!("cmd-block-model-failed-load-block-model-error", error = format!("{error:#}")));
@@ -540,7 +540,7 @@ impl<'a> App<'a> {
         let apply = move |app: &mut App, result: Result<LoadedBlockModel>| match result {
             Ok(loaded) => {
                 userspace_log!("{}", tr!("cmd-block-model-created-block-model-name-ordinary", name = loaded.name.clone().to_string()));
-                app.add_loaded_block_model(loaded);
+                app.add_as_one_step(|app| app.add_loaded_block_model(loaded));
             }
             Err(error) if error.to_string() != "Cancelled" => {
                 userspace_warn!("{}", tr!("cmd-block-model-could-not-create-block-model", error = format!("{error:#}")))
@@ -577,11 +577,7 @@ impl<'a> App<'a> {
     pub(crate) fn remove_block_model(&mut self, id: BlockModelId) {
         self.cancel_jobs(|key| *key == crate::app::jobs::JobKey::BlockModel(id));
         self.clear_block_model_entity_state(SceneEntityId::BlockModel(id));
-        // Solids reference their block model by id, and an import can reuse a
-        // freed id - see `App::remove_triangulation`.
-        if let Some(document) = self.workspace.active_document_mut() {
-            document.forget_solid_block_model(id);
-        }
+        // The solids using it are unlinked in the same undo step.
         self.delete_project_item(ItemRef::BlockModel(id));
         self.request_topology_redraw();
     }

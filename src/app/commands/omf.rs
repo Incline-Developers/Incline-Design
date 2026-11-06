@@ -378,6 +378,9 @@ impl<'a> App<'a> {
             return;
         }
         let should_fit = !self.scene_has_renderables();
+        // Everything every file brings - its collections, layers and items -
+        // goes in as one undo step at the end.
+        let before = self.project_members();
         let mut imported_items = 0usize;
         for (source_name, bundle) in bundles {
             let target_is_empty = self
@@ -498,6 +501,7 @@ impl<'a> App<'a> {
             );
         }
 
+        self.record_additions(&before, Vec::new());
         if imported_items > 0 {
             self.invalidate_geometry();
             if should_fit {

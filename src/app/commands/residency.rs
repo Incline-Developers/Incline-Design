@@ -3,7 +3,7 @@
 use crate::{
     app::{App, jobs::JobKey},
     i18n::tr,
-    model::{ItemRef, OpenItem, project::ProjectItemState},
+    model::{Command, ItemRef, OpenItem, project::ProjectItemState},
     userspace_error,
 };
 
@@ -138,6 +138,13 @@ impl<'a> App<'a> {
             self.evict_unloaded_items();
             self.evict_unloaded_layers();
         }
+    }
+
+    /// [`Self::set_item_loaded`]'s unload as a command, for a tool that unloads
+    /// its sources in the same undo step as the result it made from them.
+    pub(crate) fn unload_item_command(&mut self, item: ItemRef) -> Option<Command> {
+        self.cancel_jobs(|key| matches!(key, JobKey::Residency { item: pending, restoring: true, .. } if *pending == item));
+        self.item_style_command(item, |style| style.with_loaded(false))
     }
 
     /// The explorer's eye on a project item: hiding leaves it loaded, and

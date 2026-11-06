@@ -57,30 +57,7 @@ impl<'a> App<'a> {
             move |app, result| match result {
                 Ok(loaded) => {
                     let should_fit = !app.scene_has_renderables();
-                    let id = TriangulationId(app.next_triangulation_id);
-                    app.next_triangulation_id += 1;
-                    let name = crate::model::project::unique_item_name(loaded.name, app.triangulations.iter().map(|item| item.name.as_str()));
-                    app.triangulations.push(OpenTriangulation {
-                        id,
-                        state: crate::model::project::ProjectItemState::dirty(MemberKind::Triangulation, loaded.path.file_name().map(|name| name.to_string_lossy().into_owned())),
-                        name,
-                        geometry: crate::model::triangulation::GeometryVersion::mint(),
-                        mesh: loaded.mesh,
-                        spatial: loaded.spatial,
-                        edges: loaded.edges.into(),
-                        surface_face_order: loaded.surface_face_order,
-                        color: DEFAULT_TRIANGULATION_COLOR,
-                        line_color: [0.05, 0.08, 0.10, 1.0],
-                        line_weight: Some(1.0),
-                        raster_texture: None,
-                        raster_opacity: 1.0,
-                        flitch_style: None,
-                        cull_back_faces: false,
-                        always_show_edges: false,
-                        depth_shade: None,
-                        pattern_from: None,
-                    });
-                    app.touch_active_project_content();
+                    app.add_as_one_step(|app| app.add_loaded_triangulation(loaded));
                     if should_fit {
                         app.fit_view_to_extents();
                     }
@@ -89,6 +66,34 @@ impl<'a> App<'a> {
                 Err(error) => userspace_warn!("{}", tr!("cmd-session-failed-load-triangulation-error", error = format!("{error:#}"))),
             },
         );
+    }
+
+    /// A loaded mesh into the project as a new surface, put in directly:
+    /// callers make it an undo step with [`App::add_as_one_step`].
+    fn add_loaded_triangulation(&mut self, loaded: LoadedTriangulation) {
+        let id = TriangulationId(self.next_triangulation_id);
+        self.next_triangulation_id += 1;
+        let name = crate::model::project::unique_item_name(loaded.name, self.triangulations.iter().map(|item| item.name.as_str()));
+        self.triangulations.push(OpenTriangulation {
+            id,
+            state: crate::model::project::ProjectItemState::dirty(MemberKind::Triangulation, loaded.path.file_name().map(|name| name.to_string_lossy().into_owned())),
+            name,
+            geometry: crate::model::triangulation::GeometryVersion::mint(),
+            mesh: loaded.mesh,
+            spatial: loaded.spatial,
+            edges: loaded.edges.into(),
+            surface_face_order: loaded.surface_face_order,
+            color: DEFAULT_TRIANGULATION_COLOR,
+            line_color: [0.05, 0.08, 0.10, 1.0],
+            line_weight: Some(1.0),
+            raster_texture: None,
+            raster_opacity: 1.0,
+            flitch_style: None,
+            cull_back_faces: false,
+            always_show_edges: false,
+            depth_shade: None,
+            pattern_from: None,
+        });
     }
 
     fn clear_triangulation_entity_state(&mut self, handle: crate::model::SceneEntityId) {
@@ -171,30 +176,7 @@ impl<'a> App<'a> {
             let complete = || match result {
                 Ok(Ok(loaded)) => {
                     let should_fit = !self.scene_has_renderables();
-                    let id = TriangulationId(self.next_triangulation_id);
-                    self.next_triangulation_id += 1;
-                    let name = crate::model::project::unique_item_name(loaded.name, self.triangulations.iter().map(|item| item.name.as_str()));
-                    self.triangulations.push(OpenTriangulation {
-                        id,
-                        state: crate::model::project::ProjectItemState::dirty(MemberKind::Triangulation, loaded.path.file_name().map(|name| name.to_string_lossy().into_owned())),
-                        name,
-                        geometry: crate::model::triangulation::GeometryVersion::mint(),
-                        mesh: loaded.mesh,
-                        spatial: loaded.spatial,
-                        edges: loaded.edges.into(),
-                        surface_face_order: loaded.surface_face_order,
-                        color: DEFAULT_TRIANGULATION_COLOR,
-                        line_color: [0.05, 0.08, 0.10, 1.0],
-                        line_weight: Some(1.0),
-                        raster_texture: None,
-                        raster_opacity: 1.0,
-                        flitch_style: None,
-                        cull_back_faces: false,
-                        always_show_edges: false,
-                        depth_shade: None,
-                        pattern_from: None,
-                    });
-                    self.touch_active_project_content();
+                    self.add_as_one_step(|app| app.add_loaded_triangulation(loaded));
                     if should_fit {
                         self.fit_view_to_extents();
                     }
@@ -254,8 +236,17 @@ impl<'a> App<'a> {
 
     /// Delete an embedded mesh from the active project.
     pub(crate) fn remove_triangulation(&mut self, id: TriangulationId) {
+        if let Some(command) = Command::step(self.remove_triangulation_commands(id)) {
+            self.execute_edit(command);
+        }
+    }
+
+    /// [`Self::remove_triangulation`] as commands, for a tool that removes
+    /// surfaces in the same undo step as it adds others. The editor's and
+    /// dialogs' references to it are dropped now.
+    pub(crate) fn remove_triangulation_commands(&mut self, id: TriangulationId) -> Vec<Command> {
         let Some(name) = self.triangulations.iter().find(|triangulation| triangulation.id == id).map(|tri| tri.name.clone()) else {
-            return;
+            return Vec::new();
         };
         self.clear_triangulation_entity_state(SceneEntityId::Triangulation(id));
         self.clear_dialog_refs_to_triangulation(id);
@@ -264,14 +255,10 @@ impl<'a> App<'a> {
             self.active_triangulation = None;
         }
         // Rasters draped onto this surface are a property of the surface, so
-        // they come back with it. The Solids setup does reference it by id,
-        // and a later import can reuse that id, so drop those references here
-        // rather than let a new surface silently inherit them.
-        if let Some(document) = self.workspace.active_document_mut() {
-            document.forget_solid_triangulation(id);
-        }
-        self.delete_project_item(ItemRef::Triangulation(id));
+        // they come back with it. The solids using it are unlinked in the
+        // same step, and linked again by its undo.
         userspace_log!("{}", tr!("cmd-session-deleted-triangulation", name = name.to_string()));
+        self.delete_item_commands(ItemRef::Triangulation(id))
     }
 
     fn clear_dialog_refs_to_triangulation(&mut self, id: TriangulationId) {
@@ -325,15 +312,14 @@ impl<'a> App<'a> {
     /// with a single completion log line: log + insert on success, warn on
     /// failure. Shared by the backgrounded cut/create paths. `unload` names
     /// the sources the result replaces; they are unloaded only on success,
-    /// once the job has finished and closing them can no longer cancel it.
+    /// once the job has finished and closing them can no longer cancel it,
+    /// and in the same undo step as the result, so one undo brings them back.
     pub(crate) fn apply_generated_triangulation_job(&mut self, result: Result<crate::model::triangulation::GeneratedTriangulationLog>, unload: &[TriangulationId]) {
         match result {
             Ok(log) => {
                 userspace_log!("{}", log.message);
-                self.insert_generated_triangulation(log.generated);
-                for &id in unload {
-                    self.close_triangulation(id);
-                }
+                let unload = self.unload_triangulation_commands(unload);
+                self.add_generated_triangulations(vec![new_triangulation(log.generated, SectionKind::natural_for(MemberKind::Triangulation))], unload, true);
             }
             Err(err) => {
                 let message = format!("{err:#}");
@@ -342,12 +328,18 @@ impl<'a> App<'a> {
         }
     }
 
-    /// UI-thread half of a generated-triangulation apply: register a
-    /// pre-built mesh/BVH/edge bundle as a new `OpenTriangulation` and select
-    /// it. The heavy build (mesh assembly + BVH) is done by
+    /// The commands unloading each of `ids`, for a tool that hides its
+    /// sources in the same undo step as what it made from them.
+    pub(crate) fn unload_triangulation_commands(&mut self, ids: &[TriangulationId]) -> Vec<Command> {
+        ids.iter().filter_map(|&id| self.unload_item_command(ItemRef::Triangulation(id))).collect()
+    }
+
+    /// UI-thread half of a generated-triangulation apply: add a pre-built
+    /// mesh/BVH/edge bundle to the project as one undo step and select it.
+    /// The heavy build (mesh assembly + BVH) is done by
     /// `build_generated_triangulation`, which can run on a worker thread.
     pub(crate) fn insert_generated_triangulation(&mut self, built: crate::model::triangulation::GeneratedTriangulation) {
-        self.insert_generated_triangulation_in(built, crate::model::SectionKind::natural_for(MemberKind::Triangulation));
+        self.insert_generated_triangulation_in(built, SectionKind::natural_for(MemberKind::Triangulation));
     }
 
     /// The same, for a tool that knows where its surface belongs.
@@ -355,93 +347,129 @@ impl<'a> App<'a> {
     /// A derived surface is born beside what it was derived from when that
     /// section can show one - see [`crate::model::SectionKind::derived_for`] -
     /// and always at the section root, never in one of its collections.
-    pub(crate) fn insert_generated_triangulation_in(&mut self, built: crate::model::triangulation::GeneratedTriangulation, section: crate::model::SectionKind) {
-        let state = crate::model::project::ProjectItemState::dirty(MemberKind::Triangulation, None).with_section(section);
-        self.insert_generated_triangulation_with(built, state, DEFAULT_TRIANGULATION_COLOR, true);
+    pub(crate) fn insert_generated_triangulation_in(&mut self, built: crate::model::triangulation::GeneratedTriangulation, section: SectionKind) {
+        self.add_generated_triangulations(vec![new_triangulation(built, section)], Vec::new(), true);
     }
 
-    /// The same, with the item's placement and colour chosen by the caller.
-    /// Without `select` the selection is left alone, for tools that add many
-    /// surfaces at once; the caller then invalidates the scene once.
-    pub(crate) fn insert_generated_triangulation_with(
-        &mut self,
-        built: crate::model::triangulation::GeneratedTriangulation,
-        state: crate::model::project::ProjectItemState,
-        color: [f32; 4],
-        select: bool,
-    ) -> TriangulationId {
-        let crate::model::triangulation::GeneratedTriangulation {
-            name,
-            mesh,
-            spatial,
-            edges,
-            surface_face_order,
-            surface_type,
-        } = built;
-        let vertex_count = mesh.vertex_count();
-        let face_count = mesh.face_count();
-
-        let id = TriangulationId(self.next_triangulation_id);
-        self.next_triangulation_id += 1;
-        let name = crate::model::project::unique_item_name(name, self.triangulations.iter().map(|item| item.name.as_str()));
-
-        let cleared_object_selection = select && self.editor.selected_handles.iter().any(|handle| matches!(handle, crate::model::SceneEntityId::Object(_)));
-        self.triangulations.push(OpenTriangulation {
-            id,
-            state,
-            name: name.clone(),
-            geometry: crate::model::triangulation::GeometryVersion::mint(),
-            mesh,
-            spatial,
-            edges: edges.into(),
-            surface_face_order,
-            color,
-            line_color: [0.05, 0.08, 0.10, 1.0],
-            line_weight: Some(1.0),
-            raster_texture: None,
-            raster_opacity: 1.0,
-            flitch_style: None,
-            cull_back_faces: false,
-            always_show_edges: false,
-            depth_shade: None,
-            pattern_from: None,
-        });
-        self.touch_active_project_content();
-        userspace_log!(
-            "{}",
-            tr!(
-                "cmd-session-created-triangulation",
-                name = name.to_string(),
-                vertex_count = vertex_count.to_string(),
-                face_count = face_count.to_string(),
-                surface_type = format!("{surface_type:?}")
-            )
-        );
-        if !select {
-            return id;
+    /// Add `surfaces` to the project as one undo step, together with `also`
+    /// (applied after them; unloading the sources they were made from, say).
+    /// With `select` they become the selection, and the last of them the
+    /// active surface. Returns their ids, in order.
+    pub(crate) fn add_generated_triangulations(&mut self, surfaces: Vec<NewTriangulation>, also: Vec<Command>, select: bool) -> Vec<TriangulationId> {
+        let (ids, mut commands) = self.add_triangulation_commands(surfaces);
+        commands.extend(also);
+        let cleared_object_selection = select && !ids.is_empty() && self.editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_)));
+        let Some(command) = Command::step(commands) else {
+            return ids;
+        };
+        self.execute_job_edit(command);
+        if select && let Some(&last) = ids.last() {
+            self.active_triangulation = Some(last);
+            self.editor.selected_handles.clear();
+            self.editor.selected_handles.extend(ids.iter().map(|&id| SceneEntityId::Triangulation(id)));
+            // The edit redrew the surfaces; the objects that were selected
+            // drop their highlight only when the scene is rebuilt.
+            if cleared_object_selection {
+                self.invalidate_geometry();
+            }
         }
-        self.active_triangulation = Some(id);
-        self.editor.selected_handles.clear();
-        self.editor.selected_handles.insert(crate::model::SceneEntityId::Triangulation(id));
-        if cleared_object_selection {
-            self.invalidate_geometry();
-        } else {
-            self.invalidate_topology_bounds_and_redraw();
+        ids
+    }
+
+    /// One [`Command::AddItem`] for each of `surfaces`, appending them to the
+    /// project in order, with their ids. Each gets a new id and a name no
+    /// other surface has, these included; each creation is logged here.
+    pub(crate) fn add_triangulation_commands(&mut self, surfaces: Vec<NewTriangulation>) -> (Vec<TriangulationId>, Vec<Command>) {
+        let first_index = self.triangulations.len();
+        let mut ids = Vec::with_capacity(surfaces.len());
+        let mut names: Vec<String> = Vec::with_capacity(surfaces.len());
+        let mut commands = Vec::with_capacity(surfaces.len());
+        for NewTriangulation { built, state, color } in surfaces {
+            let crate::model::triangulation::GeneratedTriangulation {
+                name,
+                mesh,
+                spatial,
+                edges,
+                surface_face_order,
+                surface_type,
+            } = built;
+            let id = TriangulationId(self.next_triangulation_id);
+            self.next_triangulation_id += 1;
+            let name = crate::model::project::unique_item_name(name, self.triangulations.iter().map(|item| item.name.as_str()).chain(names.iter().map(String::as_str)));
+            userspace_log!(
+                "{}",
+                tr!(
+                    "cmd-session-created-triangulation",
+                    name = name.to_string(),
+                    vertex_count = mesh.vertex_count().to_string(),
+                    face_count = mesh.face_count().to_string(),
+                    surface_type = format!("{surface_type:?}")
+                )
+            );
+            commands.push(Command::AddItem {
+                item: ItemRef::Triangulation(id),
+                index: first_index + ids.len(),
+                added: Some(OpenItem::Triangulation(Box::new(OpenTriangulation {
+                    id,
+                    state,
+                    name: name.clone(),
+                    geometry: crate::model::triangulation::GeometryVersion::mint(),
+                    mesh,
+                    spatial,
+                    edges: edges.into(),
+                    surface_face_order,
+                    color,
+                    line_color: [0.05, 0.08, 0.10, 1.0],
+                    line_weight: Some(1.0),
+                    raster_texture: None,
+                    raster_opacity: 1.0,
+                    flitch_style: None,
+                    cull_back_faces: false,
+                    always_show_edges: false,
+                    depth_shade: None,
+                    pattern_from: None,
+                }))),
+            });
+            names.push(name);
+            ids.push(id);
         }
-        id
+        (ids, commands)
+    }
+}
+
+/// A generated surface on its way into the project, with where it goes and
+/// its colour.
+pub(crate) struct NewTriangulation {
+    pub(crate) built: crate::model::triangulation::GeneratedTriangulation,
+    pub(crate) state: crate::model::project::ProjectItemState,
+    pub(crate) color: [f32; 4],
+}
+
+/// `built` at the root of `section`, in the default colour.
+pub(crate) fn new_triangulation(built: crate::model::triangulation::GeneratedTriangulation, section: SectionKind) -> NewTriangulation {
+    NewTriangulation {
+        built,
+        state: crate::model::project::ProjectItemState::dirty(MemberKind::Triangulation, None).with_section(section),
+        color: DEFAULT_TRIANGULATION_COLOR,
     }
 }
 
 impl<'a> App<'a> {
-    /// Put freshly generated geometry into triangulation `id` in place of
-    /// what it held, keeping its id, name, colour, style and visibility - for
-    /// a tool that regenerates the same item (an optimization rerun's shells).
-    /// Not an undo step, like the insert it stands in for.
-    pub(crate) fn replace_generated_triangulation(&mut self, id: TriangulationId, built: crate::model::triangulation::GeneratedTriangulation) {
-        let Some(item) = self.triangulations.iter_mut().find(|item| item.id == id) else {
-            return;
-        };
-        let face_count = built.mesh.face_count();
+    /// The command putting freshly generated geometry into triangulation `id`
+    /// in place of what it held, keeping its id, name, colour, style and
+    /// visibility - for a tool that regenerates the same item (an
+    /// optimization rerun's shells). `None` when there is no such surface.
+    pub(crate) fn replace_triangulation_command(&self, id: TriangulationId, built: crate::model::triangulation::GeneratedTriangulation) -> Option<Command> {
+        let mut item = self.triangulations.iter().find(|item| item.id == id)?.clone();
+        userspace_log!(
+            "{}",
+            tr!(
+                "cmd-session-updated-triangulation",
+                name = item.name.clone(),
+                face_count = built.mesh.face_count().to_string()
+            )
+        );
+        item.geometry = crate::model::triangulation::GeometryVersion::mint();
         item.mesh = built.mesh;
         item.spatial = built.spatial;
         item.edges = built.edges.into();
@@ -451,10 +479,10 @@ impl<'a> App<'a> {
         // after eviction) no longer matches it.
         item.state.deferred = None;
         item.state.payload_source = None;
-        item.state.touch();
-        let name = item.name.clone();
-        self.touch_active_project_content();
-        userspace_log!("{}", tr!("cmd-session-updated-triangulation", name = name, face_count = face_count.to_string()));
+        Some(Command::ReplaceItem {
+            item: ItemRef::Triangulation(id),
+            other: Some(OpenItem::Triangulation(Box::new(item))),
+        })
     }
 }
 

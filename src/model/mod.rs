@@ -2184,35 +2184,36 @@ impl Document {
         changed
     }
 
-    /// Clear every solid reference to a triangulation that is going away, so
-    /// a later import reusing the id cannot silently adopt the reference.
-    pub(crate) fn forget_solid_triangulation(&mut self, id: triangulation::TriangulationId) {
-        let mut changed = false;
-        for solid in &mut self.solids {
-            for reference in [&mut solid.surface, &mut solid.topography] {
-                if *reference == Some(id) {
-                    *reference = None;
-                    changed = true;
+    /// The edits unlinking every solid from `item`, for a delete to carry in
+    /// its undo step. Solids reference surfaces and block models by id, and an
+    /// import can reuse a freed id, so a delete must not leave them pointing
+    /// at it; and undo, putting the item back, has to link them back too.
+    pub(crate) fn solid_unlinks(&self, item: ItemRef) -> Vec<Command> {
+        let unlink = |solid: SolidId, before: SolidEdit, after: SolidEdit| Command::EditSolid {
+            solid,
+            before: Box::new(before),
+            after: Box::new(after),
+        };
+        let mut commands = Vec::new();
+        for solid in &self.solids {
+            match item {
+                ItemRef::Triangulation(id) => {
+                    if solid.surface == Some(id) {
+                        commands.push(unlink(solid.id, SolidEdit::Surface(Some(id)), SolidEdit::Surface(None)));
+                    }
+                    if solid.topography == Some(id) {
+                        commands.push(unlink(solid.id, SolidEdit::Topography(Some(id)), SolidEdit::Topography(None)));
+                    }
                 }
+                ItemRef::BlockModel(id) => {
+                    if solid.block_model == Some(id) {
+                        commands.push(unlink(solid.id, SolidEdit::BlockModel(Some(id)), SolidEdit::BlockModel(None)));
+                    }
+                }
+                ItemRef::DrillHole(_) | ItemRef::PointCloud(_) | ItemRef::Raster(_) => {}
             }
         }
-        if changed {
-            self.touch();
-        }
-    }
-
-    /// Block-model counterpart of [`Document::forget_solid_triangulation`].
-    pub(crate) fn forget_solid_block_model(&mut self, id: block_model::BlockModelId) {
-        let mut changed = false;
-        for solid in &mut self.solids {
-            if solid.block_model == Some(id) {
-                solid.block_model = None;
-                changed = true;
-            }
-        }
-        if changed {
-            self.touch();
-        }
+        commands
     }
 
     pub(crate) fn set_layer_elevation(&mut self, id: LayerId, elevation: f32) {
@@ -2388,6 +2389,16 @@ impl Document {
     }
 
     /// Append a layer and its objects while retaining their runtime ids.
+    /// Lift layer `id` and every object on it out of the document, the
+    /// objects in draw order: what [`Self::append_layer_snapshot`] puts back.
+    pub(crate) fn take_layer_snapshot(&mut self, id: LayerId) -> Option<(Layer, Vec<Object>)> {
+        let layer = self.layer(id)?.clone();
+        let objects: Vec<Object> = self.objects.iter().filter(|object| object.layer() == id).cloned().collect();
+        self.remove_objects_bulk(&objects.iter().map(Object::id).collect());
+        self.delete_layer(id);
+        Some((layer, objects))
+    }
+
     pub(crate) fn append_layer_snapshot<'a>(&mut self, layer: &Layer, objects: impl Iterator<Item = &'a Object>) {
         if !self.layers.iter().any(|stored| stored.id == layer.id) {
             self.next_layer_id = self.next_layer_id.max(layer.id.0.saturating_add(1));
@@ -3712,6 +3723,16 @@ impl Command {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// `commands` as one undo step: the command itself when there is only
+    /// one, a batch when there are more, nothing when there are none.
+    pub(crate) fn step(mut commands: Vec<Command>) -> Option<Command> {
+        match commands.len() {
+            0 => None,
+            1 => commands.pop(),
+            _ => Some(Command::Batch(commands)),
         }
     }
 

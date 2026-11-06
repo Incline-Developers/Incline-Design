@@ -98,15 +98,21 @@ impl<'a> App<'a> {
                         skipped = output.skipped.to_string()
                     )
                 );
-                for generated in output.generated {
-                    app.insert_generated_triangulation(generated);
-                }
                 // The job has finished, so unloading its source dependencies no
-                // longer risks cancelling it.
-                if hide_old {
-                    app.close_triangulation(topology_id);
-                    app.close_triangulation(shape_id);
-                }
+                // longer risks cancelling it. One undo takes the new surfaces
+                // away and brings the sources back.
+                let unload = if hide_old {
+                    app.unload_triangulation_commands(&[topology_id, shape_id])
+                } else {
+                    Vec::new()
+                };
+                let section = SectionKind::natural_for(MemberKind::Triangulation);
+                let surfaces = output
+                    .generated
+                    .into_iter()
+                    .map(|generated| super::session::new_triangulation(generated, section))
+                    .collect();
+                app.add_generated_triangulations(surfaces, unload, true);
             }
             Err(err) => {
                 let message = format!("{err:#}");

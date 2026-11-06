@@ -1169,10 +1169,138 @@ impl<'a> App<'a> {
     /// through `drop_editor_references_to_missing_items` rather than trying to
     /// restore them, so a restored item comes back unselected.
     pub(crate) fn delete_project_item(&mut self, item: ItemRef) {
-        if self.item_style(item).is_none() {
-            return;
+        if let Some(command) = Command::step(self.delete_item_commands(item)) {
+            self.execute_edit(command);
         }
-        self.execute_edit(Command::DeleteItem { item, index: 0, removed: None });
+    }
+
+    /// The commands deleting `item`, unlinking the solids that use it first
+    /// so undo puts the item back before linking them to it again. Empty
+    /// when the project has no such item.
+    pub(crate) fn delete_item_commands(&self, item: ItemRef) -> Vec<Command> {
+        if self.item_style(item).is_none() {
+            return Vec::new();
+        }
+        let mut commands = self.workspace.active_document().map(|document| document.solid_unlinks(item)).unwrap_or_default();
+        commands.push(Command::DeleteItem { item, index: 0, removed: None });
+        commands
+    }
+
+    /// What the active project holds, by id, so [`Self::record_additions`]
+    /// can tell what was added after.
+    pub(crate) fn project_members(&self) -> ProjectMembers {
+        let project = self.workspace.active_project();
+        ProjectMembers {
+            layers: project
+                .map(|project| project.project.document.layers().iter().map(|layer| layer.id).collect())
+                .unwrap_or_default(),
+            folders: project
+                .map(|project| {
+                    SectionKind::ALL
+                        .into_iter()
+                        .flat_map(|section| project.project.folders.folders(section).iter().map(move |folder| (section, folder.id)))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            items: (self.triangulations.iter().map(|item| ItemRef::Triangulation(item.id)))
+                .chain(self.block_models.iter().map(|item| ItemRef::BlockModel(item.id)))
+                .chain(self.drill_holes.iter().map(|item| ItemRef::DrillHole(item.id)))
+                .chain(self.point_clouds.iter().map(|item| ItemRef::PointCloud(item.id)))
+                .chain(self.raster_textures.iter().map(|item| ItemRef::Raster(item.id)))
+                .collect(),
+        }
+    }
+
+    /// Run `add`, which puts content into the project directly, and make
+    /// everything it added one undo step.
+    pub(crate) fn add_as_one_step<R>(&mut self, add: impl FnOnce(&mut Self) -> R) -> R {
+        let before = self.project_members();
+        let added = add(self);
+        self.record_additions(&before, Vec::new());
+        added
+    }
+
+    /// Take everything added to the active project since `before` (items,
+    /// design layers with their objects, collections) back out, and put it
+    /// back in as one undo step together with `also`. For an import, which
+    /// installs what it reads piecemeal, so that one undo takes it all away.
+    pub(crate) fn record_additions(&mut self, before: &ProjectMembers, also: Vec<Command>) {
+        fn lift<T>(list: &mut Vec<T>, is_new: impl Fn(&T) -> bool, wrap: impl Fn(T) -> crate::model::OpenItem, into: &mut Vec<Command>) {
+            let positions: Vec<usize> = list.iter().enumerate().filter(|(_, item)| is_new(item)).map(|(index, _)| index).collect();
+            let mut lifted: Vec<(usize, T)> = positions.into_iter().rev().map(|index| (index, list.remove(index))).collect();
+            // Put back lowest index first, each lands where it stood.
+            lifted.reverse();
+            into.extend(lifted.into_iter().map(|(index, item)| {
+                let item = wrap(item);
+                Command::AddItem {
+                    item: item.item_ref(),
+                    index,
+                    added: Some(item),
+                }
+            }));
+        }
+
+        // Collections go first, so the layers and items in them find them
+        // there when they come back, and last on undo.
+        let mut commands = Vec::new();
+        if let Some(project) = self.workspace.active_project_mut() {
+            for section in SectionKind::ALL {
+                let added: Vec<_> = project
+                    .project
+                    .folders
+                    .folders(section)
+                    .iter()
+                    .filter(|folder| !before.folders.contains(&(section, folder.id)))
+                    .cloned()
+                    .collect();
+                for folder in added {
+                    project.project.folders.remove(section, folder.id);
+                    commands.push(Command::AddFolder { section, folder });
+                }
+            }
+            let document = &mut project.project.document;
+            let added: Vec<LayerId> = document.layers().iter().map(|layer| layer.id).filter(|id| !before.layers.contains(id)).collect();
+            for id in added {
+                if let Some((layer, objects)) = document.take_layer_snapshot(id) {
+                    commands.push(Command::AddLayerSnapshot { layer, objects });
+                }
+            }
+        }
+        let is_new = |item: ItemRef| !before.items.contains(&item);
+        lift(
+            &mut self.raster_textures,
+            |item| is_new(ItemRef::Raster(item.id)),
+            |item| crate::model::OpenItem::Raster(Box::new(item)),
+            &mut commands,
+        );
+        lift(
+            &mut self.triangulations,
+            |item| is_new(ItemRef::Triangulation(item.id)),
+            |item| crate::model::OpenItem::Triangulation(Box::new(item)),
+            &mut commands,
+        );
+        lift(
+            &mut self.block_models,
+            |item| is_new(ItemRef::BlockModel(item.id)),
+            |item| crate::model::OpenItem::BlockModel(Box::new(item)),
+            &mut commands,
+        );
+        lift(
+            &mut self.drill_holes,
+            |item| is_new(ItemRef::DrillHole(item.id)),
+            |item| crate::model::OpenItem::DrillHole(Box::new(item)),
+            &mut commands,
+        );
+        lift(
+            &mut self.point_clouds,
+            |item| is_new(ItemRef::PointCloud(item.id)),
+            |item| crate::model::OpenItem::PointCloud(Box::new(item)),
+            &mut commands,
+        );
+        commands.extend(also);
+        if let Some(command) = Command::step(commands) {
+            self.execute_job_edit(command);
+        }
     }
 
     /// Take the pointer state the UI frame ended in, and settle anything that
@@ -1263,11 +1391,24 @@ impl<'a> App<'a> {
     /// [`Self::record_applied_edit`] for one already committed by a live drag -
     /// so that anything able to dirty the project can also be taken back.
     pub(crate) fn execute_edit(&mut self, command: Command) {
+        self.execute_edit_continuing(command, true);
+    }
+
+    /// Same, for the result of a background job applied on the UI thread: an
+    /// undo step of its own, never folded into a gesture the user happens to
+    /// be making when the job finishes.
+    pub(crate) fn execute_job_edit(&mut self, command: Command) {
+        self.execute_edit_continuing(command, false);
+    }
+
+    /// `may_continue` lets the edit extend the gesture the pointer is still
+    /// driving, if there is one.
+    fn execute_edit_continuing(&mut self, command: Command, may_continue: bool) {
         let mut layers = Vec::new();
         if let Some(document) = self.workspace.active_document() {
             command.required_layers(false, document, &mut layers);
             if layers.iter().any(|id| document.deferred_layers.contains_key(id)) {
-                self.restore_layers_for(layers, move |app| app.execute_edit(command));
+                self.restore_layers_for(layers, move |app| app.execute_edit_continuing(command, may_continue));
                 return;
             }
         }
@@ -1275,10 +1416,10 @@ impl<'a> App<'a> {
         let mut needed = Vec::new();
         command.required_items(false, &mut needed);
         if needed.iter().any(|item| self.project_item_state(*item).is_some_and(|state| state.deferred.is_some())) {
-            self.restore_items_for(needed, move |app| app.execute_edit(command));
+            self.restore_items_for(needed, move |app| app.execute_edit_continuing(command, may_continue));
             return;
         }
-        let continuing = self.ui_pointer_gesture_active;
+        let continuing = may_continue && self.ui_pointer_gesture_active;
         let Some(((), effects)) = self.with_edit_target(|history, target| history.execute(target, command, continuing)) else {
             return;
         };
@@ -2965,3 +3106,10 @@ pub(crate) enum AppEvent {
 
 #[cfg(not(target_arch = "wasm32"))]
 type AppEvent = ();
+
+/// The ids the active project holds; see [`App::record_additions`].
+pub(crate) struct ProjectMembers {
+    layers: HashSet<LayerId>,
+    folders: HashSet<(SectionKind, crate::model::folders::FolderId)>,
+    items: HashSet<ItemRef>,
+}
