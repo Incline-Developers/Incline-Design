@@ -154,7 +154,7 @@ impl<'a> Graphics<'a> {
                 required_limits,
                 label: None,
                 experimental_features,
-                memory_hints: wgpu::MemoryHints::default(),
+                memory_hints: wgpu::MemoryHints::MemoryUsage,
                 trace: wgpu::Trace::Off,
             })
             .await?;
