@@ -1975,46 +1975,6 @@ const CLIP_MAX_GROWTH: f64 = 1.6;
 /// Halvings stop here whatever the region: at most `2^12` pieces.
 const CLIP_MAX_DEPTH: usize = 12;
 
-/// Intersect a slab with a vertical polygon (including holes).
-///
-/// Earcut partitions its plan into disjoint convex cells. Each cell is clipped
-/// and capped independently; shared vertical walls cancel in signed volume
-/// integration and have zero contribution to block-overlap columns.
-///
-/// A cell's cut walks every face of the body it starts from, so a polygon of
-/// a few thousand points - the outline of ground the topography crosses - is
-/// first halved, body and polygon together, until each half is small; its
-/// cells then start from that half alone. Cost goes from cells times body to
-/// roughly body times the depth of the halving.
-///
-/// The result is a soup of those cells, and is deliberately *not* edge-manifold:
-/// cells meeting at an internal wall triangulate it independently, so
-/// [`open_edge_report`] over the result always reports it open even when every
-/// cell is sound. It is no use as a trust signal here - the caller should judge
-/// the volume on whether the body going *in* was closed, which is the only
-/// thing that decides it, since a closed body clips to an exact one.
-///
-/// An open body is clipped and returned rather than rejected: bench bodies are
-/// allowed to be open (`build_solid_between_surfaces` warns rather than
-/// failing, and the Reserves view reports it through `planning-reserve-open-solid`).
-/// Failing here would take the whole View render down for a condition the page
-/// already knows how to show.
-pub(crate) fn clip_solid_to_plan(mesh: &mesh_data::Triangulation, face: &[Vec<glam::DVec2>], cancel: &crate::app::jobs::CancelFlag) -> Result<ClippedSolid> {
-    let original: Slab = (mesh.vertices().to_vec(), mesh.face_vertex_indices_iter().map(|f| f.map(|i| i as u32)).collect());
-    clip_piece_to_plan(original, face, cancel)
-}
-
-/// [`clip_solid_to_plan`] over a body already held as a slab - one piece of
-/// separate ground split off a flitch. Never an earlier clip's output: that
-/// is a soup of unwelded cells, and clipping it again grows without bound.
-pub(crate) fn clip_piece_to_plan(slab: Slab, face: &[Vec<glam::DVec2>], cancel: &crate::app::jobs::CancelFlag) -> Result<ClippedSolid> {
-    let floor = slab.0.iter().map(|vertex| vertex.z).fold(f64::INFINITY, f64::min);
-    let count = slab.1.len();
-    // The body's own surfaces are not walls the clip made.
-    let cells = clip_region((slab, vec![false; count], vec![false; count]), face.to_vec(), face, floor, 0, cancel)?;
-    Ok(gather_cells(cells))
-}
-
 /// One body's cells as a single clipped piece.
 fn gather_cells(cells: Vec<Cell>) -> ClippedSolid {
     let mut result: Slab = (Vec::new(), Vec::new());
@@ -2046,9 +2006,36 @@ const NARROW_MARGIN: f64 = 1.0;
 /// than this: cut down to each face's extent, it is already small.
 const NARROW_LEAF_FACES: usize = 4096;
 
-/// [`clip_piece_to_plan`] for many faces of one body at once, giving the same
-/// pieces. Each face is cut out with its `plans` entry, and lies within its
-/// `grounds` entry: the body has no material in the plan outside the ground.
+/// Intersect a slab with a vertical polygon (including holes).
+///
+/// Earcut partitions its plan into disjoint convex cells. Each cell is clipped
+/// and capped independently; shared vertical walls cancel in signed volume
+/// integration and have zero contribution to block-overlap columns.
+///
+/// A cell's cut walks every face of the body it starts from, so a polygon of
+/// a few thousand points - the outline of ground the topography crosses - is
+/// first halved, body and polygon together, until each half is small; its
+/// cells then start from that half alone. Cost goes from cells times body to
+/// roughly body times the depth of the halving.
+///
+/// The result is a soup of those cells, and is deliberately *not* edge-manifold:
+/// cells meeting at an internal wall triangulate it independently, so
+/// [`open_edge_report`] over the result always reports it open even when every
+/// cell is sound. It is no use as a trust signal here - the caller should judge
+/// the volume on whether the body going *in* was closed, which is the only
+/// thing that decides it, since a closed body clips to an exact one.
+///
+/// An open body is clipped and returned rather than rejected: bench bodies are
+/// allowed to be open (`build_solid_between_surfaces` warns rather than
+/// failing, and the Reserves view reports it through `planning-reserve-open-solid`).
+/// Failing here would take the whole View render down for a condition the page
+/// already knows how to show.
+///
+/// `slab` must never be an earlier clip's output: that is a soup of unwelded
+/// cells, and clipping it again grows without bound.
+///
+/// Each face is cut out with its `plans` entry, and lies within its `grounds`
+/// entry: the body has no material in the plan outside the ground.
 ///
 /// Cut one at a time, every face pays for cuts across the whole body: the
 /// halvings that cut a face apart run through it, so the pieces they leave

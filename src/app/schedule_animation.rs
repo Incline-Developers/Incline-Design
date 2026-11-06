@@ -1483,15 +1483,17 @@ fn clip_in_direction(
         return Ok((Some(source.clone()), None));
     }
     let cut = profile.cut_retaining(&source.mesh, direction, profile.whole() * (1.0 - removed_fraction), cancel)?;
-    let (vertices, faces, _, boundary_wall) = clip_at_cut(&source.mesh, face, direction, cut, cancel)?;
+    // A block split off whole keeps every triangle side in its edges, which is
+    // not an outline to carry over: it takes the corners of what is left.
+    let outline: &[[u32; 2]] = if source.always_show_edges { &source.edges } else { &[] };
+    let (vertices, faces, mut edges) = clip_at_cut(&source.mesh, outline, direction, cut);
     if faces.is_empty() {
         return Ok((None, Some(cut)));
     }
-    // Every retained component is independently capped.  The clip records
-    // its boundary walls, so only their rim is drawn: no ghost edge survives
-    // on the removed side and no internal triangulation clutters the surface.
     let slab = (vertices, faces);
-    let edges = super::commands::triangulation::solid_between::boundary_wall_outline(&slab, &boundary_wall);
+    if !source.always_show_edges {
+        edges = super::commands::triangulation::solid_between::crease_outline(&slab, &vec![false; slab.1.len()], super::commands::solids_view::BLAST_CREASE_ANGLE);
+    }
     let (vertices, faces) = slab;
     let mesh = Arc::new(Triangulation::from_vertices_and_faces(vertices, faces)?);
     let spatial = Arc::new(crate::model::spatial::TriangleBvh::build(&mesh));
@@ -1625,8 +1627,8 @@ impl VolumeProfile {
 ///
 /// The source is the consistently wound cell soup emitted by the solids
 /// clipper. Vertical faces project to zero; clipping and integrating the
-/// remaining floor/roof triangles therefore measures the same vertical
-/// prism as `clip_solid_to_plan`, while avoiding all topology construction.
+/// remaining floor/roof triangles therefore measures the vertical prism
+/// [`clip_at_cut`] keeps, without building its wall.
 fn retained_volume_at_cut(mesh: &Triangulation, direction: glam::DVec2, cut: f64, cancel: &crate::app::jobs::CancelFlag) -> anyhow::Result<f64> {
     let bounds = mesh.bounds();
     let origin_x = bounds.min.x;
@@ -1679,33 +1681,235 @@ fn clip_triangle_at_cut(triangle: [crate::model::formats::mesh_data::Vertex; 3],
     (output, count)
 }
 
-type ClippedAtY = (Vec<crate::model::formats::mesh_data::Vertex>, Vec<[u32; 3]>, f64, Vec<bool>);
+/// What stays of a block past a cut: its vertices, faces and outline.
+type Clipped = (Vec<crate::model::formats::mesh_data::Vertex>, Vec<[u32; 3]>, Vec<[u32; 2]>);
 
-fn clip_at_cut(mesh: &Triangulation, face: &Face, direction: glam::DVec2, cut: f64, cancel: &crate::app::jobs::CancelFlag) -> anyhow::Result<ClippedAtY> {
+/// What stands of a block's body at `dot(xy, direction) >= cut`, closed with a
+/// wall along that plane. `edges` is the block's outline, cut the same way.
+///
+/// A block is the cell soup the solids clipper emits, with T-junctions and
+/// gaps in its walls, so a rim walked around the cut does not reliably close,
+/// and clipping it as a solid loses the wall wherever it does not. Floor and
+/// roof cover the ground exactly whatever the walls did, and the wall is the
+/// space between them along the cut, so it is built from those alone.
+fn clip_at_cut(mesh: &Triangulation, edges: &[[u32; 2]], direction: glam::DVec2, cut: f64) -> Clipped {
+    /// Closer to the plane than this is on it, which rounding cannot tell apart.
+    const ON_PLANE: f64 = 1e-8;
+
     let tangent = glam::DVec2::new(-direction.y, direction.x);
-    let (min_tangent, max_tangent) = face
+    let source = mesh.vertices();
+    let side: Vec<f64> = source
         .iter()
-        .flatten()
-        .map(|point| point.dot(tangent))
-        .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), projection| (low.min(projection), high.max(projection)));
-    let pad = (max_tangent - min_tangent).abs().max(1.0);
-    let cut_line = vec![tangent * (min_tangent - pad) + direction * cut, tangent * (max_tangent + pad) + direction * cut];
-    let retained = crate::model::arrangement::subdivide(face, &[cut_line])
-        .into_iter()
-        .filter(|piece| crate::model::arrangement::representative_point(piece).is_some_and(|point| point.dot(direction) >= cut))
-        .collect::<Vec<_>>();
-    let mut vertices = Vec::new();
+        .map(|point| {
+            let distance = glam::DVec2::new(point.x, point.y).dot(direction) - cut;
+            if distance.abs() < ON_PLANE { 0.0 } else { distance }
+        })
+        .collect();
+    let mut clip = CutBody {
+        source,
+        side: &side,
+        vertices: Vec::new(),
+        corners: vec![u32::MAX; source.len()],
+        crossings: HashMap::new(),
+    };
     let mut faces = Vec::new();
-    let mut volume = 0.0;
-    let mut boundary_wall = Vec::new();
-    for piece in retained {
-        anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
-        let clipped = super::commands::triangulation::solid_between::clip_solid_to_plan(mesh, &piece, cancel)?;
-        let offset = vertices.len() as u32;
-        vertices.extend(clipped.slab.0);
-        faces.extend(clipped.slab.1.into_iter().map(|face| face.map(|index| index + offset)));
-        volume += clipped.volume;
-        boundary_wall.extend(clipped.boundary_wall);
+    // Where the faces leave the cut plane: floor and roof as sloping lines, in
+    // plan distance along the cut and height.
+    let mut spans: Vec<[(f64, f64); 2]> = Vec::new();
+    for face in mesh.face_vertex_indices_iter() {
+        let face = face.map(|index| index as u32);
+        let inside = face.map(|index| side[index as usize] >= 0.0);
+        if inside == [false; 3] || face.iter().all(|index| side[*index as usize] == 0.0) {
+            // Gone, or a wall already standing exactly where this one goes.
+            continue;
+        }
+        if inside == [true; 3] {
+            faces.push(face.map(|index| clip.corner(index)));
+            continue;
+        }
+        let mut polygon = [0u32; 4];
+        let mut count = 0;
+        let mut crossed = [0u32; 2];
+        let mut crossed_count = 0;
+        for index in 0..3 {
+            let previous = (index + 2) % 3;
+            if inside[index] != inside[previous] {
+                let (kept, gone) = if inside[index] { (face[index], face[previous]) } else { (face[previous], face[index]) };
+                let crossing = clip.crossing(kept, gone);
+                polygon[count] = crossing;
+                count += 1;
+                crossed[crossed_count] = crossing;
+                crossed_count += 1;
+            }
+            if inside[index] {
+                polygon[count] = clip.corner(face[index]);
+                count += 1;
+            }
+        }
+        for index in 1..count.saturating_sub(1) {
+            let triangle = [polygon[0], polygon[index], polygon[index + 1]];
+            if triangle[0] != triangle[1] && triangle[1] != triangle[2] && triangle[2] != triangle[0] {
+                faces.push(triangle);
+            }
+        }
+        let [a, b] = crossed.map(|index| {
+            let point = clip.vertices[index as usize];
+            (glam::DVec2::new(point.x, point.y).dot(tangent), point.z)
+        });
+        spans.push(if a.0 <= b.0 { [a, b] } else { [b, a] });
     }
-    Ok((vertices, faces, volume, boundary_wall))
+    let mut outline = Vec::with_capacity(edges.len());
+    for &[a, b] in edges {
+        let edge = match (side[a as usize] >= 0.0, side[b as usize] >= 0.0) {
+            (true, true) => [clip.corner(a), clip.corner(b)],
+            (true, false) => [clip.corner(a), clip.crossing(a, b)],
+            (false, true) => [clip.crossing(b, a), clip.corner(b)],
+            (false, false) => continue,
+        };
+        if edge[0] != edge[1] {
+            outline.push(edge);
+        }
+    }
+    let mut vertices = clip.vertices;
+    if !faces.is_empty() {
+        close_cut(&mut spans, direction * cut, tangent, &mut vertices, &mut faces, &mut outline);
+    }
+    (vertices, faces, outline)
+}
+
+/// A block's body being cut: which of its points have come across so far.
+struct CutBody<'a> {
+    source: &'a [crate::model::formats::mesh_data::Vertex],
+    side: &'a [f64],
+    vertices: Vec<crate::model::formats::mesh_data::Vertex>,
+    corners: Vec<u32>,
+    crossings: HashMap<(u32, u32), u32>,
+}
+
+impl CutBody<'_> {
+    fn corner(&mut self, index: u32) -> u32 {
+        let slot = &mut self.corners[index as usize];
+        if *slot == u32::MAX {
+            *slot = self.vertices.len() as u32;
+            self.vertices.push(self.source[index as usize]);
+        }
+        *slot
+    }
+
+    /// Where the edge from a kept point to a gone one meets the plane, worked
+    /// out from its ends in one order so that every face using it agrees.
+    fn crossing(&mut self, kept: u32, gone: u32) -> u32 {
+        if self.side[kept as usize] == 0.0 {
+            return self.corner(kept);
+        }
+        let key = (kept.min(gone), kept.max(gone));
+        if let Some(found) = self.crossings.get(&key) {
+            return *found;
+        }
+        let (from, to) = (self.source[key.0 as usize], self.source[key.1 as usize]);
+        let (near, far) = (self.side[key.0 as usize], self.side[key.1 as usize]);
+        let amount = near / (near - far);
+        let index = self.vertices.len() as u32;
+        self.vertices.push(crate::model::formats::mesh_data::Vertex::new(
+            from.x + (to.x - from.x) * amount,
+            from.y + (to.y - from.y) * amount,
+            from.z + (to.z - from.z) * amount,
+        ));
+        self.crossings.insert(key, index);
+        index
+    }
+}
+
+/// Close a cut with the wall between its floor and roof: `spans` are where
+/// they meet the plane, as `(along, height)` pairs in order along it. Each
+/// strip between two of their ends holds the same lines all the way across,
+/// and a column upward through them enters and leaves the body in turn.
+fn close_cut(
+    spans: &mut [[(f64, f64); 2]],
+    origin: glam::DVec2,
+    tangent: glam::DVec2,
+    vertices: &mut Vec<crate::model::formats::mesh_data::Vertex>,
+    faces: &mut Vec<[u32; 3]>,
+    outline: &mut Vec<[u32; 2]>,
+) {
+    use crate::model::formats::mesh_data::Vertex;
+
+    /// Plan distance along the cut below which two ends are one, and a line
+    /// crossing none of it is a wall, seen end on.
+    const ALONG: f64 = 1e-7;
+    /// Heights closer than this are a wall of no height.
+    const HEIGHT: f64 = 1e-6;
+
+    let add = |vertices: &mut Vec<Vertex>, along: f64, height: f64| {
+        let point = origin + tangent * along;
+        vertices.push(Vertex::new(point.x, point.y, height));
+        vertices.len() as u32 - 1
+    };
+    spans.sort_unstable_by(|a, b| a[0].0.total_cmp(&b[0].0));
+    let mut stops: Vec<f64> = spans.iter().flat_map(|span| [span[0].0, span[1].0]).collect();
+    stops.sort_unstable_by(f64::total_cmp);
+    stops.dedup_by(|next, kept| *next - *kept <= ALONG);
+    let height = |span: &[(f64, f64); 2], along: f64| {
+        let [(from, low), (to, high)] = *span;
+        let amount = ((along - from) / (to - from)).clamp(0.0, 1.0);
+        low + (high - low) * amount
+    };
+    // The wall's upright edges are where its height changes on crossing a stop.
+    let upright = |along: f64, before: &[(f64, f64)], after: &[(f64, f64)], vertices: &mut Vec<Vertex>, outline: &mut Vec<[u32; 2]>| {
+        let covers = |ranges: &[(f64, f64)], at: f64| ranges.iter().any(|(low, high)| *low <= at && at <= *high);
+        let mut ends: Vec<f64> = before.iter().chain(after).flat_map(|(low, high)| [*low, *high]).collect();
+        ends.sort_unstable_by(f64::total_cmp);
+        for pair in ends.windows(2) {
+            let middle = (pair[0] + pair[1]) * 0.5;
+            if pair[1] - pair[0] > HEIGHT && covers(before, middle) != covers(after, middle) {
+                outline.push([add(vertices, along, pair[0]), add(vertices, along, pair[1])]);
+            }
+        }
+    };
+    // Each strip's walls, as their floor and roof heights at its two stops.
+    let mut quads: Vec<[(f64, f64); 2]> = Vec::new();
+    let mut active: Vec<[(f64, f64); 2]> = Vec::new();
+    let mut next = 0;
+    let mut before: Vec<(f64, f64)> = Vec::new();
+    let mut lines: Vec<(f64, f64, f64)> = Vec::new();
+    for stop in stops.windows(2) {
+        let (from, to) = (stop[0], stop[1]);
+        let middle = (from + to) * 0.5;
+        while next < spans.len() && spans[next][0].0 <= middle {
+            if spans[next][1].0 - spans[next][0].0 > ALONG {
+                active.push(spans[next]);
+            }
+            next += 1;
+        }
+        active.retain(|span| span[1].0 >= middle);
+        lines.clear();
+        lines.extend(active.iter().map(|span| (height(span, middle), height(span, from), height(span, to))));
+        lines.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+        quads.clear();
+        for [low, high] in lines.as_chunks::<2>().0 {
+            if high.1 - low.1 > HEIGHT || high.2 - low.2 > HEIGHT {
+                quads.push([(low.1, low.2), (high.1, high.2)]);
+            }
+        }
+        let after: Vec<(f64, f64)> = quads.iter().map(|[low, high]| (low.0, high.0)).collect();
+        upright(from, &before, &after, vertices, outline);
+        before.clear();
+        before.extend(quads.iter().map(|[low, high]| (low.1, high.1)));
+        for [low, high] in &quads {
+            let [low_from, low_to] = [add(vertices, from, low.0), add(vertices, to, low.1)];
+            let [high_from, high_to] = [add(vertices, from, high.0), add(vertices, to, high.1)];
+            // Wound to face the mined side, against `direction`.
+            if high.1 - low.1 > HEIGHT {
+                faces.push([low_from, high_to, low_to]);
+            }
+            if high.0 - low.0 > HEIGHT {
+                faces.push([low_from, high_from, high_to]);
+            }
+            outline.push([low_from, low_to]);
+            outline.push([high_from, high_to]);
+        }
+    }
+    if let Some(last) = stops.last() {
+        upright(*last, &before, &[], vertices, outline);
+    }
 }

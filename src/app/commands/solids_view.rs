@@ -2121,7 +2121,7 @@ fn build_solid_partition(
 }
 
 /// How sharply a blast's surface must turn for the turn to be outlined.
-const BLAST_CREASE_ANGLE: f64 = 30.0_f64.to_radians();
+pub(crate) const BLAST_CREASE_ANGLE: f64 = 30.0_f64.to_radians();
 
 /// Each bench cut into its blasts, whole benches high, so a blast draws as
 /// one piece with its own outline. Cut the way the dig blocks are, from the
