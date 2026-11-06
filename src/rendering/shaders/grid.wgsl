@@ -1,15 +1,37 @@
 // Procedural infinite grid on the world XY plane at Z=0. A fullscreen
-// triangle reconstructs the plane intersection for each pixel, so the grid has
-// no finite mesh edge and stays stable while panning or zooming.
+// triangle casts each pixel's ray at the plane, so the grid has no mesh edge
+// and stays stable while panning or zooming.
+//
+// Everything here is measured from the eye. The ray is built from the
+// camera's axes, it meets the plane at an offset from the eye, and the lines'
+// phase about the eye arrives already reduced in f64. No f32 value is larger
+// than the distance to the pixel's plane point, so the lines stay exact at
+// any zoom and at survey coordinates in the millions.
+//
+// Each pixel picks its own powers of ten from its footprint on the plane, so
+// a perspective view draws fine lines underfoot and coarser ones further off,
+// crossfading between them, and the plane fades out towards its horizon.
 
 struct GridUniform {
-    // xy: absolute world offset of the rebased scene; z: world-Z-zero elevation
-    // relative to that scene origin; w: perspective-view flag.
-    origin_plane: vec4<f32>,
-    // x: fractional base-10 level selected once for the whole view;
-    // y: whether grazing-angle suppression is enabled (disabled in Fly mode);
-    // z: extra line width in pixels beyond the one-pixel default.
+    // Clip transform of displayed points measured from the eye.
+    eye_view_proj: mat4x4<f32>,
+    // xyz: the view's right axis scaled to half the viewport's width, per
+    // unit of depth in perspective or in metres in orthographic;
+    // w: 1 for a perspective view, 0 for orthographic.
+    ray_right: vec4<f32>,
+    // xyz: the up axis scaled to half the viewport's height likewise;
+    // w: the displayed plane's height above the eye (negative below it).
+    ray_up: vec4<f32>,
+    // xyz: the view direction; w: extra line width in pixels beyond the
+    // one-pixel default.
+    ray_forward: vec4<f32>,
+    // x: base-10 exponent of the finest level in `phases`; y: the pixel
+    // spacing at which a level is ten times too coarse to be the finest;
+    // zw: the eye's world XY, which places the world axes.
     level_params: vec4<f32>,
+    // Each level's line phase at the eye, two levels to a vector:
+    // fract(eye.xy / spacing) for spacings 10^x, 10^(x+1), ...
+    phases: array<vec4<f32>, 6>,
     minor_color: vec4<f32>,
     major_color: vec4<f32>,
     x_axis_color: vec4<f32>,
@@ -17,6 +39,9 @@ struct GridUniform {
 };
 @group(1) @binding(0)
 var<uniform> grid: GridUniform;
+
+// Levels in `phases`; GRID_LEVELS in rendering/graphics/mod.rs.
+const LEVELS: f32 = 12.0;
 
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4<f32> {
@@ -34,31 +59,35 @@ struct FragmentOutput {
     @builtin(frag_depth) depth: f32,
 };
 
-fn plane_point(ndc: vec2<f32>) -> vec4<f32> {
-    // Reversed-Z: NDC z=1 is the near plane and z=0 is the far plane.
-    let near_h = camera.inv_view_proj * vec4<f32>(ndc, 1.0, 1.0);
-    let far_h = camera.inv_view_proj * vec4<f32>(ndc, 0.0, 1.0);
-    let near_point = near_h.xyz / near_h.w;
-    let far_point = far_h.xyz / far_h.w;
-    let ray = far_point - near_point;
-    if abs(ray.z) < 1.0e-7 {
-        return vec4<f32>(0.0, 0.0, 0.0, -1.0e30);
-    }
-    let t = (grid.origin_plane.z - near_point.z) / ray.z;
-    return vec4<f32>(near_point + ray * t, t);
+fn level_phase(level: i32) -> vec2<f32> {
+    let pair = grid.phases[level / 2];
+    return select(pair.xy, pair.zw, (level & 1) == 1);
 }
 
-// Anti-aliased coverage for both families of lines at one world-space scale.
-fn grid_coverage(scene_xy: vec2<f32>, world_offset: vec2<f32>, spacing: f32) -> f32 {
-    // Reduce the large absolute offset to a one-cell phase before adding it
-    // to the small rebased coordinate. This preserves sub-metre derivatives
-    // at survey/grid coordinates in the millions.
-    let scaled_scene = scene_xy / spacing;
-    let scaled = scaled_scene + fract(world_offset / spacing);
-    let derivative = max(fwidth(scaled_scene), vec2<f32>(1.0e-6));
-    let cell_distance = abs(fract(scaled - 0.5) - 0.5) / derivative;
-    let pixel_distance = max(min(cell_distance.x, cell_distance.y) - grid.level_params.z * 0.5, 0.0);
-    return 1.0 - smoothstep(0.30, 0.90, pixel_distance);
+fn level_spacing(level: i32) -> f32 {
+    return exp2((grid.level_params.x + f32(level)) * log2(10.0));
+}
+
+// Antialiased coverage of one level's two families of lines at `hit`, the
+// plane point relative to the eye, whose pixel covers `footprint` metres of
+// the plane along X and Y: x for the lines of constant X, y for constant Y.
+// Each family is measured against its own footprint, so a family squashed
+// by a grazing view keeps one-pixel lines.
+fn level_coverage(hit: vec2<f32>, footprint: vec2<f32>, level: i32) -> vec2<f32> {
+    let spacing = level_spacing(level);
+    let cell = level_phase(level) + hit / spacing;
+    let cells_per_pixel = max(footprint / spacing, vec2<f32>(1.0e-6));
+    let pixel_distance = max(abs(fract(cell - 0.5) - 0.5) / cells_per_pixel - grid.ray_forward.w * 0.5, vec2<f32>(0.0));
+    return vec2<f32>(1.0) - smoothstep(vec2<f32>(0.30), vec2<f32>(0.90), pixel_distance);
+}
+
+// How far each family's lines at `level` stand apart on screen, as an
+// opacity: they fade as they crowd closer than a few pixels, thinning to
+// nothing instead of piling into moire or a bright sheet. Measured against
+// the line's own width, so thick lines thin out sooner.
+fn level_density(footprint: vec2<f32>, level: i32) -> vec2<f32> {
+    let spacing_pixels = level_spacing(level) / footprint / (1.0 + grid.ray_forward.w);
+    return smoothstep(vec2<f32>(3.0), vec2<f32>(8.0), spacing_pixels);
 }
 
 fn clip_to_screen_homogeneous(clip: vec4<f32>) -> vec3<f32> {
@@ -73,29 +102,18 @@ fn clip_to_screen_homogeneous(clip: vec4<f32>) -> vec3<f32> {
 
 fn projected_axis_coverage(fragment_xy: vec2<f32>, base: vec3<f32>, direction: vec3<f32>) -> f32 {
     // A 3D line projects to a 2D homogeneous line. Transform one point and
-    // its direction separately, then take their cross product; unlike fwidth
-    // on reconstructed world coordinates, this remains a single stable line
-    // when plane intersections approach infinity at the horizon.
-    let point_h = clip_to_screen_homogeneous(camera.view_proj * vec4<f32>(base, 1.0));
-    let direction_h = clip_to_screen_homogeneous(camera.view_proj * vec4<f32>(direction, 0.0));
+    // its direction separately, then take their cross product; unlike
+    // derivatives of the plane point, this remains a single stable line
+    // where plane intersections approach infinity at the horizon.
+    let point_h = clip_to_screen_homogeneous(grid.eye_view_proj * vec4<f32>(base, 1.0));
+    let direction_h = clip_to_screen_homogeneous(grid.eye_view_proj * vec4<f32>(direction, 0.0));
     let line = cross(point_h, direction_h);
     let line_length = length(line.xy);
     if line_length < 1.0e-6 {
         return 0.0;
     }
-    let pixel_distance = max(abs(dot(line, vec3<f32>(fragment_xy, 1.0))) / line_length - grid.level_params.z * 0.5, 0.0);
+    let pixel_distance = max(abs(dot(line, vec3<f32>(fragment_xy, 1.0))) / line_length - grid.ray_forward.w * 0.5, 0.0);
     return 1.0 - smoothstep(0.35, 0.95, pixel_distance);
-}
-
-fn line_alpha(scene_xy: vec2<f32>, spacing: f32, opacity: f32, world_per_pixel: f32) -> f32 {
-    let coverage = grid_coverage(scene_xy, grid.origin_plane.xy, spacing);
-    // Do not let sub-pixel lines accumulate into a bright sheet near the
-    // horizon. Blender handles the same transition through level alpha and
-    // low-alpha stippling; smooth coverage is a better fit for this pipeline.
-    // Measured against the line's own width, so thick lines thin out sooner.
-    let projected_spacing = spacing / world_per_pixel / (1.0 + grid.level_params.z);
-    let density_fade = smoothstep(0.75, 2.5, projected_spacing);
-    return coverage * opacity * density_fade;
 }
 
 @fragment
@@ -110,58 +128,85 @@ fn fs_main(@builtin(position) fragment_position: vec4<f32>) -> FragmentOutput {
         screen_xy.x / viewport.x * 2.0 - 1.0,
         1.0 - screen_xy.y / viewport.y * 2.0,
     );
-    let hit = plane_point(ndc);
-    if hit.w < -1.0e20 {
+
+    // The pixel's ray from the eye: fanned out in perspective, parallel and
+    // offset sideways in orthographic.
+    let perspective = grid.ray_right.w > 0.5;
+    let lateral = grid.ray_right.xyz * ndc.x + grid.ray_up.xyz * ndc.y;
+    let origin = select(lateral, vec3<f32>(0.0), perspective);
+    let direction = select(grid.ray_forward.xyz, grid.ray_forward.xyz + lateral, perspective);
+    let height = grid.ray_up.w;
+    // A perspective ray reaches the plane only ahead of the eye. An
+    // orthographic camera's position is nominal (its depth range runs either
+    // side of it), so its rays meet the plane wherever they cross it.
+    let crosses = abs(direction.z) > 1.0e-9;
+    let t = select(0.0, (height - origin.z) / direction.z, crosses);
+    let reaches = crosses && (!perspective || t > 0.0);
+    let hit = origin + direction * t;
+
+    // Taken before any discard, while the whole quad is still running.
+    let dx = dpdx(hit.xy);
+    let dy = dpdy(hit.xy);
+    let footprint = max(abs(dx) + abs(dy), vec2<f32>(1.0e-30));
+    if !reaches {
         discard;
     }
 
-    let scene_point = hit.xyz;
-    let clip = camera.view_proj * vec4<f32>(scene_point, 1.0);
-    // Perspective points behind the eye have non-positive W. Keep plane
-    // intersections in front of the eye even when they lie between it and
-    // the near clip plane; this is an editor construction aid, so its depth
-    // is clamped below rather than cutting the foreground off abruptly.
-    if clip.w <= 0.0 {
-        discard;
-    }
-    let unclamped_depth = clip.z / clip.w;
-
-    // Suppress the entire grid as the view approaches parallel with its
-    // plane. At grazing angles the projected cells collapse into a dense wall
-    // of lines, and the coloured axes can stretch across most of the screen.
-    // Keep the transition smooth so orbiting never produces a visible pop.
-    let grazing_angle_fade = mix(1.0, smoothstep(0.025, 0.17, abs(camera.cam_forward.z)), grid.level_params.y);
-    if grazing_angle_fade < 0.001 {
+    // Fade the plane out as the ray grazes it. In perspective this is per
+    // pixel - the grid stays under the eye and dissolves towards the
+    // horizon, however level the view; in orthographic every ray is
+    // parallel, so the whole plane fades as it turns edge-on.
+    let grazing = abs(direction.z) / length(direction);
+    // Orthographic: full above a 45 degree dip, gone below 5; the power
+    // pulls the halfway point down to 15 degrees (sines 0.707, 0.087, 0.259).
+    let ortho_fade = pow(smoothstep(0.087, 0.707, grazing), 0.414);
+    let horizon_fade = select(ortho_fade, smoothstep(0.004, 0.12, grazing), perspective);
+    if horizon_fade < 0.001 {
         discard;
     }
 
-    let dx = dpdx(scene_point.xy);
-    let dy = dpdy(scene_point.xy);
-    let world_per_pixel = max(max(length(dx), length(dy)), 1.0e-8);
+    // Pick this pixel's level from its footprint: the finest level whose
+    // lines lie a tenth of `level_params.y` pixels apart or more, with the
+    // next two above it as the coarser and major lines. The fraction
+    // crossfades between levels, so the change is continuous across the
+    // plane and as the view zooms.
+    //
+    // The footprint is the pixel's extent on the plane, which unlike the
+    // per-axis `footprint` does not change as a plan view turns. Perspective
+    // takes its longest side, so the levels coarsen with distance and the
+    // lines running away stay as far apart as those across the view. In
+    // orthographic the whole plane is squashed alike as it tilts, and there
+    // the shortest side, which tilting leaves alone, keeps the spacing the
+    // plan view has: stepping coarser with the tilt would read as the grid
+    // zooming out while the view only turns.
+    let longest = max(max(length(dx), length(dy)), 1.0e-30);
+    let shortest = abs(dx.x * dy.y - dx.y * dy.x) / longest;
+    let pixel_size = max(select(shortest, longest, perspective), 1.0e-30);
+    let base = grid.level_params.x;
+    let lod = clamp(log2(pixel_size * grid.level_params.y) / log2(10.0), base + 1.0, base + LEVELS - 1.001);
+    let transition = fract(lod);
+    let fine = i32(floor(lod) - base) - 1;
 
-    // Use one camera-selected level over the whole plane, matching Blender's
-    // viewport grid. Three adjacent powers of ten crossfade without changing
-    // scale from pixel to pixel, so perspective lines converge naturally.
-    let level_floor = floor(grid.level_params.x) - 1.0;
-    let transition = fract(grid.level_params.x);
-    let fine_spacing = pow(10.0, level_floor);
-    let coarse_spacing = fine_spacing * 10.0;
+    // A family fades as a whole, its major lines with its minor ones, by how
+    // far apart its finest visible lines stand; crossfaded like the levels
+    // so it stays continuous through a change of level. Fading each level
+    // by its own crowding would leave a squashed family as a few major lines
+    // with nothing between them.
+    let density = mix(level_density(footprint, fine), level_density(footprint, fine + 1), transition);
+    let fine_lines = level_coverage(hit.xy, footprint, fine) * density * (grid.minor_color.a * (1.0 - transition));
+    let coarse_lines = level_coverage(hit.xy, footprint, fine + 1) * density * mix(grid.major_color.a, grid.minor_color.a, transition);
+    let major_lines = level_coverage(hit.xy, footprint, fine + 2) * density * grid.major_color.a;
+    let fine_alpha = max(fine_lines.x, fine_lines.y);
+    let coarse_alpha = max(coarse_lines.x, coarse_lines.y);
+    let major_alpha = max(major_lines.x, major_lines.y);
+    var alpha = max(max(fine_alpha, coarse_alpha), major_alpha);
+    var premultiplied = mix(grid.minor_color.rgb, grid.major_color.rgb, clamp(max(coarse_alpha, major_alpha) / max(alpha, 1.0e-6), 0.0, 1.0)) * alpha;
 
-    let fine_alpha = line_alpha(scene_point.xy, fine_spacing, grid.minor_color.a * (1.0 - transition), world_per_pixel);
-    let coarse_alpha = line_alpha(
-        scene_point.xy,
-        coarse_spacing,
-        mix(grid.major_color.a, grid.minor_color.a, transition),
-        world_per_pixel,
-    );
-    let super_alpha = line_alpha(scene_point.xy, coarse_spacing * 10.0, grid.major_color.a, world_per_pixel);
-    var alpha = max(max(fine_alpha, coarse_alpha), super_alpha);
-    var premultiplied = mix(grid.minor_color.rgb, grid.major_color.rgb, clamp(max(coarse_alpha, super_alpha) / max(alpha, 1.0e-6), 0.0, 1.0)) * alpha;
-
-    // Project the two infinite world axes directly. The arbitrary coordinate
-    // along each line is kept at scene zero to avoid large-coordinate loss.
-    let x_axis_base = vec3<f32>(0.0, -grid.origin_plane.y, grid.origin_plane.z);
-    let y_axis_base = vec3<f32>(-grid.origin_plane.x, 0.0, grid.origin_plane.z);
+    // Project the two infinite world axes directly, from points on them
+    // level with the eye's own X or Y.
+    let eye_xy = grid.level_params.zw;
+    let x_axis_base = vec3<f32>(0.0, -eye_xy.y, height);
+    let y_axis_base = vec3<f32>(-eye_xy.x, 0.0, height);
     let y_axis_alpha = projected_axis_coverage(screen_xy, y_axis_base, vec3<f32>(0.0, 1.0, 0.0)) * grid.y_axis_color.a;
     premultiplied = grid.y_axis_color.rgb * y_axis_alpha + premultiplied * (1.0 - y_axis_alpha);
     alpha = y_axis_alpha + alpha * (1.0 - y_axis_alpha);
@@ -169,18 +214,23 @@ fn fs_main(@builtin(position) fragment_position: vec4<f32>) -> FragmentOutput {
     premultiplied = grid.x_axis_color.rgb * x_axis_alpha + premultiplied * (1.0 - x_axis_alpha);
     alpha = x_axis_alpha + alpha * (1.0 - x_axis_alpha);
 
-    premultiplied *= grazing_angle_fade;
-    alpha *= grazing_angle_fade;
-
+    premultiplied *= horizon_fade;
+    alpha *= horizon_fade;
     if alpha < 0.001 {
+        discard;
+    }
+
+    let clip = grid.eye_view_proj * vec4<f32>(hit, 1.0);
+    if clip.w <= 0.0 {
         discard;
     }
 
     var out: FragmentOutput;
     out.color = vec4<f32>(premultiplied / alpha, alpha);
     // Keep the construction plane continuous even when the scene-fitted clip
-    // range is tighter than the visible floor. At far depth it still remains
+    // range is tighter than the visible floor, including plane points
+    // between the eye and the near plane. At far depth it still remains
     // behind every scene object because this renderer uses reversed-Z.
-    out.depth = clamp(unclamped_depth, 0.0, 1.0);
+    out.depth = clamp(clip.z / clip.w, 0.0, 1.0);
     return out;
 }

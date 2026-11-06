@@ -1469,6 +1469,40 @@ impl<'a> Graphics<'a> {
         }
     }
 
+    /// Move the floating origin to the view once the view has wandered far
+    /// enough from it, for its scale, that f32 positions relative to it would
+    /// round visibly. An f32 coordinate rounds to about 1e-7 of its size, so
+    /// anything within `REACH` view scales of the origin rounds to under half
+    /// a pixel. Zoomed in to centimetres that reach is only metres, and
+    /// panning further would otherwise leave lines, surfaces and the orbit
+    /// pivot jittering apart.
+    ///
+    /// The scale is what the view resolves: its half height in orthographic,
+    /// and in perspective the nearer of the target and the near plane from
+    /// the eye, since the closest geometry needs the finest precision - but
+    /// never less than a metre there, or flying low through a scene would
+    /// move the origin every few seconds. A move rebuilds what is relative to
+    /// the origin, which is why it waits for the view to travel `REACH`
+    /// scales: hundreds of screens of panning, or a kilometre of flight.
+    pub(super) fn keep_scene_origin_near_view(&mut self) {
+        const REACH: f64 = 1024.0;
+        let (focus, scale) = if self.projection.is_perspective() {
+            (self.camera.position, self.projection.clip_planes().0.min(self.projection.zoom).max(1.0))
+        } else {
+            (self.camera.target(), self.projection.zoom)
+        };
+        let mut offset = focus - self.scene_origin;
+        // Vertical exaggeration stretches heights about the origin's, so
+        // moving it vertically would move everything drawn; only at true
+        // scale can the origin follow the view up and down.
+        if self.vertical_exaggeration != 1.0 {
+            offset.z = 0.0;
+        }
+        if offset.is_finite() && offset.length() > REACH * scale.max(f64::MIN_POSITIVE) {
+            self.rebase_scene_origin(self.scene_origin + offset);
+        }
+    }
+
     /// World-space bounds of everything currently visible, for callers that
     /// need to frame the scene without moving the camera (plot sheets).
     pub(crate) fn scene_extents(

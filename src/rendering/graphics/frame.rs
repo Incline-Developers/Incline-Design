@@ -166,6 +166,10 @@ impl<'a> Graphics<'a> {
                 self.scene_cache_key = None;
                 self.solid_preview_key = None;
             }
+        } else {
+            // The preview places the origin by its own rule while it shows;
+            // following the view as well could leave the two trading it.
+            self.keep_scene_origin_near_view();
         }
         let mut scene_content_changed = self.geometry_dirty;
         self.haul_roads_in_bounds = editor.shows_haul_network();
@@ -211,7 +215,7 @@ impl<'a> Graphics<'a> {
             &self.camera,
             &self.projection,
             self.vertical_exaggeration,
-            self.fly_mode_enabled,
+            f64::from(self.screen_size().1),
             &editor.xy_grid_style,
             self.window.scale_factor(),
         );

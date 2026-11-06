@@ -57,7 +57,7 @@ impl Camera {
         let forward = self.angle_forward();
         let right = self.angle_right();
         self.up = forward.cross(right).normalize();
-        self.target = self.position + forward * target_distance.max(MIN_ORTHO_ZOOM);
+        self.target = self.position + forward * target_distance.max(MIN_ZOOM);
     }
 
     pub(crate) fn sync_angles_from_forward(&mut self) {
@@ -87,14 +87,14 @@ impl Camera {
         self.up = DVec3::Y;
         self.target = center;
         // Camera height == zoom so `update_camera` re-derives the same zoom.
-        self.position = center + DVec3::Z * zoom.max(MIN_ORTHO_ZOOM);
+        self.position = center + DVec3::Z * zoom.max(MIN_ZOOM);
     }
 
     /// Place the camera at `position` looking along `forward` with the given
     /// `up`, keeping the focal point `target_distance` ahead.
     pub(crate) fn look_to(&mut self, position: DVec3, forward: DVec3, up: DVec3, target_distance: f64) {
         self.position = position;
-        self.target = position + forward * target_distance.max(MIN_ORTHO_ZOOM);
+        self.target = position + forward * target_distance.max(MIN_ZOOM);
         self.up = up;
         self.sync_angles_from_forward();
     }
@@ -112,11 +112,18 @@ impl Camera {
     pub(crate) fn frame_keep_orientation(&mut self, center: DVec3, zoom: f64) {
         let forward = self.forward();
         self.target = center;
-        self.position = center - forward * zoom.max(MIN_ORTHO_ZOOM);
+        self.position = center - forward * zoom.max(MIN_ZOOM);
     }
 }
 
-const MIN_ORTHO_ZOOM: f64 = 1.0e-4;
+/// The closest the view zooms: a view 20 cm tall (the zoom is its half
+/// height). Vertices are f32 on the GPU, relative to a chunk origin that can
+/// lie kilometres away, so they round to a tenth of a millimetre or so; this
+/// keeps that well under a pixel.
+const MIN_ZOOM: f64 = 0.1;
+/// The farthest the view zooms out: about the size of a continent, past any
+/// mine or projected coordinate system.
+const MAX_ZOOM: f64 = 1.0e7;
 pub(crate) const PERSPECTIVE_FOV_Y: f64 = 40.0_f64.to_radians();
 const MIN_PERSPECTIVE_NEAR: f64 = 0.25;
 const MAX_PERSPECTIVE_DEPTH_SPAN: f64 = 150_000.0;
@@ -190,9 +197,18 @@ impl Projection {
             return;
         }
 
-        let requested_far = (max_depth + padding).max(self.min_perspective_near * 2.0);
-        self.znear = padded_perspective_near(min_depth, padding, requested_far, self.min_perspective_near);
+        let near_limit = self.near_limit();
+        let requested_far = (max_depth + padding).max(near_limit * 2.0);
+        self.znear = padded_perspective_near(min_depth, padding, requested_far, near_limit);
         self.zfar = requested_far.min(self.znear + self.max_perspective_depth_span);
+    }
+
+    /// The nearest the perspective near plane may come: the user's limit,
+    /// unless the view is zoomed in closer than that, when the plane follows
+    /// the zoom so what the view looks at is not clipped away. Depth is a
+    /// reversed-Z float, so a near plane that close costs no precision.
+    fn near_limit(&self) -> f64 {
+        self.min_perspective_near.min(self.zoom * 0.1)
     }
 
     pub(crate) fn expand_view_depth_range(&mut self, min_depth: f64, max_depth: f64, padding: f64) {
@@ -202,9 +218,10 @@ impl Projection {
             return;
         }
 
-        let requested_far = (max_depth + padding).max(self.min_perspective_near * 2.0);
-        if max_depth + padding > self.min_perspective_near {
-            let near = padded_perspective_near(min_depth, padding, requested_far.max(self.zfar), self.min_perspective_near);
+        let near_limit = self.near_limit();
+        let requested_far = (max_depth + padding).max(near_limit * 2.0);
+        if max_depth + padding > near_limit {
+            let near = padded_perspective_near(min_depth, padding, requested_far.max(self.zfar), near_limit);
             self.znear = self.znear.min(near);
         }
         self.zfar = self.zfar.max(requested_far).min(self.znear + self.max_perspective_depth_span);
@@ -236,6 +253,10 @@ impl Projection {
         self.perspective
     }
 
+    pub(crate) fn aspect(&self) -> f64 {
+        self.aspect
+    }
+
     pub(crate) fn perspective_fov_y(&self) -> f64 {
         self.perspective_fov_y
     }
@@ -245,15 +266,16 @@ impl Projection {
         self.min_perspective_near = near_clip_limit;
         self.max_perspective_depth_span = max_clip_span;
         if self.perspective {
-            self.znear = self.znear.max(self.min_perspective_near);
+            self.znear = self.znear.max(self.near_limit());
             self.zfar = self.zfar.max(self.znear * (1.0 + f64::EPSILON)).min(self.znear + self.max_perspective_depth_span);
         }
     }
 
     pub(crate) fn set_perspective(&mut self, perspective: bool) {
         if perspective && !self.perspective {
-            let far = self.znear.abs().max(self.zfar.abs()).max(self.min_perspective_near * 2.0);
-            self.znear = (far * 1.0e-4).max(self.min_perspective_near).min(far * (1.0 - f64::EPSILON));
+            let near_limit = self.near_limit();
+            let far = self.znear.abs().max(self.zfar.abs()).max(near_limit * 2.0);
+            self.znear = (far * 1.0e-4).max(near_limit).min(far * (1.0 - f64::EPSILON));
             self.zfar = far.min(self.znear + self.max_perspective_depth_span);
         } else if !perspective && self.perspective {
             let half_depth = self.zfar.max(1.0);
@@ -473,7 +495,7 @@ impl CameraController {
             start: view_rotation(start_forward, orthonormal_up(start_forward, camera.up())),
             end: view_rotation(end_forward, orthonormal_up(end_forward, up_hint)),
             target: camera.target(),
-            distance: target_distance.max(MIN_ORTHO_ZOOM),
+            distance: target_distance.max(MIN_ZOOM),
             elapsed: Duration::ZERO,
             duration: VIEW_TRANSITION_DURATION,
         });
@@ -594,7 +616,9 @@ impl CameraController {
         } else {
             self.zoom_sensitivity * self.scroll
         };
-        let zoom_factor = to_target_distance_modifier * zoom_scale;
+        // Stop at the zoom limits rather than pass them: the view's scale
+        // follows this distance, and crossing the target would flip it.
+        let zoom_factor = (to_target_distance_modifier * zoom_scale).clamp(to_target_distance_modifier - MAX_ZOOM, (to_target_distance_modifier - MIN_ZOOM).max(0.0));
         let aspect = screen_size.0 as f64 / screen_size.1.max(1.0) as f64;
         let zoom_lateral = (right * mouse_loc_rel.x * aspect + up * mouse_loc_rel.y) * zoom_factor;
         camera.position += scrollward * zoom_factor + zoom_lateral;
@@ -646,7 +670,7 @@ impl CameraController {
     fn reconcile_zoom(camera: &Camera, projection: &mut Projection) {
         // Scale orthographic bounds by camera-to-target distance for zoom effect
         let dist = (camera.target - camera.position).dot(camera.forward()).abs();
-        projection.zoom = dist.max(MIN_ORTHO_ZOOM);
+        projection.zoom = dist.clamp(MIN_ZOOM, MAX_ZOOM);
     }
 }
 
