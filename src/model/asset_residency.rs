@@ -95,7 +95,7 @@ impl OpenItem {
                     secondary_count: item.model.metadata.variables.len(),
                 };
                 item.model.release_values();
-                item.blocks = Arc::new(super::block_model::BlockBoundsSource::Explicit(Vec::new()));
+                item.blocks = Arc::new(super::block_model::BlockBoundsSource::Explicit(Default::default()));
                 item.renderable_block_indices = Arc::new(super::block_model::RenderableBlockIndices::All(0));
                 item.active_values_cache = Default::default();
                 summary

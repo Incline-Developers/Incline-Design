@@ -98,9 +98,10 @@ impl<'a> App<'a> {
                     // steps at the boundaries between them; the weights are an
                     // estimate of their relative cost, not a measurement.
                     let mapping = source.csv_columns.as_ref().context("Only CSV block-model sources are supported")?;
-                    let bytes = std::fs::read(&source.path).with_context(|| format!("Failed to read CSV block model {}", source.path.display()))?;
-                    let parsed =
-                        crate::model::formats::csv_block_model::parse(&bytes, mapping).with_context(|| format!("Failed to parse CSV block model {}", source.path.display()))?;
+                    let file = std::fs::File::open(&source.path).with_context(|| format!("Failed to read CSV block model {}", source.path.display()))?;
+                    let file_bytes = file.metadata().map_or(0, |metadata| metadata.len()).max(1);
+                    let parsed = crate::model::formats::csv_block_model::parse_stream(file, mapping, |read| progress.set_fraction(read as f32 / file_bytes as f32 * 0.5))
+                        .with_context(|| format!("Failed to parse CSV block model {}", source.path.display()))?;
                     let (model, blocks) = (parsed.model, std::sync::Arc::new(parsed.blocks));
                     progress.set_fraction(0.5);
                     let renderable_block_indices = std::sync::Arc::new(model.renderable_block_indices()?);
@@ -504,7 +505,7 @@ impl<'a> App<'a> {
                 grid_result.get_or_insert((result.dims, result.upper, result.estimates.len()));
                 columns.push(BlockModelColumn {
                     name: variable.clone(),
-                    values: std::sync::Arc::new(result.estimates),
+                    values: std::sync::Arc::new(crate::model::formats::block_column::BlockColumn::from_values(&result.estimates)),
                     categories: None,
                     category_colors: std::collections::BTreeMap::new(),
                 });

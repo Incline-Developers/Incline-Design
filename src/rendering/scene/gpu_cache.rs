@@ -2207,7 +2207,7 @@ fn upload_edge_chunk(device: &wgpu::Device, queue: &wgpu::Queue, instances: &[Ed
 }
 
 pub(crate) struct BlockModelColorValues {
-    values: std::sync::Arc<Vec<f64>>,
+    values: std::sync::Arc<crate::model::formats::block_column::BlockColumn>,
     default: Option<f64>,
     range: Option<(f64, f64)>,
     categorical: bool,
@@ -2292,7 +2292,7 @@ pub(crate) fn grade_for_block(color_values: &Option<BlockModelColorValues>, bloc
     let Some(color_values) = color_values.as_ref() else {
         return FALLBACK_BLOCK_GRADE;
     };
-    let Some(value) = color_values.values.get(block_index).copied() else {
+    let Some(value) = color_values.values.checked(block_index) else {
         return empty_grade(hide_empty);
     };
     let is_default = color_values.default.is_some_and(|default| (value - default).abs() < 1e-8);

@@ -245,7 +245,7 @@ pub(crate) fn build(
             bucket.tonnes += base.tonnes;
             bucket.mining += base.mining;
             for (sums, element) in bucket.elements.iter_mut().zip(&economics.elements) {
-                let grade = finite_or_zero(element.values[block]);
+                let grade = finite_or_zero(element.values.get(block));
                 sums.grade_tonnes += base.tonnes * grade;
                 sums.contained += base.tonnes * grade * element.factor;
             }

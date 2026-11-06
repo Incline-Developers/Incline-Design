@@ -134,7 +134,7 @@ pub(crate) fn slopes(grid: &Grid, spec: &SlopeSpec, block_of_cell: &[u32]) -> Re
                     if block == NO_BLOCK {
                         return (step(*fallback), false);
                     }
-                    let angle = values[block as usize];
+                    let angle = values.get(block as usize);
                     if angle.is_finite() && angle > 0.0 && angle < 90.0 && step(angle) > 0 {
                         (step(angle), false)
                     } else {

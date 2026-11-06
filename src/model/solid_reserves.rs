@@ -17,7 +17,7 @@ use rayon::prelude::*;
 
 use super::{
     ReserveAggregation, ReserveField, ReserveFieldId, ReserveFieldIssue,
-    block_model::{BlockBoundsSource, ReserveFieldMapping, ReserveMappingSource},
+    block_model::{BlockBoundsSource, BlockValues as Values, ReserveFieldMapping, ReserveMappingSource},
     formats::{block_model_data::BlockModelData, mesh_data::Triangulation},
     spatial::TriangleBvh,
 };
@@ -282,26 +282,14 @@ impl ReservePartition {
     }
 }
 
-enum Values {
-    Column(Arc<Vec<f64>>),
-    Constant(f64),
-}
-impl Values {
-    fn at(&self, index: usize) -> f64 {
-        match self {
-            Self::Column(values) => values[index],
-            Self::Constant(value) => *value,
-        }
-    }
-}
-struct NumericField {
+struct NumericField<'a> {
     id: ReserveFieldId,
-    values: Values,
-    weights: Option<Values>,
+    values: Values<'a>,
+    weights: Option<Values<'a>>,
 }
-struct CategoryField {
+struct CategoryField<'a> {
     id: ReserveFieldId,
-    values: Values,
+    values: Values<'a>,
     labels: BTreeMap<u32, String>,
 }
 
@@ -436,7 +424,7 @@ pub(crate) fn compute(
         match &mapping.iter().find(|entry| entry.field == id)?.source {
             ReserveMappingSource::Constant(value) => Some(Values::Constant(*value)),
             ReserveMappingSource::Column(name) => model.shared_numeric_values(name).map(Values::Column),
-            ReserveMappingSource::PerVolume(name) => crate::model::block_model::per_volume_values(model, blocks, name).map(Values::Column),
+            ReserveMappingSource::PerVolume(name) => crate::model::block_model::per_volume_values(model, blocks, name),
         }
     };
     let mut numeric = Vec::new();
@@ -471,7 +459,7 @@ pub(crate) fn compute(
                 Some(volumes) => numeric.push(NumericField {
                     id: field.id,
                     values,
-                    weights: Some(Values::Column(volumes)),
+                    weights: Some(volumes),
                 }),
                 None => note(&mut resolution, field.id, ReserveFieldIssue::WeightUnresolved),
             },
@@ -748,7 +736,7 @@ struct Counters {
 /// `tally` is present only for the group that owns the block's counts - the
 /// `all` group. Category sub-groups measure the same block again and would
 /// otherwise double-count its missing values.
-fn add(group: &mut ReserveGroup, numeric: &[NumericField], index: usize, fraction: f64, block_volume: f64, mut tally: Option<(&mut Vec<bool>, &mut Counters)>) {
+fn add(group: &mut ReserveGroup, numeric: &[NumericField<'_>], index: usize, fraction: f64, block_volume: f64, mut tally: Option<(&mut Vec<bool>, &mut Counters)>) {
     group.equivalent_blocks += fraction;
     group.covered_volume += fraction * block_volume;
     for (slot, field) in numeric.iter().enumerate() {

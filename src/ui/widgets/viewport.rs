@@ -1515,8 +1515,7 @@ fn cached_variable_range(editor: &mut EditorState, model: &OpenBlockModel, name:
             let default = color_variable_default(variable);
             model
                 .model
-                .color_values(name)
-                .ok()
+                .shared_numeric_values(name)
                 .and_then(|values| render_value_range(&values, &model.renderable_block_indices, default))
         })
     };

@@ -14,7 +14,10 @@ use super::grid::Topography;
 use crate::{
     i18n::tr,
     model::{
-        formats::block_model_data::{BlockModelData, BlockVariable},
+        formats::{
+            block_column::BlockColumn,
+            block_model_data::{BlockModelData, BlockVariable},
+        },
         optimization::{
             AirMode, FactorInput, FieldValue, HaulageCost, HaulageMode, OptimizationScenario, RosetteInterpolation, RosetteIssue, ShellMode, SlopeMode, ValueKind, metal_factor,
             parse_factor_list, round_factor, shell_count_for_step,
@@ -30,14 +33,14 @@ pub(crate) const MAX_SHELLS: usize = 1000;
 pub(crate) enum PerTonne {
     Value(f64),
     /// Blank cells cost nothing.
-    Field(Arc<Vec<f64>>),
+    Field(Arc<BlockColumn>),
 }
 
 impl PerTonne {
     pub(crate) fn at(&self, block: usize) -> f64 {
         match self {
             Self::Value(value) => *value,
-            Self::Field(values) => finite_or_zero(values[block]),
+            Self::Field(values) => finite_or_zero(values.get(block)),
         }
     }
 }
@@ -51,7 +54,7 @@ pub(crate) fn finite_or_zero(value: f64) -> f64 {
 pub(crate) struct Element {
     /// Index into [`Economics::elements`].
     pub(crate) index: usize,
-    pub(crate) values: Arc<Vec<f64>>,
+    pub(crate) values: Arc<BlockColumn>,
     /// Subtracted from the grade before recovery: the method's threshold for
     /// the main quality field, 0 for the others.
     pub(crate) threshold: f64,
@@ -107,16 +110,16 @@ pub(crate) enum Air {
 #[derive(Clone)]
 pub(crate) struct Economics {
     /// The density field, when one is chosen.
-    pub(crate) density: Option<Arc<Vec<f64>>>,
+    pub(crate) density: Option<Arc<BlockColumn>>,
     /// Used for every block without a field, and for blank, zero or negative
     /// densities in it. Always above 0.
     pub(crate) default_density: f64,
-    pub(crate) quality: Arc<Vec<f64>>,
+    pub(crate) quality: Arc<BlockColumn>,
     /// Rock type codes, when a rock type field is set.
-    pub(crate) rock: Option<Arc<Vec<f64>>>,
+    pub(crate) rock: Option<Arc<BlockColumn>>,
     pub(crate) mining_default: f64,
     /// The field the mining cost varies by and its cost per category code.
-    pub(crate) mining_by_code: Option<(Arc<Vec<f64>>, Vec<f64>)>,
+    pub(crate) mining_by_code: Option<(Arc<BlockColumn>, Vec<f64>)>,
     pub(crate) rehab: PerTonne,
     pub(crate) waste_haulage: PerTonne,
     pub(crate) ore_haulage: PerTonne,
@@ -131,7 +134,7 @@ pub(crate) struct Economics {
 #[derive(Clone, Debug)]
 pub(crate) struct ReportElement {
     pub(crate) name: String,
-    pub(crate) values: Arc<Vec<f64>>,
+    pub(crate) values: Arc<BlockColumn>,
     /// Sales units per tonne of rock per grade unit (see [`metal_factor`]).
     pub(crate) factor: f64,
     pub(crate) grade_unit: String,
@@ -142,7 +145,7 @@ impl Economics {
     pub(crate) fn mining_cost(&self, block: usize) -> f64 {
         match &self.mining_by_code {
             None => self.mining_default,
-            Some((codes, table)) => code_index(codes[block], table.len()).map_or(self.mining_default, |code| table[code]),
+            Some((codes, table)) => code_index(codes.get(block), table.len()).map_or(self.mining_default, |code| table[code]),
         }
     }
 }
@@ -174,7 +177,7 @@ pub(crate) enum SlopeSpec {
     Uniform(mineflow::Slope),
     /// Each block's angle in degrees from a field; blocks without a valid one
     /// (blank, or outside 0..90) take `fallback`.
-    Field { values: Arc<Vec<f64>>, fallback: f64 },
+    Field { values: Arc<BlockColumn>, fallback: f64 },
 }
 
 /// How a directional shell's mining front advances from the starting point.
@@ -227,7 +230,7 @@ impl<'a> Checker<'a> {
         })
     }
 
-    fn numeric(&mut self, name: &str, what: impl FnOnce() -> String) -> Option<Arc<Vec<f64>>> {
+    fn numeric(&mut self, name: &str, what: impl FnOnce() -> String) -> Option<Arc<BlockColumn>> {
         if name.is_empty() {
             self.issues.push(tr!("opt-run-field-not-set", what = what()));
             return None;
@@ -242,7 +245,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn categorical(&mut self, name: &str, what: impl FnOnce() -> String) -> Option<(&'a BlockVariable, Arc<Vec<f64>>)> {
+    fn categorical(&mut self, name: &str, what: impl FnOnce() -> String) -> Option<(&'a BlockVariable, Arc<BlockColumn>)> {
         if name.is_empty() {
             self.issues.push(tr!("opt-run-field-not-set", what = what()));
             return None;

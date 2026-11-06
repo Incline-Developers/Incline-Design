@@ -926,7 +926,12 @@ impl<'a> App<'a> {
             })
             .collect();
         let count = values.categories.len();
-        if let Err(error) = model.model.set_category_column(field, values.codes, values.categories, colors.clone()) {
+        if let Err(error) = model.model.set_category_column(
+            field,
+            std::sync::Arc::new(crate::model::formats::block_column::BlockColumn::from_values(&values.codes)),
+            values.categories,
+            colors.clone(),
+        ) {
             userspace_error!(
                 "{}",
                 tr!("opt-run-field-failed", field = field.to_owned(), model = model.name.clone(), error = error.to_string())
