@@ -1496,7 +1496,7 @@ fn clip_in_direction(
     }
     let (vertices, faces) = slab;
     let mesh = Arc::new(Triangulation::from_vertices_and_faces(vertices, faces)?);
-    let spatial = Arc::new(crate::model::spatial::TriangleBvh::build(&mesh));
+    let spatial = Arc::new(crate::model::spatial::TriangleBvh::deferred(mesh.clone()));
     let order = Arc::new(crate::model::triangulation::spatial_surface_face_order(&mesh));
     let mut result = preview_triangulation(source.name.clone(), mesh, spatial, edges, order, source.color, source.line_color);
     result.id = source.id;

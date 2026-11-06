@@ -197,7 +197,10 @@ pub(crate) fn spatial_surface_face_order(mesh: &mesh_data::Triangulation) -> Vec
         })
         .collect();
     split_chunk_range(&mut faces);
-    faces.into_iter().map(|face| face.face).collect()
+    // Collecting reuses the allocation, which is four times too large for this.
+    let mut order: Vec<u32> = faces.into_iter().map(|face| face.face).collect();
+    order.shrink_to_fit();
+    order
 }
 
 struct FaceCentroid {

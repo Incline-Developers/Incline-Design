@@ -2376,7 +2376,12 @@ fn carve_level(level: &Level, old_parts: &mut [Option<SolidPart>], cancel: &crat
                     super::triangulation::solid_between::crease_outline(&built.slab, &internal, BLAST_CREASE_ANGLE)
                 }
             };
-            let mut mesh = piece_preview(source, built.slab, edges)?;
+            // The clip's own seams inside the piece. Its volume is already
+            // taken, its outline has just been, and nothing can see them.
+            let mut slab = built.slab;
+            let mut internal = built.internal_wall.iter();
+            slab.1.retain(|_| !internal.next().is_some_and(|wall| *wall));
+            let mut mesh = piece_preview(source, slab, edges)?;
             if built.source_vertex.is_some() {
                 // Split off whole, its edges are the source's every triangle
                 // side: shown only as the whole flitch shows them, not as the
@@ -2450,7 +2455,7 @@ fn flat_ground(source: &OpenTriangulation, faces: &[Face], z: f64) -> Option<Ope
         vertices.extend(points.iter().map(|point| crate::model::formats::mesh_data::Vertex { x: point.x, y: point.y, z }));
     }
     let mesh = Arc::new(Triangulation::from_vertices_and_faces(vertices, triangles).ok()?);
-    let spatial = Arc::new(crate::model::spatial::TriangleBvh::build(&mesh));
+    let spatial = Arc::new(crate::model::spatial::TriangleBvh::deferred(mesh.clone()));
     let order = Arc::new(crate::model::triangulation::spatial_surface_face_order(&mesh));
     let mut flat = preview_triangulation(source.name.clone(), mesh, spatial, edges, order, source.color, source.line_color);
     flat.always_show_edges = source.always_show_edges;
@@ -2463,8 +2468,9 @@ fn flat_ground(source: &OpenTriangulation, faces: &[Face], z: f64) -> Option<Ope
 /// source's colours.
 fn piece_preview(source: &OpenTriangulation, slab: super::triangulation::solid_between::Slab, mut edges: Vec<[u32; 2]>) -> anyhow::Result<OpenTriangulation> {
     let (vertices, faces) = merge_coincident_vertices(slab, &mut edges);
+    edges.shrink_to_fit();
     let mesh = Arc::new(Triangulation::from_vertices_and_faces(vertices, faces)?);
-    let spatial = Arc::new(crate::model::spatial::TriangleBvh::build(&mesh));
+    let spatial = Arc::new(crate::model::spatial::TriangleBvh::deferred(mesh.clone()));
     let order = Arc::new(crate::model::triangulation::spatial_surface_face_order(&mesh));
     let mut piece = preview_triangulation(source.name.clone(), mesh, spatial, edges, order, source.color, source.line_color);
     piece.cull_back_faces = true;
@@ -2478,12 +2484,21 @@ fn piece_preview(source: &OpenTriangulation, slab: super::triangulation::solid_b
 /// vertices it has places, and a solid has thousands of pieces to hold in
 /// memory and on the GPU. Only bit-identical positions merge, and faces keep
 /// their order, so the geometry and everything measured from it are unchanged.
+/// A vertex nothing refers to is dropped.
 fn merge_coincident_vertices((vertices, mut faces): super::triangulation::solid_between::Slab, edges: &mut [[u32; 2]]) -> super::triangulation::solid_between::Slab {
+    let mut used = vec![false; vertices.len()];
+    for &index in faces.iter().flatten().chain(edges.iter().flatten()) {
+        used[index as usize] = true;
+    }
     let mut merged = Vec::with_capacity(vertices.len() / 2);
     let mut seen: HashMap<[u64; 3], u32> = HashMap::with_capacity(vertices.len() / 2);
     let remap: Vec<u32> = vertices
         .iter()
-        .map(|vertex| {
+        .zip(&used)
+        .map(|(vertex, used)| {
+            if !used {
+                return u32::MAX;
+            }
             *seen.entry([vertex.x.to_bits(), vertex.y.to_bits(), vertex.z.to_bits()]).or_insert_with(|| {
                 merged.push(*vertex);
                 (merged.len() - 1) as u32
@@ -3187,7 +3202,8 @@ fn reserve_partition(parts: &[SolidPart]) -> ReservePartition {
     for (slot, part) in parts.iter().enumerate() {
         let piece = ReservePiece {
             mesh: part.mesh.mesh.clone(),
-            spatial: part.mesh.spatial.clone(),
+            // Its own tree, gone with the scan: the part rarely needs one again.
+            spatial: Arc::new(crate::model::spatial::TriangleBvh::deferred(part.mesh.mesh.clone())),
             slot,
         };
         let band = part.band.selection;

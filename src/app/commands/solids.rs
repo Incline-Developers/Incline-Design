@@ -1031,11 +1031,12 @@ fn cut_slabs(
         let Ok(mesh) = crate::model::formats::mesh_data::Triangulation::from_vertices_and_faces(slab.0, slab.1) else {
             continue;
         };
-        let spatial = Arc::new(crate::model::spatial::TriangleBvh::build(&mesh));
+        let mesh = Arc::new(mesh);
+        let spatial = Arc::new(crate::model::spatial::TriangleBvh::deferred(mesh.clone()));
         let edges = Arc::new(crate::model::triangulation::unique_edges(&mesh));
         let surface_face_order = Arc::new(crate::model::triangulation::spatial_surface_face_order(&mesh));
         let slab = Slab {
-            mesh: Arc::new(mesh),
+            mesh,
             spatial,
             edges,
             surface_face_order,

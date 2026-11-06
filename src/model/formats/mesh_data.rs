@@ -109,7 +109,7 @@ impl Triangulation {
 
     /// Construct a triangulation from a computed vertex list and face index triples.
     /// Face indices must be zero-based and within bounds.
-    pub fn from_vertices_and_faces(vertices: Vec<Vertex>, faces: Vec<[u32; 3]>) -> Result<Self, ReadError> {
+    pub fn from_vertices_and_faces(mut vertices: Vec<Vertex>, faces: Vec<[u32; 3]>) -> Result<Self, ReadError> {
         let vertex_count = vertices.len();
         let face_count = faces.len();
         if vertex_count == 0 || face_count == 0 {
@@ -132,7 +132,11 @@ impl Triangulation {
             });
         }
         let bounds = Bounds::from_vertices(&vertices);
-        let faces = faces.into_iter().map(|indices| Face { indices }).collect();
+        // Generated meshes are grown by pushing and then kept for as long as
+        // the project is open, so hand the spare capacity back.
+        vertices.shrink_to_fit();
+        let mut faces: Vec<Face> = faces.into_iter().map(|indices| Face { indices }).collect();
+        faces.shrink_to_fit();
         Ok(Self { vertices, faces, bounds })
     }
 }

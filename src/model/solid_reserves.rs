@@ -551,6 +551,7 @@ pub(crate) fn compute(
     // itself. The threads therefore only measure. The accumulation below walks
     // the measurements in the order one thread would have produced them, so
     // the figures are bit for bit the ones this scan has always reported.
+    partition.bands.par_iter().flat_map(|band| &band.pieces).for_each(|piece| piece.spatial.ensure_built());
     let mut chunk_start = 0usize;
     while chunk_start < blocks.len() {
         anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
