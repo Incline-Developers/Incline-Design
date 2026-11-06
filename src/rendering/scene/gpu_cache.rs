@@ -69,9 +69,10 @@ pub(crate) struct CachedTriangulationGpu {
     pub(crate) surface_style_bind_group: wgpu::BindGroup,
     /// Cached computed colour; used for transparency sorting and dirty-checking.
     pub(crate) color: [f32; 4],
-    /// The style uniform's `params` and `cut`, for dirty-checking.
+    /// The style uniform's `params`, `cut` and `overlay`, for dirty-checking.
     surface_params: [f32; 4],
     surface_cut: [f32; 4],
+    surface_overlay: [f32; 4],
     pub(crate) raster_texture: Option<RasterTextureId>,
     pub(crate) raster_opacity: f32,
     pub(crate) edge_chunks: Vec<CachedEdgeChunk>,
@@ -249,15 +250,18 @@ struct SurfaceStyleUniform {
     /// direction draws it everywhere).
     pattern: [f32; 4],
     /// The surface drawn as its cut in a 2D section (`section_cut.wgsl`):
-    /// x: cut line width in pixels; y: 1 while selected. In `surface.wgsl`,
-    /// z: the pixel scale the contour bands are drawn at, 0 for none; w: the scene origin's elevation, wrapped to
-    /// [`CONTOUR_ORIGIN_PERIOD`].
+    /// x: cut line width in pixels; y: 1 while selected; zw unused.
     cut: [f32; 4],
+    /// Drawn over the surface in `surface.wgsl`. x: the pixel scale of the
+    /// contour bands, 0 for none; y, z: the scene origin's elevation
+    /// wrapped to 10 km and 10 m, multiples of every coarse and fine contour
+    /// interval; w: how far the surface is tinted toward the selection
+    /// colour.
+    overlay: [f32; 4],
 }
 
-/// The period the scene origin's elevation is wrapped to for the contour
-/// bands: a multiple of every interval they draw at.
-const CONTOUR_ORIGIN_PERIOD: f64 = 10_000.0;
+/// How far a selected surface's colour is mixed toward the selection blue.
+const SELECTION_TINT: f32 = 0.6;
 
 /// Mirrors `ColorStop` for upload; `pos.x` holds the stop's `t`, the rest is
 /// padding to keep the array's stride 16-byte aligned.
@@ -1458,7 +1462,7 @@ impl TriangulationGpuCache {
             let entity = triangulation.entity_id();
             let raster_texture = triangulation.raster_texture.filter(|id| drawable_rasters.contains(id));
             let selected = editor.selected_handles.contains(&entity);
-            // Selection is represented by the highlighted wireframe below. A live
+            // Selection is represented by the hatching below. A live
             // picker hover temporarily overrides the face colour as well so the
             // candidate remains obvious even when it was already selected.
             let mut color = if editor.tri_hover_handles.contains(&entity) {
@@ -1473,10 +1477,12 @@ impl TriangulationGpuCache {
             if editor.translucent_handles.contains(&entity) {
                 make_translucent(&mut line_color);
             }
-            // Selection always shows edges, even when global wireframes are off,
-            // and so does a mesh that asks for them - a dig block's seam is the
-            // only thing separating it from the block beside it.
-            let show_edges = selected || editor.topology_wireframes_enabled || triangulation.always_show_edges;
+            // Selection tints the surface rather than drawing every triangle
+            // side, which floods a dense topography. Edges show when
+            // wireframes are on, in selection's colour on a selected mesh, and
+            // on a mesh that asks for them - a dig block's seam is the only
+            // thing separating it from the block beside it.
+            let show_edges = editor.topology_wireframes_enabled || triangulation.always_show_edges;
             // Contour bands in the wireframe's colour, drawn by the surface
             // shader whatever the device; selection's blue while selected.
             let contour_scale = if editor.topology_contours_enabled { scale_factor } else { 0.0 };
@@ -1518,10 +1524,18 @@ impl TriangulationGpuCache {
                 cut: [
                     (triangulation.line_weight.unwrap_or(1.0) * 2.0 * scale_factor).max(1.5),
                     if selected { 1.0 } else { 0.0 },
+                    0.0,
+                    0.0,
+                ],
+                // Contours fall on round elevations, not round offsets from
+                // the scene origin: its elevation wrapped to a multiple of
+                // the coarse intervals and, finer, of the close ones.
+                overlay: [
                     contour_scale,
-                    // Contours fall on round elevations, not round offsets
-                    // from the scene origin; a 10 km period keeps it in f32.
-                    scene_origin.z.rem_euclid(CONTOUR_ORIGIN_PERIOD) as f32,
+                    scene_origin.z.rem_euclid(10_000.0) as f32,
+                    scene_origin.z.rem_euclid(10.0) as f32,
+                    // A hovered picker candidate keeps its yellow untinted.
+                    if selected && !editor.tri_hover_handles.contains(&entity) { SELECTION_TINT } else { 0.0 },
                 ],
             };
 
@@ -1548,6 +1562,7 @@ impl TriangulationGpuCache {
                     || cached.color != color
                     || cached.surface_params != surface_style.params
                     || cached.surface_cut != surface_style.cut
+                    || cached.surface_overlay != surface_style.overlay
                     || cached.raster_texture != raster_texture
                     || cached.raster_opacity != triangulation.raster_opacity
                     || (shader_wireframe && edge_style_dirty);
@@ -1576,6 +1591,7 @@ impl TriangulationGpuCache {
                     cached.color = color;
                     cached.surface_params = surface_style.params;
                     cached.surface_cut = surface_style.cut;
+                    cached.surface_overlay = surface_style.overlay;
                     cached.raster_texture = raster_texture;
                     cached.raster_opacity = triangulation.raster_opacity;
                 }
@@ -1651,6 +1667,7 @@ impl TriangulationGpuCache {
                         color,
                         surface_params: surface_style.params,
                         surface_cut: surface_style.cut,
+                        surface_overlay: surface_style.overlay,
                         raster_texture,
                         raster_opacity: triangulation.raster_opacity,
                         edge_chunks,
@@ -2052,6 +2069,7 @@ fn upload_surface_chunk(
         pattern_color: [0.0; 4],
         pattern: [0.0; 4],
         cut: [0.0; 4],
+        overlay: [0.0; 4],
     };
     let debug_style_buffer = buffer_with_contents(device, queue, "Chunk Debug Style Uniform", wgpu::BufferUsages::UNIFORM, bytemuck::bytes_of(&debug_style));
     let debug_style_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -2125,7 +2143,8 @@ impl CachedSurfaceChunk {
             wire_color: surface_style.wire_color,
             pattern_color: [0.0; 4],
             pattern: [0.0; 4],
-            cut: [0.0, 0.0, surface_style.cut[2], surface_style.cut[3]],
+            cut: [0.0; 4],
+            overlay: surface_style.overlay,
         };
         queue.write_buffer(&self.debug_style_buffer, 0, bytemuck::bytes_of(&style));
     }

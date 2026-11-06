@@ -301,7 +301,9 @@ pub(crate) struct CameraUniform {
     /// XY grid) needs to subtract this first. Zero for every render target
     /// that's filled from its own origin (plots, slice previews, the offscreen
     /// volume raycast target) - only the main window's toolbar-bounded canvas
-    /// has a nonzero offset. zw: unused padding.
+    /// has a nonzero offset. z: the projection's y scale (its matrix's
+    /// `[1][1]`), from which a shader sizes a pixel at a given view depth,
+    /// kept by [`Self::update_view_proj`]. w: unused padding.
     viewport_origin: [f32; 4],
     section_plane: [f32; 4],
     section_normal: [f32; 4],
@@ -357,6 +359,7 @@ impl CameraUniform {
         let view_proj = scene_view_proj(camera, projection, scene_origin, vertical_exaggeration);
         self.view_proj = view_proj.as_mat4().to_cols_array_2d();
         self.inv_view_proj = view_proj.inverse().as_mat4().to_cols_array_2d();
+        self.viewport_origin[2] = projection.calc_matrix().y_axis.y as f32;
         let forward = camera.forward();
         self.cam_forward = [forward.x as f32, forward.y as f32, forward.z as f32, vertical_exaggeration as f32];
         self.cam_position = [
@@ -376,7 +379,7 @@ impl CameraUniform {
     /// except the main window's canvas) should leave this at its default of
     /// zero rather than calling it.
     pub(crate) fn set_viewport_origin(&mut self, x: u32, y: u32) {
-        self.viewport_origin = [x as f32, y as f32, 0.0, 0.0];
+        self.viewport_origin = [x as f32, y as f32, self.viewport_origin[2], 0.0];
     }
 
     /// Interaction-quality knobs packed into the otherwise-unused `viewport.zw`

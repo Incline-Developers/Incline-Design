@@ -2043,8 +2043,8 @@ pub(crate) struct EditorState {
     pub(crate) locked_rasters: HashSet<RasterTextureId>,
     /// Entities dimmed toward the background colour.
     pub(crate) translucent_handles: HashSet<SceneEntityId>,
-    /// Show wireframes on all topology meshes. Selected topology meshes always
-    /// show a highlighted wireframe independently of this preference.
+    /// Show wireframes on all topology meshes, in the selection colour on
+    /// selected ones; selection itself is shown by hatching either way.
     pub(crate) topology_wireframes_enabled: bool,
     /// Draw contour bands on all topology meshes, at an interval that
     /// follows zoom, in the wireframe's colour.
