@@ -97,6 +97,15 @@ impl<'a> App<'a> {
         Ok(())
     }
 
+    pub(crate) fn set_topology_contours(&mut self, enabled: bool) -> anyhow::Result<()> {
+        // A per-session view toggle like the wireframes, picked up by the
+        // topology GPU cache's style check on the next render.
+        self.editor.topology_contours_enabled = enabled;
+        self.redraw_requested = true;
+        userspace_log!("{}", tr!("cmd-view-set-topology-contours-enabled", enabled = enabled.to_string()));
+        Ok(())
+    }
+
     pub(crate) fn set_show_points(&mut self, enabled: bool) -> anyhow::Result<()> {
         self.editor.show_points = enabled;
         // Deliberately not persisted: this is a per-session view toggle.

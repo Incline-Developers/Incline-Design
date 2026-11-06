@@ -9,6 +9,10 @@ struct SurfaceStyle {
     // and w: scene-relative threshold the pattern is drawn from (zero
     // direction draws it everywhere).
     pattern: vec4<f32>,
+    // xy: the 2D section cut's (`section_cut.wgsl`). z: the pixel scale
+    // the contour bands are drawn at, 0 for none; w: the scene
+    // origin's elevation, wrapped to a multiple of every contour interval.
+    cut: vec4<f32>,
 };
 @group(1) @binding(0)
 var<uniform> surface_style: SurfaceStyle;
@@ -87,10 +91,67 @@ fn wire_coverage(barycentric: vec3<f32>, width: f32) -> f32 {
     return select(0.0, 1.0 - smoothstep(width * 0.5 - 0.5, width * 0.5 + 0.5, nearest), width > 0.0);
 }
 
+// World size of one pixel at this fragment's depth, the same in every
+// direction across the screen, so the contour interval follows zoom and
+// distance rather than each facet's tilt.
+fn pixel_footprint(fragment_position: vec4<f32>) -> f32 {
+    let viewport = max(camera.viewport.xy, vec2<f32>(1.0));
+    let screen_xy = fragment_position.xy - camera.viewport_origin.xy;
+    let ndc = vec2<f32>(screen_xy.x / viewport.x * 2.0 - 1.0, 1.0 - screen_xy.y / viewport.y * 2.0);
+    let here = camera.inv_view_proj * vec4<f32>(ndc, fragment_position.z, 1.0);
+    let above = camera.inv_view_proj * vec4<f32>(ndc.x, ndc.y + 2.0 / viewport.y, fragment_position.z, 1.0);
+    return length(above.xyz / above.w - here.xyz / here.w);
+}
+
+// Coverage of one level of contours, `interval` metres apart, `width` pixels
+// wide; faded out where they crowd closer than a few pixels on screen.
+fn contour_level(z: f32, z_per_pixel: f32, interval: f32, width: f32) -> f32 {
+    let distance = abs(fract(z / interval + 0.5) - 0.5) * interval / z_per_pixel;
+    let line = 1.0 - smoothstep(width * 0.5 - 0.5, width * 0.5 + 0.5, distance);
+    return line * smoothstep(3.0, 6.0, interval / z_per_pixel);
+}
+
+// Width in logical pixels of the contour bands.
+const CONTOUR_WIDTH: f32 = 2.0;
+// How far apart in logical pixels the contours fall on a 1:1 slope; gentler
+// ground draws them further apart, as contours do.
+const CONTOUR_SPACING: f32 = 12.0;
+
+// Contour bands, drawn while the Contours view is on, on round elevations. The interval
+// steps through 1, 5, 10, 50... metres with zoom; each coarser set contains
+// the finer one, so the finer lines fade in and out over lines that stay put.
+fn contour_coverage(scene_z: f32, normal: vec3<f32>, fragment_position: vec4<f32>, scale: f32, origin_z: f32) -> f32 {
+    let z = scene_z + origin_z;
+    let width = CONTOUR_WIDTH * scale;
+    let spacing = CONTOUR_SPACING * scale;
+    let z_per_pixel = max(fwidth(z), 1e-6);
+    let level = log2(max(pixel_footprint(fragment_position) * spacing, 1e-4)) / log2(10.0);
+    let decade = floor(level);
+    let within = level - decade;
+    let base = pow(10.0, decade);
+    let five = log2(5.0) / log2(10.0);
+    var fine = base;
+    var coarse = base * 5.0;
+    var blend = within / five;
+    if within >= five {
+        fine = base * 5.0;
+        coarse = base * 10.0;
+        blend = (within - five) / (1.0 - five);
+    }
+    let lines = max(contour_level(z, z_per_pixel, coarse, width), contour_level(z, z_per_pixel, fine, width) * (1.0 - blend));
+    // Level ground has no contours; one lying exactly on an interval would
+    // otherwise fill its whole face.
+    return select(0.0, lines * smoothstep(2e-6, 2e-5, 1.0 - normal.z), width > 0.0);
+}
+
 @fragment
 fn fs_main(in: VertexOutput, @builtin(barycentric) barycentric: vec3<f32>) -> @location(0) vec4<f32> {
     // Derivatives before anything that can end the invocation.
-    let wire = wire_coverage(barycentric, surface_style.params.y) * surface_style.wire_color.a;
+    let edges = max(
+        wire_coverage(barycentric, surface_style.params.y),
+        contour_coverage(in.scene_z, in.normal, in.clip_position, surface_style.cut.z, surface_style.cut.w),
+    );
+    let wire = edges * surface_style.wire_color.a;
     // Project onto the dominant world plane, including vertical slab walls.
     var hatch_uv = in.pattern_position.xy;
     let axis = abs(in.normal);

@@ -2046,6 +2046,9 @@ pub(crate) struct EditorState {
     /// Show wireframes on all topology meshes. Selected topology meshes always
     /// show a highlighted wireframe independently of this preference.
     pub(crate) topology_wireframes_enabled: bool,
+    /// Draw contour bands on all topology meshes, at an interval that
+    /// follows zoom, in the wireframe's colour.
+    pub(crate) topology_contours_enabled: bool,
     /// Show every vertex of all visible design objects. These are kept in a
     /// persistent GPU instance cache rather than a decimated UI overlay.
     pub(crate) show_points: bool,
@@ -4011,6 +4014,7 @@ impl EditorState {
             locked_rasters: HashSet::new(),
             translucent_handles: HashSet::new(),
             topology_wireframes_enabled: false,
+            topology_contours_enabled: false,
             show_points: false,
             language: crate::app::io::default_language(),
             dark_mode: crate::app::io::default_dark_mode(),
@@ -5538,6 +5542,7 @@ pub(crate) enum UiCommand {
     /// The grid button: the RL grid in a section, the XY grid in plan.
     SetGridShown(bool),
     SetTopologyWireframes(bool),
+    SetTopologyContours(bool),
     SetShowPoints(bool),
     /// Presentation shading over the scene pass. Native only.
     #[cfg(not(target_arch = "wasm32"))]
@@ -6417,6 +6422,7 @@ impl UiCommand {
             Self::ResetView => report(tr!("common-reset-view"), tr!("state-fit-extents")),
             Self::ToggleRotationCentre => report(tr!("state-centre-rotation"), tr!("state-fix-release-centre-both-views")),
             Self::SetTopologyWireframes(enabled) => report(tr!("state-set-topology-wireframes"), if *enabled { tr!("state-shown") } else { tr!("state-hidden") }),
+            Self::SetTopologyContours(enabled) => report(tr!("state-set-topology-contours"), if *enabled { tr!("state-shown") } else { tr!("state-hidden") }),
             Self::SetGridShown(shown) => report(tr!("state-set-grid"), if *shown { tr!("state-shown") } else { tr!("state-hidden") }),
             Self::SetShowPoints(enabled) => report(tr!("state-set-point-visibility"), if *enabled { tr!("state-shown") } else { tr!("state-hidden") }),
             #[cfg(not(target_arch = "wasm32"))]

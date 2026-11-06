@@ -1537,6 +1537,7 @@ cmd-view-no-point-under-cursor-fix = No point under the cursor to fix the centre
 cmd-view-released-centre-rotation = Released the centre of rotation
 cmd-view-reset-view-fit-extents = Reset view (fit to extents)
 cmd-view-set-cinematic-view-enabled = Set cinematic view = { $enabled }
+cmd-view-set-topology-contours-enabled = Set topology contours = { $enabled }
 cmd-view-set-topology-wireframes-enabled = Set topology wireframes = { $enabled }
 cmd-view-set-view-points-enabled = Set view points = { $enabled }
 cmd-view-set-xy-grid-enabled = Set XY grid = { $enabled }
@@ -3701,6 +3702,7 @@ state-set-point-visibility = Set Point Visibility
 state-set-polyline-closed = Set Polyline Closed
 state-set-raster-lock = Set Raster Lock
 state-set-standard-view = Set Standard View
+state-set-topology-contours = Set Topology Contours
 state-set-topology-wireframes = Set Topology Wireframes
 state-set-triangulation-colour = Set Triangulation Colour
 state-show-console = Show Console
@@ -3982,12 +3984,14 @@ viewport-bar-exit-slice-view = Exit Slice View
 viewport-bar-fill = Fill:
 viewport-bar-fix-centre-rotation = Fix Centre of Rotation
 viewport-bar-hide-borehole-inspector = Hide Borehole Inspector
+viewport-bar-hide-contours = Hide Contours
 viewport-bar-hide-points = Hide Points
 viewport-bar-hide-rl-grid = Hide RL Grid
 viewport-bar-hide-wireframes = Hide Wireframes
 viewport-bar-hide-xy-grid = Hide XY Grid
 viewport-bar-release-centre-rotation = Release Centre of Rotation
 viewport-bar-show-borehole-inspector = Show Borehole Inspector
+viewport-bar-show-contours = Show Contours
 viewport-bar-show-points = Show Points
 viewport-bar-show-rl-grid = Show RL Grid
 viewport-bar-show-wireframes = Show Wireframes

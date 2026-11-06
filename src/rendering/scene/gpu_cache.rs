@@ -249,9 +249,15 @@ struct SurfaceStyleUniform {
     /// direction draws it everywhere).
     pattern: [f32; 4],
     /// The surface drawn as its cut in a 2D section (`section_cut.wgsl`):
-    /// x: cut line width in pixels; y: 1 while selected; zw unused.
+    /// x: cut line width in pixels; y: 1 while selected. In `surface.wgsl`,
+    /// z: the pixel scale the contour bands are drawn at, 0 for none; w: the scene origin's elevation, wrapped to
+    /// [`CONTOUR_ORIGIN_PERIOD`].
     cut: [f32; 4],
 }
+
+/// The period the scene origin's elevation is wrapped to for the contour
+/// bands: a multiple of every interval they draw at.
+const CONTOUR_ORIGIN_PERIOD: f64 = 10_000.0;
 
 /// Mirrors `ColorStop` for upload; `pos.x` holds the stop's `t`, the rest is
 /// padding to keep the array's stride 16-byte aligned.
@@ -1471,6 +1477,9 @@ impl TriangulationGpuCache {
             // and so does a mesh that asks for them - a dig block's seam is the
             // only thing separating it from the block beside it.
             let show_edges = selected || editor.topology_wireframes_enabled || triangulation.always_show_edges;
+            // Contour bands in the wireframe's colour, drawn by the surface
+            // shader whatever the device; selection's blue while selected.
+            let contour_scale = if editor.topology_contours_enabled { scale_factor } else { 0.0 };
             // The shader draws every triangle side, which is only this mesh's
             // edge list when that list is all of them. A dig block's is its
             // outline alone, so it keeps the instanced edges.
@@ -1509,8 +1518,10 @@ impl TriangulationGpuCache {
                 cut: [
                     (triangulation.line_weight.unwrap_or(1.0) * 2.0 * scale_factor).max(1.5),
                     if selected { 1.0 } else { 0.0 },
-                    0.0,
-                    0.0,
+                    contour_scale,
+                    // Contours fall on round elevations, not round offsets
+                    // from the scene origin; a 10 km period keeps it in f32.
+                    scene_origin.z.rem_euclid(CONTOUR_ORIGIN_PERIOD) as f32,
                 ],
             };
 
@@ -2114,7 +2125,7 @@ impl CachedSurfaceChunk {
             wire_color: surface_style.wire_color,
             pattern_color: [0.0; 4],
             pattern: [0.0; 4],
-            cut: [0.0; 4],
+            cut: [0.0, 0.0, surface_style.cut[2], surface_style.cut[3]],
         };
         queue.write_buffer(&self.debug_style_buffer, 0, bytemuck::bytes_of(&style));
     }

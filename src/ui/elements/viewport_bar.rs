@@ -570,7 +570,7 @@ fn draw_camera_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
 }
 
 /// The switches saying how the scene's geometry is drawn: the vertices of its
-/// lines, the wireframes on its meshes, the grid it is drawn over, and the
+/// lines, the wireframes and contours on its meshes, the grid it is drawn over, and the
 /// presentation shading laid over the lot. None of them is a tool, and none of
 /// them is saved.
 ///
@@ -625,6 +625,24 @@ fn draw_display_switches(ui: &mut egui::Ui, editor: &mut EditorState, commands: 
         } else {
             crate::ui::state::GridOptionsDialog::open_plan(editor.xy_grid_style)
         });
+    }
+
+    // Right of the wireframes: the other way of reading a mesh's shape.
+    let contours = ui.add(
+        ToolbarButton::new(
+            egui::Image::new(unthemed_icon!("toggle_contours.svg")),
+            if editor.topology_contours_enabled {
+                tr!("viewport-bar-hide-contours")
+            } else {
+                tr!("viewport-bar-show-contours")
+            },
+        )
+        .id_salt("contours")
+        .button_side(side)
+        .selected(editor.topology_contours_enabled),
+    );
+    if contours.clicked() {
+        commands.push(UiCommand::SetTopologyContours(!editor.topology_contours_enabled));
     }
 
     let wireframes = ui.add(
