@@ -361,10 +361,6 @@ fn draw_file_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProje
             commands.push(UiCommand::ExportViewportImage);
             ui.close();
         }
-        if ContextMenuAction::new(tr!("menu-file-export-engineering-drawing")).show(ui).clicked() {
-            commands.push(UiCommand::OpenPlotDialog);
-            ui.close();
-        }
         context_menu_separator(ui);
         if ContextMenuAction::new(tr!("preferences-title")).show(ui).clicked() {
             commands.push(UiCommand::OpenPreferences);

@@ -197,9 +197,6 @@ pub(crate) enum FileDialogAction {
     /// Record Animate into this video file.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     ExportVideo(PathBuf, crate::ui::state::VideoExportRequest),
-    /// Render and write the configured plot sheet.
-    #[cfg(not(target_arch = "wasm32"))]
-    ExportPlotSheet(PathBuf),
     #[cfg(target_arch = "wasm32")]
     WebDownloadDxf {
         project_runtime_id: u32,
@@ -906,13 +903,6 @@ impl<'a> App<'a> {
                 Ok(())
             }
             FileDialogAction::ExportVideo(path, request) => self.start_video_export(path, request),
-            #[cfg(not(target_arch = "wasm32"))]
-            FileDialogAction::ExportPlotSheet(mut path) => {
-                if path.extension().is_none() {
-                    path.set_extension("png");
-                }
-                self.write_plot_sheet(crate::app::commands::plot::PlotTarget::File(path))
-            }
             #[cfg(target_arch = "wasm32")]
             FileDialogAction::WebDownloadDxf {
                 project_runtime_id,
@@ -2078,20 +2068,6 @@ impl<'a> App<'a> {
                 .await?
                 .into_path();
             Some(FileDialogAction::ExportViewportImage(path))
-        });
-    }
-
-    /// Choose where the composed plot sheet is written.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn spawn_plot_sheet_dialog(&mut self, file_name: String) {
-        self.spawn_file_dialog(async move {
-            let path: PathBuf = AsyncFileDialog::new()
-                .add_filter("PNG image", &["png"])
-                .set_file_name(&file_name)
-                .save_file()
-                .await?
-                .into_path();
-            Some(FileDialogAction::ExportPlotSheet(path))
         });
     }
 

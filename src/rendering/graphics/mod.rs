@@ -28,7 +28,7 @@ use crate::{
         scene::{
             BlockModelGpuCache, DesignPointGpuCache, DrillCell, DrillCollarInstance, DrillHoleGpuCache, DrillSegmentInstance, EdgeInstance, PointCloudGpuCache, PointInstance,
             PointPosition, RasterGpuCache, StaticStrokeCache, TriangulationGpuCache,
-            bounds::{scene_bounds, visible_object_aabbs},
+            bounds::visible_object_aabbs,
             build::{DocumentDrawBatch, DocumentObjectRanges, DocumentPrimitive, DocumentRenderStage, PolylineFillCache, TextDrawBatch},
             document_style::{DocumentStyleGpu, DocumentStyleSlots},
         },
@@ -49,7 +49,6 @@ pub(crate) mod frame;
 pub(crate) mod frustum;
 pub(crate) mod init;
 pub(crate) mod passes;
-pub(crate) mod plot;
 pub(crate) mod projections;
 mod readback;
 pub(crate) mod scene_pipelines;
@@ -368,7 +367,7 @@ pub(crate) struct Graphics<'a> {
     pub(super) scene_pipelines: Shared<scene_pipelines::ScenePipelines>,
     /// What the scene pass draws with and into while `frame::render` diverts
     /// it into the cinematic view's lit target. `None` everywhere else, so
-    /// every other pass - the overlay, the previews, the plot - draws with the
+    /// every other pass - the overlay, the previews - draws with the
     /// ordinary view's pipelines; see [`Self::pipes`].
     pub(super) active_scene: Option<ActiveScene>,
     pub(super) block_model_volume_pipeline: wgpu::RenderPipeline,
@@ -572,10 +571,6 @@ pub(crate) struct Graphics<'a> {
     /// scene pass while the developer chunk-bounds view is on and drawn,
     /// depth-tested, by the editor overlay pass.
     pub(super) chunk_bounds_outline: Option<passes::ChunkBoundsOutline>,
-    /// Live map render behind the engineering-drawing dialog's preview, and
-    /// the framing/scene fingerprint it was rendered for.
-    pub(super) plot_preview: Option<plot::PlotPreviewTarget>,
-    pub(super) plot_preview_key: Option<u64>,
     /// Destination for a one-shot viewport image export; consumed by the next
     /// `render` call (see `screenshot.rs`).
     pub(super) pending_screenshot: Option<screenshot::ScreenshotTarget>,

@@ -1,5 +1,5 @@
-//! Offscreen colour targets copied back to the CPU as RGBA8, shared by the
-//! viewport image export and the plot map render.
+//! Offscreen colour targets copied back to the CPU as RGBA8, for the viewport
+//! image and video exports.
 
 use anyhow::{Result, anyhow};
 

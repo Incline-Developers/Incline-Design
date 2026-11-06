@@ -92,7 +92,6 @@ pub(crate) enum MacMenuAction {
     OpenImport,
     OpenExport,
     ExportViewportImage,
-    OpenPlotDialog,
     RequestExit,
     OpenCutTriangulationByPolyline,
     OpenCutTriangulationByZ,
@@ -168,7 +167,6 @@ impl MacMenuAction {
         Self::OpenImport,
         Self::OpenExport,
         Self::ExportViewportImage,
-        Self::OpenPlotDialog,
         Self::RequestExit,
         Self::OpenCutTriangulationByPolyline,
         Self::OpenCutTriangulationByZ,
@@ -360,7 +358,6 @@ pub(crate) fn install_menu_bar() {
     add_action(&file_menu, &tr!("menu-file-import"), "", MacMenuAction::OpenImport, &target, mtm);
     add_action(&file_menu, &tr!("menu-file-export"), "", MacMenuAction::OpenExport, &target, mtm);
     add_action(&file_menu, &tr!("menu-file-export-viewport-image"), "", MacMenuAction::ExportViewportImage, &target, mtm);
-    add_action(&file_menu, &tr!("menu-file-export-engineering-drawing"), "", MacMenuAction::OpenPlotDialog, &target, mtm);
     add_separator(&file_menu, mtm);
     add_action(&file_menu, &tr!("preferences-title"), ",", MacMenuAction::OpenPreferences, &target, mtm);
     add_action(&file_menu, &tr!("menu-file-about", app = crate::APP_NAME), "", MacMenuAction::OpenAbout, &target, mtm);

@@ -208,7 +208,7 @@ impl<'a> Graphics<'a> {
         }
         editor.debug_clip_plane_distances = Some(self.projection.clip_planes());
         // Uploaded every frame; outside a section this is `None`, which is what switches the shader clip off.
-        self.upload_camera_uniform(editor.block_model_interaction_resolution_divisor, self.section_slab());
+        self.upload_camera_uniform(editor.block_model_interaction_resolution_divisor);
         let grid_uniform = GridUniform::new(
             self.scene_origin,
             editor.renderer_background_color,
@@ -592,9 +592,6 @@ impl<'a> Graphics<'a> {
             },
             editor,
         );
-
-        // Keep the engineering-drawing dialog's map preview current.
-        self.refresh_plot_preview(editor, document, triangulations, block_models, drill_holes, point_clouds, rasters);
 
         self.update_tool_projections(editor, document, drill_holes);
 

@@ -1728,10 +1728,6 @@ fn draw_global_dialogs(
         elements::block_model::draw_ore_triangulation_dialog(root_ui, editor, block_models, commands);
     }
 
-    if editor.plot_dialog.is_some() {
-        dialogs::plot::draw_plot_dialog(root_ui, editor, project, commands);
-    }
-
     // import export menus
     dialogs::import_export::draw_import_menu(root_ui, editor, project, commands);
     dialogs::import_export::draw_export_menu(root_ui, editor, project, commands);

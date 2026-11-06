@@ -302,7 +302,7 @@ pub(crate) fn tidy_range(column: TraceColumn, lo: f32, hi: f32) -> [f32; 2] {
 /// fixed ranges included.
 pub(crate) fn grid_step(range: [f32; 2]) -> f32 {
     let span = f64::from((range[1] - range[0]).abs());
-    crate::model::plot::round_up_to_series(span / 4.0, &crate::model::plot::DRAWING_SCALE_STEPS) as f32
+    crate::model::numbers::round_up_to_series(span / 4.0, &crate::model::numbers::DRAWING_SCALE_STEPS) as f32
 }
 
 /// Decimal places the grid step over `range` calls for, so `1.0`/`3.0` and

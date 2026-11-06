@@ -299,7 +299,7 @@ pub(crate) struct CameraUniform {
     /// reports pixels in the *target's* space, not the viewport sub-rect's
     /// own space, so a shader reconstructing a screen-relative position (the
     /// XY grid) needs to subtract this first. Zero for every render target
-    /// that's filled from its own origin (plots, slice previews, the offscreen
+    /// that's filled from its own origin (slice previews, the offscreen
     /// volume raycast target) - only the main window's toolbar-bounded canvas
     /// has a nonzero offset. z: the projection's y scale (its matrix's
     /// `[1][1]`), from which a shader sizes a pixel at a given view depth,

@@ -10,7 +10,6 @@ pub(crate) mod layer; // Handles creating layers, deleting layers, etc. commands
 pub(crate) mod object_edit;
 pub(crate) mod omf; // Whole-project Open Mining Format interchange.
 pub(crate) mod optimization; // Handles pit optimization's scenario list, editor and scenarios file.
-pub(crate) mod plot; // Handles printable plot sheets
 pub(crate) mod point_cloud; // Handles importing/loading point clouds, etc. commands
 pub(crate) mod products; // Handles the Drill & Blast workspace's stored products.
 pub(crate) mod property; // Handles changing colors, fills, etc. commands
@@ -1735,12 +1734,6 @@ impl<'a> App<'a> {
                 self.delete_selection();
                 Ok(())
             }
-            UiCommand::OpenPlotDialog => {
-                self.open_plot_dialog();
-                Ok(())
-            }
-            UiCommand::FitPlotScaleToData => self.fit_plot_scale_to_data(),
-            UiCommand::ExportPlotSheet => self.choose_plot_sheet_destination(),
             UiCommand::Undo => {
                 self.apply_history_step(true);
                 Ok(())

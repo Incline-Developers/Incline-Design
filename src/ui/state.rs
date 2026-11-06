@@ -2874,12 +2874,6 @@ pub(crate) struct EditorState {
     pub(crate) ore_max_input: f64,
     pub(crate) ore_name_input: String,
 
-    // Plot sheets
-    pub(crate) plot_dialog: Option<crate::ui::dialogs::plot::PlotDialog>,
-    /// Live map render shown inside the export dialog's sheet preview, kept up
-    /// to date by the renderer while the dialog is open.
-    pub(crate) plot_preview_texture: Option<egui::TextureId>,
-
     // Batter Berm tool
     pub(crate) batter_berm_dialog_open: bool,
     pub(crate) batter_berm_target_id: Option<ObjectId>,
@@ -3599,7 +3593,6 @@ impl EditorState {
             || self.reference_points_dialog.is_some()
             || self.reference_surface_dialog.is_some()
             || self.drill_pattern_open
-            || self.plot_dialog.is_some()
             || self.move_to_layer_dialog.is_some()
             || self.move_to_axis_dialog.is_some()
             || self.insert_point_at_elevation_dialog.is_some()
@@ -4429,8 +4422,6 @@ impl EditorState {
             ore_min_input: 0.0,
             ore_max_input: 1.0,
             ore_name_input: String::new(),
-            plot_dialog: None,
-            plot_preview_texture: None,
             batter_berm_dialog_open: false,
             batter_berm_target_id: None,
             batter_berm_width: 8.0,
@@ -6011,14 +6002,6 @@ pub(crate) enum UiCommand {
         output_layer: ContourOutputLayer,
     },
 
-    // ── Plot sheets ──
-    /// Open the "Export Engineering Drawing" dialog.
-    OpenPlotDialog,
-    /// Set the plot scale to the smallest conventional one that fits the data.
-    FitPlotScaleToData,
-    /// Render and write the configured plot sheet.
-    ExportPlotSheet,
-
     /// Open the "Edit Object" dialog on one design object, seeding its working
     /// copy from the document.
     OpenObjectEditDialog(ObjectId),
@@ -6121,8 +6104,6 @@ impl UiCommand {
             | Self::OpenCutTopologyByPitShell
             | Self::OpenIncludeSolidInTopology
             | Self::OpenContourTriangulation
-            | Self::OpenPlotDialog
-            | Self::FitPlotScaleToData
             | Self::SetBlockModelColorTransfer { .. }
             | Self::ResetBlockModelColorTransfer { .. }
             | Self::SetDrillHoleColorStops { .. }
@@ -6531,7 +6512,6 @@ impl UiCommand {
             Self::DeleteOptimizationScenario(id) => report(tr!("opt-delete-scenario"), id.to_string()),
             Self::ExecuteCreateBlockModel { name, .. } => report(tr!("common-create-block-model"), name.clone()),
             Self::ExecuteCreateOreTriangulation { name, .. } => report(tr!("common-create-ore-triangulation"), name.clone()),
-            Self::ExportPlotSheet => report(tr!("common-export-engineering-drawing"), tr!("state-choose-destination")),
             Self::RemoveTriangulation(_) => report(tr!("state-remove-triangulation"), String::new()),
             Self::HideSelection => report(tr!("common-hide-selection"), tr!("state-selected-scene-elements")),
             Self::ShowAllHidden => report(tr!("toolbars-show-all-hidden"), tr!("state-individually-hidden-designs")),
@@ -6868,6 +6848,7 @@ pub(crate) struct UiProjectView {
     pub(crate) has_active_project: bool,
     pub(crate) needs_startup_dialog: bool,
     /// Full filesystem path of the currently active project, if any.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) active_path: Option<PathBuf>,
     /// Active triangulation id and face colour, used by the context menu.
     pub(crate) active_triangulation_for_menu: Option<TriangulationMenuStyle>,

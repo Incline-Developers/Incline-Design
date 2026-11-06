@@ -1503,26 +1503,6 @@ impl<'a> Graphics<'a> {
         }
     }
 
-    /// World-space bounds of everything currently visible, for callers that
-    /// need to frame the scene without moving the camera (plot sheets).
-    pub(crate) fn scene_extents(
-        &self,
-        document: &Document,
-        triangulations: &[OpenTriangulation],
-        block_models: &[OpenBlockModel],
-        drill_holes: &[OpenDrillHoleDataset],
-        point_clouds: &[OpenPointCloud],
-        hidden: &HashSet<SceneEntityId>,
-    ) -> Option<(DVec3, DVec3)> {
-        scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, hidden, self.haul_roads_in_bounds)
-    }
-
-    /// The point the viewport is currently looking at, in world (not
-    /// vertically exaggerated) coordinates.
-    pub(crate) fn view_center(&self) -> DVec3 {
-        self.unexaggerate_point(self.camera.target())
-    }
-
     /// Frame all visible content while keeping the current camera orientation
     /// (orbit/tilt unchanged) - only position, target and zoom are adjusted.
     /// No-op when there is nothing visible to frame.
@@ -1965,11 +1945,11 @@ impl<'a> Graphics<'a> {
         }
     }
 
-    /// Write the camera uniform the fragment shaders read. `slab` is the section clip (or `None`); it's an argument because the plot renders the whole ground through this buffer while a section is up in the viewport.
-    pub(super) fn upload_camera_uniform(&mut self, interaction_resolution_divisor: u32, slab: Option<SectionSlab>) {
+    /// Write the camera uniform the fragment shaders read, with the section clip if one is up.
+    pub(super) fn upload_camera_uniform(&mut self, interaction_resolution_divisor: u32) {
         self.camera_uniform
             .update_view_proj(&self.camera, &self.projection, self.scene_origin, self.vertical_exaggeration);
-        self.camera_uniform.set_section_slab(slab, self.scene_origin);
+        self.camera_uniform.set_section_slab(self.section_slab(), self.scene_origin);
         // While the camera is being orbited/panned/zoomed, draw the volume
         // raycast at a reduced per-axis resolution and upscale. The reduced
         // resolution also coarsens the raycaster's footprint-driven brick LOD

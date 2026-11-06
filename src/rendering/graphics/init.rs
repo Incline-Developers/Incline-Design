@@ -914,8 +914,6 @@ impl<'a> Graphics<'a> {
             surface_render_stats: Default::default(),
             point_render_stats: Default::default(),
             chunk_bounds_outline: None,
-            plot_preview: None,
-            plot_preview_key: None,
             pending_screenshot: None,
             camera_lock: None,
             video_target: None,

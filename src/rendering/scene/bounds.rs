@@ -11,35 +11,6 @@ use crate::model::{
     triangulation::OpenTriangulation,
 };
 
-pub(crate) fn scene_bounds(
-    document: &Document,
-    triangulations: &[OpenTriangulation],
-    block_models: &[OpenBlockModel],
-    drill_holes: &[OpenDrillHoleDataset],
-    point_clouds: &[OpenPointCloud],
-    hidden: &std::collections::HashSet<SceneEntityId>,
-    haul_roads: bool,
-) -> Option<(DVec3, DVec3)> {
-    let mut min = DVec3::splat(f64::MAX);
-    let mut max = DVec3::splat(f64::MIN);
-    let mut any = false;
-    for_each_visible_object_aabb(
-        document,
-        triangulations,
-        block_models,
-        drill_holes,
-        point_clouds,
-        hidden,
-        haul_roads,
-        &mut |object_min, object_max| {
-            min = min.min(object_min);
-            max = max.max(object_max);
-            any = true;
-        },
-    );
-    any.then_some((min, max))
-}
-
 /// World-space AABB of every visible object, one entry per object. Depth-range
 /// fitting needs these individually (not the merged scene AABB) so a distant
 /// model that is outside the current view sideways can be rejected before it

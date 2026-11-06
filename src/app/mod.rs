@@ -836,7 +836,6 @@ impl<'a> App<'a> {
                 None
             }
             MacMenuAction::ExportViewportImage => Some(UiCommand::ExportViewportImage),
-            MacMenuAction::OpenPlotDialog => Some(UiCommand::OpenPlotDialog),
             MacMenuAction::OpenPreferences => Some(UiCommand::OpenPreferences),
             MacMenuAction::OpenAbout => {
                 self.editor.show_about = true;
@@ -2472,6 +2471,7 @@ impl<'a> App<'a> {
         point_clouds.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
         raster_textures.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
 
+        #[cfg(not(target_arch = "wasm32"))]
         let active_path = self.workspace.active_project().and_then(|p| p.path.clone());
         let same_membership = |current: &[u64], saved: &[(u64, u64)]| current.len() == saved.len() && current.iter().all(|id| saved.iter().any(|(saved_id, _)| saved_id == id));
         // A section's item membership can stay byte-identical while its
@@ -2527,6 +2527,7 @@ impl<'a> App<'a> {
             rasters_membership_dirty,
             has_active_project: self.workspace.has_active_project(),
             needs_startup_dialog: !self.startup_dialog_dismissed,
+            #[cfg(not(target_arch = "wasm32"))]
             active_path,
             active_triangulation_for_menu,
             schedule: self.workspace.active_document().map(|document| document.schedule().clone()).unwrap_or_default(),
