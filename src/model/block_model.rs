@@ -424,28 +424,37 @@ pub(crate) fn opaque_surface_block_count(blocks: &BlockBoundsSource, renderable:
         return Some(grid_cells - interior);
     }
 
-    let mut occupied = vec![0u64; grid_cells.div_ceil(64)];
-    for block_index in renderable.iter() {
-        let block = blocks.get(block_index)?;
-        let index = grid.linear_index(grid.cell_coords(block.lower)?);
-        occupied[index / 64] |= 1 << (index % 64);
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    let occupied: Vec<AtomicU64> = (0..grid_cells.div_ceil(64)).map(|_| AtomicU64::new(0)).collect();
+    let off_grid = AtomicBool::new(false);
+    renderable.par_for_each(|block_index| match blocks.get(block_index).and_then(|block| grid.cell_coords(block.lower)) {
+        Some(coords) => {
+            let index = grid.linear_index(coords);
+            occupied[index / 64].fetch_or(1 << (index % 64), Ordering::Relaxed);
+        }
+        None => off_grid.store(true, Ordering::Relaxed),
+    });
+    if off_grid.load(Ordering::Relaxed) {
+        return None;
     }
     let strides = [1, grid.dims[0], grid.dims[0].checked_mul(grid.dims[1])?];
-    let mut surface_blocks = 0usize;
-    for block_index in renderable.iter() {
-        let block = blocks.get(block_index)?;
-        let coords = grid.cell_coords(block.lower)?;
-        let index = grid.linear_index(coords);
-        let fully_occluded = (0..3).all(|axis| {
-            if coords[axis] == 0 || coords[axis] + 1 >= grid.dims[axis] {
-                return false;
-            }
-            [index - strides[axis], index + strides[axis]]
-                .into_iter()
-                .all(|neighbour| occupied[neighbour / 64] & (1 << (neighbour % 64)) != 0)
-        });
-        surface_blocks += usize::from(!fully_occluded);
-    }
+    let surface_blocks = renderable.par_filter_map_reduce(
+        || 0usize,
+        |block_index| {
+            let coords = grid.cell_coords(blocks.get(block_index)?.lower)?;
+            let index = grid.linear_index(coords);
+            let fully_occluded = (0..3).all(|axis| {
+                if coords[axis] == 0 || coords[axis] + 1 >= grid.dims[axis] {
+                    return false;
+                }
+                [index - strides[axis], index + strides[axis]]
+                    .into_iter()
+                    .all(|neighbour| occupied[neighbour / 64].load(Ordering::Relaxed) & (1 << (neighbour % 64)) != 0)
+            });
+            Some(usize::from(!fully_occluded))
+        },
+        |a, b| a + b,
+    );
     Some(surface_blocks)
 }
 
@@ -1579,19 +1588,17 @@ pub(crate) fn compute_world_bounds(model: &BlockModelData, blocks: &BlockBoundsS
         let bounds = block_world_bounds(model, local);
         return Some((bounds.lower, bounds.upper));
     }
-    let mut min = DVec3::splat(f64::INFINITY);
-    let mut max = DVec3::splat(f64::NEG_INFINITY);
-    let mut any = false;
-    for index in renderable_block_indices.iter() {
-        let Some(block) = blocks.get(index) else {
-            continue;
-        };
-        let bounds = block_world_bounds(model, block);
-        min = min.min(bounds.lower);
-        max = max.max(bounds.upper);
-        any = true;
-    }
-    any.then_some((min, max))
+    renderable_block_indices.par_filter_map_reduce(
+        || None,
+        |index| {
+            let bounds = block_world_bounds(model, blocks.get(index)?);
+            Some(Some((bounds.lower, bounds.upper)))
+        },
+        |a, b| match (a, b) {
+            (Some(a), Some(b)) => Some((a.0.min(b.0), a.1.max(b.1))),
+            (found, None) | (None, found) => found,
+        },
+    )
 }
 
 fn block_world_bounds(model: &BlockModelData, block: BlockBounds) -> BlockBounds {

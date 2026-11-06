@@ -3119,83 +3119,99 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         // Parents are kept only for a parent-block attribute to be spread over
         // its sub-blocks, which most models have none of.
         let spreads_parents = element.attributes.iter().any(|attribute| attribute.location == omf_crate::Location::Primitives);
-        let mut blocks = BlockBatches::default();
-        let mut parent_indices = Vec::new();
-        let location = match &geometry.subblocks {
-            None => {
-                let total = count
-                    .into_iter()
-                    .try_fold(1usize, |total, count| total.checked_mul(count))
-                    .context("OMF block count overflows")?;
-                ensure_items(total as u64, "blocks")?;
-                for k in 0..count[2] {
-                    for j in 0..count[1] {
-                        for i in 0..count[0] {
-                            blocks.push(BlockBounds {
-                                lower: DVec3::new(edges[0][i], edges[1][j], edges[2][k]),
-                                upper: DVec3::new(edges[0][i + 1], edges[1][j + 1], edges[2][k + 1]),
-                            });
+        let location = if geometry.subblocks.is_some() {
+            omf_crate::Location::Subblocks
+        } else {
+            omf_crate::Location::Primitives
+        };
+        let reader = self.reader;
+        let read_geometry = || -> Result<(BlockGeometry, Vec<usize>)> {
+            let mut blocks = BlockBatches::default();
+            let mut parent_indices = Vec::new();
+            match &geometry.subblocks {
+                None => {
+                    let total = count
+                        .into_iter()
+                        .try_fold(1usize, |total, count| total.checked_mul(count))
+                        .context("OMF block count overflows")?;
+                    ensure_items(total as u64, "blocks")?;
+                    for k in 0..count[2] {
+                        for j in 0..count[1] {
+                            for i in 0..count[0] {
+                                blocks.push(BlockBounds {
+                                    lower: DVec3::new(edges[0][i], edges[1][j], edges[2][k]),
+                                    upper: DVec3::new(edges[0][i + 1], edges[1][j + 1], edges[2][k + 1]),
+                                });
+                            }
                         }
                     }
                 }
-                omf_crate::Location::Primitives
-            }
-            Some(omf_crate::Subblocks::Freeform { subblocks }) => {
-                ensure_items(subblocks.item_count(), "free-form sub-blocks")?;
-                for item in self.reader.array_freeform_subblocks(subblocks)? {
-                    let (parent, corners) = item?;
-                    blocks.push(subblock_bounds(parent, corners, &edges)?);
-                    let parent = block_parent_index(parent, count)?;
-                    if spreads_parents {
-                        parent_indices.push(parent);
+                Some(omf_crate::Subblocks::Freeform { subblocks }) => {
+                    ensure_items(subblocks.item_count(), "free-form sub-blocks")?;
+                    for item in reader.array_freeform_subblocks(subblocks)? {
+                        let (parent, corners) = item?;
+                        blocks.push(subblock_bounds(parent, corners, &edges)?);
+                        let parent = block_parent_index(parent, count)?;
+                        if spreads_parents {
+                            parent_indices.push(parent);
+                        }
                     }
                 }
-                omf_crate::Location::Subblocks
-            }
-            Some(omf_crate::Subblocks::Regular { count: sub_count, subblocks, .. }) => {
-                ensure_items(subblocks.item_count(), "regular sub-blocks")?;
-                for item in self.reader.array_regular_subblocks(subblocks)? {
-                    let (parent, corners) = item?;
-                    let fractions: [f64; 3] = std::array::from_fn(|axis| f64::from(corners[axis]) / f64::from(sub_count[axis]));
-                    let max_fractions: [f64; 3] = std::array::from_fn(|axis| f64::from(corners[axis + 3]) / f64::from(sub_count[axis]));
-                    blocks.push(subblock_bounds(
-                        parent,
-                        [fractions[0], fractions[1], fractions[2], max_fractions[0], max_fractions[1], max_fractions[2]],
-                        &edges,
-                    )?);
-                    let parent = block_parent_index(parent, count)?;
-                    if spreads_parents {
-                        parent_indices.push(parent);
+                Some(omf_crate::Subblocks::Regular { count: sub_count, subblocks, .. }) => {
+                    ensure_items(subblocks.item_count(), "regular sub-blocks")?;
+                    for item in reader.array_regular_subblocks(subblocks)? {
+                        let (parent, corners) = item?;
+                        let fractions: [f64; 3] = std::array::from_fn(|axis| f64::from(corners[axis]) / f64::from(sub_count[axis]));
+                        let max_fractions: [f64; 3] = std::array::from_fn(|axis| f64::from(corners[axis + 3]) / f64::from(sub_count[axis]));
+                        blocks.push(subblock_bounds(
+                            parent,
+                            [fractions[0], fractions[1], fractions[2], max_fractions[0], max_fractions[1], max_fractions[2]],
+                            &edges,
+                        )?);
+                        let parent = block_parent_index(parent, count)?;
+                        if spreads_parents {
+                            parent_indices.push(parent);
+                        }
                     }
                 }
-                omf_crate::Location::Subblocks
             }
+            Ok((blocks.finish(), parent_indices))
         };
-        let blocks = blocks.finish();
+        // Each variable is its own array, so they decode side by side; a
+        // block model's variables are usually far more numerous than its row groups.
+        let read_columns = |parent_indices: &[usize]| -> Result<Vec<BlockModelColumn>> {
+            Ok(element
+                .attributes
+                .par_iter()
+                .filter_map(|attribute| {
+                    if location == omf_crate::Location::Subblocks && attribute.location == omf_crate::Location::Primitives {
+                        Some((attribute, Some(parent_indices)))
+                    } else if attribute.location == location {
+                        Some((attribute, None))
+                    } else {
+                        None
+                    }
+                })
+                .map(|(attribute, expansion)| read_block_column(reader, attribute, expansion))
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .flatten()
+                .collect())
+        };
+        // The bounds are six more arrays, and decode beside the rest unless the
+        // rest need the parents they hold.
+        let (blocks, columns) = if spreads_parents {
+            let (blocks, parent_indices) = read_geometry()?;
+            let columns = read_columns(&parent_indices)?;
+            (blocks, columns)
+        } else {
+            let (geometry, columns) = rayon::join(read_geometry, || read_columns(&[]));
+            (geometry?.0, columns?)
+        };
         if blocks.len() == 0 {
             self.bundle.warnings.push(format!("Skipped empty OMF block model '{}'", element.name));
             return Ok(());
         }
-        // Each variable is its own array, so they decode side by side; a
-        // block model's variables are usually far more numerous than its row groups.
-        let reader = self.reader;
-        let columns = element
-            .attributes
-            .par_iter()
-            .filter_map(|attribute| {
-                if location == omf_crate::Location::Subblocks && attribute.location == omf_crate::Location::Primitives {
-                    Some((attribute, Some(parent_indices.as_slice())))
-                } else if attribute.location == location {
-                    Some((attribute, None))
-                } else {
-                    None
-                }
-            })
-            .map(|(attribute, expansion)| read_block_column(reader, attribute, expansion))
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
         let upper = DVec3::new(*edges[0].last().unwrap_or(&0.0), *edges[1].last().unwrap_or(&0.0), *edges[2].last().unwrap_or(&0.0));
         let rotation = DMat3::from_cols(
             DVec3::from_array(geometry.orient.u),
