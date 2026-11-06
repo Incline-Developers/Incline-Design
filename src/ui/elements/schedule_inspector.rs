@@ -324,9 +324,6 @@ fn loaders(ui: &mut egui::Ui, editor: &EditorState, plan: &SchedulePlan, destina
                 }
             }
             entry.detail = Some(if targets.is_empty() { source } else { format!("{source} → {}", targets.join(", ")) });
-            if let Some(bar) = bar {
-                hover = Some(execution_tooltip(execution, bar, report, schedule, plan, destinations));
-            }
         } else if let Some(span) = schedule.idle_at(agent.id, hour) {
             if span.reason == Some(IdleReason::Delayed) {
                 let (color, kind) = delay_at(plan, agent.id, hour).unwrap_or((IDLE_COLOR, None));
@@ -424,8 +421,20 @@ fn loaders(ui: &mut egui::Ui, editor: &EditorState, plan: &SchedulePlan, destina
             }
         }
         let response = draw_entry(ui, &entry);
-        if let Some(text) = hover {
-            response.on_hover_text(text);
+        // Built only on hover, as on the Gantt: it scans the result.
+        if response.hovered() {
+            let tooltip = schedule.executions_at(hour).find(|execution| execution.agent == agent.id).and_then(|execution| {
+                let bar = plan.bar(execution.bar)?;
+                let report = editor.schedule_bar_reports.iter().find(|report| report.bar == execution.bar);
+                Some(execution_tooltip(execution, bar, report, schedule, plan, destinations))
+            });
+            let text = match (tooltip, hover) {
+                (Some(tooltip), Some(rest)) => Some(format!("{tooltip}\n{rest}")),
+                (tooltip, rest) => tooltip.or(rest),
+            };
+            if let Some(text) = text {
+                response.on_hover_text(text);
+            }
         }
     }
 }
@@ -642,7 +651,7 @@ fn dumps(ui: &mut egui::Ui, destinations: &[DestinationView], schedule: &Calcula
     section(ui, tr!("inspector-dumps"));
     for dump in dumps {
         let feed: f64 = schedule.deliveries_at(hour).filter(|d| d.destination == dump.id).map(rate).sum();
-        let (received, _) = schedule.received_between(dump.id, 0.0, hour);
+        let received = schedule.received_to_date(dump.id, hour);
         let entry = Entry {
             name: dump.name.clone(),
             value: if feed > 1e-6 {
