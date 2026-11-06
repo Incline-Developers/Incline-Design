@@ -13,6 +13,7 @@ use std::{
     sync::Arc,
 };
 
+use glam::DVec3;
 use rayon::prelude::*;
 
 use super::{
@@ -39,7 +40,7 @@ const OVERLAP_PER_PIECE: f64 = 1e-9;
 /// end of each chunk costs nothing next to it; small enough that the
 /// measurements waiting to be accumulated stay a couple of megabytes instead
 /// of growing with the model.
-const MEASURED_CHUNK: usize = 8192;
+const MEASURED_CHUNK: usize = 32_768;
 
 /// One block's overlaps with the partition, in the order a single-threaded
 /// scan would have found them.
@@ -279,6 +280,17 @@ impl ReservePartition {
 
     fn is_empty(&self) -> bool {
         self.bands.iter().all(|band| band.pieces.is_empty())
+    }
+
+    /// The box all the partition's pieces lie in.
+    fn reach(&self) -> (DVec3, DVec3) {
+        let (mut min, mut max) = (DVec3::INFINITY, DVec3::NEG_INFINITY);
+        for piece in self.bands.iter().flat_map(|band| &band.pieces) {
+            let bounds = piece.mesh.bounds();
+            min = min.min(DVec3::new(bounds.min.x, bounds.min.y, bounds.min.z));
+            max = max.max(DVec3::new(bounds.max.x, bounds.max.y, bounds.max.z));
+        }
+        (min, max)
     }
 }
 
@@ -540,6 +552,8 @@ pub(crate) fn compute(
     // the measurements in the order one thread would have produced them, so
     // the figures are bit for bit the ones this scan has always reported.
     partition.bands.par_iter().flat_map(|band| &band.pieces).for_each(|piece| piece.spatial.ensure_built());
+    let grids: Vec<PieceGrid> = partition.bands.par_iter().map(|band| PieceGrid::new(&band.pieces)).collect();
+    let reach = partition.reach();
     let mut chunk_start = 0usize;
     while chunk_start < blocks.len() {
         anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
@@ -549,38 +563,45 @@ pub(crate) fn compute(
         // are the reason a block costs what it does.
         let measured: Vec<anyhow::Result<BlockOverlaps>> = (chunk_start..chunk_end)
             .into_par_iter()
-            .map_init(intersection::Scratch::default, |scratch, index| {
-                let bounds = blocks.get(index).ok_or_else(|| anyhow::anyhow!("Missing block geometry at {index}"))?;
-                let block = intersection::Block::new(model, bounds)?;
-                // Bands are ordered, so the first that can reach this block is
-                // found by bisection and the scan stops as soon as one starts
-                // above it.
-                let first = partition.bands.partition_point(|band| band.top <= block.min.z);
-                let mut hits = Vec::new();
-                for band in &partition.bands[first..] {
-                    if band.base >= block.max.z {
-                        break;
+            .map_init(
+                || (intersection::Scratch::default(), Vec::new()),
+                |(scratch, nearby), index| {
+                    let bounds = blocks.get(index).ok_or_else(|| anyhow::anyhow!("Missing block geometry at {index}"))?;
+                    if intersection::Block::out_of_reach(model, bounds, reach) {
+                        return Ok(BlockOverlaps { volume: 0.0, hits: Vec::new() });
                     }
-                    for piece in &band.pieces {
-                        // Said with where, so a bad piece can be found: the
-                        // fraction alone names neither the piece nor the block.
-                        let fraction = block.fraction(piece, scratch, cancel).map_err(|error| {
-                            let (centre, size) = ((block.min + block.max) / 2.0, block.max - block.min);
-                            error.context(format!(
-                                "in the piece from RL {:.2} to {:.2}, against the block centred at ({:.2}, {:.2}, RL {:.2}) of {:.2} x {:.2} x {:.2}",
-                                band.base, band.top, centre.x, centre.y, centre.z, size.x, size.y, size.z
-                            ))
-                        })?;
-                        if fraction > 0.0 {
-                            hits.push((piece.slot, fraction));
+                    let block = intersection::Block::new(model, bounds)?;
+                    // Bands are ordered, so the first that can reach this block is
+                    // found by bisection and the scan stops as soon as one starts
+                    // above it.
+                    let first = partition.bands.partition_point(|band| band.top <= block.min.z);
+                    let mut hits = Vec::new();
+                    for (band, grid) in partition.bands[first..].iter().zip(&grids[first..]) {
+                        if band.base >= block.max.z {
+                            break;
+                        }
+                        grid.pieces_near(block.min.truncate(), block.max.truncate(), nearby);
+                        for piece in nearby.iter().map(|&piece| &band.pieces[piece as usize]) {
+                            // Said with where, so a bad piece can be found: the
+                            // fraction alone names neither the piece nor the block.
+                            let fraction = block.fraction(piece, scratch, cancel).map_err(|error| {
+                                let (centre, size) = ((block.min + block.max) / 2.0, block.max - block.min);
+                                error.context(format!(
+                                    "in the piece from RL {:.2} to {:.2}, against the block centred at ({:.2}, {:.2}, RL {:.2}) of {:.2} x {:.2} x {:.2}",
+                                    band.base, band.top, centre.x, centre.y, centre.z, size.x, size.y, size.z
+                                ))
+                            })?;
+                            if fraction > 0.0 {
+                                hits.push((piece.slot, fraction));
+                            }
                         }
                     }
-                }
-                Ok(BlockOverlaps {
-                    volume: block.world_volume(),
-                    hits,
-                })
-            })
+                    Ok(BlockOverlaps {
+                        volume: block.world_volume(),
+                        hits,
+                    })
+                },
+            )
             .collect();
 
         for (offset, measured) in measured.into_iter().enumerate() {
@@ -588,6 +609,11 @@ pub(crate) fn compute(
             // Taken in index order, so a chunk whose blocks failed in several
             // places reports the same one the sequential scan reported.
             let BlockOverlaps { volume: block_volume, hits } = measured?;
+            // Most of a model lies outside any one solid, and what is read
+            // below for a block in it is the slowest part of a large model's scan.
+            if hits.is_empty() {
+                continue;
+            }
             let mut assigned = 0.0;
             let mut touched = 0usize;
             counted.iter_mut().for_each(|flag| *flag = false);
@@ -701,6 +727,121 @@ pub(crate) fn compute(
         material.portions = slots.into_iter().map(|slot| slot.portions).collect();
     }
     Ok(ReserveOutcome { totals, resolution, material })
+}
+
+/// A band's pieces by where they lie in plan, so a block is only measured
+/// against those whose bounds could reach it. A band can hold thousands of
+/// pieces and a model hundreds of millions of blocks.
+struct PieceGrid {
+    /// Every piece in order, when there are too few for cells to be worth it.
+    all: Vec<u32>,
+    min: glam::DVec2,
+    cells_per_metre: glam::DVec2,
+    dims: [usize; 2],
+    /// Offsets into `pieces`, one per cell and one past the end.
+    starts: Vec<u32>,
+    pieces: Vec<u32>,
+}
+
+impl PieceGrid {
+    const WORTH_CELLS: usize = 8;
+
+    fn new(pieces: &[ReservePiece]) -> Self {
+        let all: Vec<u32> = (0..pieces.len() as u32).collect();
+        let mut grid = Self {
+            all,
+            min: glam::DVec2::ZERO,
+            cells_per_metre: glam::DVec2::ZERO,
+            dims: [0; 2],
+            starts: Vec::new(),
+            pieces: Vec::new(),
+        };
+        if pieces.len() < Self::WORTH_CELLS {
+            return grid;
+        }
+        let plan = |piece: &ReservePiece| {
+            let bounds = piece.mesh.bounds();
+            (glam::DVec2::new(bounds.min.x, bounds.min.y), glam::DVec2::new(bounds.max.x, bounds.max.y))
+        };
+        let (mut min, mut max) = (glam::DVec2::INFINITY, glam::DVec2::NEG_INFINITY);
+        for piece in pieces {
+            let (low, high) = plan(piece);
+            min = min.min(low);
+            max = max.max(high);
+        }
+        let extent = max - min;
+        if !extent.is_finite() || extent.min_element() <= 0.0 {
+            return grid;
+        }
+        // About one cell a piece, shaped like the band.
+        let side = (pieces.len() as f64 / (extent.x * extent.y)).sqrt();
+        let dims = [((extent.x * side).ceil() as usize).max(1), ((extent.y * side).ceil() as usize).max(1)];
+        grid.min = min;
+        grid.cells_per_metre = glam::DVec2::new(dims[0] as f64, dims[1] as f64) / extent;
+        grid.dims = dims;
+        let mut counts = vec![0u32; dims[0] * dims[1] + 1];
+        for piece in pieces {
+            let (low, high) = plan(piece);
+            grid.for_each_cell(low, high, |cell| counts[cell + 1] += 1);
+        }
+        for cell in 1..counts.len() {
+            counts[cell] += counts[cell - 1];
+        }
+        grid.starts = counts.clone();
+        grid.pieces = vec![0; *counts.last().unwrap_or(&0) as usize];
+        // In piece order within each cell.
+        for (index, piece) in pieces.iter().enumerate() {
+            let (low, high) = plan(piece);
+            let (starts, cells) = (&mut counts, &mut grid.pieces);
+            Self::cells(grid.min, grid.cells_per_metre, grid.dims, low, high, |cell| {
+                cells[starts[cell] as usize] = index as u32;
+                starts[cell] += 1;
+            });
+        }
+        grid
+    }
+
+    fn for_each_cell(&self, low: glam::DVec2, high: glam::DVec2, visit: impl FnMut(usize)) {
+        Self::cells(self.min, self.cells_per_metre, self.dims, low, high, visit);
+    }
+
+    fn cells(min: glam::DVec2, cells_per_metre: glam::DVec2, dims: [usize; 2], low: glam::DVec2, high: glam::DVec2, mut visit: impl FnMut(usize)) {
+        let at = |value: glam::DVec2| {
+            let cell = (value - min) * cells_per_metre;
+            [(cell.x.max(0.0) as usize).min(dims[0] - 1), (cell.y.max(0.0) as usize).min(dims[1] - 1)]
+        };
+        let ([x0, y0], [x1, y1]) = (at(low), at(high));
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                visit(y * dims[0] + x);
+            }
+        }
+    }
+
+    /// The pieces whose bounds may reach this plan box, ascending, into `out`.
+    fn pieces_near(&self, low: glam::DVec2, high: glam::DVec2, out: &mut Vec<u32>) {
+        out.clear();
+        if self.starts.is_empty() {
+            out.extend_from_slice(&self.all);
+            return;
+        }
+        let outside = high.x < self.min.x
+            || high.y < self.min.y
+            || low.x > self.min.x + self.dims[0] as f64 / self.cells_per_metre.x
+            || low.y > self.min.y + self.dims[1] as f64 / self.cells_per_metre.y;
+        if outside {
+            return;
+        }
+        let mut cells = 0;
+        self.for_each_cell(low, high, |cell| {
+            out.extend_from_slice(&self.pieces[self.starts[cell] as usize..self.starts[cell + 1] as usize]);
+            cells += 1;
+        });
+        if cells > 1 {
+            out.sort_unstable();
+            out.dedup();
+        }
+    }
 }
 
 /// The label one categorical value names, or `None` when there is no value.
