@@ -2800,7 +2800,10 @@ pub(crate) fn crease_outline(slab: &Slab, internal_wall: &[bool], min_angle: f64
         let vertex = vertices[index as usize];
         glam::DVec3::new(vertex.x, vertex.y, vertex.z)
     };
-    let mut edges: HashMap<EdgeKey, ([u32; 2], Vec<glam::DVec3>), FixedState> = HashMap::default();
+    let threshold = min_angle.cos();
+    // Each edge's first face's normal, and whether a later face has turned a
+    // corner against it. A survey's bench has millions of these.
+    let mut edges: HashMap<EdgeKey, ([u32; 2], glam::DVec3, bool), FixedState> = HashMap::default();
     // The walls between the clip's cells are inside the body: where one meets
     // the ground is a seam of the decomposition, not a corner of the blast.
     for (face, _) in faces.iter().zip(internal_wall).filter(|(_, internal)| !**internal) {
@@ -2819,23 +2822,22 @@ pub(crate) fn crease_outline(slab: &Slab, internal_wall: &[bool], min_angle: f64
             if ka == kb {
                 continue;
             }
-            edges
-                .entry(if ka <= kb { (ka, kb) } else { (kb, ka) })
-                .or_insert_with(|| ([ia, ib], Vec::new()))
-                .1
-                .push(normal);
+            // Unsigned: the clip does not wind every cell's faces the same way,
+            // and two coplanar faces wound apart are no corner. An edge only one
+            // face uses is where the clip's cells meet out of step - a T-junction
+            // across a flat face, not a corner - so it is never drawn.
+            match edges.entry(if ka <= kb { (ka, kb) } else { (kb, ka) }) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(([ia, ib], normal, false));
+                }
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    let (_, first, corner) = entry.get_mut();
+                    *corner |= first.dot(normal).abs() < threshold;
+                }
+            }
         }
     }
-    let threshold = min_angle.cos();
-    edges
-        .into_values()
-        // Unsigned: the clip does not wind every cell's faces the same way,
-        // and two coplanar faces wound apart are no corner. An edge only one
-        // face uses is where the clip's cells meet out of step - a T-junction
-        // across a flat face, not a corner - so it is never drawn.
-        .filter(|(_, normals)| normals.len() > 1 && normals[1..].iter().any(|normal| normals[0].dot(*normal).abs() < threshold))
-        .map(|(edge, _)| edge)
-        .collect()
+    edges.into_values().filter(|(_, _, corner)| *corner).map(|(edge, _, _)| edge).collect()
 }
 
 /// The rim of the walls the clip cut: the outline separating this piece from
