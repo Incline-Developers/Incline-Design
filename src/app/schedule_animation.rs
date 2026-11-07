@@ -1492,7 +1492,7 @@ fn clip_in_direction(
     }
     let slab = (vertices, faces);
     if !source.always_show_edges {
-        edges = super::commands::triangulation::solid_between::crease_outline(&slab, &vec![false; slab.1.len()], super::commands::solids_view::BLAST_CREASE_ANGLE);
+        edges = super::commands::triangulation::solid_between::crease_outline(&slab, super::commands::solids_view::BLAST_CREASE_ANGLE);
     }
     let (vertices, faces) = slab;
     let mesh = Arc::new(Triangulation::from_vertices_and_faces(vertices, faces)?);

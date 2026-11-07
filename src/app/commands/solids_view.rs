@@ -2240,7 +2240,6 @@ struct Built {
     slab: super::triangulation::solid_between::Slab,
     volume: f64,
     boundary_wall: Vec<bool>,
-    internal_wall: Vec<bool>,
     /// Which source vertex each vertex was, for a piece split off whole.
     source_vertex: Option<Vec<u32>>,
 }
@@ -2250,8 +2249,8 @@ struct Built {
 /// come from the separate ground they lie on: split off whole where the face
 /// is all of that ground, and cut from that ground alone otherwise.
 ///
-/// Never cut from an earlier cut piece, however much smaller: a clip returns
-/// unwelded cells, and clipping those again grows without bound.
+/// Never cut from an earlier cut piece, however much smaller: it carries the
+/// walls of the outline it was cut to, which the new one need not share.
 fn carve_level(level: &Level, old_parts: &mut [Option<SolidPart>], cancel: &crate::app::jobs::CancelFlag) -> anyhow::Result<Vec<Option<Carved>>> {
     use super::triangulation::solid_between::{clip_piece_to_plans, split_solid_by_plan};
 
@@ -2275,7 +2274,7 @@ fn carve_level(level: &Level, old_parts: &mut [Option<SolidPart>], cancel: &crat
                     source.mesh.vertices().to_vec(),
                     source.mesh.face_vertex_indices_iter().map(|f| f.map(|i| i as u32)).collect(),
                 );
-                let edges = super::triangulation::solid_between::crease_outline(&slab, &vec![false; slab.1.len()], BLAST_CREASE_ANGLE);
+                let edges = super::triangulation::solid_between::crease_outline(&slab, BLAST_CREASE_ANGLE);
                 drop(slab);
                 let mut mesh = source.clone();
                 mesh.edges = Arc::new(edges);
@@ -2319,8 +2318,8 @@ fn carve_level(level: &Level, old_parts: &mut [Option<SolidPart>], cancel: &crat
             _ => split_solid_by_plan(&source.mesh, &plans).map_or_else(Vec::new, |split| split.into_iter().map(Some).collect()),
         };
         let ground_of = |point: DVec2| ground.iter().position(|face| arrangement::point_in_face(face, point));
-        // Faces cut from the same ground are cut together, sharing the cuts
-        // that narrow it down to each.
+        // Faces cut from the same ground are cut together, in one pass over
+        // its faces.
         let mut groups: std::collections::BTreeMap<Option<usize>, Vec<usize>> = std::collections::BTreeMap::new();
         for index in pending {
             let (_, anchor) = &faces[index];
@@ -2333,7 +2332,6 @@ fn carve_level(level: &Level, old_parts: &mut [Option<SolidPart>], cancel: &crat
                     slab: piece.slab,
                     volume: piece.volume,
                     boundary_wall: Vec::new(),
-                    internal_wall: Vec::new(),
                     source_vertex: Some(piece.source_vertex),
                 });
                 continue;
@@ -2352,17 +2350,15 @@ fn carve_level(level: &Level, old_parts: &mut [Option<SolidPart>], cancel: &crat
                     piece.slab.clone()
                 }
             };
-            let grounds: Vec<&[Vec<DVec2>]> = members.iter().map(|&index| faces[index].0.as_slice()).collect();
             let plans: Vec<&[Vec<DVec2>]> = members
                 .iter()
                 .map(|&index| level.plans.map_or(faces[index].0.as_slice(), |plans| plans[index].as_slice()))
                 .collect();
-            for (index, clipped) in members.into_iter().zip(clip_piece_to_plans(slab, &plans, &grounds, cancel)?) {
+            for (index, clipped) in members.into_iter().zip(clip_piece_to_plans(slab, &plans, cancel)?) {
                 built[index] = Some(Built {
                     slab: clipped.slab,
                     volume: clipped.volume,
                     boundary_wall: clipped.boundary_wall,
-                    internal_wall: clipped.internal_wall,
                     source_vertex: None,
                 });
             }
@@ -2382,21 +2378,9 @@ fn carve_level(level: &Level, old_parts: &mut [Option<SolidPart>], cancel: &crat
             let edges = match (level.outline, &built.source_vertex) {
                 (Outline::Rim, Some(source_vertex)) => split_edges(&source.edges, source_vertex),
                 (Outline::Rim, None) => super::triangulation::solid_between::boundary_wall_outline(&built.slab, &built.boundary_wall),
-                (Outline::Crease, _) => {
-                    let internal = if built.internal_wall.is_empty() {
-                        vec![false; built.slab.1.len()]
-                    } else {
-                        built.internal_wall.clone()
-                    };
-                    super::triangulation::solid_between::crease_outline(&built.slab, &internal, BLAST_CREASE_ANGLE)
-                }
+                (Outline::Crease, _) => super::triangulation::solid_between::crease_outline(&built.slab, BLAST_CREASE_ANGLE),
             };
-            // The clip's own seams inside the piece. Its volume is already
-            // taken, its outline has just been, and nothing can see them.
-            let mut slab = built.slab;
-            let mut internal = built.internal_wall.iter();
-            slab.1.retain(|_| !internal.next().is_some_and(|wall| *wall));
-            let mut mesh = piece_preview(source, slab, edges)?;
+            let mut mesh = piece_preview(source, built.slab, edges)?;
             if built.source_vertex.is_some() {
                 // Split off whole, its edges are the source's every triangle
                 // side: shown only as the whole flitch shows them, not as the
