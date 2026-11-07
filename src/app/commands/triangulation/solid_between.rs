@@ -142,7 +142,7 @@ pub(crate) fn build_solid_mesh(
     }
     let mut notes = Vec::new();
     let (vertices, faces, volume) = build_solid_between_surfaces_uncached(design, topography, region, &progress.phase(0.0, 0.9), &mut notes)?;
-    let generated = session::build_generated_triangulation(String::new(), vertices, faces, TriSurfaceType::SolidClosed, crate::model::triangulation::unique_edges)?;
+    let generated = session::build_generated_triangulation(String::new(), vertices, faces, TriSurfaceType::SolidClosed, |_| Vec::new())?;
     progress.set_fraction(1.0);
     let built = SolidMesh {
         mesh: generated.mesh,

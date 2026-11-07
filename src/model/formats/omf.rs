@@ -39,7 +39,7 @@ use crate::{
         progress::Phase,
         project::{self, ProjectFile, ProjectMetadata},
         raster::{LoadedRasterTexture, OpenRasterTexture},
-        triangulation::{GeometryVersion, LoadedTriangulation, OpenTriangulation, spatial_surface_face_order, unique_edges},
+        triangulation::{GeometryVersion, LoadedTriangulation, OpenTriangulation, spatial_surface_face_order},
     },
     rendering::color::{linear_to_srgb_byte, rgb_bytes_to_linear_rgba},
 };
@@ -2951,7 +2951,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         let geometry = element_geometry(element);
         let mesh = Arc::new(Triangulation::from_vertices_and_faces(vertices, faces).with_context(|| format!("build OMF surface '{}'", element.name))?);
         let spatial = Arc::new(crate::model::spatial::TriangleBvh::for_surface(&mesh));
-        let edges = unique_edges(&mesh);
+        let edges = Vec::new();
         let surface_face_order = Arc::new(spatial_surface_face_order(&mesh));
         let style = element.metadata.get(META_STYLE);
         let color = style_value(style, "color").unwrap_or_else(|| element_color(element, [0.65, 0.68, 0.72, 1.0]));

@@ -2159,7 +2159,16 @@ fn build_edge_chunks(device: &wgpu::Device, queue: &wgpu::Queue, scene_origin: D
     let edges_per_chunk = (buffer_limit / size_of::<EdgeInstance>()).max(1);
     let mut chunks = Vec::new();
     let vertices = triangulation.mesh.vertices();
-    for source_edges in triangulation.edges.chunks(edges_per_chunk) {
+    // Every triangle side, which a surface leaves for this to find: only a
+    // device without shader barycentrics draws its wireframe from a list.
+    let derived;
+    let edges: &[[u32; 2]] = if triangulation.edges.is_empty() && !triangulation.always_show_edges {
+        derived = crate::model::triangulation::unique_edges(&triangulation.mesh);
+        &derived
+    } else {
+        &triangulation.edges
+    };
+    for source_edges in edges.chunks(edges_per_chunk) {
         let instances = source_edges
             .iter()
             .map(|[a, b]| {

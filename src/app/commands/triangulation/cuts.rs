@@ -45,7 +45,7 @@ impl<'a> App<'a> {
                 };
                 anyhow::bail!("No surface geometry falls {retained_region} the selected polyline");
             }
-            let generated = session::build_generated_triangulation(name, new_verts, new_faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)?;
+            let generated = session::build_generated_triangulation(name, new_verts, new_faces, TriSurfaceType::Surface, |_| Vec::new())?;
             Ok(crate::model::triangulation::GeneratedTriangulationLog {
                 generated,
                 message: crate::i18n::tr!("cmd-cuts-clipped-surface-name-polyline-mode", name = tri_name.to_string(), mode = mode.label().to_string()),
@@ -107,7 +107,7 @@ impl<'a> App<'a> {
             if new_faces.is_empty() {
                 anyhow::bail!("No topology geometry falls outside the pit shell");
             }
-            let generated = session::build_generated_triangulation(name, new_verts, new_faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)?;
+            let generated = session::build_generated_triangulation(name, new_verts, new_faces, TriSurfaceType::Surface, |_| Vec::new())?;
             Ok(crate::model::triangulation::GeneratedTriangulationLog {
                 generated,
                 message: crate::i18n::tr!("cmd-cuts-cut-topology-name-pit-shell", name = topology_name.to_string()),
@@ -168,7 +168,7 @@ impl<'a> App<'a> {
             if new_faces.is_empty() {
                 anyhow::bail!("No triangulation geometry lies within the specified Z range");
             }
-            let generated = session::build_generated_triangulation(name, new_verts, new_faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)?;
+            let generated = session::build_generated_triangulation(name, new_verts, new_faces, TriSurfaceType::Surface, |_| Vec::new())?;
             Ok(crate::model::triangulation::GeneratedTriangulationLog {
                 generated,
                 message: crate::i18n::tr!(
@@ -231,7 +231,7 @@ impl<'a> App<'a> {
                 let retained = side.retained_relation();
                 anyhow::bail!("No surface geometry lies {retained} the topology within its XY coverage");
             }
-            let generated = session::build_generated_triangulation(name, new_vertices, new_faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)?;
+            let generated = session::build_generated_triangulation(name, new_vertices, new_faces, TriSurfaceType::Surface, |_| Vec::new())?;
             Ok(crate::model::triangulation::GeneratedTriangulationLog {
                 generated,
                 message: crate::i18n::tr!(

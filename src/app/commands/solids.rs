@@ -1028,12 +1028,13 @@ fn cut_slabs(
         if slab.1.is_empty() {
             continue;
         }
-        let Ok(mesh) = crate::model::formats::mesh_data::Triangulation::from_vertices_and_faces(slab.0, slab.1) else {
+        let (vertices, faces) = crate::model::triangulation::weld_identical_points(slab.0, slab.1);
+        let Ok(mesh) = crate::model::formats::mesh_data::Triangulation::from_vertices_and_faces(vertices, faces) else {
             continue;
         };
         let mesh = Arc::new(mesh);
         let spatial = Arc::new(crate::model::spatial::TriangleBvh::deferred(mesh.clone()));
-        let edges = Arc::new(crate::model::triangulation::unique_edges(&mesh));
+        let edges = Arc::new(Vec::new());
         let surface_face_order = Arc::new(crate::model::triangulation::spatial_surface_face_order(&mesh));
         let slab = Slab {
             mesh,

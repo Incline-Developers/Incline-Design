@@ -110,6 +110,12 @@ pub(crate) struct OpenTriangulation {
     pub(crate) spatial: Arc<crate::model::spatial::TriangleBvh>,
     /// Shared like the mesh: the Solids pages restyle every dig block on each
     /// pick, and a copy of each block's outline per restyle added up.
+    ///
+    /// Empty when the outline is every triangle side, as it is for a surface
+    /// not marked `always_show_edges`: those are drawn by the surface's own
+    /// shader wireframe, and the renderer derives the list only on a device
+    /// that has none. A survey's would otherwise hold a pair of indices for
+    /// every side of every face, for nothing.
     pub(crate) edges: Arc<Vec<[u32; 2]>>,
     /// Face indices in GPU-chunk order (see `spatial_surface_face_order`),
     /// precomputed off-thread so GPU surface chunking never sorts on the render
@@ -243,6 +249,44 @@ fn split_chunk_range(faces: &mut [FaceCentroid]) {
     faces.select_nth_unstable_by(cut, |a, b| a.centroid[axis].total_cmp(&b.centroid[axis]));
     let (left, right) = faces.split_at_mut(cut);
     rayon::join(|| split_chunk_range(left), || split_chunk_range(right));
+}
+
+/// One vertex per bit-identical position, the first of each kept in order,
+/// and the faces renumbered onto them. A cut leaves every face with corners of
+/// its own; shared again, the mesh holds about a fifth of the vertices with
+/// nothing about its geometry changed.
+pub(crate) fn weld_identical_points(vertices: Vec<mesh_data::Vertex>, mut faces: Vec<[u32; 3]>) -> (Vec<mesh_data::Vertex>, Vec<[u32; 3]>) {
+    use rayon::prelude::*;
+
+    let keys: Vec<[u64; 3]> = vertices.par_iter().map(|vertex| [vertex.x.to_bits(), vertex.y.to_bits(), vertex.z.to_bits()]).collect();
+    let mut order: Vec<u32> = (0..vertices.len() as u32).collect();
+    order.par_sort_unstable_by_key(|&index| (keys[index as usize], index));
+    drop(keys);
+    // Each point's first occurrence, which the sort puts at the head of its run.
+    let mut first: Vec<u32> = vec![0; vertices.len()];
+    let mut head = 0;
+    for (position, &index) in order.iter().enumerate() {
+        if position == 0 || {
+            let (a, b) = (vertices[order[position - 1] as usize], vertices[index as usize]);
+            a.x.to_bits() != b.x.to_bits() || a.y.to_bits() != b.y.to_bits() || a.z.to_bits() != b.z.to_bits()
+        } {
+            head = index;
+        }
+        first[index as usize] = head;
+    }
+    drop(order);
+    let mut renumbered: Vec<u32> = vec![u32::MAX; vertices.len()];
+    let mut kept = Vec::with_capacity(vertices.len() / 4);
+    for (index, vertex) in vertices.iter().enumerate() {
+        if first[index] as usize == index {
+            renumbered[index] = kept.len() as u32;
+            kept.push(*vertex);
+        }
+    }
+    drop(vertices);
+    kept.shrink_to_fit();
+    faces.par_iter_mut().for_each(|face| *face = face.map(|index| renumbered[first[index as usize] as usize]));
+    (kept, faces)
 }
 
 pub(crate) fn unique_edges(mesh: &mesh_data::Triangulation) -> Vec<[u32; 2]> {

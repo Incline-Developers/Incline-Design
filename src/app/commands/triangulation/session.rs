@@ -7,19 +7,17 @@ use crate::model::progress::Phase;
 /// step the bar at boundaries weighted by their typical relative cost.
 const LOAD_READ_SHARE: f32 = 0.6;
 
-/// Build the derived structures a loaded mesh needs for picking, wireframes
-/// and draw order, stepping `progress` as each finishes.
+/// Build the derived structures a loaded mesh needs for picking and draw
+/// order, stepping `progress` as each finishes.
 pub(super) fn build_triangulation_indexes(
     mesh: &std::sync::Arc<mesh_data::Triangulation>,
     progress: &Phase,
-) -> (std::sync::Arc<crate::model::spatial::TriangleBvh>, Vec<[u32; 2]>, std::sync::Arc<Vec<u32>>) {
+) -> (std::sync::Arc<crate::model::spatial::TriangleBvh>, std::sync::Arc<Vec<u32>>) {
     let spatial = std::sync::Arc::new(crate::model::spatial::TriangleBvh::for_surface(mesh));
-    progress.set_fraction(0.6);
-    let edges = crate::model::triangulation::unique_edges(mesh);
-    progress.set_fraction(0.8);
+    progress.set_fraction(0.7);
     let surface_face_order = std::sync::Arc::new(crate::model::triangulation::spatial_surface_face_order(mesh));
     progress.finish();
-    (spatial, edges, surface_face_order)
+    (spatial, surface_face_order)
 }
 
 impl<'a> App<'a> {
@@ -45,13 +43,13 @@ impl<'a> App<'a> {
                 drop(bytes);
                 drop(reservation);
                 let mesh = std::sync::Arc::new(mesh);
-                let (spatial, edges, surface_face_order) = build_triangulation_indexes(&mesh, &progress.phase(LOAD_READ_SHARE, 1.0));
+                let (spatial, surface_face_order) = build_triangulation_indexes(&mesh, &progress.phase(LOAD_READ_SHARE, 1.0));
                 Ok(LoadedTriangulation {
                     path: std::path::PathBuf::from(&source_name),
                     name,
                     mesh,
                     spatial,
-                    edges,
+                    edges: Vec::new(),
                     surface_face_order,
                 })
             },
@@ -138,13 +136,13 @@ impl<'a> App<'a> {
                         )
                     );
                     let mesh = std::sync::Arc::new(mesh);
-                    let (spatial, edges, surface_face_order) = build_triangulation_indexes(&mesh, &progress.phase(LOAD_READ_SHARE, 1.0));
+                    let (spatial, surface_face_order) = build_triangulation_indexes(&mesh, &progress.phase(LOAD_READ_SHARE, 1.0));
                     Ok(LoadedTriangulation {
                         name,
                         path,
                         mesh,
                         spatial,
-                        edges,
+                        edges: Vec::new(),
                         surface_face_order,
                     })
                 })

@@ -446,7 +446,7 @@ fn delaunay_surface_from_points(
         }
         userspace_warn!("{}", report);
     }
-    session::build_generated_triangulation(name, surface.vertices, surface.faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)
+    session::build_generated_triangulation(name, surface.vertices, surface.faces, TriSurfaceType::Surface, |_| Vec::new())
 }
 
 /// Triangulate the points in plan and, given an extent, cut the result back
