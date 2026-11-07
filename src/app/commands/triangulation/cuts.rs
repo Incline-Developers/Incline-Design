@@ -432,19 +432,95 @@ fn clip_polyline_by_xy_edge_exact(polyline: &[glam::DVec3], edge_a: glam::DVec2,
 /// Exact-boundary triangle intersection used by polyline KeepInside. It must
 /// share the same classifier as [`subtract_triangle_xy`] so the inside and
 /// outside results are a true partition even within the general XY tolerance.
+///
+/// Run once for every pair of faces two surfaces overlap in, so it works in
+/// two small buffers rather than a vector per edge; the arithmetic is
+/// [`clip_polyline_by_xy_edge_exact`]'s, step for step, so the pieces are the
+/// same to the bit.
 fn clip_target_triangle_to_reference_xy_exact_into(target: [mesh_data::Vertex; 3], reference: [mesh_data::Vertex; 3], output: &mut Vec<glam::DVec3>) {
-    let mut polyline: Vec<glam::DVec3> = target.into_iter().map(|point| glam::DVec3::new(point.x, point.y, point.z)).collect();
+    /// A triangle cut by three half-planes has at most six corners; the rest
+    /// is room for rounding to add a crossing or two.
+    const ROOM: usize = 12;
+    let mut current = [glam::DVec3::ZERO; ROOM];
+    let mut next = [glam::DVec3::ZERO; ROOM];
+    for (slot, point) in current.iter_mut().zip(target) {
+        *slot = glam::DVec3::new(point.x, point.y, point.z);
+    }
+    let mut count = 3;
     let clip_ccw = triangle_xy_area(reference) > 0.0;
     for edge_index in 0..3 {
         let edge_a = glam::DVec2::new(reference[edge_index].x, reference[edge_index].y);
         let edge_b = glam::DVec2::new(reference[(edge_index + 1) % 3].x, reference[(edge_index + 1) % 3].y);
-        polyline = clip_polyline_by_xy_edge_exact(&polyline, edge_a, edge_b, clip_ccw);
-        if polyline.len() < 3 {
+        let length = edge_a.distance(edge_b);
+        let signed_distance = |point: glam::DVec3| {
+            let distance = if length == 0.0 {
+                0.0
+            } else {
+                crate::model::kernel::orient2d(edge_a, edge_b, glam::DVec2::new(point.x, point.y)) / length
+            };
+            if clip_ccw { distance } else { -distance }
+        };
+        let mut kept = 0;
+        let mut overflow = false;
+        let mut push = |point: glam::DVec3, next: &mut [glam::DVec3; ROOM]| {
+            // As `deduplicate_ring_by`: a point coincident with the last kept
+            // one is the same point.
+            if kept > 0 && next[kept - 1].distance_squared(point) <= crate::model::geometry::RING_DEDUP_EPS_SQ {
+                return;
+            }
+            if kept == ROOM {
+                overflow = true;
+                return;
+            }
+            next[kept] = point;
+            kept += 1;
+        };
+        let mut previous = current[count - 1];
+        let mut previous_distance = signed_distance(previous);
+        let mut previous_inside = previous_distance >= 0.0;
+        for &point in &current[..count] {
+            let distance = signed_distance(point);
+            let inside = distance >= 0.0;
+            if inside != previous_inside {
+                let denominator = previous_distance - distance;
+                if denominator.abs() > 1e-20 {
+                    let t = (previous_distance / denominator).clamp(0.0, 1.0);
+                    push(previous.lerp(point, t), &mut next);
+                }
+            }
+            if inside {
+                push(point, &mut next);
+            }
+            previous = point;
+            previous_distance = distance;
+            previous_inside = inside;
+        }
+        if overflow {
+            // Never for a sound pair of faces; the general clip has room.
+            let mut polyline: Vec<glam::DVec3> = current[..count].to_vec();
+            for later in edge_index..3 {
+                let edge_a = glam::DVec2::new(reference[later].x, reference[later].y);
+                let edge_b = glam::DVec2::new(reference[(later + 1) % 3].x, reference[(later + 1) % 3].y);
+                polyline = clip_polyline_by_xy_edge_exact(&polyline, edge_a, edge_b, clip_ccw);
+                if polyline.len() < 3 {
+                    break;
+                }
+            }
+            output.clear();
+            output.extend(polyline);
+            return;
+        }
+        if kept > 1 && next[0].distance_squared(next[kept - 1]) <= crate::model::geometry::RING_DEDUP_EPS_SQ {
+            kept -= 1;
+        }
+        std::mem::swap(&mut current, &mut next);
+        count = kept;
+        if count < 3 {
             break;
         }
     }
     output.clear();
-    output.extend(polyline);
+    output.extend_from_slice(&current[..count]);
 }
 
 /// Push a convex polyline into the mesh buffers as a triangle fan, dropping
@@ -649,10 +725,11 @@ pub(super) fn clip_mesh_by_surface(
 pub(super) enum WholeFaces {
     /// Every face in the pieces the reference cuts it into.
     Never,
-    /// A face wholly and clearly on the kept side, with the reference under
-    /// or over all of it, comes out whole. An edge it shares with another
-    /// such face stays one edge; any other carries the points its pieces put
-    /// there, so the pieces beside it, or the wall along the rim, meet it.
+    /// A face wholly on the kept side, with the reference under or over all
+    /// of it, comes out whole, and one the reference crosses comes out as
+    /// its kept part triangulated afresh (see [`retriangulate_face`]); either
+    /// way its edges carry the points its pieces put there, so the faces
+    /// beside it, or the wall along the rim, meet it point for point.
     Kept,
 }
 
@@ -696,18 +773,6 @@ pub(super) fn clip_mesh_by_prepared_surface(
         offset,
         whole: whole != WholeFaces::Never,
     };
-    // Seamless edges need to know which faces come out whole before any is
-    // emitted, so those are found first; the clip is cheap beside the memory
-    // its pieces would cost if kept to be looked at again.
-    let edges_between_whole: Vec<[bool; 3]> = if whole == WholeFaces::Kept {
-        let whole_faces: Vec<bool> = (0..face_count)
-            .into_par_iter()
-            .map_init(FaceScratch::default, |scratch, face| clipper.clip(triangle_of(face), scratch))
-            .collect();
-        seamless_edges(target, &whole_faces)
-    } else {
-        Vec::new()
-    };
     // Each face is clipped on its own, so the faces are shared out in
     // chunks and the pieces joined back in face order: the sheet comes out
     // the same whichever thread clipped what.
@@ -722,22 +787,26 @@ pub(super) fn clip_mesh_by_prepared_surface(
             let mut output_vertices = Vec::new();
             let mut output_faces = Vec::new();
             let mut scratch = FaceScratch::default();
+            let mut stack = Vec::new();
             for face in chunk.clone() {
                 let triangle = triangle_of(face);
-                let seamless = edges_between_whole.get(face).copied().unwrap_or([false; 3]);
-                // A face whose every edge is seamless needs nothing from its
-                // pieces: it comes out exactly as it is.
-                if seamless == [true; 3] {
-                    append_polyline_fan(
-                        triangle.into_iter().map(|vertex| glam::DVec3::new(vertex.x, vertex.y, vertex.z)),
-                        &mut output_vertices,
-                        &mut output_faces,
-                    );
+                if clipper.clip(triangle, &mut scratch) {
+                    append_whole_face(triangle, &scratch.points, &mut output_vertices, &mut output_faces);
                     continue;
                 }
-                if clipper.clip(triangle, &mut scratch) {
-                    append_whole_face(triangle, seamless, &scratch.points, &mut output_vertices, &mut output_faces);
-                    continue;
+                if whole == WholeFaces::Kept {
+                    let area = triangle_xy_area(triangle).abs();
+                    let covered = area > 0.0 && scratch.covered >= area * (1.0 - WHOLE_FACE_COVERAGE);
+                    if covered && !scratch.cut_away {
+                        append_whole_face(triangle, &scratch.points, &mut output_vertices, &mut output_faces);
+                        continue;
+                    }
+                    if covered && scratch.points.is_empty() {
+                        continue;
+                    }
+                    if covered && retriangulate_face(triangle, &scratch, &clipper, &mut stack, &mut output_vertices, &mut output_faces) {
+                        continue;
+                    }
                 }
                 for range in &scratch.pieces {
                     append_surface_clip_polyline(&scratch.points[range.clone()], &mut output_vertices, &mut output_faces);
@@ -773,7 +842,12 @@ struct FaceScratch {
     points: Vec<SurfaceClipVertex>,
     pieces: Vec<std::ops::Range<usize>>,
     overlap: Vec<glam::DVec3>,
+    heights: Vec<SurfaceClipVertex>,
     candidates: Vec<usize>,
+    /// How much of the face's plan area the reference lies over.
+    covered: f64,
+    /// Whether any of the face lies on the side cut away.
+    cut_away: bool,
 }
 
 impl FaceClipper<'_> {
@@ -789,12 +863,15 @@ impl FaceClipper<'_> {
         };
         let mut all_clear = self.whole;
         let mut covered = 0.0;
+        let mut cut_away = false;
         let bounds = triangle_xy_bounds(target);
         let FaceScratch {
             points,
             pieces,
             overlap,
+            heights,
             candidates,
+            ..
         } = scratch;
         self.reference
             .spatial
@@ -812,37 +889,258 @@ impl FaceClipper<'_> {
                     return;
                 }
 
-                let polyline: Vec<SurfaceClipVertex> = overlap
-                    .iter()
-                    .copied()
-                    .map(|point| {
-                        let reference_z = bary_z(point.x, point.y, reference_triangle);
-                        SurfaceClipVertex {
-                            point,
-                            height_delta: point.z - reference_z + self.offset,
-                        }
-                    })
-                    .collect();
+                heights.clear();
+                heights.extend(overlap.iter().map(|&point| {
+                    let reference_z = bary_z(point.x, point.y, reference_triangle);
+                    SurfaceClipVertex {
+                        point,
+                        height_delta: point.z - reference_z + self.offset,
+                    }
+                }));
                 if all_clear {
-                    all_clear = polyline.iter().all(|vertex| clear(vertex.height_delta));
-                    covered += polygon_xy_area(overlap).abs();
+                    all_clear = heights.iter().all(|vertex| clear(vertex.height_delta));
                 }
-                let mut clipped = clip_surface_polyline(polyline, self.side);
+                covered += polygon_xy_area(overlap).abs();
+                cut_away |= !heights.iter().all(|vertex| retained(self.side, vertex.height_delta));
+                let start = points.len();
+                clip_surface_polyline_into(heights, self.side, points);
                 if self.offset != 0.0 {
                     // Where this sheet stops it lies `clearance` from the
                     // reference, and the reference's own sheet stops at the same
                     // line in plan, `clearance` the other way. Both put their
                     // edge half way between, so the two meet there.
-                    for vertex in clipped.iter_mut().filter(|vertex| vertex.height_delta.abs() <= 1e-6) {
+                    for vertex in points[start..].iter_mut().filter(|vertex| vertex.height_delta.abs() <= SHEETS_MEET) {
                         vertex.point.z += self.offset / 2.0;
                     }
                 }
-                let start = points.len();
-                points.extend(clipped);
                 pieces.push(start..points.len());
             });
+        scratch.covered = covered;
+        scratch.cut_away = cut_away;
         all_clear && covered >= triangle_xy_area(target).abs() * (1.0 - WHOLE_FACE_COVERAGE)
     }
+}
+
+/// Whether a point `height_delta` from the reference is on the side kept.
+fn retained(side: TriSurfaceCutSide, height_delta: f64) -> bool {
+    match side {
+        TriSurfaceCutSide::CutTop => height_delta <= 1e-9,
+        TriSurfaceCutSide::CutBottom => height_delta >= -1e-9,
+    }
+}
+
+/// How near the reference a point of a piece must be to lie on the line where
+/// the two sheets meet.
+const SHEETS_MEET: f64 = 1.0e-6;
+
+/// How close two points of a face being triangulated again may be and still
+/// be one: two pieces either side of a reference edge each put the same
+/// crossing there, a rounding error apart.
+const RETRIANGULATE_WELD: f64 = 1.0e-7;
+
+/// `target` again, as only the part of it on the kept side: its corners, the
+/// points its pieces put on its edges - so the faces beside it meet it point
+/// for point - and the line where it meets the reference, triangulated with
+/// those as constraints, and each triangle kept or not by which side of the
+/// reference its middle lies. The pieces would be as fine as the reference
+/// all over the face; this is as fine only along the line where it matters.
+///
+/// `false`, with nothing emitted, where the constraints cross: the pieces are
+/// emitted instead.
+fn retriangulate_face(
+    target: [mesh_data::Vertex; 3],
+    scratch: &FaceScratch,
+    clipper: &FaceClipper,
+    stack: &mut Vec<usize>,
+    vertices: &mut Vec<mesh_data::Vertex>,
+    faces: &mut Vec<[u32; 3]>,
+) -> bool {
+    use spade::{ConstrainedDelaunayTriangulation, Point2, Triangulation as _};
+
+    let corner = |index: usize| glam::DVec3::new(target[index].x, target[index].y, target[index].z);
+    let origin = glam::DVec2::new(target[0].x, target[0].y);
+    let mut points: Vec<glam::DVec3> = Vec::new();
+    let mut cells: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    let mut index_of = |point: glam::DVec3, points: &mut Vec<glam::DVec3>| -> usize {
+        let local = (point.truncate() - origin) / RETRIANGULATE_WELD;
+        let (cx, cy) = (local.x.floor() as i64, local.y.floor() as i64);
+        for x in cx - 1..=cx + 1 {
+            for y in cy - 1..=cy + 1 {
+                if let Some(found) = cells
+                    .get(&(x, y))
+                    .and_then(|bucket| bucket.iter().find(|&&index| points[index].truncate().distance(point.truncate()) <= RETRIANGULATE_WELD))
+                {
+                    return *found;
+                }
+            }
+        }
+        points.push(point);
+        cells.entry((cx, cy)).or_default().push(points.len() - 1);
+        points.len() - 1
+    };
+    let mut constraints: Vec<[usize; 2]> = Vec::new();
+    // A corner the pieces kept is taken as they kept it: one on the line
+    // where the sheets meet was moved to meet the reference's sheet there.
+    let corner = |index: usize| {
+        let at = corner(index);
+        scratch
+            .points
+            .iter()
+            .find(|vertex| vertex.point.truncate().distance(at.truncate()) <= RETRIANGULATE_WELD)
+            .map_or(at, |vertex| vertex.point)
+    };
+    // The face's own outline, through the points its pieces put on it.
+    let mut along = Vec::new();
+    for edge in 0..3 {
+        let (from, to) = (corner(edge), corner((edge + 1) % 3));
+        let span = (to - from).truncate();
+        let length = span.length();
+        let reach = length * 1.0e-9 + 1.0e-9;
+        along.clear();
+        if length > 0.0 {
+            for point in scratch.points.iter().map(|vertex| vertex.point) {
+                let offset = (point - from).truncate();
+                let distance = offset.dot(span) / length;
+                if distance > reach && distance < length - reach && span.perp_dot(offset).abs() / length <= reach {
+                    along.push((distance, point));
+                }
+            }
+        }
+        along.sort_by(|left, right| left.0.total_cmp(&right.0));
+        let mut previous = index_of(from, &mut points);
+        for &(_, point) in &along {
+            let next = index_of(point, &mut points);
+            if next != previous {
+                constraints.push([previous, next]);
+                previous = next;
+            }
+        }
+        let last = index_of(to, &mut points);
+        if last != previous {
+            constraints.push([previous, last]);
+        }
+    }
+    // Where it meets the reference: each piece the line crosses has a side
+    // along it, between two points on the line - its crossings, or a corner
+    // the line passes through.
+    for range in &scratch.pieces {
+        let piece = &scratch.points[range.clone()];
+        for (index, vertex) in piece.iter().enumerate() {
+            let next = piece[(index + 1) % piece.len()];
+            if vertex.height_delta.abs() <= SHEETS_MEET && next.height_delta.abs() <= SHEETS_MEET && piece.len() > 2 {
+                let (a, b) = (index_of(vertex.point, &mut points), index_of(next.point, &mut points));
+                if a != b {
+                    constraints.push([a.min(b), a.max(b)]);
+                }
+            }
+        }
+    }
+    constraints.sort_unstable();
+    constraints.dedup();
+    let mut conflicts = 0usize;
+    let plan: Vec<Point2<f64>> = points
+        .iter()
+        .map(|point| {
+            let local = point.truncate() - origin;
+            Point2::new(local.x, local.y)
+        })
+        .collect();
+    let count = plan.len();
+    let Some(mut cdt) =
+        crate::logging::catch_panic_quietly(|| ConstrainedDelaunayTriangulation::<Point2<f64>>::try_bulk_load_cdt(plan, constraints, |_| conflicts += 1)).and_then(Result::ok)
+    else {
+        return false;
+    };
+    if conflicts > 0 || cdt.num_vertices() != count {
+        return false;
+    }
+    // Its points are all on its outline and the line where the sheets meet,
+    // so on its own the triangulation fans long slivers across the face,
+    // each reaching across the ground of everything cut from it later. Points
+    // added inside give it triangles of a fair shape; the outline and the
+    // line are not split, so the faces beside it and the reference's sheet
+    // still meet it point for point.
+    let refined = crate::logging::catch_panic_quietly(|| {
+        cdt.refine(
+            spade::RefinementParameters::<f64>::new()
+                .with_angle_limit(spade::AngleLimit::from_deg(20.0))
+                .keep_constraint_edges()
+                .exclude_outer_faces(true)
+                .with_max_additional_vertices(4 * count + 64),
+        );
+    });
+    if refined.is_none() {
+        return false;
+    }
+    for vertex in cdt.vertices().skip(count) {
+        let position = vertex.position();
+        let (x, y) = (position.x + origin.x, position.y + origin.y);
+        points.push(glam::DVec3::new(x, y, bary_z(x, y, target)));
+    }
+    // A point a rounding error inside the face's edge leaves the hull running
+    // past it, and slivers between the two that are no part of the face:
+    // whatever the hull reaches without crossing the outline is outside.
+    let mut outside = vec![false; cdt.num_all_faces()];
+    let mut reached = Vec::new();
+    for edge in cdt.convex_hull() {
+        if edge.is_constraint_edge() {
+            continue;
+        }
+        let inner = [edge.face(), edge.rev().face()].into_iter().find_map(|face| face.as_inner());
+        if let Some(inner) = inner
+            && !std::mem::replace(&mut outside[inner.fix().index()], true)
+        {
+            reached.push(inner);
+        }
+    }
+    while let Some(face) = reached.pop() {
+        for edge in face.adjacent_edges() {
+            if edge.is_constraint_edge() {
+                continue;
+            }
+            if let Some(next) = edge.rev().face().as_inner()
+                && !std::mem::replace(&mut outside[next.fix().index()], true)
+            {
+                reached.push(next);
+            }
+        }
+    }
+    let upwards = triangle_xy_area(target) > 0.0;
+    let mut kept: Vec<[usize; 3]> = Vec::new();
+    for face in cdt.inner_faces() {
+        if outside[face.fix().index()] {
+            continue;
+        }
+        let [a, b, c] = face.vertices().map(|vertex| vertex.fix().index());
+        let middle = (points[a] + points[b] + points[c]) / 3.0;
+        let mut ground = None;
+        clipper
+            .reference
+            .spatial
+            .for_each_xy_bounds_candidate_index_with_stack(middle.truncate(), middle.truncate(), stack, |index| {
+                if ground.is_none() {
+                    ground = point_in_triangle_bary_z(middle.x, middle.y, clipper.reference.triangles[index]);
+                }
+            });
+        let Some(ground) = ground else { continue };
+        let delta = bary_z(middle.x, middle.y, target) - ground + clipper.offset;
+        if retained(clipper.side, delta) {
+            kept.push(if upwards { [a, b, c] } else { [a, c, b] });
+        }
+    }
+    let mut renumbered = vec![u32::MAX; points.len()];
+    for face in kept {
+        let face = face.map(|index| {
+            if renumbered[index] == u32::MAX {
+                renumbered[index] = vertices.len() as u32;
+                let point = points[index];
+                vertices.push(mesh_data::Vertex::new(point.x, point.y, point.z));
+            }
+            renumbered[index]
+        });
+        faces.push(face);
+    }
+    true
 }
 
 /// The plan area of a polygon, positive when it winds anticlockwise.
@@ -855,45 +1153,15 @@ fn polygon_xy_area(points: &[glam::DVec3]) -> f64 {
     twice / 2.0
 }
 
-/// For each face, which of its edges - the one from corner `i` to `i + 1` -
-/// lie between two faces that both come out whole, the faces matched by the
-/// exact positions of their corners.
-fn seamless_edges(target: &mesh_data::Triangulation, whole: &[bool]) -> Vec<[bool; 3]> {
-    let vertices = target.vertices();
-    let bits = |index: usize| {
-        let vertex = vertices[index];
-        (vertex.x.to_bits(), vertex.y.to_bits(), vertex.z.to_bits())
-    };
-    let mut uses: HashMap<_, Vec<(usize, usize)>> = HashMap::new();
-    for (face, _) in whole.iter().enumerate().filter(|(_, whole)| **whole) {
-        let corners = target.face_vertex_indices(face).unwrap_or_default();
-        for edge in 0..3 {
-            let (a, b) = (bits(corners[edge]), bits(corners[(edge + 1) % 3]));
-            uses.entry(if a < b { (a, b) } else { (b, a) }).or_default().push((face, edge));
-        }
-    }
-    let mut seamless = vec![[false; 3]; whole.len()];
-    for faces in uses.values().filter(|faces| faces.len() == 2) {
-        for &(face, edge) in faces {
-            seamless[face][edge] = true;
-        }
-    }
-    seamless
-}
-
-/// Emit `target` whole, with the points of `pieces` that lie on its edges -
-/// except the `seamless` ones - so the pieces of the faces beside it meet it
-/// point for point.
-fn append_whole_face(target: [mesh_data::Vertex; 3], seamless: [bool; 3], pieces: &[SurfaceClipVertex], vertices: &mut Vec<mesh_data::Vertex>, faces: &mut Vec<[u32; 3]>) {
+/// Emit `target` whole, with the points of `pieces` that lie on its edges, so
+/// the faces beside it meet it point for point.
+fn append_whole_face(target: [mesh_data::Vertex; 3], pieces: &[SurfaceClipVertex], vertices: &mut Vec<mesh_data::Vertex>, faces: &mut Vec<[u32; 3]>) {
     let corner = |index: usize| glam::DVec3::new(target[index].x, target[index].y, target[index].z);
     let mut ring = Vec::new();
     let mut along = Vec::new();
-    for (edge, seamless) in seamless.into_iter().enumerate() {
+    for edge in 0..3 {
         let (from, to) = (corner(edge), corner((edge + 1) % 3));
         ring.push(from);
-        if seamless {
-            continue;
-        }
         let span = (to - from).truncate();
         let length = span.length();
         if length == 0.0 {
@@ -2149,15 +2417,22 @@ pub(super) fn clip_surface_polyline(polyline: Vec<SurfaceClipVertex>, side: TriS
     if polyline.is_empty() {
         return polyline;
     }
+    let mut output = Vec::new();
+    clip_surface_polyline_into(&polyline, side, &mut output);
+    output
+}
+
+/// [`clip_surface_polyline`], appending to `output`.
+pub(super) fn clip_surface_polyline_into(polyline: &[SurfaceClipVertex], side: TriSurfaceCutSide, output: &mut Vec<SurfaceClipVertex>) {
+    let Some(&last) = polyline.last() else { return };
     let retained = |delta: f64| match side {
         TriSurfaceCutSide::CutTop => delta <= 1e-9,
         TriSurfaceCutSide::CutBottom => delta >= -1e-9,
     };
 
-    let mut output = Vec::new();
-    let mut previous = *polyline.last().expect("polyline is non-empty");
+    let mut previous = last;
     let mut previous_inside = retained(previous.height_delta);
-    for current in polyline {
+    for &current in polyline {
         let current_inside = retained(current.height_delta);
         if current_inside != previous_inside {
             let denominator = previous.height_delta - current.height_delta;
@@ -2175,7 +2450,6 @@ pub(super) fn clip_surface_polyline(polyline: Vec<SurfaceClipVertex>, side: TriS
         previous = current;
         previous_inside = current_inside;
     }
-    output
 }
 
 pub(super) fn append_surface_clip_polyline(polyline: &[SurfaceClipVertex], vertices: &mut Vec<mesh_data::Vertex>, faces: &mut Vec<[u32; 3]>) {

@@ -2314,8 +2314,9 @@ pub(crate) fn boundary_wall_outline(slab: &Slab, boundary_wall: &[bool]) -> Vec<
 /// rather than failing, and the Reserves view reports it through
 /// `planning-reserve-open-solid`).
 pub(crate) fn clip_piece_to_plans(slab: Slab, plans: &[&[Vec<glam::DVec2>]], cancel: &crate::app::jobs::CancelFlag) -> Result<Vec<ClippedSolid>> {
-    /// Faces routed together on one thread.
-    const CHUNK: usize = 1 << 14;
+    /// Faces routed together on one thread: small enough that a run of
+    /// large faces, which a design's floor puts together, is shared out.
+    const CHUNK: usize = 1 << 11;
 
     let empty = || ClippedSolid {
         slab: (Vec::new(), Vec::new()),
