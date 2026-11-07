@@ -42,8 +42,11 @@ pub(crate) fn draw_panel(ui: &mut egui::Ui, editor: &mut EditorState, document: 
                 let mut last_bench = None;
                 let (mut solid_open, mut bench_open) = (true, true);
                 // A blast under the solid's minimum size is out of mining
-                // and unnamed: drawn, but not one of the blasts listed.
-                for outline in editor.blasting_outlines.iter().filter(|outline| !outline.name.is_empty()) {
+                // and unnamed: drawn, and counted on its bench's heading, but
+                // not one of the blasts listed. Its solid and bench still
+                // get their rows, even with no blast left to list: that is
+                // where the minimum is set back down.
+                for outline in editor.blasting_outlines.iter() {
                     // Benches nest under their solid, and blasts under their
                     // bench: numbering restarts per bench, so a blast only
                     // reads unambiguously under the RL it belongs to.
@@ -77,15 +80,25 @@ pub(crate) fn draw_panel(ui: &mut egui::Ui, editor: &mut EditorState, document: 
                     if last_bench != Some(bench) {
                         last_bench = Some(bench);
                         let blasts = count(&|other| other.solid == outline.solid && other.bench_base.to_bits() == bench);
+                        let under = editor
+                            .blasting_outlines
+                            .iter()
+                            .filter(|other| other.name.is_empty() && other.solid == outline.solid && other.bench_base.to_bits() == bench)
+                            .count();
+                        let detail = if under > 0 {
+                            tr!("planning-blast-count-under", count = blasts, under = under)
+                        } else {
+                            tr!("planning-blast-count", count = blasts)
+                        };
                         bench_open = grid_group_row(
                             ui,
                             ("planning_blasts_bench", outline.solid, bench),
                             &super::solids_view::format_rl(outline.bench_base),
-                            &tr!("planning-blast-count", count = blasts),
+                            &detail,
                             1,
                         );
                     }
-                    if !bench_open {
+                    if !bench_open || outline.name.is_empty() {
                         continue;
                     }
                     let blast = BlastShapeRef::new(outline.solid, outline.bench_base, anchor_of(outline));
@@ -115,6 +128,147 @@ pub(crate) fn draw_panel(ui: &mut egui::Ui, editor: &mut EditorState, document: 
             });
             editor.scroll_to_blast = false;
         })
+}
+
+/// One bench in the Copy To dialog: its base RL, and what can be ticked in it.
+type CopyBench = (f64, Vec<crate::ui::state::BenchSelection>);
+
+/// The button above a cut step's tree while lines are selected, and the
+/// dialog it opens: tick the benches or flitches to copy them to, a solid or
+/// bench ticking everything under it.
+pub(crate) fn draw_copy_cuts(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document, commands: &mut Vec<UiCommand>) {
+    let lines = editor
+        .selected_handles
+        .iter()
+        .filter(|handle| matches!(handle, crate::model::SceneEntityId::Object(_)))
+        .count();
+    // There, disabled, before anything is selected: appearing on selection
+    // would push the navigator down under the cursor.
+    if editor.planning_cut_target().is_some() {
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.add_space(8.0);
+            let button = crate::ui::widgets::menu::MenuButton::new(tr!("planning-copy-cuts-button", count = lines)).enabled(lines > 0);
+            if ui.add(button).clicked() {
+                editor.copy_cuts_dialog = Some(Default::default());
+            }
+        });
+        ui.add_space(4.0);
+    }
+    if editor.copy_cuts_dialog.is_none() {
+        return;
+    }
+    let strips = editor.is_dig_strips_step();
+    let source = editor.planning_cut_target();
+    // Every bench of each solid with what can be drawn on under it: itself
+    // on Blasting, its flitches on Dig Strips, and never the one copied from.
+    let mut solids: Vec<(&crate::model::Solid, Vec<CopyBench>)> = Vec::new();
+    for solid in document.solids() {
+        let occupied = editor.solid_view_bands.get(&solid.id).map(Vec::as_slice);
+        let is_source = |band: &crate::ui::state::BenchSelection| source.is_some_and(|(held, picked)| held == solid.id && (picked.base - band.base).abs() < 1e-6);
+        let mut benches = Vec::new();
+        for bench in solid
+            .benching
+            .benches()
+            .iter()
+            .rev()
+            .filter(|bench| super::solids_view::holds(occupied, bench.base, bench.top()))
+        {
+            let bands: Vec<_> = if strips {
+                bench
+                    .flitches
+                    .iter()
+                    .rev()
+                    .filter(|flitch| super::solids_view::holds(occupied, flitch.base, flitch.top()))
+                    .filter(|flitch| !editor.dig_excluded_flitches.contains(&(solid.id, flitch.base.to_bits())))
+                    .map(|flitch| crate::ui::state::BenchSelection {
+                        base: flitch.base,
+                        top: flitch.top(),
+                        is_flitch: true,
+                    })
+                    .collect()
+            } else {
+                vec![crate::ui::state::BenchSelection {
+                    base: bench.base,
+                    top: bench.top(),
+                    is_flitch: false,
+                }]
+            };
+            let bands: Vec<_> = bands.into_iter().filter(|band| !is_source(band)).collect();
+            if !bands.is_empty() {
+                benches.push((bench.base, bands));
+            }
+        }
+        if !benches.is_empty() {
+            solids.push((solid, benches));
+        }
+    }
+    let mut open = true;
+    let mut close = false;
+    let Some(mut dialog) = editor.copy_cuts_dialog.take() else { return };
+    let title = if strips {
+        tr!("planning-copy-cuts-title-flitches")
+    } else {
+        tr!("planning-copy-cuts-title-benches")
+    };
+    crate::ui::widgets::menu::DragableMenu::new("copy_cuts_dialog", title)
+        .open(&mut open)
+        .min_width(320.0)
+        .show(ui.ctx(), |ui| {
+            egui::ScrollArea::vertical().max_height(420.0).auto_shrink([false, true]).show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for (solid, benches) in &solids {
+                    let every = |ticks: &dyn Fn(&crate::ui::state::BenchSelection) -> bool| benches.iter().flat_map(|(_, bands)| bands).all(ticks);
+                    let mut on = every(&|band| dialog.targets.contains(&(solid.id, band.base.to_bits())));
+                    if crate::ui::widgets::data_grid::grid_toggle_row(ui, &solid.name, &mut on, 0, true, false).0 {
+                        for band in benches.iter().flat_map(|(_, bands)| bands) {
+                            dialog.set(solid.id, band.base, on);
+                        }
+                    }
+                    for (base, bands) in benches {
+                        let label = super::solids_view::format_rl(*base);
+                        let mut on = bands.iter().all(|band| dialog.targets.contains(&(solid.id, band.base.to_bits())));
+                        if crate::ui::widgets::data_grid::grid_toggle_row(ui, &label, &mut on, 1, strips, false).0 {
+                            for band in bands {
+                                dialog.set(solid.id, band.base, on);
+                            }
+                        }
+                        if strips {
+                            for band in bands {
+                                let label = super::solids_view::format_rl(band.base);
+                                let mut on = dialog.targets.contains(&(solid.id, band.base.to_bits()));
+                                if crate::ui::widgets::data_grid::grid_toggle_row(ui, &label, &mut on, 2, false, false).0 {
+                                    dialog.set(solid.id, band.base, on);
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+            let chosen: Vec<_> = solids
+                .iter()
+                .flat_map(|(solid, benches)| benches.iter().flat_map(|(_, bands)| bands).map(|band| (solid.id, *band)))
+                .filter(|(solid, band)| dialog.targets.contains(&(*solid, band.base.to_bits())))
+                .collect();
+            ui.add_space(6.0);
+            crate::ui::widgets::menu::menu_actions(ui, |ui| {
+                let submitted = crate::ui::widgets::menu::dialog_confirmed(ui.ctx());
+                let can_copy = !chosen.is_empty();
+                let copy = crate::ui::widgets::menu::MenuButton::new(tr!("planning-copy-cuts-confirm", count = chosen.len()))
+                    .primary()
+                    .enabled(can_copy);
+                if (ui.add(copy).clicked() || submitted) && can_copy {
+                    commands.push(UiCommand::CopyCutsTo(chosen.clone()));
+                    close = true;
+                }
+                if ui.add(crate::ui::widgets::menu::MenuButton::new(tr!("common-cancel"))).clicked() || crate::ui::widgets::menu::dialog_cancelled(ui.ctx()) {
+                    close = true;
+                }
+            });
+        });
+    if open && !close {
+        editor.copy_cuts_dialog = Some(dialog);
+    }
 }
 
 /// Which kind of ground an outline is.

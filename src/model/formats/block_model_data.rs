@@ -11,6 +11,7 @@ use std::{
 
 use glam::{DMat3, DVec3};
 
+use super::block_column::BlockColumn;
 use crate::model::block_model::RenderableBlockIndices;
 
 #[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
@@ -25,14 +26,14 @@ pub(crate) struct BlockModelData {
     content_version: u64,
     pub(crate) metadata: BlockModelMetadata,
     rotation: DMat3,
-    numeric_values: BTreeMap<String, Arc<Vec<f64>>>,
+    numeric_values: BTreeMap<String, Arc<BlockColumn>>,
     _reservation: crate::app::memory::MemoryReservation,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct BlockModelColumn {
     pub(crate) name: String,
-    pub(crate) values: Arc<Vec<f64>>,
+    pub(crate) values: Arc<BlockColumn>,
     /// Category code to display label. `None` identifies an ordinary numeric
     /// column; categorical columns store their codes in `values` as exact
     /// non-negative integers and use `NaN` for blank CSV cells.
@@ -162,9 +163,9 @@ impl BlockModelData {
             if values.len() != n_blocks {
                 return Err(invalid(format!("in-memory block-model resource '{name}' has {} values; expected {n_blocks}", values.len())));
             }
-            validate_allocation::<f64>(values.len(), "in-memory numeric values")?;
+            validate_allocation::<u8>(values.heap_bytes(), "in-memory numeric values")?;
             retained_bytes = retained_bytes
-                .checked_add(values.len().checked_mul(size_of::<f64>()).ok_or_else(|| invalid("in-memory resource size overflows"))?)
+                .checked_add(values.heap_bytes())
                 .ok_or_else(|| invalid("in-memory model retained size overflows"))?;
             if let Some(categories) = categories.as_ref() {
                 for (&code, label) in categories {
@@ -174,7 +175,6 @@ impl BlockModelData {
                 }
                 if let Some(value) = values
                     .iter()
-                    .copied()
                     .find(|value| value.is_finite() && (value.fract() != 0.0 || !(0.0..=u32::MAX as f64).contains(value) || !categories.contains_key(&(*value as u32))))
                 {
                     return Err(invalid(format!("in-memory categorical resource '{name}' contains unmapped category code {value}")));
@@ -235,7 +235,7 @@ impl BlockModelData {
             + self
                 .numeric_values
                 .iter()
-                .map(|(name, values)| name.len() + values.len() * size_of::<f64>())
+                .map(|(name, values)| name.len() + values.heap_bytes())
                 .fold(0usize, usize::saturating_add)
     }
 
@@ -246,7 +246,7 @@ impl BlockModelData {
     pub(crate) fn set_category_column(
         &mut self,
         name: &str,
-        codes: Arc<Vec<f64>>,
+        codes: Arc<BlockColumn>,
         categories: BTreeMap<u32, String>,
         colors: BTreeMap<u32, [f32; 4]>,
     ) -> Result<(), BlockModelDataError> {
@@ -255,7 +255,6 @@ impl BlockModelData {
         }
         if let Some(code) = codes
             .iter()
-            .copied()
             .find(|code| code.is_finite() && (code.fract() != 0.0 || !(0.0..=u32::MAX as f64).contains(code) || !categories.contains_key(&(*code as u32))))
         {
             return Err(invalid(format!("column '{name}' holds unnamed category code {code}")));
@@ -287,7 +286,13 @@ impl BlockModelData {
         Ok(())
     }
 
-    pub(crate) fn shared_numeric_values(&self, name: &str) -> Option<Arc<Vec<f64>>> {
+    /// Which allocation holds each column, in name order. A column is replaced
+    /// rather than edited in place, so these tell whether any has changed.
+    pub(crate) fn column_identities(&self) -> Vec<std::sync::Weak<BlockColumn>> {
+        self.numeric_values.values().map(Arc::downgrade).collect()
+    }
+
+    pub(crate) fn shared_numeric_values(&self, name: &str) -> Option<Arc<BlockColumn>> {
         self.numeric_values.get(name).map(Arc::clone)
     }
 
@@ -312,10 +317,6 @@ impl BlockModelData {
             .iter()
             .filter(|variable| matches!(variable.physical_type.as_str(), "namedbyte" | "namedshort"))
             .collect()
-    }
-
-    pub(crate) fn color_values(&self, name: &str) -> Result<Vec<f64>, BlockModelDataError> {
-        self.values_range(name, 0, self.metadata.n_blocks, is_color_type, "colour")
     }
 
     pub(crate) fn color_values_range(&self, name: &str, start: usize, end: usize) -> Result<Vec<f64>, BlockModelDataError> {
@@ -345,7 +346,7 @@ impl BlockModelData {
             .numeric_values
             .get(name)
             .ok_or_else(|| invalid(format!("block variable '{name}' has no value column")))?;
-        Ok(values[start..end].to_vec())
+        Ok(values.range(start, end))
     }
 
     #[cfg(not(target_arch = "wasm32"))]

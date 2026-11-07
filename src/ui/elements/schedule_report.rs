@@ -180,8 +180,8 @@ pub(crate) fn build(schedule: &CalculatedSchedule, plan: &SchedulePlan, names: &
         let mut rows = Vec::new();
         for group in &groups {
             for agent in plan
-                .agents()
-                .iter()
+                .ordered_agents()
+                .into_iter()
                 .filter(|agent| plan.agent_kind(agent.id).is_some_and(crate::model::schedule::MachineKind::is_drill_blast))
             {
                 let kind = plan.agent_kind(agent.id).expect("filtered above");
@@ -523,8 +523,8 @@ fn loaders(schedule: &CalculatedSchedule, plan: &SchedulePlan, groups: &[Group],
     let mut used = [false; REASONS.len()];
     for group in groups {
         for agent in plan
-            .agents()
-            .iter()
+            .ordered_agents()
+            .into_iter()
             .filter(|agent| !plan.agent_kind(agent.id).is_some_and(crate::model::schedule::MachineKind::is_drill_blast))
         {
             let mut time = Time {
@@ -535,30 +535,45 @@ fn loaders(schedule: &CalculatedSchedule, plan: &SchedulePlan, groups: &[Group],
                 delay_h: 0.0,
                 idle: [0.0; REASONS.len()],
             };
-            // Tonnes add span by span; hours are the time covered, because a
-            // machine working two blocks in one interval has two spans over
-            // the same hours.
-            let mut spans: [Vec<(f64, f64)>; 2] = [Vec::new(), Vec::new()];
+            // Hours of work: tonnes at the machine's rate that day, as the
+            // Calendar's utilisation reads them. The time a span covers says
+            // when the machine was on a block, not how long the tonnes took.
+            let class = plan.agent(agent.id).and_then(|loader| plan.class(loader.class_id).map(|class| (loader, class)));
+            let worked = |tonnes: f64, kind: crate::model::schedule::RateKind, start_h: f64| {
+                let Some((loader, class)) = class else { return 0.0 };
+                let default = match kind {
+                    crate::model::schedule::RateKind::Dig => class.default_dig_rate_tph,
+                    crate::model::schedule::RateKind::Reclaim => class.default_reclaim_rate_tph,
+                };
+                let day = crate::model::schedule::CalendarPeriod((start_h / crate::model::schedule::SCHEDULE_PERIOD_H) as u32);
+                match loader.calendar.rate_values_at(day, kind, default) {
+                    Ok(rate) if rate.rate_tph > 0.0 => tonnes / rate.rate_tph,
+                    _ => 0.0,
+                }
+            };
+            // Idle is the time nothing covers: a machine working two blocks in
+            // one interval has two spans over the same hours.
+            let mut spans: Vec<(f64, f64)> = Vec::new();
             for execution in schedule.executions.iter().filter(|execution| execution.agent == agent.id) {
                 let inside = overlap(execution.start_h, execution.end_h, group);
                 if inside <= 0.0 {
                     continue;
                 }
                 let share = inside / (execution.end_h - execution.start_h);
-                let index = match execution.activity {
+                let start_h = execution.start_h.max(group.start_h);
+                match execution.activity {
                     Activity::Dig => {
                         time.dug += execution.tonnes * share;
-                        0
+                        time.dig_h += worked(execution.tonnes * share, crate::model::schedule::RateKind::Dig, start_h);
                     }
                     Activity::Reclaim => {
                         time.reclaimed += execution.tonnes * share;
-                        1
+                        time.reclaim_h += worked(execution.tonnes * share, crate::model::schedule::RateKind::Reclaim, start_h);
                     }
-                };
-                spans[index].push((execution.start_h.max(group.start_h), execution.end_h.min(group.end_h)));
+                }
+                spans.push((start_h, execution.end_h.min(group.end_h)));
             }
-            time.dig_h = covered(&mut spans[0]);
-            time.reclaim_h = covered(&mut spans[1]);
+            let busy_h = covered(&mut spans);
             for span in schedule.idle.iter().filter(|span| span.agent == agent.id) {
                 let inside = overlap(span.start_h, span.end_h, group);
                 match span.reason {
@@ -573,7 +588,7 @@ fn loaders(schedule: &CalculatedSchedule, plan: &SchedulePlan, groups: &[Group],
             }
             // What the result says nothing about - a machine with no bars
             // never reached the calculation - had no work.
-            let accounted = time.dig_h + time.reclaim_h + time.delay_h + time.idle.iter().sum::<f64>();
+            let accounted = busy_h + time.delay_h + time.idle.iter().sum::<f64>();
             let left = (group.end_h - group.start_h) - accounted;
             if left > 1e-6
                 && let Some(index) = REASONS.iter().position(|reason| *reason == IdleReason::NoWork)

@@ -75,6 +75,7 @@ impl crate::app::App<'_> {
         if !self.editor.is_planning_cut_step() {
             self.editor.blasting_bench_key = None;
             self.editor.planning_cut_name = None;
+            self.editor.copy_cuts_dialog = None;
             return;
         }
         let bench = self.editor.planning_cut_target();
@@ -90,6 +91,7 @@ impl crate::app::App<'_> {
         self.cancel_active_tool();
         self.editor.tool_highlight_id = None;
         self.editor.blasting_bench_key = Some(key);
+        self.editor.copy_cuts_dialog = None;
         self.editor.selected_blast = None;
         self.editor.selected_dig_block = None;
         self.editor.selected_handles.clear();
@@ -210,11 +212,18 @@ impl crate::app::App<'_> {
         if !self.editor.is_planning_cut_step() {
             return;
         }
+        // With nothing selected, every line on the open bench or flitch: the
+        // step's scene holds only that one's cuts.
+        let any_selected = self
+            .scene_document
+            .objects()
+            .iter()
+            .any(|object| self.editor.selected_handles.contains(&SceneEntityId::Object(object.id())));
         let lines = self
             .scene_document
             .objects()
             .iter()
-            .filter(|object| self.editor.selected_handles.contains(&SceneEntityId::Object(object.id())))
+            .filter(|object| !any_selected || self.editor.selected_handles.contains(&SceneEntityId::Object(object.id())))
             .filter(|object| matches!(object, Object::Polyline { .. }))
             .cloned()
             .collect();
@@ -250,10 +259,58 @@ impl crate::app::App<'_> {
         self.invalidate_geometry();
     }
 
+    /// Copy the lines selected on this cut step to other benches or flitches,
+    /// at each one's top, as one undo. The selection stays where it is.
+    pub(crate) fn copy_cuts_to(&mut self, targets: &[(SolidId, BenchSelection)]) {
+        if !self.editor.is_planning_cut_step() {
+            return;
+        }
+        let lines: Vec<Object> = self
+            .scene_document
+            .objects()
+            .iter()
+            .filter(|object| self.editor.selected_handles.contains(&SceneEntityId::Object(object.id())))
+            .filter(|object| matches!(object, Object::Polyline { .. }))
+            .cloned()
+            .collect();
+        if lines.is_empty() {
+            return;
+        }
+        let mut commands = Vec::new();
+        for (solid, band) in targets {
+            let Some(layer) = self.cut_layer_for(*solid, *band) else { continue };
+            let Some(document) = self.workspace.active_document_mut() else { return };
+            for source in &lines {
+                let id = document.allocate_object_id();
+                let mut object = source.with_id_and_layer(id, layer);
+                if let Object::Polyline { verts, .. } = &mut object {
+                    for vertex in verts {
+                        vertex.pos.z = band.top;
+                    }
+                }
+                commands.push(Command::AddObject(object));
+            }
+        }
+        self.execute_edit(Command::Batch(commands));
+        self.invalidate_geometry();
+        let done = if self.editor.is_dig_strips_step() {
+            crate::i18n::tr!("planning-copy-cuts-done-flitches", lines = lines.len(), targets = targets.len())
+        } else {
+            crate::i18n::tr!("planning-copy-cuts-done-benches", lines = lines.len(), targets = targets.len())
+        };
+        crate::userspace_log!("{done}");
+    }
+
     pub(crate) fn ensure_bench_cut_layer(&mut self) -> Option<LayerId> {
         let (solid, band) = self.editor.planning_cut_target()?;
+        let layer = self.cut_layer_for(solid, band)?;
+        self.editor.active_layer = Some(layer);
+        Some(layer)
+    }
+
+    /// The layer one bench's or flitch's cut lines go on, created if it has none.
+    fn cut_layer_for(&mut self, solid: SolidId, band: BenchSelection) -> Option<LayerId> {
         if let Some(layer) = self.bench_cut_layer(solid, band.base) {
-            self.editor.active_layer = Some(layer);
             return Some(layer);
         }
         let layer = self.workspace.active_project_mut()?.project.document.allocate_layer_id();
@@ -274,22 +331,25 @@ impl crate::app::App<'_> {
             section: crate::model::SectionKind::natural_layer(),
         });
         self.update_solid(solid, SolidEdit::Blasting(plan));
-        self.editor.active_layer = Some(layer);
         self.editor.blasting_outlines_key = None;
         Some(layer)
     }
 
-    /// Frame the benches that are selected, once per change of selection.
+    /// Frame the benches that are selected, once per change of selection,
+    /// on the cut steps and Reserves alike.
     ///
-    /// Framed on the bench slabs alone rather than the whole scene: the
-    /// project's other geometry is still loaded, and fitting it too would
-    /// leave the bench a speck in the middle of the pit.
+    /// Framed on the bench slabs or dig blocks alone rather than the whole
+    /// scene: the project's other geometry is still loaded, and fitting it too
+    /// would leave the bench a speck in the middle of the pit.
     pub(crate) fn sync_blasting_frame(&mut self) {
-        if !self.editor.is_planning_cut_step() {
+        let reserves = self.editor.is_solids_view();
+        if !self.editor.is_planning_cut_step() && !reserves {
             self.editor.blasting_framed_key = None;
             return;
         }
         let mut hasher = DefaultHasher::new();
+        // Each page frames what it draws, so moving between them frames again.
+        reserves.hash(&mut hasher);
         for row in &self.editor.solids_view_selection {
             row.solid.hash(&mut hasher);
             row.band.map(|band| (band.base.to_bits(), band.top.to_bits())).hash(&mut hasher);
@@ -315,7 +375,7 @@ impl crate::app::App<'_> {
         }
         self.editor.blasting_framed_key = Some(key);
         let document = &self.scene_document;
-        let triangulations = &self.solid_view_body;
+        let triangulations = if reserves { &self.reserves_scene } else { &self.solid_view_body };
         if let Some(graphics) = self.graphics.as_mut() {
             graphics.frame_bounds(
                 min,
@@ -473,6 +533,13 @@ impl crate::app::App<'_> {
     /// Returns the number of solids whose plan changed.
     pub(crate) fn commit_blast_names(&mut self) -> usize {
         let solids = self.workspace.active_document().map(|document| document.solids().to_vec()).unwrap_or_default();
+        // A project with nothing unsaved and nothing to undo or redo has had no
+        // edit the new names could follow from: its blasts were cut differently
+        // by this version than by the one that saved it. Undoing back to the
+        // save is an edit like any other.
+        let was_saved =
+            !self.history.can_undo() && !self.history.can_redo() && self.workspace.active_project().is_some_and(|project| !self.project_content_is_dirty(project.runtime_id));
+        let mut renamed = Vec::new();
         let mut named = Vec::new();
         for solid in &solids {
             // Committing names is the Blasting stage's own work, so it reads
@@ -525,6 +592,7 @@ impl crate::app::App<'_> {
             }
             if plan_changed {
                 named.push((solid.id, SolidEdit::Blasting(plan)));
+                renamed.push(solid.name.clone());
             }
             if exclusions != solid.exclusions {
                 named.push((solid.id, SolidEdit::Exclusions(exclusions)));
@@ -537,6 +605,9 @@ impl crate::app::App<'_> {
         if count > 0 {
             self.editor.blasting_outlines_key = None;
             self.redraw_requested = true;
+        }
+        if was_saved && !renamed.is_empty() {
+            crate::userspace_log!("{}", crate::i18n::tr!("blasting-recut-since-saved", solids = renamed.join(", ")));
         }
         count
     }

@@ -8,9 +8,9 @@
 use crate::{
     i18n::tr,
     model::{
+        numbers::format_quantity,
         optimization::format_factor,
         optimization_run::report::{Basis, Bucket, OptimizationReport, WASTE, strip_ratio},
-        plot::format_quantity,
     },
     ui::{
         state::{OptimizationState, ResultsSource, ShellFilter, UiCommand},

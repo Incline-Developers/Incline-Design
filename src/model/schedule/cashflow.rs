@@ -46,6 +46,54 @@ pub(crate) fn currency_symbol() -> String {
     tr!("common-currency-symbol")
 }
 
+/// Money as every page shows it: whole units below ten thousand, then three
+/// significant figures with K, M or B, so $8,450, $12.3K, $999K, $1.02M.
+/// Signed: a cost reads negative. The exact figure is [`money_exact`].
+pub(crate) fn money_text(value: f64) -> String {
+    use thousands::Separable;
+
+    let symbol = currency_symbol();
+    let sign = if value.round() < 0.0 { "-" } else { "" };
+    let size = value.abs();
+    if size.round() < 10_000.0 {
+        return format!("{sign}{symbol}{}", format!("{:.0}", size.round()).separate_with_commas());
+    }
+    // The unit is picked after rounding, so 999,600 reads $1.00M, not $1000K.
+    let mut scaled = size;
+    let mut suffix = 0;
+    const SUFFIXES: [&str; 4] = ["", "K", "M", "B"];
+    while suffix + 1 < SUFFIXES.len() && round_significant(scaled, 3) >= 1000.0 {
+        scaled /= 1000.0;
+        suffix += 1;
+    }
+    let scaled = round_significant(scaled, 3);
+    let decimals = if scaled >= 100.0 {
+        0
+    } else if scaled >= 10.0 {
+        1
+    } else {
+        2
+    };
+    format!("{sign}{symbol}{scaled:.decimals$}{}", SUFFIXES[suffix])
+}
+
+/// Money to the cent with separators, for a hover beside [`money_text`].
+pub(crate) fn money_exact(value: f64) -> String {
+    use thousands::Separable;
+
+    let rounded = (value * 100.0).round() / 100.0;
+    let sign = if rounded < 0.0 { "-" } else { "" };
+    format!("{sign}{}{}", currency_symbol(), format!("{:.2}", rounded.abs()).separate_with_commas())
+}
+
+fn round_significant(value: f64, figures: i32) -> f64 {
+    if value == 0.0 {
+        return 0.0;
+    }
+    let scale = 10f64.powi(figures - 1 - value.abs().log10().floor() as i32);
+    (value * scale).round() / scale
+}
+
 /// Identity of one cashflow rule within its project. Allocated and protected
 /// like every other id here: never reused, never rewound by an undo.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -245,7 +293,7 @@ impl CashflowRule {
             LoaderSelection::Only(agents) => parts.push(agents.iter().copied().map(loader_name).collect::<Vec<_>>().join(" / ")),
         }
         if let MovementSourceSelection::Only(scopes) = &self.sources {
-            parts.push(tr!("destination-rule-sources-count", count = scopes.len().to_string()));
+            parts.push(tr!("destination-rule-sources-count", count = scopes.len()));
         }
         if let DestinationSelection::Only(ids) = &self.destinations {
             parts.push(tr!("cashflow-rule-destinations-count", count = ids.len().to_string()));

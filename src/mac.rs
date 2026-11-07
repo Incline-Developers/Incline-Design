@@ -1,8 +1,12 @@
-//! macOS system menu bar.
+//! macOS system menu bar, and the window buttons over Incline's title bar.
 //!
 //! Incline Design's other targets draw their menu inside the egui window. On macOS,
 //! AppKit owns the equivalent commands so they appear in the global menu bar
 //! and participate in standard Command-key handling.
+//!
+//! The title bar is Incline's own on every platform (`ui/elements/title_bar.rs`),
+//! but macOS keeps its red, yellow and green buttons: [`place_window_buttons`]
+//! moves them onto the bar's row.
 
 use std::{path::PathBuf, sync::Mutex};
 
@@ -13,7 +17,7 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::{NSApplication, NSControlStateValueOff, NSControlStateValueOn, NSMenu, NSMenuItem, NSStrikethroughStyleAttributeName, NSUnderlineStyle};
-use objc2_foundation::{NSAttributedString, NSDictionary, NSNumber, NSObject, NSObjectProtocol, NSString};
+use objc2_foundation::{NSAttributedString, NSDictionary, NSNumber, NSObject, NSObjectProtocol, NSString, NSUserDefaults};
 
 use crate::{
     i18n::tr,
@@ -53,9 +57,6 @@ struct MenuState {
     /// thresholding runs on.
     can_create_ore_triangulation: bool,
     can_undrape_rasters: bool,
-    /// Whether any design object is selected, which is what Convert to Road
-    /// turns into haul roads.
-    has_polyline_selection: bool,
     /// Whether each Design row can run, in [`DESIGN_ROWS`] order.
     design_rows: [bool; DESIGN_ROWS.len()],
     /// Whether the active project is a file that can be shown in Finder.
@@ -90,13 +91,7 @@ pub(crate) enum MacMenuAction {
     OpenProject,
     OpenImport,
     OpenExport,
-    DrawHaulRoad,
-    ConvertHaulSelection,
-    ImportHaulRoads,
-    ExportHaulRoads,
-    EditHaulProperties,
     ExportViewportImage,
-    OpenPlotDialog,
     RequestExit,
     OpenCutTriangulationByPolyline,
     OpenCutTriangulationByZ,
@@ -171,13 +166,7 @@ impl MacMenuAction {
         Self::OpenProject,
         Self::OpenImport,
         Self::OpenExport,
-        Self::DrawHaulRoad,
-        Self::ConvertHaulSelection,
-        Self::ImportHaulRoads,
-        Self::ExportHaulRoads,
-        Self::EditHaulProperties,
         Self::ExportViewportImage,
-        Self::OpenPlotDialog,
         Self::RequestExit,
         Self::OpenCutTriangulationByPolyline,
         Self::OpenCutTriangulationByZ,
@@ -369,7 +358,6 @@ pub(crate) fn install_menu_bar() {
     add_action(&file_menu, &tr!("menu-file-import"), "", MacMenuAction::OpenImport, &target, mtm);
     add_action(&file_menu, &tr!("menu-file-export"), "", MacMenuAction::OpenExport, &target, mtm);
     add_action(&file_menu, &tr!("menu-file-export-viewport-image"), "", MacMenuAction::ExportViewportImage, &target, mtm);
-    add_action(&file_menu, &tr!("menu-file-export-engineering-drawing"), "", MacMenuAction::OpenPlotDialog, &target, mtm);
     add_separator(&file_menu, mtm);
     add_action(&file_menu, &tr!("preferences-title"), ",", MacMenuAction::OpenPreferences, &target, mtm);
     add_action(&file_menu, &tr!("menu-file-about", app = crate::APP_NAME), "", MacMenuAction::OpenAbout, &target, mtm);
@@ -384,18 +372,6 @@ pub(crate) fn install_menu_bar() {
     }
     add_submenu(&root, &tr!("menu-view"), &view_menu, mtm);
 
-    let haul_menu = menu(&tr!("haul-roads"), mtm);
-    haul_menu.setAutoenablesItems(false);
-    for (label, action) in [
-        (tr!("haul-draw"), MacMenuAction::DrawHaulRoad),
-        (tr!("haul-convert"), MacMenuAction::ConvertHaulSelection),
-        (tr!("haul-import"), MacMenuAction::ImportHaulRoads),
-        (tr!("haul-export"), MacMenuAction::ExportHaulRoads),
-        (tr!("haul-open-layout"), MacMenuAction::EditHaulProperties),
-    ] {
-        add_action(&haul_menu, &label, "", action, &target, mtm);
-    }
-    add_submenu(&root, &tr!("haul-roads"), &haul_menu, mtm);
     let design_menu = menu(&tr!("ws-menubar-design"), mtm);
     design_menu.setAutoenablesItems(false);
     for (group, (title, run)) in design_groups().into_iter().enumerate() {
@@ -676,7 +652,6 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         can_build_reference_surface: editor.selection_counts.surface_points >= crate::app::commands::triangulation::reference_surface::MINIMUM_POINTS,
         can_create_ore_triangulation: editor.selection_counts.block_models == 1,
         can_undrape_rasters: project.raster_textures.iter().any(|raster| raster.is_draped),
-        has_polyline_selection: editor.selected_handles.iter().any(|handle| matches!(handle, crate::model::SceneEntityId::Object(_))),
         design_rows: DESIGN_ROWS.map(|row| row.enabled(editor)),
         has_project_file: project.active_path.is_some(),
         active_workspace: editor.active_workspace,
@@ -729,16 +704,88 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     for (index, enabled) in state.design_rows.iter().enumerate() {
         set_enabled(&root, MacMenuAction::DesignRow(index), *enabled);
     }
-    for action in [
-        MacMenuAction::DrawHaulRoad,
-        MacMenuAction::ImportHaulRoads,
-        MacMenuAction::ExportHaulRoads,
-        MacMenuAction::EditHaulProperties,
-    ] {
-        set_enabled(&root, action, project.has_active_project);
-    }
-    set_enabled(&root, MacMenuAction::ConvertHaulSelection, state.has_polyline_selection);
     for (index, checked) in state.view_toggles.iter().enumerate() {
         set_checked(&root, MacMenuAction::ToggleView(index), *checked);
     }
+}
+
+/// What a double-click on a title bar does, as set in System Settings >
+/// Desktop & Dock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TitleDoubleClick {
+    Zoom,
+    Minimize,
+    Nothing,
+}
+
+/// The double-click action the user has chosen for title bars.
+pub(crate) fn title_double_click() -> TitleDoubleClick {
+    let defaults = NSUserDefaults::standardUserDefaults();
+    match defaults
+        .stringForKey(&NSString::from_str("AppleActionOnDoubleClick"))
+        .map(|action| action.to_string())
+        .as_deref()
+    {
+        Some("Minimize") => TitleDoubleClick::Minimize,
+        Some("None") => TitleDoubleClick::Nothing,
+        // "Maximize" and "Fill" both zoom, as does an unset preference.
+        _ => TitleDoubleClick::Zoom,
+    }
+}
+
+/// Place the window's red, yellow and green buttons over Incline's own title
+/// bar: `left` points in from the window's left edge, centred `centre_y`
+/// points down from its top. Returns where they end, from the window's left.
+///
+/// AppKit lays its title bar out again whenever it sees fit - a resize, a
+/// change of key window, a new title - so this is called every frame, and
+/// only moves what has moved. In fullscreen the buttons belong to the menu
+/// bar that slides down, and are left alone.
+pub(crate) fn place_window_buttons(window: &winit::window::Window, centre_y: f64, left: f64) -> Option<f64> {
+    use objc2_app_kit::{NSView, NSWindowButton};
+    use objc2_foundation::{NSPoint, NSRect};
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let RawWindowHandle::AppKit(handle) = window.window_handle().ok()?.as_raw() else {
+        return None;
+    };
+    // winit hands out its content view, alive as long as the window is.
+    let view: &NSView = unsafe { handle.ns_view.cast::<NSView>().as_ref() };
+    let ns_window = view.window()?;
+    let close = ns_window.standardWindowButton(NSWindowButton::CloseButton)?;
+    let minimize = ns_window.standardWindowButton(NSWindowButton::MiniaturizeButton)?;
+    let zoom = ns_window.standardWindowButton(NSWindowButton::ZoomButton)?;
+    let spacing = minimize.frame().origin.x - close.frame().origin.x;
+    let end = left + 2.0 * spacing + zoom.frame().size.width;
+    if window.fullscreen().is_some() {
+        return Some(end);
+    }
+    // The buttons sit in the title bar view, inside a container pinned to
+    // the window's top; a bar taller than the system's grows the container to
+    // keep them in it.
+    let titlebar = unsafe { close.superview() }?;
+    let container = unsafe { titlebar.superview() }?;
+    let height = close.frame().size.height;
+    let needed = (centre_y + height / 2.0).ceil();
+    let frame = container.frame();
+    if frame.size.height < needed {
+        let window_height = ns_window.frame().size.height;
+        container.setFrame(NSRect::new(
+            NSPoint::new(frame.origin.x, window_height - needed),
+            objc2_foundation::NSSize::new(frame.size.width, needed),
+        ));
+    }
+    let titlebar_height = titlebar.frame().size.height;
+    let y = if titlebar.isFlipped() {
+        centre_y - height / 2.0
+    } else {
+        titlebar_height - centre_y - height / 2.0
+    };
+    for (index, button) in [&close, &minimize, &zoom].into_iter().enumerate() {
+        let origin = NSPoint::new(left + index as f64 * spacing, y.round());
+        if button.frame().origin != origin {
+            button.setFrameOrigin(origin);
+        }
+    }
+    Some(end)
 }

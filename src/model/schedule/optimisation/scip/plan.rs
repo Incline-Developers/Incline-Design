@@ -13,13 +13,26 @@
 //! drawn, within the loader's reclaim rate on the days the bar and the pile
 //! allow it and the bar's authored cap, out of a daily pile inventory that
 //! the plan's own deliveries fill. A loader's dig and reclaim share its
-//! hours. A blend is a ratio of two decisions, so a reclaim's grade is
-//! fixed: in a window, the blend the schedule it improves leaves the pile
-//! with as the window opens; over the whole horizon, for a bound, the one
-//! that suits each grade target best and every grade-conditional value
-//! earned when it pays and not when it costs.
+//! hours. A blend is a ratio of two decisions. In a window a day's reclaim
+//! carries the blend the incumbent's reclaim carried that day, and, from an
+//! unchunked pile, a first-order correction for how far the plan's
+//! deliveries move the pile's metal and tonnes from the incumbent's, so
+//! the plan prices the incumbent's grade exactly and a change to it nearly
+//! so; on a day the incumbent did not reclaim, the opening blend, or the
+//! incumbent's delivered blend over the window if the pile opens empty.
+//! Over the whole horizon, for a bound, a reclaim's grade is the one that
+//! suits each grade target best and every grade-conditional value earned
+//! when it pays and not when it costs.
 //!
-//! What it does not see: anything inside a day, truck classes (a route uses
+//! A loader's bars are read apart, each in its own order, and held to
+//! the authored priority as the dispatch keeps it: in a period, a loader
+//! works a lower bar only if every higher one ran out of released ground
+//! in it. Off a bound, on the timeline the search holds, a blast's ground is
+//! dug only if the ground above it is gone by the end of the period the
+//! timeline clears it in.
+//!
+//! What it does not see: anything inside a day, a bar blocked by room at a
+//! destination, truck classes (a route uses
 //! its best candidate's truck hours against the whole fleet), per-loader
 //! values (a route takes its best candidate's value), chunks, rests, and a
 //! reclaimed blend's route qualifications. Each only constrains a schedule
@@ -40,11 +53,18 @@ use std::{
 
 use web_time::Instant;
 
-use super::super::blended::{
-    input::{BlendInput, attribute_reclaim, authored_tasks, grade_ceilings, interval_rate, task_active},
-    replay::{BlendSolution, ReplayReport},
+use super::{
+    super::blended::{
+        input::{BlendInput, attribute_reclaim, authored_tasks, grade_ceilings, interval_rate, task_active},
+        replay::{BlendSolution, ReplayReport},
+        rolling::FINISHED_T,
+    },
+    blasts::BlastModel,
 };
-use crate::model::schedule::optimisation::{Activity, DestinationId, DestinationKind, GroundId, Interval, MaterialId, SourceId, StockpileId, TaskKind};
+use crate::model::schedule::{
+    BlastActivity, BlastStage,
+    optimisation::{Activity, DestinationId, DestinationKind, GroundId, Interval, MaterialId, SourceId, StockpileId, TaskKind},
+};
 
 /// Where a plan starts: the first day it plans, how many days, and the
 /// state the schedule it improves left as that day opens.
@@ -61,6 +81,25 @@ pub(crate) struct Window {
     pub(crate) piles: BTreeMap<StockpileId, (f64, Vec<f64>)>,
     /// What each reclaim bar (by task index) had drawn before the first day.
     pub(crate) reclaimed: BTreeMap<usize, f64>,
+    /// Empty piles have no opening blend. Estimate their future reclaim
+    /// across the window so moving deliveries between days keeps their grade.
+    pub(crate) reclaim_blends: BTreeMap<StockpileId, Vec<f64>>,
+    /// Each pile's days within the window, in the schedule it opens from.
+    pub(crate) pile_days: BTreeMap<(StockpileId, u32), PileDay>,
+}
+
+/// A pile's day in the schedule a window opens from.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PileDay {
+    /// Mid-day tonnes and contained quantity per grade: the means of the
+    /// day's opening and closing.
+    pub(crate) tonnes_t: f64,
+    pub(crate) contained: Vec<f64>,
+    /// Tonnes reclaimed, and the blend they carried.
+    pub(crate) reclaimed_t: f64,
+    pub(crate) blend: Vec<f64>,
+    /// Tonnes reclaimed to each destination.
+    pub(crate) to: BTreeMap<DestinationId, f64>,
 }
 
 impl Window {
@@ -90,10 +129,12 @@ impl Window {
             }
             *received.entry(candidate.destination).or_default() += row.tonnes_t;
         }
-        remaining.retain(|_, left| *left > 1e-6);
+        // Dust the replay counts as dug is gone: left in, a block with
+        // nowhere to be dug in the window would hold back the next.
+        remaining.retain(|_, left| *left > FINISHED_T);
         let grades = input.grades.count();
         let first = input.intervals.iter().position(|interval| interval.day() >= first_day).unwrap_or(0);
-        let piles = input
+        let piles: BTreeMap<StockpileId, (f64, Vec<f64>)> = input
             .piles
             .iter()
             .map(|pile| {
@@ -104,6 +145,75 @@ impl Window {
                 (pile.id, state)
             })
             .collect();
+        let mut drawn: BTreeMap<StockpileId, (f64, Vec<f64>)> = BTreeMap::new();
+        if let Some(replay) = replay {
+            for (&(pile, interval), state) in &replay.pile_intervals {
+                let day = input.intervals[interval].day();
+                if !(first_day..first_day + days).contains(&day)
+                    || piles.get(&pile).is_some_and(|(tonnes, _)| *tonnes > 1e-9)
+                    || state.reclaimed_t <= 1e-9
+                    || state.delivered_blend.len() != grades
+                {
+                    continue;
+                }
+                let entry = drawn.entry(pile).or_insert_with(|| (0.0, vec![0.0; grades]));
+                entry.0 += state.reclaimed_t;
+                for (quantity, fraction) in entry.1.iter_mut().zip(&state.delivered_blend) {
+                    *quantity += state.reclaimed_t * fraction;
+                }
+            }
+        }
+        let reclaim_blends = drawn
+            .into_iter()
+            .map(|(pile, (tonnes, quantities))| (pile, quantities.into_iter().map(|quantity| quantity / tonnes).collect()))
+            .collect();
+        let mut pile_days: BTreeMap<(StockpileId, u32), PileDay> = BTreeMap::new();
+        if let Some(replay) = replay {
+            let mut closing: BTreeMap<StockpileId, (f64, Vec<f64>)> = input.piles.iter().map(|pile| (pile.id, pile.total_opening(grades))).collect();
+            let mut closed: BTreeMap<(StockpileId, u32), (f64, Vec<f64>)> = BTreeMap::new();
+            for (&(pile, interval), state) in &replay.pile_intervals {
+                let day = input.intervals[interval].day();
+                let before = closing.insert(pile, (state.closing_t, state.closing_q.clone())).unwrap_or_else(|| (0.0, vec![0.0; grades]));
+                if !(first_day..first_day + days).contains(&day) {
+                    continue;
+                }
+                closed.insert((pile, day), (state.closing_t, state.closing_q.clone()));
+                // The day's opening tonnes and metal, until its close is known.
+                let entry = pile_days.entry((pile, day)).or_insert_with(|| PileDay {
+                    tonnes_t: before.0,
+                    contained: before.1.clone(),
+                    blend: vec![0.0; grades],
+                    ..PileDay::default()
+                });
+                if state.reclaimed_t > 1e-9 && state.delivered_blend.len() == grades {
+                    entry.reclaimed_t += state.reclaimed_t;
+                    for (quantity, fraction) in entry.blend.iter_mut().zip(&state.delivered_blend) {
+                        *quantity += state.reclaimed_t * fraction;
+                    }
+                }
+            }
+            for (key, entry) in &mut pile_days {
+                let (closing_t, closing_q) = &closed[key];
+                entry.tonnes_t = 0.5 * (entry.tonnes_t + closing_t);
+                for (quantity, closed) in entry.contained.iter_mut().zip(closing_q) {
+                    *quantity = 0.5 * (*quantity + closed);
+                }
+                if entry.reclaimed_t > 1e-9 {
+                    for quantity in &mut entry.blend {
+                        *quantity /= entry.reclaimed_t;
+                    }
+                }
+            }
+            for row in &solution.movements {
+                let candidate = &input.movements[row.candidate];
+                let (Activity::Reclaim, SourceId::Stockpile(pile)) = (candidate.activity, candidate.source) else {
+                    continue;
+                };
+                if let Some(entry) = pile_days.get_mut(&(pile, input.intervals[row.interval].day())) {
+                    *entry.to.entry(candidate.destination).or_default() += row.tonnes_t;
+                }
+            }
+        }
         Self {
             first_day,
             days,
@@ -111,6 +221,8 @@ impl Window {
             received,
             piles,
             reclaimed,
+            reclaim_blends,
+            pile_days,
         }
     }
 }
@@ -123,12 +235,18 @@ pub(crate) struct Settings {
     /// Solve the linear relaxation only, by HiGHS's interior point method:
     /// with no window, an upper bound on any schedule's value.
     pub(crate) relax: bool,
+    /// Rounds of cuts at the root at most, `None` for the solver's own
+    /// limit.
+    pub(crate) cut_rounds: Option<i64>,
 }
 
 /// The solved plan.
 pub(crate) struct PlanSolve {
-    /// Planned dug tonnes per (loader index, destination, day).
-    pub(crate) routes: BTreeMap<(usize, DestinationId, u32), f64>,
+    /// Planned tonnes per route: a loader digging or reclaiming to a
+    /// destination on a day.
+    pub(crate) routes: BTreeMap<crate::model::schedule::optimisation::blended::plan::Route, f64>,
+    /// Calendar days covered by each period label.
+    pub(crate) period_days: BTreeMap<u32, Vec<u32>>,
     pub(crate) objective: Option<f64>,
     pub(crate) bound: Option<f64>,
     pub(crate) variables: usize,
@@ -138,8 +256,10 @@ pub(crate) struct PlanSolve {
     pub(crate) solve_s: f64,
     /// What the plan valued its seed at, when it had one.
     pub(crate) seeded: Option<f64>,
-    /// What the plan's movements earn on each day it plans.
-    pub(crate) day_values: BTreeMap<u32, f64>,
+    /// How many rows and bounds the seed breaks, when it had one.
+    pub(crate) seed_violations: Option<usize>,
+    /// Planned dug tonnes per (loader index, block) over the plan.
+    pub(crate) dug: BTreeMap<(usize, GroundId), f64>,
     pub(crate) status: String,
 }
 
@@ -194,6 +314,24 @@ impl Builder {
         self.row_lower.push(lhs);
         self.row_upper.push(rhs);
     }
+
+    /// How many rows and column bounds `values` breaks, by the solver's
+    /// tolerance.
+    fn violations(&self, values: &[f64]) -> usize {
+        const TOLERANCE: f64 = solver::MIP_FEASIBILITY_TOLERANCE;
+        let rows = (0..self.row_lower.len())
+            .filter(|&row| {
+                let end = self.starts.get(row + 1).copied().unwrap_or(self.index.len());
+                let activity: f64 = (self.starts[row]..end).map(|entry| self.value[entry] * values[self.index[entry]]).sum();
+                activity < self.row_lower[row] - TOLERANCE || activity > self.row_upper[row] + TOLERANCE
+            })
+            .count();
+        rows + values
+            .iter()
+            .zip(&self.upper)
+            .filter(|(value, upper)| **value < -TOLERANCE || **value > **upper + TOLERANCE)
+            .count()
+    }
 }
 
 /// A solve's column values, objective, bound and status.
@@ -245,7 +383,13 @@ fn plan_problem(builder: &Builder, relax: bool) -> solver::Problem {
     problem
 }
 
-fn solve_plan(builder: &Builder, seed: Option<&[f64]>, time_limit: Duration, relative_gap: f64, relax: bool, stop: &Arc<AtomicBool>) -> Result<Answer, String> {
+fn solve_plan(builder: &Builder, seed: Option<&[f64]>, settings: &Settings, stop: &Arc<AtomicBool>) -> Result<Answer, String> {
+    let Settings {
+        time_limit,
+        relative_gap,
+        relax,
+        cut_rounds,
+    } = *settings;
     if relax {
         return solve_relaxation(builder, time_limit, stop);
     }
@@ -269,6 +413,7 @@ fn solve_plan(builder: &Builder, seed: Option<&[f64]>, time_limit: Duration, rel
     let settings = solver::MipSettings {
         time_limit: time_limit.as_secs_f64(),
         mip_rel_gap: relative_gap,
+        max_root_separation_rounds: cut_rounds,
         ..solver::MipSettings::default()
     };
     let stop = Arc::clone(stop);
@@ -313,6 +458,9 @@ type Flow = (usize, f64, Carried);
 /// a few orders of magnitude of each other, which both solvers need.
 const UNIT: f64 = 1000.0;
 
+/// Tonnes below which a block is dust to a plan.
+const DUST_T: f64 = 1.0;
+
 /// A column carrying a block material's tonnes to a destination on a day:
 /// (block, material, destination, period), the column, tonnes per unit, and
 /// the loader when it is one loader's own dig.
@@ -342,10 +490,18 @@ pub(super) struct Prepared<'a> {
     pub(super) outlets: BTreeMap<(GroundId, MaterialId), Vec<Outlet>>,
     /// Each loader's blocks in authored order, with their bars.
     pub(super) chains: Vec<Vec<(GroundId, usize)>>,
+    /// (loader, block) for blocks in more than one of the loader's dig bars,
+    /// which may then be worked in either bar's order: no order row holds
+    /// them.
+    pub(super) repeated: BTreeSet<(usize, GroundId)>,
     /// Kilotonnes each loader can dig each day.
     pub(super) capacity: Vec<Vec<f64>>,
     pub(super) allowed: BTreeMap<(usize, GroundId), Vec<usize>>,
     pub(super) reclaims: Vec<ReclaimSource>,
+    /// The drill and blast chain, when the plan bounds and there is one.
+    pub(super) blasts: Option<BlastModel>,
+    /// The hour each block's blast releases it.
+    pub(super) releases: BTreeMap<GroundId, f64>,
 }
 
 /// One reclaim bar's draw from one pile.
@@ -375,18 +531,51 @@ fn ground_materials(input: &BlendInput, ground: GroundId) -> Vec<(MaterialId, f6
         .unwrap_or_default()
 }
 
+/// A long-term plan's periods for each extra period break at a large
+/// blast's firing day: more breaks made the plan much slower to solve for
+/// targets no better.
+const BREAKS_PER_PERIOD: u32 = 4;
+
 impl<'a> Prepared<'a> {
     /// The plan's preparation, over periods of `period_days` days each:
     /// one, but for the whole-horizon relaxation's bound, which may join days
     /// (see [`relaxation_bound`]).
-    pub(super) fn new(input: &'a BlendInput, window: Option<&'a Window>, period_days: u32) -> Self {
+    pub(super) fn new(input: &'a BlendInput, window: Option<&'a Window>, period_days: u32, bounding: bool) -> Self {
         // ---- days ---------------------------------------------------------------
         let period_days = period_days.max(1);
+        // Keep the coarse plan small, but separate the largest changes in
+        // available ground so its targets better reflect blast timing: the
+        // largest blasts' firing days, one for every four periods.
+        let mut breaks = BTreeSet::new();
+        if period_days > 1
+            && !bounding
+            && window.is_none()
+            && let Some(chain) = &input.drill_blast
+            && let Some(timeline) = &chain.fixed
+        {
+            let tonnes: BTreeMap<_, _> = input.ground.iter().map(|ground| (ground.id, ground.tonnes_t)).collect();
+            let mut blasts: Vec<_> = chain
+                .blasts
+                .iter()
+                .zip(&timeline.blasts)
+                .filter(|(_, events)| events.fired_h.is_some_and(|hour| hour > 0.0))
+                .map(|(blast, events)| (blast.releases.iter().map(|ground| tonnes.get(ground).copied().unwrap_or(0.0)).sum::<f64>(), events))
+                .collect();
+            blasts.sort_by(|a, b| b.0.total_cmp(&a.0));
+            let days = input.intervals.iter().map(|interval| interval.day()).collect::<BTreeSet<_>>().len() as u32;
+            let periods = days.div_ceil(period_days);
+            for (_, events) in blasts.into_iter().take((periods / BREAKS_PER_PERIOD).max(1) as usize) {
+                if let Some(hour) = events.fired_h {
+                    breaks.insert((hour / 24.0).ceil() as u32);
+                }
+            }
+        }
         let mut day_intervals: BTreeMap<u32, Vec<Interval>> = BTreeMap::new();
         let mut covered: BTreeMap<u32, BTreeSet<u32>> = BTreeMap::new();
         for interval in &input.intervals {
             if window.is_none_or(|window| (window.first_day..window.first_day + window.days).contains(&interval.day())) {
-                let label = interval.day() / period_days * period_days;
+                let weekly = interval.day() / period_days * period_days;
+                let label = breaks.range(weekly..=interval.day()).next_back().copied().unwrap_or(weekly);
                 day_intervals.entry(label).or_default().push(*interval);
                 covered.entry(label).or_default().insert(interval.day());
             }
@@ -399,13 +588,23 @@ impl<'a> Prepared<'a> {
             .collect();
         let periods = days.len();
 
+        // A block of dust is left out: the dispatch digs it at once, and in
+        // the plan its tonnes bound columns and scale rows a million times
+        // below the rest, which left a long-term relaxation's basis singular.
         let tonnes: BTreeMap<GroundId, f64> = match window {
             Some(window) => window.remaining.iter().map(|(ground, left)| (*ground, left / UNIT)).collect(),
             None => input.ground.iter().map(|source| (source.id, source.tonnes_t / UNIT)).collect(),
         };
-        // Over the whole horizon the plan bounds every schedule, so a reclaim's
-        // grade is the one that suits each use of it best.
+        let tonnes: BTreeMap<GroundId, f64> = tonnes.into_iter().filter(|(_, kilotonnes)| window.is_some() || *kilotonnes * UNIT >= DUST_T).collect();
+        // Over the whole horizon a reclaim's grade is the one that suits each
+        // use of it best. A bound's relaxation also reads every route, order
+        // and reach as the most any schedule could have, and each blast at its
+        // earliest release, as Improve may move blasts. Any other plan only
+        // sets targets, so it keeps the tighter reading the dispatch mostly
+        // follows: one candidate's value and haul, and the timeline the search
+        // holds.
         let optimistic = window.is_none();
+        let bounding = optimistic && bounding;
         let grades = input.grades.count();
         let ceilings = grade_ceilings(input);
         let pile_opening: BTreeMap<StockpileId, (f64, Vec<f64>)> = match window {
@@ -423,9 +622,16 @@ impl<'a> Prepared<'a> {
                 )
             })
             .collect();
-        let releases = input.drill_blast.as_ref().map(|chain| chain.releases()).unwrap_or_default();
+        // Improve may move blasts off the timeline it starts from, so a plan
+        // that bounds every schedule allows each blast its earliest release;
+        // a window's plan keeps the timeline the search holds.
+        let releases = input
+            .drill_blast
+            .as_ref()
+            .map(|chain| if bounding { chain.earliest_releases(&input.intervals) } else { chain.releases() })
+            .unwrap_or_default();
 
-        // ---- outlets: each block material's destinations, on its best candidate
+        // ---- outlets: each block material's destinations, at their best
         let mut outlets: BTreeMap<(GroundId, MaterialId), Vec<Outlet>> = BTreeMap::new();
         for candidate in &input.movements {
             let (Activity::Dig, SourceId::Ground(ground)) = (candidate.activity, candidate.source) else {
@@ -434,7 +640,15 @@ impl<'a> Prepared<'a> {
             let value = candidate.value_per_tonne().unwrap_or(0.0) * UNIT;
             let truck_h = candidate.truck_hours_per_tonne * UNIT;
             let list = outlets.entry((ground, candidate.material)).or_default();
+            // To bound, the best value and the least truck time of every
+            // candidate to the destination, each on its own: one candidate's
+            // pair would hide a cheaper haul worth less a tonne but more in
+            // all. Otherwise the best candidate's.
             match list.iter_mut().find(|outlet| outlet.destination == candidate.destination) {
+                Some(outlet) if bounding => {
+                    outlet.value = outlet.value.max(value);
+                    outlet.truck_h = outlet.truck_h.min(truck_h);
+                }
                 Some(outlet) if value > outlet.value || (value == outlet.value && truck_h < outlet.truck_h) => {
                     outlet.value = value;
                     outlet.truck_h = truck_h;
@@ -457,23 +671,25 @@ impl<'a> Prepared<'a> {
         };
 
         // ---- each loader's chain and the days each of its blocks may be dug -----
-        // chain[l] = (block, task) in authored order, cut at the first block the
-        // plan cannot dig.
+        // chain[l] = (block, task) in authored order, each bar cut at the first
+        // block the plan cannot dig, as the dispatch moves on to the next.
         let mut chains: Vec<Vec<(GroundId, usize)>> = Vec::new();
         let mut capacity: Vec<Vec<f64>> = Vec::new();
         for (loader_index, loader) in input.loaders.iter().enumerate() {
             let mut chain = Vec::new();
             let mut seen = BTreeSet::new();
-            'tasks: for task_index in authored_tasks(input, loader_index) {
+            for task_index in authored_tasks(input, loader_index) {
                 let TaskKind::Dig { sequence } = &input.tasks[task_index].kind else { continue };
                 for ground in sequence {
-                    if !tonnes.contains_key(ground) || !seen.insert(*ground) {
+                    if !tonnes.contains_key(ground) {
                         continue;
                     }
                     if !diggable(*ground) {
-                        break 'tasks;
+                        break;
                     }
-                    chain.push((*ground, task_index));
+                    if seen.insert(*ground) {
+                        chain.push((*ground, task_index));
+                    }
                 }
             }
             let caps = days
@@ -494,14 +710,54 @@ impl<'a> Prepared<'a> {
             chains.push(chain);
             capacity.push(caps);
         }
-        // Days each (loader, block) may be dug: its bar active and the loader
-        // able to dig, not before the loader could have reached it at full rate,
-        // and not before its blast is released.
+        // The loaders whose chains hold each block, and each loader's bars
+        // holding it: a block another loader can dig need not be dug by this
+        // one first, and one in two bars is worked under either.
+        let mut diggers: BTreeMap<GroundId, BTreeSet<usize>> = BTreeMap::new();
+        for (loader_index, chain) in chains.iter().enumerate() {
+            for &(ground, _) in chain {
+                diggers.entry(ground).or_default().insert(loader_index);
+            }
+        }
+        // A plan that bounds every schedule also says when each blast could
+        // clear and fire, and holds its ground back until then.
+        let blasts = input.drill_blast.as_ref().filter(|_| bounding).map(|chain| {
+            let periods: Vec<&[Interval]> = days.iter().map(|day| day_intervals[day].as_slice()).collect();
+            let dug: BTreeSet<GroundId> = diggers.keys().copied().collect();
+            BlastModel::new(chain, &periods, &tonnes, &dug)
+        });
+        let mut holding: BTreeMap<(usize, GroundId), Vec<usize>> = BTreeMap::new();
+        for loader_index in 0..input.loaders.len() {
+            for task in authored_tasks(input, loader_index) {
+                let TaskKind::Dig { sequence } = &input.tasks[task].kind else { continue };
+                for &ground in sequence {
+                    let bars = holding.entry((loader_index, ground)).or_default();
+                    if bars.last() != Some(&task) {
+                        bars.push(task);
+                    }
+                }
+            }
+        }
+        let bars_holding = |loader_index: usize, ground: GroundId| -> Vec<usize> { holding.get(&(loader_index, ground)).cloned().unwrap_or_default() };
+        // Days each (loader, block) may be dug: one of its bars active and
+        // the loader able to dig, not before the loader could have reached it
+        // at full rate, and not before its blast is released. Reach counts
+        // only the blocks ahead of it in the same bar that it alone digs, and a
+        // block in two bars may be dug in either's window.
         let mut allowed: BTreeMap<(usize, GroundId), Vec<usize>> = BTreeMap::new();
+        let mut repeated: BTreeSet<(usize, GroundId)> = BTreeSet::new();
         for (loader_index, chain) in chains.iter().enumerate() {
             let mut prefix = 0.0;
+            let mut bar = None;
             for &(ground, task_index) in chain {
-                let task = &input.tasks[task_index];
+                let bars = bars_holding(loader_index, ground);
+                if bar != Some(task_index) {
+                    (prefix, bar) = (0.0, Some(task_index));
+                }
+                if bars.len() > 1 {
+                    repeated.insert((loader_index, ground));
+                    prefix = 0.0;
+                }
                 let mut reached = 0.0;
                 let mut list = Vec::new();
                 for p in 0..periods {
@@ -509,7 +765,10 @@ impl<'a> Prepared<'a> {
                     if reached <= prefix + 1e-6 || capacity[loader_index][p] <= 0.0 {
                         continue;
                     }
-                    if !day_intervals[&days[p]].iter().any(|interval| task_active(task, *interval)) {
+                    if !day_intervals[&days[p]]
+                        .iter()
+                        .any(|interval| bars.iter().any(|&task| task_active(&input.tasks[task], *interval)))
+                    {
                         continue;
                     }
                     if releases.get(&ground).is_some_and(|released| *released >= day_end[p] - 1e-9) {
@@ -517,12 +776,14 @@ impl<'a> Prepared<'a> {
                     }
                     list.push(p);
                 }
-                prefix += tonnes[&ground];
+                if diggers.get(&ground).is_some_and(|loaders| loaders.len() == 1) {
+                    prefix += tonnes[&ground];
+                }
                 allowed.insert((loader_index, ground), list);
             }
         }
 
-        // Each reclaim bar's piles: their destinations on their best candidate,
+        // Each reclaim bar's piles: their destinations at their best,
         // with the conditional values the blend earns, and what the bar can draw
         // from each a day.
         let mut reclaims = Vec::new();
@@ -551,7 +812,13 @@ impl<'a> Prepared<'a> {
                         .sum();
                     let value = (candidate.value_per_tonne().unwrap_or(0.0) + conditional) * UNIT;
                     let truck_h = candidate.truck_hours_per_tonne * UNIT;
+                    // As a dig's outlets: to bound, best value and least truck
+                    // time apart.
                     match routes.iter_mut().find(|route| route.destination == candidate.destination) {
+                        Some(route) if bounding => {
+                            route.value = route.value.max(value);
+                            route.truck_h = route.truck_h.min(truck_h);
+                        }
                         Some(route) if value > route.value || (value == route.value && truck_h < route.truck_h) => {
                             route.value = value;
                             route.truck_h = truck_h;
@@ -598,10 +865,65 @@ impl<'a> Prepared<'a> {
             blend,
             outlets,
             chains,
+            repeated,
             capacity,
             allowed,
             reclaims,
+            blasts,
+            releases,
         }
+    }
+    /// Each (loader, block) of the loader's chain released inside period
+    /// `p`, by the hour it may be dug from: its own release, or a later one
+    /// of a block ahead of it in the same bar.
+    pub(super) fn released_within(&self, p: usize) -> BTreeMap<(usize, GroundId), f64> {
+        let opens = self.day_intervals[&self.days[p]].first().map_or(0.0, |interval| interval.start_h);
+        let mut found = BTreeMap::new();
+        for (loader_index, chain) in self.chains.iter().enumerate() {
+            let (mut bar, mut latest) = (None, f64::NEG_INFINITY);
+            for &(ground, task) in chain {
+                if bar != Some(task) {
+                    (bar, latest) = (Some(task), f64::NEG_INFINITY);
+                }
+                if let Some(&released) = self.releases.get(&ground) {
+                    latest = latest.max(released);
+                }
+                if latest > opens + 1e-9 {
+                    found.insert((loader_index, ground), latest);
+                }
+            }
+        }
+        found
+    }
+
+    /// What `loader_index` can dig in period `p` from hour `from` on.
+    pub(super) fn capacity_from(&self, loader_index: usize, p: usize, from: f64) -> f64 {
+        let loader = &self.input.loaders[loader_index];
+        self.day_intervals[&self.days[p]]
+            .iter()
+            .filter(|interval| {
+                self.input
+                    .tasks
+                    .iter()
+                    .any(|task| task.loader == loader.id && matches!(task.kind, TaskKind::Dig { .. }) && task_active(task, **interval))
+            })
+            .filter_map(|interval| {
+                let rate = interval_rate(loader, interval.index)?;
+                Some(rate.dig_tph.max(0.0) * (interval.end_h - interval.start_h.max(from)).max(0.0) / UNIT)
+            })
+            .sum()
+    }
+
+    /// The fleet's hours in period `p` from hour `from` on.
+    pub(super) fn fleet_hours_from(&self, p: usize, from: f64) -> f64 {
+        self.day_intervals[&self.days[p]]
+            .iter()
+            .filter(|interval| interval.end_h > from)
+            .map(|interval| {
+                let share = (interval.end_h - interval.start_h.max(from)) / interval.duration_h().max(1e-9);
+                share * self.input.trucks.iter().filter_map(|truck| truck.hours.get(interval.index)).sum::<f64>()
+            })
+            .sum()
     }
 
     pub(super) fn periods(&self) -> usize {
@@ -622,9 +944,15 @@ impl<'a> Prepared<'a> {
         ground_materials(self.input, ground)
     }
 
-    /// The grade a flow carries, for a row of `direction`: a reclaim's, over
-    /// the whole horizon, the one that adds least to it.
-    pub(super) fn carried(&self, of: Carried, grade: usize, direction: f64) -> f64 {
+    /// The grade a flow carries on `day`, for a row of `direction`: a
+    /// reclaim's, over the whole horizon, the one that adds least to it.
+    pub(super) fn carried(&self, of: Carried, grade: usize, direction: f64, day: u32) -> f64 {
+        if let Carried::Pile(pile) = of
+            && !self.optimistic
+            && let Some(entry) = self.window.and_then(|window| window.pile_days.get(&(pile, day))).filter(|entry| entry.reclaimed_t > 1e-9)
+        {
+            return entry.blend.get(grade).copied().unwrap_or(0.0);
+        }
         match of {
             Carried::Material(material) => self.input.grades.fraction(material, grade).unwrap_or(0.0),
             Carried::Pile(_) if self.optimistic => {
@@ -634,7 +962,13 @@ impl<'a> Prepared<'a> {
                     self.ceilings.get(grade).copied().unwrap_or(0.0)
                 }
             }
-            Carried::Pile(pile) => self.blend.get(&pile).and_then(|blend| blend.get(grade)).copied().unwrap_or(0.0),
+            Carried::Pile(pile) => self
+                .window
+                .and_then(|window| window.reclaim_blends.get(&pile))
+                .or_else(|| self.blend.get(&pile))
+                .and_then(|blend| blend.get(grade))
+                .copied()
+                .unwrap_or(0.0),
         }
     }
 
@@ -686,10 +1020,189 @@ impl<'a> Prepared<'a> {
     }
 }
 
+/// A flag of the blast rows: a column, or settled as the plan opens.
+#[derive(Clone, Copy)]
+enum Flag {
+    Column(usize),
+    Fixed(f64),
+}
+
+impl Builder {
+    /// A row over flags: those settled go into its bounds, and one with
+    /// nothing left to decide is left out.
+    fn flag_row(&mut self, terms: &[(Flag, f64)], lhs: f64, rhs: f64, name: &str) {
+        let settled: f64 = terms
+            .iter()
+            .map(|(flag, coefficient)| if let Flag::Fixed(value) = flag { value * coefficient } else { 0.0 })
+            .sum();
+        let columns: Vec<(usize, f64)> = terms
+            .iter()
+            .filter_map(|(flag, coefficient)| if let Flag::Column(column) = flag { Some((*column, *coefficient)) } else { None })
+            .collect();
+        self.row(&columns, lhs - settled, rhs - settled, name);
+    }
+}
+
+/// The drill and blast chain's rows (see `docs/scheduling-blast-aware-plan-design.md`):
+/// each machine's work within what it could do on each blast and in all,
+/// each step done only once its work is and the step before it is, a blast
+/// clear only once the ground above it is dug, firing only once charged
+/// and in a period a firing window ends in, and the ground it releases dug
+/// only once it has fired. The work is in fractions of each step's work
+/// left. Flags are continuous: the rows only bound.
+fn blast_rows(builder: &mut Builder, model: &BlastModel, block_so_far: &BTreeMap<(GroundId, usize), usize>, tonnes: &BTreeMap<GroundId, f64>, periods: usize) {
+    let flag = |builder: &mut Builder, name: String| Flag::Column(builder.cont(1.0, 0.0, &name));
+    // Clear flags first, for every blast, so a blast whose ground above
+    // holds another's can lean on it: once the larger is clear, so is the
+    // smaller, and the larger's row needs only the ground the smaller
+    // lacks. The sets nest deeply on a bench (each blast holds those behind
+    // it), and their full sums are dense, nearly parallel rows.
+    let mut clears: Vec<Vec<Flag>> = Vec::with_capacity(model.blasts.len());
+    for planned in &model.blasts {
+        let b = planned.index;
+        clears.push(if planned.opening.cleared {
+            vec![Flag::Fixed(1.0); periods]
+        } else if planned.never_clear {
+            vec![Flag::Fixed(0.0); periods]
+        } else {
+            let flags: Vec<Flag> = (0..periods).map(|p| flag(builder, format!("bclr_{b}_{p}"))).collect();
+            for (p, pair) in flags.windows(2).enumerate() {
+                builder.flag_row(&[(pair[0], 1.0), (pair[1], -1.0)], f64::NEG_INFINITY, 0.0, &format!("bclrm_{b}_{}", p + 1));
+            }
+            flags
+        });
+    }
+    let deciding: Vec<usize> = (0..model.blasts.len()).filter(|&i| matches!(clears[i][0], Flag::Column(_))).collect();
+    let above: Vec<BTreeSet<GroundId>> = model.blasts.iter().map(|planned| planned.above.iter().copied().collect()).collect();
+    for &i in &deciding {
+        let b = model.blasts[i].index;
+        // The largest set inside this one; of equal sets, the first.
+        let inner = deciding
+            .iter()
+            .copied()
+            .filter(|&j| j != i && above[j].is_subset(&above[i]) && (above[j].len() < above[i].len() || j < i))
+            .max_by_key(|&j| (above[j].len(), std::cmp::Reverse(j)));
+        let rest: Vec<GroundId> = match inner {
+            Some(j) => above[i].difference(&above[j]).copied().collect(),
+            None => above[i].iter().copied().collect(),
+        };
+        let standing: f64 = rest.iter().filter_map(|ground| tonnes.get(ground)).sum();
+        for p in 0..periods {
+            if let Some(j) = inner {
+                builder.flag_row(&[(clears[i][p], 1.0), (clears[j][p], -1.0)], f64::NEG_INFINITY, 0.0, &format!("bnest_{b}_{p}"));
+            }
+            if standing > 1e-9 {
+                let mut terms: Vec<(Flag, f64)> = rest
+                    .iter()
+                    .filter_map(|ground| block_so_far.get(&(*ground, p)).map(|column| (Flag::Column(*column), 1.0 / standing)))
+                    .collect();
+                terms.push((clears[i][p], -1.0));
+                builder.flag_row(&terms, 0.0, f64::INFINITY, &format!("bclear_{b}_{p}"));
+            }
+        }
+    }
+    // Each machine's work on each blast per period, for its capacity rows.
+    let mut work: BTreeMap<(usize, usize), Vec<(usize, f64)>> = BTreeMap::new();
+    for (i, planned) in model.blasts.iter().enumerate() {
+        let b = planned.index;
+        let opening = &planned.opening;
+        let monotone = |builder: &mut Builder, flags: &[Flag], name: &str| {
+            for (p, pair) in flags.windows(2).enumerate() {
+                builder.flag_row(&[(pair[0], 1.0), (pair[1], -1.0)], f64::NEG_INFINITY, 0.0, &format!("{name}_{}", p + 1));
+            }
+        };
+        let clear = clears[i].clone();
+        // Each step: its work so far, and done.
+        let mut before = clear;
+        let mut done_flags: Vec<Vec<Flag>> = Vec::new();
+        for activity in BlastActivity::ALL {
+            let step = activity as usize;
+            let done: Vec<Flag> = if opening.done[step] {
+                vec![Flag::Fixed(1.0); periods]
+            } else {
+                let flags: Vec<Flag> = (0..periods).map(|p| flag(builder, format!("bdone_{b}_{step}_{p}"))).collect();
+                monotone(builder, &flags, &format!("bdonem_{b}_{step}"));
+                flags
+            };
+            // Done only once the step before it is, whatever work is left.
+            for p in 0..periods {
+                builder.flag_row(&[(done[p], 1.0), (before[p], -1.0)], f64::NEG_INFINITY, 0.0, &format!("bafter_{b}_{step}_{p}"));
+            }
+            if !opening.done[step] && opening.left[step] > 0.0 {
+                let mut so_far: Option<usize> = None;
+                for p in 0..periods {
+                    let column = builder.cont(1.0, 0.0, &format!("bw_{b}_{step}_{p}"));
+                    let mut terms = vec![(column, 1.0)];
+                    if let Some(previous) = so_far {
+                        terms.push((previous, -1.0));
+                    }
+                    for (agent, available) in planned.machines.iter().filter(|(agent, _)| model.activity(*agent) == activity) {
+                        if available[p] <= 0.0 {
+                            continue;
+                        }
+                        let share = builder.cont((available[p] / opening.left[step]).min(1.0), 0.0, &format!("bm_{agent}_{b}_{p}"));
+                        terms.push((share, -1.0));
+                        work.entry((*agent, p)).or_default().push((share, opening.left[step]));
+                    }
+                    builder.row(&terms, 0.0, 0.0, &format!("bwsum_{b}_{step}_{p}"));
+                    // Worked only once the step before it is done, and done
+                    // only once all its work is.
+                    builder.flag_row(&[(Flag::Column(column), 1.0), (before[p], -1.0)], f64::NEG_INFINITY, 0.0, &format!("bready_{b}_{step}_{p}"));
+                    builder.flag_row(&[(Flag::Column(column), 1.0), (done[p], -1.0)], 0.0, f64::INFINITY, &format!("bfinish_{b}_{step}_{p}"));
+                    so_far = Some(column);
+                }
+            }
+            before = done.clone();
+            done_flags.push(done);
+        }
+        // Fired: once charged, in a period a firing window ends in, or as
+        // the plan opened scheduled.
+        let fire: Vec<Flag> = match planned.fires_in {
+            Some(from) => (0..periods).map(|p| Flag::Fixed(if p >= from { 1.0 } else { 0.0 })).collect(),
+            None => {
+                let flags: Vec<Flag> = (0..periods).map(|p| flag(builder, format!("bfire_{b}_{p}"))).collect();
+                monotone(builder, &flags, &format!("bfirem_{b}"));
+                for p in 0..periods {
+                    builder.flag_row(&[(flags[p], 1.0), (done_flags[2][p], -1.0)], f64::NEG_INFINITY, 0.0, &format!("bcharged_{b}_{p}"));
+                    if !model.fires[p] {
+                        let previous = if p == 0 { Flag::Fixed(0.0) } else { flags[p - 1] };
+                        builder.flag_row(&[(flags[p], 1.0), (previous, -1.0)], f64::NEG_INFINITY, 0.0, &format!("bwindow_{b}_{p}"));
+                    }
+                }
+                flags
+            }
+        };
+        // Its ground, all of it together, dug only once it has fired.
+        for ground in &planned.releases {
+            let Some(&left) = tonnes.get(ground) else { continue };
+            for (p, fired) in fire.iter().enumerate() {
+                if let Some(&dug) = block_so_far.get(&(*ground, p)) {
+                    builder.flag_row(&[(Flag::Column(dug), 1.0), (*fired, -left)], f64::NEG_INFINITY, 0.0, &format!("brelease_{}_{p}", ground.0));
+                }
+            }
+        }
+    }
+    // Each machine within what it could do in each period.
+    for ((agent, p), terms) in work {
+        let capacity = model.capacity[agent][p];
+        if capacity > 0.0 {
+            let scaled: Vec<(usize, f64)> = terms.into_iter().map(|(column, quantity)| (column, quantity / capacity)).collect();
+            builder.row(&scaled, f64::NEG_INFINITY, 1.0, &format!("bcap_{agent}_{p}"));
+        }
+    }
+}
+
 /// The plan for `input`, started from `seed` (the hourly dispatch's schedule)
 /// when there is one, so it is never worse than the schedule it improves.
 pub(crate) fn solve(input: &BlendInput, seed: Option<&BlendSolution>, window: Option<&Window>, settings: Settings, stop: &Arc<AtomicBool>) -> Result<PlanSolve, String> {
-    solve_periods(input, seed, window, settings, 1, stop)
+    solve_periods(input, seed, window, settings, 1, false, stop)
+}
+
+/// The plan over the whole horizon in periods of `period_days` days, read
+/// as the window plans read it, for targets rather than a bound: its linear
+/// relaxation when `settings.relax`.
+pub(crate) fn long_term(input: &BlendInput, seed: Option<&BlendSolution>, period_days: u32, settings: Settings, stop: &Arc<AtomicBool>) -> Result<PlanSolve, String> {
+    solve_periods(input, seed, None, settings, period_days, false, stop)
 }
 
 /// The whole horizon's linear relaxation over periods of `period_days` days,
@@ -710,8 +1223,9 @@ pub(crate) fn relaxation_bound(input: &BlendInput, period_days: u32, time_limit:
         time_limit,
         relative_gap: 0.0,
         relax: true,
+        cut_rounds: None,
     };
-    solve_periods(input, None, None, settings, period_days, stop)
+    solve_periods(input, None, None, settings, period_days, true, stop)
 }
 
 fn solve_periods(
@@ -720,14 +1234,14 @@ fn solve_periods(
     window: Option<&Window>,
     settings: Settings,
     period_days: u32,
+    bounding: bool,
     stop: &Arc<AtomicBool>,
 ) -> Result<PlanSolve, String> {
     let started = Instant::now();
-    let prepared = Prepared::new(input, window, period_days);
-    let joined = prepared.period_days.iter().any(|days| days.len() > 1);
-    // Days joined, the seed would have to be mapped onto periods; nothing
-    // seeds a relaxation.
-    let seed = seed.filter(|_| !joined);
+    let prepared = Prepared::new(input, window, period_days, bounding);
+    // Nothing seeds a relaxation: its blast columns have no values in a
+    // schedule, and joined days none per period.
+    let seed = seed.filter(|_| !settings.relax);
     let Prepared {
         days,
         period_days: covered,
@@ -735,13 +1249,14 @@ fn solve_periods(
         pile_opening,
         outlets,
         chains,
+        repeated,
         capacity,
         allowed,
         ..
     } = &prepared;
     let periods = prepared.periods();
     let materials = |ground: GroundId| prepared.materials(ground);
-    let carried = |of: Carried, grade: usize, direction: f64| prepared.carried(of, grade, direction);
+    let carried = |of: Carried, grade: usize, direction: f64, day: u32| prepared.carried(of, grade, direction, day);
     let before = |id: DestinationId| prepared.before(id);
 
     // ---- model ----------------------------------------------------------------
@@ -785,6 +1300,8 @@ fn solve_periods(
         by_block.entry(ground).or_default().entry(p).or_default().push((loader_index, column));
     }
     let mut loader_so_far: BTreeMap<(usize, GroundId, usize), usize> = BTreeMap::new();
+    let mut block_loaders: BTreeMap<(GroundId, usize), Vec<usize>> = BTreeMap::new();
+    let mut first_day: BTreeMap<GroundId, usize> = BTreeMap::new();
     for (&(loader_index, ground), list) in allowed {
         let Some(&first) = list.first() else { continue };
         let mut previous: Option<usize> = None;
@@ -799,28 +1316,96 @@ fn solve_periods(
             }
             builder.row(&terms, 0.0, 0.0, &format!("ecarry_{loader_index}_{}_{p}", ground.0));
             loader_so_far.insert((loader_index, ground, p), column);
+            // Indexed by block too, for the block totals below; loaders in
+            // order, as `allowed` is.
+            block_loaders.entry((ground, p)).or_default().push(column);
+            first_day.entry(ground).and_modify(|day: &mut usize| *day = (*day).min(first)).or_insert(first);
             previous = Some(column);
         }
     }
     let mut block_so_far: BTreeMap<(GroundId, usize), usize> = BTreeMap::new();
     for ground in by_block.keys() {
-        let Some(first) = allowed.iter().filter(|((_, block), _)| block == ground).filter_map(|(_, list)| list.first().copied()).min() else {
+        let Some(&first) = first_day.get(ground) else {
             continue;
         };
         for p in first..periods {
             // Within a block's own tonnes.
             let column = builder.cont(tonnes[ground], 0.0, &format!("d_{}_{p}", ground.0));
             let mut terms = vec![(column, 1.0)];
-            terms.extend(
-                loader_so_far
-                    .range((0, *ground, p)..)
-                    .filter(|((_, block, at), _)| block == ground && *at == p)
-                    .map(|(_, &e)| (e, -1.0)),
-            );
+            terms.extend(block_loaders.get(&(*ground, p)).into_iter().flatten().map(|&e| (e, -1.0)));
             builder.row(&terms, 0.0, 0.0, &format!("dsum_{}_{p}", ground.0));
             block_so_far.insert((*ground, p), column);
         }
     }
+    // ---- drill and blast: when each blast clears, finishes its steps and
+    // fires, and the ground it holds back until then.
+    if let Some(model) = &prepared.blasts {
+        blast_rows(&mut builder, model, &block_so_far, tonnes, periods);
+    }
+    // ---- off the bound, on the held timeline: a blast's ground is dug only
+    // if the ground above it is gone by the end of the period the timeline
+    // clears it in. Otherwise the dispatch would fire it late, and the
+    // ground the plan dug from it would not be there when the plan said.
+    // Each such blast's on-time flag, and the blast each block is released
+    // by, which the priority rows below read too.
+    let mut on_time_of: BTreeMap<usize, usize> = BTreeMap::new();
+    let released_by: BTreeMap<GroundId, usize> = input
+        .drill_blast
+        .as_ref()
+        .map(|chain| {
+            chain
+                .blasts
+                .iter()
+                .enumerate()
+                .flat_map(|(index, blast)| blast.releases.iter().map(move |ground| (*ground, index)))
+                .collect()
+        })
+        .unwrap_or_default();
+    if !bounding
+        && let Some(chain) = input.drill_blast.as_ref()
+        && let Some(timeline) = chain.fixed.as_ref()
+    {
+        let spans: Vec<(f64, f64)> = days
+            .iter()
+            .map(|day| {
+                let intervals = &prepared.day_intervals[day];
+                (
+                    intervals.first().map_or(0.0, |interval| interval.start_h),
+                    intervals.last().map_or(0.0, |interval| interval.end_h),
+                )
+            })
+            .collect();
+        let so_far = |ground: GroundId, p: Option<usize>| p.and_then(|p| block_so_far.get(&(ground, p)).copied());
+        for (index, (blast, events)) in chain.blasts.iter().zip(&timeline.blasts).enumerate() {
+            let Some(cleared_h) = events.cleared_h else { continue };
+            if blast.stage != BlastStage::NotStarted || spans.first().is_none_or(|(start, _)| cleared_h <= *start) {
+                continue;
+            }
+            let standing: Vec<GroundId> = blast.above.iter().copied().filter(|ground| tonnes.get(ground).is_some_and(|t| *t > 1e-9)).collect();
+            let released: Vec<(usize, f64)> = blast
+                .releases
+                .iter()
+                .filter_map(|ground| Some((so_far(*ground, Some(periods - 1))?, tonnes[ground])))
+                .collect();
+            if standing.is_empty() || released.is_empty() {
+                continue;
+            }
+            let on_time = builder.binary(&format!("ontime_{index}"));
+            on_time_of.insert(index, on_time);
+            for &(dug, t) in &released {
+                builder.row(&[(dug, 1.0), (on_time, -t)], f64::NEG_INFINITY, 0.0, &format!("onlyclear_{index}"));
+            }
+            // All of it gone by the end of the period the clearance hour
+            // falls in. Pro rata within it ruled out every blast whose
+            // clearance ground is itself released in that period.
+            let p = spans.iter().position(|(_, end)| cleared_h <= *end + 1e-9).unwrap_or(periods - 1);
+            let total: f64 = standing.iter().map(|ground| tonnes[ground]).sum();
+            let mut terms = vec![(on_time, -total)];
+            terms.extend(standing.iter().filter_map(|ground| so_far(*ground, Some(p))).map(|column| (column, 1.0)));
+            builder.row(&terms, 0.0, f64::INFINITY, &format!("clearby_{index}"));
+        }
+    }
+
     let mut chain_so_far: BTreeMap<(usize, usize), usize> = BTreeMap::new();
     for loader_index in 0..chains.len() {
         let mut previous: Option<usize> = None;
@@ -837,9 +1422,36 @@ fn solve_periods(
         }
     }
 
+    // The orders a loader is held to: each block after the one before it in
+    // its bar, neither in another of its bars too.
+    let orders = |loader_index: usize| {
+        chains[loader_index]
+            .windows(2)
+            .filter(move |pair| pair[0].1 == pair[1].1 && !repeated.contains(&(loader_index, pair[0].0)) && !repeated.contains(&(loader_index, pair[1].0)))
+    };
     // Finished flags for every block a chain waits on: all of it dug by the
     // end of the day, and staying finished.
-    let waited: BTreeSet<GroundId> = chains.iter().flat_map(|chain| chain.windows(2).map(|pair| pair[0].0)).collect();
+    // A block in two of a loader's bars is dug in either bar's order: for
+    // each bar holding it, the block before it there still to be dug, if
+    // any, and the first period the bar is open.
+    let mut either = Vec::new();
+    for &(loader_index, ground) in repeated {
+        let mut ways = Vec::new();
+        for task in authored_tasks(input, loader_index) {
+            let TaskKind::Dig { sequence } = &input.tasks[task].kind else { continue };
+            let Some(position) = sequence.iter().position(|next| *next == ground) else { continue };
+            let ahead = sequence[..position].iter().rev().find(|ahead| tonnes.contains_key(ahead)).copied();
+            let opens = (0..periods)
+                .find(|&p| prepared.day_intervals[&days[p]].iter().any(|interval| task_active(&input.tasks[task], *interval)))
+                .unwrap_or(periods);
+            ways.push((ahead, opens));
+        }
+        either.push((loader_index, ground, ways));
+    }
+    let waited: BTreeSet<GroundId> = (0..chains.len())
+        .flat_map(|loader_index| orders(loader_index).map(|pair| pair[0].0))
+        .chain(either.iter().flat_map(|(_, _, ways)| ways.iter().filter_map(|(ahead, _)| *ahead)))
+        .collect();
     let mut finished: BTreeMap<(GroundId, usize), usize> = BTreeMap::new();
     for &ground in &waited {
         let mut previous: Option<usize> = None;
@@ -855,8 +1467,8 @@ fn solve_periods(
         }
     }
     // A loader's next block waits for this one to be finished.
-    for (loader_index, chain) in chains.iter().enumerate() {
-        for pair in chain.windows(2) {
+    for loader_index in 0..chains.len() {
+        for pair in orders(loader_index) {
             let (ahead, next) = (pair[0].0, pair[1].0);
             for p in 0..periods {
                 let Some(&so_far) = loader_so_far.get(&(loader_index, next, p)) else { continue };
@@ -869,34 +1481,106 @@ fn solve_periods(
         }
     }
 
-    // Finishing a block takes everything ahead of it in its loader's chain:
-    // the loader has dug at least those tonnes and the block's own. Implied
-    // by the order rows in whole numbers, but not in the relaxation, where
-    // fractional flags otherwise let a sliver of every block be dug at once
-    // and ore deep in a sequence look reachable on the first day. Valid while
-    // no block up to it in the chain is dug by another loader too.
+    for (loader_index, ground, ways) in &either {
+        for p in 0..periods {
+            let Some(&so_far) = loader_so_far.get(&(*loader_index, *ground, p)) else { continue };
+            let open: Vec<Option<GroundId>> = ways.iter().filter(|(_, opens)| *opens <= p).map(|(ahead, _)| *ahead).collect();
+            // A bar open with nothing left before the block frees it.
+            if open.iter().any(Option::is_none) {
+                continue;
+            }
+            let mut terms = vec![(so_far, 1.0)];
+            terms.extend(open.iter().flatten().filter_map(|ahead| finished.get(&(*ahead, p))).map(|flag| (*flag, -tonnes[ground])));
+            builder.row(&terms, f64::NEG_INFINITY, 0.0, &format!("either_{loader_index}_{}_{p}", ground.0));
+        }
+    }
+
+    // Finishing a block takes everything ahead of it in its bar: the loader
+    // has dug at least those tonnes and the block's own. Implied by the order rows in whole numbers, but not in the
+    // relaxation, where fractional flags otherwise let a sliver of every
+    // block be dug at once and ore deep in a sequence look reachable on the
+    // first day. Valid while no block up to it is dug by another loader too
+    // or sits in another of the loader's bars.
     let mut diggers: BTreeMap<GroundId, usize> = BTreeMap::new();
     for &(_, ground) in allowed.keys() {
         *diggers.entry(ground).or_default() += 1;
     }
     for (loader_index, chain) in chains.iter().enumerate() {
+        let available: Vec<f64> = capacity[loader_index]
+            .iter()
+            .scan(0.0, |total, hours| {
+                *total += hours;
+                Some(*total)
+            })
+            .collect();
         let mut prefix = 0.0;
-        for (position, &(ground, _)) in chain.iter().enumerate() {
+        let mut earliest: f64 = 0.0;
+        let mut held = true;
+        for (position, &(ground, task_index)) in chain.iter().enumerate() {
+            let same_bar = position > 0 && chain[position - 1].1 == task_index;
+            if !same_bar {
+                (prefix, earliest, held) = (0.0, 0.0, true);
+            }
             prefix += tonnes[&ground];
-            if diggers.get(&ground) != Some(&1) {
-                break;
+            held &= diggers.get(&ground) == Some(&1) && !repeated.contains(&(loader_index, ground));
+            if !held {
+                continue;
+            }
+            // An exclusive bar cannot bank capacity while its next block
+            // waits for release. In cumulative capacity units, finishing
+            // this prefix takes its tonnes after the first allowed period
+            // opens, or after the previous prefix finishes, whichever is later.
+            // Tighten daily windows, where reducing branch work leaves more
+            // time to evaluate targets; keep coarse plans' order bounds.
+            if period_days == 1 {
+                let first = allowed[&(loader_index, ground)].first().copied().unwrap_or(periods);
+                let before = first.checked_sub(1).map_or(0.0, |p| available[p]);
+                earliest = earliest.max(before) + tonnes[&ground];
+            } else {
+                earliest = prefix;
             }
             for p in 0..periods {
                 let Some(&flag) = finished.get(&(ground, p)) else { continue };
+                if period_days == 1 && earliest > available[p] + 1e-6 {
+                    builder.upper[flag] = 0.0;
+                }
                 builder.row(
                     &[(chain_so_far[&(loader_index, p)], 1.0), (flag, -prefix)],
                     0.0,
                     f64::INFINITY,
                     &format!("reach_{loader_index}_{}_{p}", ground.0),
                 );
-                if position > 0
-                    && let Some(&ahead) = finished.get(&(chain[position - 1].0, p))
+                // Once this prefix is finished, only the remaining loader
+                // capacity can reach the next block. Its whole tonnage is a
+                // loose big-M when that block is barely reachable this period.
+                if let Some(&(next, task)) = chain.get(position + 1)
+                    && task == task_index
+                    && let Some(&dug) = loader_so_far.get(&(loader_index, next, p))
                 {
+                    let room = (available[p] - earliest).max(0.0);
+                    if room < tonnes[&next] {
+                        builder.row(&[(dug, 1.0), (flag, -room)], f64::NEG_INFINITY, 0.0, &format!("reachnext_{loader_index}_{}_{p}", next.0));
+                    }
+                }
+                // Daily windows can afford the denser suffix cuts: every
+                // later block shares the remaining capacity rather than
+                // receiving its own copy in the relaxation. Keep coarse
+                // whole-horizon plans sparse. Stop before a block reachable
+                // through another bar or loader.
+                if period_days == 1 {
+                    let later: Vec<(GroundId, usize)> = chain[position + 1..]
+                        .iter()
+                        .take_while(|(next, task)| *task == task_index && diggers.get(next) == Some(&1) && !repeated.contains(&(loader_index, *next)))
+                        .filter_map(|(next, _)| loader_so_far.get(&(loader_index, *next, p)).map(|column| (*next, *column)))
+                        .collect();
+                    let room = (available[p] - earliest).max(0.0);
+                    if later.len() > 1 && room < later.iter().map(|(next, _)| tonnes[next]).sum::<f64>() {
+                        let mut terms: Vec<(usize, f64)> = later.iter().map(|(_, column)| (*column, 1.0)).collect();
+                        terms.push((flag, -room));
+                        builder.row(&terms, f64::NEG_INFINITY, 0.0, &format!("reachlater_{loader_index}_{}_{p}", ground.0));
+                    }
+                }
+                if same_bar && let Some(&ahead) = finished.get(&(chain[position - 1].0, p)) {
                     builder.row(&[(flag, 1.0), (ahead, -1.0)], f64::NEG_INFINITY, 0.0, &format!("inorder_{loader_index}_{}_{p}", ground.0));
                 }
             }
@@ -908,6 +1592,8 @@ fn solve_periods(
     let building = |id: DestinationId, p: usize| prepared.building(id, p);
     let mut flows: BTreeMap<(DestinationId, usize), Vec<Flow>> = BTreeMap::new();
     let mut trucks: BTreeMap<usize, Vec<(usize, f64)>> = BTreeMap::new();
+    // Each block's haul per period, for the release rows below.
+    let mut ground_trucks: BTreeMap<(GroundId, usize), Vec<(usize, f64)>> = BTreeMap::new();
     // Read back: (block, material, destination, period), its column, tonnes
     // per unit, and the loader when the column is one loader's own dig.
     let mut routed: Vec<Routed> = Vec::new();
@@ -920,6 +1606,7 @@ fn solve_periods(
                         flows.entry((only.destination, p)).or_default().push((*column, fraction, Carried::Material(material)));
                         if only.truck_h > 0.0 {
                             trucks.entry(p).or_default().push((*column, fraction * only.truck_h));
+                            ground_trucks.entry((*ground, p)).or_default().push((*column, fraction * only.truck_h));
                         }
                         routed.push(((*ground, material, only.destination, p), *column, fraction, Some(*loader_index)));
                     }
@@ -932,6 +1619,7 @@ fn solve_periods(
                     flows.entry((outlet.destination, p)).or_default().push((column, 1.0, Carried::Material(material)));
                     if outlet.truck_h > 0.0 {
                         trucks.entry(p).or_default().push((column, outlet.truck_h));
+                        ground_trucks.entry((*ground, p)).or_default().push((column, outlet.truck_h));
                     }
                     routed.push(((*ground, material, outlet.destination, p), column, 1.0, None));
                 }
@@ -1034,6 +1722,103 @@ fn solve_periods(
             previous = Some(held);
         }
     }
+    // An unchunked pile's reclaim carries its running blend, which what the
+    // plan delivers moves. A day's reclaimed metal is the incumbent's blend
+    // that day times the tonnes, plus, to first order, k (M - b T): M and T
+    // the plan's mid-day metal and tonnes, b the incumbent's mid-day blend
+    // and k its reclaim over its mid-day tonnes. The correction is nothing
+    // for the incumbent, so the plan prices its grade exactly.
+    let mut moved: BTreeMap<(StockpileId, usize), (f64, Vec<f64>, &PileDay)> = BTreeMap::new();
+    let mut metal: BTreeMap<(StockpileId, usize, usize), usize> = BTreeMap::new();
+    let targeted: BTreeSet<usize> = input.grade_targets.iter().map(|target| target.grade).collect();
+    if let Some(window) = window.filter(|_| !prepared.optimistic)
+        && covered.iter().all(|days| days.len() == 1)
+    {
+        for pile in input.piles.iter().filter(|pile| pile.chunks.is_empty()) {
+            for (p, days) in covered.iter().enumerate() {
+                if let Some(day) = window.pile_days.get(&(pile.id, days[0]))
+                    && day.tonnes_t > UNIT
+                    && day.reclaimed_t > DUST_T
+                {
+                    moved.insert(
+                        (pile.id, p),
+                        (day.reclaimed_t / day.tonnes_t, day.contained.iter().map(|q| q / day.tonnes_t).collect(), day),
+                    );
+                }
+            }
+            if !moved.keys().any(|(id, _)| *id == pile.id) {
+                continue;
+            }
+            let deliveries: Vec<DestinationId> = input
+                .destinations
+                .iter()
+                .filter(|entry| entry.kind == DestinationKind::Stockpile(pile.id))
+                .map(|entry| entry.id)
+                .collect();
+            let (opening_t, opening_q) = pile_opening.get(&pile.id).cloned().unwrap_or_default();
+            for &grade in &targeted {
+                let opening = opening_q.get(grade).copied().unwrap_or(0.0) / UNIT;
+                let mut previous: Option<usize> = None;
+                for (p, days) in covered.iter().enumerate() {
+                    // Metal held at the end of the day, in grade-kilotonnes.
+                    let held = builder.cont(f64::INFINITY, 0.0, &format!("metal_{}_{grade}_{p}", pile.id.0));
+                    metal.insert((pile.id, grade, p), held);
+                    let reclaimed = carried(Carried::Pile(pile.id), grade, 1.0, days[0]);
+                    let mut terms: BTreeMap<usize, f64> = BTreeMap::new();
+                    let mut rhs = 0.0;
+                    *terms.entry(held).or_default() += 1.0;
+                    match previous {
+                        Some(previous) => *terms.entry(previous).or_default() -= 1.0,
+                        None => rhs += opening,
+                    }
+                    for id in &deliveries {
+                        for &(column, per_unit, of) in flows.get(&(*id, p)).into_iter().flatten() {
+                            if let Carried::Material(material) = of {
+                                *terms.entry(column).or_default() -= per_unit * input.grades.fraction(material, grade).unwrap_or(0.0);
+                            }
+                        }
+                    }
+                    for (_, column) in reclaim.iter().filter(|((_, from, at), _)| *from == pile.id && *at == p) {
+                        *terms.entry(*column).or_default() += reclaimed;
+                    }
+                    if let Some((k, blend, _)) = moved.get(&(pile.id, p)) {
+                        let b = blend.get(grade).copied().unwrap_or(0.0);
+                        *terms.entry(held).or_default() += 0.5 * k;
+                        *terms.entry(inventory[&(pile.id, p)]).or_default() -= 0.5 * k * b;
+                        match previous {
+                            Some(previous) => {
+                                *terms.entry(previous).or_default() += 0.5 * k;
+                                *terms.entry(inventory[&(pile.id, p - 1)]).or_default() -= 0.5 * k * b;
+                            }
+                            None => rhs -= 0.5 * k * (opening - b * opening_t / UNIT),
+                        }
+                    }
+                    let terms: Vec<(usize, f64)> = terms.into_iter().collect();
+                    builder.row(&terms, rhs, rhs, &format!("metal_{}_{grade}_{p}", pile.id.0));
+                    previous = Some(held);
+                }
+            }
+        }
+    }
+    // The correction a pile's reclaim to `id` on day `p` carries in `grade`,
+    // its share of k (M - b T), as terms and a constant.
+    let correction = |pile: StockpileId, id: DestinationId, grade: usize, p: usize| -> Option<(Vec<(usize, f64)>, f64)> {
+        let (k, blend, day) = moved.get(&(pile, p))?;
+        let share = day.to.get(&id).copied().unwrap_or(0.0) / day.reclaimed_t;
+        if share <= 0.0 {
+            return None;
+        }
+        let (k, b) = (share * k, blend.get(grade).copied().unwrap_or(0.0));
+        let mut terms = vec![(metal[&(pile, grade, p)], 0.5 * k), (inventory[&(pile, p)], -0.5 * k * b)];
+        let mut constant = 0.0;
+        if p > 0 {
+            terms.extend([(metal[&(pile, grade, p - 1)], 0.5 * k), (inventory[&(pile, p - 1)], -0.5 * k * b)]);
+        } else {
+            let (opening_t, opening_q) = pile_opening.get(&pile).cloned().unwrap_or_default();
+            constant += 0.5 * k * (opening_q.get(grade).copied().unwrap_or(0.0) - b * opening_t) / UNIT;
+        }
+        Some((terms, constant))
+    };
 
     // Destination room.
     let mut totals: BTreeMap<DestinationId, Vec<(usize, f64)>> = BTreeMap::new();
@@ -1069,6 +1854,85 @@ fn solve_periods(
     for (p, terms) in &trucks {
         builder.row(terms, f64::NEG_INFINITY, prepared.fleet_hours(*p), &format!("fleet_{p}"));
     }
+    // Ground released inside a period has only the hours after its release:
+    // for each hour some ground is released at, all ground released then or
+    // later is dug within the loader's, and hauled within the fleet's, hours
+    // from it to the period's end.
+    // Each running total and what it sums, in order, so a seed can fill
+    // them in.
+    let mut totals: Vec<(usize, Vec<(usize, f64)>)> = Vec::new();
+    // Every plan the dispatch follows reads them; on the bound they doubled
+    // long's relaxation time.
+    if !bounding {
+        for p in 0..periods {
+            let within = prepared.released_within(p);
+            if within.is_empty() {
+                continue;
+            }
+            let mut hours: Vec<f64> = within.values().copied().collect();
+            hours.sort_by(f64::total_cmp);
+            hours.dedup();
+            // Running totals from the latest release back: what is dug of
+            // ground released at each hour or later, each row a few terms.
+            for loader_index in 0..chains.len() {
+                let mut later: Option<usize> = None;
+                for (step, &from) in hours.iter().enumerate().rev() {
+                    let mut terms: Vec<(usize, f64)> = within
+                        .iter()
+                        .filter(|((at, _), released)| *at == loader_index && **released == from)
+                        .filter_map(|((_, ground), _)| dig.get(&(loader_index, *ground, p)).map(|column| (*column, 1.0)))
+                        .collect();
+                    if terms.is_empty() && later.is_none() {
+                        continue;
+                    }
+                    let total = builder.cont(f64::INFINITY, 0.0, &format!("reldug_{loader_index}_{p}_{step}"));
+                    terms.extend(later.map(|column| (column, 1.0)));
+                    totals.push((total, terms.clone()));
+                    terms.push((total, -1.0));
+                    builder.row(&terms, 0.0, 0.0, &format!("relsum_{loader_index}_{p}_{step}"));
+                    builder.row(
+                        &[(total, 1.0)],
+                        f64::NEG_INFINITY,
+                        prepared.capacity_from(loader_index, p, from),
+                        &format!("relcap_{loader_index}_{p}_{step}"),
+                    );
+                    later = Some(total);
+                }
+            }
+            // A block's haul counts once, from the earliest any of its
+            // loaders may dig it, and only when every loader of it waits.
+            let mut earliest: BTreeMap<GroundId, f64> = BTreeMap::new();
+            for (&(_, ground), &released) in &within {
+                let entry = earliest.entry(ground).or_insert(released);
+                *entry = entry.min(released);
+            }
+            earliest.retain(|ground, _| {
+                chains
+                    .iter()
+                    .enumerate()
+                    .all(|(loader_index, chain)| !chain.iter().any(|(at, _)| at == ground) || within.contains_key(&(loader_index, *ground)))
+            });
+            let mut later: Option<usize> = None;
+            for (step, &from) in hours.iter().enumerate().rev() {
+                let mut terms: Vec<(usize, f64)> = earliest
+                    .iter()
+                    .filter(|(_, released)| **released == from)
+                    .flat_map(|(ground, _)| ground_trucks.get(&(*ground, p)).cloned().unwrap_or_default())
+                    .collect();
+                if terms.is_empty() && later.is_none() {
+                    continue;
+                }
+                let total = builder.cont(f64::INFINITY, 0.0, &format!("relhaul_{p}_{step}"));
+                terms.extend(later.map(|column| (column, 1.0)));
+                totals.push((total, terms.clone()));
+                terms.push((total, -1.0));
+                builder.row(&terms, 0.0, 0.0, &format!("relhsum_{p}_{step}"));
+                builder.row(&[(total, 1.0)], f64::NEG_INFINITY, prepared.fleet_hours_from(p, from), &format!("relfleet_{p}_{step}"));
+                later = Some(total);
+            }
+        }
+    }
+
     // What a reclaim carries, over the whole horizon. Any blend the pile
     // could hold would do for a bound, so each reclaimed flow carries its own
     // metal of each targeted grade, at most its tonnes at the grade's
@@ -1165,27 +2029,35 @@ fn solve_periods(
             }
             let slack = builder.cont(f64::INFINITY, -slope * UNIT, &format!("pen_{index}_{hinge}"));
             let mut terms: Vec<(usize, f64)> = Vec::with_capacity(list.len() + 1);
+            let mut piles: BTreeSet<StockpileId> = BTreeSet::new();
             for &(v, c, of) in list {
+                if let Carried::Pile(pile) = of {
+                    piles.insert(pile);
+                }
                 match contained.get(&(v, target.grade)) {
                     // A reclaim's own metal, above.
                     Some(&q) => terms.extend([(q, direction), (v, -c * direction * boundary)]),
-                    None => terms.push((v, c * direction * (carried(of, target.grade, direction) - boundary))),
+                    None => terms.push((v, c * direction * (carried(of, target.grade, direction, target.day) - boundary))),
                 }
             }
+            let mut upper = 0.0;
+            for (moved, constant) in piles.into_iter().filter_map(|pile| correction(pile, target.destination, target.grade, p)) {
+                terms.extend(moved.into_iter().map(|(column, coefficient)| (column, direction * coefficient)));
+                upper -= direction * constant;
+            }
             terms.push((slack, -1.0));
-            builder.row(&terms, f64::NEG_INFINITY, 0.0, &format!("grade_{index}_{hinge}"));
+            builder.row(&terms, f64::NEG_INFINITY, upper, &format!("grade_{index}_{hinge}"));
         }
     }
 
     // ---- the seed, in the plan's own columns ------------------------------------
-    let mut seeded = None;
     let mut seed_values: Option<Vec<f64>> = None;
     if let Some(seed) = seed {
-        let day_index: BTreeMap<u32, usize> = days.iter().enumerate().map(|(p, day)| (*day, p)).collect();
+        // Every day of a period maps to it, not just its first.
+        let day_index: BTreeMap<u32, usize> = covered.iter().enumerate().flat_map(|(p, list)| list.iter().map(move |day| (*day, p))).collect();
         let mut values: HashMap<String, f64> = HashMap::new();
         let mut done: BTreeMap<(GroundId, usize), f64> = BTreeMap::new();
         let mut received: BTreeMap<(DestinationId, usize), Vec<(Carried, f64)>> = BTreeMap::new();
-        let mut worth = 0.0;
         for row in &seed.movements {
             let candidate = &input.movements[row.candidate];
             let (Activity::Dig, SourceId::Ground(ground)) = (candidate.activity, candidate.source) else {
@@ -1209,12 +2081,6 @@ fn solve_periods(
                 .entry((candidate.destination, p))
                 .or_default()
                 .push((Carried::Material(candidate.material), tonnes_t));
-            if let Some(outlet) = outlets
-                .get(&(ground, candidate.material))
-                .and_then(|list| list.iter().find(|outlet| outlet.destination == candidate.destination))
-            {
-                worth += outlet.value * tonnes_t;
-            }
         }
         // Reclaim, each row shared between the bars it counts against as
         // the dispatch and the replay share it.
@@ -1249,6 +2115,39 @@ fn solve_periods(
                 values.insert(format!("inv_{}_{p}", pile.id.0), held.max(0.0));
             }
         }
+        // The seed's pile metal, from the rows above.
+        let value = |values: &HashMap<String, f64>, column: usize| values.get(&builder.names[column]).copied().unwrap_or(0.0);
+        for (&(pile, grade, p), &held) in &metal {
+            let (opening_t, opening_q) = pile_opening.get(&pile).cloned().unwrap_or_default();
+            let (previous_q, previous_t) = if p == 0 {
+                (opening_q.get(grade).copied().unwrap_or(0.0) / UNIT, opening_t / UNIT)
+            } else {
+                (value(&values, metal[&(pile, grade, p - 1)]), value(&values, inventory[&(pile, p - 1)]))
+            };
+            let mut gained = 0.0;
+            for entry in input.destinations.iter().filter(|entry| entry.kind == DestinationKind::Stockpile(pile)) {
+                for (of, tonnes) in received.get(&(entry.id, p)).into_iter().flatten() {
+                    if let Carried::Material(material) = of {
+                        gained += tonnes * input.grades.fraction(*material, grade).unwrap_or(0.0);
+                    }
+                }
+            }
+            let drawn: f64 = reclaim
+                .iter()
+                .filter(|((_, from, at), _)| *from == pile && *at == p)
+                .map(|(_, column)| value(&values, *column))
+                .sum();
+            let reclaimed = carried(Carried::Pile(pile), grade, 1.0, covered[p][0]);
+            let q = match moved.get(&(pile, p)) {
+                Some((k, blend, _)) => {
+                    let b = blend.get(grade).copied().unwrap_or(0.0);
+                    let t = value(&values, inventory[&(pile, p)]);
+                    (previous_q * (1.0 - 0.5 * k) + gained - reclaimed * drawn + 0.5 * k * b * (t + previous_t)) / (1.0 + 0.5 * k)
+                }
+                None => previous_q + gained - reclaimed * drawn,
+            };
+            values.insert(builder.names[held].clone(), q.max(0.0));
+        }
         for (&(loader_index, ground), list) in allowed {
             let Some(&first) = list.first() else { continue };
             let mut cumulative = 0.0;
@@ -1273,7 +2172,10 @@ fn solve_periods(
             let mut cumulative = 0.0;
             for p in 0..periods {
                 cumulative += done.get(&(ground, p)).copied().unwrap_or(0.0);
-                if cumulative >= tonnes[&ground] - 1e-4 {
+                // Finished once its `done_` row holds with the flag set, as the
+                // solver reads that row: any looser and a block with a sliver
+                // left finishes before the day that digs it.
+                if cumulative - tonnes[&ground] >= -solver::MIP_FEASIBILITY_TOLERANCE {
                     values.insert(format!("fin_{}_{p}", ground.0), 1.0);
                 }
             }
@@ -1281,31 +2183,153 @@ fn solve_periods(
         for (index, target) in input.grade_targets.iter().enumerate() {
             let Some(p) = days.iter().position(|day| *day == target.day) else { continue };
             let list = received.get(&(target.destination, p)).map(Vec::as_slice).unwrap_or_default();
-            for (hinge, (boundary, direction, slope)) in target.specification.hinges().into_iter().enumerate() {
-                let excess: f64 = list.iter().map(|(of, t)| t * direction * (carried(*of, target.grade, direction) - boundary)).sum();
+            for (hinge, (boundary, direction, _)) in target.specification.hinges().into_iter().enumerate() {
+                let mut excess: f64 = list
+                    .iter()
+                    .map(|(of, t)| t * direction * (carried(*of, target.grade, direction, target.day) - boundary))
+                    .sum();
+                let piles: BTreeSet<StockpileId> = list.iter().filter_map(|(of, _)| if let Carried::Pile(pile) = of { Some(*pile) } else { None }).collect();
+                for (moved, constant) in piles.into_iter().filter_map(|pile| correction(pile, target.destination, target.grade, p)) {
+                    excess += direction * (moved.iter().map(|(column, coefficient)| coefficient * value(&values, *column)).sum::<f64>() + constant);
+                }
                 values.insert(format!("pen_{index}_{hinge}"), excess.max(0.0));
-                worth -= slope * UNIT * excess.max(0.0);
             }
         }
-        seed_values = Some(builder.names.iter().map(|name| values.get(name).copied().unwrap_or(0.0)).collect::<Vec<f64>>());
-        seeded = Some(worth);
+        // A schedule the replay accepts clears every blast on time.
+        for index in on_time_of.keys() {
+            values.insert(format!("ontime_{index}"), 1.0);
+        }
+        let mut filled = builder.names.iter().map(|name| values.get(name).copied().unwrap_or(0.0)).collect::<Vec<f64>>();
+        for (total, terms) in &totals {
+            filled[*total] = terms.iter().map(|(column, coefficient)| coefficient * filled[*column]).sum();
+        }
+        seed_values = Some(filled);
     }
+    // ---- priority, as the dispatch keeps it: a bar has work while its
+    // current block - the first of its sequence not finished - is released.
+    // It has work for a whole period exactly when every block it passes in
+    // it was released as the period opens; one finished before then was
+    // released before then. So a bar held its loader all period, and the
+    // loader worked none of its lower bars, unless every block ahead of its
+    // first one still unreleased at the period's start is finished by the
+    // period's end. Blocked by room at a destination is not read here.
+    if !bounding {
+        let releases = input.drill_blast.as_ref().map(|chain| chain.releases()).unwrap_or_default();
+        let starts: Vec<f64> = days
+            .iter()
+            .map(|day| prepared.day_intervals[day].first().map_or(0.0, |interval| interval.start_h))
+            .collect();
+        let mut by_loader_period: BTreeMap<(usize, usize), Vec<(GroundId, usize)>> = BTreeMap::new();
+        for (&(loader_index, ground, p), &column) in &dig {
+            by_loader_period.entry((loader_index, p)).or_default().push((ground, column));
+        }
+        for loader_index in 0..chains.len() {
+            let order = authored_tasks(input, loader_index);
+            let rank: BTreeMap<usize, usize> = order.iter().enumerate().map(|(r, task)| (*task, r)).collect();
+            let mut bars: BTreeMap<usize, Vec<GroundId>> = BTreeMap::new();
+            let mut bar_of: BTreeMap<GroundId, usize> = BTreeMap::new();
+            for &(ground, task) in &chains[loader_index] {
+                let r = rank[&task];
+                bar_of.entry(ground).or_insert(r);
+                bars.entry(r).or_default().push(ground);
+            }
+            for (&r, blocks) in &bars {
+                let task = &input.tasks[order[r]];
+                for p in 0..periods {
+                    let cap = capacity[loader_index][p];
+                    if cap <= 0.0 || !prepared.day_intervals[&days[p]].iter().all(|interval| task_active(task, *interval)) {
+                        continue;
+                    }
+                    // The blocks ahead of the first still unreleased.
+                    let ready: Vec<GroundId> = blocks
+                        .iter()
+                        .copied()
+                        .take_while(|ground| releases.get(ground).is_none_or(|released| *released <= starts[p] + 1e-9))
+                        .collect();
+                    if ready.is_empty() {
+                        continue;
+                    }
+                    let mut lower: Vec<(usize, f64)> = by_loader_period
+                        .get(&(loader_index, p))
+                        .into_iter()
+                        .flatten()
+                        .filter(|(ground, _)| bar_of.get(ground).is_some_and(|b| *b > r))
+                        .map(|(_, column)| (*column, 1.0))
+                        .collect();
+                    for (&(task_index, _, at), &column) in &reclaim {
+                        if at == p && rank.get(&task_index).is_some_and(|b| *b > r) {
+                            lower.push((column, 1.0));
+                        }
+                    }
+                    if lower.is_empty() {
+                        continue;
+                    }
+                    // A block of a blast the plan makes late is not released:
+                    // the ready run is cut at the first block of each blast
+                    // whose clearance the plan decides, and each longer run
+                    // holds the loader only while all those blasts are on time.
+                    let mut cuts: Vec<(usize, usize)> = Vec::new();
+                    let mut seen: BTreeSet<usize> = BTreeSet::new();
+                    for (position, ground) in ready.iter().enumerate() {
+                        if let Some(&blast) = released_by.get(ground)
+                            && let Some(&flag) = on_time_of.get(&blast)
+                            && seen.insert(blast)
+                        {
+                            cuts.push((position, flag));
+                        }
+                    }
+                    let mut runs: Vec<(usize, Vec<usize>)> = Vec::new();
+                    for k in 0..=cuts.len() {
+                        let end = cuts.get(k).map_or(ready.len(), |(position, _)| *position);
+                        if end > 0 {
+                            runs.push((end, cuts[..k].iter().map(|(_, flag)| *flag).collect()));
+                        }
+                    }
+                    for (run, (end, needs)) in runs.into_iter().enumerate() {
+                        let ready = &ready[..end];
+                        let total: f64 = ready.iter().map(|ground| tonnes[ground]).sum();
+                        let done = builder.binary(&format!("pdone_{loader_index}_{r}_{p}_{run}"));
+                        if let Some(values) = seed_values.as_mut() {
+                            let dug: f64 = ready.iter().filter_map(|ground| block_so_far.get(&(*ground, p))).map(|column| values[*column]).sum();
+                            values.push(if dug >= total - 1e-6 { 1.0 } else { 0.0 });
+                        }
+                        let mut terms: Vec<(usize, f64)> = ready.iter().filter_map(|ground| block_so_far.get(&(*ground, p))).map(|column| (*column, 1.0)).collect();
+                        terms.push((done, -total));
+                        builder.row(&terms, 0.0, f64::INFINITY, &format!("pready_{loader_index}_{r}_{p}"));
+                        // Held unless the run is finished or one of its blasts is late.
+                        let mut row = lower.clone();
+                        row.push((done, -cap));
+                        for &flag in &needs {
+                            row.push((flag, cap));
+                        }
+                        builder.row(&row, f64::NEG_INFINITY, cap * needs.len() as f64, &format!("prio_{loader_index}_{r}_{p}"));
+                    }
+                }
+            }
+        }
+    }
+    let seed_violations = seed_values.as_deref().map(|values| builder.violations(values));
+    // The seed's worth is the plan's own objective at it, reclaim and
+    // penalties included, so it compares with the plan's answer.
+    let seeded = seed_values.as_deref().map(|values| builder.cost.iter().zip(values).map(|(cost, value)| cost * value).sum());
 
     let build_s = started.elapsed().as_secs_f64();
     let (variables, binaries, rows) = (builder.cost.len(), builder.binaries, builder.row_lower.len());
     let solving = Instant::now();
-    let answer = solve_plan(&builder, seed_values.as_deref(), settings.time_limit, settings.relative_gap, settings.relax, stop)?;
+    let answer = solve_plan(&builder, seed_values.as_deref(), &settings, stop)?;
     let solve_s = solving.elapsed().as_secs_f64();
 
     // ---- read back ----------------------------------------------------------
     let mut dug: BTreeMap<(GroundId, usize), Vec<(usize, f64)>> = BTreeMap::new();
+    let mut by_loader_block: BTreeMap<(usize, GroundId), f64> = BTreeMap::new();
     for (&(loader_index, ground, p), column) in &dig {
         let value = answer.values[*column].max(0.0) * UNIT;
         if value > 1e-6 {
             dug.entry((ground, p)).or_default().push((loader_index, value));
+            *by_loader_block.entry((loader_index, ground)).or_default() += value;
         }
     }
-    let mut routes: BTreeMap<(usize, DestinationId, u32), f64> = BTreeMap::new();
+    let mut routes: BTreeMap<crate::model::schedule::optimisation::blended::plan::Route, f64> = BTreeMap::new();
     // A split column is the block's, shared between its diggers by what each
     // dug that day.
     for ((ground, _, id, p), column, per_unit, owner) in &routed {
@@ -1314,34 +2338,24 @@ fn solve_periods(
             continue;
         }
         if let Some(loader_index) = owner {
-            *routes.entry((*loader_index, *id, days[*p])).or_default() += tonnes_t;
+            *routes.entry((*loader_index, Activity::Dig, *id, days[*p])).or_default() += tonnes_t;
         } else if let Some(diggers) = dug.get(&(*ground, *p)) {
             let total: f64 = diggers.iter().map(|(_, t)| t).sum();
             for (loader_index, share) in diggers {
-                *routes.entry((*loader_index, *id, days[*p])).or_default() += tonnes_t * share / total;
+                *routes.entry((*loader_index, Activity::Dig, *id, days[*p])).or_default() += tonnes_t * share / total;
             }
         }
     }
     for (loader_index, id, p, column) in &reclaim_routes {
         let tonnes_t = answer.values[*column].max(0.0) * UNIT;
         if tonnes_t > 1e-6 {
-            *routes.entry((*loader_index, *id, days[*p])).or_default() += tonnes_t;
+            *routes.entry((*loader_index, Activity::Reclaim, *id, days[*p])).or_default() += tonnes_t;
         }
     }
     let objective = Some(answer.objective);
     let bound = answer.bound;
-    // A movement column's name ends in its period: x_l_b_p, r_b_m_d_p,
-    // rc_t_s_p and rq_t_s_d_p.
-    let mut day_values: BTreeMap<u32, f64> = BTreeMap::new();
-    for (column, name) in builder.names.iter().enumerate() {
-        if ["x_", "r_", "rc_", "rq_"].iter().any(|prefix| name.starts_with(prefix))
-            && let Some(p) = name.rsplit('_').next().and_then(|p| p.parse::<usize>().ok())
-        {
-            *day_values.entry(days[p]).or_default() += builder.cost[column] * answer.values[column];
-        }
-    }
     Ok(PlanSolve {
-        day_values,
+        period_days: days.iter().copied().zip(covered.iter().cloned()).collect(),
         routes,
         objective,
         bound,
@@ -1351,6 +2365,8 @@ fn solve_periods(
         build_s,
         solve_s,
         seeded,
+        seed_violations,
+        dug: by_loader_block,
         status: answer.status,
     })
 }

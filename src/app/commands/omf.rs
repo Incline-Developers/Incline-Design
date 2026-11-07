@@ -2,8 +2,6 @@
 
 use std::path::PathBuf;
 
-#[cfg(not(target_arch = "wasm32"))]
-use anyhow::Context;
 use anyhow::Result;
 
 use crate::{
@@ -286,8 +284,6 @@ impl<'a> App<'a> {
             }
         };
         self.set_active_project(opened);
-        // A grid at Z=0 sits far from real data and swings under it while orbiting.
-        self.editor.show_xy_grid = false;
         if let Some(project) = self.workspace.active_project_mut() {
             project.lossy_save_warnings = lossy_save_warnings;
             project.lossy_save_confirmed = false;
@@ -329,14 +325,13 @@ impl<'a> App<'a> {
                     if cancel.is_cancelled() {
                         anyhow::bail!("Cancelled");
                     }
-                    let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
                     let name = path
                         .file_name()
                         .and_then(|name| name.to_str())
                         .map(ToOwned::to_owned)
                         .unwrap_or_else(|| format!("{}.omf", tr!("common-untitled")));
                     let phase = progress.phase(index as f32 / total, (index + 1) as f32 / total);
-                    decoded.push((name.clone(), omf::from_bytes(&name, bytes, &phase)?));
+                    decoded.push((name.clone(), omf::from_path(&name, &path, &phase)?));
                 }
                 Ok(decoded)
             },
@@ -380,17 +375,11 @@ impl<'a> App<'a> {
             return;
         }
         let should_fit = !self.scene_has_renderables();
+        // Everything every file brings - its collections, layers and items -
+        // goes in as one undo step at the end.
+        let before = self.project_members();
         let mut imported_items = 0usize;
         for (source_name, bundle) in bundles {
-            let target_is_empty = self
-                .workspace
-                .active_project()
-                .is_some_and(|project| project.project.document.layers().is_empty() && project.project.document.objects().is_empty())
-                && self.triangulations.is_empty()
-                && self.block_models.is_empty()
-                && self.drill_holes.is_empty()
-                && self.point_clouds.is_empty()
-                && self.raster_textures.is_empty();
             let count = bundle.item_count();
             if count == 0 {
                 userspace_warn!("{}", tr!("cmd-omf-project-source-name-contains-no", source_name = source_name.clone().to_string()));
@@ -422,11 +411,16 @@ impl<'a> App<'a> {
                 optimization: _,
             } = bundle;
 
-            if let Some(project) = self.workspace.active_project_mut() {
+            // A merge brings content, never the project's settings: the file's
+            // coordinate system and units are reported, not adopted.
+            if let Some(project) = self.workspace.active_project() {
                 let target_crs = project.project.metadata.coordinate_reference_system.trim();
                 let source_crs = coordinate_reference_system.trim();
-                if target_is_empty && target_crs.is_empty() {
-                    project.project.metadata.coordinate_reference_system = coordinate_reference_system.clone();
+                if target_crs.is_empty() && !source_crs.is_empty() {
+                    userspace_log!(
+                        "{}",
+                        tr!("cmd-omf-crs-not-set", source_name = source_name.clone().to_string(), source_crs = source_crs.to_string())
+                    );
                 } else if !target_crs.is_empty()
                     && !source_crs.is_empty()
                     && crate::model::crs::CoordinateSystem::parse_stored(target_crs) != crate::model::crs::CoordinateSystem::parse_stored(source_crs)
@@ -443,8 +437,15 @@ impl<'a> App<'a> {
                 }
                 let target_units = project.project.metadata.units.trim();
                 let source_units = units.trim();
-                if target_is_empty && target_units.is_empty() {
-                    project.project.metadata.units = units.clone();
+                if target_units.is_empty() && !source_units.is_empty() {
+                    userspace_log!(
+                        "{}",
+                        tr!(
+                            "cmd-omf-units-not-set",
+                            source_name = source_name.clone().to_string(),
+                            source_units = source_units.to_string()
+                        )
+                    );
                 } else if !target_units.is_empty() && !source_units.is_empty() && !target_units.eq_ignore_ascii_case(source_units) {
                     userspace_warn!(
                         "{}",
@@ -500,6 +501,7 @@ impl<'a> App<'a> {
             );
         }
 
+        self.record_additions(&before, Vec::new());
         if imported_items > 0 {
             self.invalidate_geometry();
             if should_fit {

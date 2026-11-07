@@ -142,6 +142,11 @@ impl TruckFleet {
 }
 
 impl TruckCalendar {
+    /// Whether no day of this calendar has a truck in it.
+    pub(crate) fn never_has_units(&self) -> bool {
+        self.default_units == 0 && self.periods.values().all(|period| period.units.unwrap_or(0) == 0)
+    }
+
     pub(crate) fn validate(&self) -> ScheduleResult {
         checked_percentage(self.default_availability)?;
         checked_percentage(self.default_utilisation)?;
@@ -537,7 +542,9 @@ impl TruckFleetConfig {
             loaded_speed_kph: DEFAULT_LOADED_KPH,
             unloaded_speed_kph: DEFAULT_UNLOADED_KPH,
             grade_speeds: default_grade_speeds(),
-            maximum_speed_kph: 50.0,
+            // The fastest the default grade speeds go, so a new class starts
+            // with none of them capped.
+            maximum_speed_kph: 60.0,
             maximum_grade: 0.1,
             dump_time_s: 60.0,
             calendar: TruckCalendar::default(),

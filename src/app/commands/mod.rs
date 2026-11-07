@@ -10,7 +10,6 @@ pub(crate) mod layer; // Handles creating layers, deleting layers, etc. commands
 pub(crate) mod object_edit;
 pub(crate) mod omf; // Whole-project Open Mining Format interchange.
 pub(crate) mod optimization; // Handles pit optimization's scenario list, editor and scenarios file.
-pub(crate) mod plot; // Handles printable plot sheets
 pub(crate) mod point_cloud; // Handles importing/loading point clouds, etc. commands
 pub(crate) mod products; // Handles the Drill & Blast workspace's stored products.
 pub(crate) mod property; // Handles changing colors, fills, etc. commands
@@ -156,6 +155,7 @@ impl<'a> App<'a> {
                 | UiCommand::AddReserveField { .. }
                 | UiCommand::AddReserveFieldFromColumn { .. }
                 | UiCommand::SetReserveFieldAggregation { .. }
+                | UiCommand::RequestDeleteReserveField(_)
                 | UiCommand::DeleteReserveField(_)
                 | UiCommand::SetReserveMapping { .. }
                 | UiCommand::SetReserveModelIncluded { .. }
@@ -191,6 +191,10 @@ impl<'a> App<'a> {
             anyhow::bail!("Create or open a project before importing, drawing, or generating data");
         }
         match command {
+            UiCommand::Window(action) => {
+                self.apply_window_action(action);
+                Ok(())
+            }
             UiCommand::SetActiveTool(tool) => {
                 self.set_active_tool_from_toolbar(tool);
                 Ok(())
@@ -213,6 +217,14 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::CreateDrillPattern { name, collars, depth, diameter } => self.create_drill_pattern(name, collars, depth, diameter),
+            UiCommand::CopyCutsTo(targets) => {
+                self.copy_cuts_to(&targets);
+                Ok(())
+            }
+            UiCommand::AddToSequence { rows, blast } => {
+                self.add_to_sequence(&rows, blast);
+                Ok(())
+            }
             UiCommand::ClearSelection => {
                 self.editor.clear_scene_selection();
                 self.active_triangulation = None;
@@ -236,7 +248,13 @@ impl<'a> App<'a> {
                 Ok(())
             }
             #[cfg(target_arch = "wasm32")]
-            UiCommand::CreateBrowserProject { name } => self.create_browser_project(name),
+            #[cfg(target_arch = "wasm32")]
+            UiCommand::SaveBrowserProjectAs { runtime_id, name } => self.save_browser_project_as(runtime_id, name),
+            #[cfg(target_arch = "wasm32")]
+            UiCommand::CancelBrowserProjectSave => {
+                self.cancel_browser_project_save();
+                Ok(())
+            }
             UiCommand::OpenProject => {
                 self.choose_open_project();
                 Ok(())
@@ -439,6 +457,10 @@ impl<'a> App<'a> {
                 self.set_reserve_field_aggregation(field, aggregation);
                 Ok(())
             }
+            UiCommand::RequestDeleteReserveField(id) => {
+                self.request_delete_reserve_field(id);
+                Ok(())
+            }
             UiCommand::DeleteReserveField(id) => {
                 self.delete_reserve_field(id);
                 Ok(())
@@ -471,8 +493,7 @@ impl<'a> App<'a> {
             UiCommand::EditHaulProperties => {
                 self.editor.canvas_context_menu_open = false;
                 self.editor.active_workspace = crate::ui::state::Workspace::Planning;
-                self.editor.planning_page = crate::ui::state::PlanningPage::Haulage;
-                self.editor.haulage_subpage = crate::ui::state::PlanningSubpage::Layout;
+                self.editor.open_haulage_step(crate::ui::state::HaulageStep::Network);
                 self.refresh_haulage_view();
                 Ok(())
             }
@@ -623,12 +644,12 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::UpdateSolid { solid, edit } => {
-                self.update_solid(solid, edit);
+                self.edit_solid(solid, edit);
                 Ok(())
             }
             UiCommand::SetSolidsTopography { solids, topography } => {
                 for solid in solids {
-                    self.update_solid(solid, crate::model::SolidEdit::Topography(topography));
+                    self.edit_solid(solid, crate::model::SolidEdit::Topography(topography));
                 }
                 Ok(())
             }
@@ -725,6 +746,12 @@ impl<'a> App<'a> {
             }
             UiCommand::SetSectionLocked(section, locked) => {
                 self.set_section_locked(section, locked);
+                Ok(())
+            }
+            UiCommand::ToggleEntityLocked(handle) if self.editor.page_locks_items() => {
+                let locked = !self.editor.shows_locked(handle);
+                self.editor.set_page_locked(handle, locked);
+                self.invalidate_geometry();
                 Ok(())
             }
             UiCommand::ToggleEntityLocked(handle) => {
@@ -1137,6 +1164,7 @@ impl<'a> App<'a> {
             }
             UiCommand::SetGridShown(shown) => self.set_grid_shown(shown),
             UiCommand::SetTopologyWireframes(enabled) => self.set_topology_wireframes(enabled),
+            UiCommand::SetTopologyContours(enabled) => self.set_topology_contours(enabled),
             #[cfg(not(target_arch = "wasm32"))]
             UiCommand::SetSlicePreviewDetached(detached) => {
                 self.editor.slice_preview_detached = cfg!(not(target_arch = "wasm32")) && detached && self.editor.slice_mode_enabled;
@@ -1183,48 +1211,19 @@ impl<'a> App<'a> {
                 self.editor.survey.open_transform();
                 Ok(())
             }
-            UiCommand::SetPlanningSubpage(subpage) => {
-                if self.editor.planning_page.subpages().contains(&subpage) {
-                    match self.editor.planning_page {
-                        crate::ui::state::PlanningPage::Schedule => {
-                            if self.editor.schedule_subpage == crate::ui::state::PlanningSubpage::Calendar && subpage != crate::ui::state::PlanningSubpage::Calendar {
-                                self.editor.schedule_calendar.draft = None;
-                                self.editor.schedule_calendar.error = None;
-                            }
-                            self.editor.schedule_subpage = subpage;
-                        }
-                        crate::ui::state::PlanningPage::Solids => self.editor.solids_subpage = subpage,
-                        crate::ui::state::PlanningPage::Haulage => {
-                            self.editor.haulage_subpage = subpage;
-                            self.editor.cancel_haul_edit();
-                        }
-                    }
-                    if self.editor.is_planning_viewport() {
-                        self.editor.active_property_tab = crate::ui::state::PropertyTab::Reserves;
-                    }
-                    self.redraw_requested = true;
+            UiCommand::SetPlanningView(view) => {
+                use crate::ui::state::PlanningView;
+                if self.editor.planning_view == PlanningView::Calendar && view != PlanningView::Calendar {
+                    self.editor.schedule_calendar.draft = None;
+                    self.editor.schedule_calendar.error = None;
                 }
+                self.editor.planning_view = view;
+                self.refresh_haulage_view();
+                self.redraw_requested = true;
                 Ok(())
             }
             UiCommand::FocusScheduleAnimationSolid(solid) => {
                 self.focus_schedule_animation_solid(solid);
-                Ok(())
-            }
-            UiCommand::SetPlanningPage(page) => {
-                if self.editor.planning_page == crate::ui::state::PlanningPage::Schedule
-                    && self.editor.schedule_subpage == crate::ui::state::PlanningSubpage::Calendar
-                    && page != crate::ui::state::PlanningPage::Schedule
-                {
-                    self.editor.schedule_calendar.draft = None;
-                    self.editor.schedule_calendar.error = None;
-                }
-                self.editor.planning_page = page;
-                self.editor.cancel_haul_edit();
-                self.refresh_haulage_view();
-                if self.editor.is_planning_viewport() {
-                    self.editor.active_property_tab = crate::ui::state::PropertyTab::Reserves;
-                }
-                self.redraw_requested = true;
                 Ok(())
             }
             UiCommand::SaveSurveyDefinition { target, definition } => {
@@ -1253,29 +1252,6 @@ impl<'a> App<'a> {
                 result
             }
             UiCommand::TransformSurveySelection => self.transform_survey_selection(),
-            UiCommand::ReorderWorkspace { workspace, before } => {
-                let mut order = self.editor.workspace_order.to_vec();
-                if before != Some(workspace) {
-                    order.retain(|item| *item != workspace);
-                    let index = before.and_then(|target| order.iter().position(|item| *item == target)).unwrap_or(order.len());
-                    order.insert(index, workspace);
-                    let order = order.try_into().expect("reordering preserves all workspaces");
-                    if self.editor.workspace_order != order {
-                        let config = view::config_from(
-                            &self.editor.current_preferences(),
-                            order,
-                            self.editor.delay_products.iter().map(crate::ui::state::DelayProduct::to_stored).collect(),
-                            self.editor.blast_library.clone(),
-                            self.editor.survey.definitions.clone(),
-                            self.editor.survey.local_system.clone(),
-                            self.editor.recent_design_functions.clone(),
-                        );
-                        crate::app::io::save_config(&config)?;
-                        self.editor.workspace_order = order;
-                    }
-                }
-                Ok(())
-            }
             UiCommand::OpenPreferences => {
                 self.editor.show_preferences = true;
                 Ok(())
@@ -1758,12 +1734,6 @@ impl<'a> App<'a> {
                 self.delete_selection();
                 Ok(())
             }
-            UiCommand::OpenPlotDialog => {
-                self.open_plot_dialog();
-                Ok(())
-            }
-            UiCommand::FitPlotScaleToData => self.fit_plot_scale_to_data(),
-            UiCommand::ExportPlotSheet => self.choose_plot_sheet_destination(),
             UiCommand::Undo => {
                 self.apply_history_step(true);
                 Ok(())

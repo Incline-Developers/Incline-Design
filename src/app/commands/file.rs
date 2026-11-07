@@ -116,9 +116,8 @@ fn mesh_format_mime_type(format: MeshFormat) -> &'static str {
 #[derive(Debug)]
 // On wasm the native variants are compiled out, leaving only the `Web`-prefixed ones.
 pub(crate) enum FileDialogAction {
-    /// Start a new, never-saved project. It carries no path until the first
-    /// Save asks for one.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Start a new, never-saved project. It carries no path, or browser
+    /// record, until the first Save asks for one.
     NewProject,
     #[cfg(not(target_arch = "wasm32"))]
     OpenProject(Vec<PathBuf>),
@@ -128,8 +127,6 @@ pub(crate) enum FileDialogAction {
     WebOpenProject(Vec<std::result::Result<crate::model::input::InputFile, String>>),
     #[cfg(target_arch = "wasm32")]
     WebStoredProject(crate::model::project::ProjectId),
-    #[cfg(target_arch = "wasm32")]
-    WebNewProject(String),
     /// Import DXF files into the active project.
     #[cfg(not(target_arch = "wasm32"))]
     ImportDxfInto { paths: Vec<PathBuf>, as_roads: bool },
@@ -200,9 +197,6 @@ pub(crate) enum FileDialogAction {
     /// Record Animate into this video file.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     ExportVideo(PathBuf, crate::ui::state::VideoExportRequest),
-    /// Render and write the configured plot sheet.
-    #[cfg(not(target_arch = "wasm32"))]
-    ExportPlotSheet(PathBuf),
     #[cfg(target_arch = "wasm32")]
     WebDownloadDxf {
         project_runtime_id: u32,
@@ -326,6 +320,10 @@ impl<'a> App<'a> {
         let Some(index) = self.workspace.project_index_for_runtime_id(runtime_id) else {
             return;
         };
+        if as_roads {
+            self.apply_dxf_as_roads(runtime_id, index, &parsed);
+            return;
+        }
         let document = &self.workspace.projects[index].project.document;
         let needed: Vec<_> = parsed
             .iter()
@@ -337,25 +335,6 @@ impl<'a> App<'a> {
             self.restore_layers_for(needed, move |app| app.apply_dxf_imports(runtime_id, parsed, as_roads));
             return;
         }
-        let strings: Vec<_> = if as_roads {
-            parsed
-                .iter()
-                .flat_map(|(name, doc)| {
-                    doc.objects().iter().filter_map(|o| match o {
-                        crate::model::Object::Polyline { verts, closed, .. } => {
-                            let mut points = crate::model::geometry::tessellate_polyline_bulges(verts, *closed);
-                            if *closed && let Some(&first) = points.first() {
-                                points.push(first);
-                            }
-                            Some((name.clone(), points))
-                        }
-                        _ => None,
-                    })
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
         let project = &mut self.workspace.projects[index];
         let existing: std::collections::HashSet<_> = project.project.document.layers().iter().map(|layer| layer.id).collect();
         let mut total = 0;
@@ -370,24 +349,58 @@ impl<'a> App<'a> {
         if let Some(layer) = project.project.document.layers().iter().find(|layer| layer.loaded && !existing.contains(&layer.id)) {
             self.editor.active_layer = Some(layer.id);
         }
-        if as_roads && let Some(document) = self.workspace.projects.get(index).map(|p| &p.project.document) {
-            let before = document.haulage().clone();
-            let mut after = before.clone();
-            match after.convert(&strings).and_then(|()| after.validate()) {
-                Ok(()) => self.execute_edit_for(
-                    runtime_id,
-                    crate::model::Command::SetHaulNetwork {
-                        before: Box::new(before),
-                        after: Box::new(after),
-                    },
-                ),
-                Err(error) => userspace_warn!("{error:#}"),
-            }
-        }
         self.evict_unloaded_layers();
         self.invalidate_geometry();
         self.fit_view_to_extents();
         userspace_log!("{}", tr!("cmd-file-imported-total-dxf-object-s", total = total.to_string()));
+    }
+
+    /// Haulage's own DXF import: each polyline becomes a road, in one undoable
+    /// edit, and nothing joins the design layers. A road already there along
+    /// the same points is left alone, so importing a file twice adds nothing.
+    fn apply_dxf_as_roads(&mut self, runtime_id: u32, index: usize, parsed: &[(String, crate::model::Document)]) {
+        let Some(before) = self.workspace.projects.get(index).map(|project| project.project.document.haulage().clone()) else {
+            return;
+        };
+        let polylines: Vec<_> = parsed
+            .iter()
+            .flat_map(|(_, document)| document.objects())
+            .filter_map(|object| match object {
+                crate::model::Object::Polyline { verts, closed, .. } => {
+                    let mut points = crate::model::geometry::tessellate_polyline_bulges(verts, *closed);
+                    if *closed && let Some(&first) = points.first() {
+                        points.push(first);
+                    }
+                    Some(points)
+                }
+                _ => None,
+            })
+            .collect();
+        let total = polylines.len();
+        let fresh: Vec<_> = polylines.into_iter().filter(|points| !super::haulage::road_already_there(&before, points)).collect();
+        let added = fresh.len();
+        if added == 0 {
+            userspace_log!("{}", tr!("haul-import-nothing", total = total));
+            return;
+        }
+        let mut after = before.clone();
+        let strings = super::haulage::name_road_strings(&after, fresh);
+        match after.convert(&strings).and_then(|()| after.validate()) {
+            Ok(()) => self.execute_edit_for(
+                runtime_id,
+                crate::model::Command::SetHaulNetwork {
+                    before: Box::new(before),
+                    after: Box::new(after),
+                },
+            ),
+            Err(error) => {
+                userspace_warn!("{error:#}");
+                return;
+            }
+        }
+        let skipped = total - added;
+        userspace_log!("{}", tr!("haul-import-done", added = added, skipped = skipped));
+        self.invalidate_geometry();
     }
 
     /// Register an async file dialog that was created on the main thread. The
@@ -463,10 +476,8 @@ impl<'a> App<'a> {
                 anyhow::bail!("Cancelled");
             }
             progress.set_fraction(0.0);
-            let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
-            progress.set_fraction(0.1);
             let source_name = file_name(&path);
-            let bundle = formats::omf::from_bytes(&source_name, bytes, &progress.phase(0.1, 1.0))?;
+            let bundle = formats::omf::from_path(&source_name, &path, &progress.phase(0.0, 1.0))?;
             Ok((path, source_name, bundle))
         };
         let apply = move |app: &mut App, result: Result<(PathBuf, String, formats::omf::ImportBundle)>| {
@@ -496,7 +507,7 @@ impl<'a> App<'a> {
         #[cfg(target_arch = "wasm32")]
         let replaces_project = matches!(
             &action,
-            FileDialogAction::WebNewProject(_) | FileDialogAction::WebOpenProject(_) | FileDialogAction::WebStoredProject(_)
+            FileDialogAction::NewProject | FileDialogAction::WebOpenProject(_) | FileDialogAction::WebStoredProject(_)
         );
         #[cfg(target_arch = "wasm32")]
         if replaces_project && !self.browser_project_loads_pending.is_empty() {
@@ -523,7 +534,6 @@ impl<'a> App<'a> {
         }
         self.project_replacement_bypass = false;
         match action {
-            #[cfg(not(target_arch = "wasm32"))]
             FileDialogAction::NewProject => {
                 self.start_untitled_project()?;
                 userspace_log!("{}", tr!("cmd-file-created-new-project"));
@@ -572,16 +582,6 @@ impl<'a> App<'a> {
                     let result = crate::app::web_storage::load_project(project_id).await;
                     let _ = proxy.send_event(crate::app::AppEvent::BrowserProjectLoaded { project_id, ticket, result });
                 });
-                Ok(())
-            }
-            #[cfg(target_arch = "wasm32")]
-            FileDialogAction::WebNewProject(name) => {
-                let mut project_file = project::new_empty(None);
-                project_file.metadata.name = sanitize_project_name(&name);
-                let project = project::open_project(None, project_file)?;
-                self.set_active_project(project);
-                self.fit_view_to_extents();
-                userspace_log!("{}", tr!("cmd-file-created-new-browser-project"));
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -901,13 +901,6 @@ impl<'a> App<'a> {
                 Ok(())
             }
             FileDialogAction::ExportVideo(path, request) => self.start_video_export(path, request),
-            #[cfg(not(target_arch = "wasm32"))]
-            FileDialogAction::ExportPlotSheet(mut path) => {
-                if path.extension().is_none() {
-                    path.set_extension("png");
-                }
-                self.write_plot_sheet(crate::app::commands::plot::PlotTarget::File(path))
-            }
             #[cfg(target_arch = "wasm32")]
             FileDialogAction::WebDownloadDxf {
                 project_runtime_id,
@@ -1300,12 +1293,6 @@ impl<'a> App<'a> {
     /// A dirty project still routes through the save/discard/cancel prompt
     /// before it is replaced.
     pub(crate) fn choose_new_project(&mut self) {
-        #[cfg(target_arch = "wasm32")]
-        {
-            self.editor.new_project_name.clear();
-            self.editor.new_project_dialog_open = true;
-        }
-        #[cfg(not(target_arch = "wasm32"))]
         if let Err(error) = self.execute_file_dialog_action(FileDialogAction::NewProject) {
             userspace_warn!("{}", tr!("cmd-file-could-not-create-new-project", error = format!("{error:#}")));
         }
@@ -1331,9 +1318,32 @@ impl<'a> App<'a> {
         Ok(())
     }
 
+    /// Name a never-saved browser project and save it, the first Save's
+    /// naming dialog having been confirmed.
+    ///
+    /// The name is the project's from here on, as a desktop Save As names it
+    /// after the file: should the save fail, the next Save offers it again.
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn create_browser_project(&mut self, name: String) -> Result<()> {
-        self.execute_file_dialog_action(FileDialogAction::WebNewProject(name))
+    pub(crate) fn save_browser_project_as(&mut self, runtime_id: u32, name: String) -> Result<()> {
+        self.editor.naming_browser_project = None;
+        let index = self.workspace.project_index_for_runtime_id(runtime_id).context("The selected project is no longer open")?;
+        self.workspace.projects[index].project.metadata.name = sanitize_project_name(&name);
+        self.save_browser_project(runtime_id)
+    }
+
+    /// Close the first Save's naming dialog unsaved, and let go of whatever
+    /// was waiting on the save, as a desktop Save As dialog's Cancel does.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn cancel_browser_project_save(&mut self) {
+        self.editor.naming_browser_project = None;
+        if self.project_replacement_after_save {
+            self.project_replacement_after_save = false;
+            self.editor.replace_project_confirm_open = true;
+        }
+        if self.exit_after_pending_saves {
+            self.cancel_exit_request();
+        }
+        self.cancel_close_project();
     }
 
     pub(crate) fn continue_project_replacement(&mut self) -> Result<()> {
@@ -2059,20 +2069,6 @@ impl<'a> App<'a> {
         });
     }
 
-    /// Choose where the composed plot sheet is written.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn spawn_plot_sheet_dialog(&mut self, file_name: String) {
-        self.spawn_file_dialog(async move {
-            let path: PathBuf = AsyncFileDialog::new()
-                .add_filter("PNG image", &["png"])
-                .set_file_name(&file_name)
-                .save_file()
-                .await?
-                .into_path();
-            Some(FileDialogAction::ExportPlotSheet(path))
-        });
-    }
-
     /// Save the project when its stored copy is missing or out of date.
     /// Returns false when Save As is still pending for a never-saved project.
     pub(crate) fn save_dirty_project(&mut self) -> Result<bool> {
@@ -2297,6 +2293,14 @@ impl<'a> App<'a> {
         self.ensure_project_has_no_pending_text_edit(index)?;
         #[cfg(target_arch = "wasm32")]
         {
+            // Never saved: ask for its name first, where a desktop build asks
+            // for its file. A first save already running reports itself below.
+            if project_needs_first_save(&self.workspace.projects[index]) && !self.browser_saves_pending.contains(&runtime_id) {
+                self.editor.browser_project_name = self.workspace.projects[index].project.metadata.name.trim_end_matches(".omf").to_owned();
+                self.editor.naming_browser_project = Some(runtime_id);
+                self.redraw_requested = true;
+                return Ok(());
+            }
             self.save_browser_project(runtime_id)
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -2641,9 +2645,8 @@ impl<'a> App<'a> {
             if cancel.is_cancelled() {
                 anyhow::bail!("Cancelled");
             }
-            let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
             let source_name = file_name(&path);
-            let bundle = formats::omf::from_bytes(&source_name, bytes, &progress.phase(0.0, 1.0))?;
+            let bundle = formats::omf::from_path(&source_name, &path, &progress.phase(0.0, 1.0))?;
             Ok((path, source_name, bundle))
         };
         let apply = move |app: &mut App, result: Result<(PathBuf, String, formats::omf::ImportBundle)>| {
@@ -2784,10 +2787,9 @@ impl<'a> App<'a> {
             if cancel.is_cancelled() {
                 anyhow::bail!("Cancelled");
             }
-            let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
             let source_name = file_name(&path);
             let progress = crate::model::progress::Progress::new();
-            let bundle = formats::omf::from_bytes(&source_name, bytes, &progress.phase(0.0, 1.0))?;
+            let bundle = formats::omf::from_path(&source_name, &path, &progress.phase(0.0, 1.0))?;
             let mut design = project::new_empty(Some(path.clone()));
             design.metadata.name = bundle.project_name;
             // The live registry, not the file's, decides which folders exist:
@@ -3034,9 +3036,11 @@ impl<'a> App<'a> {
     }
 }
 
-/// Normalize a browser project name to a portable filename with one `.omf`
-/// extension. The viewport prompt rejects blank input, while the fallback
-/// also keeps this helper safe for programmatic callers.
+/// Normalize a browser project's name to a portable file stem, with any
+/// `.omf` typed after it taken off: a project is named as a desktop one is
+/// after its file, without the extension, which is added only where a file is
+/// written. The naming dialog rejects blank input; the fallback keeps this
+/// safe for other callers.
 #[cfg(target_arch = "wasm32")]
 fn sanitize_project_name(name: &str) -> String {
     let mut stem = name.trim();
@@ -3050,8 +3054,7 @@ fn sanitize_project_name(name: &str) -> String {
         }
         stem = stem.get(..suffix_start).unwrap_or_default().trim_end();
     }
-    let stem = if stem.is_empty() { tr!("common-project") } else { sanitize_file_stem(stem) };
-    format!("{stem}.omf")
+    if stem.is_empty() { tr!("common-project") } else { sanitize_file_stem(stem) }
 }
 
 /// Replace characters that are invalid in filenames across Windows, macOS, and

@@ -39,7 +39,6 @@ menu-file-show-in-folder = Open Containing Folder
 menu-file-import = Import...
 menu-file-export = Export...
 menu-file-export-viewport-image = Export Viewport Image...
-menu-file-export-engineering-drawing = Export Engineering Drawing...
 menu-file-about = About { $app }...
 menu-file-exit = Exit Application
 
@@ -162,7 +161,6 @@ ui-selection-spans = Selection spans { $min } to { $max }.
 confirm-delete-count = Are you sure you want to delete { $count } selected item(s)?
 confirm-delete-layer = Delete layer '{ $name }' and all objects on it?
     This cannot be undone.
-plot-preview-pixels = { $width } × { $height } px at { $dpi } dpi
 tri-estimated-memory = Estimated peak memory ~{ $estimate }. { $detail }
 block-grid-summary = Grid: { $x } × { $y } × { $z } = { $count } blocks
 status-selected = Selected: { $count }
@@ -210,8 +208,7 @@ planning-value = Value
 planning-schedule-name = Schedule Name
 planning-page-solids = Solids
 planning-page-haulage = Haulage
-planning-subpage-view = View
-planning-subpage-layout = Layout
+planning-view-reserves = Reserves
 planning-subpage-animate = Animate
 planning-subpage-calendar = Calendar
 
@@ -222,7 +219,6 @@ planning-block-models = Block Models
 planning-solids = Solids
 planning-benching = Benching
 planning-blasting = Blasting
-planning-benches = Benches
 preferences-title = Preferences
 
 context-text-colour = Text colour
@@ -262,7 +258,7 @@ schedule-loader-agents = Machines
 schedule-class = Class
 schedule-dig-rate = Default dig rate (t/h)
 schedule-effective-rate = Class rate
-schedule-tph = tph
+schedule-tph = t/h
 schedule-new-class = New Machine Class
 schedule-new-agent = New Machine
 schedule-delete-agent-title = Delete { $name }?
@@ -297,6 +293,7 @@ schedule-calendar-duplicate-cell = A calendar edit contains the same cell more t
 schedule-calendar-period-overflow = The calendar period is too large
 schedule-calendar-effective-rate = The effective production rate is too small or large to represent
 schedule-calendar-edit = Edit loader calendar
+schedule-truck-calendar-edit = Edit truck calendar
 schedule-calendar-cells-updated =
     { $count ->
         [one] 1 cell updated
@@ -363,7 +360,14 @@ report-idle-reason-h = Idle: { $reason } (h)
 schedule-calendar-total-help = The whole calculated schedule: tonnes, truck-hours and value summed; closing stock and deposited tonnes at its end; grades weighted by tonnes.
 schedule-calendar-day = Day { $day }
 schedule-calendar-hours = { $start }–{ $end } h
-schedule-calendar-loaders = Loaders
+schedule-calendar-weekday-date = { $weekday } { $date }
+weekday-short-mon = Mon
+weekday-short-tue = Tue
+weekday-short-wed = Wed
+weekday-short-thu = Thu
+weekday-short-fri = Fri
+weekday-short-sat = Sat
+weekday-short-sun = Sun
 schedule-calendar-availability = Availability (%)
 schedule-calendar-utilisation = Utilisation (%)
 schedule-calendar-empty = Add a loader to author its production calendar.
@@ -380,7 +384,7 @@ schedule-calendar-paste-read-only = The pasted rectangle includes a read-only cl
 schedule-calendar-calculated-selection = Selection includes calculated cells
 schedule-calendar-tonnes-partial = Calculated through { $hours } h · day partially covered
 schedule-error-unknown-class = That loader class is no longer in this project
-schedule-error-unknown-agent = That loader agent is no longer in this project
+schedule-error-unknown-agent = That machine is no longer in this project
 schedule-error-class-in-use = Still assigned to ⁨{ $agents }⁩. Reassign or delete those machines first
 schedule-error-ids-exhausted = This project cannot hold any more loader classes or agents
 schedule-error-duplicate-id = Two entries share one identity
@@ -411,21 +415,22 @@ schedule-dispatch-execution = Digging
 
 # Schedule Setup pipeline
 schedule-readiness-step = Scheduling Readiness
-schedule-readiness-state = State
-schedule-readiness-last-run = Last run
-schedule-readiness-blocks = Dig blocks offered
+schedule-step-block-tonnes = Blocks
+schedule-step-road-access = Road Access
+schedule-readiness-blocks = Dig blocks available
+schedule-readiness-calculation = Calculation
+schedule-readiness-ready = Ready
+schedule-readiness-not-ready = Not ready yet
+schedule-readiness-open-gantt = Open the Gantt
 schedule-readiness-tonnage-field = Tonnage field
-schedule-readiness-never-run = Not run yet
-schedule-readiness-result-stale = Retired by an edit since; shown as it stood
-schedule-readiness-result-current = Current
 schedule-stage-no-tonnage-field = Choose the reserve field read as tonnes in Configuration
 schedule-stage-tonnage-field-not-summed = This field is not summed, so it cannot be read as tonnes
 schedule-stage-no-classes = Add a loader class before scheduling
-schedule-stage-no-agents = Add a loader agent before scheduling
+schedule-stage-no-agents = Add a loader on the Machines step before scheduling
 schedule-stage-agent-no-class = This machine's loader class is no longer in this project
 schedule-stage-waiting-solids = Waiting on the Solids pipeline: { $reason }
 schedule-stage-duplicate-solid = { $solid } is cut from the same design, topography and block model as { $other }, so both would mine the same ground. Delete one, or change its inputs.
-schedule-stage-blocks-unmeasured = { $count } dig blocks have no tonnage on the chosen field. Fix the block models, exclude the ground, or count these blocks as 0 t.
+schedule-stage-blocks-unmeasured = { $count } dig blocks have no tonnage on the chosen field. Fix the block models, exclude the ground, or count unreserved blocks as 0 t.
 schedule-stage-blocks-negative-tonnes = { $count } dig blocks hold negative values on the tonnage field, such as -99 for a blank. Those values are counted as 0 t.
 schedule-stage-blocks-negative-grade = { $count } dig blocks hold negative values of { $grade }, such as -99 for a blank. Those values are counted as a zero grade.
 schedule-not-ready-not-run = { $step } has not been run
@@ -434,10 +439,7 @@ schedule-not-ready-running = { $step } is still running
 schedule-not-ready-failed = { $step }: { $message }
 schedule-run-stopped-by-edit = Schedule Setup run stopped: the { $step } step's inputs changed while it was running
 schedule-result-superseded = A Schedule Setup result arrived from a run that had already been superseded, and was discarded
-schedule-calculation-ready = Ready to calculate
-schedule-calculation-blocked = Calculation unavailable — { $reason }
-schedule-bar-height = Bar height (px)
-gantt-settings = Gantt Settings
+gantt-row-resize-help = Drag to make every row taller or shorter. Double-click to reset.
 schedule-tonnage-field = Tonnage field
 schedule-tonnage-field-none = Not chosen
 schedule-tonnage-field-no-fields = This project has no reserve fields yet. Add them in Solids → Setup → Field List
@@ -455,7 +457,7 @@ destination-stage-retained = { $count ->
         [one] 1 capacity is kept for a solid that is no longer a stockpile or dump
        *[other] { $count } capacities are kept for solids that are no longer stockpiles or dumps
     }
-destination-stage-no-rules = Destination routing is on but no rule is enabled
+destination-stage-no-rules = No enabled rule has a destination yet
 destination-stage-rule-loader-missing = Names a loader that is no longer in the fleet
 destination-stage-field-missing = Names a field that is no longer in the Field List
 destination-stage-field-kind = ⁨{ $field }⁩ no longer aggregates the way this condition reads it
@@ -483,13 +485,15 @@ destination-rule-disabled = Disabled: this rule takes no part in routing
 destination-rule-loaders = Loaders
 destination-rule-all-loaders = All loaders
 destination-rule-none = None chosen
+destination-rule-no-target = No destination
+destination-rule-no-target-warning = This rule has no destination, so it moves nothing.
 destination-rule-no-loaders = No loaders in the fleet yet.
 destination-no-destinations = No destinations yet.
 destination-select-all = Select all
 destination-rule-sources = Sources
 destination-rule-all-sources = All sources
 destination-rule-conditions = Conditions
-destination-no-rules = No rules. Every rule names one destination and the material allowed to reach it. Right-click to add one.
+destination-no-rules = No rules. Every rule names one destination and the material allowed to reach it.
 destination-no-sources = The last Solids run produced no ground to choose from.
 destination-source-unplaced = One source is not in the last Solids run
 destination-no-conditions = No conditions: any material this rule's loaders dig from its sources. Right-click to add one.
@@ -655,10 +659,25 @@ haul-new-dump = New dump here
 haul-new-crusher = New crusher here
 haul-draw = Draw road
 haul-finish = Finish road
-haul-draw-help = Click points in the viewport; each becomes a road node. They sit at the Z level, or on what a snap mode finds. Click a road or node to join it. Backspace removes the last point; Enter, Escape or a double-click finishes.
+haul-draw-help = Click points in the viewport; each becomes a road node. They sit at the Z level, or on what a snap mode finds. Click a road or node to join it. Backspace removes the last point; Enter ends the road and starts another; Escape or a double-click finishes.
 haul-convert = Convert selection to roads
 haul-import = Import DXF as roads…
 haul-import-heading = Import DXF as Haul Roads
+haul-import-done =
+    { $added ->
+        [one] Imported 1 road
+       *[other] Imported { $added } roads
+    }{ $skipped ->
+        [0] .
+        [one] ; 1 was already on the network.
+       *[other] ; { $skipped } were already on the network.
+    }
+haul-import-nothing =
+    { $total ->
+        [0] The file has no polylines to import as roads.
+        [one] Its 1 polyline is already on the network.
+       *[other] All { $total } polylines are already on the network.
+    }
 haul-export = Export roads as DXF…
 haul-dead-end = Dead end
 haul-near-miss = Near miss
@@ -682,8 +701,8 @@ haul-method-help = How trucks reach this destination: a road node you chose, or 
 haul-from = From
 haul-to = To
 haul-from-pile = Reclaim from { $pile }
-haul-need-truck = Add a truck class in Haulage Setup to check routes.
-haul-need-loader = Add a loader in Schedule Setup to check routes.
+haul-need-truck = Add a truck class in Setup → Truck Classes to check routes.
+haul-need-loader = Add a loader on Setup's Machines step to check routes.
 haul-match-help = Theoretical matching: trucks are assumed never to queue at the loader or the destination.
 haul-profile-legend = elevation · speed
 haul-profile-hover = { $distance } m · { $elevation } m RL · { $speed } km/h
@@ -691,7 +710,7 @@ haul-unconnected-note =
     { $areas ->
         [one] 1 dig block has
        *[other] { $areas } dig blocks have
-    } no road node within the auto-join distance. Their trucks are assumed to drive straight to the nearest node (up to { $longest } m), never steeper than the truck's maximum grade. Haulage → Layout shows these blocks in red.
+    } no road node within the auto-join distance. Their trucks are assumed to drive straight to the nearest node (up to { $longest } m), never steeper than the truck's maximum grade. Setup → Road Network shows these blocks in red.
 haul-lengthened = Reaching the road means a { $rise } m change in height, so the drive from the block is taken as { $length } m at the maximum grade.
 haul-drag-hint = drag to move
 haul-spot-min = Spot (min)
@@ -706,6 +725,27 @@ machine-kind-loader = Loader
 machine-kind-dozer = Dozer
 machine-kind-drill = Drill
 machine-kind-mpu = MPU
+machine-group-loader = Loaders
+machine-group-dozer = Dozers
+machine-group-drill = Drills
+machine-group-mpu = MPUs
+stage-state-empty = Nothing set up yet
+stage-empty-hint = This step ran, but there was nothing for it to work on.
+calendar-rows = Rows
+calendar-rows-help = Choose which rows the Calendar shows, and drag them into order
+calendar-view = View
+calendar-view-everything = Everything
+calendar-view-default-name = View
+calendar-view-name = Name
+calendar-view-save = Save as a view
+calendar-view-save-help = Keep these rows as a view of their own, to come back to
+calendar-view-delete = Delete view
+calendar-view-unsaved = { $view } (changed)
+calendar-rows-section-rows = Rows
+calendar-rows-of = { $kind } rows
+calendar-rows-grades = Grades
+calendar-rows-value = Schedule value
+charts-trucks-scale = { $trucks } trucks
 blast-activity-prep = Prep
 blast-activity-drill = Drill
 blast-activity-charge = Charge
@@ -722,9 +762,12 @@ drill-blast-error-reference = A blast reference could not describe any blast.
 schedule-error-wrong-machine = That machine cannot do this work: loaders dig and reclaim, dozers, drills and MPUs work blasts.
 schedule-error-kind-in-use = Machines of this class hold bars the new kind cannot work: { $bars }
 drill-blast-unclearable = Never clear: ground above these blasts, within the buffer, is in no dig bar: { $blasts }
-drill-blast-missing = { $bar }: { $count } blast(s) in this bar are not in the planning run
-drill-blast-unworked = Loaders wait on these blasts all horizon: they are dug by a bar, but no machine bar works the step named, and they do not start Fired. Add them to a blast bar on that kind of machine, or set their starting stage in Setup → Drill & Blast: { $blasts }
+drill-blast-missing = { $bar }: { $count } of its blasts could not be found in the current run
 drill-blast-unworked-entry = { $blast } ({ $step })
+schedule-bar-unworked-blasts = { $count ->
+    [one] Its ground in { $blasts } is never dug: no machine bar works that step. Add the blast to a blast bar on that kind of machine, or start it further on in Setup → Drill & Blast.
+   *[other] Its ground in { $blasts } is never dug: no machine bar works those steps. Add the blasts to blast bars on those kinds of machine, or start them further on in Setup → Drill & Blast.
+}
 idle-waiting-on-blast = Waiting on blast
 idle-waiting-on-blast-note = The bar's next block is in a blast that has not fired yet.
 idle-waiting-on-blast-named = Waiting on blast { $blast }
@@ -892,7 +935,7 @@ haul-error-grade = Enter a grade above 0 and up to 100 %.
 haul-error-seconds = Enter a number of seconds, 0 or more.
 haul-remove-band = Delete Grade Band
 haul-speeds-help = Speeds for a large haul truck on a road with 2% rolling resistance: rimpull uphill, retarder downhill. A band runs up to the next grade.
-haul-open-layout = Open Haulage layout
+haul-open-layout = Open the Road Network
 haul-dump-override = Override dump time (s)
 haul-unlimited = Default
 haul-convert-help = Turn the selected design polylines into haul roads. Ends and crossings within the join tolerance become shared nodes; the polylines stay as they are.
@@ -916,6 +959,7 @@ haul-dump-and-reclaim = Dump & reclaim
 haul-pin-stockpile-dump = Stockpile · dump point
 haul-pin-stockpile-reclaim = Stockpile · reclaim point
 haul-link-missed = Click a node or a road to join the blocks to it.
+haul-point-no-snap = Nothing to snap to here. Items stay locked on this page until you unlock them with their padlock.
 haul-block-joined = Chosen nodes · { $length } m
 haul-block-nearest = Nearest node · { $length } m
 haul-block-far = Nearest node is { $length } m away, beyond the auto-join distance
@@ -926,6 +970,7 @@ haul-link-clear = Use nearest node
 haul-link-clear-help = Let these blocks join whichever node is nearest again.
 haul-link-picking = Click nodes or road points, then Join.
 haul-step-network = Road Network
+haul-network-settings = Network Settings
 haul-join-title = Join to Road
 haul-blocks = Blocks
 haul-nodes = Nodes
@@ -954,7 +999,7 @@ haul-selection = Selection
 haul-selection-empty = Click a road, node or block; shift-click for more.
 haul-new-road = New Road
 haul-points = Points
-haul-drawing-keys = Backspace undoes · Enter or double-click finishes
+haul-drawing-keys = Backspace undoes · Enter next road · Esc finishes
 haul-access = Access
 haul-access-far = { $length } m from a node
 haul-name = Name
@@ -968,7 +1013,7 @@ haul-link-no-point = None: give a road node this role
 haul-link-off-road = Not on any road
 haul-link-separate = On a road that does not join the rest
 haul-link-no-roads = No roads
-haul-link-no-roads-note = There are no roads, so trucks cannot haul anything. Draw them on the Haulage page's Layout.
+haul-link-no-roads-note = There are no roads, so trucks cannot haul anything. Draw them in Setup's Road Network step.
 haul-link-dump-problem = Trucks cannot dump here: { $status }
 haul-link-reclaim-problem = Trucks cannot reclaim from here: { $status }
 haul-link-pit-problem = { $missed } of { $total } dig blocks reach no road
@@ -982,7 +1027,7 @@ haul-connections-pits = Pits
 haul-connections-not-run = Run this step to check what reaches the roads.
 haul-connections-no-destinations = No stockpiles, dumps or crushers yet.
 haul-connections-no-blocks = No dig blocks yet: run Solids.
-haul-connections-open = Open the Haulage page's Layout to fix it
+haul-connections-open = Open the Road Network to fix it
 haul-speed-limit-help = Leave empty to drive at each truck class's own maximum speed.
 haul-speed-limit-truck = Truck class limit
 haul-role = Role
@@ -996,9 +1041,7 @@ haul-match-short = Trucks to match loader
 haul-loaded-distance = Loaded distance
 haul-return-distance = Return distance
 haul-rise-short = Rise
-schedule-capture-bar-unassigned = this bar is not assigned to a machine
 schedule-capture-bar-block-unmeasured = a dig block in this bar has no measured tonnage
-schedule-capture-block-no-tonnes = this block measured no tonnes of the nominated field
 schedule-capture-bar-machine-missing = this bar's machine is no longer in the project
 schedule-capture-machine-class-missing = this machine's class is no longer in the project
 schedule-capture-unroutable = { $destination }: no road route from { $count } sources it is offered
@@ -1128,7 +1171,7 @@ cmd-block-model-created-block-model-name-ordinary = Created block model '{ $name
 cmd-block-model-failed-load-block-model-error = Failed to load block model: { $error }
 cmd-block-model-generated-ore-mesh-from-block = Generated ore mesh from block model '{ $name }'
 cmd-block-model-imported-block-model-source-path = Imported block model source { $path }
-cmd-block-model-loaded-block-model-name-blocks = Loaded block model '{ $name }': { $blocks } blocks ({ $renderable } renderable), grid { $dimx }x{ $dimy }x{ $dimz }, { $variables } variables
+cmd-block-model-loaded-block-model-name-blocks = Loaded block model '{ $name }': { $blocks } blocks, { $variables } variables
 cmd-block-model-loading-name = Loading { $name }
 cmd-block-model-loading-name-ellipsis = Loading { $name }…
 cmd-chamfer-applied = Chamfered corner { $corner } with radius { $radius } and { $segments } segments
@@ -1221,7 +1264,6 @@ cmd-file-could-not-restore-layer-from = Could not restore layer from project: { 
 cmd-file-could-not-snapshot-dirty-project = Could not snapshot the dirty project for recovery: { $error }
 cmd-file-could-not-start-browser-export = Could not start browser export: { $error }
 cmd-file-could-not-write-recovery-copies = Could not write recovery copies: { $error }
-cmd-file-created-new-browser-project = Created new browser project
 cmd-file-created-new-project = Created new project
 cmd-file-description-download-failed-error = { $description } download failed: { $error }
 cmd-file-discard-cancelled-project-changed = Discard was cancelled because the project changed while the OMF was reloading
@@ -1325,11 +1367,11 @@ cmd-insert-point-no-new-operation-points-were = No new { $operation } points wer
 cmd-insert-point-select-least-two-polylines-before = Select at least two polylines before inserting intersection points
 cmd-insert-point-select-one-more-polylines-before = Select one or more polylines before inserting a point at elevation
 cmd-layer-created-layer-name = Created layer '{ $name }'
-cmd-layer-deleted-with-objects = Deleted layer { $layer_id } (and all objects on it)
+cmd-layer-deleted-with-objects = Deleted layer { $name } and everything on it
 cmd-layer-duplicated-layer-duplicate-name = Duplicated layer '{ $duplicate_name }'
 cmd-layer-locked = Locked
 cmd-layer-name-copy = { $name } copy
-cmd-layer-selected-count-object-s-layer = Selected { $count } object(s) in layer { $layer_id }
+cmd-layer-selected-count-object-s-layer = Selected { $count } in { $name }
 cmd-layer-state-layer-name = { $state } layer '{ $name }'
 cmd-layer-unlocked = Unlocked
 cmd-move-tool-moved-collars = Applied move delta ({ $delta }) to { $count } drillhole collar(s)
@@ -1363,6 +1405,8 @@ cmd-omf-source-name-applied-project-origin = { $source_name }: applied project o
 cmd-omf-crs-differs = { $source_name }: coordinate reference system '{ $source_crs }' differs from project CRS '{ $target_crs }'; coordinates were merged without reprojection
 cmd-omf-source-name-units-source-units = { $source_name }: units '{ $source_units }' differ from project units '{ $target_units }'; coordinates were merged without conversion
 cmd-omf-source-name-warning = { $source_name }: { $warning }
+cmd-omf-crs-not-set = { $source_name } uses the coordinate reference system '{ $source_crs }'; the project's is not set, so it was left unset
+cmd-omf-units-not-set = { $source_name } uses the units '{ $source_units }'; the project's are not set, so they were left unset
 cmd-omf-there-no-open-incline-design = There is no open Incline Design data to export
 cmd-placement-2-vertices = 2 vertices
 cmd-placement-count-vertices = { $count } vertices
@@ -1372,11 +1416,6 @@ cmd-placement-created-line-segment-2-vertices = Created line segment with 2 vert
 cmd-placement-created-open-polyline-count-vertices = Created open polyline with { $count } vertices
 cmd-placement-placed-point-x-y-z = Placed point at { $x }, { $y }, { $z }
 cmd-placement-radius = Radius { $radius } m
-cmd-plot-composing-engineering-drawing = Composing engineering drawing…
-cmd-plot-could-not-write-engineering-drawing = Could not write the engineering drawing: { $error }
-cmd-plot-drawing-scale-fitted-visible-data = Drawing scale fitted to visible data: 1:{ $scale }
-cmd-plot = Plot
-cmd-plot-saved-drawing = Saved engineering drawing: { $description } ({ $width } × { $height } px at { $dpi } dpi)
 cmd-point-cloud-classified = Classified { $name }: { $ground } ground, { $vegetation } vegetation and { $noise } noise of { $count } points
 cmd-point-cloud-classifying-point-clouds = Classifying point clouds
 cmd-point-cloud-join-dropped-classifications = Dropped point classifications: some of the joined clouds are unclassified, and a partly classified cloud cannot be filtered to ground.
@@ -1491,6 +1530,7 @@ cmd-view-no-point-under-cursor-fix = No point under the cursor to fix the centre
 cmd-view-released-centre-rotation = Released the centre of rotation
 cmd-view-reset-view-fit-extents = Reset view (fit to extents)
 cmd-view-set-cinematic-view-enabled = Set cinematic view = { $enabled }
+cmd-view-set-topology-contours-enabled = Set topology contours = { $enabled }
 cmd-view-set-topology-wireframes-enabled = Set topology wireframes = { $enabled }
 cmd-view-set-view-points-enabled = Set view points = { $enabled }
 cmd-view-set-xy-grid-enabled = Set XY grid = { $enabled }
@@ -1614,8 +1654,6 @@ destination-rule-sources-count = { $count ->
 # Run Period and Run All Periods - the schedule optimiser's explicit runs
 schedule-run-period-note = Run Period: schedule from hour zero through one more day than the current result (day 1 when there is none), hour by hour.
 schedule-run-whole-note = Run All Periods: schedule from hour zero through the planning end day, hour by hour.
-schedule-improve = Improve
-schedule-improving = Improving…
 schedule-improve-note = Improve: start from the hourly schedule and spend up to the solve time limit looking for a better one over the whole horizon. Stop keeps the best found so far.
 schedule-improving-note = Looking for a better schedule. Stop keeps the best found so far.
 schedule-improve-finishing = Run { $run }: finishing early with the best schedule found so far.
@@ -1635,6 +1673,7 @@ improve-card-gain = +{ $gain } ({ $percent })
 improve-card-no-gain = No better schedule yet
 improve-card-gap = { $gap } below the bound
 improve-card-gap-note = The bound is the most any schedule could be worth. The gap closing to zero proves the schedule is the best there is.
+improve-card-bound-optimistic = Bounds are optimistic: a real schedule may never reach one.
 improve-card-no-bound = No bound proved yet
 improve-card-no-bound-ended = No bound proved
 improve-card-last-gain = Last better schedule { $ago } ago
@@ -1655,20 +1694,17 @@ improve-card-stall-never = Never
 improve-card-stall-minutes = { $minutes } min
 improve-card-published = Published at { $value }.
 improve-card-not-published = Nothing published; the schedule shown before stays.
-schedule-auto = Auto
-schedule-auto-note = Recalculate the hourly schedule on its own whenever the schedule's inputs change. It takes a fraction of a second; Improve still has to be asked for.
 schedule-run-cancel-note = Stop the run. What was last calculated stays as it is.
 schedule-run-stop-early-note = Stop optimising and publish the best schedule found so far.
 schedule-run-job = Calculating schedule
 schedule-run-never = Not run yet. Press Run All Periods, or switch on Auto.
 schedule-run-working = Calculating through day { $day }…
 schedule-haulage-waiting = Waiting for Haulage
-schedule-haulage-open = Open on the Haulage page
-schedule-solids-open = Open on the Solids page
+schedule-haulage-open = Open this Haulage step
+schedule-solids-open = Open this Solids step
 schedule-solids-tonnage = Tonnage
-schedule-unmeasured-as-zero = Count unmeasured blocks as 0 t
+schedule-unmeasured-as-zero = Count unreserved blocks as 0 t
 schedule-blocks-zero = Blocks counted as 0 t
-schedule-unmeasured-as-zero-help = Blocks no block model reaches are dug at once and move nothing.
 schedule-run-improving = Showing a first schedule through day { $day }. Looking for a better one over the whole horizon…
 schedule-run-early = Run { $run }: a first schedule through day { $day } is ready and shown. The whole-horizon solve continues; stop it to keep this schedule.
 schedule-run-stopped-early = Run { $run } stopped. Its first schedule is kept.
@@ -1702,7 +1738,7 @@ schedule-run-at-end = The schedule already reaches the planning end day (day { $
 schedule-run-cancelled = Run { $run } was cancelled. The last calculated schedule is unchanged.
 schedule-run-superseded = The schedule changed while it was being calculated. That run was discarded; run it again.
 schedule-run-refused-plain = Run { $run } could not start.
-schedule-run-refused = Run { $run } could not start: { $count } problems to fix. Hover for the list.
+schedule-run-refused = Run { $run } could not start: { $count } problems to fix:
 schedule-run-refused-because = Run { $run } could not start. { $reason }
 schedule-run-no-solution = Run { $run } reached its time limit without finding a schedule. Nothing was published.
 schedule-run-infeasible = Run { $run }: no schedule satisfies the configured rules over this horizon. Nothing was published.
@@ -1712,14 +1748,9 @@ schedule-solver-crashed = The solver stopped unexpectedly ({ $status }). The pro
 schedule-run-finished = Schedule run { $run } calculated through day { $day }
 schedule-run-kept-better = Schedule run { $run } found nothing worth more than run { $held }, which is kept
 schedule-run-first = Scheduled through day { $day }
+schedule-run-restored = Opened the schedule saved with this project, worth { $value }, and checked it against the project.
 schedule-run-optimal = Scheduled through day { $day } · optimal
 schedule-run-limited-no-gap = Scheduled through day { $day }
-schedule-run-suffix-event-budget = {" "}· event budget capped
-schedule-run-suffix-unworked-blasts =
-    { $count ->
-        [one] {" "}· 1 blast has no machine to work it
-       *[other] {" "}· { $count } blasts have no machine to work them
-    }
 schedule-run-no-bars = Drag Dig from the palette onto a loader to start the schedule.
 schedule-run-empty-bars = Add dig blocks to a bar to start the schedule: right-click it, then Edit Sequence.
 schedule-run-stale = Run { $run } is out of date. The calculated work is hidden until the schedule is run again.
@@ -1797,6 +1828,7 @@ video-export-already-recording = A video is already recording.
 video-export-needs-animate = Open Animate with a calculated schedule to record a video.
 video-export-left-animate = Video recording stopped: Animate was left or its schedule changed.
 schedule-calendar-value = Movement value ({ $currency })
+schedule-calendar-grade-penalty = Grade penalties ({ $currency })
 schedule-calendar-dig-tonnes = Dug (t)
 schedule-calendar-reclaim-tonnes = Reclaimed (t)
 schedule-calendar-scheduled-utilisation = Scheduled utilisation (%)
@@ -1810,7 +1842,7 @@ truck-calendar-hours-used = Truck-hours used
 destination-calendar-reclaimed = Reclaimed (t)
 destination-calendar-closing = Closing stock (t)
 schedule-note-event-budget = The derived execution-event budget was capped at { $positions } positions per interval, so some source transitions inside an interval may have been unavailable.
-schedule-detail-value = Movement value: { $currency }{ $value }
+schedule-detail-value = Movement value: { $value }
 schedule-detail-bound = Bound: { $bound } · relative gap { $gap }%
 schedule-detail-bound-no-gap = Bound: { $bound } · relative gap not reported
 schedule-detail-bound-relaxation = Bound: { $bound } · relative gap { $gap }% · proved by the linear relaxation (HiGHS), not by SCIP
@@ -1848,10 +1880,10 @@ schedule-gantt-window-open = { $from } onwards
 schedule-gantt-window-span = { $from } → { $to }
 schedule-bar-set-window = Set Work Window…
 schedule-window-dialog = Work Window
-schedule-window-start = Start (hours)
-schedule-window-end = End (hours)
+schedule-window-start = Start
+schedule-window-end = End
 schedule-window-end-hint = Blank for open-ended
-schedule-window-invalid = The end must be a number after the start, or blank
+schedule-window-invalid = Write times like 17/04/2026 06:00 or Day 3 06:00. The end must be after the start, or blank.
 schedule-window-apply = Set Window
 schedule-dispatch-block = Block { $block }
 schedule-dispatch-remaining = { $tonnes } t left in this block
@@ -1873,6 +1905,30 @@ sequence-not-ready = The dig blocks have not been calculated: ⁨{ $reason }⁩
 sequence-no-tonnage-field = Choose the reserve field that holds tonnes, in Configuration
 sequence-tonnage-field-missing = The chosen tonnage field is no longer in this project's Field List
 sequence-tonnage-field-not-sum = ⁨{ $field }⁩ is not a summed field, so it cannot be read as tonnes
+sequence-unresolved-at = { $block }: { $reason }
+blasting-recut-since-saved = This version cuts the blasts in { $solids } differently from the one that saved the project, so their outlines were updated. Save to keep them.
+inspector-bar-section = Selected bar
+inspector-bar-blocks =
+    { $count ->
+        [one] 1 block
+       *[other] { $count } blocks
+    }
+inspector-bar-blocks-tonnes =
+    { $count ->
+        [one] 1 block · { $tonnes } t
+       *[other] { $count } blocks · { $tonnes } t
+    }
+inspector-bar-blasts =
+    { $count ->
+        [one] 1 blast
+       *[other] { $count } blasts
+    }
+schedule-blocks-show-unmeasured = Show them in 3D
+sequence-carried-over =
+    { $count ->
+        [one] The Solids run cut 1 dig order block differently, so it now uses the block there.
+       *[other] The Solids run cut { $count } dig order blocks differently, so they now use the blocks there.
+    }
 sequence-unresolved-count = ⁨{ $count }⁩ of its dig blocks could not be found in the current run
 sequence-block-unmeasured = ⁨{ $block }⁩ has no measured tonnage: ⁨{ $reason }⁩
 sequence-block-partial = ⁨{ $block }⁩ was only partly measured, so its tonnage is incomplete
@@ -1909,17 +1965,19 @@ sequence-applied-blocks = ⁨{ $count }⁩ dig blocks
 sequence-pick-superseded = Picked against an earlier Solids run
 sequence-target-changed = This bar's dig order changed while the sequence editor was open, so the older draft was refused rather than written over it
 sequence-solids-navigation = Solids Navigation
+sequence-add-to-dig-order = Add to Dig Order
+sequence-add-to-blast-order = Add to Blast Order
 sequence-objects = Objects
 
 ## Schedule → Gantt
 
 planning-subpage-gantt = Gantt
 planning-subpage-charts = Charts
-gantt-empty-fleet = No agent rows yet. Add loader classes and loader agents in Setup → Site Data
+gantt-empty-fleet = No machines yet. Their rows appear here once machines are added in Setup.
+gantt-add-loaders = Add Machines
 schedule-add-work = Add work
-schedule-open-setup = Open Schedule Setup
-schedule-open-solids-setup = Open Solids Setup
 gantt-reset-view = Reset View
+gantt-reset-view-help = Fit the view to the scheduled work
 gantt-zoom-in = Zoom in
 gantt-zoom-out = Zoom out
 gantt-day = Day { $day }
@@ -1932,11 +1990,11 @@ gantt-month-short = M{ $month }
 gantt-year = Year { $year }
 gantt-range = { $from } → { $to }
 gantt-slider-away = Bring the time slider into view
-gantt-inspector = Inspector
 gantt-inspector-help = What every machine, stockpile, crusher and truck fleet is doing at the time slider. Click the ruler or drag the slider to move it; ← and → step an hour, with Shift a day.
 inspector-next-hour = Next hour (→)
 inspector-previous-hour = Previous hour (←)
-inspector-no-schedule = Nothing is calculated yet. This fills in once the schedule is.
+inspector-collapse = Collapse the Inspector
+inspector-no-schedule = Nothing to show until the schedule is calculated.
 inspector-beyond = The schedule is calculated to { $end }. Move the slider back to inspect it.
 inspector-loaders = LOADERS
 inspector-stockpiles = STOCKPILES
@@ -1971,7 +2029,7 @@ charts-received = Received to date
 charts-nothing-received = Nothing received in this schedule
 charts-grade-day = { $grade } for the day
 charts-inventory-help = What the stockpile holds, against its capacity (dashed). Days its Mode stops building or reclaiming are tinted: blue build only, green reclaim only, grey off. The figure is at the time slider.
-charts-feed-help = Tonnes fed to the crusher, hour by hour. Gaps are hours it was not fed - often because the day's limit was reached. The figure is at the time slider.
+charts-feed-help = Tonnes fed to the crusher, hour by hour. The dashed line is the rate that would meet each day's limit. Gaps are hours it was not fed - often because the day's limit was reached. The figure is at the time slider.
 charts-grade-help = The feed's grade hour by hour (line), the day's target band (green) and the day's blend (bar) - white inside the band, orange outside. The band prices the day's blend, so single hours may stray. The figure is the day's blend at the time slider.
 charts-received-help = Everything the dump has received from the start of the schedule. The figure is at the time slider.
 charts-capacity = Capacity { $tonnes } t
@@ -1995,6 +2053,30 @@ planning-min-strip-area-help = Dig blocks smaller than this are left out of mini
 planning-blasts-empty = Select a bench to see its blasts
 planning-blasts-one-bench = Select one bench to draw cuts
 planning-dig-one-flitch = Select one flitch to draw strips
+planning-blast-count-under =
+    { $count ->
+        [one] { $count } blast
+       *[other] { $count } blasts
+    } · { $under } too small
+planning-copy-cuts-button =
+    { $count ->
+        [0] Copy lines to…
+        [one] Copy { $count } line to…
+       *[other] Copy { $count } lines to…
+    }
+planning-copy-cuts-title-benches = Copy lines to benches
+planning-copy-cuts-title-flitches = Copy lines to flitches
+planning-copy-cuts-confirm = Copy to { $count }
+planning-copy-cuts-done-benches =
+    { $targets ->
+        [one] Copied { $lines } lines to { $targets } bench
+       *[other] Copied { $lines } lines to { $targets } benches
+    }
+planning-copy-cuts-done-flitches =
+    { $targets ->
+        [one] Copied { $lines } lines to { $targets } flitch
+       *[other] Copied { $lines } lines to { $targets } flitches
+    }
 planning-blast-count =
     { $count ->
         [one] { $count } blast
@@ -2006,7 +2088,8 @@ planning-reserving-item = Item
 planning-reserving-finding = Finding
 planning-reserving-not-run = Run this step to cut the dig blocks out of the solids and measure their reserves.
 planning-reserving-stale = The strips or the ground have changed since the blocks were cut. Run this step again to cut and measure them.
-planning-reserving-complete = { $blocks } dig blocks cut and measured. Inspect them in Solids View.
+planning-reserving-empty = No dig blocks yet.
+planning-reserving-complete = { $blocks } dig blocks cut and measured. Inspect them in Reserves.
 planning-dig-blocks = Dig Blocks
 planning-dig-blocks-empty = Select a flitch to see its dig blocks
 planning-dig-block = Block
@@ -2050,8 +2133,9 @@ planning-reserve-capacity-only = Geometry only · no block model assigned, so th
 stage-state-not-run = Not run
 stage-stale-hint = Edited since its last run. Run Step or Run All brings it up to date, or tick Auto to have it rerun on its own; the steps after it keep their earlier results until then.
 planning-auto = Auto
-planning-auto-note = Rerun out-of-date steps half a second after your last edit.
-schedule-setup-auto-note = Rerun out-of-date steps and recalculate the schedule after your last edit. The same switch as the Gantt's Auto.
+setup-auto-note = Keep everything up to date on its own: out-of-date Solids, Haulage and Schedule steps rerun half a second after your last edit, and the hourly schedule recalculates. Improve still has to be asked for.
+stage-auto-holds = Auto is on, so out-of-date steps rerun on their own. Switch Auto off to run them yourself.
+schedule-auto-holds = Auto is on, so the schedule recalculates on its own whenever its inputs change. Switch Auto off to run it yourself.
 stage-state-stale = Stale
 stage-state-blocked = Blocked
 stage-state-queued = Queued
@@ -2072,12 +2156,12 @@ stage-waiting-models = Waiting on { $count } block models
 stage-waiting-solids = Waiting on { $count } solids
 stage-no-occupied-bands = The benching plan reaches no material in this solid
 stage-run-step = Run
-stage-progress-short = { $done }/{ $total }
 stage-run-all = Run All
 stage-cancel = Cancel Run
 stage-diagnostics = Diagnostics
 planning-reserve-coverage = Model coverage
 planning-reserve-coverage-note = Block-model volume measured into the shown geometry, as a share of its geometric volume
+planning-reserve-coverage-partial = The block model reaches only this share of the shown ground, so the tonnes and grades below are for that part.
 stage-block-not-closed = Dig block { $block } ({ $area } m²) did not come out closed, so it has no volume
 stage-volume-mismatch = { $blocks } dig blocks total { $children } m³ against the bench's own { $parent } m³
 stage-duplicate-block-id = Two dig blocks share identity { $id }
@@ -2105,7 +2189,6 @@ planning-snapshot-not-run = { $stage } has not been run
 planning-snapshot-stale = { $stage } is out of date; run it again
 planning-snapshot-running = { $stage } is still running
 planning-snapshot-unmeasured = Dig block { $block } has no reserve measurement
-planning-snapshot-ready = Ready · { $blocks } dig blocks
 stage-missing-reference = The bench has no independent reserve measurement to reconcile against
 stage-field-invented = The dig blocks report a reserve field the bench does not measure
 
@@ -2136,7 +2219,6 @@ truck-open-calendar-help = Set the fleet day by day on this class's Calendar row
 truck-new-rule = New Trucking Rule
 truck-duplicate-rule = Duplicate Trucking Rule
 truck-delete-rule = Delete Trucking Rule
-truck-no-rules = No trucking rules yet. Right-click to add one.
 truck-select-rule = Select a trucking rule.
 truck-default-rule-name = Trucking rule
 truck-rule-enabled = Enabled
@@ -2152,6 +2234,7 @@ truck-rule-no-classes = Add a truck class first.
 truck-rule-class-missing = A truck class this rule names is gone.
 truck-rule-destination-missing = A destination this rule names is gone.
 truck-stage-no-classes = No truck classes are configured. Trucks do not constrain this schedule.
+truck-rule-no-fleet = This rule's truck classes have no trucks, so nothing can be hauled under it.
 truck-stage-no-rules = No trucking rules are configured, so no truck class is permitted anywhere.
 schedule-calendar-trucks = Trucks
 truck-calendar-units = Units
@@ -2182,7 +2265,6 @@ cashflow-rule-all-destinations = All destinations
 cashflow-new-rule = New Cashflow Rule
 cashflow-duplicate-rule = Duplicate Cashflow Rule
 cashflow-delete-rule = Delete Cashflow Rule
-cashflow-no-rules = No cashflow rules yet. Right-click to add one.
 cashflow-select-rule = Select a cashflow rule.
 cashflow-default-rule-name = Cashflow rule
 cashflow-help = Matching rules add together. Values guide optimisation; they do not guarantee movement priority.
@@ -2232,7 +2314,9 @@ inventory-field-incompatible-note = The saved value is preserved, but its field 
 ## Reclaim bars
 
 destination-error-category-unsupported = Categories are not retained in blended stockpiles, so this rule cannot test one.
-destination-condition-category-blocked = Categories are not retained in blended stockpiles, and this rule's sources can include stockpiles (All covers any added later). Tick only pits, benches or flitches in Sources to test a category.
+destination-condition-category-blocked = Stockpiles don't keep categories, and this rule only takes from stockpiles. Add a pit, bench or flitch to its Sources to test a category.
+destination-condition-category-narrows = Stockpiles don't keep categories, so this rule will take from the pits only.
+destination-sources-category-note = Stockpiles don't keep categories, so they can't be sources of a rule that tests one.
 destination-rule-category-conflict = This rule tests a category on material it may reclaim: { $fields }.
 reclaim-error-not-a-stockpile = A reclaim bar's source has to be a stockpile.
 reclaim-error-invalid-limit = Maximum tonnes must be a number above zero, or blank.
@@ -2346,8 +2430,16 @@ planning-double-click-rename = Double-click to rename
 planning-rename-blast = Rename Blast
 planning-reset-blast-name = Reset Blast Name
 planning-rename-field = Rename Field
+planning-delete-solid-title = Delete { $name }?
+planning-delete-solid-note = Its benches, blasts, cut lines and dig strips go with it, and bars and rules that use its ground stop working. This can't be undone.
+reserve-field-in-use = Still used by { $users }. Change those first.
+reserve-field-used-tonnage = the Tonnage field in Configuration
+reserve-field-used-grades = Grades carried in Configuration
+reserve-field-delete-title = Delete { $name }?
+reserve-field-delete-note = Block models stop mapping a column to it, and grade targets and opening stock values on it are removed. This can't be undone.
 planning-delete-field = Delete Field
 planning-no-block-models-project = No block models in this project
+planning-import-block-model = Import Block Model
 planning-extents = Extents: { $lower } → { $upper }
 planning-constant = Constant
 planning-extents-heading = Extents
@@ -2459,10 +2551,11 @@ experiment-end-day-help = Run All Periods solves from hour zero to the end of th
 experiment-interval = Calendar interval (h)
 experiment-interval-help = The interval sets how finely the calendar is split and when stockpile receipts become reclaimable. It is not a limit of one dig block per interval: a loader may work through several sources inside one interval.
 experiment-solve-seconds = Solve time limit (s)
-experiment-relative-gap = Relative gap target
+experiment-relative-gap = Relative gap target (%)
 experiment-grades = Grades carried
 experiment-grades-none = None
 experiment-no-grade-fields = No tonnes-weighted average field is defined, so no blend grade can be tracked.
+experiment-grades-choose-tonnage = Choose a Tonnage field first
 experiment-representation = Representation
 experiment-blended-help = Reclaim uses the pile's tonnes-weighted average grades. Opening chunks are combined into one blend, so there is no reclaim order.
 experiment-chunks-help = The pile is divided into chunks of the chunk size, filled one at a time, opening stock first, each with its own composition. A partly filled chunk keeps receiving until it is full, even across days the pile is not building. Under FIFO the oldest chunk is reclaimed first, and under LIFO the newest, so a partly reclaimed newest chunk is topped up when building resumes. An emptied chunk's place is reused, and the pile's maximum tonnes limit what it holds at once.
@@ -2477,7 +2570,8 @@ schedule-capture-grade-negative = '{ $grade }' is { $value }, which must be a fi
 schedule-capture-opening-over-capacity = Opening stock of { $opening } t exceeds the pile capacity of { $capacity } t.
 schedule-capture-lots-combined = { $stockpile }: { $count } opening chunks combined into one blend; reclaim order does not apply.
 schedule-capture-block-uncaptured = Nothing was captured about this block's material, so its blend cannot be computed.
-schedule-capture-block-no-tonnes = The tonnage field is not among this block's captured values.
+schedule-capture-block-no-tonnage-field = The tonnage field is not among this block's captured values.
+schedule-capture-block-no-tonnes = This block measured no tonnes of the nominated field.
 schedule-capture-grade-uncaptured = '{ $grade }' was not captured for this block, and a blend cannot be computed without it.
 schedule-capture-grade-missing = '{ $grade }' is missing on some of this block's material; a missing grade cannot be read as zero.
 schedule-capture-calendar-non-finite = { $field } is not a finite number
@@ -2508,7 +2602,8 @@ grade-rejection-no-tonnage = The schedule has no tonnage field, so no grade's we
 grade-rejection-missing = Material { $material } has no '{ $field }' value; a missing grade cannot be treated as zero in a blend.
 grade-rejection-out-of-range = Material { $material }'s '{ $field }' value { $value } is outside the range its unit allows.
 schedule-capture-too-many-intervals = The horizon splits into more than { $limit } calendar intervals. Shorten the horizon or widen the calendar interval.
-schedule-capture-no-work = No assigned bar has work inside the requested horizon. Add dig blocks to a bar (right-click it, then Edit Sequence), or move a bar into the horizon.
+schedule-capture-no-bars = There is no work yet. On the Gantt, use Add work to make a bar, then add dig blocks to it (right-click it, then Edit Sequence).
+schedule-capture-no-work = No bar has work inside the horizon. On the Gantt, add dig blocks to a bar (right-click it, then Edit Sequence), or move a bar into the horizon.
 schedule-capture-no-movement = No movement is permitted by the current rules, so there is nothing to schedule.
 schedule-capture-rehandle = { $rule } permits moving reclaimed material into a stockpile. Rehandling between stockpiles is not modelled, so those movements were left out.
 schedule-unblasted = Unblasted
@@ -2543,7 +2638,6 @@ common-edit-object = Edit Object
 common-edit-text = Edit Text
 common-elevation = Elevation
 common-exit-without-saving = Exit Without Saving
-common-export-engineering-drawing = Export Engineering Drawing
 common-file-was-left-out-downhole = { $file } was left out of the downhole geophysics: { $error }
 common-filter = Filter
 common-fly-mode = Fly Mode
@@ -2559,7 +2653,6 @@ common-join = Join...
 common-join-point-clouds = Join Point Clouds
 common-joined-cloud = Joined Cloud
 common-layer = Layer
-common-legend = Legend
 common-line = Line
 common-line-weight = Line weight
 common-link-geophysics = Link Geophysics...
@@ -2604,7 +2697,6 @@ common-reveal-all = Reveal All
 common-reveal-finder = Reveal in Finder
 common-rotate-collar = Rotate Collar
 common-save-exit = Save and Exit
-common-scale-bar = Scale bar
 common-set-initiation-point = Set Initiation Point
 common-shape = Shape
 common-shell = With Shell
@@ -2662,10 +2754,8 @@ confirmations-save-remove = Save and Remove
 
 ## Warning and error alerts
 
-alerts-close-all = Close all
 alerts-copied = Message copied to the clipboard
 alerts-copy-details = Copy details
-alerts-details = Details
 alerts-error = Error:
 alerts-time-more-waiting =
     { $count ->
@@ -2875,8 +2965,7 @@ edit-control-point-2 = Control point 2
 edit-copy = Copy
 edit-corner-radius-limited-so-replacement = Corner radius, limited so the replacement cannot pass adjacent vertices.
 edit-create-new-layer = Create a new layer
-edit-create-new-project = Create a new project
-edit-create-project = Create project
+edit-save-project = Save
 edit-delta-length-m-use = Delta length (m, use + or -)
 edit-dip = Dip
 edit-direction = Direction
@@ -3267,6 +3356,7 @@ omf-element-name-has-count-unreadable = Element '{ $name }' has { $count } unrea
 omf-element-unsupported-section = Element '{ $name }' names section '{ $section }' which cannot show this kind of item in this build
 omf-element-name-names-unknown-section = Element '{ $name }' names an unknown section '{ $section }'
 omf-ignoring-colour-map-omf-attribute = Ignoring the colour map on OMF attribute '{ $attribute }': { $error }
+omf-damaged = This file is damaged or is not an Incline project
 omf-mining-data-exported-incline = Mining data exported by Incline
 omf-import = OMF import
 omf-texture = OMF texture
@@ -3280,56 +3370,6 @@ omf-skipped-drillhole-data-saved-older = Skipped drillhole data saved in an olde
 
 ## Plot strings
 
-plot-1-1000-one-millimetre-sheet = At 1:1000, one millimetre on the sheet is one metre on the ground.
-plot-1-scale-covers-width-height = 1:{ $scale } · covers { $width } × { $height } m
-plot-all-visible-data = All visible data
-plot-automatic-grid-interval = Automatic grid interval
-plot-border = Border
-plot-centre = Centre on
-plot-fit-scale-help = Choose the smallest conventional scale that fits everything visible onto the sheet.
-plot-coordinate-grid = Coordinate grid
-plot-current-view-centre = Current view centre
-plot-date-caps = DATE
-plot-date = Date
-plot-dots-per-inch-paper-size = Dots per inch. This paper size can be rasterised up to { $max_dpi } dpi; 300 dpi is a normal print quality.
-plot-dpi = dpi
-plot-drawing-no = DRAWING No.
-plot-drawing-number = Drawing number
-plot-drawn-by-caps = DRAWN BY
-plot-drawn-by = Drawn by
-plot-e-g-example-gold-project = e.g. Example Gold Project
-plot-entered-coordinates = Entered coordinates
-plot-export-png = Export PNG...
-plot-fit-scale-visible-data = Fit scale to visible data
-plot-grid-interval = Grid interval
-plot-landscape = Landscape
-plot-lists-visible-surfaces-design-layers = Lists the visible surfaces and design layers with their colours.
-plot-margin = Margin
-plot-margins-leave-no-room-map = The margins leave no room for the map
-plot-metres-scale-1-scale = metres    Scale 1:{ $scale }
-plot-mm = mm
-plot-north-arrow = North arrow
-plot-nothing-visible-draw = Nothing visible to draw
-plot-paper = Paper
-plot-paper-orientation-width-height-mm = { $paper } { $orientation } · { $width } × { $height } mm
-plot-paper-size = Paper size
-plot-pick-interval-reads-roughly-every = Pick an interval that reads roughly every 50 mm on the printed sheet.
-plot-plan = Plan
-plot-scale-must-be-positive = The plot scale must be a positive number
-plot-png-written-sheet-s-exact = The PNG is written at the sheet's exact paper size and records its DPI, so it prints at true scale.
-plot-portrait = Portrait
-plot-resolution = Resolution
-plot-rev = REV
-plot-revision = Revision
-plot-scale = SCALE
-plot-scale-ratio = Scale  1:
-plot-scale-framing = Scale and framing
-plot-sheet-furniture = Sheet furniture
-plot-size-width-height-mm = { $size } ({ $width } × { $height } mm)
-plot-subtitle = Subtitle
-plot-title = Title
-plot-title-block = Title block
-plot-today = today
 
 ## Point strings
 
@@ -3495,7 +3535,7 @@ state-count-cloud-s = { $count } cloud(s)
 state-count-file-s = { $count } file(s)
 state-count-object-s-axis-value = { $count } object(s) · { $axis } { $value }
 state-count-object-s-closed = { $count } object(s) · { $closed }
-state-count-object-s-layer = { $count } object(s) · { $layer }
+state-count-objects = { $count } object(s)
 state-count-object-s-weight = { $count } object(s) · { $weight }
 state-count-object-s-z-elevation = { $count } object(s) · Z { $elevation }
 state-points-controls-clipped = { $count } point(s) · { $controls } control string(s) · clipped to the extent string
@@ -3532,7 +3572,6 @@ state-finish-closed-polyline = Finish closed polyline
 state-finish-open-polyline = Finish open polyline
 state-fit-extents = Fit to extents
 state-fix-release-centre-both-views = Fix or release the centre both views orbit about
-state-folder-section = { $folder } in { $section }
 state-generate-contours = Generate Contours
 state-hidden = Hidden
 state-import-drillholes = Import Drillholes
@@ -3553,8 +3592,6 @@ state-load-raster = Load Raster
 state-load-triangulation = Load Triangulation
 state-locked-count-object-s = Locked { $count } object(s)
 state-major-minor = Major { $major } · minor { $minor }
-state-member-into-folder-section = { $member } into { $folder } in { $section }
-state-member-root-section = { $member } to the root of { $section }
 state-move-axis-value = Move to Axis Value
 state-move-objects-layer = Move Objects to Layer
 state-name-count-cloud-s = { $name } · { $count } cloud(s)
@@ -3594,7 +3631,7 @@ state-set-drillhole-colour-preset = Set Drillhole Colour Preset
 state-set-drillhole-discs = Set Drillhole Discs
 state-set-drillhole-style = Set Drillhole Style
 state-set-drillhole-width = Set Drillhole Width
-state-set-entity-lock = Set Entity Lock
+state-set-entity-lock = Set Lock
 state-set-grid = Set Grid
 state-set-visibility = Set Visibility
 state-set-layer-lock = Set Layer Lock
@@ -3605,6 +3642,7 @@ state-set-point-visibility = Set Point Visibility
 state-set-polyline-closed = Set Polyline Closed
 state-set-raster-lock = Set Raster Lock
 state-set-standard-view = Set Standard View
+state-set-topology-contours = Set Topology Contours
 state-set-topology-wireframes = Set Topology Wireframes
 state-set-triangulation-colour = Set Triangulation Colour
 state-show-console = Show Console
@@ -3614,7 +3652,6 @@ state-slice-mode = Slice Mode
 state-slice-preview = Slice Preview
 state-south = South
 state-stem-contours = { $stem } Contours
-state-target-new-name = { $target } to “{ $new_name }”
 state-trim-above = Trim above
 state-trim-below = Trim below
 state-trim-triangulation-surface = Trim Triangulation to Surface
@@ -3679,6 +3716,8 @@ toolbars-strike-dip = Strike and Dip
 toolbars-hide = Hide
 toolbars-show-all-hidden = Show All Hidden
 toolbars-tool-not-available-section-view = { $tool } - not available in the section view
+toolbars-tool-needs-layer = { $tool } - make a layer first
+web-startup-no-graphics = This browser could not use your graphics card through WebGPU. Try a current version of Chrome or Edge with hardware acceleration on, or the desktop app from inclinedesign.net.
 
 ## Tri strings
 
@@ -3797,6 +3836,9 @@ tri-weld-retry = Weld & Retry
 tri-when-enabled-generate-contours-only = When enabled, generate contours only between the specified minimum and maximum elevations.
 tri-solid-role-design = design
 tri-solid-role-topography = topography
+tri-solid-no-volume-cut = These surfaces enclose nothing to dig: the design surface is nowhere below the topography. Check the topography has ground over the design surface; one with a hole cut out there leaves nothing above it.
+tri-solid-no-volume-fill = These surfaces enclose nothing to fill: the design surface is nowhere above the topography. Check the topography has ground under the design surface; one with a hole cut out there leaves nothing below it.
+solid-build-failed = { $solid } could not be built. { $reason }
 tri-solid-repaired-surface = The { $role } surface folds over itself in plan or has hairline cracks between its faces, so the solid was built from a repaired copy of it: points less than 0.001 apart in plan were joined, edges were split where points of the surface lie on them, and wherever it folds the sheet on the outside of the solid was kept.
 tri-solid-open-along-edge = Solid is open along { $count } edge(s): the two surfaces do not meet all the way round, so this is a shell between them rather than a closed solid. Its volume is still exact.
 tri-built-solid-between = Built { $region } solid between '{ $design }' and '{ $topography }' · { $volume } m³
@@ -3882,12 +3924,14 @@ viewport-bar-exit-slice-view = Exit Slice View
 viewport-bar-fill = Fill:
 viewport-bar-fix-centre-rotation = Fix Centre of Rotation
 viewport-bar-hide-borehole-inspector = Hide Borehole Inspector
+viewport-bar-hide-contours = Hide Contours
 viewport-bar-hide-points = Hide Points
 viewport-bar-hide-rl-grid = Hide RL Grid
 viewport-bar-hide-wireframes = Hide Wireframes
 viewport-bar-hide-xy-grid = Hide XY Grid
 viewport-bar-release-centre-rotation = Release Centre of Rotation
 viewport-bar-show-borehole-inspector = Show Borehole Inspector
+viewport-bar-show-contours = Show Contours
 viewport-bar-show-points = Show Points
 viewport-bar-show-rl-grid = Show RL Grid
 viewport-bar-show-wireframes = Show Wireframes
@@ -4103,10 +4147,15 @@ solids-surface-design-measured-against = The surface the design is measured agai
 solids-reserved-against-model = Reserved against this model
 solids-optional-dumps-stockpiles = Optional for dumps and stockpiles
 solids-add-solid = Add Solid
-solids-no-solids-yet-add = No solids yet - add one on the Setup page
+solids-no-solids-yet-add = No solids yet - add one in Setup
 solids-multiple = Multiple…
 solids-selection = Selection
 solids-select-solid-bench-flitch = Select a solid, bench or flitch
+solids-showing-unmeasured =
+    { $count ->
+        [one] Showing the 1 block with no tonnage
+       *[other] Showing the { $count } blocks with no tonnage
+    }
 solids-blast = Blast
 solids-plan-area = Plan area
 solids-dig-block = Dig block
@@ -4117,6 +4166,7 @@ solids-block-volume = Block volume
 solids-bench-rl = Bench RL
 solids-flitch-rl = Flitch RL
 solids-contents = Contents
+solids-view-geometry = Geometry
 
 ## Animate strings
 animate-calculated-solids-unavailable-run = Calculated solids are unavailable. Run Solids through Reserving.

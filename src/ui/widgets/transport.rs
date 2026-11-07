@@ -1,5 +1,6 @@
-//! Play, Pause and Rewind: small square buttons with their glyphs painted,
-//! shared by the blast review's timeline and Animate's playback.
+//! Play, Pause, Rewind and single steps: small square buttons with their
+//! glyphs painted, shared by the blast review's timeline, Animate's playback
+//! and the Gantt's Inspector.
 
 use crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS;
 
@@ -8,6 +9,9 @@ pub(crate) enum Transport {
     Play,
     Pause,
     Rewind,
+    /// One step back or forward: a chevron.
+    StepBack,
+    StepForward,
 }
 
 /// A small square transport button with its glyph painted rather than set
@@ -51,6 +55,11 @@ pub(crate) fn transport_button(ui: &mut egui::Ui, kind: Transport, tooltip: Stri
                 .rect_filled(egui::Rect::from_center_size(egui::pos2(c.x - r * 0.9, c.y), egui::vec2(r * 0.35, r * 2.0)), 0.5, color);
             let points = vec![egui::pos2(c.x + r, c.y - r), egui::pos2(c.x - r * 0.55, c.y), egui::pos2(c.x + r, c.y + r)];
             ui.painter().add(egui::Shape::convex_polygon(points, color, egui::Stroke::NONE));
+        }
+        Transport::StepBack | Transport::StepForward => {
+            let dx = if matches!(kind, Transport::StepBack) { -r * 0.5 } else { r * 0.5 };
+            let points = vec![egui::pos2(c.x - dx, c.y - r), egui::pos2(c.x + dx, c.y), egui::pos2(c.x - dx, c.y + r)];
+            ui.painter().add(egui::Shape::line(points, egui::Stroke::new(1.8, color)));
         }
     }
     response.on_hover_text(tooltip)

@@ -21,7 +21,7 @@ use crate::{
         state::{ScheduleEdit, ScheduleExperimentDraft, UiCommand},
         widgets::{
             context_menu::{ChecklistRow, Tick, checklist_popup},
-            data_grid::{PropertyRows, PropertyTable, property_table_height},
+            data_grid::{PropertyRows, PropertyTable},
             menu,
         },
     },
@@ -30,6 +30,13 @@ use crate::{
 fn parse_positive(text: &str) -> Option<f64> {
     let value = text.trim().parse::<f64>().ok()?;
     (value.is_finite() && value > 0.0).then_some(value)
+}
+
+/// A fraction written as a percentage, to six places at most, so 0.0001
+/// reads 0.01 rather than 0.010000000000000002.
+fn percent_text(fraction: f64) -> String {
+    let text = format!("{:.6}", fraction * 100.0);
+    text.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 /// The typed text of every setting here, refreshed whenever the plan's own
@@ -49,7 +56,7 @@ fn draft<'a>(editor: &'a mut EditorState, plan: &SchedulePlan) -> &'a mut Schedu
             end_day: experiment.planning_end_day.to_string(),
             interval_h: experiment.interval_h.to_string(),
             solve_seconds: experiment.solve_seconds.to_string(),
-            relative_gap: experiment.relative_gap.to_string(),
+            relative_gap: percent_text(experiment.relative_gap),
         });
     }
     editor.schedule_experiment_draft.as_mut().expect("just ensured")
@@ -98,15 +105,22 @@ pub(crate) fn grades_row(rows: &mut PropertyRows<'_>, plan: &SchedulePlan, docum
         .filter(|field| experiment.grade_unit(field.id).is_some())
         .map(|field| field.name.as_str())
         .collect();
+    // Grades are averaged by tonnes, so until that field is chosen there is
+    // nothing to offer, however many averages the Field List holds.
+    let no_grades = if plan.tonnage_field().is_none() {
+        tr!("experiment-grades-choose-tonnage")
+    } else {
+        tr!("experiment-no-grade-fields")
+    };
     let summary = match carried.as_slice() {
-        _ if candidates.is_empty() => tr!("experiment-no-grade-fields"),
+        _ if candidates.is_empty() => no_grades.clone(),
         [] => tr!("experiment-grades-none"),
         names => names.join(", "),
     };
     let response = rows.select(&tr!("experiment-grades"), &summary).on_hover_text(tr!("experiment-grade-units-help"));
     checklist_popup(&response, tr!("experiment-grades"), 260.0, |ui| {
         if candidates.is_empty() {
-            menu::menu_note(ui, tr!("experiment-no-grade-fields"));
+            menu::menu_note(ui, no_grades.clone());
         }
         for field in &candidates {
             let tracked = experiment.grade_unit(field.id).is_some();
@@ -133,12 +147,18 @@ pub(crate) fn draw_advanced(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut Ed
     let draft = draft(editor, plan);
     let interval_h = parse_positive(&draft.interval_h).filter(|hours| *hours >= MIN_INTERVAL_H);
     let solve_seconds = parse_positive(&draft.solve_seconds).filter(|seconds| *seconds <= MAX_SOLVE_SECONDS);
-    let relative_gap = draft.relative_gap.trim().parse::<f64>().ok().filter(|gap| gap.is_finite() && (0.0..=1.0).contains(gap));
+    let relative_gap = draft
+        .relative_gap
+        .trim()
+        .trim_end_matches('%')
+        .trim_end()
+        .parse::<f64>()
+        .ok()
+        .filter(|percent| percent.is_finite() && (0.0..=100.0).contains(percent))
+        .map(|percent| percent / 100.0);
     let invalid = crate::model::schedule::ScheduleError::InvalidExperimentSetting.message();
-    let rows_used = 4;
-    let table_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), property_table_height(ui, rows_used).min(rect.height())));
     let mut edits = Vec::new();
-    PropertyTable::new("schedule_experiment", table_rect, &tr!("experiment-advanced")).show(ui, |rows| {
+    PropertyTable::new("schedule_experiment", rect, &tr!("experiment-advanced")).show(ui, |rows| {
         rows.header(&tr!("planning-property"), &tr!("planning-value"));
         let response = rows.field(&tr!("experiment-interval"), &mut draft.interval_h, interval_h.is_none().then_some(invalid.as_str()));
         if response.lost_focus()
@@ -163,7 +183,7 @@ pub(crate) fn draw_advanced(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut Ed
         let response = rows.field(&tr!("experiment-relative-gap"), &mut draft.relative_gap, relative_gap.is_none().then_some(invalid.as_str()));
         if (limit_committed || response.lost_focus())
             && let (Some(seconds), Some(relative_gap)) = (solve_seconds, relative_gap)
-            && (seconds != experiment.solve_seconds || relative_gap != experiment.relative_gap)
+            && (seconds != experiment.solve_seconds || percent_text(relative_gap) != percent_text(experiment.relative_gap))
         {
             edits.push(UiCommand::schedule(session, ScheduleEdit::SetExperimentSolveLimits { seconds, relative_gap }));
         }

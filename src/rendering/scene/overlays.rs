@@ -32,7 +32,7 @@ const BLAST_OUTLINE_WIDTH: f32 = 2.5;
 /// back, but grey against the live outlines around it.
 const EXCLUDED_OUTLINE_COLOR: [f32; 4] = [0.5, 0.5, 0.5, 0.9];
 
-/// The Haulage Layout's selected dig block, and the line to where it joins
+/// The Road Network's selected dig block, and the line to where it joins
 /// the roads: the selection orange the rest of the scene uses.
 pub(crate) const HAUL_SELECTED_BLOCK: [f32; 4] = [1.0, 0.7, 0.1, 1.0];
 /// How a dig block meets the roads, as the Layout tints it: left to the

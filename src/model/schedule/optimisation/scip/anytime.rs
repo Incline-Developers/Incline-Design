@@ -11,40 +11,31 @@
 //! whole-horizon plan keeps nothing more, the gap is closed or the budget is
 //! spent. Every kept schedule is a replayed one, so the value only rises.
 //!
-//! When a cycle of plan windows keeps nothing, the days are polished, in
-//! order, before the windows grow: the exact hourly model of a day and a
-//! look-ahead past it, opening in the state the best schedule leaves, is
-//! solved from that schedule's own hours; only the day is kept, and the
-//! dispatch works the days after it again from where it ends. That goes
-//! after what following a plan loses - the plan sees days, not hours. The
-//! look-ahead is what makes it pay on long horizons: a day solved as though
-//! the horizon ended with it takes value now that the days after it lose
-//! more than, and the dispatch after it has to live with that. Even a day
-//! ahead is too short to see why the plan strips waste now, so a polished
-//! day must also leave every block exactly as the best schedule leaves it:
-//! polishing rearranges the hours, the plan windows decide the strategy.
-//! The ground the days after it open with is then the same, so they can
-//! keep the best schedule's own hours, which the dispatch rarely matches:
-//! those hours came from dispatches following earlier targets. The dispatch
-//! from the day's end is tried as well, and the better kept.
-//!
 //! Every candidate keeps the best schedule's hours before its window and is
-//! dispatched from the state they leave, so a polished day is not undone by
-//! a later plan window starting after it. A polished day also leaves each
-//! pile having received and given up what the best schedule's did, so the
-//! piles the days after open with hold the same tonnes.
+//! dispatched from the state they leave.
+//!
+//! Schedules are ranked as the exact solve ranks them: cashflow and the
+//! utilisation incentive. The plan values cashflow alone, so each of its
+//! bounds has the most the incentive could pay added.
 //!
 //! The gap is measured against the plan's linear relaxation over the whole
 //! horizon, which is an upper bound on any schedule's value while every
 //! simplification of the plan is optimistic: free order within a day, each
-//! route at its best candidate, the fleet pooled, a reclaim's grade the one
-//! that suits each use of it best. Once a window is the whole horizon, and
-//! nothing is reclaimed, the plan's own dual bound is one as well, and the
-//! tighter of the two is kept. The relaxation is solved in the background
-//! from the start, beside the search rather than ahead of it: on a long
-//! horizon it can take longer than the budget. So is the whole horizon's
-//! plan as a mixed-integer program, for its dual bound and for one more set
-//! of targets when it finishes.
+//! route at its best value and least haul, the fleet pooled, a loader's
+//! bars free of one another, each blast at its earliest release, a
+//! reclaim's grade the one that suits each use of it best. Only the
+//! relaxation is read that way; every other plan sets targets and bounds
+//! nothing. The relaxation is solved in the background once the long-term
+//! plan is, beside the search rather than ahead of it: first in a single
+//! period, which bounds any horizon in seconds, then in finer periods that
+//! tighten the bound where they finish within the budget. The whole
+//! horizon's plan as a mixed-integer program is solved in the background
+//! from the start, for one more set of targets when it finishes.
+//!
+//! When the timeline the search holds takes none of a window's tails, the
+//! tails are dispatched again with the drill and blast chain live, resumed
+//! as the best schedule's hours leave it, so blasts move with the digging.
+//! One that wins gives the search its timeline from then on.
 //!
 //! Cancelling the run, or its time running out, stops every solve the search
 //! has under way and leaves it with the best schedule it has.
@@ -65,16 +56,18 @@ use super::{
     super::{
         background::{self, Background},
         blended::{
+            drill_blast::{Chain, ChainState, DrillBlastTimeline, NEVER},
             greedy,
-            input::BlendInput,
-            plan::PlanTargets,
-            replay::{BlendSolution, ChunkRow, MovementRow, ReplayReport, replay_cancellable},
+            input::{BlendInput, authored_tasks, interval_rate, task_active},
+            plan::{PlanTargets, Route},
+            replay::{BlendSolution, MovementRow, ReplayReport, replay_as_published},
             rolling::{self, Carry, Stitched},
+            routing, utilisation,
         },
     },
     plan::{self, PlanSolve, Settings, Window},
 };
-use crate::model::schedule::optimisation::{DestinationKind, SourceId, StockpileId, TaskKind};
+use crate::model::schedule::optimisation::{Activity, GroundId, SourceId, TaskKind};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct AnytimeSettings {
@@ -82,35 +75,12 @@ pub(crate) struct AnytimeSettings {
     pub(crate) window_days: u32,
     pub(crate) step_days: u32,
     pub(crate) window_limit: Duration,
-    /// Days per polished window, and the time each gets.
-    pub(crate) polish_days: u32,
-    /// Days solved past each polished window and then discarded.
-    pub(crate) polish_lookahead_days: u32,
-    pub(crate) polish_limit: Duration,
-    /// Windows whose exact model would have more movement columns than this
-    /// are not polished.
-    pub(crate) polish_columns: usize,
-    /// Solve the whole horizon's plan in the background for a bound.
+    /// Solve long-term plans over the whole horizon in the background, for
+    /// their targets.
     pub(crate) background_bound: bool,
     /// A gap to the bound at or below which there is nothing left worth
     /// searching for.
     pub(crate) closed_gap: f64,
-}
-
-/// Solves one window's exact hourly model from a schedule of it, within a
-/// time limit, holding what [`Hold`] says: the window's own input and
-/// schedule, in its own interval numbering. The SCIP side lives with the
-/// app's other solves.
-pub(crate) type Polisher<'a> = &'a (dyn Fn(&BlendInput, &BlendSolution, &Hold, Duration) -> Option<BlendSolution> + Sync);
-
-/// Where a polished window must leave things at the end of its interval
-/// `kept`, as the schedule it polishes does.
-pub(crate) struct Hold {
-    pub(crate) kept: usize,
-    /// What each block of the window's input (by position) holds.
-    pub(crate) blocks: Vec<(usize, f64)>,
-    /// What each pile has received and given up over the kept intervals.
-    pub(crate) piles: Vec<(StockpileId, f64, f64)>,
 }
 
 impl AnytimeSettings {
@@ -122,10 +92,6 @@ impl AnytimeSettings {
             window_days: 5,
             step_days: 3,
             window_limit: Duration::from_secs(60),
-            polish_days: 1,
-            polish_lookahead_days: 1,
-            polish_limit: Duration::from_secs(60),
-            polish_columns: 400_000,
             background_bound: true,
             closed_gap: gap_target.unwrap_or(DEFAULT_CLOSED_GAP),
         }
@@ -139,6 +105,9 @@ pub(crate) struct Found {
     pub(crate) replay: ReplayReport,
     pub(crate) bound: Option<f64>,
     pub(crate) kept: usize,
+    /// The drill and blast timeline the schedule keeps, when the search
+    /// moved blasts off the first schedule's.
+    pub(crate) drill_blast: Option<DrillBlastTimeline>,
 }
 
 /// The best schedule so far and the replay's report on it.
@@ -148,8 +117,10 @@ struct Best {
 }
 
 impl Best {
+    /// What the search ranks schedules by: the replay's cashflow and the
+    /// utilisation incentive, as the exact solve and the dispatch rank them.
     fn value(&self) -> f64 {
-        self.replay.replayed_objective
+        self.replay.ranked_objective()
     }
 }
 
@@ -170,9 +141,102 @@ fn whole(first: usize, end: usize) -> rolling::Window {
     }
 }
 
+/// A tail tried: the schedule, or why it is none, `None` when it was not
+/// dispatched or replayed at all.
+type Tried = Result<Best, Option<String>>;
+
+/// Time the tails spend dispatching and replaying, summed over the threads
+/// that run them side by side.
+#[derive(Default)]
+struct Timing {
+    dispatch_ns: std::sync::atomic::AtomicU64,
+    replay_ns: std::sync::atomic::AtomicU64,
+}
+
+impl Timing {
+    fn add(counter: &std::sync::atomic::AtomicU64, since: Instant) {
+        counter.fetch_add(since.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    }
+}
+
+/// A hash of what a tail is dispatched to follow.
+fn targets_fingerprint(targets: &PlanTargets) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for (&(loader, activity, destination, day), tonnes) in &targets.routes {
+        (loader, activity, destination.0, day, tonnes.to_bits()).hash(&mut hasher);
+    }
+    (targets.follow.to_bits(), targets.overrun.to_bits()).hash(&mut hasher);
+    for (key, value) in &targets.values {
+        (key, value.to_bits()).hash(&mut hasher);
+    }
+    targets.planned.hash(&mut hasher);
+    for (route, curve) in &targets.timing {
+        route.hash(&mut hasher);
+        for (hour, tonnes) in curve {
+            (hour.to_bits(), tonnes.to_bits()).hash(&mut hasher);
+        }
+    }
+    hasher.finish()
+}
+
+/// A hash of a schedule: its movements, durations and drill and blast
+/// timeline.
+fn schedule_fingerprint(solution: &BlendSolution) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for row in &solution.movements {
+        (row.candidate, row.interval, row.segment, row.tonnes_t.to_bits()).hash(&mut hasher);
+    }
+    for (key, duration) in &solution.durations {
+        (key, duration.to_bits()).hash(&mut hasher);
+    }
+    if let Some(timeline) = &solution.drill_blast {
+        serde_json::to_string(timeline).unwrap_or_default().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// What `replay` rejects a schedule for, its numbers left out so that alike
+/// reasons count together: the first physical rule it breaks, or else the
+/// first grade condition.
+fn rejection(replay: &ReplayReport) -> String {
+    let issue = replay.issues.first().or(replay.grade_issues.first()).map_or("", String::as_str);
+    let mut kind = String::new();
+    for c in issue.chars() {
+        if c.is_ascii_digit() || c == '.' || c == '-' {
+            if !kind.ends_with('#') {
+                kind.push('#');
+            }
+        } else {
+            kind.push(c);
+        }
+    }
+    kind
+}
+
+/// A replayed schedule, or why the replay rejects it.
+fn accepted(solution: BlendSolution, replay: ReplayReport) -> Tried {
+    if replay.is_valid() {
+        Ok(Best { solution, replay })
+    } else {
+        Err(Some(rejection(&replay)))
+    }
+}
+
 /// `best`'s intervals before `first`, then `pieces` (each in its own
-/// numbering), replayed against the whole horizon: `None` unless valid.
-fn stitch(input: &BlendInput, best: &Best, first: usize, pieces: &[(rolling::Window, &BlendSolution)], cancel: &AtomicBool) -> Option<Best> {
+/// numbering), replayed against the whole horizon, the whole on `timeline`
+/// when the pieces moved the blasts.
+fn stitch_on(
+    input: &BlendInput,
+    best: &Best,
+    first: usize,
+    pieces: &[(rolling::Window, &BlendSolution)],
+    timeline: Option<DrillBlastTimeline>,
+    timing: &Timing,
+    cancel: &AtomicBool,
+) -> Tried {
+    let replaying = Instant::now();
     let mut stitched = Stitched::new();
     if first > 0 {
         stitched.keep(input, whole(0, first), &best.solution, 0.0);
@@ -181,159 +245,122 @@ fn stitch(input: &BlendInput, best: &Best, first: usize, pieces: &[(rolling::Win
         stitched.keep(input, *window, solution, 0.0);
     }
     let mut solution = stitched.finish(input);
+    // Each candidate carries the timeline it is replayed on: its own, or
+    // the one the search holds.
+    solution.drill_blast = timeline.or_else(|| input.drill_blast.as_ref().and_then(|chain| chain.fixed.clone()));
     // The pieces' own objectives do not add up to the whole's: grade
     // targets are priced by day over all of them. The replay's figure is
     // the one reported.
-    let first_look = replay_cancellable(input, &solution, cancel)?;
-    solution.reported_objective = first_look.ranked_objective();
-    let replay = replay_cancellable(input, &solution, cancel)?;
-    replay.is_valid().then_some(Best { solution, replay })
+    let replay = replay_as_published(input, &mut solution, cancel);
+    Timing::add(&timing.replay_ns, replaying);
+    accepted(solution, replay.ok_or(None)?)
 }
 
 /// The dispatch from interval `first` to the end, following `targets`, after
 /// `best`'s intervals before it.
-fn redispatch(input: &BlendInput, best: &Best, first: usize, targets: &PlanTargets, cancel: &AtomicBool) -> Option<Best> {
+fn redispatch(input: &BlendInput, best: &Best, first: usize, targets: &PlanTargets, timing: &Timing, cancel: &AtomicBool) -> Tried {
+    let dispatching = Instant::now();
     if first == 0 {
-        let found = greedy::dispatch_following(input, Some(targets), cancel).ok()??;
-        return found.replay.is_valid().then_some(Best {
-            solution: found.solution,
-            replay: found.replay,
-        });
+        // Dispatched and replayed in one: counted as dispatch.
+        let found = greedy::dispatch_following(input, Some(targets), cancel);
+        Timing::add(&timing.dispatch_ns, dispatching);
+        let found = found.map_err(Some)?.ok_or(None)?;
+        return accepted(found.solution, found.replay);
     }
     let count = input.intervals.len();
     let tail = carried(input, best, first).window_input(input, whole(first, count));
-    let found = greedy::dispatch_following(&tail, Some(&targets.rebased(&tail)), cancel).ok()??;
-    stitch(input, best, first, &[(whole(first, count), &found.solution)], cancel)
+    // Stitching replays the whole horizon, the tail with it.
+    let found = greedy::dispatch_unreplayed(&tail, input, Some(&targets.rebased(&tail)), cancel);
+    Timing::add(&timing.dispatch_ns, dispatching);
+    let found = found.map_err(Some)?.ok_or(None)?;
+    stitch_on(input, best, first, &[(whole(first, count), &found)], None, timing, cancel)
 }
 
-/// `best`'s rows in intervals `first..end`, renumbered from `first`.
-fn slice(best: &Best, first: usize, end: usize) -> BlendSolution {
-    let range = first..end;
-    BlendSolution {
-        movements: best
-            .solution
-            .movements
-            .iter()
-            .filter(|row| range.contains(&row.interval))
-            .map(|row| MovementRow {
-                interval: row.interval - first,
-                ..*row
-            })
-            .collect(),
-        durations: best
-            .solution
-            .durations
-            .iter()
-            .filter(|((interval, _), _)| range.contains(interval))
-            .map(|(&(interval, segment), &duration)| ((interval - first, segment), duration))
-            .collect(),
-        chunks: best
-            .solution
-            .chunks
-            .iter()
-            .filter(|row| range.contains(&row.interval))
-            .map(|row| ChunkRow {
-                interval: row.interval - first,
-                ..row.clone()
-            })
-            .collect(),
-        reported_objective: 0.0,
-        adjustments: Default::default(),
-        drill_blast: None,
+/// The drill and blast chain as `best`'s hours before interval `first` leave
+/// it, simulated afresh on what they dig, as the dispatch walks it.
+fn chain_at(input: &BlendInput, best: &Best, first: usize) -> Option<ChainState> {
+    /// Ground below this stands no more, as the dispatch reads it.
+    const STANDING_T: f64 = 1e-9;
+    let mut free = input.drill_blast.clone()?;
+    free.fixed = None;
+    free.resume = None;
+    let mut dug: Vec<Vec<(GroundId, f64)>> = vec![Vec::new(); first];
+    for row in best.solution.movements.iter().filter(|row| row.interval < first) {
+        if let Some(candidate) = input.movements.get(row.candidate)
+            && candidate.activity == Activity::Dig
+            && let SourceId::Ground(ground) = candidate.source
+        {
+            dug[row.interval].push((ground, row.tonnes_t));
+        }
     }
+    let mut left: BTreeMap<GroundId, f64> = input.ground.iter().map(|source| (source.id, source.tonnes_t)).collect();
+    let mut chain = Chain::new(&free);
+    for (interval, rows) in input.intervals[..first].iter().zip(&dug) {
+        chain.advance(*interval, |ground| left.get(&ground).is_some_and(|tonnes| *tonnes > STANDING_T));
+        for (ground, tonnes) in rows {
+            if let Some(slot) = left.get_mut(ground) {
+                *slot -= tonnes;
+            }
+        }
+    }
+    Some(chain.state())
 }
 
-/// Polish `days` days from `first_day`: their exact hourly model, with
-/// `lookahead` days more solved and discarded, from `best`'s hours, then the
-/// dispatch again from where the kept days end.
+/// [`redispatch`] with the chain live from `first`: resumed from `state`,
+/// as `best`'s hours before it leave it, so the tail may move blasts.
 #[allow(clippy::too_many_arguments)]
-fn polish(
+fn redispatch_live(
     input: &BlendInput,
+    live: &BlendInput,
     best: &Best,
-    first_day: u32,
-    days: u32,
-    lookahead: u32,
+    first: usize,
+    state: Option<&ChainState>,
     targets: &PlanTargets,
-    polisher: Polisher,
-    limit: Duration,
-    columns: usize,
+    timing: &Timing,
     cancel: &AtomicBool,
-) -> Result<Option<Best>, String> {
-    let first = input.intervals.iter().position(|interval| interval.day() >= first_day).ok_or("past the horizon")?;
-    let end = input
-        .intervals
-        .iter()
-        .position(|interval| interval.day() >= first_day + days)
-        .unwrap_or(input.intervals.len());
-    let solved_to = input
-        .intervals
-        .iter()
-        .position(|interval| interval.day() >= first_day + days + lookahead)
-        .unwrap_or(input.intervals.len());
-    let size = input.movements.len() * (solved_to - first) * input.segments_per_interval.max(1);
-    if size > columns {
-        return Err(format!("{size} movement columns"));
+) -> Tried {
+    let dispatching = Instant::now();
+    if first == 0 {
+        // Dispatched and replayed in one: counted as dispatch.
+        let found = greedy::dispatch_following(live, Some(targets), cancel);
+        Timing::add(&timing.dispatch_ns, dispatching);
+        let found = found.ok().flatten().ok_or(None)?;
+        return accepted(found.solution, found.replay);
     }
-    let mut carry = carried(input, best, first);
-    let window = rolling::Window {
-        first,
-        committed: end - first,
-        end: solved_to,
-    };
-    let local = carry.window_input(input, window);
-    // Every block where the best schedule leaves it by the end of the kept
-    // days.
-    let left_by_then = Window::opening(input, &best.solution, None, first_day + days, 0).remaining;
-    let mut piles: BTreeMap<StockpileId, (f64, f64)> = input.piles.iter().map(|pile| (pile.id, (0.0, 0.0))).collect();
-    for row in best.solution.movements.iter().filter(|row| (first..end).contains(&row.interval)) {
-        let candidate = &input.movements[row.candidate];
-        if let Some(DestinationKind::Stockpile(pile)) = input.destinations.iter().find(|entry| entry.id == candidate.destination).map(|entry| entry.kind)
-            && let Some(flows) = piles.get_mut(&pile)
-        {
-            flows.0 += row.tonnes_t;
-        }
-        if let SourceId::Stockpile(pile) = candidate.source
-            && let Some(flows) = piles.get_mut(&pile)
-        {
-            flows.1 += row.tonnes_t;
-        }
-    }
-    let hold = Hold {
-        kept: end - first - 1,
-        blocks: local
-            .ground
-            .iter()
-            .enumerate()
-            .map(|(index, source)| (index, left_by_then.get(&source.id).copied().unwrap_or(0.0)))
-            .collect(),
-        piles: piles.into_iter().map(|(pile, (received, reclaimed))| (pile, received, reclaimed)).collect(),
-    };
-    let Some(polished) = polisher(&local, &slice(best, first, solved_to), &hold, limit) else {
-        return Ok(None);
-    };
-    // The window's own objective prices its grade targets on its days
-    // alone; the replay's figure is the one reported, as when stitching.
-    let mut polished = polished;
-    let Some(first_look) = replay_cancellable(&local, &polished, cancel) else {
-        return Ok(None);
-    };
-    polished.reported_objective = first_look.ranked_objective();
-    let Some(checked) = replay_cancellable(&local, &polished, cancel) else {
-        return Ok(None);
-    };
-    if !checked.is_valid() {
-        return Ok(None);
-    }
+    let state = state.ok_or(None)?.clone();
     let count = input.intervals.len();
-    if end == count {
-        return Ok(stitch(input, best, first, &[(whole(first, end), &polished)], cancel));
+    let mut tail = carried(input, best, first).window_input(input, whole(first, count));
+    if let Some(chain) = tail.drill_blast.as_mut() {
+        chain.fixed = None;
+        chain.resume = Some(state);
     }
-    let kept_after = stitch(input, best, first, &[(window, &polished), (whole(end, count), &slice(best, end, count))], cancel);
-    carry.advance(input, window, &polished, &checked);
-    let tail = carry.window_input(input, whole(end, count));
-    let dispatched_after = greedy::dispatch_following(&tail, Some(&targets.rebased(&tail)), cancel)?
-        .and_then(|found| stitch(input, best, first, &[(window, &polished), (whole(end, count), &found.solution)], cancel));
-    Ok([kept_after, dispatched_after].into_iter().flatten().max_by(|a, b| a.value().total_cmp(&b.value())))
+    let found = greedy::dispatch_unreplayed(&tail, input, Some(&targets.rebased(&tail)), cancel);
+    Timing::add(&timing.dispatch_ns, dispatching);
+    let found = found.ok().flatten().ok_or(None)?;
+    let timeline = found.drill_blast.clone();
+    stitch_on(input, best, first, &[(whole(first, count), &found)], timeline, timing, cancel)
+}
+
+/// How `moved` fires the blasts against `held`: how many sooner, how many
+/// later, and the days they moved by in all.
+fn moved_blasts(held: Option<&DrillBlastTimeline>, moved: &DrillBlastTimeline) -> String {
+    let (mut sooner, mut later, mut days) = (0, 0, 0.0);
+    for (index, events) in moved.blasts.iter().enumerate() {
+        let before = held.and_then(|held| held.blasts.get(index)).and_then(|events| events.fired_h).unwrap_or(NEVER);
+        let after = events.fired_h.unwrap_or(NEVER);
+        if (after - before).abs() < 1e-6 {
+            continue;
+        }
+        if after < before {
+            sooner += 1
+        } else {
+            later += 1
+        }
+        if after < NEVER && before < NEVER {
+            days += (after - before).abs() / 24.0;
+        }
+    }
+    format!("{sooner} fire sooner, {later} later, {days:.1} days moved")
 }
 
 #[derive(Clone, Debug)]
@@ -357,26 +384,250 @@ const WEIGHTS: [(f64, f64); 3] = [(1.0, 0.0), (1.0, 1.0), (2.0, 2.0)];
 /// How long the search waits for its background plan to stop.
 const BACKGROUND_GRACE: Duration = Duration::from_secs(2);
 
+/// What the plan windows have tried, reported when the search ends: whether
+/// it found few candidates or poor ones.
+#[derive(Default)]
+struct Tally {
+    plans: usize,
+    failed: usize,
+    timed_out: usize,
+    /// Plans whose seed broke a row or bound of the window's model.
+    seeds_broken: usize,
+    columns: usize,
+    rows: usize,
+    solve_s: f64,
+    /// Tails dispatched, those the replay accepted, and why it rejected
+    /// the others.
+    dispatched: usize,
+    valid: usize,
+    rejected: BTreeMap<String, usize>,
+    /// Wall time the tails took, run side by side; and the CPU time their
+    /// dispatches and replays took, summed over the threads.
+    tails_s: f64,
+    timing: Timing,
+    /// Tails dispatched to follow targets already followed from the same
+    /// schedule and interval, so bound to decode the same; valid tails that
+    /// decode to the schedule they started from, or to one another tail
+    /// from it decoded already.
+    repeated: usize,
+    unchanged: usize,
+    duplicates: usize,
+    /// Distinct valid tails worth the same as the schedule they started
+    /// from, to the search's own tolerance, and those worth less.
+    ties: usize,
+    worse: usize,
+    kept: usize,
+    /// Over each window's best candidate: dug tonnes the plan set, the
+    /// candidate dug, and dug in the same loader's bar as the plan set.
+    planned_t: f64,
+    executed_t: f64,
+    matched_t: f64,
+}
+
+impl Tally {
+    fn plan(&mut self, planned: &PlanSolve) {
+        self.plans += 1;
+        self.timed_out += usize::from(planned.status.contains("TimeLimit"));
+        self.seeds_broken += usize::from(planned.seed_violations.is_some_and(|broken| broken > 0));
+        self.columns += planned.variables;
+        self.rows += planned.rows;
+        self.solve_s += planned.solve_s;
+    }
+
+    /// Compare what `planned` set each loader's bars over `covered` with
+    /// what `found` dug there; `bar` is each (loader, block)'s first bar.
+    fn follow(&mut self, input: &BlendInput, bar: &BTreeMap<(usize, GroundId), usize>, planned: &PlanSolve, found: &BlendSolution, covered: &BTreeSet<u32>) {
+        let loaders: BTreeMap<_, usize> = input.loaders.iter().enumerate().map(|(index, loader)| (loader.id, index)).collect();
+        let mut set: BTreeMap<(usize, usize), f64> = BTreeMap::new();
+        for (&(loader_index, ground), tonnes) in &planned.dug {
+            if let Some(&task) = bar.get(&(loader_index, ground)) {
+                *set.entry((loader_index, task)).or_default() += tonnes;
+            }
+        }
+        let mut dug: BTreeMap<(usize, usize), f64> = BTreeMap::new();
+        for row in &found.movements {
+            let candidate = &input.movements[row.candidate];
+            let (Activity::Dig, SourceId::Ground(ground)) = (candidate.activity, candidate.source) else {
+                continue;
+            };
+            if !input.intervals.get(row.interval).is_some_and(|interval| covered.contains(&interval.day())) {
+                continue;
+            }
+            let Some(&loader_index) = loaders.get(&candidate.loader) else { continue };
+            if let Some(&task) = bar.get(&(loader_index, ground)) {
+                *dug.entry((loader_index, task)).or_default() += row.tonnes_t;
+            }
+        }
+        self.planned_t += set.values().sum::<f64>();
+        self.executed_t += dug.values().sum::<f64>();
+        self.matched_t += set.iter().map(|(key, tonnes)| tonnes.min(dug.get(key).copied().unwrap_or(0.0))).sum::<f64>();
+    }
+
+    fn summary(&self) -> String {
+        let per = |total: usize| total.checked_div(self.plans).unwrap_or(0);
+        let mut rejected: Vec<(&String, &usize)> = self.rejected.iter().collect();
+        rejected.sort_by(|a, b| b.1.cmp(a.1));
+        let rejected: Vec<String> = rejected.iter().take(3).map(|(kind, count)| format!("{count} × {kind}")).collect();
+        format!(
+            "windows: {} plans ({} failed, {} timed out, {} with a broken seed), {} columns and {} rows each on average, {:.1}s solving; \
+             {} tails dispatched in {:.1}s wall ({:.1}s dispatching and {:.1}s replaying, CPU summed over threads), {} valid, {} kept; \
+             {} repeating targets, {} unchanged, {} duplicates, {} ties, {} worse; rejected for: {}; dug by bar: {:.0} kt planned, {:.0} kt dug, {:.0} kt as planned",
+            self.plans,
+            self.failed,
+            self.timed_out,
+            self.seeds_broken,
+            per(self.columns),
+            per(self.rows),
+            self.solve_s,
+            self.dispatched,
+            self.tails_s,
+            self.timing.dispatch_ns.load(Ordering::Relaxed) as f64 / 1e9,
+            self.timing.replay_ns.load(Ordering::Relaxed) as f64 / 1e9,
+            self.valid,
+            self.kept,
+            self.repeated,
+            self.unchanged,
+            self.duplicates,
+            self.ties,
+            self.worse,
+            if rejected.is_empty() { "nothing".to_owned() } else { rejected.join(", ") },
+            self.planned_t / 1e3,
+            self.executed_t / 1e3,
+            self.matched_t / 1e3,
+        )
+    }
+}
+
 /// [`AnytimeSettings::closed_gap`] for a run with no gap target.
 const DEFAULT_CLOSED_GAP: f64 = 1e-4;
 
-/// What `solution` earns from its movements on each day.
-fn earned(input: &BlendInput, solution: &BlendSolution) -> BTreeMap<u32, f64> {
-    let mut earned: BTreeMap<u32, f64> = BTreeMap::new();
-    for row in &solution.movements {
-        if let (Some(interval), Some(candidate)) = (input.intervals.get(row.interval), input.movements.get(row.candidate)) {
-            *earned.entry(interval.day()).or_default() += row.tonnes_t * candidate.value_per_tonne().unwrap_or(0.0);
-        }
-    }
-    earned
+/// The long-term plan solved beside the search covers the horizon in about
+/// this many periods, of a day at least and [`LONG_TERM_DAYS`] at most: on
+/// a horizon of a few days, a week-long period would average away the days
+/// the plan is for (a 3-day mine lost 1.4% to it), while 52 days in weeks
+/// solve in seconds.
+const LONG_TERM_PERIODS: u32 = 8;
+
+/// The longest long-term plan period. A second plan over four days, after
+/// a weekly one, took 20-40 s on the worlds with blasts and was kept on none
+/// of them; the core it took was worth more to the search.
+const LONG_TERM_DAYS: u32 = 7;
+
+/// The long-term plan's period for a horizon of `days`.
+fn long_term_days(days: u32) -> u32 {
+    days.div_ceil(LONG_TERM_PERIODS).clamp(1, LONG_TERM_DAYS)
 }
 
-/// The background plan, once it has finished; waited for when `wait`.
-fn finished(background: &mut Option<Background<Result<PlanSolve, String>>>, wait: bool) -> Option<Result<PlanSolve, String>> {
-    if background.as_ref().is_some_and(|handle| wait || handle.is_finished()) {
-        return background.take().map(|handle| handle.join().unwrap_or_else(|| Err("the background plan panicked".into())));
+/// A search that gains less than `SEARCH_STALL_GAIN` of its value over
+/// `SEARCH_STALL_S`, once `SEARCH_MIN_S` in, ends and leaves the rest of the
+/// budget to the reroute: its late gains are mostly routing the reroute
+/// finds anyway (centralia, from 23 s to 98 s: $774k before rerouting,
+/// $233k after). The stall must also last `SEARCH_STALL_WINDOWS` windows:
+/// 20 s is seven of centralia's windows but two of trucks60's, whose
+/// digging gains then turned on whether two windows took 19 s or 21 s.
+const SEARCH_MIN_S: f64 = 30.0;
+const SEARCH_STALL_S: f64 = 20.0;
+const SEARCH_STALL_GAIN: f64 = 5e-4;
+const SEARCH_STALL_WINDOWS: usize = 5;
+/// Rounds of cuts at most at a window plan's root.
+const WINDOW_CUT_ROUNDS: i64 = 4;
+
+/// The gap a long-term plan stops at. Its answer is only targets, and
+/// proving it took 40% of its solve: on Centralia the optimum was found at
+/// 12 s and proved at 20 s.
+const LONG_TERM_GAP: f64 = 2e-2;
+
+/// The long-term plans solved beside the search (see [`plan::long_term`]),
+/// over the schedule's ground in parcels, which a long horizon needs.
+struct LongTerm {
+    worker: Background<()>,
+    planned: std::sync::mpsc::Receiver<(u32, Result<PlanSolve, String>)>,
+    /// Plans received and not yet tried.
+    pending: Vec<(u32, Result<PlanSolve, String>)>,
+}
+
+impl LongTerm {
+    fn start(input: &BlendInput, first: &BlendSolution, period: u32, limit: Duration, ending: &Arc<AtomicBool>) -> Option<Self> {
+        // Leave the digging search time to follow these targets and sweep
+        // windows before the final routing reserve begins.
+        let limit = limit / 4;
+        let (input, first, ending) = (input.clone(), first.clone(), Arc::clone(ending));
+        let (sender, planned) = std::sync::mpsc::channel();
+        let worker = background::spawn("schedule-long-term", move || {
+            let started = Instant::now();
+            let (parcelled, candidates) = super::parcels::parcels(&input);
+            // The first schedule starts it: its flags, fixed, leave the
+            // solver a plan to improve on from the outset.
+            let seed = super::parcels::seed(&first, &candidates);
+            let left = limit.saturating_sub(started.elapsed());
+            if left.is_zero() || ending.load(Ordering::Relaxed) {
+                return;
+            }
+            let settings = Settings {
+                time_limit: left,
+                relative_gap: LONG_TERM_GAP,
+                relax: false,
+                cut_rounds: None,
+            };
+            let _ = sender.send((period, plan::long_term(&parcelled, Some(&seed), period, settings, &ending)));
+        });
+        match worker {
+            Ok(worker) => Some(Self {
+                worker,
+                planned,
+                pending: Vec::new(),
+            }),
+            Err(error) => {
+                log::warn!("the search's long-term plan was not started: {error}");
+                None
+            }
+        }
     }
-    None
+
+    /// Whether a plan has arrived that the search has not tried.
+    fn ready(&mut self) -> bool {
+        self.pending.extend(self.planned.try_iter());
+        !self.pending.is_empty()
+    }
+}
+
+/// A period plan's routes as daily targets, spread over the loader's
+/// scheduled capacity rather than asking for deliveries while its bars are shut.
+fn daily_routes(input: &BlendInput, routes: &BTreeMap<Route, f64>, periods: &BTreeMap<u32, Vec<u32>>) -> BTreeMap<Route, f64> {
+    let mut capacity: BTreeMap<(usize, u32), f64> = BTreeMap::new();
+    for (loader_index, loader) in input.loaders.iter().enumerate() {
+        let tasks: Vec<_> = input.tasks.iter().filter(|task| task.loader == loader.id).collect();
+        for interval in &input.intervals {
+            let Some(rate) = interval_rate(loader, interval.index) else { continue };
+            let speed = tasks
+                .iter()
+                .filter(|task| task_active(task, *interval))
+                .map(|task| match &task.kind {
+                    TaskKind::Dig { .. } => rate.dig_tph,
+                    TaskKind::Reclaim { .. } => rate.reclaim_tph,
+                    TaskKind::Delay => 0.0,
+                })
+                .fold(0.0_f64, f64::max);
+            *capacity.entry((loader_index, interval.day())).or_default() += speed * interval.duration_h();
+        }
+    }
+    let mut daily = BTreeMap::new();
+    for (&(loader, activity, destination, label), &tonnes) in routes {
+        let Some(span) = periods.get(&label) else { continue };
+        let capacities: Vec<f64> = span.iter().map(|day| capacity.get(&(loader, *day)).copied().unwrap_or(0.0)).collect();
+        let total: f64 = capacities.iter().sum();
+        // Preserve uniform targets exactly when the calendar is uniform.
+        let uniform = capacities.windows(2).all(|pair| (pair[0] - pair[1]).abs() <= 1e-9 * pair[0].max(pair[1]).max(1.0));
+        for (index, day) in span.iter().enumerate() {
+            let target = if uniform || total <= 0.0 {
+                tonnes / span.len() as f64
+            } else {
+                tonnes * (capacities[index] / total)
+            };
+            *daily.entry((loader, activity, destination, *day)).or_default() += target;
+        }
+    }
+    daily
 }
 
 /// The relaxations solved beside the search, coarsest first, and what each
@@ -384,19 +635,25 @@ fn finished(background: &mut Option<Background<Result<PlanSolve, String>>>, wait
 struct Relaxations {
     worker: Background<()>,
     proved: std::sync::mpsc::Receiver<(u32, Result<PlanSolve, String>)>,
+    /// [`utilisation::ceiling`]: the plan values cashflow alone.
+    incentive: f64,
 }
 
 impl Relaxations {
-    /// Solve the whole horizon's relaxation over periods of each of
-    /// [`PERIOD_DAYS`] in turn, within `limit` in all: a coarse one proves a
-    /// bound in seconds on any horizon, and each finer one that finishes in
-    /// time tightens it.
+    /// Solve the whole horizon's relaxation in one period, then over periods
+    /// of each of [`PERIOD_DAYS`] shorter than the horizon in turn, within
+    /// `limit` in all: the single period proves a bound in seconds on any
+    /// horizon, and each finer one that finishes in time tightens it. Fourteen
+    /// days was the coarsest once, and over the long horizon's 114 days it
+    /// never finished in six minutes; in one period it took 18 s.
     fn start(input: &BlendInput, horizon_days: u32, limit: Duration, ending: &Arc<AtomicBool>) -> Option<Self> {
+        let incentive = utilisation::ceiling(input);
         let (input, ending) = (input.clone(), Arc::clone(ending));
         let (sender, proved) = std::sync::mpsc::channel();
         let worker = background::spawn("schedule-relaxations", move || {
             let started = Instant::now();
-            for period in PERIOD_DAYS.into_iter().filter(|period| *period == 1 || *period < horizon_days) {
+            let whole = horizon_days.max(1);
+            for period in std::iter::once(whole).chain(PERIOD_DAYS.into_iter().filter(|period| *period < whole)) {
                 let left = limit.saturating_sub(started.elapsed());
                 if left.is_zero() || ending.load(Ordering::Relaxed) {
                     return;
@@ -408,7 +665,7 @@ impl Relaxations {
             }
         });
         match worker {
-            Ok(worker) => Some(Self { worker, proved }),
+            Ok(worker) => Some(Self { worker, proved, incentive }),
             Err(error) => {
                 log::warn!("the search's relaxation bound was not started: {error}");
                 None
@@ -424,7 +681,7 @@ impl Relaxations {
             .try_iter()
             .map(|(period, solved)| match solved {
                 Ok(relaxed) => {
-                    if let Some(proved) = relaxed.bound {
+                    if let Some(proved) = relaxed.bound.map(|cashflow| cashflow + self.incentive) {
                         *bound = Some(bound.map_or(proved, |held: f64| held.min(proved)));
                     }
                     format!("relaxation bound over {period}-day periods in {:.0}s, {}", relaxed.solve_s, relaxed.status)
@@ -436,32 +693,313 @@ impl Relaxations {
     }
 }
 
-/// The period lengths the relaxation is solved over, coarsest first; see
-/// [`plan::relaxation_bound`]. Over periods of a week, Centralia's 52 days
-/// take 14 s, by the day they take more than five minutes.
-const PERIOD_DAYS: [u32; 4] = [7, 4, 2, 1];
+/// The period lengths the relaxation is solved over after the whole
+/// horizon's single period, coarsest first; see [`plan::relaxation_bound`].
+/// Over periods of a week, Centralia's 52 days take 14 s, by the day they
+/// take more than five minutes.
+const PERIOD_DAYS: [u32; 5] = [14, 7, 4, 2, 1];
 
 fn relaxed(relaxations: &Option<Relaxations>, bound: &mut Option<f64>) -> Option<String> {
     relaxations.as_ref()?.take(bound)
 }
 
-/// Search from `start`, a schedule of `input` the replay accepted, until the
-/// budget is spent, `cancel` is set or there is nothing left to find.
-pub(crate) fn run(
+/// The routing LP holds digging and durations, so intermediate steps keep
+/// the same physical capacities. Reclaim grades are nonlinear, however:
+/// judge a partial step rather than trusting the linearised full move.
+fn routing_step(opening: &BlendSolution, proposed: &BlendSolution, fraction: f64) -> BlendSolution {
+    let mut tonnes: BTreeMap<(usize, usize, usize), f64> = BTreeMap::new();
+    for (solution, weight) in [(opening, 1.0 - fraction), (proposed, fraction)] {
+        for row in &solution.movements {
+            *tonnes.entry((row.candidate, row.interval, row.segment)).or_default() += weight * row.tonnes_t;
+        }
+    }
+    let movements = tonnes
+        .into_iter()
+        .filter(|(_, tonnes)| *tonnes > 0.0)
+        .map(|((candidate, interval, segment), tonnes_t)| MovementRow {
+            candidate,
+            interval,
+            segment,
+            tonnes_t,
+        })
+        .collect();
+    BlendSolution { movements, ..opening.clone() }
+}
+
+/// `best` rerouted window by window by `reserve`'s program, each window kept
+/// as it improves, so a deadline (`ends`) inside one keeps what the windows
+/// before it found. What happened, for the record.
+/// One window of a reroute pass, kept when the replay finds it valid and
+/// worth more; with `line_search` (a linearised reclaim move) half, a
+/// quarter and three quarters of the move are judged too. What happened,
+/// for the record.
+#[allow(clippy::too_many_arguments)]
+fn reroute_window(
+    input: &BlendInput,
+    groups: &routing::Groups,
+    best: &mut Best,
+    value: &mut f64,
+    program: routing::Program,
+    reach: f64,
+    open_reclaim: bool,
+    free_digging: bool,
+    line_search: bool,
+    window: Option<&std::ops::Range<usize>>,
+    window_ends: Instant,
+    ends: Instant,
+    cancel: &AtomicBool,
+) -> String {
+    match routing::reroute(input, groups, &best.solution, program, reach, open_reclaim, free_digging, window, window_ends) {
+        Ok(mut solution) => {
+            let opening = line_search.then(|| best.solution.clone());
+            let proposed = opening.as_ref().map(|_| solution.clone());
+            let mut step = 1.0;
+            let mut judged = replay_as_published(input, &mut solution, cancel);
+            if let (Some(opening), Some(proposed)) = (&opening, &proposed) {
+                for fraction in [0.5, 0.25, 0.75] {
+                    if Instant::now() >= ends || cancel.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let mut partial = routing_step(opening, proposed, fraction);
+                    if let Some(replay) = replay_as_published(input, &mut partial, cancel)
+                        && replay.is_valid()
+                        && judged.as_ref().is_none_or(|held| !held.is_valid() || replay.ranked_objective() > held.ranked_objective())
+                    {
+                        solution = partial;
+                        judged = Some(replay);
+                        step = fraction;
+                    }
+                }
+            }
+            match judged {
+                Some(replay) if replay.is_valid() && replay.ranked_objective() > *value => {
+                    let gain = replay.ranked_objective() - *value;
+                    *value = replay.ranked_objective();
+                    *best = Best { solution, replay };
+                    format!("{gain:.0} better (step {step})")
+                }
+                Some(replay) => format!("not kept: valid {}, {:.0} better", replay.is_valid(), replay.ranked_objective() - *value),
+                None => "not kept: cancelled".into(),
+            }
+        }
+        Err(error) => format!("not kept: {error}"),
+    }
+}
+
+fn reroute_best(input: &BlendInput, groups: &routing::Groups, best: &mut Best, value: &mut f64, reserve: routing::Reserve, ends: Instant, cancel: &AtomicBool) -> String {
+    let mut notes: Vec<String> = Vec::new();
+    // First keep the reserved passes' gains. A wider linearised move can
+    // give a worse direction even after backtracking, so try it only in the
+    // time those passes leave, without cutting the digging search short.
+    // Refine with smaller moves afterwards: the changed pile blends make
+    // the next linearisation more accurate near its new opening schedule.
+    let passes = reserve.passes + 3 * usize::from(reserve.program != routing::Program::Held);
+    // Spare passes refine locally: a large drawing LP can spend the entire
+    // remainder without completing even one move. Smaller routing windows
+    // keep the horizon's pile chains while giving each move time to finish.
+    let windows_for = |pass| reserve.windows * if pass >= reserve.passes { 2 } else { 1 };
+    let total: usize = (0..passes).map(windows_for).sum();
+    for (done, (pass, index)) in (0..passes).flat_map(|pass| (0..windows_for(pass)).map(move |index| (pass, index))).enumerate() {
+        if Instant::now() >= ends || cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        // One window may take at most half of what is left, or twice its
+        // share when that is more, so a program that solves slowly costs
+        // that window, not every window after it.
+        let left = ends.saturating_duration_since(Instant::now());
+        let window_ends = Instant::now() + left.mul_f64(2.0 / (total - done) as f64).max(left / 2);
+        let window = routing::window(input, windows_for(pass), index);
+        let extra = pass >= reserve.passes;
+        let reach = if extra {
+            1.0 / (pass - reserve.passes + 1) as f64
+        } else if pass > 0 {
+            0.3
+        } else {
+            0.0
+        };
+        // Spare passes may also start reclaim in hours the schedule left
+        // idle; the reserved ones keep to its own, so that their gain is
+        // secured before a larger, slower program.
+        notes.push(reroute_window(
+            input,
+            groups,
+            best,
+            value,
+            reserve.program,
+            reach,
+            extra,
+            false,
+            extra,
+            window.as_ref(),
+            window_ends,
+            ends,
+            cancel,
+        ));
+        if Instant::now() >= ends {
+            break;
+        }
+    }
+    let program = match reserve.program {
+        routing::Program::Held => "pile tonnes held",
+        routing::Program::Moving => "pile tonnes moving",
+        routing::Program::Opening => "pile tonnes moving, new cells open",
+    };
+    format!(
+        "rerouted in {} of {} windows: {} ({program}, reserved {:.1}s)",
+        notes.len(),
+        (0..passes).map(windows_for).sum::<usize>(),
+        notes.join("; "),
+        reserve.time.as_secs_f64()
+    )
+}
+
+/// After a run, `start` refined by the reroute's operators until `until`
+/// has gone, for a run allowed to go on: an exact pass with digging free to
+/// move in time within each block, then reclaim passes at reaches of 1, a
+/// half and a third with idle hours open, all in smaller windows. Exact
+/// windows avoid cutting movable blocks where possible. Each window is
+/// kept as it improves, so stopping at any moment
+/// keeps the best schedule found. Within three minutes these lose to the
+/// search and its reroute; after them they keep gaining (centralia +$0.4M
+/// in two minutes, long +$2.9M in seven).
+pub(crate) fn continue_from(
     input: &BlendInput,
     start: (BlendSolution, ReplayReport),
-    settings: AnytimeSettings,
-    polisher: Option<Polisher>,
-    cancel: &Arc<AtomicBool>,
+    until: Duration,
+    cancel: &AtomicBool,
     mut report: impl FnMut(&Progress),
-) -> Found {
+) -> (BlendSolution, ReplayReport) {
     let started = Instant::now();
+    let ends = started + until.saturating_sub(Duration::from_secs_f64(routing::REPLAY_S));
+    let groups = routing::Groups::new(input);
     let mut best = Best {
         solution: start.0,
         replay: start.1,
     };
     let mut value = best.value();
+    // The widest program, whatever its size: there is no search to share
+    // the time with.
+    let plan = routing::plan(input, &groups, &best.solution, Duration::from_secs(86_400));
+    if plan.program == routing::Program::Held {
+        return (best.solution, best.replay);
+    }
+    'cycles: loop {
+        let before = value;
+        let exact_windows = routing::digging_windows(input, &best.solution, plan.windows * 2);
+        for (reach, size) in [(0.0, 2), (1.0, 2), (0.5, 2), (1.0 / 3.0, 2)] {
+            let windows = if reach == 0.0 { exact_windows.len() } else { plan.windows * size };
+            for index in 0..windows {
+                if Instant::now() >= ends || cancel.load(Ordering::Relaxed) {
+                    break 'cycles;
+                }
+                let drawing = reach > 0.0;
+                let window = if drawing {
+                    routing::window(input, windows, index)
+                } else {
+                    exact_windows.get(index).cloned()
+                };
+                // A difficult exact LP can otherwise consume the whole
+                // continuation before later windows get a turn. Share the
+                // remaining time; quick windows pass their unused share on.
+                let window_ends = if drawing {
+                    ends
+                } else {
+                    let now = Instant::now();
+                    now + ends.saturating_duration_since(now) / (windows - index) as u32
+                };
+                let note = reroute_window(
+                    input,
+                    &groups,
+                    &mut best,
+                    &mut value,
+                    plan.program,
+                    reach,
+                    drawing,
+                    !drawing,
+                    drawing,
+                    window.as_ref(),
+                    window_ends,
+                    window_ends,
+                    cancel,
+                );
+                report(&Progress {
+                    elapsed_s: started.elapsed().as_secs_f64(),
+                    value,
+                    bound: None,
+                    note: format!(
+                        "continued, {} at reach {reach:.2} in {window:?}: {note}",
+                        if drawing { "reclaim" } else { "exact, digging free" }
+                    ),
+                });
+            }
+        }
+        // A whole cycle that found nothing will find nothing again.
+        if value <= before + 1.0 {
+            break;
+        }
+    }
+    (best.solution, best.replay)
+}
+
+/// Search from `start`, a schedule of `input` the replay accepted, until the
+/// budget is spent, `cancel` is set or there is nothing left to find.
+pub(crate) fn run(original: &BlendInput, start: (BlendSolution, ReplayReport), settings: AnytimeSettings, cancel: &Arc<AtomicBool>, mut report: impl FnMut(&Progress)) -> Found {
+    let input = original;
+    let started = Instant::now();
+    // The search ends early enough to reroute its schedule's material over
+    // the whole horizon, digging, piles and reclaim held: see `routing`.
+    // Its size follows the schedule, so the time is judged again whenever
+    // the search keeps a better one.
+    let deadline = settings.budget;
+    let groups = routing::Groups::new(input);
+    let reserving = !cancel.load(Ordering::Relaxed);
+    let reserve_for = |schedule: &BlendSolution| {
+        if reserving {
+            routing::reserve(input, &groups, schedule, deadline)
+        } else {
+            routing::Reserve::default()
+        }
+    };
+    let reserve = std::cell::Cell::new(reserve_for(&start.0));
+    let search_budget = || deadline.saturating_sub(reserve.get().time);
+    let mut best = Best {
+        solution: start.0,
+        replay: start.1,
+    };
+    // When no tail on the timeline the search holds improves, tails with the
+    // drill and blast chain simulated afresh are tried, so blasts move with
+    // the digging; one that wins gives the search its timeline from then on.
+    let live = input.drill_blast.is_some().then(|| {
+        let mut live = input.clone();
+        if let Some(chain) = live.drill_blast.as_mut() {
+            chain.fixed = None;
+        }
+        live
+    });
+    let mut adopted: Option<Arc<BlendInput>> = None;
+    let mut value = best.value();
     let mut kept = 0;
+    let mut tally = Tally::default();
+    // What tails have been dispatched to follow, from which schedule and
+    // interval, and what they decoded to: (schedule, interval, live, targets)
+    // and (schedule, decoded).
+    let mut proposals: BTreeSet<(u64, usize, bool, u64)> = BTreeSet::new();
+    let mut decoded_from: BTreeSet<(u64, u64)> = BTreeSet::new();
+    // Each (loader, block)'s first bar, to compare plans and tails by bar.
+    let mut bar: BTreeMap<(usize, GroundId), usize> = BTreeMap::new();
+    for loader_index in 0..input.loaders.len() {
+        for task in authored_tasks(input, loader_index) {
+            if let TaskKind::Dig { sequence } = &input.tasks[task].kind {
+                for &ground in sequence {
+                    bar.entry((loader_index, ground)).or_insert(task);
+                }
+            }
+        }
+    }
+    // The best value after each window, to judge whether the search still
+    // pays.
+    let mut gains: Vec<(f64, f64)> = Vec::new();
+    let mut window_values: Vec<f64> = Vec::new();
     let mut record = |value: f64, bound: Option<f64>, note: String| {
         report(&Progress {
             elapsed_s: started.elapsed().as_secs_f64(),
@@ -472,42 +1010,35 @@ pub(crate) fn run(
     };
     record(value, None, "first schedule".into());
 
-    // A window plan prices reclaim at the blend the best schedule leaves, so
-    // only a plan of the whole horizon from scratch bounds a schedule that
-    // reclaims; see `plan`.
-    let reclaims = input.tasks.iter().any(|task| matches!(task.kind, TaskKind::Reclaim { .. }));
     let mut bound = None;
     // Raised when the search ends, so the background plans stop with it.
     let ending = Arc::new(AtomicBool::new(false));
+    let horizon_days = input.intervals.iter().map(|interval| interval.day()).collect::<BTreeSet<_>>().len() as u32;
     // The relaxation is solved beside the search, not ahead of it: on a long
     // horizon it can take longer than the whole budget, and the search has
-    // no use for the bound until there is a gap to report.
-    let horizon_days = input.intervals.iter().map(|interval| interval.day()).collect::<BTreeSet<_>>().len() as u32;
-    let relaxation = (!cancel.load(Ordering::Relaxed))
-        .then(|| Relaxations::start(input, horizon_days, settings.budget, &ending))
-        .flatten();
-    let mut background = (settings.background_bound && !cancel.load(Ordering::Relaxed))
+    // no use for the bound until there is a gap to report. It starts once
+    // the long-term plan is done: beside it on a core or two it starved
+    // that plan, whose targets the search follows, of the time to find them.
+    let mut relaxation: Option<Relaxations> = None;
+    let mut relaxation_started = false;
+    let mut start_relaxation = |long_term: &Option<LongTerm>, relaxation: &mut Option<Relaxations>| {
+        if relaxation_started || long_term.as_ref().is_some_and(|long_term| !long_term.worker.is_finished()) || cancel.load(Ordering::Relaxed) {
+            return;
+        }
+        relaxation_started = true;
+        *relaxation = Relaxations::start(original, horizon_days, settings.budget.saturating_sub(started.elapsed()), &ending);
+    };
+    let mut long_term = (settings.background_bound && !cancel.load(Ordering::Relaxed))
         .then(|| {
-            let (input, seed, ending) = (input.clone(), best.solution.clone(), Arc::clone(&ending));
-            let limit = settings.budget.saturating_sub(started.elapsed());
-            background::spawn("schedule-whole-plan", move || {
-                plan::solve(
-                    &input,
-                    Some(&seed),
-                    None,
-                    Settings {
-                        time_limit: limit,
-                        relative_gap: 1e-4,
-                        relax: false,
-                    },
-                    &ending,
-                )
-            })
-            .ok()
+            LongTerm::start(
+                input,
+                &best.solution,
+                long_term_days(horizon_days),
+                settings.budget.saturating_sub(started.elapsed()),
+                &ending,
+            )
         })
         .flatten();
-    // What the latest plan of each day promised from its movements.
-    let mut promised: BTreeMap<u32, f64> = BTreeMap::new();
 
     let days: Vec<u32> = input.intervals.iter().map(|interval| interval.day()).collect::<BTreeSet<_>>().into_iter().collect();
     let spread = PlanTargets::value_spread(input);
@@ -518,44 +1049,86 @@ pub(crate) fn run(
     let mut limit = settings.window_limit;
     let mut offset = 0;
     let mut quiet_passes = 0;
-    // Whether the days have been polished since a plan window was last kept.
-    let mut polished_since = false;
+    // Where a pass a long-term plan interrupted carries on.
+    let mut resume: Option<usize> = None;
+
     'passes: loop {
+        let held = adopted.clone();
+        let input: &BlendInput = held.as_deref().unwrap_or(original);
+        start_relaxation(&long_term, &mut relaxation);
         if let Some(note) = relaxed(&relaxation, &mut bound) {
             record(value, bound, note);
         }
-        if let Some(outcome) = finished(&mut background, false) {
-            match outcome {
-                Ok(whole_plan) => {
-                    if let Some(proved) = whole_plan.bound {
-                        bound = Some(bound.map_or(proved, |held: f64| held.min(proved)));
+        // Each long-term plan's targets for the whole horizon, dispatched on
+        // the timeline the search holds and, when none of those improves,
+        // with the chain live.
+        let arrived = long_term.as_mut().map(|long_term| {
+            long_term.ready();
+            std::mem::take(&mut long_term.pending)
+        });
+        if let Some(arrived) = arrived.filter(|arrived| !arrived.is_empty()) {
+            let all: BTreeSet<u32> = days.iter().copied().collect();
+            for (period, outcome) in arrived {
+                let planned = match outcome {
+                    Ok(planned) => planned,
+                    Err(reason) => {
+                        record(value, bound, format!("long-term plan over {period}-day periods: {reason}"));
+                        continue;
                     }
-                    record(
-                        value,
-                        bound,
-                        format!(
-                            "whole-horizon plan {:.0} in {:.0}s, {}",
-                            whole_plan.objective.unwrap_or(f64::NAN),
-                            whole_plan.solve_s,
-                            whole_plan.status
-                        ),
-                    );
-                    let all: BTreeSet<u32> = days.iter().copied().collect();
+                };
+                record(
+                    value,
+                    bound,
+                    format!(
+                        "long-term plan over {period}-day periods {:.0} in {:.1}s, {}",
+                        planned.objective.unwrap_or(f64::NAN),
+                        planned.solve_s,
+                        planned.status
+                    ),
+                );
+                let routes = daily_routes(input, &planned.routes, &planned.period_days);
+                let mut followed = false;
+                for live_round in [false, true] {
+                    let Some(live) = live.as_ref().filter(|_| live_round).or((!live_round).then_some(input)) else {
+                        break;
+                    };
+                    if followed {
+                        break;
+                    }
                     for (follow, overrun) in WEIGHTS {
-                        let candidate = targets.replacing(&all, &whole_plan.routes, follow * spread, overrun * spread);
-                        if let Some(found) = redispatch(input, &best, 0, &candidate, cancel)
-                            && found.value() > value + 1e-7 * value.abs().max(1.0)
-                        {
-                            value = found.value();
-                            best = found;
-                            targets = candidate;
-                            polished_since = false;
-                            kept += 1;
-                            record(value, bound, "whole-horizon plan's targets: kept".into());
+                        let candidate = targets.replacing(&all, &routes, follow * spread, overrun * spread).valued(input);
+                        let tried = if live_round {
+                            redispatch_live(input, live, &best, 0, None, &candidate, &Timing::default(), cancel)
+                        } else {
+                            redispatch(input, &best, 0, &candidate, &Timing::default(), cancel)
+                        };
+                        let Ok(found) = tried else { continue };
+                        if found.value() <= value + 1e-7 * value.abs().max(1.0) {
+                            continue;
                         }
+                        if let (Some(timeline), Some(chain)) = (found.solution.drill_blast.as_ref(), input.drill_blast.as_ref())
+                            && chain.fixed.as_ref() != Some(timeline)
+                        {
+                            let mut moved = input.clone();
+                            if let Some(chain) = moved.drill_blast.as_mut() {
+                                chain.fixed = Some(timeline.clone());
+                            }
+                            adopted = Some(Arc::new(moved));
+                            record(value, bound, format!("blasts moved: {}", moved_blasts(chain.fixed.as_ref(), timeline)));
+                        }
+                        value = found.value();
+                        best = found;
+                        reserve.set(reserve_for(&best.solution));
+                        targets = candidate;
+                        followed = true;
+                        kept += 1;
+                        record(
+                            value,
+                            bound,
+                            format!("long-term plan's targets over {period}-day periods: kept{}", if live_round { ", chain live" } else { "" }),
+                        );
                     }
                 }
-                Err(reason) => record(value, bound, format!("whole-horizon plan: {reason}")),
             }
         }
         let closed = Progress {
@@ -570,90 +1143,6 @@ pub(crate) fn run(
             record(value, bound, "gap closed".into());
             break;
         }
-        if quiet_passes >= step
-            && let Some(polisher) = polisher
-            && !polished_since
-        {
-            // A whole cycle of plan windows kept nothing: polish each day
-            // before the windows grow.
-            polished_since = true;
-            let mut kept_any = false;
-            // In order: a day polished first can shut off what the day before
-            // it would have found. How far each falls short of its plan is
-            // logged.
-            let earning = earned(input, &best.solution);
-            let order: Vec<(f64, u32)> = days
-                .iter()
-                .step_by(settings.polish_days.max(1) as usize)
-                .map(|day| {
-                    (
-                        promised.get(day).map_or(f64::NEG_INFINITY, |promise| promise - earning.get(day).copied().unwrap_or(0.0)),
-                        *day,
-                    )
-                })
-                .collect();
-            for (short, day) in order {
-                let left = settings.budget.saturating_sub(started.elapsed());
-                if left.is_zero() || cancel.load(Ordering::Relaxed) {
-                    break 'passes;
-                }
-                let polishing = Instant::now();
-                match polish(
-                    input,
-                    &best,
-                    day,
-                    settings.polish_days.max(1),
-                    settings.polish_lookahead_days,
-                    &targets,
-                    polisher,
-                    settings.polish_limit.min(left),
-                    settings.polish_columns,
-                    cancel,
-                ) {
-                    Ok(Some(found)) if found.value() > value + 1e-7 * value.abs().max(1.0) => {
-                        value = found.value();
-                        best = found;
-                        kept_any = true;
-                        kept += 1;
-                        record(
-                            value,
-                            bound,
-                            format!("polished day {day} (short {short:.0}) in {:.1}s: kept", polishing.elapsed().as_secs_f64()),
-                        );
-                    }
-                    Ok(Some(found)) => record(
-                        value,
-                        bound,
-                        format!(
-                            "polished day {day} (short {short:.0}) in {:.1}s: {:.0}, no better",
-                            polishing.elapsed().as_secs_f64(),
-                            found.value()
-                        ),
-                    ),
-                    Ok(None) => record(
-                        value,
-                        bound,
-                        format!("polished day {day} (short {short:.0}) in {:.1}s: no schedule", polishing.elapsed().as_secs_f64()),
-                    ),
-                    Err(reason) => {
-                        record(value, bound, format!("days not polished: {reason}"));
-                        break;
-                    }
-                }
-                if let Some(note) = relaxed(&relaxation, &mut bound) {
-                    record(value, bound, note);
-                }
-                if let Some(outcome) = finished(&mut background, false) {
-                    // Picked up at the top of the next pass.
-                    background = Some(Background::done(outcome));
-                    break;
-                }
-            }
-            if kept_any {
-                quiet_passes = 0;
-                continue;
-            }
-        }
         if quiet_passes >= step {
             // A whole cycle of offsets kept nothing: longer windows.
             length = (length * 2).min(horizon);
@@ -664,63 +1153,212 @@ pub(crate) fn run(
             record(value, bound, format!("windows of {length} days, {:.0}s each", limit.as_secs_f64()));
         }
         let mut improved = false;
-        let starts: Vec<usize> = if length == horizon { vec![0] } else { (offset..days.len()).step_by(step).collect() };
+        let starts: Vec<usize> = if length == horizon {
+            vec![0]
+        } else {
+            (resume.take().unwrap_or(offset)..days.len()).step_by(step).collect()
+        };
+        let mut interrupted = false;
         for start in starts {
-            let left = settings.budget.saturating_sub(started.elapsed());
+            let left = search_budget().saturating_sub(started.elapsed());
             if left.is_zero() || cancel.load(Ordering::Relaxed) {
                 break 'passes;
             }
+            // Late in a search its gains are mostly ones the reroute finds
+            // anyway, while the reroute's spare passes still gain at the
+            // deadline: a search that has stopped paying hands its time over.
+            let now = started.elapsed().as_secs_f64();
+            if gains.last().is_none_or(|&(_, last)| value > last) {
+                gains.push((now, value));
+            }
+            let since = gains
+                .iter()
+                .rev()
+                .find(|&&(at, _)| at <= now - SEARCH_STALL_S)
+                .map_or(f64::NEG_INFINITY, |&(_, earlier)| earlier);
+            window_values.push(value);
+            let windows_quiet =
+                window_values.len() > SEARCH_STALL_WINDOWS && value - window_values[window_values.len() - 1 - SEARCH_STALL_WINDOWS] < SEARCH_STALL_GAIN * value.abs();
+            // Nor before the long-term plan has come and been tried: its
+            // targets are ones no window has followed yet.
+            let awaiting = long_term.as_mut().is_some_and(|long_term| !long_term.worker.is_finished() || long_term.ready());
+            if now >= SEARCH_MIN_S && value - since < SEARCH_STALL_GAIN * value.abs() && windows_quiet && !awaiting {
+                record(value, bound, format!("search handed to the reroute at {now:.1}s"));
+                break 'passes;
+            }
+            // A long-term plan that has arrived is tried at the top of the
+            // next pass, which carries on from this window.
+            if long_term.as_mut().is_some_and(|long_term| long_term.ready()) {
+                resume = Some(start);
+                interrupted = true;
+                break;
+            }
+            // A window kept earlier in this pass may have moved the blasts:
+            // every window plans and replays on the timeline `best` holds.
+            let held = adopted.clone();
+            let input: &BlendInput = held.as_deref().unwrap_or(original);
             let first_day = days[start];
             let window = Window::opening(input, &best.solution, Some(&best.replay), first_day, length);
+            let from = input.intervals.iter().position(|interval| interval.day() >= first_day).unwrap_or(0);
+            // The chain as the kept hours before the window leave it, once for
+            // every weighting: on the timeline the best schedule was replayed
+            // on, which its digging keeps to. Simulated afresh, the chain can
+            // differ: a blast cleared sooner can take a machine from another,
+            // which then fires after ground the schedule digs.
+            let opening = match input
+                .drill_blast
+                .as_ref()
+                .and_then(|chain| Some((chain, best.solution.drill_blast.as_ref().or(chain.fixed.as_ref())?)))
+            {
+                Some((chain, timeline)) => Some(timeline.state_at(chain, input.intervals[from].start_h)),
+                None => chain_at(input, &best, from),
+            };
             let solve = Settings {
+                // A late window may take all the search has left: halving
+                // it, to leave time to dispatch, cut trucks60's days 30..35
+                // off half a second short of a plan worth $650k.
                 time_limit: limit.min(left),
                 relative_gap: 1e-3,
                 relax: false,
+                // A window's plan is done at its root, where HiGHS's later
+                // rounds of cuts took most of the time and changed nothing
+                // kept: five-day plans solved 2.5 times as fast for the same
+                // objectives, leaving the search time for more windows.
+                cut_rounds: Some(WINDOW_CUT_ROUNDS),
             };
             let planned = match plan::solve(input, Some(&best.solution), Some(&window), solve, cancel) {
                 Ok(planned) => planned,
                 Err(reason) => {
+                    tally.plans += 1;
+                    tally.failed += 1;
                     record(value, bound, format!("days {first_day}+: no plan ({reason})"));
                     continue;
                 }
             };
-            // The whole horizon from its first day is the plan itself, whose
-            // dual bound bounds every schedule.
-            if length == horizon
-                && start == 0
-                && !reclaims
-                && let Some(proved) = planned.bound
-            {
-                bound = Some(bound.map_or(proved, |held: f64| held.min(proved)));
-            }
-            promised.extend(planned.day_values.iter().map(|(day, earned)| (*day, *earned)));
+            tally.plan(&planned);
             let covered: BTreeSet<u32> = (first_day..first_day + length).collect();
-            let from = input.intervals.iter().position(|interval| interval.day() >= first_day).unwrap_or(0);
+            // A window changes a local plan, not the route pattern the best
+            // schedule has already earned beyond it. Guide its continuation
+            // with those actual deliveries rather than stale coarse targets.
+            let loaders: BTreeMap<_, _> = input.loaders.iter().enumerate().map(|(index, loader)| (loader.id, index)).collect();
+            let mut routes: BTreeMap<Route, f64> = BTreeMap::new();
+            for row in &best.solution.movements {
+                let movement = &input.movements[row.candidate];
+                if let Some(&loader) = loaders.get(&movement.loader) {
+                    *routes
+                        .entry((loader, movement.activity, movement.destination, input.intervals[row.interval].day()))
+                        .or_default() += row.tonnes_t;
+                }
+            }
+            let changed = routes
+                .iter()
+                .filter(|(route, tonnes)| !covered.contains(&route.3) && targets.routes.get(route).is_none_or(|held| (held - **tonnes).abs() > 1e-3))
+                .count();
+            log::debug!("window tail anchor at day {first_day}: {changed} incumbent routes differ outside the window");
+            let mut anchored = PlanTargets::new(input, routes, spread, spread).valued(input);
+            anchored.planned.extend(days.iter().copied());
+            let timed = anchored.clone().timed(input, &best.solution);
             // Each weight is dispatched at once, side by side; the first of the
-            // best is chosen, as it would be one after another.
-            let chosen = (started.elapsed() < settings.budget && !cancel.load(Ordering::Relaxed))
-                .then(|| {
-                    WEIGHTS
-                        .par_iter()
-                        .map(|&(follow, overrun)| {
-                            let candidate = targets.replacing(&covered, &planned.routes, follow * spread, overrun * spread);
-                            redispatch(input, &best, from, &candidate, cancel).map(|found| (found, candidate))
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .into_iter()
-                .flatten()
-                .flatten()
-                .reduce(|kept, next| if next.0.value() > kept.0.value() { next } else { kept });
+            // best is chosen, as it would be one after another. A round is
+            // the tails after the best schedule's hours on the timeline the
+            // search holds, or, when none of those improves, the tails with
+            // the chain live.
+            let incumbent = schedule_fingerprint(&best.solution);
+            let mut evaluate = |live_round: bool, tally: &mut Tally| {
+                if started.elapsed() >= search_budget() || cancel.load(Ordering::Relaxed) || (live_round && live.is_none()) {
+                    return None;
+                }
+                let dispatching = Instant::now();
+                let timing = &tally.timing;
+                let found: Vec<_> = WEIGHTS
+                    .par_iter()
+                    .map(|&(follow, overrun)| {
+                        // Compare timing with the ordinary daily guidance,
+                        // rather than forcing every tail to repeat the
+                        // incumbent's hours. The middle weighting explores
+                        // that ordering between the two ordinary extremes.
+                        let anchor = if follow == 1.0 && overrun == 1.0 { &timed } else { &anchored };
+                        let mut candidate = anchor.replacing(&covered, &planned.routes, follow * spread, overrun * spread);
+                        if follow == 1.0 && overrun == 1.0 {
+                            candidate.time_window(input, &timed, &covered);
+                        }
+                        let found = if live_round {
+                            redispatch_live(input, live.as_ref()?, &best, from, opening.as_ref(), &candidate, timing, cancel)
+                        } else {
+                            redispatch(input, &best, from, &candidate, timing, cancel)
+                        };
+                        let proposal = targets_fingerprint(&candidate);
+                        Some((found.map(|found| (found, candidate)), proposal))
+                    })
+                    .collect();
+                tally.tails_s += dispatching.elapsed().as_secs_f64();
+                let found: Vec<_> = found
+                    .into_iter()
+                    .flatten()
+                    .map(|(found, proposal)| {
+                        if !proposals.insert((incumbent, from, live_round, proposal)) {
+                            tally.repeated += 1;
+                        }
+                        if let Ok((tail, _)) = &found {
+                            let decoded = schedule_fingerprint(&tail.solution);
+                            if decoded == incumbent {
+                                tally.unchanged += 1;
+                            } else if !decoded_from.insert((incumbent, decoded)) {
+                                tally.duplicates += 1;
+                            } else if (tail.value() - value).abs() <= 1e-7 * value.abs().max(1.0) {
+                                tally.ties += 1;
+                            } else if tail.value() < value {
+                                tally.worse += 1;
+                            }
+                        }
+                        found
+                    })
+                    .collect();
+                tally.dispatched += found.len();
+                tally.valid += found.iter().filter(|tried| tried.is_ok()).count();
+                for reason in found.iter().filter_map(|tried| tried.as_ref().err().cloned().flatten()) {
+                    *tally.rejected.entry(reason).or_default() += 1;
+                }
+                let chosen = found.into_iter().flatten().reduce(|kept, next| if next.0.value() > kept.0.value() { next } else { kept });
+                if let Some((found, _)) = &chosen {
+                    tally.follow(input, &bar, &planned, &found.solution, &covered);
+                }
+                chosen
+            };
+            // The chain goes live only when the held timeline takes none of
+            // the tails. Where it takes one but values it lower, the live
+            // tails have not been found to win, and they cost as much again.
+            let mut chosen = evaluate(false, &mut tally);
+            if chosen.is_none() {
+                chosen = evaluate(true, &mut tally);
+            }
             if let Some((found, candidate)) = chosen
                 && found.value() > value + 1e-7 * value.abs().max(1.0)
             {
+                // A schedule with a timeline of its own moves the search onto it.
+                if let (Some(timeline), Some(chain)) = (found.solution.drill_blast.as_ref(), input.drill_blast.as_ref())
+                    && chain.fixed.as_ref() != Some(timeline)
+                {
+                    let mut moved = input.clone();
+                    if let Some(chain) = moved.drill_blast.as_mut() {
+                        chain.fixed = Some(timeline.clone());
+                    }
+                    adopted = Some(Arc::new(moved));
+                    record(value, bound, format!("blasts moved: {}", moved_blasts(chain.fixed.as_ref(), timeline)));
+                }
                 value = found.value();
                 best = found;
+                reserve.set(reserve_for(&best.solution));
                 targets = candidate;
                 improved = true;
                 kept += 1;
-                polished_since = false;
+                tally.kept += 1;
+                log::debug!("window tail anchor kept at day {first_day}: {changed} routes changed outside the window");
+                log::debug!(
+                    "window timing trial kept at day {first_day}: {} timed routes, {} inside the window",
+                    targets.timing.len(),
+                    targets.timing.keys().filter(|route| covered.contains(&route.3)).count()
+                );
                 record(
                     value,
                     bound,
@@ -738,9 +1376,13 @@ pub(crate) fn run(
                     ),
                 );
             }
+            start_relaxation(&long_term, &mut relaxation);
             if let Some(note) = relaxed(&relaxation, &mut bound) {
                 record(value, bound, note);
             }
+        }
+        if interrupted {
+            continue;
         }
         quiet_passes = if improved { 0 } else { quiet_passes + 1 };
         offset = (offset + 1) % step;
@@ -759,19 +1401,25 @@ pub(crate) fn run(
     // its own time limit, which is the search's, and its bound goes unused.
     ending.store(true, Ordering::Release);
     let waiting = Instant::now();
-    while (background.as_ref().is_some_and(|handle| !handle.is_finished()) || relaxation.as_ref().is_some_and(|relaxations| !relaxations.worker.is_finished()))
+    while (long_term.as_ref().is_some_and(|long_term| !long_term.worker.is_finished()) || relaxation.as_ref().is_some_and(|relaxations| !relaxations.worker.is_finished()))
         && waiting.elapsed() < BACKGROUND_GRACE
     {
         background::pause(Duration::from_millis(20));
     }
     relaxed(&relaxation, &mut bound);
-    if let Some(Ok(whole_plan)) = finished(&mut background, false)
-        && let Some(proved) = whole_plan.bound
-    {
-        bound = Some(bound.map_or(proved, |held: f64| held.min(proved)));
+    let reserve = reserve.get();
+    if !reserve.time.is_zero() && !cancel.load(Ordering::Relaxed) {
+        let timed = adopted.as_deref().unwrap_or(input);
+        let ends = started + deadline.saturating_sub(Duration::from_secs_f64(routing::REPLAY_S));
+        let rerouting = Instant::now();
+        let begun = started.elapsed().as_secs_f64();
+        let note = reroute_best(timed, &groups, &mut best, &mut value, reserve, ends, cancel);
+        record(value, bound, format!("{note}, began at {begun:.1}s, took {:.1}s", rerouting.elapsed().as_secs_f64()));
     }
+    record(value, bound, tally.summary());
     record(value, bound, "done".into());
     Found {
+        drill_blast: adopted.as_ref().and_then(|input| input.drill_blast.as_ref()).and_then(|chain| chain.fixed.clone()),
         solution: best.solution,
         replay: best.replay,
         bound,

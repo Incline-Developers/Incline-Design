@@ -28,7 +28,8 @@ use crate::model::schedule::{
             greedy,
             input::BlendInput,
             lp,
-            replay::{BlendSolution, ExtractionAdjustments, ReplayReport},
+            reduce::Reduced,
+            replay::{BlendSolution, ExtractionAdjustments, ReplayReport, replay_as_published},
         },
         progress::{ImproveEvent, ImproveStage},
     },
@@ -97,6 +98,7 @@ pub(crate) struct PhaseTimings {
     pub(crate) replay: Duration,
 }
 
+#[derive(Clone)]
 pub(crate) struct ScheduleCompletion {
     pub(crate) identity: ScheduleRunIdentity,
     /// The options this run was solved under, held with the result so a
@@ -125,6 +127,8 @@ pub(crate) struct ScheduleCompletion {
     pub(crate) interrupt_calls: u64,
     /// Present when the horizon was first solved day by day.
     pub(crate) day_by_day: Option<DayByDaySummary>,
+    /// Read back from the project file; see [`restore_saved`].
+    pub(crate) restored: bool,
 }
 
 impl ScheduleCompletion {
@@ -153,6 +157,7 @@ impl ScheduleCompletion {
             event_callbacks: 0,
             interrupt_calls: 0,
             day_by_day: None,
+            restored: false,
         }
     }
 
@@ -725,6 +730,40 @@ pub(crate) fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, o
 /// before an Improve run starts its whole-horizon solve, so a caller can show
 /// it while the rest of the run looks for a better one. It is called at most
 /// once, and never for a run that stops at the first schedule.
+/// A schedule saved with the project, checked against the model just captured.
+/// `None` when the replay will not have it: the caller then calculates, so a
+/// saved schedule can never be what stops a project having one.
+pub(crate) fn restore_saved(
+    input: &Arc<BlendInput>,
+    identity: ScheduleRunIdentity,
+    options: ScheduleSolveOptions,
+    saved: &crate::model::schedule::optimisation::blended::saved::SavedSchedule,
+    cancel: &CancelFlag,
+) -> Option<ScheduleCompletion> {
+    let started = Instant::now();
+    // The rows were worked against this timeline; every solve fixes its own.
+    let mut worked = (**input).clone();
+    if let (Some(chain), Some(timeline)) = (worked.drill_blast.as_mut(), saved.solution.drill_blast.as_ref()) {
+        chain.fixed = Some(timeline.clone());
+    }
+    let mut solution = (*saved.solution).clone();
+    let stop = AtomicBool::new(cancel.is_cancelled());
+    let Some(report) = replay_as_published(&worked, &mut solution, &stop).filter(ReplayReport::is_valid) else {
+        log::info!("schedule run {}: the saved schedule did not replay on this model, so it was calculated", identity.run_id);
+        return None;
+    };
+    let mut out = ScheduleCompletion::new(identity, options, Arc::new(worked));
+    out.termination = SolveTermination::FeasibleLimit;
+    out.restored = true;
+    out.raw_objective = Some(solution.reported_objective);
+    out.published_objective = Some(report.replayed_objective);
+    out.adjustments = Some(solution.adjustments);
+    out.replay = Some(Arc::new(report));
+    out.solution = Some(Arc::new(solution));
+    out.timings.replay = started.elapsed();
+    Some(out)
+}
+
 pub(crate) fn execute_schedule(
     input: Arc<BlendInput>,
     identity: ScheduleRunIdentity,
@@ -757,11 +796,20 @@ pub(crate) fn execute_schedule(
     // seeds an Improve run's whole-horizon solve.
 
     let budget_started = Instant::now();
+    // The run works on the input with the columns that only stand in for
+    // others merged (`blended::reduce`): the dispatch, the search and SCIP
+    // all solve the smaller problem, and every schedule is mapped back onto
+    // the captured input before it is shown.
+    let captured = Arc::clone(&out.input);
+    let reduced = Reduced::new(&captured);
+    out.input = Arc::new(reduced.input.clone());
+    let early = |shown: &ScheduleCompletion| early(&mapped_back(shown.clone(), &reduced, &captured));
     activity.set(3);
     activity.stage(ImproveStage::FirstSchedule);
     let attempt = hourly_dispatch(&mut out, cancel);
     if !options.first_schedule_only {
-        return super::scip_blend::improve(out, attempt, budget_started, cancel, activity, early);
+        let out = super::scip_blend::improve(out, attempt, budget_started, cancel, activity, &early);
+        return mapped_back(out, &reduced, &captured);
     }
     match attempt {
         DayByDay::Seed(found) => adopt_seed(&mut out, *found, None, None, DayByDayRole::Only),
@@ -771,5 +819,36 @@ pub(crate) fn execute_schedule(
         }
         DayByDay::Stop(reason, diagnostic) => out.stop(reason, diagnostic),
     }
-    out
+    mapped_back(out, &reduced, &captured)
+}
+
+/// `completion`, worked on `reduced`'s input, as a run of `captured`: its
+/// schedule expanded and replayed there, with the drill and blast timeline
+/// the run fixed.
+fn mapped_back(mut completion: ScheduleCompletion, reduced: &Reduced, captured: &Arc<BlendInput>) -> ScheduleCompletion {
+    let mut input = (**captured).clone();
+    if let (Some(chain), Some(worked)) = (input.drill_blast.as_mut(), completion.input.drill_blast.as_ref()) {
+        chain.fixed = worked.fixed.clone();
+    }
+    completion.input = Arc::new(input);
+    let Some(solution) = completion.solution.take() else {
+        return completion;
+    };
+    let mut expanded = reduced.expand((*solution).clone());
+    match replay_as_published(&completion.input, &mut expanded, &AtomicBool::new(false)) {
+        Some(report) if report.is_valid() => {
+            completion.published_objective = Some(report.replayed_objective);
+            completion.replay = Some(Arc::new(report));
+            completion.solution = Some(Arc::new(expanded));
+        }
+        report => {
+            let issue = report
+                .and_then(|report| report.issues.iter().chain(&report.grade_issues).next().cloned())
+                .unwrap_or_default();
+            log::error!("schedule run {}: the schedule did not replay on the captured input: {issue}", completion.identity.run_id);
+            completion.replay = None;
+            completion.stop(SolveTermination::ValidationFailure, format!("the schedule did not replay on the captured input: {issue}"));
+        }
+    }
+    completion
 }

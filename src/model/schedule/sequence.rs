@@ -39,10 +39,14 @@
 //! Resolving, in order: is the solid still there; are the sources still the
 //! sources (stamp comparison); and then does exactly one block of this solid,
 //! in this band, cover the stored point with this footprint and this volume?
-//! Only an unqualified yes resolves. Every other answer keeps the member in
-//! place and unresolved, with the most specific true reason. Nothing is ever
-//! dropped, renamed, matched by display name, or rebound through a `replaces`
-//! lineage.
+//! Only an unqualified yes resolves. Every other answer has the most specific
+//! true reason, and nothing is ever matched by display name.
+//!
+//! Resolving never substitutes. Carrying a member over to re-cut ground is a
+//! separate, explicit step: [`DigBlockRef::successors`] names the blocks of a
+//! run that now stand at a member's point, and the app replaces the member
+//! with them in the plan and says so. A member nothing stands in for stays,
+//! unresolved, with its reason.
 //!
 //! Every field of a reference is required. Scheduling is in development and
 //! carries no backwards compatibility: a reference is captured whole by
@@ -287,6 +291,69 @@ impl GroundIndex {
     }
 }
 
+/// Where a block of one run stands in another: which list of ground it is in
+/// (a run's mined ground, then its excluded ground), and its place there.
+pub(crate) type GroundPlace = (usize, usize);
+
+/// For the earlier blocks in `wanted`, the blocks of this run that took over
+/// their ground.
+///
+/// A new block belongs to the earlier block most of its volume lies in, so a
+/// block split in two hands on both pieces, and a strip moved a little does not
+/// make its neighbours part of it. A block that is cut as it was belongs to no
+/// one here: a reference to it still resolves.
+pub(crate) fn ground_heirs(earlier: &[&[BlockGround]], now: &[&[BlockGround]], wanted: &std::collections::HashSet<GroundPlace>) -> HashMap<GroundPlace, Vec<GroundPlace>> {
+    use rayon::prelude::*;
+
+    type Box2 = (glam::DVec2, glam::DVec2);
+    fn bounds(block: &BlockGround) -> Box2 {
+        block
+            .outline
+            .iter()
+            .flatten()
+            .fold((glam::DVec2::INFINITY, glam::DVec2::NEG_INFINITY), |(low, high), &point| (low.min(point), high.max(point)))
+    }
+    let same_band = |a: &BlockGround, b: &BlockGround| (a.flitch_base - b.flitch_base).abs() <= FLITCH_TOLERANCE && (a.flitch_top - b.flitch_top).abs() <= FLITCH_TOLERANCE;
+    let band_overlap = |a: &BlockGround, b: &BlockGround| a.flitch_top.min(b.flitch_top) - a.flitch_base.max(b.flitch_base);
+    let old: Vec<(GroundPlace, &BlockGround, Box2)> = earlier
+        .iter()
+        .enumerate()
+        .flat_map(|(list, blocks)| blocks.iter().enumerate().map(move |(index, block)| ((list, index), block, bounds(block))))
+        .collect();
+    let new: Vec<(GroundPlace, &BlockGround)> = now
+        .iter()
+        .enumerate()
+        .flat_map(|(list, blocks)| blocks.iter().enumerate().map(move |(index, block)| ((list, index), block)))
+        .filter(|(_, block)| {
+            !old.iter()
+                .any(|(_, earlier, _)| earlier.solid == block.solid && earlier.footprint == block.footprint && same_band(earlier, block))
+        })
+        .collect();
+    let handed_on: Vec<(GroundPlace, GroundPlace)> = new
+        .par_iter()
+        .filter_map(|(place, block)| {
+            let (low, high) = bounds(block);
+            let mut best: Option<(f64, GroundPlace)> = None;
+            for (earlier_place, earlier, (earlier_low, earlier_high)) in &old {
+                let height = band_overlap(earlier, block);
+                if earlier.solid != block.solid || height <= FLITCH_TOLERANCE || earlier_low.cmpgt(high).any() || earlier_high.cmplt(low).any() {
+                    continue;
+                }
+                let shared = crate::model::arrangement::overlap_area(&block.outline, &earlier.outline) * height;
+                if shared > best.map_or(0.0, |(most, _)| most) {
+                    best = Some((shared, *earlier_place));
+                }
+            }
+            best.map(|(_, heir_of)| heir_of).filter(|heir_of| wanted.contains(heir_of)).map(|heir_of| (heir_of, *place))
+        })
+        .collect();
+    let mut heirs: HashMap<GroundPlace, Vec<GroundPlace>> = HashMap::new();
+    for (heir_of, place) in handed_on {
+        heirs.entry(heir_of).or_default().push(place);
+    }
+    heirs
+}
+
 fn band_bucket(base: f64) -> i64 {
     (base / FLITCH_TOLERANCE).floor() as i64
 }
@@ -361,9 +428,8 @@ pub(crate) struct GroundIdentity {
 
 /// What a current run says about one stored reference.
 ///
-/// Everything but [`Self::Resolved`] keeps the member in the sequence and
-/// explains itself; none of them removes it, guesses a replacement, or
-/// substitutes a tonnage.
+/// Everything but [`Self::Resolved`] explains itself; none of them guesses a
+/// replacement or substitutes a tonnage.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum RefStatus {
     /// Index into the ground list this was resolved against.
@@ -437,6 +503,44 @@ impl DigBlockRef {
     /// as missing ground.
     pub(crate) fn resolve(&self, ground: &[BlockGround]) -> RefStatus {
         self.resolve_indexed(ground, &GroundIndex::build(ground))
+    }
+
+    /// The block of this run that now covers this reference's point at its
+    /// flitch base, whether or not it is the same ground. Never a match: only
+    /// a name for a member that did not resolve, so the planner can find the
+    /// ground it stood for.
+    pub(crate) fn covering(&self, ground: &[BlockGround], index: &GroundIndex) -> Option<usize> {
+        let anchor = glam::DVec2::new(self.anchor[0], self.anchor[1]);
+        index
+            .band_candidates(self.solid, self.flitch_base)
+            .into_iter()
+            .find(|&candidate| (ground[candidate].flitch_base - self.flitch_base).abs() <= FLITCH_TOLERANCE && point_in_face(&ground[candidate].outline, anchor))
+    }
+
+    /// The blocks of this run standing where this reference's ground stood:
+    /// those of its solid whose band overlaps its band and whose footprint
+    /// holds its point, top band first. What a member whose ground was cut
+    /// differently - by a re-bench, a surface edit or a change to the cutting
+    /// itself - is carried over to.
+    ///
+    /// The old footprint is known only by its digest, so the point is the one
+    /// place known to have been inside it: ground the old block covered away
+    /// from that point, after a split, is not found here.
+    pub(crate) fn successors(&self, ground: &[BlockGround], index: &GroundIndex) -> Vec<usize> {
+        let anchor = glam::DVec2::new(self.anchor[0], self.anchor[1]);
+        let mut found: Vec<usize> = index
+            .by_solid
+            .get(&self.solid)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|&candidate| {
+                let block = &ground[candidate];
+                block.flitch_top.min(self.flitch_top) - block.flitch_base.max(self.flitch_base) > FLITCH_TOLERANCE && point_in_face(&block.outline, anchor)
+            })
+            .collect();
+        found.sort_by(|a, b| ground[*b].flitch_top.total_cmp(&ground[*a].flitch_top));
+        found
     }
 
     pub(crate) fn resolve_indexed(&self, ground: &[BlockGround], index: &GroundIndex) -> RefStatus {

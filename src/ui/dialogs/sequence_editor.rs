@@ -262,7 +262,7 @@ pub(crate) fn draw_navigation_column(ui: &mut egui::Ui, editor: &mut EditorState
         ui.push_id("solids_navigation", |ui| {
             ui.allocate_ui(egui::vec2(ui.available_width(), half), |ui| {
                 ui.label(egui::RichText::new(tr!("sequence-solids-navigation")).strong());
-                crate::ui::elements::solids_view::draw_sequence_tree(ui, editor, document, commands);
+                crate::ui::elements::solids_view::draw_tree(ui, editor, document, crate::ui::elements::solids_view::SolidsTree::Sequence, commands);
             });
         });
         ui.separator();
@@ -386,6 +386,7 @@ fn draw_view(ui: &mut egui::Ui, editor: &mut EditorState, draft: &mut SequenceDr
     changed |= crate::ui::widgets::preview_navigation::navigate(ui, &response, image_rect, &mut draft.view, editor, !confirming);
     if has_run && !confirming {
         changed |= crate::ui::widgets::preview_navigation::orientation_gizmo(ui, "sequence_editor_orientation_gizmo", image_rect, &mut draft.view);
+        changed |= crate::ui::widgets::preview_navigation::view_buttons(ui, "sequence_editor_view_buttons", image_rect, &mut draft.view);
     }
     // A left press picks the block under it, and a left drag keeps picking as
     // it travels: one stroke takes every block it crosses. Which blocks those
@@ -546,6 +547,12 @@ fn draw_order_rows(ui: &mut egui::Ui, editor: &mut EditorState, draft: &Sequence
     for index in 0..draft.members.len() {
         let view = editor.sequence_members.get(index);
         let (rect, response) = ui.allocate_exact_size(egui::vec2(width, row_height), egui::Sense::click_and_drag());
+        // A reason too long for the row is cut short there, and read in full
+        // on hover.
+        let response = match view.and_then(|view| view.unresolved.as_ref()) {
+            Some(reason) => response.on_hover_text(reason),
+            None => response,
+        };
         rows.push(rect);
         let is_selected = selected.contains(&index);
         let visuals = ui.visuals();
@@ -568,7 +575,10 @@ fn draw_order_rows(ui: &mut egui::Ui, editor: &mut EditorState, draft: &Sequence
             egui::Vec2::splat(REMOVE_CROSS),
         );
         let text_width = (cross.left() - rect.left() - 12.0).max(1.0);
-        let galley = ui.painter().layout(member_label(view), font.clone(), color, text_width);
+        // One line, truncated: a wrapped second line would not fit the row.
+        let mut job = egui::text::LayoutJob::simple_singleline(member_label(view), font.clone(), color);
+        job.wrap = egui::text::TextWrapping::truncate_at_width(text_width);
+        let galley = ui.painter().layout_job(job);
         let painter = ui.painter().with_clip_rect(rect);
         // The rows being carried are dimmed where they still are, so the list
         // shows what is moving as well as where it would land; so are the rows
@@ -756,8 +766,11 @@ fn draw_preview_slider(ui: &mut egui::Ui, draft: &mut SequenceDraft, confirming:
         // interaction with a draft the discard question stands over, and the
         // question is the only interaction until it is answered.
         ui.add_enabled_ui(total > 0 && !confirming, |ui| {
-            ui.spacing_mut().slider_width = width;
-            ui.add(egui::Slider::new(&mut position, 0..=total).show_value(false));
+            // Whole steps: a scrub lands on the nearest one.
+            let mut at = position as f64;
+            if ui.add(crate::ui::widgets::scrubber::Scrubber::new(&mut at, 0.0..=total as f64).width(width)).changed() {
+                position = at.round() as usize;
+            }
         });
         draft.preview = position.min(total);
         ui.label(egui::RichText::new(tr!("sequence-editor-preview-at", dug = draft.preview.to_string(), total = total.to_string())).weak());

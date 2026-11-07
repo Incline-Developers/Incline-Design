@@ -185,6 +185,10 @@ pub(crate) struct CaptureIdentities {
     /// the machine each chain agent is.
     pub(crate) blasts: Vec<CapturedBlast>,
     pub(crate) blast_agents: Vec<LoaderAgentId>,
+    /// Each dig bar's ground in a blast no machine bar will prep, drill or
+    /// charge, so its loader waits on it all horizon: the bar, and the
+    /// blast with the step nobody works.
+    pub(crate) unworked_blasts: Vec<(BarId, String)>,
 }
 
 /// One blast the run sequences, as the results draw it.
@@ -209,9 +213,6 @@ pub(crate) struct CaptureStats {
     pub(crate) ground_sources: usize,
     /// Whether the derived event budget hit [`SEGMENT_CEILING`].
     pub(crate) event_budget_restricted: bool,
-    /// Blasts a dig bar needs that no machine bar will prep, drill or charge,
-    /// so their loaders wait all horizon. Named in the notes.
-    pub(crate) unworked_blasts: usize,
 }
 
 /// A finished capture: the model, what its ids mean, and one semantic key.
@@ -221,6 +222,9 @@ pub(crate) struct BlendCapture {
     /// Everything that can change feasibility, the objective or the encoded
     /// model, hashed. Presentation names are deliberately excluded.
     pub(crate) fingerprint: u64,
+    /// The same without what only means something in this session, so a
+    /// schedule saved in a project can tell whether it still answers it.
+    pub(crate) stable_fingerprint: u64,
     pub(crate) stats: CaptureStats,
     /// Stated approximations this capture applied. Never a silent adaptation.
     pub(crate) notes: Vec<String>,
@@ -620,7 +624,8 @@ fn capture_drill_blast(
             }
         }
         if missing > 0 {
-            notes.push(tr!("drill-blast-missing", bar = bar.name().to_owned(), count = missing.to_string()));
+            let name = if bar.name().is_empty() { tr!("blast-bar-default-empty") } else { bar.name().to_owned() };
+            notes.push(tr!("drill-blast-missing", bar = name, count = missing.to_string()));
         }
         if let Some(leader) = bar.follow().and_then(|work| work.leader) {
             leaders.push((tasks.len(), leader));
@@ -653,6 +658,7 @@ fn capture_drill_blast(
         window_end_h: config.window_end_h,
         windows: Some(config.effective_windows()),
         fixed: None,
+        resume: None,
     })
 }
 
@@ -783,11 +789,9 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         } else {
             super::schedule_readiness::default_bar_name(report.members.iter().filter_map(|member| member.area_name.as_deref()))
         };
+        // A bar with no machine is parked on the Gantt's Unassigned row: left
+        // out until it is given one, as drill and blast's bars are.
         let Some(agent) = bar.agent else {
-            // An unassigned delay holds no machine, so it is not a fault.
-            if bar.is_reclaim() || !bar.members().is_empty() {
-                problems.push(CaptureDiagnostic::new(label.clone(), tr!("schedule-capture-bar-unassigned")));
-            }
             continue;
         };
         // Dozers, drills and MPUs are not loaders: their bars, delays
@@ -874,7 +878,11 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             .iter()
             .any(|bar| bar.agent.is_some() && bar.blast_order().is_some_and(|order| !order.members.is_empty()));
     if scoped.iter().all(|bar| matches!(bar.work, ScopedWork::Delay)) && !has_blast_work && problems.is_empty() {
-        problems.push(CaptureDiagnostic::global(tr!("schedule-capture-no-work")));
+        problems.push(CaptureDiagnostic::global(if plan.bars().is_empty() {
+            tr!("schedule-capture-no-bars")
+        } else {
+            tr!("schedule-capture-no-work")
+        }));
     }
 
     // ---- grades ------------------------------------------------------------
@@ -1149,7 +1157,7 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         };
         let capture = &held.capture;
         let Some(tonnage_position) = capture.position(source.tonnage_field) else {
-            problems.push(CaptureDiagnostic::new(block.name.clone(), tr!("schedule-capture-block-no-tonnes")));
+            problems.push(CaptureDiagnostic::new(block.name.clone(), tr!("schedule-capture-block-no-tonnage-field")));
             continue;
         };
         let id = GroundId(ground.len() as u32);
@@ -1605,7 +1613,10 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
             TaskKind::Dig { sequence } => {
                 for &source in sequence {
                     // Every portion of the block, because they move together.
-                    let portions: Vec<MaterialId> = context.keys().filter(|(ground, _)| *ground == source).map(|(_, material)| *material).collect();
+                    let portions: Vec<MaterialId> = context
+                        .range((source, MaterialId(u32::MIN))..=(source, MaterialId(u32::MAX)))
+                        .map(|((_, material), _)| *material)
+                        .collect();
                     for material in portions {
                         let Some(held) = context.get(&(source, material)) else { continue };
                         let route = RouteSource::Ground {
@@ -1841,21 +1852,28 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         return Err(Vec::new());
     }
     // A dig bar on ground whose blast no machine works waits for it all
-    // horizon. The run is still a valid schedule, so it is a note and a
-    // warning on the status rather than a refusal.
-    let unworked = drill_blast.as_ref().map(|input| input.unworked()).unwrap_or_default();
-    if !unworked.is_empty() {
-        let blasts = unworked
-            .iter()
-            .filter_map(|(index, activity)| {
-                identities.blasts.get(*index).map(|blast| {
-                    let label = crate::ui::elements::solids_view::blast_path(&blast.solid_name, blast.bench.base, &blast.name);
-                    tr!("drill-blast-unworked-entry", blast = label, step = activity.label())
-                })
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        notes.push(tr!("drill-blast-unworked", blasts = blasts));
+    // horizon. The run is still a valid schedule, so it is not a refusal:
+    // the Gantt marks the bars that dig such ground, and says why.
+    if let Some(input) = drill_blast.as_ref() {
+        for (index, activity) in input.unworked() {
+            let (Some(blast), Some(chain)) = (identities.blasts.get(index), input.blasts.get(index)) else {
+                continue;
+            };
+            let label = crate::ui::elements::solids_view::blast_path(&blast.solid_name, blast.bench.base, &blast.name);
+            let entry = tr!("drill-blast-unworked-entry", blast = label, step = activity.label());
+            let blocks: Vec<crate::model::DigBlockId> = chain.releases.iter().filter_map(|ground| identities.ground_blocks.get(ground).copied()).collect();
+            let bars: Vec<BarId> = identities
+                .bar_blocks
+                .iter()
+                .filter(|(_, held)| held.iter().any(|block| blocks.contains(block)))
+                .map(|(bar, _)| *bar)
+                .collect();
+            for bar in bars {
+                if !identities.unworked_blasts.iter().any(|(held, named)| *held == bar && *named == entry) {
+                    identities.unworked_blasts.push((bar, entry.clone()));
+                }
+            }
+        }
     }
 
     haul.report(&identities, &mut notes, &mut problems);
@@ -1889,13 +1907,21 @@ pub(crate) fn build(source: &CaptureSnapshot, cancel: &CancelFlag) -> Result<Ble
         candidates: input.movements.len(),
         ground_sources: input.ground.len(),
         event_budget_restricted,
-        unworked_blasts: unworked.len(),
     };
-    let fingerprint = fingerprint(source, &input);
+    let stable_fingerprint = stable_fingerprint(source, &input);
+    let fingerprint = {
+        let mut hasher = DefaultHasher::new();
+        source.runtime.hash(&mut hasher);
+        source.generation.hash(&mut hasher);
+        source.plan_revision.hash(&mut hasher);
+        stable_fingerprint.hash(&mut hasher);
+        hasher.finish()
+    };
     Ok(BlendCapture {
         input,
         identities,
         fingerprint,
+        stable_fingerprint,
         stats,
         notes,
     })
@@ -1974,7 +2000,7 @@ impl<'a> HaulCapture<'a> {
             .searches
             .entry((args.destination, class.id))
             .or_insert_with(|| crate::model::haulage::routing::DestinationSearch::new(self.network, &self.index, class, target));
-        // The cycle alone: the drawn path and profile are the Haulage page's.
+        // The cycle alone: the drawn path and profile are the Road Network's.
         let cycle = search.as_ref().and_then(|s| s.cycle(&self.index, source, args.haul_link, dig, rate, spot, dump));
         self.cycles.insert(key, cycle);
         cycle
@@ -2276,6 +2302,40 @@ fn portion_name(identities: &CaptureIdentities, ground: GroundId, portion: usize
     }
 }
 
+/// Hashes a `usize` the same on every build, so a schedule saved on the desktop
+/// is recognised in the browser, whose `usize` is half the width.
+#[derive(Default)]
+struct WidthFreeHasher(DefaultHasher);
+
+impl Hasher for WidthFreeHasher {
+    fn finish(&self) -> u64 {
+        self.0.finish()
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        self.0.write(bytes);
+    }
+
+    fn write_usize(&mut self, value: usize) {
+        self.0.write_u64(value as u64);
+    }
+
+    fn write_isize(&mut self, value: isize) {
+        self.0.write_i64(value as i64);
+    }
+}
+
+/// A measured quantity as the fingerprint sees it: to about seven figures.
+///
+/// Tonnes, shares and cycle times come out of the geometry, and platforms round
+/// the last few bits of that arithmetic differently, so hashing them exactly
+/// would retire a schedule whenever a project moved between them. Opening
+/// replays the schedule against the model anyway, so nothing is lost by not
+/// telling apart two figures this close.
+fn measured(value: f64) -> u32 {
+    (value as f32).to_bits()
+}
+
 /// The complete experimental-run identity.
 ///
 /// Everything that can change feasibility, the objective or the encoded
@@ -2288,11 +2348,8 @@ fn portion_name(identities: &CaptureIdentities, ground: GroundId, portion: usize
 /// is no input a separate list could forget. The project identities that
 /// produced it are folded in beside, so two projects that happen to build the
 /// same model are still two runs.
-fn fingerprint(source: &CaptureSnapshot, input: &BlendInput) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    source.runtime.hash(&mut hasher);
-    source.generation.hash(&mut hasher);
-    source.plan_revision.hash(&mut hasher);
+fn stable_fingerprint(source: &CaptureSnapshot, input: &BlendInput) -> u64 {
+    let mut hasher = WidthFreeHasher::default();
     source.tonnage_field.0.hash(&mut hasher);
     source.haulage.hash_content(&mut hasher);
     // The model itself. `BlendInput` derives `PartialEq` over exactly the
@@ -2358,10 +2415,10 @@ fn fingerprint(source: &CaptureSnapshot, input: &BlendInput) -> u64 {
     }
     for entry in &input.ground {
         entry.id.0.hash(&mut hasher);
-        entry.tonnes_t.to_bits().hash(&mut hasher);
+        measured(entry.tonnes_t).hash(&mut hasher);
         for share in &entry.material {
             share.material.0.hash(&mut hasher);
-            share.fraction.to_bits().hash(&mut hasher);
+            measured(share.fraction).hash(&mut hasher);
             for grade in 0..input.grades.count() {
                 input.grades.fraction(share.material, grade).map(f64::to_bits).hash(&mut hasher);
             }
@@ -2388,7 +2445,7 @@ fn fingerprint(source: &CaptureSnapshot, input: &BlendInput) -> u64 {
         candidate.material.0.hash(&mut hasher);
         candidate.destination.0.hash(&mut hasher);
         candidate.truck.0.hash(&mut hasher);
-        candidate.truck_hours_per_tonne.to_bits().hash(&mut hasher);
+        measured(candidate.truck_hours_per_tonne).hash(&mut hasher);
         candidate.routing_rule.0.hash(&mut hasher);
         candidate.routing_preference.hash(&mut hasher);
         for contribution in &candidate.cashflow {

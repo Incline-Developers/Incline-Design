@@ -417,7 +417,11 @@ pub(crate) fn draw_insert_point_at_elevation_dialog(ui: &mut egui::Ui, editor: &
 /// A project is already open behind it - startup lands on an empty, never-saved
 /// one - so the splash is an offer, not a gate: Escape, a click on the backdrop,
 /// or `New project` all simply dismiss it and leave that project in place.
-pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+///
+/// Everything below `title_bar_bottom` is blocked while it is up; the title
+/// bar above stays live, so the window can still be moved, maximised or
+/// closed, and the window's edges, laid over everything, still resize it.
+pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, project: &UiProjectView, title_bar_bottom: f32, commands: &mut Vec<UiCommand>) {
     const PANEL_SIZE: f32 = 500.0;
     const COLUMN_WIDTH: f32 = 190.0;
     const ROW_HEIGHT: f32 = 22.0;
@@ -437,8 +441,9 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, project: &UiProjectV
     // The splash floats over a live window, so something has to catch the
     // clicks that dismiss it, or they would fall through to the viewport and
     // orbit the camera instead. It paints nothing: the window behind the
-    // splash reads as it always does.
-    let screen = ui.ctx().viewport_rect();
+    // splash reads as it always does. It stops at the title bar, which is the
+    // window's own and stays in reach.
+    let screen = ui.ctx().viewport_rect().with_min_y(title_bar_bottom);
     let backdrop = egui::Area::new(egui::Id::unique("select_project_backdrop"))
         .fixed_pos(screen.min)
         .order(egui::Order::Middle)
@@ -782,30 +787,55 @@ fn select_project_action_row_with_fill(
     response
 }
 
-/// Draw the browser-only prompt used to name a new project before it is created.
+/// Name a browser project the first time it is saved.
+///
+/// A browser has no file dialog to name a project in, so this floating
+/// dialog stands in for the one a desktop Save opens: it comes up on the
+/// first Save of a project, never on New, holding the project's name with
+/// all of it selected, so typing replaces it.
 #[cfg(target_arch = "wasm32")]
-pub(crate) fn draw_create_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState, viewport_rect: egui::Rect) {
-    ViewportDockPanel::new("create_project_panel", tr!("edit-create-new-project"), viewport_rect)
-        .min_width(240.0)
+pub(crate) fn draw_name_browser_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState) {
+    let opened_key = egui::Id::unique("name_browser_project_opened");
+    let Some(runtime_id) = editor.naming_browser_project else {
+        ui.data_mut(|data| data.remove::<u32>(opened_key));
+        return;
+    };
+    let mut open = true;
+    let mut cancelled = false;
+    DragableMenu::new("name_browser_project", tr!("menu-file-save-project"))
+        .open(&mut open)
+        .max_width(380.0)
         .show(ui.ctx(), |ui| {
-            let can_create = !editor.new_project_name.trim().is_empty();
-            MenuFieldText::new(tr!("edit-project-name"), &mut editor.new_project_name)
+            let response = MenuFieldText::new(tr!("edit-project-name"), &mut editor.browser_project_name)
+                .width(260.0)
                 .hint_text(tr!("dialog-rename-field-hint"))
                 .show(ui);
-            let submitted = menu::dialog_confirmed(ui.ctx());
-            let cancelled = menu::dialog_cancelled(ui.ctx());
+            if ui.data(|data| data.get_temp::<u32>(opened_key)) != Some(runtime_id) {
+                ui.data_mut(|data| data.insert_temp(opened_key, runtime_id));
+                response.request_focus();
+                let mut state = egui::TextEdit::load_state(ui.ctx(), response.id).unwrap_or_default();
+                let end = egui::text::CCursor::new(editor.browser_project_name.chars().count());
+                state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), end)));
+                state.store(ui.ctx(), response.id);
+            }
             menu::menu_actions(ui, |ui| {
-                if (submitted || ui.add(MenuButton::new(tr!("edit-create-project")).primary().enabled(can_create)).clicked()) && can_create {
-                    commands.push(UiCommand::CreateBrowserProject {
-                        name: editor.new_project_name.trim().to_owned(),
+                let can_save = !editor.browser_project_name.trim().is_empty();
+                let submitted = menu::dialog_confirmed(ui.ctx());
+                if (submitted || ui.add(MenuButton::new(tr!("edit-save-project")).primary().enabled(can_save)).clicked()) && can_save {
+                    commands.push(UiCommand::SaveBrowserProjectAs {
+                        runtime_id,
+                        name: editor.browser_project_name.trim().to_owned(),
                     });
-                    editor.new_project_dialog_open = false;
+                    editor.naming_browser_project = None;
                 }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || cancelled {
-                    editor.new_project_dialog_open = false;
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    cancelled = true;
                 }
             });
         });
+    if (cancelled || !open) && editor.naming_browser_project.is_some() {
+        commands.push(UiCommand::CancelBrowserProjectSave);
+    }
 }
 
 /// Draw the "Create a new layer" dialog (opened when NewLayer tool is active).

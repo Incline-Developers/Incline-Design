@@ -192,7 +192,7 @@ impl OptimizationReport {
 
 /// Waste tonnes per ore tonne, or `None` without ore.
 pub(crate) fn strip_ratio(ore: f64, waste: f64) -> Option<f64> {
-    (ore > 0.0).then(|| waste / ore)
+    (ore > 0.0).then_some(waste / ore)
 }
 
 /// Build the report from a finished run. Runs on the worker while the values
@@ -245,7 +245,7 @@ pub(crate) fn build(
             bucket.tonnes += base.tonnes;
             bucket.mining += base.mining;
             for (sums, element) in bucket.elements.iter_mut().zip(&economics.elements) {
-                let grade = finite_or_zero(element.values[block]);
+                let grade = finite_or_zero(element.values.get(block));
                 sums.grade_tonnes += base.tonnes * grade;
                 sums.contained += base.tonnes * grade * element.factor;
             }

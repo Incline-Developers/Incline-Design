@@ -158,11 +158,6 @@ impl CancelFlag {
     pub(crate) fn signal(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.0)
     }
-
-    /// A flag raised by whoever holds `signal`, not by a job's own cancel.
-    pub(crate) fn from_signal(signal: Arc<AtomicBool>) -> Self {
-        Self(signal)
-    }
 }
 
 /// A heavy operation running on a background thread.
@@ -411,7 +406,7 @@ impl<'a> App<'a> {
             let mut poll_once = || match rx.try_recv() {
                 Ok(result) => {
                     if !app.job_dependencies_are_current(&poll_keys) {
-                        crate::userspace_warn!("{}", tr!("jobs-discarded-stale-result", poll_label = poll_label.clone().to_string()));
+                        crate::userspace_log!("{}", tr!("jobs-discarded-stale-result", poll_label = poll_label.clone().to_string()));
                     } else if let Some(apply) = apply.take() {
                         apply(app, result);
                     }
@@ -458,7 +453,12 @@ impl<'a> App<'a> {
     /// Whether any pending job lists `key` among its dependencies. Lets a
     /// caller refuse to start a second job for a source already in flight.
     pub(crate) fn job_pending(&self, key: &JobKey) -> bool {
-        self.pending_jobs.iter().any(|job| job.keys.contains(key))
+        self.any_job_pending(|job| job == key)
+    }
+
+    /// Whether any pending job lists a dependency `matches` accepts.
+    pub(crate) fn any_job_pending(&self, matches: impl Fn(&JobKey) -> bool) -> bool {
+        self.pending_jobs.iter().any(|job| job.keys.iter().any(&matches))
     }
 
     /// Drain finished background jobs, running their apply closures on the UI
@@ -504,6 +504,11 @@ impl<'a> App<'a> {
         if residency_settled {
             self.evict_unloaded_items();
             self.evict_unloaded_layers();
+        }
+        // Everything is done, so what the jobs built and threw away can go.
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.pending_jobs.is_empty() {
+            crate::app::memory::release_free_memory();
         }
         // The status bar is driven from the ticket registry (see
         // `App::refresh_status_message`), which each job joined when it began.

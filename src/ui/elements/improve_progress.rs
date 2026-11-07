@@ -31,6 +31,8 @@ const CARD_WIDTH: f32 = 380.0;
 const RING: f32 = 40.0;
 const FOLDED_RING: f32 = 16.0;
 const CHART_HEIGHT: f32 = 128.0;
+/// The label, value and gain at the top right of the card.
+const VALUE_HEIGHT: f32 = 58.0;
 /// The time strip: how the run's time has gone, stage by stage, against its
 /// limit.
 const STRIP_HEIGHT: f32 = 8.0;
@@ -99,7 +101,7 @@ fn draw_folded(ui: &mut egui::Ui, editor: &mut EditorState, progress: &ImprovePr
         ring(ui, FOLDED_RING, progress.ended.map(|_| 1.0));
         ui.label(bold(&clock(progress.elapsed_s())));
         if let Some(best) = progress.best() {
-            ui.label(money(best.value));
+            ui.label(money(best.value)).on_hover_text(crate::model::schedule::cashflow::money_exact(best.value));
             if let Some(text) = gain_text(progress) {
                 ui.label(egui::RichText::new(text).color(ring_fill(ui.visuals())));
             }
@@ -124,11 +126,15 @@ fn draw_full(ui: &mut egui::Ui, editor: &mut EditorState, progress: &ImproveProg
             ui.add_space(6.0);
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
+                // As tall as it gets, so the buttons below stay put when a gain
+                // first appears: see `draw_standing`.
+                ui.set_min_height(VALUE_HEIGHT);
                 ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
                     ui.label(egui::RichText::new(tr!("improve-card-best")).weak().small());
                     match progress.best() {
                         Some(best) => {
-                            ui.label(egui::RichText::new(money(best.value)).font(bold_font(18.0)));
+                            ui.label(egui::RichText::new(money(best.value)).font(bold_font(18.0)))
+                                .on_hover_text(crate::model::schedule::cashflow::money_exact(best.value));
                             match gain_text(progress) {
                                 Some(text) => ui.label(egui::RichText::new(text).color(ring_fill(ui.visuals()))),
                                 None => ui.label(egui::RichText::new(tr!("improve-card-no-gain")).weak().small()),
@@ -341,6 +347,13 @@ fn draw_standing(ui: &mut egui::Ui, progress: &ImproveProgress) {
             });
         }
     });
+    // A loose bound reads like a shortfall, so the card says what a bound is
+    // where it shows one, not on hover alone. Held while the run looks for one
+    // too: the card is centred on nothing, and a line arriving mid-run would
+    // move Discard and Stop out from under the pointer.
+    if progress.gap().is_some() || progress.ended.is_none() {
+        ui.label(egui::RichText::new(tr!("improve-card-bound-optimistic")).weak().small());
+    }
 }
 
 fn draw_controls(ui: &mut egui::Ui, editor: &mut EditorState, progress: &ImproveProgress, commands: &mut Vec<UiCommand>) {
@@ -444,20 +457,6 @@ fn percent(share: f64) -> String {
     format!("{share:.decimals$}%")
 }
 
-/// Money to two decimals of its unit, which is fine enough to see a search's
-/// gains on a schedule worth hundreds of millions.
 fn money(value: f64) -> String {
-    let symbol = tr!("common-currency-symbol");
-    let size = value.abs();
-    let (scaled, suffix) = if size >= 1e9 {
-        (value / 1e9, "B")
-    } else if size >= 1e6 {
-        (value / 1e6, "M")
-    } else if size >= 1e3 {
-        (value / 1e3, "k")
-    } else {
-        (value, "")
-    };
-    let sign = if scaled < 0.0 { "-" } else { "" };
-    format!("{sign}{symbol}{:.2}{suffix}", scaled.abs())
+    crate::model::schedule::cashflow::money_text(value)
 }

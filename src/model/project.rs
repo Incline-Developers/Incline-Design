@@ -37,6 +37,9 @@ pub(crate) struct ProjectItemState {
     pub(crate) deferred: Option<crate::model::formats::omf::DeferredAsset>,
     /// Where an unchanged payload's encoded arrays can be copied from on save.
     pub(crate) payload_source: Option<crate::model::formats::omf::PayloadSource>,
+    /// The backing a resident payload was last read from, while it is still that
+    /// payload, so unloading it again need not write it out again.
+    pub(crate) restored_from: Option<(crate::model::formats::omf::DeferredAsset, crate::model::formats::omf::PayloadIdentity)>,
     pub(crate) summary: Option<crate::model::asset_residency::AssetSummary>,
     /// Explorer folder this item sits in, or `None` for its section root.
     ///
@@ -77,6 +80,7 @@ impl ProjectItemState {
             hidden: false,
             deferred: None,
             payload_source: None,
+            restored_from: None,
             summary: None,
             folder: None,
             section: SectionKind::natural_for(kind),

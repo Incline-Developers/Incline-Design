@@ -386,13 +386,16 @@ impl MipSolver {
         }
         let data = &mut self.data;
         data.analytic_center_computed = true;
-        if data.analytic_center_status == ModelStatus::Optimal {
+        // HiGHS #3408: no fixings with presolve off, where sets of
+        // equalities and redundant rows can put a valid centre near a bound;
+        // and a tenth of the tolerance.
+        if data.analytic_center_status == ModelStatus::Optimal && data.options.presolve {
             for i in 0..data.model.num_col {
                 let bound_range = data.domain.col_upper[i] - data.domain.col_lower[i];
                 if bound_range == 0.0 {
                     continue;
                 }
-                let tolerance = data.feastol * super::cmin(bound_range, 1.0);
+                let tolerance = (data.feastol / 10.0) * super::cmin(bound_range, 1.0);
                 if data.analytic_center[i] <= data.model.col_lower[i] + tolerance {
                     let bound = data.model.col_lower[i];
                     data.parts()
@@ -557,7 +560,7 @@ impl MipSolver {
             return true;
         }
         if self.data.submip || self.data.incumbent.is_empty() {
-            let solvals = self.lp.lp_solver().col_value().expect("an LP solution").to_vec();
+            let solvals = self.lp_solution();
             self.heuristics.randomized_rounding(&mut self.data, &solvals);
             if self.data.options.mip_heuristic_run_shifting {
                 self.heuristics.shifting(&self.lp, &mut self.data, &solvals);
@@ -571,8 +574,11 @@ impl MipSolver {
         false
     }
 
+    /// The LP's column values, empty when it stopped without any (cut off
+    /// by the time limit or a stop inside presolve): the heuristics then
+    /// pass over it, as HiGHS's do a solution of the wrong size.
     fn lp_solution(&self) -> Vec<f64> {
-        self.lp.lp_solver().col_value().expect("an LP solution").to_vec()
+        self.lp.lp_solver().col_value().map(<[f64]>::to_vec).unwrap_or_default()
     }
 
     /// HiGHS's `evaluateRootNode`: the root LP, separation rounds while
@@ -582,6 +588,11 @@ impl MipSolver {
         let mut max_sepa_rounds: i64 = if self.data.submip { 5 } else { IINF };
         if self.data.num_restarts == 0 {
             max_sepa_rounds = max_sepa_rounds.min((2.0 * (self.data.max_tree_size_log2 as f64).sqrt()) as i64);
+        }
+        if !self.data.submip
+            && let Some(cap) = self.data.options.max_root_separation_rounds
+        {
+            max_sepa_rounds = max_sepa_rounds.min(cap);
         }
         'restart: loop {
             if self.data.detect_symmetries {
@@ -724,6 +735,11 @@ impl MipSolver {
                 }
 
                 let solvals = self.lp_solution();
+                // A first root LP stopped without values leaves the
+                // direction to measure progress along from this one.
+                if self.data.firstlpsol.len() != num_col {
+                    self.data.firstlpsol = solvals.clone();
+                }
                 let firstlpsol = &self.data.firstlpsol;
                 let mut sqrnorm = CDouble::new(0.0);
                 for i in 0..num_col {

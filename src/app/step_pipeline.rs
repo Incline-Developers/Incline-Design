@@ -85,6 +85,11 @@ impl<S: PipelineStep> StepPipeline<S> {
         self.running.is_some() || !self.queue.is_empty()
     }
 
+    /// The inputs as last taken.
+    pub(crate) fn fingerprints(&self) -> &[u64] {
+        &self.fingerprints
+    }
+
     pub(crate) fn step_inputs_match(&self, step: S) -> bool {
         self.steps[step.index()].completed_inputs == Some(self.fingerprints[step.index()])
     }
@@ -214,6 +219,7 @@ impl<S: PipelineStep> StepPipeline<S> {
                 status.diagnostics = diagnostics;
                 status.run_generation = generation;
                 status.message = None;
+                status.last_seen = Some(entities);
                 if blocking > 0 {
                     status.state = StageState::Failed;
                     status.message = Some(tr!("stage-failed-count", count = blocking));

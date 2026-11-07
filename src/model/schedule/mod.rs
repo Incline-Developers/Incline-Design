@@ -14,6 +14,7 @@
 
 pub(crate) mod animation;
 pub(crate) mod calendar;
+pub(crate) mod calendar_views;
 pub(crate) mod cashflow;
 pub(crate) mod delays;
 pub(crate) mod destinations;
@@ -381,10 +382,6 @@ impl ScheduleBar {
             BarWork::Follow(work) => Some(work),
             _ => None,
         }
-    }
-
-    pub(crate) fn is_reclaim(&self) -> bool {
-        matches!(self.work, BarWork::Reclaim(_))
     }
 }
 
@@ -826,6 +823,25 @@ pub(crate) struct SchedulePlan {
     /// project so a switch turned off stays off when it is opened again.
     #[serde(default)]
     auto_run: AutoRun,
+    /// The order the fleet is listed in; see [`MachineOrder`].
+    #[serde(default)]
+    machine_order: MachineOrder,
+    /// The Calendar's saved views; see [`calendar_views`].
+    #[serde(default)]
+    calendar_views: calendar_views::CalendarViews,
+}
+
+/// The order the fleet is listed in: machine kinds as groups, and machines
+/// within each. The Machines page, the Gantt and the Calendar follow it; no
+/// calculation reads it, so reordering never makes a schedule out of date.
+/// Kinds or machines it does not name follow the ones it does, in the order
+/// they were added.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub(crate) struct MachineOrder {
+    #[serde(default)]
+    groups: Vec<MachineKind>,
+    #[serde(default)]
+    machines: Vec<LoaderAgentId>,
 }
 
 /// The Auto switches: Solids Setup, Haulage Setup, and the schedule (its
@@ -848,11 +864,24 @@ fn default_true() -> bool {
 
 impl Default for AutoRun {
     fn default() -> Self {
+        Self::every(true)
+    }
+}
+
+impl AutoRun {
+    /// Every switch at `on`: the one Auto the pages show sets them together.
+    pub(crate) fn every(on: bool) -> Self {
         Self {
-            solids: true,
-            haulage: true,
-            schedule: true,
+            solids: on,
+            haulage: on,
+            schedule: on,
         }
+    }
+
+    /// Whether everything is kept up to date on its own, which is what the
+    /// one Auto the pages show reads as on.
+    pub(crate) fn all(self) -> bool {
+        self.solids && self.haulage && self.schedule
     }
 }
 
@@ -881,6 +910,8 @@ impl Default for SchedulePlan {
             drill_blast: DrillBlastConfig::default(),
             periods: periods::SchedulePeriods::default(),
             auto_run: AutoRun::default(),
+            machine_order: MachineOrder::default(),
+            calendar_views: calendar_views::CalendarViews::default(),
         }
     }
 }
@@ -930,6 +961,8 @@ impl SchedulePlan {
             && self.delays.is_empty()
             && self.drill_blast.is_pristine()
             && self.periods == periods::SchedulePeriods::default()
+            && self.machine_order == MachineOrder::default()
+            && self.calendar_views.is_empty()
     }
 
     /// No visible content or retired identities to preserve in a save/import.
@@ -1335,6 +1368,7 @@ impl SchedulePlan {
             return Err(ScheduleError::UnknownAgent);
         }
         self.agents.retain(|agent| agent.id != id);
+        self.machine_order.machines.retain(|machine| *machine != id);
         self.delays.forget_agent(id);
         for bar in &mut self.bars {
             if bar.agent == Some(id) {
@@ -1360,6 +1394,28 @@ impl SchedulePlan {
     }
 
     /// Which reserve field this schedule reads as tonnes, if one was chosen.
+    /// What in the plan reads a reserve field, by name.
+    pub(crate) fn field_users(&self, field: ReserveFieldId) -> Vec<String> {
+        let mut users = Vec::new();
+        if self.tonnage_field == Some(field) {
+            users.push(tr!("reserve-field-used-tonnage"));
+        }
+        if self.experiment.grades.iter().any(|(grade, _)| *grade == field) {
+            users.push(tr!("reserve-field-used-grades"));
+        }
+        let tests = |conditions: &[destinations::FieldCondition]| conditions.iter().any(|condition| condition.field == field);
+        users.extend(self.routing.rules.iter().filter(|rule| tests(&rule.conditions)).map(|rule| rule.name.clone()));
+        users.extend(self.cashflow.rules.iter().filter(|rule| tests(&rule.conditions)).map(|rule| rule.name.clone()));
+        users
+    }
+
+    /// Drop what only described a reserve field now gone: grade targets and
+    /// opening stock's values, neither of which means anything without it.
+    pub(crate) fn forget_field(&mut self, field: ReserveFieldId) {
+        self.crusher_grade_calendars.retain(|calendar| calendar.field != field);
+        self.routing.forget_field(field);
+    }
+
     pub(crate) fn tonnage_field(&self) -> Option<ReserveFieldId> {
         self.tonnage_field
     }
@@ -1941,6 +1997,81 @@ impl SchedulePlan {
         self.class(self.agent(agent)?.class_id).map(|class| class.kind)
     }
 
+    /// Every machine kind, in the order the fleet's groups are listed.
+    pub(crate) fn machine_groups(&self) -> Vec<MachineKind> {
+        let mut groups = Vec::with_capacity(MachineKind::ALL.len());
+        for kind in self.machine_order.groups.iter().copied().chain(MachineKind::ALL) {
+            if !groups.contains(&kind) {
+                groups.push(kind);
+            }
+        }
+        groups
+    }
+
+    /// The machines in the order they are listed: by group, then as the user
+    /// arranged them within it. A machine whose class is gone comes last.
+    pub(crate) fn ordered_agents(&self) -> Vec<&LoaderAgent> {
+        let groups = self.machine_groups();
+        let mut agents: Vec<(usize, usize, usize, &LoaderAgent)> = self
+            .agents
+            .iter()
+            .enumerate()
+            .map(|(added, agent)| {
+                let group = self
+                    .class(agent.class_id)
+                    .and_then(|class| groups.iter().position(|kind| *kind == class.kind))
+                    .unwrap_or(groups.len());
+                let place = self.machine_order.machines.iter().position(|id| *id == agent.id).unwrap_or(usize::MAX);
+                (group, place, added, agent)
+            })
+            .collect();
+        agents.sort_by_key(|&(group, place, added, _)| (group, place, added));
+        agents.into_iter().map(|(.., agent)| agent).collect()
+    }
+
+    /// The classes in the order their groups are listed, each group's in the
+    /// order they were added.
+    pub(crate) fn ordered_classes(&self) -> Vec<&LoaderClass> {
+        let groups = self.machine_groups();
+        let mut classes: Vec<&LoaderClass> = self.classes.iter().collect();
+        classes.sort_by_key(|class| groups.iter().position(|kind| *kind == class.kind));
+        classes
+    }
+
+    pub(crate) fn calendar_views(&self) -> &calendar_views::CalendarViews {
+        &self.calendar_views
+    }
+
+    pub(crate) fn calendar_views_mut(&mut self) -> &mut calendar_views::CalendarViews {
+        &mut self.calendar_views
+    }
+
+    /// Move a group of machines to just before `before`, or to the end.
+    pub(crate) fn move_machine_group(&mut self, kind: MachineKind, before: Option<MachineKind>) {
+        let mut groups = self.machine_groups();
+        groups.retain(|group| *group != kind);
+        let at = before.and_then(|before| groups.iter().position(|group| *group == before)).unwrap_or(groups.len());
+        groups.insert(at, kind);
+        self.machine_order.groups = groups;
+    }
+
+    /// Move a machine to just before `before`, another of its group, or to
+    /// the end of its group.
+    pub(crate) fn move_machine(&mut self, agent: LoaderAgentId, before: Option<LoaderAgentId>) -> ScheduleResult {
+        let kind = self.agent_kind(agent).ok_or(ScheduleError::UnknownAgent)?;
+        let ordered: Vec<LoaderAgentId> = self.ordered_agents().iter().map(|agent| agent.id).collect();
+        let in_group = |id: &LoaderAgentId| self.agent_kind(*id) == Some(kind);
+        let mut group: Vec<LoaderAgentId> = ordered.iter().copied().filter(|id| in_group(id) && *id != agent).collect();
+        let at = before.and_then(|before| group.iter().position(|id| *id == before)).unwrap_or(group.len());
+        group.insert(at, agent);
+        let mut group = group.into_iter();
+        // The whole fleet is written down, so every machine keeps its place
+        // from here on, whatever is added after it.
+        let machines = ordered.iter().map(|id| if in_group(id) { group.next().unwrap_or(*id) } else { *id }).collect();
+        self.machine_order.machines = machines;
+        Ok(())
+    }
+
     /// Change what a loader class's machines are drawn as.
     pub(crate) fn set_class_loader_type(&mut self, id: LoaderClassId, loader_type: LoaderType) -> ScheduleResult {
         self.classes.iter_mut().find(|class| class.id == id).ok_or(ScheduleError::UnknownClass)?.loader_type = loader_type;
@@ -2177,6 +2308,7 @@ impl SchedulePlan {
             class.default_reclaim_rate_tph.to_bits().hash(hasher);
             class.spot_time_s.to_bits().hash(hasher);
             class.kind.hash(hasher);
+            class.loader_type.hash(hasher);
         }
         for agent in &self.agents {
             agent.id.hash(hasher);
@@ -2214,6 +2346,8 @@ impl SchedulePlan {
         self.delays.hash_content(hasher);
         // Display only, but saved: a start date or a colour is unsaved work.
         self.periods.hash(hasher);
+        self.machine_order.hash(hasher);
+        self.calendar_views.hash(hasher);
         self.drill_blast.hash_content(hasher);
         for bar in &self.bars {
             bar.id.hash(hasher);

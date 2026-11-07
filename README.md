@@ -20,17 +20,21 @@ Incline is available for Windows, Linux, macOS, and WebAssembly.
 
 Create and edit mine designs using points, lines, polylines, circles, text, and triangulations. Incline features a suite of design tools such as pit and stockpile shell generation, offsets, chamfers, Bézier curves, and surface draping, alongside tools for clipping triangulations, generating contours, and merging pit and stockpile shells into terrain.
 
-### Geological Modeling
+### Drill & Blast
 
 Coming Soon!
 
-### Mine Planning
+### Geological Modeling
 
 Coming Soon!
 
 ### Geospatial Data & Survey
 
 Coming Soon!
+
+### Mine Planning
+
+Pit / stockpile / dump solids, haulage, equipment management, destination rules, cashflows, Gantt charts, reporting and animations.
 
 ### Localisation
 

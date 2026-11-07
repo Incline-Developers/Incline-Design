@@ -171,8 +171,9 @@ pub(crate) fn spatial_surface_face_order(mesh: &mesh_data::Triangulation) -> Vec
     use rayon::prelude::*;
 
     let face_count = mesh.face_count();
-    if face_count == 0 {
-        return Vec::new();
+    // One chunk has nothing to partition, so the faces stay in their order.
+    if face_count <= SURFACE_CHUNK_FACES {
+        return (0..face_count as u32).collect();
     }
     let vertices = mesh.vertices();
     // Relative to the mesh minimum so `f32` holds plenty of precision for
@@ -196,7 +197,10 @@ pub(crate) fn spatial_surface_face_order(mesh: &mesh_data::Triangulation) -> Vec
         })
         .collect();
     split_chunk_range(&mut faces);
-    faces.into_iter().map(|face| face.face).collect()
+    // Collecting reuses the allocation, which is four times too large for this.
+    let mut order: Vec<u32> = faces.into_iter().map(|face| face.face).collect();
+    order.shrink_to_fit();
+    order
 }
 
 struct FaceCentroid {
@@ -257,5 +261,9 @@ pub(crate) fn unique_edges(mesh: &mesh_data::Triangulation) -> Vec<[u32; 2]> {
     packed.par_sort_unstable();
     packed.dedup();
 
-    packed.into_iter().map(|e| [(e >> 32) as u32, e as u32]).collect()
+    // Collected in place, so it would keep the room for every face's three
+    // sides, about twice what is left once the shared ones are gone.
+    let mut edges: Vec<[u32; 2]> = packed.into_iter().map(|e| [(e >> 32) as u32, e as u32]).collect();
+    edges.shrink_to_fit();
+    edges
 }

@@ -45,7 +45,7 @@ impl<'a> App<'a> {
             move |app, result| match result {
                 Ok(mut loaded) => {
                     loaded.path = display_path;
-                    app.add_loaded_raster(loaded);
+                    app.add_as_one_step(|app| app.add_loaded_raster(loaded));
                 }
                 Err(error) => userspace_log!("{}", tr!("cmd-raster-failed-load-raster-name-error", name = name.to_string(), error = format!("{error:#}"))),
             },
@@ -106,7 +106,7 @@ impl<'a> App<'a> {
             let complete = || match result {
                 Ok(Ok(loaded)) => {
                     self.finish_background_task(ticket, false);
-                    self.add_loaded_raster(loaded);
+                    self.add_as_one_step(|app| app.add_loaded_raster(loaded));
                 }
                 Ok(Err(error)) => {
                     crate::userspace_warn!(

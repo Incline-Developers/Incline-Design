@@ -70,8 +70,8 @@ pub(crate) fn draw_reclaim_bar_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
             draft.maximum.trim().parse::<f64>().ok().filter(|value| value.is_finite() && *value > 0.0).map(Some)
         };
         let window = if target.is_none() {
-            let start = draft.start.trim().parse::<f64>().ok();
-            let end = draft.end.trim().parse::<f64>().ok();
+            let start = crate::ui::elements::schedule_delays::read_time(&draft.start);
+            let end = crate::ui::elements::schedule_delays::read_time(&draft.end);
             start
                 .zip(end)
                 .map(|(start_h, end_h)| WorkWindow { start_h, end_h: Some(end_h) })
@@ -651,8 +651,11 @@ fn draw_blast_preview_slider(ui: &mut egui::Ui, draft: &mut crate::ui::state::Bl
         let mut position = draft.preview;
         let width = (ui.available_width() - 220.0).max(120.0);
         ui.add_enabled_ui(total > 0, |ui| {
-            ui.spacing_mut().slider_width = width;
-            ui.add(egui::Slider::new(&mut position, 0..=total).show_value(false));
+            // Whole steps: a scrub lands on the nearest one.
+            let mut at = position as f64;
+            if ui.add(crate::ui::widgets::scrubber::Scrubber::new(&mut at, 0.0..=total as f64).width(width)).changed() {
+                position = at.round() as usize;
+            }
         });
         draft.preview = position.min(total);
         ui.label(egui::RichText::new(tr!("blast-sequence-preview-at", fired = draft.preview.to_string(), total = total.to_string())).weak());
@@ -762,6 +765,7 @@ fn draw_blast_sequence_preview(ui: &mut egui::Ui, editor: &mut EditorState, draf
     crate::ui::widgets::preview_navigation::navigate(ui, &response, rect, &mut draft.view, editor, true);
     if ready {
         crate::ui::widgets::preview_navigation::orientation_gizmo(ui, "blast_sequence_orientation_gizmo", rect, &mut draft.view);
+        crate::ui::widgets::preview_navigation::view_buttons(ui, "blast_sequence_view_buttons", rect, &mut draft.view);
     }
     if ready
         && response.clicked()

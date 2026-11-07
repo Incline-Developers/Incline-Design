@@ -232,7 +232,7 @@ impl<'a> App<'a> {
         let apply = move |app: &mut App, result: Result<LoadedDrillHoleDataset>| match result {
             Ok(loaded) => {
                 let should_fit = !app.scene_has_renderables();
-                let id = app.add_loaded_drill_holes(loaded);
+                let id = app.add_as_one_step(|app| app.add_loaded_drill_holes(loaded));
                 if should_fit {
                     app.fit_view_to_extents();
                 }
@@ -305,7 +305,7 @@ impl<'a> App<'a> {
     /// A CSV bundle's dataset, then the link to its geophysics files.
     #[cfg(not(target_arch = "wasm32"))]
     fn add_loaded_bundle(&mut self, (loaded, geophysics): LoadedBundle) {
-        let id = self.add_loaded_drill_holes(loaded);
+        let id = self.add_as_one_step(|app| app.add_loaded_drill_holes(loaded));
         if let Some(link) = geophysics {
             self.keep_geophysics_link(id, link);
         }

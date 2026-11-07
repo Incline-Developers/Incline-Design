@@ -39,6 +39,7 @@ impl<'a> App<'a> {
                 self.showing_solid_preview(),
                 &self.triangulations,
                 &self.solid_view_body,
+                &self.reserves_scene,
                 &self.schedule_animation,
                 self.solid_preview.as_ref(),
             );
@@ -93,6 +94,15 @@ impl<'a> App<'a> {
         // render; document geometry does not need rebuilding.
         self.redraw_requested = true;
         userspace_log!("{}", tr!("cmd-view-set-topology-wireframes-enabled", enabled = enabled.to_string()));
+        Ok(())
+    }
+
+    pub(crate) fn set_topology_contours(&mut self, enabled: bool) -> anyhow::Result<()> {
+        // A per-session view toggle like the wireframes, picked up by the
+        // topology GPU cache's style check on the next render.
+        self.editor.topology_contours_enabled = enabled;
+        self.redraw_requested = true;
+        userspace_log!("{}", tr!("cmd-view-set-topology-contours-enabled", enabled = enabled.to_string()));
         Ok(())
     }
 
@@ -245,7 +255,6 @@ impl<'a> App<'a> {
         // the draft and the editor disagreeing.
         crate::app::io::save_config(&config_from(
             &preferences,
-            self.editor.workspace_order,
             self.editor.delay_products.iter().map(DelayProduct::to_stored).collect(),
             self.editor.blast_library.clone(),
             self.editor.survey.definitions.clone(),
@@ -264,7 +273,6 @@ impl<'a> App<'a> {
         }
         crate::app::io::save_config(&config_from(
             &self.editor.current_preferences(),
-            self.editor.workspace_order,
             self.editor.delay_products.iter().map(DelayProduct::to_stored).collect(),
             self.editor.blast_library.clone(),
             self.editor.survey.definitions.clone(),
@@ -327,6 +335,113 @@ impl<'a> App<'a> {
         }
     }
 
+    /// Work out what clicks, snaps and the orbit pivot skip this frame:
+    /// [`EditorState::pick_frozen`] and [`EditorState::orbit_frozen`]. Rebuilt only when the page, the
+    /// locks or the project's items change.
+    pub(crate) fn sync_page_locks(&mut self) {
+        use std::hash::{Hash, Hasher};
+
+        use crate::model::SceneEntityId;
+        let page = self.editor.page_locks_items();
+        // Summed per entry: the sets do not iterate in a stable order.
+        let unordered = |set: &std::collections::HashSet<SceneEntityId>| {
+            set.iter().fold(set.len() as u64, |sum, entity| {
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                entity.hash(&mut hasher);
+                sum.wrapping_add(hasher.finish())
+            })
+        };
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        page.hash(&mut hasher);
+        self.editor.is_schedule_animation().hash(&mut hasher);
+        unordered(&self.editor.frozen_handles).hash(&mut hasher);
+        unordered(&self.editor.page_unlocked).hash(&mut hasher);
+        if page {
+            self.workspace
+                .active_project()
+                .map(|project| (project.runtime_id, project.project.document.revision()))
+                .hash(&mut hasher);
+            (self.triangulations.len(), self.block_models.len(), self.drill_holes.len(), self.point_clouds.len()).hash(&mut hasher);
+        }
+        let key = hasher.finish();
+        if self.page_lock_key == Some(key) {
+            return;
+        }
+        self.page_lock_key = Some(key);
+        if !page {
+            self.editor.pick_frozen = self.editor.frozen_handles.clone();
+            self.editor.orbit_frozen = self.editor.frozen_handles.clone();
+            return;
+        }
+        let unlocked = &self.editor.page_unlocked;
+        // Design lines stay pickable on the Road Network: Convert Selection
+        // turns them into roads, and they have no padlock of their own.
+        let objects = self
+            .workspace
+            .active_project()
+            .filter(|_| self.editor.is_schedule_animation())
+            .map(|project| {
+                project
+                    .project
+                    .document
+                    .objects()
+                    .iter()
+                    .map(|object| SceneEntityId::Object(object.id()))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let every = self
+            .triangulations
+            .iter()
+            .map(|item| SceneEntityId::Triangulation(item.id))
+            .chain(self.block_models.iter().map(|item| SceneEntityId::BlockModel(item.id)))
+            .chain(self.drill_holes.iter().map(|item| SceneEntityId::DrillHole(item.id)))
+            .chain(self.point_clouds.iter().map(|item| SceneEntityId::PointCloud(item.id)))
+            .chain(objects)
+            .chain(self.editor.frozen_handles.iter().copied());
+        self.editor.pick_frozen = every.filter(|entity| !unlocked.contains(entity)).collect();
+        self.editor.orbit_frozen = self.editor.frozen_handles.iter().copied().filter(|entity| !unlocked.contains(entity)).collect();
+    }
+
+    /// Open Animate on the whole site: once per project, and again whenever
+    /// a page that frames what it draws - Reserves, Blasting, Dig Strips, the
+    /// Road Network or another workspace - has had the camera since. Moving
+    /// between Animate and the pages with no 3D view keeps the user's view.
+    pub(crate) fn sync_animation_frame(&mut self) {
+        let elsewhere = self.editor.active_workspace != crate::ui::state::Workspace::Planning || self.editor.is_solids_view() || self.editor.is_viewport_step();
+        if elsewhere {
+            self.editor.animation_framed_key = None;
+            return;
+        }
+        if !self.editor.is_schedule_animation() {
+            return;
+        }
+        let Some(runtime) = self.workspace.active_project().map(|project| project.runtime_id) else {
+            return;
+        };
+        if self.editor.animation_framed_key == Some(runtime) {
+            return;
+        }
+        // Wait for the scene, and for any swing of the view to land: a frame
+        // taken before either would be undone.
+        if self.schedule_animation.scene().is_empty() || self.graphics.as_ref().is_some_and(|graphics| graphics.view_transition_running()) {
+            return;
+        }
+        self.editor.animation_framed_key = Some(runtime);
+        let triangulations = self.framed_triangulations().to_vec();
+        if let Some(graphics) = self.graphics.as_mut() {
+            graphics.zoom_to_extents(
+                &self.scene_document,
+                &triangulations,
+                &self.block_models,
+                &self.drill_holes,
+                &self.point_clouds,
+                &self.editor.hidden_handles,
+            );
+            self.redraw_requested = true;
+        }
+    }
+
     /// Reset the camera to a plan view that fits all visible content.
     pub(crate) fn reset_view(&mut self) {
         // Cloned before borrowing graphics mutably: the surfaces may come
@@ -380,12 +495,9 @@ impl<'a> App<'a> {
 /// whole: a save that left a field out of the literal would drop whatever the
 /// last one had put there. The products are passed in rather than read off the
 /// draft because they are not a preference the settings tabs edit - the
-/// palette owns them. The workspace order is passed separately for the same
-/// reason, so saving preferences or products preserves the tab arrangement.
-/// Mine-grid definitions are also carried through every config write.
+/// palette owns them. Mine-grid definitions are also carried through every config write.
 pub(crate) fn config_from(
     preferences: &crate::ui::state::PreferencesDraft,
-    workspace_order: [crate::ui::state::Workspace; 5],
     delay_products: Vec<crate::app::io::StoredDelayProduct>,
     blast_library: crate::model::blast::BlastLibrary,
     coordinate_systems: Vec<crate::model::survey::SystemDefinition>,
@@ -422,7 +534,6 @@ pub(crate) fn config_from(
         blast_library,
         coordinate_systems,
         mine_coordinate_system,
-        workspace_order: workspace_order.to_vec(),
         recent_functions_shown: preferences.recent_functions_shown,
         recent_design_functions,
     }

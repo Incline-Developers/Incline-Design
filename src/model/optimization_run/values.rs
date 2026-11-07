@@ -198,7 +198,7 @@ pub(crate) struct ElementTake {
 pub(crate) fn block_base(economics: &Economics, volume: f64, block: usize) -> BlockBase {
     let (density, default_density) = match &economics.density {
         None => (economics.default_density, false),
-        Some(values) if values[block].is_finite() && values[block] > 0.0 => (values[block], false),
+        Some(values) if values.get(block).is_finite() && values.get(block) > 0.0 => (values.get(block), false),
         Some(_) => (economics.default_density, true),
     };
     let tonnes = volume * density;
@@ -215,16 +215,16 @@ pub(crate) fn block_base(economics: &Economics, volume: f64, block: usize) -> Bl
 /// method does not take it. `take` hears each of the method's elements (its
 /// index in [`Economics::elements`]) and its share.
 pub(crate) fn route_costs(economics: &Economics, method: usize, block: usize, base: &BlockBase, mut take: impl FnMut(usize, ElementTake)) -> Option<RouteCosts> {
-    let rock = economics.rock.as_ref().map(|codes| codes[block]);
+    let rock = economics.rock.as_ref().map(|codes| codes.get(block));
     let method = &economics.methods[method];
-    if !method.takes(rock, economics.quality[block]) {
+    if !method.takes(rock, economics.quality.get(block)) {
         return None;
     }
     let tonnes = base.tonnes;
     let mut revenue = 0.0;
     let mut element_cost = 0.0;
     for element in &method.elements {
-        let grade = finite_or_zero(element.values[block]);
+        let grade = finite_or_zero(element.values.get(block));
         let contained = tonnes * grade * element.factor;
         let recoverable = tonnes * (grade - element.threshold).max(0.0) * element.factor;
         let recovered = recoverable * element.recovery;
@@ -250,7 +250,7 @@ pub(crate) fn route_costs(economics: &Economics, method: usize, block: usize, ba
 
 /// Value one block; pushes its processing routes. Returns (waste value, tonnes, is air).
 fn value_block(economics: &Economics, grid: &Grid, heights: Option<&[f64]>, volume: f64, cell: usize, block: usize, chunk: &mut Chunk) -> (f64, f64, bool) {
-    let rock = economics.rock.as_ref().map(|codes| codes[block]);
+    let rock = economics.rock.as_ref().map(|codes| codes.get(block));
     let is_air = match &economics.air {
         Air::None => false,
         Air::Rock(air) => rock.and_then(|code| code_index(code, air.len())).is_some_and(|code| air[code]),

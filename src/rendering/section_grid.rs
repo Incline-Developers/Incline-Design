@@ -30,7 +30,7 @@ pub(crate) fn grid_spacing(span: f64, span_pt: f64) -> f64 {
     } else {
         0.0
     };
-    crate::model::plot::round_up_to_series(for_count.max(for_pitch), &SPACING_STEPS).max(MIN_SPACING_M)
+    crate::model::numbers::round_up_to_series(for_count.max(for_pitch), &SPACING_STEPS).max(MIN_SPACING_M)
 }
 
 /// Which world axis a cut along `direction` is ruled against: northings for a mostly north-south cut, eastings for mostly east-west, switching
@@ -95,7 +95,7 @@ fn axis_component(vector: DVec2, axis: SectionGridAxis) -> f64 {
 pub(crate) fn coarsen_to_fit(spacing: f64, span: f64, max_lines: usize) -> f64 {
     let mut spacing = spacing.max(MIN_SPACING_M);
     while span / spacing > max_lines as f64 {
-        spacing = crate::model::plot::round_up_to_series(spacing * 2.0, &SPACING_STEPS);
+        spacing = crate::model::numbers::round_up_to_series(spacing * 2.0, &SPACING_STEPS);
     }
     spacing
 }
@@ -120,6 +120,6 @@ pub(crate) fn grid_values(range: (f64, f64), spacing: f64, max_lines: usize) -> 
             return (0..count as usize).map(|i| (first_index + i as f64) * spacing).collect();
         }
         // Doubling before the round-up always advances to the next step (1->2, 2->5, 5->10), so the count falls every pass.
-        spacing = crate::model::plot::round_up_to_series(spacing * 2.0, &SPACING_STEPS);
+        spacing = crate::model::numbers::round_up_to_series(spacing * 2.0, &SPACING_STEPS);
     }
 }

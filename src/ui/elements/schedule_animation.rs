@@ -68,73 +68,34 @@ pub(crate) fn draw_timeline(
             // appears when the slider is off, and the instant is then a fixed
             // zero saying nothing, so the two never compete for the space.
             //
-            // Painted into a row of fixed height rather than laid out from
-            // widgets, so nothing below it can move. Text that changes width
-            // as the cursor is dragged, and an indicator that comes and goes
-            // with the work, both shift a laid-out row - and the band and the
-            // slider under it then shake for the length of the drag.
-            let (readout, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), READOUT_ROW_H), egui::Sense::hover());
-            if editor.schedule_animation_enabled {
-                response.on_hover_ui(|ui| {
-                    if let Some(schedule) = &editor.schedule_result {
-                        let destinations = crate::model::schedule::destinations::available(document.solids(), plan.routing());
-                        for pile in &schedule.piles {
-                            if let Some((tonnes, _)) = schedule.inventory_at(pile.destination, editor.schedule_animation_shown_h) {
-                                let name = destinations
-                                    .iter()
-                                    .find(|entry| entry.id == pile.destination)
-                                    .map(|entry| entry.name.clone())
-                                    .unwrap_or_default();
-                                ui.label(tr!("schedule-animation-inventory", stockpile = name, tonnes = format!("{tonnes:.1}")));
-                            }
-                        }
-                    }
+            // Laid out the way the viewport bar is: the controls from the
+            // left at their own width, and the instant centred on the row but
+            // pushed along to clear them once the row is too narrow for both.
+            // Narrower still, the row stops narrowing and scrolls - see
+            // `elements::bar_strip`. The instant is placed from the widest one
+            // the run can name rather than the one shown, so its width
+            // changing under playback or a drag never moves it.
+            //
+            // Painted rather than laid out from widgets, so nothing below it
+            // can move. Text that changes width as the cursor is dragged, and
+            // an indicator that comes and goes with the work, both shift a
+            // laid-out row - and the band and the slider under it then shake
+            // for the length of the drag.
+            ui.scope(|ui| {
+                super::bar_strip(ui, "schedule_animation_readout", READOUT_ROW_H, |ui, row| {
+                    draw_readout_row(ui, editor, document, plan, row, horizon, commands)
                 });
-            }
-            if editor.schedule_animation_enabled || editor.schedule_animation_status.is_empty() {
-                // The instant the geometry was cut for, not the instant the
-                // slider is at: while a batch is in flight those differ, and
-                // the number that names what is on screen is the one that can
-                // be trusted against it.
-                //
-                // Dimmed while the cut is being caught up with, which is the
-                // only progress this needs to report. Said with the colour
-                // rather than with a spinner because a spinner is animated,
-                // and an animated widget asks for a repaint every frame it is
-                // visible - the whole scene redrawn, for as long as a scrub
-                // keeps work in flight. Warned when a block would not cut at
-                // all: the view then holds ground from an earlier instant that
-                // no later frame will replace, so the state persists rather
-                // than passing like the lag does.
-                let color = if editor.schedule_animation_degraded {
-                    ui.visuals().warn_fg_color
-                } else if editor.schedule_animation_pending {
-                    ui.visuals().weak_text_color()
-                } else {
-                    ui.visuals().strong_text_color()
-                };
-                paint_centered_line(ui, readout, instant_label(editor.schedule_animation_shown_h), READOUT_SIZE, color);
-            } else {
-                paint_centered_line(ui, readout, editor.schedule_animation_status.clone(), STATUS_SIZE, ui.visuals().weak_text_color());
-            }
-            if let Some(progress) = editor.video_export_progress {
-                draw_recording_progress(ui, readout, horizon, progress, commands);
-            } else if editor.schedule_animation_enabled {
-                draw_playback_controls(ui, editor, readout, horizon);
-            }
+            });
 
             ui.add_space(BAND_GAP);
             let band_height = 20.0;
             let (band, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), band_height), egui::Sense::hover());
             paint_period_band(ui, band, horizon, editor.schedule_time_h, &plan.periods().colors);
 
-            ui.spacing_mut().slider_width = ui.available_width();
             ui.spacing_mut().interact_size.y = 28.0;
             let slider = ui.add_enabled(
                 editor.schedule_animation_enabled && editor.video_export_progress.is_none(),
-                egui::Slider::new(&mut editor.schedule_time_h, 0.0..=horizon.max(f64::EPSILON))
-                    .show_value(false)
-                    .clamping(egui::SliderClamping::Edits),
+                crate::ui::widgets::scrubber::Scrubber::new(&mut editor.schedule_time_h, 0.0..=horizon.max(f64::EPSILON)),
             );
             // Taking hold of the cursor stops playback, as it does in the
             // blast review.
@@ -167,14 +128,95 @@ fn advance_playback(ui: &egui::Ui, editor: &mut EditorState, horizon: f64) {
     }
 }
 
+/// The readout row: the playback controls, or a recording's progress, from
+/// the left, and the cursor's instant centred on `row` but kept clear of
+/// them. Returns the width the row needs to show both.
+fn draw_readout_row(
+    ui: &mut egui::Ui,
+    editor: &mut EditorState,
+    document: &Document,
+    plan: &crate::model::schedule::SchedulePlan,
+    row: egui::Rect,
+    horizon: f64,
+    commands: &mut Vec<crate::ui::state::UiCommand>,
+) -> f32 {
+    let controls = if let Some(progress) = editor.video_export_progress {
+        super::cluster(ui, row, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            draw_recording_progress(ui, progress, commands)
+        })
+    } else if editor.schedule_animation_enabled {
+        super::cluster(ui, row, egui::Layout::left_to_right(egui::Align::Center), |ui| draw_playback_controls(ui, editor, horizon))
+    } else {
+        egui::Rect::NOTHING
+    };
+    let clear = if controls.is_positive() { controls.right() + CONTROLS_GAP } else { row.left() };
+
+    let showing_instant = editor.schedule_animation_enabled || editor.schedule_animation_status.is_empty();
+    let width = if showing_instant {
+        ui.painter()
+            .layout_no_wrap(instant_label(horizon), egui::FontId::proportional(READOUT_SIZE), egui::Color32::WHITE)
+            .size()
+            .x
+    } else {
+        // The status runs as wide as the row lets it, shortened past that.
+        (row.right() - clear).max(0.0)
+    };
+    let left = (row.center().x - width * 0.5).max(clear);
+    let readout = egui::Rect::from_min_max(egui::pos2(left, row.top()), egui::pos2(left + width, row.bottom()));
+
+    let response = ui.interact(readout, ui.scope_id().with("schedule_animation_readout"), egui::Sense::hover());
+    if editor.schedule_animation_enabled {
+        response.on_hover_ui(|ui| {
+            if let Some(schedule) = &editor.schedule_result {
+                let destinations = crate::model::schedule::destinations::available(document.solids(), plan.routing());
+                for pile in &schedule.piles {
+                    if let Some((tonnes, _)) = schedule.inventory_at(pile.destination, editor.schedule_animation_shown_h) {
+                        let name = destinations
+                            .iter()
+                            .find(|entry| entry.id == pile.destination)
+                            .map(|entry| entry.name.clone())
+                            .unwrap_or_default();
+                        ui.label(tr!("schedule-animation-inventory", stockpile = name, tonnes = format!("{tonnes:.1}")));
+                    }
+                }
+            }
+        });
+    }
+    if showing_instant {
+        // The instant the geometry was cut for, not the instant the slider is
+        // at: while a batch is in flight those differ, and the number that
+        // names what is on screen is the one that can be trusted against it.
+        //
+        // Dimmed while the cut is being caught up with, which is the only
+        // progress this needs to report. Said with the colour rather than
+        // with a spinner because a spinner is animated, and an animated
+        // widget asks for a repaint every frame it is visible - the whole
+        // scene redrawn, for as long as a scrub keeps work in flight. Warned
+        // when a block would not cut at all: the view then holds ground from
+        // an earlier instant that no later frame will replace, so the state
+        // persists rather than passing like the lag does. Not dimmed under
+        // playback, which starts a cut almost every frame and would blink the
+        // clock at the frame rate.
+        let color = if editor.schedule_animation_degraded {
+            ui.visuals().warn_fg_color
+        } else if editor.schedule_animation_pending && !editor.schedule_animation_playing {
+            ui.visuals().weak_text_color()
+        } else {
+            ui.visuals().strong_text_color()
+        };
+        paint_centered_line(ui, readout, instant_label(editor.schedule_animation_shown_h), READOUT_SIZE, color);
+    } else {
+        paint_centered_line(ui, readout, editor.schedule_animation_status.clone(), STATUS_SIZE, ui.visuals().weak_text_color());
+    }
+    let controls_width = if controls.is_positive() { controls.width() + CONTROLS_GAP } else { 0.0 };
+    // Room for the controls, then the instant beside them; the status takes
+    // whatever is left rather than asking for more.
+    controls_width + if showing_instant { width } else { 0.0 }
+}
+
 /// The left of the readout row while a video records: how far it has got,
 /// and Cancel.
-fn draw_recording_progress(ui: &mut egui::Ui, row: egui::Rect, horizon: f64, (done, total): (usize, usize), commands: &mut Vec<crate::ui::state::UiCommand>) {
-    let Some(rect) = controls_rect(ui, row, horizon) else {
-        return;
-    };
-    let mut ui = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
-    ui.set_clip_rect(rect);
+fn draw_recording_progress(ui: &mut egui::Ui, (done, total): (usize, usize), commands: &mut Vec<crate::ui::state::UiCommand>) {
     ui.spacing_mut().interact_size.y = READOUT_ROW_H;
     ui.spacing_mut().item_spacing.x = 8.0;
     if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() {
@@ -185,41 +227,23 @@ fn draw_recording_progress(ui: &mut egui::Ui, row: egui::Rect, horizon: f64, (do
     ui.label(tr!("video-export-recording", done = done.to_string(), total = total.to_string()));
 }
 
-/// The part of the readout row left of the widest instant the run can name.
-fn controls_rect(ui: &egui::Ui, row: egui::Rect, horizon: f64) -> Option<egui::Rect> {
-    let widest = ui
-        .painter()
-        .layout_no_wrap(instant_label(horizon), egui::FontId::proportional(READOUT_SIZE), egui::Color32::WHITE)
-        .size()
-        .x;
-    let right = row.center().x - widest * 0.5 - CONTROLS_GAP;
-    (right > row.left()).then(|| egui::Rect::from_min_max(row.left_top(), egui::pos2(right, row.bottom())))
-}
-
 /// Play or Pause, Back to the start, and the speed - `[1 day] = [15 s]` -
-/// from the row's left edge. Kept clear of the widest instant the run can
-/// name rather than the one shown, so a narrow window never lets the
-/// readout run under them while its width changes under playback.
-fn draw_playback_controls(ui: &mut egui::Ui, editor: &mut EditorState, row: egui::Rect, horizon: f64) {
-    let Some(rect) = controls_rect(ui, row, horizon) else {
-        return;
-    };
-    let mut ui = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
-    ui.set_clip_rect(rect);
+/// from the row's left edge.
+fn draw_playback_controls(ui: &mut egui::Ui, editor: &mut EditorState, horizon: f64) {
     ui.spacing_mut().interact_size.y = READOUT_ROW_H;
     ui.spacing_mut().item_spacing.x = 4.0;
     if editor.schedule_animation_playing {
-        if transport_button(&mut ui, Transport::Pause, tr!("animate-pause")).clicked() {
+        if transport_button(ui, Transport::Pause, tr!("animate-pause")).clicked() {
             editor.schedule_animation_playing = false;
         }
-    } else if transport_button(&mut ui, Transport::Play, tr!("animate-play")).clicked() {
+    } else if transport_button(ui, Transport::Play, tr!("animate-play")).clicked() {
         // From the start again once it has played through.
         if editor.schedule_time_h >= horizon {
             editor.schedule_time_h = 0.0;
         }
         editor.schedule_animation_playing = true;
     }
-    if transport_button(&mut ui, Transport::Rewind, tr!("animate-reset")).clicked() {
+    if transport_button(ui, Transport::Rewind, tr!("animate-reset")).clicked() {
         editor.schedule_time_h = 0.0;
         editor.schedule_animation_playing = false;
     }
@@ -228,7 +252,7 @@ fn draw_playback_controls(ui: &mut egui::Ui, editor: &mut EditorState, row: egui
     egui::ComboBox::from_id_salt("animate_play_span")
         .selected_text(span.label())
         .width(72.0)
-        .show_ui(&mut ui, |ui| {
+        .show_ui(ui, |ui| {
             for option in PlaybackSpan::ALL {
                 ui.selectable_value(span, option, option.label());
             }

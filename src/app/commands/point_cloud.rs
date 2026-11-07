@@ -102,7 +102,7 @@ impl<'a> App<'a> {
             move |app, result| match result {
                 Ok(loaded) => {
                     let should_fit = !app.scene_has_renderables();
-                    app.add_loaded_point_cloud(loaded, true, DEFAULT_POINT_CLOUD_COLOR, DEFAULT_POINT_SIZE);
+                    app.add_as_one_step(|app| app.add_loaded_point_cloud(loaded, true, DEFAULT_POINT_CLOUD_COLOR, DEFAULT_POINT_SIZE));
                     if should_fit {
                         app.fit_view_to_extents();
                     }
@@ -193,7 +193,7 @@ impl<'a> App<'a> {
             let complete = || match result {
                 Ok(Ok(loaded)) => {
                     let should_fit = !self.scene_has_renderables();
-                    self.add_loaded_point_cloud(loaded, true, DEFAULT_POINT_CLOUD_COLOR, DEFAULT_POINT_SIZE);
+                    self.add_as_one_step(|app| app.add_loaded_point_cloud(loaded, true, DEFAULT_POINT_CLOUD_COLOR, DEFAULT_POINT_SIZE));
                     if should_fit {
                         self.fit_view_to_extents();
                     }
@@ -236,6 +236,15 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn remove_point_cloud(&mut self, id: PointCloudId) {
+        if let Some(command) = Command::step(self.remove_point_cloud_commands(id)) {
+            self.execute_edit(command);
+        }
+    }
+
+    /// [`Self::remove_point_cloud`] as commands, for a tool that removes clouds
+    /// in the same undo step as it adds another. The editor's references to
+    /// it are dropped now.
+    pub(crate) fn remove_point_cloud_commands(&mut self, id: PointCloudId) -> Vec<Command> {
         self.cancel_jobs(|key| *key == crate::app::jobs::JobKey::PointCloud(id));
         let entity = SceneEntityId::PointCloud(id);
         self.editor.selected_handles.remove(&entity);
@@ -243,7 +252,7 @@ impl<'a> App<'a> {
         self.editor.explicitly_frozen.remove(&entity);
         self.editor.frozen_handles.remove(&entity);
         self.editor.translucent_handles.remove(&entity);
-        self.delete_project_item(crate::model::ItemRef::PointCloud(id));
+        self.delete_item_commands(crate::model::ItemRef::PointCloud(id))
     }
 
     /// Open the Join dialog, ticking every loaded cloud the first time and
@@ -299,12 +308,11 @@ impl<'a> App<'a> {
         let removed = remove_sources.then(|| cloud_ids.clone());
         let apply = move |app: &mut App, result: anyhow::Result<LoadedPointCloud>| match result {
             Ok(loaded) => {
+                // The joined cloud and the sources it replaces are one undo step.
+                let before = app.project_members();
                 app.add_loaded_point_cloud(loaded, true, color, point_size);
-                if let Some(removed) = removed {
-                    for id in removed {
-                        app.remove_point_cloud(id);
-                    }
-                }
+                let removals = removed.into_iter().flatten().flat_map(|id| app.remove_point_cloud_commands(id)).collect();
+                app.record_additions(&before, removals);
             }
             Err(error) => userspace_warn!("{}", tr!("cmd-point-cloud-failed-join-point-clouds-error", error = format!("{error:#}"))),
         };

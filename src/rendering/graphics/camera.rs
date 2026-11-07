@@ -550,6 +550,15 @@ impl<'a> Graphics<'a> {
         (near, (far - near).normalize())
     }
 
+    /// The nearest of `triangulations` under the cursor, if the ray reaches one.
+    pub(crate) fn surface_under_cursor(&self, triangulations: &[OpenTriangulation], hidden: &HashSet<SceneEntityId>) -> Option<crate::model::triangulation::TriangulationId> {
+        let (origin, direction) = self.cursor_model_ray();
+        match SceneQuery::nearest_surface(triangulations, hidden, None, origin, direction)? {
+            (SceneEntityId::Triangulation(id), _) => Some(id),
+            _ => None,
+        }
+    }
+
     /// True (unexaggerated) world point where viewport-relative physical
     /// pixel `px` meets the current section plane, or `None` when there is
     /// no sound answer. A slice camera looks horizontally, so this unprojects
@@ -1460,24 +1469,38 @@ impl<'a> Graphics<'a> {
         }
     }
 
-    /// World-space bounds of everything currently visible, for callers that
-    /// need to frame the scene without moving the camera (plot sheets).
-    pub(crate) fn scene_extents(
-        &self,
-        document: &Document,
-        triangulations: &[OpenTriangulation],
-        block_models: &[OpenBlockModel],
-        drill_holes: &[OpenDrillHoleDataset],
-        point_clouds: &[OpenPointCloud],
-        hidden: &HashSet<SceneEntityId>,
-    ) -> Option<(DVec3, DVec3)> {
-        scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, hidden, self.haul_roads_in_bounds)
-    }
-
-    /// The point the viewport is currently looking at, in world (not
-    /// vertically exaggerated) coordinates.
-    pub(crate) fn view_center(&self) -> DVec3 {
-        self.unexaggerate_point(self.camera.target())
+    /// Move the floating origin to the view once the view has wandered far
+    /// enough from it, for its scale, that f32 positions relative to it would
+    /// round visibly. An f32 coordinate rounds to about 1e-7 of its size, so
+    /// anything within `REACH` view scales of the origin rounds to under half
+    /// a pixel. Zoomed in to centimetres that reach is only metres, and
+    /// panning further would otherwise leave lines, surfaces and the orbit
+    /// pivot jittering apart.
+    ///
+    /// The scale is what the view resolves: its half height in orthographic,
+    /// and in perspective the nearer of the target and the near plane from
+    /// the eye, since the closest geometry needs the finest precision - but
+    /// never less than a metre there, or flying low through a scene would
+    /// move the origin every few seconds. A move rebuilds what is relative to
+    /// the origin, which is why it waits for the view to travel `REACH`
+    /// scales: hundreds of screens of panning, or a kilometre of flight.
+    pub(super) fn keep_scene_origin_near_view(&mut self) {
+        const REACH: f64 = 1024.0;
+        let (focus, scale) = if self.projection.is_perspective() {
+            (self.camera.position, self.projection.clip_planes().0.min(self.projection.zoom).max(1.0))
+        } else {
+            (self.camera.target(), self.projection.zoom)
+        };
+        let mut offset = focus - self.scene_origin;
+        // Vertical exaggeration stretches heights about the origin's, so
+        // moving it vertically would move everything drawn; only at true
+        // scale can the origin follow the view up and down.
+        if self.vertical_exaggeration != 1.0 {
+            offset.z = 0.0;
+        }
+        if offset.is_finite() && offset.length() > REACH * scale.max(f64::MIN_POSITIVE) {
+            self.rebase_scene_origin(self.scene_origin + offset);
+        }
     }
 
     /// Frame all visible content while keeping the current camera orientation
@@ -1900,7 +1923,7 @@ impl<'a> Graphics<'a> {
         }
     }
 
-    /// The Haulage Layout's dig blocks are fills drawn into the document
+    /// The Road Network's dig blocks are fills drawn into the document
     /// scene, outside the bounds the clip range is fitted to; without this a
     /// camera brought close to them cuts the nearest ones off.
     pub(super) fn include_haul_blocks_in_depth(&mut self, editor: &EditorState) {
@@ -1922,11 +1945,11 @@ impl<'a> Graphics<'a> {
         }
     }
 
-    /// Write the camera uniform the fragment shaders read. `slab` is the section clip (or `None`); it's an argument because the plot renders the whole ground through this buffer while a section is up in the viewport.
-    pub(super) fn upload_camera_uniform(&mut self, interaction_resolution_divisor: u32, slab: Option<SectionSlab>) {
+    /// Write the camera uniform the fragment shaders read, with the section clip if one is up.
+    pub(super) fn upload_camera_uniform(&mut self, interaction_resolution_divisor: u32) {
         self.camera_uniform
             .update_view_proj(&self.camera, &self.projection, self.scene_origin, self.vertical_exaggeration);
-        self.camera_uniform.set_section_slab(slab, self.scene_origin);
+        self.camera_uniform.set_section_slab(self.section_slab(), self.scene_origin);
         // While the camera is being orbited/panned/zoomed, draw the volume
         // raycast at a reduced per-axis resolution and upscale. The reduced
         // resolution also coarsens the raycaster's footprint-driven brick LOD

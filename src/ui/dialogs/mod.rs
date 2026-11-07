@@ -17,7 +17,6 @@ pub(crate) mod import_export;
 pub(crate) mod object_edit;
 pub(crate) mod optimization;
 pub(crate) mod optimization_results;
-pub(crate) mod plot;
 pub(crate) mod point_cloud;
 pub(crate) mod products;
 pub(crate) mod reference_points;

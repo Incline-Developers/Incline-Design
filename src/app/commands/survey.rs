@@ -47,7 +47,6 @@ impl App<'_> {
     fn write_survey_config(&self, definitions: Vec<crate::model::survey::SystemDefinition>, local: Option<String>) -> Result<()> {
         let config = super::view::config_from(
             &self.editor.current_preferences(),
-            self.editor.workspace_order,
             self.editor.delay_products.iter().map(crate::ui::state::DelayProduct::to_stored).collect(),
             self.editor.blast_library.clone(),
             definitions,

@@ -1,4 +1,4 @@
-//! Bundled fonts shared by the UI, document text, and plot renderer.
+//! Bundled fonts shared by the UI and document text.
 
 use std::sync::Arc;
 

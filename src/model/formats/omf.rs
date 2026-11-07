@@ -9,7 +9,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    io::{Cursor, Seek, Write},
+    io::{Seek, Write},
     path::{Path, PathBuf},
     sync::{Arc, OnceLock},
 };
@@ -26,11 +26,12 @@ use crate::{
     model::{
         Document, FillStyle, FolderId, FolderRegistry, Layer, MemberKind, Object, ObjectColor, PolyVertex, ReserveField, SectionKind, Solid,
         block_model::{
-            BlockBounds, BlockBoundsSource, Boundary, ColorTransferFunction, LoadedBlockModel, OpenBlockModel, RenderableBlockIndices, StoredColorTransferFunction,
-            compute_world_bounds, opaque_irregular_surface_block_count, opaque_surface_block_count,
+            BlockBounds, BlockBoundsSource, BlockGeometry, BlockGeometryBuilder, Boundary, ColorTransferFunction, LoadedBlockModel, OpenBlockModel, RenderableBlockIndices,
+            StoredColorTransferFunction, compute_world_bounds, opaque_irregular_surface_block_count, opaque_surface_block_count,
         },
         drill_hole::{DrillHole, DrillHoleDataset, DrillHoleSource, DrillValue, LoadedDrillHoleDataset, OpenDrillHoleDataset, OrientationSource, skipped_working_sections},
         formats::{
+            block_column::{BlockColumn, BlockColumnBuilder},
             block_model_data::{BlockModelColumn, BlockModelData},
             mesh_data::{Triangulation, Vertex},
         },
@@ -87,6 +88,9 @@ const META_SOLIDS: &str = "incline:solids";
 /// deliberately rather than guessed at.
 const META_HAULAGE: &str = "incline:haulage";
 const META_SCHEDULE: &str = "incline:schedule";
+/// The latest calculated schedule's decisions: see
+/// [`crate::model::schedule::optimisation::blended::saved`].
+const META_SCHEDULE_RESULT: &str = "incline:schedule_result";
 /// Payload version written into [`META_SCHEDULE`], and the only one this
 /// build reads.
 ///
@@ -130,8 +134,12 @@ const KNOWN_ELEMENT_METADATA: &[&str] = &[
     META_RESERVE_FIELDS,
     META_SOLIDS,
     META_SCHEDULE,
+    META_SCHEDULE_RESULT,
     META_HAULAGE,
 ];
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_ARRAY_ITEMS: u64 = u32::MAX as u64;
+#[cfg(target_arch = "wasm32")]
 const MAX_ARRAY_ITEMS: u64 = 200_000_000;
 
 /// Owned, cheaply-cloned state captured before OMF encoding moves to a worker.
@@ -352,8 +360,21 @@ pub(crate) fn write_path(snapshot: ProjectSnapshot, path: &Path, progress: &Phas
     })
 }
 
+/// Write `snapshot` straight into a new temporary backing file.
+pub(crate) fn to_backing(snapshot: ProjectSnapshot, compression: Compression, progress: &Phase) -> Result<crate::model::asset_storage::Backing> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::model::asset_storage::Backing::write_with(|file| write_to(snapshot, file, compression, progress).map(drop))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        crate::model::asset_storage::Backing::write(&to_bytes(snapshot, compression, progress)?)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
 pub(crate) fn to_bytes(snapshot: ProjectSnapshot, compression: Compression, progress: &Phase) -> Result<Vec<u8>> {
-    let cursor = write_to(snapshot, Cursor::new(Vec::new()), compression, progress)?;
+    let cursor = write_to(snapshot, std::io::Cursor::new(Vec::new()), compression, progress)?;
     Ok(cursor.into_inner())
 }
 
@@ -736,6 +757,9 @@ fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
             META_SCHEDULE,
             serde_json::json!({ "version": SCHEDULE_METADATA_VERSION, "plan": serde_json::to_value(schedule)? }),
         );
+        if let Some(saved) = document.saved_schedule() {
+            put(&mut element, META_SCHEDULE_RESULT, saved.to_value()?);
+        }
     }
     Ok(element)
 }
@@ -1188,22 +1212,23 @@ fn write_block_model<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
     if !extent.is_finite() || extent.min_element() <= 0.0 {
         bail!("Block model '{}' has invalid bounds", open.name);
     }
-    let selected = open.renderable_block_indices.iter().collect::<Vec<_>>();
-    if selected.is_empty() {
+    let selected = open.renderable_block_indices.as_ref();
+    if selected.len() == 0 {
         bail!("Block model '{}' has no renderable blocks", open.name);
     }
-    let subblocks = selected
-        .iter()
-        .map(|&index| {
-            let block = open.blocks.get(index).with_context(|| format!("Block model '{}' is missing block {index}", open.name))?;
-            // Normalizing by `extent` should land boundary blocks exactly on
-            // 0.0/1.0, but float rounding can push a corner a hair outside
-            // that range, which OMF's strict validation rejects.
-            let min = ((block.lower - lower) / extent).clamp(DVec3::ZERO, DVec3::ONE);
-            let max = ((block.upper - lower) / extent).clamp(DVec3::ZERO, DVec3::ONE);
-            Ok(([0, 0, 0], [min.x, min.y, min.z, max.x, max.y, max.z]))
-        })
-        .collect::<Result<Vec<_>>>()?;
+    if let Some(index) = selected.iter().find(|&index| index >= open.blocks.len()) {
+        bail!("Block model '{}' is missing block {index}", open.name);
+    }
+    let blocks = open.blocks.as_ref();
+    let subblocks = selected.iter().map(|index| {
+        let block = blocks.get(index).expect("every selected block was checked above");
+        // Normalizing by `extent` should land boundary blocks exactly on
+        // 0.0/1.0, but float rounding can push a corner a hair outside
+        // that range, which OMF's strict validation rejects.
+        let min = ((block.lower - lower) / extent).clamp(DVec3::ZERO, DVec3::ONE);
+        let max = ((block.upper - lower) / extent).clamp(DVec3::ZERO, DVec3::ONE);
+        ([0, 0, 0], [min.x, min.y, min.z, max.x, max.y, max.z])
+    });
     let rotation = model.rotation();
     let geometry = omf_crate::BlockModel::with_freeform_subblocks(
         omf_crate::Orient3::new(
@@ -1222,7 +1247,7 @@ fn write_block_model<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
             continue;
         };
         if variable.strings.is_empty() {
-            let selected_values = selected.iter().map(|&index| values.get(index).copied().filter(|value| value.is_finite()));
+            let selected_values = selected.iter().map(|index| values.checked(index).filter(|value| value.is_finite()));
             let numbers = writer.array_numbers(selected_values)?;
             element.attributes.push(write_number_attribute(
                 writer,
@@ -1234,10 +1259,9 @@ fn write_block_model<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
         } else {
             let codes = variable.strings.keys().copied().collect::<Vec<_>>();
             let code_to_index = codes.iter().enumerate().map(|(index, code)| (*code, index as u32)).collect::<BTreeMap<_, _>>();
-            let indices = selected.iter().map(|&index| {
+            let indices = selected.iter().map(|index| {
                 values
-                    .get(index)
-                    .copied()
+                    .checked(index)
                     .filter(|value| value.is_finite() && value.fract() == 0.0 && (0.0..=u32::MAX as f64).contains(value))
                     .and_then(|value| code_to_index.get(&(value as u32)).copied())
             });
@@ -1689,9 +1713,21 @@ pub(crate) enum PayloadIdentity {
         classifications: Option<std::sync::Weak<Vec<u8>>>,
     },
     Raster(std::sync::Weak<Vec<u8>>),
+    BlockModel {
+        blocks: std::sync::Weak<BlockBoundsSource>,
+        columns: Vec<std::sync::Weak<BlockColumn>>,
+    },
+    DrillHole(std::sync::Weak<crate::model::drill_hole::DrillHoleDataset>),
 }
 
 impl PayloadIdentity {
+    pub(crate) fn block_model(item: &OpenBlockModel) -> Self {
+        Self::BlockModel {
+            blocks: Arc::downgrade(&item.blocks),
+            columns: item.model.column_identities(),
+        }
+    }
+
     pub(crate) fn triangulation(item: &OpenTriangulation) -> Self {
         Self::Triangulation(Arc::downgrade(&item.mesh))
     }
@@ -1708,7 +1744,7 @@ impl PayloadIdentity {
         Self::Raster(Arc::downgrade(&item.full_rgba))
     }
 
-    fn same(&self, other: &Self) -> bool {
+    pub(crate) fn same(&self, other: &Self) -> bool {
         fn same_optional<T>(a: &Option<std::sync::Weak<T>>, b: &Option<std::sync::Weak<T>>) -> bool {
             match (a, b) {
                 (None, None) => true,
@@ -1731,6 +1767,10 @@ impl PayloadIdentity {
                 },
             ) => a.ptr_eq(b) && same_optional(a_colors, b_colors) && same_optional(a_classes, b_classes),
             (Self::Raster(a), Self::Raster(b)) => a.ptr_eq(b),
+            (Self::BlockModel { blocks: a, columns: a_columns }, Self::BlockModel { blocks: b, columns: b_columns }) => {
+                a.ptr_eq(b) && a_columns.len() == b_columns.len() && a_columns.iter().zip(b_columns).all(|(a, b)| a.ptr_eq(b))
+            }
+            (Self::DrillHole(a), Self::DrillHole(b)) => a.ptr_eq(b),
             _ => false,
         }
     }
@@ -1912,11 +1952,30 @@ fn reader_limits() -> omf_crate::file::Limits {
 }
 
 /// Read an OMF 2 container.
+#[cfg(target_arch = "wasm32")]
 pub(crate) fn from_bytes(source_name: &str, bytes: Vec<u8>, progress: &Phase) -> Result<ImportBundle> {
     progress.set_fraction(0.0);
     reject_omf1(&bytes).with_context(|| format!("read OMF container {source_name}"))?;
     let backing = crate::model::asset_storage::Backing::write(&bytes)?;
-    let mut reader = omf_crate::file::Reader::new(bytes).context("open OMF archive")?;
+    read_container(source_name, bytes, backing, progress).context(tr!("omf-damaged"))
+}
+
+/// Open a project file. The archive is read from a private copy of the file as
+/// each element needs it, so it is never held in memory whole.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn from_path(source_name: &str, path: &Path, progress: &Phase) -> Result<ImportBundle> {
+    use std::io::Read;
+    progress.set_fraction(0.0);
+    let mut head = Vec::with_capacity(36);
+    std::fs::File::open(path)?.take(36).read_to_end(&mut head)?;
+    reject_omf1(&head).with_context(|| format!("read OMF container {source_name}"))?;
+    let backing = crate::model::asset_storage::Backing::copy_of(path)?;
+    let archive = backing.open()?;
+    read_container(source_name, archive, backing, progress).context(tr!("omf-damaged"))
+}
+
+fn read_container<R: omf_crate::file::ReadAt>(source_name: &str, archive: R, backing: crate::model::asset_storage::Backing, progress: &Phase) -> Result<ImportBundle> {
+    let mut reader = omf_crate::file::Reader::new(archive).context("open OMF archive")?;
     reader.set_limits(reader_limits());
     let (project, problems) = reader.project().context("read project index")?;
     let mut bundle = ImportBundle {
@@ -2377,7 +2436,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                             dims: geometry.grid.count().map(|n| n as usize),
                             ..Default::default()
                         }),
-                        blocks: Arc::new(BlockBoundsSource::Explicit(Vec::new())),
+                        blocks: Arc::new(BlockBoundsSource::Explicit(Default::default())),
                         renderable_block_indices: Arc::new(RenderableBlockIndices::All(0)),
                         uniform_grid: None,
                         opaque_surface_blocks: None,
@@ -2582,6 +2641,9 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 Ok(schedule) => document.restore_schedule(schedule),
                 Err(reason) => unreadable("a schedule", reason),
             }
+        }
+        if let Some(value) = element.metadata.get(META_SCHEDULE_RESULT).cloned() {
+            document.set_saved_schedule(crate::model::schedule::optimisation::blended::saved::SavedSchedule::from_value(value).map(std::sync::Arc::new));
         }
         // Files written before circles were their own variant store them as
         // closed two-vertex bulged polylines. Upgrade on load so no tool
@@ -2887,8 +2949,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
 
     fn push_triangulation(&mut self, element: &omf_crate::Element, vertices: Vec<Vertex>, faces: Vec<[u32; 3]>) -> Result<()> {
         let geometry = element_geometry(element);
-        let mesh = Triangulation::from_vertices_and_faces(vertices, faces).with_context(|| format!("build OMF surface '{}'", element.name))?;
-        let spatial = Arc::new(crate::model::spatial::TriangleBvh::build(&mesh));
+        let mesh = Arc::new(Triangulation::from_vertices_and_faces(vertices, faces).with_context(|| format!("build OMF surface '{}'", element.name))?);
+        let spatial = Arc::new(crate::model::spatial::TriangleBvh::for_surface(&mesh));
         let edges = unique_edges(&mesh);
         let surface_face_order = Arc::new(spatial_surface_face_order(&mesh));
         let style = element.metadata.get(META_STYLE);
@@ -2904,7 +2966,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             loaded: LoadedTriangulation {
                 name: element_name(element).to_owned(),
                 path: virtual_path(self.source_name, element_name(element), "obj"),
-                mesh: Arc::new(mesh),
+                mesh,
                 spatial,
                 edges,
                 surface_face_order,
@@ -3054,75 +3116,102 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         let sizes = self.grid3_sizes(&geometry.grid)?;
         let edges = sizes.each_ref().map(|axis| cumulative_edges(axis));
         let count = geometry.grid.count().map(|count| count as usize);
-        let mut blocks = Vec::new();
-        let mut parent_indices = Vec::new();
-        let location = match &geometry.subblocks {
-            None => {
-                let total = count
-                    .into_iter()
-                    .try_fold(1usize, |total, count| total.checked_mul(count))
-                    .context("OMF block count overflows")?;
-                ensure_items(total as u64, "blocks")?;
-                blocks.reserve(total);
-                for k in 0..count[2] {
-                    for j in 0..count[1] {
-                        for i in 0..count[0] {
-                            blocks.push(BlockBounds {
-                                lower: DVec3::new(edges[0][i], edges[1][j], edges[2][k]),
-                                upper: DVec3::new(edges[0][i + 1], edges[1][j + 1], edges[2][k + 1]),
-                            });
+        // Parents are kept only for a parent-block attribute to be spread over
+        // its sub-blocks, which most models have none of.
+        let spreads_parents = element.attributes.iter().any(|attribute| attribute.location == omf_crate::Location::Primitives);
+        let location = if geometry.subblocks.is_some() {
+            omf_crate::Location::Subblocks
+        } else {
+            omf_crate::Location::Primitives
+        };
+        let reader = self.reader;
+        let read_geometry = || -> Result<(BlockGeometry, Vec<usize>)> {
+            let mut blocks = BlockBatches::default();
+            let mut parent_indices = Vec::new();
+            match &geometry.subblocks {
+                None => {
+                    let total = count
+                        .into_iter()
+                        .try_fold(1usize, |total, count| total.checked_mul(count))
+                        .context("OMF block count overflows")?;
+                    ensure_items(total as u64, "blocks")?;
+                    for k in 0..count[2] {
+                        for j in 0..count[1] {
+                            for i in 0..count[0] {
+                                blocks.push(BlockBounds {
+                                    lower: DVec3::new(edges[0][i], edges[1][j], edges[2][k]),
+                                    upper: DVec3::new(edges[0][i + 1], edges[1][j + 1], edges[2][k + 1]),
+                                });
+                            }
                         }
                     }
                 }
-                omf_crate::Location::Primitives
-            }
-            Some(omf_crate::Subblocks::Freeform { subblocks }) => {
-                ensure_items(subblocks.item_count(), "free-form sub-blocks")?;
-                for (parent, corners) in collect_results(self.reader.array_freeform_subblocks(subblocks)?)? {
-                    blocks.push(subblock_bounds(parent, corners, &edges)?);
-                    parent_indices.push(block_parent_index(parent, count)?);
+                Some(omf_crate::Subblocks::Freeform { subblocks }) => {
+                    ensure_items(subblocks.item_count(), "free-form sub-blocks")?;
+                    for item in reader.array_freeform_subblocks(subblocks)? {
+                        let (parent, corners) = item?;
+                        blocks.push(subblock_bounds(parent, corners, &edges)?);
+                        let parent = block_parent_index(parent, count)?;
+                        if spreads_parents {
+                            parent_indices.push(parent);
+                        }
+                    }
                 }
-                omf_crate::Location::Subblocks
-            }
-            Some(omf_crate::Subblocks::Regular { count: sub_count, subblocks, .. }) => {
-                ensure_items(subblocks.item_count(), "regular sub-blocks")?;
-                for (parent, corners) in collect_results(self.reader.array_regular_subblocks(subblocks)?)? {
-                    let fractions: [f64; 3] = std::array::from_fn(|axis| f64::from(corners[axis]) / f64::from(sub_count[axis]));
-                    let max_fractions: [f64; 3] = std::array::from_fn(|axis| f64::from(corners[axis + 3]) / f64::from(sub_count[axis]));
-                    blocks.push(subblock_bounds(
-                        parent,
-                        [fractions[0], fractions[1], fractions[2], max_fractions[0], max_fractions[1], max_fractions[2]],
-                        &edges,
-                    )?);
-                    parent_indices.push(block_parent_index(parent, count)?);
+                Some(omf_crate::Subblocks::Regular { count: sub_count, subblocks, .. }) => {
+                    ensure_items(subblocks.item_count(), "regular sub-blocks")?;
+                    for item in reader.array_regular_subblocks(subblocks)? {
+                        let (parent, corners) = item?;
+                        let fractions: [f64; 3] = std::array::from_fn(|axis| f64::from(corners[axis]) / f64::from(sub_count[axis]));
+                        let max_fractions: [f64; 3] = std::array::from_fn(|axis| f64::from(corners[axis + 3]) / f64::from(sub_count[axis]));
+                        blocks.push(subblock_bounds(
+                            parent,
+                            [fractions[0], fractions[1], fractions[2], max_fractions[0], max_fractions[1], max_fractions[2]],
+                            &edges,
+                        )?);
+                        let parent = block_parent_index(parent, count)?;
+                        if spreads_parents {
+                            parent_indices.push(parent);
+                        }
+                    }
                 }
-                omf_crate::Location::Subblocks
             }
+            Ok((blocks.finish(), parent_indices))
         };
-        if blocks.is_empty() {
+        // Each variable is its own array, so they decode side by side; a
+        // block model's variables are usually far more numerous than its row groups.
+        let read_columns = |parent_indices: &[usize]| -> Result<Vec<BlockModelColumn>> {
+            Ok(element
+                .attributes
+                .par_iter()
+                .filter_map(|attribute| {
+                    if location == omf_crate::Location::Subblocks && attribute.location == omf_crate::Location::Primitives {
+                        Some((attribute, Some(parent_indices)))
+                    } else if attribute.location == location {
+                        Some((attribute, None))
+                    } else {
+                        None
+                    }
+                })
+                .map(|(attribute, expansion)| read_block_column(reader, attribute, expansion))
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .flatten()
+                .collect())
+        };
+        // The bounds are six more arrays, and decode beside the rest unless the
+        // rest need the parents they hold.
+        let (blocks, columns) = if spreads_parents {
+            let (blocks, parent_indices) = read_geometry()?;
+            let columns = read_columns(&parent_indices)?;
+            (blocks, columns)
+        } else {
+            let (geometry, columns) = rayon::join(read_geometry, || read_columns(&[]));
+            (geometry?.0, columns?)
+        };
+        if blocks.len() == 0 {
             self.bundle.warnings.push(format!("Skipped empty OMF block model '{}'", element.name));
             return Ok(());
         }
-        // Each variable is its own array, so they decode side by side; a
-        // block model's variables are usually far more numerous than its row groups.
-        let reader = self.reader;
-        let columns = element
-            .attributes
-            .par_iter()
-            .filter_map(|attribute| {
-                if location == omf_crate::Location::Subblocks && attribute.location == omf_crate::Location::Primitives {
-                    Some((attribute, Some(parent_indices.as_slice())))
-                } else if attribute.location == location {
-                    Some((attribute, None))
-                } else {
-                    None
-                }
-            })
-            .map(|(attribute, expansion)| read_block_column(reader, attribute, expansion))
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
         let upper = DVec3::new(*edges[0].last().unwrap_or(&0.0), *edges[1].last().unwrap_or(&0.0), *edges[2].last().unwrap_or(&0.0));
         let rotation = DMat3::from_cols(
             DVec3::from_array(geometry.orient.u),
@@ -3130,8 +3219,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             DVec3::from_array(geometry.orient.w),
         );
         let origin = self.project_origin + DVec3::from_array(geometry.orient.origin);
-        let retained_geometry_bytes = blocks.len().checked_mul(std::mem::size_of::<BlockBounds>()).context("block geometry size overflows")?;
-        let model = BlockModelData::from_columns(blocks.len(), DVec3::ZERO, upper, columns, retained_geometry_bytes)?.with_transform(origin, rotation)?;
+        let model = BlockModelData::from_columns(blocks.len(), DVec3::ZERO, upper, columns, blocks.heap_bytes())?.with_transform(origin, rotation)?;
         let blocks = Arc::new(BlockBoundsSource::Explicit(blocks));
         let renderable = Arc::new(RenderableBlockIndices::All(blocks.len()));
         let uniform_grid = blocks.uniform_grid();
@@ -3204,7 +3292,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         let variable_range = |name: &str| -> Option<(f64, f64)> {
             let variable = model.variable(name)?;
             let default = crate::model::block_model::color_variable_default(variable);
-            let values = model.color_values(name).ok()?;
+            let values = model.shared_numeric_values(name)?;
             crate::model::block_model::render_value_range(&values, renderable, default)
         };
 
@@ -3649,8 +3737,13 @@ fn read_block_column<R: omf_crate::file::ReadAt>(
 ) -> Result<Option<BlockModelColumn>> {
     match &attribute.data {
         omf_crate::AttributeData::Number { values, .. } => {
-            let values = read_numbers(reader, values)?.into_iter().map(|value| value.unwrap_or(f64::NAN)).collect::<Vec<_>>();
-            let values = expand_block_values(values, expansion)?;
+            let values = match expansion {
+                None => read_number_column(reader, values)?,
+                Some(_) => {
+                    let parents = read_numbers(reader, values)?.into_iter().map(|value| value.unwrap_or(f64::NAN)).collect::<Vec<_>>();
+                    expand_block_values(parents, expansion)?
+                }
+            };
             Ok(Some(BlockModelColumn {
                 name: attribute.name.clone(),
                 values: Arc::new(values),
@@ -3698,11 +3791,20 @@ fn read_block_column<R: omf_crate::file::ReadAt>(
                 .map(|colors| codes.iter().copied().zip(colors).map(|(code, color)| (code, linear_rgba(color))).collect())
                 .unwrap_or_default();
             let categories = names.into_iter().zip(codes.iter().copied()).map(|(name, code)| (code, name)).collect();
-            let values = collect_results(reader.array_indices(values)?)?
-                .into_iter()
-                .map(|value| value.and_then(|index| codes.get(index as usize).copied()).map_or(f64::NAN, f64::from))
-                .collect::<Vec<_>>();
-            let values = expand_block_values(values, expansion)?;
+            let code_of = |value: Option<u32>| value.and_then(|index| codes.get(index as usize).copied()).map_or(f64::NAN, f64::from);
+            let values = match expansion {
+                None => {
+                    let mut column = BlockColumnBuilder::default();
+                    for value in reader.array_indices(values)? {
+                        column.push(code_of(value?));
+                    }
+                    column.finish()
+                }
+                Some(_) => {
+                    let parents = collect_results(reader.array_indices(values)?)?.into_iter().map(code_of).collect::<Vec<_>>();
+                    expand_block_values(parents, expansion)?
+                }
+            };
             Ok(Some(BlockModelColumn {
                 name: attribute.name.clone(),
                 values: Arc::new(values),
@@ -3777,14 +3879,58 @@ fn block_parent_index(parent: [u32; 3], count: [usize; 3]) -> Result<usize> {
         .context("OMF block parent index overflows")
 }
 
-fn expand_block_values(values: Vec<f64>, expansion: Option<&[usize]>) -> Result<Vec<f64>> {
+fn expand_block_values(values: Vec<f64>, expansion: Option<&[usize]>) -> Result<BlockColumn> {
     let Some(expansion) = expansion else {
-        return Ok(values);
+        return Ok(BlockColumn::from_values(&values));
     };
-    expansion
-        .iter()
-        .map(|&parent| values.get(parent).copied().with_context(|| format!("OMF parent-block attribute is missing value {parent}")))
-        .collect()
+    let mut column = BlockColumnBuilder::default();
+    for &parent in expansion {
+        column.push(
+            values
+                .get(parent)
+                .copied()
+                .with_context(|| format!("OMF parent-block attribute is missing value {parent}"))?,
+        );
+    }
+    Ok(column.finish())
+}
+
+/// A number array as a block column, encoded as it is read.
+fn read_number_column<R: omf_crate::file::ReadAt>(reader: &omf_crate::file::Reader<R>, array: &omf_crate::Array<omf_crate::array_type::Number>) -> Result<BlockColumn> {
+    ensure_items(array.item_count(), "number values")?;
+    let mut column = BlockColumnBuilder::default();
+    if let Ok(numbers) = reader.array_numbers(array)?.try_into_f64() {
+        for value in numbers {
+            column.push(value?.unwrap_or(f64::NAN));
+        }
+    } else {
+        for value in reader.array_numbers(array)?.try_into_i64()? {
+            column.push(value?.map_or(f64::NAN, |value| value as f64));
+        }
+    }
+    Ok(column.finish())
+}
+
+/// Block bounds on their way to a [`BlockGeometry`], encoded a batch at a time.
+#[derive(Default)]
+struct BlockBatches {
+    batch: Vec<BlockBounds>,
+    geometry: BlockGeometryBuilder,
+}
+
+impl BlockBatches {
+    fn push(&mut self, block: BlockBounds) {
+        self.batch.push(block);
+        if self.batch.len() == 1 << 20 {
+            self.geometry.extend(&self.batch);
+            self.batch.clear();
+        }
+    }
+
+    fn finish(mut self) -> BlockGeometry {
+        self.geometry.extend(&self.batch);
+        self.geometry.finish()
+    }
 }
 
 fn subblock_bounds(parent: [u32; 3], corners: [f64; 6], edges: &[Vec<f64>; 3]) -> Result<BlockBounds> {

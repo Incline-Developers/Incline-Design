@@ -10,14 +10,17 @@ use rayon::prelude::*;
 use crate::{
     app::{
         App,
-        commands::{file::FileDialogAction, triangulation::session::build_generated_triangulation},
+        commands::{
+            file::FileDialogAction,
+            triangulation::session::{NewTriangulation, build_generated_triangulation},
+        },
         jobs::JobKey,
     },
     i18n::tr,
     model::{
-        ItemRef, MemberKind, SceneEntityId, SectionKind,
+        Command, ItemRef, MemberKind, OpenItem, SceneEntityId, SectionKind,
         block_model::{BlockModelId, ColorTransferFunction},
-        folders::FolderId,
+        folders::{Folder, FolderId},
         optimization::{
             AirMode, BlockModelFields, FactorInput, GridIssue, OptimizationScenario, ScenarioFile, ShellMode, copy_name, format_factor, shell_prefix_taken, unique_name,
             unique_shell_prefix,
@@ -769,10 +772,12 @@ impl<'a> App<'a> {
                     (scenario.id, started.elapsed().as_nanos(), self.triangulations.len()).hash(&mut hasher);
                     hasher.finish()
                 };
-                let colors = self.add_shell_triangulations(&scenario, seed, triangulations);
-                if let (Some(field), Some(values)) = (shell_field, outcome.field.take()) {
-                    self.write_shell_field(model_id, field, values, colors, seed);
-                }
+                self.publish_shells(
+                    &scenario,
+                    seed,
+                    triangulations,
+                    shell_field.zip(outcome.field.take()).map(|(field, values)| (model_id, field, values)),
+                );
                 self.editor.optimization.results.insert(
                     id,
                     Arc::new(RunResult {
@@ -794,25 +799,64 @@ impl<'a> App<'a> {
         self.start_queued_optimization_runs();
     }
 
-    /// The shells as triangulations, each a random colour (a shell's solid and
-    /// surface share one): solids in a collection named after the scenario and
-    /// the layer name, surfaces in one with " surface" after that. Returns each
-    /// shell's colour (1-based), kept from an updated item or newly given.
-    fn add_shell_triangulations(&mut self, scenario: &OptimizationScenario, seed: u64, triangulations: Vec<ShellItem>) -> HashMap<usize, [f32; 4]> {
+    /// A run's shells into the project as one undo step: their
+    /// triangulations, and `field` - the categorical field of a block model
+    /// they are written into - when there is one. A block model moved out of
+    /// memory since the run is read back first, and its field becomes an
+    /// undo step of its own then, so a failed read cannot cost the shells.
+    fn publish_shells(&mut self, scenario: &OptimizationScenario, seed: u64, triangulations: Vec<ShellItem>, field: Option<(BlockModelId, String, ShellField)>) {
+        let (colors, mut commands) = self.shell_triangulation_commands(scenario, seed, triangulations);
+        if let Some((model_id, field, values)) = field {
+            let item = ItemRef::BlockModel(model_id);
+            if self.project_item_state(item).is_some_and(|state| state.deferred.is_some()) {
+                self.restore_items_for(vec![item], move |app| {
+                    if let Some(command) = app.shell_field_command(model_id, &field, values, &colors, seed) {
+                        app.execute_job_edit(command);
+                    }
+                });
+            } else {
+                commands.extend(self.shell_field_command(model_id, &field, values, &colors, seed));
+            }
+        }
+        if let Some(command) = Command::step(commands) {
+            self.execute_job_edit(command);
+        }
+        self.invalidate_geometry();
+    }
+
+    /// The commands putting the shells in as triangulations, each a random
+    /// colour (a shell's solid and surface share one): solids in a collection
+    /// named after the scenario and the layer name, surfaces in one with
+    /// " surface" after that. Returns them with each shell's colour (1-based),
+    /// kept from an updated item or newly given.
+    fn shell_triangulation_commands(&mut self, scenario: &OptimizationScenario, seed: u64, triangulations: Vec<ShellItem>) -> (HashMap<usize, [f32; 4]>, Vec<Command>) {
         let mut colors = HashMap::new();
         if triangulations.is_empty() {
-            return colors;
+            return (colors, Vec::new());
         }
         let solids = format!("{} {}", scenario.name, scenario.output.shell_layer_name.trim()).trim().to_owned();
         let surfaces = format!("{solids} {}", tr!("opt-shell-surface-suffix"));
-        let mut folder = |name: &str| {
-            self.workspace
-                .active_project_mut()
-                .and_then(|project| project.project.folders.ensure(SectionKind::Triangulations, name))
+        // The collections it makes, and the shells it updates, adds and
+        // removes.
+        let mut commands = Vec::new();
+        let mut folder = |app: &mut Self, name: &str| -> Option<FolderId> {
+            let registry = &mut app.workspace.active_project_mut()?.project.folders;
+            if let Some(id) = registry.by_name(SectionKind::Triangulations, name) {
+                return Some(id);
+            }
+            if name.trim().is_empty() {
+                return None;
+            }
+            let id = registry.allocate_id();
+            commands.push(Command::AddFolder {
+                section: SectionKind::Triangulations,
+                folder: Folder { id, name: name.to_owned() },
+            });
+            Some(id)
         };
         // A collection only for a kind the run made, so none is left empty.
-        let solid_folder = triangulations.iter().any(|item| item.solid).then(|| folder(&solids)).flatten();
-        let surface_folder = triangulations.iter().any(|item| !item.solid).then(|| folder(&surfaces)).flatten();
+        let solid_folder = triangulations.iter().any(|item| item.solid).then(|| folder(self, &solids)).flatten();
+        let surface_folder = triangulations.iter().any(|item| !item.solid).then(|| folder(self, &surfaces)).flatten();
         // A rerun updates the shells of the same name in place, keeping their
         // colours, and removes those it no longer makes, so each collection
         // always holds the latest run.
@@ -824,50 +868,39 @@ impl<'a> App<'a> {
                 .collect()
         };
         let mut stale = in_folders(self);
+        let mut added = Vec::new();
         for ShellItem { shell, solid, built } in triangulations {
             let folder = if solid { solid_folder } else { surface_folder };
             if let Some(index) = stale.iter().position(|(_, existing, name)| *existing == folder && *name == built.name) {
                 let (id, ..) = stale.swap_remove(index);
-                self.replace_generated_triangulation(id, built);
                 if let Some(item) = self.triangulations.iter().find(|item| item.id == id) {
                     colors.entry(shell).or_insert(item.color);
                 }
+                commands.extend(self.replace_triangulation_command(id, built));
                 continue;
             }
             let state = ProjectItemState::dirty(MemberKind::Triangulation, None)
                 .with_section(SectionKind::natural_for(MemberKind::Triangulation))
                 .with_folder(folder);
             let color = *colors.entry(shell).or_insert_with(|| shell_color(seed, shell));
-            self.insert_generated_triangulation_with(built, state, color, false);
+            added.push(NewTriangulation { built, state, color });
         }
+        let (_, adds) = self.add_triangulation_commands(added);
+        commands.extend(adds);
         for (id, ..) in stale {
-            self.remove_triangulation(id);
+            commands.extend(self.remove_triangulation_commands(id));
         }
-        self.evict_unloaded_items();
-        self.invalidate_geometry();
-        colors
+        (colors, commands)
     }
 
-    /// Write a run's shells into categorical field `field` of block model
-    /// `model_id`, adding the field or overwriting it. A block model moved out
-    /// of memory since the run is read back first, and leaves again after.
-    fn write_shell_field(&mut self, model_id: BlockModelId, field: String, values: ShellField, colors: HashMap<usize, [f32; 4]>, seed: u64) {
-        let restoring = self.restore_items_for(vec![ItemRef::BlockModel(model_id)], {
-            let (field, values, colors) = (field.clone(), values.clone(), colors.clone());
-            move |app| app.apply_shell_field(model_id, &field, values, &colors, seed)
-        });
-        if !restoring {
-            self.apply_shell_field(model_id, &field, values, &colors, seed);
-        }
-    }
-
+    /// The command writing a run's shells into categorical field `field` of
+    /// block model `model_id` (in memory), adding the field or overwriting it.
     /// Each category's colour: the one its name already had in the field (so a
     /// rerun, or a colour the user changed, stays), else its shell's
     /// triangulation colour, else a new random one.
-    fn apply_shell_field(&mut self, model_id: BlockModelId, field: &str, values: ShellField, shell_colors: &HashMap<usize, [f32; 4]>, seed: u64) {
-        let Some(model) = self.block_models.iter_mut().find(|model| model.id == model_id) else {
-            return;
-        };
+    fn shell_field_command(&self, model_id: BlockModelId, field: &str, values: ShellField, shell_colors: &HashMap<usize, [f32; 4]>, seed: u64) -> Option<Command> {
+        // The columns are shared, so the copy costs only the one it writes.
+        let mut model = self.block_models.iter().find(|model| model.id == model_id)?.clone();
         let earlier: HashMap<String, [f32; 4]> = model
             .model
             .variable(field)
@@ -893,23 +926,30 @@ impl<'a> App<'a> {
             })
             .collect();
         let count = values.categories.len();
-        if let Err(error) = model.model.set_category_column(field, values.codes, values.categories, colors.clone()) {
+        if let Err(error) = model.model.set_category_column(
+            field,
+            std::sync::Arc::new(crate::model::formats::block_column::BlockColumn::from_values(&values.codes)),
+            values.categories,
+            colors.clone(),
+        ) {
             userspace_error!(
                 "{}",
                 tr!("opt-run-field-failed", field = field.to_owned(), model = model.name.clone(), error = error.to_string())
             );
-            return;
+            return None;
         }
         model.color_transfers.insert(field.to_owned(), ColorTransferFunction::Category { gradient: colors });
         if model.active_color_variable.as_deref() == Some(field) {
             model.clear_active_values_cache();
         }
-        model.state.touch();
-        let name = model.name.clone();
-        self.touch_active_project_content();
-        userspace_log!("{}", tr!("opt-run-field-written", field = field.to_owned(), model = name, count = count.to_string()));
-        self.evict_unloaded_items();
-        self.invalidate_geometry();
+        userspace_log!(
+            "{}",
+            tr!("opt-run-field-written", field = field.to_owned(), model = model.name.clone(), count = count.to_string())
+        );
+        Some(Command::ReplaceItem {
+            item: ItemRef::BlockModel(model_id),
+            other: Some(OpenItem::BlockModel(Box::new(model))),
+        })
     }
 }
 

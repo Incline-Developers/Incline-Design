@@ -449,7 +449,7 @@ impl<'a> BoreholeLog<'a> {
                     let label = if ratio == 1.0 {
                         tr!("viewport-1-1-true-shape")
                     } else {
-                        tr!("viewport-1-ratio", ratio = crate::model::plot::format_quantity(ratio, 0).to_string())
+                        tr!("viewport-1-ratio", ratio = crate::model::numbers::format_quantity(ratio, 0).to_string())
                     };
                     if ContextMenuAction::new(label).checked(squeeze == LogSqueeze::Fixed(ratio)).show(ui).clicked() {
                         squeeze = LogSqueeze::Fixed(ratio);
@@ -920,10 +920,10 @@ impl<'a> BoreholeLog<'a> {
 
         let ratio = elided(
             painter,
-            // Written as the plot sheet writes its 1:N, bar a fitted 1:2.5.
+            // Written as 1:N, bar a fitted 1:2.5.
             tr!(
                 "viewport-h-1-ratio",
-                ratio = trim_decimal_zeros(crate::model::plot::format_quantity(lean.ratio, 1)).to_string()
+                ratio = trim_decimal_zeros(crate::model::numbers::format_quantity(lean.ratio, 1)).to_string()
             ),
             font,
             ink,
@@ -1146,7 +1146,7 @@ fn fitted_squeeze(reach: f64, points_per_metre: f64, room: f64) -> Option<f64> {
         return None;
     }
     Some(if needed > 1.0 {
-        crate::model::plot::round_up_to_series(needed, &LOG_SQUEEZE_SERIES)
+        crate::model::numbers::round_up_to_series(needed, &LOG_SQUEEZE_SERIES)
     } else {
         1.0
     })
@@ -1417,7 +1417,7 @@ fn log_tick_step(span: f64, length: f32, min_gap: f32) -> f64 {
     if span <= 0.0 || length <= 0.0 {
         return 1.0;
     }
-    crate::model::plot::round_up_to_series(span * f64::from(min_gap) / f64::from(length), &[1.0, 2.0, 5.0, 10.0])
+    crate::model::numbers::round_up_to_series(span * f64::from(min_gap) / f64::from(length), &[1.0, 2.0, 5.0, 10.0])
 }
 
 /// A bearing turned by a drag across the page, wrapped back into 0..360.

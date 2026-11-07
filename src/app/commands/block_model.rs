@@ -69,7 +69,7 @@ impl<'a> App<'a> {
                 loaded_block_model_from_bytes(bytes, model_name, source)
             },
             |app, result| match result {
-                Ok(loaded) => app.add_loaded_block_model(loaded),
+                Ok(loaded) => app.add_as_one_step(|app| app.add_loaded_block_model(loaded)),
                 Err(error) => userspace_warn!("{}", tr!("cmd-block-model-failed-load-block-model-error", error = format!("{error:#}"))),
             },
         );
@@ -98,9 +98,10 @@ impl<'a> App<'a> {
                     // steps at the boundaries between them; the weights are an
                     // estimate of their relative cost, not a measurement.
                     let mapping = source.csv_columns.as_ref().context("Only CSV block-model sources are supported")?;
-                    let bytes = std::fs::read(&source.path).with_context(|| format!("Failed to read CSV block model {}", source.path.display()))?;
-                    let parsed =
-                        crate::model::formats::csv_block_model::parse(&bytes, mapping).with_context(|| format!("Failed to parse CSV block model {}", source.path.display()))?;
+                    let file = std::fs::File::open(&source.path).with_context(|| format!("Failed to read CSV block model {}", source.path.display()))?;
+                    let file_bytes = file.metadata().map_or(0, |metadata| metadata.len()).max(1);
+                    let parsed = crate::model::formats::csv_block_model::parse_stream(file, mapping, |read| progress.set_fraction(read as f32 / file_bytes as f32 * 0.5))
+                        .with_context(|| format!("Failed to parse CSV block model {}", source.path.display()))?;
                     let (model, blocks) = (parsed.model, std::sync::Arc::new(parsed.blocks));
                     progress.set_fraction(0.5);
                     let renderable_block_indices = std::sync::Arc::new(model.renderable_block_indices()?);
@@ -177,7 +178,7 @@ impl<'a> App<'a> {
             let complete = || match result {
                 Ok(Ok(loaded)) => {
                     self.finish_background_task(ticket, true);
-                    self.add_loaded_block_model(loaded);
+                    self.add_as_one_step(|app| app.add_loaded_block_model(loaded));
                 }
                 Ok(Err(error)) => {
                     userspace_warn!("{}", tr!("cmd-block-model-failed-load-block-model-error", error = format!("{error:#}")));
@@ -200,7 +201,6 @@ impl<'a> App<'a> {
     }
 
     pub(super) fn add_loaded_block_model(&mut self, loaded: LoadedBlockModel) {
-        let dims = loaded.model.metadata.dims;
         let name = crate::model::project::unique_item_name(loaded.name, self.block_models.iter().map(|item| item.name.as_str()));
         userspace_log!(
             "{}",
@@ -208,10 +208,6 @@ impl<'a> App<'a> {
                 "cmd-block-model-loaded-block-model-name-blocks",
                 name = name.clone().to_string(),
                 blocks = loaded.model.metadata.n_blocks.to_string(),
-                renderable = loaded.renderable_block_indices.len().to_string(),
-                dimx = dims[0].to_string(),
-                dimy = dims[1].to_string(),
-                dimz = dims[2].to_string(),
                 variables = loaded.model.metadata.variables.len().to_string()
             )
         );
@@ -509,7 +505,7 @@ impl<'a> App<'a> {
                 grid_result.get_or_insert((result.dims, result.upper, result.estimates.len()));
                 columns.push(BlockModelColumn {
                     name: variable.clone(),
-                    values: std::sync::Arc::new(result.estimates),
+                    values: std::sync::Arc::new(crate::model::formats::block_column::BlockColumn::from_values(&result.estimates)),
                     categories: None,
                     category_colors: std::collections::BTreeMap::new(),
                 });
@@ -545,7 +541,7 @@ impl<'a> App<'a> {
         let apply = move |app: &mut App, result: Result<LoadedBlockModel>| match result {
             Ok(loaded) => {
                 userspace_log!("{}", tr!("cmd-block-model-created-block-model-name-ordinary", name = loaded.name.clone().to_string()));
-                app.add_loaded_block_model(loaded);
+                app.add_as_one_step(|app| app.add_loaded_block_model(loaded));
             }
             Err(error) if error.to_string() != "Cancelled" => {
                 userspace_warn!("{}", tr!("cmd-block-model-could-not-create-block-model", error = format!("{error:#}")))
@@ -582,11 +578,7 @@ impl<'a> App<'a> {
     pub(crate) fn remove_block_model(&mut self, id: BlockModelId) {
         self.cancel_jobs(|key| *key == crate::app::jobs::JobKey::BlockModel(id));
         self.clear_block_model_entity_state(SceneEntityId::BlockModel(id));
-        // Solids reference their block model by id, and an import can reuse a
-        // freed id - see `App::remove_triangulation`.
-        if let Some(document) = self.workspace.active_document_mut() {
-            document.forget_solid_block_model(id);
-        }
+        // The solids using it are unlinked in the same undo step.
         self.delete_project_item(ItemRef::BlockModel(id));
         self.request_topology_redraw();
     }
