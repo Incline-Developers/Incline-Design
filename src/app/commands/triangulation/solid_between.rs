@@ -2622,15 +2622,18 @@ pub(crate) fn clip_piece_to_plans(slab: Slab, plans: &[&[Vec<glam::DVec2>]], can
             for part in &sheet {
                 part.iter().copied().for_each(&mut weld);
             }
-            let mut faces_here = Vec::new();
-            for (offset, refs) in panel_faces.iter().enumerate() {
-                faces_here.clear();
-                faces_here.extend(refs.iter().map(|&(run, face)| sheet[run as usize][face as usize]));
-                panel_wall(&overlay.panels[first_panel as usize + offset], &faces_here, floor)
-                    .into_iter()
-                    .for_each(&mut weld);
-            }
-            drop((sheet, panel_faces, faces_here));
+            // A plan along a survey's ragged edge has thousands of panels:
+            // their walls are built side by side and welded in order.
+            let walls: Vec<Vec<[mesh_data::Vertex; 3]>> = panel_faces
+                .par_iter()
+                .enumerate()
+                .map(|(offset, refs)| {
+                    let faces: Vec<[mesh_data::Vertex; 3]> = refs.iter().map(|&(run, face)| sheet[run as usize][face as usize]).collect();
+                    panel_wall(&overlay.panels[first_panel as usize + offset], &faces, floor)
+                })
+                .collect();
+            drop((sheet, panel_faces));
+            walls.into_iter().flatten().for_each(&mut weld);
             drop(seen);
             let mut boundary_wall = vec![false; sheet_faces];
             boundary_wall.resize(faces.len(), true);
