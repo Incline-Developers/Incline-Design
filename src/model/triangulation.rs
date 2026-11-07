@@ -251,6 +251,48 @@ fn split_chunk_range(faces: &mut [FaceCentroid]) {
     rayon::join(|| split_chunk_range(left), || split_chunk_range(right));
 }
 
+/// For each of `count` items, the first with a key equal to its own: itself,
+/// or an earlier one.
+///
+/// Items are dealt by their key's hash into shards, in order, and each shard
+/// is matched up on its own, so the whole runs in parallel and needs no sort
+/// of all the keys - one of tens of millions, through an index, whose first
+/// partitions run on one thread.
+pub(crate) fn first_of_equal<K: std::hash::Hash + Eq + Send>(count: usize, key: impl Fn(usize) -> K + Sync) -> Vec<u32> {
+    use std::{
+        hash::BuildHasher,
+        sync::atomic::{AtomicU32, Ordering},
+    };
+
+    use rayon::prelude::*;
+    const SHARDS: usize = 256;
+    const RUN: usize = 1 << 16;
+    let hasher = foldhash::fast::FixedState::default();
+    let shard = |index: usize| (hasher.hash_one(key(index)) >> 56) as usize % SHARDS;
+    // Each run's items by shard, in order; a shard's items are its runs'
+    // lists one after another.
+    let dealt: Vec<Vec<Vec<u32>>> = (0..count.div_ceil(RUN))
+        .into_par_iter()
+        .map(|run| {
+            let mut shards: Vec<Vec<u32>> = vec![Vec::new(); SHARDS];
+            for index in run * RUN..((run + 1) * RUN).min(count) {
+                shards[shard(index)].push(index as u32);
+            }
+            shards
+        })
+        .collect();
+    let first: Vec<AtomicU32> = (0..count).map(|_| AtomicU32::new(0)).collect();
+    (0..SHARDS).into_par_iter().for_each(|shard| {
+        let mut seen: std::collections::HashMap<K, u32, foldhash::fast::FixedState> = std::collections::HashMap::default();
+        for index in dealt.iter().flat_map(|runs| runs[shard].iter().copied()) {
+            let earliest = *seen.entry(key(index as usize)).or_insert(index);
+            first[index as usize].store(earliest, Ordering::Relaxed);
+        }
+    });
+    drop(dealt);
+    first.into_iter().map(AtomicU32::into_inner).collect()
+}
+
 /// One vertex per bit-identical position, the first of each kept in order,
 /// and the faces renumbered onto them. A cut leaves every face with corners of
 /// its own; shared again, the mesh holds about a fifth of the vertices with
@@ -258,23 +300,11 @@ fn split_chunk_range(faces: &mut [FaceCentroid]) {
 pub(crate) fn weld_identical_points(vertices: Vec<mesh_data::Vertex>, mut faces: Vec<[u32; 3]>) -> (Vec<mesh_data::Vertex>, Vec<[u32; 3]>) {
     use rayon::prelude::*;
 
-    let keys: Vec<[u64; 3]> = vertices.par_iter().map(|vertex| [vertex.x.to_bits(), vertex.y.to_bits(), vertex.z.to_bits()]).collect();
-    let mut order: Vec<u32> = (0..vertices.len() as u32).collect();
-    order.par_sort_unstable_by_key(|&index| (keys[index as usize], index));
-    drop(keys);
-    // Each point's first occurrence, which the sort puts at the head of its run.
-    let mut first: Vec<u32> = vec![0; vertices.len()];
-    let mut head = 0;
-    for (position, &index) in order.iter().enumerate() {
-        if position == 0 || {
-            let (a, b) = (vertices[order[position - 1] as usize], vertices[index as usize]);
-            a.x.to_bits() != b.x.to_bits() || a.y.to_bits() != b.y.to_bits() || a.z.to_bits() != b.z.to_bits()
-        } {
-            head = index;
-        }
-        first[index as usize] = head;
-    }
-    drop(order);
+    // Each point's first occurrence.
+    let first = first_of_equal(vertices.len(), |index| {
+        let vertex = vertices[index];
+        [vertex.x.to_bits(), vertex.y.to_bits(), vertex.z.to_bits()]
+    });
     let mut renumbered: Vec<u32> = vec![u32::MAX; vertices.len()];
     let mut kept = Vec::with_capacity(vertices.len() / 4);
     for (index, vertex) in vertices.iter().enumerate() {

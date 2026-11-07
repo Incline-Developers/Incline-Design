@@ -590,35 +590,93 @@ impl EdgeUse {
 }
 
 /// Every edge of `faces` once, with how its faces use it; the first
-/// `floor_faces` faces are the floor's. Sorted, so the tally of a few million
-/// edges is one parallel sort rather than as many hash lookups.
+/// `floor_faces` faces are the floor's. In order of their lower end, then
+/// their upper.
+///
+/// Each use is filed under its edge's lower end, a few to a point, so a tally
+/// of tens of millions of edges is one parallel pass and a short sort per
+/// point - not one sort of them all, whose first partitions run on one
+/// thread - and holds eight bytes a use rather than sixteen.
 fn edge_uses(faces: &[[u32; 3]], floor_faces: usize) -> Vec<EdgeUse> {
+    use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+
     use rayon::prelude::*;
-    let mut runs: Vec<(u32, u32, u32, bool)> = faces
-        .par_iter()
-        .enumerate()
-        .flat_map_iter(|(face, corners)| {
-            [(corners[0], corners[1]), (corners[1], corners[2]), (corners[2], corners[0])]
-                .into_iter()
-                .filter(|(a, b)| a != b)
-                .map(move |(a, b)| (a.min(b), a.max(b), face as u32, a < b))
-        })
-        .collect();
-    runs.par_sort_unstable();
-    runs.chunk_by(|left, right| (left.0, left.1) == (right.0, right.1))
-        .map(|group| {
-            let (low, high, face, forward) = group[0];
-            let balance = group.iter().map(|run| if run.3 { 1 } else { -1 }).sum();
-            let (from, to) = if forward { (low, high) } else { (high, low) };
-            EdgeUse {
-                low,
-                high,
-                count: group.len() as u32,
-                balance,
-                from,
-                to,
-                floor: (face as usize) < floor_faces,
+    const RUN: usize = 1 << 14;
+    let sides = |corners: &[u32; 3]| {
+        [(corners[0], corners[1]), (corners[1], corners[2]), (corners[2], corners[0])]
+            .into_iter()
+            .filter(|(a, b)| a != b)
+    };
+    assert!(faces.len() < 1 << 31, "a face's index is packed into 31 bits");
+    let points = faces.par_iter().map(|face| face.iter().copied().max().unwrap_or(0)).max().map_or(0, |max| max as usize + 1);
+    // Where each point's uses start: counted, then summed.
+    let counts: Vec<AtomicU32> = (0..points).map(|_| AtomicU32::new(0)).collect();
+    faces.par_chunks(RUN).for_each(|run| {
+        for corners in run {
+            for (a, b) in sides(corners) {
+                counts[a.min(b) as usize].fetch_add(1, Ordering::Relaxed);
             }
+        }
+    });
+    let mut starts: Vec<usize> = Vec::with_capacity(points + 1);
+    let mut total = 0;
+    starts.push(0);
+    for count in &counts {
+        total += count.load(Ordering::Relaxed) as usize;
+        starts.push(total);
+    }
+    // Each use as its upper end, face and direction, packed so that sorting
+    // a point's uses orders them as the edges are listed.
+    let cursors: Vec<AtomicU32> = counts;
+    cursors.par_iter().for_each(|cursor| cursor.store(0, Ordering::Relaxed));
+    let filed: Vec<AtomicU64> = (0..total).map(|_| AtomicU64::new(0)).collect();
+    faces.par_chunks(RUN).enumerate().for_each(|(chunk, run)| {
+        for (offset, corners) in run.iter().enumerate() {
+            let face = (chunk * RUN + offset) as u64;
+            for (a, b) in sides(corners) {
+                let low = a.min(b) as usize;
+                let slot = starts[low] + cursors[low].fetch_add(1, Ordering::Relaxed) as usize;
+                filed[slot].store((u64::from(a.max(b)) << 32) | (face << 1) | u64::from(a < b), Ordering::Relaxed);
+            }
+        }
+    });
+    drop(cursors);
+    let mut filed: Vec<u64> = filed.into_iter().map(AtomicU64::into_inner).collect();
+    // Split into runs of points, each sorted and tallied on its own.
+    let mut runs: Vec<(usize, &mut [u64])> = Vec::with_capacity(points.div_ceil(RUN));
+    let mut rest = filed.as_mut_slice();
+    for first in (0..points).step_by(RUN) {
+        let last = (first + RUN).min(points);
+        let (here, after) = rest.split_at_mut(starts[last] - starts[first]);
+        runs.push((first, here));
+        rest = after;
+    }
+    let starts = &starts;
+    runs.into_par_iter()
+        .flat_map_iter(|(first, filed)| {
+            let mut uses = Vec::new();
+            for low in first..(first + RUN).min(points) {
+                let filed = &mut filed[starts[low] - starts[first]..starts[low + 1] - starts[first]];
+                filed.sort_unstable();
+                let low = low as u32;
+                for group in filed.chunk_by(|left, right| left >> 32 == right >> 32) {
+                    let high = (group[0] >> 32) as u32;
+                    let face = ((group[0] >> 1) & 0x7fff_ffff) as usize;
+                    let forward = group[0] & 1 == 1;
+                    let balance = group.iter().map(|run| if run & 1 == 1 { 1 } else { -1 }).sum();
+                    let (from, to) = if forward { (low, high) } else { (high, low) };
+                    uses.push(EdgeUse {
+                        low,
+                        high,
+                        count: group.len() as u32,
+                        balance,
+                        from,
+                        to,
+                        floor: face < floor_faces,
+                    });
+                }
+            }
+            uses
         })
         .collect()
 }
@@ -1464,20 +1522,72 @@ fn merge_close_points(
     // Most points repeat one exactly - a copy for each face meeting there.
     // A parallel sort finds every repeat at once, and each takes whatever
     // its first copy becomes, so the search below sees each place once.
-    let bits: Vec<(u64, u64, u64)> = vertices.par_iter().map(|vertex| (vertex.x.to_bits(), vertex.y.to_bits(), vertex.z.to_bits())).collect();
-    let mut order: Vec<u32> = (0..vertices.len() as u32).collect();
-    order.par_sort_unstable_by_key(|&index| (bits[index as usize], index));
-    let mut first_copy: Vec<u32> = (0..vertices.len() as u32).collect();
-    for group in order.chunk_by(|&left, &right| bits[left as usize] == bits[right as usize]) {
-        for &index in &group[1..] {
-            first_copy[index as usize] = group[0];
+    let first_copy = crate::model::triangulation::first_of_equal(vertices.len(), |index| {
+        let vertex = vertices[index];
+        (vertex.x.to_bits(), vertex.y.to_bits(), vertex.z.to_bits())
+    });
+
+    // The points the search below is made for, and of those, the ones with no
+    // other within reach. One of those is kept on its own whatever comes
+    // before it, and nothing after it can join it, since reach is the same
+    // both ways: the search skips it and leaves it out of the cells, which
+    // for a survey's points is nearly all of them. Found side by side.
+    let in_only = |index: usize| only.is_none_or(|only| only.contains(&(index as u32)));
+    let searched = |index: usize| in_only(index) && (first_copy[index] as usize == index || only.is_some_and(|only| !only.contains(&first_copy[index])));
+    let lonely = {
+        use std::{
+            hash::BuildHasher,
+            sync::atomic::{AtomicU32, Ordering},
+        };
+        const EMPTY: u32 = u32::MAX;
+        let key = |index: u32| {
+            let vertex = vertices[index as usize];
+            (cell(vertex.x), cell(vertex.y), cell(vertex.z))
+        };
+        let points: Vec<u32> = (0..vertices.len() as u32).into_par_iter().filter(|&index| searched(index as usize)).collect();
+        // Every point filed by its cell in one open table, at most half full,
+        // filled and read side by side.
+        let slots = (points.len() * 2).next_power_of_two().max(2);
+        let hasher = FixedState::default();
+        let home = |key: PointKey| hasher.hash_one(key) as usize & (slots - 1);
+        let table: Vec<AtomicU32> = (0..slots).map(|_| AtomicU32::new(EMPTY)).collect();
+        points.par_iter().for_each(|&index| {
+            let mut slot = home(key(index));
+            while table[slot].compare_exchange(EMPTY, index, Ordering::Relaxed, Ordering::Relaxed).is_err() {
+                slot = (slot + 1) & (slots - 1);
+            }
+        });
+        let alone: Vec<u32> = points
+            .into_par_iter()
+            .filter(|&index| {
+                let vertex = vertices[index as usize];
+                !span(vertex.x)
+                    .flat_map(|x| span(vertex.y).flat_map(move |y| span(vertex.z).map(move |z| (x, y, z))))
+                    .any(|cell| {
+                        let mut slot = home(cell);
+                        loop {
+                            let other_index = table[slot].load(Ordering::Relaxed);
+                            if other_index == EMPTY {
+                                return false;
+                            }
+                            if other_index != index && key(other_index) == cell {
+                                let other = vertices[other_index as usize];
+                                if (other.x - vertex.x).powi(2) + (other.y - vertex.y).powi(2) + (other.z - vertex.z).powi(2) <= distance * distance {
+                                    return true;
+                                }
+                            }
+                            slot = (slot + 1) & (slots - 1);
+                        }
+                    })
+            })
+            .collect();
+        drop(table);
+        let mut lonely = vec![false; vertices.len()];
+        for index in alone {
+            lonely[index as usize] = true;
         }
-    }
-    // Each of these is as long as the points, which for a solid cut from a
-    // survey topography is tens of millions: what is done with goes now,
-    // before the search and the faces need their own.
-    drop(order);
-    drop(bits);
+        lonely
+    };
 
     let mut cells: HashMap<PointKey, Vec<u32>, FixedState> = HashMap::default();
     let mut kept: Vec<mesh_data::Vertex> = Vec::with_capacity(vertices.len() / 2);
@@ -1488,6 +1598,9 @@ fn merge_close_points(
             (kept.len() - 1) as u32
         } else if first_copy[index] as usize != index && only.is_none_or(|only| only.contains(&first_copy[index])) {
             remap[first_copy[index] as usize]
+        } else if lonely[index] {
+            kept.push(*vertex);
+            (kept.len() - 1) as u32
         } else {
             let found = span(vertex.x)
                 .flat_map(|x| span(vertex.y).flat_map(move |y| span(vertex.z).map(move |z| (x, y, z))))
@@ -1526,13 +1639,18 @@ fn merge_close_points(
             Some((index as u32, sorted, face, index < floor_faces))
         })
         .collect();
-    let mut by_points: Vec<u32> = (0..merged.len() as u32).collect();
-    by_points.par_sort_unstable_by_key(|&position| (merged[position as usize].1, merged[position as usize].0));
-    let mut dropped = vec![false; merged.len()];
-    for group in by_points.chunk_by(|&left, &right| merged[left as usize].1 == merged[right as usize].1) {
-        if group.len() < 2 {
-            continue;
+    // Faces on the same three points, each group in order: the first of each
+    // is found in parallel, and only the few that repeat one are gathered.
+    let first_on_points = crate::model::triangulation::first_of_equal(merged.len(), |position| merged[position].1);
+    let mut groups: std::collections::HashMap<u32, Vec<u32>, FixedState> = std::collections::HashMap::default();
+    for (position, first) in first_on_points.iter().enumerate() {
+        if *first as usize != position {
+            groups.entry(*first).or_insert_with(|| vec![*first]).push(position as u32);
         }
+    }
+    drop(first_on_points);
+    let mut dropped = vec![false; merged.len()];
+    for group in groups.values() {
         // Even: the same way round as the sorted points.
         let even = |position: u32| {
             let (sorted, face) = (merged[position as usize].1, merged[position as usize].2);
