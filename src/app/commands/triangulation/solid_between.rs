@@ -8,7 +8,7 @@ use anyhow::Result;
 use rayon::prelude::*;
 
 use super::{
-    cuts::{FoldLayer, PreparedReferenceSurface, REPAIR_WELD, WholeFaces, clip_mesh_by_prepared_surface, single_valued_surface, snap_surface_points},
+    cuts::{FoldLayer, PreparedReferenceSurface, REPAIR_WELD, clip_surfaces_against_each_other, single_valued_surface, snap_surface_points},
     *,
 };
 use crate::ui::state::SolidRegion;
@@ -94,13 +94,10 @@ fn build_envelopes(design: &PreparedReferenceSurface, topography: &PreparedRefer
         SolidRegion::Cut => (TriSurfaceCutSide::CutTop, TriSurfaceCutSide::CutBottom),
         SolidRegion::Fill => (TriSurfaceCutSide::CutBottom, TriSurfaceCutSide::CutTop),
     };
-    let (design_sheet, topography_sheet) = rayon::join(
-        // The design's faces are few and large, and come out whole wherever
-        // they lie clear of the ground. The topography's are already as fine
-        // as the ground, so its pieces are next to all of them anyway.
-        || clip_mesh_by_prepared_surface(&design.mesh, topography, design_side, SURFACE_CONTACT, WholeFaces::Kept, &progress.phase(0.0, 0.5)),
-        || clip_mesh_by_prepared_surface(&topography.mesh, design, topography_side, SURFACE_CONTACT, WholeFaces::Never, &progress.phase(0.5, 1.0)),
-    );
+    // The design's faces are few and large, and come out whole wherever they
+    // lie clear of the ground; the topography's are already as fine as the
+    // ground. Both are cut from one pass over the overlaps between them.
+    let (design_sheet, topography_sheet) = clip_surfaces_against_each_other(design, topography, design_side, topography_side, SURFACE_CONTACT, progress);
 
     let (floor, roof) = match region {
         SolidRegion::Cut => (design_sheet, topography_sheet),
