@@ -42,6 +42,7 @@ pub(crate) const APP_RELEASE: &str = env!("CARGO_PKG_VERSION");
 fn main() -> Result<()> {
     app::memory::tune_allocator();
     let _logging_guard = logging::init();
+    std::thread::spawn(model::asset_storage::initialize_native);
     (|| {
         let event_loop = EventLoop::new()?;
         let mut app = App::new()?;

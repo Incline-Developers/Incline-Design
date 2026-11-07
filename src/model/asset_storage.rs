@@ -19,54 +19,11 @@ pub(crate) type BackingData = Vec<u8>;
 #[derive(Debug)]
 struct BackingFile {
     #[cfg(not(target_arch = "wasm32"))]
-    file: NativeFile,
+    path: tempfile::TempPath,
     #[cfg(target_arch = "wasm32")]
     key: String,
     #[cfg(target_arch = "wasm32")]
     len: usize,
-}
-
-/// A project's archives are few and large: held open with no name, so the
-/// system reclaims them however the app ends. History steps and unloaded
-/// layers can be numerous enough to run out of file handles, and are small, so
-/// they keep a name; [`backing_directory`] clears any a crash leaves behind.
-#[cfg(not(target_arch = "wasm32"))]
-#[derive(Debug)]
-enum NativeFile {
-    Unnamed(std::fs::File),
-    Named(tempfile::TempPath),
-}
-
-/// /tmp is commonly a RAM-backed filesystem. Evicted data goes in the
-/// application cache so unloading does not merely move it into tmpfs and keep
-/// the same system-memory pressure.
-#[cfg(not(target_arch = "wasm32"))]
-fn backing_directory() -> Result<std::path::PathBuf> {
-    static CLEARED: std::sync::Once = std::sync::Once::new();
-    let directory = dirs::cache_dir().context("locate asset cache directory")?.join("Incline_Design").join("unloaded-assets");
-    std::fs::create_dir_all(&directory).context("create asset cache directory")?;
-    let leftovers = directory.clone();
-    CLEARED.call_once(|| {
-        std::thread::spawn(move || remove_leftovers(&leftovers));
-    });
-    Ok(directory)
-}
-
-/// Remove named files an earlier run did not get to remove. A day's grace
-/// leaves any other instance's recent files alone.
-#[cfg(not(target_arch = "wasm32"))]
-fn remove_leftovers(directory: &std::path::Path) {
-    const GRACE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
-    let Ok(entries) = std::fs::read_dir(directory) else { return };
-    for entry in entries.flatten() {
-        let old = entry
-            .metadata()
-            .and_then(|metadata| metadata.modified())
-            .is_ok_and(|modified| modified.elapsed().is_ok_and(|age| age > GRACE));
-        if old && entry.file_name().to_string_lossy().starts_with("asset-") {
-            let _ = std::fs::remove_file(entry.path());
-        }
-    }
 }
 
 impl Backing {
@@ -74,9 +31,14 @@ impl Backing {
     /// in memory whole.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn write_with(write: impl FnOnce(&mut std::fs::File) -> Result<()>) -> Result<Self> {
-        let mut file = tempfile::tempfile_in(backing_directory()?).context("create asset backing file")?;
-        write(&mut file)?;
-        Ok(Self(Arc::new(BackingFile { file: NativeFile::Unnamed(file) })))
+        use std::io::Write;
+        let mut file = tempfile::Builder::new()
+            .prefix("asset-")
+            .tempfile_in(native::directory()?)
+            .context("create asset backing file")?;
+        write(file.as_file_mut())?;
+        file.flush().context("flush asset backing file")?;
+        Ok(Self(Arc::new(BackingFile { path: file.into_temp_path() })))
     }
 
     /// A private copy of the file at `path`.
@@ -92,15 +54,7 @@ impl Backing {
         #[cfg(not(target_arch = "wasm32"))]
         {
             use std::io::Write;
-            let mut file = tempfile::Builder::new()
-                .prefix("asset-")
-                .tempfile_in(backing_directory()?)
-                .context("create asset backing file")?;
-            file.write_all(bytes).context("write asset backing file")?;
-            file.flush().context("flush asset backing file")?;
-            Ok(Self(Arc::new(BackingFile {
-                file: NativeFile::Named(file.into_temp_path()),
-            })))
+            Self::write_with(|file| file.write_all(bytes).context("write asset backing file"))
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -116,10 +70,7 @@ impl Backing {
     pub(crate) fn open(&self) -> Result<BackingData> {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            match &self.0.file {
-                NativeFile::Unnamed(file) => file.try_clone().context("open unloaded asset"),
-                NativeFile::Named(path) => std::fs::File::open(path).context("open unloaded asset"),
-            }
+            std::fs::File::open(&self.0.path).context("open unloaded asset")
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -135,18 +86,114 @@ impl Backing {
     pub(crate) fn read(&self) -> Result<Vec<u8>> {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            use std::io::{Read, Seek};
-            // An unnamed copy's handles share a position, so it starts from
-            // the top. Those copies are otherwise read by position only.
-            let mut file = self.open()?;
-            let mut bytes = Vec::new();
-            file.rewind().context("read unloaded asset")?;
-            file.read_to_end(&mut bytes).context("read unloaded asset")?;
-            Ok(bytes)
+            std::fs::read(&self.0.path).context("read unloaded asset")
         }
         #[cfg(target_arch = "wasm32")]
         {
             browser::read(&self.0.key, self.0.len).map_err(|error| anyhow::anyhow!("read unloaded asset: {error:?}"))
+        }
+    }
+}
+
+/// Claim this run's backing folder and clear out the ones runs that died left
+/// behind. Call once at startup, off the UI thread: the first unload waits
+/// for it, and clearing a crashed run's copies can take a moment.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn initialize_native() {
+    if let Err(error) = native::directory() {
+        log::warn!("asset backing unavailable: {error:#}");
+    }
+}
+
+/// Backing files live in a folder per run, under the application cache rather
+/// than /tmp, which is commonly RAM-backed: unloading into tmpfs would keep the
+/// same memory pressure. Each copy deletes itself when its last handle drops,
+/// but a run that crashes, is killed or exits with work in flight never drops
+/// them. So each run holds a lock on a file in its folder for as long as it
+/// lives (the OS releases it however the process ends), and the next run to
+/// start deletes every folder whose lock it can take.
+#[cfg(not(target_arch = "wasm32"))]
+mod native {
+    use std::{
+        fs::{self, File, OpenOptions},
+        path::{Path, PathBuf},
+        sync::OnceLock,
+    };
+
+    use anyhow::{Context, Result, anyhow};
+
+    struct Session {
+        directory: PathBuf,
+        /// Locked for the life of the process; never read.
+        _lock: File,
+    }
+
+    static SESSION: OnceLock<Result<Session, String>> = OnceLock::new();
+
+    /// This run's folder, claimed on first use.
+    pub(super) fn directory() -> Result<&'static Path> {
+        match SESSION.get_or_init(|| claim().map_err(|error| format!("{error:#}"))) {
+            Ok(session) => Ok(&session.directory),
+            Err(error) => Err(anyhow!("{error}")),
+        }
+    }
+
+    fn claim() -> Result<Session> {
+        let root = dirs::cache_dir().context("locate asset cache directory")?.join("Incline_Design").join("unloaded-assets");
+        fs::create_dir_all(&root).context("create asset cache directory")?;
+        // Held while claiming and sweeping, so no run sweeps a folder another
+        // has made but not yet locked. Locking is best effort throughout: on a
+        // filesystem without it nothing is ever swept, which is the old
+        // behaviour.
+        let guard = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(root.join(".lock"))
+            .context("open asset cache lock")?;
+        let _ = guard.lock();
+        let directory = tempfile::Builder::new()
+            .prefix("session-")
+            .tempdir_in(&root)
+            .context("create asset session directory")?
+            .keep();
+        let lock = File::create(directory.join("lock")).context("create asset session lock")?;
+        let _ = lock.try_lock();
+        sweep(&root, &directory);
+        Ok(Session { directory, _lock: lock })
+    }
+
+    /// Delete everything in `root` but this run's folder, the guard and the
+    /// folders of runs still alive. Loose files are copies from before
+    /// backing folders were per run.
+    fn sweep(root: &Path, own: &Path) {
+        let Ok(entries) = fs::read_dir(root) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path == own || entry.file_name() == ".lock" {
+                continue;
+            }
+            let removed = if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                if alive(&path) {
+                    continue;
+                }
+                fs::remove_dir_all(&path)
+            } else {
+                fs::remove_file(&path)
+            };
+            if let Err(error) = removed {
+                log::warn!("could not remove stale asset backing {}: {error}", path.display());
+            }
+        }
+    }
+
+    /// Whether a running process still holds the folder's lock. A folder with
+    /// no lock file is a dead run's (the lock is made before anything else
+    /// goes in); one whose lock cannot be checked is left alone.
+    fn alive(directory: &Path) -> bool {
+        match File::open(directory.join("lock")) {
+            Ok(file) => !matches!(file.try_lock(), Ok(())),
+            Err(error) => error.kind() != std::io::ErrorKind::NotFound,
         }
     }
 }
