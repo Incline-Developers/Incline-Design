@@ -1458,6 +1458,11 @@ pub(super) const REPAIR_WELD: f64 = 1.0e-3;
 pub(super) fn single_valued_surface(surface: &mesh_data::Triangulation, keep: FoldLayer) -> Result<(PreparedReferenceSurface, bool)> {
     let prepared = prepare_reference_surface_relaxed(surface)?;
     let (fold, folded) = folds(&prepared, reference_xy_overlap_area_tolerance(surface), true);
+    // Most surfaces need nothing, and saying so takes a fraction of the
+    // weld below, which runs on one thread over every corner.
+    if fold.is_none() && !folded.iter().any(|&folded| folded) && plainly_sound(&prepared) {
+        return Ok((prepared, false));
+    }
     let bounds = surface.bounds();
     let mut graph = SurfaceGraph::weld(&prepared, glam::DVec2::new(bounds.min.x, bounds.min.y), keep);
     // Only the edges of faces that fold can cross. They are noted before the
@@ -1492,6 +1497,110 @@ pub(super) fn single_valued_surface(surface: &mesh_data::Triangulation, keep: Fo
     // with any area is kept: a sliver dropped here would be a hole in the
     // solid.
     Ok((prepare_reference_surface(&repaired, 0.0)?, true))
+}
+
+/// The run of `cells`, sorted by cell, that lies in `cell`.
+fn points_in_cell(cells: &[((i64, i64), u32)], cell: (i64, i64)) -> &[((i64, i64), u32)] {
+    let start = cells.partition_point(|(key, _)| *key < cell);
+    let end = cells.partition_point(|(key, _)| *key <= cell);
+    &cells[start..end]
+}
+
+/// Whether `prepared` has nothing [`SurfaceGraph`] would weld or split: no
+/// two of its points within [`REPAIR_WELD`] of each other in plan unless
+/// they are the same point, and no point that near an edge it is not an end
+/// of. Errs towards `false`, which only costs the full check.
+fn plainly_sound(prepared: &PreparedReferenceSurface) -> bool {
+    use rayon::prelude::*;
+
+    // A little past the weld, so rounding cannot hide a pair it would join.
+    let reach = REPAIR_WELD * 1.01;
+    let corners: Vec<mesh_data::Vertex> = prepared.triangles.iter().flatten().copied().collect();
+    let bits = |vertex: &mesh_data::Vertex| [vertex.x.to_bits(), vertex.y.to_bits(), vertex.z.to_bits()];
+    let mut order: Vec<u32> = (0..corners.len() as u32).collect();
+    order.par_sort_unstable_by_key(|&index| bits(&corners[index as usize]));
+    // Each corner as one of the distinct points.
+    let mut point_of = vec![0u32; corners.len()];
+    let mut points: Vec<glam::DVec2> = Vec::new();
+    for (position, &index) in order.iter().enumerate() {
+        let corner = corners[index as usize];
+        if position == 0 || bits(&corners[order[position - 1] as usize]) != bits(&corner) {
+            points.push(glam::DVec2::new(corner.x, corner.y));
+        }
+        point_of[index as usize] = points.len() as u32 - 1;
+    }
+    drop(order);
+    drop(corners);
+    let Some(origin) = points.iter().copied().reduce(glam::DVec2::min) else { return true };
+
+    // Points by plan cell, a weld wide: any two within it lie in neighbouring cells.
+    let cell_of = |point: glam::DVec2, size: f64| {
+        let cell = ((point - origin) / size).floor();
+        (cell.x as i64, cell.y as i64)
+    };
+    let mut by_cell: Vec<((i64, i64), u32)> = points.par_iter().enumerate().map(|(index, point)| (cell_of(*point, reach), index as u32)).collect();
+    by_cell.par_sort_unstable();
+    let crowded = by_cell.par_iter().any(|&(cell, index)| {
+        let point = points[index as usize];
+        (cell.0 - 1..=cell.0 + 1).any(|x| {
+            (cell.1 - 1..=cell.1 + 1).any(|y| {
+                points_in_cell(&by_cell, (x, y))
+                    .iter()
+                    .any(|&(_, other)| other != index && points[other as usize].distance(point) <= reach)
+            })
+        })
+    });
+    if crowded {
+        return false;
+    }
+
+    // Each edge once, as its two points.
+    let mut edges: Vec<u64> = point_of
+        .par_chunks(3)
+        .flat_map_iter(|face| {
+            [(face[0], face[1]), (face[1], face[2]), (face[2], face[0])]
+                .into_iter()
+                .filter(|(a, b)| a != b)
+                .map(|(a, b)| (u64::from(a.min(b)) << 32) | u64::from(a.max(b)))
+        })
+        .collect();
+    drop(point_of);
+    edges.par_sort_unstable();
+    edges.dedup();
+    if edges.is_empty() {
+        return true;
+    }
+    // As `split_t_junctions` looks, on cells about an edge long.
+    let mean = edges
+        .par_iter()
+        .map(|&edge| points[(edge >> 32) as usize].distance(points[edge as u32 as usize]))
+        .sum::<f64>()
+        / edges.len() as f64;
+    let size = mean.max(16.0 * REPAIR_WELD);
+    let mut by_cell: Vec<((i64, i64), u32)> = points.par_iter().enumerate().map(|(index, point)| (cell_of(*point, size), index as u32)).collect();
+    by_cell.par_sort_unstable();
+    !edges.par_iter().any(|&edge| {
+        let (a, b) = ((edge >> 32) as u32, edge as u32);
+        let (from, to) = (points[a as usize], points[b as usize]);
+        let span = to - from;
+        let length = span.length();
+        if length <= 2.0 * REPAIR_WELD {
+            return false;
+        }
+        let (low, high) = (cell_of(from.min(to) - reach, size), cell_of(from.max(to) + reach, size));
+        (low.0..=high.0).any(|x| {
+            (low.1..=high.1).any(|y| {
+                points_in_cell(&by_cell, (x, y)).iter().any(|&(_, index)| {
+                    if index == a || index == b {
+                        return false;
+                    }
+                    let offset = points[index as usize] - from;
+                    let along = offset.dot(span) / length;
+                    along > REPAIR_WELD * 0.99 && along < length - REPAIR_WELD * 0.99 && span.perp_dot(offset).abs() / length <= reach
+                })
+            })
+        })
+    })
 }
 
 /// `surface` with each point that lies within [`REPAIR_WELD`] of one of
