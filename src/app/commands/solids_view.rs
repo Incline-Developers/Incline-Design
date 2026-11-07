@@ -19,6 +19,8 @@ use glam::DVec2;
 use rayon::prelude::*;
 
 use super::solids::{CutBand, bench_bands, build_bench_body, plan_bands, preview_triangulation};
+
+mod disk_cache;
 use crate::{
     model::{
         DigBlockId, Solid, SolidId,
@@ -317,6 +319,9 @@ pub(crate) struct ViewSolid {
     /// inputs that job read - and read by the dig-block records, so a block
     /// can say which ground produced it. See [`GroundSourceStamp`].
     stamp: GroundSourceStamp,
+    /// The envelope's key in the disk cache, which every later stage's is
+    /// made from: settled with the envelope, `None` where nothing is kept.
+    disk_key: Option<u64>,
     envelope: Stage<Arc<OpenTriangulation>>,
     /// The Benching stage: the envelope plus the plan that divides it.
     body: Stage<Arc<SolidBody>>,
@@ -974,6 +979,7 @@ impl crate::app::App<'_> {
                     solid: solid.clone(),
                     sources: sources.clone(),
                     stamp: GroundSourceStamp::default(),
+                    disk_key: None,
                     envelope: Stage::default(),
                     body: Stage::default(),
                     blasting: Stage::default(),
@@ -1035,7 +1041,17 @@ impl crate::app::App<'_> {
         self.spawn_job_reporting_progress(
             crate::i18n::tr!("planning-building-view"),
             vec![artifact_job(id, SolidArtifact::Envelope, token)],
-            move |cancel, progress| build_solid_envelope(&snapshot, &design, &topo, cancel, progress),
+            move |cancel, progress| {
+                let disk_key = disk_cache::envelope_key(&snapshot, &design, &topo);
+                if let Some(envelope) = disk_key.and_then(|key| disk_cache::load(disk_cache::Kind::Envelope, key, |input| disk_cache::read_envelope(input, &snapshot))) {
+                    return Ok((envelope, disk_key));
+                }
+                let envelope = build_solid_envelope(&snapshot, &design, &topo, cancel, progress)?;
+                if let Some(key) = disk_key {
+                    disk_cache::store(disk_cache::Kind::Envelope, key, |out| disk_cache::write_envelope(out, &envelope));
+                }
+                Ok((envelope, disk_key))
+            },
             move |app, result| {
                 let Some(cache) = app.accepting_solid(runtime, id, SolidArtifact::Envelope, token) else {
                     return;
@@ -1043,7 +1059,10 @@ impl crate::app::App<'_> {
                 cache.stamp = stamp;
                 let name = cache.solid.name.clone();
                 match result {
-                    Ok(envelope) => cache.envelope.settle(Arc::new(envelope)),
+                    Ok((envelope, disk_key)) => {
+                        cache.disk_key = disk_key;
+                        cache.envelope.settle(Arc::new(envelope));
+                    }
                     Err(error) => {
                         let message = format!("{error:#}");
                         cache.envelope.fail(message.clone());
@@ -1115,11 +1134,21 @@ impl crate::app::App<'_> {
         cache.measured = None;
         cache.bench_reserves = Stage::default();
         cache.reserves = Stage::default();
+        let disk_key = cache.disk_key.map(|key| body_key(key, solid));
         let snapshot = solid.clone();
         self.spawn_job_reporting_progress(
             crate::i18n::tr!("planning-building-slabs"),
             vec![artifact_job(id, SolidArtifact::Body, token)],
-            move |cancel, progress| build_solid_body(&snapshot, &envelope, cancel, progress),
+            move |cancel, progress| {
+                if let Some(body) = disk_key.and_then(|key| disk_cache::load(disk_cache::Kind::Body, key, |input| disk_cache::read_body(input, &snapshot))) {
+                    return Ok(body);
+                }
+                let body = build_solid_body(&snapshot, &envelope, cancel, progress)?;
+                if let Some(key) = disk_key {
+                    disk_cache::store(disk_cache::Kind::Body, key, |out| disk_cache::write_body(out, &body));
+                }
+                Ok(body)
+            },
             move |app, result| {
                 let Some(cache) = app.accepting_solid(runtime, id, SolidArtifact::Body, token) else {
                     return;
@@ -1154,11 +1183,21 @@ impl crate::app::App<'_> {
         if let Some(partition) = std::mem::take(&mut cache.partition).product {
             cache.carved = Some(partition);
         }
+        let disk_key = cache.disk_key.map(|key| blasting_key(body_key(key, solid), solid));
         let snapshot = solid.clone();
         self.spawn_job_reporting_progress(
             crate::i18n::tr!("planning-building-view"),
             vec![artifact_job(id, SolidArtifact::Blasting, token)],
-            move |cancel, _| build_solid_blasting(&snapshot, &body, cancel),
+            move |cancel, _| {
+                if let Some(blasting) = disk_key.and_then(|key| disk_cache::load(disk_cache::Kind::Blasting, key, disk_cache::read_blasting)) {
+                    return Ok(blasting);
+                }
+                let blasting = build_solid_blasting(&snapshot, &body, cancel)?;
+                if let Some(key) = disk_key {
+                    disk_cache::store(disk_cache::Kind::Blasting, key, |out| disk_cache::write_blasting(out, &blasting));
+                }
+                Ok(blasting)
+            },
             move |app, result| {
                 let Some(cache) = app.accepting_solid(runtime, id, SolidArtifact::Blasting, token) else {
                     return;
@@ -1194,11 +1233,21 @@ impl crate::app::App<'_> {
         let previous = cache.partition.product.take().or(cache.carved.take());
         let token = cache.partition.begin(key);
         cache.reserves = Stage::default();
+        let disk_key = cache.disk_key.map(|key| partition_key(blasting_key(body_key(key, solid), solid), solid));
         let snapshot = solid.clone();
         self.spawn_job_reporting_progress(
             crate::i18n::tr!("planning-building-view"),
             vec![artifact_job(id, SolidArtifact::Partition, token)],
-            move |cancel, progress| build_solid_partition(&snapshot, &body, &blasting, previous, cancel, progress),
+            move |cancel, progress| {
+                if let Some(partition) = disk_key.and_then(|key| disk_cache::load(disk_cache::Kind::Partition, key, |input| disk_cache::read_partition(input, &snapshot, &body))) {
+                    return Ok(partition);
+                }
+                let partition = build_solid_partition(&snapshot, &body, &blasting, previous, cancel, progress)?;
+                if let Some(key) = disk_key {
+                    disk_cache::store(disk_cache::Kind::Partition, key, |out| disk_cache::write_partition(out, &partition));
+                }
+                Ok(partition)
+            },
             move |app, result| {
                 if app.accepting_solid(runtime, id, SolidArtifact::Partition, token).is_none() {
                     return;
