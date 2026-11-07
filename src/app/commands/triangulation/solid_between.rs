@@ -2378,16 +2378,23 @@ pub(crate) fn clip_piece_to_plans(slab: Slab, plans: &[&[Vec<glam::DVec2>]], can
     // Everything from here on is in the routed parts.
     drop(slab);
 
+    let mut panel_plan = vec![0u32; overlay.panels.len()];
+    for (plan, panels) in overlay.plan_panels.iter().enumerate() {
+        panel_plan[panels.start as usize..panels.end as usize].fill(plan as u32);
+    }
+    // Each wall face as its run's sheet within its plan's, and its place there.
     let mut sheets: Vec<Vec<Vec<[mesh_data::Vertex; 3]>>> = (0..plans.len()).map(|_| Vec::new()).collect();
-    let mut walls: Vec<Vec<[mesh_data::Vertex; 3]>> = (0..overlay.panels.len()).map(|_| Vec::new()).collect();
+    let mut walls: Vec<Vec<(u32, u32)>> = (0..overlay.panels.len()).map(|_| Vec::new()).collect();
     for part in routed {
         for (plan, faces) in part.sheets {
             sheets[plan as usize].push(faces);
         }
         for (panel, face) in part.walls {
-            walls[panel as usize].push(face);
+            let run = sheets[panel_plan[panel as usize] as usize].len() - 1;
+            walls[panel as usize].push((run as u32, face));
         }
     }
+    drop(panel_plan);
     let mut walls = walls.into_iter();
     let jobs: Vec<_> = sheets
         .into_iter()
@@ -2401,21 +2408,41 @@ pub(crate) fn clip_piece_to_plans(slab: Slab, plans: &[&[Vec<glam::DVec2>]], can
             if sheet_faces == 0 {
                 return Ok(empty());
             }
-            let mut triangles: Vec<[mesh_data::Vertex; 3]> = Vec::with_capacity(sheet_faces);
-            for part in sheet {
-                triangles.extend(part);
+            // Welded as it is gathered, one vertex per bit-identical position
+            // in the order they come: held as loose triangles until its level
+            // was dressed, each piece cost three times the memory, and the
+            // pieces of the levels cut side by side outgrew the slabs they
+            // were cut from. The weld is the one the piece is dressed with, so
+            // that one finds nothing left to merge.
+            let mut vertices: Vec<mesh_data::Vertex> = Vec::with_capacity(sheet_faces / 2 + 16);
+            let mut faces: Vec<[u32; 3]> = Vec::with_capacity(sheet_faces + sheet_faces / 8);
+            let mut seen: std::collections::HashMap<[u64; 3], u32, FixedState> = std::collections::HashMap::with_capacity_and_hasher(sheet_faces / 2 + 16, FixedState::default());
+            let mut weld = |triangle: [mesh_data::Vertex; 3]| {
+                faces.push(triangle.map(|vertex| {
+                    *seen.entry([vertex.x.to_bits(), vertex.y.to_bits(), vertex.z.to_bits()]).or_insert_with(|| {
+                        vertices.push(vertex);
+                        (vertices.len() - 1) as u32
+                    })
+                }));
+            };
+            for part in &sheet {
+                part.iter().copied().for_each(&mut weld);
             }
-            for (offset, faces) in panel_faces.iter().enumerate() {
-                triangles.extend(panel_wall(&overlay.panels[first_panel as usize + offset], faces, floor));
+            let mut faces_here = Vec::new();
+            for (offset, refs) in panel_faces.iter().enumerate() {
+                faces_here.clear();
+                faces_here.extend(refs.iter().map(|&(run, face)| sheet[run as usize][face as usize]));
+                panel_wall(&overlay.panels[first_panel as usize + offset], &faces_here, floor)
+                    .into_iter()
+                    .for_each(&mut weld);
             }
-            drop(panel_faces);
+            drop((sheet, panel_faces, faces_here));
+            drop(seen);
             let mut boundary_wall = vec![false; sheet_faces];
-            boundary_wall.resize(triangles.len(), true);
-            let count = triangles.len() as u32;
-            let mut slab: Slab = (
-                triangles.into_iter().flatten().collect(),
-                (0..count).map(|face| [3 * face, 3 * face + 1, 3 * face + 2]).collect(),
-            );
+            boundary_wall.resize(faces.len(), true);
+            vertices.shrink_to_fit();
+            faces.shrink_to_fit();
+            let mut slab: Slab = (vertices, faces);
             // Every piece wound the same way: the block-model overlap
             // integrates signed prisms over floor and roof from one origin.
             let signed = prism_volume(&slab.0, &slab.1);
@@ -2591,10 +2618,12 @@ struct PlanOverlay {
 }
 
 /// What one run of faces left in each plan: its faces, by plan, and the faces
-/// bounding each panel's wall.
+/// bounding each panel's wall, as the panel and the face's place in the
+/// panel's plan's sheet. A wall face is one of its plan's faces, and a
+/// survey's walls run to millions of them, so they are not copied.
 struct Routed {
     sheets: Vec<(u32, Vec<[mesh_data::Vertex; 3]>)>,
-    walls: Vec<(u32, [mesh_data::Vertex; 3])>,
+    walls: Vec<(u32, u32)>,
 }
 
 /// A convex piece of a face being split: its corners in order, each with the
@@ -2795,7 +2824,7 @@ impl PlanOverlay {
         corners: [mesh_data::Vertex; 3],
         candidates: &[u32],
         sheets: &mut std::collections::HashMap<u32, Vec<[mesh_data::Vertex; 3]>, FixedState>,
-        walls: &mut Vec<(u32, [mesh_data::Vertex; 3])>,
+        walls: &mut Vec<(u32, u32)>,
         panels_hit: &mut Vec<u32>,
     ) {
         let face = corners.map(|p| glam::DVec3::new(p.x, p.y, p.z));
@@ -2875,8 +2904,9 @@ impl PlanOverlay {
                 }
                 panels_hit.sort_unstable();
                 panels_hit.dedup();
-                walls.extend(panels_hit.iter().map(|&panel| (panel, triangle)));
-                sheets.entry(plan).or_default().push(triangle);
+                let sheet = sheets.entry(plan).or_default();
+                walls.extend(panels_hit.iter().map(|&panel| (panel, sheet.len() as u32)));
+                sheet.push(triangle);
             }
         }
     }
