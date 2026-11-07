@@ -2040,28 +2040,39 @@ fn build_solid_body(solid: &Solid, source: &OpenTriangulation, cancel: &crate::a
 /// A bench with no cuts is one blast covering the whole of it, which is what
 /// makes "no cuts drawn" a valid finished result rather than pending work.
 fn build_solid_blasting(solid: &Solid, body: &SolidBody, cancel: &crate::app::jobs::CancelFlag) -> anyhow::Result<SolidBlasting> {
-    let mut blast_faces = Vec::new();
-    for part in &body.bench_parts {
-        anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
-        let Some(outline) = body.bench_footprints.get(&part.band.selection.base.to_bits()) else {
-            continue;
-        };
-        let cuts = solid
-            .blasting
-            .bench(part.band.selection.base)
-            .map(|bench| arrangement::cut_lines(&bench.cuts))
-            .unwrap_or_default();
-        for face in arrangement::subdivide(outline, &cuts) {
-            let Some(anchor) = arrangement::representative_point(&face) else { continue };
-            blast_faces.push(BlastFace {
-                bench: part.band.selection,
-                area: arrangement::face_area(&face),
-                face,
-                anchor: anchor.to_array(),
-            });
-        }
-    }
-    Ok(SolidBlasting { blast_faces })
+    // Each bench on its own, side by side: a survey's bench ground runs to
+    // hundreds of thousands of points, and finding a point inside a ring of
+    // them is most of the work.
+    let benches = body
+        .bench_parts
+        .par_iter()
+        .map(|part| -> anyhow::Result<Vec<BlastFace>> {
+            anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+            let Some(outline) = body.bench_footprints.get(&part.band.selection.base.to_bits()) else {
+                return Ok(Vec::new());
+            };
+            let cuts = solid
+                .blasting
+                .bench(part.band.selection.base)
+                .map(|bench| arrangement::cut_lines(&bench.cuts))
+                .unwrap_or_default();
+            Ok(arrangement::subdivide(outline, &cuts)
+                .into_iter()
+                .filter_map(|face| {
+                    let anchor = arrangement::representative_point(&face)?;
+                    Some(BlastFace {
+                        bench: part.band.selection,
+                        area: arrangement::face_area(&face),
+                        face,
+                        anchor: anchor.to_array(),
+                    })
+                })
+                .collect())
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(SolidBlasting {
+        blast_faces: benches.into_iter().flatten().collect(),
+    })
 }
 
 /// The Reserving stage: each flitch cut by its own strips and by the blast
@@ -2101,29 +2112,54 @@ fn build_solid_partition(
         benches: HashMap::new(),
     };
 
+    // Each flitch's earlier pieces are taken out first, so the flitches can
+    // be cut side by side; their pieces are then numbered in flitch order, as
+    // one after another would have numbered them.
+    let mut flitch_earlier: Vec<EarlierLevel> = body
+        .flitch_parts
+        .iter()
+        .map(|flitch| {
+            earlier_level(
+                earlier.as_ref().and_then(|earlier| earlier.flitches.get(&flitch.band.selection.base.to_bits())),
+                &mut old_parts,
+            )
+        })
+        .collect();
+    let total = body.flitch_parts.len() as u64;
+    let done = AtomicU64::new(0);
+    let flitches: Vec<_> = body.flitch_parts.iter().zip(flitch_earlier.iter_mut()).collect();
+    let cut = side_by_side(
+        flitches,
+        |(flitch, _)| flitch.mesh.mesh.face_count(),
+        |(flitch, earlier)| -> anyhow::Result<CutLevel> {
+            anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+            let band = flitch.band;
+            let strips = solid.blasting.drawing(band.selection.base, true).map_or(&[][..], |drawing| &drawing.cuts);
+            let bench_cuts = solid.blasting.bench(flitch.bench.base).map_or(&[][..], |entry| &entry.cuts);
+            let footprint = body.flitch_footprints.get(&band.selection.base.to_bits()).map_or(&[][..], Vec::as_slice);
+            let faces = super::dig_strips::dig_block_faces(footprint, strips, bench_cuts);
+            let plans = super::dig_strips::dig_block_plans(&faces, &super::dig_strips::dig_block_cuts(strips, bench_cuts));
+            anyhow::ensure!(!faces.is_empty(), "Occupied flitch at RL {} has no valid dig-block footprint", band.selection.base);
+            let level = Level {
+                source: &flitch.mesh,
+                volume: flitch.volume,
+                footprint,
+                faces: &faces,
+                plans: Some(&plans),
+                outline: Outline::Rim,
+            };
+            let carved = carve_level(&level, earlier, cancel)?;
+            progress.set_items(done.fetch_add(1, Ordering::Relaxed) + 1, total);
+            Ok((faces, carved))
+        },
+    )?;
+    drop(flitch_earlier);
+
     let mut parts = Vec::new();
-    for (index, flitch) in body.flitch_parts.iter().enumerate() {
-        anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
-        progress.set_items(index as u64, body.flitch_parts.len() as u64);
+    for (flitch, (faces, carved)) in body.flitch_parts.iter().zip(cut) {
         let band = flitch.band;
         let bench = flitch.bench;
-        let strips = solid.blasting.drawing(band.selection.base, true).map_or(&[][..], |drawing| &drawing.cuts);
-        let bench_cuts = solid.blasting.bench(bench.base).map_or(&[][..], |entry| &entry.cuts);
-        let footprint = body.flitch_footprints.get(&band.selection.base.to_bits()).map_or(&[][..], Vec::as_slice);
-        let faces = super::dig_strips::dig_block_faces(footprint, strips, bench_cuts);
-        let plans = super::dig_strips::dig_block_plans(&faces, &super::dig_strips::dig_block_cuts(strips, bench_cuts));
-        anyhow::ensure!(!faces.is_empty(), "Occupied flitch at RL {} has no valid dig-block footprint", band.selection.base);
         let key = band.selection.base.to_bits();
-        let level = Level {
-            source: &flitch.mesh,
-            volume: flitch.volume,
-            footprint,
-            faces: &faces,
-            plans: Some(&plans),
-            earlier: earlier.as_ref().and_then(|earlier| earlier.flitches.get(&key)),
-            outline: Outline::Rim,
-        };
-        let carved = carve_level(&level, &mut old_parts, cancel)?;
         let mut pieces = Vec::new();
         for (number, ((face, anchor), carved)) in faces.into_iter().zip(carved).enumerate() {
             let Some(carved) = carved else { continue };
@@ -2167,27 +2203,44 @@ fn build_blast_parts(
     carving: &mut Carving,
     cancel: &crate::app::jobs::CancelFlag,
 ) -> anyhow::Result<Vec<SolidPart>> {
+    let blasts_of = |bench: &SolidPart| -> Vec<&BlastFace> { blasting.blast_faces.iter().filter(|blast| blast.bench == bench.band.selection).collect() };
+    let mut bench_earlier: Vec<EarlierLevel> = body
+        .bench_parts
+        .iter()
+        .map(|bench| earlier_level(earlier.and_then(|earlier| earlier.benches.get(&bench.band.selection.base.to_bits())), old_parts))
+        .collect();
+    let benches: Vec<_> = body.bench_parts.iter().zip(bench_earlier.iter_mut()).collect();
+    let cut = side_by_side(
+        benches,
+        |(bench, _)| bench.mesh.mesh.face_count(),
+        |(bench, earlier)| -> anyhow::Result<Option<CutLevel>> {
+            anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+            let blasts = blasts_of(bench);
+            if blasts.is_empty() {
+                return Ok(None);
+            }
+            let key = bench.band.selection.base.to_bits();
+            let faces: Vec<(Face, DVec2)> = blasts.iter().map(|blast| (blast.face.clone(), DVec2::from(blast.anchor))).collect();
+            let level = Level {
+                source: &bench.mesh,
+                volume: bench.volume,
+                footprint: body.bench_footprints.get(&key).map_or(&[][..], Vec::as_slice),
+                faces: &faces,
+                plans: None,
+                outline: Outline::Crease,
+            };
+            let carved = carve_level(&level, earlier, cancel)?;
+            Ok(Some((faces, carved)))
+        },
+    )?;
+    drop(bench_earlier);
+
     let mut parts = Vec::new();
-    for bench in &body.bench_parts {
-        anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
-        let blasts: Vec<_> = blasting.blast_faces.iter().filter(|blast| blast.bench == bench.band.selection).collect();
-        if blasts.is_empty() {
-            continue;
-        }
+    for (bench, cut) in body.bench_parts.iter().zip(cut) {
+        let Some((faces, carved)) = cut else { continue };
         let key = bench.band.selection.base.to_bits();
-        let faces: Vec<(Face, DVec2)> = blasts.iter().map(|blast| (blast.face.clone(), DVec2::from(blast.anchor))).collect();
-        let level = Level {
-            source: &bench.mesh,
-            volume: bench.volume,
-            footprint: body.bench_footprints.get(&key).map_or(&[][..], Vec::as_slice),
-            faces: &faces,
-            plans: None,
-            earlier: earlier.and_then(|earlier| earlier.benches.get(&key)),
-            outline: Outline::Crease,
-        };
-        let carved = carve_level(&level, old_parts, cancel)?;
         let mut pieces = Vec::new();
-        for ((blast, (face, _)), carved) in blasts.into_iter().zip(faces).zip(carved) {
+        for ((blast, (face, _)), carved) in blasts_of(bench).into_iter().zip(faces).zip(carved) {
             let Some(carved) = carved else { continue };
             pieces.push((face, parts.len()));
             parts.push(SolidPart {
@@ -2202,6 +2255,77 @@ fn build_blast_parts(
         carving.benches.insert(key, pieces);
     }
     Ok(parts)
+}
+
+/// How many source faces [`side_by_side`] cuts at once. Each costs several
+/// hundred bytes while it is being cut, and a survey's flitches run to tens of
+/// millions of faces between them: all at once, they took more memory than
+/// the slabs they were cut from.
+const FACES_IN_FLIGHT: usize = 2_000_000;
+
+/// `cut` over every item, in their order, as many at once as fit within
+/// [`FACES_IN_FLIGHT`] by `faces` - always at least one. An item starts as
+/// soon as one in flight finishes, so no thread waits for a batch, and one too
+/// large to share runs alone with the whole pool for its own parallel work.
+/// The first error stops further items from starting.
+fn side_by_side<T: Send, R: Send>(items: Vec<T>, faces: impl Fn(&T) -> usize + Sync, cut: impl Fn(T) -> anyhow::Result<R> + Sync) -> anyhow::Result<Vec<R>> {
+    struct Queue<T> {
+        waiting: std::collections::VecDeque<(usize, T)>,
+        in_flight: usize,
+        failed: bool,
+    }
+    let results: Vec<std::sync::Mutex<Option<anyhow::Result<R>>>> = (0..items.len()).map(|_| std::sync::Mutex::new(None)).collect();
+    let queue = std::sync::Mutex::new(Queue {
+        waiting: items.into_iter().enumerate().collect(),
+        in_flight: 0,
+        failed: false,
+    });
+    // Starts every waiting item that fits; each one, as it finishes, starts
+    // whatever its share now lets in.
+    fn start<'scope, T: Send + 'scope, R: Send + 'scope>(
+        scope: &rayon::Scope<'scope>,
+        queue: &'scope std::sync::Mutex<Queue<T>>,
+        results: &'scope [std::sync::Mutex<Option<anyhow::Result<R>>>],
+        faces: &'scope (impl Fn(&T) -> usize + Sync),
+        cut: &'scope (impl Fn(T) -> anyhow::Result<R> + Sync),
+    ) {
+        let mut state = queue.lock().expect("queue lock");
+        while !state.failed
+            && let Some((_, next)) = state.waiting.front()
+            && (state.in_flight == 0 || state.in_flight + faces(next) <= FACES_IN_FLIGHT)
+        {
+            let (index, item) = state.waiting.pop_front().expect("checked above");
+            let weight = faces(&item);
+            state.in_flight += weight;
+            scope.spawn(move |scope| {
+                let result = cut(item);
+                let failed = result.is_err();
+                *results[index].lock().expect("result lock") = Some(result);
+                {
+                    let mut state = queue.lock().expect("queue lock");
+                    state.in_flight -= weight;
+                    state.failed |= failed;
+                }
+                start(scope, queue, results, faces, cut);
+            });
+        }
+    }
+    rayon::scope(|scope| start(scope, &queue, &results, &faces, &cut));
+    let mut out = Vec::with_capacity(results.len());
+    let mut first_error = None;
+    for result in results {
+        match result.into_inner().expect("result lock") {
+            Some(Ok(value)) => out.push(value),
+            Some(Err(error)) => {
+                first_error.get_or_insert(error);
+            }
+            None => {}
+        }
+    }
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(out),
+    }
 }
 
 /// Which outline a newly cut piece draws.
@@ -2223,9 +2347,22 @@ struct Level<'a> {
     /// What each face is cut out with, when not its own outline: see
     /// [`super::dig_strips::dig_block_plans`].
     plans: Option<&'a [Face]>,
-    /// How the last partition cut this same level.
-    earlier: Option<&'a CarvedLevel>,
     outline: Outline,
+}
+
+/// One level as it was cut: its plan faces, each with a point inside, and what
+/// each face carved.
+type CutLevel = (Vec<(Face, DVec2)>, Vec<Option<Carved>>);
+
+/// How the last partition cut one level: each outline, with its piece while
+/// no face of the new one has taken it.
+type EarlierLevel<'a> = Vec<(&'a Face, Option<SolidPart>)>;
+
+/// Take `level`'s pieces out of the last partition's `parts`.
+fn earlier_level<'a>(level: Option<&'a CarvedLevel>, parts: &mut [Option<SolidPart>]) -> EarlierLevel<'a> {
+    level.map_or_else(Vec::new, |level| {
+        level.iter().map(|(face, part)| (face, parts.get_mut(*part).and_then(Option::take))).collect()
+    })
 }
 
 /// One face's piece, ready to become a part.
@@ -2251,7 +2388,7 @@ struct Built {
 ///
 /// Never cut from an earlier cut piece, however much smaller: it carries the
 /// walls of the outline it was cut to, which the new one need not share.
-fn carve_level(level: &Level, old_parts: &mut [Option<SolidPart>], cancel: &crate::app::jobs::CancelFlag) -> anyhow::Result<Vec<Option<Carved>>> {
+fn carve_level(level: &Level, earlier: &mut EarlierLevel, cancel: &crate::app::jobs::CancelFlag) -> anyhow::Result<Vec<Option<Carved>>> {
     use super::triangulation::solid_between::{clip_piece_to_plans, split_solid_by_plan};
 
     let source = level.source;
@@ -2294,10 +2431,7 @@ fn carve_level(level: &Level, old_parts: &mut [Option<SolidPart>], cancel: &crat
 
     // Unchanged outlines.
     for (index, (face, _)) in faces.iter().enumerate() {
-        let kept = level.earlier.and_then(|earlier| {
-            let (_, part) = earlier.iter().find(|(earlier, _)| earlier == face)?;
-            old_parts.get_mut(*part)?.take()
-        });
+        let kept = earlier.iter_mut().find(|(earlier, _)| *earlier == face).and_then(|(_, part)| part.take());
         match kept {
             Some(part) => {
                 carved[index] = Some(Carved {
