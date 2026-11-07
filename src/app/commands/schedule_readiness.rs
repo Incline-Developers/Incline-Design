@@ -504,6 +504,8 @@ impl crate::app::App<'_> {
     /// again, and would trap the undo history behind it. With nothing to join,
     /// as on first opening a project, it is simply written; the project is
     /// marked unsaved either way, as the plan it would save has changed.
+    ///
+    /// Said in the console only: nothing is lost, and it can be undone.
     fn carry_over_recut_members(&mut self) -> bool {
         let Some(cache) = self.schedule_report_cache.as_ref() else {
             return false;
@@ -612,7 +614,7 @@ impl crate::app::App<'_> {
         );
         self.invalidate_geometry();
         self.redraw_requested = true;
-        crate::userspace_warn!("{}", tr!("sequence-carried-over", count = carried));
+        crate::userspace_log!("{}", tr!("sequence-carried-over", count = carried));
         true
     }
 

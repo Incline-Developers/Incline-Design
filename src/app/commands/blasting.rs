@@ -607,7 +607,7 @@ impl crate::app::App<'_> {
             self.redraw_requested = true;
         }
         if was_saved && !renamed.is_empty() {
-            crate::userspace_warn!("{}", crate::i18n::tr!("blasting-recut-since-saved", solids = renamed.join(", ")));
+            crate::userspace_log!("{}", crate::i18n::tr!("blasting-recut-since-saved", solids = renamed.join(", ")));
         }
         count
     }
