@@ -139,13 +139,17 @@ pub(crate) fn build_solid_mesh(
     }
     let mut notes = Vec::new();
     let (vertices, faces, volume) = build_solid_between_surfaces_uncached(design, topography, region, &progress.phase(0.0, 0.9), &mut notes)?;
-    let generated = session::build_generated_triangulation(String::new(), vertices, faces, TriSurfaceType::SolidClosed, |_| Vec::new())?;
+    anyhow::ensure!(!faces.is_empty(), "Triangulation produced no faces");
+    let mesh = std::sync::Arc::new(mesh_data::Triangulation::from_vertices_and_faces(vertices, faces)?);
     progress.set_fraction(1.0);
+    // Its picking tree only when something picks it: the solid is cut into
+    // benches and drawn as those, and a survey's tree runs to hundreds of
+    // megabytes held for as long as the solid is.
     let built = SolidMesh {
-        mesh: generated.mesh,
-        spatial: generated.spatial,
-        edges: std::sync::Arc::new(generated.edges),
-        surface_face_order: generated.surface_face_order,
+        spatial: std::sync::Arc::new(crate::model::spatial::TriangleBvh::deferred(mesh.clone())),
+        edges: std::sync::Arc::new(Vec::new()),
+        surface_face_order: std::sync::Arc::new(crate::model::triangulation::spatial_surface_face_order(&mesh)),
+        mesh,
         volume,
     };
     // Once per pair of surfaces: the Setup preview and the Solids stage can
