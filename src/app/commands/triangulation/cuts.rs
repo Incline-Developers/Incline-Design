@@ -1753,16 +1753,17 @@ fn plainly_sound(prepared: &PreparedReferenceSurface) -> bool {
 /// apart. Clipped against each other, each puts its own copy into the rim
 /// where they meet, and a hair is still a gap.
 pub(super) fn snap_surface_points(surface: &mesh_data::Triangulation, anchors: &mesh_data::Triangulation) -> Result<Option<mesh_data::Triangulation>> {
+    use rayon::prelude::*;
     let cell = |value: f64| (value / REPAIR_WELD).floor() as i64;
-    let mut cells: HashMap<(i64, i64), Vec<glam::DVec2>> = HashMap::new();
+    let mut cells: HashMap<(i64, i64), Vec<glam::DVec2>, foldhash::fast::FixedState> = HashMap::default();
     for anchor in anchors.vertices() {
         let point = glam::DVec2::new(anchor.x, anchor.y);
         cells.entry((cell(point.x), cell(point.y))).or_default().push(point);
     }
-    let mut moved = false;
+    // A survey's points, each looked up on its own.
     let vertices: Vec<mesh_data::Vertex> = surface
         .vertices()
-        .iter()
+        .par_iter()
         .map(|vertex| {
             let point = glam::DVec2::new(vertex.x, vertex.y);
             let (cx, cy) = (cell(point.x), cell(point.y));
@@ -1775,14 +1776,16 @@ pub(super) fn snap_surface_points(surface: &mesh_data::Triangulation, anchors: &
                 .filter(|(distance, _)| *distance <= REPAIR_WELD)
                 .min_by(|left, right| left.0.total_cmp(&right.0));
             match nearest {
-                Some((distance, anchor)) if distance > 0.0 => {
-                    moved = true;
-                    mesh_data::Vertex::new(anchor.x, anchor.y, vertex.z)
-                }
+                Some((distance, anchor)) if distance > 0.0 => mesh_data::Vertex::new(anchor.x, anchor.y, vertex.z),
                 _ => *vertex,
             }
         })
         .collect();
+    // A point that moved has moved in plan.
+    let moved = vertices
+        .par_iter()
+        .zip(surface.vertices())
+        .any(|(now, was)| now.x.to_bits() != was.x.to_bits() || now.y.to_bits() != was.y.to_bits());
     if !moved {
         return Ok(None);
     }
