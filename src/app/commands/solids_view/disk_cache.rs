@@ -29,7 +29,7 @@ use crate::{
 };
 
 /// Raised whenever what a file holds, or how, changes.
-const FORMAT: u32 = 2;
+const FORMAT: u32 = 3;
 #[cfg(not(target_arch = "wasm32"))]
 const MAGIC: &[u8; 8] = b"INCLSOLD";
 
@@ -491,6 +491,15 @@ impl Reader {
     }
 }
 
+/// `count` items read by `read`, held at exactly that length.
+fn read_counted<T>(input: &mut Reader, count: usize, mut read: impl FnMut(&mut Reader) -> Option<T>) -> Option<Vec<T>> {
+    let mut items = Vec::with_capacity(count);
+    for _ in 0..count {
+        items.push(read(input)?);
+    }
+    Some(items)
+}
+
 fn write_points(out: &mut Writer, points: &[DVec2]) {
     out.usize(points.len());
     for point in points {
@@ -500,8 +509,12 @@ fn write_points(out: &mut Writer, points: &[DVec2]) {
 }
 
 fn read_points(input: &mut Reader) -> Option<Vec<DVec2>> {
-    let count = input.count(16)?;
-    (0..count).map(|_| Some(DVec2::new(input.f64()?, input.f64()?))).collect()
+    input.items(16, |item| {
+        DVec2::new(
+            f64::from_le_bytes(item[..8].try_into().expect("eight bytes")),
+            f64::from_le_bytes(item[8..].try_into().expect("eight bytes")),
+        )
+    })
 }
 
 fn write_face(out: &mut Writer, face: &[Vec<DVec2>]) {
@@ -513,7 +526,7 @@ fn write_face(out: &mut Writer, face: &[Vec<DVec2>]) {
 
 fn read_face(input: &mut Reader) -> Option<Vec<Vec<DVec2>>> {
     let count = input.count(8)?;
-    (0..count).map(|_| read_points(input)).collect()
+    read_counted(input, count, read_points)
 }
 
 fn write_footprints(out: &mut Writer, footprints: &std::collections::HashMap<u64, Vec<Vec<DVec2>>>) {
@@ -748,7 +761,7 @@ fn write_parts(out: &mut Writer, parts: &[SolidPart], shared: &Shared) -> Option
 
 fn read_parts(input: &mut Reader, name: &str, id: Id, shared: &Shared) -> Option<Vec<SolidPart>> {
     let count = input.count(64)?;
-    (0..count).map(|_| read_part(input, name, id, shared)).collect()
+    read_counted(input, count, |input| read_part(input, name, id, shared))
 }
 
 pub(super) fn write_envelope(out: &mut Writer, envelope: &OpenTriangulation) -> Option<()> {
@@ -813,7 +826,9 @@ pub(super) fn read_blasting(input: &mut Reader) -> Option<SolidBlasting> {
     Some(SolidBlasting { blast_faces })
 }
 
-fn write_carved(out: &mut Writer, levels: &std::collections::HashMap<u64, super::CarvedLevel>) {
+/// Each level's outlines and the parts they were cut into; an outline its
+/// part's dig block holds is kept once, as that block's.
+fn write_carved(out: &mut Writer, levels: &std::collections::HashMap<u64, super::CarvedLevel>, parts: &[SolidPart]) {
     let mut keys: Vec<&u64> = levels.keys().collect();
     keys.sort_unstable();
     out.usize(keys.len());
@@ -821,28 +836,33 @@ fn write_carved(out: &mut Writer, levels: &std::collections::HashMap<u64, super:
         out.u64(*key);
         out.usize(levels[key].len());
         for (face, part) in &levels[key] {
-            write_face(out, face);
             out.usize(*part);
+            let held = parts.get(*part).and_then(|part| part.block.as_ref()).is_some_and(|block| Arc::ptr_eq(&block.face, face));
+            out.bool(held);
+            if !held {
+                write_face(out, face);
+            }
         }
     }
 }
 
-fn read_carved(input: &mut Reader, parts: usize) -> Option<std::collections::HashMap<u64, super::CarvedLevel>> {
+fn read_carved(input: &mut Reader, parts: &[SolidPart]) -> Option<std::collections::HashMap<u64, super::CarvedLevel>> {
     let count = input.count(16)?;
-    (0..count)
-        .map(|_| {
-            let key = input.u64()?;
-            let pieces = input.count(16)?;
-            let level = (0..pieces)
-                .map(|_| {
-                    let face = read_face(input)?;
-                    let part = usize::try_from(input.u64()?).ok().filter(|part| *part < parts)?;
-                    Some((face, part))
-                })
-                .collect::<Option<_>>()?;
-            Some((key, level))
-        })
-        .collect()
+    let mut levels = std::collections::HashMap::with_capacity(count);
+    for _ in 0..count {
+        let key = input.u64()?;
+        let pieces = input.count(9)?;
+        let level = read_counted(input, pieces, |input| {
+            let part = usize::try_from(input.u64()?).ok().filter(|part| *part < parts.len())?;
+            let face = match input.bool()? {
+                true => parts[part].block.as_ref()?.face.clone(),
+                false => Arc::new(read_face(input)?),
+            };
+            Some((face, part))
+        })?;
+        levels.insert(key, level);
+    }
+    Some(levels)
 }
 
 pub(super) fn write_partition(out: &mut Writer, partition: &SolidPartition) -> Option<()> {
@@ -850,8 +870,8 @@ pub(super) fn write_partition(out: &mut Writer, partition: &SolidPartition) -> O
     let shared: &Shared = &[&body.bench_parts, &body.flitch_parts];
     write_parts(out, &partition.parts, shared)?;
     write_parts(out, &partition.blast_parts, shared)?;
-    write_carved(out, &partition.carving.flitches);
-    write_carved(out, &partition.carving.benches);
+    write_carved(out, &partition.carving.flitches, &partition.parts);
+    write_carved(out, &partition.carving.benches, &partition.blast_parts);
     Some(())
 }
 
@@ -860,8 +880,8 @@ pub(super) fn read_partition(input: &mut Reader, solid: &Solid, body: &Arc<Solid
     let shared: &Shared = &[&body.bench_parts, &body.flitch_parts];
     let parts = read_parts(input, &solid.name, Id::Fresh, shared)?;
     let blast_parts = read_parts(input, &solid.name, Id::Fresh, shared)?;
-    let flitches = read_carved(input, parts.len())?;
-    let benches = read_carved(input, blast_parts.len())?;
+    let flitches = read_carved(input, &parts)?;
+    let benches = read_carved(input, &blast_parts)?;
     Some(SolidPartition {
         parts,
         blast_parts,

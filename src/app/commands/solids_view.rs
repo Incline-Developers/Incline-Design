@@ -116,7 +116,8 @@ struct Carving {
 
 /// One flitch or bench's pieces: each one's outline, and the index of its
 /// part - in `parts` for a flitch and `blast_parts` for a bench.
-type CarvedLevel = Vec<(Face, usize)>;
+/// Each outline is the one its dig block holds, not a copy of it.
+type CarvedLevel = Vec<(Arc<Face>, usize)>;
 
 /// One solid's artifacts, one per stage that owns one.
 ///
@@ -2242,6 +2243,7 @@ fn build_solid_partition(
         let mut pieces = Vec::new();
         for (number, ((face, anchor), carved)) in faces.into_iter().zip(carved).enumerate() {
             let Some(carved) = carved else { continue };
+            let face = Arc::new(face);
             pieces.push((face.clone(), parts.len()));
             parts.push(SolidPart {
                 bench,
@@ -2251,7 +2253,7 @@ fn build_solid_partition(
                     key: BlastShapeRef::new(solid.id, band.selection.base, anchor.to_array()),
                     name: (number + 1).to_string(),
                     area: arrangement::face_area(&face),
-                    face: Arc::new(face),
+                    face,
                     replaces: Vec::new(),
                 }),
                 band,
@@ -2321,7 +2323,7 @@ fn build_blast_parts(
         let mut pieces = Vec::new();
         for ((blast, (face, _)), carved) in blasts_of(bench).into_iter().zip(faces).zip(carved) {
             let Some(carved) = carved else { continue };
-            pieces.push((face, parts.len()));
+            pieces.push((Arc::new(face), parts.len()));
             parts.push(SolidPart {
                 mesh: carved.mesh,
                 band: bench.band,
@@ -2440,7 +2442,7 @@ type EarlierLevel<'a> = Vec<(&'a Face, Option<SolidPart>)>;
 /// Take `level`'s pieces out of the last partition's `parts`.
 fn earlier_level<'a>(level: Option<&'a CarvedLevel>, parts: &mut [Option<SolidPart>]) -> EarlierLevel<'a> {
     level.map_or_else(Vec::new, |level| {
-        level.iter().map(|(face, part)| (face, parts.get_mut(*part).and_then(Option::take))).collect()
+        level.iter().map(|(face, part)| (&**face, parts.get_mut(*part).and_then(Option::take))).collect()
     })
 }
 
