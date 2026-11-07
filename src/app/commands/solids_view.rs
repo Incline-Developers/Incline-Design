@@ -2075,10 +2075,13 @@ fn build_solid_body(solid: &Solid, source: &OpenTriangulation, cancel: &crate::a
         )
     };
 
+    // Each piece checked closed side by side; said in order after.
+    let bench_checks: Vec<Closure> = bench_body.par_iter().map(closure).collect();
+    let flitch_checks: Vec<Closure> = flitch_body.par_iter().map(closure).collect();
     let mut bench_parts = Vec::with_capacity(bench_body.len());
-    for (mut mesh, band) in bench_body.into_iter().zip(bench_bands_out) {
+    for ((mut mesh, band), check) in bench_body.into_iter().zip(bench_bands_out).zip(bench_checks) {
         mesh.id = next_view_id();
-        let volume = closed_volume(&mesh, &solid.name, &band);
+        let volume = closed_volume(check, &solid.name, &band);
         bench_parts.push(SolidPart {
             bench: band.selection,
             band,
@@ -2089,8 +2092,8 @@ fn build_solid_body(solid: &Solid, source: &OpenTriangulation, cancel: &crate::a
         });
     }
     let mut flitch_parts = Vec::with_capacity(flitch_body.len());
-    for (mesh, band) in flitch_body.into_iter().zip(flitch_bands) {
-        let volume = closed_volume(&mesh, &solid.name, &band);
+    for ((mesh, band), check) in flitch_body.into_iter().zip(flitch_bands).zip(flitch_checks) {
+        let volume = closed_volume(check, &solid.name, &band);
         flitch_parts.push(SolidPart {
             bench: bench_of(band.selection),
             band,
@@ -2727,14 +2730,25 @@ fn split_edges(edges: &[[u32; 2]], source_vertex: &[u32]) -> Vec<[u32; 2]> {
     edges.iter().filter_map(|edge| Some([*local.get(&edge[0])?, *local.get(&edge[1])?])).collect()
 }
 
+/// Whether a piece closes: its volume if it does, and if not, how many edges
+/// are open, how long they are and where the longest is.
+type Closure = Result<f64, (usize, f64, crate::model::formats::mesh_data::Vertex)>;
+
+fn closure(mesh: &OpenTriangulation) -> Closure {
+    let faces: Vec<_> = mesh.mesh.face_vertex_indices_iter().map(|face| face.map(|i| i as u32)).collect();
+    match super::triangulation::solid_between::open_edge_report(mesh.mesh.vertices(), &faces) {
+        None => Ok(mesh_volume(&mesh.mesh)),
+        Some(open) => Err(open),
+    }
+}
+
 /// A measured volume, or `None` when the piece did not come out closed - said
 /// in the activity console with where, since the reserve diagnostic that
 /// follows can only say that some piece of the solid is open.
-fn closed_volume(mesh: &OpenTriangulation, solid: &str, band: &CutBand) -> Option<f64> {
-    let faces: Vec<_> = mesh.mesh.face_vertex_indices_iter().map(|face| face.map(|i| i as u32)).collect();
-    match super::triangulation::solid_between::open_edge_report(mesh.mesh.vertices(), &faces) {
-        None => Some(mesh_volume(&mesh.mesh)),
-        Some((count, length, at)) => {
+fn closed_volume(closure: Closure, solid: &str, band: &CutBand) -> Option<f64> {
+    match closure {
+        Ok(volume) => Some(volume),
+        Err((count, length, at)) => {
             crate::userspace_log!(
                 "{}",
                 crate::i18n::tr!(
