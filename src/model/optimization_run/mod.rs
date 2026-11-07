@@ -62,6 +62,8 @@ pub(crate) struct RunOutcome {
     /// The shell field to write into the block model (see [`block_field`]).
     pub(crate) field: Option<ShellField>,
     pub(crate) report: OptimizationReport,
+    /// Which cells are air, a bit each (see [`AirBits`]).
+    pub(crate) air: AirBits,
     pub(crate) blocks_with_default_density: usize,
     pub(crate) blocks_with_default_angle: usize,
 }
@@ -77,12 +79,33 @@ pub(crate) struct ShellField {
 /// What a finished run keeps for later: the grid and every cell's shell.
 #[derive(Debug)]
 pub(crate) struct RunResult {
-    #[allow(dead_code, reason = "kept for later reports (bench by bench, scheduling)")]
+    /// The grid of the run, for the schedules to check theirs against.
     pub(crate) grid: Grid,
-    #[allow(dead_code, reason = "kept for later reports (bench by bench, scheduling)")]
+    /// Every cell's shell; schedules lay their panels by it.
     pub(crate) shells: Shells,
     /// Per shell and destination, at the base price; the Results view reads it.
     pub(crate) report: std::sync::Arc<OptimizationReport>,
+    /// Which cells are air: the schedules tell air from the ground around
+    /// their pits by it.
+    pub(crate) air: AirBits,
+}
+
+/// One bit per grid cell.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct AirBits(Vec<u64>);
+
+impl AirBits {
+    pub(crate) fn new(air: &[bool]) -> Self {
+        let mut bits = vec![0u64; air.len().div_ceil(64)];
+        for (cell, _) in air.iter().enumerate().filter(|(_, air)| **air) {
+            bits[cell / 64] |= 1 << (cell % 64);
+        }
+        Self(bits)
+    }
+
+    pub(crate) fn get(&self, cell: usize) -> bool {
+        self.0.get(cell / 64).is_some_and(|word| word & (1 << (cell % 64)) != 0)
+    }
 }
 
 /// The name of a shell's triangulation: `<prefix>_RF 0.85`, with ` DIR 50%`
@@ -130,6 +153,7 @@ pub(crate) fn run(input: RunInput, cancel: &CancelFlag, progress: &Progress) -> 
     let shells = shells::solve(&prepared.plan, &grid, &values, &slopes, cancel, &progress.phase(0.2, 0.85))?;
     let field = field_value.map(|kind| block_field(&shells, &values.air, &block_of_cell, layout.blocks.len(), kind));
     let report = report::build(&scenario_name, &prepared.economics, &grid, &block_of_cell, &values, &shells, cancel)?;
+    let air = AirBits::new(&values.air);
     drop(block_of_cell);
 
     // One mesh per shell and kind, built side by side.
@@ -173,6 +197,7 @@ pub(crate) fn run(input: RunInput, cancel: &CancelFlag, progress: &Progress) -> 
         meshes,
         field,
         report,
+        air,
     })
 }
 

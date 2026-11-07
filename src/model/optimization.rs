@@ -30,7 +30,8 @@ use crate::{
 };
 
 /// Bumped whenever the file's shape changes in a way old builds cannot read.
-pub(crate) const SCENARIO_FILE_VERSION: u32 = 3;
+/// 4: the constants moved from each scenario to the file (`ScenarioFile::constants`).
+pub(crate) const SCENARIO_FILE_VERSION: u32 = 4;
 
 // ── Constants ──
 
@@ -121,6 +122,79 @@ impl ConstantsRow {
         match self {
             Self::Constant(constant) => Some(constant),
             Self::Group { .. } => None,
+        }
+    }
+}
+
+/// A hash of the constants `settings` name (each [`FieldValue`]'s `constant`)
+/// and their values in `constants`, so a run key changes with the constants
+/// it uses and with no other.
+pub(crate) fn used_constants_hash(settings: &impl Serialize, constants: &[ConstantsRow]) -> u64 {
+    fn collect(value: &serde_json::Value, names: &mut std::collections::BTreeSet<String>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                for (key, inner) in map {
+                    match (key.as_str(), inner) {
+                        ("constant", serde_json::Value::String(name)) => {
+                            names.insert(name.clone());
+                        }
+                        _ => collect(inner, names),
+                    }
+                }
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|item| collect(item, names)),
+            _ => {}
+        }
+    }
+    let mut names = std::collections::BTreeSet::new();
+    collect(&serde_json::to_value(settings).unwrap_or_default(), &mut names);
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for name in names {
+        let value = constants
+            .iter()
+            .filter_map(ConstantsRow::constant)
+            .find(|constant| constant.name == name)
+            .map(|constant| &constant.value);
+        (name, serde_json::to_string(&value).unwrap_or_default()).hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// Merge constants `rows` into `into` keeping their groups: each group is
+/// added once, each constant under its own group. The first value of a name
+/// wins; a later, different one is skipped and its name added to `clashes`.
+pub(crate) fn merge_constants(into: &mut Vec<ConstantsRow>, rows: &[ConstantsRow], clashes: &mut Vec<String>) {
+    let mut group: Option<&str> = None;
+    for row in rows {
+        match row {
+            ConstantsRow::Group { name, .. } => {
+                group = Some(name.as_str());
+                if !into.iter().any(|row| matches!(row, ConstantsRow::Group { name: existing, .. } if existing == name)) {
+                    into.push(row.clone());
+                }
+            }
+            ConstantsRow::Constant(constant) => {
+                if let Some(existing) = into.iter().filter_map(ConstantsRow::constant).find(|existing| existing.name == constant.name) {
+                    if existing.value != constant.value && !clashes.contains(&constant.name) {
+                        clashes.push(constant.name.clone());
+                    }
+                    continue;
+                }
+                // The end of the constant's group: the rows up to the next
+                // group row (ungrouped ones sit above every group).
+                let start = match group {
+                    None => 0,
+                    Some(name) => into
+                        .iter()
+                        .position(|row| matches!(row, ConstantsRow::Group { name: existing, .. } if existing == name))
+                        .map_or(into.len(), |at| at + 1),
+                };
+                let end = into[start..]
+                    .iter()
+                    .position(|row| matches!(row, ConstantsRow::Group { .. }))
+                    .map_or(into.len(), |offset| start + offset);
+                into.insert(end, row.clone());
+            }
         }
     }
 }
@@ -842,7 +916,7 @@ impl Default for OutputSettings {
             use_directional_shells: false,
             shell_direction: ShellDirection::North,
             shell_start: None,
-            create_reports: true,
+            create_reports: false,
             reports_folder: String::new(),
             shell_as_solid: true,
             shell_as_surface: false,
@@ -903,6 +977,33 @@ impl FactorListIssue {
 }
 
 impl OutputSettings {
+    /// The revenue factors a run makes shells at, ascending, or why there are
+    /// none: one factor of 1 for a single shell, else the range or the typed list.
+    pub(crate) fn factors(&self) -> Result<Vec<f64>, String> {
+        use crate::model::optimization_run::prepare::MAX_SHELLS;
+        if self.mode == ShellMode::Single {
+            return Ok(vec![1.0]);
+        }
+        match self.factor_input {
+            FactorInput::Range => {
+                let (from, to) = (self.factor_from, self.factor_to);
+                let count = shell_count_for_step(from, to, self.factor_step).map(|count| count as usize);
+                let Some(count) = count.filter(|count| (2..=MAX_SHELLS).contains(count) && from > 0.0) else {
+                    return Err(tr!("opt-run-factor-range", max = MAX_SHELLS.to_string()));
+                };
+                let step = (to - from) / (count - 1) as f64;
+                // Rounded, so a factor reads 0.9 rather than 0.8999999999999999.
+                let factor = |index: usize| round_factor(from + step * index as f64);
+                Ok((0..count).map(|index| if index + 1 == count { to } else { factor(index) }).collect())
+            }
+            FactorInput::List => match parse_factor_list(&self.factor_list) {
+                Ok(factors) if factors.len() <= MAX_SHELLS => Ok(factors),
+                Ok(_) => Err(tr!("opt-run-factor-range", max = MAX_SHELLS.to_string())),
+                Err(issue) => Err(issue.message()),
+            },
+        }
+    }
+
     /// Set the number of shells to what the (rounded) step really makes.
     ///
     /// The step is the one a run uses. A count typed in is turned into a step
@@ -967,6 +1068,12 @@ pub(crate) struct OptimizationScenario {
     /// The rock type value that means air, for [`AirMode::Rocktype`].
     pub(crate) air_rocktype: String,
 
+    /// A copy of the project's global constants (`ScenarioFile::constants`),
+    /// set by `OptimizationState::sync_constants`, so every field resolves
+    /// against the scenario as before. Never written; read only from files
+    /// saved before the constants were global, where
+    /// [`ScenarioFile::take_constants`] merges them.
+    #[serde(skip_serializing)]
     pub(crate) constants: Vec<ConstantsRow>,
 
     // Mining costs
@@ -991,6 +1098,9 @@ pub(crate) struct OptimizationScenario {
     pub(crate) revenues: Vec<RevenueRow>,
     pub(crate) slope: SlopeSettings,
     pub(crate) output: OutputSettings,
+    /// The NPV schedules of this scenario's shells. Not part of its
+    /// fingerprint: editing a schedule does not make the scenario stale.
+    pub(crate) schedules: Vec<crate::model::npv_schedule::NpvSchedule>,
 }
 
 impl Default for OptimizationScenario {
@@ -1033,16 +1143,21 @@ impl OptimizationScenario {
             revenues: vec![RevenueRow::default()],
             slope: SlopeSettings::default(),
             output: OutputSettings::default(),
+            schedules: Vec::new(),
         }
     }
 
     /// A key that changes when anything a run depends on changes: everything
-    /// but the name.
+    /// but the name and the schedules.
     pub(crate) fn fingerprint(&self) -> u64 {
         let mut settings = self.clone();
         settings.name.clear();
+        settings.schedules.clear();
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         serde_json::to_string(&settings).unwrap_or_default().hash(&mut hasher);
+        // The constants are global and not serialized here: only those this
+        // scenario names count, so editing another leaves it up to date.
+        used_constants_hash(&settings, &self.constants).hash(&mut hasher);
         hasher.finish()
     }
 
@@ -1115,6 +1230,10 @@ impl OptimizationScenario {
         // Scenarios saved before the count followed the step may show a count
         // their step does not make.
         self.output.match_count_to_step();
+        let quality = self.quality_field.clone();
+        for schedule in &mut self.schedules {
+            schedule.migrate(&quality);
+        }
     }
 
     /// Choose the field the mining cost varies by (empty for none). Rows whose
@@ -1414,6 +1533,17 @@ pub(crate) struct ScenarioFile {
     /// the scenarios, so choosing columns never makes a run look stale.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) report_columns: BTreeMap<String, Vec<String>>,
+    /// The playback deck's speed, in steps (benches) a second, last set in
+    /// this project: one for every schedule's animation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) animation_speed: Option<f64>,
+    /// The schedule Results tables' columns, by table (`periods`, `pits`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) schedule_columns: BTreeMap<String, Vec<String>>,
+    /// The constants every scenario and schedule resolves against. Empty in
+    /// files saved before they were global (see [`Self::take_constants`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) constants: Vec<ConstantsRow>,
 }
 
 impl ScenarioFile {
@@ -1422,6 +1552,25 @@ impl ScenarioFile {
             version: SCENARIO_FILE_VERSION,
             scenarios,
             report_columns: BTreeMap::new(),
+            animation_speed: None,
+            schedule_columns: BTreeMap::new(),
+            constants: Vec::new(),
         }
+    }
+
+    /// The file's global constants. A file saved before they were global keeps
+    /// them in each scenario: those lists merge in scenario order (see
+    /// [`merge_constants`]), the first value of a name winning. Also returns
+    /// the names that had a different value elsewhere.
+    pub(crate) fn take_constants(&self) -> (Vec<ConstantsRow>, Vec<String>) {
+        let mut clashes = Vec::new();
+        if !self.constants.is_empty() {
+            return (self.constants.clone(), clashes);
+        }
+        let mut merged = Vec::new();
+        for scenario in &self.scenarios {
+            merge_constants(&mut merged, &scenario.constants, &mut clashes);
+        }
+        (merged, clashes)
     }
 }

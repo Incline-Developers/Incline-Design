@@ -18,10 +18,7 @@ use crate::{
             block_column::BlockColumn,
             block_model_data::{BlockModelData, BlockVariable},
         },
-        optimization::{
-            AirMode, FactorInput, FieldValue, HaulageCost, HaulageMode, OptimizationScenario, RosetteInterpolation, RosetteIssue, ShellMode, SlopeMode, ValueKind, metal_factor,
-            parse_factor_list, round_factor, shell_count_for_step,
-        },
+        optimization::{AirMode, FieldValue, HaulageCost, HaulageMode, OptimizationScenario, RosetteInterpolation, RosetteIssue, ShellMode, SlopeMode, ValueKind, metal_factor},
     },
 };
 
@@ -595,30 +592,12 @@ fn shell_plan(check: &mut Checker) -> Option<ShellPlan> {
     if output.mode == ShellMode::Single {
         return Some(ShellPlan::Factors(vec![1.0]));
     }
-    let factors = match output.factor_input {
-        FactorInput::Range => {
-            let (from, to) = (output.factor_from, output.factor_to);
-            let count = shell_count_for_step(from, to, output.factor_step).map(|count| count as usize);
-            let Some(count) = count.filter(|count| (2..=MAX_SHELLS).contains(count) && from > 0.0) else {
-                check.issues.push(tr!("opt-run-factor-range", max = MAX_SHELLS.to_string()));
-                return None;
-            };
-            let step = (to - from) / (count - 1) as f64;
-            // Rounded, so a factor reads 0.9 rather than 0.8999999999999999.
-            let factor = |index: usize| round_factor(from + step * index as f64);
-            (0..count).map(|index| if index + 1 == count { to } else { factor(index) }).collect()
+    let factors = match output.factors() {
+        Ok(factors) => factors,
+        Err(issue) => {
+            check.issues.push(issue);
+            return None;
         }
-        FactorInput::List => match parse_factor_list(&output.factor_list) {
-            Ok(factors) if factors.len() <= MAX_SHELLS => factors,
-            Ok(_) => {
-                check.issues.push(tr!("opt-run-factor-range", max = MAX_SHELLS.to_string()));
-                return None;
-            }
-            Err(issue) => {
-                check.issues.push(issue.message());
-                return None;
-            }
-        },
     };
     if output.use_directional_shells {
         let Some((x, y)) = output.shell_start else {

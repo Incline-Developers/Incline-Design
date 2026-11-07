@@ -1694,6 +1694,10 @@ impl<'a> App<'a> {
         // Scenarios, runs and results belong to the outgoing project; the next
         // one's scenarios are read from it when the list first opens.
         self.editor.optimization = Default::default();
+        // The playback deck played one of its block models: it goes with it.
+        if let Some(animation) = self.editor.field_animation.take() {
+            self.editor.isolated_entity = animation.restore.isolated_entity;
+        }
         self.scene_document_key = None;
         // Item and object ids restart with the replacement project, so the
         // renderer's id-keyed caches would otherwise keep drawing this
