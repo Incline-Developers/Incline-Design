@@ -773,7 +773,9 @@ pub(crate) fn slabs_between_elevations(mesh: &mesh_data::Triangulation, bands: &
     if bands.iter().any(|(base, top)| !base.is_finite() || !top.is_finite() || base >= top) || bands.windows(2).any(|pair| pair[0].1 > pair[1].0 + 1e-6) {
         anyhow::bail!("Bench bands must be finite, ascending and non-overlapping");
     }
-    let mut slabs: Vec<Slab> = vec![(Vec::new(), Vec::new()); bands.len()];
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    use rayon::prelude::*;
     // A point a rounding error off a cut plane - a crest built at a bench's
     // own elevation, say - is put on it. Left a hair to either side, the cut
     // trims slivers off the faces meeting there, too thin to keep and too
@@ -783,7 +785,7 @@ pub(crate) fn slabs_between_elevations(mesh: &mesh_data::Triangulation, bands: &
     planes.sort_by(f64::total_cmp);
     let source: Vec<mesh_data::Vertex> = mesh
         .vertices()
-        .iter()
+        .par_iter()
         .map(|vertex| {
             let next = planes.partition_point(|plane| *plane < vertex.z);
             let nearest = [next.checked_sub(1), Some(next)]
@@ -795,51 +797,100 @@ pub(crate) fn slabs_between_elevations(mesh: &mesh_data::Triangulation, bands: &
             nearest.map_or(*vertex, |plane| mesh_data::Vertex::new(vertex.x, vertex.y, plane))
         })
         .collect();
-    for (face_index, face) in mesh.face_vertex_indices_iter().enumerate() {
-        if face_index % 1024 == 0 && cancel.is_some_and(|cancel| cancel.is_cancelled()) {
-            anyhow::bail!("Cancelled");
-        }
-        let triangle = [source[face[0]], source[face[1]], source[face[2]]];
+    let faces: Vec<[u32; 3]> = mesh.face_indices().collect();
+    let triangle = |face: usize| faces[face].map(|index| source[index as usize]);
+    // The bands each face's height range reaches.
+    let reach = |face: usize| {
+        let triangle = triangle(face);
         let lowest = triangle[0].z.min(triangle[1].z).min(triangle[2].z);
         let highest = triangle[0].z.max(triangle[1].z).max(triangle[2].z);
         let first = bands.partition_point(|(_, top)| *top < lowest);
-        for (index, (base, top)) in bands.iter().enumerate().skip(first).take_while(|(_, (base, _))| *base <= highest) {
-            if top <= base || highest < *base || lowest > *top {
-                continue;
-            }
-            // A horizontal boundary face belongs only to the slab on its
-            // material side. Copying it into both bands creates a zero-thickness
-            // sheet which cap triangulation can cover a second time.
-            if highest - lowest < 1e-8 {
-                let normal_z = (triangle[1].x - triangle[0].x) * (triangle[2].y - triangle[0].y) - (triangle[1].y - triangle[0].y) * (triangle[2].x - triangle[0].x);
-                if ((lowest - base).abs() < 1e-8 && normal_z > 0.0) || ((highest - top).abs() < 1e-8 && normal_z < 0.0) {
-                    continue;
-                }
-            }
-            let slab = &mut slabs[index];
-            for clipped in super::cuts::clip_triangle_z(triangle, *base, *top) {
-                if collapsed(&clipped) {
-                    continue;
-                }
-                let vertex = slab.0.len() as u32;
-                slab.0.extend_from_slice(&clipped);
-                slab.1.push([vertex, vertex + 1, vertex + 2]);
-            }
+        first..first + bands[first..].partition_point(|(base, _)| *base <= highest)
+    };
+    // Each band's faces, filed in parallel and put back in order, so each
+    // band is cut on its own - side by side - from its faces as they come.
+    let counts: Vec<AtomicU32> = bands.iter().map(|_| AtomicU32::new(0)).collect();
+    (0..faces.len()).into_par_iter().for_each(|face| {
+        for band in reach(face) {
+            counts[band].fetch_add(1, Ordering::Relaxed);
         }
+    });
+    let mut starts = Vec::with_capacity(bands.len() + 1);
+    starts.push(0usize);
+    for count in &counts {
+        starts.push(starts.last().copied().unwrap_or(0) + count.load(Ordering::Relaxed) as usize);
     }
-    // Each slab is capped on its own, so the slabs are capped side by side.
-    use rayon::prelude::*;
-    slabs.par_iter_mut().zip(bands).try_for_each(|(slab, (base, top))| {
-        if slab.1.is_empty() {
-            return Ok(());
+    counts.par_iter().for_each(|count| count.store(0, Ordering::Relaxed));
+    let filed: Vec<AtomicU32> = (0..starts[bands.len()]).map(|_| AtomicU32::new(0)).collect();
+    (0..faces.len()).into_par_iter().for_each(|face| {
+        for band in reach(face) {
+            let slot = starts[band] + counts[band].fetch_add(1, Ordering::Relaxed) as usize;
+            filed[slot].store(face as u32, Ordering::Relaxed);
         }
-        if cancel.is_some_and(|cancel| cancel.is_cancelled()) {
-            anyhow::bail!("Cancelled");
-        }
-        cap_slab(slab, *base, *top);
-        Ok(())
-    })?;
-    Ok(slabs)
+    });
+    drop(counts);
+    let mut filed: Vec<u32> = filed.into_iter().map(AtomicU32::into_inner).collect();
+    let mut by_band: Vec<&mut [u32]> = Vec::with_capacity(bands.len());
+    let mut rest = filed.as_mut_slice();
+    for band in 0..bands.len() {
+        let (here, after) = rest.split_at_mut(starts[band + 1] - starts[band]);
+        by_band.push(here);
+        rest = after;
+    }
+    by_band
+        .into_par_iter()
+        .zip(bands)
+        .map(|(band_faces, &(base, top))| -> Result<Slab> {
+            band_faces.sort_unstable();
+            // Welded as it is cut, one vertex per bit-identical position in
+            // the order they come: a survey's slabs as loose triangles cost
+            // three times the memory. See [`cap_slab`] for why that is the
+            // same slab.
+            let mut seen: std::collections::HashMap<[u64; 3], u32, FixedState> = std::collections::HashMap::default();
+            let mut slab: Slab = (Vec::new(), Vec::new());
+            for (count, &face) in band_faces.iter().enumerate() {
+                if count % 1024 == 0 && cancel.is_some_and(|cancel| cancel.is_cancelled()) {
+                    anyhow::bail!("Cancelled");
+                }
+                let triangle = triangle(face as usize);
+                let lowest = triangle[0].z.min(triangle[1].z).min(triangle[2].z);
+                let highest = triangle[0].z.max(triangle[1].z).max(triangle[2].z);
+                if top <= base || highest < base || lowest > top {
+                    continue;
+                }
+                // A horizontal boundary face belongs only to the slab on its
+                // material side. Copying it into both bands creates a
+                // zero-thickness sheet which cap triangulation can cover a
+                // second time.
+                if highest - lowest < 1e-8 {
+                    let normal_z = (triangle[1].x - triangle[0].x) * (triangle[2].y - triangle[0].y) - (triangle[1].y - triangle[0].y) * (triangle[2].x - triangle[0].x);
+                    if ((lowest - base).abs() < 1e-8 && normal_z > 0.0) || ((highest - top).abs() < 1e-8 && normal_z < 0.0) {
+                        continue;
+                    }
+                }
+                for clipped in super::cuts::clip_triangle_z(triangle, base, top) {
+                    if collapsed(&clipped) {
+                        continue;
+                    }
+                    slab.1.push(clipped.map(|vertex| {
+                        *seen.entry([vertex.x.to_bits(), vertex.y.to_bits(), vertex.z.to_bits()]).or_insert_with(|| {
+                            slab.0.push(vertex);
+                            (slab.0.len() - 1) as u32
+                        })
+                    }));
+                }
+            }
+            drop(seen);
+            if slab.1.is_empty() {
+                return Ok(slab);
+            }
+            if cancel.is_some_and(|cancel| cancel.is_cancelled()) {
+                anyhow::bail!("Cancelled");
+            }
+            cap_slab(&mut slab, base, top);
+            Ok(slab)
+        })
+        .collect::<Result<Vec<Slab>>>()
 }
 
 /// Whether a clipped triangle has two corners at one point, and so covers
@@ -855,6 +906,12 @@ fn collapsed(triangle: &[mesh_data::Vertex; 3]) -> bool {
 
 /// Fill the open rims a slab was cut at, turning the band of surface into a
 /// solid.
+///
+/// The slab comes welded by bit-identical position, its points in the order
+/// its faces first use them. Everything here reads points by position, so
+/// that is the same slab as one with a copy of each corner per face, and the
+/// weld after capping gives the same mesh - except where the rims do not
+/// close, which is put back to the copies first.
 fn cap_slab(slab: &mut (Vec<mesh_data::Vertex>, Vec<[u32; 3]>), base: f64, top: f64) {
     let weld = Weld::of(&slab.0);
     // Only points on a cut plane can be a rim's, and only faces with two of
@@ -862,34 +919,49 @@ fn cap_slab(slab: &mut (Vec<mesh_data::Vertex>, Vec<[u32; 3]>), base: f64, top: 
     // the plane has both its ends there. Looking at those alone keeps a cut
     // through a large body from hashing every face of it. Each point is
     // classed once: 1 on the base, 2 on the top, 0 on neither.
-    let plane_of: Vec<u8> = slab
-        .0
-        .iter()
-        .map(|vertex| {
-            if (vertex.z - base).abs() <= weld.tolerance {
-                1
-            } else if (vertex.z - top).abs() <= weld.tolerance {
-                2
-            } else {
-                0
-            }
-        })
-        .collect();
-    let edge_faces: Vec<[u32; 3]> = slab
-        .1
-        .iter()
-        .copied()
-        .filter(|face| {
-            let [a, b, c] = face.map(|index| plane_of[index as usize]);
-            (a != 0 && (a == b || a == c)) || (b != 0 && b == c)
-        })
-        .collect();
+    let classify = |vertices: &[mesh_data::Vertex]| -> Vec<u8> {
+        vertices
+            .iter()
+            .map(|vertex| {
+                if (vertex.z - base).abs() <= weld.tolerance {
+                    1
+                } else if (vertex.z - top).abs() <= weld.tolerance {
+                    2
+                } else {
+                    0
+                }
+            })
+            .collect()
+    };
+    let rim_faces = |faces: &[[u32; 3]], plane_of: &[u8]| -> Vec<[u32; 3]> {
+        faces
+            .iter()
+            .copied()
+            .filter(|face| {
+                let [a, b, c] = face.map(|index| plane_of[index as usize]);
+                (a != 0 && (a == b || a == c)) || (b != 0 && b == c)
+            })
+            .collect()
+    };
+    let plane_of = classify(&slab.0);
+    let edge_faces = rim_faces(&slab.1, &plane_of);
     let mut rims = boundary_segments(&slab.0, &edge_faces);
     // Points are merged only where the rims do not already close. A cut can
     // leave distinct rim points a hair apart, and merging those pinches a
     // closed rim into one that no longer traces as a ring - the cap is lost
     // and every later cut through the body inherits the hole.
+    let mut edge_faces = edge_faces;
     if !rims_close(&rims, &[base, top], weld) {
+        // Merging moves each point onto the first kept one within reach, a
+        // copy at a time, and two copies of one point can come to rest on
+        // different ones: the slab goes back to a copy of each corner per
+        // face, as it was cut, so the merge is what it always was.
+        *slab = (
+            slab.1.iter().flatten().map(|&index| slab.0[index as usize]).collect(),
+            (0..slab.1.len() as u32).map(|face| [3 * face, 3 * face + 1, 3 * face + 2]).collect(),
+        );
+        let plane_of = classify(&slab.0);
+        edge_faces = rim_faces(&slab.1, &plane_of);
         let planar: Vec<usize> = (0..slab.0.len()).filter(|&index| plane_of[index] != 0).collect();
         merge_coincident(&mut slab.0, &planar, weld);
         rims = boundary_segments(&slab.0, &edge_faces);
