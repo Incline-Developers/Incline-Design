@@ -319,20 +319,24 @@ impl<'a> App<'a> {
         }
     }
 
-    /// The surfaces framing must measure whatever the viewport is actually
-    /// drawing.
+    /// The surfaces framing must measure: whatever the viewport is actually
+    /// drawing, as [`crate::app::events::drawn_surfaces`] says for every page.
     ///
-    /// On the Animate page, that is the project's own surfaces and the
-    /// calculated solids for the instant on screen. Measuring only the
-    /// project's own surfaces framed nothing when the calculated solids were
-    /// the only visible content, causing the camera to reset to the world
-    /// origin.
+    /// Animate draws the solids for the instant on screen, Reserves its dig
+    /// blocks and the Blasting steps their bench bodies, with the project's
+    /// own surfaces hidden; measuring those framed nothing there, and the
+    /// camera stayed put or swung to the world origin.
     fn framed_triangulations(&self) -> &[crate::model::triangulation::OpenTriangulation] {
-        if self.editor.is_schedule_animation() {
-            self.schedule_animation.scene()
-        } else {
-            &self.triangulations
-        }
+        crate::app::events::drawn_surfaces(
+            &self.editor,
+            self.showing_solid_preview(),
+            &self.triangulations,
+            &self.solid_view_body,
+            &self.reserves_scene,
+            &self.schedule_animation,
+            self.solid_preview.as_ref(),
+        )
+        .0
     }
 
     /// Work out what clicks, snaps and the orbit pivot skip this frame:
