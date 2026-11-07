@@ -19,7 +19,10 @@ use glam::DVec2;
 
 use super::{BlastFace, Carving, CutBand, DigPiece, SolidBlasting, SolidBody, SolidPart, SolidPartition};
 use crate::{
-    app::commands::solids::preview_triangulation,
+    app::commands::{
+        solids::preview_triangulation,
+        triangulation::solid_between::{BuiltFrom, SolidMesh},
+    },
     model::{
         DigBlockId, Solid, SolidId,
         formats::mesh_data::{Triangulation, Vertex},
@@ -39,7 +42,7 @@ const CAPACITY: u64 = 12 << 30;
 
 /// Which stage's product a file holds.
 #[derive(Clone, Copy)]
-pub(super) enum Kind {
+pub(crate) enum Kind {
     Envelope,
     Body,
     Blasting,
@@ -58,49 +61,29 @@ impl Kind {
     }
 }
 
-/// The key a solid's envelope is kept under: its definition and the content
-/// of both surfaces, with the program that builds it. `None` where nothing can
-/// be kept.
-pub(super) fn envelope_key(solid: &Solid, design: &Triangulation, topography: &Triangulation) -> Option<u64> {
+/// The key a solid built between two surfaces is kept under: what it was
+/// built from, with the program that built it. `None` where nothing can be
+/// kept.
+pub(crate) fn solid_mesh_key(built_from: BuiltFrom) -> Option<u64> {
     use std::hash::Hasher;
-    let program = program()?;
-    let mut key = twox_hash::XxHash3_64::with_seed(program);
+    let mut key = twox_hash::XxHash3_64::with_seed(program()?);
     key.write_u32(FORMAT);
-    key.write_u64(solid.id.0);
-    key.write_u8(solid.kind as u8);
-    key.write_u64(mesh_content(design));
-    key.write_u64(mesh_content(topography));
+    key.write(b"solid between surfaces");
+    key.write_u64(built_from.0);
+    key.write_u64(built_from.1);
+    key.write_u8(u8::from(built_from.2));
     Some(key.finish())
 }
 
-/// A hash of every vertex and face of `mesh`, taken in parallel runs.
-fn mesh_content(mesh: &Triangulation) -> u64 {
+/// The key a solid's later stages are kept under, each from the one before
+/// (see [`super::body_key`]): its envelope, and the solid it belongs to,
+/// whose identity its blasts and dig blocks carry.
+pub(super) fn chain_key(solid: &Solid, built_from: BuiltFrom) -> Option<u64> {
     use std::hash::Hasher;
-
-    use rayon::prelude::*;
-    const RUN: usize = 1 << 16;
-    let vertices: Vec<u64> = mesh
-        .vertices()
-        .par_chunks(RUN)
-        .map(|run| {
-            let bytes: Vec<u8> = run.iter().flat_map(|vertex| [vertex.x, vertex.y, vertex.z]).flat_map(f64::to_le_bytes).collect();
-            twox_hash::XxHash3_64::oneshot(&bytes)
-        })
-        .collect();
-    let faces: Vec<[u32; 3]> = mesh.face_indices().collect();
-    let faces: Vec<u64> = faces
-        .par_chunks(RUN)
-        .map(|run| {
-            let bytes: Vec<u8> = run.iter().flatten().flat_map(|index| index.to_le_bytes()).collect();
-            twox_hash::XxHash3_64::oneshot(&bytes)
-        })
-        .collect();
-    let mut hash = twox_hash::XxHash3_64::new();
-    hash.write_u64(vertices.len() as u64);
-    vertices.iter().for_each(|run| hash.write_u64(*run));
-    hash.write_u64(faces.len() as u64);
-    faces.iter().for_each(|run| hash.write_u64(*run));
-    hash.finish()
+    let mut key = twox_hash::XxHash3_64::with_seed(solid_mesh_key(built_from)?);
+    key.write_u64(solid.id.0);
+    key.write_u8(solid.kind as u8);
+    Some(key.finish())
 }
 
 /// A hash of the running executable, read once: results are only ever read
@@ -135,7 +118,7 @@ fn program() -> Option<u64> {
 
 /// Read back what [`store`] kept under `key`, or `None` if nothing usable is
 /// there.
-pub(super) fn load<T>(kind: Kind, key: u64, read: impl FnOnce(&mut Reader) -> Option<T>) -> Option<T> {
+pub(crate) fn load<T>(kind: Kind, key: u64, read: impl FnOnce(&mut Reader) -> Option<T>) -> Option<T> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let started = std::time::Instant::now();
@@ -176,7 +159,7 @@ pub(super) fn load<T>(kind: Kind, key: u64, read: impl FnOnce(&mut Reader) -> Op
 /// Keep a product under `key`, written beside the cache and moved into place
 /// whole, so a reader never sees half of one. Failure only means the next
 /// open builds it again, so it is logged and otherwise ignored.
-pub(super) fn store(kind: Kind, key: u64, write: impl FnOnce(&mut Writer) -> Option<()>) {
+pub(crate) fn store(kind: Kind, key: u64, write: impl FnOnce(&mut Writer) -> Option<()>) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let started = std::time::Instant::now();
@@ -264,7 +247,7 @@ fn evict(directory: &std::path::Path) {
 
 /// Encodes values little-endian into a buffer that is hashed and written a
 /// megabyte at a time, with the hash of it all at the end.
-pub(super) struct Writer<'a> {
+pub(crate) struct Writer<'a> {
     sink: &'a mut dyn std::io::Write,
     buffer: Vec<u8>,
     hash: twox_hash::XxHash3_64,
@@ -354,7 +337,7 @@ impl<'a> Writer<'a> {
 /// Reads what a [`Writer`] wrote, hashing as it goes. Every length is checked
 /// against what the file has left before anything is allocated for it, so a
 /// damaged file is found out rather than believed.
-pub(super) struct Reader {
+pub(crate) struct Reader {
     source: Box<dyn std::io::Read>,
     buffer: Vec<u8>,
     position: usize,
@@ -764,15 +747,48 @@ fn read_parts(input: &mut Reader, name: &str, id: Id, shared: &Shared) -> Option
     read_counted(input, count, |input| read_part(input, name, id, shared))
 }
 
-pub(super) fn write_envelope(out: &mut Writer, envelope: &OpenTriangulation) -> Option<()> {
-    write_mesh(out, envelope, &[])
+pub(crate) fn write_solid_mesh(out: &mut Writer, solid: &SolidMesh) -> Option<()> {
+    if !solid.edges.is_empty() {
+        return None;
+    }
+    let vertices = solid.mesh.vertices();
+    out.usize(vertices.len());
+    for vertex in vertices {
+        out.f64(vertex.x);
+        out.f64(vertex.y);
+        out.f64(vertex.z);
+    }
+    out.usize(solid.mesh.face_count());
+    for face in solid.mesh.face_indices() {
+        face.into_iter().for_each(|index| out.u32(index));
+    }
+    out.usize(solid.surface_face_order.len());
+    solid.surface_face_order.iter().for_each(|face| out.u32(*face));
+    out.f64(solid.volume);
+    Some(())
 }
 
-/// The envelope as [`super::build_solid_envelope`] makes it for `solid`.
-pub(super) fn read_envelope(input: &mut Reader, solid: &Solid) -> Option<OpenTriangulation> {
-    let mut envelope = read_mesh(input, &solid.name, Id::Kept, &[])?;
-    envelope.color = solid.color;
-    Some(envelope)
+/// A solid built between two surfaces, as [`write_solid_mesh`] kept it.
+pub(crate) fn read_solid_mesh(input: &mut Reader, built_from: BuiltFrom) -> Option<SolidMesh> {
+    let f64_at = |bytes: &[u8], at: usize| f64::from_le_bytes(bytes[at..at + 8].try_into().expect("eight bytes"));
+    let u32_at = |bytes: &[u8], at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().expect("four bytes"));
+    let vertices = input.items(24, |item| Vertex {
+        x: f64_at(item, 0),
+        y: f64_at(item, 8),
+        z: f64_at(item, 16),
+    })?;
+    let faces = input.items(12, |item| [u32_at(item, 0), u32_at(item, 4), u32_at(item, 8)])?;
+    let order = input.items(4, |item| u32_at(item, 0))?;
+    let volume = input.f64()?;
+    let mesh = Arc::new(Triangulation::from_vertices_and_faces(vertices, faces).ok()?);
+    Some(SolidMesh {
+        spatial: Arc::new(crate::model::spatial::TriangleBvh::deferred(mesh.clone())),
+        edges: Arc::new(Vec::new()),
+        surface_face_order: Arc::new(order),
+        mesh,
+        volume,
+        built_from,
+    })
 }
 
 pub(super) fn write_body(out: &mut Writer, body: &SolidBody) -> Option<()> {

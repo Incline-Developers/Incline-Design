@@ -20,7 +20,7 @@ use rayon::prelude::*;
 
 use super::solids::{CutBand, bench_bands, build_bench_body, plan_bands, preview_triangulation};
 
-mod disk_cache;
+pub(crate) mod disk_cache;
 use crate::{
     model::{
         DigBlockId, Solid, SolidId,
@@ -1043,15 +1043,8 @@ impl crate::app::App<'_> {
             crate::i18n::tr!("planning-building-view"),
             vec![artifact_job(id, SolidArtifact::Envelope, token)],
             move |cancel, progress| {
-                let disk_key = disk_cache::envelope_key(&snapshot, &design, &topo);
-                if let Some(envelope) = disk_key.and_then(|key| disk_cache::load(disk_cache::Kind::Envelope, key, |input| disk_cache::read_envelope(input, &snapshot))) {
-                    return Ok((envelope, disk_key));
-                }
-                let envelope = build_solid_envelope(&snapshot, &design, &topo, cancel, progress)?;
-                if let Some(key) = disk_key {
-                    disk_cache::store(disk_cache::Kind::Envelope, key, |out| disk_cache::write_envelope(out, &envelope));
-                }
-                Ok((envelope, disk_key))
+                let (envelope, built_from) = build_solid_envelope(&snapshot, &design, &topo, cancel, progress)?;
+                Ok((envelope, disk_cache::chain_key(&snapshot, built_from)))
             },
             move |app, result| {
                 let Some(cache) = app.accepting_solid(runtime, id, SolidArtifact::Envelope, token) else {
@@ -2030,12 +2023,12 @@ fn build_solid_envelope(
     topo: &Arc<Triangulation>,
     cancel: &crate::app::jobs::CancelFlag,
     progress: &crate::model::progress::Progress,
-) -> anyhow::Result<OpenTriangulation> {
+) -> anyhow::Result<(OpenTriangulation, super::triangulation::solid_between::BuiltFrom)> {
     // The same mesh as the Setup page's preview of this solid, when it has
     // built one, rather than a copy of it.
     let built = super::triangulation::solid_between::build_solid_mesh(design, topo, crate::ui::state::SolidRegion::of_solid(solid.kind), &solid.name, &progress.phase(0.0, 1.0))?;
     anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
-    Ok(preview_triangulation(
+    let envelope = preview_triangulation(
         solid.name.clone(),
         built.mesh,
         built.spatial,
@@ -2043,7 +2036,8 @@ fn build_solid_envelope(
         built.surface_face_order,
         solid.color,
         [0.0, 0.0, 0.0, 1.0],
-    ))
+    );
+    Ok((envelope, built.built_from))
 }
 
 /// The Benching stage: cut a committed envelope into benches and flitches.

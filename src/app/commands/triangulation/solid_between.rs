@@ -137,6 +137,14 @@ pub(crate) fn build_solid_mesh(
         progress.set_fraction(1.0);
         return Ok(built);
     }
+    // Then one kept on disk from an earlier session.
+    use crate::app::commands::solids_view::disk_cache;
+    let disk = disk_cache::solid_mesh_key(key);
+    if let Some(built) = disk.and_then(|disk| disk_cache::load(disk_cache::Kind::Envelope, disk, |input| disk_cache::read_solid_mesh(input, key))) {
+        progress.set_fraction(1.0);
+        remember_build(key, &built);
+        return Ok(built);
+    }
     let mut notes = Vec::new();
     let (vertices, faces, volume) = build_solid_between_surfaces_uncached(design, topography, region, &progress.phase(0.0, 0.9), &mut notes)?;
     anyhow::ensure!(!faces.is_empty(), "Triangulation produced no faces");
@@ -151,6 +159,7 @@ pub(crate) fn build_solid_mesh(
         surface_face_order: std::sync::Arc::new(crate::model::triangulation::spatial_surface_face_order(&mesh)),
         mesh,
         volume,
+        built_from: key,
     };
     // Once per pair of surfaces: the Setup preview and the Solids stage can
     // build the same pair at once, and the second would repeat the first.
@@ -163,6 +172,15 @@ pub(crate) fn build_solid_mesh(
             }
         }
     }
+    if let Some(disk) = disk {
+        disk_cache::store(disk_cache::Kind::Envelope, disk, |out| disk_cache::write_solid_mesh(out, &built));
+    }
+    remember_build(key, &built);
+    Ok(built)
+}
+
+/// Keep `built` among the recent builds, for the next to ask for it.
+fn remember_build(key: BuiltFrom, built: &SolidMesh) {
     let mut recent = recent_builds();
     recent.retain(|(recent, _)| *recent != key);
     recent.push((key, built.clone()));
@@ -171,8 +189,11 @@ pub(crate) fn build_solid_mesh(
     while recent.len() > 1 && (recent.len() > RECENT_BUILDS || recent.iter().map(|(_, built)| built.bytes()).sum::<usize>() > RECENT_BUILD_BYTES) {
         recent.remove(0);
     }
-    Ok(built)
 }
+
+/// What a solid between two surfaces is built from: a fingerprint of each
+/// surface, and whether it is the cut below the design or the fill above.
+pub(crate) type BuiltFrom = (u64, u64, bool);
 
 /// A solid built between two surfaces, with what every view of it needs.
 ///
@@ -187,6 +208,7 @@ pub(crate) struct SolidMesh {
     pub(crate) surface_face_order: std::sync::Arc<Vec<u32>>,
     /// The volume enclosed, in cubic model units.
     pub(crate) volume: f64,
+    pub(crate) built_from: BuiltFrom,
 }
 
 impl SolidMesh {
