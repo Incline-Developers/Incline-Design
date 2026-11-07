@@ -975,6 +975,24 @@ fn boundary_segments(vertices: &[mesh_data::Vertex], faces: &[[u32; 3]]) -> Vec<
     use std::collections::HashMap;
     let weld = Weld::of(vertices);
     let key = |vertex: mesh_data::Vertex| weld.key(vertex);
+    // A wall's few faces, a few dozen at most, are matched up faster sorted
+    // in a list than hashed into a table built for each one.
+    if faces.len() <= 512 {
+        let mut sides: Vec<(EdgeKey, [mesh_data::Vertex; 2])> = Vec::with_capacity(faces.len() * 3);
+        for face in faces {
+            let corners = face.map(|index| vertices[index as usize]);
+            for (a, b) in [(corners[0], corners[1]), (corners[1], corners[2]), (corners[2], corners[0])] {
+                let (ka, kb) = (key(a), key(b));
+                sides.push((if ka <= kb { (ka, kb) } else { (kb, ka) }, [a, b]));
+            }
+        }
+        sides.sort_by_key(|(key, _)| *key);
+        return sides
+            .chunk_by(|left, right| left.0 == right.0)
+            .filter(|group| group.len() == 1)
+            .map(|group| group[0].1)
+            .collect();
+    }
     let mut counts: HashMap<EdgeKey, (usize, [mesh_data::Vertex; 2]), FixedState> = HashMap::default();
     for face in faces {
         let corners = face.map(|index| vertices[index as usize]);
@@ -1006,6 +1024,10 @@ pub(crate) fn plan_footprint_rings(mesh: &mesh_data::Triangulation, plane: f64) 
         return Vec::new();
     }
     let sliver = Weld::of(source).tolerance.powi(2);
+    // On the body's own points, each flattened once and in the order the
+    // faces first use it: a body cut from a survey shares most of them, and
+    // three to every face would be as many again to merge and hash.
+    let mut flattened = vec![u32::MAX; source.len()];
     let mut vertices = Vec::new();
     let mut faces = Vec::new();
     for face in mesh.face_vertex_indices_iter() {
@@ -1020,9 +1042,13 @@ pub(crate) fn plan_footprint_rings(mesh: &mesh_data::Triangulation, plane: f64) 
         if plan <= sliver.max(full * VERTICAL_WALL_RATIO) {
             continue;
         }
-        let base = vertices.len() as u32;
-        vertices.extend([a, b, c].map(|vertex| mesh_data::Vertex::new(vertex.x, vertex.y, plane)));
-        faces.push([base, base + 1, base + 2]);
+        faces.push(face.map(|index| {
+            if flattened[index] == u32::MAX {
+                flattened[index] = vertices.len() as u32;
+                vertices.push(mesh_data::Vertex::new(source[index].x, source[index].y, plane));
+            }
+            flattened[index]
+        }));
     }
     if faces.is_empty() {
         return Vec::new();
@@ -2103,20 +2129,31 @@ pub(crate) fn split_solid_by_plan(mesh: &mesh_data::Triangulation, faces: &[&[Ve
         }
         index
     }
-    let mut first: HashMap<EdgeKey, u32, FixedState> = HashMap::default();
-    for (index, triangle) in triangles.iter().enumerate() {
-        for (a, b) in [(0, 1), (1, 2), (2, 0)] {
-            let (ka, kb) = (weld.key(vertices[triangle[a] as usize]), weld.key(vertices[triangle[b] as usize]));
-            if ka == kb {
-                continue;
-            }
-            let other = *first.entry(if ka <= kb { (ka, kb) } else { (kb, ka) }).or_insert(index as u32);
-            let (x, y) = (root(&mut parent, other), root(&mut parent, index as u32));
+    // Every face's sides by their welded ends, sorted so the faces sharing
+    // one sit together: keyed and sorted side by side, joined in one pass.
+    let keys: Vec<PointKey> = vertices.par_iter().map(|vertex| weld.key(*vertex)).collect();
+    let mut sides: Vec<(EdgeKey, u32)> = triangles
+        .par_iter()
+        .enumerate()
+        .flat_map_iter(|(index, triangle)| {
+            let keys = &keys;
+            [(0, 1), (1, 2), (2, 0)].into_iter().filter_map(move |(a, b)| {
+                let (ka, kb) = (keys[triangle[a] as usize], keys[triangle[b] as usize]);
+                (ka != kb).then_some((if ka <= kb { (ka, kb) } else { (kb, ka) }, index as u32))
+            })
+        })
+        .collect();
+    drop(keys);
+    sides.par_sort_unstable();
+    for pair in sides.windows(2) {
+        if pair[0].0 == pair[1].0 {
+            let (x, y) = (root(&mut parent, pair[0].1), root(&mut parent, pair[1].1));
             if x != y {
                 parent[x as usize] = y;
             }
         }
     }
+    drop(sides);
 
     // Each piece's probe: the centroid of its largest triangle in plan.
     let mut probe: HashMap<u32, (f64, glam::DVec2), FixedState> = HashMap::default();
@@ -2215,8 +2252,6 @@ pub(crate) fn crease_outline(slab: &Slab, min_angle: f64) -> Vec<[u32; 2]> {
     /// face is a sliver: about a 1:1000 height to length.
     const SLIVER_RATIO: f64 = 1e-3;
 
-    use std::collections::HashMap;
-
     let (vertices, faces) = slab;
     let weld = Weld::of(vertices);
     let position = |index: u32| {
@@ -2224,41 +2259,48 @@ pub(crate) fn crease_outline(slab: &Slab, min_angle: f64) -> Vec<[u32; 2]> {
         glam::DVec3::new(vertex.x, vertex.y, vertex.z)
     };
     let threshold = min_angle.cos();
-    // Each edge's first face's normal, and whether a later face has turned a
-    // corner against it. A survey's bench has millions of these.
-    let mut edges: HashMap<EdgeKey, ([u32; 2], glam::DVec3, bool), FixedState> = HashMap::default();
-    for face in faces {
-        let [a, b, c] = face.map(position);
-        let cross = (b - a).cross(c - a);
-        // A sliver's normal is rounding noise, and splitting leaves them along
-        // the cut lines: left in, every one reads as a corner.
-        let longest = (b - a).length_squared().max((c - b).length_squared()).max((a - c).length_squared());
-        if cross.length() <= longest * SLIVER_RATIO {
-            continue;
-        }
-        let normal = cross.normalize();
-        for (a, b) in [(0, 1), (1, 2), (2, 0)] {
-            let (ia, ib) = (face[a], face[b]);
-            let (ka, kb) = (weld.key(vertices[ia as usize]), weld.key(vertices[ib as usize]));
-            if ka == kb {
-                continue;
-            }
-            // Unsigned: two coplanar faces wound apart are no corner. An edge
-            // only one face uses is a T-junction across a flat face, where a
-            // split stops short of the face beside it, not a corner - so it is
-            // never drawn.
-            match edges.entry(if ka <= kb { (ka, kb) } else { (kb, ka) }) {
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    entry.insert(([ia, ib], normal, false));
-                }
-                std::collections::hash_map::Entry::Occupied(mut entry) => {
-                    let (_, first, corner) = entry.get_mut();
-                    *corner |= first.dot(normal).abs() < threshold;
-                }
-            }
-        }
-    }
-    edges.into_values().filter(|(_, _, corner)| *corner).map(|(edge, _, _)| edge).collect()
+    // Every side of every face with a sound normal, by its welded ends, sorted
+    // so a side's faces sit together in face order. A survey's bench has
+    // millions of these, so they are keyed and sorted side by side.
+    let keys: Vec<PointKey> = vertices.par_iter().map(|vertex| weld.key(*vertex)).collect();
+    let mut sides: Vec<(EdgeKey, u32, u8)> = faces
+        .par_iter()
+        .enumerate()
+        .flat_map_iter(|(index, face)| {
+            let [a, b, c] = face.map(position);
+            let cross = (b - a).cross(c - a);
+            // A sliver's normal is rounding noise, and splitting leaves them along
+            // the cut lines: left in, every one reads as a corner.
+            let longest = (b - a).length_squared().max((c - b).length_squared()).max((a - c).length_squared());
+            let sound = cross.length() > longest * SLIVER_RATIO;
+            let keys = &keys;
+            (0..3u8).filter(move |_| sound).filter_map(move |side| {
+                let (ka, kb) = (keys[face[side as usize] as usize], keys[face[(side as usize + 1) % 3] as usize]);
+                (ka != kb).then_some((if ka <= kb { (ka, kb) } else { (kb, ka) }, index as u32, side))
+            })
+        })
+        .collect();
+    drop(keys);
+    sides.par_sort_unstable();
+    let normal = |face: u32| {
+        let [a, b, c] = faces[face as usize].map(position);
+        (b - a).cross(c - a).normalize()
+    };
+    // A side is a corner when a later face turns against its first. Unsigned:
+    // two coplanar faces wound apart are no corner. A side only one face uses
+    // is a T-junction across a flat face, where a split stops short of the
+    // face beside it, not a corner - so it is never drawn.
+    sides
+        .par_chunk_by(|left, right| left.0 == right.0)
+        .filter_map(|group| {
+            let (_, first, side) = group[0];
+            let facing = normal(first);
+            group[1..].iter().any(|&(_, later, _)| facing.dot(normal(later)).abs() < threshold).then(|| {
+                let face = faces[first as usize];
+                [face[side as usize], face[(side as usize + 1) % 3]]
+            })
+        })
+        .collect()
 }
 
 /// The rim of the walls the clip built: the outline separating this piece

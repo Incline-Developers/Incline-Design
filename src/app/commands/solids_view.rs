@@ -2545,16 +2545,20 @@ fn closed_volume(mesh: &OpenTriangulation, solid: &str, band: &CutBand) -> Optio
 }
 
 fn plan_footprints(body: &[OpenTriangulation], bands: &[CutBand], cancel: &crate::app::jobs::CancelFlag) -> anyhow::Result<HashMap<u64, Vec<Vec<DVec2>>>> {
-    let mut footprints = HashMap::new();
-    for (mesh, band) in body.iter().zip(bands) {
-        anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
-        let rings = super::triangulation::solid_between::plan_footprint_rings(&mesh.mesh, band.selection.top)
-            .into_iter()
-            .map(|ring| ring.into_iter().map(|point| DVec2::new(point.x, point.y)).collect())
-            .collect();
-        footprints.insert(band.selection.base.to_bits(), rings);
-    }
-    Ok(footprints)
+    // Each band's on its own, so the bands are traced side by side.
+    let traced = body
+        .par_iter()
+        .zip(bands)
+        .map(|(mesh, band)| -> anyhow::Result<(u64, Vec<Vec<DVec2>>)> {
+            anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+            let rings = super::triangulation::solid_between::plan_footprint_rings(&mesh.mesh, band.selection.top)
+                .into_iter()
+                .map(|ring| ring.into_iter().map(|point| DVec2::new(point.x, point.y)).collect())
+                .collect();
+            Ok((band.selection.base.to_bits(), rings))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(traced.into_iter().collect())
 }
 
 impl crate::app::App<'_> {
