@@ -332,6 +332,10 @@ pub(crate) struct ViewSolid {
     bench_reserves: Stage<ReserveProduct>,
     reserves: Stage<ReserveProduct>,
     measured: Option<Arc<MeasuredReserves>>,
+    /// How many dig block faces each flitch's ground is divided into, by the
+    /// key [`super::dig_strips::count_dig_block_faces`] gives it, so a strip
+    /// edit counts again only the flitch it touched.
+    dig_face_counts: std::sync::Mutex<HashMap<u64, usize>>,
 }
 
 impl ViewSolid {
@@ -403,6 +407,28 @@ impl ViewSolid {
     /// Each flitch's ground in plan, likewise a Benching product.
     pub(crate) fn flitch_footprints(&self) -> Option<&HashMap<u64, Vec<Vec<DVec2>>>> {
         self.body.product().map(|body| &body.flitch_footprints)
+    }
+
+    /// The number of dig block faces under `key`, counted by `count` the
+    /// first time. `key` has to say which body's ground was divided:
+    /// see [`Self::body_attempt`].
+    pub(crate) fn dig_face_count(&self, key: u64, count: impl FnOnce() -> usize) -> usize {
+        if let Some(count) = self.dig_face_counts.lock().expect("dig face counts").get(&key) {
+            return *count;
+        }
+        let counted = count();
+        let mut counts = self.dig_face_counts.lock().expect("dig face counts");
+        // Edits made over a long session would otherwise pile up.
+        if counts.len() >= 4096 {
+            counts.clear();
+        }
+        counts.insert(key, counted);
+        counted
+    }
+
+    /// Unique to the attempt that built the committed body.
+    pub(crate) fn body_attempt(&self) -> Option<u64> {
+        self.body.product().and(self.body.request).map(|request| request.token)
     }
 
     /// One bench-high part per blast, committed with the dig blocks.
@@ -954,6 +980,7 @@ impl crate::app::App<'_> {
                     partition: Stage::default(),
                     carved: None,
                     measured: None,
+                    dig_face_counts: std::sync::Mutex::default(),
                     bench_reserves: Stage::default(),
                     reserves: Stage::default(),
                 },

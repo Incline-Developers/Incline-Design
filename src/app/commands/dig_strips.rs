@@ -79,9 +79,14 @@ pub(crate) fn dig_block_plans(faces: &[(arrangement::Face, DVec2)], cuts: &[Vec<
 /// and Reserving later cuts, counted without cutting anything, so a strip
 /// edit settles at once.
 pub(crate) fn count_dig_block_faces(solids: &[crate::model::Solid], caches: &std::collections::HashMap<crate::model::SolidId, super::solids_view::ViewSolid>) -> usize {
-    let mut count = 0;
+    use rayon::prelude::*;
+    // A survey's flitch ground runs to thousands of points a ring, and finding
+    // a point inside each face is most of the work: each flitch is counted
+    // once for its ground and lines, and the flitches side by side.
+    let mut flitches = Vec::new();
     for solid in solids {
-        let Some(footprints) = caches.get(&solid.id).and_then(super::solids_view::ViewSolid::flitch_footprints) else {
+        let Some(cache) = caches.get(&solid.id) else { continue };
+        let (Some(footprints), Some(attempt)) = (cache.flitch_footprints(), cache.body_attempt()) else {
             continue;
         };
         for bench in solid.benching.benches() {
@@ -91,11 +96,22 @@ pub(crate) fn count_dig_block_faces(solids: &[crate::model::Solid], caches: &std
                     continue;
                 };
                 let strips = solid.blasting.drawing(flitch.base, true).map_or(&[][..], |drawing| &drawing.cuts);
-                count += dig_block_faces(footprint, strips, bench_cuts).len();
+                let mut key = DefaultHasher::new();
+                attempt.hash(&mut key);
+                flitch.base.to_bits().hash(&mut key);
+                for (lines, cuts) in [(0u8, strips), (1u8, bench_cuts)] {
+                    lines.hash(&mut key);
+                    cuts.len().hash(&mut key);
+                    cuts.iter().for_each(|cut| cut.geometry_hash().hash(&mut key));
+                }
+                flitches.push((cache, key.finish(), footprint, strips, bench_cuts));
             }
         }
     }
-    count
+    flitches
+        .into_par_iter()
+        .map(|(cache, key, footprint, strips, bench_cuts)| cache.dig_face_count(key, || dig_block_faces(footprint, strips, bench_cuts).len()))
+        .sum()
 }
 
 impl crate::app::App<'_> {
@@ -132,8 +148,19 @@ impl crate::app::App<'_> {
         if self.editor.dig_outlines_key == Some(key) {
             return;
         }
-        let mut outlines = Vec::new();
-        let mut excluded_flitches = std::collections::HashSet::new();
+        // Deriving a flitch's blocks finds a point inside each one, and a
+        // survey's flitch ground runs to thousands of points a ring: the
+        // flitches are derived side by side, then listed in order.
+        struct Flitch<'a> {
+            solid: &'a crate::model::Solid,
+            bench: f64,
+            flitch: f64,
+            top: f64,
+            footprint: Option<&'a Vec<Vec<DVec2>>>,
+            bench_cuts: &'a [Object],
+            excluded_blasts: std::sync::Arc<Vec<Vec<Vec<DVec2>>>>,
+        }
+        let mut flitches = Vec::new();
         for solid in document.solids() {
             // The flitch ground, which Benching committed: the strips drawn on
             // it are this step's own input, not the blocks cut out of them.
@@ -142,94 +169,118 @@ impl crate::app::App<'_> {
             };
             for bench in solid.benching.benches() {
                 let bench_cuts = solid.blasting.bench(bench.base).map(|entry| entry.cuts.as_slice()).unwrap_or_default();
-                let excluded_blasts: Vec<Vec<Vec<DVec2>>> = self
-                    .editor
-                    .blasting_outlines
-                    .iter()
-                    .filter(|outline| outline.solid == solid.id && (outline.bench_base - bench.base).abs() < 1e-6 && outline.excluded)
-                    .map(|outline| outline.rings.iter().map(|ring| ring.iter().map(|p| p.truncate()).collect()).collect())
-                    .collect();
-                for flitch in &bench.flitches {
-                    // A flitch every piece of which lies in excluded blasts has
-                    // nothing left to dig, so the tree leaves it out.
-                    let gone = solid.exclusions.bench_excluded(bench.base)
-                        || (!excluded_blasts.is_empty()
-                            && footprints.get(&flitch.base.to_bits()).is_some_and(|footprint| {
-                                arrangement::subdivide(footprint, &arrangement::cut_lines(bench_cuts))
-                                    .iter()
-                                    .filter_map(|face| arrangement::representative_point(face))
-                                    .all(|anchor| excluded_blasts.iter().any(|rings| arrangement::point_in_face(rings, anchor)))
-                            }));
-                    if gone {
-                        excluded_flitches.insert((solid.id, flitch.base.to_bits()));
-                        continue;
-                    }
-                    let band = BenchSelection {
-                        base: flitch.base,
-                        top: flitch.top(),
-                        is_flitch: true,
-                    };
-                    if !super::solids_view::selected(&self.editor.solids_view_selection, solid.id, Some(band)) {
-                        continue;
-                    }
-                    let drawing = solid.blasting.drawing(flitch.base, true);
-                    let Some(footprint) = footprints.get(&flitch.base.to_bits()) else {
-                        continue;
-                    };
-                    let faces = dig_block_faces(footprint, drawing.map_or(&[][..], |drawing| &drawing.cuts), bench_cuts);
-                    // The bench's blasts, as Blasting named them, so each block
-                    // can be listed under the blast it lies in.
-                    let blasts: Vec<(&str, bool, Vec<Vec<DVec2>>)> = self
-                        .editor
+                let excluded_blasts: std::sync::Arc<Vec<Vec<Vec<DVec2>>>> = std::sync::Arc::new(
+                    self.editor
                         .blasting_outlines
                         .iter()
-                        .filter(|outline| outline.solid == solid.id && (outline.bench_base - bench.base).abs() < 1e-6)
-                        .map(|outline| {
-                            (
-                                outline.name.as_str(),
-                                outline.excluded,
-                                outline.rings.iter().map(|ring| ring.iter().map(|p| p.truncate()).collect()).collect(),
-                            )
-                        })
-                        .collect();
-                    let first = outlines.len();
-                    for (index, (face, anchor)) in faces.into_iter().enumerate() {
-                        let blast = blasts.iter().find(|(_, _, rings)| arrangement::point_in_face(rings, anchor));
-                        // Ground Blasting took out of mining is gone here, as
-                        // its solids are; only a block excluded on its own
-                        // still shows, so it can be put back.
-                        if solid.exclusions.bench_excluded(bench.base) || blast.is_some_and(|(_, excluded, _)| *excluded) {
-                            continue;
-                        }
-                        let excluded = solid.exclusions.block_excluded(flitch.base, &face);
-                        let blast = blast.map(|(name, _, _)| (*name).to_owned());
-                        let area = arrangement::face_area(&face);
-                        outlines.push(BlastOutline {
-                            solid: solid.id,
-                            bench_base: flitch.base,
-                            plane: flitch.top(),
-                            name: (index + 1).to_string(),
-                            anchor: anchor.to_array(),
-                            area,
-                            blast,
-                            excluded,
-                            rings: face
-                                .into_iter()
-                                .map(|ring| ring.into_iter().map(|p| DVec3::new(p.x, p.y, flitch.top())).collect())
-                                .collect(),
-                        });
-                    }
-                    // Grouped by blast, numbered blasts in number order, as the
-                    // panel nests them.
-                    let number = |name: Option<&str>| name.and_then(|name| name.parse::<u64>().ok()).unwrap_or(u64::MAX);
-                    outlines[first..].sort_by(|a, b| {
-                        number(a.blast.as_deref())
-                            .cmp(&number(b.blast.as_deref()))
-                            .then_with(|| a.blast.cmp(&b.blast))
-                            .then_with(|| number(Some(&a.name)).cmp(&number(Some(&b.name))))
+                        .filter(|outline| outline.solid == solid.id && (outline.bench_base - bench.base).abs() < 1e-6 && outline.excluded)
+                        .map(|outline| outline.rings.iter().map(|ring| ring.iter().map(|p| p.truncate()).collect()).collect())
+                        .collect(),
+                );
+                for flitch in &bench.flitches {
+                    flitches.push(Flitch {
+                        solid,
+                        bench: bench.base,
+                        flitch: flitch.base,
+                        top: flitch.top(),
+                        footprint: footprints.get(&flitch.base.to_bits()),
+                        bench_cuts,
+                        excluded_blasts: excluded_blasts.clone(),
                     });
                 }
             }
+        }
+        let selection = &self.editor.solids_view_selection;
+        let derived: Vec<Option<Vec<(arrangement::Face, DVec2)>>> = {
+            use rayon::prelude::*;
+            flitches
+                .par_iter()
+                .map(|item| {
+                    // A flitch every piece of which lies in excluded blasts has
+                    // nothing left to dig, so the tree leaves it out.
+                    let gone = item.solid.exclusions.bench_excluded(item.bench)
+                        || (!item.excluded_blasts.is_empty()
+                            && item.footprint.is_some_and(|footprint| {
+                                arrangement::subdivide(footprint, &arrangement::cut_lines(item.bench_cuts))
+                                    .iter()
+                                    .filter_map(|face| arrangement::representative_point(face))
+                                    .all(|anchor| item.excluded_blasts.iter().any(|rings| arrangement::point_in_face(rings, anchor)))
+                            }));
+                    if gone {
+                        return None;
+                    }
+                    let band = BenchSelection {
+                        base: item.flitch,
+                        top: item.top,
+                        is_flitch: true,
+                    };
+                    let faces = match item.footprint {
+                        Some(footprint) if super::solids_view::selected(selection, item.solid.id, Some(band)) => {
+                            let drawing = item.solid.blasting.drawing(item.flitch, true);
+                            dig_block_faces(footprint, drawing.map_or(&[][..], |drawing| &drawing.cuts), item.bench_cuts)
+                        }
+                        _ => Vec::new(),
+                    };
+                    Some(faces)
+                })
+                .collect()
+        };
+        let mut outlines = Vec::new();
+        let mut excluded_flitches = std::collections::HashSet::new();
+        for (item, faces) in flitches.iter().zip(derived) {
+            let Some(faces) = faces else {
+                excluded_flitches.insert((item.solid.id, item.flitch.to_bits()));
+                continue;
+            };
+            let solid = item.solid;
+            // The bench's blasts, as Blasting named them, so each block
+            // can be listed under the blast it lies in.
+            let blasts: Vec<(&str, bool, Vec<Vec<DVec2>>)> = self
+                .editor
+                .blasting_outlines
+                .iter()
+                .filter(|outline| outline.solid == solid.id && (outline.bench_base - item.bench).abs() < 1e-6)
+                .map(|outline| {
+                    (
+                        outline.name.as_str(),
+                        outline.excluded,
+                        outline.rings.iter().map(|ring| ring.iter().map(|p| p.truncate()).collect()).collect(),
+                    )
+                })
+                .collect();
+            let first = outlines.len();
+            for (index, (face, anchor)) in faces.into_iter().enumerate() {
+                let blast = blasts.iter().find(|(_, _, rings)| arrangement::point_in_face(rings, anchor));
+                // Ground Blasting took out of mining is gone here, as
+                // its solids are; only a block excluded on its own
+                // still shows, so it can be put back.
+                if solid.exclusions.bench_excluded(item.bench) || blast.is_some_and(|(_, excluded, _)| *excluded) {
+                    continue;
+                }
+                let excluded = solid.exclusions.block_excluded(item.flitch, &face);
+                let blast = blast.map(|(name, _, _)| (*name).to_owned());
+                let area = arrangement::face_area(&face);
+                outlines.push(BlastOutline {
+                    solid: solid.id,
+                    bench_base: item.flitch,
+                    plane: item.top,
+                    name: (index + 1).to_string(),
+                    anchor: anchor.to_array(),
+                    area,
+                    blast,
+                    excluded,
+                    rings: face.into_iter().map(|ring| ring.into_iter().map(|p| DVec3::new(p.x, p.y, item.top)).collect()).collect(),
+                });
+            }
+            // Grouped by blast, numbered blasts in number order, as the
+            // panel nests them.
+            let number = |name: Option<&str>| name.and_then(|name| name.parse::<u64>().ok()).unwrap_or(u64::MAX);
+            outlines[first..].sort_by(|a, b| {
+                number(a.blast.as_deref())
+                    .cmp(&number(b.blast.as_deref()))
+                    .then_with(|| a.blast.cmp(&b.blast))
+                    .then_with(|| number(Some(&a.name)).cmp(&number(Some(&b.name))))
+            });
         }
         self.editor.dig_outlines = outlines;
         // A flitch the tree no longer lists can't stay picked in it.
