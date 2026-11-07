@@ -42,7 +42,7 @@ use crate::{
         Document, ReserveAggregation, ReserveFieldId,
         schedule::{
             BarId, DigBlockPick,
-            sequence::{BlockGround, GroundIndex, RefStatus},
+            sequence::{BlockGround, GroundIndex, GroundPlace, RefStatus, ground_heirs},
         },
         solid_reserves::ReserveTotals,
     },
@@ -264,10 +264,20 @@ pub(crate) struct ScheduleReportCache {
     /// The run's excluded ground and its index, kept with the rest so a bar
     /// edit against the same run builds neither again.
     excluded: Arc<(Vec<BlockGround>, GroundIndex)>,
+    /// The ground of the run before this one, which a dig order's references
+    /// may still name: all that says what a block they name covered.
+    earlier_run: Option<EarlierRun>,
     unavailable: Option<String>,
     reports: Arc<Vec<BarReport>>,
     bar_views_key: Option<u64>,
     sequence_key: Option<u64>,
+}
+
+#[derive(Clone)]
+struct EarlierRun {
+    ground: Arc<Vec<BlockGround>>,
+    index: Arc<GroundIndex>,
+    excluded: Arc<(Vec<BlockGround>, GroundIndex)>,
 }
 
 /// The project's tonnage field, or what is wrong with the choice.
@@ -388,6 +398,7 @@ impl crate::app::App<'_> {
                 ground: Arc::default(),
                 index: Arc::new(GroundIndex::build(&[])),
                 excluded: Arc::new((Vec::new(), GroundIndex::build(&[]))),
+                earlier_run: None,
                 unavailable: snapshot.err().map(|reason| reason.describe()),
                 reports: Arc::default(),
                 bar_views_key: None,
@@ -403,6 +414,19 @@ impl crate::app::App<'_> {
             .as_ref()
             .filter(|cache| cache.snapshot.as_ref().zip(snapshot.as_ref().ok()).is_some_and(|(held, now)| Arc::ptr_eq(held, now)))
             .map(|cache| (Arc::clone(&cache.ground), Arc::clone(&cache.index), Arc::clone(&cache.excluded)));
+        let earlier_run = self.schedule_report_cache.as_ref().and_then(|cache| {
+            // Moved on only when a different run takes this one's place.
+            let moved_on = held.is_none() && cache.snapshot.is_some();
+            if moved_on {
+                Some(EarlierRun {
+                    ground: Arc::clone(&cache.ground),
+                    index: Arc::clone(&cache.index),
+                    excluded: Arc::clone(&cache.excluded),
+                })
+            } else {
+                cache.earlier_run.clone()
+            }
+        });
         let (snapshot, ground, index, excluded, unavailable, reports) = match snapshot {
             Ok(snapshot) => {
                 let (ground, index, excluded) = held.unwrap_or_else(|| {
@@ -444,6 +468,7 @@ impl crate::app::App<'_> {
             ground,
             index,
             excluded,
+            earlier_run,
             unavailable,
             reports,
             bar_views_key: None,
@@ -469,10 +494,16 @@ impl crate::app::App<'_> {
     /// the order already holds is not added twice. A member nothing stands
     /// in for - its ground cut away, or its solid gone - stays, unresolved.
     ///
-    /// Written to the plan directly rather than as an undo step: undoing it
-    /// would only restore references the next rebuild replaces again, and
-    /// would trap the undo history behind it. The project is still marked
-    /// unsaved, as the plan it would save has changed.
+    /// Which blocks stand in comes from the run before this one where it can:
+    /// every block now on ground the old one covered, so a split keeps all its
+    /// pieces. A reference from an earlier session has only its point to go on.
+    ///
+    /// Joins the undo step of the edit that led to this run, so undoing that
+    /// edit brings back the old ground and the references to it together. A
+    /// step of its own would only restore references the next rebuild replaces
+    /// again, and would trap the undo history behind it. With nothing to join,
+    /// as on first opening a project, it is simply written; the project is
+    /// marked unsaved either way, as the plan it would save has changed.
     fn carry_over_recut_members(&mut self) -> bool {
         let Some(cache) = self.schedule_report_cache.as_ref() else {
             return false;
@@ -484,12 +515,39 @@ impl crate::app::App<'_> {
             return false;
         }
         let (ground, index, excluded) = (Arc::clone(&cache.ground), Arc::clone(&cache.index), Arc::clone(&cache.excluded));
+        let earlier = cache.earlier_run.clone();
         let Some(document) = self.workspace.active_document() else {
             return false;
         };
         let mut plan = document.schedule().clone();
         let mut carried = 0_usize;
         let mut orders = Vec::new();
+        let stands_as_it_is = |member: &crate::model::schedule::DigBlockRef| {
+            let status = member.resolve_indexed(&ground, &index);
+            status.resolved().is_some()
+                || matches!(status, RefStatus::SolidMissing | RefStatus::GroundAmbiguous(_))
+                || member.resolve_indexed(&excluded.0, &excluded.1).resolved().is_some()
+        };
+        // Where each stale member's block stood in the run before.
+        let place_in_earlier = |member: &crate::model::schedule::DigBlockRef| -> Option<GroundPlace> {
+            let earlier = earlier.as_ref()?;
+            member
+                .resolve_indexed(&earlier.ground, &earlier.index)
+                .resolved()
+                .map(|place| (0, place))
+                .or_else(|| member.resolve_indexed(&earlier.excluded.0, &earlier.excluded.1).resolved().map(|place| (1, place)))
+        };
+        let wanted: std::collections::HashSet<GroundPlace> = plan
+            .bars()
+            .iter()
+            .flat_map(|bar| bar.members())
+            .filter(|member| !stands_as_it_is(member))
+            .filter_map(place_in_earlier)
+            .collect();
+        let heirs = match earlier.as_ref().filter(|_| !wanted.is_empty()) {
+            Some(earlier) => ground_heirs(&[&earlier.ground, &earlier.excluded.0], &[&ground, &excluded.0], &wanted),
+            None => Default::default(),
+        };
         for bar in plan.bars() {
             let mut members: Vec<crate::model::schedule::DigBlockRef> = Vec::with_capacity(bar.members().len());
             let mut changed = false;
@@ -502,18 +560,16 @@ impl crate::app::App<'_> {
                 }
             };
             for member in bar.members() {
-                let status = member.resolve_indexed(&ground, &index);
-                let stays = status.resolved().is_some()
-                    || matches!(status, RefStatus::SolidMissing | RefStatus::GroundAmbiguous(_))
-                    || member.resolve_indexed(&excluded.0, &excluded.1).resolved().is_some();
-                let mut successors: Vec<&DigBlockRecord> = if stays {
+                let mut successors: Vec<&DigBlockRecord> = if stands_as_it_is(member) {
                     Vec::new()
                 } else {
+                    let pieces = place_in_earlier(member).and_then(|place| heirs.get(&place)).into_iter().flatten();
                     member
                         .successors(&ground, &index)
                         .into_iter()
                         .map(|found| &snapshot.blocks[found])
                         .chain(member.successors(&excluded.0, &excluded.1).into_iter().map(|found| &snapshot.excluded[found]))
+                        .chain(pieces.map(|&(list, found)| if list == 0 { &snapshot.blocks[found] } else { &snapshot.excluded[found] }))
                         .collect()
                 };
                 if successors.is_empty() {
@@ -543,7 +599,17 @@ impl crate::app::App<'_> {
         let Some(document) = self.workspace.active_document_mut() else {
             return false;
         };
+        let before = document.schedule().clone();
         document.set_schedule(plan);
+        let after = document.schedule().clone();
+        let epoch = self.active_project_content_epoch();
+        self.history.join_last_step(
+            epoch,
+            crate::model::Command::SetSchedulePlan {
+                before: Box::new(before),
+                after: Box::new(after),
+            },
+        );
         self.invalidate_geometry();
         self.redraw_requested = true;
         crate::userspace_warn!("{}", tr!("sequence-carried-over", count = carried));

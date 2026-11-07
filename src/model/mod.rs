@@ -4400,6 +4400,30 @@ impl History {
         self.enforce_memory_budget();
     }
 
+    /// Make `command`, already applied, part of the newest undo step, so one
+    /// undo reverses both. For what an edit leads to once its results are in.
+    /// Leaves anything waiting to be redone alone. Returns whether there was a
+    /// step to join.
+    pub(crate) fn join_last_step(&mut self, project_epoch: u64, command: Command) -> bool {
+        let Some(entry) = self.project.undo.last_mut() else {
+            return false;
+        };
+        self.archive_revision = self.archive_revision.wrapping_add(1);
+        self.open_run = false;
+        let mut step = match std::mem::replace(&mut entry.command, Command::Batch(Vec::new())) {
+            Command::Batch(commands) => commands,
+            earlier => vec![earlier],
+        };
+        step.push(command);
+        entry.command = Command::Batch(step);
+        entry.after.project = project_epoch;
+        self.retained_bytes = self.retained_bytes.saturating_sub(entry.estimated_bytes);
+        entry.estimated_bytes = entry.command.estimated_bytes();
+        self.retained_bytes = self.retained_bytes.saturating_add(entry.estimated_bytes);
+        self.enforce_memory_budget();
+        true
+    }
+
     /// Revert the most recent command. Returns `true` if something was undone.
     pub(crate) fn undo(&mut self, target: &mut EditTarget<'_>) -> bool {
         self.archive_revision = self.archive_revision.wrapping_add(1);

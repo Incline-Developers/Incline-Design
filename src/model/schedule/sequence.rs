@@ -291,6 +291,69 @@ impl GroundIndex {
     }
 }
 
+/// Where a block of one run stands in another: which list of ground it is in
+/// (a run's mined ground, then its excluded ground), and its place there.
+pub(crate) type GroundPlace = (usize, usize);
+
+/// For the earlier blocks in `wanted`, the blocks of this run that took over
+/// their ground.
+///
+/// A new block belongs to the earlier block most of its volume lies in, so a
+/// block split in two hands on both pieces, and a strip moved a little does not
+/// make its neighbours part of it. A block that is cut as it was belongs to no
+/// one here: a reference to it still resolves.
+pub(crate) fn ground_heirs(earlier: &[&[BlockGround]], now: &[&[BlockGround]], wanted: &std::collections::HashSet<GroundPlace>) -> HashMap<GroundPlace, Vec<GroundPlace>> {
+    use rayon::prelude::*;
+
+    type Box2 = (glam::DVec2, glam::DVec2);
+    fn bounds(block: &BlockGround) -> Box2 {
+        block
+            .outline
+            .iter()
+            .flatten()
+            .fold((glam::DVec2::INFINITY, glam::DVec2::NEG_INFINITY), |(low, high), &point| (low.min(point), high.max(point)))
+    }
+    let same_band = |a: &BlockGround, b: &BlockGround| (a.flitch_base - b.flitch_base).abs() <= FLITCH_TOLERANCE && (a.flitch_top - b.flitch_top).abs() <= FLITCH_TOLERANCE;
+    let band_overlap = |a: &BlockGround, b: &BlockGround| a.flitch_top.min(b.flitch_top) - a.flitch_base.max(b.flitch_base);
+    let old: Vec<(GroundPlace, &BlockGround, Box2)> = earlier
+        .iter()
+        .enumerate()
+        .flat_map(|(list, blocks)| blocks.iter().enumerate().map(move |(index, block)| ((list, index), block, bounds(block))))
+        .collect();
+    let new: Vec<(GroundPlace, &BlockGround)> = now
+        .iter()
+        .enumerate()
+        .flat_map(|(list, blocks)| blocks.iter().enumerate().map(move |(index, block)| ((list, index), block)))
+        .filter(|(_, block)| {
+            !old.iter()
+                .any(|(_, earlier, _)| earlier.solid == block.solid && earlier.footprint == block.footprint && same_band(earlier, block))
+        })
+        .collect();
+    let handed_on: Vec<(GroundPlace, GroundPlace)> = new
+        .par_iter()
+        .filter_map(|(place, block)| {
+            let (low, high) = bounds(block);
+            let mut best: Option<(f64, GroundPlace)> = None;
+            for (earlier_place, earlier, (earlier_low, earlier_high)) in &old {
+                let height = band_overlap(earlier, block);
+                if earlier.solid != block.solid || height <= FLITCH_TOLERANCE || earlier_low.cmpgt(high).any() || earlier_high.cmplt(low).any() {
+                    continue;
+                }
+                let shared = crate::model::arrangement::overlap_area(&block.outline, &earlier.outline) * height;
+                if shared > best.map_or(0.0, |(most, _)| most) {
+                    best = Some((shared, *earlier_place));
+                }
+            }
+            best.map(|(_, heir_of)| heir_of).filter(|heir_of| wanted.contains(heir_of)).map(|heir_of| (heir_of, *place))
+        })
+        .collect();
+    let mut heirs: HashMap<GroundPlace, Vec<GroundPlace>> = HashMap::new();
+    for (heir_of, place) in handed_on {
+        heirs.entry(heir_of).or_default().push(place);
+    }
+    heirs
+}
+
 fn band_bucket(base: f64) -> i64 {
     (base / FLITCH_TOLERANCE).floor() as i64
 }
