@@ -23,7 +23,7 @@ use super::solids::{CutBand, bench_bands, build_bench_body, plan_bands, preview_
 pub(crate) mod disk_cache;
 use crate::{
     model::{
-        DigBlockId, Solid, SolidId,
+        DigBlockId, Object, Solid, SolidId,
         arrangement::{self, Face},
         formats::mesh_data::Triangulation,
         solid_reserves::{ReserveBand, ReserveOutcome, ReservePartition, ReservePiece},
@@ -37,6 +37,7 @@ use crate::{
 ///
 /// A record rather than an index into four parallel arrays, so a piece cannot
 /// be measured against another piece's band or another piece's identity.
+#[derive(Clone)]
 pub(crate) struct SolidPart {
     pub(crate) mesh: OpenTriangulation,
     pub(crate) band: CutBand,
@@ -93,6 +94,7 @@ pub(crate) struct SolidBlasting {
 }
 
 /// What the Reserving stage commits: the terminal blocks.
+#[derive(Clone)]
 pub(crate) struct SolidPartition {
     /// Flitch-level parts, cut into dig blocks. What View draws.
     pub(crate) parts: Vec<SolidPart>,
@@ -105,6 +107,7 @@ pub(crate) struct SolidPartition {
 
 /// What a partition was cut from, so the next one can keep every piece whose
 /// outline it leaves unchanged.
+#[derive(Clone)]
 struct Carving {
     /// Pieces are only reusable over the body they were cut from.
     body: Arc<SolidBody>,
@@ -112,12 +115,26 @@ struct Carving {
     flitches: HashMap<u64, CarvedLevel>,
     /// By the bit pattern of the bench base RL.
     benches: HashMap<u64, CarvedLevel>,
+    /// Each flitch's dig block outlines, by the bit pattern of its base RL.
+    /// Drawing them again is most of what an edit elsewhere would otherwise
+    /// cost a survey's flitches.
+    outlines: HashMap<u64, Arc<FlitchOutlines>>,
 }
 
-/// One flitch or bench's pieces: each one's outline, and the index of its
-/// part - in `parts` for a flitch and `blast_parts` for a bench.
-/// Each outline is the one its dig block holds, not a copy of it.
-type CarvedLevel = Vec<(Arc<Face>, usize)>;
+/// One flitch's or bench's pieces: each one's outline, and the index of its
+/// part - in `parts` for a flitch and `blast_parts` for a bench - or `None`
+/// where the outline holds no material, so it is not cut again to find that
+/// out. Each outline is the one its dig block holds, not a copy of it.
+type CarvedLevel = Vec<(Arc<Face>, Option<usize>)>;
+
+/// One flitch's dig block outlines, and the lines they were drawn from: the
+/// same lines over the same ground draw the same outlines.
+struct FlitchOutlines {
+    strips: Vec<Object>,
+    bench_cuts: Vec<Object>,
+    faces: Vec<(Arc<Face>, DVec2)>,
+    plans: Vec<Face>,
+}
 
 /// One solid's artifacts, one per stage that owns one.
 ///
@@ -1241,8 +1258,12 @@ impl crate::app::App<'_> {
                     return Ok(partition);
                 }
                 let partition = build_solid_partition(&snapshot, &body, &blasting, previous, cancel, progress)?;
+                // Written after the partition is handed back: a survey's runs
+                // to a gigabyte, and the edit that cut it should not wait on
+                // the disk. The copy shares every mesh.
                 if let Some(key) = disk_key {
-                    disk_cache::store(disk_cache::Kind::Partition, key, |out| disk_cache::write_partition(out, &partition));
+                    let kept = partition.clone();
+                    crate::app::jobs::spawn_io_task(move || disk_cache::store(disk_cache::Kind::Partition, key, |out| disk_cache::write_partition(out, &kept)));
                 }
                 Ok(partition)
             },
@@ -2188,6 +2209,7 @@ fn build_solid_partition(
         body: body.clone(),
         flitches: HashMap::new(),
         benches: HashMap::new(),
+        outlines: HashMap::new(),
     };
 
     // Each flitch's earlier pieces are taken out first, so the flitches can
@@ -2205,44 +2227,64 @@ fn build_solid_partition(
         .collect();
     let total = body.flitch_parts.len() as u64;
     let done = AtomicU64::new(0);
+    let earlier_outlines = earlier.as_ref().map(|earlier| &earlier.outlines);
     let flitches: Vec<_> = body.flitch_parts.iter().zip(flitch_earlier.iter_mut()).collect();
     let cut = side_by_side(
         flitches,
         |(flitch, _)| flitch.mesh.mesh.face_count(),
-        |(flitch, earlier)| -> anyhow::Result<CutLevel> {
+        |(flitch, earlier)| -> anyhow::Result<(Arc<FlitchOutlines>, Vec<Option<Carved>>)> {
             anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
             let band = flitch.band;
+            let key = band.selection.base.to_bits();
             let strips = solid.blasting.drawing(band.selection.base, true).map_or(&[][..], |drawing| &drawing.cuts);
             let bench_cuts = solid.blasting.bench(flitch.bench.base).map_or(&[][..], |entry| &entry.cuts);
-            let footprint = body.flitch_footprints.get(&band.selection.base.to_bits()).map_or(&[][..], Vec::as_slice);
-            let faces = super::dig_strips::dig_block_faces(footprint, strips, bench_cuts);
-            let plans = super::dig_strips::dig_block_plans(&faces, &super::dig_strips::dig_block_cuts(strips, bench_cuts));
-            anyhow::ensure!(!faces.is_empty(), "Occupied flitch at RL {} has no valid dig-block footprint", band.selection.base);
+            let footprint = body.flitch_footprints.get(&key).map_or(&[][..], Vec::as_slice);
+            let drawn = earlier_outlines
+                .and_then(|outlines| outlines.get(&key))
+                .filter(|drawn| drawn.strips == strips && drawn.bench_cuts == bench_cuts)
+                .cloned();
+            let outlines = match drawn {
+                Some(drawn) => drawn,
+                None => {
+                    let faces = super::dig_strips::dig_block_faces(footprint, strips, bench_cuts);
+                    let plans = super::dig_strips::dig_block_plans(&faces, &super::dig_strips::dig_block_cuts(strips, bench_cuts));
+                    Arc::new(FlitchOutlines {
+                        strips: strips.to_vec(),
+                        bench_cuts: bench_cuts.to_vec(),
+                        faces: faces.into_iter().map(|(face, anchor)| (Arc::new(face), anchor)).collect(),
+                        plans,
+                    })
+                }
+            };
+            anyhow::ensure!(!outlines.faces.is_empty(), "Occupied flitch at RL {} has no valid dig-block footprint", band.selection.base);
             let level = Level {
                 source: &flitch.mesh,
                 volume: flitch.volume,
                 footprint,
-                faces: &faces,
-                plans: Some(&plans),
+                faces: &outlines.faces,
+                plans: Some(&outlines.plans),
                 outline: Outline::Rim,
             };
             let carved = carve_level(&level, earlier, cancel)?;
             progress.set_items(done.fetch_add(1, Ordering::Relaxed) + 1, total);
-            Ok((faces, carved))
+            Ok((outlines, carved))
         },
     )?;
     drop(flitch_earlier);
 
     let mut parts = Vec::new();
-    for (flitch, (faces, carved)) in body.flitch_parts.iter().zip(cut) {
+    for (flitch, (outlines, carved)) in body.flitch_parts.iter().zip(cut) {
         let band = flitch.band;
         let bench = flitch.bench;
         let key = band.selection.base.to_bits();
         let mut pieces = Vec::new();
-        for (number, ((face, anchor), carved)) in faces.into_iter().zip(carved).enumerate() {
-            let Some(carved) = carved else { continue };
-            let face = Arc::new(face);
-            pieces.push((face.clone(), parts.len()));
+        for (number, ((face, anchor), carved)) in outlines.faces.iter().zip(carved).enumerate() {
+            let (face, anchor) = (face.clone(), *anchor);
+            let Some(carved) = carved else {
+                pieces.push((face, None));
+                continue;
+            };
+            pieces.push((face.clone(), Some(parts.len())));
             parts.push(SolidPart {
                 bench,
                 blast: blast_for(bench, anchor),
@@ -2260,6 +2302,7 @@ fn build_solid_partition(
             });
         }
         carving.flitches.insert(key, pieces);
+        carving.outlines.insert(key, outlines);
     }
     progress.set_items(body.flitch_parts.len() as u64, body.flitch_parts.len() as u64);
     let blast_parts = build_blast_parts(solid, body, blasting, earlier.as_ref(), &mut old_blasts, &mut carving, cancel)?;
@@ -2299,7 +2342,7 @@ fn build_blast_parts(
                 return Ok(None);
             }
             let key = bench.band.selection.base.to_bits();
-            let faces: Vec<(Face, DVec2)> = blasts.iter().map(|blast| (blast.face.clone(), DVec2::from(blast.anchor))).collect();
+            let faces: Vec<(Arc<Face>, DVec2)> = blasts.iter().map(|blast| (Arc::new(blast.face.clone()), DVec2::from(blast.anchor))).collect();
             let level = Level {
                 source: &bench.mesh,
                 volume: bench.volume,
@@ -2320,8 +2363,11 @@ fn build_blast_parts(
         let key = bench.band.selection.base.to_bits();
         let mut pieces = Vec::new();
         for ((blast, (face, _)), carved) in blasts_of(bench).into_iter().zip(faces).zip(carved) {
-            let Some(carved) = carved else { continue };
-            pieces.push((Arc::new(face), parts.len()));
+            let Some(carved) = carved else {
+                pieces.push((face, None));
+                continue;
+            };
+            pieces.push((face, Some(parts.len())));
             parts.push(SolidPart {
                 mesh: carved.mesh,
                 band: bench.band,
@@ -2422,7 +2468,7 @@ struct Level<'a> {
     /// The source's volume, `None` when it is open.
     volume: Option<f64>,
     footprint: &'a [Vec<DVec2>],
-    faces: &'a [(Face, DVec2)],
+    faces: &'a [(Arc<Face>, DVec2)],
     /// What each face is cut out with, when not its own outline: see
     /// [`super::dig_strips::dig_block_plans`].
     plans: Option<&'a [Face]>,
@@ -2431,16 +2477,32 @@ struct Level<'a> {
 
 /// One level as it was cut: its plan faces, each with a point inside, and what
 /// each face carved.
-type CutLevel = (Vec<(Face, DVec2)>, Vec<Option<Carved>>);
+type CutLevel = (Vec<(Arc<Face>, DVec2)>, Vec<Option<Carved>>);
 
-/// How the last partition cut one level: each outline, with its piece while
-/// no face of the new one has taken it.
-type EarlierLevel<'a> = Vec<(&'a Face, Option<SolidPart>)>;
+/// How the last partition cut one level: each outline, with what it found
+/// there while no face of the new one has taken it.
+type EarlierLevel<'a> = Vec<(&'a Arc<Face>, Option<Kept>)>;
+
+/// What the last partition found under one outline.
+enum Kept {
+    Piece(Box<SolidPart>),
+    /// No material, so cutting it again would only find nothing again.
+    Empty,
+}
 
 /// Take `level`'s pieces out of the last partition's `parts`.
 fn earlier_level<'a>(level: Option<&'a CarvedLevel>, parts: &mut [Option<SolidPart>]) -> EarlierLevel<'a> {
     level.map_or_else(Vec::new, |level| {
-        level.iter().map(|(face, part)| (&**face, parts.get_mut(*part).and_then(Option::take))).collect()
+        level
+            .iter()
+            .map(|(face, part)| {
+                let kept = match part {
+                    Some(part) => parts.get_mut(*part).and_then(Option::take).map(|part| Kept::Piece(Box::new(part))),
+                    None => Some(Kept::Empty),
+                };
+                (face, kept)
+            })
+            .collect()
     })
 }
 
@@ -2472,6 +2534,31 @@ fn carve_level(level: &Level, earlier: &mut EarlierLevel, cancel: &crate::app::j
 
     let source = level.source;
     let faces = level.faces;
+
+    // Unchanged outlines, first: a whole bench outlined again is a pass over
+    // all of a survey's bench.
+    let mut carved: Vec<Option<Carved>> = (0..faces.len()).map(|_| None).collect();
+    let mut pending: Vec<usize> = Vec::new();
+    for (index, (face, _)) in faces.iter().enumerate() {
+        let kept = earlier
+            .iter_mut()
+            .find(|(earlier, _)| Arc::ptr_eq(earlier, face) || **earlier == *face)
+            .and_then(|(_, kept)| kept.take());
+        match kept {
+            Some(Kept::Piece(part)) => {
+                carved[index] = Some(Carved {
+                    mesh: part.mesh,
+                    volume: part.volume,
+                })
+            }
+            Some(Kept::Empty) => {}
+            None => pending.push(index),
+        }
+    }
+    if pending.is_empty() {
+        return Ok(carved);
+    }
+
     if let [_] = faces {
         let mesh = match level.outline {
             Outline::Rim => {
@@ -2504,26 +2591,10 @@ fn carve_level(level: &Level, earlier: &mut EarlierLevel, cancel: &crate::app::j
         return Ok(vec![Some(Carved { mesh, volume: level.volume })]);
     }
 
-    let mut carved: Vec<Option<Carved>> = (0..faces.len()).map(|_| None).collect();
     let mut built: Vec<Option<Built>> = (0..faces.len()).map(|_| None).collect();
-    let mut pending: Vec<usize> = Vec::new();
-
-    // Unchanged outlines.
-    for (index, (face, _)) in faces.iter().enumerate() {
-        let kept = earlier.iter_mut().find(|(earlier, _)| *earlier == face).and_then(|(_, part)| part.take());
-        match kept {
-            Some(part) => {
-                carved[index] = Some(Carved {
-                    mesh: part.mesh,
-                    volume: part.volume,
-                })
-            }
-            None => pending.push(index),
-        }
-    }
 
     // The rest, from the ground they lie on.
-    if !pending.is_empty() {
+    {
         let ground = arrangement::subdivide(level.footprint, &[]);
         let plans: Vec<&[Vec<DVec2>]> = ground.iter().map(Vec::as_slice).collect();
         let mut split: Vec<Option<_>> = match ground.len() {

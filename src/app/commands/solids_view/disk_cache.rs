@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use glam::DVec2;
 
-use super::{BlastFace, Carving, CutBand, DigPiece, SolidBlasting, SolidBody, SolidPart, SolidPartition};
+use super::{BlastFace, Carving, CutBand, DigPiece, FlitchOutlines, SolidBlasting, SolidBody, SolidPart, SolidPartition};
 use crate::{
     app::commands::{
         solids::preview_triangulation,
@@ -34,7 +34,7 @@ use crate::{
 };
 
 /// Raised whenever what a file holds, or how, changes.
-const FORMAT: u32 = 3;
+const FORMAT: u32 = 4;
 #[cfg(not(target_arch = "wasm32"))]
 const MAGIC: &[u8; 8] = b"INCLSOLD";
 
@@ -858,8 +858,12 @@ fn write_carved(out: &mut Writer, levels: &std::collections::HashMap<u64, super:
         out.u64(*key);
         out.usize(levels[key].len());
         for (face, part) in &levels[key] {
-            out.usize(*part);
-            let held = parts.get(*part).and_then(|part| part.block.as_ref()).is_some_and(|block| Arc::ptr_eq(&block.face, face));
+            // An outline that holds no material is written as one past the parts.
+            out.usize(part.unwrap_or(parts.len()));
+            let held = part
+                .and_then(|part| parts.get(part))
+                .and_then(|part| part.block.as_ref())
+                .is_some_and(|block| Arc::ptr_eq(&block.face, face));
             out.bool(held);
             if !held {
                 write_face(out, face);
@@ -875,9 +879,10 @@ fn read_carved(input: &mut Reader, parts: &[SolidPart]) -> Option<std::collectio
         let key = input.u64()?;
         let pieces = input.count(9)?;
         let level = read_counted(input, pieces, |input| {
-            let part = usize::try_from(input.u64()?).ok().filter(|part| *part < parts.len())?;
+            let part = usize::try_from(input.u64()?).ok().filter(|part| *part <= parts.len())?;
+            let part = (part < parts.len()).then_some(part);
             let face = match input.bool()? {
-                true => parts[part].block.as_ref()?.face.clone(),
+                true => parts[part?].block.as_ref()?.face.clone(),
                 false => Arc::new(read_face(input)?),
             };
             Some((face, part))
@@ -894,7 +899,75 @@ pub(super) fn write_partition(out: &mut Writer, partition: &SolidPartition) -> O
     write_parts(out, &partition.blast_parts, shared)?;
     write_carved(out, &partition.carving.flitches, &partition.parts);
     write_carved(out, &partition.carving.benches, &partition.blast_parts);
+    write_outlines(out, &partition.carving);
     Some(())
+}
+
+/// Each flitch's dig block outlines, so the first edit after opening need not
+/// draw every flitch's again. The outlines are the flitch's carved ones, in
+/// the same order; what is added is each one's anchor, and its plan where
+/// that is not the outline itself. The lines they were drawn from are the
+/// solid's own, which the partition's key names.
+fn write_outlines(out: &mut Writer, carving: &Carving) {
+    let mut keys: Vec<&u64> = carving
+        .outlines
+        .iter()
+        .filter(|(key, outlines)| {
+            carving
+                .flitches
+                .get(key)
+                .is_some_and(|carved| carved.len() == outlines.faces.len() && carved.iter().zip(&outlines.faces).all(|((carved, _), (face, _))| Arc::ptr_eq(carved, face)))
+        })
+        .map(|(key, _)| key)
+        .collect();
+    keys.sort_unstable();
+    out.usize(keys.len());
+    for key in keys {
+        let outlines = &carving.outlines[key];
+        out.u64(*key);
+        for ((face, anchor), plan) in outlines.faces.iter().zip(&outlines.plans) {
+            out.f64(anchor.x);
+            out.f64(anchor.y);
+            let own = **face == *plan;
+            out.bool(own);
+            if !own {
+                write_face(out, plan);
+            }
+        }
+    }
+}
+
+fn read_outlines(
+    input: &mut Reader,
+    solid: &Solid,
+    body: &SolidBody,
+    flitches: &std::collections::HashMap<u64, super::CarvedLevel>,
+) -> Option<std::collections::HashMap<u64, Arc<FlitchOutlines>>> {
+    let count = input.count(8)?;
+    let mut outlines = std::collections::HashMap::with_capacity(count);
+    for _ in 0..count {
+        let key = input.u64()?;
+        let carved = flitches.get(&key)?;
+        let flitch = body.flitch_parts.iter().find(|flitch| flitch.band.selection.base.to_bits() == key)?;
+        let mut faces = Vec::with_capacity(carved.len());
+        let mut plans = Vec::with_capacity(carved.len());
+        for (face, _) in carved {
+            let anchor = DVec2::new(input.f64()?, input.f64()?);
+            plans.push(if input.bool()? { (**face).clone() } else { read_face(input)? });
+            faces.push((face.clone(), anchor));
+        }
+        let base = flitch.band.selection.base;
+        outlines.insert(
+            key,
+            Arc::new(FlitchOutlines {
+                strips: solid.blasting.drawing(base, true).map_or_else(Vec::new, |drawing| drawing.cuts.clone()),
+                bench_cuts: solid.blasting.bench(flitch.bench.base).map_or_else(Vec::new, |entry| entry.cuts.clone()),
+                faces,
+                plans,
+            }),
+        );
+    }
+    Some(outlines)
 }
 
 /// The partition as cut from `body`, which it lends its pieces to the next.
@@ -904,6 +977,7 @@ pub(super) fn read_partition(input: &mut Reader, solid: &Solid, body: &Arc<Solid
     let blast_parts = read_parts(input, &solid.name, Id::Fresh, shared)?;
     let flitches = read_carved(input, &parts)?;
     let benches = read_carved(input, &blast_parts)?;
+    let outlines = read_outlines(input, solid, body, &flitches)?;
     Some(SolidPartition {
         parts,
         blast_parts,
@@ -911,6 +985,7 @@ pub(super) fn read_partition(input: &mut Reader, solid: &Solid, body: &Arc<Solid
             body: body.clone(),
             flitches,
             benches,
+            outlines,
         },
     })
 }
