@@ -247,7 +247,11 @@ planning-reserve-method = Geometric overlap fractions · uniform values within b
 planning-reserve-blocks = Equivalent blocks
 planning-reserve-status = Reserves
 planning-reserve-scope = Method
-planning-reserve-categories = { $count } categories
+planning-reserve-categories =
+    { $count ->
+        [one] { $count } category
+       *[other] { $count } categories
+    }
 planning-reserve-unavailable = Block model data is unavailable; reload the model to compute reserves
 planning-volume-unavailable = Preview available · volume requires closed meshes
 

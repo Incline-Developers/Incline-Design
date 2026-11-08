@@ -1624,7 +1624,10 @@ impl crate::app::App<'_> {
 
     /// The Reserves view's dig blocks a drag box takes: wholly inside it, or
     /// for a box dragged left to right any corner inside it, judged by each
-    /// block's outline at the top and foot of its flitch.
+    /// block's outline at the top and foot of its flitch - of those that can
+    /// be seen. Looking down on a pit, every flitch's block under the one in
+    /// sight falls inside the same box; a block is taken only where it is
+    /// what the view shows at the point inside its ground.
     pub(crate) fn reserves_blocks_in_screen_rect(&self, start: (f32, f32), end: (f32, f32), cross_select: bool) -> Vec<BlastShapeRef> {
         let Some(graphics) = self.graphics.as_ref() else { return Vec::new() };
         let view_proj = graphics.view_proj();
@@ -1644,6 +1647,13 @@ impl crate::app::App<'_> {
                 } else {
                     corners.all(|p| p.is_some_and(inside))
                 }
+            })
+            .filter(|block| {
+                let anchor = block.key.anchor();
+                graphics
+                    .world_to_window_px(&view_proj, glam::DVec3::new(anchor[0], anchor[1], block.top))
+                    .and_then(|px| graphics.surface_at_window_px(px, &self.solid_view_body, &self.editor.hidden_handles))
+                    == Some(block.mesh)
             })
             .map(|block| block.key)
             .collect()
@@ -2031,6 +2041,7 @@ impl crate::app::App<'_> {
                 }
                 if let Some(piece) = &part.block {
                     self.solid_view_shown_blocks.push(ShownBlock {
+                        mesh: mesh.id,
                         key: piece.key,
                         face: piece.face.clone(),
                         base: part.band.selection.base,
@@ -3274,6 +3285,8 @@ impl crate::app::App<'_> {
 /// A dig block the Reserves view draws: which block, and the ground it
 /// covers between the foot and top of its flitch.
 pub(crate) struct ShownBlock {
+    /// The mesh drawn for it.
+    mesh: crate::model::triangulation::TriangulationId,
     key: BlastShapeRef,
     face: Arc<Face>,
     base: f64,

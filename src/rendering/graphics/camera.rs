@@ -536,11 +536,30 @@ impl<'a> Graphics<'a> {
     }
 
     pub(super) fn cursor_model_ray(&self) -> (DVec3, DVec3) {
+        self.model_ray_at_viewport_px(self.camera_controller.mouse_loc)
+    }
+
+    /// The first of `triangulations` along the ray through window pixel
+    /// `px`, as [`Self::surface_under_cursor`] finds the one under the cursor.
+    pub(crate) fn surface_at_window_px(
+        &self,
+        px: (f32, f32),
+        triangulations: &[OpenTriangulation],
+        hidden: &HashSet<SceneEntityId>,
+    ) -> Option<crate::model::triangulation::TriangulationId> {
+        let (origin, direction) = self.model_ray_at_viewport_px(self.window_to_viewport_px(px));
+        match SceneQuery::nearest_surface(triangulations, hidden, None, origin, direction)? {
+            (SceneEntityId::Triangulation(id), _) => Some(id),
+            _ => None,
+        }
+    }
+
+    /// The model-space ray through viewport pixel `cursor`.
+    fn model_ray_at_viewport_px(&self, cursor: (f32, f32)) -> (DVec3, DVec3) {
         // Unproject through the exact matrix used for rendering. The previous
         // implementation moved the origin 1e9 units behind the cursor, which
         // lost enough floating-point precision to visibly offset BVH hits.
         let screen = self.screen_size();
-        let cursor = self.camera_controller.mouse_loc;
         let ndc = crate::rendering::camera::point(cursor.0, cursor.1, screen);
         let inverse = self.view_proj().inverse();
         let near_h = inverse * DVec4::new(ndc.x, ndc.y, 1.0, 1.0);
