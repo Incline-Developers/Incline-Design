@@ -113,7 +113,8 @@ impl Segment {
         if let Some(segment) = Self::small_table(values) {
             return segment;
         }
-        let decimal = decimal_form(values);
+        let mut scaled = Vec::new();
+        let decimal = decimal_form(values, &mut scaled);
         let decimal_bytes = decimal.as_ref().map_or(size_of_val(values), |form| form.bytes(values.len()));
         // Two bytes a row is already what the larger table would cost before
         // its table, so it only ever has the wider forms to beat.
@@ -123,7 +124,7 @@ impl Segment {
             return segment;
         }
         match decimal {
-            Some(form) => form.encode(values),
+            Some(form) => form.encode(values, &scaled),
             None => Self::Raw(values.into()),
         }
     }
@@ -214,47 +215,74 @@ impl DecimalForm {
         rows * if self.range < u64::from(NAN_16) { 2 } else { 4 }
     }
 
-    fn encode(&self, values: &[f64]) -> Segment {
+    /// `values` in this form, from the integers [`decimal_form`] scaled them to.
+    fn encode(&self, values: &[f64], scaled: &[i64]) -> Segment {
         let divisor = POWERS_OF_TEN[self.decimals];
-        let offset = |value: f64| ((value * divisor).round() as i64 - self.min) as u64;
+        let offset = |scaled: i64| (scaled - self.min) as u64;
+        let rows = values.iter().zip(scaled);
         if self.range < u64::from(NAN_16) {
             Segment::Decimal16 {
                 base: self.min,
                 divisor,
-                raw: values.iter().map(|value| if value.is_nan() { NAN_16 } else { offset(*value) as u16 }).collect(),
+                raw: rows.map(|(value, scaled)| if value.is_nan() { NAN_16 } else { offset(*scaled) as u16 }).collect(),
             }
         } else {
             Segment::Decimal32 {
                 base: self.min,
                 divisor,
-                raw: values.iter().map(|value| if value.is_nan() { NAN_32 } else { offset(*value) as u32 }).collect(),
+                raw: rows.map(|(value, scaled)| if value.is_nan() { NAN_32 } else { offset(*scaled) as u32 }).collect(),
             }
         }
     }
 }
 
+/// `value` rounded half away from zero, as [`f64::round`] rounds it, when its
+/// magnitude is below [`MAX_SCALED`], where every integer is exact; `None`
+/// otherwise. Without SSE4.1, `round` is a library call, and it ran twice for
+/// every value of a decimal segment.
+#[inline]
+fn round_scaled(value: f64) -> Option<i64> {
+    if value.abs().partial_cmp(&MAX_SCALED).is_none_or(std::cmp::Ordering::is_ge) {
+        return None;
+    }
+    let whole = value as i64;
+    // Exact: `whole` is `value` with its fraction cut off.
+    let rest = value - whole as f64;
+    Some(if rest >= 0.5 {
+        whole + 1
+    } else if rest <= -0.5 {
+        whole - 1
+    } else {
+        whole
+    })
+}
+
 /// The fewest decimal places that give back every value's exact bits, if any
-/// do within a range four bytes a row can hold.
-fn decimal_form(values: &[f64]) -> Option<DecimalForm> {
+/// do within a range four bytes a row can hold, with each value scaled to its
+/// integer in `scaled` (anything in a `NaN`'s place).
+fn decimal_form(values: &[f64], scaled: &mut Vec<i64>) -> Option<DecimalForm> {
     let mut decimals = 0;
     'places: while decimals <= MAX_DECIMALS {
         let divisor = POWERS_OF_TEN[decimals];
         let (mut min, mut max) = (i64::MAX, i64::MIN);
+        scaled.clear();
         for value in values {
             if value.is_nan() {
+                scaled.push(0);
                 continue;
             }
-            let scaled = (value * divisor).round();
+            let whole = round_scaled(value * divisor)?;
             // An integer has no negative zero to give back.
-            if scaled.abs() >= MAX_SCALED || (scaled == 0.0 && value.is_sign_negative()) {
+            if whole == 0 && value.is_sign_negative() {
                 return None;
             }
-            if (scaled / divisor).to_bits() != value.to_bits() {
+            if ((whole as f64) / divisor).to_bits() != value.to_bits() {
                 decimals += 1;
                 continue 'places;
             }
-            min = min.min(scaled as i64);
-            max = max.max(scaled as i64);
+            min = min.min(whole);
+            max = max.max(whole);
+            scaled.push(whole);
         }
         if min > max {
             return None;

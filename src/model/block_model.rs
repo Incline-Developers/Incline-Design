@@ -1701,14 +1701,30 @@ fn block_world_bounds(model: &BlockModelData, block: BlockBounds) -> BlockBounds
 
 /// A block's world bounds in the frame `origin` and `rotation` give, as
 /// [`BlockModelData::local_to_world`] places its corners.
+///
+/// Each world coordinate is `origin + ((u * x + v * y) + w * z)` as
+/// `rotation * corner` rounds it, and rounding keeps a product or a sum in
+/// step with each of its terms, so the coordinate only ever rises, or only
+/// ever falls, as each corner coordinate does. Its least and greatest values
+/// over the eight corners are therefore at the corner that takes each face by
+/// the sign of its entry: two sums an axis rather than eight full products.
 pub(crate) fn block_world_bounds_in(origin: DVec3, rotation: glam::DMat3, block: BlockBounds) -> BlockBounds {
-    let mut min = DVec3::splat(f64::INFINITY);
-    let mut max = DVec3::splat(f64::NEG_INFINITY);
-    for world in block_corners(block).map(|corner| origin + rotation * corner) {
-        min = min.min(world);
-        max = max.max(world);
+    let columns = [rotation.x_axis, rotation.y_axis, rotation.z_axis];
+    let mut lower = [0.0; 3];
+    let mut upper = [0.0; 3];
+    for axis in 0..3 {
+        let world = |upper_face: [bool; 3]| {
+            let at = |local: usize| if upper_face[local] { block.upper[local] } else { block.lower[local] };
+            origin[axis] + (columns[0][axis] * at(0) + columns[1][axis] * at(1) + columns[2][axis] * at(2))
+        };
+        let rising: [bool; 3] = std::array::from_fn(|local| columns[local][axis] >= 0.0);
+        lower[axis] = world(rising.map(|rises| !rises));
+        upper[axis] = world(rising);
     }
-    BlockBounds { lower: min, upper: max }
+    BlockBounds {
+        lower: DVec3::from_array(lower),
+        upper: DVec3::from_array(upper),
+    }
 }
 
 /// A numeric variable's fixed "no value" sentinel, parsed from its source

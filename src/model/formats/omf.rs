@@ -4076,19 +4076,24 @@ impl GeometrySummary {
     /// frame `origin` and `rotation` give.
     fn of(columns: &[Vec<f64>; 6], origin: DVec3, rotation: DMat3) -> Self {
         let [lx, ly, lz, ux, uy, uz] = columns;
-        (0..lx.len())
-            .map(|row| {
-                let block = BlockBounds {
-                    lower: DVec3::new(lx[row], ly[row], lz[row]),
-                    upper: DVec3::new(ux[row], uy[row], uz[row]),
-                };
-                let world = crate::model::block_model::block_world_bounds_in(origin, rotation, block);
-                Self {
-                    least_lower: Some(block.lower),
-                    world: Some((world.lower, world.upper)),
-                }
-            })
-            .fold(Self::default(), Self::join)
+        if lx.is_empty() {
+            return Self::default();
+        }
+        let (mut least, mut world_least, mut world_greatest) = (DVec3::INFINITY, DVec3::INFINITY, DVec3::NEG_INFINITY);
+        for row in 0..lx.len() {
+            let block = BlockBounds {
+                lower: DVec3::new(lx[row], ly[row], lz[row]),
+                upper: DVec3::new(ux[row], uy[row], uz[row]),
+            };
+            let world = crate::model::block_model::block_world_bounds_in(origin, rotation, block);
+            least = least.min(block.lower);
+            world_least = world_least.min(world.lower);
+            world_greatest = world_greatest.max(world.upper);
+        }
+        Self {
+            least_lower: Some(least),
+            world: Some((world_least, world_greatest)),
+        }
     }
 
     fn join(self, other: Self) -> Self {
