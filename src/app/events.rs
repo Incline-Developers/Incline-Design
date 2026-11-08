@@ -1316,7 +1316,7 @@ impl<'a> App<'a> {
                         self.editor.selected_blast = Some(shape);
                         self.editor.scroll_to_blast = true;
                     } else {
-                        self.editor.selected_dig_block = Some(shape);
+                        self.editor.selected_dig_blocks = vec![shape];
                     }
                     self.editor.canvas_context_menu_hole = None;
                     self.editor.canvas_context_menu_open = true;
@@ -1693,10 +1693,10 @@ impl<'a> App<'a> {
                     self.active_triangulation = None;
                     self.invalidate_geometry();
                 } else if (self.editor.is_schedule_animation() || self.editor.is_solids_view())
-                    && (!self.editor.solids_view_selection.is_empty() || self.editor.selected_dig_block.is_some())
+                    && (!self.editor.solids_view_selection.is_empty() || !self.editor.selected_dig_blocks.is_empty())
                 {
                     self.editor.solids_view_selection.clear();
-                    self.editor.selected_dig_block = None;
+                    self.editor.selected_dig_blocks.clear();
                     self.invalidate_geometry();
                 } else if !self.editor.haul_selected_blocks.is_empty() {
                     self.editor.haul_selected_blocks.clear();

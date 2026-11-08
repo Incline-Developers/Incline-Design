@@ -250,7 +250,7 @@ pub(crate) fn draw_solids_tonnage(ui: &mut egui::Ui, rect: egui::Rect, editor: &
                     editor.solids_view_marked = editor.schedule_unmeasured_blocks.clone();
                     editor.solids_view_frame_marked = true;
                     editor.solids_view_selection.clear();
-                    editor.selected_dig_block = None;
+                    editor.selected_dig_blocks.clear();
                     editor.selected_blast = None;
                     commands.push(UiCommand::SetPlanningView(crate::ui::state::PlanningView::Reserves));
                 }

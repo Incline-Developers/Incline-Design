@@ -371,7 +371,7 @@ impl<'a> App<'a> {
             && self.editor.active_tool == ActiveTool::None
             && !pending_selection_click.is_some_and(|pick| matches!(pick.entity, SceneEntityId::Object(_)))
         {
-            self.editor.selected_dig_block = self.dig_block_at_cursor();
+            self.editor.selected_dig_blocks = self.dig_block_at_cursor().into_iter().collect();
             self.invalidate_overlay();
             return;
         }
@@ -514,6 +514,13 @@ impl<'a> App<'a> {
         // Box selection: left-to-right (end.x > start.x) = cross select (any vertex
         // inside box); right-to-left (end.x < start.x) = window select (all vertices inside).
         let cross_select = end.0 > start.0;
+        // The Reserves view selects nothing but its dig blocks.
+        if self.editor.is_solids_view() && self.editor.active_tool == ActiveTool::None {
+            let blocks = self.reserves_blocks_in_screen_rect(start, end, cross_select);
+            self.select_reserves_blocks(blocks);
+            self.invalidate_overlay();
+            return;
+        }
         // Drill & Blast gives connectors first refusal on the marquee. If no
         // tie-in is taken, it falls back to holes one at a time; Survey's
         // marquee takes point clouds, and production's the design geometry

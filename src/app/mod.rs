@@ -474,6 +474,9 @@ pub(crate) struct App<'a> {
     /// a restore that fails is not retried every frame.
     pub(crate) solid_view_cache: std::collections::HashMap<crate::model::SolidId, crate::app::commands::solids_view::ViewSolid>,
     pub(crate) solid_view_body: Vec<crate::model::triangulation::OpenTriangulation>,
+    /// The dig blocks the Reserves view draws, with their ground, for a drag
+    /// box to test against.
+    pub(crate) solid_view_shown_blocks: Vec<crate::app::commands::solids_view::ShownBlock>,
     pub(crate) solid_view_body_key: Option<u64>,
     /// What the Reserves page draws in the viewport: the open surfaces and
     /// the dig blocks together, assembled when either changes; see
@@ -738,6 +741,7 @@ impl<'a> Default for App<'a> {
             solid_preview: None,
             solid_view_cache: Default::default(),
             solid_view_body: Vec::new(),
+            solid_view_shown_blocks: Vec::new(),
             haul_block_surface: Vec::new(),
             solid_view_body_key: None,
             reserves_scene: Vec::new(),

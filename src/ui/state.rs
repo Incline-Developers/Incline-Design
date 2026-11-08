@@ -601,6 +601,7 @@ pub(crate) struct BlastingRestore {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DigBlockInfo {
     pub(crate) id: crate::model::DigBlockId,
+    pub(crate) solid: crate::model::SolidId,
     pub(crate) name: String,
     pub(crate) plan_area: f64,
     /// The bench and flitch it belongs to, named rather than re-derived.
@@ -2405,7 +2406,10 @@ pub(crate) struct EditorState {
     /// Flitches whose ground Blasting took wholly out of mining, by solid and
     /// base RL bits: Dig Strips leaves them out, as nothing on them is dug.
     pub(crate) dig_excluded_flitches: std::collections::HashSet<(crate::model::SolidId, u64)>,
-    pub(crate) selected_dig_block: Option<BlastShapeRef>,
+    /// The dig blocks picked: one at a time on Dig Strips, any number in the
+    /// Reserves view, where ctrl adds a block, shift toggles one and a drag
+    /// box takes every block it holds.
+    pub(crate) selected_dig_blocks: Vec<BlastShapeRef>,
     /// A click on the solid preview, waiting for the renderer to say what it
     /// landed on - addressed, so it can only ever be answered as the click it
     /// was (see [`SolidPreviewPickRequest`]).
@@ -2427,9 +2431,9 @@ pub(crate) struct EditorState {
     /// image it was made on, and a click on a superseded image can be told
     /// apart from one on the image being drawn now.
     pub(crate) solid_preview_image_revision: u64,
-    /// The selected dig block as the figures panel reports it: identity,
-    /// parents and what it is worth. Mirrored out of the committed artifacts.
-    pub(crate) selected_dig_block_info: Option<DigBlockInfo>,
+    /// The selected dig blocks as the figures panel reports them: identity,
+    /// parents and what each is worth. Mirrored out of the committed artifacts.
+    pub(crate) selected_dig_block_infos: Vec<DigBlockInfo>,
     /// Lines copied in a planning cut step, and whether they came from Dig
     /// Strips (flitch strips) or Blasting (bench blast lines): each pastes
     /// only into the step it was copied from.
@@ -3696,7 +3700,7 @@ impl EditorState {
     /// project that was just left.
     pub(crate) fn clear_project_transients(&mut self) {
         self.selected_blast = None;
-        self.selected_dig_block = None;
+        self.selected_dig_blocks.clear();
         self.dig_outlines.clear();
         self.dig_outlines_key = None;
         self.dig_excluded_flitches.clear();
@@ -4172,13 +4176,13 @@ impl EditorState {
             planning_cut_spacing_m: 0.0,
             dig_outlines_key: None,
             dig_excluded_flitches: Default::default(),
-            selected_dig_block: None,
+            selected_dig_blocks: Vec::new(),
             solid_preview_pick: None,
             solid_preview_pick_result: None,
             solid_preview_pivot_request: None,
             solid_preview_pivot: None,
             solid_preview_image_revision: 0,
-            selected_dig_block_info: None,
+            selected_dig_block_infos: Vec::new(),
             cut_clipboard: (false, Vec::new()),
             copy_cuts_dialog: None,
             selected_blast: None,

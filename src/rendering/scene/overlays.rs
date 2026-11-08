@@ -160,7 +160,9 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
     // it shows its benches undivided.
     if editor.is_dig_strips_step() {
         for outline in &editor.dig_outlines {
-            let selected = editor.selected_dig_block == Some(crate::ui::state::BlastShapeRef::new(outline.solid, outline.bench_base, outline.anchor));
+            let selected = editor
+                .selected_dig_blocks
+                .contains(&crate::ui::state::BlastShapeRef::new(outline.solid, outline.bench_base, outline.anchor));
             overlay.fade_size_m = if selected { 0.0 } else { plan_fade_size(&outline.rings) };
             for ring in &outline.rings {
                 let verts: Vec<_> = ring.iter().map(|point| crate::model::PolyVertex::straight(*point)).collect();

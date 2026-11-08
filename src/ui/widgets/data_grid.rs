@@ -1076,14 +1076,14 @@ impl<'a> PropertyTable<'a> {
     pub(crate) fn show(self, ui: &mut egui::Ui, body: impl FnOnce(&mut PropertyRows<'_>)) {
         framed_pane(ui, self.id, self.rect, self.title, TitleExtras::default(), |ui| {
             if fitted(self.rect) {
-                body(&mut PropertyRows { ui });
+                body(&mut PropertyRows { ui, depth: 0, scope: None });
                 return;
             }
             egui::ScrollArea::vertical()
                 .id_salt((self.id, "body"))
                 .auto_shrink([false; 2])
                 .min_scrolled_height(0.0)
-                .show(ui, |ui| body(&mut PropertyRows { ui }));
+                .show(ui, |ui| body(&mut PropertyRows { ui, depth: 0, scope: None }));
         });
     }
 }
@@ -1098,7 +1098,15 @@ enum Badge<'a> {
 /// Row sink handed to a [`PropertyTable`] body closure.
 pub(crate) struct PropertyRows<'u> {
     ui: &'u mut egui::Ui,
+    /// How many [`Self::branch`] rows the rows being added sit under.
+    depth: usize,
+    /// What the rows' own ids are made from: the table's, or the branch
+    /// they sit under, so a key that repeats under two branches is two rows.
+    scope: Option<egui::Id>,
 }
+
+/// How far each level under a [`PropertyRows::branch`] is indented.
+const BRANCH_INDENT: f32 = 14.0;
 
 impl PropertyRows<'_> {
     /// The bold "Property / Value" heading row, as a [`DataGrid::columns`]
@@ -1118,9 +1126,50 @@ impl PropertyRows<'_> {
         paint_cell_text(self.ui, cell, bold(label), self.ui.visuals().text_color());
     }
 
-    /// The key of an ordinary row, left-aligned in its cell.
+    /// What this row's ids are made from; see [`Self::scope`].
+    fn scope(&self) -> egui::Id {
+        self.scope.unwrap_or_else(|| self.ui.scope_id())
+    }
+
+    /// The key of an ordinary row, left-aligned in its cell, indented as
+    /// deep as the branches it sits under.
     fn paint_key(&self, rect: egui::Rect, split: f32, key: &str) {
-        paint_cell_text(self.ui, Self::key_cell(rect, split), egui::RichText::new(key), self.ui.visuals().text_color());
+        let mut cell = Self::key_cell(rect, split);
+        cell.min.x = (cell.min.x + self.depth as f32 * BRANCH_INDENT).min(cell.max.x);
+        paint_cell_text(self.ui, cell, egui::RichText::new(key), self.ui.visuals().text_color());
+    }
+
+    /// A calculated row that opens onto the rows `body` adds beneath it, as a
+    /// tree's branch does: an arrow in its gutter, closed until it is
+    /// clicked, and the rows under it indented a level. Clicking anywhere in
+    /// its key opens or closes it; `id` keeps it open or closed from one
+    /// frame to the next.
+    pub(crate) fn branch(&mut self, id: impl std::hash::Hash + std::fmt::Debug, key: &str, value: &str, unit: Option<&str>, body: impl FnOnce(&mut Self)) {
+        let row_id = self.scope().with(("branch", id));
+        let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(self.ui.ctx(), row_id, false);
+        // The row's own key and value, laid out as any calculated row's.
+        let top = self.ui.cursor().top();
+        self.readonly(key, value, unit, None);
+        let row = egui::Rect::from_min_max(egui::pos2(self.ui.min_rect().left(), top), egui::pos2(self.ui.min_rect().right(), self.ui.cursor().top()));
+        let indent = self.depth as f32 * BRANCH_INDENT;
+        let toggle = egui::Rect::from_min_max(egui::pos2(row.left() + indent, row.top()), egui::pos2(row.left() + indent + GUTTER, row.bottom()));
+        let key_area = egui::Rect::from_min_max(toggle.min, egui::pos2(row.left() + row.width() * KEY_FRACTION, row.bottom()));
+        let response = self.ui.interact(key_area, row_id.with("toggle"), egui::Sense::click());
+        if response.clicked() {
+            state.toggle(self.ui);
+        }
+        let arrow = egui::Rect::from_center_size(toggle.center(), egui::vec2(12.0, 12.0));
+        let openness = state.openness(self.ui.ctx());
+        let arrow_response = self.ui.interact(arrow, row_id.with("arrow"), egui::Sense::hover());
+        egui::collapsing_header::paint_default_icon(self.ui, openness, &arrow_response);
+        state.store(self.ui.ctx());
+        if state.is_open() {
+            let outer = self.scope.replace(row_id);
+            self.depth += 1;
+            body(self);
+            self.depth -= 1;
+            self.scope = outer;
+        }
     }
 
     /// An editable key/value pair. `error`, when set, shows a red badge in the
@@ -1206,7 +1255,7 @@ impl PropertyRows<'_> {
         let rect = self.begin_table_row(false);
         let cell = egui::Rect::from_min_max(egui::pos2(rect.left() + GUTTER, rect.top()), rect.max);
         paint_cell_text(self.ui, cell, egui::RichText::new(text), self.ui.visuals().weak_text_color());
-        self.ui.interact(cell, self.ui.scope_id().with(("note", text)), egui::Sense::hover()).on_hover_text(text);
+        self.ui.interact(cell, self.scope().with(("note", text)), egui::Sense::hover()).on_hover_text(text);
     }
 
     /// A row across both columns, `height` tall, drawn by `add` into the rect
@@ -1341,7 +1390,7 @@ impl PropertyRows<'_> {
             );
             let response = self
                 .ui
-                .interact(value_rect, self.ui.scope_id().with(("calculated", key)), egui::Sense::hover())
+                .interact(value_rect, self.scope().with(("calculated", key)), egui::Sense::hover())
                 .on_hover_text(value.as_str());
             self.badge(rect, badge);
             return response;

@@ -84,7 +84,7 @@ pub(crate) fn draw_panel(ui: &mut egui::Ui, editor: &mut EditorState, document: 
                             block.name.clone()
                         };
                         let area = super::solids_view::format_area(block.area);
-                        let (response, _) = grid_columns_row(ui, &FRACTIONS, &[&name, &area], editor.selected_dig_block == Some(id));
+                        let (response, _) = grid_columns_row(ui, &FRACTIONS, &[&name, &area], editor.selected_dig_blocks.contains(&id));
                         if response.clicked() {
                             commands.push(UiCommand::SelectDigBlock(id));
                         }

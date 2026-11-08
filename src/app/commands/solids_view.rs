@@ -1588,11 +1588,65 @@ impl crate::app::App<'_> {
             self.editor.solids_view_marked.clear();
             self.solid_view_body_key = None;
         }
-        if self.editor.selected_dig_block != block {
-            self.editor.selected_dig_block = block;
+        self.select_reserves_blocks(block.into_iter().collect());
+        self.redraw_requested = true;
+    }
+
+    /// Take `blocks` into the Reserves view's selection as the modifiers
+    /// held say, as the rest of the viewport takes a pick: shift toggles each
+    /// block, ctrl adds them, and otherwise they replace what was selected -
+    /// nothing at all clearing it.
+    pub(crate) fn select_reserves_blocks(&mut self, blocks: Vec<BlastShapeRef>) {
+        let selected = &mut self.editor.selected_dig_blocks;
+        let before = selected.clone();
+        if self.modifiers.shift_key() {
+            for block in blocks {
+                match selected.iter().position(|held| *held == block) {
+                    Some(index) => {
+                        selected.remove(index);
+                    }
+                    None => selected.push(block),
+                }
+            }
+        } else if self.modifiers.control_key() {
+            for block in blocks {
+                if !selected.contains(&block) {
+                    selected.push(block);
+                }
+            }
+        } else {
+            *selected = blocks;
+        }
+        if *selected != before {
             self.solid_view_body_key = None;
         }
-        self.redraw_requested = true;
+    }
+
+    /// The Reserves view's dig blocks a drag box takes: wholly inside it, or
+    /// for a box dragged left to right any corner inside it, judged by each
+    /// block's outline at the top and foot of its flitch.
+    pub(crate) fn reserves_blocks_in_screen_rect(&self, start: (f32, f32), end: (f32, f32), cross_select: bool) -> Vec<BlastShapeRef> {
+        let Some(graphics) = self.graphics.as_ref() else { return Vec::new() };
+        let view_proj = graphics.view_proj();
+        let (min, max) = ((start.0.min(end.0), start.1.min(end.1)), (start.0.max(end.0), start.1.max(end.1)));
+        let inside = |p: (f32, f32)| p.0 >= min.0 && p.0 <= max.0 && p.1 >= min.1 && p.1 <= max.1;
+        self.solid_view_shown_blocks
+            .iter()
+            .filter(|block| {
+                let mut corners = block
+                    .face
+                    .iter()
+                    .flatten()
+                    .flat_map(|point| [block.base, block.top].map(|z| glam::DVec3::new(point.x, point.y, z)))
+                    .map(|world| graphics.world_to_window_px(&view_proj, world));
+                if cross_select {
+                    corners.any(|p| p.is_some_and(inside))
+                } else {
+                    corners.all(|p| p.is_some_and(inside))
+                }
+            })
+            .map(|block| block.key)
+            .collect()
     }
 
     /// The blast a preview mesh lies in, whatever flitch it was cut from.
@@ -1617,7 +1671,7 @@ impl crate::app::App<'_> {
         let blast_sequencing = self.editor.blast_sequence_active();
         let blast_draft = self.editor.blast_bar_dialog.as_ref().filter(|_| blast_sequencing).cloned();
         let editing = sequencing || blast_sequencing;
-        let selected_block = (!editing).then_some(self.editor.selected_dig_block).flatten();
+        let selected_blocks: Vec<BlastShapeRef> = if editing { Vec::new() } else { self.editor.selected_dig_blocks.clone() };
         let selected_blast = (!editing).then_some(self.editor.selected_blast).flatten();
         let view_selection: Vec<SolidsViewRow> = self.editor.solids_view_selection.clone();
         // What the sequence editors' own tree has hidden from their preview.
@@ -1639,7 +1693,7 @@ impl crate::app::App<'_> {
         let runtime = self.workspace.active_project().map(|project| project.runtime_id);
         // Blocks marked from the Blocks step stand until the planner picks
         // something of their own in the view.
-        if !self.editor.solids_view_selection.is_empty() || self.editor.selected_dig_block.is_some() {
+        if !self.editor.solids_view_selection.is_empty() || !self.editor.selected_dig_blocks.is_empty() {
             self.editor.solids_view_marked.clear();
             self.editor.solids_view_frame_marked = false;
         }
@@ -1652,7 +1706,7 @@ impl crate::app::App<'_> {
 
         let mut hasher = DefaultHasher::new();
         runtime.hash(&mut hasher);
-        selected_block.hash(&mut hasher);
+        selected_blocks.hash(&mut hasher);
         selected_blast.hash(&mut hasher);
         benches_only.hash(&mut hasher);
         dig_strips.hash(&mut hasher);
@@ -1719,11 +1773,12 @@ impl crate::app::App<'_> {
         let solids = solids.as_slice();
         self.solid_view_body_key = Some(key);
         self.solid_view_body.clear();
+        self.solid_view_shown_blocks.clear();
         self.editor.solid_view_reserves = None;
         self.editor.solid_view_reserve_status = None;
         self.editor.solid_view_reserve_issues.clear();
         self.editor.solid_view_coverage = None;
-        self.editor.selected_dig_block_info = None;
+        self.editor.selected_dig_block_infos.clear();
 
         // Ramp across what is actually on screen rather than the whole pit,
         // so one bench is not a single flat shade of its solid's colour.
@@ -1851,10 +1906,11 @@ impl crate::app::App<'_> {
                 {
                     continue;
                 }
-                let is_selected_block = part.block.as_ref().is_some_and(|piece| Some(piece.key) == selected_block);
+                let is_selected_block = part.block.as_ref().is_some_and(|piece| selected_blocks.contains(&piece.key));
                 if is_selected_block && let Some(piece) = &part.block {
-                    self.editor.selected_dig_block_info = Some(crate::ui::state::DigBlockInfo {
+                    self.editor.selected_dig_block_infos.push(crate::ui::state::DigBlockInfo {
                         id: piece.id,
+                        solid: solid.id,
                         name: piece.name.clone(),
                         plan_area: piece.area,
                         bench: part.bench,
@@ -1864,7 +1920,7 @@ impl crate::app::App<'_> {
                         replaces: piece.replaces.clone(),
                     });
                 }
-                let counted = selected_block.is_none() || is_selected_block;
+                let counted = selected_blocks.is_empty() || is_selected_block;
                 let mut mesh = match &ground {
                     Some(faces) => match flat_ground(&part.mesh, faces, part.band.selection.top) {
                         Some(mesh) => mesh,
@@ -1972,6 +2028,14 @@ impl crate::app::App<'_> {
                         }
                     }
                     volume = volume.zip(part.volume).map(|(total, item)| total + item);
+                }
+                if let Some(piece) = &part.block {
+                    self.solid_view_shown_blocks.push(ShownBlock {
+                        key: piece.key,
+                        face: piece.face.clone(),
+                        base: part.band.selection.base,
+                        top: part.band.selection.top,
+                    });
                 }
                 self.solid_view_body.push(mesh);
             }
@@ -3205,6 +3269,15 @@ impl crate::app::App<'_> {
             );
         }
     }
+}
+
+/// A dig block the Reserves view draws: which block, and the ground it
+/// covers between the foot and top of its flitch.
+pub(crate) struct ShownBlock {
+    key: BlastShapeRef,
+    face: Arc<Face>,
+    base: f64,
+    top: f64,
 }
 
 /// A solid's part of its block model, by the key it is kept under.
