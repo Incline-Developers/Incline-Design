@@ -19,7 +19,9 @@
 //! materials by their fractions, which is exactly the split the `portion`
 //! rows ask of the original.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+use rayon::prelude::*;
 
 use super::{
     input::BlendInput,
@@ -36,16 +38,17 @@ pub(crate) struct Reduced {
 
 impl Reduced {
     pub(crate) fn new(input: &BlendInput) -> Self {
+        // Every candidate named by its Debug text, which is exact for every
+        // field, floating point included, and covers any field added later.
+        // Formatted once each and side by side: a large model's candidates run
+        // to hundreds of thousands, and this was most of what the reduction cost.
+        let names: Vec<String> = input.movements.par_iter().map(|candidate| format!("{candidate:?}")).collect();
+
         // Duplicates: the first of each set of identical candidates stands
-        // for all of them. Debug formatting is exact for every field,
-        // floating point included.
-        let mut first: BTreeMap<String, usize> = BTreeMap::new();
-        let canonical: Vec<usize> = input
-            .movements
-            .iter()
-            .enumerate()
-            .map(|(index, candidate)| *first.entry(format!("{candidate:?}")).or_insert(index))
-            .collect();
+        // for all of them.
+        let mut first: HashMap<&str, usize> = HashMap::with_capacity(names.len());
+        let canonical: Vec<usize> = names.iter().enumerate().map(|(index, name)| *first.entry(name.as_str()).or_insert(index)).collect();
+        drop(first);
 
         // Dumps whose receipts no grade reads.
         let graded: BTreeSet<DestinationId> = input
@@ -61,23 +64,36 @@ impl Reduced {
                     .iter()
                     .any(|entry| entry.id == destination && matches!(entry.kind, DestinationKind::Dump))
         };
-        let unmaterialled = |candidate: &MovementCandidate| {
-            format!(
-                "{:?}",
-                MovementCandidate {
-                    material: MaterialId(0),
-                    ..candidate.clone()
-                }
-            )
-        };
 
         // Each block's distinct candidates by material.
-        let mut by_block: BTreeMap<(SourceId, MaterialId), Vec<usize>> = BTreeMap::new();
+        let mut by_block: HashMap<(SourceId, MaterialId), Vec<usize>> = HashMap::new();
         for (index, candidate) in input.movements.iter().enumerate() {
             if candidate.activity == Activity::Dig && canonical[index] == index {
                 by_block.entry((candidate.source, candidate.material)).or_default().push(index);
             }
         }
+        // The route each of those takes: its name with the material left out.
+        let routed: Vec<usize> = by_block.values().flatten().copied().collect();
+        let mut route_of: Vec<Option<String>> = vec![None; input.movements.len()];
+        let routes: Vec<(usize, String)> = routed
+            .par_iter()
+            .map(|&index| {
+                let candidate = &input.movements[index];
+                let route = format!(
+                    "{:?}",
+                    MovementCandidate {
+                        material: MaterialId(0),
+                        ..candidate.clone()
+                    }
+                );
+                (index, route)
+            })
+            .collect();
+        for (index, route) in routes {
+            route_of[index] = Some(route);
+        }
+        let route = |index: usize| route_of[index].as_deref().expect("every block candidate has its route");
+
         // For a merged material, the representative it joins; and every
         // candidate's stand-in: itself, or the representative's candidate on
         // the same route.
@@ -86,26 +102,23 @@ impl Reduced {
         for source in &mut ground {
             let block = SourceId::Ground(source.id);
             // Mergeable materials grouped by the routes they take.
-            let mut groups: BTreeMap<Vec<String>, Vec<usize>> = BTreeMap::new();
+            let mut groups: BTreeMap<Vec<&str>, Vec<usize>> = BTreeMap::new();
             for (position, share) in source.material.iter().enumerate() {
                 let Some(candidates) = by_block.get(&(block, share.material)) else { continue };
                 if !candidates.iter().all(|&index| plain_dump(input.movements[index].destination)) {
                     continue;
                 }
-                let mut routes: Vec<String> = candidates.iter().map(|&index| unmaterialled(&input.movements[index])).collect();
-                routes.sort();
+                let mut routes: Vec<&str> = candidates.iter().map(|&index| route(index)).collect();
+                routes.sort_unstable();
                 groups.entry(routes).or_default().push(position);
             }
             let mut dropped = BTreeSet::new();
             for positions in groups.values().filter(|positions| positions.len() > 1) {
                 let representative = source.material[positions[0]].material;
-                let routes: BTreeMap<String, usize> = by_block[&(block, representative)]
-                    .iter()
-                    .map(|&index| (unmaterialled(&input.movements[index]), index))
-                    .collect();
+                let routes: HashMap<&str, usize> = by_block[&(block, representative)].iter().map(|&index| (route(index), index)).collect();
                 for &position in &positions[1..] {
                     for &index in &by_block[&(block, source.material[position].material)] {
-                        stand_in[index] = routes[&unmaterialled(&input.movements[index])];
+                        stand_in[index] = routes[route(index)];
                     }
                     source.material[positions[0]].fraction += source.material[position].fraction;
                     dropped.insert(position);
@@ -122,23 +135,22 @@ impl Reduced {
             stand_in[index] = stand_in[canonical[index]];
         }
 
-        let mut renumbered: BTreeMap<usize, usize> = BTreeMap::new();
+        let mut renumbered: Vec<usize> = vec![usize::MAX; input.movements.len()];
         let mut movements = Vec::new();
         for (index, candidate) in input.movements.iter().enumerate() {
             if stand_in[index] == index {
-                renumbered.insert(index, movements.len());
+                renumbered[index] = movements.len();
                 movements.push(candidate.clone());
             }
         }
-        let forward: Vec<usize> = stand_in.iter().map(|kept| renumbered[kept]).collect();
+        let forward: Vec<usize> = stand_in.iter().map(|&kept| renumbered[kept]).collect();
 
         // Each merged candidate's tonnes split over its materials by their
         // fractions, onto each material's first candidate on that route.
+        let blocks: HashMap<_, _> = input.ground.iter().rev().map(|entry| (entry.id, entry)).collect();
         let fraction = |source: SourceId, material: MaterialId| match source {
-            SourceId::Ground(ground) => input
-                .ground
-                .iter()
-                .find(|entry| entry.id == ground)
+            SourceId::Ground(ground) => blocks
+                .get(&ground)
                 .and_then(|entry| entry.material.iter().find(|share| share.material == material))
                 .map_or(0.0, |share| share.fraction),
             SourceId::Stockpile(_) => 1.0,
