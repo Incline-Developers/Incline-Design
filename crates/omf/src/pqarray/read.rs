@@ -447,6 +447,36 @@ impl<R: ChunkReader + 'static> PqArrayReader<R> {
         Ok(rows)
     }
 
+    /// How many row groups the file holds. Each can be read on its own with
+    /// [`Self::read_multi_column_group`].
+    pub fn row_group_count(&self) -> usize {
+        self.file_reader.metadata().num_row_groups()
+    }
+
+    /// Read `N` required columns of one type from one row group.
+    ///
+    /// For a caller that turns each group into something smaller as it goes,
+    /// rather than holding every row the way [`Self::read_multi_column`] does.
+    pub fn read_multi_column_group<P, const N: usize>(&self, names: [&str; N], group: usize) -> Result<Vec<[P; N]>, Error>
+    where
+        P: PqArrayType + Copy,
+    {
+        let metadata = self.file_reader.metadata();
+        let infos: [Info; N] = names
+            .iter()
+            .map(|name| check::<P>(metadata, ColumnPath::new(vec![(*name).to_owned()]), false))
+            .collect::<Result<Vec<_>, _>>()?
+            .try_into()
+            .expect("correct length");
+        if group >= metadata.num_row_groups() {
+            return Err(invalid(format!("Parquet row group {group} does not exist")));
+        }
+        let count = metadata.row_group(group).num_rows().try_into().unwrap_or(0);
+        let mut rows = vec![[P::default(); N]; count];
+        self.read_row_group(group, &infos, &mut rows)?;
+        Ok(rows)
+    }
+
     fn read_row_group<P, const N: usize>(&self, group: usize, infos: &[Info; N], rows: &mut [[P; N]]) -> Result<(), Error>
     where
         P: PqArrayType + Copy,

@@ -3181,12 +3181,38 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 }
                 Some(omf_crate::Subblocks::Freeform { subblocks }) => {
                     ensure_items(subblocks.item_count(), "free-form sub-blocks")?;
-                    for item in reader.array_freeform_subblocks(subblocks)? {
-                        let (parent, corners) = item?;
-                        blocks.push(subblock_bounds(parent, corners, &edges)?);
-                        let parent = block_parent_index(parent, count)?;
-                        if spreads_parents {
-                            parent_indices.push(parent);
+                    // Decoded a row group per thread, a window of groups at a
+                    // time, and added in order: one thread decoding a model of
+                    // a hundred million blocks took over twenty seconds. The
+                    // window is half as many groups as threads: the attributes
+                    // decode beside it, and each group waiting to be added
+                    // holds a hundred megabytes or so.
+                    let groups = reader.array_freeform_subblock_groups(subblocks)?;
+                    let order: Vec<usize> = (0..groups.len()).collect();
+                    for window in order.chunks((rayon::current_num_threads() / 2).max(1)) {
+                        let decoded: Vec<Result<(Vec<BlockBounds>, Vec<usize>)>> = window
+                            .par_iter()
+                            .map(|&group| {
+                                let (parents, corners) = groups.read(group)?;
+                                let bounds = parents
+                                    .iter()
+                                    .zip(corners)
+                                    .map(|(parent, corners)| subblock_bounds(*parent, corners, &edges))
+                                    .collect::<Result<Vec<_>>>()?;
+                                let mut indices = Vec::with_capacity(if spreads_parents { parents.len() } else { 0 });
+                                for parent in parents {
+                                    let index = block_parent_index(parent, count)?;
+                                    if spreads_parents {
+                                        indices.push(index);
+                                    }
+                                }
+                                Ok((bounds, indices))
+                            })
+                            .collect();
+                        for group in decoded {
+                            let (bounds, parents) = group?;
+                            blocks.extend(&bounds);
+                            parent_indices.extend(parents);
                         }
                     }
                 }
@@ -3960,6 +3986,13 @@ impl BlockBatches {
             self.geometry.extend(&self.batch);
             self.batch.clear();
         }
+    }
+
+    /// Add a run of blocks after any pushed before it.
+    fn extend(&mut self, blocks: &[BlockBounds]) {
+        self.geometry.extend(&self.batch);
+        self.batch.clear();
+        self.geometry.extend(blocks);
     }
 
     fn finish(mut self) -> BlockGeometry {

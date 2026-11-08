@@ -145,6 +145,20 @@ impl<R: ReadAt> Reader<R> {
         Ok(RegularSubblocks::new(parents, corners, array.constraint()))
     }
 
+    /// Open an [`array_type::FreeformSubblock`](crate::array_type::FreeformSubblock)
+    /// array to be read a row group at a time, so the groups can be decoded
+    /// side by side. Each group is checked as [`Self::array_freeform_subblocks`]
+    /// checks every item.
+    pub fn array_freeform_subblock_groups(&self, array: &Array<array_type::FreeformSubblock>) -> Result<FreeformSubblockGroups<R>, Error> {
+        let reader = self.array_reader(array)?;
+        let single = matches!(schemas::FreeformSubblock::check(&reader)?, schemas::FreeformSubblock::U32F32);
+        let block_count = match array.constraint() {
+            &crate::array::Constraint::RegularSubblock { block_count, .. } | &crate::array::Constraint::FreeformSubblock { block_count } => block_count,
+            _ => panic!("invalid constraint"),
+        };
+        Ok(FreeformSubblockGroups { reader, single, block_count })
+    }
+
     /// Read an [`array_type::FreeformSubblock`](crate::array_type::FreeformSubblock) array.
     pub fn array_freeform_subblocks(&self, array: &Array<array_type::FreeformSubblock>) -> Result<FreeformSubblocks<R>, Error> {
         let reader = self.array_reader(array)?;
@@ -269,4 +283,56 @@ fn check_indices<const N: usize>(primitives: Vec<[u32; N]>, constraint: &crate::
         }
     }
     Ok(primitives)
+}
+
+/// One row group of sub-blocks: each one's parent index, and its corners.
+pub type SubblockGroup = (Vec<[u32; 3]>, Vec<[f64; 6]>);
+
+/// A free-form sub-block array, read a row group at a time: see
+/// [`Reader::array_freeform_subblock_groups`].
+pub struct FreeformSubblockGroups<R: ReadAt> {
+    reader: PqArrayReader<SubFile<R>>,
+    /// Corners stored as `f32` rather than `f64`.
+    single: bool,
+    block_count: [u32; 3],
+}
+
+impl<R: ReadAt> FreeformSubblockGroups<R> {
+    /// How many groups there are.
+    pub fn len(&self) -> usize {
+        self.reader.row_group_count()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// One group's sub-blocks, in order: each one's parent index, and its
+    /// corners. Two lists rather than one of pairs, so a large group is not
+    /// held twice while it is turned into something else.
+    pub fn read(&self, group: usize) -> Result<SubblockGroup, Error> {
+        const CORNERS: [&str; 6] = ["corner_min_u", "corner_min_v", "corner_min_w", "corner_max_u", "corner_max_v", "corner_max_w"];
+        let parents = self.reader.read_multi_column_group::<u32, 3>(["parent_u", "parent_v", "parent_w"], group)?;
+        let corners: Vec<[f64; 6]> = if self.single {
+            self.reader
+                .read_multi_column_group::<f32, 6>(CORNERS, group)?
+                .into_iter()
+                .map(|corners| corners.map(f64::from))
+                .collect()
+        } else {
+            self.reader.read_multi_column_group::<f64, 6>(CORNERS, group)?
+        };
+        if parents.len() != corners.len() {
+            return Err(InvalidData::LengthMismatch {
+                found: corners.len() as u64,
+                expected: parents.len() as u64,
+            }
+            .into());
+        }
+        for (parent, corners) in parents.iter().zip(&corners) {
+            check_parent(self.block_count, *parent)?;
+            check_freeform_corners(*corners)?;
+        }
+        Ok((parents, corners))
+    }
 }
