@@ -161,19 +161,38 @@ impl Segment {
     }
 
     fn large_table(values: &[f64], to_beat: usize) -> Option<Self> {
-        let mut table: Vec<u64> = values.iter().map(|value| canonical(*value)).collect();
-        table.sort_unstable();
-        table.dedup();
-        if table.len() > usize::from(u16::MAX) + 1 || table.len() * size_of::<f64>() + values.len() * 2 >= to_beat {
+        // Open addressing over twice the most rows a segment holds, as
+        // `small_table` does: sorting the segment to find its distinct values
+        // was most of what encoding a large model cost.
+        const SLOTS: usize = 2 * SEGMENT_ROWS;
+        let mut slots = vec![u32::MAX; SLOTS];
+        let mut table: Vec<u64> = Vec::new();
+        let mut codes: Vec<u16> = Vec::with_capacity(values.len());
+        for value in values {
+            let bits = canonical(*value);
+            let mut slot = (bits.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> (64 - (SEGMENT_SHIFT + 1))) as usize;
+            let code = loop {
+                match slots[slot] {
+                    u32::MAX => {
+                        if table.len() > usize::from(u16::MAX) {
+                            return None;
+                        }
+                        slots[slot] = table.len() as u32;
+                        table.push(bits);
+                        break table.len() - 1;
+                    }
+                    code if table[code as usize] == bits => break code as usize,
+                    _ => slot = (slot + 1) % SLOTS,
+                }
+            };
+            codes.push(code as u16);
+        }
+        if table.len() * size_of::<f64>() + values.len() * 2 >= to_beat {
             return None;
         }
-        let codes = values
-            .iter()
-            .map(|value| table.binary_search(&canonical(*value)).expect("every value is in the table") as u16)
-            .collect();
         Some(Self::Table16 {
             table: table.into_iter().map(f64::from_bits).collect(),
-            codes,
+            codes: codes.into_boxed_slice(),
         })
     }
 }
