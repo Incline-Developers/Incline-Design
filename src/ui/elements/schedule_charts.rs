@@ -766,7 +766,7 @@ fn draw_trucks(
     ui.painter().text(
         header.left_top() + egui::vec2(8.0, 28.0),
         egui::Align2::LEFT_TOP,
-        tr!("inspector-trucks"),
+        tr!("charts-trucks"),
         egui::FontId::proportional(12.0),
         ui.visuals().weak_text_color(),
     );
