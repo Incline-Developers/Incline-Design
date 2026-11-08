@@ -177,6 +177,13 @@ impl<R: ReadAt> Archive<R> {
         Ok(*span.get_or_init(|| found))
     }
 
+    pub fn checksum(&self, name: &str) -> Result<(u32, u64), Error> {
+        let (index, _) = self.members.get(name).ok_or_else(|| Error::ZipMemberMissing(name.to_owned()))?;
+        let zip = self.zip.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let entry = zip.by_index_data(*index)?;
+        Ok((entry.crc32(), entry.size()))
+    }
+
     pub fn open(&self, name: &str) -> Result<SubFile<R>, Error> {
         let span = self.span(name)?;
         Ok(self.file.sub_file(span.offset, span.size)?)

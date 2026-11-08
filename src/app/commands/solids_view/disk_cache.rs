@@ -24,8 +24,10 @@ use crate::{
         triangulation::solid_between::{BuiltFrom, SolidMesh},
     },
     model::{
-        DigBlockId, Solid, SolidId,
+        DigBlockId, ReserveField, ReserveFieldId, ReserveFieldIssue, Solid, SolidId,
+        block_model::ReserveFieldMapping,
         formats::mesh_data::{Triangulation, Vertex},
+        solid_reserves::{CapturedField, MaterialCapture, MaterialPortion, NumericTotal, ReserveGroup, ReserveOutcome, ReserveResolution, ReserveTotals},
         triangulation::{OpenTriangulation, TriangulationId},
     },
     ui::state::{BenchSelection, BlastShapeRef},
@@ -47,6 +49,8 @@ pub(crate) enum Kind {
     Body,
     Blasting,
     Partition,
+    BenchReserves,
+    DigReserves,
 }
 
 impl Kind {
@@ -57,6 +61,8 @@ impl Kind {
             Self::Body => "body",
             Self::Blasting => "blasting",
             Self::Partition => "partition",
+            Self::BenchReserves => "bench-reserves",
+            Self::DigReserves => "dig-reserves",
         }
     }
 }
@@ -907,4 +913,257 @@ pub(super) fn read_partition(input: &mut Reader, solid: &Solid, body: &Arc<Solid
             benches,
         },
     })
+}
+
+/// The key a reserve measurement is kept under: the stage key of the pieces it
+/// measured, and what it read them against, the block model named by its
+/// source fingerprint rather than by anything that lasts one session only.
+pub(super) fn reserves_key(pieces: u64, kind: Kind, fields: &[ReserveField], mapping: &[ReserveFieldMapping], model: u64) -> Option<u64> {
+    use std::hash::Hasher;
+    let mut key = twox_hash::XxHash3_64::with_seed(program()?);
+    key.write_u32(FORMAT);
+    key.write(b"reserves");
+    key.write_u64(pieces);
+    #[cfg(not(target_arch = "wasm32"))]
+    key.write(kind.name().as_bytes());
+    #[cfg(target_arch = "wasm32")]
+    let _ = kind;
+    key.write(&serde_json::to_vec(fields).ok()?);
+    key.write(&serde_json::to_vec(mapping).ok()?);
+    key.write_u64(model);
+    Some(key.finish())
+}
+
+/// Hash maps are written in key order, so equal measurements make equal files.
+fn sorted<K: Ord + Copy, V>(map: &std::collections::HashMap<K, V>) -> Vec<(K, &V)> {
+    let mut entries: Vec<(K, &V)> = map.iter().map(|(key, value)| (*key, value)).collect();
+    entries.sort_unstable_by_key(|(key, _)| *key);
+    entries
+}
+
+fn write_numeric(out: &mut Writer, total: &NumericTotal) {
+    out.f64(total.sum);
+    out.f64(total.weight);
+    out.u64(total.contributions);
+    out.u64(total.missing);
+    out.u64(total.unusable_weights);
+    out.u64(total.negatives);
+}
+
+fn read_numeric(input: &mut Reader) -> Option<NumericTotal> {
+    Some(NumericTotal {
+        sum: input.f64()?,
+        weight: input.f64()?,
+        contributions: input.u64()?,
+        missing: input.u64()?,
+        unusable_weights: input.u64()?,
+        negatives: input.u64()?,
+    })
+}
+
+fn write_group(out: &mut Writer, group: &ReserveGroup) {
+    out.f64(group.equivalent_blocks);
+    out.f64(group.covered_volume);
+    let numeric = sorted(&group.numeric);
+    out.usize(numeric.len());
+    for (field, total) in numeric {
+        out.u64(field.0);
+        write_numeric(out, total);
+    }
+}
+
+fn read_group(input: &mut Reader) -> Option<ReserveGroup> {
+    let equivalent_blocks = input.f64()?;
+    let covered_volume = input.f64()?;
+    let count = input.count(56)?;
+    let numeric = (0..count).map(|_| Some((ReserveFieldId(input.u64()?), read_numeric(input)?))).collect::<Option<_>>()?;
+    Some(ReserveGroup {
+        equivalent_blocks,
+        covered_volume,
+        numeric,
+    })
+}
+
+fn write_totals(out: &mut Writer, totals: &ReserveTotals) {
+    write_group(out, &totals.all);
+    let categories = sorted(&totals.categories);
+    out.usize(categories.len());
+    for (field, groups) in categories {
+        out.u64(field.0);
+        out.usize(groups.len());
+        for (name, group) in groups {
+            out.string(name);
+            write_group(out, group);
+        }
+    }
+}
+
+fn read_totals(input: &mut Reader) -> Option<ReserveTotals> {
+    let all = read_group(input)?;
+    let count = input.count(16)?;
+    let categories = (0..count)
+        .map(|_| {
+            let field = ReserveFieldId(input.u64()?);
+            let groups = input.count(32)?;
+            let groups = (0..groups).map(|_| Some((input.string()?, read_group(input)?))).collect::<Option<_>>()?;
+            Some((field, groups))
+        })
+        .collect::<Option<_>>()?;
+    Some(ReserveTotals { all, categories })
+}
+
+fn write_issue(out: &mut Writer, issue: &ReserveFieldIssue) {
+    match issue {
+        ReserveFieldIssue::Unmapped => out.u8(0),
+        ReserveFieldIssue::ConstantNotFinite => out.u8(1),
+        ReserveFieldIssue::MissingColumn(column) => {
+            out.u8(2);
+            out.string(column);
+        }
+        ReserveFieldIssue::WrongColumnKind { column, wanted_categorical } => {
+            out.u8(3);
+            out.string(column);
+            out.bool(*wanted_categorical);
+        }
+        ReserveFieldIssue::ColumnNotResident(column) => {
+            out.u8(4);
+            out.string(column);
+        }
+        ReserveFieldIssue::LengthMismatch { column, values, blocks } => {
+            out.u8(5);
+            out.string(column);
+            out.usize(*values);
+            out.usize(*blocks);
+        }
+        ReserveFieldIssue::WeightFieldMissing => out.u8(6),
+        ReserveFieldIssue::WeightNotSummed(field) => {
+            out.u8(7);
+            out.string(field);
+        }
+        ReserveFieldIssue::WeightUnresolved => out.u8(8),
+        ReserveFieldIssue::AllValuesMissing => out.u8(9),
+        ReserveFieldIssue::ModelExcluded => out.u8(10),
+    }
+}
+
+fn read_issue(input: &mut Reader) -> Option<ReserveFieldIssue> {
+    Some(match input.u8()? {
+        0 => ReserveFieldIssue::Unmapped,
+        1 => ReserveFieldIssue::ConstantNotFinite,
+        2 => ReserveFieldIssue::MissingColumn(input.string()?),
+        3 => ReserveFieldIssue::WrongColumnKind {
+            column: input.string()?,
+            wanted_categorical: input.bool()?,
+        },
+        4 => ReserveFieldIssue::ColumnNotResident(input.string()?),
+        5 => ReserveFieldIssue::LengthMismatch {
+            column: input.string()?,
+            values: usize::try_from(input.u64()?).ok()?,
+            blocks: usize::try_from(input.u64()?).ok()?,
+        },
+        6 => ReserveFieldIssue::WeightFieldMissing,
+        7 => ReserveFieldIssue::WeightNotSummed(input.string()?),
+        8 => ReserveFieldIssue::WeightUnresolved,
+        9 => ReserveFieldIssue::AllValuesMissing,
+        10 => ReserveFieldIssue::ModelExcluded,
+        _ => return None,
+    })
+}
+
+fn write_counts(out: &mut Writer, counts: &std::collections::HashMap<ReserveFieldId, u64>) {
+    let counts = sorted(counts);
+    out.usize(counts.len());
+    for (field, count) in counts {
+        out.u64(field.0);
+        out.u64(*count);
+    }
+}
+
+fn read_counts(input: &mut Reader) -> Option<std::collections::HashMap<ReserveFieldId, u64>> {
+    let count = input.count(16)?;
+    (0..count).map(|_| Some((ReserveFieldId(input.u64()?), input.u64()?))).collect()
+}
+
+fn write_material(out: &mut Writer, material: &MaterialCapture) {
+    out.usize(material.fields.len());
+    for field in &material.fields {
+        out.u64(field.field.0);
+        out.bool(field.categorical);
+    }
+    out.usize(material.labels.len());
+    for label in &material.labels {
+        out.string(label);
+    }
+    out.usize(material.portions.len());
+    for portions in &material.portions {
+        out.usize(portions.len());
+        for portion in portions.iter() {
+            out.f64(portion.fraction);
+            for value in &portion.values {
+                out.f64(*value);
+            }
+        }
+    }
+}
+
+fn read_material(input: &mut Reader) -> Option<MaterialCapture> {
+    let count = input.count(9)?;
+    let fields = read_counted(input, count, |input| {
+        Some(CapturedField {
+            field: ReserveFieldId(input.u64()?),
+            categorical: input.bool()?,
+        })
+    })?;
+    let count = input.count(8)?;
+    let labels = read_counted(input, count, Reader::string)?;
+    let width = fields.len();
+    let count = input.count(8)?;
+    let portions = read_counted(input, count, |input| {
+        let count = input.count(8 * (width as u64 + 1))?;
+        let portions = read_counted(input, count, |input| {
+            let fraction = input.f64()?;
+            let values = read_counted(input, width, Reader::f64)?;
+            Some(MaterialPortion { values, fraction })
+        })?;
+        Some(Arc::new(portions))
+    })?;
+    Some(MaterialCapture { fields, labels, portions })
+}
+
+pub(super) fn write_reserves(out: &mut Writer, totals: &[ReserveTotals], resolution: &ReserveResolution, material: Option<&MaterialCapture>) -> Option<()> {
+    out.usize(totals.len());
+    for totals in totals {
+        write_totals(out, totals);
+    }
+    out.usize(resolution.issues.len());
+    for (field, issue) in &resolution.issues {
+        out.u64(field.0);
+        write_issue(out, issue);
+    }
+    write_counts(out, &resolution.missing_values);
+    write_counts(out, &resolution.unusable_weights);
+    write_counts(out, &resolution.unmapped_labels);
+    write_option(out, material, write_material);
+    Some(())
+}
+
+/// A measurement over `slots` pieces, or `None` if the file holds another
+/// number of them.
+pub(super) fn read_reserves(input: &mut Reader, slots: usize) -> Option<ReserveOutcome> {
+    let count = input.count(32)?;
+    (count == slots).then_some(())?;
+    let totals = read_counted(input, count, read_totals)?;
+    let count = input.count(9)?;
+    let issues = read_counted(input, count, |input| Some((ReserveFieldId(input.u64()?), read_issue(input)?)))?;
+    let resolution = ReserveResolution {
+        issues,
+        missing_values: read_counts(input)?,
+        unusable_weights: read_counts(input)?,
+        unmapped_labels: read_counts(input)?,
+    };
+    let material = read_option(input, read_material)?;
+    if material.as_ref().is_some_and(|material| material.portions.len() != slots) {
+        return None;
+    }
+    Some(ReserveOutcome { totals, resolution, material })
 }

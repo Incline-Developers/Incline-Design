@@ -2098,6 +2098,38 @@ struct Decoder<'a, R: omf_crate::file::ReadAt> {
 }
 
 impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
+    /// What a block model element holds, as a hash a later session reading the
+    /// same content derives again, without decoding any of it: the element's
+    /// geometry and attributes, each array named by the checksum and length of
+    /// its data rather than by its file name, which a save renumbers, and the
+    /// project origin the geometry is placed by. `None` when a checksum cannot
+    /// be read, so nothing is ever keyed on a guess.
+    fn block_model_fingerprint(&self, element: &omf_crate::Element) -> Option<u64> {
+        fn rename(value: &mut serde_json::Value, checksum: &dyn Fn(&str) -> Option<(u32, u64)>) -> Option<()> {
+            match value {
+                serde_json::Value::Object(map) => {
+                    if let Some(serde_json::Value::String(filename)) = map.get("filename") {
+                        let (crc, length) = checksum(filename)?;
+                        map.insert("filename".to_owned(), serde_json::json!([crc, length]));
+                    }
+                    map.values_mut().try_for_each(|value| rename(value, checksum))
+                }
+                serde_json::Value::Array(values) => values.iter_mut().try_for_each(|value| rename(value, checksum)),
+                _ => Some(()),
+            }
+        }
+        use std::hash::Hasher;
+        let mut described = serde_json::to_value((&element.geometry, &element.attributes)).ok()?;
+        rename(&mut described, &|filename| self.reader.member_checksum(filename).ok())?;
+        let mut hash = twox_hash::XxHash3_64::new();
+        hash.write(b"block model source");
+        hash.write(&serde_json::to_vec(&described).ok()?);
+        for coordinate in self.project_origin.to_array() {
+            hash.write_u64(coordinate.to_bits());
+        }
+        Some(hash.finish())
+    }
+
     fn finish(mut self) -> Result<ImportBundle> {
         if !self.generic_design.layers().is_empty() {
             self.generic_design.validate().context("validate OMF line-set designs")?;
@@ -2435,7 +2467,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                             variables,
                             dims: geometry.grid.count().map(|n| n as usize),
                             ..Default::default()
-                        }),
+                        })
+                        .with_source_fingerprint(self.block_model_fingerprint(element)),
                         blocks: Arc::new(BlockBoundsSource::Explicit(Default::default())),
                         renderable_block_indices: Arc::new(RenderableBlockIndices::All(0)),
                         uniform_grid: None,
@@ -3219,7 +3252,9 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             DVec3::from_array(geometry.orient.w),
         );
         let origin = self.project_origin + DVec3::from_array(geometry.orient.origin);
-        let model = BlockModelData::from_columns(blocks.len(), DVec3::ZERO, upper, columns, blocks.heap_bytes())?.with_transform(origin, rotation)?;
+        let model = BlockModelData::from_columns(blocks.len(), DVec3::ZERO, upper, columns, blocks.heap_bytes())?
+            .with_transform(origin, rotation)?
+            .with_source_fingerprint(self.block_model_fingerprint(element));
         let blocks = Arc::new(BlockBoundsSource::Explicit(blocks));
         let renderable = Arc::new(RenderableBlockIndices::All(blocks.len()));
         let uniform_grid = blocks.uniform_grid();

@@ -323,6 +323,9 @@ pub(crate) struct ViewSolid {
     /// The envelope's key in the disk cache, which every later stage's is
     /// made from: settled with the envelope, `None` where nothing is kept.
     disk_key: Option<u64>,
+    /// Reserve measurements looked for in the disk cache and not found there,
+    /// by their disk key, so the next attempt measures instead of looking again.
+    reserves_not_on_disk: HashSet<u64>,
     envelope: Stage<Arc<OpenTriangulation>>,
     /// The Benching stage: the envelope plus the plan that divides it.
     body: Stage<Arc<SolidBody>>,
@@ -981,6 +984,7 @@ impl crate::app::App<'_> {
                     sources: sources.clone(),
                     stamp: GroundSourceStamp::default(),
                     disk_key: None,
+                    reserves_not_on_disk: HashSet::new(),
                     envelope: Stage::default(),
                     body: Stage::default(),
                     blasting: Stage::default(),
@@ -2855,6 +2859,25 @@ impl crate::app::App<'_> {
             } else {
                 None
             };
+            // Kept between sessions where everything the measurement reads is
+            // named by something that outlasts this one: the pieces by their
+            // stage's disk key, the model by its source's fingerprint. The
+            // pieces must be the ones the solid's plan now gives, which the
+            // stage's own key confirms.
+            let disk_key = (|| {
+                let model = model.filter(|_| included && error.is_none())?;
+                let chained = cache.disk_key?;
+                let (memory, disk) = match scope {
+                    ReserveScope::Bench => (body_key(cache.key, solid), body_key(chained, solid)),
+                    ReserveScope::Dig => (
+                        partition_key(blasting_key(body_key(cache.key, solid), solid), solid),
+                        partition_key(blasting_key(body_key(chained, solid), solid), solid),
+                    ),
+                };
+                (scope.source_key(cache) == Some(memory)).then_some(())?;
+                disk_cache::reserves_key(disk, scope.disk_kind(), &fields, &model.reserve_mapping, model.model.source_fingerprint()?)
+            })();
+            let look_on_disk = disk_key.filter(|key| !cache.reserves_not_on_disk.contains(key));
             // Only the pieces this measurement has not already got figures for.
             let measured = cache
                 .measured
@@ -2919,6 +2942,31 @@ impl crate::app::App<'_> {
                 self.solid_view_body_key = None;
                 continue;
             }
+            // A measurement kept from an earlier session needs neither the
+            // scan nor the model loaded for it.
+            if let Some(disk_key) = look_on_disk {
+                self.spawn_job_reporting_progress(
+                    crate::i18n::tr!("planning-computing-reserves"),
+                    vec![artifact_job(id, scope.artifact(), token)],
+                    move |_, _| Ok(disk_cache::load(scope.disk_kind(), disk_key, |input| disk_cache::read_reserves(input, slots))),
+                    move |app, result: anyhow::Result<Option<ReserveOutcome>>| {
+                        if app.accepting_solid(runtime, id, scope.artifact(), token).is_none() {
+                            return;
+                        }
+                        let cache = app.solid_view_cache.get_mut(&id).expect("checked above");
+                        match result {
+                            Ok(Some(outcome)) => settle_reserves(cache, scope, outcome, measured_with, meshes),
+                            // Not kept, so measured after all, on the next pass.
+                            _ => {
+                                cache.reserves_not_on_disk.insert(disk_key);
+                                scope.slot(cache).retire_if_unfinished();
+                            }
+                        }
+                        app.solid_view_body_key = None;
+                    },
+                );
+                continue;
+            }
             let Some((model, blocks, mapping, partition)) = inputs else {
                 // Not resident: a restore is a wait, not a failure.
                 let item = crate::model::ItemRef::BlockModel(solid.block_model.expect("a model was resolved"));
@@ -2944,6 +2992,19 @@ impl crate::app::App<'_> {
                     let mut outcome = crate::model::solid_reserves::compute(&model, &blocks, &mapping, &fields, &partition, capture_material, cancel, progress)?;
                     if let Some(kept) = &kept {
                         outcome.keep(kept);
+                    }
+                    // A column that was not in memory says nothing about the
+                    // model, only about this session, so such a measurement
+                    // is not kept for another.
+                    let resident = !outcome
+                        .resolution
+                        .issues
+                        .iter()
+                        .any(|(_, issue)| matches!(issue, crate::model::ReserveFieldIssue::ColumnNotResident(_)));
+                    if let Some(key) = disk_key.filter(|_| resident) {
+                        disk_cache::store(scope.disk_kind(), key, |out| {
+                            disk_cache::write_reserves(out, &outcome.totals, &outcome.resolution, outcome.material.as_ref())
+                        });
                     }
                     Ok(outcome)
                 },
@@ -2999,6 +3060,13 @@ pub(crate) enum ReserveScope {
 impl ReserveScope {
     fn hash_into(self, hasher: &mut DefaultHasher) {
         (self as u8).hash(hasher);
+    }
+
+    fn disk_kind(self) -> disk_cache::Kind {
+        match self {
+            Self::Bench => disk_cache::Kind::BenchReserves,
+            Self::Dig => disk_cache::Kind::DigReserves,
+        }
     }
 
     fn artifact(self) -> SolidArtifact {
