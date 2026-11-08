@@ -25,9 +25,9 @@ use crate::{
     },
     model::{
         DigBlockId, ReserveField, ReserveFieldId, ReserveFieldIssue, Solid, SolidId,
-        block_model::ReserveFieldMapping,
+        block_model::{BlockBoundsSource, ReserveFieldMapping},
         formats::mesh_data::{Triangulation, Vertex},
-        solid_reserves::{CapturedField, MaterialCapture, MaterialPortion, NumericTotal, ReserveGroup, ReserveOutcome, ReserveResolution, ReserveTotals},
+        solid_reserves::{CapturedField, MaterialCapture, MaterialPortion, NumericTotal, ReserveGroup, ReserveOutcome, ReserveResolution, ReserveSource, ReserveTotals},
         triangulation::{OpenTriangulation, TriangulationId},
     },
     ui::state::{BenchSelection, BlastShapeRef},
@@ -51,6 +51,8 @@ pub(crate) enum Kind {
     Partition,
     BenchReserves,
     DigReserves,
+    /// The part of a solid's block model its reserves read: see [`ReserveSource`].
+    ReserveSource,
 }
 
 impl Kind {
@@ -63,6 +65,7 @@ impl Kind {
             Self::Partition => "partition",
             Self::BenchReserves => "bench-reserves",
             Self::DigReserves => "dig-reserves",
+            Self::ReserveSource => "reserve-source",
         }
     }
 }
@@ -1007,6 +1010,140 @@ pub(super) fn reserves_key(pieces: u64, kind: Kind, fields: &[ReserveField], map
     key.write(&serde_json::to_vec(mapping).ok()?);
     key.write_u64(model);
     Some(key.finish())
+}
+
+/// The key a solid's [`ReserveSource`] is kept under: its body's stage key,
+/// which decides the reach, the columns its mapping reads, and the model by its
+/// source fingerprint.
+pub(super) fn reserve_source_key(body: u64, columns: &[String], model: u64) -> Option<u64> {
+    use std::hash::Hasher;
+    let mut key = twox_hash::XxHash3_64::with_seed(program()?);
+    key.write_u32(FORMAT);
+    key.write(b"reserve-source");
+    key.write_u64(body);
+    for name in columns {
+        key.write_u64(name.len() as u64);
+        key.write(name.as_bytes());
+    }
+    key.write_u64(model);
+    Some(key.finish())
+}
+
+/// Whether a file is kept under `key`, without reading it.
+pub(crate) fn exists(kind: Kind, key: u64) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        directory().is_some_and(|directory| directory.join(file_name(kind, key)).is_file())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (kind, key);
+        false
+    }
+}
+
+pub(super) fn write_reserve_source(out: &mut Writer, source: &ReserveSource) -> Option<()> {
+    let BlockBoundsSource::Explicit(geometry) = &*source.blocks else { return None };
+    let metadata = &source.model.metadata;
+    out.usize(metadata.n_blocks);
+    for vector in [metadata.origin, metadata.lower, metadata.upper] {
+        vector.to_array().into_iter().for_each(|value| out.f64(value));
+    }
+    let rotation = source.model.rotation();
+    for axis in [rotation.x_axis, rotation.y_axis, rotation.z_axis] {
+        axis.to_array().into_iter().for_each(|value| out.f64(value));
+    }
+    out.usize(metadata.variables.len());
+    for variable in &metadata.variables {
+        out.string(&variable.name);
+        out.string(&variable.physical_type);
+        out.string(&variable.default);
+        out.string(&variable.global);
+        out.usize(variable.strings.len());
+        for (code, label) in &variable.strings {
+            out.u32(*code);
+            out.string(label);
+        }
+        out.usize(variable.category_colors.len());
+        for (code, color) in &variable.category_colors {
+            out.u32(*code);
+            color.iter().for_each(|channel| out.f32(*channel));
+        }
+        out.bool(variable.special);
+    }
+    let columns = source.model.columns();
+    out.usize(columns.len());
+    for (name, column) in columns {
+        out.string(name);
+        column.write(&mut |bytes| out.bytes(bytes));
+    }
+    for column in geometry.columns() {
+        column.write(&mut |bytes| out.bytes(bytes));
+    }
+    Some(())
+}
+
+pub(super) fn read_reserve_source(input: &mut Reader) -> Option<ReserveSource> {
+    use crate::model::formats::{
+        block_column::BlockColumn,
+        block_model_data::{BlockModelData, BlockModelMetadata, BlockVariable},
+    };
+    let n_blocks = input.count(1)?;
+    let vector = |input: &mut Reader| Some(glam::DVec3::new(input.f64()?, input.f64()?, input.f64()?));
+    let (origin, lower, upper) = (vector(input)?, vector(input)?, vector(input)?);
+    let rotation = glam::DMat3::from_cols(vector(input)?, vector(input)?, vector(input)?);
+    let variables = input.count(8)?;
+    let variables = read_counted(input, variables, |input| {
+        let (name, physical_type, default, global) = (input.string()?, input.string()?, input.string()?, input.string()?);
+        let strings = input.count(12)?;
+        let strings = read_counted(input, strings, |input| Some((input.u32()?, input.string()?)))?.into_iter().collect();
+        let colors = input.count(20)?;
+        let category_colors = read_counted(input, colors, |input| Some((input.u32()?, [input.f32()?, input.f32()?, input.f32()?, input.f32()?])))?
+            .into_iter()
+            .collect();
+        Some(BlockVariable {
+            name,
+            physical_type,
+            default,
+            global,
+            strings,
+            category_colors,
+            special: input.bool()?,
+        })
+    })?;
+    let take = |input: &mut Reader, count: usize| -> Option<Vec<u8>> {
+        if count as u64 > input.left() {
+            return None;
+        }
+        let mut bytes = vec![0; count];
+        input.fill(&mut bytes)?;
+        Some(bytes)
+    };
+    let columns = input.count(16)?;
+    let columns = read_counted(input, columns, |input| {
+        let name = input.string()?;
+        let column = BlockColumn::read(&mut |count| take(input, count))?;
+        Some((name, Arc::new(column)))
+    })?;
+    let geometry: Vec<BlockColumn> = (0..6).map(|_| BlockColumn::read(&mut |count| take(input, count))).collect::<Option<_>>()?;
+    let geometry = crate::model::block_model::BlockGeometry::from_columns(geometry.try_into().ok()?)?;
+    if geometry.len() != n_blocks || columns.iter().any(|(name, _)| !variables.iter().any(|variable: &BlockVariable| &variable.name == name)) {
+        return None;
+    }
+    let metadata = BlockModelMetadata {
+        n_blocks,
+        origin,
+        lower,
+        upper,
+        dims: [n_blocks, 1, 1],
+        is_irregular: true,
+        variables,
+    };
+    let model = BlockModelData::from_parts(metadata, rotation, columns.into_iter().collect()).ok()?;
+    Some(ReserveSource {
+        model,
+        blocks: Arc::new(BlockBoundsSource::Explicit(geometry)),
+    })
 }
 
 /// Hash maps are written in key order, so equal measurements make equal files.

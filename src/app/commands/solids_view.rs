@@ -26,7 +26,7 @@ use crate::{
         DigBlockId, Object, Solid, SolidId,
         arrangement::{self, Face},
         formats::mesh_data::Triangulation,
-        solid_reserves::{ReserveBand, ReserveOutcome, ReservePartition, ReservePiece},
+        solid_reserves::{ReserveBand, ReserveOutcome, ReservePartition, ReservePiece, ReserveSource},
         triangulation::{GroundSourceStamp, OpenTriangulation, TriangulationId},
     },
     ui::state::{BenchSelection, BlastShapeRef, SolidPreviewSummary, SolidsViewRow},
@@ -343,6 +343,11 @@ pub(crate) struct ViewSolid {
     /// Reserve measurements looked for in the disk cache and not found there,
     /// by their disk key, so the next attempt measures instead of looking again.
     reserves_not_on_disk: HashSet<u64>,
+    /// The part of this solid's block model its reserves read, by its key,
+    /// held only while Setup is open; see [`ReserveSource`].
+    reserve_source: Option<KeptPart>,
+    /// Parts looked for in the disk cache and not found there, by their key.
+    sources_not_on_disk: HashSet<u64>,
     envelope: Stage<Arc<OpenTriangulation>>,
     /// The Benching stage: the envelope plus the plan that divides it.
     body: Stage<Arc<SolidBody>>,
@@ -891,6 +896,13 @@ impl crate::app::App<'_> {
             .map(|doc| doc.solids().iter().map(|solid| solid.id).collect())
             .unwrap_or_default();
         self.solid_view_cache.retain(|id, cache| cache.runtime == runtime && ids.contains(id));
+        // A solid's part of its block model is held for edits made on Setup,
+        // and given back the moment another page is open.
+        if !self.editor.is_planning_view(crate::ui::state::PlanningView::Setup) {
+            for cache in self.solid_view_cache.values_mut() {
+                cache.reserve_source = None;
+            }
+        }
         self.editor.solid_view_bands.retain(|id, _| ids.contains(id));
         self.dig_block_identities.retain(|id, _| ids.contains(id));
         // Only a running stage may start authoritative work. Display reads
@@ -1002,6 +1014,8 @@ impl crate::app::App<'_> {
                     stamp: GroundSourceStamp::default(),
                     disk_key: None,
                     reserves_not_on_disk: HashSet::new(),
+                    reserve_source: None,
+                    sources_not_on_disk: HashSet::new(),
                     envelope: Stage::default(),
                     body: Stage::default(),
                     blasting: Stage::default(),
@@ -2949,6 +2963,18 @@ impl crate::app::App<'_> {
                 disk_cache::reserves_key(disk, scope.disk_kind(), &fields, &model.reserve_mapping, model.model.source_fingerprint()?)
             })();
             let look_on_disk = disk_key.filter(|key| !cache.reserves_not_on_disk.contains(key));
+            // The solid's part of its model: named like the measurement, by
+            // things that outlast a session, and cut to the body this plan
+            // has now, which bounds every piece the body is ever cut into.
+            let part = (|| {
+                let model = model.filter(|_| included && error.is_none())?;
+                let body = cache.body.product().filter(|_| cache.body.is_current(body_key(cache.key, solid)))?;
+                let columns = ReserveSource::columns(&model.reserve_mapping);
+                let key = disk_cache::reserve_source_key(body_key(cache.disk_key?, solid), &columns, model.model.source_fingerprint()?)?;
+                let reach = ReserveSource::reach_of(body.bench_parts.iter().map(|part| &*part.mesh.mesh))?;
+                Some((key, reach))
+            })();
+            let part_in_memory = part.and_then(|(key, _)| cache.reserve_source.as_ref().filter(|(held, _)| *held == key).map(|(_, source)| source.clone()));
             // Only the pieces this measurement has not already got figures for.
             let measured = cache
                 .measured
@@ -2978,6 +3004,12 @@ impl crate::app::App<'_> {
                     model.reserve_mapping.clone(),
                     reserve_partition(parts, &unchanged),
                 )
+            });
+            // Not loaded, and its part kept: measured over the part instead.
+            let from_part = model.filter(|_| !resident && included && error.is_none() && !everything_kept).and_then(|model| {
+                let (key, _) = part?;
+                let held = part_in_memory.clone();
+                (held.is_some() || !cache.sources_not_on_disk.contains(&key)).then(|| (key, held, model.reserve_mapping.clone(), reserve_partition(parts, &unchanged)))
             });
             let meshes: Vec<Arc<Triangulation>> = parts.iter().map(|part| part.mesh.mesh.clone()).collect();
             let runtime = cache.runtime;
@@ -3038,6 +3070,58 @@ impl crate::app::App<'_> {
                 );
                 continue;
             }
+            if inputs.is_none()
+                && let Some((source_key, held, mapping, partition)) = from_part
+            {
+                let fields = fields.clone();
+                let capture_material = scope == ReserveScope::Dig;
+                self.spawn_job_reporting_progress(
+                    crate::i18n::tr!("planning-computing-reserves"),
+                    vec![artifact_job(id, scope.artifact(), token)],
+                    move |cancel, progress| -> anyhow::Result<Option<(ReserveOutcome, Arc<ReserveSource>)>> {
+                        let source = match held {
+                            Some(source) => source,
+                            None => match disk_cache::load(disk_cache::Kind::ReserveSource, source_key, disk_cache::read_reserve_source) {
+                                Some(source) => Arc::new(source),
+                                None => return Ok(None),
+                            },
+                        };
+                        let mut outcome = crate::model::solid_reserves::compute(&source.model, &source.blocks, &mapping, &fields, &partition, capture_material, cancel, progress)?;
+                        if let Some(kept) = &kept {
+                            outcome.keep(kept);
+                        }
+                        if let Some(key) = disk_key {
+                            disk_cache::store(scope.disk_kind(), key, |out| {
+                                disk_cache::write_reserves(out, &outcome.totals, &outcome.resolution, outcome.material.as_ref())
+                            });
+                        }
+                        Ok(Some((outcome, source)))
+                    },
+                    move |app, result| {
+                        if app.accepting_solid(runtime, id, scope.artifact(), token).is_none() {
+                            return;
+                        }
+                        let setup = app.editor.is_planning_view(crate::ui::state::PlanningView::Setup);
+                        let cache = app.solid_view_cache.get_mut(&id).expect("checked above");
+                        match result {
+                            Ok(Some((outcome, source))) => {
+                                settle_reserves(cache, scope, outcome, measured_with, meshes);
+                                if setup {
+                                    cache.reserve_source = Some((source_key, source));
+                                }
+                            }
+                            // Not kept after all: the next pass loads the model.
+                            Ok(None) => {
+                                cache.sources_not_on_disk.insert(source_key);
+                                scope.slot(cache).retire_if_unfinished();
+                            }
+                            Err(error) => scope.slot(cache).fail(format!("{error:#}")),
+                        }
+                        app.solid_view_body_key = None;
+                    },
+                );
+                continue;
+            }
             let Some((model, blocks, mapping, partition)) = inputs else {
                 // Not resident: a restore is a wait, not a failure.
                 let item = crate::model::ItemRef::BlockModel(solid.block_model.expect("a model was resolved"));
@@ -3052,6 +3136,7 @@ impl crate::app::App<'_> {
             };
             let fields = fields.clone();
             let capture_material = scope == ReserveScope::Dig;
+            let cut_part = part.filter(|_| part_in_memory.is_none());
             self.scanned_model_kept_until = Some(web_time::Instant::now() + SCANNED_MODEL_KEPT);
             self.spawn_job_reporting_progress(
                 crate::i18n::tr!("planning-computing-reserves"),
@@ -3060,7 +3145,24 @@ impl crate::app::App<'_> {
                 // its totals cannot say; whole benches are reported, never
                 // routed, so theirs is not retained.
                 move |cancel, progress| {
-                    let mut outcome = crate::model::solid_reserves::compute(&model, &blocks, &mapping, &fields, &partition, capture_material, cancel, progress)?;
+                    // The solid's part of the model, cut beside the scan when
+                    // it is not kept yet, so the next edit need not load the
+                    // whole model again.
+                    let cut_part = || {
+                        let (key, reach) = cut_part?;
+                        if disk_cache::exists(disk_cache::Kind::ReserveSource, key) {
+                            return None;
+                        }
+                        let source = Arc::new(ReserveSource::extract(&model, &blocks, &mapping, reach)?);
+                        let kept = source.clone();
+                        crate::app::jobs::spawn_io_task(move || disk_cache::store(disk_cache::Kind::ReserveSource, key, |out| disk_cache::write_reserve_source(out, &kept)));
+                        Some((key, source))
+                    };
+                    let (outcome, part) = rayon::join(
+                        || crate::model::solid_reserves::compute(&model, &blocks, &mapping, &fields, &partition, capture_material, cancel, progress),
+                        cut_part,
+                    );
+                    let mut outcome = outcome?;
                     if let Some(kept) = &kept {
                         outcome.keep(kept);
                     }
@@ -3077,15 +3179,25 @@ impl crate::app::App<'_> {
                             disk_cache::write_reserves(out, &outcome.totals, &outcome.resolution, outcome.material.as_ref())
                         });
                     }
-                    Ok(outcome)
+                    Ok((outcome, part))
                 },
-                move |app, result: anyhow::Result<ReserveOutcome>| {
+                move |app, result: anyhow::Result<(ReserveOutcome, Option<KeptPart>)>| {
                     if app.accepting_solid(runtime, id, scope.artifact(), token).is_none() {
                         return;
                     }
+                    let setup = app.editor.is_planning_view(crate::ui::state::PlanningView::Setup);
                     let cache = app.solid_view_cache.get_mut(&id).expect("checked above");
                     match result {
-                        Ok(outcome) => settle_reserves(cache, scope, outcome, measured_with, meshes),
+                        Ok((outcome, part)) => {
+                            settle_reserves(cache, scope, outcome, measured_with, meshes);
+                            if let Some((key, source)) = part {
+                                // Kept on disk now, so it is worth looking for there again.
+                                cache.sources_not_on_disk.remove(&key);
+                                if setup {
+                                    cache.reserve_source = Some((key, source));
+                                }
+                            }
+                        }
                         Err(error) => scope.slot(cache).fail(format!("{error:#}")),
                     }
                     app.solid_view_body_key = None;
@@ -3094,6 +3206,9 @@ impl crate::app::App<'_> {
         }
     }
 }
+
+/// A solid's part of its block model, by the key it is kept under.
+type KeptPart = (u64, Arc<ReserveSource>);
 
 /// How long a hidden block model stays loaded after a reserve scan used it.
 const SCANNED_MODEL_KEPT: std::time::Duration = std::time::Duration::from_secs(180);

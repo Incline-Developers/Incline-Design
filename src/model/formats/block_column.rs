@@ -353,6 +353,139 @@ impl BlockColumn {
             .collect()
     }
 
+    /// The rows `rows`, which must ascend, as a column of their own.
+    pub(crate) fn select(&self, rows: &[usize]) -> Self {
+        let mut values = Vec::with_capacity(rows.len());
+        let (mut decoded, mut current) = (Vec::new(), usize::MAX);
+        for &row in rows {
+            let run = row >> SEGMENT_SHIFT;
+            if run != current {
+                self.decode_run(run, &mut decoded);
+                current = run;
+            }
+            values.push(decoded[row & SEGMENT_MASK]);
+        }
+        Self::from_values(&values)
+    }
+
+    /// The column as it is held, a segment at a time, for a cache file: each
+    /// piece of bytes goes to `put` in order. [`Self::read`] reads it back.
+    pub(crate) fn write(&self, put: &mut impl FnMut(&[u8])) {
+        put(&(self.len as u64).to_le_bytes());
+        put(&(self.segments.len() as u64).to_le_bytes());
+        for segment in &self.segments {
+            match segment {
+                Segment::Constant(value) => {
+                    put(&[0]);
+                    put(&value.to_le_bytes());
+                }
+                Segment::Table8 { table, codes } => {
+                    put(&[1]);
+                    write_values(put, table);
+                    put(&(codes.len() as u64).to_le_bytes());
+                    put(codes);
+                }
+                Segment::Table16 { table, codes } => {
+                    put(&[2]);
+                    write_values(put, table);
+                    put(&(codes.len() as u64).to_le_bytes());
+                    put(&codes.iter().flat_map(|code| code.to_le_bytes()).collect::<Vec<u8>>());
+                }
+                Segment::Decimal16 { base, divisor, raw } => {
+                    put(&[3]);
+                    put(&base.to_le_bytes());
+                    put(&divisor.to_le_bytes());
+                    put(&(raw.len() as u64).to_le_bytes());
+                    put(&raw.iter().flat_map(|raw| raw.to_le_bytes()).collect::<Vec<u8>>());
+                }
+                Segment::Decimal32 { base, divisor, raw } => {
+                    put(&[4]);
+                    put(&base.to_le_bytes());
+                    put(&divisor.to_le_bytes());
+                    put(&(raw.len() as u64).to_le_bytes());
+                    put(&raw.iter().flat_map(|raw| raw.to_le_bytes()).collect::<Vec<u8>>());
+                }
+                Segment::Raw(values) => {
+                    put(&[5]);
+                    write_values(put, values);
+                }
+            }
+        }
+    }
+
+    /// A column [`Self::write`] wrote, from `take`, which hands back the next
+    /// `n` bytes or `None` when fewer are left. `None` for anything that is
+    /// not a whole, well-formed column: every segment is a full one but the
+    /// last, and every table code names a table entry.
+    pub(crate) fn read(take: &mut impl FnMut(usize) -> Option<Vec<u8>>) -> Option<Self> {
+        let len = usize::try_from(read_u64(take)?).ok()?;
+        let count = usize::try_from(read_u64(take)?).ok()?;
+        if count != len.div_ceil(SEGMENT_ROWS) {
+            return None;
+        }
+        let mut segments = Vec::with_capacity(count);
+        for index in 0..count {
+            let rows = SEGMENT_ROWS.min(len - index * SEGMENT_ROWS);
+            let tag = take(1)?[0];
+            let segment = match tag {
+                0 => Segment::Constant(f64::from_le_bytes(take(8)?.try_into().ok()?)),
+                1 | 2 => {
+                    let table = read_values(take)?;
+                    let codes = usize::try_from(read_u64(take)?).ok()?;
+                    if codes != rows {
+                        return None;
+                    }
+                    if tag == 1 {
+                        let codes = take(rows)?;
+                        if table.len() > 256 || codes.iter().any(|code| usize::from(*code) >= table.len()) {
+                            return None;
+                        }
+                        Segment::Table8 {
+                            table: table.into(),
+                            codes: codes.into(),
+                        }
+                    } else {
+                        let codes: Box<[u16]> = take(rows * 2)?.as_chunks::<2>().0.iter().map(|code| u16::from_le_bytes(*code)).collect();
+                        if table.len() > usize::from(u16::MAX) + 1 || codes.iter().any(|code| usize::from(*code) >= table.len()) {
+                            return None;
+                        }
+                        Segment::Table16 { table: table.into(), codes }
+                    }
+                }
+                3 | 4 => {
+                    let base = i64::from_le_bytes(take(8)?.try_into().ok()?);
+                    let divisor = f64::from_le_bytes(take(8)?.try_into().ok()?);
+                    if usize::try_from(read_u64(take)?).ok()? != rows || !POWERS_OF_TEN.iter().any(|power| power.to_bits() == divisor.to_bits()) {
+                        return None;
+                    }
+                    if tag == 3 {
+                        Segment::Decimal16 {
+                            base,
+                            divisor,
+                            raw: take(rows * 2)?.as_chunks::<2>().0.iter().map(|raw| u16::from_le_bytes(*raw)).collect(),
+                        }
+                    } else {
+                        Segment::Decimal32 {
+                            base,
+                            divisor,
+                            raw: take(rows * 4)?.as_chunks::<4>().0.iter().map(|raw| u32::from_le_bytes(*raw)).collect(),
+                        }
+                    }
+                }
+                5 => {
+                    let values = read_values(take)?;
+                    if values.len() != rows {
+                        return None;
+                    }
+                    Segment::Raw(values.into())
+                }
+                _ => return None,
+            };
+            segments.push(segment);
+        }
+        Some(Self { len, segments })
+    }
+
     /// The value of `row`, or `None` past the end.
     #[inline]
     pub(crate) fn checked(&self, row: usize) -> Option<f64> {
@@ -363,6 +496,21 @@ impl BlockColumn {
     pub(crate) fn heap_bytes(&self) -> usize {
         self.segments.iter().map(|segment| size_of::<Segment>() + segment.heap_bytes()).sum()
     }
+}
+
+fn write_values(put: &mut impl FnMut(&[u8]), values: &[f64]) {
+    put(&(values.len() as u64).to_le_bytes());
+    put(&values.iter().flat_map(|value| value.to_le_bytes()).collect::<Vec<u8>>());
+}
+
+fn read_u64(take: &mut impl FnMut(usize) -> Option<Vec<u8>>) -> Option<u64> {
+    Some(u64::from_le_bytes(take(8)?.try_into().ok()?))
+}
+
+fn read_values(take: &mut impl FnMut(usize) -> Option<Vec<u8>>) -> Option<Vec<f64>> {
+    let count = usize::try_from(read_u64(take)?).ok()?;
+    let bytes = take(count.checked_mul(8)?)?;
+    Some(bytes.as_chunks::<8>().0.iter().map(|value| f64::from_le_bytes(*value)).collect())
 }
 
 /// Builds a column from values that arrive a batch at a time, so a model read

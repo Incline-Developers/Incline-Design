@@ -250,6 +250,58 @@ impl BlockModelData {
         })
     }
 
+    /// The rows `rows`, which must ascend, of the columns `names` that this
+    /// model holds, as a model of their own in the same frame. Each column
+    /// keeps its own description, kind and categories as they are here, so a
+    /// mapping resolves against the part as it does against the whole; a
+    /// named column that is declared but not in memory gives `None`, as the
+    /// part could not say what the whole would.
+    pub(crate) fn rows_of(&self, rows: &[usize], names: &[String]) -> Option<Self> {
+        let mut numeric_values = BTreeMap::new();
+        let mut variables = Vec::new();
+        for variable in self.metadata.variables.iter().filter(|variable| names.contains(&variable.name)) {
+            let values = self.numeric_values.get(&variable.name)?;
+            if values.len() != self.metadata.n_blocks {
+                return None;
+            }
+            numeric_values.insert(variable.name.clone(), Arc::new(values.select(rows)));
+            variables.push(variable.clone());
+        }
+        let metadata = BlockModelMetadata {
+            n_blocks: rows.len(),
+            dims: [rows.len(), 1, 1],
+            is_irregular: true,
+            variables,
+            ..self.metadata.clone()
+        };
+        Self::from_parts(metadata, self.rotation, numeric_values).ok()
+    }
+
+    /// A model from what describes it and its columns, each `n_blocks` long.
+    pub(crate) fn from_parts(metadata: BlockModelMetadata, rotation: DMat3, numeric_values: BTreeMap<String, Arc<BlockColumn>>) -> Result<Self, BlockModelDataError> {
+        if metadata.n_blocks == 0 || !rotation.is_finite() || !metadata.origin.is_finite() {
+            return Err(invalid("block-model part is empty or has no frame"));
+        }
+        if numeric_values.values().any(|values| values.len() != metadata.n_blocks) {
+            return Err(invalid("block-model part has a column of the wrong length"));
+        }
+        let retained = numeric_values.values().map(|values| values.heap_bytes()).fold(0usize, usize::saturating_add);
+        let reservation = crate::app::memory::reserve(retained, "block model part").map_err(invalid)?;
+        Ok(Self {
+            content_version: NEXT_CONTENT_VERSION.fetch_add(1, Ordering::Relaxed),
+            source_fingerprint: None,
+            metadata,
+            rotation,
+            numeric_values,
+            _reservation: reservation,
+        })
+    }
+
+    /// The model's columns by name, as [`Self::from_parts`] takes them.
+    pub(crate) fn columns(&self) -> &BTreeMap<String, Arc<BlockColumn>> {
+        &self.numeric_values
+    }
+
     /// Approximate retained size, used by the undo history's memory budget.
     /// Columns shared through an `Arc` are counted in full: over-counting only
     /// evicts a deleted model from the stack sooner than strictly necessary.

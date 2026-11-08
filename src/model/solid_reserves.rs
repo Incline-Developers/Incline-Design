@@ -295,6 +295,73 @@ impl ReservePartition {
     }
 }
 
+/// The part of a block model one solid's reserves can ever read: every block
+/// within reach of the solid's body, and the columns its mapping names.
+///
+/// A scan of any partition of that body over this part gives the same figures
+/// as over the whole model, to the bit. Every piece cut from the body lies
+/// within the body's bounds, so a block out of the body's reach is out of
+/// every piece's, and a scan skips a block out of reach before it counts or
+/// reads anything of it; the blocks it keeps keep their order, which is the
+/// order the scan adds them up in. Kept so that measuring an edited solid
+/// need not load the whole model.
+pub(crate) struct ReserveSource {
+    pub(crate) model: BlockModelData,
+    pub(crate) blocks: Arc<BlockBoundsSource>,
+}
+
+impl ReserveSource {
+    /// The columns `mapping` reads, by name, each once and in order.
+    pub(crate) fn columns(mapping: &[ReserveFieldMapping]) -> Vec<String> {
+        let mut names: Vec<String> = mapping
+            .iter()
+            .filter_map(|entry| match &entry.source {
+                ReserveMappingSource::Column(name) | ReserveMappingSource::PerVolume(name) => Some(name.clone()),
+                ReserveMappingSource::Constant(_) => None,
+            })
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    }
+
+    /// The box around `meshes`, a millimetre wider each way than their own
+    /// bounds, so that no rounding in a later cut of them reaches past it.
+    pub(crate) fn reach_of<'a>(meshes: impl IntoIterator<Item = &'a Triangulation>) -> Option<(DVec3, DVec3)> {
+        let (mut min, mut max) = (DVec3::INFINITY, DVec3::NEG_INFINITY);
+        for mesh in meshes {
+            let bounds = mesh.bounds();
+            min = min.min(DVec3::new(bounds.min.x, bounds.min.y, bounds.min.z));
+            max = max.max(DVec3::new(bounds.max.x, bounds.max.y, bounds.max.z));
+        }
+        if !min.is_finite() || !max.is_finite() {
+            return None;
+        }
+        let margin = |corner: DVec3| DVec3::splat(1e-3) + corner.abs() * 1e-9;
+        Some((min - margin(min), max + margin(max)))
+    }
+
+    /// The part of `model` within `reach` that `mapping` reads; `None` when a
+    /// column it names is declared but not in memory, or nothing is in reach.
+    pub(crate) fn extract(model: &BlockModelData, blocks: &BlockBoundsSource, mapping: &[ReserveFieldMapping], reach: (DVec3, DVec3)) -> Option<Self> {
+        if blocks.len() != model.metadata.n_blocks {
+            return None;
+        }
+        let rows: Vec<usize> = (0..blocks.len())
+            .into_par_iter()
+            .filter(|&row| blocks.get(row).is_some_and(|bounds| !intersection::Block::out_of_reach(model, bounds, reach)))
+            .collect();
+        if rows.is_empty() {
+            return None;
+        }
+        let part = model.rows_of(&rows, &Self::columns(mapping))?;
+        Some(Self {
+            model: part,
+            blocks: Arc::new(BlockBoundsSource::Explicit(blocks.select(&rows))),
+        })
+    }
+}
+
 struct NumericField<'a> {
     id: ReserveFieldId,
     values: Values<'a>,

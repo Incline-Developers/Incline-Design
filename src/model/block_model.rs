@@ -174,6 +174,38 @@ impl BlockGeometry {
         self.lower.iter().chain(&self.upper).map(BlockColumn::heap_bytes).sum()
     }
 
+    /// The blocks `rows`, which must ascend, as geometry of their own.
+    pub(crate) fn select(&self, rows: &[usize]) -> Self {
+        use rayon::prelude::*;
+        let columns: Vec<BlockColumn> = self.columns().par_iter().map(|column| column.select(rows)).collect();
+        let Ok([lx, ly, lz, ux, uy, uz]) = <[BlockColumn; 6]>::try_from(columns) else {
+            unreachable!("six columns in, six out")
+        };
+        Self {
+            lower: [lx, ly, lz],
+            upper: [ux, uy, uz],
+        }
+    }
+
+    /// The six columns, lower x, y and z then upper, as [`Self::from_columns`] takes them.
+    pub(crate) fn columns(&self) -> [&BlockColumn; 6] {
+        [&self.lower[0], &self.lower[1], &self.lower[2], &self.upper[0], &self.upper[1], &self.upper[2]]
+    }
+
+    /// Geometry from its six columns, lower x, y and z then upper; `None`
+    /// unless they are all one length.
+    pub(crate) fn from_columns(columns: [BlockColumn; 6]) -> Option<Self> {
+        let length = columns[0].len();
+        if columns.iter().any(|column| column.len() != length) {
+            return None;
+        }
+        let [lx, ly, lz, ux, uy, uz] = columns;
+        Some(Self {
+            lower: [lx, ly, lz],
+            upper: [ux, uy, uz],
+        })
+    }
+
     /// Every block, a run of rows at a time and the runs side by side: `map`
     /// is given each run's first index and its bounds. A pass over a whole
     /// model reads this way rather than a block at a time, which decoded six
@@ -316,6 +348,21 @@ impl BlockBoundsSource {
         match self {
             Self::Regular(grid) => grid.uniform_grid(),
             Self::Explicit(blocks) => detect_uniform_grid(blocks),
+        }
+    }
+
+    /// The blocks `rows`, which must ascend, as stored geometry.
+    pub(crate) fn select(&self, rows: &[usize]) -> BlockGeometry {
+        match self {
+            Self::Explicit(blocks) => blocks.select(rows),
+            Self::Regular(_) => {
+                let mut builder = BlockGeometryBuilder::default();
+                for chunk in rows.chunks(1 << 20) {
+                    let bounds: Vec<BlockBounds> = chunk.iter().filter_map(|&row| self.get(row)).collect();
+                    builder.extend(&bounds);
+                }
+                builder.finish()
+            }
         }
     }
 
