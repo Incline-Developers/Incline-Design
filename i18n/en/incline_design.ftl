@@ -4165,6 +4165,7 @@ solids-plan-area = Plan area
 solids-dig-block = Dig block
 solids-dig-blocks = Dig blocks
 solids-dig-blocks-selected = { $count } selected
+planning-dig-blocks-title = { $count } dig blocks
 solids-block-id = Block ID
 solids-bench = In bench
 solids-flitch = In flitch

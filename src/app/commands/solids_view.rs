@@ -1588,15 +1588,15 @@ impl crate::app::App<'_> {
             self.editor.solids_view_marked.clear();
             self.solid_view_body_key = None;
         }
-        self.select_reserves_blocks(block.into_iter().collect());
+        self.select_dig_blocks(block.into_iter().collect());
         self.redraw_requested = true;
     }
 
-    /// Take `blocks` into the Reserves view's selection as the modifiers
-    /// held say, as the rest of the viewport takes a pick: shift toggles each
-    /// block, ctrl adds them, and otherwise they replace what was selected -
-    /// nothing at all clearing it.
-    pub(crate) fn select_reserves_blocks(&mut self, blocks: Vec<BlastShapeRef>) {
+    /// Take `blocks` into the dig block selection, in Reserves or on Dig
+    /// Strips, as the modifiers held say and as the rest of the viewport takes
+    /// a pick: shift toggles each block, ctrl adds them, and otherwise they
+    /// replace what was selected - nothing at all clearing it.
+    pub(crate) fn select_dig_blocks(&mut self, blocks: Vec<BlastShapeRef>) {
         let selected = &mut self.editor.selected_dig_blocks;
         let before = selected.clone();
         if self.modifiers.shift_key() {
