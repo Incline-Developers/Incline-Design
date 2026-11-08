@@ -10,10 +10,10 @@
 //! another format, is ignored and rebuilt.
 //!
 //! The cache is the user's cache directory, shared by every project, and has
-//! no size limit: nothing is removed from it but writes that were abandoned
-//! part way. Reading a file still marks it recently used, for a limit to go by
-//! should one be offered as a setting. Native builds only: the browser
-//! rebuilds, as it always has.
+//! no size limit. Once a session, files no build but this one can read go -
+//! those another build or format wrote, whose keys this one never makes - as
+//! do files nothing has read for [`UNUSED_FOR`], and writes abandoned part
+//! way. Native builds only: the browser rebuilds, as it always has.
 
 use std::sync::Arc;
 
@@ -36,9 +36,14 @@ use crate::{
 };
 
 /// Raised whenever what a file holds, or how, changes.
-const FORMAT: u32 = 4;
+const FORMAT: u32 = 5;
 #[cfg(not(target_arch = "wasm32"))]
 const MAGIC: &[u8; 8] = b"INCLSOLD";
+
+/// How long a file may go unread before it goes. A project left this long
+/// is cut again when it next opens.
+#[cfg(not(target_arch = "wasm32"))]
+const UNUSED_FOR: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 60 * 60);
 
 /// Which stage's product a file holds.
 #[derive(Clone, Copy)]
@@ -136,7 +141,7 @@ pub(crate) fn load<T>(kind: Kind, key: u64, read: impl FnOnce(&mut Reader) -> Op
         let value = (|| {
             let mut magic = [0; 8];
             reader.fill(&mut magic)?;
-            (&magic == MAGIC && reader.u32()? == FORMAT && reader.u64()? == key).then_some(())?;
+            (&magic == MAGIC && reader.u32()? == FORMAT && Some(reader.u64()?) == program() && reader.u64()? == key).then_some(())?;
             let value = read(&mut reader)?;
             reader.finish().then_some(value)
         })();
@@ -177,6 +182,7 @@ pub(crate) fn store(kind: Kind, key: u64, write: impl FnOnce(&mut Writer) -> Opt
             let mut writer = Writer::new(&mut sink);
             writer.bytes(MAGIC);
             writer.u32(FORMAT);
+            writer.u64(program().unwrap_or_default());
             writer.u64(key);
             anyhow::ensure!(write(&mut writer).is_some(), "the {} holds something the cache does not keep", kind.name());
             let size = writer.finish()?;
@@ -187,7 +193,6 @@ pub(crate) fn store(kind: Kind, key: u64, write: impl FnOnce(&mut Writer) -> Opt
         match result {
             Ok(size) => {
                 log::info!("Solids cache: kept the {} ({} MB) in {:.2?}", kind.name(), size >> 20, started.elapsed());
-                remove_abandoned_writes(directory);
             }
             Err(error) => log::warn!("Solids cache: could not keep the {}: {error:#}", kind.name()),
         }
@@ -210,7 +215,11 @@ fn directory() -> Option<&'static std::path::Path> {
         .get_or_init(|| {
             let directory = dirs::cache_dir()?.join("Incline_Design").join("solids");
             match std::fs::create_dir_all(&directory) {
-                Ok(()) => Some(directory),
+                Ok(()) => {
+                    let tidied = directory.clone();
+                    crate::app::jobs::spawn_io_task(move || tidy(&tidied, std::time::SystemTime::now()));
+                    Some(directory)
+                }
                 Err(error) => {
                     log::warn!("Solids cache off: could not create {}: {error}", directory.display());
                     None
@@ -220,21 +229,46 @@ fn directory() -> Option<&'static std::path::Path> {
         .as_deref()
 }
 
-/// Remove what writes left behind when they were stopped part way, once they
-/// are an hour old and so certainly not still being written.
+/// Remove what no read will ever take from the cache: files another build or
+/// format wrote, files unread for [`UNUSED_FOR`], and writes abandoned part
+/// way, once they are an hour old and so certainly not still being written.
+/// Run once a session, as `now` stands.
 #[cfg(not(target_arch = "wasm32"))]
-fn remove_abandoned_writes(directory: &std::path::Path) {
+fn tidy(directory: &std::path::Path, now: std::time::SystemTime) {
+    use std::io::Read;
     let Ok(entries) = std::fs::read_dir(directory) else { return };
-    let now = std::time::SystemTime::now();
+    // Without the program's own key nothing can say which build wrote a file.
+    let this = program();
+    let mut removed = (0usize, 0u64);
     for entry in entries.flatten() {
-        if !entry.file_name().to_string_lossy().starts_with(".writing-") {
+        let Ok(metadata) = entry.metadata() else { continue };
+        if !metadata.is_file() {
             continue;
         }
-        let Ok(metadata) = entry.metadata() else { continue };
-        let modified = metadata.modified().unwrap_or(std::time::UNIX_EPOCH);
-        if now.duration_since(modified).is_ok_and(|age| age.as_secs() > 3600) {
-            let _ = std::fs::remove_file(entry.path());
+        let path = entry.path();
+        let age = now.duration_since(metadata.modified().unwrap_or(std::time::UNIX_EPOCH)).unwrap_or_default();
+        let stale = if entry.file_name().to_string_lossy().starts_with(".writing-") {
+            age.as_secs() > 3600
+        } else if age > UNUSED_FOR {
+            true
+        } else if let Some(this) = this {
+            // Who wrote it: the magic, the format and the program.
+            let mut header = [0; 20];
+            let written_here = std::fs::File::open(&path).and_then(|mut file| file.read_exact(&mut header)).is_ok()
+                && &header[..8] == MAGIC
+                && header[8..12] == FORMAT.to_le_bytes()
+                && u64::from_le_bytes(header[12..20].try_into().expect("eight bytes")) == this;
+            !written_here
+        } else {
+            false
+        };
+        if stale && std::fs::remove_file(&path).is_ok() {
+            removed.0 += 1;
+            removed.1 += metadata.len();
         }
+    }
+    if removed.0 > 0 {
+        log::info!("Solids cache: removed {} files ({} MB) no read would take", removed.0, removed.1 >> 20);
     }
 }
 
