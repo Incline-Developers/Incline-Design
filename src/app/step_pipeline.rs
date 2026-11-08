@@ -222,7 +222,7 @@ impl<S: PipelineStep> StepPipeline<S> {
                 status.last_seen = Some(entities);
                 if blocking > 0 {
                     status.state = StageState::Failed;
-                    status.message = Some(tr!("stage-failed-count", count = blocking));
+                    status.message = Some(crate::app::planning_pipeline::failed_message(&status.diagnostics));
                     self.running = None;
                     for later in std::mem::take(&mut self.queue) {
                         let status = self.status_mut(later);

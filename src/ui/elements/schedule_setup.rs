@@ -180,14 +180,12 @@ pub(crate) fn draw_readiness(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut E
     ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
         ui.set_clip_rect(ui.clip_rect().intersect(body));
         egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
-            if let Some(message) = &status.message {
+            // A failure with one problem says that problem, listed below.
+            if let Some(message) = status.message.as_ref().filter(|message| !status.diagnostics.iter().any(|entry| entry.line() == **message)) {
                 ui.add(egui::Label::new(egui::RichText::new(message).color(ui.visuals().error_fg_color)).wrap());
             }
             for entry in &status.diagnostics {
-                let text = match &entry.entity {
-                    Some(entity) => format!("{}: {}", entity, entry.message),
-                    None => entry.message.clone(),
-                };
+                let text = entry.line();
                 let color = if entry.blocking { ui.visuals().error_fg_color } else { ui.visuals().weak_text_color() };
                 ui.add(egui::Label::new(egui::RichText::new(text).color(color)).wrap());
             }
@@ -231,14 +229,12 @@ pub(crate) fn draw_solids_tonnage(ui: &mut egui::Ui, rect: egui::Rect, editor: &
     ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
         ui.set_clip_rect(ui.clip_rect().intersect(body));
         egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
-            if let Some(message) = &status.message {
+            // A failure with one problem says that problem, listed below.
+            if let Some(message) = status.message.as_ref().filter(|message| !status.diagnostics.iter().any(|entry| entry.line() == **message)) {
                 ui.add(egui::Label::new(egui::RichText::new(message).color(ui.visuals().weak_text_color())).wrap());
             }
             for entry in &status.diagnostics {
-                let text = match &entry.entity {
-                    Some(entity) => format!("{}: {}", entity, entry.message),
-                    None => entry.message.clone(),
-                };
+                let text = entry.line();
                 let color = if entry.blocking { ui.visuals().error_fg_color } else { ui.visuals().weak_text_color() };
                 ui.add(egui::Label::new(egui::RichText::new(text).color(color)).wrap());
             }

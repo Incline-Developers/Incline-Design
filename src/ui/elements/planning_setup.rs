@@ -680,7 +680,9 @@ pub(crate) fn stage_tooltip_parts(
     if let Some(blocker) = &blocker {
         ui.label(blocker);
     }
-    if let Some(message) = message.filter(|message| blocker.as_deref() != Some(*message)) {
+    // A failure with one problem says that problem; it is listed below.
+    let listed = |message: &str| diagnostics.iter().any(|entry| entry.line() == message);
+    if let Some(message) = message.filter(|message| blocker.as_deref() != Some(*message) && !listed(message)) {
         ui.label(message);
     }
     if diagnostics.is_empty() {
@@ -689,10 +691,7 @@ pub(crate) fn stage_tooltip_parts(
     ui.separator();
     ui.label(bold(&tr!("stage-diagnostics")));
     for entry in diagnostics.iter().take(12) {
-        let text = match &entry.entity {
-            Some(entity) => format!("{entity}: {}", entry.message),
-            None => entry.message.clone(),
-        };
+        let text = entry.line();
         let color = if entry.blocking { ui.visuals().error_fg_color } else { ui.visuals().weak_text_color() };
         ui.label(egui::RichText::new(text).color(color));
     }
