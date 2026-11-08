@@ -178,6 +178,25 @@ impl<R: ReadAt> Reader<R> {
         })
     }
 
+    /// Open an [`array_type::Number`](crate::array_type::Number) array to be read
+    /// a row group at a time, so the groups can be decoded side by side.
+    pub fn array_number_groups(&self, array: &Array<array_type::Number>) -> Result<NumberGroups<R>, Error> {
+        let reader = self.array_reader(array)?;
+        let kind = schemas::Number::check(&reader)?;
+        Ok(NumberGroups { reader, kind })
+    }
+
+    /// Open an [`array_type::Index`](crate::array_type::Index) array to be read a
+    /// row group at a time, each checked as [`Self::array_indices`] checks every item.
+    pub fn array_index_groups(&self, array: &Array<array_type::Index>) -> Result<IndexGroups<R>, Error> {
+        let reader = self.array_reader(array)?;
+        let schemas::Index::U32 = schemas::Index::check(&reader)?;
+        let &crate::array::Constraint::Index(category_count) = array.constraint() else {
+            panic!("invalid constraint");
+        };
+        Ok(IndexGroups { reader, category_count })
+    }
+
     /// Read an [`array_type::Number`](crate::array_type::Number) array.
     pub fn array_numbers(&self, array: &Array<array_type::Number>) -> Result<Numbers<R>, Error> {
         let reader = self.array_reader(array)?;
@@ -285,8 +304,9 @@ fn check_indices<const N: usize>(primitives: Vec<[u32; N]>, constraint: &crate::
     Ok(primitives)
 }
 
-/// One row group of sub-blocks: each one's parent index, and its corners.
-pub type SubblockGroup = (Vec<[u32; 3]>, Vec<[f64; 6]>);
+/// One row group of sub-blocks: each one's parent index, and its corners a
+/// column each.
+pub type SubblockGroup = (Vec<[u32; 3]>, [Vec<f64>; 6]);
 
 /// A free-form sub-block array, read a row group at a time: see
 /// [`Reader::array_freeform_subblock_groups`].
@@ -308,31 +328,124 @@ impl<R: ReadAt> FreeformSubblockGroups<R> {
     }
 
     /// One group's sub-blocks, in order: each one's parent index, and its
-    /// corners. Two lists rather than one of pairs, so a large group is not
-    /// held twice while it is turned into something else.
+    /// corners a column each (minimum u, v, w, then maximum u, v, w). Columns
+    /// rather than rows, so a caller can turn them into what it keeps in place.
     pub fn read(&self, group: usize) -> Result<SubblockGroup, Error> {
         const CORNERS: [&str; 6] = ["corner_min_u", "corner_min_v", "corner_min_w", "corner_max_u", "corner_max_v", "corner_max_w"];
         let parents = self.reader.read_multi_column_group::<u32, 3>(["parent_u", "parent_v", "parent_w"], group)?;
-        let corners: Vec<[f64; 6]> = if self.single {
-            self.reader
-                .read_multi_column_group::<f32, 6>(CORNERS, group)?
-                .into_iter()
-                .map(|corners| corners.map(f64::from))
-                .collect()
-        } else {
-            self.reader.read_multi_column_group::<f64, 6>(CORNERS, group)?
-        };
-        if parents.len() != corners.len() {
-            return Err(InvalidData::LengthMismatch {
-                found: corners.len() as u64,
-                expected: parents.len() as u64,
+        let mut corners: [Vec<f64>; 6] = Default::default();
+        for (column, name) in corners.iter_mut().zip(CORNERS) {
+            *column = if self.single {
+                self.reader.read_column_group::<f32>(name, group)?.into_iter().map(f64::from).collect()
+            } else {
+                self.reader.read_column_group::<f64>(name, group)?
+            };
+            if column.len() != parents.len() {
+                return Err(InvalidData::LengthMismatch {
+                    found: column.len() as u64,
+                    expected: parents.len() as u64,
+                }
+                .into());
             }
-            .into());
         }
-        for (parent, corners) in parents.iter().zip(&corners) {
+        for (row, parent) in parents.iter().enumerate() {
             check_parent(self.block_count, *parent)?;
-            check_freeform_corners(*corners)?;
+            check_freeform_corners(std::array::from_fn(|axis| corners[axis][row]))?;
         }
         Ok((parents, corners))
+    }
+}
+
+/// A number array, read a row group at a time: see [`Reader::array_number_groups`].
+pub struct NumberGroups<R: ReadAt> {
+    reader: PqArrayReader<SubFile<R>>,
+    kind: schemas::Number,
+}
+
+impl<R: ReadAt> NumberGroups<R> {
+    /// How many groups there are.
+    pub fn len(&self) -> usize {
+        self.reader.row_group_count()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Whether the numbers are 64-bit integers, which [`Self::read_f64`] refuses.
+    pub fn is_integer(&self) -> bool {
+        self.kind == schemas::Number::I64
+    }
+
+    /// One group's numbers as `f64`, cast as [`Numbers::try_into_f64`] casts them.
+    pub fn read_f64(&self, group: usize) -> Result<Vec<Option<f64>>, Error> {
+        use crate::date_time::{date_time_to_f64, date_to_f64};
+        let reader = &self.reader;
+        Ok(match self.kind {
+            schemas::Number::F32 => cast(reader.read_nullable_column_group::<f32>("number", group)?, f64::from),
+            schemas::Number::F64 => reader.read_nullable_column_group::<f64>("number", group)?,
+            schemas::Number::Date => cast(reader.read_nullable_column_group("number", group)?, date_to_f64),
+            schemas::Number::DateTime => cast(reader.read_nullable_column_group("number", group)?, date_time_to_f64),
+            schemas::Number::I64 => return Err(Error::UnsafeCast("64-bit integer", "64-bit float")),
+        })
+    }
+
+    /// One group's numbers as `f64`, as [`Self::read_f64`] gives them but with
+    /// `missing` in place of each null.
+    pub fn read_f64_or(&self, group: usize, missing: f64) -> Result<Vec<f64>, Error> {
+        Ok(match self.kind {
+            schemas::Number::F64 => self.reader.read_nullable_column_group_or::<f64>("number", group, missing)?,
+            _ => self.read_f64(group)?.into_iter().map(|value| value.unwrap_or(missing)).collect(),
+        })
+    }
+
+    /// One group's numbers as `i64`, cast as [`Numbers::try_into_i64`] casts them.
+    pub fn read_i64(&self, group: usize) -> Result<Vec<Option<i64>>, Error> {
+        use crate::date_time::{date_time_to_i64, date_to_i64};
+        let reader = &self.reader;
+        Ok(match self.kind {
+            schemas::Number::F32 => return Err(Error::UnsafeCast("32-bit float", "64-bit integer")),
+            schemas::Number::F64 => return Err(Error::UnsafeCast("64-bit float", "64-bit integer")),
+            schemas::Number::I64 => reader.read_nullable_column_group::<i64>("number", group)?,
+            schemas::Number::Date => cast(reader.read_nullable_column_group("number", group)?, date_to_i64),
+            schemas::Number::DateTime => cast(reader.read_nullable_column_group("number", group)?, date_time_to_i64),
+        })
+    }
+}
+
+fn cast<T, U>(values: Vec<Option<T>>, convert: impl Fn(T) -> U) -> Vec<Option<U>> {
+    values.into_iter().map(|value| value.map(&convert)).collect()
+}
+
+/// An index array, read a row group at a time: see [`Reader::array_index_groups`].
+pub struct IndexGroups<R: ReadAt> {
+    reader: PqArrayReader<SubFile<R>>,
+    category_count: u64,
+}
+
+impl<R: ReadAt> IndexGroups<R> {
+    /// How many groups there are.
+    pub fn len(&self) -> usize {
+        self.reader.row_group_count()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// One group's indices.
+    pub fn read(&self, group: usize) -> Result<Vec<Option<u32>>, Error> {
+        let indices = self.reader.read_nullable_column_group::<u32>("index", group)?;
+        for index in indices.iter().flatten() {
+            let index = u64::from(*index);
+            if index >= self.category_count {
+                return Err(InvalidData::IndexOutOfRange {
+                    value: index,
+                    maximum: self.category_count.saturating_add(1),
+                }
+                .into());
+            }
+        }
+        Ok(indices)
     }
 }

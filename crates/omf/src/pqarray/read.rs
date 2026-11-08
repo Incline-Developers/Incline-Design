@@ -477,6 +477,102 @@ impl<R: ChunkReader + 'static> PqArrayReader<R> {
         Ok(rows)
     }
 
+    /// Read one nullable column from one row group.
+    ///
+    /// The bulk counterpart of [`Self::iter_nullable_column`] for one group, for a
+    /// caller that turns each group into something smaller as it goes.
+    pub fn read_nullable_column_group<P>(&self, name: &str, group: usize) -> Result<Vec<Option<P>>, Error>
+    where
+        P: PqArrayType + Copy,
+    {
+        let metadata = self.file_reader.metadata();
+        let info = check::<P>(metadata, ColumnPath::new(vec![name.to_owned()]), true)?;
+        if group >= metadata.num_row_groups() {
+            return Err(invalid(format!("Parquet row group {group} does not exist")));
+        }
+        let count = metadata.row_group(group).num_rows().try_into().unwrap_or(0);
+        let mut rows = vec![Some([P::default(); 1]); count];
+        self.read_nullable_row_group(group, &[info], &mut rows)?;
+        Ok(rows.into_iter().map(|row| row.map(|[value]| value)).collect())
+    }
+
+    /// Read one required column from one row group, as a list of its own.
+    pub fn read_column_group<P>(&self, name: &str, group: usize) -> Result<Vec<P>, Error>
+    where
+        P: PqArrayType + Copy,
+    {
+        let metadata = self.file_reader.metadata();
+        let info = check::<P>(metadata, ColumnPath::new(vec![name.to_owned()]), false)?;
+        if group >= metadata.num_row_groups() {
+            return Err(invalid(format!("Parquet row group {group} does not exist")));
+        }
+        let count: usize = metadata.row_group(group).num_rows().try_into().unwrap_or(0);
+        let reader = self.file_reader.get_row_group(group)?;
+        let column = reader.get_column_reader(info.column_index)?;
+        let mut column = P::DataType::get_column_reader(column).expect("matching column reader type");
+        let mut rows = Vec::with_capacity(count);
+        let mut values: Vec<<P::DataType as DataType>::T> = Vec::with_capacity(CHUNK_SIZE);
+        while rows.len() < count {
+            values.clear();
+            column.read_records(CHUNK_SIZE.min(count - rows.len()), None, None, &mut values)?;
+            if values.is_empty() {
+                break;
+            }
+            rows.extend(values.drain(..).map(|value| P::from_parquet(value, &info.logical_type)));
+        }
+        if rows.len() != count {
+            return Err(invalid(format!("Parquet column ended after {} of {count} rows", rows.len())));
+        }
+        Ok(rows)
+    }
+
+    /// Read one nullable column from one row group, with `missing` where a value is null.
+    ///
+    /// For a caller that keeps nulls as a sentinel, so the values arrive as they
+    /// are kept rather than wrapped one by one.
+    pub fn read_nullable_column_group_or<P>(&self, name: &str, group: usize, missing: P) -> Result<Vec<P>, Error>
+    where
+        P: PqArrayType + Copy,
+    {
+        let metadata = self.file_reader.metadata();
+        let info = check::<P>(metadata, ColumnPath::new(vec![name.to_owned()]), true)?;
+        if group >= metadata.num_row_groups() {
+            return Err(invalid(format!("Parquet row group {group} does not exist")));
+        }
+        let count: usize = metadata.row_group(group).num_rows().try_into().unwrap_or(0);
+        let reader = self.file_reader.get_row_group(group)?;
+        let column = reader.get_column_reader(info.column_index)?;
+        let mut column = P::DataType::get_column_reader(column).expect("matching column reader type");
+        let mut rows = Vec::with_capacity(count);
+        let mut values: Vec<<P::DataType as DataType>::T> = Vec::with_capacity(CHUNK_SIZE);
+        let mut def_levels: Vec<i16> = Vec::with_capacity(CHUNK_SIZE);
+        while rows.len() < count {
+            values.clear();
+            def_levels.clear();
+            column.read_records(CHUNK_SIZE.min(count - rows.len()), Some(&mut def_levels), None, &mut values)?;
+            if def_levels.is_empty() {
+                break;
+            }
+            if values.len() == def_levels.len() {
+                rows.extend(values.drain(..).map(|value| P::from_parquet(value, &info.logical_type)));
+                continue;
+            }
+            let mut values = values.drain(..);
+            for &level in &def_levels {
+                if level == 0 {
+                    rows.push(missing);
+                } else {
+                    let value = values.next().ok_or_else(|| invalid("Parquet column has fewer values than levels"))?;
+                    rows.push(P::from_parquet(value, &info.logical_type));
+                }
+            }
+        }
+        if rows.len() != count {
+            return Err(invalid(format!("Parquet column ended after {} of {count} rows", rows.len())));
+        }
+        Ok(rows)
+    }
+
     fn read_row_group<P, const N: usize>(&self, group: usize, infos: &[Info; N], rows: &mut [[P; N]]) -> Result<(), Error>
     where
         P: PqArrayType + Copy,

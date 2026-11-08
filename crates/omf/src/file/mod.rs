@@ -12,7 +12,7 @@ mod writer;
 mod zip_container;
 
 #[cfg(feature = "parquet")]
-pub use parquet::{FreeformSubblockGroups, SubblockGroup};
+pub use parquet::{FreeformSubblockGroups, IndexGroups, NumberGroups, SubblockGroup};
 pub use read_at::ReadAt;
 pub use reader::{Limits, Reader};
 pub use sub_file::SubFile;

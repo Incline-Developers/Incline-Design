@@ -72,6 +72,28 @@ impl Segment {
         }
     }
 
+    /// Every row of the segment into `out`, as [`Self::get`] gives each.
+    fn decode(&self, out: &mut [f64]) {
+        match self {
+            Self::Constant(value) => out.fill(*value),
+            Self::Table8 { table, codes } => out.iter_mut().zip(codes).for_each(|(out, code)| *out = table[usize::from(*code)]),
+            Self::Table16 { table, codes } => out.iter_mut().zip(codes).for_each(|(out, code)| *out = table[usize::from(*code)]),
+            Self::Decimal16 { base, divisor, raw } => out.iter_mut().zip(raw).for_each(|(out, raw)| {
+                *out = match *raw {
+                    NAN_16 => f64::NAN,
+                    raw => (base + i64::from(raw)) as f64 / divisor,
+                }
+            }),
+            Self::Decimal32 { base, divisor, raw } => out.iter_mut().zip(raw).for_each(|(out, raw)| {
+                *out = match *raw {
+                    NAN_32 => f64::NAN,
+                    raw => (base + i64::from(raw)) as f64 / divisor,
+                }
+            }),
+            Self::Raw(values) => out.copy_from_slice(&values[..out.len()]),
+        }
+    }
+
     fn heap_bytes(&self) -> usize {
         match self {
             Self::Constant(_) => 0,
@@ -257,6 +279,33 @@ impl BlockColumn {
         (start..end).map(|row| self.get(row)).collect()
     }
 
+    /// How many runs [`Self::decode_run`] reads the column in: every one
+    /// [`SEGMENT_ROWS`] long but the last.
+    pub(crate) fn run_count(&self) -> usize {
+        self.segments.len()
+    }
+
+    /// Run `run`'s values into `out`, which is resized to fit: rows
+    /// `run * SEGMENT_ROWS` onward, as [`Self::get`] gives each. A pass over a
+    /// whole column reads this way rather than a row at a time.
+    pub(crate) fn decode_run(&self, run: usize, out: &mut Vec<f64>) {
+        let start = run << SEGMENT_SHIFT;
+        out.resize(SEGMENT_ROWS.min(self.len - start), 0.0);
+        self.segments[run].decode(out);
+    }
+
+    /// Every value, a run at a time and the runs side by side: `map` is given
+    /// each run's first row and its values.
+    pub(crate) fn par_map_runs<T: Send>(&self, map: impl Fn(usize, &[f64]) -> T + Sync + Send) -> Vec<T> {
+        (0..self.run_count())
+            .into_par_iter()
+            .map_init(Vec::new, |values, run| {
+                self.decode_run(run, values);
+                map(run << SEGMENT_SHIFT, values)
+            })
+            .collect()
+    }
+
     /// The value of `row`, or `None` past the end.
     #[inline]
     pub(crate) fn checked(&self, row: usize) -> Option<f64> {
@@ -300,6 +349,32 @@ impl BlockColumnBuilder {
         self.column.segments.par_extend(whole.par_chunks_exact(SEGMENT_ROWS).map(Segment::encode));
         self.column.len += whole.len();
         self.pending.extend_from_slice(rest);
+    }
+
+    /// Add a column built on its own, as if its values were added here: its
+    /// segments are kept where they start on a segment boundary, which is
+    /// where adding its values would have put them, and its values are added
+    /// again otherwise. A last part-filled segment goes back to waiting for
+    /// the rows after it, as it would have.
+    pub(crate) fn append(&mut self, mut column: BlockColumn) {
+        if !self.pending.is_empty() {
+            let mut values = Vec::with_capacity(column.len);
+            let mut run = Vec::new();
+            for index in 0..column.run_count() {
+                column.decode_run(index, &mut run);
+                values.extend_from_slice(&run);
+            }
+            self.extend_slice(&values);
+            return;
+        }
+        let tail = column.len & SEGMENT_MASK;
+        if tail != 0 {
+            column.decode_run(column.run_count() - 1, &mut self.pending);
+            column.segments.pop();
+            column.len -= tail;
+        }
+        self.column.len += column.len;
+        self.column.segments.append(&mut column.segments);
     }
 
     fn flush(&mut self) {
