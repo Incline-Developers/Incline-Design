@@ -9,9 +9,11 @@
 //! read another's results. A file that fails its checksum, or was written by
 //! another format, is ignored and rebuilt.
 //!
-//! The cache is the user's cache directory, shared by every project; the least
-//! recently used files go once it passes [`CAPACITY`]. Native builds only: the
-//! browser rebuilds, as it always has.
+//! The cache is the user's cache directory, shared by every project, and has
+//! no size limit: nothing is removed from it but writes that were abandoned
+//! part way. Reading a file still marks it recently used, for a limit to go by
+//! should one be offered as a setting. Native builds only: the browser
+//! rebuilds, as it always has.
 
 use std::sync::Arc;
 
@@ -37,10 +39,6 @@ use crate::{
 const FORMAT: u32 = 4;
 #[cfg(not(target_arch = "wasm32"))]
 const MAGIC: &[u8; 8] = b"INCLSOLD";
-
-/// The most the cache may hold before its least recently used files go.
-#[cfg(not(target_arch = "wasm32"))]
-const CAPACITY: u64 = 12 << 30;
 
 /// Which stage's product a file holds.
 #[derive(Clone, Copy)]
@@ -189,7 +187,7 @@ pub(crate) fn store(kind: Kind, key: u64, write: impl FnOnce(&mut Writer) -> Opt
         match result {
             Ok(size) => {
                 log::info!("Solids cache: kept the {} ({} MB) in {:.2?}", kind.name(), size >> 20, started.elapsed());
-                evict(directory);
+                remove_abandoned_writes(directory);
             }
             Err(error) => log::warn!("Solids cache: could not keep the {}: {error:#}", kind.name()),
         }
@@ -222,34 +220,20 @@ fn directory() -> Option<&'static std::path::Path> {
         .as_deref()
 }
 
-/// Remove the least recently used files until the cache fits [`CAPACITY`].
-/// Unfinished writes of a session that stopped part way go as well, once
-/// they are an hour old.
+/// Remove what writes left behind when they were stopped part way, once they
+/// are an hour old and so certainly not still being written.
 #[cfg(not(target_arch = "wasm32"))]
-fn evict(directory: &std::path::Path) {
+fn remove_abandoned_writes(directory: &std::path::Path) {
     let Ok(entries) = std::fs::read_dir(directory) else { return };
     let now = std::time::SystemTime::now();
-    let mut files: Vec<(std::time::SystemTime, u64, std::path::PathBuf)> = Vec::new();
     for entry in entries.flatten() {
-        let Ok(metadata) = entry.metadata() else { continue };
-        let modified = metadata.modified().unwrap_or(std::time::UNIX_EPOCH);
-        let path = entry.path();
-        if entry.file_name().to_string_lossy().starts_with(".writing-") {
-            if now.duration_since(modified).is_ok_and(|age| age.as_secs() > 3600) {
-                let _ = std::fs::remove_file(&path);
-            }
+        if !entry.file_name().to_string_lossy().starts_with(".writing-") {
             continue;
         }
-        files.push((modified, metadata.len(), path));
-    }
-    let mut total: u64 = files.iter().map(|(_, size, _)| size).sum();
-    files.sort_by_key(|(modified, _, _)| *modified);
-    for (_, size, path) in files {
-        if total <= CAPACITY {
-            break;
-        }
-        if std::fs::remove_file(&path).is_ok() {
-            total -= size;
+        let Ok(metadata) = entry.metadata() else { continue };
+        let modified = metadata.modified().unwrap_or(std::time::UNIX_EPOCH);
+        if now.duration_since(modified).is_ok_and(|age| age.as_secs() > 3600) {
+            let _ = std::fs::remove_file(entry.path());
         }
     }
 }
